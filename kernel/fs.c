@@ -152,21 +152,23 @@ static bool ldconfig_trace_enabled(void) {
 }
 
 static bool ldconfig_trace_path(const char *path) {
-    static const char *prefixes[] = {
-        "/lib/i386-linux-gnu",
-        "/usr/lib/i386-linux-gnu",
-        "/etc/ld.so.conf",
-        "/etc/ld.so.conf.d/",
-        "/usr/local/lib/i386-linux-gnu",
-        "/usr/local/lib/i686-linux-gnu",
-        "/lib/i686-linux-gnu",
-        "/usr/lib/i686-linux-gnu",
+    static const struct {
+        const char *prefix;
+        size_t len;
+    } prefixes[] = {
+        {"/lib/i386-linux-gnu", sizeof("/lib/i386-linux-gnu") - 1},
+        {"/usr/lib/i386-linux-gnu", sizeof("/usr/lib/i386-linux-gnu") - 1},
+        {"/etc/ld.so.conf", sizeof("/etc/ld.so.conf") - 1},
+        {"/etc/ld.so.conf.d/", sizeof("/etc/ld.so.conf.d/") - 1},
+        {"/usr/local/lib/i386-linux-gnu", sizeof("/usr/local/lib/i386-linux-gnu") - 1},
+        {"/usr/local/lib/i686-linux-gnu", sizeof("/usr/local/lib/i686-linux-gnu") - 1},
+        {"/lib/i686-linux-gnu", sizeof("/lib/i686-linux-gnu") - 1},
+        {"/usr/lib/i686-linux-gnu", sizeof("/usr/lib/i686-linux-gnu") - 1},
     };
     if (path == NULL)
         return false;
     for (unsigned i = 0; i < sizeof(prefixes) / sizeof(prefixes[0]); i++) {
-        size_t len = strlen(prefixes[i]);
-        if (strncmp(path, prefixes[i], len) == 0)
+        if (strncmp(path, prefixes[i].prefix, prefixes[i].len) == 0)
             return true;
     }
     return false;
