@@ -40,3 +40,7 @@
 ## 2024-05-29 - Missing Accessibility Hints on App Buttons
 **Learning:** Adding an `accessibilityLabel` to a UI element allows a screen reader to announce its name, but if its purpose or effect isn't clear, VoiceOver users won't know what action will result from activating it.
 **Action:** Always provide an `accessibilityHint` that concisely describes the outcome of activating the element (e.g., "Navigates back to the previous page", "Closes the current workspace window").
+
+## 2024-05-30 - Missing Accessibility Hints in Applet Toolbars
+**Learning:** Adding an `accessibilityLabel` to a UI element allows a screen reader to announce its name, but if its purpose or effect isn't clear, VoiceOver users won't know what action will result from activating it. This applies to applet toolbars where actions might be context-specific.
+**Action:** Always provide an `accessibilityHint` that concisely describes the outcome of activating the element for applet toolbars (e.g., "Navigates back to the previous document.", "Cancels the video extraction process.").

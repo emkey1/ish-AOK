@@ -92,6 +92,7 @@ static void *kWorkspaceVideoPlayerItemStatusContext = &kWorkspaceVideoPlayerItem
     _cancelButton = [UIButton buttonWithType:UIButtonTypeSystem];
     _cancelButton.translatesAutoresizingMaskIntoConstraints = NO;
     [_cancelButton setTitle:@"Cancel" forState:UIControlStateNormal];
+    _cancelButton.accessibilityHint = @"Cancels the video extraction process.";
     [_cancelButton addTarget:self action:@selector(cancelButtonTapped) forControlEvents:UIControlEventTouchUpInside];
 
     UIStackView *stack = [[UIStackView alloc] initWithArrangedSubviews:@[_progressLabel, _progressView, _cancelButton]];
