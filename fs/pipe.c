@@ -30,9 +30,14 @@ static struct fd *pipe_fd_new(int pipe_fd, qword_t shared_inode, bool write_end)
     // answered "not a fifo, not a directory, not a regular file" to anything
     // that checked -- fallocate on a pipe came back ENODEV instead of ESPIPE.
     fd->type = S_IFIFO;
-    fd->stat.mode = S_IFIFO | 0660;
-    fd->stat.uid = current->uid;
-    fd->stat.gid = current->gid;
+    // get_pipe_inode: S_IFIFO | S_IRUSR | S_IWUSR, owned by the creator's
+    // FILESYSTEM ids. This had 0660 and the real uid, so a setuid program's
+    // pipe belonged to the user who ran it. Measured on 6.12 as root after
+    // setresuid(-1, 65534, -1): mode 10600, st_uid 65534. Sockets follow the
+    // same rule; see sock_fd_adopt.
+    fd->stat.mode = S_IFIFO | 0600;
+    fd->stat.uid = current->fsuid;
+    fd->stat.gid = current->fsgid;
     fd->stat.ctime = (dword_t)time(NULL);
     return fd;
 }

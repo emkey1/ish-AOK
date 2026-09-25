@@ -1452,12 +1452,6 @@ static int netlink_handle_route_request(struct fd *sock, const struct nlmsghdr_ 
     }
 }
 
-struct diag_socket_entry {
-    struct fd **fds;
-    unsigned count;
-    unsigned cap;
-};
-
 static uint32_t netlink_next_port_id(void);
 // on iOS, when the device goes to sleep, all connected sockets are killed;
 // reads/writes then return ENOTCONN, a POSIX violation this remaps to
@@ -2630,8 +2624,14 @@ struct fd *sock_fd_adopt(int sock_fd, int domain, int type, int protocol) {
     // uid while the anon_inode family -- eventfd, epoll, timerfd, signalfd --
     // really is root-owned and really does answer EPERM). fs/pipe.c has always
     // done this; sockets were simply missed.
-    fd->stat.uid = current->uid;
-    fd->stat.gid = current->gid;
+    //
+    // The FILESYSTEM ids, as sock_alloc takes them (current_fsuid()), not the
+    // real ones: a setuid program's socket is its effective user's, and that
+    // owner is the uid column of /proc/net/tcp and ss (sock_uid). Measured on
+    // 6.12 as root after setresuid(-1, 65534, -1): st_uid 65534, and 65534 in
+    // /proc/net/tcp.
+    fd->stat.uid = current->fsuid;
+    fd->stat.gid = current->fsgid;
     // fd->type is set by generic_open for path-opened files; a socket() fd
     // never goes through that, so it was left 0 and every S_ISSOCK(fd->type)
     // test in the tree read false for an actual socket -- including the poll
@@ -2746,8 +2746,8 @@ int_t sys_socket(dword_t domain, dword_t type, dword_t protocol) {
             return _ENOMEM;
         fd->stat.mode = S_IFSOCK | 0666;
         // Same ownership as the socket() path above: the creator's, not root's.
-        fd->stat.uid = current->uid;
-        fd->stat.gid = current->gid;
+        fd->stat.uid = current->fsuid;
+        fd->stat.gid = current->fsgid;
     // fd->type is set by generic_open for path-opened files; a socket() fd
     // never goes through that, so it was left 0 and every S_ISSOCK(fd->type)
     // test in the tree read false for an actual socket -- including the poll
@@ -2760,7 +2760,6 @@ int_t sys_socket(dword_t domain, dword_t type, dword_t protocol) {
         fd->socket.protocol = protocol;
         sock_init_emulation_defaults(fd);
         fd->socket.netlink_port_id = netlink_next_port_id();
-        fd->fake_inode = fd->socket.netlink_port_id;
         netlink_notify_register(fd);
         return f_install(fd, type & ~SOCKET_TYPE_MASK);
     }
@@ -3042,39 +3041,59 @@ static int netlink_append_done(struct fd *sock, uint32_t seq) {
             &status, sizeof(status), true, true);
 }
 
-static int diag_socket_push(struct diag_socket_entry *entries, struct fd *fd) {
-    for (unsigned i = 0; i < entries->count; i++) {
-        if (entries->fds[i] == fd)
+static int sock_snapshot_push(struct sock_snapshot *snapshot, struct fd *fd) {
+    for (unsigned i = 0; i < snapshot->count; i++) {
+        if (snapshot->fds[i] == fd)
             return 0;
     }
-    if (entries->count == entries->cap) {
-        unsigned new_cap = entries->cap ? entries->cap * 2 : 16;
-        struct fd **new_fds = realloc(entries->fds, sizeof(*new_fds) * new_cap);
+    if (snapshot->count == snapshot->cap) {
+        unsigned new_cap = snapshot->cap ? snapshot->cap * 2 : 16;
+        struct fd **new_fds = realloc(snapshot->fds, sizeof(*new_fds) * new_cap);
         if (new_fds == NULL)
             return _ENOMEM;
-        entries->fds = new_fds;
-        entries->cap = new_cap;
+        snapshot->fds = new_fds;
+        snapshot->cap = new_cap;
     }
-    entries->fds[entries->count++] = fd_retain(fd);
+    snapshot->fds[snapshot->count++] = fd_retain(fd);
     return 0;
 }
 
-static struct fdtable *diag_task_files_retain(struct task *task) {
+// A task's descriptor table, retained, for a walk over every process's
+// sockets.
+//
+// Never a plain blocking lock. The caller holds a task_snapshot, which holds a
+// reference on every task in it, and do_exit() takes general_lock and then
+// waits for exactly those references to go (exit_wait_needed) -- so blocking
+// on the lock of a task that has started to exit waits forever, and so does
+// the task. c0ccaed3 found that with four `ktop -b` against fork churn and
+// fixed /proc/net's copy of this walk; ss(8)'s sock_diag and bind()'s conflict
+// scan went on blocking here. do_exit() sets ->exiting before it takes the
+// lock, so a lock held on an exiting task is that case: skip the task, which
+// is about to close everything it has open. Any other holder is an ordinary
+// critical section and is waited out rather than skipped, so a live process's
+// sockets do not drop out of a listing, or out of the conflict scan, merely
+// because it was busy.
+static struct fdtable *sock_task_files_retain(struct task *task) {
+    while (trylock(&task->general_lock) != 0) {
+        if (task->exiting)
+            return NULL;
+        nanosleep(&lock_pause, NULL);
+    }
     struct fdtable *files = NULL;
-    lock(&task->general_lock, 0);
     if (task->files != NULL)
         files = fdtable_retain(task->files);
     unlock(&task->general_lock);
     return files;
 }
 
-static void diag_socket_release(struct diag_socket_entry *entries) {
-    for (unsigned i = 0; i < entries->count; i++)
-        fd_close(entries->fds[i]);
-    free(entries->fds);
+void sock_snapshot_release(struct sock_snapshot *snapshot) {
+    for (unsigned i = 0; i < snapshot->count; i++)
+        fd_close(snapshot->fds[i]);
+    free(snapshot->fds);
+    *snapshot = (struct sock_snapshot) {};
 }
 
-static int diag_collect_sockets(struct diag_socket_entry *entries, int domain, int type) {
+int sock_snapshot_collect(struct sock_snapshot *out, int domain, int type) {
     struct task_snapshot snapshot = {};
     int err = task_snapshot_collect(&snapshot, false);
     if (err < 0)
@@ -3084,7 +3103,7 @@ static int diag_collect_sockets(struct diag_socket_entry *entries, int domain, i
         struct task *task = snapshot.tasks[i];
         if (task == NULL)
             continue;
-        struct fdtable *files = diag_task_files_retain(task);
+        struct fdtable *files = sock_task_files_retain(task);
         if (files == NULL)
             continue;
         lock(&files->lock, 0);
@@ -3098,7 +3117,7 @@ static int diag_collect_sockets(struct diag_socket_entry *entries, int domain, i
                 continue;
             if (domain != AF_LOCAL_ && fd->real_fd < 0)
                 continue;
-            err = diag_socket_push(entries, fd);
+            err = sock_snapshot_push(out, fd);
             if (err < 0)
                 break;
         }
@@ -3111,19 +3130,47 @@ static int diag_collect_sockets(struct diag_socket_entry *entries, int domain, i
     return err;
 }
 
-static unsigned long diag_socket_inode(const struct fd *fd) {
-    if (fd->inode != NULL)
-        return (unsigned long) fd->inode;
-    if (fd->fake_inode != 0)
-        return (unsigned long) fd->fake_inode;
-    return (unsigned long) (uintptr_t) fd;
+// Every socket is an adhoc descriptor (sock_fd_adopt, and the netlink and
+// restore paths beside it), and adhoc_fd_create gives each one its own inode
+// number: the one fstat reports and /proc/<pid>/fd/N spells socket:[N]. This
+// used to answer fd->inode or fd->fake_inode -- neither of which a socket has
+// (they are the path-opened and fakefs identities) -- and fell through to the
+// struct fd's own ADDRESS, a number that matched nothing any process could
+// see. lsof and ss join their tables to processes on exactly this number, so
+// `lsof -i` found no sockets at all and `ss -p` could name no process.
+unsigned long sock_inode(const struct fd *sock) {
+    return (unsigned long) sock->stat.inode;
 }
 
-static int diag_recv_q(struct fd *fd) {
+// Linux's sock_i_uid: the socket inode's owner -- its creator, or whoever
+// fchown'd it since (sockfs_setattr carries a chown to sk_uid). Both the
+// /proc/net tables and sock_diag reported the READER's uid instead, so every
+// row claimed to belong to whoever was looking.
+uid_t_ sock_uid(const struct fd *sock) {
+    return sock->stat.uid;
+}
+
+int sock_recv_queue(struct fd *sock) {
     int bytes = 0;
-    if (fd->real_fd >= 0 && ioctl(fd->real_fd, FIONREAD, &bytes) == 0 && bytes > 0)
+    if (sock->real_fd >= 0 && ioctl(sock->real_fd, FIONREAD, &bytes) == 0 && bytes > 0)
         return bytes;
     return 0;
+}
+
+// Whether Linux would list this socket in /proc/net/{tcp,udp}* and sock_diag
+// at all. Both walk the protocol's lookup tables, and a socket is in them only
+// while something can find it: a TCP socket while it is listening or
+// connected -- never one that was only created, or is bound but not yet
+// listening, which is TCP_CLOSE -- and a UDP socket once it has a port. Every
+// open socket used to be listed, as 0.0.0.0:0 in state 07 until then.
+bool sock_inet_is_listed(int type, int state, const struct sockaddr *local) {
+    if (type == SOCK_STREAM_)
+        return state != 7;
+    if (local->sa_family == AF_INET)
+        return ((const struct sockaddr_in *) local)->sin_port != 0;
+    if (local->sa_family == AF_INET6)
+        return ((const struct sockaddr_in6 *) local)->sin6_port != 0;
+    return false;
 }
 
 struct inet_bind_info {
@@ -3184,7 +3231,7 @@ static bool sock_bound_inet_conflicts(struct fd *sock, const struct inet_bind_in
         struct task *task = snapshot.tasks[i];
         if (task == NULL)
             continue;
-        struct fdtable *files = diag_task_files_retain(task);
+        struct fdtable *files = sock_task_files_retain(task);
         if (files == NULL)
             continue;
         lock(&files->lock, 0);
@@ -3244,36 +3291,56 @@ static bool sock_bound_inet_conflicts(struct fd *sock, const struct inet_bind_in
     return conflict;
 }
 
-static int diag_tcp_state(struct fd *fd) {
+int sock_tcp_state(struct fd *sock) {
 #if defined(__APPLE__)
     struct tcp_connection_info conn_info;
     socklen_t conn_info_size = sizeof(conn_info);
-    if (getsockopt(fd->real_fd, IPPROTO_TCP, TCP_CONNECTION_INFO, &conn_info, &conn_info_size) == 0) {
+    if (getsockopt(sock->real_fd, IPPROTO_TCP, TCP_CONNECTION_INFO, &conn_info, &conn_info_size) == 0) {
+        // Darwin's TCPS_* (netinet/tcp_fsm.h, which iOS does not ship) in
+        // order, as Linux's TCP_* numbers.
         static const uint8_t tcp_state_table[] = {
-            7, 10, 2, 3, 1, 8, 4, 11, 9, 5, 6,
+            7,  // TCPS_CLOSED
+            10, // TCPS_LISTEN
+            2,  // TCPS_SYN_SENT
+            3,  // TCPS_SYN_RECEIVED
+            1,  // TCPS_ESTABLISHED
+            8,  // TCPS_CLOSE_WAIT
+            4,  // TCPS_FIN_WAIT_1
+            11, // TCPS_CLOSING
+            9,  // TCPS_LAST_ACK
+            5,  // TCPS_FIN_WAIT_2
+            6,  // TCPS_TIME_WAIT
         };
         if (conn_info.tcpi_state < sizeof(tcp_state_table))
             return tcp_state_table[conn_info.tcpi_state];
     }
+#elif defined(__linux__)
+    // A Linux host numbers its states exactly as the guest expects, and knows
+    // the ones the fallback below cannot see (a connect still in SYN_SENT has
+    // no peer yet, and would read as closed).
+    struct tcp_info info;
+    socklen_t info_size = sizeof(info);
+    if (getsockopt(sock->real_fd, IPPROTO_TCP, TCP_INFO, &info, &info_size) == 0 &&
+            info.tcpi_state != 0)
+        return info.tcpi_state;
 #endif
-    int acceptconn = 0;
-    socklen_t len = sizeof(acceptconn);
-    if (getsockopt(fd->real_fd, SOL_SOCKET, SO_ACCEPTCONN, &acceptconn, &len) == 0 && acceptconn)
+    // The fallback: listen()'s own record (Darwin has no SO_ACCEPTCONN to
+    // ask), then whether there is a peer.
+    if (sock->socket.listening)
         return 10;
-
     struct sockaddr_storage peer;
-    len = sizeof(peer);
-    if (getpeername(fd->real_fd, (struct sockaddr *) &peer, &len) == 0)
+    socklen_t len = sizeof(peer);
+    if (getpeername(sock->real_fd, (struct sockaddr *) &peer, &len) == 0)
         return 1;
     return 7;
 }
 
 static int diag_unix_state(struct fd *fd) {
-    int acceptconn = 0;
-    socklen_t len = sizeof(acceptconn);
-    if (fd->real_fd >= 0 &&
-            getsockopt(fd->real_fd, SOL_SOCKET, SO_ACCEPTCONN, &acceptconn, &len) == 0 &&
-            acceptconn)
+    // listen()'s own record, as getsockopt(SO_ACCEPTCONN) answers the guest.
+    // This asked the host instead, and Darwin has no SO_ACCEPTCONN at all
+    // (ENOPROTOOPT), so no unix listener was ever TCP_LISTEN here: `ss -xl`
+    // listed none, and plain `ss -x` hid them as closed.
+    if (fd->socket.listening)
         return 10;
     if (fd->socket.unix_peer != NULL)
         return 1;
@@ -3325,10 +3392,12 @@ static int netlink_append_inet_diag(struct fd *sock, const struct nlmsghdr_ *req
     else
         return netlink_append_error(sock, req_hdr->nlmsg_seq, req_hdr, _EOPNOTSUPP);
 
-    struct diag_socket_entry entries = {};
-    int err = diag_collect_sockets(&entries, req->sdiag_family, type);
-    if (err < 0)
+    struct sock_snapshot entries = {};
+    int err = sock_snapshot_collect(&entries, req->sdiag_family, type);
+    if (err < 0) {
+        sock_snapshot_release(&entries);
         return err;
+    }
 
     for (unsigned i = 0; i < entries.count; i++) {
         struct fd *fd = entries.fds[i];
@@ -3340,16 +3409,18 @@ static int netlink_append_inet_diag(struct fd *sock, const struct nlmsghdr_ *req
             continue;
 
         bool has_peer = getpeername(fd->real_fd, (struct sockaddr *) &peer, &peer_len) == 0;
-        int state = type == SOCK_STREAM_ ? diag_tcp_state(fd) : (has_peer ? 1 : 7);
+        int state = type == SOCK_STREAM_ ? sock_tcp_state(fd) : (has_peer ? 1 : 7);
+        if (!sock_inet_is_listed(type, state, (const struct sockaddr *) &local))
+            continue;
         if (req->idiag_states != 0 && !(req->idiag_states & (1u << state)))
             continue;
 
         struct inet_diag_msg_ msg = {};
         msg.idiag_family = req->sdiag_family;
         msg.idiag_state = state;
-        msg.idiag_uid = current->euid;
-        msg.idiag_inode = diag_socket_inode(fd);
-        msg.idiag_rqueue = diag_recv_q(fd);
+        msg.idiag_uid = sock_uid(fd);
+        msg.idiag_inode = sock_inode(fd);
+        msg.idiag_rqueue = sock_recv_queue(fd);
         msg.id.idiag_cookie[0] = 0xffffffffu;
         msg.id.idiag_cookie[1] = 0xffffffffu;
 
@@ -3383,16 +3454,18 @@ static int netlink_append_inet_diag(struct fd *sock, const struct nlmsghdr_ *req
 
     if (err >= 0)
         err = netlink_append_done(sock, req_hdr->nlmsg_seq);
-    diag_socket_release(&entries);
+    sock_snapshot_release(&entries);
     return err;
 }
 
 static int netlink_append_unix_diag(struct fd *sock, const struct nlmsghdr_ *req_hdr,
         const struct unix_diag_req_ *req) {
-    struct diag_socket_entry entries = {};
-    int err = diag_collect_sockets(&entries, AF_LOCAL_, -1);
-    if (err < 0)
+    struct sock_snapshot entries = {};
+    int err = sock_snapshot_collect(&entries, AF_LOCAL_, -1);
+    if (err < 0) {
+        sock_snapshot_release(&entries);
         return err;
+    }
 
     for (unsigned i = 0; i < entries.count; i++) {
         struct fd *fd = entries.fds[i];
@@ -3400,7 +3473,7 @@ static int netlink_append_unix_diag(struct fd *sock, const struct nlmsghdr_ *req
         msg.udiag_family = AF_LOCAL_;
         msg.udiag_type = fd->socket.type;
         msg.udiag_state = diag_unix_state(fd);
-        msg.udiag_ino = diag_socket_inode(fd);
+        msg.udiag_ino = sock_inode(fd);
         msg.udiag_cookie[0] = 0xffffffffu;
         msg.udiag_cookie[1] = 0xffffffffu;
         if (req->udiag_states != 0 && !(req->udiag_states & (1u << msg.udiag_state)))
@@ -3414,7 +3487,7 @@ static int netlink_append_unix_diag(struct fd *sock, const struct nlmsghdr_ *req
 
     if (err >= 0)
         err = netlink_append_done(sock, req_hdr->nlmsg_seq);
-    diag_socket_release(&entries);
+    sock_snapshot_release(&entries);
     return err;
 }
 
@@ -11133,8 +11206,8 @@ struct fd *sock_ckpt_rebuild(const struct sock_ckpt_desc *desc, int *err) {
             return NULL;
         }
         fd->stat.mode = S_IFSOCK | 0666;
-        fd->stat.uid = current != NULL ? current->uid : 0;
-        fd->stat.gid = current != NULL ? current->gid : 0;
+        fd->stat.uid = current != NULL ? current->fsuid : 0;
+        fd->stat.gid = current != NULL ? current->fsgid : 0;
         fd->type = S_IFSOCK;
         fd->real_fd = -1;
         fd->socket.domain = desc->domain;
@@ -11144,7 +11217,6 @@ struct fd *sock_ckpt_rebuild(const struct sock_ckpt_desc *desc, int *err) {
         fd->socket.netlink_port_id = desc->netlink_port_id != 0
                 ? desc->netlink_port_id : netlink_next_port_id();
         fd->socket.netlink_groups = desc->netlink_groups;
-        fd->fake_inode = fd->socket.netlink_port_id;
         netlink_notify_register(fd);
         return fd;
     }

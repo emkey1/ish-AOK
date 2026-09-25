@@ -27,6 +27,30 @@ struct fd *sock_fd_adopt(int sock_fd, int domain, int type, int protocol);
 // and so must not reach the guest. See fs/sock.c.
 bool sock_host_error_is_peer_gone(struct fd *fd, int host_err);
 
+// Every open socket of one domain, across every process, each retained once
+// however many descriptors share it: what /proc/net/{tcp,tcp6,udp,udp6,unix}
+// and NETLINK_SOCK_DIAG (ss) list. A type of -1 takes every type. One walk for
+// all of them, so the listings cannot drift apart; see fs/sock.c.
+struct sock_snapshot {
+    struct fd **fds;
+    unsigned count;
+    unsigned cap;
+};
+int sock_snapshot_collect(struct sock_snapshot *snapshot, int domain, int type);
+void sock_snapshot_release(struct sock_snapshot *snapshot);
+
+// A socket's inode number -- fstat's st_ino, and the N in /proc/<pid>/fd's
+// socket:[N] -- and its owner, as every listing of sockets must report them.
+unsigned long sock_inode(const struct fd *sock);
+uid_t_ sock_uid(const struct fd *sock);
+// A TCP socket's state as Linux numbers them (TCP_ESTABLISHED 1 ... TCP_LISTEN
+// 10), and the bytes waiting to be read on a socket.
+int sock_tcp_state(struct fd *sock);
+int sock_recv_queue(struct fd *sock);
+// Whether Linux would list an IP socket, in that state and with that (host)
+// local address, in /proc/net and sock_diag at all.
+bool sock_inet_is_listed(int type, int state, const struct sockaddr *local);
+
 int_t sys_socketcall(dword_t call_num, addr_t args_addr);
 int_t sys_socketcall_guest(dword_t call_num, guest_addr_t args_addr);
 
