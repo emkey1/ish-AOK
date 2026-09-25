@@ -567,6 +567,8 @@ void mem_init(struct mem *mem) {
     // locked mapping has no "lo"). pt_copy_on_write gives the child unlocked
     // entries, so the count starts, and stays, at what it gives: 0.
     atomic_init(&mem->locked_pages, 0);
+    for (unsigned c = 0; c < MEM_PAGE_CLASSES; c++)
+        atomic_init(&mem->class_entries[c], 0);
     // Same reason as mem->lazy above: mm_copy copies the whole struct and then
     // calls this on the child, so an inherited pointer here would be a double
     // free of the parent's array and a double close of its descriptors.
@@ -786,6 +788,20 @@ static void mem_note_vm_peak(struct mem *mem) {
     mem_hwm_raise(&mem->vm_hwm, mem_vm_pages_now(mem));
 }
 
+// `pages` entries with these flags were published, or one was cleared: the
+// only two ways vm_entries and class_entries move, so they move together.
+static inline void mem_entries_published(struct mem *mem, unsigned flags, size_t pages) {
+    atomic_fetch_add_explicit(&mem->vm_entries, pages, memory_order_relaxed);
+    atomic_fetch_add_explicit(&mem->class_entries[mem_page_class(flags)], pages,
+            memory_order_relaxed);
+}
+
+static inline void mem_entry_cleared(struct mem *mem, unsigned flags) {
+    atomic_fetch_sub_explicit(&mem->vm_entries, 1, memory_order_relaxed);
+    atomic_fetch_sub_explicit(&mem->class_entries[mem_page_class(flags)], 1,
+            memory_order_relaxed);
+}
+
 // The first access to a mapped page since it was mapped: into the resident set.
 static inline void mem_pt_touch(struct mem *mem, struct pt_entry *entry) {
     if (entry->accessed & PT_TOUCHED)
@@ -840,6 +856,37 @@ size_t mem_rss_pages_peak(struct mem *mem) {
     return hwm > now ? hwm : now;
 }
 
+size_t mem_class_pages_now(struct mem *mem, enum mem_page_class class) {
+    if (mem == NULL || class >= MEM_PAGE_CLASSES)
+        return 0;
+    return atomic_load_explicit(&mem->class_entries[class], memory_order_relaxed);
+}
+
+bool mem_class_pages_verify(struct mem *mem, size_t walked[MEM_PAGE_CLASSES],
+                            size_t counted[MEM_PAGE_CLASSES]) {
+    // The growth path's lock set (kernel/mmap.c mem_growth_lock): pt_alloc_lock
+    // holds off every structural writer that takes it, and the read lock the
+    // fault path's write-locked ones (a COW break, stack growth), so no entry
+    // is published or cleared between the walk and the counter reads.
+    pthread_mutex_lock(&mem->pt_alloc_lock);
+    read_lock(&mem->lock);
+    memset(walked, 0, sizeof(size_t) * MEM_PAGE_CLASSES);
+    for (page_t page = 0; page < mem->page_limit; mem_next_page(mem, &page)) {
+        struct pt_entry *entry = mem_pt(mem, page);
+        if (entry != NULL)
+            walked[mem_page_class(entry->flags)]++;
+    }
+    bool same = true;
+    for (unsigned c = 0; c < MEM_PAGE_CLASSES; c++) {
+        counted[c] = atomic_load_explicit(&mem->class_entries[c], memory_order_relaxed);
+        if (counted[c] != walked[c])
+            same = false;
+    }
+    read_unlock(&mem->lock);
+    pthread_mutex_unlock(&mem->pt_alloc_lock);
+    return same;
+}
+
 // Set a live entry's lock (see pt_entry::locked), keeping mem->locked_pages.
 // Every change to the byte of an entry that has data goes through here, which
 // is what lets VmLck be a counter. An exchange, not a store: mlock runs under
@@ -863,7 +910,7 @@ static void mem_pt_del(struct mem *mem, page_t page) {
     if (entry == NULL)
         return;
     if (entry->data != NULL) {
-        atomic_fetch_sub_explicit(&mem->vm_entries, 1, memory_order_relaxed);
+        mem_entry_cleared(mem, entry->flags);
         mem_pt_untouch(mem, entry);
         // Out of VmLck with the page. A leaf is reused, so a stale lock would
         // also silently pin some future mapping's page against eviction for
@@ -2666,7 +2713,7 @@ int pt_map(struct mem *mem, page_t start, pages_t pages, void *memory, size_t of
         pt->flags = flags;
     }
     // Every entry in the range was empty: the loop unmapped any that was not.
-    atomic_fetch_add_explicit(&mem->vm_entries, pages, memory_order_relaxed);
+    mem_entries_published(mem, flags, pages);
     mem_note_vm_peak(mem);
     mem_changed(mem);
     return 0;
@@ -3014,7 +3061,7 @@ int pt_dup(struct mem *mem, page_t old_start, page_t new_start, pages_t pages) {
         // A new mapping of the pages, which on Linux has none of them present
         // until it is used: not in the resident set yet (dst's accessed byte
         // is whatever mem_pt_del left, which is 0).
-        atomic_fetch_add_explicit(&mem->vm_entries, 1, memory_order_relaxed);
+        mem_entries_published(mem, dst->flags, 1);
         // ...but a locked one if the pages were: mremap's alias is a copy of
         // the VMA, VM_LOCKED and all, and VmLck counts it a second time
         // (MEASURED on 6.12: +8 kB for a 2-page alias of a locked mapping).
@@ -3101,7 +3148,7 @@ int pt_move(struct mem *mem, page_t old_start, page_t new_start, pages_t pages) 
         // once when pt_unmap below clears the source. Its lock too -- a moved
         // VMA keeps VM_LOCKED (MEASURED: VmLck unchanged across mremap to a
         // new address, and the destination "lo").
-        atomic_fetch_add_explicit(&mem->vm_entries, 1, memory_order_relaxed);
+        mem_entries_published(mem, dst->flags, 1);
         if (src->accessed & PT_TOUCHED) {
             __atomic_fetch_or(&dst->accessed, PT_TOUCHED, __ATOMIC_RELAXED);
             atomic_fetch_add_explicit(&mem->rss_pages, 1, memory_order_relaxed);
@@ -3763,7 +3810,7 @@ int pt_copy_on_write(struct mem *src, struct mem *dst, page_t start, page_t page
         //
         // The child starts with the parent's present pages in its resident set,
         // as a Linux fork copies the present entries.
-        atomic_fetch_add_explicit(&dst->vm_entries, 1, memory_order_relaxed);
+        mem_entries_published(dst, dst_entry->flags, 1);
         if (entry->accessed & PT_TOUCHED) {
             __atomic_fetch_or(&dst_entry->accessed, PT_TOUCHED, __ATOMIC_RELAXED);
             atomic_fetch_add_explicit(&dst->rss_pages, 1, memory_order_relaxed);

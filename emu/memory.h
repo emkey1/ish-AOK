@@ -105,6 +105,17 @@ struct mem_lazy_map {
 // start, so a sequential walk pays one fault per 2 MiB rather than per page.
 #define MEM_LAZY_CHUNK_PAGES 512u
 
+// What /proc/meminfo sorts an address space's page-table entries into: private
+// anonymous (AnonPages), shared anonymous (Shmem), and everything mapped from
+// a file, memfd included (Mapped). See mem_page_class, and the counters that
+// use it at the end of struct mem.
+enum mem_page_class {
+    MEM_PAGE_ANON,
+    MEM_PAGE_SHMEM,
+    MEM_PAGE_FILE,
+    MEM_PAGE_CLASSES,
+};
+
 struct mem {
     _Atomic(struct pt_directory_chunk *) *pgdir_root;
     // Set-only bitmap (one bit per pgdir_root entry) of which roots have a
@@ -229,6 +240,13 @@ struct mem {
     // (mem_set_memlock_limit). mem_init clears it to "none", which is what a
     // fresh mm has until exec reads the limit.
     _Atomic page_t memlock_limit_pages;
+    // vm_entries again, split by mem_page_class of each entry's flags, so
+    // /proc/meminfo never walks a page table. Moved at exactly the sites
+    // vm_entries is, which is enough because an entry's class is fixed from
+    // publication to mem_pt_del: nothing changes P_ANONYMOUS or P_SHARED on a
+    // live entry (mprotect keeps them, a COW break maps a copy with the same
+    // ones). Same mm_copy rule as the counters above.
+    _Atomic size_t class_entries[MEM_PAGE_CLASSES];
 };
 #define MEM_MEMLOCK_UNLIMITED ((page_t) -1)
 
@@ -392,6 +410,16 @@ size_t mem_vm_pages_now(struct mem *mem);
 size_t mem_vm_pages_peak(struct mem *mem);
 size_t mem_rss_pages_now(struct mem *mem);
 size_t mem_rss_pages_peak(struct mem *mem);
+// Of the page-table entries (not reservations), how many are of each
+// mem_page_class: what /proc/meminfo sums over address spaces. A counter read,
+// needing no lock on `mem`; 0 for a NULL mem.
+size_t mem_class_pages_now(struct mem *mem, enum mem_page_class class);
+// The same three figures by walking the page table, and the counters read at
+// the same instant, with every structural writer held off: whether they agree.
+// A page-table walk, for ISH_MEM_CLASS_CHECK=1 (fs/proc/root.c) only. Takes
+// the mem's locks itself, so the caller must hold none of them.
+bool mem_class_pages_verify(struct mem *mem, size_t walked[MEM_PAGE_CLASSES],
+                            size_t counted[MEM_PAGE_CLASSES]);
 // Linux's total_vm and data_vm, for RLIMIT_AS and RLIMIT_DATA: every page of
 // the address space the guest has mapped (reserved pages included), and those
 // of them that are private, writable and not the stack. The _range form counts
@@ -724,6 +752,12 @@ struct pt_entry {
 // madvise(MADV_WIPEONFORK): a child of fork() gets fresh zero pages here
 // instead of inheriting the parent's data. Cleared by MADV_KEEPONFORK.
 #define P_WIPEONFORK (1 << 8)
+
+static inline enum mem_page_class mem_page_class(unsigned flags) {
+    if (!(flags & P_ANONYMOUS))
+        return MEM_PAGE_FILE;
+    return (flags & P_SHARED) ? MEM_PAGE_SHMEM : MEM_PAGE_ANON;
+}
 
 // pt_entry::accessed bits; see the comment there.
 #define PT_ACCESSED 0x1

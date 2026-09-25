@@ -395,6 +395,35 @@ struct mem_page_class_totals {
 // kernel/fork.c), so summing leaders avoids counting the same address space
 // once per thread. A bare CLONE_VM without CLONE_THREAD would be missed, but
 // nothing in this codebase creates that combination.
+//
+// Each address space's figures are counters (mem_class_pages_now), not a walk.
+// This used to walk every page of every address space under its read lock,
+// which made one read cost a pass over every mapped page in the guest. The
+// .NET GC reads this file on every collection and maps its code heap twice
+// from a 2 GiB memfd: MEASURED on amd64, one read took 0.5 ms alone and 54 ms
+// beside that mapping (200-1200 ms on a loaded host), and an mmap on another
+// thread waited out each one for the write lock. Linux's read is constant,
+// 0.011 ms either way. Now it costs a few loads per process, takes no lock on
+// any address space, and reports the same numbers the walk did.
+// ISH_MEM_CLASS_CHECK=1 walks as well and stops the emulator if they differ.
+static bool mem_class_check_enabled(void) {
+    static int enabled = -1;
+    if (enabled < 0) {
+        const char *v = getenv("ISH_MEM_CLASS_CHECK");
+        enabled = (v != NULL && *v == '1') ? 1 : 0;
+    }
+    return enabled == 1;
+}
+
+static void mem_class_check(struct task *task, struct mm *mm) {
+    size_t walked[MEM_PAGE_CLASSES], counted[MEM_PAGE_CLASSES];
+    if (!mem_class_pages_verify(&mm->mem, walked, counted))
+        die("ISH_MEM_CLASS_CHECK: pid %d (%s): walked anon %zu shmem %zu file %zu, "
+            "counted %zu %zu %zu", (int) task->pid, task->comm,
+            walked[MEM_PAGE_ANON], walked[MEM_PAGE_SHMEM], walked[MEM_PAGE_FILE],
+            counted[MEM_PAGE_ANON], counted[MEM_PAGE_SHMEM], counted[MEM_PAGE_FILE]);
+}
+
 static void collect_mem_page_stats(struct mem_page_class_totals *out) {
     memset(out, 0, sizeof(*out));
 
@@ -402,6 +431,7 @@ static void collect_mem_page_stats(struct mem_page_class_totals *out) {
     if (task_snapshot_collect(&snapshot, true) < 0)
         return;
 
+    bool check = mem_class_check_enabled();
     for (unsigned i = 0; i < snapshot.count; i++) {
         struct task *task = snapshot.tasks[i];
         // task_snapshot_collect() only checks task->exiting at snapshot time
@@ -424,32 +454,28 @@ static void collect_mem_page_stats(struct mem_page_class_totals *out) {
         // is harmless.
         if (trylock(&task->general_lock) != 0)
             continue;
+        // Read under general_lock rather than through a reference, as
+        // task_maxrss_kb does: do_exit holds the same lock across
+        // `mm_release(task->mm); task->mm = NULL;`, so the mm cannot go while
+        // it is held, and this reader never becomes the one whose release
+        // tears an address space down.
         struct mm *mm = task->mm;
-        if (mm != NULL)
-            mm_retain(mm);
-        unlock(&task->general_lock);
-        if (mm == NULL)
-            continue;
-
-        struct mem *mem = &mm->mem;
-        mem_read_lock_quiesce_aware(mem);
-        page_t page = 0;
-        while (page < mem->page_limit) {
-            struct pt_entry *pt = mem_pt(mem, page);
-            if (pt != NULL) {
-                if (pt->flags & P_ANONYMOUS) {
-                    if (pt->flags & P_SHARED)
-                        out->shmem_bytes += PAGE_SIZE;
-                    else
-                        out->anon_bytes += PAGE_SIZE;
-                } else {
-                    out->mapped_bytes += PAGE_SIZE;
-                }
-            }
-            mem_next_page(mem, &page);
+        if (mm != NULL) {
+            struct mem *mem = &mm->mem;
+            out->anon_bytes += (uint64_t) mem_class_pages_now(mem, MEM_PAGE_ANON) * PAGE_SIZE;
+            out->shmem_bytes += (uint64_t) mem_class_pages_now(mem, MEM_PAGE_SHMEM) * PAGE_SIZE;
+            out->mapped_bytes += (uint64_t) mem_class_pages_now(mem, MEM_PAGE_FILE) * PAGE_SIZE;
+            if (check)
+                mm_retain(mm);
         }
-        mem_read_unlock_quiesce_aware(mem);
-        mm_release(mm);
+        unlock(&task->general_lock);
+        // The check walks under the mm's own locks, which must not be taken
+        // under general_lock: mem_ptr's COW break takes general_lock while
+        // holding the read lock, the opposite order.
+        if (check && mm != NULL) {
+            mem_class_check(task, mm);
+            mm_release(mm);
+        }
     }
 
     task_snapshot_release(&snapshot);

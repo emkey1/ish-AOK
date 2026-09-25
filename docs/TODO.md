@@ -931,6 +931,39 @@ header alone and shmctl has no SHM_STAT/SHM_INFO, so `ipcs -m` shows nothing
 even while segments exist (kernel/ipc.c implements them). Semaphores and
 message queues are listed for real.
 
+**`/proc/meminfo`'s Shmem, AnonPages and Mapped are not Linux's figures.**
+Since 2026-09-25 they are counters (`class_entries` in struct mem), so a read no
+longer walks every page of every address space -- 0.5 ms alone and 54 ms beside
+a 2 GiB memfd mapped twice before, 0.05-0.06 ms both after, 0.011 ms on Linux.
+The counters kept the old walk's values exactly, and those differ from what
+Linux means. Measured with the same program on amd64 and on Linux 6.12 (camd),
+the change in kB as each step happens:
+
+| step (16 MiB unless said)          | Linux 6.12                     | AOK                         |
+|------------------------------------|--------------------------------|-----------------------------|
+| private anon mapped, untouched     | 0                              | AnonPages +16384            |
+| ...then touched                    | AnonPages +16384               | 0                           |
+| shared anon mapped, untouched      | 0                              | Shmem +16384                |
+| ...then touched                    | Shmem +16384, Mapped +16384    | 0                           |
+| memfd mapped RW and RX, untouched  | 0                              | Mapped +32768               |
+| ...touched through RW              | Shmem +16384, Mapped +16384    | 0                           |
+| ...read through RX too             | 0                              | 0                           |
+| ...unmapped, fd still open         | Mapped -16384 (Shmem stays)    | Mapped -32768               |
+| ...fd closed                       | Shmem -16384                   | 0                           |
+| file mapped private, then read     | Mapped + the pages not already mapped elsewhere | Mapped + all, at mmap |
+| 2 GiB memfd mapped twice, untouched| 0                              | Mapped +4194304             |
+| fork, child breaks half of 32 MiB  | AnonPages +16384               | AnonPages +32768            |
+
+So AOK counts page-table entries per address space at mmap time; Linux counts
+resident pages once each, from first touch: AnonPages is anonymous pages
+mapped anywhere, Mapped is file pages (shmem included) mapped anywhere, and
+Shmem is every shmem page -- memfd, shared anonymous, tmpfs, SysV -- mapped or
+not. Linux-shaped figures need per-page state rather than per-entry: a
+touched-and-first-mapping count on the frame (struct data already tracks its
+owners), a memfd/shared-anon page counted as Shmem, and tmpfs file pages
+counted whether mapped or not. `tests/manual/meminfo_scaling.c` asserts only
+what both agree on; its table would change with this.
+
 ### PIPE_BUF atomicity cannot be imposed on a HOST pipe
 
 Measured 2026-09-01. A write of at most PIPE_BUF is atomic on Linux: with

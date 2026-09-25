@@ -39,7 +39,8 @@ changes, not footnotes:
   write lock a lockless walker does not hold, at a measured 267-457 frees per
   second from one dull single-threaded guest. The clock hand must walk under
   `mem_read_lock_quiesce_aware` in bounded chunks, exactly as
-  `collect_mem_page_stats` already does (fs/proc/root.c:400-418).
+  `collect_mem_page_stats` then did (fs/proc/root.c:400-418; it reads
+  per-address-space counters now and takes no mem lock).
 - **Eviction throughput is 100-200 MiB/s per victim process, not 1 GB/s.** The
   barrier is scheduler-bound, its cost is a per-busy-sibling scheduling latency,
   and each barrier also costs every sibling about 109 us of its own CPU that the
@@ -218,9 +219,9 @@ pointer") does not save it: libmalloc returns the same address for a new
 
 **The repair.** The clock hand runs under `mem_read_lock_quiesce_aware`, in
 bounded chunks (one leaf, or one 4 MiB granule, per acquisition, dropping and
-re-taking between chunks). This is the pattern `collect_mem_page_stats` already
-uses (fs/proc/root.c:400 lock, :418 unlock, with the `mm_retain` from
-`task_snapshot_collect`). The read lock is shared with running guest threads, so
+re-taking between chunks). This is the pattern `collect_mem_page_stats` then
+used (fs/proc/root.c:400 lock, :418 unlock, with the `mm_retain` from
+`task_snapshot_collect`; since 2026-09-25 it reads counters instead). The read lock is shared with running guest threads, so
 it does not stop them; it only delays a concurrent barrier writer, and only for
 the length of one chunk. Nothing else in the design changes: the `accessed`/`age`
 bytes still live in the leaf, and the barrier re-validation still runs.
