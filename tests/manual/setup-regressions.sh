@@ -146,6 +146,7 @@ if [ "$is_x86_guest" -eq 1 ]; then
 fi
 if [ "$is_x86_guest" -eq 1 ] && [ "$is_amd64_guest" -eq 0 ]; then
     need_file x86/avx32_smoke.c
+    need_file x86/i386_segment_regs.c
 fi
 if [ "$is_arm64_guest" -eq 1 ]; then
     need_file arm64/atomics64.c
@@ -914,7 +915,7 @@ if [ "$is_x86_guest" -eq 1 ] && [ "$is_amd64_guest" -eq 0 ]; then
     # invalid in 64-bit mode)" on every amd64 run -- a test reporting, correctly
     # and forever, that it could not run. The list should say what is true
     # instead: this is an i386 test.
-    all_tests="avx32_smoke bcd_adjust $all_tests"
+    all_tests="avx32_smoke bcd_adjust i386_segment_regs $all_tests"
 fi
 if [ "$is_amd64_guest" -eq 1 ]; then
     all_tests="$all_tests amd64_regress avx_regress amd64_incdec amd64_singlestep amd64_segment_regs"

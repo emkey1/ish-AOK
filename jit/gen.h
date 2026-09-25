@@ -5,6 +5,13 @@
 #include "jit/jit.h"
 #include "emu/tlb.h"
 
+// Which base an i386 segment override adds (gen_state.x86_seg).
+enum x86_seg_base {
+    X86_SEG_NONE,
+    X86_SEG_GS,     // tls_ptr: GS's base, and FS's on the amd64 bring-up path
+    X86_SEG_FS,     // i386_fs_base
+};
+
 struct gen_state {
     addr_t ip;
     addr_t orig_ip;
@@ -43,6 +50,13 @@ struct gen_state {
     // gen_start's comment).
     unsigned x86_fuse_end;
     int x86_fuse_op; // 0 = none, 1 = sub (cmp), 2 = and (test)
+    // The segment override of the i386 instruction being decoded, whose base
+    // gen_addr adds. Here rather than in the decoder's locals because an
+    // operand-size prefix re-enters the decoder, and assemblers put it after
+    // the segment override: `65 66 8b 15` is mov %gs:...,%dx, and was a flat
+    // access while this lived in a local. gen_step clears it for each
+    // instruction.
+    enum x86_seg_base x86_seg;
     struct jit_block *block;
     unsigned size;
     unsigned capacity;

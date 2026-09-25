@@ -4,6 +4,7 @@
 #include "kernel/abi/amd64.h"
 #include "kernel/abi/i386.h"
 #include "kernel/signal.h"
+#include "emu/i386_sreg.h"
 #include "task.h"
 #include <string.h>
 
@@ -561,16 +562,16 @@ static void get_user_regs(struct cpu_state *cpu, struct user_regs_struct_ *user_
     user_regs_->edi = cpu->edi;
     user_regs_->ebp = cpu->ebp;
     user_regs_->eax = cpu->eax;
-//  user_regs_->xds = cpu->xds;
-//  user_regs_->xes = cpu->xes;
-//  user_regs_->xfs = cpu->xfs;
-//  user_regs_->xgs = cpu->xgs;
+    user_regs_->xds = i386_sreg_read(cpu, AMD64_SREG_DS);
+    user_regs_->xes = i386_sreg_read(cpu, AMD64_SREG_ES);
+    user_regs_->xfs = i386_sreg_read(cpu, AMD64_SREG_FS);
+    user_regs_->xgs = i386_sreg_read(cpu, AMD64_SREG_GS);
     user_regs_->orig_eax = cpu->eax;
     user_regs_->eip = cpu->eip;
-//  user_regs_->xcs = cpu->xcs;
+    user_regs_->xcs = i386_sreg_read(cpu, AMD64_SREG_CS);
     user_regs_->eflags = cpu->eflags;
     user_regs_->esp = cpu->esp;
-//  user_regs_->xss = cpu->xss;
+    user_regs_->xss = i386_sreg_read(cpu, AMD64_SREG_SS);
 }
 
 // Ensure stopped, ptrace locked, etc. before calling this
@@ -581,9 +582,45 @@ static void get_user_regs_and_syscall(struct task *task, struct user_regs_struct
         user_regs_->eax = (dword_t) (sdword_t) _ENOSYS;
 }
 
-// Ensure stopped, ptrace locked, etc. before calling this
-static void set_user_regs(struct task *task, struct user_regs_struct_ *user_regs_) {
+// Linux's set_segment_reg takes the low word, and refuses (EIO) a selector
+// that is neither null nor RPL 3, and a null CS or SS.
+static bool ptrace_sreg_ok(unsigned sreg, dword_t value) {
+    word_t sel = (word_t) value;
+    if (sel != 0 && (sel & 3) != 3)
+        return false;
+    return sel != 0 || (sreg != AMD64_SREG_CS && sreg != AMD64_SREG_SS);
+}
+
+// What the task has once it resumes: a selector it cannot load is null, as
+// Linux's reload of it on the way back to the task faults to null. CS is
+// always 0x23 here, so a new CS changes nothing, and an SS that cannot be
+// loaded leaves SS as it was.
+static void ptrace_sreg_set(struct cpu_state *cpu, unsigned sreg, dword_t value) {
+    word_t sel = (word_t) value;
+    if (sreg == AMD64_SREG_CS)
+        return;
+    if (!i386_sreg_loadable(cpu, sreg, sel)) {
+        if (sreg == AMD64_SREG_SS)
+            return;
+        sel = 0;
+    }
+    i386_sreg_load(cpu, sreg, sel);
+}
+
+// Ensure stopped, ptrace locked, etc. before calling this. In the order of
+// struct user_regs_struct, as Linux's putreg32 goes: a refused selector stops
+// there with EIO, after what came before it has been set.
+static int set_user_regs(struct task *task, struct user_regs_struct_ *user_regs_) {
     struct cpu_state *cpu = &task->cpu;
+    static const struct {
+        size_t offset;
+        unsigned sreg;
+    } sregs_early[] = {
+        {offsetof(struct user_regs_struct_, xds), AMD64_SREG_DS},
+        {offsetof(struct user_regs_struct_, xes), AMD64_SREG_ES},
+        {offsetof(struct user_regs_struct_, xfs), AMD64_SREG_FS},
+        {offsetof(struct user_regs_struct_, xgs), AMD64_SREG_GS},
+    };
     cpu->ebx = user_regs_->ebx;
     cpu->ecx = user_regs_->ecx;
     cpu->edx = user_regs_->edx;
@@ -591,21 +628,28 @@ static void set_user_regs(struct task *task, struct user_regs_struct_ *user_regs
     cpu->edi = user_regs_->edi;
     cpu->ebp = user_regs_->ebp;
     cpu->eax = user_regs_->eax;
-//  cpu->xds = user_regs_->xds;
-//  cpu->xes = user_regs_->xes;
-//  cpu->xfs = user_regs_->xfs;
-//  cpu->xgs = user_regs_->xgs;
-//  cpu->eax = user_regs_->orig_eax;
+    for (unsigned i = 0; i < sizeof(sregs_early) / sizeof(sregs_early[0]); i++) {
+        dword_t value;
+        memcpy(&value, (char *) user_regs_ + sregs_early[i].offset, sizeof(value));
+        if (!ptrace_sreg_ok(sregs_early[i].sreg, value))
+            return _EIO;
+        ptrace_sreg_set(cpu, sregs_early[i].sreg, value);
+    }
+    task->ptrace.syscall = (int) user_regs_->orig_eax;
+    if (ptrace_in_syscall_entry_stop(task))
+        cpu->eax = user_regs_->orig_eax;
     cpu->eip = user_regs_->eip;
-//  cpu->xcs = user_regs_->xcs;
+    if (!ptrace_sreg_ok(AMD64_SREG_CS, user_regs_->xcs))
+        return _EIO;
+    ptrace_sreg_set(cpu, AMD64_SREG_CS, user_regs_->xcs);
     cpu->eflags = user_regs_->eflags;
     expand_flags(cpu);
     cpu->df_offset = cpu->df ? -1 : 1;
     cpu->esp = user_regs_->esp;
-//  cpu->xss = user_regs_->xss;
-    task->ptrace.syscall = (int) user_regs_->orig_eax;
-    if (ptrace_in_syscall_entry_stop(task))
-        cpu->eax = user_regs_->orig_eax;
+    if (!ptrace_sreg_ok(AMD64_SREG_SS, user_regs_->xss))
+        return _EIO;
+    ptrace_sreg_set(cpu, AMD64_SREG_SS, user_regs_->xss);
+    return 0;
 }
 
 static int ptrace_getregset(struct task *tracer, struct task *child, guest_addr_t iov_addr,
@@ -747,7 +791,7 @@ static int ptrace_setregset(struct task *tracer, struct task *child, guest_addr_
                 int err = ptrace_setregset_read(tracer, iov_addr, &user_regs_, sizeof(user_regs_));
                 if (err < 0)
                     return err;
-                set_user_regs(child, &user_regs_);
+                return set_user_regs(child, &user_regs_);
             }
             return 0;
         }
@@ -1775,7 +1819,11 @@ dword_t sys_ptrace_guest(dword_t request, dword_t pid, guest_addr_t addr, guest_
                     unlock(&child->ptrace.lock);
                     return _EFAULT;
                 }
-                set_user_regs(child, &user_regs_);
+                int err = set_user_regs(child, &user_regs_);
+                if (err < 0) {
+                    unlock(&child->ptrace.lock);
+                    return err;
+                }
             }
             unlock(&child->ptrace.lock);
 
@@ -1955,6 +2003,30 @@ dword_t sys_ptrace_guest(dword_t request, dword_t pid, guest_addr_t addr, guest_
             }
             unlock(&child->ptrace.lock);
             return 0;
+        }
+
+        // A TLS entry of an x86 tracee, addr its number, as get_thread_area
+        // and set_thread_area (without allocating) would see it in the
+        // tracee. gdb reads the one GS selects to find an i386 thread's
+        // libthread_db state.
+        case PTRACE_GET_THREAD_AREA_:
+        case PTRACE_SET_THREAD_AREA_: {
+            STRACE("ptrace(%s, %d, %#llx, %#llx)",
+                    request == PTRACE_GET_THREAD_AREA_ ? "PTRACE_GET_THREAD_AREA"
+                                                       : "PTRACE_SET_THREAD_AREA",
+                    pid, (unsigned long long) addr, (unsigned long long) data);
+            struct task *child = find_child(pid);
+            if (!child) return _ESRCH;
+
+            int err;
+            if (child->abi != GUEST_ABI_I386 && child->abi != GUEST_ABI_AMD64)
+                err = _EIO;
+            else if (request == PTRACE_GET_THREAD_AREA_)
+                err = task_get_thread_area(child, (int) addr, (addr_t) data);
+            else
+                err = task_set_thread_area(child, (int) addr, (addr_t) data, false);
+            unlock(&child->ptrace.lock);
+            return err;
         }
 
         case PTRACE_GETREGSET_: {

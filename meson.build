@@ -498,6 +498,7 @@ emu_src = [
     'emu/tlb.c',
     'emu/fpu.c',
     'emu/fpenv.c',
+    'emu/i386_sreg.c', # i386 segment registers and TLS descriptors: the JIT's i386_jit_sreg and the kernel's side
     'emu/vec.c',
     'emu/avx.c', # arch-independent AVX/VEX semantics, shared by the amd64 and i386 front-ends
     'emu/mmx.c',

@@ -56,6 +56,11 @@
     addl CPU_tls_ptr(%_cpu), %_addr
     gret
 
+# An FS override on i386: FS's base (emu/i386_sreg.c).
+.gadget seg_fs
+    addl CPU_i386_fs_base(%_cpu), %_addr
+    gret
+
 .irp type, read,write
 
 .global handle_\type\()_miss

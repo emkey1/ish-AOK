@@ -15,6 +15,7 @@
 #include "emu/avx.h"
 #include "emu/vec.h"
 #include "emu/interrupt.h"
+#include "emu/i386_sreg.h"
 #include "emu/arch/arm64/decode.h"
 
 // Every tlb_read in this file reads the guest's CODE -- the instruction being
@@ -364,6 +365,7 @@ int gen_step(struct gen_state *state, struct tlb *tlb) {
     state->orig_ip_extra = 0;
     if (state->amd64)
         return gen_step64(state, tlb);
+    state->x86_seg = X86_SEG_NONE;
     return gen_step32(state, tlb);
 }
 
@@ -622,6 +624,7 @@ bool gen_start(guest_addr_t addr, struct gen_state *state) {
     state->amd64_fallback_op2 = 0;
     state->amd64_fallback_flags = 0;
     state->x86_fuse_end = 0; // same uninitialized-flag bug class as arm64 above
+    state->x86_seg = X86_SEG_NONE;
     state->x86_fuse_op = 0;
     state->capacity = JIT_BLOCK_INITIAL_CAPACITY;
     state->size = 0;
@@ -12617,7 +12620,7 @@ void gen_exit(struct gen_state *state) {
 #define DECLARE_LOCALS \
     dword_t addr_offset = 0; \
     bool end_block = false; \
-    bool seg_tls = false
+    bool seg_tls = state->x86_seg != X86_SEG_NONE
 
 #define FINISH \
     return !end_block
@@ -12630,14 +12633,17 @@ void gen_exit(struct gen_state *state) {
 
 #define READMODRM if (!modrm_decode32(&state->ip, tlb, &modrm)) SEGFAULT
 #define READADDR _READIMM(addr_offset, 32)
-#define SEG_GS() seg_tls = true
-#define SEG_FS() seg_tls = true
+// An override's base: GS's is tls_ptr and FS's i386_fs_base (emu/i386_sreg.c).
+// On the amd64 bring-up path FS's base is tls_ptr.
+#define SEG_GS() (state->x86_seg = X86_SEG_GS, seg_tls = true)
+#define SEG_FS() (state->x86_seg = X86_SEG_FS, seg_tls = true)
+#define SEG_FS_AMD64() SEG_GS()
 
 // This should stay in sync with the definition of .gadget_array in gadgets.h
 enum arg {
     arg_reg_a, arg_reg_c, arg_reg_d, arg_reg_b, arg_reg_sp, arg_reg_bp, arg_reg_si, arg_reg_di,
     arg_reg_ah = arg_reg_sp, arg_reg_ch = arg_reg_bp, arg_reg_dh = arg_reg_si, arg_reg_bh = arg_reg_di,
-    arg_imm, arg_mem, arg_addr, arg_gs,
+    arg_imm, arg_mem, arg_addr,
     arg_count, arg_invalid,
     // the following should not be synced with the list mentioned above (no gadgets implement them)
     arg_modrm_val, arg_modrm_reg,
@@ -12773,7 +12779,9 @@ bool gen_addr(struct gen_state *state, struct modrm *modrm, bool seg_tls) {
         gag(addr, modrm->base, modrm->offset);
     if (modrm->type == modrm_mem_si)
         ga(si, modrm->index * 4 + modrm->shift);
-    if (seg_tls)
+    if (seg_tls && state->x86_seg == X86_SEG_FS)
+        g(seg_fs);
+    else if (seg_tls)
         g(seg_gs);
     return true;
 }
@@ -13277,6 +13285,31 @@ static inline bool gen_pop_reg_fused(struct gen_state *state, enum arg thing,
 #define lo(o, src, dst, z) load(dst, z); op(o, src, z)
 
 #define MOV(src, dst,z) do { if (!gen_mov(state, arg_##src, arg_##dst, &modrm, &imm, z, seg_tls, addr_offset)) return false; } while (0)
+
+// MOV r/m, Sreg (8C), MOV Sreg, r/m (8E), and PUSH and POP of a segment
+// register, all through i386_jit_sreg (emu/i386_sreg.c): the selectors and
+// Linux's rules for loading one live there, and a load that breaks them is a
+// #GP it raises at run time. The decoder has already made the Sreg fields
+// that do not exist #UD. A memory operand's address, segment base and all,
+// comes from gen_addr, as any other's does. Rare enough -- glibc reads GS
+// once per pthread_create, its getcontext FS once per call -- that a helper
+// costs nothing that matters, and the block goes on after it.
+static void gen_sreg(struct gen_state *state, struct modrm *modrm, unsigned kind,
+        unsigned sreg, int size, bool seg_tls) {
+    unsigned long op = kind | sreg << 4 | (size == 16 ? I386_SREG_OP_16 : 0);
+    if (modrm != NULL && modrm->type != modrm_reg) {
+        gen_addr(state, modrm, seg_tls);
+        op |= I386_SREG_OP_MEM;
+    } else if (modrm != NULL) {
+        op |= (unsigned long) modrm->base << 12;
+    }
+    g(helper_addr_retint);
+    GEN(i386_jit_sreg);
+    GEN(op);
+    GEN(state->orig_ip);
+}
+#define SREG_RM(kind) gen_sreg(state, &modrm, I386_SREG_OP_##kind, modrm.reg, OP_SIZE, seg_tls)
+#define SREG_STACK(kind, sreg) gen_sreg(state, NULL, I386_SREG_OP_##kind, AMD64_SREG_##sreg, OP_SIZE, seg_tls)
 #define MOVZX(src, dst,zs,zd) load(src, zs); gz(zero_extend, zs); store(dst, zd)
 #define MOVSX(src, dst,zs,zd) load(src, zs); gz(sign_extend, zs); store(dst, zd)
 // xchg must generate in this order to be atomic

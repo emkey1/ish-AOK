@@ -199,6 +199,15 @@ union xmm_reg {
 static_assert(sizeof(union xmm_reg) == 16, "xmm_reg size");
 static_assert(sizeof(union mm_reg) == 8, "mm_reg size");
 
+// A TLS entry as set_thread_area filled it: struct user_desc's base, its
+// limit (20 bits) and its flags word (bits 0-6). flags is 0 for an empty
+// entry, since a filled one is always 32-bit. See emu/i386_sreg.c.
+struct i386_tls_desc {
+    dword_t base;
+    dword_t limit;
+    dword_t flags;
+};
+
 struct cpu_state {
     struct mmu *mmu;
     long cycle;
@@ -407,8 +416,15 @@ struct cpu_state {
     // read-modify-write round-trips (Free Pascal's FPU init does this).
     dword_t mxcsr;
 
-    // TLS bullshit
-    word_t gs;
+    // The base an FS override adds on i386: that of the descriptor FS
+    // selected when it was loaded, 0 unless that is a TLS entry. It sits in
+    // what was padding before tls_ptr, where the JIT's seg_fs gadget reaches
+    // it with an immediate. See emu/i386_sreg.c.
+    dword_t i386_fs_base;
+    // The TLS base: FS's on amd64 (ARCH_SET_FS, CLONE_SETTLS), and on i386
+    // GS's, the base of the descriptor GS selected when it was loaded (see
+    // emu/i386_sreg.c). The JIT's seg_gs gadget adds it to every GS-relative
+    // address.
     guest_addr_t tls_ptr;
 
     // for the page fault handler
@@ -465,6 +481,16 @@ struct cpu_state {
     // 0x2b is the only selector its SS can be loaded with. See
     // amd64_sreg_op in emu/amd64_interp.c.
     word_t amd64_sreg[6];
+
+    // i386 segment state; see emu/i386_sreg.c. i386_sreg holds what ES, SS,
+    // DS, FS and GS were last loaded with -- by 8E, POP, sigreturn, ptrace or
+    // exec -- indexed by the Sreg encoding, as amd64_sreg is. The CS slot is
+    // unused: a 32-bit task's CS is always 0x23. i386_tls holds GDT entries
+    // 12-14, the ones set_thread_area fills. Both are inherited by fork and
+    // reset by exec, as Linux's are. FS's and GS's bases are i386_fs_base and
+    // tls_ptr above.
+    word_t i386_sreg[6];
+    struct i386_tls_desc i386_tls[3];
 };
 
 #define AMD64_SREG_ES 0

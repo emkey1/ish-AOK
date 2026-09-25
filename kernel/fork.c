@@ -275,7 +275,11 @@ static int copy_task(struct task *task, dword_t flags, guest_addr_t stack, guest
             // register like arm64's TPIDR_EL0.
             task->cpu.riscv64_regs[riscv64_tp] = tls_addr;
         } else {
-            err = task_set_thread_area(task, (addr_t) tls_addr);
+            // i386: a struct user_desc in the caller's memory for an entry
+            // the child already has (Linux's do_set_thread_area with
+            // can_allocate 0, so -1 is EINVAL). The child's GS or FS follows
+            // the entry if it selects it, as it does for glibc and musl.
+            err = task_set_thread_area(task, -1, (addr_t) tls_addr, false);
             if (err < 0)
                 goto fail_unlink_group;
         }

@@ -65,6 +65,16 @@ restart:
         MAKE_OP(0x00, ADD, "add");
         MAKE_OP(0x08, OR, "or");
 
+        // PUSH and POP of ES, CS, SS and DS (there is no POP CS: 0F is the
+        // two-byte escape). See gen_sreg.
+        case 0x06: TRACEI("push es"); SREG_STACK(PUSH, ES); break;
+        case 0x07: TRACEI("pop es"); SREG_STACK(POP, ES); break;
+        case 0x0e: TRACEI("push cs"); SREG_STACK(PUSH, CS); break;
+        case 0x16: TRACEI("push ss"); SREG_STACK(PUSH, SS); break;
+        case 0x17: TRACEI("pop ss"); SREG_STACK(POP, SS); break;
+        case 0x1e: TRACEI("push ds"); SREG_STACK(PUSH, DS); break;
+        case 0x1f: TRACEI("pop ds"); SREG_STACK(POP, DS); break;
+
         case 0x0f:
             // 2-byte opcode prefix
             READINSN;
@@ -201,6 +211,8 @@ restart:
                                UNDEFINED;
                            XGETBV(); break;
 
+                case 0xa0: TRACEI("push fs"); SREG_STACK(PUSH, FS); break;
+                case 0xa1: TRACEI("pop fs"); SREG_STACK(POP, FS); break;
                 case 0xa2: TRACEI("cpuid"); CPUID(); break;
 
                 case 0xa3: TRACEI("bt reg, modrm");
@@ -211,6 +223,9 @@ restart:
                            READMODRM; READIMM8; SHLD(imm, modrm_reg, modrm_val,oz); break;
                 case 0xa5: TRACEI("shld cl, reg, modrm");
                            READMODRM; SHLD(reg_c, modrm_reg, modrm_val,oz); break;
+
+                case 0xa8: TRACEI("push gs"); SREG_STACK(PUSH, GS); break;
+                case 0xa9: TRACEI("pop gs"); SREG_STACK(POP, GS); break;
 
                 case 0xab: TRACEI("bts reg, modrm");
                            READMODRM; if (modrm.type != modrm_reg) TRACE_SPECIAL("bts");
@@ -982,19 +997,22 @@ restart:
         MAKE_OP(0x20, AND, "and");
         MAKE_OP(0x28, SUB, "sub");
 
+        // CS, DS, ES and SS overrides change nothing: those registers only
+        // ever select flat descriptors here (emu/i386_sreg.c).
+        case 0x26: TRACEI("segment es (flat)"); goto restart;
         case 0x2e: TRACEI("segment cs (ignoring)"); goto restart;
+        case 0x36: TRACEI("segment ss (flat)"); goto restart;
 
         MAKE_OP(0x30, XOR, "xor");
         MAKE_OP(0x38, CMP, "cmp");
 
         case 0x3e: TRACEI("segment ds (useless)"); goto restart;
         case 0x64:
-                   if (current != NULL && current->abi == GUEST_ABI_AMD64) {
-                       TRACE("segment fs\n");
+                   TRACE("segment fs\n");
+                   if (current != NULL && current->abi == GUEST_ABI_AMD64)
+                       SEG_FS_AMD64();
+                   else
                        SEG_FS();
-                   } else {
-                       TRACEI("segment fs (ignoring)");
-                   }
                    goto restart;
 
         case 0x40: TRACEI("inc oax"); INC(reg_a,oz); break;
@@ -1216,16 +1234,15 @@ restart:
         case 0x8d: TRACEI("lea\t\t"); READMODRM_MEM;
                    MOV(addr, modrm_reg,oz); break;
 
-        // We only emulate one TLS-backed segment selector. FS and GS are both
-        // accepted here and share the same backing state, matching the rest of
-        // the tree where both FS: and GS: memory references resolve via
-        // cpu->tls_ptr. ES/CS/SS/DS remain unsupported.
+        // MOV to and from ES, CS, SS, DS, FS and GS; see gen_sreg. Sreg
+        // fields 6 and 7 are #UD, with a memory operand too, and so is CS as
+        // a destination.
         case 0x8c: TRACEI("mov seg, modrm\t"); READMODRM;
-            if (modrm.reg != reg_esp && modrm.reg != reg_ebp) UNDEFINED;
-            MOV(gs, modrm_val,16); break;
+            if (modrm.reg > AMD64_SREG_GS) UNDEFINED;
+            SREG_RM(READ); break;
         case 0x8e: TRACEI("mov modrm, seg\t"); READMODRM;
-            if (modrm.reg != reg_esp && modrm.reg != reg_ebp) UNDEFINED;
-            MOV(modrm_val, gs,16); break;
+            if (modrm.reg > AMD64_SREG_GS || modrm.reg == AMD64_SREG_CS) UNDEFINED;
+            SREG_RM(LOAD); break;
 
         case 0x8f: TRACEI("pop modrm");
                    READMODRM; POP(modrm_val,oz); break;
@@ -1559,13 +1576,16 @@ restart:
             lockrestart:
             READINSN;
             switch (insn) {
+                case 0x26:
+                case 0x2e:
+                case 0x36:
+                case 0x3e: TRACEI("segment es/cs/ss/ds (flat)"); goto lockrestart;
                 case 0x64:
-                    if (current != NULL && current->abi == GUEST_ABI_AMD64) {
-                        TRACE("segment fs\n");
+                    TRACE("segment fs\n");
+                    if (current != NULL && current->abi == GUEST_ABI_AMD64)
+                        SEG_FS_AMD64();
+                    else
                         SEG_FS();
-                    } else {
-                        TRACEI("segment fs (ignoring)");
-                    }
                     goto lockrestart;
                 case 0x65: TRACE("segment gs\n"); SEG_GS(); goto lockrestart;
 

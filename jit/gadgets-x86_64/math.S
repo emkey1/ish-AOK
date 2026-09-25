@@ -4,14 +4,6 @@
     movl %_addr, %_tmp
     gret
 
-.gadget load16_gs
-    movw CPU_gs(%_cpu), %r10w
-    gret
-
-.gadget store16_gs
-    movw %r10w, CPU_gs(%_cpu)
-    gret
-
 .gadget amd64_set_rip
     movq (%_ip), %r10
     movq %r10, CPU_amd64_rip(%_cpu)

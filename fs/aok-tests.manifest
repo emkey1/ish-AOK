@@ -344,6 +344,7 @@ x86/amd64_singlestep.c
 x86/amd64_segment_regs.c
 x86/avx_regress.c
 x86/avx32_smoke.c
+x86/i386_segment_regs.c
 x86/amd64_jit_guest_bench.sh
 setup-regressions.sh
 arm64/atomics64.c

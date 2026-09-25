@@ -16,6 +16,7 @@
 #include "emu/interrupt.h"
 #include "emu/memory.h"
 #include "emu/fxsave.h"
+#include "emu/i386_sreg.h"
 #include "util/sync.h"
 #include "kernel/anonfd_ckpt.h"
 
@@ -2872,7 +2873,12 @@ static void setup_sigcontext(struct sigcontext_ *sc, struct cpu_state *cpu, int 
         sc->cr2 = cpu->segfault_addr;
     else
         sc->cr2 = 0;
-    // TODO more shit
+    sc->gs = i386_sreg_read(cpu, AMD64_SREG_GS);
+    sc->fs = i386_sreg_read(cpu, AMD64_SREG_FS);
+    sc->es = i386_sreg_read(cpu, AMD64_SREG_ES);
+    sc->ds = i386_sreg_read(cpu, AMD64_SREG_DS);
+    sc->cs = i386_sreg_read(cpu, AMD64_SREG_CS);
+    sc->ss = i386_sreg_read(cpu, AMD64_SREG_SS);
     sc->oldmask = sigmask_to_save() & 0xffffffff;
 }
 
@@ -3458,6 +3464,7 @@ static void receive_signal(struct sighand *sighand, struct siginfo_ *info) {
         do_exit_group(SIGSEGV_);
     }
     x86_signal_handler_fpu_init(&current->cpu);
+    i386_sreg_signal_enter(&current->cpu);
 
     if (action->flags & SA_RESETHAND_)
         *action = (struct sigaction_) {.handler = SIG_DFL_};
@@ -3778,7 +3785,10 @@ void receive_signals(void) {
     }
 }
 
-static int restore_sigcontext(struct sigcontext_ *context, struct cpu_state *cpu) {
+// *resumable is false when the frame's CS or SS cannot be returned to: Linux
+// takes them, and the IRET to them faults.
+static int restore_sigcontext(struct sigcontext_ *context, struct cpu_state *cpu,
+        bool *resumable) {
     if (context->fpstate != 0) {
         struct fpstate_ fpstate;
         if (user_get(context->fpstate, fpstate))
@@ -3801,7 +3811,24 @@ static int restore_sigcontext(struct sigcontext_ *context, struct cpu_state *cpu
     cpu->eflags = (context->flags & USE_FLAGS) | (cpu->eflags & ~USE_FLAGS);
     expand_flags(cpu);
     cpu->df_offset = cpu->df ? -1 : 1;
+
+    // reload_segments, then the return to the frame's CS and SS.
+    i386_sreg_sigreturn(cpu, AMD64_SREG_GS, context->gs);
+    i386_sreg_sigreturn(cpu, AMD64_SREG_FS, context->fs);
+    i386_sreg_sigreturn(cpu, AMD64_SREG_DS, context->ds);
+    i386_sreg_sigreturn(cpu, AMD64_SREG_ES, context->es);
+    *resumable = i386_sreg_sigreturn_cs_ss(cpu, context->cs, context->ss);
     return 0;
+}
+
+// The IRET to a frame's bad CS or SS is a #GP at the task's restored state:
+// SIGSEGV, si_code SI_KERNEL, reported where it would have resumed.
+static void i386_sigreturn_gpf(struct cpu_state *cpu) {
+    cpu->trapno = INT_GPF;
+    cpu->segfault_addr = 0;
+    cpu->segfault_was_write = false;
+    struct siginfo_ info = {.code = SI_KERNEL_};
+    deliver_signal(current, SIGSEGV_, info);
 }
 
 static void sync_i386_shadows_from_amd64(struct cpu_state *cpu) {
@@ -3871,12 +3898,13 @@ dword_t sys_rt_sigreturn(void) {
         return (dword_t) sys_rt_sigreturn_amd64();
 
     struct rt_sigframe_ frame;
+    bool resumable;
     // esp points past the first field of the frame
     if (user_get(cpu->esp - offsetof(struct rt_sigframe_, sig), frame)) {
         deliver_signal(current, SIGSEGV_, SIGINFO_NIL);
         return _EFAULT;
     }
-    if (restore_sigcontext(&frame.uc.mcontext, cpu)) {
+    if (restore_sigcontext(&frame.uc.mcontext, cpu, &resumable)) {
         deliver_signal(current, SIGSEGV_, SIGINFO_NIL);
         return _EFAULT;
     }
@@ -3885,6 +3913,8 @@ dword_t sys_rt_sigreturn(void) {
     restore_altstack(cpu->esp, frame.uc.stack.stack, frame.uc.stack.size, frame.uc.stack.flags);
     sigmask_set(frame.uc.sigmask);
     unlock(&current->sighand->lock);
+    if (!resumable)
+        i386_sigreturn_gpf(cpu);
     return cpu->eax;
 }
 
@@ -3918,12 +3948,13 @@ qword_t sys_rt_sigreturn_amd64(void) {
 dword_t sys_sigreturn(void) {
     struct cpu_state *cpu = &current->cpu;
     struct sigframe_ frame;
+    bool resumable;
     // esp points past the first two fields of the frame
     if (user_get(cpu->esp - offsetof(struct sigframe_, sc), frame)) {
         deliver_signal(current, SIGSEGV_, SIGINFO_NIL);
         return _EFAULT;
     }
-    if (restore_sigcontext(&frame.sc, cpu)) {
+    if (restore_sigcontext(&frame.sc, cpu, &resumable)) {
         deliver_signal(current, SIGSEGV_, SIGINFO_NIL);
         return _EFAULT;
     }
@@ -3932,6 +3963,8 @@ dword_t sys_sigreturn(void) {
     sigset_t_ oldmask = ((sigset_t_) frame.extramask << 32) | frame.sc.oldmask;
     sigmask_set(oldmask);
     unlock(&current->sighand->lock);
+    if (!resumable)
+        i386_sigreturn_gpf(cpu);
     return cpu->eax;
 }
 

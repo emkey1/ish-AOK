@@ -252,6 +252,29 @@ do_helper_tlb_retint 2
 0:
     gret 4
 
+# [helper][arg][orig_ip], for an i386 C helper that works on the address the
+# address gadgets left in _addr and may fault or #GP (i386_jit_sreg):
+# helper(cpu, tlb, arg, addr) returns -1 to go on past the three words, or an
+# interrupt to raise at orig_ip.
+.gadget helper_addr_retint
+    save_regs
+    save_c
+    movq %_cpu, %rdi
+    leaq -TLB_entries(%_tlb), %rsi
+    movq 8(%_ip), %rdx
+    movl %_addr, %ecx
+    callq *(%_ip)
+    movq %rax, %r14
+    restore_c
+    load_regs
+    cmpl $-1, %r14d
+    je 0f
+    movl %r14d, %_tmp
+    movl 16(%_ip), %_eip
+    jmp jit_exit
+0:
+    gret 3
+
 .macro do_vec_helper rm, _imm, size=
     .gadget vec_helper_\rm\size\_imm
         .ifin(\rm, read,write)

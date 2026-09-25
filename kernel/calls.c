@@ -1116,6 +1116,7 @@ static syscall_t i386_syscall_table[] = {
     [241] = (syscall_t) sys_sched_setaffinity,
     [242] = (syscall_t) sys_sched_getaffinity,
     [243] = (syscall_t) sys_set_thread_area,
+    [244] = (syscall_t) sys_get_thread_area,
     // The io_* family. 246-249 were absent rather than stubbed, and absent is
     // worse: a missing entry is a "missing syscall" SIGSYS kill instead of an
     // errno, so a 32-bit guest touching AIO died without even a log line.

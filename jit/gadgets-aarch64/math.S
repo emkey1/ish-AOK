@@ -6,14 +6,6 @@
     mov _tmp, _addr
     gret
 
-.gadget load16_gs
-    ldrh _tmp, [_cpu, #CPU_gs]
-    gret
-
-.gadget store16_gs
-    strh _tmp, [_cpu, #CPU_gs]
-    gret
-
 .gadget amd64_set_rip
     ldr x8, [_ip]
     str x8, [_cpu, CPU_amd64_rip]
@@ -5839,10 +5831,10 @@ fused_flagop_family test, and, sxo, mi, retest
 fused_flagop_family test, and, sxoz, le, retest
 
 # cond-major [cond_count][arg_count] arrays, same arg layout as the op
-# gadget tables; missing entries (parity, and-family jb/jae/jo, addr/gs)
+# gadget tables; missing entries (parity, and-family jb/jae/jo, addr)
 # resolve to 0 and gen.c declines the fusion.
 # (COND_LIST lives in control.S, a different translation unit -- an
-# unexpanded name here would silently produce a 12-entry all-zero array
+# unexpanded name here would silently produce an 11-entry all-zero array
 # that gen.c indexes out of bounds, so define it locally, same order.)
 #define COND_LIST o,c,z,cz,s,p,sxo,sxoz
 _gadget_array_start fused_cmp32

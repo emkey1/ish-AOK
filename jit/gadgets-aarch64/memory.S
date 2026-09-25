@@ -407,6 +407,12 @@ NAME(si_gadgets):
     add _addr, _addr, w8
     gret
 
+# An FS override on i386: FS's base (emu/i386_sreg.c).
+.gadget seg_fs
+    ldr w8, [_cpu, CPU_i386_fs_base]
+    add _addr, _addr, w8
+    gret
+
 .irp type, read,write
 
 .global handle_\type\()_miss

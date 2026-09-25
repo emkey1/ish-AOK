@@ -13,6 +13,7 @@
 #include "misc.h"
 #include "kernel/calls.h"
 #include "emu/cpuid.h"
+#include "emu/i386_sreg.h"
 #include "kernel/personality.h"
 #include "kernel/random.h"
 #include "kernel/errno.h"
@@ -1478,6 +1479,10 @@ static intptr_t elf_exec(struct fd *fd, const char *file, struct exec_args argv,
     memset(save->cpu.amd64_regs, 0, sizeof(save->cpu.amd64_regs));
     // Linux's start_thread loads 0 into ES, DS, FS and GS.
     memset(save->cpu.amd64_sreg, 0, sizeof(save->cpu.amd64_sreg));
+    // Or, for a 32-bit image, 0x2b into ES, DS and SS and 0 into FS and GS,
+    // and flush_thread empties the TLS entries. This clears tls_ptr too,
+    // which is amd64's FS base as well as i386's GS base.
+    i386_sreg_exec_reset(&save->cpu);
     save->cpu.amd64_rip = entry;
     save->cpu.amd64_regs[amd64_rsp] = sp;
     memset(save->cpu.amd64_store_trace, 0, sizeof(save->cpu.amd64_store_trace));
