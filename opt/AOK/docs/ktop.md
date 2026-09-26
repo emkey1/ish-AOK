@@ -115,11 +115,11 @@ Linux host, or an iSH-AOK build old enough not to have the file.
 iSH-AOK's native programs — `zsh`, and SmallCLUE's applets (among them
 `ssh`, `scp`, `sftp`, `ssh-keygen` and `vi`), all dispatched through
 `/AOK/native` — are host code compiled into the app, not guest binaries, so
-they have no guest ELF image of their own. `/proc/ish/arch` already says
-`native` for these, which `ktop` turns into the **host's** architecture —
-`arm64` on every Apple Silicon device — because that is what the code
-genuinely is. It does not depend on which root is booted: a native `zsh` in an
-x86 root shows `arm64` while everything around it shows `x86`. That is the
+they have no guest ELF image of their own. `/proc/ish/arch` lists these as the
+**host's** machine marked `(n)`, and `ktop` shows `arm64(n)` on every Apple
+Silicon device, because that is what the code genuinely is. It does not
+depend on which root is booted: a native `zsh` in an x86 root shows
+`arm64(n)` while everything around it shows `x86`. That is the
 honest label, and it doubles as the quickest way to see at a glance which
 processes are running natively. See [native-programs.md](native-programs.md).
 

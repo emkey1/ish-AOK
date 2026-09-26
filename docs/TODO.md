@@ -19,8 +19,12 @@ Started 2026-08-19, after the 549 release run. Closed entries from the 549 and
 
 ## Queued for a future release
 
-Filed as task chips and not started before the 556 freeze (2026-09-25). The
-full chip text of each is in [future-release-queue.md](future-release-queue.md).
+The one queue for follow-up work. Sessions add a bullet here instead of
+raising task chips (the maintainer's rule, 2026-09-26): what was seen, the
+evidence, and the proposed fix. Check here, and `git log origin/working`,
+before starting anything. The first ten were chips not started before the 556
+freeze (2026-09-25); their full text is in
+[future-release-queue.md](future-release-queue.md).
 
 - **Implement ENTER and 16-bit branch EIP truncation on i386 JIT.** While fixing 16-bit PUSH/POP on the i386 JIT, I found ENTER (C8) is SIGILL there, and 0x66 near JMP rel/Jcc/LOOP/JCXZ keep the full target where x86 truncates EIP to 16 bits. This session would measure both on camd and fix them with a test.
 - **Fix x86_fp_env failures on the x86_64-host gadgets.** Running the x86 guest tests under a GCC/x86_64-host build on camd, x86_fp_env fails two SSE checks (ucomisd qnan, divsd FTZ), with or without today's changes; aarch64 builds pass. This session would find and fix the x86_64-backend cause.

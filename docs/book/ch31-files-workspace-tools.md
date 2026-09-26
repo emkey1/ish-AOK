@@ -185,9 +185,10 @@ for every live process — readable by anyone, because which of iSH-AOK's
 architectures a process runs is not a secret even when the process itself is —
 and `ktop` reads the whole table once per refresh, falling back to the ELF
 header only for a pid the table missed. Native programs (`zsh`, SmallCLUE's
-applets) have no guest ELF image to read anyway; the table says `native` for
-those, and `ktop` shows the host's own architecture, `arm64` on every Apple
-Silicon device, because that is what the code actually is.
+applets) have no guest ELF image to read anyway; the table lists those as the
+host's machine marked `(n)`, and `ktop` shows `arm64(n)` on every Apple Silicon
+device, because that is what the code actually is, and the `(n)` says it runs
+natively.
 
 That column is only meaningful because of two facts established much earlier in
 this book: a task's guest ABI is a field on the task (Chapter 7), and there are

@@ -2000,10 +2000,20 @@ static int proc_ish_show_host_ports(struct proc_entry *UNUSED(entry), struct pro
 // directory, rather than as a line added to a file Linux defines.
 //
 // One line per process (thread-group leader): the pid, then the machine name
-// uname(2) reports inside it (aarch64, x86_64, i686, riscv64), or "native" for
-// a program compiled into iSH-AOK and running as host code (/AOK/native), or
-// "-" for a task caught without an address space. A zombie is not listed: the
+// uname(2) reports inside it (aarch64, x86_64, i686, riscv64); for a program
+// compiled into iSH-AOK and running as host code (/AOK/native), the HOST's
+// machine name marked "(n)" -- "aarch64(n)" on every Apple device -- because
+// that is what the code is, whichever root is booted; or "-" for a task caught
+// without an address space. A zombie is not listed: the
 // snapshot takes live processes only.
+#if defined(__aarch64__)
+#define NATIVE_ARCH_ENTRY "aarch64(n)"
+#elif defined(__x86_64__)
+#define NATIVE_ARCH_ENTRY "x86_64(n)"
+#else
+#define NATIVE_ARCH_ENTRY "native(n)"
+#endif
+
 static int proc_ish_show_arch(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
     proc_printf(buf, "PID ARCH\n");
     struct task_snapshot snapshot = {0};
@@ -2017,7 +2027,7 @@ static int proc_ish_show_arch(struct proc_entry *UNUSED(entry), struct proc_data
             continue;
         const char *arch;
         if (task->native_running != NULL)
-            arch = "native";
+            arch = NATIVE_ARCH_ENTRY;
         else if (task->mm == NULL)
             arch = "-";
         else

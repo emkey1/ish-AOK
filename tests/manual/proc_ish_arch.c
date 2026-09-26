@@ -4,13 +4,15 @@
 // 2026-09-24 hardening another user's exe is refused, as on Linux, so a normal
 // user saw "?" beside every root process. iSH-AOK now publishes the answer in
 // its own /proc/ish/arch: "PID ARCH", then "<pid> <machine>" per live process,
-// machine being what uname(2) says inside it, or "native" for host code.
+// machine being what uname(2) says inside it, or for host code the host's
+// machine marked "(n)" ("aarch64(n)").
 //
 // Asserted here:
 //   - the header, this process listed with its own uname machine, pid 1 listed;
 //   - an unprivileged reader sees a root process listed, while that process's
 //     exe stays EACCES to it (the reason the table exists);
-//   - a program running natively from /AOK/native is listed as "native".
+//   - a program running natively from /AOK/native is listed as the host's
+//     machine with "(n)": aarch64(n) or x86_64(n).
 //
 // iSH-AOK only: with no /proc/ish at all (real Linux) it skips; with /proc/ish
 // but no arch file (an iSH-AOK from before the table) it FAILS.
@@ -151,11 +153,12 @@ int main(int argc, char **argv) {
         for (int i = 0; i < 40; i++) {   // up to 2 s for the exec to land
             usleep(50000);
             arch = listed_arch(nat);
-            if (arch != NULL && strcmp(arch, "native") == 0)
+            if (arch != NULL && strstr(arch, "(n)") != NULL)
                 break;
         }
-        check("a native program is listed as \"native\"",
-              arch != NULL && strcmp(arch, "native") == 0, 0, 1);
+        check("a native program is listed as the host's machine with \"(n)\"",
+              arch != NULL && (strcmp(arch, "aarch64(n)") == 0 || strcmp(arch, "x86_64(n)") == 0),
+              0, 1);
         kill(nat, SIGKILL);
         waitpid(nat, NULL, 0);
     } else {

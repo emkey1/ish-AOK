@@ -147,6 +147,17 @@ static const char *arch_from_machine(const char *machine) {
     return arch_intern("?");
 }
 
+// The label for a program running as native host code: its architecture with
+// "(n)", so the ARCH column shows at a glance which processes are native.
+static const char *native_label(const char *arch) {
+    if (strcmp(arch, "arm64") == 0)   return arch_intern("arm64(n)");
+    if (strcmp(arch, "x86_64") == 0)  return arch_intern("x86_64(n)");
+    if (strcmp(arch, "riscv64") == 0) return arch_intern("riscv64(n)");
+    if (strcmp(arch, "x86") == 0)     return arch_intern("x86(n)");
+    if (strcmp(arch, "arm") == 0)     return arch_intern("arm(n)");
+    return arch_intern("?(n)");
+}
+
 // A kernel thread has no /proc/<pid>/exe -- on real Linux either -- so there is
 // no ELF header to read an architecture out of. Reporting "?" for AOK's
 // kthreadd is accurate but useless; a kernel thread belongs to the running
@@ -235,8 +246,9 @@ static bool exe_is_native(pid_t pid) {
 
 // iSH-AOK's own answer, /proc/ish/arch: "PID ARCH" and then one "<pid>
 // <machine>" line per process, where machine is what uname(2) says inside it,
-// "native" for a program running as host code, or "-" for one with no address
-// space. Read once per refresh, before the /proc walk.
+// the host's machine marked "(n)" ("aarch64(n)") for a program running as host
+// code -- "native" before 556 -- or "-" for one with no address space. Read
+// once per refresh, before the /proc walk.
 //
 // It comes FIRST because the ELF header below cannot answer for another user's
 // process: /proc/<pid>/exe is gated by ptrace_may_access, on Linux and on
@@ -277,8 +289,12 @@ static void load_arch_table(void) {
             arch_table_cap = cap;
         }
         const char *arch;
-        if (strcmp(machine, "native") == 0)
-            arch = host_arch();
+        size_t mlen = strlen(machine);
+        if (mlen > 3 && strcmp(machine + mlen - 3, "(n)") == 0) {
+            machine[mlen - 3] = '\0';
+            arch = native_label(arch_from_machine(machine));
+        } else if (strcmp(machine, "native") == 0)
+            arch = native_label(host_arch());
         else if (strcmp(machine, "-") == 0)
             arch = NULL;
         else
@@ -341,7 +357,7 @@ static const char *detect_arch(pid_t pid, bool kernel_thread) {
     // kernel's; anything else -- an exe outside this chroot, a process that
     // exited mid-scan -- is genuinely unknown.
     if (exe_is_native(pid))
-        return host_arch();
+        return native_label(host_arch());
     if (fd < 0 && kernel_thread)
         return guest_arch();
     return arch_intern("?");
@@ -1256,7 +1272,7 @@ static void draw_column_header(int cols) {
     char line[64];
     fputs("\033[K", stdout);
     fputs(C_HDR, stdout);
-    snprintf(line, sizeof(line), "%6s %-8.8s %3s %3s %7s %7s %1s %-7s ",
+    snprintf(line, sizeof(line), "%6s %-8.8s %3s %3s %7s %7s %1s %-9s ",
              "PID", "USER", "PR", "NI", "VIRT", "RES", "S", "ARCH");
     fputs(line, stdout);
     printf("%s%5s%s%s %s%5s%s%s %s%8s%s%s ",
@@ -1369,7 +1385,7 @@ static void draw_interactive(struct proc_sample *procs, int n,
 
         char line[512];
         int len = snprintf(line, sizeof(line),
-                           "%6d %-8.8s %3ld %3ld %7s %7s %1s %-7s %5.1f %5.1f %8s %s",
+                           "%6d %-8.8s %3ld %3ld %7s %7s %1s %-9s %5.1f %5.1f %8s %s",
                            (int) procs[i].pid, userbuf,
                            procs[i].priority, procs[i].nice,
                            virt, res, state, procs[i].arch,
@@ -1468,7 +1484,7 @@ static void print_batch(struct proc_sample *cur, int cur_n,
     printf("Mem: %lukB total, %lukB used, %lukB free\n",
            mi->total_kb, used_kb, mi->free_kb);
 
-    printf("\n%6s %-8s %3s %3s %8s %8s %-7s %5s %5s  %s\n",
+    printf("\n%6s %-8s %3s %3s %8s %8s %-9s %5s %5s  %s\n",
            "PID", "USER", "PR", "NI", "VIRT(K)", "RES(K)", "ARCH", "%CPU", "%MEM", "COMMAND");
 
     for (int i = 0; i < cur_n; i++) {
@@ -1493,7 +1509,7 @@ static void print_batch(struct proc_sample *cur, int cur_n,
         } else {
             snprintf(cmdbuf, sizeof(cmdbuf), "%s", cur[i].comm);
         }
-        printf("%6d %-8s %3ld %3ld %8lu %8ld %-7s %5.1f %5.1f  %s\n",
+        printf("%6d %-8s %3ld %3ld %8lu %8ld %-9s %5.1f %5.1f  %s\n",
                (int) cur[i].pid, userbuf, cur[i].priority, cur[i].nice,
                cur[i].vsize / 1024, cur[i].rss_pages * page_kb,
                cur[i].arch, cpu_pct, mem_pct, cmdbuf);

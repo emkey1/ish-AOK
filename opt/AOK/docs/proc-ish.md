@@ -33,13 +33,14 @@ says which is which:
 $ cat /proc/ish/arch
 PID ARCH
 1 aarch64
-842 native
+842 aarch64(n)
 917 x86_64
 ```
 
 One line per live process (the thread-group leader): the machine name
-`uname` reports inside it, `native` for a program compiled into iSH-AOK and
-running as host code (see [native-programs.md](native-programs.md)), or `-`
+`uname` reports inside it; for a program compiled into iSH-AOK and running as
+host code, the host's machine marked `(n)` — `aarch64(n)` on every Apple
+device (see [native-programs.md](native-programs.md)); or `-`
 for a task caught without an address space. Zombies are not listed. This
 exists because [ktop](ktop.md)'s ARCH column used to read the ELF header
 behind `/proc/<pid>/exe`, and since another user's process became off-limits
