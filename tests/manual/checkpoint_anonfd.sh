@@ -2,7 +2,11 @@
 # checkpoint_anonfd.sh -- see checkpoint_anonfd.c.
 #     tests/manual/checkpoint_anonfd.sh [root]      (needs gcc in root)
 # On the app's save path (ISH_CHECKPOINT_AFTER), killed the moment the image
-# exists, the way iOS kills the app -- so only the restored run checks.
+# exists, the way iOS kills the app -- so only the restored run checks. The
+# checkpoint waits for the probe to say its descriptors are set up (the @ form)
+# instead of firing two seconds after the CLI started: on
+# build/alpine-arm64-test that was before the probe ran ("refused: there is no
+# guest running").
 set -e
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
 ISH=${ISH:-$REPO/build/ish}
@@ -15,12 +19,15 @@ ISH_REAL_MNT=$WORK "$ISH" -f "$ROOT" /bin/sh -c \
     || { echo "FAIL: could not build the probe"; exit 1; }
 # stdin from /dev/null throughout: a broken restore can hand a descriptor the
 # CLI's own stdin, and a read on that must end, not wait for a terminal.
-ISH_REAL_MNT=$WORK ISH_CHECKPOINT_AFTER="2:$WORK/img" "$ISH" -f "$ROOT" /realmnt/probe \
+ISH_REAL_MNT=$WORK ISH_CHECKPOINT_AFTER="@$WORK/ready:$WORK/img" "$ISH" -f "$ROOT" /realmnt/probe \
     < /dev/null > "$WORK/save.out" 2>&1 &
 saver=$!
-n=0; while [ ! -s "$WORK/img" ] && [ $n -lt 100 ]; do sleep 0.1; n=$((n+1)); done
+n=0
+while [ ! -s "$WORK/img" ] && kill -0 $saver 2>/dev/null && [ $n -lt 1200 ]; do
+    sleep 0.1; n=$((n+1))
+done
 kill -9 $saver 2>/dev/null || true; wait $saver 2>/dev/null || true
-[ -s "$WORK/img" ] || { echo "FAIL: no image written"; exit 1; }
+[ -s "$WORK/img" ] || { echo "FAIL: no image written"; cat "$WORK/img.log" 2>/dev/null; exit 1; }
 out=$(ISH_REAL_MNT=$WORK ISH_RESTORE="$WORK/img" "$ISH" -f "$ROOT" < /dev/null 2>&1 || true)
 echo "$out" | sed 's/^/  /'
 fail=0

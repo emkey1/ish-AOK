@@ -163,17 +163,3 @@ kernel/checkpoint.c records the exe as generic_getpath_backing(mm->exefile) and 
 ```
 
 </details>
-
-## Make checkpoint_anonfd.sh wait for the guest
-
-It checkpoints 2 s after start; on build/alpine-arm64-test that is before the probe runs ("refused: there is no guest running"), before and after today's changes. This session would have the probe signal readiness and the harness wait for it.
-
-<details><summary>Original chip prompt</summary>
-
-```text
-In iSH-AOK (/Users/mke/git/ish-AOK, branch `working`; follow the project memory: diff peer worktrees before starting, oracle on camd, positive controls, register tests in all places, stage explicit paths, push to origin/working and fast-forward the main checkout), make tests/manual/checkpoint_anonfd.sh reliable on any root.
-
-It runs the probe with ISH_CHECKPOINT_AFTER="2:$WORK/img" and waits 10 s for the image. On build/alpine-arm64-test (and devuan-arm64-test under load) the fakefs root takes longer than 2 s to come up, so the save thread finds no task ("refused (-3) there is no guest running" in img.log) and the harness reports "FAIL: no image written"; the probe then runs to completion un-checkpointed. Seen 2026-09-25 with both the old and new binaries; with "3.5:" on devuan-arm64-test it worked. Have the probe write a ready marker to /realmnt once its descriptors are set up and before its sleep, have the script start the checkpoint only after that (a delay counted from the marker, or a longer probe sleep with the delay derived from it), and keep the kill-on-image behaviour.
-```
-
-</details>

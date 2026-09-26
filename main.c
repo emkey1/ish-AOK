@@ -145,6 +145,9 @@ static char *build_initial_envp(void) {
 // exercise the path the app uses, which is not a guest task either.
 double cli_checkpoint_delay;
 const char *cli_checkpoint_path;
+// Set instead of a delay by the "@<file>" form: checkpoint once this host file
+// exists. NULL for a plain delay.
+const char *cli_checkpoint_when;
 
 // See ISH_SOCKRESTART_AFTER below. Same idea, same reason: fs/sockrestart.c's
 // save and rebuild are reached ONLY from the app's background and foreground
@@ -167,7 +170,15 @@ static void *cli_checkpoint_after(void *unused) {
     (void) unused;
     while (cli_checkpoint_path == NULL)
         usleep(1000);
-    usleep((useconds_t) (cli_checkpoint_delay * 1000000));
+    if (cli_checkpoint_when != NULL) {
+        // Up to two minutes for the guest to say it is ready; after that the
+        // save goes ahead and is refused or written as it stands, and the log
+        // beside the image says which.
+        for (int i = 0; i < 12000 && access(cli_checkpoint_when, F_OK) != 0; i++)
+            usleep(10000);
+    } else {
+        usleep((useconds_t) (cli_checkpoint_delay * 1000000));
+    }
     int err = checkpoint_save_external(cli_checkpoint_path);
     // To a file beside the image, not to stderr: by the time this runs the
     // guest may have closed the host's standard streams on its way out, and a
@@ -587,6 +598,11 @@ int main(int argc, char *const argv[]) {
     }
     // ISH_CHECKPOINT_AFTER=<seconds>:<path> -- take a checkpoint from a thread
     // that is NOT a guest task, after the guest has been running a while.
+    // ISH_CHECKPOINT_AFTER=@<file>:<path> -- the same, as soon as the host file
+    // <file> exists, which a guest can create through ISH_REAL_MNT when it has
+    // set up what the checkpoint is meant to catch. A fixed delay counts from
+    // the CLI's start, so on a slow boot it lands before the guest has run at
+    // all ("refused: there is no guest running") -- checkpoint_anonfd.sh did.
     //
     // This is the APP's path, exercised where it can be tested: the app
     // backgrounds on its UI thread and has to know the image is on disk before
@@ -597,10 +613,17 @@ int main(int argc, char *const argv[]) {
         const char *spec = getenv("ISH_CHECKPOINT_AFTER");
         if (spec != NULL && *spec != '\0') {
             static char at[PATH_MAX];
+            static char when[PATH_MAX];
             static double delay;
             const char *colon = strchr(spec, ':');
             if (colon != NULL) {
-                delay = atof(spec);
+                if (spec[0] == '@') {
+                    snprintf(when, sizeof(when), "%.*s", (int) (colon - spec - 1), spec + 1);
+                    extern const char *cli_checkpoint_when;
+                    cli_checkpoint_when = when;
+                } else {
+                    delay = atof(spec);
+                }
                 snprintf(at, sizeof(at), "%s", colon + 1);
                 pthread_t th;
                 pthread_create(&th, NULL, cli_checkpoint_after, NULL);

@@ -93,8 +93,12 @@ int main(void) {
     int gfd = (int) syscall(SYS_pidfd_open, gone, 0);
     waitpid(gone, NULL, 0);
 
-    // The checkpoint lands in here; the script kills this run once the image
-    // exists, so everything below runs only in the restored guest.
+    // Everything is set up: say so. The harness checkpoints the moment this
+    // file exists (ISH_CHECKPOINT_AFTER=@...) rather than a fixed time after
+    // the CLI started, which on a slow boot was before this ran at all. The
+    // checkpoint lands in the sleep below, and the script kills this run once
+    // the image exists, so everything after it runs only in the restored guest.
+    close(open("/realmnt/ready", O_WRONLY | O_CREAT, 0644));
     for (int i = 0; i < 6; i++) sleep(1);
 
     char d[160];
