@@ -335,6 +335,7 @@ sock_ifconf_sizing.c
 signal_group_blocked_eintr.c
 scm_credentials_rules.c
 unix_scm_before_accept.c
+unix_recv_name.c
 epoll_nested.c
 epoll_edge_triggered.c
 unix_seqpacket_msgs.c

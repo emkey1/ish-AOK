@@ -5202,6 +5202,14 @@ static int sockaddr_read(guest_addr_t sockaddr_addr, void *sockaddr, uint_t *soc
 static int ipv6_recverr_fd_get(struct fd *sock);
 
 static int sockaddr_write(guest_addr_t sockaddr_addr, void *sockaddr, uint_t buffer_len, uint_t *sockaddr_len) {
+    // The host returned no address at all: a recvmsg or recvfrom on an
+    // AF_UNIX stream socket, whose peer carries no name. Linux reports a
+    // length of 0 there too. The buffer still holds whatever was in it before
+    // the call, so its "family" is noise -- translating it was an EINVAL that
+    // broke every recvmsg given a name buffer, which Python always passes
+    // (3.14's multiprocessing forkserver died on it).
+    if (*sockaddr_len == 0)
+        return 0;
     struct sockaddr *real_addr = sockaddr;
     struct sockaddr_ *fake_addr = sockaddr;
     fake_addr->family = sock_family_from_real(real_addr->sa_family);
