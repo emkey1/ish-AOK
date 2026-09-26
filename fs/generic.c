@@ -1096,6 +1096,20 @@ bool generic_path_names_fd(const char *path, struct fd *fd) {
     return generic_fstat(fd, &held) >= 0 && path_names_file(path, &held);
 }
 
+// See kernel/fs.h. Only a path: a name that is not one ("pipe:[12]") has no
+// file to have lost, and one the filesystem marks itself (a memfd's
+// "/memfd:x (deleted)") is left as it is.
+void generic_mark_deleted(struct fd *fd, char *path, size_t size) {
+    static const char suffix[] = " (deleted)";
+    size_t len = strlen(path), slen = sizeof(suffix) - 1;
+    if (path[0] != '/' || len + slen >= size)
+        return;
+    if (len >= slen && strcmp(path + len - slen, suffix) == 0)
+        return;
+    if (!generic_path_names_fd(path, fd))
+        memcpy(path + len, suffix, slen + 1);
+}
+
 // See kernel/fs.h. The name is looked at before it is opened, and what opened
 // is checked after. Looked at first, with a stat, because an open can act on
 // what it finds: O_TRUNC empties it, a FIFO blocks the opener until a writer

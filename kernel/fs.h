@@ -82,6 +82,12 @@ struct fd *generic_reopen_pathless(struct fd *fd, int flags, bool check_access);
 // file the descriptor holds? Not once the file is unlinked: the path is then
 // the name it had, which another file may have taken. See fs/generic.c.
 bool generic_path_names_fd(const char *path, struct fd *fd);
+// Linux's d_path shows a file whose name no longer reaches it -- unlinked, or
+// a directory removed -- by the name it had with " (deleted)" after it, in the
+// /proc/<pid> links and maps. Appends that to `path`, as generic_getpath_shown
+// gave it for `fd` and before any rebase against the caller's root, when it
+// applies; `size` is path's buffer. Not for getcwd, which is ENOENT there.
+void generic_mark_deleted(struct fd *fd, char *path, size_t size);
 // lstat of a stored, already-normalized path, anchored as generic_open_realroot
 // anchors one.
 int generic_lstat_realroot(const char *path, struct statbuf *stat);

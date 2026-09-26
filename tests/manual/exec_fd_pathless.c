@@ -502,10 +502,7 @@ static void unlinked_files(const char *dir) {
     snprintf(how, sizeof(how), "fexecve of unlinked %s/prog", dir);
     if (fd >= 0 && expect_runs(how, fd, "prog", NO_SEALS_CHECK, &o)) {
         snprintf(path, sizeof(path), "%s/prog (deleted)", dir);
-        // AOK names an unlinked file by the name it had, without Linux's
-        // " (deleted)"; that is /proc's to fix, not exec's.
-        check(strncmp(o.exe, path, strlen(dir) + 5) == 0,
-              "%s: /proc/self/exe is %s (got %s)", how, path, o.exe);
+        check(strcmp(o.exe, path) == 0, "%s: /proc/self/exe is %s (got %s)", how, path, o.exe);
     }
     if (fd >= 0)
         close(fd);

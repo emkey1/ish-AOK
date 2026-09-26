@@ -2123,6 +2123,11 @@ static dword_t sys_getcwd_common(guest_addr_t buf_addr, dword_t size) {
     char pwd[MAX_PATH + 1];
     bool unreachable;
     int err = generic_getpath_shown(wd, pwd, &unreachable);
+    // A cwd that has been removed has no path: Linux's getcwd is ENOENT for
+    // it (d_unlinked), where AOK gave the name it had -- which another
+    // directory may have taken since.
+    if (err >= 0 && !unreachable && !generic_path_names_fd(pwd, wd))
+        err = _ENOENT;
     fd_close(wd);
     if (err < 0)
         return err;

@@ -1061,6 +1061,30 @@ static unsigned long maps_region_offset(const struct pt_entry *start_pt) {
     return (unsigned long) data_file_offset(data, start_pt->offset);
 }
 
+// " (deleted)" after a mapped file's name that no longer reaches it
+// (generic_mark_deleted) -- what needrestart and lsof look for to find a
+// library that was replaced under a running program. Asked once per file, not
+// once per region: a library is mapped several times over, and the question
+// is a lookup.
+struct maps_mark {
+    struct fd *fd;
+    bool deleted;
+};
+
+static void maps_mark_deleted(struct fd *fd, char *path, bool unreachable, struct maps_mark *mark) {
+    if (unreachable)
+        return;
+    if (fd != mark->fd) {
+        char probe[MAX_PATH + 1];
+        snprintf(probe, sizeof(probe), "%s", path);
+        generic_mark_deleted(fd, probe, sizeof(probe));
+        mark->fd = fd;
+        mark->deleted = strcmp(probe, path) != 0;
+    }
+    if (mark->deleted && strlen(path) + 10 < MAX_PATH)
+        strcat(path, " (deleted)");
+}
+
 void proc_maps_dump(struct task *task, struct proc_data *buf) {
     struct mm *mm = proc_task_mm_retain(task);
     struct mem *mem = mm ? &mm->mem : NULL;
@@ -1073,6 +1097,7 @@ void proc_maps_dump(struct task *task, struct proc_data *buf) {
     struct mem_lazy_map pending[MEM_LAZY_MAX];
     unsigned pending_n = collect_pending_reservations(mem, pending);
     unsigned pending_i = 0;
+    struct maps_mark mark = {0};
 
     page_t page = 0;
     while (page < mem->page_limit) {
@@ -1130,6 +1155,7 @@ void proc_maps_dump(struct task *task, struct proc_data *buf) {
         } else if (data->fd != NULL) {
             bool unreachable;
             generic_getpath_shown(start_pt->data->fd, path, &unreachable);
+            maps_mark_deleted(start_pt->data->fd, path, unreachable, &mark);
         }
         proc_printf(buf, "%08llx-%08llx %c%c%c%c %08lx 00:00 %-10d %s\n",
                 (unsigned long long) (start << PAGE_BITS), (unsigned long long) (end << PAGE_BITS),
@@ -1388,6 +1414,7 @@ static void proc_smaps_walk(struct task *task, struct proc_data *buf, bool rollu
     struct mem_lazy_map pending[MEM_LAZY_MAX];
     unsigned pending_n = collect_pending_reservations(mem, pending);
     unsigned pending_i = 0;
+    struct maps_mark mark = {0};
     page_t page = 0;
     while (page < mem->page_limit) {
         while (page < mem->page_limit && mem_pt(mem, page) == NULL) {
@@ -1476,6 +1503,7 @@ static void proc_smaps_walk(struct task *task, struct proc_data *buf, bool rollu
         } else if (data->fd != NULL) {
             bool unreachable;
             generic_getpath_shown(data->fd, path, &unreachable);
+            maps_mark_deleted(data->fd, path, unreachable, &mark);
         }
 
         proc_smaps_region(buf, mem, start, end, start_pt, runs, nruns, path, !rollup,
@@ -1652,13 +1680,26 @@ static bool proc_pid_fdinfo_readdir(struct proc_entry *entry, unsigned long *ind
 // "socket:[N]"-style name, as Linux prints them (fs_rebase_shown_link_path);
 // a walk gets text that cannot reach a different file inside the chroot
 // (fs_rebase_readlink_path).
+//
+// What is shown also says " (deleted)" after a name that no longer reaches the
+// file, as Linux's does; the walked text never does.
 static int proc_pid_link_path(struct proc_entry *entry, struct fd *fd, char *buf) {
     bool unreachable = false;
     int err = entry->shown ? generic_getpath_shown(fd, buf, &unreachable)
                            : generic_getpath(fd, buf);
+    char mark[MAX_PATH + 1] = "";
+    if (err >= 0 && entry->shown && !unreachable) {
+        strcpy(mark, buf);
+        generic_mark_deleted(fd, mark, sizeof(mark));
+    }
     if (err >= 0 && !unreachable)
         err = entry->shown ? fs_rebase_shown_link_path(current->fs, buf)
                            : fs_rebase_readlink_path(current->fs, buf);
+    // After the rebase, which works on the path alone.
+    size_t len = strlen(buf), mark_len = strlen(mark);
+    if (err >= 0 && mark_len > 10 && strcmp(mark + mark_len - 10, " (deleted)") == 0 &&
+            (len < 10 || strcmp(buf + len - 10, " (deleted)") != 0) && len + 10 <= MAX_PATH)
+        strcat(buf, " (deleted)");
     return err;
 }
 
