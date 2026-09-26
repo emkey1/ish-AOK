@@ -603,7 +603,7 @@ static const NSInteger kMaximumTerminalFontSize = 72;
     // extra-keys row -- reported on 555, worse on some guests than others only
     // because a busier prompt redraws more of the overlap.
     [center addObserver:self
-               selector:@selector(_reestablishTerminalGeometry)
+               selector:@selector(_applicationDidBecomeActive:)
                    name:UIApplicationDidBecomeActiveNotification
                  object:nil];
     [center addObserver:self
@@ -2234,6 +2234,52 @@ static const NSInteger kMaxConsecutiveQuickSessionExits = 3;
     [self _updateSafeAreaCompensation];
     [self.view layoutIfNeeded];
     [self _applyScreenPadding];
+    [self _keepClearOfExtraKeys];
+    [self.terminal resyncSize];
+}
+
+// Becoming active comes before the keyboard is back, so look again once it has
+// had time to come back: if no keyboard-frame notification arrives, or none that
+// sets the inset right, nothing else would (#612).
+- (void)_applicationDidBecomeActive:(NSNotification *)notification {
+    [self _reestablishTerminalGeometry];
+    __weak typeof(self) weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t) (0.6 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        [weakSelf _reestablishTerminalGeometry];
+    });
+}
+
+// The terminal ends where the extra-keys row begins, never under it. The inset
+// is otherwise worked out from keyboard-frame notifications alone, and after a
+// return from the background those were not to be relied on: on device the
+// terminal came back ending a row's height too low, its last row (tmux's status
+// line in the report) drawn under the keys, until a tap brought a fresh
+// notification (#612). The row itself is the ground truth -- while it is on
+// screen, its top edge is where the terminal has to stop -- so the inset is
+// raised to clear it whenever it falls short.
+//
+// Only a docked keyboard's row: a floating keyboard's is narrow and sits
+// over the terminal by design (see -keyboardDidSomething:), a hardware keyboard's
+// has its own inset, and a Workspace window is placed clear of the keyboard.
+- (void)_keepClearOfExtraKeys {
+    if (self.embeddedInWorkspaceWindow || self.hasExternalKeyboard)
+        return;
+    UIView *bar = self.termView.inputAccessoryView;
+    if (bar == nil || bar.window == nil || bar.hidden)
+        return;
+    CGRect frame = [self.view convertRect:bar.bounds fromView:bar];
+    if (CGRectIsNull(frame) || CGRectIsEmpty(frame) || !isfinite(CGRectGetMinY(frame)))
+        return;
+    CGRect bounds = self.view.bounds;
+    if (CGRectGetWidth(frame) < CGRectGetWidth(bounds) - 1)
+        return;
+    CGFloat needed = CGRectGetMaxY(bounds) - CGRectGetMinY(frame);
+    if (needed <= self.bottomConstraint.constant + 0.5 || needed >= CGRectGetHeight(bounds))
+        return;
+    [ISHDiagnosticsStore recordBreadcrumb:@"terminal.keyboardInset.raisedToExtraKeys"
+                                  details:@{@"had": @(self.bottomConstraint.constant), @"needed": @(needed)}];
+    self.bottomConstraint.constant = needed;
+    [self.view layoutIfNeeded];
     [self.terminal resyncSize];
 }
 
@@ -2584,6 +2630,12 @@ static const NSInteger kMaxConsecutiveQuickSessionExits = 3;
 
     BOOL initialLayout = self.termView.needsUpdateConstraints;
     [self.view setNeedsUpdateConstraints];
+    // Once the keyboard has settled, the row it carries is where the terminal
+    // has to end, whatever the frame this notification brought said.
+    if ([notification.name isEqualToString:UIKeyboardDidChangeFrameNotification]) {
+        [self.view layoutIfNeeded];
+        [self _keepClearOfExtraKeys];
+    }
     if (!initialLayout) {
         // if initial layout hasn't happened yet, the terminal view is going to be at a really weird place, so animating it is going to look really bad
         NSNumber *interval = notification.userInfo[UIKeyboardAnimationDurationUserInfoKey];
