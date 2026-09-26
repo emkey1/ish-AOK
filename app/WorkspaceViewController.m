@@ -16033,8 +16033,11 @@ static int ISHWorkspaceOpenImpl(const char *request) {
         return _EINVAL;
     // A relative path has no meaning by the time this reaches the main queue:
     // the guest's cwd is not the app's, and it may have changed or the process
-    // exited. Make the caller resolve it.
-    if (path != nil && ![path hasPrefix:@"/"])
+    // exited. Make the caller resolve it. The one exception is a stream's web
+    // address for the video player (`ws-videoplayer https://.../live.m3u8`).
+    BOOL streamAddress = [tool isEqualToString:@"videoplayer"] &&
+        ([path hasPrefix:@"http://"] || [path hasPrefix:@"https://"]);
+    if (path != nil && ![path hasPrefix:@"/"] && !streamAddress)
         return _EINVAL;
 
     if (ISHWorkspaceActiveController == nil)

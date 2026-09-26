@@ -1018,11 +1018,12 @@ static NSSet<NSString *> *ISHFileManagerImageExtensions(void) {
 // reports), but the file manager still needs a list to decide whether a tap
 // should open the player at all -- includes containers AVFoundation may not
 // actually support (mkv/webm) so those get a real in-player error instead of
-// a flat "no viewer" from here.
+// a flat "no viewer" from here. m3u and m3u8 are playlists, which the player
+// reads and lists.
 static NSSet<NSString *> *ISHFileManagerVideoExtensions(void) {
     static NSSet<NSString *> *set;
     static dispatch_once_t once;
-    dispatch_once(&once, ^{ set = [NSSet setWithArray:@[@"mp4", @"mov", @"m4v", @"avi", @"mkv", @"webm"]]; });
+    dispatch_once(&once, ^{ set = [NSSet setWithArray:@[@"mp4", @"mov", @"m4v", @"avi", @"mkv", @"webm", @"m3u", @"m3u8"]]; });
     return set;
 }
 

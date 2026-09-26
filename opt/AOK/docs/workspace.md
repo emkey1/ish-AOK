@@ -78,6 +78,25 @@ An audio player applet with two kinds of sources:
 
 Playlists are saved as JSON under `/AOK/persist/playlists`.
 
+## Video Player
+
+Plays a video opened from the File Manager (mp4, mov, m4v; mkv and webm open
+and say whether AVFoundation can play them), and streams from the web:
+
+- **Open URL**, above the picture, takes a video's address, an HLS stream
+  (`.m3u8`), or an `.m3u` playlist.
+- A **playlist** of several entries — the shape of an IPTV channel list, one
+  address per line with `#EXTINF` names — becomes a searchable list; the
+  **Channels** button brings it back. One with a single entry just plays. An
+  address counts as a playlist when it ends in `.m3u` or `.m3u8`, or its query
+  names the format (`get.php?…&type=m3u_plus`).
+- An `.m3u` or `.m3u8` file in the guest opens from the File Manager the same
+  way; entries that are relative paths are read from the playlist's directory.
+  An HLS stream saved as a file cannot play from there — its segments are
+  fetched relative to its web address — so open that address instead.
+- From a shell: `ws-videoplayer https://…/live.m3u8` or
+  `ws-videoplayer ~/channels.m3u`.
+
 ## The Wayland applet
 
 The **Wayland** applet is the one window here whose contents are drawn by guest
@@ -222,7 +241,8 @@ whitespace, so a filename with spaces in it needs no quoting here — but it mus
 be **absolute**. A relative path has no meaning by the time the request reaches
 the app: the guest's working directory is not the app's, and the process may be
 gone before the window appears. `motepad` and the `ws-*` launchers resolve yours
-for you.
+for you. The one exception is the video player, which also takes an `http://`
+or `https://` address (`open videoplayer https://…/live.m3u8`).
 
 The file is `0666` and owned by root — unlike `/proc/ish/roots`, which is
 `0644`. Reading *and writing* work for any uid, and that asymmetry is
