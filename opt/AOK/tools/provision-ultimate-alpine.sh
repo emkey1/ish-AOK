@@ -37,6 +37,41 @@ fi
 log()  { printf '\n\033[1;36m==>\033[0m \033[1m%s\033[0m\n' "$*"; }
 note() { printf '    %s\n' "$*"; }
 
+# apk add, with every package downloaded whole before any is installed.
+# apk-tools 3 (Alpine 3.23+) streams each package from the mirror straight into
+# extraction, so the connection is read only as fast as files are written. Under
+# emulation that is slow, and if the app is suspended mid-install it stops
+# altogether; a mirror drops a connection left unread for a few minutes
+# (measured: a reader paused for 3 minutes lost the rest of a 68 MB transfer),
+# and apk reports that as "I/O error" on whatever it was extracting.
+# --cache-predownload fetches the whole transaction into the cache first
+# (/var/cache/apk when /etc/apk/cache is not set up) and installs from there; a
+# failed download stops the run before anything is installed, and a retry keeps
+# what already arrived. Up to three tries. The downloaded packages are deleted
+# afterwards unless the system keeps an apk cache of its own. apk-tools 2 has no
+# such option and streams as it always did.
+apk_add() {
+    _apk_opts=""
+    _apk_purge=""
+    case "$(apk --version 2>/dev/null)" in
+        "apk-tools 3."*)
+            _apk_opts="--cache-predownload"
+            [ -e /etc/apk/cache ] || _apk_purge=/var/cache/apk
+            ;;
+    esac
+    _apk_try=1
+    while :; do
+        apk add $_apk_opts "$@"
+        _apk_rc=$?
+        [ "$_apk_rc" -eq 0 ] && break
+        [ "$_apk_try" -ge 3 ] && break
+        _apk_try=$((_apk_try + 1))
+        note "apk add failed; trying again ($_apk_try of 3)"
+    done
+    [ -n "$_apk_purge" ] && rm -f "$_apk_purge"/*.apk
+    return "$_apk_rc"
+}
+
 # ---- config (env overrides; prompts interactively when run on a TTY) ------
 NEW_HOSTNAME="${NEW_HOSTNAME:-}"
 SUDO_NOPASSWD="${SUDO_NOPASSWD:-0}"
@@ -106,7 +141,7 @@ PKGS="
   fastfetch figlet ncurses lazygit
 "
 apk update >/dev/null 2>&1 || note "apk update failed (continuing with cached index)"
-if apk add --no-progress $PKGS; then
+if apk_add --no-progress $PKGS; then
     note "packages installed"
 else
     note "WARNING: 'apk add' reported errors; review above and re-run if needed"

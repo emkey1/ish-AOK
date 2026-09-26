@@ -44,6 +44,41 @@ log()  { printf '\n\033[1;36m==>\033[0m \033[1m%s\033[0m\n' "$*"; }
 note() { printf '    %s\n' "$*"; }
 die()  { printf 'setup-wayland.sh: %s\n' "$*" >&2; exit 1; }
 
+# apk add, with every package downloaded whole before any is installed.
+# apk-tools 3 (Alpine 3.23+) streams each package from the mirror straight into
+# extraction, so the connection is read only as fast as files are written. Under
+# emulation that is slow, and if the app is suspended mid-install it stops
+# altogether; a mirror drops a connection left unread for a few minutes
+# (measured: a reader paused for 3 minutes lost the rest of a 68 MB transfer),
+# and apk reports that as "I/O error" on whatever it was extracting.
+# --cache-predownload fetches the whole transaction into the cache first
+# (/var/cache/apk when /etc/apk/cache is not set up) and installs from there; a
+# failed download stops the run before anything is installed, and a retry keeps
+# what already arrived. Up to three tries. The downloaded packages are deleted
+# afterwards unless the system keeps an apk cache of its own. apk-tools 2 has no
+# such option and streams as it always did.
+apk_add() {
+    _apk_opts=""
+    _apk_purge=""
+    case "$(apk --version 2>/dev/null)" in
+        "apk-tools 3."*)
+            _apk_opts="--cache-predownload"
+            [ -e /etc/apk/cache ] || _apk_purge=/var/cache/apk
+            ;;
+    esac
+    _apk_try=1
+    while :; do
+        apk add $_apk_opts "$@"
+        _apk_rc=$?
+        [ "$_apk_rc" -eq 0 ] && break
+        [ "$_apk_try" -ge 3 ] && break
+        _apk_try=$((_apk_try + 1))
+        note "apk add failed; trying again ($_apk_try of 3)"
+    done
+    [ -n "$_apk_purge" ] && rm -f "$_apk_purge"/*.apk
+    return "$_apk_rc"
+}
+
 [ "$(id -u)" = 0 ] || die "must run as root:  sudo sh $0"
 
 ARCH="$(uname -m)"
@@ -94,7 +129,7 @@ elif command -v apk >/dev/null 2>&1; then
     # window title, menu and foot terminal was drawn in Font Awesome.
     # wlr-randr sets the output scale the Display applet's UI-scale setting
     # asks for; labwc has no output configuration of its own.
-    apk add labwc sway wofi foot wayvnc font-dejavu wlr-randr || die "apk add failed -- see output above"
+    apk_add labwc sway wofi foot wayvnc font-dejavu wlr-randr || die "apk add failed -- see output above"
 
 else
     die "no supported package manager found (need apt-get, pacman, or apk)"
@@ -116,7 +151,7 @@ if ! command -v dbus-daemon >/dev/null 2>&1; then
     elif command -v pacman >/dev/null 2>&1; then
         pacman -S --needed --noconfirm dbus
     elif command -v apk >/dev/null 2>&1; then
-        apk add dbus
+        apk_add dbus
     fi
     # Judged by the result, not the exit status: apk exits 1 when any package
     # already in the root is broken, even though dbus itself installed.
@@ -135,7 +170,7 @@ if command -v apt-get >/dev/null 2>&1; then
 elif command -v pacman >/dev/null 2>&1; then
     pacman -S --needed --noconfirm waybar otf-font-awesome
 elif command -v apk >/dev/null 2>&1; then
-    apk add waybar font-awesome
+    apk_add waybar font-awesome
 fi
 command -v waybar >/dev/null 2>&1 \
     || note "warning: waybar did not install -- the desktop runs without a panel"
@@ -167,7 +202,7 @@ elif command -v pacman >/dev/null 2>&1; then
     pacman -S --needed --noconfirm $MENU_APPS \
         || note "warning: some of these failed to install -- Applications menu will just show whichever succeeded"
 elif command -v apk >/dev/null 2>&1; then
-    apk add $MENU_APPS \
+    apk_add $MENU_APPS \
         || note "warning: some of these failed to install -- Applications menu will just show whichever succeeded"
 fi
 
@@ -204,7 +239,7 @@ if command -v qv4l2 >/dev/null 2>&1 || command -v qvidcap >/dev/null 2>&1; then
             pacman -S --needed --noconfirm $QT_RUNTIME \
                 || note "warning: Qt6 runtime install failed -- qv4l2/qvidcap in the Applications menu will still be broken"
         elif command -v apk >/dev/null 2>&1; then
-            apk add $QT_RUNTIME \
+            apk_add $QT_RUNTIME \
                 || note "warning: Qt6 runtime install failed -- qv4l2/qvidcap in the Applications menu will still be broken"
         fi
     fi
