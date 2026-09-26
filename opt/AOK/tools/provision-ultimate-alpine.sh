@@ -22,6 +22,7 @@
 #       TARGET_USER=mke                # primary login to set up (else prompted)
 #       NEW_HOSTNAME=                  # hostname to set (else prompted)
 #       SUDO_NOPASSWD=0                # 1 = passwordless %wheel sudo
+#       MIRROR=keep                    # keep dl-cdn rather than pick the fastest mirror
 #
 # Arch note: every package below is arch-independent in Alpine, so the same
 # script provisions an x86_64 3.23.3 rootfs identically.
@@ -117,6 +118,45 @@ if [ -n "$TARGET_USER" ] && id "$TARGET_USER" >/dev/null 2>&1; then
     TARGET_HOME="$(awk -F: -v u="$TARGET_USER" '$1==u{print $6}' /etc/passwd)"
 fi
 note "timezone=$TZ_NAME  login=${TARGET_USER:-<none>}  hostname=${NEW_HOSTNAME:-<keep>}"
+
+# ===========================================================================
+log "Choosing the fastest package mirror (a couple of minutes)"
+# ===========================================================================
+# The stock repositories are dl-cdn.alpinelinux.org, one CDN for everyone, and a
+# mirror near the device can be several times faster: measured 2026-09-26 from
+# London, 0.8 MB/s from dl-cdn and 2.6 MB/s from the mirror this picked, for the
+# same 68 MB package. setup-apkrepos -f (alpine-conf) times a small request to
+# every mirror on Alpine's list and takes the quickest. It appends that mirror
+# after dl-cdn, where apk may go on using dl-cdn, so the list is emptied first
+# and holds only the mirror afterwards; the stock list is kept as
+# repositories.aok-dl-cdn, and put back if no mirror answers or the run is
+# interrupted. Only a stock list is replaced -- one naming anything else (edge,
+# testing, a mirror of one's own) is left as it is -- and MIRROR=keep skips this.
+MIRROR="${MIRROR:-fastest}"
+REPOS=/etc/apk/repositories
+if [ "$MIRROR" = keep ]; then
+    note "keeping $REPOS (MIRROR=keep)"
+elif grep -Ev '^[[:space:]]*(#|$)' "$REPOS" 2>/dev/null |
+        grep -Evq '^https?://dl-cdn\.alpinelinux\.org/alpine/[^/]+/(main|community)/?$'; then
+    note "keeping $REPOS: it is not the stock dl-cdn list"
+else
+    apk update >/dev/null 2>&1
+    command -v setup-apkrepos >/dev/null 2>&1 || apk_add -q alpine-conf >/dev/null 2>&1
+    if command -v setup-apkrepos >/dev/null 2>&1; then
+        cp "$REPOS" "$REPOS.aok-dl-cdn"
+        trap 'cp "$REPOS.aok-dl-cdn" "$REPOS"; exit 130' INT TERM HUP
+        : > "$REPOS"
+        if setup-apkrepos -c -f >/dev/null 2>&1 && grep -q '^[^#].*/main$' "$REPOS"; then
+            note "mirror: $(sed -n 's#/[^/]*/main$##p' "$REPOS" | head -1)  (was dl-cdn; kept in $REPOS.aok-dl-cdn)"
+        else
+            cp "$REPOS.aok-dl-cdn" "$REPOS"
+            note "no mirror answered; keeping dl-cdn"
+        fi
+        trap - INT TERM HUP
+    else
+        note "could not install alpine-conf (setup-apkrepos); keeping dl-cdn"
+    fi
+fi
 
 # ===========================================================================
 log "Installing packages (this is the slow part under emulation)"
