@@ -88,7 +88,7 @@ the arm64 CLI, two levels deep, exiting cleanly:
 
 ```
 HELLO-FROM-THE-NESTED-GUEST
-Linux ... 5.20.66-ish_aok iSH-AOK built 2026-08-31 09:32Z unoptimized aarch64 GNU/Linux
+Linux ... 5.10.0-ish_aok iSH-AOK built 2026-08-31 09:32Z unoptimized aarch64 GNU/Linux
 ```
 
 The cost is exactly what one would predict and worth having measured rather

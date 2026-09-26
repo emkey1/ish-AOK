@@ -52,10 +52,10 @@ The document's own conclusion about itself:
 > design was dismissed as the expensive option; it is the affordable one,
 > because the expensive thing was never fork.
 
-With an honest qualifier attached, which is why the shipped figure quoted in
-Chapter 22 is roughly 16x rather than 46x: the ceiling above compares a *host*
-binary against an emulated one, while the shipped native program reaches its I/O
-through the shim and stops at a checkpoint on every read and write (Chapter 23).
+With an honest qualifier attached, which is why Chapter 22's figure is roughly
+16x rather than 46x: the ceiling above compares a *host* binary against an
+emulated one, while a native program built this way reaches its I/O through
+the shim and stops at a checkpoint on every read and write (Chapter 23).
 And 38–46x applies only to time spent *inside* bash — external commands stay
 emulated unless they are native applets, so an end-to-end figure for a real
 script is lower and depends entirely on the mix.

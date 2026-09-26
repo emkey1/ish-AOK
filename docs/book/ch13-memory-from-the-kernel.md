@@ -502,77 +502,90 @@ private mapping does not, because writes to it never reach the file. That is the
 opposite of what the names suggest, which is why the conformance test checks the
 whole matrix instead of the cases somebody expected to matter.
 
-## 13.13 The gap: `PROT_EXEC` is never enforced
+## 13.13 Closed this cycle: `PROT_EXEC` is now enforced
 
-This is the largest known hole in AOK's memory model, and the way it is recorded
-in the tree is a model for how to document one.
+Through build 555 this was the largest known hole in AOK's memory model, and the
+way it was recorded in the tree was a model for how to document a gap that has
+not been fixed. It is worth keeping the record of what it looked like, because
+build 556 fixed it by following through on exactly the design the record had
+already picked out.
 
-`emu/memory.h` says "P_READ and P_EXEC are ignored for now", and `P_EXEC` really
-is ignored: it is stored, printed in `/proc/<pid>/maps`, reconstructed by
+`emu/memory.h` used to say "P_READ and P_EXEC are ignored for now", and `P_EXEC`
+really was ignored: stored, printed in `/proc/<pid>/maps`, reconstructed by
 `mremap`, and never once consulted. Measured against Linux 6.12, with an arm64
 `mov w0,#42; ret` written into a `PROT_READ|PROT_WRITE` page:
 
-| | Linux | AOK |
-|---|---|---|
-| call into a never-`PROT_EXEC` page | SIGSEGV | returns 42 |
-| `mprotect(PROT_READ)` over a `PROT_EXEC` page, then call | SIGSEGV | returns 42 |
+| | Linux | AOK through 555 | AOK, 556 |
+|---|---|---|---|
+| call into a never-`PROT_EXEC` page | SIGSEGV | returns 42 | SIGSEGV |
+| `mprotect(PROT_READ)` over a `PROT_EXEC` page, then call | SIGSEGV | returns 42 | SIGSEGV |
 
-So every guest `.data` and `.bss` page is executable, and any guest JIT's own
-W^X discipline is decorative.
+Every guest `.data` and `.bss` page used to be executable, and any guest JIT's
+own W^X discipline was decorative.
 
-**The grading.** It is a mitigation gap rather than a hole: exploiting it
-requires a separate memory-corruption bug in guest software. Nothing about AOK
-becomes reachable that was not already reachable; what is lost is a layer that
-would have made a guest-side bug harder to turn into execution.
+**The grading, which is why fixing it was not an emergency.** It was a
+mitigation gap rather than a hole: exploiting it needed a separate
+memory-corruption bug in guest software. Nothing about AOK became reachable
+that was not already reachable; what was missing was a layer that would have
+made a guest-side bug harder to turn into execution.
 
-**Why it is not fixed, stated as design rather than as an apology.** The
-instruction-fetch path has no access type of its own — `emu/tlb.h` fills the TLB
-for a fetch with `MEM_READ` — so there is nothing for a permission check to hang
-off. Two designs were considered:
+**The obstacle, restated from the design record.** The instruction-fetch path
+had no access type of its own — `emu/tlb.h` filled the TLB for a fetch with
+`MEM_READ` — so there was nothing for a permission check to hang off. Two
+designs were on the table. *A TLB bit* — a `page_if_executable` tag beside
+`page` and `page_if_writable`, so a fetch checks a third tag exactly as a write
+checks the second — was the obvious shape, and it grew the emulator's hottest
+data structure by half; Chapter 5 has the measurement that made this a hard no,
+since the same structure was already grown once, from 24 bytes to 32, in a
+change that was implemented in full, benchmarked on two microarchitectures, and
+reverted for buying nothing. *Check the fetch itself, invalidate on revoke* was
+the right shape and nearly free, and it is the one that shipped.
 
-*A TLB bit.* Add a `page_if_executable` tag beside `page` and
-`page_if_writable`, so a fetch checks a third tag exactly as a write checks the
-second. This is the obvious shape, and it grows the emulator's hottest data
-structure by half. Chapter 5 has the measurement that makes this a hard no: the
-same structure was already grown once, from 24 bytes to 32, in a change that was
-implemented in full, benchmarked on two microarchitectures, and reverted for
-buying nothing. Rejected on cost.
+**What actually landed (`bd055d53`).** Every engine now fetches instructions
+through a dedicated `tlb_fetch` (`emu/tlb.c`) instead of reusing a data read —
+the JIT's `gen.c`, HLE's code reads, the amd64 interpreter's `amd64_fetch`, and
+the arm64 interpreter's `arm64_read_insn` all go through it — and it refuses a
+page that is mapped, or merely reserved, without `P_EXEC`. A refused fetch
+raises the new `INT_PF_EXEC`: `SIGSEGV`, `SEGV_ACCERR`, `si_addr` at the first
+byte that could not be fetched, and the x86 error code's instruction-fetch bit
+set — never retried as a read, which would succeed and walk straight back into
+the same fetch. `pt_set_flags` throws away any translated code for a page whose
+`P_EXEC` changes, either way, so `mprotect` to RX runs code that used to fault
+and back to RW stops code that used to run — the revoke half the design record
+asked `jit_invalidate_page` for, unchanged.
 
-*Check once per compiled block, invalidate on revoke.* This is the right shape
-and is nearly free. `jit_block_compile_common` runs once per block, so the check
-lands exactly where Linux's fault-on-fetch would; and `jit_invalidate_page` —
-which already exists for self-modifying code — handles the revoke half when
-`pt_set_flags` clears `P_EXEC`.
+What legitimately runs keeps running. `PT_GNU_STACK` still decides whether the
+stack is executable, an i386 binary with no `PT_GNU_STACK` still gets
+`READ_IMPLIES_EXEC`, and `shmat` still honours `SHM_EXEC`. The one new wrinkle
+is `[sigpage]`: a 64-bit guest now returns from a signal handler through a
+read-only executable page `exec` maps for it — Linux keeps the same
+`rt_sigreturn` trampoline in the vDSO instead — recorded in `mm->vdso`, which a
+checkpoint already carries; musl's aarch64 port sets no `SA_RESTORER` and
+riscv64 has none, so both used to return to a copy on the signal stack. A
+checkpoint image from before this — version 20 raised it — has no sigpage to
+restore, so a pre-556 image's 64-bit processes would return from their first
+signal onto a stack that no longer executes. `tests/manual/nx_enforce.c` holds
+the whole matrix: RW, the stack and the heap fault at the call target; RX
+runs; RW again faults; RWX runs; `PROT_NONE` and unmapped fault as they always
+did.
 
-The obstacle is fault *delivery*. `jit_block_compile` returning NULL already
-means out of memory, and every dispatch loop responds to that by flushing the
-entire JIT, retrying, and then killing the task with a "JIT OOM" message
-(Chapter 6). A non-executable page needs a **distinct** signal threaded out, so
-the loop raises `INT_PF` with the faulting address instead — and there are four
-dispatch loops, one per guest, each with its own OOM ladder and crash-unwind
-structure, plus the interpreter build's own path.
-
-The verdict in `docs/TODO.md`:
-
-> That is a contained project rather than a patch, and it touches the one path
-> where a mistake stops every guest from running. Worth doing deliberately, with
-> its own before/after benchmark run, rather than folded into a conformance
-> sweep.
-
-Three things make that entry worth imitating: the gap is *measured* against a
-real Linux rather than assumed; the severity is *graded* rather than asserted;
-and the two candidate designs are written down with the specific reason each was
-or was not taken, so the next person starts from the second design rather than
-rediscovering the first.
+Three things made the original record worth imitating, and they are also why
+the fix was cheap once someone sat down to do it: the gap was *measured*
+against a real Linux rather than assumed; the severity was *graded* rather than
+asserted; and the two candidate designs were written down with the specific
+reason each was or was not taken, so whoever picked this up started from the
+second design instead of rediscovering the first.
 
 ## 13.14 What this layer is actually defending
 
 Put the chapter together and the priorities are visible in the order the checks
 run.
 
-The guest is not being protected from itself. `PROT_EXEC` is unenforced, there
-are no memory namespaces, and a guest process that corrupts its own heap is on
-its own — the same as on Linux, minus one mitigation.
+The guest is not being protected from itself in any deep sense: there are no
+memory namespaces, and a guest process that corrupts its own heap is on its
+own — the same as on Linux. Section 13.13 closed the one respect in which it
+used to be *less* protected than that: `PROT_EXEC` is enforced now, so a guest
+bug that can write memory still cannot simply jump into what it wrote.
 
 What is being protected is the *application*. Reservations are bounded so a
 64 GiB `mmap` cannot consume a gigabyte of host RSS. Growth is refused before
@@ -600,9 +613,10 @@ it is running inside.
 [kernel/exec.c](../../kernel/exec.c) (`mem_set_stack_bounds`),
 [platform/platform.h](../../platform/platform.h) (`host_mem_headroom_low`,
 `host_mem_pressure_level`), [docs/simulated_swap_plan.md](../../docs/simulated_swap_plan.md),
-[docs/TODO.md](../../docs/TODO.md) ("PROT_EXEC is never enforced"),
+[emu/tlb.c](../../emu/tlb.c) (`tlb_fetch`),
 `tests/manual/mmap_shared_integrity.c`, `tests/manual/stack_guard_gap.c`,
-`tests/manual/mem_guard_small_growth.c`. Deeper treatment for users:
+`tests/manual/mem_guard_small_growth.c`, `tests/manual/nx_enforce.c`. Deeper
+treatment for users:
 [opt/AOK/docs/swap.md](../../opt/AOK/docs/swap.md).
 
 *Story:* the silent headroom guard — every `mmap` in the application beginning

@@ -10,7 +10,7 @@ automatically, and the specific ways a testing system can be green and wrong.
 | tier | what it is | what only it can see |
 |---|---|---|
 | host unit tests | `meson test -C build` | pure logic — `float80`, decoders, utilities |
-| guest suite | ~190 C programs run **inside** a guest at `/AOK/tests` | kernel behaviour as a real userland experiences it |
+| guest suite | ~366 C programs run **inside** a guest at `/AOK/tests` | kernel behaviour as a real userland experiences it |
 | end-to-end | boot an i686 Alpine, compile C in it, run the result | fork- and exec-heavy work on an architecture daily testing never touches |
 | differential | ptraceomatic, unicornomatic, the conductor | instruction- and program-level divergence from real Linux |
 
@@ -43,9 +43,10 @@ having in one place:
 > exec.
 
 That is the *pre-push* gate: both suites and the JVM, on one guest. The
-*release* gate is wider — all four guests, on the Mac and again on real
-hardware, because a 32-bit ABI difference is invisible on the other three and a
-device regression is invisible everywhere else. Section 37.4 has it.
+*release* gate is wider — all five roots, on the Mac and again on real
+hardware, because a 32-bit ABI difference is invisible on the other three
+musl guests and a glibc-only or a device-only regression is invisible
+everywhere else. Section 37.4 has it.
 
 The JVM is in that list for a specific reason: it is the most demanding ordinary
 program available. It threads heavily, maps aggressively, and uses `exec` and

@@ -16,13 +16,18 @@ inventory:
 
 ## 41.1 Architectural: there are no namespaces
 
-No PID namespaces, no mount namespaces, no network, IPC, user or cgroup
-namespaces. `CLONE_NEWUTS` is the single exception, because a UTS namespace is a
-hostname in a refcounted struct.
+No PID namespaces, no mount namespaces, no network, user or cgroup namespaces.
+`CLONE_NEWUTS` and `CLONE_NEWIPC` are the two exceptions: a UTS namespace is a
+hostname in a refcounted struct, and an IPC namespace is System V shared
+memory, semaphores and message queues kept per namespace instead of global.
+`setns(2)` can join either one — or a namespace nothing is in any more — through
+its `/proc/<pid>/ns` file. Every other kind is `ENOSYS` to `unshare` and `clone`;
+`setns` into one is the no-op of joining the only one there is.
 
-So nothing container-shaped runs. No Docker, no `unshare`, no rootless podman,
-no per-service filesystem views. There is one process table, one filesystem
-tree, and one network, visible identically from every root and every chroot.
+So nothing container-shaped runs. No Docker, no `unshare -m` or `-n`, no
+rootless podman, no per-service filesystem views. There is one process table,
+one filesystem tree, and one network, visible identically from every root and
+every chroot.
 
 This is not a missing feature with a ticket. The absence runs through the design
 — Chapter 10's task model, Chapter 16's global mount table, Chapter 21's
@@ -31,18 +36,21 @@ This is not a missing feature with a ticket. The absence runs through the design
 possible, and on a single-user device the isolation being traded away was
 protecting nobody.
 
-## 41.2 Diagnosed: `PROT_EXEC` is never enforced
+## 41.2 Closed this cycle: `PROT_EXEC` was diagnosed, then fixed
 
-Every guest `.data` and `.bss` page is executable, and any guest JIT's own W^X
-discipline is decorative. Chapter 13 has it in full, and it is the model entry
-for how a gap should be recorded: measured against Linux 6.12 in a two-row
-table, **graded** as a mitigation gap rather than a hole (exploiting it needs a
-separate memory-corruption bug in guest software), and carrying both candidate
-designs with the specific reason each was or was not taken.
+Through build 555, every guest `.data` and `.bss` page was executable, and any
+guest JIT's own W^X discipline was decorative. Chapter 13 has the full history,
+and it is the model entry for how a gap should be recorded: measured against
+Linux 6.12 in a two-row table, **graded** as a mitigation gap rather than a hole
+(exploiting it needed a separate memory-corruption bug in guest software), and
+carrying both candidate designs with the specific reason each was or was not
+taken.
 
-The verdict — "a contained project rather than a patch, and it touches the one
-path where a mistake stops every guest from running" — is a decision, not a
-deferral. The difference is that somebody can act on it.
+It is also the model entry for what a diagnosed gap is *for*: 556's fix
+(`bd055d53`) took the second design off the page and built it, unchanged in
+shape, because the record had already done the hard part of deciding what the
+right shape was. The difference between a diagnosed gap and a deferral is that
+somebody can act on it — and eventually somebody did.
 
 ## 41.3 Diagnosed: `fcntl(F_GETFL)` lies about a pipe
 
@@ -264,11 +272,12 @@ guest data. A written-down gap is not just a reminder; it is a claim someone can
 go and check. That file's closing section now records what it got wrong, which
 is the more useful half.
 
-That turns a gap into a decision. `PROT_EXEC` is not "we never got to NX" — it
-is a two-row table against Linux 6.12, a severity grade, two candidate designs
-and a reason. The external display is not an abandoned branch — it is a
-maintainer's judgement with a fence around it. The `F_GETFL` lie is not a
-mystery — it is two correct decisions and a named seam with a scoped next step.
+That turns a gap into a decision, and sometimes into a fix. `PROT_EXEC` was
+never "we never got to NX" — it was a two-row table against Linux 6.12, a
+severity grade, two candidate designs and a reason, and it is closed. The
+external display is not an abandoned branch — it is a maintainer's judgement
+with a fence around it. The `F_GETFL` lie is not a mystery — it is two correct
+decisions and a named seam with a scoped next step.
 
 The alternative is not a shorter list. It is the same list, undiscovered, found
 one user report at a time by people who have no way to know whether they are the

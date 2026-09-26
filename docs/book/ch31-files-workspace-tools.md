@@ -173,8 +173,21 @@ Its reason to exist is one column:
 
 > iSH-AOK can run i386, amd64, arm64, and riscv64 binaries side by side in one
 > booted session … Stock `top`/`htop` have no way to show that architecture mix.
-> `ktop`'s one real differentiator is an **ARCH** column, read directly from each
-> process's ELF header via `/proc/<pid>/exe`.
+> `ktop`'s one real differentiator is an **ARCH** column.
+
+That column used to be read straight from each process's ELF header via
+`/proc/<pid>/exe`. Chapter 12's `/proc`/`ptrace` credential gate broke it: a
+normal user's `open` of a root process's `exe` is now `EACCES`, as on Linux, so
+`init`, `sshd`, `login` and every other root-owned process showed `?` in the one
+column that is the entire point of running `ktop`. The check was right; the
+column's source was the wrong one. `/proc/ish/arch` now lists `<pid> <machine>`
+for every live process — readable by anyone, because which of iSH-AOK's
+architectures a process runs is not a secret even when the process itself is —
+and `ktop` reads the whole table once per refresh, falling back to the ELF
+header only for a pid the table missed. Native programs (`zsh`, SmallCLUE's
+applets) have no guest ELF image to read anyway; the table says `native` for
+those, and `ktop` shows the host's own architecture, `arm64` on every Apple
+Silicon device, because that is what the code actually is.
 
 That column is only meaningful because of two facts established much earlier in
 this book: a task's guest ABI is a field on the task (Chapter 7), and there are

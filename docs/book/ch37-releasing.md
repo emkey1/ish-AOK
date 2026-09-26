@@ -151,9 +151,18 @@ not own, which makes it the highest-value item on a list nobody enjoys.
 
 **The release gate is wider than the pre-push one.** Chapter 35's pre-push rule
 asks for both suites plus the JVM on a single guest. Before a tag, the full
-guest regression suite runs on **all four guests** — i386, amd64, arm64 and
-riscv64 — on the Mac and again on real hardware, with the end-to-end suite and
-the JVM smoke test.
+guest regression suite runs on **all five roots** — the four musl guests
+(i386, amd64, arm64 and riscv64) plus a fifth leg on glibc, aarch64 — on the
+Mac and again on real hardware, with the end-to-end suite and the JVM smoke
+test. The device leg boots the glibc root and reaches the four musl roots
+through `mount-root.sh`'s chroot, so it proves chroot behaviour at least as
+much as it proves each root booted on its own — a distinction sharp enough to
+explain failures that turn out to be chroot-only. And the build on the device is
+one the release itself compiled, installed and launched, never one started from
+Xcode's Run button: under the debugger every host-thread wake-up signal goes
+through debugserver, and on the M4 iPad in 556's leg a 17-thread process took
+4.3 s to die of `SIGKILL` where the same build, launched normally, took 11 ms.
+The timing tests failed as if the timer work had regressed.
 
 Each axis earns its place by having caught something nothing else could. The
 four wrong tests fixed in 552 were visible only on **i386**: a `PTRACE_POKEDATA`

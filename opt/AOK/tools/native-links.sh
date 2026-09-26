@@ -1,7 +1,9 @@
 #!/bin/sh
 # Link iSH-AOK's native programs into a bin directory so they run natively:
 # SmallCLUE's applets, and the standalone programs beside it in /AOK/native --
-# helix (`hx`), zsh, dash (also linked as `sh`) and bash.
+# zsh, dash (also linked as `sh`), helix (`hx`), ktop, motepad, the bmm/bmt
+# benchmarks, and the setuid-root su, sudo and passwd. (bash, when a build
+# enables it; builds from 556 on do not.)
 #
 # /AOK/native/smallclue is compiled into iSH-AOK and runs as host code rather
 # than translated guest instructions, so it costs the same on every guest
@@ -310,7 +312,7 @@ link_is_native() {
 # reason the applet list is parsed with builtins.
 usage() {
     echo "Link iSH-AOK's native programs into a bin directory so they run"
-    echo "natively: SmallCLUE's applets, plus hx, bash and zsh from /AOK/native."
+    echo "natively: SmallCLUE's applets, plus the programs beside it in /AOK/native."
     echo
     echo "Usage: sh /AOK/tools/native-links.sh [options] [directory]"
     echo "       (defaults to /usr/local/native-bin, put first on PATH unless --no-path)"

@@ -83,19 +83,29 @@ different and more honest thing.
 ## 26.4 The answer is a build option
 
 ```bash
-meson setup build .                          # auto: on if deps/bash is present
-meson setup build . -Dnative_bash=disabled   # no third-party GPL in the binary
+meson setup build .                          # disabled by default: no third-party GPL in the binary
+meson setup build . -Dnative_bash=auto       # on if deps/bash is present
 meson setup build . -Dnative_bash=enabled    # fail if deps/bash is missing
 ```
 
 Three values doing three different jobs.
 
-`auto` is today's default behaviour: on when the submodule is checked out. It is
-the convenient answer and the one that makes a `--recurse-submodules` clone
-produce a working bash.
+`disabled` is the default as of build 556 (`bd17993b`): no third-party GPL
+code in the binary, whether or not `deps/bash` is checked out. It is set
+explicitly on every reconfigure rather than left to meson's own remembered
+value, because meson caches an option in the build directory — a tree
+configured before the change would otherwise have gone on shipping bash
+forever, under a default that no longer matched `meson_options.txt`. This is
+the answer for anyone distributing a build who does not want to carry
+third-party GPL code in it, which as of this release is every build unless
+someone opts back in.
 
-`disabled` is the answer for anyone distributing a build they do not want to
-carry third-party GPL code in.
+`auto` was the default through 555, and is still available: on when the
+submodule is checked out, which is the convenient answer for a developer who
+wants a `--recurse-submodules` clone to produce a working bash without passing
+anything. That convenience is exactly why it stopped being the default — a
+release build picking up GPLv3 code because a submodule happened to be checked
+out is the failure mode `disabled` exists to close off.
 
 `enabled` exists for a subtler reason, and it is the one worth copying. With
 `auto`, a missing submodule silently produces a build without bash — which is

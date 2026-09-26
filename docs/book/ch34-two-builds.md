@@ -106,7 +106,7 @@ Because that is so easy to get wrong, the build tells the guest:
 
 ```
 $ uname -a
-Linux Mac.lan 5.20.66-ish_aok iSH-AOK built 2026-08-31 10:24Z unoptimized aarch64 Linux
+Linux Mac.lan 5.10.0-ish_aok iSH-AOK built 2026-08-31 10:24Z unoptimized aarch64 Linux
 ```
 
 `unoptimized` in `uname -v`. It costs a string and it means no benchmark result

@@ -120,6 +120,19 @@ bias for position-independent executables, the `brk` reservation set aside for
 heap growth on the dynamic-PIE guests (Chapter 13), a guard against a later
 `mmap` landing where the heap intends to grow, and the initial stack.
 
+Through build 555 that load bias, and the stack and heap addresses beside it,
+were the same on every run — exactly the constant an exploit wants. `exec` now
+moves each of them by a random number of pages (`arch_mmap_rnd`,
+`randomize_stack_top`, `arch_randomize_brk`, mirroring what Linux does), so the
+stack, the heap, the program, the loader and every library land somewhere
+different each time, within bounds sized to each guest's address space.
+`personality(ADDR_NO_RANDOMIZE)` — `setarch -R`, and gdb's default — turns it
+off for one process and survives that process's own later `exec`s; a set-id
+`exec` clears it. `/proc/sys/kernel/randomize_va_space` is root's system-wide
+switch, and `ISH_RANDOMIZE_VA_SPACE` in the host environment sets its starting
+value, for anyone who needs a build's addresses to repeat across runs while
+bisecting a bug.
+
 **Anything the guest has registered.** `binfmt_misc` is the third answer, and
 unlike the other two it is written by the guest at run time: a rule matches a
 file by a magic string at some offset or by its filename extension, and names an

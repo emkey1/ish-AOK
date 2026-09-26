@@ -347,7 +347,7 @@ stop signal. `deliver_sig` records a signal the tracer injected, which must be
 `signal_delivery_stop` — otherwise an injected signal loops forever.
 
 `PTRACE_ATTACH` — the request `gdb -p` and `strace -p` use — was missing until
-this cycle, and fell through to the default arm's `EPERM`, so a debugger could
+build 552, and fell through to the default arm's `EPERM`, so a debugger could
 not be pointed at a running guest process at all. It shares its implementation
 with `SEIZE` and differs in two ways the rest of the sub-struct keys off. It
 takes no options, so `seized` stays false and the tracee reports group-stops
@@ -357,6 +357,19 @@ an ordinary job-control stop — which the tracer collects from its first `wait`
 `PTRACE_INTERRUPT` is now gated on `seized` the way Linux gates it: an attached
 tracee gets `EIO`. `gdb -p <pid>` against a running guest process attaches,
 walks the stack, evaluates and detaches as a result.
+
+Implementing the request was not the same as guarding it. Through build 555,
+neither `PTRACE_ATTACH` nor `PTRACE_SEIZE` asked whether the caller was allowed
+to inspect the target at all — any user could attach to root's `sshd` and read
+or write its memory and registers. Build 556's `task_ptrace_may_access()`
+(`kernel/getset.c`) closed that the way Linux's `ptrace_may_access()` does: a
+thread of the caller's own process always may; otherwise the caller's real ids
+must match all three of the target's real, effective and saved ids, and the
+target must be dumpable, or the caller needs `CAP_SYS_PTRACE`. The same rule
+now gates every `/proc/<pid>` entry `fs/proc.c` marks `.ptrace_read` — `mem`,
+`environ`, `auxv`, `maps`, `smaps`, `fd/`, `cwd`, `exe`, and opening or
+`readlink`ing any of them — which is also why ktop's ARCH column no longer
+reads `/proc/<pid>/exe` for a process it does not own (Chapter 31).
 
 > **The bug that taught us this**
 >

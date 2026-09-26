@@ -198,8 +198,10 @@ Chapter 39 counted them: two of six optimizations produced a negative result
 worth keeping, and both are recorded *in the source*, with numbers, beside the
 code somebody would have to change to re-propose them. Chapter 38's biggest win
 is published with its own +0.5% regression, the mechanism, and the fix that has
-not been done. Chapter 13's `PROT_EXEC` gap is measured, graded, and carries
-both rejected designs.
+not been done. Chapter 13's `PROT_EXEC` gap was measured, graded, and recorded
+with both candidate designs and the reason each was or was not taken — and that
+record is why, when someone finally sat down to close it, the fix followed the
+plan already on the page rather than starting over.
 
 The alternative is not a tidier record. It is the same investigation being run
 again in two years by somebody who has no way to know it was already done.

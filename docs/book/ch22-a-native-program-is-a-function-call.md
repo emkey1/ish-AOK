@@ -34,9 +34,10 @@ and evaluates. That work is not `memcpy`-shaped and no fingerprint will ever
 match it. Under emulation it is millions of guest instructions, each one a
 dispatch (Chapter 6).
 
-Measured: an arithmetic loop under the native bash runs roughly **16x faster**
-than under the emulated shell. Subshells and command substitutions land near
-parity, for reasons Chapter 24 is entirely about.
+Measured with bash built as a native program (`-Dnative_bash=enabled`; off by
+default since build 556, Chapter 26): an arithmetic loop runs roughly **16x
+faster** than under the emulated shell. Subshells and command substitutions
+land near parity, for reasons Chapter 24 is entirely about.
 
 There is a second benefit that gets less attention and is nearly free. From
 `kernel/native.h`:
