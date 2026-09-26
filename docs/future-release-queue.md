@@ -131,17 +131,3 @@ Found 2026-09-25 with the pathless-reopen work (fs/generic.c: procfd_parse, proc
 ```
 
 </details>
-
-## Keep /proc/<pid>/exe of a memfd image across a checkpoint
-
-An image started from a memfd saves its exe as the path "/memfd:name (deleted)", which restore cannot open, so the link is empty afterwards. This session would carry it by the memfd's checkpoint identity when that memfd is in the image.
-
-<details><summary>Original chip prompt</summary>
-
-```text
-In iSH-AOK (/Users/mke/git/ish-AOK, branch `working`; follow the project memory: diff peer worktrees before starting, oracle on camd, positive controls, register tests in all places, stage explicit paths, push to origin/working and fast-forward the main checkout), keep mm->exefile for an image exec'd from a memfd across a checkpoint save and restore.
-
-kernel/checkpoint.c records the exe as generic_getpath_backing(mm->exefile) and restore reopens it by path; for a memfd that path is "/memfd:name (deleted)", so the restored process has no exe (readlink /proc/self/exe fails, and open of it too). Since 2026-09-25 (CKPT_VERSION 22) a memfd description carries its identity (the state's inode number, memfd_ckpt_ident) and restore keeps st->memfds; if any descriptor in the image holds the same memfd, the exe can be recorded by that identity and restored with memfd_ckpt_new(..., same). Decide what to do when the memfd is held only as the exe (runc closes its copy after exec): carrying its contents costs up to CKPT_MEMFD_MAX. Test with tests/manual/checkpoint_anonfd.sh.
-```
-
-</details>

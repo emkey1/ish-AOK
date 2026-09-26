@@ -97,7 +97,7 @@
 #include "util/sync.h"
 
 #define CKPT_MAGIC "AOKCKPT"
-#define CKPT_VERSION 22  // 22: a memfd's identity and position; 21: the capability bounding set; 20: NX -- 64-bit guests return from signals through a [sigpage], and the personality; 19: seccomp mode and filters, dumpable; 18: a queued signal says whether it is a POSIX timer's own; 17: no_new_privs; 16: the executable behind /proc/<pid>/exe, capabilities, supplementary groups; 15: the root it was saved from; 14: timers, queued signals, the deadline a frozen wait carries; timerfd as a deadline; 13: the guest's clocks, task start times, timerfd guest clock; 12: a terminal record names its terminal; 11: socket options and unix node attributes; 10: threads and shared objects; 9: socket pairs; 8: anon fds + epoll section; 7: pty slave owner; 6: tmpfs contents; 4: ckpt_task.native_standin_child
+#define CKPT_VERSION 23  // 23: an executable that is a memfd travels as one; 22: a memfd's identity and position; 21: the capability bounding set; 20: NX -- 64-bit guests return from signals through a [sigpage], and the personality; 19: seccomp mode and filters, dumpable; 18: a queued signal says whether it is a POSIX timer's own; 17: no_new_privs; 16: the executable behind /proc/<pid>/exe, capabilities, supplementary groups; 15: the root it was saved from; 14: timers, queued signals, the deadline a frozen wait carries; timerfd as a deadline; 13: the guest's clocks, task start times, timerfd guest clock; 12: a terminal record names its terminal; 11: socket options and unix node attributes; 10: threads and shared objects; 9: socket pairs; 8: anon fds + epoll section; 7: pty slave owner; 6: tmpfs contents; 4: ckpt_task.native_standin_child
                          // 5: ckpt_map.kind, reservations saved as reservations
 // How long the freezer waits for a task to reach a syscall boundary.
 //
@@ -391,7 +391,14 @@ struct ckpt_task {
     // its threads -- and never a native program's, which is re-launched and
     // arms its own.
     uint32_t group_timers;
-    uint32_t reserved3;
+    // An executable that is a memfd -- fexecve of one, as runc and crun run
+    // themselves -- has no path to reopen ("/memfd:name (deleted)"), so the
+    // link came back empty and a runtime re-executing itself through
+    // /proc/self/exe failed. It travels as a memfd description instead
+    // (memfd_ckpt_describe), this many bytes after the exe path, and comes back
+    // as a description of the same memfd as any descriptor of it in the image.
+    // 0: no memfd, or one past CKPT_MEMFD_MAX, whose link restores empty.
+    uint32_t exe_memfd_len;
     // The executable behind /proc/<pid>/exe (mm->exefile), as a path after the
     // root's, in the record that owns the address space. It came back empty:
     // readlink /proc/self/exe failed in every restored process, and ktop, which
@@ -2600,9 +2607,20 @@ static int ckpt_save_task(struct ckpt_writer *w, struct task *task,
     // Only where the address space is recorded. A native program's counts: its
     // mm names the /AOK/native entry it was exec'd through.
     char exe[MAX_PATH + 1] = "";
-    if (sh->mm == 0 && task->mm != NULL && task->mm->exefile != NULL &&
-            generic_getpath_backing(task->mm->exefile, exe) < 0)
-        exe[0] = '\0';
+    char *exe_memfd = NULL;
+    size_t exe_memfd_len = 0;
+    if (sh->mm == 0 && task->mm != NULL && task->mm->exefile != NULL) {
+        if (memfd_fd_is(task->mm->exefile)) {
+            exe_memfd = memfd_ckpt_describe(task->mm->exefile, &exe_memfd_len, CKPT_MEMFD_MAX);
+            if (exe_memfd == NULL) {
+                exe_memfd_len = 0;
+                CKPT_TRACE("  pid %d: its executable is a memfd too large to carry; "
+                           "/proc/<pid>/exe restores empty\n", task->pid);
+            }
+        } else if (generic_getpath_backing(task->mm->exefile, exe) < 0) {
+            exe[0] = '\0';
+        }
+    }
 
     struct ckpt_task rec = {
         .pid = task->pid,
@@ -2634,6 +2652,7 @@ static int ckpt_save_task(struct ckpt_writer *w, struct task *task,
         .cwd_len = (uint32_t) strlen(cwd),
         .root_len = (uint32_t) strlen(root),
         .exe_len = (uint32_t) strlen(exe),
+        .exe_memfd_len = (uint32_t) exe_memfd_len,
         .cap_effective = {task->cap_effective[0], task->cap_effective[1]},
         .cap_permitted = {task->cap_permitted[0], task->cap_permitted[1]},
         .cap_inheritable = {task->cap_inheritable[0], task->cap_inheritable[1]},
@@ -2769,6 +2788,9 @@ static int ckpt_save_task(struct ckpt_writer *w, struct task *task,
     wr(w, cwd, rec.cwd_len);
     wr(w, root, rec.root_len);
     wr(w, exe, rec.exe_len);
+    if (exe_memfd != NULL)
+        wr(w, exe_memfd, rec.exe_memfd_len);
+    free(exe_memfd);
     if (rec.ngroups > 0)
         wr(w, task->groups, rec.ngroups * sizeof(*task->groups));
     if (rec.seccomp_nprogs > 0) {
@@ -3813,6 +3835,35 @@ static int ckpt_pipe_for(struct ckpt_restore_state *st, uint64_t inode,
 // Build a descriptor with no file behind it from its description (see
 // ckpt_describe_anon). A pidfd is made unbound and bound once every task
 // exists: it usually names a child, and a child is restored after its parent.
+// A description of a memfd in the image: the first with its identity builds
+// the memfd, and every later one -- a descriptor or an executable -- is a
+// description of that one's (memfd_ckpt_new's `same`).
+static struct fd *ckpt_memfd_restore(struct ckpt_restore_state *st, const char *payload, size_t len) {
+    uint64_t ident;
+    if (!memfd_ckpt_ident(payload, len, &ident))
+        return ERR_PTR(_EINVAL);
+    for (uint32_t i = 0; i < st->memfd_count; i++)
+        if (st->memfds[i].ident == ident)
+            return memfd_ckpt_new(payload, len, st->memfds[i].fd);
+    struct fd *memfd = memfd_ckpt_new(payload, len, NULL);
+    if (IS_ERR(memfd))
+        return memfd;
+    if (st->memfd_count == st->memfd_cap) {
+        uint32_t cap = st->memfd_cap ? st->memfd_cap * 2 : 8;
+        void *n = realloc(st->memfds, cap * sizeof(*st->memfds));
+        if (n == NULL) {
+            fd_close(memfd);
+            return ERR_PTR(_ENOMEM);
+        }
+        st->memfds = n;
+        st->memfd_cap = cap;
+    }
+    st->memfds[st->memfd_count].ident = ident;
+    st->memfds[st->memfd_count].fd = fd_retain(memfd);
+    st->memfd_count++;
+    return memfd;
+}
+
 static struct fd *ckpt_rebuild_anon(struct ckpt_restore_state *st,
         const struct ckpt_fd *cf, const char *payload) {
     size_t len = (size_t) cf->offset;
@@ -3842,31 +3893,8 @@ static struct fd *ckpt_rebuild_anon(struct ckpt_restore_state *st,
     }
     case CKPT_FD_INOTIFY:
         return inotify_ckpt_new(payload, len);
-    case CKPT_FD_MEMFD: {
-        uint64_t ident;
-        if (!memfd_ckpt_ident(payload, len, &ident))
-            return ERR_PTR(_EINVAL);
-        for (uint32_t i = 0; i < st->memfd_count; i++)
-            if (st->memfds[i].ident == ident)
-                return memfd_ckpt_new(payload, len, st->memfds[i].fd);
-        struct fd *memfd = memfd_ckpt_new(payload, len, NULL);
-        if (IS_ERR(memfd))
-            return memfd;
-        if (st->memfd_count == st->memfd_cap) {
-            uint32_t cap = st->memfd_cap ? st->memfd_cap * 2 : 8;
-            void *n = realloc(st->memfds, cap * sizeof(*st->memfds));
-            if (n == NULL) {
-                fd_close(memfd);
-                return ERR_PTR(_ENOMEM);
-            }
-            st->memfds = n;
-            st->memfd_cap = cap;
-        }
-        st->memfds[st->memfd_count].ident = ident;
-        st->memfds[st->memfd_count].fd = fd_retain(memfd);
-        st->memfd_count++;
-        return memfd;
-    }
+    case CKPT_FD_MEMFD:
+        return ckpt_memfd_restore(st, payload, len);
     case CKPT_FD_PIDFD: {
         int32_t pid;
         if (len != sizeof(pid))
@@ -4432,8 +4460,8 @@ static int ckpt_restore_signals_and_timers(FILE *f, const struct ckpt_task *rec,
     return 0;
 }
 
-static int ckpt_restore_task(FILE *f, const struct ckpt_header *h,
-        const struct ckpt_task *rec, struct ckpt_restore_state *st) {
+static int ckpt_restore_task_(FILE *f, const struct ckpt_header *h,
+        const struct ckpt_task *rec, struct ckpt_restore_state *st, struct fd **exe_memfd) {
     int err;
     bool thread = rec->tgid != 0 && rec->tgid != rec->pid;
     struct fdtable *files;
@@ -4441,6 +4469,24 @@ static int ckpt_restore_task(FILE *f, const struct ckpt_header *h,
     if ((err = rd(f, cwd, rec->cwd_len)) < 0) return err;
     if ((err = rd(f, root, rec->root_len)) < 0) return err;
     if ((err = rd(f, exe, rec->exe_len)) < 0) return err;
+    // An executable that is a memfd (struct ckpt_task's exe_memfd_len), rebuilt
+    // now since it is next in the file, and bound where the path would be.
+    if (rec->exe_memfd_len != 0) {
+        char *blob = malloc(rec->exe_memfd_len);
+        if (blob == NULL)
+            return _ENOMEM;
+        if ((err = rd(f, blob, rec->exe_memfd_len)) < 0) {
+            free(blob);
+            return err;
+        }
+        struct fd *memfd = ckpt_memfd_restore(st, blob, rec->exe_memfd_len);
+        free(blob);
+        if (IS_ERR(memfd))
+            CKPT_TRACE("  load pid %u: its memfd executable did not rebuild (%ld)\n",
+                       rec->pid, PTR_ERR(memfd));
+        else
+            *exe_memfd = memfd;
+    }
     // The supplementary groups, installed as soon as they are read: the task
     // owns them from here, so a restore that fails further on frees them with
     // it. Nothing below is decided by them -- the restore reopens files as
@@ -4676,7 +4722,13 @@ static int ckpt_restore_task(FILE *f, const struct ckpt_header *h,
     // credentials go back on, so an execute-only binary still opens. One that
     // has since gone -- replaced by a package upgrade, say -- leaves the link
     // empty, which is what it was for everything before this.
-    if (exe[0] == '/') {
+    if (*exe_memfd != NULL) {
+        struct fd *old = mm->exefile;
+        mm->exefile = *exe_memfd;
+        *exe_memfd = NULL;
+        if (old != NULL)
+            fd_close(old);
+    } else if (exe[0] == '/') {
         struct fd *exe_fd = generic_open(exe, O_RDONLY_, 0);
         if (!IS_ERR(exe_fd)) {
             struct fd *old = mm->exefile;
@@ -5271,6 +5323,18 @@ identity:
     return 0;
 }
 
+// The rebuilt memfd executable goes into the address space the record owns;
+// on every other way out -- a thread, a shared address space, a failure --
+// it is released here.
+static int ckpt_restore_task(FILE *f, const struct ckpt_header *h,
+        const struct ckpt_task *rec, struct ckpt_restore_state *st) {
+    struct fd *exe_memfd = NULL;
+    int err = ckpt_restore_task_(f, h, rec, st, &exe_memfd);
+    if (exe_memfd != NULL)
+        fd_close(exe_memfd);
+    return err;
+}
+
 // Hand a restored native program back its state and arrange for it to run.
 //
 // A native program is not photographed and not resumed mid-instruction: it is
@@ -5730,6 +5794,7 @@ int checkpoint_restore(const char *host_path) {
             goto out;
         err = _EINVAL;
         if (rec.cwd_len > MAX_PATH || rec.root_len > MAX_PATH || rec.exe_len > MAX_PATH ||
+                rec.exe_memfd_len > CKPT_ANON_MAX ||
                 rec.ngroups > MAX_GROUPS ||
                 rec.seccomp_nprogs > CKPT_MAX_SECCOMP_PROGS ||
                 rec.n_sigactions != NUM_SIGS)

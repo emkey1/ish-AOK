@@ -11,6 +11,13 @@
 // has to report the pipe that became readable, with the data it was given; the
 // inotify watch has to report under the number it was added with.
 //
+// memfd-exe: a process exec'd from a memfd -- runc and crun run themselves
+// that way, and re-execute through /proc/self/exe -- keeps its executable.
+// The image recorded it by path ("/memfd:name (deleted)"), which restore
+// cannot open, so the link came back empty. Both shapes: the memfd closed at
+// the exec, so the executable is its only holder (runc's), and the memfd also
+// kept open as fd 50, which must come back as the same file.
+//
 // memfd-shared: a second description of the same memfd, opened read-only
 // through /proc/self/fd, comes back as a description of the SAME memfd -- a
 // write through the first is read through the second -- each at its own
@@ -37,12 +44,53 @@
 #include <errno.h>
 #include <unistd.h>
 
+extern char **environ;
+
 static void check(const char *what, int ok, const char *detail) {
     printf("%s %s%s%s\n", ok ? "OK" : "FAIL", what, detail[0] ? ": " : "", detail);
     fflush(stdout);
 }
 
-int main(void) {
+// A child that re-executes this program from a memfd copy of it and parks.
+static pid_t memfd_exec_child(int keep) {
+    pid_t pid = fork();
+    if (pid != 0)
+        return pid;
+    int mfd = memfd_create("ckanon-exe", keep ? 0 : MFD_CLOEXEC);
+    int src = open("/proc/self/exe", O_RDONLY);
+    char buf[65536];
+    ssize_t n;
+    while (src >= 0 && (n = read(src, buf, sizeof(buf))) > 0)
+        if (write(mfd, buf, (size_t) n) != n)
+            _exit(3);
+    if (keep)
+        dup2(mfd, 50);
+    char *args[] = {"checkpoint_anonfd", "--parked", NULL};
+    fexecve(mfd, args, environ);
+    _exit(4);
+}
+
+// What /proc/<pid>/exe says and holds: the link text, whether it opens to an
+// ELF image, and the inode it opens to.
+static int exe_of(pid_t pid, char *link, size_t cap, ino_t *ino) {
+    char path[64];
+    snprintf(path, sizeof(path), "/proc/%d/exe", (int) pid);
+    ssize_t n = readlink(path, link, cap - 1);
+    link[n > 0 ? n : 0] = '\0';
+    int fd = open(path, O_RDONLY);
+    char magic[4] = {0};
+    int elf = fd >= 0 && read(fd, magic, 4) == 4 && memcmp(magic, "\x7f" "ELF", 4) == 0;
+    struct stat st;
+    *ino = fd >= 0 && fstat(fd, &st) == 0 ? st.st_ino : 0;
+    if (fd >= 0)
+        close(fd);
+    return elf;
+}
+
+int main(int argc, char **argv) {
+    if (argc > 1 && strcmp(argv[1], "--parked") == 0)
+        for (;;)
+            pause();
     int pipefd[2];
     if (pipe(pipefd) != 0) return 1;
     int ep = epoll_create1(0);
@@ -92,6 +140,20 @@ int main(void) {
         _exit(0);
     int gfd = (int) syscall(SYS_pidfd_open, gone, 0);
     waitpid(gone, NULL, 0);
+
+    pid_t exe_only = memfd_exec_child(0);
+    pid_t exe_shared = memfd_exec_child(1);
+    // Both exec'd before the checkpoint may land: up to 20 s for each link to
+    // name its memfd rather than this program.
+    for (int i = 0; i < 400; i++) {
+        char l1[256], l2[256];
+        ino_t ignored;
+        exe_of(exe_only, l1, sizeof(l1), &ignored);
+        exe_of(exe_shared, l2, sizeof(l2), &ignored);
+        if (strstr(l1, "memfd:") != NULL && strstr(l2, "memfd:") != NULL)
+            break;
+        usleep(50000);
+    }
 
     // Everything is set up: say so. The harness checkpoints the moment this
     // file exists (ISH_CHECKPOINT_AFTER=@...) rather than a fixed time after
@@ -206,5 +268,28 @@ int main(void) {
              gpr, gp.revents, gsig, gerr, ESRCH);
     check("pidfd-gone", gpr == 1 && (gp.revents & POLLIN) && gsig == -1 &&
                         gerr == ESRCH, d);
+
+    // memfd-exe: the link names the memfd and opens to its ELF image.
+    char exe_link[256];
+    ino_t exe_ino = 0;
+    int elf = exe_of(exe_only, exe_link, sizeof(exe_link), &exe_ino);
+    snprintf(d, sizeof(d), "link=\"%s\" elf=%d", exe_link, elf);
+    check("memfd-exe", strstr(exe_link, "memfd:ckanon-exe") != NULL && elf, d);
+
+    // ...and one also held as fd 50 is the same file as that descriptor.
+    elf = exe_of(exe_shared, exe_link, sizeof(exe_link), &exe_ino);
+    char fdpath[64];
+    snprintf(fdpath, sizeof(fdpath), "/proc/%d/fd/50", (int) exe_shared);
+    int held = open(fdpath, O_RDONLY);
+    struct stat hst;
+    ino_t held_ino = held >= 0 && fstat(held, &hst) == 0 ? hst.st_ino : 0;
+    if (held >= 0)
+        close(held);
+    snprintf(d, sizeof(d), "link=\"%s\" elf=%d exe ino=%lu fd 50 ino=%lu", exe_link, elf,
+             (unsigned long) exe_ino, (unsigned long) held_ino);
+    check("memfd-exe-shared", strstr(exe_link, "memfd:ckanon-exe") != NULL && elf &&
+                              exe_ino != 0 && exe_ino == held_ino, d);
+    kill(exe_only, SIGKILL);
+    kill(exe_shared, SIGKILL);
     return 0;
 }
