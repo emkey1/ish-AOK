@@ -780,6 +780,11 @@ noreturn void do_exit(struct task *task, int status) {
         goto EXIT;
     }
     bool was_already_exiting = task->exiting;
+    // Before anything is torn down, so a zombie can still say what it ran
+    // (/proc/ish/arch). Unlocked, as `exiting` is: the task is on its way out
+    // and these are only read, not followed.
+    if (!was_already_exiting)
+        __atomic_store_n(&task->exit_arch, task_arch_name(task), __ATOMIC_RELEASE);
     task->exiting = true;
     if (!was_already_exiting)
         checkpoint_trace_exit(task->pid, task->comm, status);

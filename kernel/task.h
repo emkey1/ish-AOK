@@ -734,6 +734,12 @@ struct task {
     // not inherited. At the end for the reason given above
     // native_standin_child.
     int native_helper_threads;
+    // What /proc/ish/arch names this process as (task_arch_name), recorded as
+    // do_exit begins and before its address space and native state go. A
+    // zombie has neither, and was simply left out of the table, so ktop's ARCH
+    // column read "?" for it. Set once, release-stored; NULL while alive. Not
+    // inherited. At the end for the reason given above native_standin_child.
+    const char *exit_arch;
 };
 
 // current will always give the process that is currently executing
@@ -968,6 +974,11 @@ static inline bool tgroup_is_session_leader(struct tgroup *tgroup) {
     return tgroup->sid == tgroup->leader->pid;
 }
 
+
+// The architecture a process runs, as /proc/ish/arch names it: the machine
+// uname(2) reports inside it; for a program running as host code, the host's
+// machine marked "(n)"; "-" with no address space. A static string.
+const char *task_arch_name(struct task *task);
 
 static inline bool task_is_leader(struct task *task) {
     return task->group->leader == task;

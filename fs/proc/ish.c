@@ -2004,37 +2004,41 @@ static int proc_ish_show_host_ports(struct proc_entry *UNUSED(entry), struct pro
 // compiled into iSH-AOK and running as host code (/AOK/native), the HOST's
 // machine name marked "(n)" -- "aarch64(n)" on every Apple device -- because
 // that is what the code is, whichever root is booted; or "-" for a task caught
-// without an address space. A zombie is not listed: the
-// snapshot takes live processes only.
-#if defined(__aarch64__)
-#define NATIVE_ARCH_ENTRY "aarch64(n)"
-#elif defined(__x86_64__)
-#define NATIVE_ARCH_ENTRY "x86_64(n)"
-#else
-#define NATIVE_ARCH_ENTRY "native(n)"
-#endif
-
+// without an address space (task_arch_name). A zombie, or a leader that has
+// exited ahead of its threads, is listed with what it ran when it began to
+// exit: it has no address space left to ask, and leaving it out made ktop's
+// ARCH column read "?" for every zombie.
 static int proc_ish_show_arch(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
     proc_printf(buf, "PID ARCH\n");
     struct task_snapshot snapshot = {0};
-    if (task_snapshot_collect(&snapshot, true) < 0)
+    if (task_snapshot_collect_all(&snapshot) < 0)
         return 0;
     for (unsigned i = 0; i < snapshot.count; i++) {
         struct task *task = snapshot.tasks[i];
-        // task->mm is general_lock's; a task already in do_exit is left out
-        // rather than waited for (see task_lock_unless_exiting).
-        if (!task_lock_unless_exiting(task))
+        // One line per process. A leader's pid is its tgid, which asks without
+        // following a group pointer (see task_free_final).
+        if (task->pid != task->tgid)
             continue;
-        const char *arch;
-        if (task->native_running != NULL)
-            arch = NATIVE_ARCH_ENTRY;
-        else if (task->mm == NULL)
-            arch = "-";
-        else
-            arch = guest_abi_desc(task->abi).uname_machine;
-        dword_t pid = task->pid;
-        unlock(&task->general_lock);
-        proc_printf(buf, "%u %s\n", pid, arch);
+        // A task that has begun to exit answers from exit_arch, whether or not
+        // its lock is free: a finished zombie's is, and by then it has no
+        // address space to ask (it read "-"). Otherwise task->mm is
+        // general_lock's, and a task caught inside do_exit is not waited for
+        // (see task_lock_unless_exiting).
+        const char *arch = __atomic_load_n(&task->exit_arch, __ATOMIC_ACQUIRE);
+        if (arch == NULL) {
+            if (task_lock_unless_exiting(task)) {
+                if (task->exiting)
+                    arch = __atomic_load_n(&task->exit_arch, __ATOMIC_ACQUIRE);
+                if (arch == NULL)
+                    arch = task_arch_name(task);
+                unlock(&task->general_lock);
+            } else {
+                arch = __atomic_load_n(&task->exit_arch, __ATOMIC_ACQUIRE);
+            }
+            if (arch == NULL)
+                continue;
+        }
+        proc_printf(buf, "%u %s\n", (unsigned) task->pid, arch);
     }
     task_snapshot_release(&snapshot);
     return 0;

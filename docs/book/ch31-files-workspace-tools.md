@@ -181,7 +181,7 @@ normal user's `open` of a root process's `exe` is now `EACCES`, as on Linux, so
 `init`, `sshd`, `login` and every other root-owned process showed `?` in the one
 column that is the entire point of running `ktop`. The check was right; the
 column's source was the wrong one. `/proc/ish/arch` now lists `<pid> <machine>`
-for every live process — readable by anyone, because which of iSH-AOK's
+for every process, a zombie with what it ran before it died — readable by anyone, because which of iSH-AOK's
 architectures a process runs is not a secret even when the process itself is —
 and `ktop` reads the whole table once per refresh, falling back to the ELF
 header only for a pid the table missed. Native programs (`zsh`, SmallCLUE's

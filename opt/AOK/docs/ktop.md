@@ -103,7 +103,7 @@ batch mode this applies only when stdout is a terminal: redirect or pipe
 
 `ktop` reads [`/proc/ish/arch`](proc-ish.md#every-processs-architecture-and-who-may-ask)
 once per refresh, before it walks `/proc`: one `<pid> <machine>` line for
-every live process, with no ptrace check involved, because it comes from the
+every process, zombies included, with no ptrace check involved, because it comes from the
 task's own record rather than from opening another process's `/proc/<pid>/exe`
 — reading that path for a process that is not yours is gated since AOK's
 `ptrace`/`/proc` hardening, and a normal user would otherwise see `?` next to

@@ -16,7 +16,7 @@ cat /proc/ish/thermal_state  # nominal / fair / serious / critical
 cat /proc/ish/timezone       # the device's time zone, e.g. Europe/London
 cat /proc/ish/UIDevice       # the UIDevice the app sees: model, OS, orientation
 cat /proc/ish/applets        # the Workspace applets that are open
-cat /proc/ish/arch           # every live process's guest architecture, one line each
+cat /proc/ish/arch           # every process's guest architecture, one line each
 cat /proc/ish/host_ports     # Mach port usage -- a leak diagnostic
 ```
 
@@ -37,11 +37,13 @@ PID ARCH
 917 x86_64
 ```
 
-One line per live process (the thread-group leader): the machine name
+One line per process (the thread-group leader): the machine name
 `uname` reports inside it; for a program compiled into iSH-AOK and running as
 host code, the host's machine marked `(n)` — `aarch64(n)` on every Apple
 device (see [native-programs.md](native-programs.md)); or `-`
-for a task caught without an address space. Zombies are not listed. This
+for a task caught without an address space. A zombie is listed with what it
+ran when it began to exit, until it is reaped; before 557 zombies were left
+out, and `ktop` showed `?` for them. This
 exists because [ktop](ktop.md)'s ARCH column used to read the ELF header
 behind `/proc/<pid>/exe`, and since another user's process became off-limits
 to inspect (below), that returned "?" for anything not your own — real Linux

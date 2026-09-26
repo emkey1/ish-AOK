@@ -12,7 +12,11 @@
 //   - an unprivileged reader sees a root process listed, while that process's
 //     exe stays EACCES to it (the reason the table exists);
 //   - a program running natively from /AOK/native is listed as the host's
-//     machine with "(n)": aarch64(n) or x86_64(n).
+//     machine with "(n)": aarch64(n) or x86_64(n);
+//   - a zombie is listed with what it ran -- its uname machine, or "(n)" for
+//     one that died running native code -- until it is reaped, and not after.
+//     The table used to take live processes only, so ktop's ARCH column read
+//     "?" for every zombie (seen on the device in the 556 suite).
 //
 // iSH-AOK only: with no /proc/ish at all (real Linux) it skips; with /proc/ish
 // but no arch file (an iSH-AOK from before the table) it FAILS.
@@ -142,6 +146,23 @@ int main(int argc, char **argv) {
         waitpid(victim, NULL, 0);
     }
 
+    // A zombie. waitid(WNOWAIT) returns once it has exited and leaves it
+    // unreaped, so the table is read with a zombie certainly there.
+    {
+        pid_t z = fork();
+        if (z == 0)
+            _exit(0);
+        siginfo_t si;
+        int w = waitid(P_PID, z, &si, WEXITED | WNOWAIT);
+        const char *arch = w == 0 ? listed_arch(z) : NULL;
+        if (arch != NULL && strcmp(arch, u.machine) != 0)
+            test_logf("    zombie listed \"%s\", uname says \"%s\"\n", arch, u.machine);
+        check("a zombie is listed with its uname machine",
+              arch != NULL && strcmp(arch, u.machine) == 0, w, 0);
+        waitpid(z, NULL, 0);
+        check("...and is gone from the table once reaped", listed_arch(z) == NULL, 0, 1);
+    }
+
     // A program running as host code.
     if (access("/AOK/native/dash", X_OK) == 0) {
         pid_t nat = fork();
@@ -159,7 +180,13 @@ int main(int argc, char **argv) {
         check("a native program is listed as the host's machine with \"(n)\"",
               arch != NULL && (strcmp(arch, "aarch64(n)") == 0 || strcmp(arch, "x86_64(n)") == 0),
               0, 1);
+        // Killed while running host code: its zombie says so too.
         kill(nat, SIGKILL);
+        siginfo_t si;
+        int w = waitid(P_PID, nat, &si, WEXITED | WNOWAIT);
+        arch = w == 0 ? listed_arch(nat) : NULL;
+        check("...and so is its zombie",
+              arch != NULL && strstr(arch, "(n)") != NULL, w, 0);
         waitpid(nat, NULL, 0);
     } else {
         test_logf("  (no /AOK/native/dash; native leg skipped)\n");

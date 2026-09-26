@@ -276,6 +276,24 @@ int task_snapshot_collect_all(struct task_snapshot *snapshot) {
     return task_snapshot_collect_common(snapshot, false, true);
 }
 
+// "aarch64(n)" on every Apple device: what a program compiled into iSH-AOK
+// and running as host code (/AOK/native) is, whichever root is booted.
+#if defined(__aarch64__)
+#define NATIVE_ARCH_ENTRY "aarch64(n)"
+#elif defined(__x86_64__)
+#define NATIVE_ARCH_ENTRY "x86_64(n)"
+#else
+#define NATIVE_ARCH_ENTRY "native(n)"
+#endif
+
+const char *task_arch_name(struct task *task) {
+    if (task->native_running != NULL)
+        return NATIVE_ARCH_ENTRY;
+    if (task->mm == NULL)
+        return "-";
+    return guest_abi_desc(task->abi).uname_machine;
+}
+
 struct pid *pid_get_last_allocated(void) {
     if (!last_allocated_pid) {
         return NULL;
@@ -1286,6 +1304,7 @@ static struct task *task_create_pid_(struct task *parent, pid_t_ want_pid) {
     task->ptrace_link_capable = false;
     task->ptrace_trap_notify = false;
     task->native_helper_threads = 0;
+    task->exit_arch = NULL;
     lock_init(&task->ptrace.lock, "task_creat_ptr\0");
     cond_init(&task->ptrace.cond);
 
