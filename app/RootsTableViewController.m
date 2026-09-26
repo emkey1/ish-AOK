@@ -34,6 +34,52 @@
 
 @end
 
+// A root the app is holding open: the one booted as / this session, or the one
+// set to boot next. Neither can be renamed or deleted; Roots refuses both, and
+// the controls should not offer what will be refused. See -[RootDetailView-
+// Controller isInUseRoot] for why it is both and not only the default.
+static BOOL RootNameIsInUse(NSString *rootName) {
+    return [rootName isEqualToString:Roots.instance.defaultRoot] ||
+        [rootName isEqualToString:Roots.instance.bootedRoot];
+}
+
+// Asks, then deletes. The one confirmation behind both ways of deleting a
+// machine -- the Delete Filesystem row on its own screen and a swipe on its row
+// in the list (#575) -- so the two say the same thing and refuse the same
+// roots. The title names the root: from the list, a swipe can land on the row
+// next to the one meant. done(YES) once the root is gone; done(NO) on Cancel,
+// or on a failure, which has already been shown.
+static void RootConfirmAndDelete(UIViewController *host, NSString *rootName,
+                                 void (^done)(BOOL deleted)) {
+    if (RootNameIsInUse(rootName)) {
+        done(NO);
+        return;
+    }
+    NSString *message = @"I can't be bothered to implement any undo or regret UI so this is irreversible.";
+    // Its saved sessions go with it (Roots destroyRootNamed), so say so.
+    NSUInteger sessions = ISHSessionCountForRoot(ISHSessionRootIdentityNamed(rootName));
+    if (sessions > 0)
+        message = [message stringByAppendingFormat:@"\n\n%@ saved session%@ from this filesystem will be deleted too.",
+                   sessions == 1 ? @"The" : [NSString stringWithFormat:@"%lu", (unsigned long) sessions],
+                   sessions == 1 ? @"" : @"s"];
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:[NSString stringWithFormat:@"Delete \u201c%@\u201d?", rootName]
+                                                                   message:message
+                                                            preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:^(UIAlertAction *action) {
+        done(NO);
+    }]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Delete" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
+        NSError *error;
+        if (![Roots.instance destroyRootNamed:rootName error:&error]) {
+            [host presentError:error title:@"Delete failed"];
+            done(NO);
+        } else {
+            done(YES);
+        }
+    }]];
+    [host presentViewController:alert animated:YES completion:nil];
+}
+
 @implementation RootsTableViewController
 
 - (BOOL)_bundledChoiceRequiresAMD64Bringup:(NSDictionary<NSString *, NSString *> *)choice {
@@ -742,7 +788,43 @@ static UIColor *RootRowInUseAccentColor(void) {
 }
 
 - (BOOL)tableView:(UITableView *)tableView canEditRowAtIndexPath:(NSIndexPath *)indexPath {
-    return [self sectionShowsCachedRoots:indexPath.section];
+    return [self sectionShowsCachedRoots:indexPath.section] ||
+        [self deletableRootAtIndexPath:indexPath] != nil;
+}
+
+// #575: deleting a machine used to be reachable only from its own screen, and
+// swiping its row here did nothing at all -- only the cached archives could be
+// edited -- so the list read as having no delete. The row the app is holding
+// open (see RootNameIsInUse) still has none; its own row already says why.
+- (NSString *)deletableRootAtIndexPath:(NSIndexPath *)indexPath {
+    if (self.choosesRootOnSelection || ![self sectionShowsInstalledRoots:indexPath.section])
+        return nil;
+    NSOrderedSet<NSString *> *roots = Roots.instance.roots;
+    if (indexPath.row < 0 || indexPath.row >= (NSInteger) roots.count)
+        return nil;
+    NSString *rootName = roots[indexPath.row];
+    return RootNameIsInUse(rootName) ? nil : rootName;
+}
+
+- (UISwipeActionsConfiguration *)tableView:(UITableView *)tableView
+    trailingSwipeActionsConfigurationForRowAtIndexPath:(NSIndexPath *)indexPath {
+    NSString *rootName = [self deletableRootAtIndexPath:indexPath];
+    // nil keeps the standard Delete (commitEditingStyle) for the cached archives.
+    if (rootName == nil)
+        return nil;
+    UIContextualAction *delete = [UIContextualAction
+        contextualActionWithStyle:UIContextualActionStyleDestructive
+                            title:@"Delete"
+                          handler:^(UIContextualAction *action, UIView *sourceView, void (^completion)(BOOL)) {
+        // NO, and at once: the answer comes from the alert, and a Delete there
+        // removes the row through the roots observer's reload. A destructive
+        // action that reported YES would have the table remove it as well.
+        completion(NO);
+        RootConfirmAndDelete(self, rootName, ^(BOOL deleted) {});
+    }];
+    UISwipeActionsConfiguration *config = [UISwipeActionsConfiguration configurationWithActions:@[delete]];
+    config.performsFirstActionWithFullSwipe = NO;
+    return config;
 }
 
 - (void)tableView:(UITableView *)tableView commitEditingStyle:(UITableViewCellEditingStyle)editingStyle forRowAtIndexPath:(NSIndexPath *)indexPath {
@@ -947,16 +1029,19 @@ static UIColor *RootRowInUseAccentColor(void) {
 // only the default left the running root editable. Roots enforces this too;
 // this just keeps the controls from offering something that will be refused.
 - (BOOL)isInUseRoot {
-    return self.isDefaultRoot ||
-        [self.rootName isEqualToString:Roots.instance.bootedRoot];
+    return RootNameIsInUse(self.rootName);
 }
 
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
     if (section == 2) { // delete
+        // The rule and then the way out of it (#575): without the second
+        // sentence this read as "iSH-AOK cannot delete machines".
         if ([self.rootName isEqualToString:Roots.instance.bootedRoot])
-            return @"This filesystem can't be deleted or renamed because it's currently mounted as the root.";
+            return @"This filesystem can't be deleted or renamed because it's currently mounted as the root. "
+                   @"To delete it, choose Boot From This Filesystem on another one; once iSH-AOK has restarted from that, this one can go.";
         if (self.isDefaultRoot)
-            return @"This filesystem can't be deleted or renamed because it's the one set to boot next.";
+            return @"This filesystem can't be deleted or renamed because it's the one set to boot next. "
+                   @"To delete it, choose Boot From This Filesystem on another one first.";
     }
     return [super tableView:tableView titleForFooterInSection:section];
 }
@@ -1036,28 +1121,10 @@ static UIColor *RootRowInUseAccentColor(void) {
 }
 
 - (void)deleteFilesystem {
-    if (self.isInUseRoot)
-        return;
-    NSString *message = @"I can't be bothered to implement any undo or regret UI so this is irreversible.";
-    // Its saved sessions go with it (Roots destroyRootNamed), so say so.
-    NSUInteger sessions = ISHSessionCountForRoot(ISHSessionRootIdentityNamed(self.rootName));
-    if (sessions > 0)
-        message = [message stringByAppendingFormat:@"\n\n%@ saved session%@ from this filesystem will be deleted too.",
-                   sessions == 1 ? @"The" : [NSString stringWithFormat:@"%lu", (unsigned long) sessions],
-                   sessions == 1 ? @"" : @"s"];
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Really delete?"
-                                                                   message:message
-                                                            preferredStyle:UIAlertControllerStyleAlert];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Delete" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
-        NSError *error;
-        if (![Roots.instance destroyRootNamed:self.rootName error:&error]) {
-            [self presentError:error title:@"Delete failed"];
-        } else {
+    RootConfirmAndDelete(self, self.rootName, ^(BOOL deleted) {
+        if (deleted)
             [self.navigationController popViewControllerAnimated:YES];
-        }
-    }]];
-    [self presentViewController:alert animated:YES completion:nil];
+    });
 }
 
 - (void)dealloc {
