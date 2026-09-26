@@ -1,6 +1,6 @@
 # Release Notes Since `builds/iSH-AOK_555`
 
-282 commits. This build is mostly about the guest being what it
+284 commits. This build is mostly about the guest being what it
 claims to be. Security features that Linux programs rely on were accepted and
 then ignored; now they are enforced. Timers now fire on time. And a long list
 of emulator, filesystem and memory behaviour now matches what a real Linux
