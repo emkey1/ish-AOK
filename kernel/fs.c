@@ -2064,19 +2064,16 @@ int fs_rebase_path_to_root(struct fs_info *fs, char *path) {
     return rebased ? 0 : _ENOENT;
 }
 
-// Like fs_rebase_path_to_root, but for readlink() of the magic-symlink
-// targets under /proc/*/{cwd,root,exe,fd/N} -- those are computed via
-// d_path() against the CALLING process's root on real Linux (so callers pass
-// current->fs here even when reading another task's /proc entries), and
-// unlike getcwd(2), d_path() does NOT fail when the target is outside the
-// caller's root: it prefixes the un-rebased absolute path with
-// "(unreachable)" and the readlink still succeeds. Getting this wrong as an
-// outright ENOENT (as fs_rebase_path_to_root does) broke opening another
-// process's /proc/<pid>/exe from inside a chroot entirely -- iSH's open()
-// resolves a followed symlink's target by re-walking the string returned by
-// .readlink() (see __path_normalize in fs/path.c), so a failing readlink()
-// here made the subsequent open() fail too, not just the informational
-// readlink(2) syscall.
+// The WALKABLE text of a /proc/*/{cwd,root,exe,fd/N} link, for a path walk
+// that goes through one: AOK re-walks the string .readlink() returns (see
+// __path_normalize in fs/path.c) where Linux jumps straight to the file. A
+// path under the caller's root is rebased to it. One outside it is prefixed
+// with "(unreachable)", which no walk can resolve: walked as it is, the
+// global path would name whatever that path means INSIDE the chroot, a
+// different file. (Failing the readlink outright instead, as
+// fs_rebase_path_to_root does, broke opening another process's
+// /proc/<pid>/exe from inside a chroot: the open walks this text.) What
+// readlink(2) is SHOWN is fs_rebase_shown_link_path, below.
 int fs_rebase_readlink_path(struct fs_info *fs, char *path) {
     int rebased = fs_try_rebase_path(fs, path);
     if (rebased < 0)
@@ -2090,6 +2087,21 @@ int fs_rebase_readlink_path(struct fs_info *fs, char *path) {
     memmove(path + sizeof(prefix) - 1, path, path_len + 1);
     memcpy(path, prefix, sizeof(prefix) - 1);
     return 0;
+}
+
+// The text readlink(2) of a /proc/*/{cwd,root,exe,fd/N} link is SHOWN: Linux's
+// d_path() against the caller's root. A path under the root is rebased to it;
+// one outside it is printed from the global root with no marker at all (the
+// "(unreachable)" prefix is getcwd(2)'s, not d_path's); and a name that is not
+// a path -- "socket:[N]", "pipe:[N]", "anon_inode:[...]" -- is printed as it
+// is. Measured on Linux 6.12 in a chroot: "/etc/hostname", "/usr",
+// "/memfd:crl (deleted)" and "socket:[12054799]" for descriptors opened
+// before the chroot.
+int fs_rebase_shown_link_path(struct fs_info *fs, char *path) {
+    if (path[0] != '/')
+        return 0;
+    int rebased = fs_try_rebase_path(fs, path);
+    return rebased < 0 ? rebased : 0;
 }
 
 static dword_t sys_getcwd_common(guest_addr_t buf_addr, dword_t size) {

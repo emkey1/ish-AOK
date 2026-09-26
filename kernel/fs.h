@@ -103,6 +103,7 @@ int generic_getpath_shown(struct fd *fd, char *buf, bool *unreachable);
 int generic_getpath_backing(struct fd *fd, char *buf);
 int fs_rebase_path_to_root(struct fs_info *fs, char *path);
 int fs_rebase_readlink_path(struct fs_info *fs, char *path);
+int fs_rebase_shown_link_path(struct fs_info *fs, char *path);
 // src_norm are the fs/path.h N_* flags the SOURCE is resolved with: which of
 // N_SYMLINK_FOLLOW/N_SYMLINK_NOFOLLOW linkat's AT_SYMLINK_FOLLOW asked for,
 // plus N_REALROOT | N_DETACHED_OK when the source is a stored path rather

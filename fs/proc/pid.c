@@ -1646,14 +1646,19 @@ static bool proc_pid_fdinfo_readdir(struct proc_entry *entry, unsigned long *ind
 //
 // Then rebased against the CALLING process's chroot root, not the target
 // task's -- readlink of these links is d_path() against current's root on
-// real Linux (see fs_rebase_readlink_path) -- except for a path from a
-// detached bind's root, which no root contains and Linux prints as it is.
+// real Linux -- except for a path from a detached bind's root, which no root
+// contains and Linux prints as it is. The shown text and the walked text part
+// ways again outside the root: readlink(2) gets the global path, or a
+// "socket:[N]"-style name, as Linux prints them (fs_rebase_shown_link_path);
+// a walk gets text that cannot reach a different file inside the chroot
+// (fs_rebase_readlink_path).
 static int proc_pid_link_path(struct proc_entry *entry, struct fd *fd, char *buf) {
     bool unreachable = false;
     int err = entry->shown ? generic_getpath_shown(fd, buf, &unreachable)
                            : generic_getpath(fd, buf);
     if (err >= 0 && !unreachable)
-        err = fs_rebase_readlink_path(current->fs, buf);
+        err = entry->shown ? fs_rebase_shown_link_path(current->fs, buf)
+                           : fs_rebase_readlink_path(current->fs, buf);
     return err;
 }
 
