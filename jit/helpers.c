@@ -54,42 +54,31 @@ void helper_trace_unaligned_atomic(struct cpu_state *cpu, dword_t addr, dword_t 
     (void) tag;
 }
 
-// Unaligned i386 `lock cmpxchg8b [addr]`. The aarch64 fast path uses an ARM
-// exclusive load (ldaxr), which requires 8-byte alignment; but x86 permits
-// unaligned LOCK operands, and the i386 ABI aligns 64-bit fields to only 4
-// bytes -- so glibc/Python 64-bit atomics routinely land on a 4-aligned (not
-// 8-aligned) address and the gadget previously bailed to segfault_write.
+// Unaligned i386 `lock cmpxchg8b [addr]`. The aarch64 fast path is an ARM
+// exclusive load (ldaxr), which needs 8-byte alignment; x86 allows any, and the
+// i386 ABI aligns 64-bit struct fields to only 4 bytes, so this is ordinary
+// code (Python 3.14 does it at startup). x86_atomic_cas does it exactly -- see
+// "Misaligned LOCK" in emu/tlb.c.
 //
-// Perform a software-atomic compare-exchange under the global atomic lock,
-// which serializes against the other emulated CPUs' atomics. tlb_read/tlb_write
-// handle cross-page access and faults (returning false with tlb->segfault_addr
-// already set), so the gadget jumps to its existing segfault_write exit on a
-// nonzero return. The caller has spilled EAX/EBX/ECX/EDX to cpu->* and reloads
-// EAX/EDX afterward; flags live in memory (cpu->eflags/flags_res), so setting
-// ZF here is visible to the next gadget. Only ZF is affected (x86: CF/PF/AF/
-// SF/OF unchanged by CMPXCHG8B), matching the aligned gadget exactly.
-// Returns 0 on success, 1 on fault.
+// The caller has spilled EAX/EBX/ECX/EDX to cpu->* and reloads EAX/EDX
+// afterward; flags live in memory (cpu->eflags/flags_res), so ZF set here is
+// what the next gadget sees. Only ZF is affected (CF/PF/AF/SF/OF are
+// unchanged by CMPXCHG8B), matching the aligned gadget. Returns 0, or 1 on a
+// fault with tlb->segfault_addr set for the gadget's segfault_write exit.
 int helper_atomic_cmpxchg8b(struct cpu_state *cpu, struct tlb *tlb, dword_t addr) {
     qword_t expected = ((qword_t) cpu->edx << 32) | (dword_t) cpu->eax;
     qword_t desired  = ((qword_t) cpu->ecx << 32) | (dword_t) cpu->ebx;
-    qword_t dst = 0;
-    int faulted = 0;
-    lock(&atomic_l_lock, 0);
-    if (!tlb_read(tlb, addr, &dst, 8)) {
-        faulted = 1;
-    } else {
-        cpu->zf = (expected == dst);   // only ZF is affected (CF/PF/AF/SF/OF kept)
-        cpu->zf_res = 0;
-        if (expected == dst) {
-            if (!tlb_write(tlb, addr, &desired, 8))
-                faulted = 1;
-        } else {
-            cpu->eax = (dword_t) dst;
-            cpu->edx = (dword_t) (dst >> 32);
-        }
+    qword_t old;
+    bool swapped;
+    if (x86_atomic_cas(cpu, tlb, addr, 8, expected, desired, &old, &swapped) != 0)
+        return 1;
+    cpu->zf = swapped;
+    cpu->zf_res = 0;
+    if (!swapped) {
+        cpu->eax = (dword_t) old;
+        cpu->edx = (dword_t) (old >> 32);
     }
-    unlock(&atomic_l_lock);
-    return faulted;
+    return 0;
 }
 
 // ---------------------------------------------------------------------------

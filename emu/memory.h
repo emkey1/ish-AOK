@@ -955,6 +955,10 @@ size_t mem_frame_size(void);
 
 // Must call with mem read-locked.
 void *mem_ptr(struct mem *mem, guest_addr_t addr, int type);
+// For a caller already holding mem->lock, either side, that must not fault:
+// a page that is absent, evicted, unwritable for a write, or copy-on-write
+// reads as NULL. Nothing is mapped, copied or swapped in.
+void *mem_ptr_locked(struct mem *mem, guest_addr_t addr, int type);
 // memcpy between host pointers into guest memory that answers false, rather
 // than killing the emulator, when either side cannot be touched -- a page of a
 // file mapping past the end of its file raises SIGBUS on the host. Guarded on

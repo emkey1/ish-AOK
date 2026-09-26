@@ -4441,6 +4441,10 @@ void *mem_ptr(struct mem *mem, guest_addr_t addr, int type) {
     return mem_ptr_may_fault(mem, addr, type, NULL);
 }
 
+void *mem_ptr_locked(struct mem *mem, guest_addr_t addr, int type) {
+    return mem_ptr_nofault(mem, addr, type, NULL);
+}
+
 void *mem_ptr_fault(struct mem *mem, guest_addr_t addr, int type) {
     page_t page = PAGE(addr);
     write_lock(&mem->lock);

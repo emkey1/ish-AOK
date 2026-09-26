@@ -408,13 +408,11 @@ int arm64_stxp(struct cpu_state *cpu, struct tlb *tlb, guest_addr_t addr,
 //   aligned  -> one host atomic on the resolved host pointer. A naturally
 //               aligned access of 1/2/4/8/16 bytes cannot cross a page, so a
 //               single resolved page always covers it.
-//   unaligned-> fall back to atomic_l_lock around a read/compute/write pair.
-//               x86 permits a misaligned LOCK (unlike arm64's LSE atomics, so
-//               unlike arm64_lse_rmw above we cannot just fault), but such an
-//               access can straddle two pages and no host atomic spans that.
-//               It stays as weak as it was -- it does not interlock with a
-//               host atomic -- but it is vanishingly rare in real code and it
-//               is at least correct against other guest threads.
+//   unaligned-> x86_atomic_unaligned below. x86 makes a misaligned LOCK
+//               atomic too, against every other access to those bytes, and
+//               the i386 ABI makes the 64-bit case ordinary: it aligns
+//               uint64_t struct fields to 4 bytes, and Python 3.14 does a
+//               `lock cmpxchg8b` on one at startup.
 //
 // `fn` computes the new value from the observed old one and MUST BE PURE: on
 // the aligned path it is re-run for every compare-exchange retry. Flags are
@@ -430,38 +428,171 @@ static int x86_atomic_fault(struct cpu_state *cpu, struct tlb *tlb) {
     return INT_PF;
 }
 
-// The unaligned path, shared by every helper below: one global-lock-guarded
-// read/compute/write. Split out so the fast paths stay readable.
-static int x86_atomic_rmw_locked(struct cpu_state *cpu, struct tlb *tlb,
+// ---------------------------------------------------------------------
+// Misaligned LOCK.
+//
+// This used to take the global atomic_l_lock around a read and a write. That
+// serialised locked instructions against each other, and nothing else: a
+// plain store from another thread could land between the read and the write
+// and be lost. tests/manual/x86_unaligned_lock measured up to 60% of such
+// stores lost, on both x86 engines. Exact instead, two ways:
+//
+//   * The operand lies inside one 16-byte-aligned block. A 16-byte host
+//     compare-exchange on the block, changing only the operand's bytes, is a
+//     real atomic: a store anywhere in the block between the read and the
+//     exchange makes it fail and go round again. That holds against plain
+//     stores, host atomics, and other processes mapping the same page.
+//   * It straddles two blocks, and maybe two pages, which no host atomic
+//     covers. Take this address space's lock as a writer instead. Guest code
+//     only runs under the read side, and so does every syscall touching guest
+//     memory, so while it is held nothing else in this process reads or
+//     writes the operand. That is the emulator's split lock. Another process
+//     sharing the page is not held off, which is the one thing this does not
+//     cover.
+//
+//     The upgrade never lets go of the read side (read_to_write_lock_timed):
+//     this runs inside the JIT, holding jetsam_lock, and a structural writer
+//     that got in would wait for jetsam while this waited for it. When it
+//     cannot be the last reader in time, or another thread is already
+//     upgrading, it backs out and the instruction runs again.
+//
+// `step` sees the value the operand held and says what to store, if anything.
+// It must be pure: on the block path it is re-run for every retry.
+// ---------------------------------------------------------------------
+
+typedef bool (*x86_atomic_step)(qword_t old, qword_t *neu, void *ctx);
+
+static int x86_atomic_in_block(struct cpu_state *cpu, struct tlb *tlb,
+        guest_addr_t addr, unsigned size_bytes, x86_atomic_step step, void *ctx,
+        qword_t *old_out, qword_t *new_out) {
+    // 16-byte aligned, so the block is on one page, and so is its host copy.
+    unsigned __int128 *block = tlb_write_ptr_slow(tlb, addr & ~(guest_addr_t) 15);
+    if (block == NULL)
+        return x86_atomic_fault(cpu, tlb);
+    unsigned shift = (addr & 15) * 8;
+    unsigned __int128 ones = size_bytes == 8 ? (unsigned __int128) UINT64_MAX
+        : ((unsigned __int128) 1 << (size_bytes * 8)) - 1;
+    unsigned __int128 mask = ones << shift;
+    // Starting from a guess is fine: a wrong guess fails the exchange, which
+    // hands back what the block really holds.
+    unsigned __int128 cur = 0, neu;
+    qword_t old, val;
+    bool store;
+    do {
+        old = (qword_t) ((cur & mask) >> shift);
+        store = step(old, &val, ctx);
+        // Storing nothing still exchanges the block with itself, so `old` is
+        // a value it really held -- which is also what x86 does on a failed
+        // CMPXCHG: it writes back what it read.
+        neu = store ? (cur & ~mask) | (((unsigned __int128) val << shift) & mask) : cur;
+    } while (!__atomic_compare_exchange_n(block, &cur, neu, false,
+                 __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST));
+    *old_out = old;
+    *new_out = store ? val : old;
+    return 0;
+}
+
+// One thread at a time attempts the upgrade below. Two readers each waiting
+// to be the last reader would wait for each other; the loser backs out
+// instead of waiting here, because waiting while it holds the read lock would
+// keep the winner from ever being alone.
+static lock_t x86_split_lock = LOCK_INITIALIZER;
+
+// Hand the instruction back to be run again. A page fault on an address that
+// is mapped and writable resolves to nothing, so the engine leaves the JIT --
+// releasing mem read and jetsam -- and re-executes the instruction.
+static int x86_atomic_split_retry(struct cpu_state *cpu, struct tlb *tlb, guest_addr_t addr) {
+    tlb->segfault_addr = addr;
+    return x86_atomic_fault(cpu, tlb);
+}
+
+static int x86_atomic_split(struct cpu_state *cpu, struct tlb *tlb,
+        guest_addr_t addr, unsigned size_bytes, x86_atomic_step step, void *ctx,
+        qword_t *old_out, qword_t *new_out) {
+    struct mem *mem = container_of(tlb->mmu, struct mem, mmu);
+    guest_addr_t last = addr + size_bytes - 1;
+    unsigned first = PAGE_SIZE - PGOFFSET(addr);
+    if (first > size_bytes)
+        first = size_bytes;
+    // Make both pages present and writable -- breaking copy-on-write and
+    // dropping code compiled from them -- while this thread holds only the
+    // read side, which is all those paths may be called with.
+    if (tlb_write_ptr_slow(tlb, addr) == NULL || tlb_write_ptr_slow(tlb, last) == NULL)
+        return x86_atomic_fault(cpu, tlb);
+    if (trylock(&x86_split_lock) != 0)
+        return x86_atomic_split_retry(cpu, tlb, addr);
+    // Siblings running guest code hold the read side until their next exit
+    // from the JIT, which on its own can be a timer tick away: a poke sends
+    // them out at the next block boundary, as the mmap barrier does
+    // (kernel/mmap.c). The upgrade then holds them off until it is done.
+    task_poke_shared_mem(current, mem);
+    if (!read_to_write_lock_timed(&mem->lock, 20 * 1000 * 1000)) {
+        unlock(&x86_split_lock);
+        return x86_atomic_split_retry(cpu, tlb, addr);
+    }
+    // No other writer could get in while this thread kept its read lock, so
+    // the pages faulted in above are still there. Look anyway: it is cheap,
+    // and a NULL here must be a fault, not a wild pointer.
+    char *lo = mem_ptr_locked(mem, addr, MEM_WRITE);
+    char *hi = mem_ptr_locked(mem, last, MEM_WRITE);
+    if (lo == NULL || hi == NULL) {
+        write_to_read_lock(&mem->lock);
+        unlock(&x86_split_lock);
+        return x86_atomic_split_retry(cpu, tlb, lo == NULL ? addr : last);
+    }
+    // The part on the second page, if the operand reaches one.
+    unsigned second = size_bytes - first;
+    char *hi_start = second != 0 ? hi - (second - 1) : NULL;
+    qword_t old = 0, val = 0;
+    memcpy(&old, lo, first);
+    if (second != 0)
+        memcpy((char *) &old + first, hi_start, second);
+    bool store = step(old, &val, ctx);
+    if (store) {
+        memcpy(lo, &val, first);
+        if (second != 0)
+            memcpy(hi_start, (char *) &val + first, second);
+    }
+    write_to_read_lock(&mem->lock);
+    unlock(&x86_split_lock);
+    *old_out = old;
+    *new_out = store ? val : old;
+    return 0;
+}
+
+static int x86_atomic_unaligned(struct cpu_state *cpu, struct tlb *tlb,
+        guest_addr_t addr, unsigned size_bytes, x86_atomic_step step, void *ctx,
+        qword_t *old_out, qword_t *new_out) {
+    if ((addr & 15) + size_bytes <= 16)
+        return x86_atomic_in_block(cpu, tlb, addr, size_bytes, step, ctx, old_out, new_out);
+    return x86_atomic_split(cpu, tlb, addr, size_bytes, step, ctx, old_out, new_out);
+}
+
+// An x86_atomic_fn as a step that always stores.
+struct x86_atomic_fn_step {
+    x86_atomic_fn fn;
+    void *ctx;
+};
+static bool x86_atomic_fn_as_step(qword_t old, qword_t *neu, void *ctx) {
+    struct x86_atomic_fn_step *s = ctx;
+    *neu = s->fn(old, s->ctx);
+    return true;
+}
+
+static int x86_atomic_rmw_unaligned(struct cpu_state *cpu, struct tlb *tlb,
         guest_addr_t addr, unsigned size_bytes, x86_atomic_fn fn, void *ctx,
         qword_t *old_out, qword_t *new_out) {
-    uint64_t old = 0, neu;
-    int err = 0;
-    lock(&atomic_l_lock, 0);
-    if (!tlb_read(tlb, addr, &old, size_bytes)) {
-        cpu->segfault_addr = tlb->segfault_addr;
-        cpu->segfault_was_write = false;
-        err = INT_PF;
-        goto out;
-    }
-    neu = fn(old, ctx);
-    if (!tlb_write(tlb, addr, &neu, size_bytes)) {
-        err = x86_atomic_fault(cpu, tlb);
-        goto out;
-    }
-    *old_out = old;
-    *new_out = neu;
-out:
-    unlock(&atomic_l_lock);
-    return err;
+    struct x86_atomic_fn_step s = { fn, ctx };
+    return x86_atomic_unaligned(cpu, tlb, addr, size_bytes, x86_atomic_fn_as_step, &s,
+                                old_out, new_out);
 }
 
 int x86_atomic_rmw(struct cpu_state *cpu, struct tlb *tlb, guest_addr_t addr,
                    unsigned size_bytes, x86_atomic_fn fn, void *ctx,
                    qword_t *old_out, qword_t *new_out) {
     if (addr & (size_bytes - 1))
-        return x86_atomic_rmw_locked(cpu, tlb, addr, size_bytes, fn, ctx,
-                                     old_out, new_out);
+        return x86_atomic_rmw_unaligned(cpu, tlb, addr, size_bytes, fn, ctx,
+                                        old_out, new_out);
     void *ptr = tlb_write_ptr_slow(tlb, addr);
     if (ptr == NULL)
         return x86_atomic_fault(cpu, tlb);
@@ -486,6 +617,15 @@ int x86_atomic_rmw(struct cpu_state *cpu, struct tlb *tlb, guest_addr_t addr,
     return 0;
 }
 
+struct x86_cas_step {
+    qword_t expected, desired;
+};
+static bool x86_cas_as_step(qword_t old, qword_t *neu, void *ctx) {
+    struct x86_cas_step *c = ctx;
+    *neu = c->desired;
+    return old == c->expected;
+}
+
 // LOCK CMPXCHG / CMPXCHG8B. Compares [addr] against `expected`; on equal
 // stores `desired`. *old_out always receives the observed value -- which is
 // what CMPXCHG loads into the accumulator when the compare fails, and what
@@ -494,24 +634,11 @@ int x86_atomic_cas(struct cpu_state *cpu, struct tlb *tlb, guest_addr_t addr,
                    unsigned size_bytes, qword_t expected, qword_t desired,
                    qword_t *old_out, bool *swapped) {
     if (addr & (size_bytes - 1)) {
-        // No pure-function shape here: whether we store depends on the value
-        // we read, so the locked fallback is written out rather than reusing
-        // x86_atomic_rmw_locked.
-        uint64_t old = 0;
-        int err = 0;
-        lock(&atomic_l_lock, 0);
-        if (!tlb_read(tlb, addr, &old, size_bytes)) {
-            cpu->segfault_addr = tlb->segfault_addr;
-            cpu->segfault_was_write = false;
-            err = INT_PF;
-            goto out;
-        }
-        *old_out = old;
-        *swapped = old == expected;
-        if (*swapped && !tlb_write(tlb, addr, &desired, size_bytes))
-            err = x86_atomic_fault(cpu, tlb);
-out:
-        unlock(&atomic_l_lock);
+        struct x86_cas_step c = { expected, desired };
+        qword_t neu;
+        int err = x86_atomic_unaligned(cpu, tlb, addr, size_bytes, x86_cas_as_step, &c,
+                                       old_out, &neu);
+        *swapped = err == 0 && *old_out == expected;
         return err;
     }
     void *ptr = tlb_write_ptr_slow(tlb, addr);
@@ -566,7 +693,7 @@ int x86_atomic_xchg(struct cpu_state *cpu, struct tlb *tlb, guest_addr_t addr,
                     unsigned size_bytes, qword_t value, qword_t *old_out) {
     if (addr & (size_bytes - 1)) {
         qword_t neu;
-        return x86_atomic_rmw_locked(cpu, tlb, addr, size_bytes,
+        return x86_atomic_rmw_unaligned(cpu, tlb, addr, size_bytes,
                 x86_atomic_swap_fn, &value, old_out, &neu);
     }
     void *ptr = tlb_write_ptr_slow(tlb, addr);
