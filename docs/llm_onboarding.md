@@ -378,6 +378,13 @@ single, tool-agnostic, version-controlled entry point; if you (or your tool)
 want a local pointer file, keep it out of git and have it reference this
 document rather than duplicating its content.
 
+If you use **Claude Code** specifically: [`CLAUDE.md.template`](../CLAUDE.md.template)
+at the repo root is a ready-to-copy pointer file with this same short version
+of the essentials. `cp CLAUDE.md.template CLAUDE.md` gets it auto-loaded in
+every session in your checkout — the `.md.template` suffix isn't matched by
+the `CLAUDE.md` ignore rule, but the copy you make is, so it stays local and
+never shows up as something to commit.
+
 ## Further reading
 
 - [book/README.md](book/README.md) — the full 42-chapter table of contents.

@@ -1,0 +1,56 @@
+# CLAUDE.md (template — copy me)
+
+This is a **template**, not a live instructions file. `.gitignore` excludes
+`CLAUDE.md` itself (along with `AGENTS.md`, `.claude/`, `.cursor/`,
+`.clinerules/`, `.gemini/`, `.windsurfrules`, `opencode.json` — every
+tool-specific agent config file this project has seen), because this project
+treats those as personal, per-checkout tooling preference, not shared repo
+content — the same bucket as `.vscode/` or `.prettierrc`. See
+[docs/llm_onboarding.md](docs/llm_onboarding.md)'s "Agent config files stay
+local" section for why.
+
+If you use Claude Code and want this orientation loaded automatically in
+every session in your checkout, copy this file over the gitignored name:
+
+```bash
+cp CLAUDE.md.template CLAUDE.md
+```
+
+It will not be committed, will not show up in `git status` as a change to
+push, and is yours to edit freely per checkout.
+
+---
+
+iSH-AOK is a heavily-diverged fork of
+[ish-app/ish](https://github.com/ish-app/ish) — a Linux syscall emulator that
+runs as an iOS app, JIT-translating i386/amd64/arm64/riscv64 guest code. See
+[README.md](README.md) for what this fork adds on top of upstream.
+
+Before doing substantive work here, read
+**[docs/llm_onboarding.md](docs/llm_onboarding.md)**. It exists specifically
+to get an LLM coding agent oriented fast in this tree: the regression suite,
+debugging with no guest-side debugger, the `docs/TODO.md` collaboration
+workflow, and the footguns that have already cost real time here. Treat it
+as required reading before touching tests, debugging, the build, or
+licensing-sensitive code — not just optional background.
+
+The five things that matter most, before anything else:
+
+1. **This is a fork.** Upstream's README, issues, branches and workflows are
+   not this repo's. If you use `gh`, pass `--repo emkey1/ish-AOK` or it
+   resolves to upstream.
+2. **Check `docs/TODO.md` and `git log origin/working` before starting
+   work** — someone, or some other session, may already be on it. See
+   `docs/llm_onboarding.md` for the exact claim/complete workflow this
+   project uses there.
+3. **`meson test -C build` is host-only and thin.** The real regression gate
+   is the guest suite (`tests/manual/`, run inside a booted guest via
+   `/AOK/tests/setup-regressions.sh`) — CI does not run it. Don't call a
+   change tested when only the host tests passed.
+4. **Never regenerate a vendored `config.h`** (bash/zsh/OpenSSH) to silence a
+   GCC-only warning — guard the specific site with `!__linux__` instead, or
+   you'll move what ships on Darwin to fix a platform that doesn't ship.
+5. **Registration is silent.** A test, doc, or native program not listed in
+   its manifest/registry (`fs/aok-*.manifest`,
+   `tests/manual/setup-regressions.sh`, `kernel/native.c`) is just absent on
+   device — no error, no failed build.

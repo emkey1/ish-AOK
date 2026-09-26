@@ -531,6 +531,12 @@ is the one committed, tool-agnostic entry point; if your tool wants its own
 pointer file, keep it local and have it reference that document rather than
 duplicating it.
 
+If you use Claude Code, anyone working here might want to enable
+[`CLAUDE.md.template`](CLAUDE.md.template) — copy it to `CLAUDE.md`
+(`cp CLAUDE.md.template CLAUDE.md`) to have Claude Code load a short version
+of the essentials automatically in every session, without it ever being
+tracked or committed.
+
 ## Acknowledgments
 
 The ARM64 guest work is motivated by, and in places adapted from,
