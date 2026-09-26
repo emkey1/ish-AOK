@@ -531,8 +531,6 @@ static int open_flags_fake_from_real(int flags) {
 
 struct fd *realfs_open(struct mount *mount, const char *path, int flags, int mode) {
     int real_flags = open_flags_real_from_fake(flags);
-    if ((flags & O_CREAT_) && (mount->flags & MOUNT_ISH_SHARED_))
-        mode |= 0666;
     // A FIFO here is a host FIFO, so opening one without O_NONBLOCK waits in
     // the host openat for the other end, and any SIGUSR1 ends that wait with
     // EINTR -- including the address-space barrier's poke, which reaches a
@@ -597,11 +595,52 @@ static void copy_stat(struct statbuf *fake_stat, struct stat *real_stat) {
 #undef TIMESPEC
 }
 
+// A shared mount's files (MOUNT_ISH_SHARED_) belong, at the host, to the app's
+// own uid, whichever guest user made them, and the host can record no other
+// owner. Reported as that uid, every guest user but root was "other" to every
+// file there: uid 1000 could not use a directory it had just made in
+// /AOK/persist. So a file the app owns is reported as owned by whoever asks,
+// as macOS shows a volume whose ownership is ignored -- each guest user has an
+// owner's access to the area it shares with the others, and tools that want a
+// file to be their own (git's safe.directory, sshd's StrictModes) are content.
+static uid_t_ realfs_shared_uid(void) {
+    return current != NULL ? current->fsuid : 0;
+}
+static uid_t_ realfs_shared_gid(void) {
+    return current != NULL ? current->fsgid : 0;
+}
+
+static void realfs_shared_owner(struct mount *mount, struct statbuf *fake_stat,
+                                const struct stat *real_stat) {
+    if (mount == NULL || !(mount->flags & MOUNT_ISH_SHARED_) || real_stat->st_uid != getuid())
+        return;
+    fake_stat->uid = realfs_shared_uid();
+    fake_stat->gid = realfs_shared_gid();
+}
+
+// And the owner it is reported to have is the only one a chown can give it:
+// that changes nothing, and any other is one the host cannot record. True
+// when *err is the answer. A chown that succeeds still changes the file's
+// status time, as Linux's does even to the owner a file has; the caller gets
+// that from a host chown to the owner the host already has.
+static bool realfs_shared_chown(struct mount *mount, struct attr attr, int *err) {
+    if (mount == NULL || !(mount->flags & MOUNT_ISH_SHARED_))
+        return false;
+    if (attr.type == attr_uid)
+        *err = attr.uid == realfs_shared_uid() ? 0 : _EPERM;
+    else if (attr.type == attr_gid)
+        *err = attr.gid == realfs_shared_gid() ? 0 : _EPERM;
+    else
+        return false;
+    return true;
+}
+
 int realfs_stat(struct mount *mount, const char *path, struct statbuf *fake_stat) {
     struct stat real_stat;
     if (fstatat(mount->root_fd, fix_path(path), &real_stat, AT_SYMLINK_NOFOLLOW) < 0)
         return errno_map();
     copy_stat(fake_stat, &real_stat);
+    realfs_shared_owner(mount, fake_stat, &real_stat);
     return 0;
 }
 
@@ -610,6 +649,7 @@ int realfs_fstat(struct fd *fd, struct statbuf *fake_stat) {
     if (fstat(fd->real_fd, &real_stat) < 0)
         return errno_map();
     copy_stat(fake_stat, &real_stat);
+    realfs_shared_owner(fd->mount, fake_stat, &real_stat);
     return 0;
 }
 
@@ -1280,8 +1320,6 @@ int realfs_symlink(struct mount *mount, const char *target, const char *link) {
 int realfs_mknod(struct mount *mount, const char *path, mode_t_ mode, dev_t_ UNUSED(dev)) {
     int err;
     mode_t_ perm = mode & ~S_IFMT;
-    if (mount->flags & MOUNT_ISH_SHARED_)
-        perm |= 0666;
     if (S_ISFIFO(mode)) {
         lock_fchdir(mount->root_fd);
         err = mkfifo(fix_path(path), perm);
@@ -1313,6 +1351,11 @@ int realfs_setattr(struct mount *mount, const char *path, struct attr attr) {
     path = fix_path(path);
     int root = mount->root_fd;
     int err;
+    if (realfs_shared_chown(mount, attr, &err)) {
+        if (err == 0 && fchownat(root, path, getuid(), (gid_t) -1, 0) < 0)
+            return errno_map();
+        return err;
+    }
     switch (attr.type) {
         case attr_uid:
             err = fchownat(root, path, attr.uid, -1, 0);
@@ -1340,6 +1383,11 @@ int realfs_setattr(struct mount *mount, const char *path, struct attr attr) {
 int realfs_fsetattr(struct fd *fd, struct attr attr) {
     int real_fd = fd->real_fd;
     int err;
+    if (realfs_shared_chown(fd->mount, attr, &err)) {
+        if (err == 0 && fchown(real_fd, getuid(), (gid_t) -1) < 0)
+            return errno_map();
+        return err;
+    }
     switch (attr.type) {
         case attr_uid:
             err = fchown(real_fd, attr.uid, -1);
@@ -1383,8 +1431,6 @@ int realfs_futime(struct fd *fd, struct timespec atime, struct timespec mtime) {
 }
 
 int realfs_mkdir(struct mount *mount, const char *path, mode_t_ mode) {
-    if (mount->flags & MOUNT_ISH_SHARED_)
-        mode |= 0777;
     int err = mkdirat(mount->root_fd, fix_path(path), mode);
     if (err < 0)
         return errno_map();

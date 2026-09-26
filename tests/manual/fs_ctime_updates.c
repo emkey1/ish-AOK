@@ -256,10 +256,12 @@ int main(int argc, char **argv) {
         snprintf(real_dir, sizeof(real_dir), "%s/ctime.XXXXXX", real);
         bool made = mkdtemp(real_dir) != NULL;
         if (made && access(real_dir, W_OK) != 0) {
-            // realfs reports the host's owner for every file, so a caller
-            // other than root is "other" even in a directory it just made,
-            // and cannot create anything in it. The suite re-runs this test
-            // as root (needs_root_tests), which covers realfs.
+            // A realfs mount that is not shared (a dev /realmnt) reports the
+            // host's owner for every file, so a caller other than root is
+            // "other" even in a directory it just made, and cannot create
+            // anything in it. A shared one (/AOK/persist) reports the caller
+            // (realfs_shared_owner). The suite re-runs this test as root
+            // (needs_root_tests), which covers realfs either way.
             test_logf("realfs %s: not writable by uid %d, realfs checks skipped\n",
                       real_dir, (int) geteuid());
             rmdir(real_dir);

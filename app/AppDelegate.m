@@ -16,7 +16,6 @@
 #include <notify.h>
 #include <pthread.h>
 #include <sys/stat.h>
-#include <ftw.h>
 #include <sys/socket.h>
 #include <sys/utsname.h>
 #include <unistd.h>
@@ -1881,11 +1880,6 @@ static int EnsureSymlink(const char *path, const char *target) {
     return (int) len;
 }
 
-// nftw callback backing FixSharedDirectoryPermissions: widens every entry's
-// mode to be world-rw (world-rwx for directories), preserving any bits
-// already set (e.g. an existing execute bit on a script). Symlinks are left
-// alone (FTW_PHYS below reports them as FTW_SL rather than following them)
-// so this can't be used to reach outside the tree via a symlink target.
 // "It wasn't there" is the ordinary first-launch outcome for a directory we are
 // about to create, not a failure worth logging.
 static BOOL ISHIsFileNotFoundError(NSError *error) {
@@ -1893,27 +1887,6 @@ static BOOL ISHIsFileNotFoundError(NSError *error) {
         return YES;
     return [error.domain isEqualToString:NSCocoaErrorDomain] &&
            (error.code == NSFileNoSuchFileError || error.code == NSFileReadNoSuchFileError);
-}
-
-static int FixSharedDirectoryPermissionsCallback(const char *fpath, const struct stat *sb, int typeflag, struct FTW *ftwbuf) {
-    (void)ftwbuf;
-    if (typeflag == FTW_D || typeflag == FTW_DP)
-        chmod(fpath, sb->st_mode | 0777);
-    else if (typeflag == FTW_F)
-        chmod(fpath, sb->st_mode | 0666);
-    return 0;
-}
-
-// /AOK/persist is a realfs mount backed by this single host directory, owned
-// at the host layer by the app's own uid -- never by whatever uid a guest
-// process happens to be running as (see MOUNT_ISH_SHARED_ in kernel/fs.h).
-// MOUNT_ISH_SHARED_ keeps every node created *after* this fix world-writable,
-// but content already on disk from before it (or copied in by hand, e.g. via
-// the Files app) predates that and can carry restrictive host-default modes.
-// Recursively widening permissions here, on every launch, heals that: it's
-// cheap for the modest trees /AOK/persist actually holds, and idempotent.
-static void FixSharedDirectoryPermissions(const char *path) {
-    nftw(path, FixSharedDirectoryPermissionsCallback, 16, FTW_PHYS);
 }
 
 // One tiny launcher per Workspace applet, written into /AOK/persist/bin so a
@@ -3817,9 +3790,11 @@ static TerminalViewController *CreateTerminalViewController(void) {
                                                     attributes:nil
                                                          error:&persistError]) {
             // /AOK/persist is shared by every guest uid but owned at the host
-            // layer by the app's own uid -- see MOUNT_ISH_SHARED_ (kernel/fs.h)
-            // for why that means it needs to be forced world-writable rather
-            // than relying on ordinary Unix ownership.
+            // by the app's own uid, so realfs reports each file there as owned
+            // by whoever asks -- see MOUNT_ISH_SHARED_ (kernel/fs.h). It used
+            // to be widened to world-writable on every launch instead, which
+            // undid any chmod made there: an ssh key could never stay 0600.
+            //
             // bin/lib/etc, created empty on every launch so they are simply
             // THERE to drop things into -- from the guest or from the Files
             // app -- rather than something a user has to know to mkdir.
@@ -3847,7 +3822,6 @@ static TerminalViewController *CreateTerminalViewController(void) {
             }
             ISHWriteWorkspaceLaunchers([aokPersistURL
                 URLByAppendingPathComponent:@"bin" isDirectory:YES]);
-            FixSharedDirectoryPermissions(aokPersistURL.fileSystemRepresentation);
             int persistMountErr = do_mount(&realfs, aokPersistURL.fileSystemRepresentation, "/AOK/persist", "", MOUNT_ISH_SHARED_);
             if (persistMountErr >= 0)
                 mount_set_display_source("/AOK/persist", "persist");
@@ -3928,9 +3902,8 @@ static TerminalViewController *CreateTerminalViewController(void) {
                                    withIntermediateDirectories:YES
                                                     attributes:nil
                                                          error:&rootsError]) {
-            // See the matching comment at the /AOK/persist mount above --
-            // same single-host-owner-shared-by-every-guest-uid situation.
-            chmod(aokRootsURL.fileSystemRepresentation, 0777);
+            // Shared by every guest uid, as /AOK/persist is: see the comment
+            // at that mount above.
             int rootsMountErr = do_mount(&realfs, aokRootsURL.fileSystemRepresentation, "/AOK/roots", "", MOUNT_ISH_SHARED_);
             if (rootsMountErr >= 0)
                 mount_set_display_source("/AOK/roots", "roots");

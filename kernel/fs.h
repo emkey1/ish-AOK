@@ -177,15 +177,13 @@ ssize_t fd_write_host_buf(fd_t fd_no, const void *buf, size_t size);
 // iSH-internal mount flag, NOT part of the guest mount(2) ABI. fs/mount.c's
 // sys_mount masks incoming guest flags to MS_FLAGS before calling do_mount(),
 // so a guest process can never set or clear this bit; only native do_mount()
-// callers (see app/AppDelegate.m) do. Marks a realfs mount whose backing
-// directory is a single app-owned host area shared by every guest uid (e.g.
-// /AOK/persist, /AOK/roots) rather than a real multi-user filesystem: every
-// file in it is always owned, at the host layer, by the app's own real uid
-// regardless of which guest uid nominally created it, so iSH's normal
-// owner-vs-other permission model (kernel/fs.c:access_check) can never see
-// the guest uid as "owner" and falls back to the (usually non-writable)
-// "other" bits. realfs_open/realfs_mkdir/realfs_mknod force newly created
-// nodes world-writable under this flag so every guest uid keeps working.
+// callers (see app/AppDelegate.m, and main.c's ISH_REAL_MNT_SHARED) do. Marks
+// a realfs mount whose backing directory is a single app-owned host area
+// shared by every guest uid (e.g. /AOK/persist, /AOK/roots) rather than a real
+// multi-user filesystem: every file in it is owned, at the host, by the app's
+// own uid whichever guest uid made it, and the host can record no other
+// owner. realfs reports such a file as owned by whoever asks, and takes a
+// chown only to that owner (fs/real.c, realfs_shared_owner).
 #define MOUNT_ISH_SHARED_ (1 << 30)
 
 struct mount {

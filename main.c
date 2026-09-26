@@ -370,10 +370,14 @@ static void setup_host_mounts(void) {
 
     // Dev-only: mount a host directory as realfs at /realmnt to reproduce
     // real-fs-backed behavior (e.g. /AOK/persist) against a local fakefs root.
+    // ISH_REAL_MNT_SHARED=1 mounts it the way the app mounts /AOK/persist and
+    // /AOK/roots (MOUNT_ISH_SHARED_), which a guest's own mount cannot ask for.
     const char *real_mnt = getenv("ISH_REAL_MNT");
     if (real_mnt != NULL && real_mnt[0] != '\0') {
+        const char *shared = getenv("ISH_REAL_MNT_SHARED");
+        int real_flags = shared != NULL && strcmp(shared, "1") == 0 ? MOUNT_ISH_SHARED_ : 0;
         ignore_eexist(generic_mkdirat(AT_PWD, "/realmnt", 0755));
-        ignore_eexist(do_mount(&realfs, real_mnt, "/realmnt", "", 0));
+        ignore_eexist(do_mount(&realfs, real_mnt, "/realmnt", "", real_flags));
     }
 
     // Dev-only: mount a second fakefs (SQLite-backed) root at /fakemnt2, to

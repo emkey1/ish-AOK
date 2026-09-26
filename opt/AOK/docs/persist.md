@@ -21,6 +21,21 @@ For a cross-root tree that needs real filesystem semantics (uid/gid, modes,
 device nodes, hardlinks), use `/AOK/fakefs` instead; it survives exactly the
 same things. See [00-overview.md](00-overview.md) for where both sit.
 
+## Who owns what
+
+Every file here belongs to iSH-AOK itself on the host side, whichever Linux
+user made it, and the host has nowhere to record any other owner. So each
+file is shown as owned by **whoever is looking**: `ls -l` run as `mke` lists
+`mke`, run as root lists root. Every user of every root can create, change and
+remove anything under `/AOK/persist`, which is what a shared directory is for,
+and tools that insist a file be your own (git's "dubious ownership" check,
+sshd's `StrictModes`) are satisfied.
+
+`chmod` works and stays as you set it, so a key kept here can be `0600`.
+`chown` to yourself succeeds and changes nothing; to anyone else it fails with
+"Operation not permitted", even as root, because the owner cannot be stored.
+`/AOK/roots` behaves the same way.
+
 ## What already lives there
 
 | Path | Used for |
@@ -117,8 +132,8 @@ dynamic linker hunting through a directory of wrong-architecture libraries on
 every single exec. The rpath binds the lookup to the one binary that needs it.
 
 Two things this directory is host-backed and therefore cannot do: hold device
-nodes, or preserve Linux uid/gid and modes. If you need those, use
-`/AOK/fakefs`.
+nodes, or keep a Linux owner and group (see "Who owns what" above). If you
+need those, use `/AOK/fakefs`.
 
 ## Reaching them from a `PATH` iSH-AOK did not set
 

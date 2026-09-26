@@ -383,6 +383,7 @@ native_signal_write_eintr.sh
 stack_guard_gap.c
 stack_rlimit_pushdown.c
 realfs_long_name.c
+realfs_shared_owner.c
 setsid_thread_group.c
 group_signal_target.c
 signal_sender_tgid.c
