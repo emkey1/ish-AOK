@@ -75,11 +75,14 @@ Images** applet in Workspace — lists four groups:
   running as `/` is tinted and bold, and reads "● IN USE — mounted at / ·
   can't be deleted"; the others read "Mounted at `/AOK/roots/<name>`", or
   carry no subtitle at all if their mount failed. The root set to boot next
-  is usually that same row but need not be — choosing a different default
-  takes effect immediately while `/` stays where it is until the next launch
-  — and neither of those two can be deleted or renamed while it is in use. To
-  delete or rename one, tap it and use the detail screen — swipe-to-delete
-  applies to the cached archives below, not to installed roots.
+  is usually that same row but need not be; when it is another one, that row
+  begins "Boots next". Neither of those two can be deleted or renamed. Delete
+  any other root by swiping its row, or from its detail screen; rename it
+  there. **Boot From This Filesystem** on the detail screen asks when:
+  **Next Launch** keeps everything running and switches the next time
+  iSH-AOK opens, and **Quit Now** closes iSH-AOK, ending every running
+  program, so that the root boots when you open it again. iOS does not let an
+  app restart itself.
 - **Root Cached Filesystems (`/AOK/persist/roots`)** — any root archives
   sitting in that shared, persistent folder, whether they got there via
   automatic download or because you (or the Files app) dropped a

@@ -739,9 +739,13 @@ static UIColor *RootRowInUseAccentColor(void) {
         cell.textLabel.font = [UIFont systemFontOfSize:17];
         cell.detailTextLabel.font = [UIFont systemFontOfSize:11];
         cell.detailTextLabel.textColor = UIColor.secondaryLabelColor;
-        cell.detailTextLabel.text = mounted
-            ? [NSString stringWithFormat:@"Mounted at %@", mountPoint]
-            : nil;
+        NSString *where = mounted ? [NSString stringWithFormat:@"Mounted at %@", mountPoint] : nil;
+        // The default that is not yet running -- "Next Launch" on its screen
+        // leaves exactly this -- needs saying, or the choice is invisible
+        // until the next launch acts on it.
+        if (isDefaultRoot)
+            where = where != nil ? [@"Boots next \u00b7 " stringByAppendingString:where] : @"Boots next";
+        cell.detailTextLabel.text = where;
     }
 
     if (isDefaultRoot) {
@@ -754,9 +758,10 @@ static UIColor *RootRowInUseAccentColor(void) {
             @"%@, in use, mounted at /, can't be deleted", rootName];
     else if (mounted)
         cell.accessibilityLabel = [NSString stringWithFormat:
-            @"%@, mounted at %@", rootName, mountPoint];
+            @"%@%@, mounted at %@", rootName, isDefaultRoot ? @", boots next" : @"", mountPoint];
     else
-        cell.accessibilityLabel = [NSString stringWithFormat:@"%@, not mounted", rootName];
+        cell.accessibilityLabel = [NSString stringWithFormat:@"%@%@, not mounted",
+            rootName, isDefaultRoot ? @", boots next" : @""];
     return cell;
 }
 
@@ -962,6 +967,17 @@ static UIColor *RootRowInUseAccentColor(void) {
 // WorkspaceTextScaledPage. Anywhere else the rows are left as they are.
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
     UITableViewCell *cell = [super tableView:tableView cellForRowAtIndexPath:indexPath];
+    if (indexPath.section == 1 && indexPath.row == 0) {
+        BOOL inert = self.bootRowIsInert;
+        for (UIView *view in cell.contentView.subviews)
+            if ([view isKindOfClass:UILabel.class])
+                ((UILabel *) view).enabled = !inert;
+        cell.selectionStyle = inert ? UITableViewCellSelectionStyleNone : UITableViewCellSelectionStyleDefault;
+        if (inert)
+            cell.accessibilityTraits |= UIAccessibilityTraitNotEnabled;
+        else
+            cell.accessibilityTraits &= ~UIAccessibilityTraitNotEnabled;
+    }
     CGFloat scale = ISHWorkspaceTextScaleForViewController(self);
     ISHWorkspaceScaleTableViewCell(cell, scale);
     if ([self.nameField isDescendantOfView:cell])
@@ -1020,6 +1036,16 @@ static UIColor *RootRowInUseAccentColor(void) {
     return [self.rootName isEqualToString:Roots.instance.defaultRoot];
 }
 
+- (BOOL)isBootedRoot {
+    return [self.rootName isEqualToString:Roots.instance.bootedRoot];
+}
+
+// Running from it and booting it next: Boot From This Filesystem has nothing
+// left to do.
+- (BOOL)bootRowIsInert {
+    return self.isBootedRoot && self.isDefaultRoot;
+}
+
 // Renaming or deleting a root moves or removes its backing store, so neither
 // is allowed for a root the app is holding open: the one booted as / this
 // session, and the one chosen to boot next (whose store the next launch will
@@ -1033,12 +1059,21 @@ static UIColor *RootRowInUseAccentColor(void) {
 }
 
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
+    if (section == 1) { // boot
+        if (self.bootRowIsInert)
+            return @"iSH-AOK is running from this filesystem, and boots it next time too.";
+        if (self.isBootedRoot)
+            return @"iSH-AOK is running from this filesystem, but another one is set to boot next.";
+        if (self.isDefaultRoot)
+            return @"This filesystem boots the next time iSH-AOK opens.";
+        return @"Takes effect the next time iSH-AOK opens. You choose whether that is now.";
+    }
     if (section == 2) { // delete
         // The rule and then the way out of it (#575): without the second
         // sentence this read as "iSH-AOK cannot delete machines".
         if ([self.rootName isEqualToString:Roots.instance.bootedRoot])
             return @"This filesystem can't be deleted or renamed because it's currently mounted as the root. "
-                   @"To delete it, choose Boot From This Filesystem on another one; once iSH-AOK has restarted from that, this one can go.";
+                   @"To delete it, choose Boot From This Filesystem on another one; once iSH-AOK is running from that one, this one can go.";
         if (self.isDefaultRoot)
             return @"This filesystem can't be deleted or renamed because it's the one set to boot next. "
                    @"To delete it, choose Boot From This Filesystem on another one first.";
@@ -1110,14 +1145,59 @@ static UIColor *RootRowInUseAccentColor(void) {
     _exportURL = exportURL;
 }
 
+// This used to quit iSH-AOK on the spot: one tap, no question, every running
+// program ended, under a footer that promised a restart iOS does not let an app
+// perform -- it landed on the home screen. The choice only takes effect at a
+// launch either way, so ask whether that launch is now or whenever it comes.
 - (void)bootThis {
-    Roots.instance.defaultRoot = self.rootName;
-    AppDelegate *appDelegate = (AppDelegate *) UIApplication.sharedApplication.delegate;
-    if ([appDelegate isKindOfClass:AppDelegate.class]) {
-        [appDelegate exitApp];
+    if (self.bootRowIsInert)
+        return;
+    NSString *name = self.rootName;
+    NSString *title, *message;
+    BOOL offerLater = YES, offerQuit = YES;
+    if (self.isBootedRoot) {
+        // Running from it, with another set to boot next: all that is left to
+        // choose is booting it next time too. Quitting would only bring the
+        // same root back.
+        title = [NSString stringWithFormat:@"Keep booting \u201c%@\u201d?", name];
+        message = @"iSH-AOK is running from it now, but another filesystem is set to boot next. "
+                  @"Next Launch makes this one boot next time instead.";
+        offerQuit = NO;
+    } else if (self.isDefaultRoot) {
+        title = [NSString stringWithFormat:@"\u201c%@\u201d boots next", name];
+        message = @"It boots the next time iSH-AOK opens. Quit Now closes iSH-AOK, ending every running program, "
+                  @"so that it boots when you open it again.";
+        offerLater = NO;
     } else {
-        exit(0);
+        title = [NSString stringWithFormat:@"Boot \u201c%@\u201d from now on?", name];
+        message = @"iSH-AOK can't restart itself. Next Launch keeps everything running and switches the next time "
+                  @"iSH-AOK opens. Quit Now closes it, ending every running program, and boots this filesystem when "
+                  @"you open it again.";
     }
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:title
+                                                                   message:message
+                                                            preferredStyle:UIAlertControllerStyleAlert];
+    if (offerLater) {
+        UIAlertAction *later = [UIAlertAction actionWithTitle:@"Next Launch" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+            Roots.instance.defaultRoot = name;
+            [self update];
+        }];
+        [alert addAction:later];
+        alert.preferredAction = later;
+    }
+    if (offerQuit) {
+        [alert addAction:[UIAlertAction actionWithTitle:@"Quit Now" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
+            Roots.instance.defaultRoot = name;
+            AppDelegate *appDelegate = (AppDelegate *) UIApplication.sharedApplication.delegate;
+            if ([appDelegate isKindOfClass:AppDelegate.class]) {
+                [appDelegate exitApp];
+            } else {
+                exit(0);
+            }
+        }]];
+    }
+    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    [self presentViewController:alert animated:YES completion:nil];
 }
 
 - (void)deleteFilesystem {

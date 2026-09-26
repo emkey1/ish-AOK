@@ -171,7 +171,7 @@
                                     </tableViewCell>
                                 </cells>
                             </tableViewSection>
-                            <tableViewSection footerTitle="This will restart the app." id="uz7-5p-jKp">
+                            <tableViewSection footerTitle="Takes effect the next time iSH-AOK opens." id="uz7-5p-jKp">
                                 <cells>
                                     <tableViewCell clipsSubviews="YES" contentMode="scaleToFill" preservesSuperviewLayoutMargins="YES" selectionStyle="default" indentationWidth="10" textLabel="jVu-zc-iaY" style="IBUITableViewCellStyleDefault" id="rs6-db-M98">
                                         <rect key="frame" x="0.0" y="185.00000381469729" width="736" height="43.666667938232422"/>

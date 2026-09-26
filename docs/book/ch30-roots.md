@@ -126,6 +126,13 @@ different one and then acting on the running root walked straight past it.
 `/proc/ish/roots` reports both: `default name=` (and `root default=1`) for the
 next launch, `booted name=` for this one.
 
+**Choosing the next root asks when.** The screen's Boot From This Filesystem
+used to set the default and quit on the spot: one tap, every running program
+ended, under a footer promising a restart. iOS does not let an app restart
+itself, so the "restart" was the home screen. It now offers Next Launch, which
+only records the choice (the row then reads "Boots next"), or Quit Now, which is
+the old behaviour chosen on purpose.
+
 **One launch can boot a different root without choosing it.** `ISH_BOOT_ROOT`,
 set in the app's launch environment, boots the named root for that launch and
 leaves the saved default alone:
