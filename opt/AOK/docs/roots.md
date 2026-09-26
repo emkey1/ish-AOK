@@ -253,15 +253,15 @@ make you set it all up again.
 
 SmallCLUE's `sudo` asks for **your own** password and then consults
 `/etc/sudoers` (and `/etc/sudoers.d`), like real sudo — user and `%group`
-entries, `(runas)` specs, `NOPASSWD`, explicit command lists, `#includedir`
-and last-match-wins. Aliases, negation and globs are not implemented, and a
-line using them is skipped rather than guessed at. With no sudoers file at
-all, nobody is authorised. It also ships inside the PSCAL image itself, as
-`provision-ultimate-pscal.sh` on `PATH`, so it is there even on an iSH-AOK
-build older than the script. Its tunables are `TARGET_USER`, `NEW_HOSTNAME`,
-`PERSIST_SSH`, `PASSWORD_AUTH`, `NATIVE_LINKS` and `AUTHORIZED_KEY`; note
-that `/AOK/persist` is host-backed, so the stash puts private host keys
-somewhere outside the guest — `PERSIST_SSH=0` opts out.
+entries, `(runas)` specs, `NOPASSWD`, explicit command lists, `#includedir` or
+`@includedir`, and last-match-wins. Aliases, negation and globs are not
+implemented, and a line using them is skipped rather than guessed at. With no
+sudoers file at all, nobody is authorised. It also ships inside the PSCAL image
+itself, as `provision-ultimate-pscal.sh` on `PATH`, so it is there even on an
+iSH-AOK build older than the script. Its tunables are `TARGET_USER`,
+`NEW_HOSTNAME`, `PERSIST_SSH`, `PASSWORD_AUTH`, `NATIVE_LINKS` and
+`AUTHORIZED_KEY`; note that `/AOK/persist` is host-backed, so the stash puts
+private host keys somewhere outside the guest — `PERSIST_SSH=0` opts out.
 
 The other three are the package-installing kind, and prompt for a timezone
 and a target username unless you set `TZ_NAME` / `TARGET_USER` (and
