@@ -31,6 +31,7 @@
 #include <sys/stat.h>
 #include <string.h>
 #include <sys/sysmacros.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "test_common.h"
@@ -64,18 +65,61 @@ static int kmsg_open(const char *path, int flags, const char *label) {
     return -1;
 }
 
+static double now_secs(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double) ts.tv_sec + (double) ts.tv_nsec / 1e9;
+}
+
 // Read until the fd is caught up, then answer what the NEXT read says. On
 // Linux that is always EAGAIN; a 0 would be the spin this test exists for.
-// Bounded so a kernel that never catches up fails instead of looping.
+//
+// Bounded by time, so a kernel that never catches up fails instead of
+// looping -- and not by a count of reads. A fresh reader starts at the oldest
+// message still buffered, and both files hand back one line or one record per
+// read, so a full log is as many reads as it has lines: the 1 MiB buffer of a
+// device that has been up a while holds more than the 20000 this used to
+// allow, and every device leg of 555 and 556 failed here with the sentinel.
+//
+// EPIPE on the way is not the answer either. In a full log every new line
+// pushes the oldest out, so a reader still at the oldest -- a fresh one, or one
+// just reset there -- loses its place to anything logged meanwhile. /dev/kmsg
+// says EPIPE and moves the reader on, on Linux as here, and a reader carries
+// on; util-linux's dmesg does exactly that.
 static int drain_then_read(int fd) {
     char buf[4096];
-    for (int i = 0; i < 20000; i++) {
+    double deadline = now_secs() + 20;
+    while (now_secs() < deadline) {
         errno = 0;
         ssize_t n = read(fd, buf, sizeof buf);
+        if (n < 0 && errno == EPIPE)
+            continue;
         if (n <= 0)
             return n < 0 ? -errno : 0;
     }
     return -EMFILE; // never caught up: distinct from any real answer
+}
+
+// Drained, is the fd reported not ready? Something may log between the drain
+// and the poll -- on the device atop does, all the time -- and then "ready" is
+// the right answer. So a ready fd is read once more: a line there means one
+// arrived in the window, and the drain and poll are simply repeated; nothing
+// there means poll claimed readiness it did not have, which is the bug. Returns
+// poll's answer from the last attempt, with its revents.
+static int drained_poll(int fd, short *revents) {
+    char buf[4096];
+    int ready = -1;
+    for (int attempt = 0; attempt < 5; attempt++) {
+        if (drain_then_read(fd) != -EAGAIN)
+            break;
+        struct pollfd p = { .fd = fd, .events = POLLIN };
+        ready = poll(&p, 1, 0);
+        *revents = p.revents;
+        if (ready != 1 || read(fd, buf, sizeof buf) <= 0)
+            break;
+        test_logf("  (a line arrived between the drain and the poll; again)\n");
+    }
+    return ready;
 }
 
 int main(int argc, char **argv) {
@@ -145,9 +189,9 @@ int main(int argc, char **argv) {
                            "/dev/kmsg opens O_NONBLOCK");
         if (fd >= 0) {
             ck("  drained read is EAGAIN, never 0", drain_then_read(fd), -EAGAIN);
-            struct pollfd p = { .fd = fd, .events = POLLIN };
-            ck("  and poll reports nothing ready", poll(&p, 1, 0), 0);
-            ck("  with no stray revents", (long) p.revents, 0);
+            short revents = -1;
+            ck("  and poll reports nothing ready", drained_poll(fd, &revents), 0);
+            ck("  with no stray revents", (long) revents, 0);
             close(fd);
         }
     }
@@ -160,8 +204,8 @@ int main(int argc, char **argv) {
             // so a caller that asked not to block blocked anyway and the test
             // hung here rather than failing.
             ck("  drained read is EAGAIN, never 0", drain_then_read(fd), -EAGAIN);
-            struct pollfd p = { .fd = fd, .events = POLLIN };
-            ck("  and poll reports nothing ready", poll(&p, 1, 0), 0);
+            short revents = -1;
+            ck("  and poll reports nothing ready", drained_poll(fd, &revents), 0);
             close(fd);
         }
     }
@@ -203,14 +247,26 @@ int main(int argc, char **argv) {
         int wr = kmsg_open("/dev/kmsg", O_WRONLY, "/dev/kmsg opens for writing");
         if (rd >= 0 && wr >= 0) {
             char buf[8192];
-            while (read(rd, buf, sizeof buf) > 0)
-                ;  // catch up first, so what we read back is only ours
+            drain_then_read(rd);  // caught up first, so what follows is new
             static const char line[] = "<6>kmsg_stream test marker\n";
             errno = 0;
             ssize_t n = write(wr, line, sizeof line - 1);
             ck("  the write is accepted", n == (ssize_t) (sizeof line - 1), 1);
-            errno = 0;
-            ssize_t got = read(rd, buf, sizeof buf - 1);
+            // Ours, not merely the next record: anything else logging (atop,
+            // on the device) can land first.
+            ssize_t got = -1;
+            double deadline = now_secs() + 10;
+            while (now_secs() < deadline) {
+                errno = 0;
+                got = read(rd, buf, sizeof buf - 1);
+                if (got < 0 && errno == EPIPE)
+                    continue;
+                if (got <= 0)
+                    break;
+                buf[got] = '\0';
+                if (strstr(buf, "kmsg_stream test marker") != NULL)
+                    break;
+            }
             ck("  and a reader sees it", got > 0 ? 1 : 0, 1);
             if (got > 0) {
                 buf[got] = '\0';

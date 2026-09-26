@@ -141,11 +141,23 @@ static int kmsg_say(const char *text) {
 }
 
 // Read past everything already logged, so what comes next is ours alone.
+// Through EPIPE, which is not "caught up": in a full log each new line pushes
+// the oldest out, and a reader still there is told so once and moved on.
+// Bounded by time rather than a count, since a full 1 MiB log is tens of
+// thousands of records.
 static void kmsg_drain(int rd) {
     char buf[8192];
-    for (int i = 0; i < 100000; i++)
-        if (read(rd, buf, sizeof buf) <= 0)
+    struct timespec t0, t;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    for (;;) {
+        errno = 0;
+        ssize_t n = read(rd, buf, sizeof buf);
+        if (n <= 0 && !(n < 0 && errno == EPIPE))
             return;
+        clock_gettime(CLOCK_MONOTONIC, &t);
+        if (t.tv_sec - t0.tv_sec > 20)
+            return;
+    }
 }
 
 // Write `text` and return the record carrying it. Other threads can log in
@@ -159,7 +171,10 @@ static bool kmsg_say_and_match(int rd, const char *text, const char *match,
         return false;
     size_t mlen = strlen(match);
     for (int i = 0; i < 200; i++) {
+        errno = 0;
         ssize_t n = read(rd, buf, bufsize);
+        if (n < 0 && errno == EPIPE)
+            continue;  // lapped by other logging; see kmsg_drain
         if (n <= 0)
             return false;
         if (!kmsg_parse(buf, (size_t) n, r))
@@ -519,6 +534,21 @@ int main(int argc, char **argv) {
             test_logf("  %-56s SKIP (%s)\n", "/proc/kmsg is not record-framed",
                       strerror(errno));
         } else {
+            // Caught up first, then the marker, so the line is the next thing
+            // there rather than somewhere past the end of a count. A fresh
+            // reader starts at the oldest line buffered and gets one line per
+            // read, and a device's full 1 MiB log is more lines than the
+            // 20000 reads this once allowed: the marker was never reached, on
+            // every device leg of 555 and 556. Bounded by time, not by reads.
+            struct timespec t0, t;
+            clock_gettime(CLOCK_MONOTONIC, &t0);
+            for (;;) {
+                if (read(pk, buf, sizeof buf - 1) <= 0)
+                    break;
+                clock_gettime(CLOCK_MONOTONIC, &t);
+                if (t.tv_sec - t0.tv_sec > 20)
+                    break;
+            }
             if (kmsg_say("kmsg_records PROC-PLAIN") == 0) {
                 bool seen = false, framed = false;
                 for (int i = 0; i < 20000; i++) {
