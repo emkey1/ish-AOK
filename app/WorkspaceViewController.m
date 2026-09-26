@@ -1893,11 +1893,14 @@ static BOOL ISHWorkspaceDeviceHasLowMemoryForWorkspace(void) {
     return ISHWorkspacePhysicalMemoryMarketedGB() < 4;
 }
 
+// Doubled for 557 (4 / 6 / 10 / 18 tabs at under 4 / 4 / 8 / 16 GB, from
+// 2 / 3 / 5 / 9): the maintainer's testing found the browser far lighter on
+// RAM than this limit had assumed.
 static NSUInteger ISHWorkspaceBrowserMaximumTabCount(void) {
     NSUInteger marketedGB = ISHWorkspacePhysicalMemoryMarketedGB();
     if (marketedGB < 4)
-        return 2;
-    return 3 + ((marketedGB - 4) / 2);
+        return 4;
+    return 2 * (3 + ((marketedGB - 4) / 2));
 }
 
 static NSString *ISHWorkspaceSystemStatusText(void) {
