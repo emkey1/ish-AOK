@@ -13420,6 +13420,48 @@ static bool gen_call16(struct gen_state *state, enum arg loc, struct modrm *modr
     return true;
 }
 
+// ENTER alloc, level (C8 iw ib), `size` 32 or 16 (0x66): push EBP; for a
+// level L > 0, push the L-1 enclosing frame pointers from EBP-bytes down and
+// then FrameTemp, the ESP after the first push; EBP = FrameTemp (only BP at
+// 16 bits); ESP -= alloc. Every store, and every frame pointer's load, comes
+// before ESP or EBP moves, as for the stack instructions above: a fault
+// leaves both as the instruction found them, and the retry runs it whole.
+// Measured on camd: tests/manual/x86/i386_enter_branch16.c.
+static bool gen_enter(struct gen_state *state, uint32_t alloc, int level, int size) {
+    extern gadget_t load_gadgets[], store_gadgets[];
+    int bytes = size / 8;
+    uint64_t unused = 0;
+    struct modrm unused_modrm = {0};
+    if (!gen_op(state, load_gadgets, arg_reg_bp, &unused_modrm, &unused, size, false, 0))
+        return false;
+    gen_stack_store(-bytes, size);
+    for (int i = 1; i < level; i++) {
+        struct modrm frame = {
+            .type = modrm_mem, .base = reg_ebp, .offset = -i * bytes, .index = reg_none,
+        };
+        if (!gen_op(state, load_gadgets, arg_modrm_val, &frame, &unused, size, false, 0))
+            return false;
+        gen_stack_store(-(i + 1) * bytes, size);
+    }
+    // FrameTemp into _tmp: ESP there and back again, since an add would set
+    // the flags, and ENTER sets none.
+    gen_esp_add(-bytes);
+    if (!gen_op(state, load_gadgets, arg_reg_sp, &unused_modrm, &unused, 32, false, 0))
+        return false;
+    gen_esp_add(bytes);
+    if (level > 0)
+        gen_stack_store(-(level + 1) * bytes, size);
+    // Nothing from here on can fault.
+    if (!gen_op(state, store_gadgets, arg_reg_bp, &unused_modrm, &unused, size, false, 0))
+        return false;
+    int pushes = level == 0 ? 1 : level + 1;
+    gen_esp_add(-(int32_t) (pushes * bytes) - (int32_t) alloc);
+    return true;
+}
+#define ENTER(alloc, level) do { \
+    if (!gen_enter(state, alloc, level, OP_SIZE)) return false; \
+} while (0)
+
 // RETW [imm16]: pop a word, zero-extended, into EIP, and release imm16 more
 // bytes. SIGSEGV at that word, as for CALLW.
 static bool gen_ret16(struct gen_state *state, uint32_t release) {
@@ -13549,8 +13591,16 @@ static void gen_sreg(struct gen_state *state, struct modrm *modrm, unsigned kind
     g(jmp_indir); \
     end_block = true; \
 } while (0)
-#define JMP_REL(off) gg(jmp, fake_ip + off); jump_ips(-1, 0); end_block = true
-#define JCXZ_REL(off) ggg(jcxz, fake_ip + off, fake_ip); jump_ips(-2, -1); end_block = true
+// A taken near branch goes to the target's low word when the operand size is
+// 16 (SDM: IF OperandSize = 16 THEN tempEIP AND 0000FFFFH) -- JMP, Jcc, LOOP,
+// LOOPE, LOOPNE and JCXZ with the 0x66 prefix. Below 64 KiB nothing is mapped,
+// so that is SIGSEGV there, as CALLW's is. The JIT jumped to the whole target,
+// inside real code. Masking the sum is right whether a rel16 was zero- or
+// sign-extended.
+#define REL_TARGET(off) (OP_SIZE == 16 ? \
+    (((uint64_t) ((state->ip + (off)) & 0xffff)) | (1ul << 63)) : fake_ip + (off))
+#define JMP_REL(off) gg(jmp, REL_TARGET(off)); jump_ips(-1, 0); end_block = true
+#define JCXZ_REL(off) ggg(jcxz, REL_TARGET(off), fake_ip); jump_ips(-2, -1); end_block = true
 
 void helper_loop_dec_ecx(struct cpu_state *cpu);
 
@@ -13574,18 +13624,18 @@ void helper_aad(struct cpu_state *cpu, uint32_t base);
 // LOOP rel8 (0xe2): decrement ECX without touching flags, then branch if the
 // result is nonzero. That is jcxz with its two ip slots swapped, so the
 // existing gadget covers it on both hosts.
-#define LOOP_REL(off) h(helper_loop_dec_ecx); ggg(jcxz, fake_ip, fake_ip + off); jump_ips(-2, -1); end_block = true
+#define LOOP_REL(off) h(helper_loop_dec_ecx); ggg(jcxz, fake_ip, REL_TARGET(off)); jump_ips(-2, -1); end_block = true
 // LOOPZ/LOOPE (0xe1) and LOOPNZ/LOOPNE (0xe0): same decrement, but the branch
 // also tests ZF, which needs a gadget -- the taken/not-taken decision can't be
 // expressed by swapping jcxz's targets. Operand 0 = taken, operand 1 = else.
-#define LOOPZ_REL(off)  h(helper_loop_dec_ecx); ggg(loopz,  fake_ip + off, fake_ip); jump_ips(-2, -1); end_block = true
-#define LOOPNZ_REL(off) h(helper_loop_dec_ecx); ggg(loopnz, fake_ip + off, fake_ip); jump_ips(-2, -1); end_block = true
+#define LOOPZ_REL(off)  h(helper_loop_dec_ecx); ggg(loopz,  REL_TARGET(off), fake_ip); jump_ips(-2, -1); end_block = true
+#define LOOPNZ_REL(off) h(helper_loop_dec_ecx); ggg(loopnz, REL_TARGET(off), fake_ip); jump_ips(-2, -1); end_block = true
 #define jcc(cc, to, otherwise) do { \
     if (gen_try_fuse_jcc(state, cond_##cc)) { GEN(to); GEN(otherwise); } \
     else { gagg(jmp, cond_##cc, to, otherwise); } \
     jump_ips(-2, -1); end_block = true; } while (0)
-#define J_REL(cc, off)  jcc(cc, fake_ip + off, fake_ip)
-#define JN_REL(cc, off) jcc(cc, fake_ip, fake_ip + off)
+#define J_REL(cc, off)  jcc(cc, REL_TARGET(off), fake_ip)
+#define JN_REL(cc, off) jcc(cc, fake_ip, REL_TARGET(off))
 
 // state->orig_ip: for use with page fault handler;
 // -1: will be patched to block address in gen_end();

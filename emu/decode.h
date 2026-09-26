@@ -1345,6 +1345,13 @@ restart:
         case 0xc3: TRACEI("ret near");
                    RET_NEAR(0); break;
 
+        // The nesting level is the byte mod 32.
+        case 0xc8: TRACEI("enter imm16, imm8\t");
+                   READIMM16; {
+                       uint32_t enter_alloc = (uint32_t) imm;
+                       READIMM8; ENTER(enter_alloc, (uint8_t) imm % 32);
+                   } break;
+
         // ESP = EBP whole at either operand size: the stack is 32-bit, and
         // the 0x66 prefix narrows only the pop into BP.
         case 0xc9: TRACEI("leave");

@@ -29,7 +29,6 @@ commit is the record. The first ten were chips not started before the 556
 freeze (2026-09-25); their full text is in
 [future-release-queue.md](future-release-queue.md).
 
-- **[in progress: "Build 557" session, 2026-09-26]** **Implement ENTER and 16-bit branch EIP truncation on i386 JIT.** While fixing 16-bit PUSH/POP on the i386 JIT, I found ENTER (C8) is SIGILL there, and 0x66 near JMP rel/Jcc/LOOP/JCXZ keep the full target where x86 truncates EIP to 16 bits. This session would measure both on camd and fix them with a test.
 - **Fix x86_fp_env failures on the x86_64-host gadgets.** Running the x86 guest tests under a GCC/x86_64-host build on camd, x86_fp_env fails two SSE checks (ucomisd qnan, divsd FTZ), with or without today's changes; aarch64 builds pass. This session would find and fix the x86_64-backend cause.
 - **Make meminfo Shmem/AnonPages/Mapped Linux-shaped.** While making /proc/meminfo cheap, a side-by-side run against Linux 6.12 showed AOK's Shmem, AnonPages and Mapped mean something different: mapped entries per process from mmap, not resident pages once each. A new session would change the accounting to Linux's meaning and update the test.
 - **Raise #GP for privileged and misaligned x86 instructions.** While fixing how iSH-AOK reports a #GP, the camd oracle showed several instructions Linux faults with #GP that iSH-AOK either answers with SIGILL or runs silently. This session would decode them and raise #GP(0) on both x86 engines, with tests measured against camd.

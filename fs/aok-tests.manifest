@@ -42,6 +42,7 @@ x86/x86_fp_env.c
 x86/x86_prefetch.c
 x86/x86_ud_siginfo.c
 x86/i386_push16.c
+x86/i386_enter_branch16.c
 signal_core.c
 fp_env.c
 signal_restart.c

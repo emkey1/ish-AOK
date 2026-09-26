@@ -7,24 +7,6 @@ prompts name the files, the evidence and the Linux 6.12 (camd) measurements
 as they stood that day, so re-check against `working` before relying on a
 line number. Indexed from docs/TODO.md ("Queued for a future release").
 
-## Implement ENTER and 16-bit branch EIP truncation on i386 JIT
-
-While fixing 16-bit PUSH/POP on the i386 JIT, I found ENTER (C8) is SIGILL there, and 0x66 near JMP rel/Jcc/LOOP/JCXZ keep the full target where x86 truncates EIP to 16 bits. This session would measure both on camd and fix them with a test.
-
-<details><summary>Original chip prompt</summary>
-
-```text
-In iSH-AOK (/Users/mke/git/ish-AOK, branch `working`; follow the project memory: diff peer worktrees before starting, oracle on camd, positive controls, register tests in THREE places, stage explicit paths, push to origin/working and fast-forward the main checkout), two i386-JIT gaps found 2026-09-25 while fixing 16-bit PUSH/POP (commit "i386: the 0x66 stack instructions move two bytes, and PUSHA and POPA fault as one instruction", test tests/manual/x86/i386_push16.c):
-
-1. ENTER (C8 iw ib) is not decoded in emu/decode.h's one-byte table, so `enter $8,$0` is SIGILL on the i386 JIT (checked on build/alpine-i386-test). Implement it (both operand sizes; 66 C8 pushes BP and moves ESP by 2 per level) in jit/gen.c the way the 16-bit stack ops now are: loads/stores at [esp+off] through gen_stack_access plus one esp_add gadget, so a fault leaves ESP unmoved. Nesting levels > 0 copy frame pointers; measure every level count you support on camd first.
-
-2. With the 0x66 prefix, near JMP rel16 (66 E9), JMP rel8 (66 EB), Jcc rel8/rel16 (66 7x, 66 0F 8x), LOOP/LOOPE/LOOPNE and JCXZ truncate EIP to its low 16 bits when taken (Intel SDM: IF OperandSize = 16 THEN tempEIP AND 0000FFFFH), which on Linux always means SIGSEGV SEGV_MAPERR at an address below 64 KiB. The JIT's JMP_REL/J_REL/JN_REL/JCXZ_REL macros in jit/gen.c use fake_ip + off untruncated (and READIMM of a 16-bit immediate is zero-extended, not sign-extended), so they land inside real code. JMPW r/m16 (66 FF /4), CALLW and RETW are already right. Measure on camd (gcc -m32, SIGSEGV handler reading uc_mcontext EIP/ESP and si_addr, as i386_push16.c does), then fix with the truncated target and add probes to a new i386-only test (name it i386_*).
-
-Verify on build/alpine-i386-test (full guest suite), on camd with a GCC build (x86_64 gadgets: git archive the tree + deps/smallclue to /tmp, meson setup with -Dnative_*=disabled), and confirm the amd64 JIT is untouched.
-```
-
-</details>
-
 ## Fix x86_fp_env failures on the x86_64-host gadgets
 
 Running the x86 guest tests under a GCC/x86_64-host build on camd, x86_fp_env fails two SSE checks (ucomisd qnan, divsd FTZ), with or without today's changes; aarch64 builds pass. This session would find and fix the x86_64-backend cause.
