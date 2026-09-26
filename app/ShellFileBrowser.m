@@ -403,6 +403,7 @@ NSString *ISHShellQuoteArgument(NSString *argument) {
                                                                   menu:menu];
     // The same name as the workspace File Manager's identical menu.
     overflow.accessibilityLabel = @"More Actions";
+    overflow.accessibilityHint = @"Shows additional file browser options.";
     self.navigationItem.rightBarButtonItem = overflow;
 }
 
