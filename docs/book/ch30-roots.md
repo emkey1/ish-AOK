@@ -123,8 +123,23 @@ would leave the next launch with nothing to boot. Keying the screen's marker off
 the running root rather than the default one is the fix, not a decoration; the
 guard against deleting `/` had been checking only the default, so choosing a
 different one and then acting on the running root walked straight past it.
-`/proc/ish/roots` reports only the second of the two — `root default=1` and
-`default name=` — so which root actually booted is app-side knowledge today.
+`/proc/ish/roots` reports both: `default name=` (and `root default=1`) for the
+next launch, `booted name=` for this one.
+
+**One launch can boot a different root without choosing it.** `ISH_BOOT_ROOT`,
+set in the app's launch environment, boots the named root for that launch and
+leaves the saved default alone:
+
+```sh
+xcrun devicectl device process launch -e '{"ISH_BOOT_ROOT":"Alpine3.23.3"}' \
+    --terminate-existing app.ish.iSH-AOK
+```
+
+That is for driving a device from a Mac — a release's device leg boots each
+root in turn this way (Chapter 37). A name that is not an installed root fails
+the boot, naming the roots that are, rather than booting the default in its
+place: a test run that asked for one root and quietly got another would report
+that root's results as the one it asked for.
 
 **An install keeps running if you walk away.** The download and unpack belong to
 the app, not to the shell that asked for them. Ctrl-C, a dropped `ssh` session,

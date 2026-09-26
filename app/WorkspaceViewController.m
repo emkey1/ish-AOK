@@ -1908,9 +1908,11 @@ static NSString *ISHWorkspaceSystemStatusText(void) {
     [lines addObject:[NSString stringWithFormat:@"Device: %@ / iOS %@",
                       UIDevice.currentDevice.model ?: @"Unknown",
                       UIDevice.currentDevice.systemVersion ?: @"?"]];
-    NSString *defaultRoot = Roots.instance.defaultRoot;
+    // The root at /, which is not the default once the default has been
+    // changed, or when ISH_BOOT_ROOT picked this launch's root.
+    NSString *currentRoot = Roots.instance.bootedRoot ?: Roots.instance.rootToBoot;
     [lines addObject:[NSString stringWithFormat:@"Current root: %@",
-                      defaultRoot.length > 0 ? defaultRoot : @"unavailable"]];
+                      currentRoot.length > 0 ? currentRoot : @"unavailable"]];
     [lines addObject:ISHWorkspaceStorageSummaryText()];
     [lines addObject:[NSString stringWithFormat:@"Startup screen: %@", ISHInitialWindowTitle()]];
     [lines addObject:[NSString stringWithFormat:@"Installed roots: %lu",
@@ -15275,8 +15277,8 @@ static void ISHWorkspaceResizeWindowForTextScale(WorkspaceThemedToolViewControll
         _batterySubtitle.text = stateDescription;
     }
 
-    NSString *defaultRoot = Roots.instance.defaultRoot;
-    _rootValueLabel.text = defaultRoot.length > 0 ? defaultRoot : @"Unavailable";
+    NSString *currentRoot = Roots.instance.bootedRoot ?: Roots.instance.rootToBoot;
+    _rootValueLabel.text = currentRoot.length > 0 ? currentRoot : @"Unavailable";
 
     NSDictionary<NSFileAttributeKey, id> *attributes =
         [NSFileManager.defaultManager attributesOfFileSystemForPath:NSHomeDirectory() error:nil];
@@ -15649,9 +15651,9 @@ static void ISHWorkspaceResizeWindowForTextScale(WorkspaceThemedToolViewControll
     if (@available(iOS 13.0, *)) {
         sceneCount = UIApplication.sharedApplication.connectedScenes.count;
     }
-    NSString *defaultRoot = Roots.instance.defaultRoot;
+    NSString *currentRoot = Roots.instance.bootedRoot ?: Roots.instance.rootToBoot;
     _uptimeValueLabel.text = ISHWorkspaceDurationString(NSProcessInfo.processInfo.systemUptime);
-    _rootValueLabel.text = defaultRoot.length > 0 ? defaultRoot : @"unavailable";
+    _rootValueLabel.text = currentRoot.length > 0 ? currentRoot : @"unavailable";
     _networkValueLabel.text = ISHWorkspacePrimaryNetworkLine();
     _startupValueLabel.text = ISHInitialWindowTitle();
     _liveValueLabel.text = [NSString stringWithFormat:@"%lu scenes · %lu terminals",

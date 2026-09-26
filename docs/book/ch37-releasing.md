@@ -154,10 +154,12 @@ asks for both suites plus the JVM on a single guest. Before a tag, the full
 guest regression suite runs on **all five roots** — the four musl guests
 (i386, amd64, arm64 and riscv64) plus a fifth leg on glibc, aarch64 — on the
 Mac and again on real hardware, with the end-to-end suite and the JVM smoke
-test. The device leg boots the glibc root and reaches the four musl roots
-through `mount-root.sh`'s chroot, so it proves chroot behaviour at least as
-much as it proves each root booted on its own — a distinction sharp enough to
-explain failures that turn out to be chroot-only. And the build on the device is
+test. The device leg boots each root in turn, relaunching the app with
+`ISH_BOOT_ROOT` (Chapter 30). Until 557 it booted only the glibc root and
+reached the four musl roots through `mount-root.sh`'s chroot, which proved
+chroot behaviour at least as much as each root booted on its own — a
+distinction sharp enough that three of 556's device failures turned out to be
+chroot-only. And the build on the device is
 one the release itself compiled, installed and launched, never one started from
 Xcode's Run button: under the debugger every host-thread wake-up signal goes
 through debugserver, and on the M4 iPad in 556's leg a 17-thread process took

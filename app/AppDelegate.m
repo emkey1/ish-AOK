@@ -2275,6 +2275,7 @@ static NSURL *AOKSharedFakefsDirectoryURL(void) {
     summary[@"hostMachine"] = DiagnosticsHostMachine() ?: @"";
     summary[@"systemVersion"] = UIDevice.currentDevice.systemVersion ?: @"";
     summary[@"defaultRoot"] = Roots.instance.defaultRoot ?: @"";
+    summary[@"bootedRoot"] = Roots.instance.bootedRoot ?: @"";
     summary[@"rootCount"] = @(Roots.instance.roots.count);
     summary[@"needsInitialRootSelection"] = @(Roots.instance.needsInitialRootSelection);
     if (Roots.instance.initialBundledRootImportError != nil)
@@ -2308,6 +2309,8 @@ static NSURL *AOKSharedFakefsDirectoryURL(void) {
     [report appendFormat:@"OS: iOS %@\n", summary[@"systemVersion"]];
     [report appendFormat:@"Free Space: %@\n", summary[@"freeSpace"] ?: @"unknown"];
     [report appendFormat:@"Default Root: %@\n", summary[@"defaultRoot"] ?: @"(none)"];
+    if ([summary[@"bootedRoot"] length] != 0)
+        [report appendFormat:@"Booted Root: %@\n", summary[@"bootedRoot"]];
     [report appendFormat:@"Roots: %@\n", summary[@"rootCount"]];
     [report appendFormat:@"Needs Initial Root Selection: %@\n", [summary[@"needsInitialRootSelection"] boolValue] ? @"yes" : @"no"];
     if (summary[@"initialRootImportError"] != nil)
@@ -2911,7 +2914,7 @@ uint64_t ISHSessionRootIdentityNamed(NSString *_Nullable name) {
 // The root whose sessions these are: the one running, or before the boot, the
 // one about to.
 static uint64_t ISHSessionCurrentRoot(void) {
-    return ISHSessionRootIdentityNamed(Roots.instance.bootedRoot ?: Roots.instance.defaultRoot);
+    return ISHSessionRootIdentityNamed(Roots.instance.bootedRoot ?: Roots.instance.rootToBoot);
 }
 
 // This launch's sessions. Newest first, because the one you want is almost
@@ -3506,8 +3509,8 @@ static TerminalViewController *CreateTerminalViewController(void) {
     [ISHDiagnosticsStore recordLaunchStage:@"boot.swap.configured"
                                    details:@{@"enabled": @(swapEnabled),
                                              @"sizeMB": @(swapSizeMB)}];
-    NSString *defaultRoot = Roots.instance.defaultRoot;
-    if (defaultRoot == nil) {
+    NSString *bootRoot = Roots.instance.rootToBoot;
+    if (bootRoot == nil) {
         return RecordBootFailure(_ENOENT,
                                  @"boot.root.none",
                                  @"No boot filesystem is selected",
@@ -3515,31 +3518,49 @@ static TerminalViewController *CreateTerminalViewController(void) {
                                  @"Open Filesystems and choose or import a root filesystem.",
                                  @{@"rootCount": @(Roots.instance.roots.count)});
     }
+    // ISH_BOOT_ROOT names the root outright, so a name with no root behind it
+    // stops here, by name, rather than booting some other root in its place.
+    if (Roots.instance.bootRootOverride != nil) {
+        NSArray<NSString *> *installed = Roots.instance.roots.array ?: @[];
+        if (![installed containsObject:bootRoot]) {
+            return RecordBootFailure(_ENOENT,
+                                     @"boot.root.override.missing",
+                                     @"The requested boot filesystem does not exist",
+                                     [NSString stringWithFormat:@"ISH_BOOT_ROOT asks for \"%@\", which is not an installed filesystem.", bootRoot],
+                                     [NSString stringWithFormat:@"Launch without ISH_BOOT_ROOT, or name one of: %@.",
+                                      [installed componentsJoinedByString:@", "]],
+                                     @{@"root": bootRoot,
+                                       @"installed": installed});
+        }
+        [ISHDiagnosticsStore recordLaunchStage:@"boot.root.override"
+                                       details:@{@"root": bootRoot,
+                                                 @"defaultRoot": Roots.instance.defaultRoot ?: @""}];
+    }
     // From here on this root is /, whatever the user later sets the default to.
     // Roots consults this before letting a rename or delete touch a root's
     // backing store; see -[Roots bootedRoot].
-    Roots.instance.bootedRoot = defaultRoot;
+    Roots.instance.bootedRoot = bootRoot;
     NSError *rootLockError = nil;
-    int rootLockFd = ISHAppGroupAcquireNamedLock(@"root", defaultRoot, YES, &rootLockError);
+    int rootLockFd = ISHAppGroupAcquireNamedLock(@"root", bootRoot, YES, &rootLockError);
     if (rootLockFd < 0) {
         [ISHDiagnosticsStore recordLaunchStage:@"boot.root.lock.failed"
-                                       details:@{@"root": defaultRoot,
+                                       details:@{@"root": bootRoot,
                                                  @"error": rootLockError.localizedDescription ?: @"unknown"}];
     } else {
         [ISHDiagnosticsStore recordLaunchStage:@"boot.root.locked"
-                                       details:@{@"root": defaultRoot}];
+                                       details:@{@"root": bootRoot}];
     }
     @try {
     [ISHDiagnosticsStore recordLaunchStage:@"boot.root.selected"
-                                   details:@{@"root": defaultRoot}];
-    NSString *guestABI = [Roots.instance guestABIForRootNamed:defaultRoot];
+                                   details:@{@"root": bootRoot}];
+    NSString *guestABI = [Roots.instance guestABIForRootNamed:bootRoot];
     if ([guestABI isEqualToString:@"amd64"]) {
-        NSLog(@"Attempting experimental amd64 guest boot for root %@", defaultRoot);
+        NSLog(@"Attempting experimental amd64 guest boot for root %@", bootRoot);
         [ISHDiagnosticsStore recordLaunchStage:@"boot.root.amd64"
-                                       details:@{@"root": defaultRoot}];
+                                       details:@{@"root": bootRoot}];
     }
 
-    NSURL *root = [Roots.instance rootUrl:defaultRoot];
+    NSURL *root = [Roots.instance rootUrl:bootRoot];
     NSURL *rootData = [root URLByAppendingPathComponent:@"data" isDirectory:YES];
     NSURL *rootMetadata = [root URLByAppendingPathComponent:@"meta.db" isDirectory:NO];
     BOOL isDirectory = NO;
@@ -3549,7 +3570,7 @@ static TerminalViewController *CreateTerminalViewController(void) {
                                  @"Selected filesystem is missing",
                                  @"The active filesystem points to a root directory that is not present on disk.",
                                  @"Choose another filesystem or reimport this one.",
-                                 @{@"root": defaultRoot,
+                                 @{@"root": bootRoot,
                                    @"guestABI": guestABI ?: @"",
                                    @"path": root.path ?: @""});
     }
@@ -3560,7 +3581,7 @@ static TerminalViewController *CreateTerminalViewController(void) {
                                  @"Selected filesystem is incomplete",
                                  @"The active filesystem directory exists, but its data directory is missing.",
                                  @"Choose another filesystem or reimport this one.",
-                                 @{@"root": defaultRoot,
+                                 @{@"root": bootRoot,
                                    @"guestABI": guestABI ?: @"",
                                    @"path": rootData.path ?: @""});
     }
@@ -3571,7 +3592,7 @@ static TerminalViewController *CreateTerminalViewController(void) {
                                  @"Selected filesystem metadata is missing",
                                  @"The active filesystem data exists, but its fakefs metadata database is missing.",
                                  @"Choose another filesystem or reimport this one.",
-                                 @{@"root": defaultRoot,
+                                 @{@"root": bootRoot,
                                    @"guestABI": guestABI ?: @"",
                                    @"path": rootMetadata.path ?: @""});
     }
@@ -3587,12 +3608,12 @@ static TerminalViewController *CreateTerminalViewController(void) {
                                  @"Boot failed while mounting the filesystem",
                                  @"iSH-AOK found the selected filesystem, but fakefs could not mount it.",
                                  BootMountRecovery(err),
-                                 @{@"root": defaultRoot,
+                                 @{@"root": bootRoot,
                                    @"guestABI": guestABI ?: @"",
                                    @"path": rootData.path ?: @""});
     }
     [ISHDiagnosticsStore recordLaunchStage:@"boot.root.mounted"
-                                   details:@{@"root": defaultRoot}];
+                                   details:@{@"root": bootRoot}];
 
     fs_register(&iosfs);
     fs_register(&iosfs_unsafe);
@@ -3607,7 +3628,7 @@ static TerminalViewController *CreateTerminalViewController(void) {
                                  err == _ENOMEM
                                      ? @"Close other apps and restart iSH-AOK."
                                      : @"Restart iSH-AOK. If this repeats, open Diagnostics from recovery mode.",
-                                 @{@"root": defaultRoot,
+                                 @{@"root": bootRoot,
                                    @"guestABI": guestABI ?: @""});
     }
     [ISHDiagnosticsStore recordLaunchStage:@"boot.first_process.ready"];
@@ -3719,7 +3740,7 @@ static TerminalViewController *CreateTerminalViewController(void) {
                                  @"Boot failed while registering clipboard device",
                                  @"The filesystem was mounted, but iSH-AOK could not register /dev/clipboard.",
                                  @"Restart iSH-AOK. If this repeats, open Diagnostics from recovery mode.",
-                                 @{@"root": defaultRoot,
+                                 @{@"root": bootRoot,
                                    @"guestABI": guestABI ?: @"",
                                    @"path": @"/dev/clipboard"});
     }
@@ -3732,7 +3753,7 @@ static TerminalViewController *CreateTerminalViewController(void) {
                                  @"Boot failed while registering location device",
                                  @"The filesystem was mounted, but iSH-AOK could not register /dev/location.",
                                  @"Restart iSH-AOK. If this repeats, open Diagnostics from recovery mode.",
-                                 @{@"root": defaultRoot,
+                                 @{@"root": bootRoot,
                                    @"guestABI": guestABI ?: @"",
                                    @"path": @"/dev/location"});
     }
@@ -3748,7 +3769,7 @@ static TerminalViewController *CreateTerminalViewController(void) {
                                  @"Boot failed while registering URL device",
                                  @"The filesystem was mounted, but iSH-AOK could not register /dev/url.",
                                  @"Restart iSH-AOK. If this repeats, open Diagnostics from recovery mode.",
-                                 @{@"root": defaultRoot,
+                                 @{@"root": bootRoot,
                                    @"guestABI": guestABI ?: @"",
                                    @"path": @"/dev/url"});
     }
@@ -3761,7 +3782,7 @@ static TerminalViewController *CreateTerminalViewController(void) {
                                  @"Boot failed while registering audio device",
                                  @"The filesystem was mounted, but iSH-AOK could not register /dev/dsp.",
                                  @"Restart iSH-AOK. If this repeats, open Diagnostics from recovery mode.",
-                                 @{@"root": defaultRoot,
+                                 @{@"root": bootRoot,
                                    @"guestABI": guestABI ?: @"",
                                    @"path": @"/dev/dsp"});
     }
@@ -3775,7 +3796,7 @@ static TerminalViewController *CreateTerminalViewController(void) {
                                  @"Boot failed while registering clock device",
                                  @"The filesystem was mounted, but iSH-AOK could not register /dev/rtc0.",
                                  @"Restart iSH-AOK. If this repeats, open Diagnostics from recovery mode.",
-                                 @{@"root": defaultRoot,
+                                 @{@"root": bootRoot,
                                    @"guestABI": guestABI ?: @"",
                                    @"path": @"/dev/rtc0"});
     }
@@ -4219,7 +4240,7 @@ static TerminalViewController *CreateTerminalViewController(void) {
                                              @"Resume failed while starting init",
                                              @"The suspended session was restored, but iSH-AOK could not create a thread to run it.",
                                              @"Close other apps to free memory, then restart iSH-AOK.",
-                                             @{@"root": defaultRoot});
+                                             @{@"root": bootRoot});
                 }
                 // `current` is left pointing at init, exactly as the boot path
                 // below leaves it after its own task_start -- the two paths
@@ -4227,7 +4248,7 @@ static TerminalViewController *CreateTerminalViewController(void) {
                 // the note in TerminalViewController's startSession.
                 os_log(ISHSuspendLog(), "resumed a suspended session");
                 [ISHDiagnosticsStore recordLaunchStage:@"boot.suspend.resumed"
-                                               details:@{@"root": defaultRoot}];
+                                               details:@{@"root": bootRoot}];
                 return 0;
             }
             os_log_error(ISHSuspendLog(),
@@ -4247,7 +4268,7 @@ static TerminalViewController *CreateTerminalViewController(void) {
                                  @"Boot failed while opening console",
                                  @"The filesystem was mounted, but iSH-AOK could not attach init to /dev/console.",
                                  @"The root's /dev entries may be damaged. Choose another filesystem or reimport this one.",
-                                 @{@"root": defaultRoot,
+                                 @{@"root": bootRoot,
                                    @"guestABI": guestABI ?: @"",
                                    @"path": @"/dev/console"});
     }
@@ -4260,11 +4281,11 @@ static TerminalViewController *CreateTerminalViewController(void) {
                                  @"Boot command is empty",
                                  @"iSH-AOK cannot start init because the configured boot command is empty.",
                                  @"Set a boot command in Settings. The default is /sbin/init.",
-                                 @{@"root": defaultRoot,
+                                 @{@"root": bootRoot,
                                    @"guestABI": guestABI ?: @""});
     }
     command = BootCommandWithInitFallback(command,
-                                          @{@"root": defaultRoot,
+                                          @{@"root": bootRoot,
                                             @"guestABI": guestABI ?: @""});
     NSString *commandString = [command componentsJoinedByString:@" "];
     NSArray<NSString *> *argvCommand = bootUsesNativeFakeInit ? FakeInitLoginShellArgvForCommand(command) : command;
@@ -4334,12 +4355,12 @@ static TerminalViewController *CreateTerminalViewController(void) {
                                      @"Boot failed while starting fallback console",
                                      @"The filesystem was mounted, but iSH-AOK could not start its fallback console supervisor.",
                                      @"Restart iSH-AOK. If this repeats, choose another filesystem or reimport this one.",
-                                     @{@"root": defaultRoot,
+                                     @{@"root": bootRoot,
                                        @"guestABI": guestABI ?: @"",
                                        @"command": commandString ?: @""});
         }
         [ISHDiagnosticsStore recordLaunchStage:@"boot.init.fake.started"
-                                       details:@{@"root": defaultRoot,
+                                       details:@{@"root": bootRoot,
                                                  @"guestABI": guestABI ?: @"",
                                                  @"command": commandString ?: @"",
                                                  @"argv": [argvCommand componentsJoinedByString:@" "] ?: @""}];
@@ -4352,7 +4373,7 @@ static TerminalViewController *CreateTerminalViewController(void) {
                                  @"Boot failed while starting init",
                                  @"The filesystem was mounted, but the configured boot command could not be executed.",
                                  BootExecRecovery(err, guestABI),
-                                 @{@"root": defaultRoot,
+                                 @{@"root": bootRoot,
                                    @"guestABI": guestABI ?: @"",
                                    @"command": commandString ?: @""});
     }
@@ -4363,7 +4384,7 @@ static TerminalViewController *CreateTerminalViewController(void) {
                                  @"Boot failed while starting init",
                                  @"The boot command was loaded, but iSH-AOK could not create a thread to run it.",
                                  @"Close other apps to free memory, then restart iSH-AOK.",
-                                 @{@"root": defaultRoot,
+                                 @{@"root": bootRoot,
                                    @"guestABI": guestABI ?: @"",
                                    @"command": commandString ?: @""});
     }

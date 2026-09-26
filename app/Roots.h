@@ -32,6 +32,11 @@ FOUNDATION_EXPORT NSNotificationName const RootsCatalogDidChangeNotification;
 // next launch -- renaming or deleting the running root because it no longer
 // matches defaultRoot would move / out from under the live guest.
 @property (nullable) NSString *bootedRoot;
+// The root this launch boots: ISH_BOOT_ROOT when that is set, otherwise
+// defaultRoot. Read before the boot; after it, bootedRoot is the answer.
+@property (readonly, nullable) NSString *rootToBoot;
+// ISH_BOOT_ROOT as given, whether or not a root has that name; nil if unset.
+@property (readonly, nullable) NSString *bootRootOverride;
 @property (readonly) BOOL wantsVersionFile;
 @property (readonly) BOOL needsInitialRootSelection;
 @property (readonly) BOOL initialBundledRootImportInProgress;

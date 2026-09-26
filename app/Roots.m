@@ -867,6 +867,25 @@ static NSString *PreferredDefaultRootName(NSOrderedSet<NSString *> *roots) {
     [NSUserDefaults.standardUserDefaults setObject:defaultRoot forKey:kDefaultRoot];
 }
 
+// ISH_BOOT_ROOT=<name> boots that root for this launch only and leaves the
+// saved default alone -- for driving a device from a Mac
+// (`devicectl device process launch -e '{"ISH_BOOT_ROOT":"Alpine3.23.3"}'`),
+// so a test leg boots each root rather than chrooting into it from the default
+// one. A name that is not an installed root is still returned: the boot then
+// fails on that name instead of quietly booting the default, because a leg
+// that asked for one root and tested another would report the wrong root's
+// results as that root's.
+- (NSString *)bootRootOverride {
+    const char *name = getenv("ISH_BOOT_ROOT");
+    if (name == NULL || name[0] == '\0')
+        return nil;
+    return @(name) ?: @"";
+}
+
+- (NSString *)rootToBoot {
+    return self.bootRootOverride ?: self.defaultRoot;
+}
+
 - (BOOL)needsInitialRootSelection {
     return self.roots.count == 0;
 }
@@ -1828,6 +1847,9 @@ static NSString *const kRootsJobStateDone = @"done";
     [_lock unlock];
 
     [text appendFormat:@"default name=%@\n", defaultRoot];
+    // The root at / this launch, empty before the boot. Not the default: that
+    // is the next launch's, and ISH_BOOT_ROOT boots a root without touching it.
+    [text appendFormat:@"booted name=%@\n", roots.bootedRoot ?: @""];
     return text;
 }
 
