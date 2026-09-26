@@ -118,8 +118,10 @@ static NSSet<NSString *> *ISHImageViewerSupportedExtensions(void) {
 
     _prevButton = [self toolbarIconButtonNamed:@"chevron.left" action:@selector(navigatePrev)];
     _prevButton.accessibilityLabel = @"Previous Image";
+    _prevButton.accessibilityHint = @"Displays the previous image in the folder.";
     _nextButton = [self toolbarIconButtonNamed:@"chevron.right" action:@selector(navigateNext)];
     _nextButton.accessibilityLabel = @"Next Image";
+    _nextButton.accessibilityHint = @"Displays the next image in the folder.";
     _prevButton.enabled = NO;
     _nextButton.enabled = NO;
 
@@ -140,9 +142,11 @@ static NSSet<NSString *> *ISHImageViewerSupportedExtensions(void) {
 
     _shareButton = [self toolbarIconButtonNamed:@"square.and.arrow.up" action:@selector(shareCurrentImage)];
     _shareButton.accessibilityLabel = @"Share";
+    _shareButton.accessibilityHint = @"Opens the share sheet for the current image.";
     _shareButton.enabled = NO;
     _reloadButton = [self toolbarIconButtonNamed:@"arrow.clockwise" action:@selector(reload)];
     _reloadButton.accessibilityLabel = @"Reload";
+    _reloadButton.accessibilityHint = @"Reloads the current image.";
     _reloadButton.enabled = NO;
 
     UIStackView *stack = [[UIStackView alloc] initWithArrangedSubviews:@[
@@ -497,6 +501,7 @@ static NSSet<NSString *> *ISHImageViewerSupportedExtensions(void) {
 - (void)updateZoomToggleTitle {
     [_zoomToggleButton setTitle:(_showingActualSize ? @"Fit" : @"100%") forState:UIControlStateNormal];
     _zoomToggleButton.accessibilityLabel = _showingActualSize ? @"Fit to screen" : @"View actual size";
+    _zoomToggleButton.accessibilityHint = @"Toggles the image zoom between fitting to the screen and displaying at actual size.";
 }
 
 - (void)applyZoomMode {
