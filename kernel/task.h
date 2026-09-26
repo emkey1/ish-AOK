@@ -740,6 +740,12 @@ struct task {
     // column read "?" for it. Set once, release-stored; NULL while alive. Not
     // inherited. At the end for the reason given above native_standin_child.
     const char *exit_arch;
+    // x86 debug registers DR0-DR7 as a tracer last wrote them through
+    // PTRACE_POKEUSER, so it reads back what it wrote. Nothing arms them:
+    // iSH-AOK has no hardware breakpoints, and a DR7 that would enable one is
+    // refused (kernel/ptrace.c ptrace_set_debugreg). Not inherited. At the
+    // end for the reason given above native_standin_child.
+    qword_t ptrace_debugreg[8];
 };
 
 // current will always give the process that is currently executing

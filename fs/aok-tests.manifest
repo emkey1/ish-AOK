@@ -74,6 +74,7 @@ ptrace_tracee_exit.c
 ptrace_strace_startup.c
 ptrace_startup_with_shell.c
 ptrace_poke_text.c
+ptrace_pokeuser.c
 mlock_accounting.c
 fcntl_lock.c
 fcntl_ofd.c

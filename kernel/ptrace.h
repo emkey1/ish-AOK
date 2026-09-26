@@ -13,6 +13,7 @@ struct task;
 #define PTRACE_PEEKUSER_ 3
 #define PTRACE_POKETEXT_ 4
 #define PTRACE_POKEDATA_ 5
+#define PTRACE_POKEUSER_ 6
 #define PTRACE_CONT_ 7
 #define PTRACE_KILL_ 8
 #define PTRACE_SINGLESTEP_ 9
@@ -252,6 +253,14 @@ struct user_ {
     struct user_regs_struct_ user_regs;
     char padding[286 - sizeof(struct user_regs_struct_)];
 };
+
+// Where the debug registers sit in each ABI's struct user, and how big that
+// is: x86_64 928 bytes, u_debugreg at 848; i386 284, u_debugreg at 252
+// (measured, <sys/user.h> on Linux 6.12, gcc and gcc -m32).
+#define USER_DEBUGREG_AMD64_ 848
+#define USER_SIZE_AMD64_ 928
+#define USER_DEBUGREG_I386_ 252
+#define USER_SIZE_I386_ 284
 
 dword_t sys_ptrace(dword_t request, dword_t pid, addr_t addr, dword_t data);
 dword_t sys_ptrace_guest(dword_t request, dword_t pid, guest_addr_t addr, guest_addr_t data);

@@ -118,24 +118,6 @@ Test: add probes (a PROT_NONE read and write, a read-only page write, a kernel a
 
 </details>
 
-## Add PTRACE_POKEUSER and base checks to ptrace
-
-While adding the amd64 GS base, I found iSH-AOK has no PTRACE_POKEUSER at all (any ABI), and SETREGS accepts any fs_base/gs_base where Linux says EIO. The new session implements POKEUSER for amd64 and i386 and the base validation, oracle-checked on camd.
-
-<details><summary>Original chip prompt</summary>
-
-```text
-In iSH-AOK (/Users/mke/git/ish-AOK, branch `working`; follow the project memory: oracle on camd, positive controls, register tests in THREE places, stage explicit paths, push to origin/working and fast-forward the main checkout), implement PTRACE_POKEUSER (request 6) like Linux, and Linux's putreg validation for amd64 SETREGS.
-
-Found 2026-09-25 while adding the amd64 GS base (tests/manual/x86/amd64_gs_base.c, commit on `working` titled "amd64: a GS override adds a base of its own..."): kernel/ptrace.c implements PTRACE_PEEKUSER_ (amd64: offsets into struct user_regs_struct via get_user_regs_amd64, plus u_debugreg 848..911 reading 0; i386: struct user_) but there is no PTRACE_POKEUSER for any ABI -- the request falls to the default and fails. gdb writes debug registers through POKEUSER (hardware watchpoints) and some tools poke single registers.
-
-Linux x86_64 (arch/x86/kernel/ptrace.c): POKEUSER at an offset inside user_regs_struct goes through putreg (the same path as SETREGS, per word): segment selectors via set_segment_reg (16-bit truncation, EIO unless null or RPL 3 -- see set_user_sreg_amd64 in kernel/ptrace.c, which currently silently ignores a bad one instead of EIO), eflags masked by FLAG_MASK, and fs_base / gs_base EIO when >= TASK_SIZE_MAX (0x7ffffffff000 with 4-level paging). Offsets into u_debugreg go to ptrace_set_debugreg (iSH has no hardware breakpoints: decide from the oracle what a write of 0 vs nonzero should return so gdb degrades gracefully). Unaligned or out-of-range offsets are EIO. Also: SETREGS on Linux applies fields in struct order and stops at the first EIO -- check on camd whether a bad fs_base in SETREGS leaves the earlier registers written, and make set_user_regs_amd64 return an error so SETREGS/SETREGSET can report it. The i386 (32-bit) side has its own struct user_ and putreg32 rules; c5b34ec2 already added i386 selector EIO checks to SETREGS -- reuse them.
-
-Oracle-check every expectation on camd first (gcc and gcc -m32), add a regression test (ptrace_pokeuser or similar) with a positive control, register it in all three places, and verify on build/alpine-amd64-test, build/devuan-amd64-test and build/alpine-i386-test under the JIT.
-```
-
-</details>
-
 ## O_PATH opens of /proc magic links to a pathless file
 
 While giving memfds and unlinked files descriptions of their own, I found `open("/proc/self/fd/N" or "/proc/self/exe", O_PATH)` still walks the link's text (procfd_openat leaves O_PATH to path resolution): ENOENT for a memfd, the stale name's file for an unlinked one. This session would give O_PATH the same inode Linux does, measured on camd.

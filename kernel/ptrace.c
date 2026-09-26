@@ -208,6 +208,7 @@ static bool ptrace_in_syscall_entry_stop(const struct task *task) {
 
 static void get_user_regs_amd64(struct task *task, struct user_regs_struct_amd64_ *user_regs_) {
     struct cpu_state *cpu = &task->cpu;
+    collapse_flags(cpu);   // see get_user_regs
     memset(user_regs_, 0, sizeof(*user_regs_));
     user_regs_->r15 = cpu->amd64_regs[amd64_r15];
     user_regs_->r14 = cpu->amd64_regs[amd64_r14];
@@ -240,46 +241,117 @@ static void get_user_regs_amd64(struct task *task, struct user_regs_struct_amd64
         user_regs_->rax = (qword_t) (sqword_t) _ENOSYS;
 }
 
-// Linux's set_segment_reg truncates to 16 bits, takes the selector only if it
-// is null or has RPL 3 (anything else is EIO), and leaves the base alone.
-static void set_user_sreg_amd64(struct cpu_state *cpu, unsigned sreg, qword_t value) {
-    word_t sel = (word_t) value;
-    if (sel == 0 || (sel & 3) == 3)
-        cpu->amd64_sreg[sreg] = sel;
-}
+// The eflags bits a tracer may change: CF PF AF ZF SF TF DF OF NT RF AC. The
+// rest, IF among them, stay as they were. Linux's FLAG_MASK, measured on 6.12
+// (x86_64 and -m32 alike): writing every bit gives 0x54fd7, writing none 0x202.
+#define PTRACE_FLAG_MASK 0x54dd5u
 
-static void set_user_regs_amd64(struct task *task, const struct user_regs_struct_amd64_ *user_regs_) {
-    struct cpu_state *cpu = &task->cpu;
-    cpu->amd64_regs[amd64_r15] = user_regs_->r15;
-    cpu->amd64_regs[amd64_r14] = user_regs_->r14;
-    cpu->amd64_regs[amd64_r13] = user_regs_->r13;
-    cpu->amd64_regs[amd64_r12] = user_regs_->r12;
-    cpu->amd64_regs[amd64_rbp] = user_regs_->rbp;
-    cpu->amd64_regs[amd64_rbx] = user_regs_->rbx;
-    cpu->amd64_regs[amd64_r11] = user_regs_->r11;
-    cpu->amd64_regs[amd64_r10] = user_regs_->r10;
-    cpu->amd64_regs[amd64_r9] = user_regs_->r9;
-    cpu->amd64_regs[amd64_r8] = user_regs_->r8;
-    cpu->amd64_regs[amd64_rax] = user_regs_->rax;
-    cpu->amd64_regs[amd64_rcx] = user_regs_->rcx;
-    cpu->amd64_regs[amd64_rdx] = user_regs_->rdx;
-    cpu->amd64_regs[amd64_rsi] = user_regs_->rsi;
-    cpu->amd64_regs[amd64_rdi] = user_regs_->rdi;
-    cpu->amd64_rip = user_regs_->rip;
-    cpu->eflags = (dword_t) user_regs_->eflags;
+static void ptrace_set_flags(struct cpu_state *cpu, dword_t value) {
+    collapse_flags(cpu);   // the bits kept are the current ones (get_user_regs)
+    cpu->eflags = (cpu->eflags & ~PTRACE_FLAG_MASK) | (value & PTRACE_FLAG_MASK);
     expand_flags(cpu);
     cpu->df_offset = cpu->df ? -1 : 1;
-    cpu->amd64_regs[amd64_rsp] = user_regs_->rsp;
-    cpu->tls_ptr = user_regs_->fs_base;
-    cpu->amd64_gs_base = user_regs_->gs_base;
-    set_user_sreg_amd64(cpu, AMD64_SREG_DS, user_regs_->ds);
-    set_user_sreg_amd64(cpu, AMD64_SREG_ES, user_regs_->es);
-    set_user_sreg_amd64(cpu, AMD64_SREG_FS, user_regs_->fs);
-    set_user_sreg_amd64(cpu, AMD64_SREG_GS, user_regs_->gs);
-    task->ptrace.syscall = (int) user_regs_->orig_rax;
-    if (ptrace_in_syscall_entry_stop(task))
-        cpu->amd64_regs[amd64_rax] = user_regs_->orig_rax;
-    sync_i386_shadows_from_amd64_ptrace(cpu);
+}
+
+// Linux's TASK_SIZE_MAX with 4-level paging: an fs_base or gs_base at or above
+// it is EIO, and so is a debug register address (EINVAL there).
+#define PTRACE_AMD64_TASK_SIZE_MAX 0x7ffffffff000ull
+
+// One word of an amd64 tracee's user_regs_struct, as Linux's putreg writes it:
+// PTRACE_POKEUSER's path, and SETREGS's for every word in struct order.
+//  - A selector is its low 16 bits, EIO unless null or RPL 3; a null CS or SS
+//    is EIO. DS ES FS GS are kept. SS is not: this CPU has none to change in
+//    64-bit mode, and reports 0x2b. CS other than the 0x33 it runs under is EIO
+//    -- Linux would switch the task to 32-bit mode, which iSH-AOK cannot do
+//    to a 64-bit process, and saying so beats taking it and running on as if.
+//  - eflags through PTRACE_FLAG_MASK; fs_base and gs_base below TASK_SIZE_MAX.
+static int ptrace_putreg_amd64(struct task *task, size_t offset, qword_t value) {
+    struct cpu_state *cpu = &task->cpu;
+    word_t sel = (word_t) value;
+    switch (offset) {
+        case offsetof(struct user_regs_struct_amd64_, cs):
+        case offsetof(struct user_regs_struct_amd64_, ss):
+        case offsetof(struct user_regs_struct_amd64_, ds):
+        case offsetof(struct user_regs_struct_amd64_, es):
+        case offsetof(struct user_regs_struct_amd64_, fs):
+        case offsetof(struct user_regs_struct_amd64_, gs):
+            if (sel != 0 && (sel & 3) != 3)
+                return _EIO;
+            if (offset == offsetof(struct user_regs_struct_amd64_, cs))
+                return sel == 0x33 ? 0 : _EIO;
+            if (offset == offsetof(struct user_regs_struct_amd64_, ss))
+                return sel == 0 ? _EIO : 0;
+            if (offset == offsetof(struct user_regs_struct_amd64_, ds))
+                cpu->amd64_sreg[AMD64_SREG_DS] = sel;
+            else if (offset == offsetof(struct user_regs_struct_amd64_, es))
+                cpu->amd64_sreg[AMD64_SREG_ES] = sel;
+            else if (offset == offsetof(struct user_regs_struct_amd64_, fs))
+                cpu->amd64_sreg[AMD64_SREG_FS] = sel;
+            else
+                cpu->amd64_sreg[AMD64_SREG_GS] = sel;
+            return 0;
+        case offsetof(struct user_regs_struct_amd64_, eflags):
+            ptrace_set_flags(cpu, (dword_t) value);
+            return 0;
+        case offsetof(struct user_regs_struct_amd64_, fs_base):
+            if (value >= PTRACE_AMD64_TASK_SIZE_MAX)
+                return _EIO;
+            cpu->tls_ptr = value;
+            return 0;
+        case offsetof(struct user_regs_struct_amd64_, gs_base):
+            if (value >= PTRACE_AMD64_TASK_SIZE_MAX)
+                return _EIO;
+            cpu->amd64_gs_base = value;
+            return 0;
+        case offsetof(struct user_regs_struct_amd64_, orig_rax):
+            task->ptrace.syscall = (int) value;
+            if (ptrace_in_syscall_entry_stop(task))
+                cpu->amd64_regs[amd64_rax] = value;
+            return 0;
+        case offsetof(struct user_regs_struct_amd64_, rip):
+            cpu->amd64_rip = value;
+            return 0;
+    }
+    static const struct { size_t offset; int reg; } gprs[] = {
+        {offsetof(struct user_regs_struct_amd64_, r15), amd64_r15},
+        {offsetof(struct user_regs_struct_amd64_, r14), amd64_r14},
+        {offsetof(struct user_regs_struct_amd64_, r13), amd64_r13},
+        {offsetof(struct user_regs_struct_amd64_, r12), amd64_r12},
+        {offsetof(struct user_regs_struct_amd64_, rbp), amd64_rbp},
+        {offsetof(struct user_regs_struct_amd64_, rbx), amd64_rbx},
+        {offsetof(struct user_regs_struct_amd64_, r11), amd64_r11},
+        {offsetof(struct user_regs_struct_amd64_, r10), amd64_r10},
+        {offsetof(struct user_regs_struct_amd64_, r9), amd64_r9},
+        {offsetof(struct user_regs_struct_amd64_, r8), amd64_r8},
+        {offsetof(struct user_regs_struct_amd64_, rax), amd64_rax},
+        {offsetof(struct user_regs_struct_amd64_, rcx), amd64_rcx},
+        {offsetof(struct user_regs_struct_amd64_, rdx), amd64_rdx},
+        {offsetof(struct user_regs_struct_amd64_, rsi), amd64_rsi},
+        {offsetof(struct user_regs_struct_amd64_, rdi), amd64_rdi},
+        {offsetof(struct user_regs_struct_amd64_, rsp), amd64_rsp},
+    };
+    for (unsigned i = 0; i < sizeof(gprs) / sizeof(gprs[0]); i++) {
+        if (gprs[i].offset == offset) {
+            cpu->amd64_regs[gprs[i].reg] = value;
+            return 0;
+        }
+    }
+    return _EIO;
+}
+
+// SETREGS: every word through putreg in struct order, stopping at the first
+// refusal with what came before it set, as Linux's genregs_set does.
+static int set_user_regs_amd64(struct task *task, const struct user_regs_struct_amd64_ *user_regs_) {
+    int err = 0;
+    for (size_t offset = 0; offset < sizeof(*user_regs_); offset += sizeof(qword_t)) {
+        qword_t value;
+        memcpy(&value, (const char *) user_regs_ + offset, sizeof(value));
+        err = ptrace_putreg_amd64(task, offset, value);
+        if (err < 0)
+            break;
+    }
+    sync_i386_shadows_from_amd64_ptrace(&task->cpu);
+    return err;
 }
 
 static void get_user_fpregs_amd64(struct task *task, struct user_fpregs_struct_amd64_ *user_fpregs_) {
@@ -557,6 +629,10 @@ static int ptrace_regset_check(struct task *tracer, struct task *child, guest_ad
 
 // Ensure stopped, ptrace locked, etc. before calling this
 static void get_user_regs(struct cpu_state *cpu, struct user_regs_struct_ *user_regs_) {
+    // The flags the JIT keeps lazily (ZF SF PF from a saved result) folded into
+    // eflags first, as a signal frame does. Without it an i386 tracer read ZF,
+    // SF and PF as they last happened to be stored, and IF clear.
+    collapse_flags(cpu);
     user_regs_->ebx = cpu->ebx;
     user_regs_->ecx = cpu->ecx;
     user_regs_->edx = cpu->edx;
@@ -609,49 +685,82 @@ static void ptrace_sreg_set(struct cpu_state *cpu, unsigned sreg, dword_t value)
     i386_sreg_load(cpu, sreg, sel);
 }
 
+// One word of an i386 tracee's user_regs_struct, as Linux's putreg32 writes it:
+// PTRACE_POKEUSER's path, and SETREGS's for every word in struct order. A
+// selector must pass ptrace_sreg_ok (EIO otherwise), eflags goes through
+// PTRACE_FLAG_MASK, and orig_eax at a syscall-entry stop is the syscall.
+static int ptrace_putreg_i386(struct task *task, size_t offset, dword_t value) {
+    struct cpu_state *cpu = &task->cpu;
+    unsigned sreg;
+    switch (offset) {
+        case offsetof(struct user_regs_struct_, xds): sreg = AMD64_SREG_DS; goto selector;
+        case offsetof(struct user_regs_struct_, xes): sreg = AMD64_SREG_ES; goto selector;
+        case offsetof(struct user_regs_struct_, xfs): sreg = AMD64_SREG_FS; goto selector;
+        case offsetof(struct user_regs_struct_, xgs): sreg = AMD64_SREG_GS; goto selector;
+        case offsetof(struct user_regs_struct_, xcs): sreg = AMD64_SREG_CS; goto selector;
+        case offsetof(struct user_regs_struct_, xss): sreg = AMD64_SREG_SS; goto selector;
+        case offsetof(struct user_regs_struct_, ebx): cpu->ebx = value; return 0;
+        case offsetof(struct user_regs_struct_, ecx): cpu->ecx = value; return 0;
+        case offsetof(struct user_regs_struct_, edx): cpu->edx = value; return 0;
+        case offsetof(struct user_regs_struct_, esi): cpu->esi = value; return 0;
+        case offsetof(struct user_regs_struct_, edi): cpu->edi = value; return 0;
+        case offsetof(struct user_regs_struct_, ebp): cpu->ebp = value; return 0;
+        case offsetof(struct user_regs_struct_, eax): cpu->eax = value; return 0;
+        case offsetof(struct user_regs_struct_, eip): cpu->eip = value; return 0;
+        case offsetof(struct user_regs_struct_, esp): cpu->esp = value; return 0;
+        case offsetof(struct user_regs_struct_, orig_eax):
+            task->ptrace.syscall = (int) value;
+            if (ptrace_in_syscall_entry_stop(task))
+                cpu->eax = value;
+            return 0;
+        case offsetof(struct user_regs_struct_, eflags):
+            ptrace_set_flags(cpu, value);
+            return 0;
+        default:
+            return _EIO;
+    }
+selector:
+    if (!ptrace_sreg_ok(sreg, value))
+        return _EIO;
+    ptrace_sreg_set(cpu, sreg, value);
+    return 0;
+}
+
 // Ensure stopped, ptrace locked, etc. before calling this. In the order of
 // struct user_regs_struct, as Linux's putreg32 goes: a refused selector stops
 // there with EIO, after what came before it has been set.
 static int set_user_regs(struct task *task, struct user_regs_struct_ *user_regs_) {
-    struct cpu_state *cpu = &task->cpu;
-    static const struct {
-        size_t offset;
-        unsigned sreg;
-    } sregs_early[] = {
-        {offsetof(struct user_regs_struct_, xds), AMD64_SREG_DS},
-        {offsetof(struct user_regs_struct_, xes), AMD64_SREG_ES},
-        {offsetof(struct user_regs_struct_, xfs), AMD64_SREG_FS},
-        {offsetof(struct user_regs_struct_, xgs), AMD64_SREG_GS},
-    };
-    cpu->ebx = user_regs_->ebx;
-    cpu->ecx = user_regs_->ecx;
-    cpu->edx = user_regs_->edx;
-    cpu->esi = user_regs_->esi;
-    cpu->edi = user_regs_->edi;
-    cpu->ebp = user_regs_->ebp;
-    cpu->eax = user_regs_->eax;
-    for (unsigned i = 0; i < sizeof(sregs_early) / sizeof(sregs_early[0]); i++) {
+    for (size_t offset = 0; offset < sizeof(*user_regs_); offset += sizeof(dword_t)) {
         dword_t value;
-        memcpy(&value, (char *) user_regs_ + sregs_early[i].offset, sizeof(value));
-        if (!ptrace_sreg_ok(sregs_early[i].sreg, value))
-            return _EIO;
-        ptrace_sreg_set(cpu, sregs_early[i].sreg, value);
+        memcpy(&value, (char *) user_regs_ + offset, sizeof(value));
+        int err = ptrace_putreg_i386(task, offset, value);
+        if (err < 0)
+            return err;
     }
-    task->ptrace.syscall = (int) user_regs_->orig_eax;
-    if (ptrace_in_syscall_entry_stop(task))
-        cpu->eax = user_regs_->orig_eax;
-    cpu->eip = user_regs_->eip;
-    if (!ptrace_sreg_ok(AMD64_SREG_CS, user_regs_->xcs))
-        return _EIO;
-    ptrace_sreg_set(cpu, AMD64_SREG_CS, user_regs_->xcs);
-    cpu->eflags = user_regs_->eflags;
-    expand_flags(cpu);
-    cpu->df_offset = cpu->df ? -1 : 1;
-    cpu->esp = user_regs_->esp;
-    if (!ptrace_sreg_ok(AMD64_SREG_SS, user_regs_->xss))
-        return _EIO;
-    ptrace_sreg_set(cpu, AMD64_SREG_SS, user_regs_->xss);
     return 0;
+}
+
+// DR0-DR7, as Linux's ptrace_set_debugreg takes them (measured, 6.12): DR4 and
+// DR5 are EIO; DR0-DR3 take an address -- on x86_64 EINVAL at or above
+// TASK_SIZE_MAX, leaving the register as it was, while -m32 takes any; DR6 and
+// DR7 take the value. Each reads back what was written. The one difference:
+// iSH-AOK has no hardware breakpoints, so a DR7 with an enable bit (L0-G3, the
+// low byte) is ENOSPC, Linux's answer when every debug register is taken --
+// gdb then says "Couldn't write debug register" instead of placing a hardware
+// watchpoint that would never fire.
+static int ptrace_set_debugreg(struct task *task, unsigned n, qword_t value) {
+    if (n == 4 || n == 5)
+        return _EIO;
+    if (n < 4 && task->abi == GUEST_ABI_AMD64 && value >= PTRACE_AMD64_TASK_SIZE_MAX)
+        return _EINVAL;
+    if (n == 7 && (value & 0xff) != 0)
+        return _ENOSPC;
+    task->ptrace_debugreg[n] = value;
+    return 0;
+}
+
+static qword_t ptrace_get_debugreg(struct task *task, unsigned n) {
+    return n == 4 || n == 5 ? 0 : task->ptrace_debugreg[n];
 }
 
 static int ptrace_getregset(struct task *tracer, struct task *child, guest_addr_t iov_addr,
@@ -786,7 +895,7 @@ static int ptrace_setregset(struct task *tracer, struct task *child, guest_addr_
                 int err = ptrace_setregset_read(tracer, iov_addr, &user_regs_amd64, sizeof(user_regs_amd64));
                 if (err < 0)
                     return err;
-                set_user_regs_amd64(child, &user_regs_amd64);
+                return set_user_regs_amd64(child, &user_regs_amd64);
             } else {
                 struct user_regs_struct_ user_regs_ = {};
                 get_user_regs_and_syscall(child, &user_regs_);
@@ -1538,67 +1647,92 @@ dword_t sys_ptrace_guest(dword_t request, dword_t pid, guest_addr_t addr, guest_
                 return _EIO;
             }
 
+            int err = 0;
             if (child->abi == GUEST_ABI_AMD64) {
-                qword_t peek;
-                if (addr & (sizeof(peek) - 1)) {
-                    unlock(&child->ptrace.lock);
-                    return _EIO;
-                }
-
-                // Real struct user's u_debugreg[8] (x86_64: offsets 848..911,
-                // verified against a real kernel header) -- the hardware
-                // debug registers DR0-DR7. iSH has no hardware breakpoint/
-                // watchpoint support at all (nothing ever arms one), so these
-                // always legitimately read as zero -- truthful, not a stub.
-                // gdb's own ptrace self-test (linux_ptrace_test_ret_to_nx)
-                // and its hardware-watchpoint-capacity probe both read here
-                // at every stop; this range previously fell outside the
-                // (regs-struct-only) bounds check below and returned EIO,
-                // which gdb surfaces as an alarming "Couldn't read debug
-                // register: I/O error" instead of silently treating "0
-                // registers armed" as normal.
-                if (addr >= 848 && addr < 848 + 64) {
-                    qword_t zero = 0;
-                    if (user_put(data, zero)) {
-                        unlock(&child->ptrace.lock);
-                        return _EFAULT;
-                    }
-                    unlock(&child->ptrace.lock);
-                    return 0;
-                }
-
+                qword_t peek = 0;
+                // u_debugreg (DR0-DR7) reads back what a tracer wrote there
+                // (ptrace_set_debugreg): zero until then, which gdb's own
+                // ptrace self-test and its watchpoint-capacity probe read at
+                // every stop -- EIO there showed as "Couldn't read debug
+                // register: I/O error".
                 struct user_regs_struct_amd64_ user_regs_amd64 = {};
-                get_user_regs_amd64(child, &user_regs_amd64);
-
-                if (addr >= sizeof(user_regs_amd64)) {
-                    unlock(&child->ptrace.lock);
-                    return _EIO;
+                if (addr & (sizeof(peek) - 1)) {
+                    err = _EIO;
+                } else if (addr >= USER_DEBUGREG_AMD64_ && addr < USER_DEBUGREG_AMD64_ + 64) {
+                    peek = ptrace_get_debugreg(child, (unsigned) ((addr - USER_DEBUGREG_AMD64_) / 8));
+                } else if (addr < sizeof(user_regs_amd64)) {
+                    get_user_regs_amd64(child, &user_regs_amd64);
+                    memcpy(&peek, (char *) &user_regs_amd64 + addr, sizeof(peek));
+                } else {
+                    err = _EIO;
                 }
-
-                memcpy(&peek, (char *) &user_regs_amd64 + addr, sizeof(peek));
-                if (user_put(data, peek)) {
-                    unlock(&child->ptrace.lock);
-                    return _EFAULT;
-                }
+                if (err == 0 && user_put(data, peek))
+                    err = _EFAULT;
             } else {
-                dword_t peek;
-                struct user_ user_ = {};
-                get_user_regs_and_syscall(child, &user_.user_regs);
-
-                if (addr & (sizeof(peek) - 1) || addr >= sizeof(struct user_)) {
-                    unlock(&child->ptrace.lock);
-                    return _EIO;
+                // i386 (measured on Linux's compat path, -m32): any aligned
+                // word up to 284 -- one past struct user's 284 bytes -- reads;
+                // the registers and u_debugreg have values, the rest is 0. The
+                // bound was sizeof(struct user_), 286, and a read at 284 copied
+                // two bytes past it.
+                dword_t peek = 0;
+                if (addr & (sizeof(peek) - 1) || addr > USER_SIZE_I386_) {
+                    err = _EIO;
+                } else if (addr >= USER_DEBUGREG_I386_ && addr < USER_DEBUGREG_I386_ + 32) {
+                    peek = (dword_t) ptrace_get_debugreg(child, (unsigned) ((addr - USER_DEBUGREG_I386_) / 4));
+                } else if (addr < sizeof(struct user_regs_struct_)) {
+                    struct user_regs_struct_ user_regs_ = {};
+                    get_user_regs_and_syscall(child, &user_regs_);
+                    memcpy(&peek, (char *) &user_regs_ + addr, sizeof(peek));
                 }
-
-                memcpy(&peek, (char *) &user_ + addr, sizeof(peek));
-                if (user_put(data, peek)) {
-                    unlock(&child->ptrace.lock);
-                    return _EFAULT;
-                }
+                if (err == 0 && user_put(data, peek))
+                    err = _EFAULT;
             }
             unlock(&child->ptrace.lock);
+            return err;
+        }
 
-            return 0;
+        // One word of the user area, through the same putreg SETREGS uses
+        // (see ptrace_putreg_amd64 and ptrace_putreg_i386) or into a debug
+        // register. There was no POKEUSER at all, on any ABI, and gdb writes
+        // its hardware watchpoints through it.
+        case PTRACE_POKEUSER_: {
+            STRACE("ptrace(PTRACE_POKEUSER, %d, %#llx, %#llx)", pid,
+                    (unsigned long long) addr, (unsigned long long) data);
+            struct task *child = find_child(pid);
+            if (!child) return _ESRCH;
+
+            int err;
+            if (child->abi == GUEST_ABI_ARM64 || child->abi == GUEST_ABI_RISCV64) {
+                err = _EIO;
+            } else if (child->abi == GUEST_ABI_AMD64) {
+                // Linux: EIO for an unaligned word, one past the user area, and
+                // one between the registers and u_debugreg.
+                if (addr & 7 || addr >= USER_SIZE_AMD64_) {
+                    err = _EIO;
+                } else if (addr < sizeof(struct user_regs_struct_amd64_)) {
+                    err = ptrace_putreg_amd64(child, (size_t) addr, (qword_t) data);
+                    sync_i386_shadows_from_amd64_ptrace(&child->cpu);
+                } else if (addr >= USER_DEBUGREG_AMD64_ && addr < USER_DEBUGREG_AMD64_ + 64) {
+                    err = ptrace_set_debugreg(child, (unsigned) ((addr - USER_DEBUGREG_AMD64_) / 8),
+                                              (qword_t) data);
+                } else {
+                    err = _EIO;
+                }
+            } else {
+                // Linux's compat path: an aligned word up to 284; one elsewhere
+                // in struct user is taken and ignored.
+                if (addr & 3 || addr > USER_SIZE_I386_)
+                    err = _EIO;
+                else if (addr < sizeof(struct user_regs_struct_))
+                    err = ptrace_putreg_i386(child, (size_t) addr, (dword_t) data);
+                else if (addr >= USER_DEBUGREG_I386_ && addr < USER_DEBUGREG_I386_ + 32)
+                    err = ptrace_set_debugreg(child, (unsigned) ((addr - USER_DEBUGREG_I386_) / 4),
+                                              (dword_t) data);
+                else
+                    err = 0;
+            }
+            unlock(&child->ptrace.lock);
+            return err;
         }
 
         case PTRACE_POKETEXT_:
@@ -1814,7 +1948,11 @@ dword_t sys_ptrace_guest(dword_t request, dword_t pid, guest_addr_t addr, guest_
                     unlock(&child->ptrace.lock);
                     return _EFAULT;
                 }
-                set_user_regs_amd64(child, &user_regs_amd64);
+                int err = set_user_regs_amd64(child, &user_regs_amd64);
+                if (err < 0) {
+                    unlock(&child->ptrace.lock);
+                    return err;
+                }
             } else {
                 struct user_regs_struct_ user_regs_;
                 if (user_get(data, user_regs_)) {

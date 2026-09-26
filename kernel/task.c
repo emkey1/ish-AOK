@@ -1305,6 +1305,7 @@ static struct task *task_create_pid_(struct task *parent, pid_t_ want_pid) {
     task->ptrace_trap_notify = false;
     task->native_helper_threads = 0;
     task->exit_arch = NULL;
+    memset(task->ptrace_debugreg, 0, sizeof(task->ptrace_debugreg));
     lock_init(&task->ptrace.lock, "task_creat_ptr\0");
     cond_init(&task->ptrace.cond);
 
