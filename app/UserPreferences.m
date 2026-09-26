@@ -48,6 +48,7 @@ static NSString *const kPreferenceLLMAPIKeyKey = @"LLM API Key";
 static NSString *const kPreferenceLLMDestinationsKey = @"LLM Destinations";
 static NSString *const kPreferenceSnippetsKey = @"Snippets";
 static NSString *const kPreferenceSnippetsSyncedDigestKey = @"Snippets Synced Digest";
+static NSString *const kPreferenceToolbarKeysKey = @"Toolbar Keys";
 static NSString *const kPreferenceLLMActiveDestinationKey = @"LLM Active Destination";
 static NSString *const kPreferenceLLMToolsEnabledKey = @"LLM Tools Enabled";
 static NSString *const kPreferenceLLMToolTimeoutSecondsKey = @"LLM Tool Timeout Seconds";
@@ -434,6 +435,7 @@ void amd64_jit_preference_set(bool enabled) {
             kPreferenceLLMAPIKeyKey: property(llmAPIKey),
             kPreferenceLLMDestinationsKey: property(llmDestinations),
             kPreferenceSnippetsKey: property(snippets),
+            kPreferenceToolbarKeysKey: property(toolbarKeys),
             kPreferenceSnippetsSyncedDigestKey: property(snippetsSyncedDigest),
             kPreferenceLLMActiveDestinationKey: property(llmActiveDestinationID),
             kPreferenceLLMToolsEnabledKey: property(llmToolsEnabled),
@@ -804,6 +806,19 @@ void amd64_jit_preference_set(bool enabled) {
 
 - (void)setSnippets:(NSArray<NSDictionary<NSString *, id> *> *)snippets {
     [_defaults setObject:snippets ?: @[] forKey:kPreferenceSnippetsKey];
+}
+
+// MARK: toolbarKeys
+- (NSDictionary<NSString *, NSArray *> *)toolbarKeys {
+    NSDictionary *stored = [_defaults dictionaryForKey:kPreferenceToolbarKeysKey];
+    return [stored isKindOfClass:NSDictionary.class] ? stored : nil;
+}
+
+- (void)setToolbarKeys:(NSDictionary<NSString *, NSArray *> *)toolbarKeys {
+    if (toolbarKeys == nil)
+        [_defaults removeObjectForKey:kPreferenceToolbarKeysKey];
+    else
+        [_defaults setObject:toolbarKeys forKey:kPreferenceToolbarKeysKey];
 }
 
 // MARK: snippetsSyncedDigest
@@ -1399,3 +1414,152 @@ static NSArray<NSString *> *ISHDefaultBootCommand(void) {
 }
 
 @end
+
+// ---- The extra-keys toolbar's keys (#609) -------------------------------
+
+NSString *const ISHToolbarKeyGroupLeft = @"left";
+NSString *const ISHToolbarKeyGroupCenter = @"center";
+NSString *const ISHToolbarKeyBuiltin = @"key";
+NSString *const ISHToolbarKeyTitle = @"title";
+NSString *const ISHToolbarKeySends = @"sends";
+NSString *const ISHToolbarKeyNarrow = @"narrow";
+
+// id, symbol, name -- in the order the Add Key menu offers them.
+static NSArray<NSArray<NSString *> *> *ISHToolbarBuiltinCatalog(void) {
+    static NSArray *catalog;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        catalog = @[
+            @[@"tab", @"\u21E5", @"Tab"],
+            @[@"ctrl", @"\u2303", @"Control"],
+            @[@"esc", @"\u238B", @"Escape"],
+            @[@"arrows", @"\u271C", @"Arrow keys"],
+            @[@"dash", @"-", @"Hyphen"],
+            @[@"dot", @".", @"Period"],
+            @[@"slash", @"/", @"Slash"],
+            @[@"colon", @":", @"Colon"],
+            @[@"bang", @"!", @"Exclamation mark"],
+            @[@"pipe", @"|", @"Vertical bar"],
+        ];
+    });
+    return catalog;
+}
+
+NSArray<NSString *> *ISHToolbarBuiltinKeyIDs(void) {
+    NSMutableArray *ids = [NSMutableArray array];
+    for (NSArray *entry in ISHToolbarBuiltinCatalog())
+        [ids addObject:entry[0]];
+    return ids;
+}
+
+static NSArray<NSString *> *ISHToolbarBuiltinEntry(NSString *key) {
+    for (NSArray *entry in ISHToolbarBuiltinCatalog())
+        if ([entry[0] isEqualToString:key])
+            return entry;
+    return nil;
+}
+
+NSString *ISHToolbarBuiltinKeySymbol(NSString *key) {
+    return ISHToolbarBuiltinEntry(key)[1] ?: key;
+}
+
+NSString *ISHToolbarBuiltinKeyName(NSString *key) {
+    return ISHToolbarBuiltinEntry(key)[2] ?: key;
+}
+
+NSDictionary<NSString *, NSArray *> *ISHToolbarKeysDefaultLayout(void) {
+    NSDictionary *(^builtin)(NSString *, BOOL) = ^(NSString *key, BOOL narrow) {
+        return @{ISHToolbarKeyBuiltin: key, ISHToolbarKeyNarrow: @(narrow)};
+    };
+    return @{
+        ISHToolbarKeyGroupLeft: @[builtin(@"tab", YES), builtin(@"ctrl", YES),
+                                  builtin(@"esc", YES), builtin(@"arrows", YES)],
+        ISHToolbarKeyGroupCenter: @[builtin(@"dash", NO), builtin(@"dot", YES),
+                                    builtin(@"slash", YES), builtin(@"colon", NO),
+                                    builtin(@"bang", NO), builtin(@"pipe", NO)],
+    };
+}
+
+NSDictionary<NSString *, NSArray *> *ISHToolbarKeysValidatedLayout(NSDictionary *layout) {
+    if (![layout isKindOfClass:NSDictionary.class])
+        return ISHToolbarKeysDefaultLayout();
+    NSMutableSet<NSString *> *seen = [NSMutableSet set];
+    NSMutableDictionary *result = [NSMutableDictionary dictionary];
+    for (NSString *group in @[ISHToolbarKeyGroupLeft, ISHToolbarKeyGroupCenter]) {
+        NSArray *items = layout[group];
+        NSMutableArray *kept = [NSMutableArray array];
+        for (NSDictionary *item in [items isKindOfClass:NSArray.class] ? items : @[]) {
+            if (![item isKindOfClass:NSDictionary.class])
+                continue;
+            id narrow = item[ISHToolbarKeyNarrow];
+            BOOL shown = [narrow isKindOfClass:NSNumber.class] ? [narrow boolValue] : YES;
+            NSString *key = item[ISHToolbarKeyBuiltin];
+            if (key != nil) {
+                if (![key isKindOfClass:NSString.class] || ISHToolbarBuiltinEntry(key) == nil ||
+                        [seen containsObject:key])
+                    continue;
+                [seen addObject:key];
+                [kept addObject:@{ISHToolbarKeyBuiltin: key, ISHToolbarKeyNarrow: @(shown)}];
+                continue;
+            }
+            NSString *title = item[ISHToolbarKeyTitle], *sends = item[ISHToolbarKeySends];
+            if (![title isKindOfClass:NSString.class] || ![sends isKindOfClass:NSString.class] ||
+                    title.length == 0 || sends.length == 0)
+                continue;
+            [kept addObject:@{ISHToolbarKeyTitle: title, ISHToolbarKeySends: sends,
+                              ISHToolbarKeyNarrow: @(shown)}];
+        }
+        result[group] = kept;
+    }
+    return result;
+}
+
+NSDictionary<NSString *, NSArray *> *ISHToolbarKeysCurrentLayout(void) {
+    NSDictionary *saved = UserPreferences.shared.toolbarKeys;
+    return saved != nil ? ISHToolbarKeysValidatedLayout(saved) : ISHToolbarKeysDefaultLayout();
+}
+
+static int ISHHexDigit(unichar c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+NSString *ISHToolbarKeyDecodeSends(NSString *sends) {
+    NSMutableString *out = [NSMutableString string];
+    NSUInteger n = sends.length;
+    for (NSUInteger i = 0; i < n; i++) {
+        unichar c = [sends characterAtIndex:i];
+        if (c != '\\' || i + 1 >= n) {
+            [out appendFormat:@"%C", c];
+            continue;
+        }
+        unichar e = [sends characterAtIndex:i + 1];
+        unichar decoded = 0;
+        NSUInteger used = 2;
+        switch (e) {
+            case 'e': decoded = 0x1b; break;
+            case 't': decoded = '\t'; break;
+            case 'n': decoded = '\n'; break;
+            case 'r': decoded = '\r'; break;
+            case '\\': decoded = '\\'; break;
+            case 'x': {
+                int hi = i + 2 < n ? ISHHexDigit([sends characterAtIndex:i + 2]) : -1;
+                int lo = i + 3 < n ? ISHHexDigit([sends characterAtIndex:i + 3]) : -1;
+                if (hi >= 0 && lo >= 0 && hi * 16 + lo <= 0x7f) {
+                    decoded = (unichar) (hi * 16 + lo);
+                    used = 4;
+                }
+                break;
+            }
+        }
+        if (decoded == 0 && !(e == 'x' && used == 4)) {
+            [out appendFormat:@"%C", c];   // not an escape: the backslash stands
+            continue;
+        }
+        [out appendFormat:@"%C", decoded];
+        i += used - 1;
+    }
+    return out;
+}

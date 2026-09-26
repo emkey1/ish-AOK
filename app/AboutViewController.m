@@ -148,12 +148,21 @@ UIViewController *ISHCreateLLMSettingsViewController(void) {
     return [LLMSettingsViewController new];
 }
 
+// Settings -> Keyboard Toolbar (#609); defined at the end of this file.
+@interface ISHToolbarKeysViewController : UITableViewController <WorkspaceTextScaledPage>
+@end
+
+UIViewController *ISHCreateToolbarKeysViewController(void) {
+    return [ISHToolbarKeysViewController new];
+}
+
 BOOL ISHLLMClientEnabled(void) {
     return UserPreferences.shared.shouldEnableLLMClient;
 }
 
 @interface AboutViewController () <WorkspaceTextScaledPage>
 @property (weak, nonatomic) IBOutlet UITableViewCell *capsLockMappingCell;
+@property (weak, nonatomic) IBOutlet UITableViewCell *keyboardToolbarCell;
 @property (weak, nonatomic) IBOutlet UITableViewCell *themeCell;
 @property (weak, nonatomic) IBOutlet UITableViewCell *initialWindowCell;
 @property (weak, nonatomic) IBOutlet UITableViewCell *diagnosticsCell;
@@ -6341,6 +6350,16 @@ typedef NS_ENUM(NSInteger, ISHLLMDestinationEditorRow) {
         iosfs_clear_all_bookmarks();
     } else if (cell == self.customDnsCell) {
         [self _showCustomDnsServersEditorFromCell:cell];
+    } else if (cell == self.keyboardToolbarCell) {
+        UIViewController *toolbarKeys = ISHCreateToolbarKeysViewController();
+        if (self.ish_canPushSubpage) {
+            [self.navigationController pushViewController:toolbarKeys animated:YES];
+        } else {
+            UINavigationController *navigationController =
+                [[UINavigationController alloc] initWithRootViewController:toolbarKeys];
+            ISHConfigureLLMSettingsNavigationController(navigationController);
+            [self presentViewController:navigationController animated:YES completion:nil];
+        }
     }
     [tableView deselectRowAtIndexPath:indexPath animated:YES];
 }
@@ -6701,6 +6720,310 @@ static NSArray<NSString *> *ISHCommandFromFieldText(NSString *text) {
         [UserPreferences.shared resetBootCommand];
     else
         UserPreferences.shared.bootCommand = command;
+}
+
+@end
+
+#pragma mark - Keyboard Toolbar (#609)
+
+// The extra-keys bar's keys, arranged by hand. One section per place on the bar
+// (ISHToolbarKeyGroupLeft, ISHToolbarKeyGroupCenter), always in editing mode so a
+// key drags within and between them and deletes with the usual control; a third
+// section holds Add Key and Reset. Every change is saved at once, and the bar
+// follows it live (-[TerminalViewController _applyToolbarKeys]).
+@implementation ISHToolbarKeysViewController {
+    NSMutableArray<NSMutableArray<NSDictionary *> *> *_groups;   // left, center
+}
+
+static const NSInteger ISHToolbarKeysActionsSection = 2;
+
+- (instancetype)init {
+    self = [super initWithStyle:UITableViewStyleInsetGrouped];
+    if (self != nil)
+        self.title = @"Keyboard Toolbar";
+    return self;
+}
+
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    ISHSizeTableSectionTitlesOnMac(self.tableView);
+    [self _load];
+    self.tableView.allowsSelectionDuringEditing = YES;
+    [self setEditing:YES animated:NO];
+}
+
+- (void)_load {
+    NSDictionary<NSString *, NSArray *> *layout = ISHToolbarKeysCurrentLayout();
+    _groups = [NSMutableArray array];
+    for (NSString *group in @[ISHToolbarKeyGroupLeft, ISHToolbarKeyGroupCenter])
+        [_groups addObject:[layout[group] mutableCopy] ?: [NSMutableArray array]];
+}
+
+- (void)_save {
+    UserPreferences.shared.toolbarKeys = @{
+        ISHToolbarKeyGroupLeft: [_groups[0] copy],
+        ISHToolbarKeyGroupCenter: [_groups[1] copy],
+    };
+}
+
+- (BOOL)_isKeySection:(NSInteger)section {
+    return section == 0 || section == 1;
+}
+
+- (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
+    return 3;
+}
+
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
+    return [self _isKeySection:section] ? (NSInteger) _groups[section].count : 2;
+}
+
+- (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section {
+    if (section == 0)
+        return @"Left";
+    if (section == 1)
+        return @"Center";
+    return nil;
+}
+
+- (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
+    if (section == 0)
+        return @"From the bar's left edge.";
+    if (section == 1)
+        return @"Centered on the bar. On an iPhone held upright, a key set to hide on a narrow bar is left off.";
+    return @"A custom key types its text as written. \\e is Escape, \\t Tab, \\n Return, and \\xHH any "
+           @"character up to 7F -- \\x03 is Control-C. \\\\ is a backslash. With Control on, a key of one "
+           @"character sends that character's control code.\n\n"
+           @"Settings, Files, Paste and the other buttons at the bar's right end stay where they are.";
+}
+
+- (NSString *)_symbolForItem:(NSDictionary *)item {
+    NSString *builtin = item[ISHToolbarKeyBuiltin];
+    return builtin != nil ? ISHToolbarBuiltinKeySymbol(builtin) : item[ISHToolbarKeyTitle];
+}
+
+- (NSString *)_nameForItem:(NSDictionary *)item {
+    NSString *builtin = item[ISHToolbarKeyBuiltin];
+    return builtin != nil ? ISHToolbarBuiltinKeyName(builtin)
+                          : [NSString stringWithFormat:@"Types %@", item[ISHToolbarKeySends]];
+}
+
+- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+    UITableViewCell *cell;
+    if ([self _isKeySection:indexPath.section]) {
+        NSDictionary *item = _groups[indexPath.section][indexPath.row];
+        cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:nil];
+        cell.textLabel.text = [NSString stringWithFormat:@"%@    %@", [self _symbolForItem:item],
+                               item[ISHToolbarKeyBuiltin] != nil ? [self _nameForItem:item] : @""];
+        BOOL narrow = [item[ISHToolbarKeyNarrow] boolValue];
+        NSMutableArray<NSString *> *detail = [NSMutableArray array];
+        if (item[ISHToolbarKeyBuiltin] == nil)
+            [detail addObject:[self _nameForItem:item]];
+        if (!narrow)
+            [detail addObject:@"Hidden on a narrow bar"];
+        cell.detailTextLabel.text = [detail componentsJoinedByString:@" \u00b7 "];
+        cell.detailTextLabel.textColor = UIColor.secondaryLabelColor;
+        cell.editingAccessoryType = UITableViewCellAccessoryDetailButton;
+        cell.accessibilityLabel = [NSString stringWithFormat:@"%@%@",
+            item[ISHToolbarKeyBuiltin] != nil ? [self _nameForItem:item]
+                                              : [NSString stringWithFormat:@"%@, %@", item[ISHToolbarKeyTitle],
+                                                 [self _nameForItem:item]],
+            narrow ? @"" : @", hidden on a narrow bar"];
+    } else {
+        cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:nil];
+        if (indexPath.row == 0) {
+            cell.textLabel.text = @"Add Key\u2026";
+            cell.textLabel.textColor = self.view.tintColor;
+        } else {
+            cell.textLabel.text = @"Reset to Default";
+            cell.textLabel.textColor = UIColor.systemRedColor;
+        }
+        cell.accessibilityTraits |= UIAccessibilityTraitButton;
+    }
+    ISHWorkspaceScaleTableViewCell(cell, ISHWorkspaceTextScaleForViewController(self));
+    return cell;
+}
+
+- (void)workspaceTextScaleDidChange {
+    ISHWorkspaceRescaleTableView(self.tableView, ISHWorkspaceTextScaleForViewController(self));
+}
+
+- (BOOL)tableView:(UITableView *)tableView canEditRowAtIndexPath:(NSIndexPath *)indexPath {
+    return [self _isKeySection:indexPath.section];
+}
+
+- (BOOL)tableView:(UITableView *)tableView canMoveRowAtIndexPath:(NSIndexPath *)indexPath {
+    return [self _isKeySection:indexPath.section];
+}
+
+- (UITableViewCellEditingStyle)tableView:(UITableView *)tableView editingStyleForRowAtIndexPath:(NSIndexPath *)indexPath {
+    return [self _isKeySection:indexPath.section] ? UITableViewCellEditingStyleDelete : UITableViewCellEditingStyleNone;
+}
+
+- (BOOL)tableView:(UITableView *)tableView shouldIndentWhileEditingRowAtIndexPath:(NSIndexPath *)indexPath {
+    return [self _isKeySection:indexPath.section];
+}
+
+// A key goes anywhere in Left or Center, and never among the action rows.
+- (NSIndexPath *)tableView:(UITableView *)tableView
+    targetIndexPathForMoveFromRowAtIndexPath:(NSIndexPath *)source
+                         toProposedIndexPath:(NSIndexPath *)proposed {
+    if ([self _isKeySection:proposed.section])
+        return proposed;
+    NSInteger last = (NSInteger) _groups[1].count - (source.section == 1 ? 1 : 0);
+    return [NSIndexPath indexPathForRow:MAX(last, 0) inSection:1];
+}
+
+- (void)tableView:(UITableView *)tableView moveRowAtIndexPath:(NSIndexPath *)source toIndexPath:(NSIndexPath *)destination {
+    NSDictionary *item = _groups[source.section][source.row];
+    [_groups[source.section] removeObjectAtIndex:source.row];
+    [_groups[destination.section] insertObject:item atIndex:destination.row];
+    [self _save];
+}
+
+- (void)tableView:(UITableView *)tableView commitEditingStyle:(UITableViewCellEditingStyle)editingStyle forRowAtIndexPath:(NSIndexPath *)indexPath {
+    if (editingStyle != UITableViewCellEditingStyleDelete || ![self _isKeySection:indexPath.section])
+        return;
+    [_groups[indexPath.section] removeObjectAtIndex:indexPath.row];
+    [self _save];
+    [tableView deleteRowsAtIndexPaths:@[indexPath] withRowAnimation:UITableViewRowAnimationAutomatic];
+}
+
+- (void)tableView:(UITableView *)tableView accessoryButtonTappedForRowWithIndexPath:(NSIndexPath *)indexPath {
+    [self tableView:tableView didSelectRowAtIndexPath:indexPath];
+}
+
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+    UITableViewCell *cell = [tableView cellForRowAtIndexPath:indexPath];
+    [tableView deselectRowAtIndexPath:indexPath animated:YES];
+    if (indexPath.section == ISHToolbarKeysActionsSection) {
+        if (indexPath.row == 0)
+            [self _showAddKeyMenuFrom:cell];
+        else
+            [self _confirmResetFrom:cell];
+        return;
+    }
+    [self _showOptionsForKeyAt:indexPath from:cell];
+}
+
+- (void)_showOptionsForKeyAt:(NSIndexPath *)indexPath from:(UIView *)source {
+    NSDictionary *item = _groups[indexPath.section][indexPath.row];
+    BOOL narrow = [item[ISHToolbarKeyNarrow] boolValue];
+    UIAlertController *sheet =
+        [UIAlertController alertControllerWithTitle:[self _symbolForItem:item]
+                                            message:[self _nameForItem:item]
+                                     preferredStyle:UIAlertControllerStyleActionSheet];
+    if (item[ISHToolbarKeyBuiltin] == nil) {
+        [sheet addAction:[UIAlertAction actionWithTitle:@"Edit\u2026" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+            [self _editCustomKey:item completion:^(NSDictionary *edited) {
+                self->_groups[indexPath.section][indexPath.row] = edited;
+                [self _save];
+                [self.tableView reloadRowsAtIndexPaths:@[indexPath] withRowAnimation:UITableViewRowAnimationNone];
+            }];
+        }]];
+    }
+    NSString *toggle = narrow ? @"Hide on a Narrow Bar" : @"Show on a Narrow Bar";
+    [sheet addAction:[UIAlertAction actionWithTitle:toggle style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        NSMutableDictionary *changed = [item mutableCopy];
+        changed[ISHToolbarKeyNarrow] = @(!narrow);
+        self->_groups[indexPath.section][indexPath.row] = changed;
+        [self _save];
+        [self.tableView reloadRowsAtIndexPaths:@[indexPath] withRowAnimation:UITableViewRowAnimationNone];
+    }]];
+    [sheet addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    [self anchorPopoverForAlertController:sheet toSource:source];
+    [self presentViewController:sheet animated:YES completion:nil];
+}
+
+// Built-in keys not on the bar, then a custom one. A key comes back to the place
+// it had by default: the left for Tab, Control, Escape and the arrows, the centre
+// for the rest and for custom keys.
+- (void)_showAddKeyMenuFrom:(UIView *)source {
+    NSMutableSet<NSString *> *present = [NSMutableSet set];
+    for (NSArray *group in _groups)
+        for (NSDictionary *item in group)
+            if (item[ISHToolbarKeyBuiltin] != nil)
+                [present addObject:item[ISHToolbarKeyBuiltin]];
+    NSSet *leftKeys = [NSSet setWithArray:@[@"tab", @"ctrl", @"esc", @"arrows"]];
+    UIAlertController *sheet = [UIAlertController alertControllerWithTitle:@"Add Key"
+                                                                   message:nil
+                                                            preferredStyle:UIAlertControllerStyleActionSheet];
+    for (NSString *key in ISHToolbarBuiltinKeyIDs()) {
+        if ([present containsObject:key])
+            continue;
+        NSString *title = [NSString stringWithFormat:@"%@  %@", ISHToolbarBuiltinKeySymbol(key), ISHToolbarBuiltinKeyName(key)];
+        [sheet addAction:[UIAlertAction actionWithTitle:title style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+            NSInteger section = [leftKeys containsObject:key] ? 0 : 1;
+            [self _appendItem:@{ISHToolbarKeyBuiltin: key, ISHToolbarKeyNarrow: @YES} toSection:section];
+        }]];
+    }
+    [sheet addAction:[UIAlertAction actionWithTitle:@"Custom Key\u2026" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        [self _editCustomKey:nil completion:^(NSDictionary *created) {
+            [self _appendItem:created toSection:1];
+        }];
+    }]];
+    [sheet addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    [self anchorPopoverForAlertController:sheet toSource:source];
+    [self presentViewController:sheet animated:YES completion:nil];
+}
+
+- (void)_appendItem:(NSDictionary *)item toSection:(NSInteger)section {
+    [_groups[section] addObject:item];
+    [self _save];
+    NSIndexPath *path = [NSIndexPath indexPathForRow:(NSInteger) _groups[section].count - 1 inSection:section];
+    [self.tableView insertRowsAtIndexPaths:@[path] withRowAnimation:UITableViewRowAnimationAutomatic];
+}
+
+- (void)_editCustomKey:(NSDictionary *)item completion:(void (^)(NSDictionary *))completion {
+    UIAlertController *alert =
+        [UIAlertController alertControllerWithTitle:item == nil ? @"Custom Key" : @"Edit Key"
+                                            message:@"What the key shows, and the text it types. "
+                                                    @"\\e Escape, \\t Tab, \\n Return, \\xHH a character."
+                                     preferredStyle:UIAlertControllerStyleAlert];
+    for (int i = 0; i < 2; i++) {
+        [alert addTextFieldWithConfigurationHandler:^(UITextField *field) {
+            field.autocapitalizationType = UITextAutocapitalizationTypeNone;
+            field.autocorrectionType = UITextAutocorrectionTypeNo;
+            field.spellCheckingType = UITextSpellCheckingTypeNo;
+            field.smartQuotesType = UITextSmartQuotesTypeNo;
+            field.smartDashesType = UITextSmartDashesTypeNo;
+            field.clearButtonMode = UITextFieldViewModeWhileEditing;
+            if (i == 0) {
+                field.placeholder = @"Shows, e.g. ~";
+                field.text = item[ISHToolbarKeyTitle];
+                field.accessibilityLabel = @"What the key shows";
+            } else {
+                field.placeholder = @"Types, e.g. ls -la\\n";
+                field.text = item[ISHToolbarKeySends];
+                field.accessibilityLabel = @"What the key types";
+            }
+        }];
+    }
+    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Save" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        NSString *title = [alert.textFields[0].text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
+        NSString *sends = alert.textFields[1].text ?: @"";
+        if (title.length == 0 || sends.length == 0)
+            return;   // nothing to show or nothing to type: not a key
+        completion(@{ISHToolbarKeyTitle: title, ISHToolbarKeySends: sends,
+                     ISHToolbarKeyNarrow: item[ISHToolbarKeyNarrow] ?: @YES});
+    }]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)_confirmResetFrom:(UIView *)source {
+    UIAlertController *alert =
+        [UIAlertController alertControllerWithTitle:@"Reset the Toolbar?"
+                                            message:@"Tab, Control, Escape and the arrows at the left, and - . / : ! | "
+                                                    @"in the center, as the toolbar came. Custom keys are removed."
+                                     preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Reset" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
+        UserPreferences.shared.toolbarKeys = nil;
+        [self _load];
+        [self.tableView reloadData];
+    }]];
+    [self presentViewController:alert animated:YES completion:nil];
 }
 
 @end

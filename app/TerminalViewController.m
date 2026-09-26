@@ -34,6 +34,7 @@ static os_log_t ISHSuspendLog(void) {
 #import "Snippets.h"
 #import "SceneDelegate.h"
 #import <GameController/GameController.h>
+#import <objc/runtime.h>
 #include "kernel/init.h"
 #include "kernel/task.h"
 #include "kernel/calls.h"
@@ -249,6 +250,16 @@ static NSArray<NSString *> *ISHSessionCommandWithFallback(NSArray<NSString *> *c
 @property (strong, nonatomic) BarButton *colonKey;
 @property (strong, nonatomic) BarButton *bangKey;
 @property (strong, nonatomic) BarButton *pipeKey;
+// The accessory bar's keys (#609): the built-in ones by id, kept here because
+// they are off the bar whenever the list leaves them out; what is on it now, in
+// order, with whether each is shown on a narrow bar; the custom ones; and the
+// two spacers the centre keys sit between.
+@property (strong, nonatomic) NSDictionary<NSString *, UIView *> *toolbarBuiltinKeys;
+@property (strong, nonatomic) NSArray<UIView *> *toolbarPlacedKeys;
+@property (strong, nonatomic) NSArray<NSNumber *> *toolbarPlacedKeyShownWhenNarrow;
+@property (strong, nonatomic) NSArray<BarButton *> *toolbarCustomKeys;
+@property (strong, nonatomic) UIView *toolbarLeftSpacer;
+@property (strong, nonatomic) UIView *toolbarRightSpacer;
 @property (weak, nonatomic) IBOutlet UIButton *pasteButton;
 @property (weak, nonatomic) IBOutlet UIButton *hideKeyboardButton;
 @property (strong, nonatomic) UIButton *floatingWorkspaceButton;
@@ -1479,17 +1490,27 @@ static UIButton *ISHBarButtonWithAction(UIView *root, SEL action) {
         [self showSnippets:gesture];
 }
 
-// Up to six extra keys centered on the accessory bar -- characters a shell user
-// reaches for constantly. '.' and '/' (./  ../  /usr  *.c) are always present and
-// straddle the bar's horizontal center; '-', ':', '!' and '|' (command flags,
-// host:path, history !!/!$, pipelines) flank them but only when there's room -- hidden
-// on an iPhone in portrait, where the bar is already full, and shown in landscape and on iPad.
-// Flexible space on either side keeps the left keys and right controls on their own
-// edges. Present on both the plain and Workspace bars.
+// The keys on the accessory bar (#609): an ordered list the user arranges in
+// Settings -> Keyboard Toolbar, in two places. The LEFT keys run from the bar's
+// left edge; the CENTRE keys sit between two equal flexible spaces, so they are
+// centred whatever else is on the bar. The app's own controls keep the
+// right-hand end and are not part of the list. Nobody who never opens the
+// screen sees a change: the default list is the bar as it always was -- Tab,
+// Control, Escape and the arrows at the left, and - . / : ! | in the centre,
+// characters a shell user reaches for constantly (./  ../  flags  host:path
+// !! pipelines), of which only . and / fit an iPhone held upright.
+//
+// The storyboard's four keys are taken out of the stack once and kept here:
+// their outlets are weak, and the Control key's state is read by the terminal
+// view whether or not it is on the bar. The bar's one absolute key width lived
+// on the Tab key, with every other key and control tied to it through the
+// Settings button; it moves to the Settings button, which never leaves, so any
+// key can. Keys are tied to that width just below required, so a key hidden on
+// a narrow bar collapses without a conflict.
 - (void)_installCenterKeys {
     // The storyboard bar has a single flexible spacer (a plain, childless UIView)
-    // between the left keys and the right controls; reuse it as the left spacer and
-    // add a matching one to the right of the new keys.
+    // between the left keys and the right controls; it becomes the left spacer,
+    // and a matching one goes to the right of the centre keys.
     UIView *leftSpacer = nil;
     for (UIView *view in self.bar.arrangedSubviews) {
         if ([view isMemberOfClass:UIView.class] && view.subviews.count == 0) {
@@ -1497,7 +1518,7 @@ static UIButton *ISHBarButtonWithAction(UIView *root, SEL action) {
             break;
         }
     }
-    if (leftSpacer == nil)
+    if (leftSpacer == nil || self.infoButton == nil)
         return;
 
     self.dashKey = [self _makeCenterKeyWithTitle:@"-" action:@selector(pressDash:)];
@@ -1519,19 +1540,41 @@ static UIButton *ISHBarButtonWithAction(UIView *root, SEL action) {
     self.pipeKey.accessibilityLabel = @"Vertical bar";
     self.pipeKey.accessibilityHint = @"Sends a vertical bar.";
 
+    NSMutableDictionary<NSString *, UIView *> *builtins = [NSMutableDictionary dictionary];
+    if (self.tabKey != nil) builtins[@"tab"] = self.tabKey;
+    if (self.controlKey != nil) builtins[@"ctrl"] = self.controlKey;
+    if (self.escapeKey != nil) builtins[@"esc"] = self.escapeKey;
+    if (self.arrowKey != nil) builtins[@"arrows"] = self.arrowKey;
+    builtins[@"dash"] = self.dashKey;
+    builtins[@"dot"] = self.dotKey;
+    builtins[@"slash"] = self.slashKey;
+    builtins[@"colon"] = self.colonKey;
+    builtins[@"bang"] = self.bangKey;
+    builtins[@"pipe"] = self.pipeKey;
+    self.toolbarBuiltinKeys = builtins;
+
+    // The absolute width, off the Tab key and onto the Settings button.
+    // -resizeBar keeps it to what fits, so it never has to give.
+    if (self.barButtonWidth != nil) {
+        NSLayoutConstraint *width =
+            [self.infoButton.widthAnchor constraintEqualToConstant:self.barButtonWidth.constant];
+        self.barButtonWidth.active = NO;
+        width.active = YES;
+        self.barButtonWidth = width;
+    }
+    // Out of the stack, and so out of their storyboard width constraints.
+    for (UIView *key in builtins.allValues) {
+        if (key.superview == self.bar)
+            [self.bar removeArrangedSubview:key];
+        [key removeFromSuperview];
+    }
+
     UIView *rightSpacer = [[UIView alloc] init];
     rightSpacer.translatesAutoresizingMaskIntoConstraints = NO;
-
-    // Order across the center: dash dot slash colon bang pipe, with the dot/slash gap
-    // pinned to the bar center below.
     NSUInteger spacerIndex = [self.bar.arrangedSubviews indexOfObject:leftSpacer];
-    [self.bar insertArrangedSubview:self.dashKey atIndex:spacerIndex + 1];
-    [self.bar insertArrangedSubview:self.dotKey atIndex:spacerIndex + 2];
-    [self.bar insertArrangedSubview:self.slashKey atIndex:spacerIndex + 3];
-    [self.bar insertArrangedSubview:self.colonKey atIndex:spacerIndex + 4];
-    [self.bar insertArrangedSubview:self.bangKey atIndex:spacerIndex + 5];
-    [self.bar insertArrangedSubview:self.pipeKey atIndex:spacerIndex + 6];
-    [self.bar insertArrangedSubview:rightSpacer atIndex:spacerIndex + 7];
+    [self.bar insertArrangedSubview:rightSpacer atIndex:spacerIndex + 1];
+    self.toolbarLeftSpacer = leftSpacer;
+    self.toolbarRightSpacer = rightSpacer;
 
     // Both spacers yield their width freely so the keys can reach the center; the
     // >= 0 floor keeps a very narrow bar from forcing them (and the keys) to overlap.
@@ -1551,37 +1594,93 @@ static UIButton *ISHBarButtonWithAction(UIView *root, SEL action) {
     center.priority = UILayoutPriorityRequired - 1;
     center.active = YES;
 
-    [self.dotKey.widthAnchor constraintEqualToAnchor:self.infoButton.widthAnchor].active = YES;
-    [self.slashKey.widthAnchor constraintEqualToAnchor:self.infoButton.widthAnchor].active = YES;
-    // '-', ':', '!' and '|' match the other keys' width, but just-breakable so
-    // UIStackView can collapse them to zero width when hidden (portrait iPhone)
-    // without a conflict.
-    NSLayoutConstraint *dashWidth = [self.dashKey.widthAnchor constraintEqualToAnchor:self.infoButton.widthAnchor];
-    NSLayoutConstraint *colonWidth = [self.colonKey.widthAnchor constraintEqualToAnchor:self.infoButton.widthAnchor];
-    NSLayoutConstraint *bangWidth = [self.bangKey.widthAnchor constraintEqualToAnchor:self.infoButton.widthAnchor];
-    NSLayoutConstraint *pipeWidth = [self.pipeKey.widthAnchor constraintEqualToAnchor:self.infoButton.widthAnchor];
-    dashWidth.priority = UILayoutPriorityRequired - 1;
-    colonWidth.priority = UILayoutPriorityRequired - 1;
-    bangWidth.priority = UILayoutPriorityRequired - 1;
-    pipeWidth.priority = UILayoutPriorityRequired - 1;
-    dashWidth.active = YES;
-    colonWidth.active = YES;
-    bangWidth.active = YES;
-    pipeWidth.active = YES;
-
-    [self _updateCenterKeyVisibility];
+    [self _applyToolbarKeys];
+    [UserPreferences.shared observe:@[@"toolbarKeys"] options:0 owner:self usingBlock:^(typeof(self) self) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self _applyToolbarKeys];
+        });
+    }];
 }
 
-// '-', ':', '!' and '|' only appear when the accessory bar has room: hidden on an iPhone in
-// portrait (regular height, compact width), shown in landscape and on iPad. A hidden
-// UIStackView arranged subview is collapsed, so '.' and '/' stay centered either way.
+static const void *ISHToolbarCustomKeySendsKey = &ISHToolbarCustomKeySendsKey;
+
+- (BarButton *)_makeCustomToolbarKey:(NSDictionary *)item {
+    NSString *title = item[ISHToolbarKeyTitle];
+    BarButton *button = [self _makeCenterKeyWithTitle:title action:@selector(pressCustomKey:)];
+    if (title.length > 2)
+        button.titleLabel.font = [UIFont systemFontOfSize:14];
+    button.titleLabel.adjustsFontSizeToFitWidth = YES;
+    button.titleLabel.minimumScaleFactor = 0.5;
+    button.keyAppearance = UserPreferences.shared.keyboardAppearance;
+    button.accessibilityLabel = title;
+    button.accessibilityHint = @"A custom key. Types the text set for it in Keyboard Toolbar settings.";
+    objc_setAssociatedObject(button, ISHToolbarCustomKeySendsKey,
+                             ISHToolbarKeyDecodeSends(item[ISHToolbarKeySends]),
+                             OBJC_ASSOCIATION_COPY_NONATOMIC);
+    return button;
+}
+
+- (IBAction)pressCustomKey:(UIButton *)sender {
+    NSString *text = objc_getAssociatedObject(sender, ISHToolbarCustomKeySendsKey);
+    if (text.length > 0)
+        [self pressKey:text];
+}
+
+// Lays the keys out as the saved list says: every key off the bar, then each
+// group's in order, left keys ahead of the left spacer and centre keys between
+// the spacers. The controls after the right spacer are not touched.
+- (void)_applyToolbarKeys {
+    if (self.toolbarLeftSpacer == nil || self.toolbarRightSpacer == nil)
+        return;
+    for (UIView *key in self.toolbarPlacedKeys) {
+        [self.bar removeArrangedSubview:key];
+        [key removeFromSuperview];
+    }
+    NSDictionary<NSString *, NSArray *> *layout = ISHToolbarKeysCurrentLayout();
+    NSMutableArray<UIView *> *placed = [NSMutableArray array];
+    NSMutableArray<NSNumber *> *narrow = [NSMutableArray array];
+    NSMutableArray<BarButton *> *custom = [NSMutableArray array];
+    for (NSString *group in @[ISHToolbarKeyGroupLeft, ISHToolbarKeyGroupCenter]) {
+        BOOL left = [group isEqualToString:ISHToolbarKeyGroupLeft];
+        NSUInteger index = left ? 0
+            : [self.bar.arrangedSubviews indexOfObject:self.toolbarLeftSpacer] + 1;
+        for (NSDictionary *item in layout[group]) {
+            UIView *key;
+            NSString *builtin = item[ISHToolbarKeyBuiltin];
+            if (builtin != nil) {
+                key = self.toolbarBuiltinKeys[builtin];
+            } else {
+                key = [self _makeCustomToolbarKey:item];
+                [custom addObject:(BarButton *) key];
+            }
+            if (key == nil)
+                continue;
+            key.hidden = NO;
+            [self.bar insertArrangedSubview:key atIndex:index++];
+            NSLayoutConstraint *width = [key.widthAnchor constraintEqualToAnchor:self.infoButton.widthAnchor];
+            width.priority = UILayoutPriorityRequired - 1;
+            width.active = YES;
+            [placed addObject:key];
+            [narrow addObject:@([item[ISHToolbarKeyNarrow] boolValue])];
+        }
+    }
+    self.toolbarPlacedKeys = placed;
+    self.toolbarPlacedKeyShownWhenNarrow = narrow;
+    self.toolbarCustomKeys = custom;
+    [self _updateCenterKeyVisibility];
+    [self.barView setNeedsLayout];   // the key width follows the count (-resizeBar)
+}
+
+// A key the list marks as not shown on a narrow bar -- an iPhone held upright,
+// regular height and compact width -- is hidden there; a hidden stack view
+// member collapses, so the centre keys stay centred either way.
 - (void)_updateCenterKeyVisibility {
     BOOL phonePortrait = UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPhone &&
         self.traitCollection.verticalSizeClass == UIUserInterfaceSizeClassRegular;
-    self.dashKey.hidden = phonePortrait;
-    self.colonKey.hidden = phonePortrait;
-    self.bangKey.hidden = phonePortrait;
-    self.pipeKey.hidden = phonePortrait;
+    [self.toolbarPlacedKeys enumerateObjectsUsingBlock:^(UIView *key, NSUInteger i, BOOL *stop) {
+        key.hidden = phonePortrait && ![self.toolbarPlacedKeyShownWhenNarrow[i] boolValue];
+    }];
+    [self.barView setNeedsLayout];
 }
 
 - (void)_installTerminalSwitcherGestureOnView:(UIView *)view {
@@ -2204,6 +2303,8 @@ static const NSInteger kMaxConsecutiveQuickSessionExits = 3;
         self.colonKey.keyAppearance = keyAppearance;
         self.bangKey.keyAppearance = keyAppearance;
         self.pipeKey.keyAppearance = keyAppearance;
+        for (BarButton *button in self.toolbarCustomKeys)
+            button.keyAppearance = keyAppearance;
         UIColor *tintColor = keyAppearance == UIKeyboardAppearanceLight ? UIColor.blackColor : UIColor.whiteColor;
         // Give the in-bar control buttons a key-like background so they stay visible on any terminal
         // theme. Without it they are bare glyphs that vanish on a dark terminal (they only showed in
@@ -2749,6 +2850,28 @@ static const NSInteger kMaxConsecutiveQuickSessionExits = 3;
     // best redundant and at worst reentrant.
 }
 
+// The width every key and control can have and still fit: an iPhone asks for 32
+// points, and the bar as it comes -- eleven buttons and thirteen gaps -- does not
+// fit a 402-point iPhone at that. It used to come out right only because the
+// layout was over-constrained and UIKit happened to break the one absolute width,
+// narrowing everything together; with the keys a list the user can lengthen
+// (#609), that is asked for directly instead. Spacers count as gaps, not buttons.
+- (CGFloat)_barButtonWidthFitting:(CGFloat)wanted horizontalPadding:(CGFloat)horizontal {
+    CGFloat available = self.barView.bounds.size.width - 2 * horizontal;
+    NSUInteger buttons = 0, visible = 0;
+    for (UIView *view in self.bar.arrangedSubviews) {
+        if (view.hidden)
+            continue;
+        visible++;
+        if (view != self.toolbarLeftSpacer && view != self.toolbarRightSpacer)
+            buttons++;
+    }
+    if (buttons == 0 || available <= 0)
+        return wanted;
+    CGFloat fit = floor((available - self.bar.spacing * (visible - 1)) / buttons);
+    return MAX(MIN(wanted, fit), 1);
+}
+
 - (void)setBarHorizontalPadding:(CGFloat)horizontal verticalPadding:(CGFloat)vertical buttonWidth:(CGFloat)buttonWidth {
     // Only touch constants that actually change: this runs from inside the bar's
     // layoutSubviews, and an unconditional write re-dirties layout every pass.
@@ -2760,6 +2883,7 @@ static const NSInteger kMaxConsecutiveQuickSessionExits = 3;
         self.barTop.constant = vertical;
     if (self.barBottom.constant != vertical)
         self.barBottom.constant = vertical;
+    buttonWidth = [self _barButtonWidthFitting:buttonWidth horizontalPadding:horizontal];
     if (self.barButtonWidth.constant != buttonWidth)
         self.barButtonWidth.constant = buttonWidth;
 }

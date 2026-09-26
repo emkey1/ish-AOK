@@ -151,6 +151,10 @@ extern NSString *const kThemeBackgroundColor;
 // us" an answerable question rather than a guess -- see +[ISHSnippetStore
 // syncWithGuest:].
 @property (nonatomic) NSString *snippetsSyncedDigest;
+// The keys on the extra-keys toolbar above the on-screen keyboard (#609), as
+// the user arranged them; nil when they never have, which is the built-in
+// layout -- see ISHToolbarKeysCurrentLayout, which is what everything reads.
+@property (nonatomic, nullable) NSDictionary<NSString *, NSArray *> *toolbarKeys;
 @property (nonatomic) NSString *llmActiveDestinationID;
 @property BOOL llmToolsEnabled;
 @property NSInteger llmToolTimeoutSeconds;
@@ -248,5 +252,38 @@ NSInteger ISHCompressedMemoryMaxForDevice(void);
 // provisioned/created by iSH itself. See +[AppDelegate defaultUserAccountName], which looks up
 // the actual account name (or returns nil if none exists) at each use.
 extern const int ISHDefaultUserAccountUID;
+
+// ---- The extra-keys toolbar's keys (#609) ------------------------------
+//
+// A layout is two ordered lists, one per place on the bar: ISHToolbarKeyGroupLeft
+// runs from the bar's left edge, ISHToolbarKeyGroupCenter is centred between two
+// equal flexible spaces. The app's own controls (Settings, Files, Paste, Hide
+// Keyboard and the rest) keep the right-hand end and are not part of it.
+//
+// Each key is a dictionary: a built-in one names itself with ISHToolbarKeyBuiltin
+// (see ISHToolbarBuiltinKeyIDs); a custom one has ISHToolbarKeyTitle, what the
+// key shows, and ISHToolbarKeySends, the text it types in the escaped form
+// ISHToolbarKeyDecodeSends reads. ISHToolbarKeyNarrow (BOOL, default YES) is
+// whether it is shown on a narrow bar, an iPhone held upright.
+extern NSString *const ISHToolbarKeyGroupLeft;
+extern NSString *const ISHToolbarKeyGroupCenter;
+extern NSString *const ISHToolbarKeyBuiltin;
+extern NSString *const ISHToolbarKeyTitle;
+extern NSString *const ISHToolbarKeySends;
+extern NSString *const ISHToolbarKeyNarrow;
+// Today's bar, exactly: Tab, Control, Escape and the arrows at the left; - . / :
+// ! | centred, with only . and / on a narrow bar.
+NSDictionary<NSString *, NSArray *> *ISHToolbarKeysDefaultLayout(void);
+// `layout` made safe to build from: unknown or repeated built-ins and custom keys
+// with nothing to show or send are dropped. nil gives the default layout.
+NSDictionary<NSString *, NSArray *> *ISHToolbarKeysValidatedLayout(NSDictionary * _Nullable layout);
+// The saved layout, validated, or the default.
+NSDictionary<NSString *, NSArray *> *ISHToolbarKeysCurrentLayout(void);
+NSArray<NSString *> *ISHToolbarBuiltinKeyIDs(void);
+NSString *ISHToolbarBuiltinKeyName(NSString *key);   // "Tab"
+NSString *ISHToolbarBuiltinKeySymbol(NSString *key); // "⇥"
+// A custom key's text as typed: \e Escape, \t Tab, \n Return, \r, \\ and
+// \xHH for any byte up to 7F; anything else stands for itself.
+NSString *ISHToolbarKeyDecodeSends(NSString *sends);
 
 NS_ASSUME_NONNULL_END

@@ -479,6 +479,10 @@ can lose their session is one they opt into.
 
 **Keyboard toolbar customization, [#609](https://github.com/emkey1/ish-AOK/issues/609) -- a user request (2026-09-24).** In their
 words: "reorganizing and adding/removing custom toolbar buttons."
+**Done for 557 (2026-09-26):** Settings → Keyboard Toolbar; the user's guide is
+`opt/AOK/docs/keyboard-toolbar.md`. The app's own controls at the right-hand
+end stayed fixed, deliberately, so Settings cannot be arranged off its own bar.
+What follows is the plan as written.
 
 Today the extra-keys bar above the on-screen keyboard is fixed:
 - `Terminal.storyboard` lays out most of it: the `barButtons` outlet

@@ -68,6 +68,23 @@
                                             <segue destination="Zzy-IN-laJ" kind="show" id="3W3-8y-gVF"/>
                                         </connections>
                                     </tableViewCell>
+                                    <tableViewCell clipsSubviews="YES" contentMode="scaleToFill" preservesSuperviewLayoutMargins="YES" selectionStyle="default" accessoryType="disclosureIndicator" indentationWidth="10" textLabel="kTb-Lb-L01" style="IBUITableViewCellStyleDefault" id="kTb-Ce-L01" userLabel="Keyboard Toolbar">
+                                        <rect key="frame" x="0.0" y="105" width="320" height="43.5"/>
+                                        <autoresizingMask key="autoresizingMask"/>
+                                        <tableViewCellContentView key="contentView" opaque="NO" clipsSubviews="YES" multipleTouchEnabled="YES" contentMode="center" preservesSuperviewLayoutMargins="YES" insetsLayoutMarginsFromSafeArea="NO" tableViewCell="kTb-Ce-L01" id="kTb-Cv-L01">
+                                            <rect key="frame" x="0.0" y="0.0" width="293.5" height="43.5"/>
+                                            <autoresizingMask key="autoresizingMask"/>
+                                            <subviews>
+                                                <label opaque="NO" multipleTouchEnabled="YES" contentMode="left" insetsLayoutMarginsFromSafeArea="NO" text="Keyboard Toolbar" textAlignment="natural" lineBreakMode="tailTruncation" baselineAdjustment="alignBaselines" adjustsFontSizeToFit="NO" id="kTb-Lb-L01">
+                                                    <rect key="frame" x="16" y="0.0" width="269.5" height="43.5"/>
+                                                    <autoresizingMask key="autoresizingMask"/>
+                                                    <fontDescription key="fontDescription" type="system" pointSize="17"/>
+                                                    <nil key="textColor"/>
+                                                    <nil key="highlightedColor"/>
+                                                </label>
+                                            </subviews>
+                                        </tableViewCellContentView>
+                                    </tableViewCell>
                                     <tableViewCell clipsSubviews="YES" contentMode="scaleToFill" preservesSuperviewLayoutMargins="YES" selectionStyle="default" accessoryType="disclosureIndicator" indentationWidth="10" textLabel="6Qv-kp-ISr" style="IBUITableViewCellStyleDefault" id="LVQ-SX-dAA" userLabel="Caps Lock">
                                         <rect key="frame" x="0.0" y="105" width="320" height="43.5"/>
                                         <autoresizingMask key="autoresizingMask"/>
@@ -505,6 +522,7 @@
                     </navigationItem>
                         <connections>
                             <outlet property="bootCommandField" destination="bKw-tV-nX1" id="MVz-gk-QE7"/>
+                            <outlet property="keyboardToolbarCell" destination="kTb-Ce-L01" id="kTb-Ou-L01"/>
                             <outlet property="capsLockMappingCell" destination="31N-0g-RhF" id="UjF-21-3df"/>
                             <outlet property="customDnsCell" destination="dnS-Cd-Cel" id="dnS-Ot-Cel"/>
                             <outlet property="diagnosticsCell" destination="QYd-Ux-B9j" id="R7m-cB-CVC"/>
