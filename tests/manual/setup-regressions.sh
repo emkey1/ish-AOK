@@ -1011,7 +1011,7 @@ fi
 # a clean run. Re-invoke them under passwordless sudo instead. Where sudo is
 # absent or wants a password we fall through to the plain invocation and the
 # test's own guard skips it, which is exactly the old behaviour.
-needs_root_tests=" at_empty_path ambient_caps chroot_dotdot chroot_getcwd file_perms fsopen_move_mount fuse_basic fuse_threaded_daemon inotify_bind_alias mount_bind_getpath mount_bind_busy mount_bind_id mount_bind_rbind mount_fake_long_source mount_flags mount_lazy_detached exec_link_by_fd exec_fd_pathless tmpfs_accmode netlink_audit oom_score_adj realfs_long_name sysfs_dev_ns uts_namespace setns_join file_caps_exec ipc_namespace futex_shared_mapping "
+needs_root_tests=" at_empty_path fs_ctime_updates ambient_caps chroot_dotdot chroot_getcwd file_perms fsopen_move_mount fuse_basic fuse_threaded_daemon inotify_bind_alias mount_bind_getpath mount_bind_busy mount_bind_id mount_bind_rbind mount_fake_long_source mount_flags mount_lazy_detached exec_link_by_fd exec_fd_pathless tmpfs_accmode netlink_audit oom_score_adj realfs_long_name sysfs_dev_ns uts_namespace setns_join file_caps_exec ipc_namespace futex_shared_mapping "
 
 cat >"$work_dir/run-regressions.sh" <<EOF
 #!/bin/sh

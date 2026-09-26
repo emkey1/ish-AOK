@@ -28,6 +28,7 @@
 // Oracle: Linux 6.12 (camd), ext4 and tmpfs, glibc x86_64 and -m32, as root.
 #define _GNU_SOURCE
 #include <errno.h>
+#include <stdbool.h>
 #include <fcntl.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -253,7 +254,16 @@ int main(int argc, char **argv) {
     if (find_realfs(real, sizeof(real))) {
         char real_dir[600];
         snprintf(real_dir, sizeof(real_dir), "%s/ctime.XXXXXX", real);
-        if (mkdtemp(real_dir) != NULL) {
+        bool made = mkdtemp(real_dir) != NULL;
+        if (made && access(real_dir, W_OK) != 0) {
+            // realfs reports the host's owner for every file, so a caller
+            // other than root is "other" even in a directory it just made,
+            // and cannot create anything in it. The suite re-runs this test
+            // as root (needs_root_tests), which covers realfs.
+            test_logf("realfs %s: not writable by uid %d, realfs checks skipped\n",
+                      real_dir, (int) geteuid());
+            rmdir(real_dir);
+        } else if (made) {
             run_ops("realfs", real_dir);
             rmdir(real_dir);
         } else {
