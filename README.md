@@ -513,6 +513,30 @@ If you use the `gh` CLI in a clone that has an `upstream` remote, pass
 `--repo emkey1/ish-AOK`. Without it `gh` resolves to `ish-app/ish` and will
 answer about upstream's workflows, releases and tags instead of this fork's.
 
+## Working with LLM Coding Agents
+
+This tree is developed heavily with LLM coding agents. If you forked this
+repo and are pointing an agent at it — Claude, or anything else — start it on
+[docs/llm_onboarding.md](docs/llm_onboarding.md). It exists specifically to
+shortcut the ramp-up into this tree's regression suite, its debugging tools
+(there is no debugger for guest code), and its `docs/TODO.md` collaboration
+workflow.
+
+Note that `.gitignore` deliberately excludes every tool-specific agent config
+file this project has seen (`CLAUDE.md`, `AGENTS.md`, `.claude/`, `.cursor/`,
+`.clinerules`, `.gemini/`, `.windsurfrules`, `opencode.json`...) — those are
+treated as personal, per-checkout tooling preference, the same bucket as
+`.vscode/` or `.prettierrc`, not shared repo content. `docs/llm_onboarding.md`
+is the one committed, tool-agnostic entry point; if your tool wants its own
+pointer file, keep it local and have it reference that document rather than
+duplicating it.
+
+If you use Claude Code, anyone working here might want to enable
+[`CLAUDE.md.template`](CLAUDE.md.template) — copy it to `CLAUDE.md`
+(`cp CLAUDE.md.template CLAUDE.md`) to have Claude Code load a short version
+of the essentials automatically in every session, without it ever being
+tracked or committed.
+
 ## Acknowledgments
 
 The ARM64 guest work is motivated by, and in places adapted from,
