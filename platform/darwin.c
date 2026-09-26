@@ -222,34 +222,41 @@ struct uptime_info get_uptime(void) {
     return uptime;
 }
 
-// How many CPUs the guest has. ONE number, and every view of it reports it:
-// sched_getaffinity (nproc, Go's GOMAXPROCS, Rust's available_parallelism),
-// sysconf's _SC_NPROCESSORS_* (glibc reads /sys, musl the affinity mask),
-// /proc/cpuinfo, /proc/stat's cpuN lines, /proc/self/status's Cpus_allowed
-// and /sys/devices/system/cpu -- as they all agree on a Linux machine.
+// The guest's CPUs, in the shape Linux gives a process in a cpuset or under
+// taskset: every CPU is online -- /proc/cpuinfo, /proc/stat's cpuN lines,
+// /proc/interrupts and /sys/devices/system/cpu list them all -- and the
+// affinity mask names the ones it may run on -- sched_getaffinity (nproc, Go's
+// GOMAXPROCS, Rust's available_parallelism, musl's sysconf) and
+// /proc/<pid>/status's Cpus_allowed. glibc's sysconf reads /sys, so on glibc
+// _SC_NPROCESSORS_ONLN is the online count, as it is there under taskset.
 //
-// On iOS that is fewer than the host has. Multi-threaded guest programs start
-// one thread per CPU they are told about, and under emulation that many busy
+// On iOS the mask is smaller than the machine. Multi-threaded guest programs
+// start one thread per CPU they may use, and under emulation that many busy
 // threads saturates every core, starving the app's UI and drowning the guest
 // in lock, futex and TLB-shootdown overhead (Go compiles faster with fewer).
-// So a third of the cores (at least one) are kept back. That used to apply to
-// sched_getaffinity alone, while /proc/cpuinfo, /proc/stat and /sys went on
-// reporting every core: nproc said 6 on a 9-core device whose cpuinfo listed
-// 9, top drew CPUs the scheduler said nothing could run on, and a program that
-// counted CPUs any other way than the affinity mask -- glibc's sysconf, Node's
-// os.cpus() -- sized itself to the whole machine anyway.
+// So a third of the cores (at least one) are left out of it.
 //
-// ISH_GUEST_CPU_COUNT=N overrides all of it. ISH_GUEST_CPU_RESERVE=1 applies
-// the iOS reservation on the Mac as well, so the CLI reaches the count a
-// device reports (tests/manual/cpu_count_agree).
+// History: 555 had this shape. 096531e8 (in 556's cycle) took a report of
+// "nproc 6, /proc/cpuinfo 9" for a bug and cut every view to the reduced
+// count, so a 9-core M4 iPad listed 6 CPUs and three real cores disappeared;
+// caught on the device before 556 shipped, and put back.
+//
+// ISH_GUEST_CPU_COUNT=N sets both counts to N, with nothing reserved.
+// ISH_GUEST_CPU_RESERVE=1 applies the iOS reservation on the Mac as well, so
+// the CLI reaches the shape a device reports (tests/manual/cpu_count_agree).
+static int cpu_count_forced(void) {
+    const char *override = getenv("ISH_GUEST_CPU_COUNT");
+    long forced = override != NULL && override[0] != '\0' ? strtol(override, NULL, 10) : 0;
+    return forced > 0 ? (int) forced : 0;
+}
+
 int get_cpu_count(void) {
+    int forced = cpu_count_forced();
+    if (forced > 0)
+        return forced;
     int ncpu = 1;
     size_t size = sizeof(int);
     sysctlbyname("hw.ncpu", &ncpu, &size, NULL, 0);
-    const char *override = getenv("ISH_GUEST_CPU_COUNT");
-    long forced = override != NULL && override[0] != '\0' ? strtol(override, NULL, 10) : 0;
-    if (forced > 0)
-        return (int) forced;
 #if TARGET_OS_OSX && defined(__aarch64__)
     // Standalone CLI / macOS dev harness: default to 4 emulated CPUs so local
     // and fakefs repro runs reproduce the concurrency -- and the TLB/COW/futex/
@@ -260,6 +267,15 @@ int get_cpu_count(void) {
     // ISH_GUEST_CPU_COUNT=N (e.g. =6 to match a device, =1 to force serial).
     ncpu = 4;
 #endif
+    if (ncpu < 1)
+        ncpu = 1;
+    return ncpu;
+}
+
+int get_cpu_count_allowed(void) {
+    int ncpu = get_cpu_count();
+    if (cpu_count_forced() > 0)
+        return ncpu;
     if ((TARGET_OS_IPHONE || getenv("ISH_GUEST_CPU_RESERVE") != NULL) && ncpu > 2) {
         int reserve = ncpu / 3;
         if (reserve < 1)

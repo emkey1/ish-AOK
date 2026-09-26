@@ -18,8 +18,12 @@ Overrides the CPU count iSH-AOK reports to the guest — `/proc/cpuinfo` and
 On iOS, and only on a device with more than two cores, iSH-AOK reserves roughly
 a third of them (at least one) back from the scheduler-sizing queries `nproc`
 and `sched_getaffinity`, so that `make -j$(nproc)` and programs that size
-themselves from the affinity mask leave the app some headroom; `/proc/cpuinfo`
-still shows every core. The standalone CLI on Apple silicon does **not** do
+themselves from the affinity mask leave the app some headroom. Every core is
+still online: `/proc/cpuinfo`, `/proc/stat` and `/sys/devices/system/cpu` list
+all of them, and the affinity mask and `Cpus_allowed` name the ones a program
+may run on, the way Linux looks under a cpuset or `taskset` (so glibc's
+`sysconf(_SC_NPROCESSORS_ONLN)` counts every core, as it does there). On a
+9-core M4 iPad that is 9 CPUs listed and `nproc` 6. The standalone CLI on Apple silicon does **not** do
 that — with no override it runs a fixed 4 emulated CPUs regardless of the host's
 core count. Set `ISH_GUEST_CPU_COUNT` to override either:
 

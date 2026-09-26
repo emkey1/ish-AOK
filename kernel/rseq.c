@@ -60,11 +60,10 @@ struct rseq_cs_ {
     qword_t abort_ip;
 };
 
-// How many CPUs a thread can be on: the guest's CPU count, which
-// sched_getaffinity, sysconf(_SC_NPROCESSORS_*), /proc and /sys all report
-// (get_cpu_count). Capped by the slot mask.
+// How many CPUs a thread can be on: its affinity mask, 0..N-1
+// (get_cpu_count_allowed). Capped by the slot mask.
 static int rseq_ncpus(void) {
-    int n = get_cpu_count();
+    int n = get_cpu_count_allowed();
     if (n < 1)
         n = 1;
     if (n > 64)

@@ -717,7 +717,7 @@ static int proc_show_loadavg(struct proc_entry *UNUSED(entry), struct proc_data 
     int blocked_task_count = get_count_of_blocked_tasks();
     int alive_task_count = get_count_of_alive_tasks();
     // running_task_count is calculated abool proc_net_readdir(struct proc_entry * UNUSED(entry), unsigned long *index, struct proc_entry *next_entry) pproximetly, since we don't know the real number of currently running tasks.
-    int running_task_count = MIN(get_cpu_count(), (int)(alive_task_count - blocked_task_count));
+    int running_task_count = MIN(get_cpu_count_allowed(), (int)(alive_task_count - blocked_task_count));
     proc_printf(buf, "%.2f %.2f %.2f %u/%u %u\n", load_1m, load_5m, load_15m, running_task_count, alive_task_count, last_pid_id);
     return 0;
 }

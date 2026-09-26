@@ -2491,7 +2491,7 @@ int nlibc_sysctlbyname(const char *name, void *old, size_t *oldlen,
         return -1;
     }
 
-    long value = get_cpu_count();
+    long value = get_cpu_count_allowed();
     if (old == NULL) {
         if (oldlen != NULL)
             *oldlen = sizeof(int);
@@ -3046,7 +3046,7 @@ long nlibc_sysconf(int name) {
             // asking disagreed. get_cpu_count is what sched_getaffinity uses
             // (kernel/resource.c) and is the one source of truth for how many
             // CPUs AOK is prepared to hand out.
-            return get_cpu_count();
+            return get_cpu_count_allowed();
         case _SC_PHYS_PAGES: {
             unsigned procs = 0;
             uint64_t ram = 0;

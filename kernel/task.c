@@ -985,7 +985,7 @@ void task_bank_cpu_time(struct task *task) {
     if (!task->cpu_time_banked) {
         uint64_t user_ns, system_ns;
         task_thread_cpu_time_ns(task, &user_ns, &system_ns);
-        int slot = task_cpu_slot(task, get_cpu_count());
+        int slot = task_cpu_slot(task, get_cpu_count_allowed());
         atomic_fetch_add(&cpu_slot_dead_user[slot], user_ns);
         atomic_fetch_add(&cpu_slot_dead_system[slot], system_ns);
         task->cpu_time_banked = true;
@@ -1021,7 +1021,7 @@ int get_emulated_per_cpu_usage(struct cpu_usage **cpus_usage) {
             continue;
         uint64_t user_ns, system_ns;
         task_thread_cpu_time_ns(task, &user_ns, &system_ns);
-        int slot = task_cpu_slot(task, ncpu);
+        int slot = task_cpu_slot(task, get_cpu_count_allowed());
         busy_user[slot] += user_ns;
         busy_system[slot] += system_ns;
     }

@@ -129,11 +129,14 @@ struct uptime_info {
 };
 struct uptime_info get_uptime(void);
 
-// How many CPUs the guest has: one number that sched_getaffinity, sysconf,
-// /proc/cpuinfo, /proc/stat and /sys/devices/system/cpu all report. On iOS it
-// is fewer than the host has, keeping cores back for the UI; see
+// The guest's CPUs, shaped like a Linux cpuset: get_cpu_count() is every CPU
+// that is online -- what /proc/cpuinfo, /proc/stat and /sys/devices/system/cpu
+// list -- and get_cpu_count_allowed() is how many of them a task may run on,
+// CPUs 0..N-1 -- what sched_getaffinity, Cpus_allowed and so nproc report. On
+// iOS the second is smaller, keeping cores back for the UI; see
 // platform/darwin.c.
 int get_cpu_count(void);
+int get_cpu_count_allowed(void);
 
 // True when the host process is close enough to its memory ceiling that guest
 // memory growth should be refused (guest mmap/brk/mremap return ENOMEM) so the

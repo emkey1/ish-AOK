@@ -1,27 +1,29 @@
-// Every way of asking how many CPUs there are gives the same answer.
+// The CPU counts are shaped like Linux's: the CPUs online, and the ones this
+// task may run on.
 //
-// Regression for a triage report: nproc said 6 on a device where /proc/cpuinfo
-// listed 9 processors. On iOS AOK kept a third of the cores back from
-// sched_getaffinity, so that the programs sizing a thread pool from it (Go's
-// GOMAXPROCS, `make -j$(nproc)`, OpenMP, Rust's available_parallelism) leave
-// the app's UI room to run -- but /proc/cpuinfo, /proc/stat and
-// /sys/devices/system/cpu reported every core, so a program counting CPUs any
-// other way (glibc's sysconf reads /sys/devices/system/cpu/online, Node's
-// os.cpus() reads /proc/cpuinfo) sized itself to all of them, and top showed
-// CPUs that sched_getaffinity said this process could not run on.
+// Every view of the ONLINE CPUs agrees: /sys/devices/system/cpu/online and the
+// cpuN directories beside it, the processors in /proc/cpuinfo and the cpuN
+// lines of /proc/stat. possible and present may name more (hotplug slots) but
+// never fewer. The affinity mask and /proc/self/status's Cpus_allowed_list
+// agree with each other and name only online CPUs, and may name fewer: a
+// cpuset or `taskset` does that on Linux, and AOK does it on iOS, keeping a
+// third of the cores back so that what sizes a thread pool from the mask (Go's
+// GOMAXPROCS, `make -j$(nproc)`, Rust's available_parallelism) leaves the
+// app's UI room to run. sysconf follows its libc: glibc answers
+// _SC_NPROCESSORS_ONLN from /sys (online) and _CONF from possible, musl
+// answers both from the mask.
 //
-// On an unrestricted Linux process they all agree (camd, 8 CPUs): the
-// affinity mask, /proc/self/status Cpus_allowed_list, sysconf
-// _SC_NPROCESSORS_ONLN and _CONF (musl answers both from the affinity mask,
-// glibc from /sys), /sys/devices/system/cpu/online and the cpuN directories
-// beside it, the processors in /proc/cpuinfo and the cpuN lines of /proc/stat.
-// possible and present may name more CPUs than are online on real hardware
-// (hotplug slots) but never fewer.
+// This test first asserted that every view gives ONE number, and 096531e8 (in
+// 556's cycle) made them do so by cutting all of them to the reduced count, so
+// a 9-core M4 iPad listed 6 processors in /proc/cpuinfo. Linux itself fails
+// that rule under `taskset`. The shape is checked here; the hardware count,
+// which a guest cannot know, was checked on the device (cpuinfo 9, nproc 6).
 //
-// The iOS reservation does not happen on the Mac, where every source already
-// agreed; ISH_GUEST_CPU_RESERVE=1 applies it there so this can see it fail.
+// ISH_GUEST_CPU_RESERVE=1 applies the iOS reservation on the Mac, so the CLI
+// has a mask smaller than what is online, as a device does.
 //
-// Oracle: Linux 6.12 (camd), glibc x86_64 and -m32.
+// Oracle: Linux 6.12 (camd), glibc x86_64 and -m32, as it is and under
+// `taskset -c 0-2`.
 #define _GNU_SOURCE
 #include <ctype.h>
 #include <dirent.h>
@@ -128,21 +130,38 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+    long allowed = status_allowed();
+    long online = file_list_count("/sys/devices/system/cpu/online");
+    test_logf("sched_getaffinity: %ld CPUs, Cpus_allowed_list %ld, online %ld\n",
+              affinity, allowed, online);
+    if (allowed != affinity) {
+        printf("FAIL: Cpus_allowed_list names %ld CPUs, sched_getaffinity %ld\n", allowed, affinity);
+        failures_total++;
+    }
+    if (online < affinity) {
+        printf("FAIL: %ld CPUs online, fewer than the %ld in the affinity mask\n", online, affinity);
+        failures_total++;
+    }
+    // Every CPU in the mask is online (online is "0-N" here, as on a machine
+    // without holes, so that is: below N).
+    for (int cpu = 0; cpu < CPU_SETSIZE; cpu++) {
+        if (CPU_ISSET(cpu, &set) && cpu >= online) {
+            printf("FAIL: the affinity mask names CPU %d, which is not online (%ld online)\n",
+                   cpu, online);
+            failures_total++;
+        }
+    }
+
     struct { const char *name; long n; } seen[] = {
-        {"/proc/self/status Cpus_allowed_list", status_allowed()},
-        {"sysconf(_SC_NPROCESSORS_ONLN)", sysconf(_SC_NPROCESSORS_ONLN)},
-        {"sysconf(_SC_NPROCESSORS_CONF)", sysconf(_SC_NPROCESSORS_CONF)},
-        {"/sys/devices/system/cpu/online", file_list_count("/sys/devices/system/cpu/online")},
         {"/sys/devices/system/cpu/cpuN directories", cpu_dirs()},
         {"/proc/cpuinfo processors", count_lines("/proc/cpuinfo", "processor", 0)},
         {"/proc/stat cpuN lines", count_lines("/proc/stat", "cpu", 1)},
     };
-    test_logf("sched_getaffinity: %ld CPUs\n", affinity);
     for (size_t i = 0; i < sizeof(seen) / sizeof(seen[0]); i++) {
         test_logf("%s: %ld\n", seen[i].name, seen[i].n);
-        if (seen[i].n != affinity) {
-            printf("FAIL: %s says %ld CPUs, sched_getaffinity %ld\n", seen[i].name, seen[i].n,
-                   affinity);
+        if (seen[i].n != online) {
+            printf("FAIL: %s says %ld CPUs, /sys/devices/system/cpu/online %ld\n",
+                   seen[i].name, seen[i].n, online);
             failures_total++;
         }
     }
@@ -150,10 +169,26 @@ int main(int argc, char **argv) {
     for (size_t i = 0; i < 2; i++) {
         long n = file_list_count(wider[i]);
         test_logf("%s: %ld\n", wider[i], n);
-        if (n < affinity) {
-            printf("FAIL: %s names %ld CPUs, fewer than the %ld online\n", wider[i], n, affinity);
+        if (n < online) {
+            printf("FAIL: %s names %ld CPUs, fewer than the %ld online\n", wider[i], n, online);
             failures_total++;
         }
     }
+
+    long onln = sysconf(_SC_NPROCESSORS_ONLN), conf = sysconf(_SC_NPROCESSORS_CONF);
+    test_logf("sysconf ONLN %ld, CONF %ld\n", onln, conf);
+#ifdef __GLIBC__
+    if (onln != online || conf < online) {
+        printf("FAIL: glibc sysconf ONLN %ld CONF %ld, want ONLN = %ld online and CONF >= it\n",
+               onln, conf, online);
+        failures_total++;
+    }
+#else
+    if (onln != affinity || conf != affinity) {
+        printf("FAIL: musl sysconf ONLN %ld CONF %ld, want both the mask's %ld\n",
+               onln, conf, affinity);
+        failures_total++;
+    }
+#endif
     return finish_suite(TEST_NAME);
 }

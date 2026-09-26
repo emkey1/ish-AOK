@@ -1146,7 +1146,8 @@ void task_thread_cpu_time_ns(struct task *task, uint64_t *user_ns, uint64_t *sys
 // exists to be queried. Sets task->cpu_time_banked.
 void task_bank_cpu_time(struct task *task);
 // Per-emulated-CPU usage for /proc/stat's cpuN lines: each task's real thread
-// CPU time charged to slot pid % ncpu (live tasks sampled, exited tasks from
+// CPU time charged to slot pid % get_cpu_count_allowed(), so the online CPUs
+// outside the affinity mask stay idle (live tasks sampled, exited tasks from
 // the banked totals), against the guest's uptime as each slot's capacity. No
 // field ever decreases between calls. Returns 0 and a malloc'd
 // get_cpu_count()-sized array, or _ENOMEM.

@@ -139,6 +139,11 @@ int get_cpu_count(void) {
     return forced > 0 ? (int) forced : get_nprocs();
 }
 
+// No reservation on a Linux host: every online CPU is allowed.
+int get_cpu_count_allowed(void) {
+    return get_cpu_count();
+}
+
 // ISH_GUEST_MEM_BUDGET_MB: treat this process as though it had that many MiB.
 // A Linux host imposes no such ceiling, so without the knob there is nothing to
 // report and host_mem_headroom_low() below stays false -- but with it, CI and a
