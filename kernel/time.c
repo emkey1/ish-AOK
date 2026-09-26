@@ -723,6 +723,24 @@ static int clock_gettime_host_backed(uint_t clock, struct timespec *ts) {
     if (clock_gettime(clock_id, ts) < 0)
         return errno_map();
     *ts = guest_clock_from_host(clock, *ts);
+#if defined(__APPLE__)
+    // Darwin's wall clock is whole microseconds -- clock_gettime,
+    // clock_gettime_nsec_np and mach_get_times alike -- while APFS stamps a
+    // file in nanoseconds. So a file written in the same microsecond as a
+    // later read was dated after it: on the Mac host, natively, 6969 of 20000
+    // write-then-read pairs, by up to 786 ns, and on the M4 iPad vdso_clock's
+    // "an mtime is never in the future" failed 17 of 300 times. Linux reads
+    // REALTIME in nanoseconds and stamps files from a coarse clock, so there a
+    // stamp is never ahead of a later read.
+    //
+    // Each read is reported at the END of its microsecond, which no stamp
+    // made within it can pass (0 of 20000 on the same host). Still whole
+    // microseconds apart and never decreasing; at most 999 ns ahead of the
+    // host and never behind it, so a REALTIME deadline the guest computes from
+    // it cannot come due early. gettimeofday reports the same microsecond.
+    if (clock_id == CLOCK_REALTIME)
+        ts->tv_nsec = ts->tv_nsec / 1000 * 1000 + 999;
+#endif
     return 0;
 }
 

@@ -274,6 +274,16 @@ vDSO changes on Linux: these reads are no longer system calls, so neither
 seccomp nor `strace` sees them. (musl's riscv64 port never looks the vDSO up, so
 there only glibc and Go use it.)
 
+That promise, a read never earlier than a file just stamped, needed one more
+step on Apple hosts. Darwin's wall clock only has whole microseconds, while APFS
+stamps files to the nanosecond, so a file written in the same microsecond as a
+later read came out dated after it. The M4 iPad's JIT is fast enough to land in
+one microsecond; the vDSO test's "an mtime is never in the future" check failed
+there 17 times in 300. So `clock_gettime_host_backed` reports each REALTIME
+read at the *end* of its microsecond. That is never behind the host's clock and
+never more than 999 ns ahead of it, so a deadline computed from it still cannot
+come due early.
+
 Each process gets its own copy, as it does of the `[sigpage]`. The i386 vDSO
 used to be one array mapped into every process, which any of them could
 `mprotect` writable and rewrite for all the others, root's included.
