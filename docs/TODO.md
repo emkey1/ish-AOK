@@ -173,25 +173,6 @@ boot and sshd. Implementing the `netatop` family is NOT the fix -- a guest
 that blocks forever on a family a real kernel also refuses is the bug.
 
 
-### SEEK_DATA/SEEK_HOLE is still EINVAL on tmpfs
-
-**[in progress: "Build 557" session, 2026-09-26]**
-
-Noticed while giving fusefs a real implementation, and **half fixed since**:
-`fs/real.c:819` now answers both for a realfs file, and `fs/fuse.c:1236` answers
-them for FUSE. **tmpfs does not.** `fs/tmp.c:1593` routes straight into
-`generic_seek` (fs/generic.c:1345), which answers `_EINVAL` for any whence that
-is not SET/CUR/END.
-
-Measured on Devuan for a 4096-byte file with no holes: `SEEK_DATA(1000)` is
-1000, `SEEK_HOLE(1000)` is 4096, a negative offset is `ENXIO`, and **both
-reposition the file offset** like any other whence. `EINVAL` tells a caller the
-interface does not exist at all, which is what the sparse-copy paths in `cp`,
-`tar` and `rsync` act on -- the same reasoning that made it worth fixing for the
-other two backends. The fix is the same shape: answer from the file's size, and
-set `fd->offset`. It is now the odd one out rather than one of a pair, which
-makes it a smaller job than the original entry described.
-
 ### FUSE has no attribute cache, and three absences follow from it
 
 Measured against Devuan (Linux 6.12) on 2026-09-01, when mmap, FUSE_FORGET and

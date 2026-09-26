@@ -961,9 +961,9 @@ off_t realfs_lseek(struct fd *fd, off_t offset, int whence) {
         struct stat st;
         if (fstat(fd->real_fd, &st) < 0)
             return errno_map();
-        if (offset < 0)
-            return _EINVAL;
-        if (offset >= st.st_size)
+        // Before the start is ENXIO too, not EINVAL (measured on Linux 6.12,
+        // ext4 and tmpfs): the offset is compared as unsigned.
+        if (offset < 0 || offset >= st.st_size)
             return _ENXIO;
         off_t res = whence == LSEEK_DATA ? offset : st.st_size;
         // And it is a seek: the position moves there, as it does on Linux.

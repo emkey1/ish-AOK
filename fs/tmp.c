@@ -1905,6 +1905,22 @@ static off_t_ tmpfs_lseek(struct fd *fd, off_t_ off, int whence) {
         return target;
     }
 
+    // tmpfs keeps a file as one buffer and has no record of holes, so it
+    // answers as realfs does (fs/real.c): a file with no holes -- DATA is the
+    // offset itself, the only HOLE is the one at EOF, and before the start or
+    // at and past EOF is ENXIO for both, as measured on Linux 6.12. And it is
+    // a seek: the offset moves there. generic_seek answered EINVAL, which told
+    // cp, tar and rsync the interface did not exist.
+    if (whence == LSEEK_DATA || whence == LSEEK_HOLE) {
+        lock(&inode->lock, 0);
+        off_t_ eof = (off_t_) inode->stat.size;
+        unlock(&inode->lock);
+        if (off < 0 || off >= eof)
+            return _ENXIO;
+        fd->offset = whence == LSEEK_DATA ? off : eof;
+        return fd->offset;
+    }
+
     qword_t size = 0;
     if (whence == LSEEK_END) {
         lock(&inode->lock, 0);

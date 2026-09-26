@@ -28,7 +28,10 @@
 //   SEEK_DATA and SEEK_HOLE were EINVAL. A filesystem is always allowed to
 //   report that a file has no holes, and that is now the answer; EINVAL told
 //   callers the interface did not exist, and the tools that copy sparsely
-//   (cp --sparse, tar, rsync) act on that.
+//   (cp --sparse, tar, rsync) act on that. Checked on the root filesystem and,
+//   as root, on a tmpfs, which went on answering EINVAL after the others were
+//   fixed. Both reposition the file offset, and an offset before the start is
+//   ENXIO like one at or past EOF (realfs said EINVAL).
 //
 //   memfd_create reported EFAULT for a name that was merely too long, sending
 //   the caller to look for a bad pointer it did not have.
@@ -40,6 +43,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <sys/mount.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <unistd.h>
@@ -81,6 +85,54 @@ static int mkfile(const char *name, int pages) {
             return -1;
         }
     return fd;
+}
+
+// SEEK_DATA and SEEK_HOLE on a two-page file with no holes in `dir`.
+static void seek_checks(const char *dir, const char *fs) {
+    char path[160], label[120];
+    snprintf(path, sizeof path, "%s/sk", dir);
+    int fd = open(path, O_RDWR | O_CREAT | O_TRUNC, 0644);
+    char buf[PS];
+    memset(buf, 'A', sizeof buf);
+    snprintf(label, sizeof label, "%s: stage a two-page file", fs);
+    ck(label, fd >= 0 && write(fd, buf, PS) == PS && write(fd, buf, PS) == PS ? 1 : 0, 1);
+    if (fd < 0)
+        return;
+#define L(text) (snprintf(label, sizeof label, "%s: %s", fs, text), label)
+    errno = 0;
+    ck(L("SEEK_DATA at 0 is 0"), (long) lseek(fd, 0, SEEK_DATA), 0);
+    errno = 0;
+    // A fully-allocated file's only hole is the implicit one at EOF.
+    ck(L("SEEK_HOLE at 0 is EOF"), (long) lseek(fd, 0, SEEK_HOLE), 2 * PS);
+    ck(L("  and the offset is there"), (long) lseek(fd, 0, SEEK_CUR), 2 * PS);
+    errno = 0;
+    ck(L("SEEK_DATA in the middle is where you are"), (long) lseek(fd, PS + 100, SEEK_DATA),
+       PS + 100);
+    ck(L("  and the offset is there"), (long) lseek(fd, 0, SEEK_CUR), PS + 100);
+    // Past EOF is ENXIO for both -- there is no more data and no more file to
+    // hold a hole -- and so is before the start.
+    errno = 0;
+    ck(L("SEEK_DATA past EOF is ENXIO"), lseek(fd, 4 * PS, SEEK_DATA) < 0 ? errno : 0, ENXIO);
+    errno = 0;
+    ck(L("SEEK_HOLE past EOF is ENXIO"), lseek(fd, 4 * PS, SEEK_HOLE) < 0 ? errno : 0, ENXIO);
+    errno = 0;
+    ck(L("SEEK_HOLE at EOF is ENXIO"), lseek(fd, 2 * PS, SEEK_HOLE) < 0 ? errno : 0, ENXIO);
+    errno = 0;
+    ck(L("SEEK_DATA before the start is ENXIO"), lseek(fd, -1, SEEK_DATA) < 0 ? errno : 0, ENXIO);
+    errno = 0;
+    ck(L("SEEK_HOLE before the start is ENXIO"), lseek(fd, -1, SEEK_HOLE) < 0 ? errno : 0, ENXIO);
+    // ...and ordinary seeking is untouched.
+    ck(L("SEEK_SET still works"), (long) lseek(fd, PS, SEEK_SET), PS);
+    ck(L("SEEK_END still works"), (long) lseek(fd, 0, SEEK_END), 2 * PS);
+    // An empty file has neither.
+    ck(L("truncate to empty"), ftruncate(fd, 0), 0);
+    errno = 0;
+    ck(L("SEEK_DATA in an empty file is ENXIO"), lseek(fd, 0, SEEK_DATA) < 0 ? errno : 0, ENXIO);
+    errno = 0;
+    ck(L("SEEK_HOLE in an empty file is ENXIO"), lseek(fd, 0, SEEK_HOLE) < 0 ? errno : 0, ENXIO);
+#undef L
+    close(fd);
+    unlink(path);
 }
 
 int main(int argc, char **argv) {
@@ -196,30 +248,14 @@ int main(int argc, char **argv) {
     }
 
     // ---- SEEK_DATA / SEEK_HOLE -------------------------------------------
-    {
-        int fd = mkfile("sk", 2);
-        ck("stage a two-page file", fd >= 0 ? 1 : 0, 1);
-        if (fd >= 0) {
-            errno = 0;
-            ck("SEEK_DATA at 0 is 0", (long) lseek(fd, 0, SEEK_DATA), 0);
-            errno = 0;
-            // A fully-allocated file's only hole is the implicit one at EOF.
-            ck("SEEK_HOLE at 0 is EOF", (long) lseek(fd, 0, SEEK_HOLE), 2 * PS);
-            errno = 0;
-            ck("SEEK_DATA in the middle is where you are", (long) lseek(fd, PS, SEEK_DATA), PS);
-            // Past EOF is ENXIO for both -- there is no more data and no more
-            // file to hold a hole.
-            errno = 0;
-            ck("SEEK_DATA past EOF is ENXIO",
-               lseek(fd, 4 * PS, SEEK_DATA) < 0 ? errno : 0, ENXIO);
-            errno = 0;
-            ck("SEEK_HOLE past EOF is ENXIO",
-               lseek(fd, 4 * PS, SEEK_HOLE) < 0 ? errno : 0, ENXIO);
-            // ...and ordinary seeking is untouched.
-            ck("SEEK_SET still works", (long) lseek(fd, PS, SEEK_SET), PS);
-            ck("SEEK_END still works", (long) lseek(fd, 0, SEEK_END), 2 * PS);
-            close(fd);
-        }
+    seek_checks(base, "root fs");
+    if (geteuid() == 0) {
+        char tmpfs[120];
+        snprintf(tmpfs, sizeof tmpfs, "%s/tmpfs", base);
+        ck("mkdir a tmpfs mount point", mkdir(tmpfs, 0755), 0);
+        ck("mount a tmpfs", mount("tmpfs", tmpfs, "tmpfs", 0, "size=1m"), 0);
+        seek_checks(tmpfs, "tmpfs");
+        umount(tmpfs);
     }
 
     // ---- memfd_create name length ----------------------------------------
