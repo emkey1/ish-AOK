@@ -211,11 +211,41 @@ static bool procfd_resolve(struct fd *at, const char *path_raw, struct fd **fd_o
     return false; // too many hops -- treat like ELOOP by just not matching
 }
 
+// O_PATH through a magic link: a handle on the file the link holds. Linux's
+// walk jumps to that file (nd_jump_link); walking the link's text instead
+// reached nothing for a memfd, and for an unlinked file whatever had taken its
+// name since. By path while the path still names the file, otherwise through
+// the filesystem, as for any other open of it -- but with no permission check,
+// as for any O_PATH open (procfd_resolve's ptrace gate still stands).
+//
+// NULL leaves it to the walk, as before: a file in procfs, whose name always
+// names it, and what has no name at all -- a pipe, a socket, an anonymous
+// inode, which Linux opens too (docs/TODO.md).
+static struct fd *procfd_open_path(struct fd *fd, int flags) {
+    if (fd->mount == NULL || fd->mount->fs == &procfs || !(S_ISREG(fd->type) || S_ISDIR(fd->type)))
+        return NULL;
+    if ((flags & O_DIRECTORY_) && !S_ISDIR(fd->type))
+        return ERR_PTR(_ENOTDIR);
+    flags &= O_PATH_FLAGS_ & ~O_CLOEXEC_;
+    struct fd *reopened = generic_reopen_by_path(fd, flags);
+    if (reopened == NULL && S_ISREG(fd->type))
+        reopened = generic_reopen_pathless(fd, flags, false);
+    // Not by the walk: the name is not this file's any more, so the walk
+    // would reach nothing, or somebody else's. A directory removed while
+    // held -- which Linux still opens -- is the case left.
+    if (reopened == NULL)
+        return ERR_PTR(_ENOENT);
+    // What F_GETFL reports: not the O_NOFOLLOW the reopen by path adds.
+    if (!IS_ERR(reopened))
+        reopened->flags = flags;
+    return reopened;
+}
+
 static struct fd *procfd_openat(struct fd *at, const char *path_raw, int flags) {
     // O_NOFOLLOW must fail the open with ELOOP and O_PATH|O_NOFOLLOW must
     // open the magic symlink itself; both operate on the link, not the
     // target, so leave them to normal path resolution.
-    if (flags & (O_NOFOLLOW_ | O_PATH_))
+    if (flags & O_NOFOLLOW_)
         return NULL;
     struct fd *fd;
     int err;
@@ -224,6 +254,11 @@ static struct fd *procfd_openat(struct fd *at, const char *path_raw, int flags) 
         return NULL;
     if (err < 0)
         return ERR_PTR(err);
+    if (flags & O_PATH_) {
+        struct fd *handle = procfd_open_path(fd, flags);
+        fd_close(fd);
+        return handle;
+    }
 
     // Linux procfd opens give regular files a fresh file position and the
     // CALLER's flags, which shell script loaders rely on when they execute
@@ -234,6 +269,16 @@ static struct fd *procfd_openat(struct fd *at, const char *path_raw, int flags) 
     struct fd *reopened = procfd_reopen_regular(fd, flags);
     if (reopened == NULL && fd->mount != NULL && fd->mount->fs != &procfs)
         reopened = generic_reopen_pathless(fd, flags, true);
+    // A directory, likewise a description of its own, by path. The one held
+    // can be an O_PATH handle, and reopening one of those as a directory that
+    // reads is what the open is for; handed back, getdents through it was
+    // EBADF. Opened for writing it is EISDIR, as any directory is.
+    if (reopened == NULL && S_ISDIR(fd->type) && fd->mount != NULL && fd->mount->fs != &procfs) {
+        if (flags & (O_WRONLY_ | O_RDWR_))
+            reopened = ERR_PTR(_EISDIR);
+        else
+            reopened = generic_reopen_by_path(fd, flags & ~(O_CLOEXEC_ | O_NOFOLLOW_ | O_CREAT_ | O_EXCL_));
+    }
     if (reopened != NULL) {
         fd_close(fd);
         return reopened;

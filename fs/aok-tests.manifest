@@ -326,6 +326,7 @@ epoll_dup_add.c
 inotify_mount_paths.c
 inotify_fionread.c
 procfd_reopen.c
+opath_open_flags.c
 scm_rights_pidfd.c
 siocoutq.c
 sock_ifconf_sizing.c

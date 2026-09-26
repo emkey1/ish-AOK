@@ -402,6 +402,10 @@ bool mount_param_flag(const char *info, const char *flag);
 // links" for /etc/os-release and, fatally, the /etc/localtime timezone
 // watch during Arch aarch64 boot).
 #define O_PATH_ (1 << 21)
+// All an O_PATH open keeps (Linux's O_PATH_FLAGS): it performs no permission
+// check, so it does nothing the check would have guarded -- no access mode, no
+// O_TRUNC, no O_CREAT. open() and openat() drop the rest; openat2() refuses it.
+#define O_PATH_FLAGS_ (O_PATH_ | O_DIRECTORY_ | O_NOFOLLOW_ | O_CLOEXEC_)
 // O_TMPFILE is this bit PLUS O_DIRECTORY, on every ABI: the directory bit is
 // what makes an old kernel reject it rather than create a file called
 // whatever the path said. The arm64 translation relocates O_DIRECTORY and

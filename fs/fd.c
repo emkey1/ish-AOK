@@ -610,6 +610,12 @@ dword_t sys_close_range(dword_t first, dword_t last, dword_t flags) {
 }
 
 int fd_getflags(struct fd *fd) {
+    // An O_PATH descriptor is a location, not an open file: Linux reports
+    // O_PATH and the lookup flags it was opened with, never an access mode --
+    // and no filesystem's getflags knows of it (realfs asks the host, whose
+    // open was an ordinary read-only one).
+    if (fd->flags & O_PATH_)
+        return fd->flags & (O_PATH_ | O_DIRECTORY_ | O_NOFOLLOW_);
     if (fd->ops->getflags)
         return fd->ops->getflags(fd);
     return fd->flags;
@@ -628,6 +634,14 @@ static dword_t sys_fcntl_common(fd_t f, dword_t cmd, guest_addr_t arg, bool gues
     struct fd *fd = f_get_retain(f);
     if (fd == NULL)
         return _EBADF;
+    // An O_PATH descriptor answers only what is about the descriptor itself
+    // (Linux's check_fcntl_cmd); locks, seals, owners and status flags are
+    // about an open file, which it is not: EBADF.
+    if ((fd->flags & O_PATH_) && cmd != F_DUPFD_ && cmd != F_DUPFD_CLOEXEC_ &&
+            cmd != F_GETFD_ && cmd != F_SETFD_ && cmd != F_GETFL_) {
+        fd_close(fd);
+        return _EBADF;
+    }
     struct flock32_ flock32;
     struct flock_ flock;
     // struct flock_/flock32_ append an iSH-internal comm[16] after the guest-

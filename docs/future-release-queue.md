@@ -117,17 +117,3 @@ Test: add probes (a PROT_NONE read and write, a read-only page write, a kernel a
 ```
 
 </details>
-
-## O_PATH opens of /proc magic links to a pathless file
-
-While giving memfds and unlinked files descriptions of their own, I found `open("/proc/self/fd/N" or "/proc/self/exe", O_PATH)` still walks the link's text (procfd_openat leaves O_PATH to path resolution): ENOENT for a memfd, the stale name's file for an unlinked one. This session would give O_PATH the same inode Linux does, measured on camd.
-
-<details><summary>Original chip prompt</summary>
-
-```text
-In iSH-AOK (/Users/mke/git/ish-AOK, branch `working`; follow the project memory: diff peer worktrees before starting, oracle on camd, positive controls, register tests in all places, stage explicit paths, push to origin/working and fast-forward the main checkout), make an O_PATH open (without O_NOFOLLOW) of /proc/<pid>/fd/N, /proc/<pid>/exe and their task/<tid> forms reach the file the magic link holds, as Linux does.
-
-Found 2026-09-25 with the pathless-reopen work (fs/generic.c: procfd_parse, procfd_resolve, procfd_openat, generic_reopen_pathless; fd_ops->reopen). procfd_openat returns NULL for O_PATH so that O_PATH|O_NOFOLLOW opens the link itself; plain O_PATH then falls to generic_openat_path, which walks the readlink text. For a memfd ("/memfd:x (deleted)") that is ENOENT; for an unlinked file it is whatever took the name since (see memory descriptor-path-is-a-stale-name). Measure on camd first (fstat of the O_PATH fd is the memfd's inode; fexecve and *at(fd, "", AT_EMPTY_PATH) work through it), then build an O_PATH description for the held file -- generic_reopen_pathless with the filesystem's reopen is one route, or the opath pseudo-fd -- and add cases to tests/manual/exec_fd_pathless.c. Verify on the five roots.
-```
-
-</details>

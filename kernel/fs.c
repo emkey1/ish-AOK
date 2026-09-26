@@ -621,6 +621,11 @@ static fd_t sys_openat_norm(fd_t at_f, guest_addr_t path_addr, dword_t flags, mo
         return path_err;
     STRACE("openat(%d, \"%s\", 0x%x, 0x%x)", at_f, path, flags, mode);
 
+    // O_PATH beats everything else (Linux's build_open_how). The open skips
+    // the permission check, and kept the other flags: an unprivileged
+    // open(f, O_PATH|O_WRONLY|O_TRUNC) emptied a root-owned 0644 file.
+    if (flags & O_PATH_)
+        flags &= O_PATH_FLAGS_;
     if (flags & O_CREAT_)
         apply_umask(&mode);
 
@@ -739,6 +744,10 @@ fd_t sys_openat2_guest(fd_t at_f, guest_addr_t path_addr, guest_addr_t how_addr,
     // (i386-derived) values.
     if (current->abi == GUEST_ABI_ARM64)
         flags = arm64_open_flags_to_internal(flags);
+    // openat2 is strict where openat drops: O_PATH with any flag it does not
+    // keep is EINVAL.
+    if ((flags & O_PATH_) && (flags & ~O_PATH_FLAGS_))
+        return _EINVAL;
 
     return sys_openat_norm(at_f, path_addr, flags, (mode_t_) how.mode, extra_norm);
 }

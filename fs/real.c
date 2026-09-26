@@ -1513,7 +1513,8 @@ static struct fd *realfs_reopen(struct fd *fd, int flags) {
         return ERR_PTR(errno_map());
     host &= O_ACCMODE;
     int want = flags & O_ACCMODE_;
-    bool reads = want != O_WRONLY_;
+    // An O_PATH description does no I/O, so any host description will do.
+    bool reads = want != O_WRONLY_ && !(flags & O_PATH_);
     bool writes = want != O_RDONLY_ || (flags & O_TRUNC_);
     if ((reads && host == O_WRONLY) || (writes && host == O_RDONLY))
         return ERR_PTR(_EACCES);

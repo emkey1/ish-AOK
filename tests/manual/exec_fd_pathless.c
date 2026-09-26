@@ -36,6 +36,12 @@
 //     the caller's offset, 12, is still 12 afterwards. AOK handed the
 //     interpreter the caller's own description, rewound to 0.
 //
+// And O_PATH through the same links: open("/proc/self/fd/<n>", O_PATH) of a
+// memfd or an unlinked file is a handle on that very file (Linux's walk jumps
+// to it), which fexecve runs; so is O_PATH of /proc/self/exe in the new image.
+// AOK walked the link's text: ENOENT for a memfd, and for an unlinked file
+// whatever had taken its name since.
+//
 // And /proc/self/fd/<n> of a file with no path, opened directly: a new
 // description at offset 0 whose reads leave the caller's where it was, the
 // same inode, the access mode asked for. As Linux opens the inode afresh, an
@@ -161,8 +167,13 @@ static int report(int out) {
     exe[n > 0 ? n : 0] = '\0';
     prctl(PR_GET_NAME, comm);
     const char *execfn = (const char *) getauxval(AT_EXECFN);
-    int open_err = 0, seals = 0;
-    struct stat st = {0};
+    int open_err = 0, seals = 0, opath_err = 0;
+    struct stat st = {0}, opath_st = {0};
+    int handle = open("/proc/self/exe", O_PATH | O_CLOEXEC);
+    if (handle < 0 || fstat(handle, &opath_st) != 0)
+        opath_err = errno;
+    if (handle >= 0)
+        close(handle);
     int self = open("/proc/self/exe", O_RDONLY | O_CLOEXEC);
     if (self < 0) {
         open_err = errno;
@@ -174,8 +185,10 @@ static int report(int out) {
             seals = -errno;
         close(self);
     }
-    dprintf(out, "R\n%s\n%s\n%s\n%d\n%llu\n%llu\n%d\n", execfn != NULL ? execfn : "(none)", exe,
-            comm, open_err, (unsigned long long) st.st_dev, (unsigned long long) st.st_ino, seals);
+    dprintf(out, "R\n%s\n%s\n%s\n%d\n%llu\n%llu\n%d\n%d\n%llu\n%llu\n",
+            execfn != NULL ? execfn : "(none)", exe, comm, open_err, (unsigned long long) st.st_dev,
+            (unsigned long long) st.st_ino, seals, opath_err, (unsigned long long) opath_st.st_dev,
+            (unsigned long long) opath_st.st_ino);
     return 42;
 }
 
@@ -187,6 +200,8 @@ struct outcome {
     int exe_open_err;                           // open("/proc/self/exe")
     unsigned long long exe_dev, exe_ino;        // ...and what it reached
     int exe_seals;                              // F_GET_SEALS, or -errno
+    int exe_opath_err;                          // open("/proc/self/exe", O_PATH)
+    unsigned long long exe_opath_dev, exe_opath_ino;
 };
 
 // fexecve(fd) in a child, the way glibc and musl both do it.
@@ -224,8 +239,8 @@ static void run_fexecve(int fd, struct outcome *o) {
         char *e = strtok_r(NULL, "\n", &save);
         o->err = e != NULL ? atoi(e) : -1;
     } else if (kind != NULL && strcmp(kind, "R") == 0) {
-        const char *fields[7] = {"", "", "", "-1", "0", "0", "0"};
-        for (int i = 0; i < 7; i++) {
+        const char *fields[10] = {"", "", "", "-1", "0", "0", "0", "-1", "0", "0"};
+        for (int i = 0; i < 10; i++) {
             char *f = strtok_r(NULL, "\n", &save);
             if (f != NULL)
                 fields[i] = f;
@@ -238,6 +253,9 @@ static void run_fexecve(int fd, struct outcome *o) {
         o->exe_dev = strtoull(fields[4], NULL, 10);
         o->exe_ino = strtoull(fields[5], NULL, 10);
         o->exe_seals = atoi(fields[6]);
+        o->exe_opath_err = atoi(fields[7]);
+        o->exe_opath_dev = strtoull(fields[8], NULL, 10);
+        o->exe_opath_ino = strtoull(fields[9], NULL, 10);
     }
 }
 
@@ -281,6 +299,14 @@ static bool expect_runs(const char *how, int fd, const char *name, int seals, st
               "%s: /proc/self/exe opens the file it runs, dev %llu ino %llu (got dev %llu ino %llu)",
               how, (unsigned long long) held.st_dev, (unsigned long long) held.st_ino, o->exe_dev,
               o->exe_ino);
+    check(o->exe_opath_err == 0, "%s: open(/proc/self/exe, O_PATH) in the new image (%s)", how,
+          o->exe_opath_err != 0 ? strerror(o->exe_opath_err) : "ok");
+    if (o->exe_opath_err == 0)
+        check(o->exe_opath_dev == (unsigned long long) held.st_dev &&
+                  o->exe_opath_ino == (unsigned long long) held.st_ino,
+              "%s: /proc/self/exe O_PATH is the file it runs, dev %llu ino %llu (got dev %llu ino %llu)",
+              how, (unsigned long long) held.st_dev, (unsigned long long) held.st_ino,
+              o->exe_opath_dev, o->exe_opath_ino);
     if (o->exe_open_err == 0 && seals != NO_SEALS_CHECK)
         check(o->exe_seals == seals, "%s: F_GET_SEALS through /proc/self/exe is %#x (got %d)", how,
               seals, o->exe_seals);
@@ -303,6 +329,39 @@ static void expect_exit(const char *how, int fd, int code) {
     check(!o.ran && o.err == 0 && o.status != -1 && WIFEXITED(o.status) &&
               WEXITSTATUS(o.status) == code,
           "%s exits %d (got %s)", how, code, describe(&o, got, sizeof(got)));
+}
+
+// open("/proc/self/fd/<fd>", O_PATH): a handle on the file `fd` holds -- the
+// same inode, O_PATH as F_GETFL has it, nothing to read -- which fexecve runs.
+static void expect_opath_link(const char *how, int fd, const char *name) {
+    char proc[64], b[1];
+    struct stat held, st;
+    snprintf(proc, sizeof(proc), "/proc/self/fd/%d", fd);
+    check(fstat(fd, &held) == 0, "%s: fstat the descriptor (%s)", how, strerror(errno));
+    int h = open(proc, O_PATH | O_CLOEXEC);
+    check(h >= 0, "%s: open %s O_PATH (%s)", how, proc, strerror(errno));
+    if (h < 0)
+        return;
+    check(fstat(h, &st) == 0 && st.st_dev == held.st_dev && st.st_ino == held.st_ino,
+          "%s: O_PATH: the same file, dev %llu ino %llu (got dev %llu ino %llu)", how,
+          (unsigned long long) held.st_dev, (unsigned long long) held.st_ino,
+          (unsigned long long) st.st_dev, (unsigned long long) st.st_ino);
+    int fl = fcntl(h, F_GETFL);
+    check(fl == O_PATH, "%s: O_PATH: F_GETFL is O_PATH (got %#x)", how, fl);
+    errno = 0;
+    check(read(h, b, 1) < 0 && errno == EBADF, "%s: O_PATH: read is EBADF (%s)", how,
+          strerror(errno));
+    errno = 0;
+    int d = open(proc, O_PATH | O_DIRECTORY | O_CLOEXEC);
+    check(d < 0 && errno == ENOTDIR, "%s: O_PATH|O_DIRECTORY is ENOTDIR (%s)", how,
+          d >= 0 ? "opened" : strerror(errno));
+    if (d >= 0)
+        close(d);
+    char run[PATH_MAX + 64];
+    struct outcome o;
+    snprintf(run, sizeof(run), "%s, through its O_PATH handle", how);
+    expect_runs(run, h, name, NO_SEALS_CHECK, &o);
+    close(h);
 }
 
 static bool put_fd(int fd, const char *what, const void *data, size_t len) {
@@ -459,6 +518,8 @@ static void unlinked_files(const char *dir) {
     snprintf(how, sizeof(how), "fexecve of unlinked %s/gone, with a script there now", dir);
     if (fd >= 0) {
         expect_runs(how, fd, "gone", NO_SEALS_CHECK, &o);
+        snprintf(how, sizeof(how), "unlinked %s/gone, with a script there now", dir);
+        expect_opath_link(how, fd, "gone");
         close(fd);
     }
     unlink(path);
@@ -578,6 +639,7 @@ static void memfds(void) {
             check(strcmp(o.exe, "/memfd:runc_cloned (deleted)") == 0,
                   "memfd: /proc/self/exe is /memfd:runc_cloned (deleted) (got %s)", o.exe);
         check(lseek(fd, 0, SEEK_CUR) == end, "memfd: the offset is still at the end");
+        expect_opath_link("a sealed memfd", fd, "memfd:runc_clon");
     }
     close(fd);
 
