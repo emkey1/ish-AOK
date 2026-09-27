@@ -1802,8 +1802,11 @@ endif
 if have_gpu
     moltenvk = subproject('MoltenVK')
     # virglrenderer's Venus renderer links vkGetInstanceProcAddr directly
-    # (vulkan-dload=false): MoltenVK is its Vulkan.
-    meson.override_dependency('vulkan', moltenvk.get_variable('moltenvk_dep'))
+    # (vulkan-dload=false): MoltenVK is its Vulkan. Headers only -- MoltenVK
+    # itself is merged into libish below, and a second copy on the link line
+    # duplicates its Objective-C classes once -ObjC loads them.
+    meson.override_dependency('vulkan', declare_dependency(
+        include_directories: moltenvk.get_variable('vulkan_inc')))
     virgl = subproject('virglrenderer', default_options: [
         'default_library=static', 'vrend=false', 'venus=true', 'vulkan-dload=false',
         'render-server-worker=thread', 'tests=false', 'werror=false', 'warning_level=0',
@@ -1812,8 +1815,13 @@ if have_gpu
                   moltenvk.get_variable('libmoltenvk')]
     ish_c_args += '-DISH_VIRTGPU'
     if not meson.is_cross_build()
+        # -ObjC: MoltenVK adds methods to Metal classes in categories, which a
+        # static archive's members only bring in when asked (the app's link
+        # has it already); without it the first sampler with a border colour
+        # is an unrecognized selector, and an uncaught exception.
         virgl_deps = [moltenvk.get_variable('framework_deps'),
-                      dependency('appleframeworks', modules: ['CoreFoundation'])]
+                      dependency('appleframeworks', modules: ['CoreFoundation']),
+                      declare_dependency(link_args: ['-ObjC'])]
     endif
 endif
 
