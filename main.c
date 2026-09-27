@@ -14,6 +14,7 @@
 #include "fs/path.h"
 #include "fs/real.h"
 #include "fs/stat.h"
+#include "fs/virtgpu.h"
 #include "jit/jit.h"
 #include "kernel/calls.h"
 #include "fs/sockrestart.h"
@@ -287,6 +288,12 @@ static void setup_host_mounts(void) {
     ensure_dev_node("/dev/tty", TTY_ALTERNATE_MAJOR, DEV_TTY_MINOR);
     ensure_dev_node("/dev/ptmx", TTY_ALTERNATE_MAJOR, DEV_PTMX_MINOR);
     ensure_dev_node("/dev/fuse", MISC_MAJOR, DEV_FUSE_MINOR);
+    // The GPU render node (fs/virtgpu.c), when the renderer is built in:
+    // crw-rw-rw- as a Linux render node, which any user may open.
+    if (virtgpu_available()) {
+        ignore_eexist(generic_mkdirat(AT_PWD, "/dev/dri", 0755));
+        ensure_dev_node("/dev/dri/renderD128", DRM_MAJOR, DEV_VIRTGPU_RENDER_MINOR);
+    }
     // The swap area as a block device, so /proc/swaps has a real path to name.
     // brw-rw---- like a Linux swap device, and present whether or not swap is
     // enabled -- an unbound block node is an ordinary Linux state, and creating

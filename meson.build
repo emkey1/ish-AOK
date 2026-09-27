@@ -665,6 +665,7 @@ src = [
     'fs/pty.c',
     'fs/tmp.c',
     'fs/fuse.c',
+    'fs/virtgpu.c',
 
     'fs/poll.c',
     'kernel/poll.c',
@@ -1781,6 +1782,17 @@ endif
 if have_helix
     ish_c_args += '-DISH_NATIVE_HELIX'
 endif
+# /dev/dri/renderD128 (fs/virtgpu.c, #484): virglrenderer's Venus renderer,
+# linked from a build of it (-Dvrend=false -Dvenus=true). Empty: no node.
+virgl_link_args = []
+virgl_dir = get_option('virglrenderer')
+if virgl_dir != ''
+    ish_c_args += '-DISH_VIRTGPU'
+    virgl_link_args = [
+        virgl_dir / 'src/libvirgl.a', virgl_dir / 'src/mesa/libmesa.a',
+        '-framework', 'Metal', '-framework', 'IOSurface', '-framework', 'Foundation',
+    ]
+endif
 
 # motepad is a native PROGRAM, so its libc calls have to reach the guest --
 # its own archive purely so it can be compiled with the native_libc.h
@@ -1825,6 +1837,7 @@ libish = library('ish', src,
     include_directories: includes, c_args: ish_c_args)
 ish = declare_dependency(
     link_with: [libish, libish_emu, libfakefs],
+    link_args: virgl_link_args,
     dependencies: dependencies,
     include_directories: includes)
 

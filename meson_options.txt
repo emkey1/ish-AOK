@@ -1,4 +1,6 @@
 option('log', type: 'string', value: '')
+option('virglrenderer', type: 'string', value: '',
+       description: 'A virglrenderer build directory (Venus only) for /dev/dri/renderD128; empty: none')
 option('cargo_home', type: 'string', value: '~/.cargo',
        description: 'Where rustup installed cargo, when it is not on PATH')
 option('native_rust_target', type: 'string', value: '',

@@ -501,7 +501,10 @@ whatever this becomes, like any other program.
   inside the kernel with virglrenderer + MoltenVK linked into the `ish` CLI on
   the Mac, then in the app on the M4 -- the quickest way to prove the renderer
   and get numbers, with the same renderer the DRM device will use. vtest is
-  never a shipped path.
+  never a shipped path. **Amended in step 2:** skipped. Mesa's Venus DRM path
+  needs only eleven ioctls (it simulates sync objects on EXECBUFFER's
+  out-fences), so the device cost less than vtest's socket plumbing, which
+  would have been thrown away.
 - **The gate.** vkcube and glmark2 (through zink) in the Wayland desktop on the
   M4, against today's software rendering (llvmpipe/lavapipe): **go** at >= 5x
   the frame rate, <= 1/5 of the app CPU time per frame (the battery proxy),
@@ -522,10 +525,40 @@ whatever this becomes, like any other program.
   API (`vkr_renderer_init`, `vkr_renderer_create_context`, ...), which the
   kernel can call in-process instead. The vtest server builds only with the GL
   renderer, which is moot: the kernel answers vtest itself.
-- **Next:** (2) the in-kernel vtest endpoint in the `ish` CLI, calling the
-  renderer in-process; (3) guest Venus (vkcube, then glmark2 through zink) in
-  an Alpine aarch64 root on the Mac against lavapipe/llvmpipe; (4) MoltenVK and
-  virglrenderer for iOS, and the same numbers on the M4.
+- **Phase 0, step 2 (2026-09-27): the DRM device, on the Mac.** `fs/virtgpu.c`
+  is `/dev/dri/renderD128` (226:128), built when meson is given
+  `-Dvirglrenderer=<build dir>` and absent otherwise. It answers DRM VERSION
+  ("virtio_gpu"), GET_CAP, GEM_CLOSE, PRIME both ways, and VIRTGPU GETPARAM,
+  GET_CAPS, CONTEXT_INIT, RESOURCE_CREATE_BLOB, RESOURCE_INFO, MAP and
+  EXECBUFFER, by calling `vkr_renderer_*` in-process (no render server). A
+  blob is the host's shared memory, mmapped into the guest -- the pages the
+  GPU reads, not a copy. EXECBUFFER's out-fence is a descriptor that polls
+  readable when the renderer retires it. libdrm finds the node through sysfs:
+  `/sys/dev/char/226:128` into a platform device `aok-gpu`
+  (`fs/proc/root.c`). In a stock Alpine 3.24 aarch64 root with
+  `mesa-vulkan-virtio`, `vulkaninfo` reports "Virtio-GPU Venus (Apple M5)".
+- **Phase 0, step 3 (2026-09-27): the numbers, on the Mac.** An offscreen
+  probe (`tools/vkbench.c`: T blended triangles per frame, two frames in flight; checksums of
+  the last frame agree across drivers to 0.01%, blend rounding), host CPU from
+  `time` on the whole `ish` process less a zero-frame run:
+
+  | scene | Venus | lavapipe |
+  |---|---|---|
+  | 640x360, 2000 tris | 1375 fps, 0.44 ms CPU/frame | 2.4 fps, ~1270 ms CPU/frame |
+  | 1280x720, 20000 tris | 50 fps (GPU-bound), 1.9 ms CPU/frame | not finished in 20 min |
+
+  Copying every 1280x720 frame back to guest memory costs about 0.1 ms CPU
+  per frame more. Against the gate: ~570x the frame rate and well under 1/5
+  of the CPU per frame. Run with `DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib`:
+  virglrenderer dlopens the Vulkan loader or MoltenVK by leaf name
+  (`vkr_library.c`), which is also what has to change for iOS.
+- **Next:** (4) MoltenVK and virglrenderer for iOS -- MoltenVK linked, and
+  virglrenderer given its `vkGetInstanceProcAddr` rather than a dlopen -- and
+  the same numbers on the M4; (5) presenting: vkcube and glmark2 (zink) in the
+  Wayland desktop, which needs the compositor to take the guest's buffers.
+  Gaps in the device, for later: no GUEST blobs or DRM syncobjs (Mesa needs
+  neither), one lock around all renderer calls, and no checkpoint support for an
+  open node or its fences.
 
 **Suspend to disk ships**, behind a Settings switch and off by default, on the
 same reasoning swap ships that way: a feature that spends the user's storage and

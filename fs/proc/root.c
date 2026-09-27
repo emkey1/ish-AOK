@@ -29,6 +29,7 @@
 // sees it; gcc on Linux fails the build outright. fs/proc.c orders it the
 // same way for the same reason.
 #include "fs/poll.h"
+#include "fs/virtgpu.h"
 
 extern int console_major;
 extern int console_minor;
@@ -1344,6 +1345,19 @@ enum sysfs_node_kind {
     sysfs_class_tty,
     sysfs_tty_tty0,
     sysfs_tty0_active,
+    sysfs_dev_char_drm,
+    sysfs_platform,
+    sysfs_gpu_dir,
+    sysfs_gpu_uevent,
+    sysfs_gpu_subsystem,
+    sysfs_gpu_drm,
+    sysfs_render_dir,
+    sysfs_render_dev,
+    sysfs_render_uevent,
+    sysfs_render_device,
+    sysfs_render_subsystem,
+    sysfs_class_drm,
+    sysfs_class_drm_render,
 };
 
 // A node is identified by (kind, cpu, index). cpu is -1 except under cpuN/,
@@ -1462,14 +1476,35 @@ static const struct sysfs_node_desc sysfs_node_descs[] = {
     //
     //     lsblk: failed to access sysfs directory: /sys/dev/block
     //
-    // char/ is present and empty because that is what AOK can honestly say:
-    // it models no character devices in sysfs at all, and /sys/class does not
+    // char/ is present and, but for the GPU render node below, empty: AOK
+    // models no other character device in sysfs, and /sys/class does not
     // list them either. An absent directory would be a different claim, and
     // the wrong one -- Linux always has both.
     {sysfs_dev, sysfs_root, "dev", SYSFS_DIR},
     {sysfs_dev_block, sysfs_dev, "block", SYSFS_DIR},
     {sysfs_dev_char, sysfs_dev, "char", SYSFS_DIR},
     {sysfs_dev_block_link, sysfs_dev_block, NULL, SYSFS_LNK},
+
+    // The virtio-gpu render node (fs/virtgpu.c), present only when it is.
+    // libdrm's drmGetDevices2 -- how Mesa's Venus driver finds a GPU -- takes
+    // a /dev/dri node for a DRM device only if /sys/dev/char/<maj>:<min>/
+    // device/drm exists, reads the bus from that device's `subsystem` link,
+    // and for a platform device names it from MODALIAS in its uevent. So:
+    //
+    //   /sys/dev/char/226:128 -> ../../devices/platform/aok-gpu/drm/renderD128
+    //   /sys/devices/platform/aok-gpu/{uevent, subsystem, drm/renderD128/}
+    //   /sys/class/drm/renderD128 -> ../../devices/platform/aok-gpu/drm/renderD128
+    {sysfs_dev_char_drm, sysfs_dev_char, "226:128", SYSFS_LNK},
+    {sysfs_platform, sysfs_devices, "platform", SYSFS_DIR},
+    {sysfs_gpu_dir, sysfs_platform, "aok-gpu", SYSFS_DIR},
+    {sysfs_gpu_uevent, sysfs_gpu_dir, "uevent", SYSFS_REG},
+    {sysfs_gpu_subsystem, sysfs_gpu_dir, "subsystem", SYSFS_LNK},
+    {sysfs_gpu_drm, sysfs_gpu_dir, "drm", SYSFS_DIR},
+    {sysfs_render_dir, sysfs_gpu_drm, "renderD128", SYSFS_DIR},
+    {sysfs_render_dev, sysfs_render_dir, "dev", SYSFS_REG},
+    {sysfs_render_uevent, sysfs_render_dir, "uevent", SYSFS_REG},
+    {sysfs_render_device, sysfs_render_dir, "device", SYSFS_LNK},
+    {sysfs_render_subsystem, sysfs_render_dir, "subsystem", SYSFS_LNK},
 
     // /sys/class exists on every Linux system, and its absence is not cosmetic.
     // Devuan's /etc/init.d/eudev tests `[ ! -d /sys/class/ ]` and reports
@@ -1481,6 +1516,8 @@ static const struct sysfs_node_desc sysfs_node_descs[] = {
     {sysfs_class, sysfs_root, "class", SYSFS_DIR},
     {sysfs_class_block, sysfs_class, "block", SYSFS_DIR},
     {sysfs_class_block_dev, sysfs_class_block, GUEST_DISK_NAME, SYSFS_DIR},
+    {sysfs_class_drm, sysfs_class, "drm", SYSFS_DIR},
+    {sysfs_class_drm_render, sysfs_class_drm, "renderD128", SYSFS_LNK},
 
     // /sys/class/net, which is where a lot of userland actually looks for
     // per-interface byte counters -- NOT /proc/net/dev. btop is one: its binary
@@ -1702,6 +1739,8 @@ static int sysfs_node_multiplicity(enum sysfs_node_kind kind) {
         struct host_battery_status battery;
         return sysfs_power_supply_known(&battery) ? 1 : 0;
     }
+    if (kind == sysfs_dev_char_drm || kind == sysfs_gpu_dir || kind == sysfs_class_drm)
+        return virtgpu_available() ? 1 : 0;
     if (kind == sysfs_cpu_dir)
         return sysfs_cpu_count();
     if (kind == sysfs_net_dir)
@@ -1953,6 +1992,14 @@ static size_t sysfs_file_data(struct sysfs_node node, char *buf, size_t bufsize)
             return snprintf(buf, bufsize, "1\n");
         case sysfs_cpu_uevent:
             return snprintf(buf, bufsize, "DRIVER=processor\n");
+
+        case sysfs_gpu_uevent:
+            return snprintf(buf, bufsize, "DRIVER=virtio_gpu\nMODALIAS=platform:aok-gpu\n");
+        case sysfs_render_dev:
+            return snprintf(buf, bufsize, "%d:%d\n", DRM_MAJOR, DEV_VIRTGPU_RENDER_MINOR);
+        case sysfs_render_uevent:
+            return snprintf(buf, bufsize, "MAJOR=%d\nMINOR=%d\nDEVNAME=dri/renderD128\n",
+                            DRM_MAJOR, DEV_VIRTGPU_RENDER_MINOR);
 
         // Always a tty name: this file names a VIRTUAL CONSOLE, and tty1 is
         // the one AOK presents even when the console itself was redirected to
@@ -2244,14 +2291,20 @@ static ssize_t sysfs_readlink(struct mount *UNUSED(mount), const char *path,
     // /sys/class/net/utun15/statistics/rx_bytes, against 19 us for
     // /sys/block/sda/size. btop reads six such counters per interface.
     //
-    // Every symlink in this tree lives under /sys/dev/block/, and there is
-    // exactly one kind of them, so anything that cannot be one is refused
-    // without walking anywhere.
-    static const char dev_block_prefix[] = "dev/block/";
+    // Every symlink in this tree lives under one of these, so anything
+    // elsewhere is refused without walking anywhere.
+    static const char *const link_prefixes[] = {
+        "dev/block/", "dev/char/", "devices/platform/", "class/drm/",
+    };
     const char *p = path;
     while (*p == '/')
         p++;
-    if (strncmp(p, dev_block_prefix, sizeof(dev_block_prefix) - 1) != 0)
+    bool may_be_link = false;
+    for (size_t i = 0; i < sizeof(link_prefixes) / sizeof(link_prefixes[0]); i++) {
+        if (strncmp(p, link_prefixes[i], strlen(link_prefixes[i])) == 0)
+            may_be_link = true;
+    }
+    if (!may_be_link)
         return _EINVAL;     // not a symlink: readlink(2)'s answer for one
 
     struct sysfs_node node;
@@ -2265,6 +2318,21 @@ static ssize_t sysfs_readlink(struct mount *UNUSED(mount), const char *path,
         case sysfs_dev_block_link:
             // /sys/dev/block/8:0 -> ../../block/sda
             len = snprintf(target, sizeof(target), "../../block/%s", GUEST_DISK_NAME);
+            break;
+        case sysfs_dev_char_drm:
+            len = snprintf(target, sizeof(target), "../../devices/platform/aok-gpu/drm/renderD128");
+            break;
+        case sysfs_class_drm_render:
+            len = snprintf(target, sizeof(target), "../../devices/platform/aok-gpu/drm/renderD128");
+            break;
+        case sysfs_gpu_subsystem:
+            len = snprintf(target, sizeof(target), "../../../bus/platform");
+            break;
+        case sysfs_render_device:
+            len = snprintf(target, sizeof(target), "../../../aok-gpu");
+            break;
+        case sysfs_render_subsystem:
+            len = snprintf(target, sizeof(target), "../../../../../class/drm");
             break;
         default:
             return _EINVAL;

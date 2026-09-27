@@ -8,6 +8,7 @@
 #include "app/RTCDevice.h"
 #include "kernel/swap.h"
 #include "fs/poll.h"
+#include "fs/virtgpu.h"
 #include "kernel/task.h"
 #include "kernel/abi.h"
 
@@ -168,6 +169,9 @@ struct dev_ops *char_devs[256] = {
     [TTY_PSEUDO_SLAVE_MAJOR] = &tty_dev,
     [DEV_RTC_MAJOR] = &rtc_dev,
     [DYN_DEV_MAJOR] = &dyn_dev_char,
+#ifdef ISH_VIRTGPU
+    [DRM_MAJOR] = &virtgpu_dev,
+#endif
 };
 
 const struct dev_node_spec dev_standard_nodes[] = {
