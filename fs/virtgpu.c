@@ -34,6 +34,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/stat.h>
 #include "debug.h"
 #include "kernel/abi.h"
 #include "kernel/calls.h"
@@ -817,15 +818,22 @@ static int ioctl_prime_to_handle(struct vgpu_file *file, struct drm_prime_handle
         err = _EINVAL;
     } else if (res->ctx_id != file->ctx->ctx_id) {
         int dup_fd = res->host_fd >= 0 ? dup(res->host_fd) : -1;
+        // The shared memory's own size, which the exporter rounded to the
+        // host page: the importer wraps whole host pages of it (16K on iOS),
+        // and the guest's size is only 4K-granular.
+        struct stat st;
+        uint64_t size = res->size;
+        if (dup_fd >= 0 && fstat(dup_fd, &st) == 0 && (uint64_t) st.st_size > size)
+            size = (uint64_t) st.st_size;
         lock(&renderer_lock, 0);
         imported = dup_fd >= 0 && vkr_renderer_import_resource(file->ctx->ctx_id, res->res_id,
-                VIRGL_RESOURCE_FD_SHM_, dup_fd, res->size);
+                VIRGL_RESOURCE_FD_SHM_, dup_fd, size);
         unlock(&renderer_lock);
-        if (!imported) {
-            if (dup_fd >= 0)
-                close(dup_fd);
+        // A SHM import keeps a mapping, not the descriptor.
+        if (dup_fd >= 0)
+            close(dup_fd);
+        if (!imported)
             err = _EINVAL;
-        }
     }
     if (err == 0) {
         atomic_fetch_add(&res->refcount, 1);

@@ -598,12 +598,22 @@ whatever this becomes, like any other program.
   every NEON load/store; the inline fast path (5c210298) cut the session's
   busy CPU ~31%. A MoltenVK Objective-C exception now loses one context
   instead of killing the app (d79de17a).
-- **Next:** (5b) Devuan 6: Mesa 25.0's Venus also wants the host to have
-  dma-buf external memory with DRM format modifiers and foreign queues
-  before it offers any WSI. The renderer must emulate them on Metal: LINEAR
-  modifier images, dma-buf memory as the shared-memory MTLBuffers it
-  already exports, and -- missing today -- importing such a resource into
-  another context. (5c) zero copy: the same import lets a GPU compositor
+- **Step 5b (2026-09-27): Devuan 6.** Mesa 25.0's Venus wants dma-buf
+  memory with DRM format modifiers and foreign queues from the host before
+  it offers any WSI; the fork emulates them on Metal (vkr_dma_buf_emul.h,
+  d6f30585): LINEAR is the one modifier, dma-buf memory is the shared-memory
+  MTLBuffers the renderer already exports, and a SHM resource from another
+  context now imports by wrapping its mapping. `VKR_DMA_BUF_EMULATION=0`
+  turns it off. In the Devuan 6 desktop with stock packages, vkcube runs,
+  and glmark2 through zink scores 287 against llvmpipe's 20 at 4.7 against
+  114 ms of CPU per frame -- the gate's ratios, on the Mac. `tools/vkdmabuf.c`
+  exports a LINEAR dma-buf image in one process and imports it in another's
+  context: every pixel intact, on Mesa 25.0 and 26.1. Side effect caught on
+  the way: with dma-buf on offer, wlroots took the Vulkan renderer, failed
+  to allocate output buffers (GBM fell back to DRM dumb buffers) and the
+  desktop never started; start-wayland.sh now pins WLR_RENDERER=pixman
+  unless the caller sets it.
+- **Next:** (5c) zero copy: the dma-buf import lets a GPU compositor
   (wlroots' Vulkan renderer on Venus) sample client buffers, and the app
   show the output buffer as a Metal texture instead of VNC. (5d) glmark2
   through zink, and the gate's numbers on the M4. Gaps in the device, for later: no GUEST blobs or DRM syncobjs (Mesa needs

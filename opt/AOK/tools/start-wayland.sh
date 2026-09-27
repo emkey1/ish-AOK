@@ -324,6 +324,14 @@ fi
 
 export WLR_BACKENDS=headless
 export WLR_LIBINPUT_NO_DEVICES=1
+# The compositor renders in software, into the shared-memory buffers wayvnc
+# reads. Left to choose, wlroots finds the GPU render node (/dev/dri/
+# renderD128, #484), takes its Vulkan renderer, and then cannot allocate an
+# output buffer (GBM falls back to DRM dumb buffers, which a render node does
+# not offer): "Swapchain for output 'HEADLESS-1' failed test", no output, and
+# no desktop. Clients still get the GPU; only the compositor stays on pixman.
+# WLR_RENDERER set by the caller wins.
+export WLR_RENDERER="${WLR_RENDERER:-pixman}"
 # There's no real GPU/DRM device here (matches labwc's own harmless
 # "drmGetDevices2 failed: No such file or directory" at startup). GTK3
 # apps generally cope via cairo software rendering by default, but GTK4's
