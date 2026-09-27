@@ -640,6 +640,81 @@ vshll_gadget vshll_u2_4s,  uxtl2, .4s, .2d, x9
     cbz x23, 3f
     mov x11, #16
 3:
+    // Fast path, inline: the whole transfer on one page, a TLB hit, and for
+    // a store no write revalidation pending -- the checks read_prep and
+    // write_prep make (gadgets.h), for a size known only at run time. This
+    // is a NEON memcpy's inner loop (glibc and musl both use LD1/ST1 of up
+    // to four Q registers), and the C helper below cost a register save, a
+    // call and a tlb_read per register for it: a frame copy in the Wayland
+    // desktop spent 60% of its CPU here. Anything else -- a page crossing,
+    // a miss, a fault, a debug watch (it sets requires_write_revalidate) --
+    // still takes the helper. Scratch: x3-x6, x12-x17 (x11, regbytes, and
+    // the x19-x26 parameters are live into the writeback below).
+    mul x12, x22, x11          // total bytes
+    and x9, x7, #0xfff
+    add x9, x9, x12
+    cmp x9, #0x1000
+    b.hi ld1st1_slow
+    and x9, x7, #0xfffffffffffff000
+    ubfx x10, x7, #12, #10
+    eor x10, x10, x7, lsr #22
+    and x10, x10, #(1 << TLB_BITS) - 1
+    mov w13, #TLB_ENTRY_SIZE
+    madd x10, x10, x13, _tlb
+    cbz x24, ld1st1_fast_store
+    ldr x13, [x10, #TLB_ENTRY_page]
+    cmp x9, x13
+    b.ne ld1st1_slow
+    ldr x13, [x10, #TLB_ENTRY_data_minus_addr]
+    add x14, x13, x7, uxtx     // host address
+    mov x15, x20               // v = rt
+    mov x16, x22               // registers left
+ld1st1_fast_load_loop:
+    add x17, _cpu, #CPU_v0
+    add x17, x17, x15, lsl #4
+    cbz x23, 9f
+    ldp x3, x4, [x14], #16
+    b 10f
+9:  ldr x3, [x14], #8
+    mov x4, xzr                // Q=0 clears the upper half
+10: stp x3, x4, [x17]
+    add x15, x15, #1
+    and x15, x15, #31
+    subs x16, x16, #1
+    b.ne ld1st1_fast_load_loop
+    b ld1st1_writeback
+
+ld1st1_fast_store:
+    ldr x3, [_tlb, #(-TLB_entries+TLB_mmu)]
+    ldr x4, [_tlb, #(-TLB_entries+TLB_mem_changes)]
+    ldr x5, [x3, #MMU_changes]
+    cmp x4, x5
+    b.ne ld1st1_slow
+    ldrb w5, [x3, #MMU_requires_write_revalidate]
+    cbnz w5, ld1st1_slow
+    ldr x13, [x10, #TLB_ENTRY_page_if_writable]
+    cmp x9, x13
+    b.ne ld1st1_slow
+    str x9, [_tlb, #(-TLB_entries+TLB_dirty_page)]
+    ldr x13, [x10, #TLB_ENTRY_data_minus_addr]
+    add x14, x13, x7, uxtx     // host address
+    mov x15, x20
+    mov x16, x22
+ld1st1_fast_store_loop:
+    add x17, _cpu, #CPU_v0
+    add x17, x17, x15, lsl #4
+    ldp x3, x4, [x17]
+    cbz x23, 11f
+    stp x3, x4, [x14], #16
+    b 12f
+11: str x3, [x14], #8
+12: add x15, x15, #1
+    and x15, x15, #31
+    subs x16, x16, #1
+    b.ne ld1st1_fast_store_loop
+    b ld1st1_writeback
+
+ld1st1_slow:
     save_c                     // saves x0-x18+lr; x7/x11 spill+restore too
     // AAPCS64 args. Set the non-conflicting ones first (from callee-saved
     // sources), then chain x0<-x1(cpu), x1<-x2(tlb), x2<-x7(addr): x1 and
@@ -658,7 +733,7 @@ vshll_gadget vshll_u2_4s,  uxtl2, .4s, .2d, x9
 
     cbnz x27, ld1st1_fault
 
-    // writeback
+ld1st1_writeback:
     cbz x25, ld1st1_done
     add x9, _cpu, #CPU_x0
     cmp x21, #31
