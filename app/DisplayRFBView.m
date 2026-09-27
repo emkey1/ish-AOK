@@ -2,8 +2,127 @@
 #import "BarButton.h"
 #import "UserPreferences.h"
 #import <GameController/GameController.h>
+#include <stdatomic.h>
+#include "fs/virtgpu.h"
 
 NS_ASSUME_NONNULL_BEGIN
+
+@interface DisplayRFBView ()
+- (void)directFrameArrivedWithWidth:(uint32_t)width height:(uint32_t)height;
+- (void)directFramesEnded;
+@end
+
+// Takes wl-present's frames on the guest thread presenting them, so it holds
+// no strong reference to the view (whose last release there would run UIKit
+// teardown off the main thread): the frames go into a texture of its own, and
+// the view is told on the main thread.
+@interface DisplayDirectFrames : NSObject {
+  @public
+    id<MTLDevice> _device;
+    id<MTLCommandQueue> _queue;     // the view's: drawing then follows each blit
+    id<MTLTexture> _Nullable _texture;  // @synchronized(self)
+    uint32_t _display;
+    atomic_bool _visible;
+}
+@property (weak, nullable) DisplayRFBView *view;
+@end
+
+@implementation DisplayDirectFrames
+
+- (id<MTLTexture> _Nullable)texture {
+    @synchronized (self) {
+        return _texture;
+    }
+}
+
+- (BOOL)presentFrame:(const struct virtgpu_frame *)frame {
+    if (!atomic_load(&_visible))
+        return NO;
+    if (frame->width == 0 || frame->height == 0 || frame->width > 16384 || frame->height > 16384 ||
+            frame->stride < frame->width * 4 || (size_t) frame->stride * frame->height > frame->size)
+        return NO;
+    // The shared memory itself, no copy: page-aligned and whole pages (see
+    // struct virtgpu_frame), and alive until this returns.
+    id<MTLBuffer> buffer = [_device newBufferWithBytesNoCopy:frame->pixels
+                                                      length:frame->size
+                                                     options:MTLResourceStorageModeShared
+                                                 deallocator:nil];
+    if (buffer == nil)
+        return NO;
+    id<MTLTexture> texture;
+    BOOL whole = NO;
+    @synchronized (self) {
+        if (_texture == nil || _texture.width != frame->width || _texture.height != frame->height) {
+            MTLTextureDescriptor *descriptor = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                                                                                    width:frame->width
+                                                                                                   height:frame->height
+                                                                                                mipmapped:NO];
+            descriptor.usage = MTLTextureUsageShaderRead;
+            descriptor.storageMode = MTLStorageModePrivate;
+            _texture = [_device newTextureWithDescriptor:descriptor];
+            whole = YES;
+        }
+        texture = _texture;
+    }
+    if (texture == nil)
+        return NO;
+    NSUInteger x = 0, y = 0, w = frame->width, h = frame->height;
+    if (!whole && frame->damage_width > 0 && frame->damage_height > 0 &&
+            frame->damage_x >= 0 && frame->damage_y >= 0 &&
+            (uint32_t) frame->damage_x < frame->width && (uint32_t) frame->damage_y < frame->height) {
+        x = (NSUInteger) frame->damage_x;
+        y = (NSUInteger) frame->damage_y;
+        w = MIN((NSUInteger) frame->damage_width, frame->width - x);
+        h = MIN((NSUInteger) frame->damage_height, frame->height - y);
+    }
+    id<MTLCommandBuffer> commandBuffer = [_queue commandBuffer];
+    id<MTLBlitCommandEncoder> blit = [commandBuffer blitCommandEncoder];
+    [blit copyFromBuffer:buffer
+            sourceOffset:y * frame->stride + x * 4
+       sourceBytesPerRow:frame->stride
+     sourceBytesPerImage:frame->stride * h
+              sourceSize:MTLSizeMake(w, h, 1)
+               toTexture:texture
+        destinationSlice:0
+        destinationLevel:0
+       destinationOrigin:MTLOriginMake(x, y, 0)];
+    [blit endEncoding];
+    [commandBuffer commit];
+    [commandBuffer waitUntilCompleted];
+    if (commandBuffer.status != MTLCommandBufferStatusCompleted)
+        return NO; // e.g. the app went to the background: GPU work is refused there
+    uint32_t width = frame->width, height = frame->height;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self.view directFrameArrivedWithWidth:width height:height];
+    });
+    return YES;
+}
+
+- (void)presenterGone {
+    @synchronized (self) {
+        _texture = nil;
+    }
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self.view directFramesEnded];
+    });
+}
+
+@end
+
+// virtgpu_present_fn; ctx is a DisplayDirectFrames the hook's registration
+// holds a reference to.
+static int display_direct_frame(const struct virtgpu_frame *frame, void *ctx) {
+    DisplayDirectFrames *sink = (__bridge DisplayDirectFrames *) ctx;
+    // A guest thread has no pool of its own: without one, every Metal object
+    // made here would live until the thread exits.
+    @autoreleasepool {
+        if (frame == NULL) {
+            [sink presenterGone];
+            return 0;
+        }
+        return [sink presentFrame:frame] ? 0 : 1;
+    }
+}
 
 @interface DisplayRFBView () <MTKViewDelegate, UIKeyInput>
 @end
@@ -12,6 +131,10 @@ NS_ASSUME_NONNULL_BEGIN
     id<MTLCommandQueue> _commandQueue;
     id<MTLRenderPipelineState> _pipelineState;
     id<MTLTexture> _Nullable _texture;
+    DisplayDirectFrames *_Nullable _direct;
+    uint32_t _directWidth, _directHeight;
+    BOOL _hasCursor;    // the RFB server gave a cursor shape to overlay
+    BOOL _textureStale; // _texture missed updates while direct frames showed
     NSMutableArray<UIKeyCommand *> *_Nullable _keyCommands;
 
     UIImageView *_Nullable _cursorView;
@@ -107,6 +230,16 @@ NS_ASSUME_NONNULL_BEGIN
 }
 
 - (void)drawInMTKView:(MTKView *)view {
+    if (_directFrames) {
+        // An update already on its way when VNC was paused: dropped, but
+        // acknowledged, since the client reads nothing more (clipboard,
+        // cursor shapes) until it is.
+        [_rfbClient acknowledgeFramebufferRead];
+        id<MTLTexture> texture = [_direct texture];
+        if (texture != nil)
+            [self drawTexture:texture];
+        return;
+    }
     DisplayRFBClient *client = _rfbClient;
     uint16_t width = client.framebufferWidth;
     uint16_t height = client.framebufferHeight;
@@ -125,6 +258,10 @@ NS_ASSUME_NONNULL_BEGIN
     // row and advances by bytesPerRow between rows, so this reads a strided
     // sub-rectangle straight out of the full buffer with no extra copy.
     CGRect dirty = CGRectIntegral(CGRectIntersection(client.dirtyRect, CGRectMake(0, 0, width, height)));
+    if (_textureStale) {
+        _textureStale = NO;
+        dirty = CGRectMake(0, 0, width, height);
+    }
     if (CGRectIsNull(dirty) || CGRectIsEmpty(dirty)) {
         // Nothing in the texture actually changed (e.g. an update that was
         // purely a cursor rect, handled separately as an overlay) -- no GPU
@@ -143,6 +280,10 @@ NS_ASSUME_NONNULL_BEGIN
     // with the next update immediately -- no need to wait for the encode/
     // present below to actually finish on the GPU.
     [client acknowledgeFramebufferRead];
+    [self drawTexture:_texture];
+}
+
+- (void)drawTexture:(id<MTLTexture>)texture {
     if (_pipelineState == nil)
         return; // shader pipeline failed to build; keep the RFB session alive without rendering
 
@@ -153,7 +294,7 @@ NS_ASSUME_NONNULL_BEGIN
     id<MTLCommandBuffer> commandBuffer = [_commandQueue commandBuffer];
     id<MTLRenderCommandEncoder> encoder = [commandBuffer renderCommandEncoderWithDescriptor:pass];
     [encoder setRenderPipelineState:_pipelineState];
-    [encoder setFragmentTexture:_texture atIndex:0];
+    [encoder setFragmentTexture:texture atIndex:0];
     [encoder drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
     [encoder endEncoding];
     [commandBuffer presentDrawable:drawable];
@@ -170,6 +311,96 @@ NS_ASSUME_NONNULL_BEGIN
     descriptor.usage = MTLTextureUsageShaderRead;
     descriptor.storageMode = MTLStorageModeShared;
     _texture = [self.device newTextureWithDescriptor:descriptor];
+}
+
+#pragma mark - Direct frames
+
+- (void)startDirectFramesForDisplay:(uint32_t)display {
+    if (_direct != nil && _direct->_display == display)
+        return;
+    [self stopDirectFrames];
+    DisplayDirectFrames *sink = [DisplayDirectFrames new];
+    sink->_device = self.device;
+    sink->_queue = _commandQueue;
+    sink->_display = display;
+    atomic_init(&sink->_visible, self.window != nil && UIApplication.sharedApplication.applicationState != UIApplicationStateBackground);
+    sink.view = self;
+    _direct = sink;
+    virtgpu_set_present_hook(display, display_direct_frame, (__bridge_retained void *) sink);
+    [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(directVisibilityChanged:)
+                                               name:UIApplicationDidEnterBackgroundNotification object:nil];
+    [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(directVisibilityChanged:)
+                                               name:UIApplicationWillEnterForegroundNotification object:nil];
+}
+
+- (void)stopDirectFrames {
+    if (_direct == nil)
+        return;
+    [self detachDirectFrames];
+    [self directFramesEnded];
+}
+
+- (void)detachDirectFrames {
+    DisplayDirectFrames *sink = _direct;
+    _direct = nil;
+    [NSNotificationCenter.defaultCenter removeObserver:self name:UIApplicationDidEnterBackgroundNotification object:nil];
+    [NSNotificationCenter.defaultCenter removeObserver:self name:UIApplicationWillEnterForegroundNotification object:nil];
+    // Waits out a frame in progress; after it, nothing calls the sink again.
+    virtgpu_clear_present_hook(sink->_display, (__bridge void *) sink);
+    CFRelease((__bridge CFTypeRef) sink);
+}
+
+// Nobody sees frames with the app in the background (and Metal refuses the
+// work there): wl-present is told so, and captures less often.
+- (void)directVisibilityChanged:(NSNotification *)note {
+    BOOL background = [note.name isEqualToString:UIApplicationDidEnterBackgroundNotification];
+    if (_direct != nil)
+        atomic_store(&_direct->_visible, !background && self.window != nil);
+}
+
+- (void)didMoveToWindow {
+    [super didMoveToWindow];
+    if (_direct != nil)
+        atomic_store(&_direct->_visible, self.window != nil);
+}
+
+- (void)directFrameArrivedWithWidth:(uint32_t)width height:(uint32_t)height {
+    if (_direct == nil)
+        return; // stopped since
+    _directWidth = width;
+    _directHeight = height;
+    if (!_directFrames) {
+        _directFrames = YES;
+        _rfbClient.framebufferUpdatesPaused = YES;
+        _cursorView.hidden = YES;
+    }
+    [self setNeedsDisplay];
+}
+
+- (void)directFramesEnded {
+    if (!_directFrames)
+        return;
+    _directFrames = NO;
+    _textureStale = YES;
+    _rfbClient.framebufferUpdatesPaused = NO;
+    if (_hasCursor) {
+        _cursorView.hidden = NO;
+        [self repositionCursor];
+    }
+    [self setNeedsDisplay];
+}
+
+// The desktop's size in pixels: the direct frames' while they come, the RFB
+// client's otherwise.
+- (CGSize)desktopPixelSize {
+    if (_directFrames && _directWidth != 0)
+        return CGSizeMake(_directWidth, _directHeight);
+    return CGSizeMake(_rfbClient.framebufferWidth, _rfbClient.framebufferHeight);
+}
+
+- (void)dealloc {
+    if (_direct != nil)
+        [self detachDirectFrames];
 }
 
 #pragma mark - Pointer input
@@ -205,8 +436,9 @@ NS_ASSUME_NONNULL_BEGIN
 // just moving the pointer around does nothing at all -- the remote cursor
 // sits wherever the last click left it instead of tracking live movement.
 - (void)sendPointerEventAtViewPoint:(CGPoint)point buttonMask:(uint8_t)buttonMask {
-    uint16_t fbWidth = _rfbClient.framebufferWidth;
-    uint16_t fbHeight = _rfbClient.framebufferHeight;
+    CGSize desktop = [self desktopPixelSize];
+    uint16_t fbWidth = (uint16_t) desktop.width;
+    uint16_t fbHeight = (uint16_t) desktop.height;
     if (_rfbClient == nil || fbWidth == 0 || fbHeight == 0)
         return;
     CGSize viewSize = self.bounds.size;
@@ -247,6 +479,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)updateCursorWithWidth:(uint16_t)width height:(uint16_t)height
                       hotspotX:(uint16_t)hotspotX hotspotY:(uint16_t)hotspotY bgra:(NSData *)bgra {
     if (width == 0 || height == 0) {
+        _hasCursor = NO;
         _cursorView.hidden = YES;
         return;
     }
@@ -265,15 +498,17 @@ NS_ASSUME_NONNULL_BEGIN
     CGImageRelease(image);
     _cursorImageSize = CGSizeMake(width, height);
     _cursorHotspot = CGPointMake(hotspotX, hotspotY);
-    self.cursorView.hidden = NO;
+    _hasCursor = YES;
+    self.cursorView.hidden = _directFrames; // direct frames have it drawn in
     [self repositionCursor];
 }
 
 - (void)repositionCursor {
     if (_cursorView == nil || _cursorView.hidden)
         return;
-    uint16_t fbWidth = _rfbClient.framebufferWidth;
-    uint16_t fbHeight = _rfbClient.framebufferHeight;
+    CGSize desktop = [self desktopPixelSize];
+    uint16_t fbWidth = (uint16_t) desktop.width;
+    uint16_t fbHeight = (uint16_t) desktop.height;
     CGSize viewSize = self.bounds.size;
     if (fbWidth == 0 || fbHeight == 0 || viewSize.width <= 0 || viewSize.height <= 0)
         return;

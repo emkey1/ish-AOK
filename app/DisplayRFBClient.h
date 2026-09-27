@@ -75,6 +75,12 @@ NS_ASSUME_NONNULL_BEGIN
 
 - (void)acknowledgeFramebufferRead;
 
+// While YES, no further FramebufferUpdateRequest is sent (the read loop and
+// input carry on): the desktop's pixels are arriving another way
+// (wl-present, fs/virtgpu.h) and wayvnc need not capture them. Setting it
+// back to NO asks for updates again.
+@property (nonatomic) BOOL framebufferUpdatesPaused;
+
 #pragma mark - Input
 
 - (void)sendPointerEventAtX:(uint16_t)x y:(uint16_t)y buttonMask:(uint8_t)buttonMask;

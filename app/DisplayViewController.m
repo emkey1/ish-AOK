@@ -219,6 +219,7 @@ typedef NS_ENUM(NSInteger, DisplayConnectionState) {
     // YES once _rfbClient has reported connecting. _state goes Connected
     // optimistically before that, and a SetDesktopSize sent earlier is dropped.
     BOOL _rfbClientConnected;
+    uint16_t _rfbGuestPort; // the desktop's VNC port, which also names it for direct frames
     // The desktop size last asked of the current connection (zero: none yet),
     // and the display surface size -viewDidLayoutSubviews last saw.
     CGSize _requestedDesktopSize;
@@ -821,12 +822,14 @@ typedef NS_ENUM(NSInteger, DisplayConnectionState) {
     _statusLabel.text = @"Connecting to compositor…";
     _rfbClientConnected = NO;
     _requestedDesktopSize = CGSizeZero;
+    _rfbGuestPort = guestPort;
     _rfbClient = [DisplayRFBClient new];
     _rfbClient.delegate = self;
     [_rfbClient connectToGuestPort:guestPort];
 }
 
 - (void)teardownSession {
+    [_displayView stopDirectFrames];
     [_rfbClient disconnect];
     _rfbClient = nil;
     _rfbClientConnected = NO;
@@ -860,6 +863,7 @@ typedef NS_ENUM(NSInteger, DisplayConnectionState) {
         return;
     _sessionPid = 0;
     _sessionTerminal = nil; // the kernel already tore this down; don't double-destroy it
+    [_displayView stopDirectFrames];
     [_rfbClient disconnect];
     _rfbClient = nil;
     _rfbClientConnected = NO;
@@ -1194,6 +1198,9 @@ static NSString *DisplayScaleChoiceTitle(NSString *name, NSInteger value, NSInte
     if (client != _rfbClient)
         return;
     self.displayView.rfbClient = client;
+    // With the GPU compositor, wl-present (start-wayland.sh) sends the
+    // desktop's frames straight here; VNC then carries only input.
+    [self.displayView startDirectFramesForDisplay:_rfbGuestPort];
     if (client.desktopName.length > 0)
         self.title = client.desktopName;
     _state = DisplayConnectionStateConnected;
@@ -1257,6 +1264,7 @@ static NSString *DisplayScaleChoiceTitle(NSString *name, NSInteger value, NSInte
 - (void)rfbClient:(DisplayRFBClient *)client didFailWithMessage:(NSString *)message {
     if (client != _rfbClient)
         return;
+    [_displayView stopDirectFrames];
     [self failWithMessage:message];
 }
 

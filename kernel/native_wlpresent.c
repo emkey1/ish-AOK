@@ -79,6 +79,8 @@ struct wp {
     uint8_t in[16384];
     size_t in_len;
     bool synced, quiet;
+    bool watched;       // the app took the last frame
+    uint32_t display;   // the desktop's VNC port, naming it to the app
 };
 
 static void wp_log(struct wp *w, const char *fmt, ...) __attribute__((format(__printf__, 2, 3)));
@@ -356,7 +358,7 @@ static int wp_run(struct wp *w) {
         return 1;
     }
     w->drm = open("/dev/dri/renderD128", O_RDWR | O_CLOEXEC);
-    if (w->drm < 0 || virtgpu_presenter_attach(w->drm) != 0) {
+    if (w->drm < 0 || virtgpu_presenter_attach(w->drm, w->display) != 0) {
         wp_log(w, "no GPU render node to present from");
         return 1;
     }
@@ -431,9 +433,13 @@ static int wp_run(struct wp *w) {
             dw = (w->dx1 > (int32_t) w->width ? (int32_t) w->width : w->dx1) - dx;
             dh = (w->dy1 > (int32_t) w->height ? (int32_t) w->height : w->dy1) - dy;
         }
-        int shown = virtgpu_present_fd(b->fd, w->width, w->height, b->stride, w->format,
+        int shown = virtgpu_present_fd(b->fd, w->display, w->width, w->height, b->stride, w->format,
                                        dx, dy, dw, dh);
         next ^= 1;
+        if ((shown == 0) != w->watched) {
+            w->watched = shown == 0;
+            wp_log(w, w->watched ? "the app is showing the desktop" : "nothing is showing the desktop");
+        }
         if (shown != 0) {
             // Nobody is watching: look again in a while, and give the next
             // viewer a whole frame.
@@ -455,6 +461,9 @@ int native_wlpresent_main(int argc, char *const argv[], char *const envp[]) {
     w.next_id = NEXT_ID;
     w.buf[0].fd = w.buf[1].fd = -1;
     w.quiet = argc > 1 && !strcmp(argv[1], "-q");
+    // The desktop's VNC port names it to the app (fs/virtgpu.h).
+    const char *port = getenv("WAYVNC_PORT");
+    w.display = port != NULL ? (uint32_t) strtoul(port, NULL, 10) : 5901;
     int rc = wp_run(&w);
     if (w.drm >= 0)
         buffers_free(&w);

@@ -235,6 +235,7 @@ struct vgpu_handle {
 struct vgpu_file {
     lock_t lock;
     bool presenter;         // wl-present's: closing it ends direct frames
+    uint32_t presenter_display;
     struct vgpu_ctx *ctx;   // NULL until CONTEXT_INIT
     uint32_t next_handle;
     uint64_t next_map_offset;
@@ -1168,12 +1169,12 @@ static int vgpu_mmap(struct fd *fd, struct mem *mem, page_t start, pages_t pages
     return err;
 }
 
-static void presenter_gone(void);
+static void presenter_gone(uint32_t display);
 
 static int vgpu_close(struct fd *fd) {
     struct vgpu_file *file = fd->data;
     if (file->presenter)
-        presenter_gone();
+        presenter_gone(file->presenter_display);
     lock(&file->lock, 0);
     struct vgpu_handle *h, *tmp;
     list_for_each_entry_safe(&file->handles, h, tmp, link)
@@ -1226,31 +1227,75 @@ static int vgpu_open(int major, int minor, struct fd *fd) {
 
 // ---- presenting (fs/virtgpu.h) ------------------------------------------------
 
+// One hook per display (one per open desktop window); a frame waits for the
+// hook, so present_lock is held across it.
+#define PRESENT_HOOKS 8
 static lock_t present_lock = LOCK_INITIALIZER;
-static virtgpu_present_fn present_hook;
-static void *present_ctx;
+static struct present_hook {
+    uint32_t display;
+    virtgpu_present_fn fn;  // NULL: a free slot
+    void *ctx;
+} present_hooks[PRESENT_HOOKS];
 
-void virtgpu_set_present_hook(virtgpu_present_fn fn, void *ctx) {
+// With present_lock held.
+static struct present_hook *present_hook_find(uint32_t display) {
+    struct present_hook *any = NULL;
+    for (int i = 0; i < PRESENT_HOOKS; i++) {
+        struct present_hook *h = &present_hooks[i];
+        if (h->fn == NULL)
+            continue;
+        if (h->display == display)
+            return h;
+        if (h->display == 0)
+            any = h;
+    }
+    return any;
+}
+
+void virtgpu_set_present_hook(uint32_t display, virtgpu_present_fn fn, void *ctx) {
     lock(&present_lock, 0);
-    present_hook = fn;
-    present_ctx = ctx;
+    struct present_hook *slot = NULL;
+    for (int i = 0; i < PRESENT_HOOKS; i++) {
+        struct present_hook *h = &present_hooks[i];
+        if (h->fn != NULL && h->display == display) {
+            slot = h;
+            break;
+        }
+        if (h->fn == NULL && slot == NULL)
+            slot = h;
+    }
+    if (slot != NULL)
+        *slot = (struct present_hook) {.display = display, .fn = fn, .ctx = ctx};
     unlock(&present_lock);
 }
 
-static void presenter_gone(void) {
+void virtgpu_clear_present_hook(uint32_t display, void *ctx) {
     lock(&present_lock, 0);
-    if (present_hook != NULL)
-        present_hook(NULL, present_ctx);
+    for (int i = 0; i < PRESENT_HOOKS; i++) {
+        struct present_hook *h = &present_hooks[i];
+        if (h->fn != NULL && h->display == display && h->ctx == ctx)
+            *h = (struct present_hook) {0};
+    }
     unlock(&present_lock);
 }
 
-int virtgpu_presenter_attach(int render_fd) {
+static void presenter_gone(uint32_t display) {
+    lock(&present_lock, 0);
+    struct present_hook *h = present_hook_find(display);
+    if (h != NULL)
+        h->fn(NULL, h->ctx);
+    unlock(&present_lock);
+}
+
+int virtgpu_presenter_attach(int render_fd, uint32_t display) {
     struct fd *fd = f_get(render_fd);
     if (fd == NULL)
         return _EBADF;
     if (fd->ops != &virtgpu_dev.fd)
         return _EINVAL;
-    ((struct vgpu_file *) fd->data)->presenter = true;
+    struct vgpu_file *file = fd->data;
+    file->presenter_display = display;
+    file->presenter = true;
     return 0;
 }
 
@@ -1262,7 +1307,7 @@ int virtgpu_presenter_buffer(uint32_t width, uint32_t height, uint32_t *stride) 
     return prime_fd_create(res, O_CLOEXEC_);
 }
 
-int virtgpu_present_fd(int buf_fd, uint32_t width, uint32_t height, uint32_t stride,
+int virtgpu_present_fd(int buf_fd, uint32_t display, uint32_t width, uint32_t height, uint32_t stride,
                        uint32_t format, int32_t dx, int32_t dy, int32_t dw, int32_t dh) {
     struct fd *fd = f_get(buf_fd);
     if (fd == NULL)
@@ -1274,7 +1319,8 @@ int virtgpu_present_fd(int buf_fd, uint32_t width, uint32_t height, uint32_t str
         return _EINVAL;
 
     lock(&present_lock, 0);
-    if (present_hook == NULL) {
+    struct present_hook *hook = present_hook_find(display);
+    if (hook == NULL) {
         unlock(&present_lock);
         return 1;
     }
@@ -1298,7 +1344,7 @@ int virtgpu_present_fd(int buf_fd, uint32_t width, uint32_t height, uint32_t str
             .width = width, .height = height, .stride = stride, .format = format,
             .damage_x = dx, .damage_y = dy, .damage_width = dw, .damage_height = dh,
         };
-        shown = present_hook(&frame, present_ctx) == 0 ? 0 : 1;
+        shown = hook->fn(&frame, hook->ctx) == 0 ? 0 : 1;
     }
     unlock(&present_lock);
     return shown;
@@ -1321,13 +1367,20 @@ bool virtgpu_available(void) {
     return false;
 }
 
-void virtgpu_set_present_hook(virtgpu_present_fn fn, void *ctx) {
+void virtgpu_set_present_hook(uint32_t display, virtgpu_present_fn fn, void *ctx) {
+    (void) display;
     (void) fn;
     (void) ctx;
 }
 
-int virtgpu_presenter_attach(int render_fd) {
+void virtgpu_clear_present_hook(uint32_t display, void *ctx) {
+    (void) display;
+    (void) ctx;
+}
+
+int virtgpu_presenter_attach(int render_fd, uint32_t display) {
     (void) render_fd;
+    (void) display;
     return _ENODEV;
 }
 
@@ -1336,9 +1389,9 @@ int virtgpu_presenter_buffer(uint32_t width, uint32_t height, uint32_t *stride) 
     return _ENODEV;
 }
 
-int virtgpu_present_fd(int buf_fd, uint32_t width, uint32_t height, uint32_t stride,
+int virtgpu_present_fd(int buf_fd, uint32_t display, uint32_t width, uint32_t height, uint32_t stride,
                        uint32_t format, int32_t dx, int32_t dy, int32_t dw, int32_t dh) {
-    (void) buf_fd; (void) width; (void) height; (void) stride; (void) format;
+    (void) buf_fd; (void) display; (void) width; (void) height; (void) stride; (void) format;
     (void) dx; (void) dy; (void) dw; (void) dh;
     return _ENODEV;
 }

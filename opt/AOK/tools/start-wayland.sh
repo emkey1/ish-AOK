@@ -331,7 +331,9 @@ export WLR_LIBINPUT_NO_DEVICES=1
 # The session profiled with ~40% less CPU for the same frames that way.
 # Otherwise, and whenever that fails to bring up an output (below), it
 # renders in software (pixman). WLR_RENDERER set by the caller wins, and
-# ISH_DISPLAY_GPU=0 keeps it in software.
+# ISH_DISPLAY_GPU=0 keeps it in software. On the GPU the app also takes the
+# frames directly (wl-present, below); ISH_DISPLAY_DIRECT=0 leaves that to
+# wayvnc.
 wl_gpu_usable() {
     [ -c /dev/dri/renderD128 ] || return 1
     ls /usr/share/vulkan/icd.d/virtio_icd*.json >/dev/null 2>&1 || return 1
@@ -411,6 +413,7 @@ COMPOSITOR_PID=""
 FOOT_PID=""
 WAYVNC_PID=""
 PANEL_PID=""
+PRESENT_PID=""
 
 cleanup() {
     trap - TERM INT HUP EXIT
@@ -419,6 +422,7 @@ cleanup() {
     : > "/tmp/ish-display.closing.$$" 2>/dev/null
     rm -f "$READY_FILE"
     [ -n "$PANEL_PID" ] && kill "$PANEL_PID" 2>/dev/null
+    [ -n "$PRESENT_PID" ] && kill "$PRESENT_PID" 2>/dev/null
     [ -n "$WAYVNC_PID" ] && kill "$WAYVNC_PID" 2>/dev/null
     [ -n "$FOOT_PID" ] && kill "$FOOT_PID" 2>/dev/null
     [ -n "$COMPOSITOR_PID" ] && kill "$COMPOSITOR_PID" 2>/dev/null
@@ -1406,6 +1410,17 @@ while true; do
     foot_attempt=$((foot_attempt + 1))
     sleep 0.3
 done
+
+# On the GPU, wl-present (compiled into iSH-AOK) hands each frame the
+# compositor draws straight to the app, which then asks wayvnc for no pixels:
+# VNC carries only input, and nothing copies or encodes frames on the CPU.
+# Without it, or with a software compositor (whose buffers the app cannot
+# take), the app shows wayvnc's pixels as before.
+if [ "$WL_GPU_COMPOSITOR" = 1 ] && [ "${ISH_DISPLAY_DIRECT:-1}" != 0 ] && [ -x /AOK/native/wl-present ]; then
+    log "presenting the desktop to the app directly"
+    spawn_logged wl-present env WAYVNC_PORT="$WAYVNC_PORT" /AOK/native/wl-present
+    PRESENT_PID=$SPAWN_PID
+fi
 
 echo "READY $WAYVNC_PORT"
 # The applet's whole handshake is this file appearing; if the write fails

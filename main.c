@@ -577,7 +577,7 @@ static int cli_present_frame(const struct virtgpu_frame *f, void *ctx) {
 
 int main(int argc, char *const argv[]) {
     if (getenv("ISH_PRESENT_DUMP") != NULL)
-        virtgpu_set_present_hook(cli_present_frame, getenv("ISH_PRESENT_DUMP"));
+        virtgpu_set_present_hook(0, cli_present_frame, getenv("ISH_PRESENT_DUMP"));
     // The system's memory-pressure source, which outranks our own per-process
     // headroom arithmetic; see host_mem_pressure_start() in platform/darwin.c.
     host_mem_pressure_start();

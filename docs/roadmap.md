@@ -649,11 +649,31 @@ whatever this becomes, like any other program.
   app's own threads -- the RFB decode among them -- 15%, vkcube and the
   renderer's threads ~16%. The client already asks for Raw only, so there is
   no cheaper encoding to pick: the display link is now the cost, not the GPU.
-- **Next:** (5c, rest) the app showing the compositor's output directly: the
-  output buffers already live in host shared memory (dumb buffers through
-  GBM), so the app can wrap one as an MTLBuffer and draw it into a
-  CAMetalLayer when told a frame is ready, leaving VNC to carry input only.
-  Gaps in the device, for later: no GUEST blobs or DRM syncobjs (Mesa needs
+- **Step 5c, second part (2026-09-27): the app draws the desktop itself.**
+  wl-present (kernel/native_wlpresent.c, host code under the libc shim) has
+  the compositor copy each damaged frame on the GPU (wlr-screencopy into
+  linux-dmabuf buffers from the node) and hands it to the app through the
+  kernel (virtgpu_present_fd, one hook per desktop, keyed by its VNC port).
+  The app wraps the shared memory as an MTLBuffer, blits the damaged
+  rectangle into its own texture and draws that; while frames flow it stops
+  asking wayvnc for pixels, and when wl-present goes away it asks again.
+  start-wayland.sh runs it with the GPU compositor (`ISH_DISPLAY_DIRECT=0`
+  leaves the pixels to wayvnc). On the M4, vkcube in the Devuan desktop,
+  device-wide busy ticks/s over 12-15 s, interleaved:
+
+  | | busy/s | wayvnc | labwc | frames shown |
+  |---|---|---|---|---|
+  | VNC only | 38-39 | 17.5-18.4% | 6-7% | up to 30 fps (wayvnc's cap) |
+  | direct, VNC paused | 41 | 12.5% | 10% | up to 60 fps |
+  | direct, wayvnc detached (`wayvncctl detach`) | 35-36 | 0.2% | 10% | up to 60 fps |
+
+  Pausing requests does not stop wayvnc: it screen-copies for as long as a
+  client is connected, requests or not. Detached it costs nothing and the
+  connection stays up, but it then carries no input, clipboard or resize
+  either -- so that is the next step (docs/TODO.md). labwc's extra 3-4% is
+  the second copy per frame at twice the rate.
+- **Next:** input, clipboard and resize through wl-present, so wayvnc can
+  detach while the app shows frames. Gaps in the device, for later: no GUEST blobs or DRM syncobjs (Mesa needs
   neither), one lock around all renderer calls, and no checkpoint support for an
   open node or its fences.
 

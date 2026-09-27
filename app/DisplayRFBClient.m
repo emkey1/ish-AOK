@@ -94,6 +94,8 @@ static inline void rfb_write_u32(uint8_t *p, uint32_t hostValue) {
     // it) from sending a second FramebufferUpdateRequest and starting a second,
     // concurrent read loop that races the legitimate one on the same stream.
     BOOL _hasPendingFrame;
+    BOOL _updatesPaused;        // framebufferUpdatesPaused, on _queue
+    BOOL _requestHeldBack;      // a request the pause kept from being sent
 
     uint8_t *_Nullable _framebuffer; // BGRA8888, framebufferWidth*framebufferHeight*4
     NSString *_Nullable _lastUpdateHeaderHex; // diagnostic: raw pad+count bytes of the in-progress FramebufferUpdate
@@ -1030,8 +1032,29 @@ static inline void rfb_write_u32(uint8_t *p, uint32_t hostValue) {
         self->_dirtyRect = CGRectNull;
         // Always incremental, even right after a desktop resize. See
         // -_applyDesktopSizeWidth:height:.
-        [self _sendFramebufferUpdateRequestIncremental:YES];
+        if (self->_updatesPaused)
+            self->_requestHeldBack = YES;
+        else
+            [self _sendFramebufferUpdateRequestIncremental:YES];
         [self _readNextServerMessage];
+    });
+}
+
+- (BOOL)framebufferUpdatesPaused {
+    __block BOOL paused;
+    dispatch_sync(_queue, ^{
+        paused = self->_updatesPaused;
+    });
+    return paused;
+}
+
+- (void)setFramebufferUpdatesPaused:(BOOL)paused {
+    dispatch_async(_queue, ^{
+        self->_updatesPaused = paused;
+        if (!paused && self->_requestHeldBack && self->_connected && self->_connection != nil) {
+            self->_requestHeldBack = NO;
+            [self _sendFramebufferUpdateRequestIncremental:YES];
+        }
     });
 }
 

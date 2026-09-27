@@ -18,6 +18,10 @@ extern struct dev_ops virtgpu_dev;
 // wl-present (kernel/native_wlpresent.c) has the compositor copy each frame,
 // on the GPU, into one of its dma-bufs, then hands it over here; the app,
 // which registered a hook, draws it with Metal. VNC then carries only input.
+//
+// Each desktop is named by its VNC port (`display`), so the hook for one
+// desktop's window never gets another's frames; a hook for display 0 takes
+// any desktop's that has no hook of its own.
 
 // A frame: the whole buffer (host shared memory, mapped for the life of the
 // buffer), its layout, and the rectangle that changed since the last frame.
@@ -38,18 +42,22 @@ struct virtgpu_frame {
 // viewer can go back to asking VNC for pixels.
 typedef int (*virtgpu_present_fn)(const struct virtgpu_frame *frame, void *ctx);
 
-// The app's hook; NULL removes it. Waits for a frame in progress.
-void virtgpu_set_present_hook(virtgpu_present_fn fn, void *ctx);
+// The app's hook for a display, replacing any it had. Waits for a frame in
+// progress, as does clearing.
+void virtgpu_set_present_hook(uint32_t display, virtgpu_present_fn fn, void *ctx);
+// Removes the display's hook only if it is still ctx's, for a viewer going
+// away while another may have taken over.
+void virtgpu_clear_present_hook(uint32_t display, void *ctx);
 
 // For wl-present, on its own task: `render_fd` is its render node, whose
-// closing (exit, crash or kill) tells the viewer it is gone.
-int virtgpu_presenter_attach(int render_fd);
+// closing (exit, crash or kill) tells the display's viewer it is gone.
+int virtgpu_presenter_attach(int render_fd, uint32_t display);
 // A 32-bit linear buffer in host shared memory, as a new dma-buf descriptor
 // (or a negative errno); *stride gets its row pitch.
 int virtgpu_presenter_buffer(uint32_t width, uint32_t height, uint32_t *stride);
-// Show the dma-buf `buf_fd`. 0 when shown, 1 when nobody is watching, or a
-// negative errno.
-int virtgpu_present_fd(int buf_fd, uint32_t width, uint32_t height, uint32_t stride,
+// Show the dma-buf `buf_fd` on the display. 0 when shown, 1 when nobody is
+// watching, or a negative errno.
+int virtgpu_present_fd(int buf_fd, uint32_t display, uint32_t width, uint32_t height, uint32_t stride,
                        uint32_t format, int32_t dx, int32_t dy, int32_t dw, int32_t dh);
 
 #endif
