@@ -34,6 +34,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
 #include "debug.h"
 #include "kernel/abi.h"
@@ -190,6 +191,8 @@ struct vgpu_res {
     uint32_t wring;
     uint64_t wid;
     bool woken;             // pollers told of wid's retirement
+    void *host_map;         // host_fd mapped for presenting, or NULL
+    size_t host_map_size;
 };
 
 // A dma-buf descriptor (PRIME export), for waking its pollers when the
@@ -231,6 +234,7 @@ struct vgpu_handle {
 
 struct vgpu_file {
     lock_t lock;
+    bool presenter;         // wl-present's: closing it ends direct frames
     struct vgpu_ctx *ctx;   // NULL until CONTEXT_INIT
     uint32_t next_handle;
     uint64_t next_map_offset;
@@ -404,6 +408,8 @@ static void res_release(struct vgpu_res *res) {
     lock(&renderer_lock, 0);
     vkr_renderer_destroy_resource(res->ctx_id, res->res_id);
     unlock(&renderer_lock);
+    if (res->host_map != NULL)
+        munmap(res->host_map, res->host_map_size);
     if (res->host_fd >= 0)
         close(res->host_fd);
     free(res);
@@ -850,14 +856,15 @@ static int ioctl_execbuffer(struct vgpu_file *file, struct drm_virtgpu_execbuffe
 // renderer wraps as an MTLBuffer), so the compositor renders into it on the
 // GPU and wayvnc reads the result from the same pages.
 
-static int ioctl_create_dumb(struct vgpu_file *file, struct drm_mode_create_dumb_ *d) {
-    if (d->width == 0 || d->height == 0 || d->bpp == 0 || d->bpp > 128 ||
-            d->width > 16384 || d->height > 16384)
+// A dumb buffer's memory, with one reference.
+static int dumb_res_create(uint32_t width, uint32_t height, uint32_t bpp,
+                           uint32_t *pitch_out, struct vgpu_res **res_out) {
+    if (width == 0 || height == 0 || bpp == 0 || bpp > 128 || width > 16384 || height > 16384)
         return _EINVAL;
     // MoltenVK lays a LINEAR image's rows 16 bytes apart at the least; an
     // importer takes the host's pitch, so the buffer must have the same one.
-    uint64_t pitch = (((uint64_t) d->width * d->bpp + 7) / 8 + 15) & ~(uint64_t) 15;
-    uint64_t size = pitch * d->height;
+    uint64_t pitch = (((uint64_t) width * bpp + 7) / 8 + 15) & ~(uint64_t) 15;
+    uint64_t size = pitch * height;
     uint64_t host_page = (uint64_t) getpagesize();
     uint64_t alloc = (size + host_page - 1) & ~(host_page - 1);
     int host_fd = host_unlinked_tmpfd();
@@ -877,6 +884,17 @@ static int ioctl_create_dumb(struct vgpu_file *file, struct drm_mode_create_dumb
     res->ctx_id = 0;            // no context: nothing to destroy in the renderer
     res->size = (size + 4095) & ~(uint64_t) 4095;
     res->host_fd = host_fd;
+    *pitch_out = (uint32_t) pitch;
+    *res_out = res;
+    return 0;
+}
+
+static int ioctl_create_dumb(struct vgpu_file *file, struct drm_mode_create_dumb_ *d) {
+    uint32_t pitch;
+    struct vgpu_res *res;
+    int err = dumb_res_create(d->width, d->height, d->bpp, &pitch, &res);
+    if (err < 0)
+        return err;
     lock(&file->lock, 0);
     struct vgpu_handle *h = handle_add(file, res, false);
     unlock(&file->lock);
@@ -885,7 +903,7 @@ static int ioctl_create_dumb(struct vgpu_file *file, struct drm_mode_create_dumb
         return _ENOMEM;
     }
     d->handle = h->handle;
-    d->pitch = (uint32_t) pitch;
+    d->pitch = pitch;
     d->size = res->size;
     return 0;
 }
@@ -943,15 +961,8 @@ static const struct fd_ops vgpu_prime_ops = {
     .close = prime_close,
 };
 
-static int ioctl_prime_to_fd(struct vgpu_file *file, struct drm_prime_handle_ *p) {
-    lock(&file->lock, 0);
-    struct vgpu_handle *h = handle_find(file, p->handle);
-    struct vgpu_res *res = h != NULL ? h->res : NULL;
-    if (res != NULL)
-        atomic_fetch_add(&res->refcount, 1);
-    unlock(&file->lock);
-    if (res == NULL)
-        return _ENOENT;
+// A dma-buf descriptor for res, taking over the caller's reference.
+static fd_t prime_fd_create(struct vgpu_res *res, int flags) {
     struct vgpu_prime *prime = calloc(1, sizeof(*prime));
     struct fd *fd = prime != NULL ? adhoc_fd_create(&vgpu_prime_ops) : NULL;
     if (fd == NULL) {
@@ -966,7 +977,19 @@ static int ioctl_prime_to_fd(struct vgpu_file *file, struct drm_prime_handle_ *p
     list_add(&vgpu_primes, &prime->link);
     unlock(&vgpu_lock);
     fd->flags = O_RDWR_;
-    fd_t f = f_install(fd, p->flags & DRM_CLOEXEC);
+    return f_install(fd, flags);
+}
+
+static int ioctl_prime_to_fd(struct vgpu_file *file, struct drm_prime_handle_ *p) {
+    lock(&file->lock, 0);
+    struct vgpu_handle *h = handle_find(file, p->handle);
+    struct vgpu_res *res = h != NULL ? h->res : NULL;
+    if (res != NULL)
+        atomic_fetch_add(&res->refcount, 1);
+    unlock(&file->lock);
+    if (res == NULL)
+        return _ENOENT;
+    fd_t f = prime_fd_create(res, p->flags & DRM_CLOEXEC);
     if (f < 0)
         return f;
     p->fd = f;
@@ -1145,8 +1168,12 @@ static int vgpu_mmap(struct fd *fd, struct mem *mem, page_t start, pages_t pages
     return err;
 }
 
+static void presenter_gone(void);
+
 static int vgpu_close(struct fd *fd) {
     struct vgpu_file *file = fd->data;
+    if (file->presenter)
+        presenter_gone();
     lock(&file->lock, 0);
     struct vgpu_handle *h, *tmp;
     list_for_each_entry_safe(&file->handles, h, tmp, link)
@@ -1197,6 +1224,86 @@ static int vgpu_open(int major, int minor, struct fd *fd) {
     return 0;
 }
 
+// ---- presenting (fs/virtgpu.h) ------------------------------------------------
+
+static lock_t present_lock = LOCK_INITIALIZER;
+static virtgpu_present_fn present_hook;
+static void *present_ctx;
+
+void virtgpu_set_present_hook(virtgpu_present_fn fn, void *ctx) {
+    lock(&present_lock, 0);
+    present_hook = fn;
+    present_ctx = ctx;
+    unlock(&present_lock);
+}
+
+static void presenter_gone(void) {
+    lock(&present_lock, 0);
+    if (present_hook != NULL)
+        present_hook(NULL, present_ctx);
+    unlock(&present_lock);
+}
+
+int virtgpu_presenter_attach(int render_fd) {
+    struct fd *fd = f_get(render_fd);
+    if (fd == NULL)
+        return _EBADF;
+    if (fd->ops != &virtgpu_dev.fd)
+        return _EINVAL;
+    ((struct vgpu_file *) fd->data)->presenter = true;
+    return 0;
+}
+
+int virtgpu_presenter_buffer(uint32_t width, uint32_t height, uint32_t *stride) {
+    struct vgpu_res *res;
+    int err = dumb_res_create(width, height, 32, stride, &res);
+    if (err < 0)
+        return err;
+    return prime_fd_create(res, O_CLOEXEC_);
+}
+
+int virtgpu_present_fd(int buf_fd, uint32_t width, uint32_t height, uint32_t stride,
+                       uint32_t format, int32_t dx, int32_t dy, int32_t dw, int32_t dh) {
+    struct fd *fd = f_get(buf_fd);
+    if (fd == NULL)
+        return _EBADF;
+    if (fd->ops != &vgpu_prime_ops)
+        return _EINVAL;
+    struct vgpu_res *res = ((struct vgpu_prime *) fd->data)->res;
+    if (res->host_fd < 0 || (uint64_t) stride * height > res->size)
+        return _EINVAL;
+
+    lock(&present_lock, 0);
+    if (present_hook == NULL) {
+        unlock(&present_lock);
+        return 1;
+    }
+    // Mapped once and kept for the buffer's life (res_release unmaps it):
+    // whole host pages of the shared memory, which the app wraps as an
+    // MTLBuffer without copying.
+    if (res->host_map == NULL) {
+        struct stat st;
+        if (fstat(res->host_fd, &st) == 0 && st.st_size > 0) {
+            void *map = mmap(NULL, (size_t) st.st_size, PROT_READ, MAP_SHARED, res->host_fd, 0);
+            if (map != MAP_FAILED) {
+                res->host_map = map;
+                res->host_map_size = (size_t) st.st_size;
+            }
+        }
+    }
+    int shown = 1;
+    if (res->host_map != NULL) {
+        struct virtgpu_frame frame = {
+            .pixels = res->host_map, .size = res->host_map_size,
+            .width = width, .height = height, .stride = stride, .format = format,
+            .damage_x = dx, .damage_y = dy, .damage_width = dw, .damage_height = dh,
+        };
+        shown = present_hook(&frame, present_ctx) == 0 ? 0 : 1;
+    }
+    unlock(&present_lock);
+    return shown;
+}
+
 struct dev_ops virtgpu_dev = {
     .open = vgpu_open,
     .fd = {
@@ -1212,6 +1319,28 @@ struct dev_ops virtgpu_dev = {
 
 bool virtgpu_available(void) {
     return false;
+}
+
+void virtgpu_set_present_hook(virtgpu_present_fn fn, void *ctx) {
+    (void) fn;
+    (void) ctx;
+}
+
+int virtgpu_presenter_attach(int render_fd) {
+    (void) render_fd;
+    return _ENODEV;
+}
+
+int virtgpu_presenter_buffer(uint32_t width, uint32_t height, uint32_t *stride) {
+    (void) width; (void) height; (void) stride;
+    return _ENODEV;
+}
+
+int virtgpu_present_fd(int buf_fd, uint32_t width, uint32_t height, uint32_t stride,
+                       uint32_t format, int32_t dx, int32_t dy, int32_t dw, int32_t dh) {
+    (void) buf_fd; (void) width; (void) height; (void) stride; (void) format;
+    (void) dx; (void) dy; (void) dw; (void) dh;
+    return _ENODEV;
 }
 
 #endif

@@ -541,7 +541,43 @@ static struct tty *cli_pty_open_session(void) {
     return IS_ERR(tty) ? NULL : tty;
 }
 
+// ISH_PRESENT_DUMP=<file>: a stand-in for the app's viewer of wl-present's
+// frames (fs/virtgpu.h), for testing that path from the command line. Counts
+// frames and damaged pixels on stderr every 100 frames, and writes the frame
+// it has as a PPM at the first frame and every 100th.
+static int cli_present_frame(const struct virtgpu_frame *f, void *ctx) {
+    static unsigned long frames;
+    static unsigned long long damaged;
+    const char *path = ctx;
+    if (f == NULL) {
+        fprintf(stderr, "present: presenter gone after %lu frames\n", frames);
+        return 0;
+    }
+    frames++;
+    damaged += (unsigned long long) f->damage_width * (unsigned long long) f->damage_height;
+    if (frames % 100 == 1) {
+        FILE *out = fopen(path, "wb");
+        if (out != NULL) {
+            fprintf(out, "P6\n%u %u\n255\n", f->width, f->height);
+            for (uint32_t y = 0; y < f->height; y++) {
+                const uint8_t *row = (const uint8_t *) f->pixels + (size_t) y * f->stride;
+                for (uint32_t x = 0; x < f->width; x++) {
+                    uint8_t rgb[3] = {row[x * 4 + 2], row[x * 4 + 1], row[x * 4]};
+                    fwrite(rgb, 1, 3, out);
+                }
+            }
+            fclose(out);
+        }
+    }
+    if (frames % 100 == 0)
+        fprintf(stderr, "present: %lu frames, %llu damaged pixels, last %dx%d at %d,%d\n", frames,
+                damaged, f->damage_width, f->damage_height, f->damage_x, f->damage_y);
+    return 0;
+}
+
 int main(int argc, char *const argv[]) {
+    if (getenv("ISH_PRESENT_DUMP") != NULL)
+        virtgpu_set_present_hook(cli_present_frame, getenv("ISH_PRESENT_DUMP"));
     // The system's memory-pressure source, which outranks our own per-process
     // headroom arithmetic; see host_mem_pressure_start() in platform/darwin.c.
     host_mem_pressure_start();

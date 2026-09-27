@@ -1841,6 +1841,14 @@ libmotepad = static_library('motepad', 'kernel/native_motepad.c',
         '-include', meson.current_source_dir() / 'kernel/native_libc.h',
     ])
 
+# wl-present (#484), on the same terms: host code reaching the guest's
+# compositor through the shim, and the app through fs/virtgpu.h.
+libwlpresent = static_library('wlpresent', 'kernel/native_wlpresent.c',
+    include_directories: includes,
+    c_args: ish_c_args + [
+        '-include', meson.current_source_dir() / 'kernel/native_libc.h',
+    ])
+
 # ktop, on the same terms as motepad and from the SAME source file the guest
 # gets at /AOK/tools/ktop/ktop.c -- compiled a second time as host code rather
 # than copied, so /AOK/native/ktop cannot drift from the source the docs tell
@@ -1864,7 +1872,7 @@ libktop = static_library('ktop', 'opt/AOK/tools/ktop/ktop.c',
 
 libish = library('ish', src,
     objects: librustnative,
-    link_whole: [libsmallclue, libnextvi, libbash, libzsh, libdash, libopenssh, libmotepad, libktop] + libopenssh_special + libcurlshim + virgl_libs,
+    link_whole: [libsmallclue, libnextvi, libbash, libzsh, libdash, libopenssh, libmotepad, libktop, libwlpresent] + libopenssh_special + libcurlshim + virgl_libs,
     include_directories: includes, c_args: ish_c_args)
 ish = declare_dependency(
     link_with: [libish, libish_emu, libfakefs],

@@ -330,6 +330,9 @@ int helix_native_main(int argc, char *const argv[], char *const envp[]);
 // a licence question with them.
 int native_motepad_main(int argc, char *const argv[], char *const envp[]);
 int native_bmm_main(int argc, char *const argv[], char *const envp[]);
+// Presents the Wayland desktop to the app directly (kernel/native_wlpresent.c);
+// start-wayland.sh runs it when the compositor draws on the GPU.
+int native_wlpresent_main(int argc, char *const argv[], char *const envp[]);
 int native_bmt_main(int argc, char *const argv[], char *const envp[]);
 
 // ktop (kernel/ktop_glue.c), compiled from the same opt/AOK/tools/ktop/ktop.c
@@ -351,6 +354,7 @@ static const struct native_program native_programs[] = {
     // because most of a refresh is kernel-side /proc work that was never
     // emulated to begin with. See ktop_glue.c.
     { "ktop", native_ktop_main },
+    { "wl-present", native_wlpresent_main },
     // The /AOK/tools benchmarks, so the same workload can be timed with and
     // without emulation. kernel/native_bench.c explains what that comparison
     // is, and what it is not.
