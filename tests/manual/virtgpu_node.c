@@ -39,6 +39,9 @@ struct virtgpu_blob_ { uint32_t blob_mem, blob_flags, bo_handle, res_handle;
                        uint64_t size; uint32_t pad, cmd_size; uint64_t cmd, blob_id; };
 struct virtgpu_map_ { uint64_t offset; uint32_t handle, pad; };
 struct virtgpu_info_ { uint32_t bo_handle, res_handle, size, blob_mem; };
+struct drm_mode_create_dumb_ { uint32_t height, width, bpp, flags, handle, pitch; uint64_t size; };
+struct drm_mode_map_dumb_ { uint32_t handle, pad; uint64_t offset; };
+struct drm_mode_destroy_dumb_ { uint32_t handle; };
 struct virtgpu_execbuffer_ { uint32_t flags, size; uint64_t command, bo_handles;
                              uint32_t num_bo_handles; int32_t fence_fd; uint32_t ring_idx,
                              syncobj_stride, num_in, num_out; uint64_t in, out; };
@@ -47,6 +50,9 @@ struct virtgpu_execbuffer_ { uint32_t flags, size; uint64_t command, bo_handles;
 #define DRM_IOCTL_GEM_CLOSE_ _IOW('d', 0x09, struct drm_gem_close_)
 #define DRM_IOCTL_PRIME_TO_FD_ _IOWR('d', 0x2d, struct drm_prime_handle_)
 #define DRM_IOCTL_PRIME_TO_HANDLE_ _IOWR('d', 0x2e, struct drm_prime_handle_)
+#define DRM_IOCTL_MODE_CREATE_DUMB_ _IOWR('d', 0xb2, struct drm_mode_create_dumb_)
+#define DRM_IOCTL_MODE_MAP_DUMB_ _IOWR('d', 0xb3, struct drm_mode_map_dumb_)
+#define DRM_IOCTL_MODE_DESTROY_DUMB_ _IOWR('d', 0xb4, struct drm_mode_destroy_dumb_)
 #define VIRTGPU_MAP_ _IOWR('d', 0x41, struct virtgpu_map_)
 #define VIRTGPU_EXECBUFFER_ _IOWR('d', 0x42, struct virtgpu_execbuffer_)
 #define VIRTGPU_GETPARAM_ _IOWR('d', 0x43, struct virtgpu_getparam_)
@@ -204,6 +210,19 @@ int main(int argc, char **argv) {
 
     // An empty submission with an out-fence on ring 0: the fence is a
     // descriptor that polls readable once the renderer retires it.
+    // Implicit fencing: a submission naming the blob gives its dma-buf the
+    // submission's fence, and the dma-buf polls readable once it retires --
+    // what a compositor without explicit sync waits on.
+    struct drm_prime_handle_ ph2 = {.handle = blob.bo_handle, .flags = O_CLOEXEC | O_RDWR};
+    ck("PRIME_HANDLE_TO_FD again", io(fd, DRM_IOCTL_PRIME_TO_FD_, &ph2), 0);
+    uint32_t named = blob.bo_handle;
+    struct virtgpu_execbuffer_ eb_named = {.flags = 0x04, .ring_idx = 0,
+        .bo_handles = (uintptr_t) &named, .num_bo_handles = 1, .fence_fd = -1};
+    ck("EXECBUFFER naming the blob", io(fd, VIRTGPU_EXECBUFFER_, &eb_named), 0);
+    struct pollfd bpfd = {.fd = ph2.fd, .events = POLLIN};
+    ck("  its dma-buf polls readable when the work retires", poll(&bpfd, 1, 5000), 1);
+    close(ph2.fd);
+
     struct virtgpu_execbuffer_ eb = {.flags = 0x02 | 0x04, .ring_idx = 0, .fence_fd = -1};
     ck("EXECBUFFER with FENCE_FD_OUT", io(fd, VIRTGPU_EXECBUFFER_, &eb), 0);
     ck("  returns a fence descriptor", eb.fence_fd >= 0, 1);
@@ -222,6 +241,30 @@ int main(int argc, char **argv) {
     ck("GEM_CLOSE", io(fd, DRM_IOCTL_GEM_CLOSE_, &gcl), 0);
     ck("  a second time is EINVAL", io(fd, DRM_IOCTL_GEM_CLOSE_, &gcl), -EINVAL);
     ck("  and RESOURCE_INFO no longer knows it", io(fd, VIRTGPU_RESOURCE_INFO_, &info), -ENOENT);
+
+    // Dumb buffers: linear host memory with no context behind it (GBM's
+    // fallback allocates these). Rows are 16-byte aligned, MoltenVK's pitch
+    // for a LINEAR image.
+    struct drm_mode_create_dumb_ cd = {.width = 100, .height = 10, .bpp = 32};
+    ck("MODE_CREATE_DUMB 100x10x32", io(fd, DRM_IOCTL_MODE_CREATE_DUMB_, &cd), 0);
+    ck("  pitch is width*4 rounded to 16", cd.pitch, 400);
+    struct drm_mode_create_dumb_ cd2 = {.width = 7, .height = 1, .bpp = 32};
+    ck("MODE_CREATE_DUMB 7x1x32", io(fd, DRM_IOCTL_MODE_CREATE_DUMB_, &cd2), 0);
+    ck("  pitch 28 rounds to 32", cd2.pitch, 32);
+    struct drm_mode_map_dumb_ md = {.handle = cd.handle};
+    ck("MODE_MAP_DUMB", io(fd, DRM_IOCTL_MODE_MAP_DUMB_, &md), 0);
+    unsigned char *dm = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, fd, (off_t) md.offset);
+    ck("  and mmap", dm != MAP_FAILED, 1);
+    if (dm != MAP_FAILED) {
+        dm[123] = 0xa5;
+        ck("  reads back", dm[123], 0xa5);
+        munmap(dm, 4096);
+    }
+    struct drm_mode_destroy_dumb_ dd = {.handle = cd.handle};
+    ck("MODE_DESTROY_DUMB", io(fd, DRM_IOCTL_MODE_DESTROY_DUMB_, &dd), 0);
+    ck("  a second time is EINVAL", io(fd, DRM_IOCTL_MODE_DESTROY_DUMB_, &dd), -EINVAL);
+    struct drm_mode_create_dumb_ bad_dumb = {.width = 0, .height = 1, .bpp = 32};
+    ck("MODE_CREATE_DUMB of width 0 is EINVAL", io(fd, DRM_IOCTL_MODE_CREATE_DUMB_, &bad_dumb), -EINVAL);
 
     close(fd);
     return finish_suite("virtgpu_node");

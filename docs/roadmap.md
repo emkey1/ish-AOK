@@ -626,10 +626,25 @@ whatever this becomes, like any other program.
   glmark2 is 14x the frame rate at 1/61 of the CPU per frame; vkcube, which
   FIFO holds near the output's rate, is 1/5.7. Every term of the gate is
   met. What is left is making it cheaper still and the default.
-- **Next:** (5c) zero copy: the dma-buf import lets a GPU compositor
-  (wlroots' Vulkan renderer on Venus) sample client buffers, and the app
-  show the output buffer as a Metal texture instead of VNC. (5d) glmark2
-  through zink, and the gate's numbers on the M4. Gaps in the device, for later: no GUEST blobs or DRM syncobjs (Mesa needs
+- **Step 5c, first part (2026-09-27): the compositor on the GPU, by default.**
+  The node now has DRM dumb buffers (host shared memory, rows 16-byte
+  aligned as MoltenVK lays out LINEAR images) and implicit fences: a buffer
+  named in an EXECBUFFER takes its fence, and its dma-buf polls readable
+  once that retires -- what wlroots waits on without explicit sync. GBM
+  must load zink for the compositor (Mesa's software fallback reports no
+  modifier, and wlroots' Vulkan renderer needs LINEAR), which a private
+  drirc (`dri_driver`, per executable) gives labwc and sway alone: zink here
+  is GL 2.1 / GLES 2.0, llvmpipe 4.5, so GL programs keep software unless
+  told otherwise. start-wayland.sh composites on the GPU when Venus and zink
+  are installed, falls back to pixman when the output does not come up, and
+  honours `ISH_DISPLAY_GPU=0`; Vulkan clients then hand over dma-bufs with no
+  copy, and wayvnc captures the result. Profiled on the Mac, the same vkcube
+  session costs ~39% less CPU than pixman plus the CPU copy; glmark2 through
+  zink scores 657 against llvmpipe's 64.
+- **Next:** (5c, rest) the app showing the compositor's output buffer as a
+  Metal texture instead of through VNC (wayvnc's capture and encode, and the
+  app's decode, are now the costly part), and the same numbers on the M4 with
+  the GPU compositor. Gaps in the device, for later: no GUEST blobs or DRM syncobjs (Mesa needs
   neither), one lock around all renderer calls, and no checkpoint support for an
   open node or its fences.
 

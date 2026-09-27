@@ -324,13 +324,26 @@ fi
 
 export WLR_BACKENDS=headless
 export WLR_LIBINPUT_NO_DEVICES=1
-# The compositor renders in software, into the shared-memory buffers wayvnc
-# reads. Left to choose, wlroots finds the GPU render node (/dev/dri/
-# renderD128, #484), takes its Vulkan renderer, and then cannot allocate an
-# output buffer (GBM falls back to DRM dumb buffers, which a render node does
-# not offer): "Swapchain for output 'HEADLESS-1' failed test", no output, and
-# no desktop. Clients still get the GPU; only the compositor stays on pixman.
-# WLR_RENDERER set by the caller wins.
+# Which renderer the compositor uses. With the GPU render node (/dev/dri/
+# renderD128, #484) and the guest's Mesa able to use it -- the Venus Vulkan
+# driver and zink -- it composites on the host GPU: wlroots' Vulkan renderer,
+# output buffers from GBM, and client buffers taken as dma-bufs with no copy.
+# The session profiled with ~40% less CPU for the same frames that way.
+# Otherwise, and whenever that fails to bring up an output (below), it
+# renders in software (pixman). WLR_RENDERER set by the caller wins, and
+# ISH_DISPLAY_GPU=0 keeps it in software.
+wl_gpu_usable() {
+    [ -c /dev/dri/renderD128 ] || return 1
+    ls /usr/share/vulkan/icd.d/virtio_icd*.json >/dev/null 2>&1 || return 1
+    for zink in /usr/lib/*/dri/zink_dri.so /usr/lib/dri/zink_dri.so /usr/lib64/dri/zink_dri.so; do
+        [ -e "$zink" ] && return 0
+    done
+    return 1
+}
+WL_GPU_COMPOSITOR=0
+if [ -z "${WLR_RENDERER:-}" ] && [ "${ISH_DISPLAY_GPU:-1}" != 0 ] && wl_gpu_usable; then
+    WL_GPU_COMPOSITOR=1
+fi
 export WLR_RENDERER="${WLR_RENDERER:-pixman}"
 # There's no real GPU/DRM device here (matches labwc's own harmless
 # "drmGetDevices2 failed: No such file or directory" at startup). GTK3
@@ -342,7 +355,7 @@ export WLR_RENDERER="${WLR_RENDERER:-pixman}"
 # session launches -- typically from a shell inside foot -- inherits them
 # without the user needing to know this environment has no GPU.
 export GSK_RENDERER=cairo
-export LIBGL_ALWAYS_SOFTWARE=1
+export LIBGL_ALWAYS_SOFTWARE="${LIBGL_ALWAYS_SOFTWARE-1}"
 # Debian/Devuan firefox-esr routes its Wayland connection through a bundled
 # "wayland-proxy-compositor" shim by default. Under iSH that relay corrupts
 # the stream: firefox dies at startup with "Wayland protocol error:
@@ -1094,9 +1107,76 @@ spawn_logged() {
 # earlier sessions left behind (see the DISPLAY lookup below).
 COMPOSITOR_START_MARK="$XDG_RUNTIME_DIR/compositor-started"
 : > "$COMPOSITOR_START_MARK"
-log "starting $COMPOSITOR_CMD (headless)"
-spawn_logged compositor $COMPOSITOR_CMD
-COMPOSITOR_PID=$SPAWN_PID
+
+# The GPU compositor's environment, for the compositor process alone.
+# - Its output buffers come from GBM, which must load zink: Mesa's software
+#   fallback for this device reports buffers without a modifier, and wlroots'
+#   Vulkan renderer takes none but LINEAR. Mesa picks the driver per program
+#   (drirc "dri_driver"), so a private drirc directory -- Mesa's own defaults
+#   plus that one rule -- gives zink to the compositor and not to the programs
+#   it starts: zink here offers only OpenGL 2.1 and GLES 2.0 (MoltenVK lacks
+#   what GL 3 needs), where llvmpipe offers 4.5.
+# - LIBGL_ALWAYS_SOFTWARE would put zink on a CPU device; the compositor's
+#   children therefore start without it, and Mesa falls back to software GL
+#   for them by itself.
+wl_gpu_drirc() {
+    dir="$XDG_RUNTIME_DIR/drirc.d"
+    mkdir -p "$dir" || return 1
+    for conf in /usr/share/drirc.d/*.conf; do
+        [ -e "$conf" ] && ln -sf "$conf" "$dir/"
+    done
+    cat > "$dir/99-ish-aok-compositor.conf" <<'DRIRC_EOF'
+<?xml version="1.0" standalone="yes"?>
+<driconf>
+    <device driver="loader" kernel_driver="virtio_gpu">
+        <application name="labwc" executable="labwc">
+            <option name="dri_driver" value="zink" />
+        </application>
+        <application name="sway" executable="sway">
+            <option name="dri_driver" value="zink" />
+        </application>
+    </device>
+</driconf>
+DRIRC_EOF
+    printf '%s\n' "$dir"
+}
+
+# Start the compositor; on the GPU, fall back to software when it cannot
+# bring up its output (an allocator or swapchain failure leaves a compositor
+# running with nothing to show).
+start_compositor() {
+    if [ "$WL_GPU_COMPOSITOR" = 1 ] && drirc_dir=$(wl_gpu_drirc); then
+        log "starting $COMPOSITOR_CMD (headless, composited on the GPU)"
+        log_mark=$(wc -c < "$DEBUG_LOG" 2>/dev/null || echo 0)
+        spawn_logged compositor env -u LIBGL_ALWAYS_SOFTWARE \
+            WLR_RENDERER=vulkan DRIRC_CONFIGDIR="$drirc_dir" $COMPOSITOR_CMD
+        COMPOSITOR_PID=$SPAWN_PID
+        # The output's first commit, where a failure shows, follows the
+        # socket closely: wait for the socket, then a little longer.
+        i=0
+        while [ $i -lt 100 ]; do
+            kill -0 "$COMPOSITOR_PID" 2>/dev/null || break
+            ls "$XDG_RUNTIME_DIR"/wayland-* >/dev/null 2>&1 && break
+            sleep 0.1
+            i=$((i + 1))
+        done
+        sleep 1.5
+        if kill -0 "$COMPOSITOR_PID" 2>/dev/null &&
+           ! tail -c +$((log_mark + 1)) "$DEBUG_LOG" 2>/dev/null |
+             grep -qE 'failed test|Failed to commit frame|unable to create (allocator|renderer)|Failed to create (renderer|allocator)|Could not initialize'; then
+            return 0
+        fi
+        log "warning: $COMPOSITOR_CMD could not composite on the GPU -- falling back to software (see $DEBUG_LOG)"
+        kill "$COMPOSITOR_PID" 2>/dev/null
+        wait "$COMPOSITOR_PID" 2>/dev/null
+        rm -f "$XDG_RUNTIME_DIR"/wayland-*
+        WL_GPU_COMPOSITOR=0
+    fi
+    log "starting $COMPOSITOR_CMD (headless)"
+    spawn_logged compositor $COMPOSITOR_CMD
+    COMPOSITOR_PID=$SPAWN_PID
+}
+start_compositor
 
 # Wait for the compositor to create its Wayland socket rather than a fixed
 # sleep -- labwc under JIT on a loaded device can take longer than the ~1s

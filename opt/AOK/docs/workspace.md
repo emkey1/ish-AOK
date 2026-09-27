@@ -186,6 +186,30 @@ may well work, but nobody has run them. And it has been run on **Devuan** (apt)
 and **Alpine** (apk); **Arch** (pacman) installs the same stack under the same
 names, and its packages resolve, but no one has run a session on it.
 
+### The GPU
+
+The desktop draws on the device's GPU when the guest has what that takes: the
+GPU device (`/dev/dri/renderD128`) and Mesa's Vulkan driver for it, with zink.
+Install them once:
+
+```
+sudo apt install mesa-vulkan-drivers libgl1-mesa-dri   # Devuan/Debian
+sudo apk add mesa-vulkan-virtio mesa-dri-gallium       # Alpine (arm64, amd64)
+```
+
+With those, `start-wayland.sh` composites on the GPU, and Vulkan programs
+render on it and hand their frames over without copying — vkcube and the
+like need nothing set. If the compositor cannot use the GPU it says so and
+falls back to drawing in software, as it always has; `ISH_DISPLAY_GPU=0`
+keeps it in software from the start.
+
+OpenGL programs still render in software by default. They can use the GPU
+through zink with `MESA_LOADER_DRIVER_OVERRIDE=zink`, but on this GPU zink
+offers only OpenGL 2.1 and OpenGL ES 2.0, where software rendering offers
+4.5 — so it suits older and simpler programs (glmark2 runs about ten times
+as fast), not everything. riscv64 and i386 guests have no Vulkan driver
+for the device and stay in software.
+
 You may also come across `docs/historical/wayland_workspace_plan.md` in the project's design
 docs. That is the forward design document this applet came out of; where it and
 the shipped applet disagree, the applet is right.

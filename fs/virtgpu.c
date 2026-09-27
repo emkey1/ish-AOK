@@ -87,6 +87,10 @@ void vkr_renderer_destroy_resource(uint32_t ctx_id, uint32_t res_id);
 #define DRM_NR_GET_CAP 0x0c
 #define DRM_NR_PRIME_HANDLE_TO_FD 0x2d
 #define DRM_NR_PRIME_FD_TO_HANDLE 0x2e
+#define DRM_NR_AUTH_MAGIC 0x11
+#define DRM_NR_MODE_CREATE_DUMB 0xb2
+#define DRM_NR_MODE_MAP_DUMB 0xb3
+#define DRM_NR_MODE_DESTROY_DUMB 0xb4
 #define DRM_COMMAND_BASE 0x40
 #define VIRTGPU_NR_MAP (DRM_COMMAND_BASE + 0x01)
 #define VIRTGPU_NR_EXECBUFFER (DRM_COMMAND_BASE + 0x02)
@@ -101,6 +105,9 @@ void vkr_renderer_destroy_resource(uint32_t ctx_id, uint32_t res_id);
 #define IOC_TYPE(cmd) (((unsigned) (cmd) >> 8) & 0xff)
 #define IOC_SIZE(cmd) (((unsigned) (cmd) >> 16) & 0x3fff)
 
+#define DRM_CAP_DUMB_BUFFER 0x1
+#define DRM_CAP_DUMB_PREFERRED_DEPTH 0x3
+#define DRM_CAP_DUMB_PREFER_SHADOW 0x4
 #define DRM_CAP_PRIME 0x5
 #define DRM_CAP_TIMESTAMP_MONOTONIC 0x6
 #define DRM_CAP_SYNCOBJ 0x13
@@ -136,6 +143,9 @@ struct drm_gem_close_ { uint32_t handle, pad; };
 struct drm_get_cap_ { uint64_t capability, value; };
 struct drm_prime_handle_ { uint32_t handle, flags; int32_t fd; };
 struct drm_virtgpu_map_ { uint64_t offset; uint32_t handle, pad; };
+struct drm_mode_create_dumb_ { uint32_t height, width, bpp, flags, handle, pitch; uint64_t size; };
+struct drm_mode_map_dumb_ { uint32_t handle, pad; uint64_t offset; };
+struct drm_mode_destroy_dumb_ { uint32_t handle; };
 struct drm_virtgpu_execbuffer_ {
     uint32_t flags, size;
     uint64_t command, bo_handles;
@@ -171,6 +181,23 @@ struct vgpu_res {
     uint32_t blob_mem;
     uint64_t size;
     int host_fd;            // shared memory, -1 when the blob is not mappable
+    // Implicit fencing, as a dma-buf has on Linux: the fence of the last
+    // EXECBUFFER that named this buffer. A dma-buf descriptor polls readable
+    // once it has retired -- what a compositor without explicit sync waits
+    // for before sampling a client's buffer. Guarded by vgpu_lock; wctx holds
+    // a reference.
+    struct vgpu_ctx *wctx;
+    uint32_t wring;
+    uint64_t wid;
+    bool woken;             // pollers told of wid's retirement
+};
+
+// A dma-buf descriptor (PRIME export), for waking its pollers when the
+// buffer's implicit fence retires.
+struct vgpu_prime {
+    struct vgpu_res *res;
+    struct fd *fd;
+    struct list link;       // vgpu_primes, under vgpu_lock
 };
 
 // A Venus context, one per open file. Fence descriptors keep it alive after
@@ -217,6 +244,7 @@ struct vgpu_file {
 static lock_t vgpu_lock = LOCK_INITIALIZER;
 static lock_t renderer_lock = LOCK_INITIALIZER;
 static struct list vgpu_contexts = {&vgpu_contexts, &vgpu_contexts};
+static struct list vgpu_primes = {&vgpu_primes, &vgpu_primes};
 static atomic_uint next_ctx_id = 1;
 static atomic_uint next_res_id = 1;
 static int renderer_state;  // 0 untried, 1 ready, -1 failed
@@ -266,6 +294,29 @@ static bool collect_signaled(struct vgpu_ctx *ctx, struct woken *w) {
     return false;
 }
 
+// Caller holds vgpu_lock.
+static bool res_fence_signaled(struct vgpu_res *res) {
+    return res->wctx == NULL || atomic_load(&res->wctx->retired[res->wring]) >= res->wid;
+}
+
+// Dma-buf descriptors whose buffer's implicit fence, on this ring, has now
+// retired, each once per fence. Caller holds vgpu_lock.
+static bool collect_primes(struct vgpu_ctx *ctx, uint32_t ring, struct woken *w) {
+    struct vgpu_prime *p;
+    list_for_each_entry(&vgpu_primes, p, link) {
+        struct vgpu_res *res = p->res;
+        if (res->woken || res->wctx != ctx || res->wring != ring || !res_fence_signaled(res))
+            continue;
+        if (w->count == (int) (sizeof(w->fds) / sizeof(w->fds[0])))
+            return true;
+        res->woken = true;
+        struct fd *fd = fd_retain_if_live(p->fd);
+        if (fd != NULL)
+            w->fds[w->count++] = fd;
+    }
+    return false;
+}
+
 static void retire_fence(uint32_t ctx_id, uint32_t ring_idx, uint64_t fence_id) {
     if (ring_idx >= VIRTGPU_MAX_RINGS)
         return;
@@ -287,6 +338,8 @@ static void retire_fence(uint32_t ctx_id, uint32_t ring_idx, uint64_t fence_id) 
             if (atomic_load(&ctx->retired[ring_idx]) < fence_id)
                 atomic_store(&ctx->retired[ring_idx], fence_id);
             more = collect_signaled(ctx, &w);
+            if (!more)
+                more = collect_primes(ctx, ring_idx, &w);
         }
         unlock(&vgpu_lock);
         wake_fences(&w);
@@ -346,6 +399,8 @@ static int fence_wait(fd_t f) {
 static void res_release(struct vgpu_res *res) {
     if (atomic_fetch_sub(&res->refcount, 1) != 1)
         return;
+    if (res->wctx != NULL)
+        ctx_release(res->wctx);
     lock(&renderer_lock, 0);
     vkr_renderer_destroy_resource(res->ctx_id, res->res_id);
     unlock(&renderer_lock);
@@ -698,35 +753,86 @@ static int ioctl_execbuffer(struct vgpu_file *file, struct drm_virtgpu_execbuffe
         if (err < 0)
             return err;
     }
-    int err = submit_cmd(ctx, e->command, e->size);
-    if (err < 0)
-        return err;
-    if (!(e->flags & VIRTGPU_EXECBUF_FENCE_FD_OUT))
-        return 0;
-
-    struct vgpu_fence *fence = calloc(1, sizeof(*fence));
-    struct fd *fd = fence != NULL ? adhoc_fd_create(&vgpu_fence_ops) : NULL;
-    if (fd == NULL) {
-        free(fence);
-        return _ENOMEM;
+    // The buffers the submission names take its fence as their implicit
+    // one (struct vgpu_res). Venus names the images it presents.
+    struct vgpu_res *named[64];
+    uint32_t named_count = 0;
+    if (e->num_bo_handles > 0) {
+        uint32_t count = e->num_bo_handles < 64 ? e->num_bo_handles : 64;
+        uint32_t handles[64];
+        if (user_read((guest_addr_t) e->bo_handles, handles, count * sizeof(handles[0])))
+            return _EFAULT;
+        lock(&file->lock, 0);
+        for (uint32_t i = 0; i < count; i++) {
+            struct vgpu_handle *h = handle_find(file, handles[i]);
+            if (h == NULL)
+                continue;
+            atomic_fetch_add(&h->res->refcount, 1);
+            named[named_count++] = h->res;
+        }
+        unlock(&file->lock);
     }
-    atomic_fetch_add(&ctx->refcount, 1);
-    fence->ctx = ctx;
-    fence->ring = ring;
-    fence->fd = fd;
-    fd->data = fence;
+
+    int err = submit_cmd(ctx, e->command, e->size);
+    if (err < 0 || (!(e->flags & VIRTGPU_EXECBUF_FENCE_FD_OUT) && named_count == 0)) {
+        for (uint32_t i = 0; i < named_count; i++)
+            res_release(named[i]);
+        return err;
+    }
+
+    struct vgpu_fence *fence = NULL;
+    struct fd *fd = NULL;
+    if (e->flags & VIRTGPU_EXECBUF_FENCE_FD_OUT) {
+        fence = calloc(1, sizeof(*fence));
+        fd = fence != NULL ? adhoc_fd_create(&vgpu_fence_ops) : NULL;
+        if (fd == NULL) {
+            free(fence);
+            for (uint32_t i = 0; i < named_count; i++)
+                res_release(named[i]);
+            return _ENOMEM;
+        }
+        atomic_fetch_add(&ctx->refcount, 1);
+        fence->ctx = ctx;
+        fence->ring = ring;
+        fence->fd = fd;
+        fd->data = fence;
+    }
+    // Buffers take the fence before it is submitted, so a retirement that
+    // comes at once still finds them.
+    struct vgpu_ctx *old[64];
+    uint32_t old_count = 0;
     lock(&vgpu_lock, 0);
-    fence->id = ++ctx->next_fence[ring];
-    list_add_tail(&ctx->fences, &fence->link);
+    uint64_t id = ++ctx->next_fence[ring];
+    if (fence != NULL) {
+        fence->id = id;
+        list_add_tail(&ctx->fences, &fence->link);
+    }
+    for (uint32_t i = 0; i < named_count; i++) {
+        struct vgpu_res *res = named[i];
+        if (res->wctx != NULL)
+            old[old_count++] = res->wctx;
+        atomic_fetch_add(&ctx->refcount, 1);
+        res->wctx = ctx;
+        res->wring = ring;
+        res->wid = id;
+        res->woken = false;
+    }
     unlock(&vgpu_lock);
+    for (uint32_t i = 0; i < old_count; i++)
+        ctx_release(old[i]);
+    for (uint32_t i = 0; i < named_count; i++)
+        res_release(named[i]);
 
     lock(&renderer_lock, 0);
-    bool ok = vkr_renderer_submit_fence(ctx->ctx_id, VIRGL_RENDERER_FENCE_FLAG_MERGEABLE, ring, fence->id);
+    bool ok = vkr_renderer_submit_fence(ctx->ctx_id, VIRGL_RENDERER_FENCE_FLAG_MERGEABLE, ring, id);
     unlock(&renderer_lock);
     if (!ok) {
-        fd_close(fd);
+        if (fd != NULL)
+            fd_close(fd);
         return _EINVAL;
     }
+    if (fd == NULL)
+        return 0;
     fd_t f = f_install(fd, O_CLOEXEC_);
     if (f < 0)
         return f;
@@ -734,15 +840,80 @@ static int ioctl_execbuffer(struct vgpu_file *file, struct drm_virtgpu_execbuffe
     return 0;
 }
 
-// ---- PRIME -----------------------------------------------------------------
+// ---- dumb buffers ------------------------------------------------------------
+//
+// Linear buffers in host shared memory, with no GPU context behind them. A
+// render node does not offer these on Linux, but Mesa's GBM falls back to
+// them when it has no hardware driver for the device -- and wlroots' Vulkan
+// renderer gets its output buffers from GBM. Exported through PRIME, one
+// imports into any Venus context as a dma-buf (a SHM resource, which the
+// renderer wraps as an MTLBuffer), so the compositor renders into it on the
+// GPU and wayvnc reads the result from the same pages.
 
-static int prime_close(struct fd *fd) {
-    res_release(fd->data);
+static int ioctl_create_dumb(struct vgpu_file *file, struct drm_mode_create_dumb_ *d) {
+    if (d->width == 0 || d->height == 0 || d->bpp == 0 || d->bpp > 128 ||
+            d->width > 16384 || d->height > 16384)
+        return _EINVAL;
+    // MoltenVK lays a LINEAR image's rows 16 bytes apart at the least; an
+    // importer takes the host's pitch, so the buffer must have the same one.
+    uint64_t pitch = (((uint64_t) d->width * d->bpp + 7) / 8 + 15) & ~(uint64_t) 15;
+    uint64_t size = pitch * d->height;
+    uint64_t host_page = (uint64_t) getpagesize();
+    uint64_t alloc = (size + host_page - 1) & ~(host_page - 1);
+    int host_fd = host_unlinked_tmpfd();
+    if (host_fd < 0)
+        return host_fd;
+    if (ftruncate(host_fd, (off_t) alloc) != 0) {
+        close(host_fd);
+        return _ENOMEM;
+    }
+    struct vgpu_res *res = calloc(1, sizeof(*res));
+    if (res == NULL) {
+        close(host_fd);
+        return _ENOMEM;
+    }
+    res->refcount = 1;
+    res->res_id = atomic_fetch_add(&next_res_id, 1);
+    res->ctx_id = 0;            // no context: nothing to destroy in the renderer
+    res->size = (size + 4095) & ~(uint64_t) 4095;
+    res->host_fd = host_fd;
+    lock(&file->lock, 0);
+    struct vgpu_handle *h = handle_add(file, res, false);
+    unlock(&file->lock);
+    if (h == NULL) {
+        res_release(res);
+        return _ENOMEM;
+    }
+    d->handle = h->handle;
+    d->pitch = (uint32_t) pitch;
+    d->size = res->size;
     return 0;
 }
 
+// ---- PRIME -----------------------------------------------------------------
+
+static int prime_close(struct fd *fd) {
+    struct vgpu_prime *p = fd->data;
+    lock(&vgpu_lock, 0);
+    list_remove(&p->link);
+    unlock(&vgpu_lock);
+    res_release(p->res);
+    free(p);
+    return 0;
+}
+
+// Readable, and writable, once the buffer's last writer has finished: a
+// dma-buf's implicit fence, as poll(2) reports it on Linux.
+static int prime_poll(struct fd *fd) {
+    struct vgpu_prime *p = fd->data;
+    lock(&vgpu_lock, 0);
+    bool done = res_fence_signaled(p->res);
+    unlock(&vgpu_lock);
+    return done ? POLL_READ | POLL_WRITE : 0;
+}
+
 static int prime_mmap(struct fd *fd, struct mem *mem, page_t start, pages_t pages, off_t offset, int prot, int flags) {
-    struct vgpu_res *res = fd->data;
+    struct vgpu_res *res = ((struct vgpu_prime *) fd->data)->res;
     if (res->host_fd < 0)
         return _ENODEV;
     if (offset < 0 || (uint64_t) offset + (uint64_t) pages * PAGE_SIZE > res->size)
@@ -753,7 +924,7 @@ static int prime_mmap(struct fd *fd, struct mem *mem, page_t start, pages_t page
 // A dma-buf's size is what lseek(SEEK_END) reports; that is how a consumer
 // that did not make one learns it.
 static off_t_ prime_lseek(struct fd *fd, off_t_ off, int whence) {
-    struct vgpu_res *res = fd->data;
+    struct vgpu_res *res = ((struct vgpu_prime *) fd->data)->res;
     if (off != 0)
         return _EINVAL;
     if (whence == LSEEK_END)
@@ -768,6 +939,7 @@ static const struct fd_ops vgpu_prime_ops = {
     .anon_inode_class = "dmabuf",
     .mmap = prime_mmap,
     .lseek = prime_lseek,
+    .poll = prime_poll,
     .close = prime_close,
 };
 
@@ -780,12 +952,19 @@ static int ioctl_prime_to_fd(struct vgpu_file *file, struct drm_prime_handle_ *p
     unlock(&file->lock);
     if (res == NULL)
         return _ENOENT;
-    struct fd *fd = adhoc_fd_create(&vgpu_prime_ops);
+    struct vgpu_prime *prime = calloc(1, sizeof(*prime));
+    struct fd *fd = prime != NULL ? adhoc_fd_create(&vgpu_prime_ops) : NULL;
     if (fd == NULL) {
+        free(prime);
         res_release(res);
         return _ENOMEM;
     }
-    fd->data = res;
+    prime->res = res;
+    prime->fd = fd;
+    fd->data = prime;
+    lock(&vgpu_lock, 0);
+    list_add(&vgpu_primes, &prime->link);
+    unlock(&vgpu_lock);
     fd->flags = O_RDWR_;
     fd_t f = f_install(fd, p->flags & DRM_CLOEXEC);
     if (f < 0)
@@ -800,7 +979,7 @@ static int ioctl_prime_to_handle(struct vgpu_file *file, struct drm_prime_handle
         return _EBADF;
     if (fd->ops != &vgpu_prime_ops)
         return _EINVAL;
-    struct vgpu_res *res = fd->data;
+    struct vgpu_res *res = ((struct vgpu_prime *) fd->data)->res;
     lock(&file->lock, 0);
     int err = 0;
     struct vgpu_handle *h;
@@ -813,10 +992,11 @@ static int ioctl_prime_to_handle(struct vgpu_file *file, struct drm_prime_handle
     }
     // Another file's resource: its context must be told of it, with the
     // memory it lives in.
+    // A file with no context -- GBM's, say -- only holds the handle; the
+    // renderer needs to hear of the resource only in a context that will use
+    // it.
     bool imported = false;
-    if (file->ctx == NULL) {
-        err = _EINVAL;
-    } else if (res->ctx_id != file->ctx->ctx_id) {
+    if (file->ctx != NULL && res->ctx_id != file->ctx->ctx_id) {
         int dup_fd = res->host_fd >= 0 ? dup(res->host_fd) : -1;
         // The shared memory's own size, which the exporter rounded to the
         // host page: the importer wraps whole host pages of it (16K on iOS),
@@ -871,6 +1051,9 @@ static int vgpu_ioctl(struct fd *fd, int cmd, void *arg) {
             struct drm_get_cap_ *c = arg;
             switch (c->capability) {
                 case DRM_CAP_PRIME: c->value = DRM_PRIME_CAP_IMPORT | DRM_PRIME_CAP_EXPORT; return 0;
+                case DRM_CAP_DUMB_BUFFER: c->value = 1; return 0;
+                case DRM_CAP_DUMB_PREFERRED_DEPTH: c->value = 24; return 0;
+                case DRM_CAP_DUMB_PREFER_SHADOW: c->value = 0; return 0;
                 case DRM_CAP_TIMESTAMP_MONOTONIC: c->value = 1; return 0;
                 case DRM_CAP_SYNCOBJ: case DRM_CAP_SYNCOBJ_TIMELINE: c->value = 0; return 0;
                 default: return _EINVAL;
@@ -879,6 +1062,25 @@ static int vgpu_ioctl(struct fd *fd, int cmd, void *arg) {
         case DRM_NR_GEM_CLOSE:
             NEED(struct drm_gem_close_);
             return ioctl_gem_close(file, arg);
+        case DRM_NR_AUTH_MAGIC:
+            // Render nodes need no authentication; clients ask anyway.
+            return 0;
+        case DRM_NR_MODE_CREATE_DUMB:
+            NEED(struct drm_mode_create_dumb_);
+            return ioctl_create_dumb(file, arg);
+        case DRM_NR_MODE_MAP_DUMB: {
+            NEED(struct drm_mode_map_dumb_);
+            struct drm_mode_map_dumb_ *m = arg;
+            struct drm_virtgpu_map_ vm = {.handle = m->handle};
+            int err = ioctl_map(file, &vm);
+            m->offset = vm.offset;
+            return err;
+        }
+        case DRM_NR_MODE_DESTROY_DUMB: {
+            NEED(struct drm_mode_destroy_dumb_);
+            struct drm_gem_close_ c = {.handle = ((struct drm_mode_destroy_dumb_ *) arg)->handle};
+            return ioctl_gem_close(file, &c);
+        }
         case DRM_NR_PRIME_HANDLE_TO_FD:
             NEED(struct drm_prime_handle_);
             return ioctl_prime_to_fd(file, arg);
@@ -965,6 +1167,8 @@ static int vgpu_close(struct fd *fd) {
                 atomic_store(&ctx->retired[r], UINT64_MAX);
             ctx->destroyed = true;
             more = collect_signaled(ctx, &w);
+            for (uint32_t r = 0; r < VIRTGPU_MAX_RINGS && !more; r++)
+                more = collect_primes(ctx, r, &w);
             unlock(&vgpu_lock);
             wake_fences(&w);
         }
