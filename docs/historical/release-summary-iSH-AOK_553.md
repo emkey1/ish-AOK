@@ -1,7 +1,7 @@
 # iSH-AOK 553 release summary (archived, duplicate)
 
 **This file is history.** A condensed rewrite of
-[`docs/release-notes-since-iSH-AOK_553.md`](../release-notes-since-iSH-AOK_553.md)
+[`docs/release-notes/release-notes-since-iSH-AOK_553.md`](../release-notes/release-notes-since-iSH-AOK_553.md)
 for the same build — same fixes, same narrative, shorter. Only 3 of the ~30
 numbered releases ever got a second "summary" file; the release process
 (`docs/book/ch37-releasing.md`) now writes one release-notes file per build,

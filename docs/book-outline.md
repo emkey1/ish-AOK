@@ -157,7 +157,7 @@ which is why this outline is worth trusting:
   the emulator turned out to be behavior real Linux shares.
 - How this book uses that record.
 
-*Anchors:* `docs/TODO.md`, `docs/release-notes-since-iSH-AOK_*.md`.
+*Anchors:* `docs/TODO.md`, `docs/release-notes/release-notes-since-iSH-AOK_*.md`.
 
 ---
 
@@ -776,9 +776,10 @@ correct in isolation and wrong at a page boundary.
 ## Chapter 37. Releasing
 
 - What a release is: bump `CURRENT_PROJECT_VERSION`, write
-  `docs/release-notes-since-iSH-AOK_<N>.md` and a summary, tag
-  `builds/iSH-AOK_<N>`. **The tag name is load-bearing** — the workflow triggers on
-  it, so a differently named tag produces no build.
+  `docs/release-notes/release-notes-since-iSH-AOK_<N>.md` — one file, opening
+  with its own summary paragraph — tag `builds/iSH-AOK_<N>`. **The tag name is
+  load-bearing** — the workflow triggers on it, so a differently named tag
+  produces no build.
 - `tools/release-aok.sh`: preflight, archive, export, upload; and where fastlane's
   Ruby requirements bite.
 - TestFlight, App Store review, and the entitlements story — including the
@@ -791,7 +792,7 @@ correct in isolation and wrong at a page boundary.
   history of the fork.
 
 *Anchors:* `tools/release-aok.sh`, `.github/workflows/build-release-ipa.yml`,
-`fastlane/`, `docs/release-notes-since-iSH-AOK_*.md`.
+`fastlane/`, `docs/release-notes/release-notes-since-iSH-AOK_*.md`.
 
 ---
 

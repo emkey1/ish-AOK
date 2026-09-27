@@ -364,7 +364,7 @@ MULTIOS 리다이렉션은 동반 네이티브 프로그램인 `zsh-multio` 를 
 필요한데 Alpine 이미지에는 없어서 그곳에서는 에뮬레이트되는 `/bin/bash` 에서도
 똑같이 실패하고, `/dev/fd` 가 `/proc/self/fd` 심볼릭 링크인 Devuan 에서는 두 셸
 모두 동작합니다. *셸 자체의* 알려진 결함 두 가지는
-[docs/release-notes-since-iSH-AOK_549.md](docs/release-notes-since-iSH-AOK_549.md)
+[docs/release-notes/release-notes-since-iSH-AOK_549.md](docs/release-notes/release-notes-since-iSH-AOK_549.md)
 의 *Known gaps* 에 적혀 있습니다. 패턴이 처음 쓰일 때 컴파일되어 파스 트리에
 캐시되는데 그때 어떤 옵션이 켜져 있었는지는 어디에도 기록되지 않아, 다시 띄워진
 자식이 부모와 다른 옵션으로 컴파일할 수 있다는 것, 그리고 multio 아래의
@@ -481,7 +481,7 @@ ISH_LOG = verbose strace
 Ruby/Bundler/Fastlane 환경과 서명 및 인증 시크릿이 필요합니다.
 
 릴리스 자체는 `CURRENT_PROJECT_VERSION`을 올리고,
-`docs/release-notes-since-iSH-AOK_<N>.md`와 `docs/release-summary-iSH-AOK_<N>.md`를
+`docs/release-notes/release-notes-since-iSH-AOK_<N>.md`를
 추가한 뒤, 해당 커밋에 `builds/iSH-AOK_<N>` 태그를 붙여 만듭니다. 태그 이름은 그 자체로
 동작에 관여합니다. `.github/workflows/build-release-ipa.yml`이 `builds/iSH-AOK_*`에서
 트리거되므로, 다르게 이름 붙인 태그는 릴리스 빌드를 만들지 않습니다.

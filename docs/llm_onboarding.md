@@ -227,7 +227,7 @@ recurs most.
 - **`docs/roadmap.md`** — near-term priorities (as opposed to TODO.md's
   record of what's already known). `docs/build_<N>_musts.md` — commitments
   for the release currently being prepared.
-- **`docs/release-notes-since-iSH-AOK_<N>.md`** — written for users, detailed
+- **`docs/release-notes/release-notes-since-iSH-AOK_<N>.md`** — written for users, detailed
   enough to reconstruct the engineering behind each build.
 - **`.jules/`** — append-only, dated, per-theme learnings logs (performance
   in `bolt.md`, security-relevant findings in `sentinel.md`, accessibility in

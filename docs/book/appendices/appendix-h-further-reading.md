@@ -25,7 +25,7 @@ entries with measurements and rejected designs; closed entries with their full
 investigation, including the wrong first hypothesis; and a "Deferred on purpose"
 section. The single most informative file in the tree.
 
-**`docs/release-notes-since-iSH-AOK_521.md` … `_551.md`** — written for users and
+**`docs/release-notes/release-notes-since-iSH-AOK_521.md` … `_551.md`** — written for users and
 detailed enough to reconstruct the engineering (Chapter 37).
 
 **The port plans** — `docs/historical/amd64_port_plan.md`, `docs/aarch64_guest_plan.md`,

@@ -24,7 +24,7 @@ archive.
 | [wayland_workspace_plan.md](wayland_workspace_plan.md) | the Tier 1/2 plan for a guest Wayland desktop shown via a vendored noVNC/WKWebView/WebSocket bridge | [app/DisplayRFBClient.h](../../app/DisplayRFBClient.h); the top-level goal shipped but that specific transport was replaced by a native Metal RFB client before release |
 | [suspend_full_resume_plan.md](suspend_full_resume_plan.md) | the 2026-09-12 design note for restoring app/Workspace UI state on top of a guest checkpoint | [docs/roadmap.md](../roadmap.md)'s "557 -- reach" section and [opt/AOK/docs/suspend.md](../../opt/AOK/docs/suspend.md); shipped as Suspend to Disk, confirmed 2026-09-27 |
 | [apt_runtime_syscall_audit.md](apt_runtime_syscall_audit.md) | a syscall-gap audit for apt/helper-process startup, self-dated 2026-03-23 | [docs/book/appendices/appendix-c-syscall-coverage.md](../book/appendices/appendix-c-syscall-coverage.md); every gap it lists (`pidfd_send_signal`, `clock_adjtime64`, ...) has since been closed |
-| [release-summary-iSH-AOK_547.md](release-summary-iSH-AOK_547.md), [_548.md](release-summary-iSH-AOK_548.md), [_553.md](release-summary-iSH-AOK_553.md) | a one-off "summary" companion file, written for only 3 of ~30 numbered releases | the corresponding `docs/release-notes-since-iSH-AOK_<N>.md` for the same build, which covers the same ground; see the release-process note below |
+| [release-summary-iSH-AOK_547.md](release-summary-iSH-AOK_547.md), [_548.md](release-summary-iSH-AOK_548.md), [_553.md](release-summary-iSH-AOK_553.md) | a one-off "summary" companion file, written for only 3 of ~30 numbered releases | the corresponding `docs/release-notes/release-notes-since-iSH-AOK_<N>.md` for the same build, which covers the same ground; see the release-process note below |
 
 ## The `build_<N>_musts.md` series
 
@@ -42,12 +42,18 @@ performance gap. That correction is only legible with both files in hand.
 
 ## One release-notes file per release
 
-`docs/release-notes-since-iSH-AOK_<N>.md` is the only release-facing document
-the release process writes: one file per numbered build, named consistently,
-with its own summary as the opening paragraph. A separate
-`release-summary-iSH-AOK_<N>.md` was written for three builds (547, 548, 553)
-as a condensed duplicate of the same content — an inconsistently-named,
-inconsistently-produced second format that never became the practice for the
-other ~27 releases. Those three are archived here rather than continued;
-[docs/book/ch37-releasing.md](../book/ch37-releasing.md) states the one-file
-rule explicitly so it does not drift again.
+`docs/release-notes/release-notes-since-iSH-AOK_<N>.md` is the only
+release-facing document the release process writes: one file per numbered
+build, named consistently, with its own summary as the opening paragraph. A
+separate `release-summary-iSH-AOK_<N>.md` was written for three builds (547,
+548, 553) as a condensed duplicate of the same content — an
+inconsistently-named, inconsistently-produced second format that never became
+the practice for the other ~27 releases. Those three are archived here rather
+than continued; [docs/book/ch37-releasing.md](../book/ch37-releasing.md)
+states the one-file rule explicitly so it does not drift again. The release
+notes themselves moved from `docs/` into `docs/release-notes/` on 2026-09-27
+to stop 32 dated files from crowding the top level;
+[.github/workflows/build-release-ipa.yml](../../.github/workflows/build-release-ipa.yml)
+reads this exact path to populate each GitHub release, and this is the second
+time that path has moved, so check it first if a future release ever
+publishes with the placeholder body again.

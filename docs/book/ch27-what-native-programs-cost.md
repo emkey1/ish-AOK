@@ -239,7 +239,7 @@ run inside, and what it takes to make an emulator feel like a terminal.
 [kernel/time.c](../../kernel/time.c) (`clock_nanosleep_common`),
 [main.c](../../main.c) (`cli_halt`'s comment on `fflush(NULL)`),
 [docs/TODO.md](../../docs/TODO.md),
-[docs/release-notes-since-iSH-AOK_549.md](../../docs/release-notes-since-iSH-AOK_549.md).
+[docs/release-notes/release-notes-since-iSH-AOK_549.md](../../docs/release-notes/release-notes-since-iSH-AOK_549.md).
 
 *Story:* a weak import of `strchrnul` resolving to NULL — and every device below
 iOS 18.4 crashing at address zero the moment the terminal started.

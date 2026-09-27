@@ -365,7 +365,7 @@ Alpine image does not provide, so it fails identically under the emulated
 `/bin/bash` there and works under both shells on Devuan, where `/dev/fd` is a
 symlink to `/proc/self/fd`. Two known gaps that *are* the shell's are recorded
 under *Known gaps* in
-[docs/release-notes-since-iSH-AOK_549.md](docs/release-notes-since-iSH-AOK_549.md):
+[docs/release-notes/release-notes-since-iSH-AOK_549.md](docs/release-notes/release-notes-since-iSH-AOK_549.md):
 a pattern is compiled at first use and cached in the parse tree with nothing
 recording the options in force at the time, so a re-launched child can compile
 it under different options than its parent did; and `pipestatus` under a multio
@@ -486,7 +486,7 @@ here.
 Ruby/Bundler/Fastlane setup plus signing and auth secrets.
 
 Releases themselves are cut by bumping `CURRENT_PROJECT_VERSION`, adding
-`docs/release-notes-since-iSH-AOK_<N>.md` and `docs/release-summary-iSH-AOK_<N>.md`,
+`docs/release-notes/release-notes-since-iSH-AOK_<N>.md`,
 and tagging that commit `builds/iSH-AOK_<N>`. The tag name is load-bearing:
 `.github/workflows/build-release-ipa.yml` triggers on `builds/iSH-AOK_*`, so a
 differently named tag produces no release build.

@@ -334,7 +334,7 @@ MULTIOS 重定向使用配套的原生程序 `zsh-multio`，因为那些描述�
 `/dev/fd`，Alpine 镜像没有提供，因此在那里用模拟执行的 `/bin/bash` 也同样失败；而在
 `/dev/fd` 是指向 `/proc/self/fd` 的符号链接的 Devuan 上，两个 shell 都正常。两个确实
 属于 shell 自身的已知缺陷记录在
-[docs/release-notes-since-iSH-AOK_549.md](docs/release-notes-since-iSH-AOK_549.md)
+[docs/release-notes/release-notes-since-iSH-AOK_549.md](docs/release-notes/release-notes-since-iSH-AOK_549.md)
 的 *Known gaps* 中：模式在首次使用时被编译并缓存进语法树，而当时生效的选项没有被任何
 地方记录下来，因此重新启动的子进程可能在与父进程不同的选项下编译它；以及在 multio 下
 `pipestatus` 报告 `1 0`，而 zsh 报告 `0 0`。
@@ -444,7 +444,7 @@ ISH_LOG = verbose strace
 环境以及签名和认证密钥。
 
 发布本身的做法是：提升 `CURRENT_PROJECT_VERSION`，添加
-`docs/release-notes-since-iSH-AOK_<N>.md` 和 `docs/release-summary-iSH-AOK_<N>.md`，
+`docs/release-notes/release-notes-since-iSH-AOK_<N>.md`，
 然后在该提交上打上 `builds/iSH-AOK_<N>` 标签。标签名本身是有作用的：
 `.github/workflows/build-release-ipa.yml` 由 `builds/iSH-AOK_*` 触发，因此命名不同的
 标签不会产生发布构建。

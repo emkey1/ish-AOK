@@ -170,8 +170,10 @@ jobs:
           # looked for docs-less "release-notes-since-iSH-AOK_$((N-1)).md" in the
           # checkout root, which has matched nothing since the notes moved into
           # docs/ (60b9b8285) -- so builds 544 through 548 all published with the
-          # placeholder body below instead of their notes.
-          NOTES_FILE="docs/release-notes-since-iSH-AOK_${BUILD_N}.md"
+          # placeholder body below instead of their notes. Moved again, into
+          # docs/release-notes/, on 2026-09-27 -- update this path if it moves
+          # again, or history repeats a third time.
+          NOTES_FILE="docs/release-notes/release-notes-since-iSH-AOK_${BUILD_N}.md"
           if [ -f "$NOTES_FILE" ]; then
             NOTES_ARGS=(--notes-file "$NOTES_FILE")
           else

@@ -399,7 +399,7 @@ shipped for `strace -f`, and the symptom it described has a different cause.
 
 Not repeated here, but a reader of this document should know where they are.
 
-**554's own known gaps** (`docs/release-notes-since-iSH-AOK_554.md`) — two of
+**554's own known gaps** (`docs/release-notes/release-notes-since-iSH-AOK_554.md`) — two of
 them are directly the 555 theme and should be read before the suspend-to-disk
 design, not after: **swap does not survive a guest reboot** (the area is
 recreated empty, and `swapoff` tears it down rather than parking it), and
