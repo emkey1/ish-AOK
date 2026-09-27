@@ -24,7 +24,6 @@ does not say what it is for.
 | `aio_basic.c` | yes | Linux native AIO (the io_* family), which iSH-AOK stubbed to ENOSYS until MariaDB dereferenced the nullptr that came back and crash-looped on install. |
 | `aio_threads.c` | yes | AIO under concurrency, which is the way MariaDB uses it: many threads sharing one context, and a teardown that can land while they are still... |
 | `ambient_caps.c` | yes | Ambient capabilities + SECBIT_KEEP_CAPS across a root-to-nonroot uid transition -- the exact sequence systemd's executor runs for every service... |
-| `aokgfx_protocol.c` | yes | /dev/aokgfx speaks its wire format, and refuses the things it should. |
 | `arm64/ands_bcond_fusion.c` | yes | Regression coverage for jit/guest-arm64/control.S's ANDS+B.cond gadget fusion (fused_andsi/fused_andsr, wired in gen.c's opc==3 peek-ahead in... |
 | `arm64/arm64_fp_env.c` | yes | arm64_fp_env.c -- FPCR and FPSR at the instruction level. |
 | `arm64/arm64_regress.c` | yes | arm64 guest regressions: one check per real bug class found while bringing up the AArch64 JIT (the counterpart of x86/amd64_regress.c). |

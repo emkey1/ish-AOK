@@ -168,7 +168,6 @@ struct dev_ops *char_devs[256] = {
     [TTY_PSEUDO_SLAVE_MAJOR] = &tty_dev,
     [DEV_RTC_MAJOR] = &rtc_dev,
     [DYN_DEV_MAJOR] = &dyn_dev_char,
-    [AOKGFX_MAJOR] = &aokgfx_dev,
 };
 
 const struct dev_node_spec dev_standard_nodes[] = {
@@ -194,10 +193,6 @@ const struct dev_node_spec dev_standard_nodes[] = {
     {"tty7",    0666, TTY_CONSOLE_MAJOR, 7},
     {"rtc0",    0666, DEV_RTC_MAJOR, DEV_RTC_MINOR},
     {"fuse",    0666, MISC_MAJOR, DEV_FUSE_MINOR},
-    // 0666 like the other draw-on-my-screen devices: a graphics channel is no
-    // more privileged than /dev/dsp, and the single-open rule in fs/aokgfx.c
-    // is what keeps two programs from interleaving commands, not the mode.
-    {"aokgfx",  0666, AOKGFX_MAJOR, DEV_AOKGFX_MINOR},
     // 0660 and not 0666: a Linux swap block device is brw-rw---- root:disk
     // (verified against /dev/loop1). dev_node_spec carries no uid/gid so this
     // lands root:root, which is as close as AOK can say -- there is no disk

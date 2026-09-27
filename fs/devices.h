@@ -52,14 +52,6 @@
 // devices.txt 240-254 "local/experimental" range, which is what this is: AOK's
 // swap area is not a Linux device and 241 is a local number, not a claim on an
 // upstream one.
-// The AOK graphics channel (/dev/aokgfx, fs/aokgfx.c). A CHAR major of its
-// own rather than a DYN_DEV minor, because unlike the clipboard and the rest
-// this device is implemented in the kernel and is present whether or not an
-// app is attached -- the renderer registers a backend with it, it does not
-// provide the device. 242 is inside devices.txt's 240-254 local/experimental
-// range and unused in both major tables.
-#define AOKGFX_MAJOR 242
-#define DEV_AOKGFX_MINOR 0
 
 #define AOKSWAP_MAJOR 241
 #define DEV_AOKSWAP_MINOR 0

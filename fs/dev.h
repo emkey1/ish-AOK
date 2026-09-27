@@ -91,6 +91,5 @@ int dev_open(int major, int minor, int type, struct fd *fd);
 
 extern struct dev_ops null_dev;
 extern struct dev_ops fuse_dev; // fs/fuse.c
-extern struct dev_ops aokgfx_dev; // fs/aokgfx.c
 
 #endif
