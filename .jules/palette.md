@@ -44,3 +44,7 @@
 ## 2024-05-30 - Missing Accessibility Hints in Applet Toolbars
 **Learning:** Adding an `accessibilityLabel` to a UI element allows a screen reader to announce its name, but if its purpose or effect isn't clear, VoiceOver users won't know what action will result from activating it. This applies to applet toolbars where actions might be context-specific.
 **Action:** Always provide an `accessibilityHint` that concisely describes the outcome of activating the element for applet toolbars (e.g., "Navigates back to the previous document.", "Cancels the video extraction process.").
+
+## 2024-09-27 - Added accessibilityHint to File Manager navigation buttons
+**Learning:** Navigation buttons in the file manager need accessibility hints to clarify their destination or action.
+**Action:** Added accessibility hints to the Back, Forward, Up, and More Actions buttons in WorkspaceFileManager.

@@ -300,12 +300,16 @@ static NSString *ISHHomeDirectoryForUID(NSData *passwdData, uid_t targetUID) {
 
     _backButton = [self toolbarIconButtonNamed:@"chevron.left" action:@selector(navigateBack)];
     _backButton.accessibilityLabel = @"Back";
+    _backButton.accessibilityHint = @"Navigates back to the previous folder.";
     _forwardButton = [self toolbarIconButtonNamed:@"chevron.right" action:@selector(navigateForward)];
     _forwardButton.accessibilityLabel = @"Forward";
+    _forwardButton.accessibilityHint = @"Navigates forward to the next folder.";
     _upButton = [self toolbarIconButtonNamed:@"arrow.up" action:@selector(navigateUp)];
     _upButton.accessibilityLabel = @"Up";
+    _upButton.accessibilityHint = @"Navigates to the parent folder.";
     _moreButton = [self toolbarIconButtonNamed:@"ellipsis.circle" action:nil];
     _moreButton.accessibilityLabel = @"More Actions";
+    _moreButton.accessibilityHint = @"Shows more actions for this folder.";
     _moreButton.showsMenuAsPrimaryAction = YES;
 
     // Finder-style breadcrumb: one button per path component inside a
