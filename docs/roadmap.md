@@ -476,6 +476,9 @@ release.
 **Suspend to disk ships**, behind a Settings switch and off by default, on the
 same reasoning swap ships that way: a feature that spends the user's storage and
 can lose their session is one they opt into.
+**Done (confirmed 2026-09-27):** the switch is Settings → Suspend to Disk
+(7e68cfc6), registered off by default (`kPreferenceSuspendToDiskKey: @(NO)` in
+`UserPreferences.m`); the user's guide is `opt/AOK/docs/suspend.md`.
 
 **Keyboard toolbar customization, [#609](https://github.com/emkey1/ish-AOK/issues/609) -- a user request (2026-09-24).** In their
 words: "reorganizing and adding/removing custom toolbar buttons."
