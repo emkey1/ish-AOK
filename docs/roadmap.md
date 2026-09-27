@@ -613,6 +613,19 @@ whatever this becomes, like any other program.
   to allocate output buffers (GBM fell back to DRM dumb buffers) and the
   desktop never started; start-wayland.sh now pins WLR_RENDERER=pixman
   unless the caller sets it.
+- **Step 5d (2026-09-27): the gate on the M4 -- go.** A stock device build,
+  the user's Devuan 6 root and its running desktop (labwc as root, wayvnc
+  to the app), clients through Mesa's shared-memory present
+  (`MESA_VK_WSI_DEBUG=sw`); CPU is device-wide from `/proc/stat`:
+
+  | | Venus | software |
+  |---|---|---|
+  | vkcube, FIFO | 54.8 fps, 8.3 ms CPU/frame | lavapipe 29.1 fps, 47.3 ms |
+  | glmark2 (zink), 800x600 | score 1299, 0.82 ms CPU/frame | llvmpipe score 90, 50.2 ms |
+
+  glmark2 is 14x the frame rate at 1/61 of the CPU per frame; vkcube, which
+  FIFO holds near the output's rate, is 1/5.7. Every term of the gate is
+  met. What is left is making it cheaper still and the default.
 - **Next:** (5c) zero copy: the dma-buf import lets a GPU compositor
   (wlroots' Vulkan renderer on Venus) sample client buffers, and the app
   show the output buffer as a Metal texture instead of VNC. (5d) glmark2
