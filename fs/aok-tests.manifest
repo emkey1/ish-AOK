@@ -271,6 +271,7 @@ timer_missed_periods.c
 itimer_prof_rate.c
 timer_thread_cpu_early.c
 mmap_conventions.c
+virtgpu_node.c
 fd_conventions.c
 proc_files.c
 signal_conventions.c

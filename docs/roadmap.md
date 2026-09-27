@@ -549,9 +549,8 @@ whatever this becomes, like any other program.
 
   Copying every 1280x720 frame back to guest memory costs about 0.1 ms CPU
   per frame more. Against the gate: ~570x the frame rate and well under 1/5
-  of the CPU per frame. Run with `DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib`:
-  virglrenderer dlopens the Vulkan loader or MoltenVK by leaf name
-  (`vkr_library.c`), which is also what has to change for iOS.
+  of the CPU per frame. (This run dlopened Homebrew's Vulkan loader; since
+  step 6 MoltenVK is linked in and nothing is loaded.)
 - **Phase 0, step 4 (2026-09-27): the M4, in the app -- go.** virglrenderer
   cross-builds for iOS as it is (`-Dvulkan-dload=false` links MoltenVK's
   `vkGetInstanceProcAddr`, no dlopen); MoltenVK 1.4.2's release ships an iOS
@@ -559,10 +558,8 @@ whatever this becomes, like any other program.
   branch `ish-aok`, which also carries venus-protocol so a build needs no
   network): the
   include fix above, and an unlinked temp file when `shm_open` is refused.
-  `tools/build-gpu-renderer.sh` builds it all; the app links it only when
-  `AOK_VIRGLRENDERER_DIR` and `AOK_VIRGL_LDFLAGS` are set (`app/iSH.xcconfig`),
-  so a normal build is unchanged. Size: libMoltenVK.a 7.1 MB and libvirgl.a
-  3.4 MB (archives, before dead-stripping). On the iPad Pro M4, Devuan 6's
+  Size: libMoltenVK.a 7.1 MB and libvirgl.a 3.4 MB (archives, before
+  dead-stripping). On the iPad Pro M4, Devuan 6's
   stock `mesa-vulkan-drivers` sees "Virtio-GPU Venus (Apple M4 GPU)". CPU is
   device-wide busy time from `/proc/stat` (idle iPad), less a zero-frame run:
 
@@ -575,12 +572,22 @@ whatever this becomes, like any other program.
   ~500x the frame rate at ~1/4500 of the CPU per frame, and 91 fps offscreen
   at 1280x720. What the gate also asks -- vkcube and glmark2 on screen in the
   Wayland desktop -- is the next step, not a doubt about the renderer.
-- **Next:** (5) presenting: vkcube and glmark2 (zink) in the
-  Wayland desktop, which needs the compositor to take the guest's buffers;
-  (6) shipping it: the renderer in the release build rather than behind two
-  settings -- MoltenVK fetched or built by the build, the renderer built by
-  `xcode-meson.sh` from `deps/virglrenderer` (the fork submodule is done,
-  2026-09-27) -- and a simulator slice. Gaps in the device, for later: no GUEST blobs or DRM syncobjs (Mesa needs
+- **Step 6 (2026-09-27): in every build.** Both halves are fork submodules
+  built as meson subprojects of the kernel and merged into libish, so the CLI,
+  the device app and the simulator get the node with nothing to set:
+  `deps/virglrenderer` (emkey1/virglrenderer, `ish-aok`: also carries
+  venus-protocol and its generated headers, so no network and no Python mako)
+  and `deps/MoltenVK` (emkey1/MoltenVK, `ish-aok`: a meson build of MoltenVK
+  1.4.2 with SPIRV-Cross, Vulkan-Headers and cereal committed under
+  `aok/external`; upstream's own build fetches them, needs Xcode per platform,
+  and its CMake is macOS-only). `subprojects/{virglrenderer,MoltenVK}` link
+  to the submodules; `-Dgpu=auto` builds them on Darwin when both are checked
+  out. The app links only `-lc++` and the Metal, IOSurface and QuartzCore
+  frameworks (`app/App.xcconfig`). The CLI now needs no Homebrew Vulkan and no
+  `DYLD_*`. MoltenVK compiles in about 30 s per slice; a clean device build
+  took 146 s. The M4 gives the same numbers as step 4 from a stock build.
+- **Next:** (5) presenting: vkcube and glmark2 (zink) in the Wayland desktop,
+  which needs the compositor to take the guest's buffers. Gaps in the device, for later: no GUEST blobs or DRM syncobjs (Mesa needs
   neither), one lock around all renderer calls, and no checkpoint support for an
   open node or its fences.
 

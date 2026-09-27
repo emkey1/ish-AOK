@@ -53,10 +53,3 @@ AOK_RUST_FEATURES =
 ISH_GUEST_ARCHS = i386,amd64,arm64,riscv64
 
 ROOTFS_URL = github.com/ish-app/roots/releases/download/g5739cf3df9f8bd3acb82b59c2397cb3daead19c4/appstore-apk.tar.gz
-
-// The GPU render node, /dev/dri/renderD128 (fs/virtgpu.c, #484). Off unless
-// both are set: a virglrenderer build directory for this platform (Venus only,
-// static, -Dvulkan-dload=false), and the flags that link it with MoltenVK.
-// tools/build-gpu-renderer.sh builds both and prints the two values.
-AOK_VIRGLRENDERER_DIR =
-AOK_VIRGL_LDFLAGS =

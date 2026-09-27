@@ -10,4 +10,6 @@ CODE_SIGN_ENTITLEMENTS = app/iSH.entitlements
 
 HEADER_SEARCH_PATHS = $(inherited) $(SRCROOT) $(SRCROOT)/deps/libarchive/libarchive
 // AccessibilityFixes.m contains a static constructor that we don't want removed
-OTHER_LDFLAGS = -ObjC -u _accessibilityfixes_init $(AOK_VIRGL_LDFLAGS)
+// MoltenVK, inside libish.a with the GPU render node (fs/virtgpu.c), is C++
+// over Metal.
+OTHER_LDFLAGS = -ObjC -u _accessibilityfixes_init -lc++ -framework Metal -framework IOSurface -framework QuartzCore

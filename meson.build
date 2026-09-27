@@ -1782,16 +1782,39 @@ endif
 if have_helix
     ish_c_args += '-DISH_NATIVE_HELIX'
 endif
-# /dev/dri/renderD128 (fs/virtgpu.c, #484): virglrenderer's Venus renderer,
-# linked from a build of it (-Dvrend=false -Dvenus=true). Empty: no node.
-virgl_link_args = []
-virgl_dir = get_option('virglrenderer')
-if virgl_dir != ''
+# /dev/dri/renderD128 (fs/virtgpu.c, #484): virglrenderer's Venus renderer
+# over MoltenVK, both built here as subprojects (subprojects/virglrenderer
+# and subprojects/MoltenVK link to the submodules in deps/) and merged into
+# libish -- so the Xcode build carries them inside libish.a, and the app links
+# only the frameworks they use (app/App.xcconfig). auto: on Darwin, when both
+# submodules are checked out.
+virgl_libs = []
+virgl_deps = []
+gpu_opt = get_option('gpu')
+have_gpu = false
+if not gpu_opt.disabled() and host_machine.system() == 'darwin'
+    have_gpu = (fs_mod.exists('deps/virglrenderer/src/venus/vkr_renderer.c') and
+                fs_mod.exists('deps/MoltenVK/meson.build'))
+    if gpu_opt.enabled() and not have_gpu
+        error('-Dgpu=enabled but deps/virglrenderer or deps/MoltenVK is not checked out')
+    endif
+endif
+if have_gpu
+    moltenvk = subproject('MoltenVK')
+    # virglrenderer's Venus renderer links vkGetInstanceProcAddr directly
+    # (vulkan-dload=false): MoltenVK is its Vulkan.
+    meson.override_dependency('vulkan', moltenvk.get_variable('moltenvk_dep'))
+    virgl = subproject('virglrenderer', default_options: [
+        'default_library=static', 'vrend=false', 'venus=true', 'vulkan-dload=false',
+        'render-server-worker=thread', 'tests=false', 'werror=false', 'warning_level=0',
+    ])
+    virgl_libs = [virgl.get_variable('libvirgl'), virgl.get_variable('libmesa'),
+                  moltenvk.get_variable('libmoltenvk')]
     ish_c_args += '-DISH_VIRTGPU'
-    virgl_link_args = [
-        virgl_dir / 'src/libvirgl.a', virgl_dir / 'src/mesa/libmesa.a',
-        '-framework', 'Metal', '-framework', 'IOSurface', '-framework', 'Foundation',
-    ]
+    if not meson.is_cross_build()
+        virgl_deps = [moltenvk.get_variable('framework_deps'),
+                      dependency('appleframeworks', modules: ['CoreFoundation'])]
+    endif
 endif
 
 # motepad is a native PROGRAM, so its libc calls have to reach the guest --
@@ -1833,12 +1856,11 @@ libktop = static_library('ktop', 'opt/AOK/tools/ktop/ktop.c',
 
 libish = library('ish', src,
     objects: librustnative,
-    link_whole: [libsmallclue, libnextvi, libbash, libzsh, libdash, libopenssh, libmotepad, libktop] + libopenssh_special + libcurlshim,
+    link_whole: [libsmallclue, libnextvi, libbash, libzsh, libdash, libopenssh, libmotepad, libktop] + libopenssh_special + libcurlshim + virgl_libs,
     include_directories: includes, c_args: ish_c_args)
 ish = declare_dependency(
     link_with: [libish, libish_emu, libfakefs],
-    link_args: virgl_link_args,
-    dependencies: dependencies,
+    dependencies: dependencies + virgl_deps,
     include_directories: includes)
 
 if not meson.is_cross_build()

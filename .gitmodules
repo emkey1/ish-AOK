@@ -37,3 +37,7 @@
 	path = deps/virglrenderer
 	url = https://github.com/emkey1/virglrenderer.git
 	branch = ish-aok
+[submodule "deps/MoltenVK"]
+	path = deps/MoltenVK
+	url = https://github.com/emkey1/MoltenVK.git
+	branch = ish-aok
