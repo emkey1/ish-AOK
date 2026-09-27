@@ -186,7 +186,7 @@ may well work, but nobody has run them. And it has been run on **Devuan** (apt)
 and **Alpine** (apk); **Arch** (pacman) installs the same stack under the same
 names, and its packages resolve, but no one has run a session on it.
 
-You may also come across `wayland_workspace_plan.md` in the project's design
+You may also come across `docs/historical/wayland_workspace_plan.md` in the project's design
 docs. That is the forward design document this applet came out of; where it and
 the shipped applet disagree, the applet is right.
 

@@ -95,8 +95,8 @@ PROGRAMS_EXCLUDED="smallclue rust-probe zsh-multio"
 # comment said the opposite of the code for a while, which is exactly what a
 # second copy of a decision buys you.
 #
-# The ordering used to be the other way round. bash is removed in 556 (it is
-# GPLv3, see docs/shell_transition_plan.md), so preferring it would keep handing
+# The ordering used to be the other way round. bash is disabled by default (it
+# is GPLv3, see docs/historical/shell_transition_plan.md), so preferring it would keep handing
 # new installs the shell that is going away; bash stays reachable with
 # --shell bash for as long as it exists.
 SHELL_WANT=
@@ -543,8 +543,9 @@ resolve_native_shell() {
 # ---- native bash is going away, and a login shell that does not exist locks
 # ---- the account out -------------------------------------------------------
 #
-# bash is GPLv3, so an App Store build cannot contain it; native bash is removed
-# in 556 (docs/shell_transition_plan.md). Anyone whose login shell is
+# bash is GPLv3, so an App Store build cannot contain it; native bash is
+# disabled by default starting in 556 (docs/historical/shell_transition_plan.md).
+# Anyone whose login shell is
 # /AOK/native/bash would find, on that upgrade, that their shell is simply gone
 # -- which is not a degraded session, it is no session.
 #

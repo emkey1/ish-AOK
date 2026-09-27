@@ -1,4 +1,4 @@
-# Vendor/user extension hook smoke test (riscv64_guest_plan.md patch 5b;
+# Vendor/user extension hook smoke test (docs/historical/riscv64_guest_plan.md patch 5b;
 # jit/riscv64_vendor_ext.c; opt/AOK/docs/riscv64-vendor-extensions.md).
 #
 # Custom mnemonics (ish.clz/ish.ctz/ish.pcnt/ish.bswap) aren't known to any

@@ -1,7 +1,7 @@
 // RISC-V vendor/user extension hook: a decode-miss registry that lets
 // custom instructions execute via one generic "call a C handler" gadget,
 // with NO interpreter and NO change to the JIT's engine-only-for-the-
-// ratified-ISA design (riscv64_guest_plan.md patch 5b).
+// ratified-ISA design (docs/historical/riscv64_guest_plan.md patch 5b).
 //
 // This file is ALSO the reference implementation for /AOK/docs' vendor
 // extension write-up (opt/AOK/docs/riscv64-vendor-extensions.md) — the

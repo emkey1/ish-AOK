@@ -46,7 +46,7 @@ Relevant files:
 - [jit/gen.c](jit/gen.c) instruction translation for every guest
 - [jit/jit.c](jit/jit.c) block cache and dispatch
 - [kernel/calls.c](kernel/calls.c) per-ABI syscall tables
-- [docs/amd64_port_plan.md](docs/amd64_port_plan.md)
+- [docs/historical/amd64_port_plan.md](docs/historical/amd64_port_plan.md)
 - [docs/aarch64_guest_plan.md](docs/aarch64_guest_plan.md)
 
 ## Performance
@@ -248,7 +248,7 @@ build.
 > Login shells naming `/AOK/native/bash` are converted to the guest's own bash
 > automatically by `native-links.sh`, so nobody already using it was locked out
 > by the change.
-> See [docs/shell_transition_plan.md](docs/shell_transition_plan.md).
+> See [docs/historical/shell_transition_plan.md](docs/historical/shell_transition_plan.md).
 
 bash can be compiled into the app as a native program (`-Dnative_bash=enabled`),
 though build 556 does not ship it by default. The win, when it is built in, is

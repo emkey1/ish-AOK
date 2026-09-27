@@ -49,7 +49,7 @@ Testflight: https://testflight.apple.com/join/X1flyiqE
 - [jit/gen.c](jit/gen.c) 모든 게스트의 명령어 변환
 - [jit/jit.c](jit/jit.c) 블록 캐시와 디스패치
 - [kernel/calls.c](kernel/calls.c) ABI별 시스템 콜 테이블
-- [docs/amd64_port_plan.md](docs/amd64_port_plan.md)
+- [docs/historical/amd64_port_plan.md](docs/historical/amd64_port_plan.md)
 - [docs/aarch64_guest_plan.md](docs/aarch64_guest_plan.md)
 
 ## 성능
@@ -252,7 +252,7 @@ ninja -C build
 > 가리키는 로그인 셸은 `native-links.sh` 가 게스트 자체의 bash 로 자동
 > 변환하므로, 이미 그것을 쓰던 사람이 이번 변경으로 로그인하지 못하게 되는
 > 일은 없습니다.
-> [docs/shell_transition_plan.md](docs/shell_transition_plan.md) 을 참고하십시오.
+> [docs/historical/shell_transition_plan.md](docs/historical/shell_transition_plan.md) 을 참고하십시오.
 
 bash 는 네이티브 프로그램으로 앱에 컴파일해 넣을 수 있지만(`-Dnative_bash=enabled`),
 빌드 556 은 기본적으로 이를 포함하지 않습니다. 컴파일해 넣었을 때의 이득은 fork 가

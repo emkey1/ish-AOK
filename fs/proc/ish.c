@@ -514,8 +514,9 @@ static int proc_ish_show_checkpoint(struct proc_entry *UNUSED(entry), struct pro
             // zsh already knows how to describe itself and re-launch
             // (deps/zsh/Src/aok_fork.c), which is the same capability a
             // checkpoint needs. bash does NOT and will not: it is GPLv3, so an
-            // App Store build cannot contain it, and it is being removed in 556
-            // (docs/shell_transition_plan.md). Teaching it to dump state would
+            // App Store build cannot contain it, and it ships disabled by
+            // default (native_bash meson option;
+            // docs/historical/shell_transition_plan.md). Teaching it to dump state would
             // be work thrown away, so a native bash is a hard refusal rather
             // than a wait-for-a-quiet-point.
             if (strcmp(task->comm, "zsh") == 0)

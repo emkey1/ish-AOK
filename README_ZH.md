@@ -47,7 +47,7 @@ Testflight: https://testflight.apple.com/join/X1flyiqE
 - [jit/gen.c](jit/gen.c) 所有客户机的指令翻译
 - [jit/jit.c](jit/jit.c) 代码块缓存与分派
 - [kernel/calls.c](kernel/calls.c) 各 ABI 的系统调用表
-- [docs/amd64_port_plan.md](docs/amd64_port_plan.md)
+- [docs/historical/amd64_port_plan.md](docs/historical/amd64_port_plan.md)
 - [docs/aarch64_guest_plan.md](docs/aarch64_guest_plan.md)
 
 ## 性能
@@ -237,7 +237,7 @@ libc 符号。它是特意手动运行的，没有接进构建流程。
 > 重新启动它并如实报告这一点。zsh 是唯一一个能带着你的会话原样回来的原生程序。
 > 指向 `/AOK/native/bash` 的登录 shell 会由 `native-links.sh` 自动转换为客户机自带的
 > bash，因此已经在用它的人不会因为这次变更而被挡在登录之外。
-> 参见 [docs/shell_transition_plan.md](docs/shell_transition_plan.md)。
+> 参见 [docs/historical/shell_transition_plan.md](docs/historical/shell_transition_plan.md)。
 
 bash 可以作为原生程序编译进应用（`-Dnative_bash=enabled`），但构建 556 默认不会
 这样做。编译进去之后，收益在于解释执行而非 fork：算术循环比模拟执行的 shell

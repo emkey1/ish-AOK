@@ -1,3 +1,20 @@
+# iSH-AOK riscv64 Guest Port Plan (archived, not maintained)
+
+**This file is history.** Pre-implementation port plan dated 2026-07-10,
+written in future tense throughout. The riscv64 guest shipped in full
+(`GUEST_ABI_RISCV64`, `jit/guest-riscv64/*`), but this document's one concrete
+forward-looking design — a generic, all-architecture vendor-extension hook at
+`jit/ext.c`/`jit/ext.h` (§5b) — is not what was built; the actual
+implementation is the riscv64-specific
+[`jit/riscv64_vendor_ext.c`](../../jit/riscv64_vendor_ext.c), which
+[`docs/book/ch07-four-guests.md`](../book/ch07-four-guests.md) §7.5 names as
+"the reference implementation." Several source comments still point here
+(`kernel/abi.h`, `emu/interrupt.h`, `emu/arch/riscv64/decode.h`, `jit/gen.c`,
+`jit/riscv64_vendor_ext.c`, `tests/riscv64/riscv64_vendor_ext.s`) — the
+patch-numbered sections they cite are the parts of this plan that did land.
+
+---
+
 # iSH-AOK riscv64 Guest Port Plan
 
 Date: 2026-07-10

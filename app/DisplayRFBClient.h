@@ -46,7 +46,7 @@ NS_ASSUME_NONNULL_BEGIN
 //
 // Replaces DisplayNetworkBridge + the WS/noVNC/WKWebView stack entirely:
 // this connects straight to wayvnc's loopback TCP port (see
-// wayland_workspace_plan.md and the harmonic-giggling-aho plan for why).
+// docs/historical/wayland_workspace_plan.md and the harmonic-giggling-aho plan for why).
 @interface DisplayRFBClient : NSObject
 
 @property (nonatomic, weak, nullable) id<DisplayRFBClientDelegate> delegate;

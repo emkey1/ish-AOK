@@ -28,8 +28,8 @@ section. The single most informative file in the tree.
 **`docs/release-notes-since-iSH-AOK_521.md` … `_551.md`** — written for users and
 detailed enough to reconstruct the engineering (Chapter 37).
 
-**The port plans** — `docs/amd64_port_plan.md`, `docs/aarch64_guest_plan.md`,
-`docs/riscv64_guest_plan.md`. Read in that order they show a first port being a
+**The port plans** — `docs/historical/amd64_port_plan.md`, `docs/aarch64_guest_plan.md`,
+`docs/historical/riscv64_guest_plan.md`. Read in that order they show a first port being a
 rewrite, a second an adaptation, and a third a checklist.
 
 **`docs/perf_benchmarks_2026_08.md`** — the derivation of the 6.8 ns dispatch

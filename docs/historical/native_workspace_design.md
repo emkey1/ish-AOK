@@ -1,3 +1,19 @@
+# Native Workspace Design (archived, not maintained)
+
+**This file is history.** This is the early native-only Workspace design —
+its own stated Non-Goal was "guest-side X11/Wayland support... desktop/window-
+manager emulation." The project later reversed that decision: the Workspace
+"Display" applet now runs a real guest Wayland desktop (labwc/wayvnc), per
+[`docs/roadmap.md`](../roadmap.md)'s "556 -- the desktop is the product"
+section and [`app/DisplayViewController.h`](../../app/DisplayViewController.h).
+The component and scene-type names proposed here (`WorkspaceCoordinator`,
+`app.ish.scene.*`) were never built — current routing uses
+`ISHSceneActivityTypeWorkspace` (`app/SceneDelegate.m`). Kept because it shows
+the native-only philosophy the project explicitly moved past, per
+[`docs/book/ch31-files-workspace-tools.md`](../book/ch31-files-workspace-tools.md).
+
+---
+
 # Native Workspace Design
 
 ## Goal

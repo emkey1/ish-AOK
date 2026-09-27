@@ -1,3 +1,16 @@
+# iSH-AOK 547 release summary (archived, duplicate)
+
+**This file is history.** A condensed rewrite of
+[`docs/release-notes-since-iSH-AOK_547.md`](../release-notes-since-iSH-AOK_547.md)
+for the same build — same crash fixes, same narrative, shorter. Only 3 of the
+~30 numbered releases ever got a second "summary" file; the release process
+(`docs/book/ch37-releasing.md`) now writes one release-notes file per build,
+with the summary as its own opening paragraph rather than a separate file.
+Kept rather than deleted only because it is a verbatim record of what was
+written at the time.
+
+---
+
 iSH-AOK 547
 36 commits. Mostly crash fixes, and three of the four families were found in the
 field rather than in testing.

@@ -196,7 +196,7 @@ the only one that transfers to any system at all: **check the thing itself.**
 
 ---
 
-*Anchors:* [docs/wayland_workspace_plan.md](../../docs/wayland_workspace_plan.md),
+*Anchors:* [docs/historical/wayland_workspace_plan.md](../../docs/historical/wayland_workspace_plan.md),
 [docs/wayland_rotation_resize_plan.md](../../docs/wayland_rotation_resize_plan.md),
 [docs/external_display_plan.md](../../docs/external_display_plan.md),
 [docs/metal_sgemm_milestone1.md](../../docs/metal_sgemm_milestone1.md),

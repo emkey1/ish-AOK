@@ -229,7 +229,7 @@ invisible until they break.
 [tools/build-rust-native.sh](../../tools/build-rust-native.sh),
 [tools/gen-nlibc-renames.py](../../tools/gen-nlibc-renames.py),
 [tools/native-applet-audit.py](../../tools/native-applet-audit.py),
-[docs/native_workspace_design.md](../../docs/native_workspace_design.md).
+[docs/historical/native_workspace_design.md](../../docs/historical/native_workspace_design.md).
 
 *Story:* `fs::canonicalize` resolving against the Mac — because Darwin exports
 `_realpath$DARWIN_EXTSN` and the symbol-rename list was keyed on bare names, so

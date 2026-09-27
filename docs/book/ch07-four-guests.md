@@ -302,9 +302,9 @@ four tables), [kernel/task.h](../../kernel/task.h), [kernel/abi/](../../kernel/a
 [jit/guest-arm64/](../../jit/guest-arm64), [jit/guest-riscv64/](../../jit/guest-riscv64),
 [jit/riscv64_vendor_ext.c](../../jit/riscv64_vendor_ext.c),
 [main.c](../../main.c) (`configure_standalone_amd64_jit`),
-[docs/amd64_port_plan.md](../../docs/amd64_port_plan.md),
+[docs/historical/amd64_port_plan.md](../../docs/historical/amd64_port_plan.md),
 [docs/aarch64_guest_plan.md](../../docs/aarch64_guest_plan.md),
-[docs/riscv64_guest_plan.md](../../docs/riscv64_guest_plan.md),
+[docs/historical/riscv64_guest_plan.md](../../docs/historical/riscv64_guest_plan.md),
 [docs/CREDITS-aarch64.md](../../docs/CREDITS-aarch64.md),
 [docs/guest_architecture_benchmarks.md](../../docs/guest_architecture_benchmarks.md),
 `tests/arm64/`, `tests/riscv64/`.

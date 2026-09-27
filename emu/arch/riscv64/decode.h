@@ -2,7 +2,7 @@
 #define EMU_ARCH_RISCV64_DECODE_H
 
 // RV64GC decode helpers: pure functions over instruction words, no state.
-// Shared by the JIT generator (jit/gen.c, riscv64_guest_plan.md patch 5).
+// Shared by the JIT generator (jit/gen.c, docs/historical/riscv64_guest_plan.md patch 5).
 // Style follows emu/arch/arm64/decode.h.
 //
 // The C (compressed) extension is handled by expansion: every 16-bit

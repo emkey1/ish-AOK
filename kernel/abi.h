@@ -96,7 +96,7 @@ static inline qword_t guest_abi_user_addr_max(enum guest_abi abi) {
     case GUEST_ABI_RISCV64:
         // Sv39, the Linux riscv64 default (Alpine/Debian userland is built
         // for Sv39-sized VA). Revisit (Sv48 = 1<<47) only if a workload
-        // needs more; see riscv64_guest_plan.md.
+        // needs more; see docs/historical/riscv64_guest_plan.md.
         return (qword_t) 1 << 38;
     case GUEST_ABI_I386:
     default:

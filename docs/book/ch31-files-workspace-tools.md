@@ -116,7 +116,7 @@ screen of Chapter 30, settings, diagnostics, an LLM chat (Chapter 32), and a
 Wayland display (Chapter 42).
 
 The design question from the top of this chapter applies hardest here, and
-`docs/native_workspace_design.md` answers it directly: the goal "is not to build
+`docs/historical/native_workspace_design.md` answers it directly: the goal "is not to build
 a Linux desktop stack", but to let the guest keep providing shell and process
 semantics while the visible workspace, layout and widgets are owned by the app.
 A clock applet does not need a Linux process behind it, and one drawn in UIKit
@@ -243,7 +243,7 @@ system underneath, and the surfaces are views onto it.
 [opt/AOK/tools/ktop/ktop.c](../../opt/AOK/tools/ktop/ktop.c),
 [docs/guest_file_bridge_lanes.md](../../docs/guest_file_bridge_lanes.md),
 [docs/workspace_file_manager_plan.md](../../docs/workspace_file_manager_plan.md),
-[docs/native_workspace_design.md](../../docs/native_workspace_design.md),
+[docs/historical/native_workspace_design.md](../../docs/historical/native_workspace_design.md),
 [opt/AOK/docs/workspace.md](../../opt/AOK/docs/workspace.md),
 [opt/AOK/docs/files-app-integration.md](../../opt/AOK/docs/files-app-integration.md),
 [opt/AOK/docs/ktop.md](../../opt/AOK/docs/ktop.md),

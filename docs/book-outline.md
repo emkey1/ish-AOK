@@ -232,8 +232,8 @@ correct in isolation and wrong at a page boundary.
 - The interpreters (`emu/*_interp.c`) are legacy; the `engine` build option now
   offers only `jit`. What that means for anyone reading old code.
 
-*Anchors:* `docs/amd64_port_plan.md`, `docs/aarch64_guest_plan.md`,
-`docs/riscv64_guest_plan.md`, `jit/guest-arm64/`, `jit/guest-riscv64/`,
+*Anchors:* `docs/historical/amd64_port_plan.md`, `docs/aarch64_guest_plan.md`,
+`docs/historical/riscv64_guest_plan.md`, `jit/guest-arm64/`, `jit/guest-riscv64/`,
 `kernel/calls.c`, `tests/arm64/`, `tests/riscv64/`.
 
 ## Chapter 8. High-level emulation: skipping the instructions entirely
@@ -602,7 +602,7 @@ correct in isolation and wrong at a page boundary.
 - Darwin stdio lock forensics: naming the `FILE` a wedged process is blocked on.
 - When *not* to make something native.
 
-*Anchors:* `docs/TODO.md`, `kernel/native_libc.c`, `docs/native_workspace_design.md`.
+*Anchors:* `docs/TODO.md`, `kernel/native_libc.c`, `docs/historical/native_workspace_design.md`.
 
 ---
 
@@ -877,7 +877,7 @@ reader can take to a different project:
 - The Bedrock companion, and the two gaps that mattered (bind mounts, FUSE).
 - What a second maintainer would need to know first.
 
-*Anchors:* `docs/wayland_workspace_plan.md`, `docs/wayland_rotation_resize_plan.md`,
+*Anchors:* `docs/historical/wayland_workspace_plan.md`, `docs/wayland_rotation_resize_plan.md`,
 `docs/external_display_plan.md`, `docs/wasm_browser_architecture.md`,
 `docs/metal_sgemm_milestone1.md`.
 

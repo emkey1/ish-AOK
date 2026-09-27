@@ -1,3 +1,16 @@
+# iSH-AOK 548 release summary (archived, duplicate)
+
+**This file is history.** A condensed rewrite of
+[`docs/release-notes-since-iSH-AOK_548.md`](../release-notes-since-iSH-AOK_548.md)
+for the same build — same fixes, same narrative, shorter. Only 3 of the ~30
+numbered releases ever got a second "summary" file; the release process
+(`docs/book/ch37-releasing.md`) now writes one release-notes file per build,
+with the summary as its own opening paragraph rather than a separate file.
+Kept rather than deleted only because it is a verbatim record of what was
+written at the time.
+
+---
+
 iSH-AOK 548
 
 92 commits. Two cycles landed together: a performance pass that made every

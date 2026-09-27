@@ -14,7 +14,12 @@ and therefore fail differently.
 The release process is short:
 
 1. Bump `CURRENT_PROJECT_VERSION`.
-2. Add `docs/release-notes-since-iSH-AOK_<N>.md` and a summary.
+2. Add `docs/release-notes-since-iSH-AOK_<N>.md` — one file, named exactly that
+   way for every release, opening with its own summary paragraph. That is the
+   whole artifact: a separate `release-summary-iSH-AOK_<N>.md` was tried for
+   three builds (547, 548, 553) as a condensed duplicate and abandoned; those
+   three are in `docs/historical/` and nothing should reintroduce the second
+   file.
 3. Tag that commit `builds/iSH-AOK_<N>` and push it.
 
 Pushing that tag triggers `.github/workflows/build-release-ipa.yml`, which

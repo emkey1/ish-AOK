@@ -5901,7 +5901,7 @@ int gen_step_riscv64(struct gen_state *state, struct tlb *tlb) {
 
     case RISCV64_OP_CUSTOM0: case RISCV64_OP_CUSTOM1:
     case RISCV64_OP_CUSTOM2: case RISCV64_OP_CUSTOM3: {
-        // Vendor/user extension hook (riscv64_guest_plan.md patch 5b,
+        // Vendor/user extension hook (docs/historical/riscv64_guest_plan.md patch 5b,
         // jit/riscv64_vendor_ext.c). These four opcodes are permanently
         // reserved by the ISA for non-standard use, so consulting a
         // registry here can never shadow a real instruction — see that

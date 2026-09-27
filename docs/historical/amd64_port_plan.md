@@ -1,3 +1,17 @@
+# iSH-AOK amd64 Port Plan (archived, not maintained)
+
+**This file is history.** Pre-implementation bring-up plan dated 2026-04-08.
+Its "Hard Blockers" (`arch_prctl` unimplemented, no register room for
+`rip`/`r8`-`r15`, "bring up the interpreter first, not the JIT") are all now
+false: amd64 is a fully shipped guest architecture with its own JIT
+(`sys_arch_prctl` in `kernel/misc.c`, `amd64_regs[]`/`amd64_rip` in
+`emu/cpu.h`). The current account is
+[`docs/book/ch07-four-guests.md`](../book/ch07-four-guests.md). Kept because
+[`docs/aarch64_guest_plan.md`](../aarch64_guest_plan.md) cites this file as its
+own explicit baseline ("narrower than the amd64 port").
+
+---
+
 # iSH-AOK amd64 Port Plan
 
 Date: 2026-04-08

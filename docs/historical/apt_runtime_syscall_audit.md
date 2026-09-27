@@ -1,4 +1,18 @@
-# Apt Runtime Syscall Audit
+# Apt Runtime Syscall Audit (archived, not maintained)
+
+**This file is history.** A syscall-gap audit self-dated 2026-03-23, never
+referenced from anywhere else in the tree and never folded into
+`docs/TODO.md`'s own procfs/syscall coverage tracking. Its "Remaining Likely
+Gaps" and "Current Limitations" are now stale: `pidfd_send_signal` is
+implemented (`kernel/pidfd.c`), `clock_adjtime`/`clock_adjtime64` are wired
+(`kernel/calls.c`, `kernel/time.c`), and `clone3`/`unshare` have grown well
+past what this audit describes. Current syscall coverage per ABI is generated
+from the tree in
+[`docs/book/appendices/appendix-c-syscall-coverage.md`](../book/appendices/appendix-c-syscall-coverage.md).
+Kept rather than deleted only because it recorded a real point-in-time
+snapshot of the apt/helper-launch surface; treat nothing in it as current.
+
+---
 
 Scope: modern glibc / apt / event-loop / process-management syscalls that are
 likely to matter for guest userspace startup, helper process launch, and HTTP

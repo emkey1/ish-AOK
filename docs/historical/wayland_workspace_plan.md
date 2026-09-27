@@ -1,3 +1,23 @@
+# Wayland in Workspace: Tier 1 + Tier 2 Plan (archived, not maintained)
+
+**This file is history.** Tier 1/2's top-level goal shipped — a guest
+wlroots+wayvnc desktop inside the Workspace "Display" applet, via
+`opt/AOK/tools/start-wayland.sh` — but the transport this document actually
+specifies, §2's in-app noVNC (JavaScript) client hosted in a `WKWebView` over
+a WebSocket bridge, was built and then fully replaced by a native
+Objective-C/Metal RFB client:
+[`app/DisplayRFBClient.h`](../../app/DisplayRFBClient.h) now says outright
+"Replaces DisplayNetworkBridge + the WS/noVNC/WKWebView stack entirely...
+connects straight to wayvnc's loopback TCP port", rendered by
+[`app/DisplayRFBView.h`](../../app/DisplayRFBView.h) (`MTKView`/Metal, no
+WebView). This document's MPL-2.0 noVNC-vendoring licensing analysis (§2.2) no
+longer applies to the shipping app for that reason. See
+[`docs/book/ch42-where-it-could-go.md`](../book/ch42-where-it-could-go.md) and
+[`opt/AOK/docs/workspace.md`](../../opt/AOK/docs/workspace.md) for the current
+account.
+
+---
+
 # Wayland in Workspace: Tier 1 + Tier 2 Plan
 
 Goal: arbitrary Wayland window managers and apps running inside a Workspace applet.

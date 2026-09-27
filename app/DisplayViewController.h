@@ -6,7 +6,7 @@ NS_ASSUME_NONNULL_BEGIN
 // Workspace "Display" applet: a headless Wayland desktop (labwc + foot +
 // wayvnc, launched via /AOK/tools/start-wayland.sh) shown through a native
 // Metal-rendered RFB client (DisplayRFBClient/DisplayRFBView) connected
-// straight to wayvnc's loopback TCP port. See wayland_workspace_plan.md and
+// straight to wayvnc's loopback TCP port. See docs/historical/wayland_workspace_plan.md and
 // the harmonic-giggling-aho plan for why this replaced the original vendored
 // noVNC-in-WKWebView + WebSocket bridge design.
 //

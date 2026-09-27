@@ -136,6 +136,6 @@ Part II starts at the bottom, with the guest machine.
 *Anchors:* `git log --since=2026-01-01`,
 [docs/TODO.md](../../docs/TODO.md),
 [docs/release-notes-since-iSH-AOK_521.md](../../docs/release-notes-since-iSH-AOK_521.md)
-through `_551.md`, [docs/amd64_port_plan.md](../../docs/amd64_port_plan.md),
+through `_551.md`, [docs/historical/amd64_port_plan.md](../../docs/historical/amd64_port_plan.md),
 [docs/aarch64_guest_plan.md](../../docs/aarch64_guest_plan.md),
-[docs/riscv64_guest_plan.md](../../docs/riscv64_guest_plan.md).
+[docs/historical/riscv64_guest_plan.md](../../docs/historical/riscv64_guest_plan.md).

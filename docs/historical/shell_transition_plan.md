@@ -1,3 +1,20 @@
+# Native shells: bash out, dash in, zsh as the one that checkpoints (archived, not maintained)
+
+**This file is history.** This records a maintainer decision from 2026-09-10
+to remove native bash outright (decisions #2/#5: "removed in 556",
+`/AOK/native/bash` becomes a symlink). That removal did not land, or was
+reverted: `kernel/native.c` still registers `bash` as a real native program,
+and `meson_options.txt`'s `native_bash` option is a full, documented
+disabled-by-default feature, not a removed one. The two documents that
+currently govern this — [`README.md`](../../README.md#native-bash-and-licensing)
+and [`docs/llm_onboarding.md`](../llm_onboarding.md) — both correctly describe
+native bash as merely **disabled by default**, still in the tree. Kept because
+this file's dash `mksignames.c` GPL-2+ research is real and is the basis for
+`meson.build`'s current build guard, even though the bash-removal decision it
+sits alongside did not stick.
+
+---
+
 # Native shells: bash out, dash in, zsh as the one that checkpoints
 
 Maintainer's call, 2026-09-10. Four decisions and one finding that qualifies

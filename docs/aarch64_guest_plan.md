@@ -25,7 +25,7 @@ GPLv3-compatible and fits our tree, we adapt it and credit it.
 
 ## Why This Port Is Narrower Than the amd64 Port
 
-`amd64_port_plan.md` had to build the ABI-split infrastructure from scratch:
+`historical/amd64_port_plan.md` had to build the ABI-split infrastructure from scratch:
 per-task ABI enum, 64-bit-capable MM, ELF64 loading, a second syscall table
 mechanism. All of that now exists and is proven (see the conversation that
 produced this plan for full file:line citations):

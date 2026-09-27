@@ -1,4 +1,18 @@
-# Full-app resume from a checkpoint
+# Full-app resume from a checkpoint (archived, not maintained)
+
+**This file is history.** It is the design note written 2026-09-12 for full-app
+resume (windows, applets, mode) on top of a guest checkpoint. The feature it
+describes shipped as **Suspend to Disk** (confirmed 2026-09-27, `7e68cfc6`,
+Settings → Suspend to Disk, off by default) — see
+[`docs/roadmap.md`](../roadmap.md)'s "557 -- reach" section for the shipping
+note and [`opt/AOK/docs/suspend.md`](../../opt/AOK/docs/suspend.md) for the
+current, user-facing description (which confirms the layout/session-arrangement
+and terminal-reattachment gaps this file's "Where it stands" table lists as
+**missing** are now done). Kept because the ordering rationale and the applet
+survey are still worth checking against, not because the table below is still
+current.
+
+---
 
 **The goal, stated once:** a suspend or checkpoint allows 100% resumption of the
 app -- in shell, Workspace or Wayland mode -- including every window and every

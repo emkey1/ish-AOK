@@ -13,8 +13,9 @@
 // dash's are -- but anything added here has to be read twice, because a name
 // the header does not rewrite reaches the HOST.
 //
-// WHY dash IS HERE AT ALL. bash is GPLv3 and is being removed in 556
-// (docs/shell_transition_plan.md); zsh stays as the interactive shell. Neither
+// WHY dash IS HERE AT ALL. bash is GPLv3 and disabled by default
+// (native_bash meson option; docs/historical/shell_transition_plan.md); zsh
+// stays as the interactive shell. Neither
 // is /bin/sh. dash is the POSIX shell scripts actually run under, it is
 // BSD-3-Clause, and it starts in a fraction of the time either of the others
 // does -- which matters when a script forks one per line.

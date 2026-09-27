@@ -37,7 +37,7 @@
 // (only the host backing shrank), so it must NOT retry through mem_ptr_fault.
 #define INT_BUS 0x103
 // Synthetic interrupt for RISC-V ECALL (syscall) entry. Not wired to a
-// syscall table yet (riscv64_guest_plan.md patch 4) — same staging as
+// syscall table yet (docs/historical/riscv64_guest_plan.md patch 4) — same staging as
 // INT_ARM64_SVC above.
 #define INT_RISCV64_ECALL 0x104
 // Synthetic interrupt for an instruction fetch from a page that is mapped but

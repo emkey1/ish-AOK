@@ -18,7 +18,7 @@
 #                      compositor invocation (default: "labwc"). cage is
 #                      NOT supported here -- its virtual-keyboard keycodes
 #                      are off by evdev's +8 offset and foot silently drops
-#                      every key (see wayland_workspace_plan.md phase 0).
+#                      every key (see docs/historical/wayland_workspace_plan.md phase 0).
 #                      labwc is a floating/stacking compositor (normal
 #                      desktop-style windows, right-click menu) -- tried
 #                      "sway" (tiling, keybinding-driven) for a while
