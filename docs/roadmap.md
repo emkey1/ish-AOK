@@ -473,6 +473,42 @@ measured translation at 3.5--6% of wall time against a 30% gate and the project
 correctly did not build it. A no-go here is a good outcome, not a wasted
 release.
 
+**The plan (settled 2026-09-27).** The goal is 3D renders shown quickly and
+with little battery drain -- and 2D, which is easy beside it -- through **one**
+mechanism. `/dev/aokgfx`, a PSCAL-only channel whose renderer was never built,
+was removed (71e1681f) so nothing grows on a second way; PSCAL draws through
+whatever this becomes, like any other program.
+
+- **What the guests can already speak (measured 2026-09-26).** Debian 13 /
+  Devuan 6 Mesa 25.0 carries the virgl GL driver with its vtest client
+  (`virpipe`, `/tmp/.virgl_test`). Alpine 3.24 builds **no** virgl GL driver
+  on any architecture (APKBUILD `_gallium_drivers`), but ships zink and, on
+  aarch64 and x86_64, Mesa's Venus Vulkan driver (`libvulkan_virtio.so`, with
+  vtest). riscv64 and i386 have neither and stay on software rendering. So the
+  common path in stock Mesa is **Vulkan through Venus, and GL through zink on
+  top of it**.
+- **Host side.** virglrenderer's Venus renderer replaying onto **MoltenVK**
+  (Vulkan over Metal) -- Metal is the only way an app reaches the GPU. Not
+  ANGLE: nothing in Alpine needs GL on the host.
+- **The product: a virtual DRM device.** iOS has no Linux DRM (its "DRM" is
+  FairPlay; the GPU driver is private, reached only through Metal), so the
+  kernel presents `/dev/dri/renderD128` speaking the virtio-gpu uAPI -- the
+  way QEMU does it -- backed by that renderer. Stock Mesa then takes its normal
+  path, and buffers can be passed rather than copied: in time the Wayland
+  compositor renders on the GPU too and the app presents its output as a Metal
+  texture instead of through VNC, which also cuts what the 2D desktop costs.
+- **Phase 0 uses vtest only as a harness.** Answer `/tmp/.virgl_test` from
+  inside the kernel with virglrenderer + MoltenVK linked into the `ish` CLI on
+  the Mac, then in the app on the M4 -- the quickest way to prove the renderer
+  and get numbers, with the same renderer the DRM device will use. vtest is
+  never a shipped path.
+- **The gate.** vkcube and glmark2 (through zink) in the Wayland desktop on the
+  M4, against today's software rendering (llvmpipe/lavapipe): **go** at >= 5x
+  the frame rate, <= 1/5 of the app CPU time per frame (the battery proxy),
+  >= 30 fps on screen at desktop size, and an app-size cost for MoltenVK and
+  virglrenderer that is acceptable. Unknowns phase 0 settles first: whether
+  virglrenderer's Venus builds and runs on MoltenVK as it is, and that cost.
+
 **Suspend to disk ships**, behind a Settings switch and off by default, on the
 same reasoning swap ships that way: a feature that spends the user's storage and
 can lose their session is one they opt into.
