@@ -641,10 +641,19 @@ whatever this becomes, like any other program.
   copy, and wayvnc captures the result. Profiled on the Mac, the same vkcube
   session costs ~39% less CPU than pixman plus the CPU copy; glmark2 through
   zink scores 657 against llvmpipe's 64.
-- **Next:** (5c, rest) the app showing the compositor's output buffer as a
-  Metal texture instead of through VNC (wayvnc's capture and encode, and the
-  app's decode, are now the costly part), and the same numbers on the M4 with
-  the GPU compositor. Gaps in the device, for later: no GUEST blobs or DRM syncobjs (Mesa needs
+- **On the M4 with the GPU compositor (2026-09-27):** vkcube 57.5 fps at 7.9
+  ms CPU/frame (lavapipe 48.2 fps, 32 ms); glmark2 through zink 1016 at 1.2
+  ms (llvmpipe 100, 47 ms). A time profile of the app during vkcube, with the
+  Wayland window open: wayvnc's threads 44% of the CPU (capturing each frame,
+  finding the damage and converting pixels, all emulated), labwc 17%, the
+  app's own threads -- the RFB decode among them -- 15%, vkcube and the
+  renderer's threads ~16%. The client already asks for Raw only, so there is
+  no cheaper encoding to pick: the display link is now the cost, not the GPU.
+- **Next:** (5c, rest) the app showing the compositor's output directly: the
+  output buffers already live in host shared memory (dumb buffers through
+  GBM), so the app can wrap one as an MTLBuffer and draw it into a
+  CAMetalLayer when told a frame is ready, leaving VNC to carry input only.
+  Gaps in the device, for later: no GUEST blobs or DRM syncobjs (Mesa needs
   neither), one lock around all renderer calls, and no checkpoint support for an
   open node or its fences.
 
