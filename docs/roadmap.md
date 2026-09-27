@@ -508,6 +508,24 @@ whatever this becomes, like any other program.
   >= 30 fps on screen at desktop size, and an app-size cost for MoltenVK and
   virglrenderer that is acceptable. Unknowns phase 0 settles first: whether
   virglrenderer's Venus builds and runs on MoltenVK as it is, and that cost.
+- **Phase 0, step 1 (2026-09-27): it does, on the Mac.** Upstream
+  virglrenderer (8167744) already has a Darwin/Venus build (Metal and
+  Foundation frameworks, `-Dvrend=false -Dvenus=true`). Built against
+  Homebrew's MoltenVK 1.4.2 and Vulkan loader 1.4.357 with one local fix -- an
+  include in `src/venus/vkr_metal_helpers.m` names `venus-protocol/vulkan_metal.h`
+  where the bundled venus-protocol provides `vulkan/vulkan_metal.h` (upstream
+  bug, to report). A host smoke test initialised the Venus renderer, filled the
+  Venus capset (Vulkan 1.4.357 through MoltenVK) and created a Venus context.
+  Sizes on macOS arm64: libvirglrenderer (Venus only) 2.6 MB, libMoltenVK
+  5.3 MB. The render server normally runs as a separate process, which an iOS
+  app cannot spawn; its `server/render_state.c` only drives the renderer's own
+  API (`vkr_renderer_init`, `vkr_renderer_create_context`, ...), which the
+  kernel can call in-process instead. The vtest server builds only with the GL
+  renderer, which is moot: the kernel answers vtest itself.
+- **Next:** (2) the in-kernel vtest endpoint in the `ish` CLI, calling the
+  renderer in-process; (3) guest Venus (vkcube, then glmark2 through zink) in
+  an Alpine aarch64 root on the Mac against lavapipe/llvmpipe; (4) MoltenVK and
+  virglrenderer for iOS, and the same numbers on the M4.
 
 **Suspend to disk ships**, behind a Settings switch and off by default, on the
 same reasoning swap ships that way: a feature that spends the user's storage and
