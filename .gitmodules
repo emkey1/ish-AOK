@@ -33,3 +33,7 @@
 	path = deps/dash
 	url = https://github.com/emkey1/dash.git
 	branch = debian/unstable
+[submodule "deps/virglrenderer"]
+	path = deps/virglrenderer
+	url = https://github.com/emkey1/virglrenderer.git
+	branch = ish-aok

@@ -555,7 +555,9 @@ whatever this becomes, like any other program.
 - **Phase 0, step 4 (2026-09-27): the M4, in the app -- go.** virglrenderer
   cross-builds for iOS as it is (`-Dvulkan-dload=false` links MoltenVK's
   `vkGetInstanceProcAddr`, no dlopen); MoltenVK 1.4.2's release ships an iOS
-  static library. Two local changes, `tools/virglrenderer-aok.patch`: the
+  static library. Two local changes, now on `deps/virglrenderer` (emkey1/virglrenderer,
+  branch `ish-aok`, which also carries venus-protocol so a build needs no
+  network): the
   include fix above, and an unlinked temp file when `shm_open` is refused.
   `tools/build-gpu-renderer.sh` builds it all; the app links it only when
   `AOK_VIRGLRENDERER_DIR` and `AOK_VIRGL_LDFLAGS` are set (`app/iSH.xcconfig`),
@@ -576,8 +578,9 @@ whatever this becomes, like any other program.
 - **Next:** (5) presenting: vkcube and glmark2 (zink) in the
   Wayland desktop, which needs the compositor to take the guest's buffers;
   (6) shipping it: the renderer in the release build rather than behind two
-  settings -- virglrenderer as an emkey1 fork submodule carrying the patch,
-  MoltenVK fetched or built by the build -- and a simulator slice. Gaps in the device, for later: no GUEST blobs or DRM syncobjs (Mesa needs
+  settings -- MoltenVK fetched or built by the build, the renderer built by
+  `xcode-meson.sh` from `deps/virglrenderer` (the fork submodule is done,
+  2026-09-27) -- and a simulator slice. Gaps in the device, for later: no GUEST blobs or DRM syncobjs (Mesa needs
   neither), one lock around all renderer calls, and no checkpoint support for an
   open node or its fences.
 
