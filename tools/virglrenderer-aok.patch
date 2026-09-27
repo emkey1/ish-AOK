@@ -1,0 +1,36 @@
+diff --git a/src/mesa/util/anon_file.c b/src/mesa/util/anon_file.c
+index 1c22514..a4d3c99 100644
+--- a/src/mesa/util/anon_file.c
++++ b/src/mesa/util/anon_file.c
+@@ -147,6 +147,18 @@ os_create_anonymous_file(off_t size, const char *debug_name)
+      if (errno != EEXIST)
+        break;
+    }
++   /* If the sandbox refuses POSIX shared memory, as an iOS app's may, an
++    * unlinked file in its own temporary directory maps the same way. */
++   if (fd < 0) {
++     const char *dir = getenv("TMPDIR");
++     char path[1024];
++     snprintf(path, sizeof(path), "%s/%s-XXXXXX", dir ? dir : "/tmp", tag);
++     fd = mkstemp(path);
++     if (fd >= 0) {
++       unlink(path);
++       fcntl(fd, F_SETFD, FD_CLOEXEC);
++     }
++   }
+ #elif defined(__OpenBSD__)
+    char template[] = "/tmp/mesa-XXXXXXXXXX";
+    fd = shm_mkstemp(template);
+diff --git a/src/venus/vkr_metal_helpers.m b/src/venus/vkr_metal_helpers.m
+index f0373ed..d40ae70 100644
+--- a/src/venus/vkr_metal_helpers.m
++++ b/src/venus/vkr_metal_helpers.m
+@@ -13,7 +13,7 @@
+ #include <unistd.h>
+ 
+ #include "util/anon_file.h"
+-#include "venus-protocol/vulkan_metal.h"
++#include "vulkan/vulkan_metal.h"
+ 
+ #include "vkr_metal_helpers.h"
+ 

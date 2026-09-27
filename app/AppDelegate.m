@@ -55,6 +55,7 @@
 #include "kernel/task.h"
 #include "fs/dyndev.h"
 #include "fs/devices.h"
+#include "fs/virtgpu.h"
 #include "tools/fakefs.h"
 #include "fs/path.h"
 #include "fs/real.h"
@@ -3642,6 +3643,11 @@ static TerminalViewController *CreateTerminalViewController(void) {
     EnsureCharacterDevice("/dev/random", S_IFCHR|0666, dev_make(MEM_MAJOR, DEV_RANDOM_MINOR));
     EnsureCharacterDevice("/dev/urandom", S_IFCHR|0666, dev_make(MEM_MAJOR, DEV_URANDOM_MINOR));
     EnsureCharacterDevice("/dev/fuse", S_IFCHR|0666, dev_make(MISC_MAJOR, DEV_FUSE_MINOR));
+    // The GPU render node (fs/virtgpu.c, #484), when the renderer is linked in.
+    if (virtgpu_available()) {
+        generic_mkdirat(AT_PWD, "/dev/dri", 0755);
+        EnsureCharacterDevice("/dev/dri/renderD128", S_IFCHR|0666, dev_make(DRM_MAJOR, DEV_VIRTGPU_RENDER_MINOR));
+    }
     // The kernel log. The driver has always been here (fs/mem.c) but the node
     // never was, so every syslog daemon that starts with "open the kernel log"
     // failed on it -- busybox's klogd and rsyslog's imklog both read

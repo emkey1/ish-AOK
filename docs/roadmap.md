@@ -552,11 +552,32 @@ whatever this becomes, like any other program.
   of the CPU per frame. Run with `DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib`:
   virglrenderer dlopens the Vulkan loader or MoltenVK by leaf name
   (`vkr_library.c`), which is also what has to change for iOS.
-- **Next:** (4) MoltenVK and virglrenderer for iOS -- MoltenVK linked, and
-  virglrenderer given its `vkGetInstanceProcAddr` rather than a dlopen -- and
-  the same numbers on the M4; (5) presenting: vkcube and glmark2 (zink) in the
-  Wayland desktop, which needs the compositor to take the guest's buffers.
-  Gaps in the device, for later: no GUEST blobs or DRM syncobjs (Mesa needs
+- **Phase 0, step 4 (2026-09-27): the M4, in the app -- go.** virglrenderer
+  cross-builds for iOS as it is (`-Dvulkan-dload=false` links MoltenVK's
+  `vkGetInstanceProcAddr`, no dlopen); MoltenVK 1.4.2's release ships an iOS
+  static library. Two local changes, `tools/virglrenderer-aok.patch`: the
+  include fix above, and an unlinked temp file when `shm_open` is refused.
+  `tools/build-gpu-renderer.sh` builds it all; the app links it only when
+  `AOK_VIRGLRENDERER_DIR` and `AOK_VIRGL_LDFLAGS` are set (`app/iSH.xcconfig`),
+  so a normal build is unchanged. Size: libMoltenVK.a 7.1 MB and libvirgl.a
+  3.4 MB (archives, before dead-stripping). On the iPad Pro M4, Devuan 6's
+  stock `mesa-vulkan-drivers` sees "Virtio-GPU Venus (Apple M4 GPU)". CPU is
+  device-wide busy time from `/proc/stat` (idle iPad), less a zero-frame run:
+
+  | scene | Venus | lavapipe |
+  |---|---|---|
+  | 640x360, 2000 tris | 2484 fps, 0.13 ms CPU/frame | 4.9 fps, 595 ms CPU/frame |
+  | 1280x720, 20000 tris | 91 fps, 0.42 ms CPU/frame | -- |
+
+  The last frame's checksums match the Mac's to the digit. Against the gate:
+  ~500x the frame rate at ~1/4500 of the CPU per frame, and 91 fps offscreen
+  at 1280x720. What the gate also asks -- vkcube and glmark2 on screen in the
+  Wayland desktop -- is the next step, not a doubt about the renderer.
+- **Next:** (5) presenting: vkcube and glmark2 (zink) in the
+  Wayland desktop, which needs the compositor to take the guest's buffers;
+  (6) shipping it: the renderer in the release build rather than behind two
+  settings -- virglrenderer as an emkey1 fork submodule carrying the patch,
+  MoltenVK fetched or built by the build -- and a simulator slice. Gaps in the device, for later: no GUEST blobs or DRM syncobjs (Mesa needs
   neither), one lock around all renderer calls, and no checkpoint support for an
   open node or its fences.
 

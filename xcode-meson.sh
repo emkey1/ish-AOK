@@ -340,6 +340,9 @@ EOF
     # the variant for an on-device A/B; see jit/guest-arm64/gadgets.h for why
     # this is host-generation dependent and why it must be measured on ARMv8.0.
     arm64_gret=${ISH_ARM64_GRET:-dmb}
+    # The GPU render node's renderer (fs/virtgpu.c), from AOK_VIRGLRENDERER_DIR
+    # in app/iSH.xcconfig; empty builds no node.
+    virglrenderer=${AOK_VIRGLRENDERER_DIR:-}
     # Options added to meson_options.txt after this build dir was set up are
     # invisible to `meson configure`, which only knows what the dir was
     # configured with -- so a NEW option silently keeps whatever default was
@@ -358,7 +361,7 @@ EOF
         fi
     done
 
-    for var in buildtype log b_ndebug b_sanitize log_handler guest_archs arm64_gret; do
+    for var in buildtype log b_ndebug b_sanitize log_handler guest_archs arm64_gret virglrenderer; do
         if ! old_value=$(python3 -c "import sys, json; v = next(x['value'] for x in json.load(sys.stdin) if x['name'] == '$var'); print(str(v).lower() if isinstance(v, bool) else ','.join(v) if isinstance(v, list) else v)" <<< "$config" 2>/dev/null); then
             # The option is missing from this build dir's cached
             # configuration: it was added to meson_options.txt after the
