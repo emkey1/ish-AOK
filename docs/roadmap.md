@@ -586,8 +586,27 @@ whatever this becomes, like any other program.
   frameworks (`app/App.xcconfig`). The CLI now needs no Homebrew Vulkan and no
   `DYLD_*`. MoltenVK compiles in about 30 s per slice; a clean device build
   took 146 s. The M4 gives the same numbers as step 4 from a stock build.
-- **Next:** (5) presenting: vkcube and glmark2 (zink) in the Wayland desktop,
-  which needs the compositor to take the guest's buffers. Gaps in the device, for later: no GUEST blobs or DRM syncobjs (Mesa needs
+- **Step 5, first part (2026-09-27): vkcube in the desktop.** Venus offers
+  VK_KHR_swapchain only when the host can import sync-fd semaphores, which
+  MoltenVK cannot; the virglrenderer fork now emulates them (the renderer's
+  two uses become empty queue submissions). With Mesa 26.1 (Alpine 3.24)
+  and `MESA_VK_WSI_DEBUG=sw`, vkcube runs in labwc on the host GPU: 51-56 fps
+  in FIFO. Presenting that way costs ~6-7 ms of CPU per frame, the same for
+  Venus and lavapipe, because it copies each frame into shared memory and
+  labwc composites in software -- vkcube is too light to tell the drivers
+  apart. Profiling it found the arm64 JIT's LD1/ST1 gadget calling C for
+  every NEON load/store; the inline fast path (5c210298) cut the session's
+  busy CPU ~31%. A MoltenVK Objective-C exception now loses one context
+  instead of killing the app (d79de17a).
+- **Next:** (5b) Devuan 6: Mesa 25.0's Venus also wants the host to have
+  dma-buf external memory with DRM format modifiers and foreign queues
+  before it offers any WSI. The renderer must emulate them on Metal: LINEAR
+  modifier images, dma-buf memory as the shared-memory MTLBuffers it
+  already exports, and -- missing today -- importing such a resource into
+  another context. (5c) zero copy: the same import lets a GPU compositor
+  (wlroots' Vulkan renderer on Venus) sample client buffers, and the app
+  show the output buffer as a Metal texture instead of VNC. (5d) glmark2
+  through zink, and the gate's numbers on the M4. Gaps in the device, for later: no GUEST blobs or DRM syncobjs (Mesa needs
   neither), one lock around all renderer calls, and no checkpoint support for an
   open node or its fences.
 
