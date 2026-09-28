@@ -21,8 +21,17 @@ No PID namespaces, no mount namespaces, no network, user or cgroup namespaces.
 hostname in a refcounted struct, and an IPC namespace is System V shared
 memory, semaphores and message queues kept per namespace instead of global.
 `setns(2)` can join either one — or a namespace nothing is in any more — through
-its `/proc/<pid>/ns` file. Every other kind is `ENOSYS` to `unshare` and `clone`;
-`setns` into one is the no-op of joining the only one there is.
+its `/proc/<pid>/ns` file. Every other kind is `ENOSYS` to `unshare`, and
+`setns` into one is the no-op of joining the only one there is — a mount
+namespace's join moves the caller's root and working directory to the real
+root, as Linux's does, and changes nothing else.
+
+`clone` answers differently, and worse: measured as root for this chapter on
+557, `clone` with `CLONE_NEWNS`, `CLONE_NEWPID`, `CLONE_NEWNET` or
+`CLONE_NEWUSER` fails `EPERM`, which reads as "you may not" to a caller who is
+root and may. `unshare` with the same flags says `ENOSYS` — "this kernel has
+none" — which is the truth. The two entry points should agree, and the one
+that does not is recorded as a follow-up in `docs/TODO.md`.
 
 So nothing container-shaped runs. No Docker, no `unshare -m` or `-n`, no
 rootless podman, no per-service filesystem views. There is one process table,
@@ -36,7 +45,21 @@ This is not a missing feature with a ticket. The absence runs through the design
 possible, and on a single-user device the isolation being traded away was
 protecting nobody.
 
-## 41.2 Closed this cycle: `PROT_EXEC` was diagnosed, then fixed
+**The other half of containment is capabilities, and there the gap is
+diagnosed rather than architectural.** Extended attributes and file
+capabilities landed in 556 — `setcap cap_net_bind_service+ep` lets uid 1000
+bind port 80, taking effect at exec as it does on Linux. But
+`current_capable()` is `superuser() || <the bit in cap_effective>`, so an
+effective uid of 0 still counts as *every* capability whatever its effective
+set says. A root process that drops capabilities to confine itself — which is
+what `capsh --drop` and systemd's `CapabilityBoundingSet=` are for — is not
+confined. `tests/manual/exec_setid_unsafe.sh` sees it in exactly one of its 51
+rows: root drops `CAP_SYS_PTRACE` and `CAP_SETUID`, calls `PTRACE_TRACEME`, and
+execs a program set-user-ID to 1000; Linux refuses the new uid, AOK grants it.
+Every privileged syscall asks the same function, so the fix is tree-wide, and
+none of the capability tests yet run as root with a reduced effective set.
+
+## 41.2 Closed in 556: `PROT_EXEC` was diagnosed, then fixed
 
 Through build 555, every guest `.data` and `.bss` page was executable, and any
 guest JIT's own W^X discipline was decorative. Chapter 13 has the full history,
@@ -74,8 +97,9 @@ back, so the restore faithfully wrote what it was given.
 
 **Where the lie comes from.** A guest pipe is a host pipe, and
 `realfs_getflags` answers `F_GETFL` by asking the **host** descriptor. Meanwhile
-`realfs_read` permanently forces that host descriptor non-blocking the first
-time the guest does a *blocking* read on it, and deliberately never restores it.
+`realfs_read` and `realfs_write` permanently force that host descriptor
+non-blocking the first time the guest does a *blocking* read or write on it,
+and deliberately never restore it.
 
 And that second decision is correct. Restoring it races a sibling task into an
 uninterruptible, `SIGKILL`-proof host `read` — a real pipe-herd hang that was
@@ -84,9 +108,15 @@ fixed by exactly this non-restoration.
 So the host flag is an implementation detail that must not be visible, and it
 is. Before the first read `F_GETFL` says 0; after it says `O_NONBLOCK`, with the
 guest having done nothing. The kernel's own `fd->flags` — which is what actually
-governs guest blocking semantics — still says blocking, and the two disagree.
+governs guest blocking semantics — still says blocking, and the two disagree
+until the idiom's "restore" writes the lie into `fd->flags` as well, and then
+they agree on the wrong answer.
 
-The recorded next step is precise, including its own scope warning:
+Still true in 557, measured for this chapter on aarch64 and x86_64 guests in the
+Mac CLI: a fresh pipe reports 0; its write end reports `O_NONBLOCK` after one
+blocking write, its read end after one blocking read, and after the
+get-set-restore the read end *is* non-blocking. The recorded next step was
+precise, including its own scope warning:
 
 > `realfs_getflags` should report the guest-visible flags from `fd->flags` for
 > the bits the guest owns (`O_APPEND`, `O_NONBLOCK`) and take only the access
@@ -95,6 +125,15 @@ The recorded next step is precise, including its own scope warning:
 > under a program that never asked is the kind of thing that surfaces far from
 > here. Worth checking whether sockets and ttys answer `F_GETFL` the same way
 > before fixing just the one path.
+
+That check is now done: the same probe against a `socketpair` and a pty
+reports no `O_NONBLOCK` before or after, so the pipe path really is the one
+path. And the shape of the fix is already in the function — a descriptor
+reopened through `/proc` keeps its own flags, and `realfs_getflags` answers
+those from `fd->flags` without asking the host. The ordinary descriptor still
+asks, which is also why a directory reopened through `/proc` reports neither
+the `O_DIRECTORY` nor the `O_LARGEFILE` Linux shows there: the host's `F_GETFL`
+keeps neither. Both are recorded in `docs/TODO.md`.
 
 Two correct decisions, one wrong seam. That is the characteristic shape of a
 bug in a system this size, and it is why Chapter 40's rules are about *checking*
@@ -106,21 +145,32 @@ The `engine` build option offers exactly one value. New work targets the JIT.
 And yet:
 
 - `emu/amd64_interp.c` is still the **largest single file in the tree** at
-  16,675 lines.
-- It is still what runs on non-aarch64 hosts, because the amd64 JIT is validated
-  only on the iOS target (Chapter 7).
-- It is still what GNU `as` executes on, behind a containment workaround for
-  crashes that were never root-caused — with a probe harness in the tree waiting
-  for somebody to re-run it.
-- It is still where AVX semantics execute for amd64 (Chapter 5).
-- And it is still where **almost every `lock`-prefixed instruction** executes.
-  Nearly every eligibility predicate in `jit/gen.c`'s amd64 front-end requires
-  the lock prefix to be absent, so a locked `xadd` or `cmpxchg` drops out of the
-  JIT and is interpreted — where the i386 JIT compiles the same instructions
-  into `ldaxr`/`stlxr` gadgets.
+  17,902 lines.
+- It is still what runs on non-aarch64 hosts, because the amd64 JIT's gadgets
+  exist only for aarch64 (Chapter 7).
+- It is still where AVX executes for amd64: the JIT cuts its block at a VEX or
+  EVEX prefix and hands the instruction to `amd64_jit_vex`, which lives in the
+  interpreter's file and decodes it there before `emu/avx.c` does the
+  arithmetic (Chapter 5).
+- And it is still where **most `lock`-prefixed instructions** execute. Nearly
+  every eligibility predicate in `jit/gen.c`'s amd64 front-end requires the
+  lock prefix to be absent, so a locked `xadd`, `cmpxchg`, `inc` or `neg`
+  leaves the JIT for a C helper or the interpreter. Two families no longer do:
+  since 556, `lock add/or/and/sub/xor [mem], imm` and `xchg [mem], reg` are
+  `ldaxr`/`stlxr` gadgets, as the i386 JIT's locked instructions have long
+  been.
 
-That last one used to cost twice, and the correctness half is now paid. Until
-553 the interpreter serialised locked instructions on the global
+One bullet has come off this list. It used to say the interpreter was what GNU
+`as` executed on, behind a containment workaround for crashes nobody had
+root-caused, with a probe harness waiting for somebody to re-run it. Somebody
+did, on 2026-09-07: the full guest suite with its cache disabled, so gas ran 200
+times under the JIT with no errors and no block fallbacks, and one nontrivial
+translation unit assembled byte-identically under both engines. The bypass was
+deleted (`jit/jit.c` keeps the evidence in a comment), and with it a blind
+spot — `as` had never counted toward any "zero fallbacks" measurement.
+
+The locked instructions used to cost twice, and the correctness half is now
+paid. Until 553 the interpreter serialised locked instructions on the global
 `atomic_l_lock`, which does not interlock with a host atomic — so a kernel-side
 read-modify-write on guest memory raced with an amd64 guest's own atomics.
 `FUTEX_WAKE_OP` lost 1107 of 40,000 increments that way, and the fix for 552 was
@@ -142,8 +192,27 @@ single-threaded and a lost update is the only symptom a broken atomic has.
 (`x86_atomic_rmw` and friends in `emu/tlb.c`), `atomic_l_lock` is gone from that
 path, `kernel/futex.c` is back to a plain compare-exchange, and
 `tests/manual/x86/atomic_lock_contended.c` runs nineteen locked forms from four
-threads at once. What remains is the throughput half: a locked instruction still
-leaves the JIT for a C helper instead of becoming a gadget.
+threads at once. What remains is the throughput half: apart from the two
+families above, a locked instruction still leaves the JIT for a C helper
+instead of becoming a gadget. What that costs a real workload has not been
+measured.
+
+The *misaligned* half closed in 557 (`4d7a6981`). A locked access that is not
+naturally aligned — which x86 allows, and which the i386 ABI makes ordinary for
+a `uint64_t` in a struct — still took the global lock around a plain read and
+write, so it was atomic against other locked instructions and nothing else: a plain
+store from another thread could land in between, and
+`tests/manual/x86_unaligned_lock` lost up to 60% of them on amd64. It now uses a
+16-byte host compare-exchange when the operand sits inside one 16-byte block,
+and the address space's writer lock when it straddles two.
+
+**Its i386 twin is open.** The i386 JIT's locked gadgets for 16- and 32-bit
+operands check alignment and then ignore the answer: on a misaligned operand
+they call a tracing helper that does nothing and run `ldaxr`/`stlxr` on the
+misaligned host address anyway. An M-series Mac tolerates that inside a 16-byte
+block and raises `SIGBUS` across one; older devices may fault on any
+misalignment. Only packed structures reach it, since the i386 ABI aligns those
+sizes naturally, and the fix is the amd64 JIT's: branch to a C slow path.
 
 `emu/arm64_interp.c` survives for a different reason: as a bisection escape
 hatch behind `ISH_ARM64_FORCE_INTERP=1`, with a comment that is candid about
@@ -167,38 +236,96 @@ not good enough: `env` was missed, and since one test harness runs
 `env ... bash ...`, installing the symlinks took its suite from 217 passing to
 zero.
 
-**Unrouted host symbols** remain, and are enumerated on demand — Chapter 23's
-gate has a `--report` mode whose third list is exactly the outstanding work.
+**Unrouted host symbols** do not ship: Chapter 23's gate fails the build on one.
+Run against a 557 build, it finds 283 host symbols referenced across every
+native archive, all of them on the pure list, and none needing work. What
+remains is the porting of programs not yet native, and the gate's `--report`
+mode enumerates that for any candidate — its third list is exactly the
+outstanding work. Three are already in the binary and only refuse: smallclue's
+`git` (built without libgit2), `dvtm` and `rsync`. Each is a port, not a flag —
+libgit2 needs an HTTPS transport in a binary that links no OpenSSL, and `dvtm`
+and `rsync` both start children, which a native program does through native
+spawn or not at all. Until then the distribution's packages do the job,
+translated.
 
-**Two divergences are genuinely the shell's**: a pattern compiled at first use
-is cached in the parse tree with nothing recording the options in force at the
-time, so a re-launched child can compile it under different options than its
-parent did; and `pipestatus` under a MULTIOS redirection reports `1 0` where zsh
-reports `0 0`. Both have tests pinning them.
+**Two divergences are recorded as the shell's**: a pattern compiled at first
+use is cached in the parse tree with nothing recording the options in force at
+the time, so a re-launched child can compile it under different options than its
+parent did; and `pipestatus` under a MULTIOS redirection was seen to report
+`1 0` where zsh reports `0 0`. Both are written down in the 549 release notes,
+and — contrary to what this chapter said until 557 — **neither has a test**.
+The native zsh's fork-state test covers MULTIOS and `pipestatus` separately,
+never the two together, and the simple MULTIOS pipelines tried for this revision
+agree with the host's zsh. So the second one needs its reproducer found again
+before it is either fixed or struck off.
+
+**A tracer cannot see inside a native program.** gdb and strace can start one
+since 556 — it reports its exec, and exec replaces it in place with its pid
+kept — but its calls go through a dispatcher with no ptrace hooks and no guest
+register file to report from. So `strace` shows the exec, the exit, and nothing
+between; `strace -f` and gdb's `follow-fork-mode` never see a native shell's
+children, because it starts them with native spawn rather than `clone`; and a
+tracer that attaches after an untraced native exec finds the stand-in's wait,
+not the program.
 
 **And there is no native `sshd`** (Chapter 25), blocked on privilege-separation
 forking — mitigated rather than fixed, because the crypto accelerator takes the
 cipher out of the emulator and the cipher is what an ssh session is bound by.
 
-## 41.6 FUSE, stated as absences
+## 41.6 FUSE, stated as absences — and one that stopped being one
 
-No `readdirplus`, which needs an attribute cache to be worth having. No splice.
-No `fsopen()`-based mount API. That is the whole list — `fs/fuse.c`'s own header
-comment names those three and nothing else.
+`fs/fuse.c`'s header comment names three things not modeled: `readdirplus`,
+which needs an attribute cache to be worth having; splice; and the
+`fsopen()`-based mount API. `FUSE_INIT` offers the daemon no optional features
+at all, so a daemon is never told AOK supports something it does not. Missing
+*visibly*, which Chapter 40 explains is the whole difference between an
+unfinished feature and a capability lie.
 
-All of them are missing *visibly*, which Chapter 40 explains is the whole
-difference between an unfinished feature and a capability lie.
+The missing cache has costs that are not absences, and `docs/TODO.md` measures
+them: every operation walks from the root with one `LOOKUP` per component, so a
+path five deep is six requests; a `stat` of a name that does not exist sent
+**nine** requests against Linux 6.12's one; and a mapping and `read()` agree
+only at sync points, where Linux's page cache keeps them coherent all the time.
+One change — a real dentry and attribute cache honouring FUSE's timeouts — is
+behind all of them, and the reference accounting it needs is already asserted
+by the test.
+
+The third absence is no longer visible. The new mount API arrived for systemd
+and util-linux, generically, and it reaches FUSE: `fsopen("fuse")` succeeds,
+`fsconfig` accepts `fd`, `rootmode`, `user_id` and `group_id`, and
+`FSCONFIG_CMD_CREATE` makes the mount. Then `fsmount()` opens the new mount's
+root directory to hand back a descriptor — and opening a FUSE directory asks the
+daemon. A daemon mounts first and serves afterwards, so it is still waiting for
+its own mount call and never answers. Measured for this chapter:
+`tests/manual/fuse_basic.c` with its `mount(2)` swapped for that sequence hangs
+in `fsmount` until its watchdog kills it, where the unmodified test passes.
+Linux's `fsmount` returns an `O_PATH`-style descriptor for the mount, which asks
+the daemon nothing. No user has reported it — every daemon tested here mounts
+through `mount(2)` — but it is a hang where the header comment promises an
+absence, and it is queued in `docs/TODO.md`.
 
 ## 41.7 Deferred on purpose: external display
 
 This entry is the rarest kind, and worth holding up.
 
-Work exists for mirroring the Wayland display to an external display — one
-commit, on a branch. It is **not merged**, and the reason is recorded verbatim:
+External display support ([#540](https://github.com/emkey1/ish-AOK/issues/540))
+did ship once. It landed in July (`57380ba6`, `cc0b5b21`) and was reverted for
+546 (`ad602c7c`) after testing on an M4 iPad with a real monitor, because it
+fought how iPadOS already uses an external display: the app would not open
+there, dragged there it took a portrait-iPad shape, a second window on the
+built-in display pulled it back, and a terminal applet opened on it disturbed
+the primary. One further commit — mirroring the Wayland display — is left on
+`worktree-external-display-540`. It is **not merged**, it is a child of the
+reverted pair so it cannot be merged alone, and the reason is recorded
+verbatim:
 
 > Deferred to a future release by the maintainer: *"the external display work is
 > flawed"*. The commit is NOT merged and must not be swept into a release by
 > accident. Left on its branch deliberately.
+
+It was deferred again, by decision, for 556, and 557's plan does not reopen it.
+The resume plan — revert the revert, then preferably stop claiming a screen an
+interactive scene already occupies — is in `docs/external_display_plan.md`.
 
 Most projects do one of two things with an implementation they have judged
 inadequate: merge it because it mostly works, or delete it because it does not.
@@ -206,30 +333,79 @@ Keeping it, naming the judgement, and fencing it against accidental inclusion is
 better than either — the work is recoverable, the verdict is legible, and
 nothing is going to ship it by mistake.
 
-## 41.8 The open reports, and one that is a speed problem
+## 41.8 The open reports, and one that was not a speed problem
 
-The tracked issues are worth a glance because of what they are *made of*: the
-Wayland applet not resizing, Qt applications unable to reach the session bus,
-`gdb`'s `next`/`step` crashing with `SIGILL` on amd64 after a breakpoint,
-Buildroot's `make` dying at "checking for working sigaltstack", `pikaur` blocked
-on `systemd-run`.
+The tracked issues are worth a glance because of what they are *made of*, and
+because they turn over. Of the five bugs this section named at 556, four are
+closed: the Wayland applet now sizes the desktop to its window and Qt
+applications get a session bus (both 555), `gdb`'s `next`/`step` after a
+breakpoint no longer dies with `SIGILL` on amd64, and `pikaur` builds packages
+since 554. Only Buildroot's `make` dying at "checking for working sigaltstack"
+is still open. What is open now (2026-09-28) is mostly the app rather than the
+kernel: a terminal's last row hidden under the keyboard toolbar after returning
+to the foreground (a fix landed for 557; the issue is still open), window
+controls misplaced in iPadOS windowed mode, a copy that loses the part of a
+selection scrolled off screen, network throughput slower than it should be, and
+a new list of programs that misbehave in the Wayland desktop — `btop` needing a
+flag to start, Synaptic freezing the display.
 
-And one of a category that deserves naming:
+This section also used to hold up a report as the model of a category:
 
 > `yay -S pandoc-bin` dying with `context: signal: terminated` … is not a crash:
 > yay's Go runtime sends itself `SIGTERM` when its context is cancelled, most
 > likely its own timeout firing because emulated syscalls are slower than its
 > budget assumes. **Not a re-test; a timeout question.**
 
-That is a bug report with no bug in it. The software is working; it has a
-deadline calibrated for native hardware, and the emulator misses it. There is no
-fix short of being faster, and there is no honest way to close it either.
+— a bug report with no bug in it, a deadline calibrated for native hardware that
+the emulator misses, with no fix short of being faster.
 
-Any emulator accumulates these, and they are worth distinguishing from
-correctness failures early — because the investigation is completely different,
-and because "make it faster" is not a triage outcome.
+The category was right to name and wrong for this report. The reported failure
+never reproduced (the issue was closed on that basis); what did, one run in
+four, was Go's HTTP/2 client giving up on the AUR. And the measurement behind
+*that* was not a slow machine. Fifteen TLS handshakes to the same host had a
+guest median of 0.39 s against the host's 0.21 — unremarkable for emulation —
+and a guest **maximum of 15.3 s** against the host's 1.15, past Go's 10-second
+handshake timeout. Nothing in a handshake is compute-heavy enough to take
+fifteen seconds when it usually takes a third of one. That is a wait not being
+woken, which is a correctness question dressed as a speed one.
 
-## 41.9 Structural ceilings
+It is not settled. Re-measured for this chapter on 557 in the Mac CLI, 45 guest
+handshakes on aarch64, in two batches, had medians of 0.28 and 0.43 s and a
+maximum of 1.29 s: no tail. The original run was in an Arch Linux ARM root rather than Alpine, the
+device has not been re-measured, and the open throughput report is in the same
+neighbourhood.
+
+So the lesson got sharper rather than going away. "Make it faster" is not a
+triage outcome — and neither is "it is just slow" until somebody has looked at
+the *tail*, because a median describes the emulator and a tail describes a
+bug.
+
+## 41.9 New in 557: the GPU's edges
+
+557 put a GPU under the guest ([#484](https://github.com/emkey1/ish-AOK/issues/484)):
+`/dev/dri/renderD128` (`fs/virtgpu.c`) speaks the virtio-gpu interface to stock
+Mesa and replays its Vulkan onto Metal through Venus and MoltenVK, in-process;
+the Wayland compositor renders on it by default; and `wl-present` hands its
+frames to the app directly instead of through VNC. The gate it had to pass is
+in `docs/roadmap.md`, with numbers, and most of its edges are written down in
+the same place:
+
+- **Diagnosed, not built.** No guest-memory blobs and no DRM sync objects —
+  Mesa's Venus path needs neither, and simulates the latter. One lock
+  serialises every call into the renderer, as virglrenderer's own server does.
+- **Not carried by a checkpoint.** An open render node and its fences are not
+  in the image. What a restore then does has not been measured; by the
+  checkpoint's descriptor rules a character device with a path comes back by
+  being opened again, which would hand a restored Vulkan program a node with
+  none of its contexts behind it rather than a refusal.
+- **Bounded by the distributions.** Alpine builds no virgl GL driver at all, so
+  GL goes through zink on top of Venus — and zink here is GL 2.1 and GLES 2.0,
+  so GL programs stay on llvmpipe unless told otherwise, and only the
+  compositor is pointed at the GPU by default. Alpine's i386 and riscv64
+  builds have no Venus driver either, so those guests stay on software
+  rendering.
+
+## 41.10 Structural ceilings
 
 Some limits are arithmetic.
 
@@ -246,38 +422,56 @@ guest thread, and therefore cannot pass on a 2 GB device regardless of any
 emulator change (Chapter 38). Knowing that is what stops it being treated as a
 regression.
 
-**And there is no instruction-level oracle for the arm64 and riscv64 guests**
+**There is no instruction-level oracle for the arm64 and riscv64 guests**
 (Chapter 9). Ptraceomatic needs real x86 silicon; unicornomatic needs Unicorn's
 x86 support; the conductor's oracle cells are Rosetta and an x86 Linux VM. The
 newest and fastest guests are the least differentially verified, and the
 lockstep harness that could fix that on an Apple silicon host has not been
 built.
 
-## 41.10 Why the list exists
+**And the GPU stops when the app is not in front.** iOS refuses GPU command
+buffers from an app in the background, and the refusal is not advisory:
+MoltenVK marked the whole device lost on the first one, every fence a guest was
+waiting on stayed unsignalled, and even `vulkaninfo` hung. 557 holds every
+submission at a gate that closes when the app's last window goes to the
+background and opens when one returns, so guest GPU work *pauses* rather than
+breaking. It cannot be made to continue. A render that has to finish while the
+user is in another app is not a job this GPU can take.
+
+## 41.11 Why the list exists
 
 Every entry here shares one property: **it is written down somewhere a person
 would find it**, usually in `docs/TODO.md`, usually with a measurement, often
 with the designs that were rejected and why.
 
-The 552 release added a second such file, and every release since has kept the
-habit: `docs/build_556_musts.md` carries the work deferred out of 555 with the
-diagnosis already done, so nobody has to re-derive it. Each entry says what is
-established, what the next step is, and how to prove it afterwards.
+The 552 release added a second such file, a per-release list of work that must
+be done or explicitly decided before the next build is tagged:
+`docs/build_556_musts.md` carried what was deferred out of 555, with the
+diagnosis already done so nobody has to re-derive it. Each entry says what is
+established, what the next step is, and how to prove it afterwards. During the
+557 cycle the follow-ups gathered instead in one queue at the top of
+`docs/TODO.md`, "Queued for a future release": every session that finds
+something adds a bullet with its evidence, marks the bullet before starting on
+it, and deletes it when the work lands, since the commit is then the record.
+This chapter's own revision went through that queue.
 
 The habit paid for itself immediately. `docs/historical/build_553_musts.md`'s entry on the
 amd64 locked-instruction path is what got that path opened up at all — and the
 first thing the work found was that the entry's own diagnosis was wrong in the
 optimistic direction, describing as a performance gap something that was losing
 guest data. A written-down gap is not just a reminder; it is a claim someone can
-go and check. That file's closing section now records what it got wrong, which
-is the more useful half.
+go and check. That file's header now says what it got wrong, and its
+successor's *Closed in 553* section says how, which is the more useful half.
 
 That turns a gap into a decision, and sometimes into a fix. `PROT_EXEC` was
 never "we never got to NX" — it was a two-row table against Linux 6.12, a
 severity grade, two candidate designs and a reason, and it is closed. The
 external display is not an abandoned branch — it is a maintainer's judgement
 with a fence around it. The `F_GETFL` lie is not a mystery — it is two correct
-decisions and a named seam with a scoped next step.
+decisions and a named seam with a scoped next step. And this chapter's own
+record needed the same treatment: at 556 it still said GNU `as` ran on the
+interpreter, that a zsh divergence had a test, and that a yay failure was a
+timeout — and none of the three survived being checked.
 
 The alternative is not a shorter list. It is the same list, undiscovered, found
 one user report at a time by people who have no way to know whether they are the
@@ -285,16 +479,24 @@ first.
 
 ---
 
-*Anchors:* [docs/TODO.md](../../docs/TODO.md) ("Diagnosed, not fixed",
-"Deferred on purpose", "Native program candidates", "Reported issues"),
+*Anchors:* [docs/TODO.md](../../docs/TODO.md) ("Queued for a future release",
+"Diagnosed, not fixed", "Deferred on purpose", "Native program candidates",
+"Reported issues"), [docs/roadmap.md](../../docs/roadmap.md) ("557 -- reach"),
 [docs/build_556_musts.md](../../docs/build_556_musts.md),
+[docs/external_display_plan.md](../../docs/external_display_plan.md),
+[kernel/fork.c](../../kernel/fork.c) (`sys_unshare`, `sys_setns`),
+[kernel/getset.c](../../kernel/getset.c) (`current_capable`),
 [emu/memory.h](../../emu/memory.h) (`P_EXEC`), [fs/real.c](../../fs/real.c)
-(`realfs_getflags`, `realfs_read`), [emu/amd64_interp.c](../../emu/amd64_interp.c),
-[jit/jit.c](../../jit/jit.c) (the `as` bypass), [fs/fuse.c](../../fs/fuse.c),
+(`realfs_getflags`, `realfs_read`, `realfs_write`),
+[emu/amd64_interp.c](../../emu/amd64_interp.c), [emu/tlb.c](../../emu/tlb.c)
+(`x86_atomic_rmw`), [jit/jit.c](../../jit/jit.c) (where the `as` bypass was),
+[jit/gadgets-aarch64/math.S](../../jit/gadgets-aarch64/math.S),
+[fs/fuse.c](../../fs/fuse.c), [fs/mount.c](../../fs/mount.c)
+(`sys_fsmount_guest`), [fs/virtgpu.c](../../fs/virtgpu.c),
 [tools/native-applet-audit.py](../../tools/native-applet-audit.py),
 [tools/check-native-libc.py](../../tools/check-native-libc.py).
 
 *Story:* a pipe that reports `O_NONBLOCK` the guest never set — because
-`F_GETFL` asks the host descriptor, and a blocking read permanently makes that
-descriptor non-blocking on purpose, to prevent a `SIGKILL`-proof hang that was
+`F_GETFL` asks the host descriptor, and a blocking read or write permanently
+makes that descriptor non-blocking on purpose, to prevent a `SIGKILL`-proof hang that was
 real.

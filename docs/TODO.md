@@ -44,7 +44,10 @@ freeze (2026-09-25); their full text is in
   - Fix: branch to a C slow path on misalignment, as the amd64 JIT does (amd64_jit_locked_alu_slow and _xchg_slow, which call x86_atomic_rmw). Add C paths for cmpxchg, inc/dec/neg/not, xadd and the bit ops, using the i386 JIT's flag conventions.
   - Acceptance: drop the `#ifndef __i386__` around the 16/32-bit cases in that test.
 - **pwritev2 ignores its flags.** sys_pwritev2_guest (kernel/fs.c) takes `flags` as UNUSED. musl 1.2.6 (Alpine 3.24) calls every pwrite() as pwritev2(..., RWF_NOAPPEND), and on Linux that writes at the offset even on an O_APPEND descriptor. Whether AOK then appends depends on the host write path, and that has not been measured. Measure it, then honour RWF_NOAPPEND (write at the offset), and return EOPNOTSUPP for flags AOK cannot do, which is what musl falls back on.
-- **[in progress: claude bold-wu-428676, 2026-09-28]** **Bring book ch41 (the honest gaps) up to 557.** Last reviewed against 556 (2478db6f); check every section against the code and `git log`, drop closed gaps, add missing ones.
+- **clone() refuses unsupported namespaces with EPERM, unshare() with ENOSYS.** Measured as root on 557 (aarch64 CLI): `clone(CLONE_NEWNS|NEWPID|NEWNET|NEWUSER)` fails EPERM (sys_clone_common_, kernel/fork.c: `if (flags & CLONE_NEW_FLAGS_) return _EPERM;`) while `unshare` with the same flags says ENOSYS. EPERM to root reads as a permission problem. Make clone agree with unshare (check what Linux built without the namespace config returns first); book ch41.1 describes the divergence.
+- **FUSE through fsopen() hangs in fsmount().** `fsopen("fuse")` + fsconfig fd/rootmode/user_id/group_id + CREATE succeed, then sys_fsmount_guest (fs/mount.c) opens the mount's root directory, which sends a request to a daemon that has not started serving (daemons mount first, serve after). Measured 2026-09-28: tests/manual/fuse_basic.c with mount(2) replaced by that sequence hangs until its watchdog; unmodified it passes. Linux's fsmount returns a mount fd without asking the daemon. Fix: return a descriptor for the mount without opening through the filesystem (or refuse fsopen("fuse") visibly), add the fsopen variant to fuse_basic, and update fs/fuse.c's header ("not modeled: fsopen") and book ch20/ch41.6.
+- **Checkpoint with an open GPU render node.** kernel/checkpoint.c's descriptor rules treat any character device with a path as CKPT_FD_CHR (reopened on restore), so an open /dev/dri/renderD128 would presumably come back as a fresh node with none of its Venus contexts, blobs or fences -- silently, not refused. Unmeasured. Measure with vkcube or tools/vkbench.c across a save/restore, then refuse by name (as other stateful descriptors are) until it can be carried.
+- **Book ch07 predates the GNU `as` bypass removal.** ch07-four-guests.md (around lines 88 and 267) still says the interpreter is "what GNU `as` executes on" (bypass removed 23edd81e, 2026-09-07), quotes 16,675 lines for emu/amd64_interp.c (17,902 now), and says the amd64 JIT is "validated only on the iOS target" (its gadgets are aarch64-only; the Mac CLI runs it). ch41.4 has the corrected text.
 - **Settle the device-only failures carried since 555.** Every device leg of 555 and 556 has failed these, and only in the Alpine roots, which run in a `mount-root.sh` chroot of the booted Devuan root: `mount_bind_rbind` (`rbind.self_mounted`, all four) and `futex_timeout_duration` (i386: the FUTEX_WAIT_BITSET +500 ms deadlines). Re-run them on a booted root (`ISH_BOOT_ROOT`, 55ceaa8c) and fix whatever still fails. (The third, the `kmsg_stream`/`kmsg_records` pair, was the tests, fixed for 557: a full 1 MiB log outlasted their 20000-read drains, and other logging raced their poll and read-back. Not rsyslogd -- AOK's /proc/kmsg is per-reader, not consuming.)
 
 ## Diagnosed, not fixed
@@ -1107,51 +1110,6 @@ where that store succeeds (host probe, 2026-09-25); unmeasured on a device.
 **Debug-only readers are unguarded.** emu/amd64_interp.c's trace functions and
 kernel/user.c's htop trace `memcpy` from `mem_ptr` directly; each runs only
 behind its own `ISH_*` trace knob.
-
-### PROT_EXEC is never enforced -- no NX for guest pages
-
-`emu/memory.h` says "P_READ and P_EXEC are ignored for now", and P_EXEC really
-is: it is stored, printed in `/proc/<pid>/maps`, reconstructed by mremap, and
-never once consulted. Measured against Linux 6.12 (arm64 `mov w0,#42; ret` in a
-PROT_READ|PROT_WRITE page):
-
-| | Linux | AOK |
-|---|---|---|
-| call into a never-PROT_EXEC page | SIGSEGV | returns 42 |
-| `mprotect(PROT_READ)` over a PROT_EXEC page, then call | SIGSEGV | returns 42 |
-
-So every guest `.data`/`.bss` page is executable and any guest JIT's W^X
-discipline is decorative. Graded a mitigation gap rather than a hole: it takes
-a separate memory-corruption bug in guest software to matter.
-
-**Why it is not fixed here, and what it would take.** The instruction-fetch
-path has no access type of its own -- `emu/tlb.h` fills the TLB for a fetch
-with `MEM_READ` -- so there is nothing for a check to hang off. Two designs
-were considered:
-
-- *A TLB bit.* `struct tlb_entry` is `page`, `page_if_writable`,
-  `data_minus_addr` -- 16 bytes, 1024 entries. Adding `page_if_executable`
-  pushes it to 24 and grows the emulator's hottest structure by half. Rejected
-  on cost.
-
-- *Check once per compiled block, invalidate on revoke.* This is the right
-  shape and is nearly free: `jit_block_compile_common` runs once per block, so
-  the check lands exactly where Linux's fault-on-fetch would, and
-  `jit_invalidate_page` (already used for self-modifying code) handles the
-  revoke half when `pt_set_flags` clears P_EXEC.
-
-  The obstacle is fault delivery. `jit_block_compile*` returning NULL already
-  means OOM, and every dispatch loop responds by flushing the entire JIT,
-  retrying, and then killing the task with a "JIT OOM" printk. A non-executable
-  page needs a *distinct* signal threaded out to raise INT_PF with the faulting
-  address instead -- and there are four dispatch loops (i386, amd64, arm64,
-  riscv64), each with its own OOM and crash-unwind structure. The interpreter
-  build needs its own check as well.
-
-That is a contained project rather than a patch, and it touches the one path
-where a mistake stops every guest from running. Worth doing deliberately, with
-its own before/after benchmark run, rather than folded into a conformance
-sweep.
 
 ### `fcntl(F_GETFL)` on a pipe reports an O_NONBLOCK the guest never set
 
