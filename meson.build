@@ -915,6 +915,10 @@ smallclue_c_args = [
     # broken rather than empty. /AOK/docs is compiled into the app
     # (fs/aok-docs.manifest) and is always there.
     '-DSMALLCLUE_MARKDOWN_DOCS_DIR="/AOK/docs"',
+    # uname() here is the guest kernel's (kernel/native_libc.c's nlibc_uname),
+    # so SmallCLUE must not swap in the host's hw.machine -- `uname -m` said
+    # "iPad17,3" where scripts expect "aarch64" (#622).
+    '-DSMALLCLUE_UNAME_FROM_KERNEL',
     '-w',  # vendored code, not ours to police
 ]
 
