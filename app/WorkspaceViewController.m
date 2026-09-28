@@ -25,6 +25,8 @@
 #import "UIApplication+OpenURL.h"
 #import "UIViewController+Extras.h"
 #import <WebKit/WebKit.h>
+#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
+#import "GuestFileBridge.h"
 #import <objc/runtime.h>
 #include "kernel/task.h"
 #include "fs/proc/ish.h"
@@ -2861,7 +2863,7 @@ static BOOL ISHWorkspaceThemeIdentifierIsBuiltIn(NSString *identifier) {
 - (CGSize)launcherContentSizeForDisplayedLevel;
 @end
 
-@interface WorkspaceBrowserToolViewController : WorkspaceThemedToolViewController <UITextFieldDelegate, WKNavigationDelegate, WKUIDelegate, WorkspaceStatefulTool, WorkspaceTextScalable>
+@interface WorkspaceBrowserToolViewController : WorkspaceThemedToolViewController <UITextFieldDelegate, WKNavigationDelegate, WKUIDelegate, WorkspaceStatefulTool, WorkspaceTextScalable, WorkspaceFileOpenable>
 @end
 
 @interface WorkspaceThemesToolViewController : WorkspaceThemedToolViewController
@@ -3946,7 +3948,12 @@ static UIView *ISHWorkspaceFindFirstResponder(UIView *view) {
     // mirrors the first. Reuse whichever Music window is already open instead of spawning a duplicate
     // when another song is opened, summoning it to the current Desktop if it was hidden on another one
     // (same reveal behavior as openOrFocusWorkspaceToolIdentifier:).
-    if ([toolIdentifier isEqualToString:ISHWorkspaceToolAudioIdentifier]) {
+    // The Browser likewise: a page opened from the File Manager or ws-browser
+    // becomes a tab in the Browser already open. The Equalizer has one set of
+    // settings to show.
+    if ([toolIdentifier isEqualToString:ISHWorkspaceToolAudioIdentifier] ||
+            [toolIdentifier isEqualToString:ISHWorkspaceToolBrowserIdentifier] ||
+            [toolIdentifier isEqualToString:ISHWorkspaceToolEqualizerIdentifier]) {
         ISHWorkspaceContainedWindowView *existing = [self desktopWindowForToolIdentifier:toolIdentifier];
         if (existing != nil) {
             existing.workspaceDesktopIndex = self.activeDesktopIndex;
@@ -14234,6 +14241,73 @@ static NSURL *ISHWorkspaceBrowserURLFromInput(NSString *input) {
 
 @end
 
+// Serves aokfile:///<guest path> to the Browser from the guest's filesystem.
+@interface ISHBrowserGuestFileSchemeHandler : NSObject <WKURLSchemeHandler>
++ (instancetype)shared;
+@end
+
+@implementation ISHBrowserGuestFileSchemeHandler {
+    NSHashTable *_stoppedTasks; // main thread
+}
+
++ (instancetype)shared {
+    static ISHBrowserGuestFileSchemeHandler *shared;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        shared = [ISHBrowserGuestFileSchemeHandler new];
+    });
+    return shared;
+}
+
+- (instancetype)init {
+    self = [super init];
+    if (self != nil)
+        _stoppedTasks = [NSHashTable weakObjectsHashTable];
+    return self;
+}
+
+static NSString *ISHBrowserMIMETypeForPath(NSString *path) {
+    NSString *ext = path.pathExtension.lowercaseString;
+    if ([ext isEqualToString:@"html"] || [ext isEqualToString:@"htm"])
+        return @"text/html";
+    if (@available(iOS 14.0, *)) {
+        UTType *type = ext.length > 0 ? [UTType typeWithFilenameExtension:ext] : nil;
+        if (type.preferredMIMEType != nil)
+            return type.preferredMIMEType;
+    }
+    return @"application/octet-stream";
+}
+
+- (void)webView:(WKWebView *)webView startURLSchemeTask:(id<WKURLSchemeTask>)task {
+    NSURL *url = task.request.URL;
+    NSString *path = url.path.length > 0 ? url.path : @"/";
+    [ISHGuestFileBridge.sharedBridge readFileAtGuestPath:path maxBytes:64u << 20
+                                              completion:^(NSData *data, NSError *error) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if ([self->_stoppedTasks containsObject:task])
+                return;
+            if (data == nil) {
+                [task didFailWithError:error ?: [NSError errorWithDomain:NSURLErrorDomain
+                                                                    code:NSURLErrorFileDoesNotExist userInfo:nil]];
+                return;
+            }
+            NSString *mime = ISHBrowserMIMETypeForPath(path);
+            NSURLResponse *response = [[NSURLResponse alloc] initWithURL:url MIMEType:mime
+                                                   expectedContentLength:(NSInteger) data.length
+                                                        textEncodingName:[mime hasPrefix:@"text/"] ? @"utf-8" : nil];
+            [task didReceiveResponse:response];
+            [task didReceiveData:data];
+            [task didFinish];
+        });
+    }];
+}
+
+- (void)webView:(WKWebView *)webView stopURLSchemeTask:(id<WKURLSchemeTask>)task {
+    [_stoppedTasks addObject:task];
+}
+
+@end
+
 @implementation WorkspaceBrowserToolViewController {
     UIView *_toolbarCard;
     UIView *_browserCard;
@@ -14329,6 +14403,9 @@ static NSURL *ISHWorkspaceBrowserURLFromInput(NSString *input) {
 
 - (WKWebView *)buildBrowserWebView {
     WKWebViewConfiguration *configuration = [WKWebViewConfiguration new];
+    // aokfile:///path reads the guest's files, so a local page's relative
+    // links (its CSS, images, other pages) resolve to guest files too.
+    [configuration setURLSchemeHandler:ISHBrowserGuestFileSchemeHandler.shared forURLScheme:@"aokfile"];
     WKWebView *webView = [[WKWebView alloc] initWithFrame:CGRectZero configuration:configuration];
     webView.translatesAutoresizingMaskIntoConstraints = NO;
     webView.navigationDelegate = self;
@@ -14445,6 +14522,31 @@ static NSURL *ISHWorkspaceBrowserURLFromInput(NSString *input) {
     _selectedTabIndex = index;
     [self attachCurrentBrowserWebView];
     [self refreshBrowserChrome];
+}
+
+// A file from the File Manager, or a path or web address from ws-browser: in a
+// new tab while the RAM-based tab limit leaves room, else in the current tab.
+// A Browser that has only its first tab, never navigated, uses that one.
+- (void)workspaceOpenFileAtGuestPath:(NSString *)guestPath {
+    [self loadViewIfNeeded];
+    NSString *address = guestPath;
+    if ([guestPath hasPrefix:@"/"]) {
+        NSURLComponents *components = [NSURLComponents new];
+        components.scheme = @"aokfile";
+        components.host = @"";
+        components.path = guestPath;
+        address = components.URL.absoluteString ?: guestPath;
+    }
+    WKWebView *current = [self currentBrowserWebView];
+    BOOL currentUnused = _tabWebViews.count == 1 && current.backForwardList.backList.count == 0;
+    if (!currentUnused && _tabWebViews.count < _maximumTabCount) {
+        [self addBrowserTabLoadingAddress:address activate:YES];
+        // A pinned address for the new tab's slot must not win over this one.
+        if (ISHWorkspaceBrowserPinnedURLForTabIndex((NSInteger) _tabWebViews.count - 1).length > 0)
+            [self loadAddressString:address inWebView:_tabWebViews.lastObject];
+        return;
+    }
+    [self loadAddressString:address inWebView:current];
 }
 
 - (void)addBrowserTabLoadingAddress:(NSString *)addressString activate:(BOOL)activate {
@@ -16280,7 +16382,7 @@ static int ISHWorkspaceOpenImpl(const char *request) {
     // the guest's cwd is not the app's, and it may have changed or the process
     // exited. Make the caller resolve it. The one exception is a stream's web
     // address for the video player (`ws-videoplayer https://.../live.m3u8`).
-    BOOL streamAddress = [tool isEqualToString:@"videoplayer"] &&
+    BOOL streamAddress = ([tool isEqualToString:@"videoplayer"] || [tool isEqualToString:@"browser"]) &&
         ([path hasPrefix:@"http://"] || [path hasPrefix:@"https://"]);
     if (path != nil && ![path hasPrefix:@"/"] && !streamAddress)
         return _EINVAL;

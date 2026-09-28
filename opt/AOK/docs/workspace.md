@@ -84,6 +84,14 @@ the Launcher, or `ws-eq`) shapes what Music plays: ten bands from 31 Hz to
 Boost, Vocal, Loudness, Rock). Settings are kept and apply as the sliders move.
 Sound from guest programs does not pass through it.
 
+## Browser
+
+A web browser with tabs (as many as the device's memory allows). It also shows
+the guest's own files: tap an `.html`, `.svg` or `.pdf` file in the File Manager,
+or run `ws-browser page.html`, and it opens in a new tab of the Browser already
+open. A local page's stylesheets, images and links to other pages are read from
+the guest too. `ws-browser https://…` opens a web address the same way.
+
 ## Video Player
 
 Plays a video opened from the File Manager (mp4, mov, m4v; mkv and webm open

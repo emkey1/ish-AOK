@@ -1002,8 +1002,14 @@ static NSSet<NSString *> *ISHFileManagerMarkdownExtensions(void) {
 
 // Matches WorkspaceImageViewer.m's ISHImageViewerSupportedExtensions() --
 // deliberately excludes svg (not rasterizable by the ImageIO decode path the
-// viewer uses) and stays routed to nil until the Browser applet is wired for
-// file-open.
+// viewer uses); svg goes to the Browser instead.
+static NSSet<NSString *> *ISHFileManagerBrowserExtensions(void) {
+    static NSSet<NSString *> *set;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ set = [NSSet setWithArray:@[@"html", @"htm", @"xhtml", @"svg", @"pdf"]]; });
+    return set;
+}
+
 static NSSet<NSString *> *ISHFileManagerImageExtensions(void) {
     static NSSet<NSString *> *set;
     static dispatch_once_t once;
@@ -1047,13 +1053,11 @@ static NSSet<NSString *> *ISHFileManagerKnownBinaryExtensions(void) {
     static dispatch_once_t once;
     dispatch_once(&once, ^{
         set = [NSSet setWithArray:@[
-            @"svg",
             @"zip", @"tar", @"gz", @"bz2", @"xz", @"7z", @"rar",
-            @"pdf", @"doc", @"docx", @"xls", @"xlsx", @"ppt", @"pptx",
+            @"doc", @"docx", @"xls", @"xlsx", @"ppt", @"pptx",
             @"so", @"dylib", @"dll", @"exe", @"o", @"a", @"bin",
             @"db", @"sqlite", @"sqlite3",
             @"ttf", @"otf", @"woff", @"woff2",
-            @"html", @"htm",
         ]];
     });
     return set;
@@ -1076,6 +1080,11 @@ static NSSet<NSString *> *ISHFileManagerKnownBinaryExtensions(void) {
     }
     if (ext.length > 0 && [ISHFileManagerVideoExtensions() containsObject:ext]) {
         completion(@"videoplayer");
+        return;
+    }
+    // Web pages, SVG and PDF: WebKit renders all three.
+    if (ext.length > 0 && [ISHFileManagerBrowserExtensions() containsObject:ext]) {
+        completion(@"browser");
         return;
     }
     if ([ISHAudioLibrary isSupportedAudioFileName:item.name]) {
