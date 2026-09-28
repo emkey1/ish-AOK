@@ -156,6 +156,9 @@ static const struct virtgpu_present_ops display_direct_ops = {
     BOOL _hasCursor;    // the RFB server gave a cursor shape to overlay
     BOOL _textureStale; // _texture missed updates while direct frames showed
     NSMutableArray<UIKeyCommand *> *_Nullable _keyCommands;
+    // Hardware keys held down, by HID usage, with the keysym each went down
+    // as: its release sends the same keysym whatever the modifiers are by then.
+    NSMutableDictionary<NSNumber *, NSNumber *> *_Nullable _heldKeys;
 
     UIImageView *_Nullable _cursorView;
     CGSize _cursorImageSize;
@@ -636,107 +639,168 @@ static const struct virtgpu_present_ops display_direct_ops = {
     [self releaseLatchedAccessoryModifiers];
 }
 
+#pragma mark - Hardware keyboard
+
+// A hardware keyboard's keys go to the guest as they are pressed and released,
+// modifiers included: a game reads a held arrow as movement, Ctrl alone as fire
+// and Shift alone as run, none of which -insertText: or a key command can say
+// (each sends a press and its release at once, and neither sees a bare
+// modifier). The presses are not passed on, so neither of those paths sees
+// them too. Command chords stay with iPadOS and Workspace.
+
+static uint32_t DisplayRFBKeysymForHIDUsage(UIKeyboardHIDUsage usage) {
+    switch (usage) {
+        case UIKeyboardHIDUsageKeyboardReturnOrEnter: return 0xFF0D;
+        case UIKeyboardHIDUsageKeypadEnter: return 0xFF8D;
+        case UIKeyboardHIDUsageKeyboardEscape: return 0xFF1B;
+        case UIKeyboardHIDUsageKeyboardDeleteOrBackspace: return 0xFF08;
+        case UIKeyboardHIDUsageKeyboardTab: return 0xFF09;
+        case UIKeyboardHIDUsageKeyboardCapsLock: return 0xFFE5;
+        case UIKeyboardHIDUsageKeyboardDeleteForward: return 0xFFFF;
+        case UIKeyboardHIDUsageKeyboardInsert: return 0xFF63;
+        case UIKeyboardHIDUsageKeyboardHome: return 0xFF50;
+        case UIKeyboardHIDUsageKeyboardEnd: return 0xFF57;
+        case UIKeyboardHIDUsageKeyboardPageUp: return 0xFF55;
+        case UIKeyboardHIDUsageKeyboardPageDown: return 0xFF56;
+        case UIKeyboardHIDUsageKeyboardLeftArrow: return 0xFF51;
+        case UIKeyboardHIDUsageKeyboardUpArrow: return 0xFF52;
+        case UIKeyboardHIDUsageKeyboardRightArrow: return 0xFF53;
+        case UIKeyboardHIDUsageKeyboardDownArrow: return 0xFF54;
+        case UIKeyboardHIDUsageKeyboardLeftControl: return 0xFFE3;
+        case UIKeyboardHIDUsageKeyboardRightControl: return 0xFFE4;
+        case UIKeyboardHIDUsageKeyboardLeftShift: return 0xFFE1;
+        case UIKeyboardHIDUsageKeyboardRightShift: return 0xFFE2;
+        case UIKeyboardHIDUsageKeyboardLeftAlt: return 0xFFE9;
+        case UIKeyboardHIDUsageKeyboardRightAlt: return 0xFFEA;
+        default: break;
+    }
+    if (usage >= UIKeyboardHIDUsageKeyboardF1 && usage <= UIKeyboardHIDUsageKeyboardF12)
+        return 0xFFBE + (uint32_t) (usage - UIKeyboardHIDUsageKeyboardF1);
+    return 0;
+}
+
+static BOOL DisplayRFBUsageIsModifier(UIKeyboardHIDUsage usage) {
+    return usage >= UIKeyboardHIDUsageKeyboardLeftControl && usage <= UIKeyboardHIDUsageKeyboardRightGUI;
+}
+
+// The keysym a key goes down as. Printable keys go as the character they make
+// with the modifiers held -- the uppercase letter or "!" with Shift -- since the
+// compositor presses a key at the level that makes the keysym it is sent, and
+// lifts the held modifiers when that level does not match: a lowercase letter
+// under Alt+Shift reached labwc as a bare letter. With Control or Option held, the character iOS
+// reports is a control code or an Option-layer symbol, so take the key's plain
+// character and apply Shift to letters only.
+static uint32_t DisplayRFBKeysymForKey(UIKey *key) {
+    uint32_t keysym = DisplayRFBKeysymForHIDUsage(key.keyCode);
+    if (keysym != 0)
+        return keysym;
+    BOOL plain = !(key.modifierFlags & (UIKeyModifierControl | UIKeyModifierAlternate));
+    NSString *text = plain ? key.characters : key.charactersIgnoringModifiers;
+    if (text.length != 1)
+        return 0;
+    unichar ch = [text characterAtIndex:0];
+    if (!plain && (key.modifierFlags & UIKeyModifierShift) && ch >= 'a' && ch <= 'z')
+        ch -= 'a' - 'A';
+    if (ch < 0x20 || ch == 0x7F)
+        return 0;
+    // Latin-1 keysyms are the code point; the rest are 0x01000000 + it.
+    return ch <= 0xFF ? (uint32_t) ch : 0x01000000u + ch;
+}
+
+- (BOOL)forwardPresses:(NSSet<UIPress *> *)presses down:(BOOL)down {
+    if (_rfbClient == nil)
+        return NO;
+    BOOL all = YES;
+    for (UIPress *press in presses) {
+        UIKey *key = press.key;
+        if (key == nil || (key.modifierFlags & UIKeyModifierCommand) ||
+            key.keyCode == UIKeyboardHIDUsageKeyboardLeftGUI || key.keyCode == UIKeyboardHIDUsageKeyboardRightGUI) {
+            all = NO;
+            continue;
+        }
+        NSNumber *usage = @(key.keyCode);
+        if (down) {
+            uint32_t keysym = DisplayRFBKeysymForKey(key);
+            if (keysym == 0) {
+                all = NO;
+                continue;
+            }
+            if (_heldKeys == nil)
+                _heldKeys = [NSMutableDictionary new];
+            _heldKeys[usage] = @(keysym);
+            [_rfbClient sendKeyEvent:keysym down:YES];
+            if (!DisplayRFBUsageIsModifier(key.keyCode))
+                [self releaseLatchedAccessoryModifiers];
+        } else {
+            NSNumber *keysym = _heldKeys[usage];
+            if (keysym == nil) {
+                all = NO;
+                continue;
+            }
+            [_heldKeys removeObjectForKey:usage];
+            [_rfbClient sendKeyEvent:keysym.unsignedIntValue down:NO];
+        }
+    }
+    return all;
+}
+
+// Anything still held goes up: focus moving away mid-press would otherwise
+// leave a key down in the guest (a game running forever).
+- (void)releaseHeldKeys {
+    NSDictionary<NSNumber *, NSNumber *> *held = _heldKeys;
+    _heldKeys = nil;
+    if (_rfbClient == nil)
+        return;
+    for (NSNumber *keysym in held.allValues)
+        [_rfbClient sendKeyEvent:keysym.unsignedIntValue down:NO];
+}
+
+- (void)pressesBegan:(NSSet<UIPress *> *)presses withEvent:(nullable UIPressesEvent *)event {
+    if (![self forwardPresses:presses down:YES])
+        [super pressesBegan:presses withEvent:event];
+}
+
+- (void)pressesEnded:(NSSet<UIPress *> *)presses withEvent:(nullable UIPressesEvent *)event {
+    if (![self forwardPresses:presses down:NO])
+        [super pressesEnded:presses withEvent:event];
+}
+
+- (void)pressesCancelled:(NSSet<UIPress *> *)presses withEvent:(nullable UIPressesEvent *)event {
+    if (![self forwardPresses:presses down:NO])
+        [super pressesCancelled:presses withEvent:event];
+}
+
+- (BOOL)resignFirstResponder {
+    [self releaseHeldKeys];
+    return [super resignFirstResponder];
+}
+
 - (nullable NSArray<UIKeyCommand *> *)keyCommands {
     if (_keyCommands != nil)
         return _keyCommands;
     _keyCommands = [NSMutableArray new];
-    [self addSpecialKeyWithInput:UIKeyInputUpArrow keysym:0xFF52];
-    [self addSpecialKeyWithInput:UIKeyInputDownArrow keysym:0xFF54];
-    [self addSpecialKeyWithInput:UIKeyInputLeftArrow keysym:0xFF51];
-    [self addSpecialKeyWithInput:UIKeyInputRightArrow keysym:0xFF53];
-    [self addSpecialKeyWithInput:UIKeyInputEscape keysym:0xFF1B];
-    [self addSpecialKeyWithInput:@"\t" keysym:0xFF09];
-    // The arrows under every mix of Shift, Control and Option -- selection
-    // and word moves in programs, and the desktop's Ctrl+Alt+Left/Right
-    // (switch desktops) and Ctrl+Alt+Shift+Left/Right (take the window along).
-    // Like every modified key, they never arrive at all without a key command
-    // of their own. Cmd+arrows stay with Workspace's Desktops around the view.
-    static const UIKeyModifierFlags arrowModifiers[] = {
-        UIKeyModifierShift, UIKeyModifierControl, UIKeyModifierAlternate,
-        UIKeyModifierShift | UIKeyModifierControl, UIKeyModifierShift | UIKeyModifierAlternate,
-        UIKeyModifierControl | UIKeyModifierAlternate,
-        UIKeyModifierShift | UIKeyModifierControl | UIKeyModifierAlternate,
-    };
-    NSArray<NSArray *> *arrows = @[@[UIKeyInputUpArrow, @0xFF52], @[UIKeyInputDownArrow, @0xFF54],
-                                   @[UIKeyInputLeftArrow, @0xFF51], @[UIKeyInputRightArrow, @0xFF53]];
-    for (NSArray *arrow in arrows)
-        for (size_t i = 0; i < sizeof(arrowModifiers) / sizeof(arrowModifiers[0]); i++)
-            [self addModifiedKeyWithInput:arrow[0] keysym:[arrow[1] unsignedIntValue] modifierFlags:arrowModifiers[i]];
-    // Ctrl+<key> (Ctrl+C, Ctrl+D, Ctrl+Z, ...): not covered by UIKeyInput
-    // at all -- iOS only routes plain character insertion through
-    // -insertText:, not modified combinations, so without an explicit
-    // UIKeyCommand per key these are silently swallowed before ever
-    // reaching the RFB session. Besides the letters, cover digits and the
-    // characters terminal font zooming uses: foot binds font-increase to
-    // Control+plus/Control+equal, font-decrease to Control+minus, and
-    // font-reset to Control+0 by default ("+" is registered as its own
-    // input alongside "=" because a hardware keyboard reports the shifted
-    // character itself for Ctrl+Shift+=; every keysym here equals its
-    // ASCII value, so handleControlKeyCommand needs no special cases).
-    static const char *controlLetters = "abcdefghijklmnopqrstuvwxyz0123456789=+-_";
-    for (size_t i = 0; controlLetters[i] != '\0'; i++) {
-        NSString *letter = [NSString stringWithFormat:@"%c", controlLetters[i]];
-        UIKeyCommand *command = [UIKeyCommand keyCommandWithInput:letter
-                                                    modifierFlags:UIKeyModifierControl
-                                                           action:@selector(handleControlKeyCommand:)];
-        if (@available(iOS 15, *))
-            command.wantsPriorityOverSystemBehavior = YES;
-        [_keyCommands addObject:command];
-    }
-    // Alt+<letter> and Alt+Shift+<letter>: sway's $mod is Alt (Mod1), not
-    // Control -- Control has to stay free for the terminal/app-level Ctrl
-    // combos above (Ctrl+C etc.), so a window-manager modifier would collide
-    // with those if it also used Control. Same UIKeyInput gap as Control:
-    // iOS never routes modified combinations through -insertText:.
-    for (size_t i = 0; controlLetters[i] != '\0'; i++) {
-        NSString *letter = [NSString stringWithFormat:@"%c", controlLetters[i]];
-        UIKeyCommand *altCommand = [UIKeyCommand keyCommandWithInput:letter
-                                                       modifierFlags:UIKeyModifierAlternate
-                                                              action:@selector(handleAltKeyCommand:)];
-        UIKeyCommand *altShiftCommand = [UIKeyCommand keyCommandWithInput:letter
-                                                            modifierFlags:UIKeyModifierAlternate | UIKeyModifierShift
-                                                                   action:@selector(handleAltShiftKeyCommand:)];
-        if (@available(iOS 15, *)) {
-            altCommand.wantsPriorityOverSystemBehavior = YES;
-            altShiftCommand.wantsPriorityOverSystemBehavior = YES;
-        }
-        [_keyCommands addObject:altCommand];
-        [_keyCommands addObject:altShiftCommand];
-    }
-    // Ctrl+Alt+<letter or digit>: the desktop's Ctrl+Alt+1-4 (go to that
-    // desktop), and whatever else programs bind there.
-    static const char *controlAltKeys = "abcdefghijklmnopqrstuvwxyz0123456789";
-    for (size_t i = 0; controlAltKeys[i] != '\0'; i++)
-        [self addModifiedKeyWithInput:[NSString stringWithFormat:@"%c", controlAltKeys[i]]
-                               keysym:(uint32_t) controlAltKeys[i]
-                        modifierFlags:UIKeyModifierControl | UIKeyModifierAlternate];
     // Cmd+= / Cmd++ / Cmd+- / Cmd+0: the Apple-conventional zoom chords.
     // Terminal apps in the guest only understand the Ctrl forms (foot's
     // font-increase/decrease/reset are Control+equal/plus/minus/0), so these
-    // reuse handleControlKeyCommand, which wraps the key in a guest Ctrl
-    // press. Deliberately NOT extended to Cmd+<letter>: translating Cmd+C
-    // into guest Ctrl+C would turn a reflexive "copy" into SIGINT.
+    // wrap the key in a guest Ctrl press. Deliberately NOT extended to
+    // Cmd+<letter>: translating Cmd+C into guest Ctrl+C would turn a reflexive
+    // "copy" into SIGINT. Every other key reaches the guest through
+    // -pressesBegan: as it is pressed and released; a key command here would
+    // take its press first.
     static const char *commandZoomKeys = "=+-0";
     for (size_t i = 0; commandZoomKeys[i] != '\0'; i++) {
         NSString *key = [NSString stringWithFormat:@"%c", commandZoomKeys[i]];
         UIKeyCommand *zoomCommand = [UIKeyCommand keyCommandWithInput:key
                                                         modifierFlags:UIKeyModifierCommand
-                                                               action:@selector(handleControlKeyCommand:)];
+                                                               action:@selector(handleZoomKeyCommand:)];
         if (@available(iOS 15, *))
             zoomCommand.wantsPriorityOverSystemBehavior = YES;
         [_keyCommands addObject:zoomCommand];
     }
-    // Alt+Return: sway's new-terminal binding.
-    UIKeyCommand *altReturn = [UIKeyCommand keyCommandWithInput:@"\r"
-                                                  modifierFlags:UIKeyModifierAlternate
-                                                         action:@selector(handleAltKeyCommand:)];
-    if (@available(iOS 15, *))
-        altReturn.wantsPriorityOverSystemBehavior = YES;
-    [_keyCommands addObject:altReturn];
     return _keyCommands;
 }
 
-- (void)handleControlKeyCommand:(UIKeyCommand *)command {
+- (void)handleZoomKeyCommand:(UIKeyCommand *)command {
     NSString *input = command.input;
     if (input.length == 0 || _rfbClient == nil)
         return;
@@ -749,112 +813,6 @@ static const struct virtgpu_present_ops display_direct_ops = {
     [_rfbClient sendKeyEvent:keysym down:YES];
     [_rfbClient sendKeyEvent:keysym down:NO];
     [_rfbClient sendKeyEvent:keysymControlL down:NO];
-}
-
-// -input's "\r" (Alt+Return) needs the Return keysym, not the literal
-// carriage-return character value; everything else here is a plain letter,
-// where the X11 keysym equals its ASCII value.
-static uint32_t DisplayRFBKeysymForKeyCommandInput(NSString *input) {
-    if ([input isEqualToString:@"\r"])
-        return 0xFF0D; // Return
-    return (uint32_t) [input characterAtIndex:0];
-}
-
-- (void)handleAltKeyCommand:(UIKeyCommand *)command {
-    NSString *input = command.input;
-    if (input.length == 0 || _rfbClient == nil)
-        return;
-    [self releaseLatchedAccessoryModifiers];
-    static const uint32_t keysymAltL = 0xFFE9;
-    uint32_t keysym = DisplayRFBKeysymForKeyCommandInput(input);
-    [_rfbClient sendKeyEvent:keysymAltL down:YES];
-    [_rfbClient sendKeyEvent:keysym down:YES];
-    [_rfbClient sendKeyEvent:keysym down:NO];
-    [_rfbClient sendKeyEvent:keysymAltL down:NO];
-}
-
-- (void)handleAltShiftKeyCommand:(UIKeyCommand *)command {
-    NSString *input = command.input;
-    if (input.length == 0 || _rfbClient == nil)
-        return;
-    [self releaseLatchedAccessoryModifiers];
-    static const uint32_t keysymAltL = 0xFFE9;
-    static const uint32_t keysymShiftL = 0xFFE1;
-    uint32_t keysym = DisplayRFBKeysymForKeyCommandInput(input);
-    // A letter goes as its uppercase keysym, the symbol the key makes with Shift
-    // held. wayvnc presses the key at the level that makes the keysym it is sent;
-    // for a lowercase letter that is the unshifted level, so it sent the key with
-    // Shift and Alt lifted. labwc never saw Alt+Shift, none of its Alt+Shift
-    // bindings (close, reconfigure, exit, the launcher) fired, and the letter was
-    // typed into the focused window instead.
-    if (keysym >= 'a' && keysym <= 'z')
-        keysym -= 'a' - 'A';
-    [_rfbClient sendKeyEvent:keysymAltL down:YES];
-    [_rfbClient sendKeyEvent:keysymShiftL down:YES];
-    [_rfbClient sendKeyEvent:keysym down:YES];
-    [_rfbClient sendKeyEvent:keysym down:NO];
-    [_rfbClient sendKeyEvent:keysymShiftL down:NO];
-    [_rfbClient sendKeyEvent:keysymAltL down:NO];
-}
-
-// Mirrors TerminalView's addFunctionKey: pattern (stashing the payload via
-// propertyList: rather than an associated object) but targets an RFB keysym
-// instead of a terminal escape sequence.
-- (void)addSpecialKeyWithInput:(NSString *)input keysym:(uint32_t)keysym {
-    UIKeyCommand *command = [UIKeyCommand commandWithTitle:@""
-                                                      image:nil
-                                                     action:@selector(handleSpecialKeyCommand:)
-                                                      input:input
-                                              modifierFlags:0
-                                               propertyList:@(keysym)];
-    if (@available(iOS 15, *))
-        command.wantsPriorityOverSystemBehavior = YES;
-    [_keyCommands addObject:command];
-}
-
-// A key under modifiers, sent as the guest would see it typed: the modifiers
-// down, the key, the modifiers up.
-- (void)addModifiedKeyWithInput:(NSString *)input keysym:(uint32_t)keysym modifierFlags:(UIKeyModifierFlags)flags {
-    UIKeyCommand *command = [UIKeyCommand commandWithTitle:@""
-                                                      image:nil
-                                                     action:@selector(handleModifiedKeyCommand:)
-                                                      input:input
-                                              modifierFlags:flags
-                                               propertyList:@(keysym)];
-    if (@available(iOS 15, *))
-        command.wantsPriorityOverSystemBehavior = YES;
-    [_keyCommands addObject:command];
-}
-
-- (void)handleModifiedKeyCommand:(UIKeyCommand *)command {
-    NSNumber *keysymNumber = command.propertyList;
-    if (![keysymNumber isKindOfClass:NSNumber.class] || _rfbClient == nil)
-        return;
-    [self releaseLatchedAccessoryModifiers];
-    uint32_t modifiers[3];
-    int count = 0;
-    if (command.modifierFlags & UIKeyModifierControl)
-        modifiers[count++] = 0xFFE3; // Control_L
-    if (command.modifierFlags & UIKeyModifierAlternate)
-        modifiers[count++] = 0xFFE9; // Alt_L
-    if (command.modifierFlags & UIKeyModifierShift)
-        modifiers[count++] = 0xFFE1; // Shift_L
-    for (int i = 0; i < count; i++)
-        [_rfbClient sendKeyEvent:modifiers[i] down:YES];
-    [_rfbClient sendKeyEvent:keysymNumber.unsignedIntValue down:YES];
-    [_rfbClient sendKeyEvent:keysymNumber.unsignedIntValue down:NO];
-    for (int i = count - 1; i >= 0; i--)
-        [_rfbClient sendKeyEvent:modifiers[i] down:NO];
-}
-
-- (void)handleSpecialKeyCommand:(UIKeyCommand *)command {
-    NSNumber *keysymNumber = command.propertyList;
-    if (![keysymNumber isKindOfClass:NSNumber.class] || _rfbClient == nil)
-        return;
-    uint32_t keysym = keysymNumber.unsignedIntValue;
-    [_rfbClient sendKeyEvent:keysym down:YES];
-    [_rfbClient sendKeyEvent:keysym down:NO];
-    [self releaseLatchedAccessoryModifiers];
 }
 
 #pragma mark - Accessory key strip
