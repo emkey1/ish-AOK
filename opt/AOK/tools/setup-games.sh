@@ -6,6 +6,15 @@
 #
 #   Freedoom (Phase 1 and 2) on Chocolate Doom    freedoom1, freedoom2
 #   Beneath a Steel Sky (ScummVM, freeware)       sky
+#   Extreme Tux Racer                             etr
+#   Warzone 2100 (real-time strategy, Vulkan)     warzone2100
+#   Armagetron Advanced (light cycles)            armagetronad
+#   Chromium B.S.U. (scrolling shooter)           chromium-bsu
+#   Blobby Volley 2                               blobby
+#   Neverball                                     neverball
+#   Trigger Rally                                 trigger-rally
+#
+# --minimal installs the first two only (about 190 MB less).
 #
 # Every game is started through /usr/local/bin/aok-sdl-game (a symlink per
 # game, found on PATH before /usr/games, and used by the desktop menu too),
@@ -20,6 +29,7 @@
 #
 # Usage:
 #   sudo sh /AOK/tools/setup-games.sh              install, then check
+#   sudo sh /AOK/tools/setup-games.sh --minimal    Freedoom and Beneath a Steel Sky only
 #   sudo sh /AOK/tools/setup-games.sh --gpu        Doom on the GPU regardless
 #   sudo sh /AOK/tools/setup-games.sh --software   everything in software
 #   sudo sh /AOK/tools/setup-games.sh --debs DIR   use the .deb files in DIR
@@ -41,21 +51,27 @@ WRAPPER_SRC="$(dirname "$0")/aok-sdl-game"   # /AOK/tools, beside this script
 
 # Packages, the /usr/games names that go through the wrapper, and the ones
 # that draw on the GPU when it works.
+# Warzone 2100 draws with Vulkan whatever the list says (see aok-sdl-game).
 PKGS="chocolate-doom freedoom scummvm beneath-a-steel-sky"
 WRAPPED="chocolate-doom doom freedoom1 freedoom2 scummvm sky"
 GPU_GAMES="chocolate-doom doom freedoom1 freedoom2 scummvm sky"
+MORE_PKGS="extremetuxracer warzone2100 armagetronad chromium-bsu blobby neverball trigger-rally"
+MORE_WRAPPED="etr warzone2100 armagetronad chromium-bsu blobby neverball trigger-rally"
+MORE_GPU="etr armagetronad chromium-bsu blobby neverball trigger-rally"
 
 usage() {
     sed -n '/^# Usage:/,/^# Devuan/p' "$0" | sed '$d; s/^# \{0,1\}//'
 }
 
 CHECK_ONLY=0
+MINIMAL=0
 GL_CHOICE=auto
 GL_FORCED=0
 DEBS=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --check) CHECK_ONLY=1 ;;
+        --minimal) MINIMAL=1 ;;
         --gpu) GL_CHOICE=gpu; GL_FORCED=1 ;;
         --software) GL_CHOICE=software; GL_FORCED=1 ;;
         --debs) [ $# -ge 2 ] || { usage >&2; exit 2; }; DEBS=$2; shift ;;
@@ -97,19 +113,27 @@ ok()   { printf '    \033[1;32mok\033[0m    %s\n' "$*"; }
 bad()  { printf '    \033[1;31mno\033[0m    %s\n' "$*"; CHECK_FAILED=1; }
 info() { printf '    --    %s\n' "$*"; }
 
-check() {
-    log "checking"
-    for name in $WRAPPED; do
+# $1: the names; $2: 1 when each must be there (the --minimal set).
+check_games() {
+    for name in $1; do
         if [ -e "/usr/games/$name" ]; then
             if [ "$(readlink "/usr/local/bin/$name" 2>/dev/null)" = aok-sdl-game ]; then
                 ok "$name"
             else
                 bad "$name is installed but does not go through $WRAPPER"
             fi
-        else
+        elif [ "$2" = 1 ]; then
             bad "$name is not installed"
+        else
+            info "$name is not installed (--minimal)"
         fi
     done
+}
+
+check() {
+    log "checking"
+    check_games "$WRAPPED" 1
+    check_games "$MORE_WRAPPED" 0
     [ -x "$WRAPPER" ] && ok "$WRAPPER" || bad "$WRAPPER is not installed"
     if [ -w /dev/dsp ] || [ -c /dev/dsp ]; then
         ok "sound: /dev/dsp"
@@ -147,8 +171,11 @@ if [ "$GL_CHOICE" = auto ]; then
     fi
 fi
 
+[ "$MINIMAL" = 0 ] && PKGS="$PKGS $MORE_PKGS"
 MESA="libgl1-mesa-dri libegl-mesa0"
 [ "$GL_CHOICE" = gpu ] && MESA="$MESA mesa-vulkan-drivers mesa-utils"
+# Warzone 2100 draws with Vulkan: the GPU's, or Mesa's software one.
+[ "$MINIMAL" = 0 ] && MESA="$MESA mesa-vulkan-drivers"
 
 SOURCES=/etc/apt/sources.list
 if [ -f "$SOURCES" ] && grep -q 'deb\.devuan\.org' "$SOURCES" 2>/dev/null; then
@@ -191,7 +218,7 @@ fi
 log "installing $WRAPPER"
 mkdir -p /usr/local/bin
 cp "$WRAPPER_SRC" "$WRAPPER" && chmod 755 "$WRAPPER" || die "could not write $WRAPPER"
-for name in $WRAPPED; do
+for name in $WRAPPED $MORE_WRAPPED; do
     [ -e "/usr/games/$name" ] || continue
     ln -sf aok-sdl-game "/usr/local/bin/$name"
     # The desktop menu reads only /usr/share/applications; an entry naming
@@ -203,7 +230,7 @@ for name in $WRAPPED; do
 done
 
 log "writing $CONF"
-if [ "$GL_CHOICE" = gpu ]; then gpu_list=$GPU_GAMES; else gpu_list=""; fi
+if [ "$GL_CHOICE" = gpu ]; then gpu_list="$GPU_GAMES $MORE_GPU"; else gpu_list=""; fi
 {
     echo "# Written by /AOK/tools/setup-games.sh; /usr/local/bin/aok-sdl-game reads it."
     echo "# The games that draw on the GPU (zink); the rest draw in software."
@@ -216,6 +243,7 @@ log "done"
 if [ "$CHECK_FAILED" = 0 ]; then
     note "Start them from the desktop's menu, or in a terminal there:"
     note "  freedoom1    freedoom2    sky"
+    [ "$MINIMAL" = 0 ] && note "  etr    warzone2100    armagetronad    chromium-bsu    blobby    neverball    trigger-rally"
     note "Doom: arrow keys move and turn, Ctrl fires, Space opens doors, Shift runs,"
     note "      Alt+arrows strafe, 1-7 pick a weapon, Tab shows the map, Esc the menu."
     note "Beneath a Steel Sky: left-click walks and looks, right-click uses; F5 menu."

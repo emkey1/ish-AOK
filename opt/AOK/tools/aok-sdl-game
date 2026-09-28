@@ -22,8 +22,43 @@ fi
 AOK_GAMES_GPU=
 [ -r /etc/aok-games.conf ] && . /etc/aok-games.conf
 
-[ -w /dev/dsp ] && export SDL_AUDIODRIVER="${SDL_AUDIODRIVER:-dsp}"
+# Sound: SDL's OSS driver, and OpenAL's, on the app's /dev/dsp.
+if [ -w /dev/dsp ]; then
+    export SDL_AUDIODRIVER="${SDL_AUDIODRIVER:-dsp}"
+    export ALSOFT_DRIVERS="${ALSOFT_DRIVERS:-oss}"
+fi
 [ -n "${WAYLAND_DISPLAY:-}" ] && export SDL_VIDEODRIVER="${SDL_VIDEODRIVER:-wayland}"
+
+# The desktop's X display, for the X11-only games: the Xwayland lock whose pid
+# is the running compositor's (start-wayland.sh's rule; a terminal started
+# before it could tell may not have DISPLAY).
+x_display() {
+    for lock in /tmp/.X*-lock; do
+        [ -f "$lock" ] || continue
+        pid=""
+        read -r pid < "$lock" 2>/dev/null
+        case "$(cat /proc/"$pid"/comm 2>/dev/null)" in
+            labwc|sway) lock=${lock#/tmp/.X}; echo ":${lock%-lock}"; return ;;
+        esac
+    done
+}
+
+target="/usr/games/$name"
+
+case "$name" in
+    # SFML and GLEW draw through X11 only: Xwayland, which has the GPU too.
+    etr|trigger-rally)
+        [ -z "${DISPLAY:-}" ] && DISPLAY=$(x_display) && export DISPLAY
+        export SDL_VIDEODRIVER=x11
+        ;;
+    # Debian's launcher runs the game in a bubblewrap sandbox, which needs
+    # namespaces AOK does not have; and its Vulkan renderer is the one that
+    # reaches the GPU (its OpenGL one needs 3.0, zink here has 2.1).
+    warzone2100)
+        target=/usr/games/warzone2100.real
+        case " $* " in *" --gfxbackend"*) ;; *) set -- --gfxbackend=vulkan "$@" ;; esac
+        ;;
+esac
 
 gl=${AOK_GAMES_GL:-}
 if [ -z "$gl" ]; then
@@ -39,4 +74,4 @@ else
     unset MESA_LOADER_DRIVER_OVERRIDE
 fi
 
-exec "/usr/games/$name" "$@"
+exec "$target" "$@"

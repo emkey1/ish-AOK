@@ -247,18 +247,21 @@ stay in software.
 
 ### Games
 
-One script installs Freedoom (the free Doom, Phases 1 and 2, on Chocolate
-Doom) and Beneath a Steel Sky (the freeware ScummVM adventure), and sets each
-up to play sound through the app and to draw on the GPU where the GPU can
-(Devuan roots):
+One script installs a set of free games tested here -- Freedoom (the free
+Doom, on Chocolate Doom), Beneath a Steel Sky (the freeware ScummVM
+adventure), Extreme Tux Racer, Warzone 2100, Armagetron Advanced, Chromium
+B.S.U., Blobby Volley 2, Neverball and Trigger Rally -- and sets each up to
+play sound through the app and to draw on the GPU where the GPU can (Devuan
+roots):
 
 ```
-sudo sh /AOK/tools/setup-games.sh          # --software keeps them off the GPU
-sh /AOK/tools/setup-games.sh --check
+sudo sh /AOK/tools/setup-games.sh          # --minimal: Freedoom and Beneath a Steel Sky only
+sh /AOK/tools/setup-games.sh --check       # --software keeps them off the GPU
 ```
 
-Start them from the desktop's menu, or as `freedoom1`, `freedoom2` and `sky`
-in a terminal there. Each goes through `/usr/local/bin/aok-sdl-game`, and
+Start them from the desktop's menu, or by name in a terminal there
+(`freedoom1`, `freedoom2`, `sky`, `etr`, `warzone2100`, `armagetronad`,
+`chromium-bsu`, `blobby`, `neverball`, `trigger-rally`). Each goes through `/usr/local/bin/aok-sdl-game`, and
 `/etc/aok-games.conf` lists the ones that draw on the GPU. Doom's keys: the
 arrow keys move and turn, Ctrl fires, Space opens doors, Shift runs, Alt with
 the arrows strafes, 1-7 pick a weapon, Tab shows the map and Esc the menu. In
