@@ -700,6 +700,15 @@ whatever this becomes, like any other program.
   while away, back at 11 ticks/s on return, wl-present showing frames again.
   The display view now follows its own scene rather than UIApplication's
   notifications, which a UIScene app does not get.
+- **Older GPUs (2026-09-28, the A10X in a 2017 iPad Pro).** Shared buffers
+  were sized for rows padded to 16 bytes, as on M-series GPUs; the A10X pads
+  linear rows to 64 (measured with a Vulkan probe: a 780-pixel row is 3136
+  bytes there, 3120 on the M4). wl-present's buffers were refused ("importing
+  the supplied dmabufs failed") and wayvnc died on a read past a buffer's
+  end. The node now asks Metal (mvkAOKLinearRowAlignment in the MoltenVK
+  fork); on the A10X the desktop then composites on the GPU and the app shows
+  wl-present's frames. zink there still kills its context on the first draw
+  (docs/TODO.md).
 - **Next:** gaps in the device, for later: no GUEST blobs or DRM syncobjs (Mesa needs
   neither), one lock around all renderer calls, and no checkpoint support for an
   open node or its fences.

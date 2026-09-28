@@ -858,13 +858,18 @@ static int ioctl_execbuffer(struct vgpu_file *file, struct drm_virtgpu_execbuffe
 // GPU and wayvnc reads the result from the same pages.
 
 // A dumb buffer's memory, with one reference.
+// MoltenVK, iSH-AOK's fork (MVKAOKGPUGate.h).
+unsigned mvkAOKLinearRowAlignment(void);
+
 static int dumb_res_create(uint32_t width, uint32_t height, uint32_t bpp,
                            uint32_t *pitch_out, struct vgpu_res **res_out) {
     if (width == 0 || height == 0 || bpp == 0 || bpp > 128 || width > 16384 || height > 16384)
         return _EINVAL;
-    // MoltenVK lays a LINEAR image's rows 16 bytes apart at the least; an
-    // importer takes the host's pitch, so the buffer must have the same one.
-    uint64_t pitch = (((uint64_t) width * bpp + 7) / 8 + 15) & ~(uint64_t) 15;
+    // MoltenVK pads a LINEAR image's rows to the GPU's linear alignment --
+    // 16 bytes on M-series GPUs, 64 on an A10X -- and an importer takes the
+    // host's pitch, so the buffer must have the same one.
+    uint64_t align = mvkAOKLinearRowAlignment();
+    uint64_t pitch = (((uint64_t) width * bpp + 7) / 8 + align - 1) / align * align;
     uint64_t size = pitch * height;
     uint64_t host_page = (uint64_t) getpagesize();
     uint64_t alloc = (size + host_page - 1) & ~(host_page - 1);
