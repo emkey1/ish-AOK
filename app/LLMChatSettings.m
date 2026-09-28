@@ -69,6 +69,7 @@ typedef NS_ENUM(NSInteger, ISHLLMSettingsRow) {
     ISHLLMSettingsRowQueryModels,
     ISHLLMSettingsRowTestConnection,
     ISHLLMSettingsRowShellTools,
+    ISHLLMSettingsRowToolPermissions,
     ISHLLMSettingsRowCommandTimeout,
     ISHLLMSettingsRowOutputLimit,
     ISHLLMSettingsRowToolRounds,
@@ -124,8 +125,8 @@ typedef NS_ENUM(NSInteger, ISHLLMSettingsRow) {
     NSString *thinkingNote = @"Hide Thinking collapses a reasoning model's <think> blocks behind a “Thinking” line in the transcript; tap it to expand or copy the reasoning. The full text is always kept in the saved history.";
     NSString *destinationsNote = @"Destinations are the saved endpoints the chat can switch between from its own toolbar; the rows below configure whichever one is selected. Chats are saved in /AOK/persist/llm-chats.";
     if (ISHLLMUsesAppleFoundationModels())
-        return [NSString stringWithFormat:@"Apple Foundation Models is an iOS/iPadOS 26+ on-device backend; no server URL or API key needed. %@ Shell Tools lets it run commands in the iSH shell, confirmed per command; the command timeout, output limit, and tool call round cap are adjustable above. %@ %@", ISHLLMAppleFoundationModelsUnavailableMessage(), thinkingNote, destinationsNote];
-    return [NSString stringWithFormat:@"Use a /v1 OpenAI-compatible server, or the Gemini preset. Hosted providers require API keys.\nShell Tools lets an OpenAI-compatible model run commands in the iSH shell (web search via curl, etc.), confirmed per command; not available for Gemini. The command timeout, output limit, and tool call round cap are adjustable above.\n%@\n%@", thinkingNote, destinationsNote];
+        return [NSString stringWithFormat:@"Apple Foundation Models is an iOS/iPadOS 26+ on-device backend; no server URL or API key needed. %@ Tools lets it run commands in the iSH-AOK shell, as Tool Permissions allows; the command timeout, output limit, and tool call round cap are adjustable above. %@ %@", ISHLLMAppleFoundationModelsUnavailableMessage(), thinkingNote, destinationsNote];
+    return [NSString stringWithFormat:@"Use a /v1 OpenAI-compatible server, or the Gemini preset. Hosted providers require API keys.\nTools lets an OpenAI-compatible model read, search and edit files and run commands in the iSH-AOK shell, as Tool Permissions allows; not available for Gemini. The command timeout, output limit, and tool call round cap are adjustable above.\n%@\n%@", thinkingNote, destinationsNote];
 }
 
 // At the text size of the Workspace window this page is in; see
@@ -199,9 +200,15 @@ typedef NS_ENUM(NSInteger, ISHLLMSettingsRow) {
             cell.accessoryType = UITableViewCellAccessoryNone;
             break;
         case ISHLLMSettingsRowShellTools:
-            cell.textLabel.text = @"Shell Tools";
+            cell.textLabel.text = @"Tools";
             cell.detailTextLabel.text = UserPreferences.shared.llmToolsEnabled ? @"On" : @"Off";
             cell.accessoryType = UserPreferences.shared.llmToolsEnabled ? UITableViewCellAccessoryCheckmark : UITableViewCellAccessoryNone;
+            break;
+        case ISHLLMSettingsRowToolPermissions:
+            cell.textLabel.text = @"Tool Permissions";
+            cell.detailTextLabel.text = [NSString stringWithFormat:@"Edit %@ · Shell %@",
+                ISHLLMPermissionActionTitle(ISHLLMCategoryAction(ISHLLMToolCategoryEdit)),
+                ISHLLMPermissionActionTitle(ISHLLMCategoryAction(ISHLLMToolCategoryShell))];
             break;
         case ISHLLMSettingsRowCommandTimeout:
             cell.textLabel.text = @"Command Timeout";
@@ -261,6 +268,9 @@ typedef NS_ENUM(NSInteger, ISHLLMSettingsRow) {
         case ISHLLMSettingsRowShellTools:
             [self toggleShellToolsFromView:cell];
             return;
+        case ISHLLMSettingsRowToolPermissions:
+            [self.navigationController pushViewController:[LLMToolPermissionsViewController new] animated:YES];
+            return;
         case ISHLLMSettingsRowCommandTimeout:
             [self pickToolTimeoutFromView:cell];
             return;
@@ -315,8 +325,8 @@ typedef NS_ENUM(NSInteger, ISHLLMSettingsRow) {
         [self.tableView reloadData];
         return;
     }
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Enable shell tools?"
-        message:[NSString stringWithFormat:@"The model will be able to request shell commands that run in the iSH Linux environment — for web search via curl/wget, reading files, or running programs. You confirm each command before it runs, output is capped at %ld KB, and commands are killed after %@ (both adjustable below). Only enable this with a model and server you trust.",
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Enable tools?"
+        message:[NSString stringWithFormat:@"The model will be able to read, search and change files and run shell commands in the iSH-AOK Linux environment — to work on code, fetch web pages with curl/wget, or run programs. By default it reads files freely and asks you before each edit or command; Tool Permissions changes that. Output is capped at %ld KB and commands are killed after %@ (both adjustable below). Only enable this with a model and server you trust.",
             (long) ISHLLMToolOutputLimitKB(), ISHLLMToolTimeoutTitle(ISHLLMToolTimeoutSeconds())]
         preferredStyle:UIAlertControllerStyleAlert];
     [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
@@ -1087,6 +1097,231 @@ typedef NS_ENUM(NSInteger, ISHLLMDestinationEditorRow) {
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:nil message:message preferredStyle:UIAlertControllerStyleAlert];
     [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
     [self presentViewController:alert animated:YES completion:nil];
+}
+
+@end
+
+#pragma mark - Tool permissions
+
+// LLM Settings -> Tool Permissions: the three category defaults, then the
+// shell rules in the order they are tried (first match wins). See
+// LLMChatPermissions.h for what each one means.
+typedef NS_ENUM(NSInteger, ISHLLMPermissionsSection) {
+    ISHLLMPermissionsSectionCategories,
+    ISHLLMPermissionsSectionRules,
+    ISHLLMPermissionsSectionActions,
+    ISHLLMPermissionsSectionCount,
+};
+
+@implementation LLMToolPermissionsViewController
+
+- (instancetype)init {
+    return [super initWithStyle:UITableViewStyleInsetGrouped];
+}
+
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.title = @"Tool Permissions";
+    self.navigationItem.rightBarButtonItem = self.editButtonItem;
+}
+
+- (void)viewWillAppear:(BOOL)animated {
+    [super viewWillAppear:animated];
+    [self.tableView reloadData];
+}
+
+- (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
+    (void) tableView;
+    return ISHLLMPermissionsSectionCount;
+}
+
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
+    (void) tableView;
+    switch ((ISHLLMPermissionsSection) section) {
+        case ISHLLMPermissionsSectionCategories: return 3;
+        case ISHLLMPermissionsSectionRules: return (NSInteger) ISHLLMShellRules().count + 1;
+        case ISHLLMPermissionsSectionActions: return 1;
+        case ISHLLMPermissionsSectionCount: break;
+    }
+    return 0;
+}
+
+- (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section {
+    (void) tableView;
+    if (section == ISHLLMPermissionsSectionCategories)
+        return @"When the model wants to";
+    if (section == ISHLLMPermissionsSectionRules)
+        return @"Shell command rules";
+    return nil;
+}
+
+- (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
+    (void) tableView;
+    if (section == ISHLLMPermissionsSectionCategories)
+        return @"Allow runs it without asking, Ask shows you each one first, Deny refuses it and tells the model so. File edits outside the chat's working directory always ask unless edits are denied.";
+    if (section == ISHLLMPermissionsSectionRules)
+        return @"Each part of a command line (split at ; & | && || and newlines) takes the first rule its text matches, or the Shell Commands setting when none does; the strictest part decides. * matches anything, so \"git status *\" also matches a bare \"git status\". A rule cannot allow a part that writes to a file with > or a line with $( ) or backquotes: those get the Shell Commands setting. Drag to reorder in Edit mode.";
+    return nil;
+}
+
+- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+    UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1 reuseIdentifier:nil];
+    switch ((ISHLLMPermissionsSection) indexPath.section) {
+        case ISHLLMPermissionsSectionCategories: {
+            ISHLLMToolCategory category = (ISHLLMToolCategory) indexPath.row;
+            cell.textLabel.text = ISHLLMToolCategoryTitle(category);
+            cell.detailTextLabel.text = ISHLLMPermissionActionTitle(ISHLLMCategoryAction(category));
+            cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+            break;
+        }
+        case ISHLLMPermissionsSectionRules: {
+            NSArray<NSDictionary<NSString *, id> *> *rules = ISHLLMShellRules();
+            if ((NSUInteger) indexPath.row >= rules.count) {
+                cell.textLabel.text = @"Add Rule…";
+                cell.textLabel.textColor = self.view.tintColor;
+                break;
+            }
+            NSDictionary<NSString *, id> *rule = rules[(NSUInteger) indexPath.row];
+            cell.textLabel.text = rule[kISHLLMShellRulePattern];
+            cell.textLabel.font = [UIFont monospacedSystemFontOfSize:UIFont.labelFontSize - 1.0 weight:UIFontWeightRegular];
+            cell.detailTextLabel.text = ISHLLMPermissionActionTitle((ISHLLMPermissionAction) [rule[kISHLLMShellRuleAction] integerValue]);
+            break;
+        }
+        case ISHLLMPermissionsSectionActions:
+            cell.textLabel.text = @"Restore Default Rules";
+            cell.textLabel.textColor = self.view.tintColor;
+            break;
+        case ISHLLMPermissionsSectionCount:
+            break;
+    }
+    ISHWorkspaceScaleTableViewCell(cell, ISHWorkspaceTextScaleForViewController(self));
+    return cell;
+}
+
+- (void)workspaceTextScaleDidChange {
+    ISHWorkspaceRescaleTableView(self.tableView, ISHWorkspaceTextScaleForViewController(self));
+}
+
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+    [tableView deselectRowAtIndexPath:indexPath animated:YES];
+    UITableViewCell *cell = [tableView cellForRowAtIndexPath:indexPath];
+    switch ((ISHLLMPermissionsSection) indexPath.section) {
+        case ISHLLMPermissionsSectionCategories: {
+            ISHLLMToolCategory category = (ISHLLMToolCategory) indexPath.row;
+            [self pickActionWithTitle:ISHLLMToolCategoryTitle(category) current:ISHLLMCategoryAction(category) sourceView:cell handler:^(ISHLLMPermissionAction action) {
+                ISHLLMSetCategoryAction(category, action);
+            }];
+            return;
+        }
+        case ISHLLMPermissionsSectionRules: {
+            NSArray<NSDictionary<NSString *, id> *> *rules = ISHLLMShellRules();
+            [self editRuleAtIndex:(NSUInteger) indexPath.row existing:(NSUInteger) indexPath.row < rules.count ? rules[(NSUInteger) indexPath.row] : nil sourceView:cell];
+            return;
+        }
+        case ISHLLMPermissionsSectionActions: {
+            UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Restore the default rules?"
+                message:@"Your shell command rules are replaced by the defaults, which allow only commands that look at things (ls, cat, git status, ...)."
+                preferredStyle:UIAlertControllerStyleAlert];
+            [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+            [alert addAction:[UIAlertAction actionWithTitle:@"Restore" style:UIAlertActionStyleDestructive handler:^(__unused UIAlertAction *action) {
+                ISHLLMSetShellRules(nil);
+                [self.tableView reloadData];
+            }]];
+            [self presentViewController:alert animated:YES completion:nil];
+            return;
+        }
+        case ISHLLMPermissionsSectionCount:
+            return;
+    }
+}
+
+- (void)pickActionWithTitle:(NSString *)title current:(ISHLLMPermissionAction)current sourceView:(UIView *)sourceView
+                    handler:(void (^)(ISHLLMPermissionAction action))handler {
+    ISHActionSheet *sheet = [ISHActionSheet actionSheetWithTitle:title message:nil];
+    for (NSNumber *choice in @[@(ISHLLMPermissionAllow), @(ISHLLMPermissionAsk), @(ISHLLMPermissionDeny)]) {
+        ISHLLMPermissionAction action = (ISHLLMPermissionAction) choice.integerValue;
+        NSString *label = ISHLLMPermissionActionTitle(action);
+        if (action == current)
+            label = [label stringByAppendingString:@" ✓"];
+        [sheet addActionWithTitle:label style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *alertAction) {
+            handler(action);
+            [self.tableView reloadData];
+        }];
+    }
+    [sheet addActionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil];
+    [sheet presentFromViewController:self sourceView:sourceView sourceRect:sourceView.bounds];
+}
+
+// Pattern first, then what it does: one alert with a text field, then the
+// same Allow/Ask/Deny sheet the categories use.
+- (void)editRuleAtIndex:(NSUInteger)index existing:(NSDictionary<NSString *, id> *)existing sourceView:(UIView *)sourceView {
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:existing != nil ? @"Edit Rule" : @"Add Rule"
+        message:@"A command pattern, e.g. \"make *\" or \"rm *\"."
+        preferredStyle:UIAlertControllerStyleAlert];
+    [alert addTextFieldWithConfigurationHandler:^(UITextField *textField) {
+        textField.text = existing[kISHLLMShellRulePattern];
+        textField.placeholder = @"make *";
+        textField.autocapitalizationType = UITextAutocapitalizationTypeNone;
+        textField.autocorrectionType = UITextAutocorrectionTypeNo;
+        textField.spellCheckingType = UITextSpellCheckingTypeNo;
+        textField.font = [UIFont monospacedSystemFontOfSize:UIFont.labelFontSize weight:UIFontWeightRegular];
+    }];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Next" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
+        NSString *pattern = [alert.textFields.firstObject.text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+        if (pattern.length == 0)
+            return;
+        ISHLLMPermissionAction current = existing != nil ? (ISHLLMPermissionAction) [existing[kISHLLMShellRuleAction] integerValue] : ISHLLMPermissionAllow;
+        [self pickActionWithTitle:pattern current:current sourceView:sourceView handler:^(ISHLLMPermissionAction chosen) {
+            NSMutableArray *rules = [ISHLLMShellRules() mutableCopy];
+            NSDictionary *rule = @{kISHLLMShellRulePattern: pattern, kISHLLMShellRuleAction: @(chosen)};
+            if (existing != nil && index < rules.count)
+                rules[index] = rule;
+            else
+                [rules insertObject:rule atIndex:0]; // new rules win over older ones
+            ISHLLMSetShellRules(rules);
+        }];
+    }]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
+- (BOOL)tableView:(UITableView *)tableView canEditRowAtIndexPath:(NSIndexPath *)indexPath {
+    (void) tableView;
+    return indexPath.section == ISHLLMPermissionsSectionRules && (NSUInteger) indexPath.row < ISHLLMShellRules().count;
+}
+
+- (BOOL)tableView:(UITableView *)tableView canMoveRowAtIndexPath:(NSIndexPath *)indexPath {
+    return [self tableView:tableView canEditRowAtIndexPath:indexPath];
+}
+
+- (NSIndexPath *)tableView:(UITableView *)tableView targetIndexPathForMoveFromRowAtIndexPath:(NSIndexPath *)source
+       toProposedIndexPath:(NSIndexPath *)proposed {
+    (void) tableView;
+    NSInteger last = (NSInteger) ISHLLMShellRules().count - 1;
+    if (proposed.section < ISHLLMPermissionsSectionRules)
+        return [NSIndexPath indexPathForRow:0 inSection:ISHLLMPermissionsSectionRules];
+    if (proposed.section > ISHLLMPermissionsSectionRules || proposed.row > last)
+        return [NSIndexPath indexPathForRow:last inSection:ISHLLMPermissionsSectionRules];
+    (void) source;
+    return proposed;
+}
+
+- (void)tableView:(UITableView *)tableView moveRowAtIndexPath:(NSIndexPath *)source toIndexPath:(NSIndexPath *)destination {
+    (void) tableView;
+    NSMutableArray *rules = [ISHLLMShellRules() mutableCopy];
+    NSDictionary *rule = rules[(NSUInteger) source.row];
+    [rules removeObjectAtIndex:(NSUInteger) source.row];
+    [rules insertObject:rule atIndex:(NSUInteger) destination.row];
+    ISHLLMSetShellRules(rules);
+}
+
+- (void)tableView:(UITableView *)tableView commitEditingStyle:(UITableViewCellEditingStyle)editingStyle forRowAtIndexPath:(NSIndexPath *)indexPath {
+    if (editingStyle != UITableViewCellEditingStyleDelete)
+        return;
+    NSMutableArray *rules = [ISHLLMShellRules() mutableCopy];
+    [rules removeObjectAtIndex:(NSUInteger) indexPath.row];
+    ISHLLMSetShellRules(rules);
+    [tableView deleteRowsAtIndexPaths:@[indexPath] withRowAnimation:UITableViewRowAnimationAutomatic];
 }
 
 @end

@@ -21,8 +21,9 @@
 /* End PBXAggregateTarget section */
 
 /* Begin PBXBuildFile section */
-		BB28C8F326896C1D00BDC834 /* SwapFilePicker.m in Sources */ = {isa = PBXBuildFile; fileRef = BB28C8F126896C1D00BDC834 /* SwapFilePicker.m */; };
 		07430ECDFB3BADD4102D3854 /* MediaPlayer.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = EDE84B56A5A0D9AC87E4DABB /* MediaPlayer.framework */; };
+		086DF4AE2BCA3731D05CF391 /* LLMChatTools.m in Sources */ = {isa = PBXBuildFile; fileRef = 0D4A622DB170BCCE9126AFC9 /* LLMChatTools.m */; };
+		69D530C0057201B5AB1A590F /* LLMChatPermissions.m in Sources */ = {isa = PBXBuildFile; fileRef = 07A0595A97B6DF8D65AEF053 /* LLMChatPermissions.m */; };
 		0FC2383C2991FBA6004C09EC /* mmx.c in Sources */ = {isa = PBXBuildFile; fileRef = 0FC2383B2991FB82004C09EC /* mmx.c */; };
 		1A4DC4F2374508A4B1CEC666 /* manifest.json in Resources */ = {isa = PBXBuildFile; fileRef = B943617711E6F6314E471864 /* manifest.json */; };
 		2E93B4EE793B2F3424392363 /* DisplayViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = 336DFB895C466449FA941BEF /* DisplayViewController.m */; };
@@ -133,10 +134,12 @@
 		5DABED392B41E2150078F3FB /* hostinfo.m in Sources */ = {isa = PBXBuildFile; fileRef = 5DABED372B41E2150078F3FB /* hostinfo.m */; };
 		5DD383EB2AAE33330013A847 /* UIDevice.m in Sources */ = {isa = PBXBuildFile; fileRef = 5DD383EA2AAE33330013A847 /* UIDevice.m */; };
 		64CE50B26A1362B804F817ED /* AudioPCMDecoder_AVF.m in Sources */ = {isa = PBXBuildFile; fileRef = 753D59F184017DDADD8F541A /* AudioPCMDecoder_AVF.m */; };
+		66F6D8D15BB25D55FC157BDD /* LLMChatViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = 8A878C6B5BF3537BE23A280C /* LLMChatViewController.m */; };
 		7D1582A708E54A98CEF01901 /* AVFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 27540C36CB55E575C077AB88 /* AVFoundation.framework */; };
 		826E8F9723237C5BAA6FDD6A /* WorkspaceMarkdownViewer.m in Sources */ = {isa = PBXBuildFile; fileRef = 3A510B0EF1C9B96522FE6860 /* WorkspaceMarkdownViewer.m */; };
 		8373773A4AE4AA88C0E3CCBC /* AudioLibrary.m in Sources */ = {isa = PBXBuildFile; fileRef = F9B4AFAD2A89EB3E27D10A36 /* AudioLibrary.m */; };
 		8D457CFF8048C780CA8A5561 /* DisplayRFBView.m in Sources */ = {isa = PBXBuildFile; fileRef = F849D89896B2C39F45F1E7E5 /* DisplayRFBView.m */; };
+		9BB992DCCE1343B81D71A938 /* LLMChatSupport.m in Sources */ = {isa = PBXBuildFile; fileRef = 1BCB82C7F2994769EADB8945 /* LLMChatSupport.m */; };
 		9C2BEE382C85ECD21A4672CA /* AudioPCMDecoder_Opus.m in Sources */ = {isa = PBXBuildFile; fileRef = 0877CBCD3AD3639A48727F42 /* AudioPCMDecoder_Opus.m */; };
 		9E0E330D31CAA2DC36F0F208 /* FoundationModels.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A1C46BFA5283C8409E80F5EC /* FoundationModels.framework */; settings = {ATTRIBUTES = (Weak, ); }; };
 		A143B4E425BDFAE03A1725CD /* AOKFoundationModelsBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F681FC66C14DDED4FBD7BD6 /* AOKFoundationModelsBridge.swift */; };
@@ -173,10 +176,6 @@
 		BB28C7A426896B1F00BDC834 /* AppGroup.m in Sources */ = {isa = PBXBuildFile; fileRef = BB9C7B84240A240E00F5D4F0 /* AppGroup.m */; };
 		BB28C7A526896B1F00BDC834 /* UIApplication+OpenURL.m in Sources */ = {isa = PBXBuildFile; fileRef = BBFB557B215878C600DFE6DE /* UIApplication+OpenURL.m */; };
 		BB28C7A626896B1F00BDC834 /* AboutViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = BBFB5578215876CD00DFE6DE /* AboutViewController.m */; };
-		9BB992DCCE1343B81D71A938 /* LLMChatSupport.m in Sources */ = {isa = PBXBuildFile; fileRef = 1BCB82C7F2994769EADB8945 /* LLMChatSupport.m */; };
-		086DF4AE2BCA3731D05CF391 /* LLMChatTools.m in Sources */ = {isa = PBXBuildFile; fileRef = 0D4A622DB170BCCE9126AFC9 /* LLMChatTools.m */; };
-		66F6D8D15BB25D55FC157BDD /* LLMChatViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = 8A878C6B5BF3537BE23A280C /* LLMChatViewController.m */; };
-		C9DC7E00D7ACBDB0B88FAE97 /* LLMChatSettings.m in Sources */ = {isa = PBXBuildFile; fileRef = 37D9BDEB8D8CF285B64CA4C9 /* LLMChatSettings.m */; };
 		BB28C7A726896B1F00BDC834 /* UIViewController+Extras.m in Sources */ = {isa = PBXBuildFile; fileRef = BBFB557021586C4800DFE6DE /* UIViewController+Extras.m */; };
 		BB28C7A826896B1F00BDC834 /* NSObject+SaneKVO.m in Sources */ = {isa = PBXBuildFile; fileRef = BBCED896255BB65A00CA0701 /* NSObject+SaneKVO.m */; };
 		BB28C7AE26896C1D00BDC834 /* libiSH-AOKApp.a in Frameworks */ = {isa = PBXBuildFile; fileRef = BBEF191E26806364001225BD /* libiSH-AOKApp.a */; platformFilter = ios; };
@@ -186,6 +185,7 @@
 		BB28C7BB268975AE00BDC834 /* LocationDevice.m in Sources */ = {isa = PBXBuildFile; fileRef = BB235533235D488400139E00 /* LocationDevice.m */; };
 		BB28C7BC268975B000BDC834 /* PasteboardDevice.m in Sources */ = {isa = PBXBuildFile; fileRef = 650B337322EA235C00B4C03E /* PasteboardDevice.m */; };
 		BB28C7BF2689799800BDC834 /* Roots.m in Sources */ = {isa = PBXBuildFile; fileRef = BB10E5CD248DBE66009C7A74 /* Roots.m */; };
+		BB28C8F326896C1D00BDC834 /* SwapFilePicker.m in Sources */ = {isa = PBXBuildFile; fileRef = BB28C8F126896C1D00BDC834 /* SwapFilePicker.m */; };
 		BB2B4DAC231D94C300CB578B /* hterm_all.js in Resources */ = {isa = PBXBuildFile; fileRef = BB2B4DAB231D94C300CB578B /* hterm_all.js */; };
 		BB2B4DAD231D998300CB578B /* term.js in Resources */ = {isa = PBXBuildFile; fileRef = BB4A539C1FAA490C00A72ACE /* term.js */; };
 		BB2B4DAE231D998300CB578B /* term.css in Resources */ = {isa = PBXBuildFile; fileRef = BB4A53AF1FAA787900A72ACE /* term.css */; };
@@ -253,6 +253,7 @@
 		C0A200042F2F000100000003 /* ISHRunCommandIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0A200042F2F000100000004 /* ISHRunCommandIntent.swift */; };
 		C0A200042F2F000100000005 /* GuestCommandRunner.m in Sources */ = {isa = PBXBuildFile; fileRef = C0A200042F2F000100000006 /* GuestCommandRunner.m */; };
 		C3060403DA76F382061A1170 /* DisplayRFBClient.m in Sources */ = {isa = PBXBuildFile; fileRef = 704575CA466EF25ECC14EA7B /* DisplayRFBClient.m */; };
+		C9DC7E00D7ACBDB0B88FAE97 /* LLMChatSettings.m in Sources */ = {isa = PBXBuildFile; fileRef = 37D9BDEB8D8CF285B64CA4C9 /* LLMChatSettings.m */; };
 		DC09D58C8595F3ACD279A0D2 /* AudioPlayerEngine.m in Sources */ = {isa = PBXBuildFile; fileRef = 59516B05C7A2120D1EE19975 /* AudioPlayerEngine.m */; };
 		E02D963E8F2A7D5D58954A0D /* MarkdownRenderer.m in Sources */ = {isa = PBXBuildFile; fileRef = 57D6250B1A93D2423FF389EB /* MarkdownRenderer.m */; };
 		F8AF2E023A182D2DF0E331A0 /* DisplayRFBShaders.metal in Sources */ = {isa = PBXBuildFile; fileRef = C64EFBFD4819B3516B73356F /* DisplayRFBShaders.metal */; };
@@ -392,12 +393,18 @@
 		01BF35C50FE269DF759E5D59 /* WorkspaceVideoPlayer.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = WorkspaceVideoPlayer.m; sourceTree = "<group>"; };
 		04D500F4AD345B478159A9D2 /* GuestFileBridge.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = GuestFileBridge.m; sourceTree = "<group>"; };
 		0877CBCD3AD3639A48727F42 /* AudioPCMDecoder_Opus.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = AudioPCMDecoder_Opus.m; sourceTree = "<group>"; };
+		0D4A622DB170BCCE9126AFC9 /* LLMChatTools.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = LLMChatTools.m; sourceTree = "<group>"; };
+		07A0595A97B6DF8D65AEF053 /* LLMChatPermissions.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = LLMChatPermissions.m; sourceTree = "<group>"; };
+		3DAB153C6AF1B9F81CC861FD /* LLMChatPermissions.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = LLMChatPermissions.h; sourceTree = "<group>"; };
 		0FC2383B2991FB82004C09EC /* mmx.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = mmx.c; sourceTree = "<group>"; };
+		1BCB82C7F2994769EADB8945 /* LLMChatSupport.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = LLMChatSupport.m; sourceTree = "<group>"; };
+		222FF3C6D16AAB7D6D90E559 /* LLMChatInternal.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = LLMChatInternal.h; sourceTree = "<group>"; };
 		27540C36CB55E575C077AB88 /* AVFoundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AVFoundation.framework; path = System/Library/Frameworks/AVFoundation.framework; sourceTree = SDKROOT; };
 		2D2CE94AE68FC33023A693E0 /* AudioPCMDecoder.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = AudioPCMDecoder.m; sourceTree = "<group>"; };
 		336DFB895C466449FA941BEF /* DisplayViewController.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = DisplayViewController.m; sourceTree = "<group>"; };
 		339C4B7260DE3DF9776043F8 /* AudioPCMDecoder.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; path = AudioPCMDecoder.h; sourceTree = "<group>"; };
 		340B757F7B6F0A41BD73AE7D /* AudioPCMDecoder_Vorbis.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = AudioPCMDecoder_Vorbis.m; sourceTree = "<group>"; };
+		37D9BDEB8D8CF285B64CA4C9 /* LLMChatSettings.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = LLMChatSettings.m; sourceTree = "<group>"; };
 		3A510B0EF1C9B96522FE6860 /* WorkspaceMarkdownViewer.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = WorkspaceMarkdownViewer.m; sourceTree = "<group>"; };
 		3F264C7242E0E51BAA5B5CF3 /* audiocodecs.xcframework */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = wrapper.xcframework; name = audiocodecs.xcframework; path = "deps/audiocodecs-static/audiocodecs.xcframework"; sourceTree = SOURCE_ROOT; };
 		408A2639236440F8008A4E81 /* iOSFS.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = iOSFS.m; sourceTree = "<group>"; };
@@ -602,6 +609,7 @@
 		761C29F5D922E3D01F78AE83 /* MarkdownRenderer.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; path = MarkdownRenderer.h; sourceTree = "<group>"; };
 		8632A7BD219A59FB00F02325 /* UserPreferences.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = UserPreferences.h; sourceTree = "<group>"; };
 		8632A7BE219A59FB00F02325 /* UserPreferences.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = UserPreferences.m; sourceTree = "<group>"; };
+		8A878C6B5BF3537BE23A280C /* LLMChatViewController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = LLMChatViewController.m; sourceTree = "<group>"; };
 		8C79AE703940107B279572E7 /* WorkspaceImageViewer.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = WorkspaceImageViewer.m; sourceTree = "<group>"; };
 		8DA9B7B2A14CC33EF9CF003E /* WorkspaceFileManager.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = WorkspaceFileManager.m; sourceTree = "<group>"; };
 		8DA9B7B2A14CC33EF9CF00B7 /* ShellFileBrowser.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = ShellFileBrowser.m; sourceTree = "<group>"; };
@@ -660,6 +668,8 @@
 		BB267FA423A48F1500ED7CAF /* AltIconViewController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = AltIconViewController.h; sourceTree = "<group>"; };
 		BB267FA523A48F1500ED7CAF /* AltIconViewController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = AltIconViewController.m; sourceTree = "<group>"; };
 		BB28C755268956C900BDC834 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS15.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
+		BB28C8F126896C1D00BDC834 /* SwapFilePicker.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = SwapFilePicker.m; sourceTree = "<group>"; };
+		BB28C8F226896C1D00BDC834 /* SwapFilePicker.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = SwapFilePicker.h; sourceTree = "<group>"; };
 		BB2B4DAB231D94C300CB578B /* hterm_all.js */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.javascript; name = hterm_all.js; path = ../../deps/libapps/hterm/dist/js/hterm_all.js; sourceTree = "<group>"; };
 		BB38597627BCEC70000A1082 /* circular.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = circular.png; sourceTree = "<group>"; };
 		BB38597927BCEC78000A1082 /* dollarblock1.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = dollarblock1.png; sourceTree = "<group>"; };
@@ -745,11 +755,6 @@
 		BBFB557021586C4800DFE6DE /* UIViewController+Extras.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = "UIViewController+Extras.m"; sourceTree = "<group>"; };
 		BBFB5577215876CD00DFE6DE /* AboutViewController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = AboutViewController.h; sourceTree = "<group>"; };
 		BBFB5578215876CD00DFE6DE /* AboutViewController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = AboutViewController.m; sourceTree = "<group>"; };
-		222FF3C6D16AAB7D6D90E559 /* LLMChatInternal.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = LLMChatInternal.h; sourceTree = "<group>"; };
-		1BCB82C7F2994769EADB8945 /* LLMChatSupport.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = LLMChatSupport.m; sourceTree = "<group>"; };
-		0D4A622DB170BCCE9126AFC9 /* LLMChatTools.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = LLMChatTools.m; sourceTree = "<group>"; };
-		8A878C6B5BF3537BE23A280C /* LLMChatViewController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = LLMChatViewController.m; sourceTree = "<group>"; };
-		37D9BDEB8D8CF285B64CA4C9 /* LLMChatSettings.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = LLMChatSettings.m; sourceTree = "<group>"; };
 		BBFB557A215878C600DFE6DE /* UIApplication+OpenURL.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "UIApplication+OpenURL.h"; sourceTree = "<group>"; };
 		BBFB557B215878C600DFE6DE /* UIApplication+OpenURL.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = "UIApplication+OpenURL.m"; sourceTree = "<group>"; };
 		BBFB557E21587B6800DFE6DE /* ArrowBarButton.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ArrowBarButton.h; sourceTree = "<group>"; };
@@ -773,8 +778,6 @@
 		C0A200042F2F000100000006 /* GuestCommandRunner.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = GuestCommandRunner.m; sourceTree = "<group>"; };
 		C0A200042F2F000100000007 /* GuestCommandRunner.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = GuestCommandRunner.h; sourceTree = "<group>"; };
 		C0A200042F2F000100000008 /* ShortcutActivityBridge.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ShortcutActivityBridge.h; sourceTree = "<group>"; };
-		BB28C8F126896C1D00BDC834 /* SwapFilePicker.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = SwapFilePicker.m; sourceTree = "<group>"; };
-		BB28C8F226896C1D00BDC834 /* SwapFilePicker.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = SwapFilePicker.h; sourceTree = "<group>"; };
 		C100D3488E931E73E9A1AC8C /* WorkspaceImageViewer.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; path = WorkspaceImageViewer.h; sourceTree = "<group>"; };
 		C64EFBFD4819B3516B73356F /* DisplayRFBShaders.metal */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.metal; path = DisplayRFBShaders.metal; sourceTree = "<group>"; };
 		C9934D01E356E81EDFCCD344 /* WorkspaceFileManager.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; path = WorkspaceFileManager.h; sourceTree = "<group>"; };
@@ -1439,6 +1442,8 @@
 				222FF3C6D16AAB7D6D90E559 /* LLMChatInternal.h */,
 				1BCB82C7F2994769EADB8945 /* LLMChatSupport.m */,
 				0D4A622DB170BCCE9126AFC9 /* LLMChatTools.m */,
+				07A0595A97B6DF8D65AEF053 /* LLMChatPermissions.m */,
+				3DAB153C6AF1B9F81CC861FD /* LLMChatPermissions.h */,
 				8A878C6B5BF3537BE23A280C /* LLMChatViewController.m */,
 				37D9BDEB8D8CF285B64CA4C9 /* LLMChatSettings.m */,
 				BB267FA423A48F1500ED7CAF /* AltIconViewController.h */,
@@ -2235,6 +2240,7 @@
 				BB28C7A626896B1F00BDC834 /* AboutViewController.m in Sources */,
 				9BB992DCCE1343B81D71A938 /* LLMChatSupport.m in Sources */,
 				086DF4AE2BCA3731D05CF391 /* LLMChatTools.m in Sources */,
+				69D530C0057201B5AB1A590F /* LLMChatPermissions.m in Sources */,
 				66F6D8D15BB25D55FC157BDD /* LLMChatViewController.m in Sources */,
 				C9DC7E00D7ACBDB0B88FAE97 /* LLMChatSettings.m in Sources */,
 				C0A000032E00000300000001 /* WorkspaceViewController.m in Sources */,

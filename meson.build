@@ -1920,6 +1920,17 @@ if not meson.is_cross_build()
         ['tests/riscv64/decode_check.c'],
         include_directories: [includes, include_directories('tests/riscv64')])
     test('riscv64_decode', riscv64_decode_check)
+
+    # The LLM Chat's tool permission rules decide what runs in the guest
+    # without the user seeing it. Foundation only, so it needs a Mac.
+    if host_machine.system() == 'darwin' and have_curl_shim
+        llm_permissions_test = executable('llm_permissions_test',
+            ['app/LLMChatPermissions.m', 'tests/unit/llm_permissions_test.m'],
+            include_directories: include_directories('app'),
+            objc_args: ['-fobjc-arc'],
+            link_args: ['-framework', 'Foundation'])
+        test('llm_permissions', llm_permissions_test)
+    endif
 endif
 
 e2e_test = find_program('tests/e2e/e2e.bash')

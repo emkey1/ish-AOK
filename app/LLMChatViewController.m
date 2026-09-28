@@ -385,7 +385,10 @@ static UIFont *ISHLLMMonospaceFont(CGFloat size) {
     // Deliberately the pre-UIButtonConfiguration API: -codeCopyButtonTapped:
     // swaps the title to "Copied" with -setTitle:forState:, which a configured
     // button ignores.
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
     copyButton.contentEdgeInsets = UIEdgeInsetsMake(2.0, 6.0, 2.0, 6.0);
+#pragma clang diagnostic pop
     [copyButton addTarget:self action:@selector(codeCopyButtonTapped:) forControlEvents:UIControlEventTouchUpInside];
     return copyButton;
 }
@@ -466,6 +469,8 @@ static const CGFloat kISHLLMMaximumTextScale = 3.0;
     NSMutableDictionary<NSString *, NSNumber *> *_commandDecisionsThisReply; // Apple FM only: command text -> boxed ISHLLMToolRunDecision, so a repeat call for the same command isn't re-prompted
     BOOL _autoRunCommandsThisChat;  // skip per-command confirm until the chat is cleared
     NSString *_guestEnvironmentNote; // cached distro/tool probe for the tool system prompt
+    NSString *_guestHomeDirectory; // the tool account's $HOME, from the same probe; the default working directory
+    ISHLLMToolContext *_toolContext; // this chat's working directory and the files its model has read
     UILabel *_statusLabel;
     UIActivityIndicatorView *_activityIndicator;
     NSMutableSet<NSNumber *> *_expandedThinkingIndices; // indices into _messages whose <think> block the user expanded
@@ -501,6 +506,7 @@ static const CGFloat kISHLLMMaximumTextScale = 3.0;
 
     _messages = [NSMutableArray array];
     _commandDecisionsThisReply = [NSMutableDictionary dictionary];
+    _toolContext = [ISHLLMToolContext new];
     _expandedThinkingIndices = [NSMutableSet set];
     // Opens the chat that was last selected; on the first run in this build
     // that is the migrated pre-sessions transcript (see
@@ -600,10 +606,7 @@ static const CGFloat kISHLLMMaximumTextScale = 3.0;
 
     // Status row: a spinner + label so the connection/work state is always visible
     // (and so a stall is obvious instead of looking like a silent hang).
-    if (@available(iOS 13.0, *))
-        _activityIndicator = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleMedium];
-    else
-        _activityIndicator = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleGray];
+    _activityIndicator = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleMedium];
     _activityIndicator.hidesWhenStopped = YES;
     _statusLabel = [UILabel new];
     _statusLabel.font = [UIFont preferredFontForTextStyle:UIFontTextStyleCaption1];
@@ -846,6 +849,11 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
     _autoRunCommandsThisChat = NO;
     _autoRunCommandsThisReply = NO;
     [_commandDecisionsThisReply removeAllObjects];
+    // Which files the model has read is part of the conversation too: a read
+    // in another chat is no licence to write here.
+    _toolContext = [ISHLLMToolContext new];
+    NSString *workingDirectory = ISHLLMStringValue(entry, @"workingDirectory");
+    _toolContext.workingDirectory = workingDirectory.length > 0 ? workingDirectory : _guestHomeDirectory;
     [_expandedThinkingIndices removeAllObjects]; // indices into _messages, which just changed
     _streamingThinkingOpen = NO;
     _cancelled = NO;
@@ -1234,6 +1242,7 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
     _autoRunCommandsThisChat = NO; // a fresh chat re-arms per-command confirmation
     _autoRunCommandsThisReply = NO;
     [_commandDecisionsThisReply removeAllObjects];
+    [_toolContext forgetReads]; // the model starts over, so must read again before writing
     _guestEnvironmentNote = nil; // re-probe the guest on the next tool-enabled reply
     [self saveTranscript];
     [self refreshTranscript];
@@ -1447,7 +1456,7 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
             NSString *sentContent = content;
             if (!keepFull) {
                 NSString *summary = [message[@"summary"] isKindOfClass:NSString.class] ? message[@"summary"] : nil;
-                sentContent = [NSString stringWithFormat:@"(output omitted to save context: %@. Re-run the command if you need the output again.)",
+                sentContent = [NSString stringWithFormat:@"(output omitted to save context: %@. Call the tool again if you need it.)",
                     summary.length > 0 ? summary : @"result compacted"];
             }
             [messages addObject:@{@"role": @"tool", @"tool_call_id": toolCallID, @"content": sentContent}];
@@ -1522,17 +1531,12 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
     _visibleMessageIndices = indices;
 }
 
-// Don't show the commands or their output in the transcript -- only a small
-// note that the model ran tools. The full command and output are still kept
-// in the saved transcript file and sent to the model.
+// The transcript shows one short line per tool call ("$ make", "edit
+// src/main.c"), not the calls' output. The full calls and results are still
+// kept in the saved transcript file and sent to the model.
 - (NSUInteger)commandCountForMessage:(NSDictionary<NSString *, id> *)message {
     NSArray *toolCalls = [message[@"tool_calls"] isKindOfClass:NSArray.class] ? message[@"tool_calls"] : nil;
-    NSUInteger commandCount = 0;
-    for (NSDictionary *toolCall in toolCalls) {
-        if ([toolCall isKindOfClass:NSDictionary.class] && ISHLLMToolCallCommand(toolCall).length > 0)
-            commandCount++;
-    }
-    return commandCount;
+    return ISHLLMToolCallDescriptions(toolCalls ?: @[]).count;
 }
 
 - (void)refreshTranscript {
@@ -1727,10 +1731,9 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
         ? ISHMarkdownBlocksFromMarkdown(displayContent, baseFont, textColor, secondaryColor, linkColor)
         : @[ISHMarkdownPlainTextBlock(displayContent, baseFont, userTextColor)];
 
-    NSUInteger commandCount = [self commandCountForMessage:message];
-    NSString *caption = commandCount > 0
-        ? [NSString stringWithFormat:@"(ran %lu shell command%@)", (unsigned long) commandCount, commandCount == 1 ? @"" : @"s"]
-        : nil;
+    NSArray *toolCalls = [message[@"tool_calls"] isKindOfClass:NSArray.class] ? message[@"tool_calls"] : nil;
+    NSArray<NSString *> *toolLines = ISHLLMToolCallDescriptions(toolCalls ?: @[]);
+    NSString *caption = toolLines.count > 0 ? [toolLines componentsJoinedByString:@"\n"] : nil;
 
     __weak __typeof(self) weakSelf = self;
     cell.thinkingToggleHandler = ^{
@@ -2189,53 +2192,29 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
         }
         completion(resultText ?: @"");
     };
-
-    void (^runApprovedCommand)(void) = ^{
-        typeof(self) self = weakSelf;
-        if (self != nil)
-            [self setStatus:@"Running command…" busy:YES];
-        dispatch_async(ISHLLMGuestCommandQueue(), ^{
-            NSString *summary = nil;
-            NSString *output = ISHLLMRunGuestShellCommand(command, &summary);
-            dispatch_async(dispatch_get_main_queue(), ^{
-                recordAndComplete(output, summary);
-            });
-        });
+    NSDictionary *toolCall = @{
+        @"id": NSUUID.UUID.UUIDString,
+        @"function": @{@"name": @"run_shell", @"arguments": @{@"command": command ?: @""}},
     };
+    ISHLLMToolInvocation *invocation = [ISHLLMToolInvocation invocationWithToolCall:toolCall context:_toolContext];
 
     if (command.length > 0) {
         NSNumber *priorDecision = _commandDecisionsThisReply[command];
         if (priorDecision != nil) {
-            if (priorDecision.integerValue == ISHLLMToolRunDecline)
+            if (priorDecision.integerValue == ISHLLMToolRunDecline) {
                 recordAndComplete(@"The user declined to run this command.", @"declined by user (repeat request)");
-            else
-                runApprovedCommand();
+            } else {
+                [self setStatus:@"Running command…" busy:YES];
+                ISHLLMRunToolInvocation(invocation, _toolContext, recordAndComplete);
+            }
             return;
         }
     }
-
-    if (_autoRunCommandsThisChat || _autoRunCommandsThisReply) {
-        runApprovedCommand();
-        return;
-    }
-
-    [self setStatus:@"Waiting for approval…" busy:YES];
-    [self confirmRunCommand:command completion:^(ISHLLMToolRunDecision decision) {
+    [self performToolInvocation:invocation decision:^(BOOL approved) {
         typeof(self) self = weakSelf;
-        if (self == nil)
-            return;
-        if (command.length > 0)
-            self->_commandDecisionsThisReply[command] = @(decision);
-        if (decision == ISHLLMToolRunDecline) {
-            recordAndComplete(@"The user declined to run this command.", @"declined by user");
-            return;
-        }
-        if (decision == ISHLLMToolRunAllowReply)
-            self->_autoRunCommandsThisReply = YES;
-        else if (decision == ISHLLMToolRunAllowChat)
-            self->_autoRunCommandsThisChat = YES;
-        runApprovedCommand();
-    }];
+        if (self != nil && command.length > 0)
+            self->_commandDecisionsThisReply[command] = @(approved ? ISHLLMToolRunOnce : ISHLLMToolRunDecline);
+    } completion:recordAndComplete];
 }
 #endif
 
@@ -2294,7 +2273,7 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
         if (self == nil)
             return;
         NSString *instructions = [@"The prompt is this conversation so far, formatted as alternating \"User:\"/\"Assistant:\" turns. Continue it naturally as the Assistant, responding only to the latest User message -- the earlier turns are context, not something to repeat back."
-            stringByAppendingString:toolsEnabled ? [@" " stringByAppendingString:ISHLLMToolSystemNote(self->_guestEnvironmentNote)] : @""];
+            stringByAppendingString:toolsEnabled ? [@" " stringByAppendingString:ISHLLMToolSystemNote(self->_guestEnvironmentNote, self->_toolContext.workingDirectory, NO)] : @""];
         NSString *promptWithHistory = [self appleFoundationModelsPromptWithHistory];
         [self setSending:YES];
         [self->_messages addObject:@{@"role": @"assistant", @"content": @""}];
@@ -2658,11 +2637,19 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
         _guestEnvironmentNote = @""; // mark in-flight so we only probe once per chat
         __weak typeof(self) weakSelf = self;
         dispatch_async(ISHLLMGuestCommandQueue(), ^{
-            NSString *note = ISHLLMDetectGuestEnvironmentNote();
+            NSString *home = nil;
+            NSString *note = ISHLLMDetectGuestEnvironmentNote(&home);
             dispatch_async(dispatch_get_main_queue(), ^{
                 typeof(self) self = weakSelf;
-                if (self != nil && note.length > 0)
+                if (self == nil)
+                    return;
+                if (note.length > 0)
                     self->_guestEnvironmentNote = note;
+                if (home.length > 0) {
+                    self->_guestHomeDirectory = home;
+                    if (self->_toolContext.workingDirectory.length == 0)
+                        self->_toolContext.workingDirectory = home;
+                }
             });
         });
     }
@@ -2739,7 +2726,7 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
 
     [self setStatus:(round == 0 ? @"Contacting model…" : @"Thinking…") busy:YES];
     NSMutableArray<NSDictionary<NSString *, id> *> *messages = [NSMutableArray array];
-    NSString *systemNote = ISHLLMToolSystemNote(_guestEnvironmentNote);
+    NSString *systemNote = ISHLLMToolSystemNote(_guestEnvironmentNote, _toolContext.workingDirectory, YES);
     if (systemNote.length > 0)
         [messages addObject:@{@"role": @"system", @"content": systemNote}];
     [messages addObjectsFromArray:[self providerMessages]];
@@ -2837,20 +2824,16 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
         [self runToolLoopRound:round + 1 model:model apiKey:apiKey];
         return;
     }
-    NSDictionary *toolCall = toolCalls[index];
-    NSString *toolCallID = ISHLLMToolCallID(toolCall);
-    NSString *name = ISHLLMToolCallName(toolCall);
-    NSString *command = ISHLLMToolCallCommand(toolCall);
-
+    ISHLLMToolInvocation *invocation = [ISHLLMToolInvocation invocationWithToolCall:toolCalls[index] context:_toolContext];
     __weak typeof(self) weakSelf = self;
-    void (^recordResultAndContinue)(NSString *, NSString *) = ^(NSString *resultText, NSString *summary) {
+    [self performToolInvocation:invocation decision:nil completion:^(NSString *resultText, NSString *summary) {
         typeof(self) self = weakSelf;
         if (self == nil)
             return;
         [self->_messages addObject:@{
             @"role": @"tool",
-            @"tool_call_id": toolCallID ?: @"",
-            @"name": name ?: @"run_shell",
+            @"tool_call_id": invocation.callID,
+            @"name": invocation.name.length > 0 ? invocation.name : @"run_shell",
             @"content": resultText ?: @"",
             @"summary": summary.length > 0 ? summary : (resultText ?: @""),
         }];
@@ -2863,47 +2846,77 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
             return;
         }
         [self runToolCalls:toolCalls index:index + 1 round:round model:model apiKey:apiKey];
-    };
+    }];
+}
 
-    if (![name isEqualToString:@"run_shell"] || command.length == 0) {
-        recordResultAndContinue([NSString stringWithFormat:@"Tool '%@' is not supported or the command was empty. Only run_shell with a non-empty \"command\" is available.", name ?: @"(unnamed)"], @"unsupported tool call");
-        return;
-    }
+- (NSString *)statusTextForRunningInvocation:(ISHLLMToolInvocation *)invocation {
+    NSString *name = invocation.name;
+    if ([name isEqualToString:@"read_file"])
+        return @"Reading file…";
+    if ([name isEqualToString:@"write_file"])
+        return @"Writing file…";
+    if ([name isEqualToString:@"edit_file"])
+        return @"Editing file…";
+    if ([name isEqualToString:@"list_directory"])
+        return @"Listing directory…";
+    if ([name isEqualToString:@"glob"] || [name isEqualToString:@"grep"])
+        return @"Searching…";
+    return @"Running command…";
+}
 
-    void (^runApprovedCommand)(void) = ^{
+// The one path every tool call takes, from either backend: the permission
+// rules' answer, then the user's when the rules say ask, then the tool.
+// `decision` (optional) hears whether it ran, for the Apple FM repeat guard.
+- (void)performToolInvocation:(ISHLLMToolInvocation *)invocation
+                     decision:(void (^)(BOOL approved))decision
+                   completion:(void (^)(NSString *result, NSString *summary))completion {
+    __weak typeof(self) weakSelf = self;
+    ISHLLMToolContext *context = _toolContext;
+    void (^run)(void) = ^{
         typeof(self) self = weakSelf;
         if (self != nil)
-            [self setStatus:@"Running command…" busy:YES];
-        dispatch_async(ISHLLMGuestCommandQueue(), ^{
-            NSString *summary = nil;
-            NSString *output = ISHLLMRunGuestShellCommand(command, &summary);
-            dispatch_async(dispatch_get_main_queue(), ^{
-                recordResultAndContinue(output, summary);
-            });
-        });
+            [self setStatus:[self statusTextForRunningInvocation:invocation] busy:YES];
+        ISHLLMRunToolInvocation(invocation, context, completion);
     };
-
-    // Skip the per-command prompt if the user already approved auto-run for this
-    // reply or for the whole chat.
-    if (_autoRunCommandsThisChat || _autoRunCommandsThisReply) {
-        runApprovedCommand();
+    if (invocation.problem != nil) {
+        run();
         return;
     }
-
+    NSString *reason = nil;
+    ISHLLMPermissionAction action = [invocation permissionWithReason:&reason];
+    if (action == ISHLLMPermissionDeny) {
+        if (decision != nil)
+            decision(NO);
+        completion([NSString stringWithFormat:@"Not run: the user's tool permissions refuse this (%@). Do not try to reach the same result another way; tell the user what you needed instead.",
+                    reason ?: [NSString stringWithFormat:@"%@ is set to Deny", ISHLLMToolCategoryTitle(invocation.category)]],
+                   @"refused by permissions");
+        return;
+    }
+    if (action == ISHLLMPermissionAllow || _autoRunCommandsThisChat || _autoRunCommandsThisReply) {
+        if (decision != nil)
+            decision(YES);
+        run();
+        return;
+    }
     [self setStatus:@"Waiting for approval…" busy:YES];
-    [self confirmRunCommand:command completion:^(ISHLLMToolRunDecision decision) {
+    [self confirmToolInvocation:invocation reason:reason completion:^(ISHLLMToolRunDecision choice) {
         typeof(self) self = weakSelf;
-        if (self == nil)
-            return;
-        if (decision == ISHLLMToolRunDecline) {
-            recordResultAndContinue(@"The user declined to run this command.", @"declined by user");
+        if (self == nil) {
+            completion(@"The chat window closed before this could run.", @"not run");
             return;
         }
-        if (decision == ISHLLMToolRunAllowReply)
+        if (decision != nil)
+            decision(choice != ISHLLMToolRunDecline);
+        if (choice == ISHLLMToolRunDecline) {
+            completion(invocation.category == ISHLLMToolCategoryShell ? @"The user declined to run this command." : @"The user declined this tool call.",
+                       @"declined by user");
+            return;
+        }
+        if (choice == ISHLLMToolRunAllowReply)
             self->_autoRunCommandsThisReply = YES;
-        else if (decision == ISHLLMToolRunAllowChat)
+        else if (choice == ISHLLMToolRunAllowChat)
             self->_autoRunCommandsThisChat = YES;
-        runApprovedCommand();
+        run();
     }];
 }
 
@@ -2932,10 +2945,10 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
         completion(ISHLLMToolRunAllowChat);
         return;
     }
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Auto-run all commands this chat?"
-        message:@"Every command the model requests for the rest of this chat will run without confirmation. Content the model fetches (a web page, a file) can instruct it to run destructive commands or read private data, and nothing will stop that but the model itself. Auto-run re-arms when you clear the chat."
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Allow every tool call this chat?"
+        message:@"Every command and file change the model requests for the rest of this chat will happen without confirmation. Content the model reads (a web page, a file) can instruct it to run destructive commands, overwrite files or read private data, and nothing will stop that but the model itself. Permissions set to Deny still apply. Confirmation comes back when you clear the chat."
         preferredStyle:UIAlertControllerStyleAlert];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Run Once Instead" style:UIAlertActionStyleCancel handler:^(UIAlertAction *action) {
+    [alert addAction:[UIAlertAction actionWithTitle:@"Allow Once Instead" style:UIAlertActionStyleCancel handler:^(UIAlertAction *action) {
         completion(ISHLLMToolRunOnce);
     }]];
     [alert addAction:[UIAlertAction actionWithTitle:@"Allow All" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
@@ -2945,20 +2958,44 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
     [[self ish_presentationViewController] presentViewController:alert animated:YES completion:nil];
 }
 
-- (void)confirmRunCommand:(NSString *)command completion:(void (^)(ISHLLMToolRunDecision decision))completion {
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Run shell command?"
-        message:[NSString stringWithFormat:@"The model wants to run this in the iSH shell:\n\n%@", command]
+// The "always" choices save a permission, so later calls of the same kind do
+// not ask at all: a shell rule for this command (see ISHLLMSuggestedShellRule
+// for why compound lines get none), or the category's own setting for files.
+- (void)confirmToolInvocation:(ISHLLMToolInvocation *)invocation reason:(NSString *)reason
+                   completion:(void (^)(ISHLLMToolRunDecision decision))completion {
+    BOOL shell = invocation.category == ISHLLMToolCategoryShell;
+    NSString *message = invocation.confirmationMessage;
+    if (reason.length > 0)
+        message = [message stringByAppendingFormat:@"\n\nAsking because of %@.", reason];
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:invocation.confirmationTitle
+        message:message
         preferredStyle:UIAlertControllerStyleAlert];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Run" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+    [alert addAction:[UIAlertAction actionWithTitle:shell ? @"Run" : @"Allow" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
         completion(ISHLLMToolRunOnce);
     }]];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Run, don't ask again this reply" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+    [alert addAction:[UIAlertAction actionWithTitle:shell ? @"Run, don't ask again this reply" : @"Allow, don't ask again this reply" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
         completion(ISHLLMToolRunAllowReply);
     }]];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Run, allow all this chat" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+    NSString *rule = shell ? ISHLLMSuggestedShellRule(invocation.command ?: @"") : nil;
+    if (rule != nil) {
+        [alert addAction:[UIAlertAction actionWithTitle:[NSString stringWithFormat:@"Always allow \u201c%@\u201d", rule] style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+            ISHLLMAddShellRule(rule, ISHLLMPermissionAllow);
+            completion(ISHLLMToolRunOnce);
+        }]];
+    } else if (!shell && reason.length == 0) {
+        // Only when the category setting is what asked: an edit outside the
+        // working directory asks whatever the setting says.
+        ISHLLMToolCategory category = invocation.category;
+        NSString *title = category == ISHLLMToolCategoryEdit ? @"Always allow file edits" : @"Always allow reading files";
+        [alert addAction:[UIAlertAction actionWithTitle:title style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+            ISHLLMSetCategoryAction(category, ISHLLMPermissionAllow);
+            completion(ISHLLMToolRunOnce);
+        }]];
+    }
+    [alert addAction:[UIAlertAction actionWithTitle:shell ? @"Run, allow all this chat" : @"Allow all tools this chat" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
         [self confirmAutoRunAllForChatWithCompletion:completion];
     }]];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Don't Run" style:UIAlertActionStyleCancel handler:^(UIAlertAction *action) {
+    [alert addAction:[UIAlertAction actionWithTitle:shell ? @"Don't Run" : @"Don't Allow" style:UIAlertActionStyleCancel handler:^(UIAlertAction *action) {
         completion(ISHLLMToolRunDecline);
     }]];
     [[self ish_presentationViewController] presentViewController:alert animated:YES completion:nil];

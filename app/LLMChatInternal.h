@@ -17,6 +17,7 @@
 #import <UIKit/UIKit.h>
 #import "AboutViewController.h"
 #import "WorkspaceViewController.h"
+#import "LLMChatPermissions.h"
 #include <netdb.h>
 
 // WorkspaceTextScalable: the Workspace window's Cmd+= / Cmd+- / Cmd+0. Shown
@@ -39,6 +40,11 @@
 @interface LLMChatSessionListViewController : UITableViewController
 @property (nonatomic, copy) NSString *currentSessionID;
 @property (nonatomic, copy) void (^sessionSelected)(NSString *sessionID);
+@end
+
+// LLM Settings -> Tool Permissions: allow/ask/deny per tool category, and the
+// shell command rules. See LLMChatPermissions.h.
+@interface LLMToolPermissionsViewController : UITableViewController <WorkspaceTextScaledPage>
 @end
 
 // The saved destinations: select, edit, duplicate, delete, add from a preset.
@@ -200,16 +206,60 @@ NSInteger ISHLLMToolTimeoutSeconds(void);
 NSInteger ISHLLMToolOutputLimitKB(void);
 NSInteger ISHLLMToolMaxRounds(void);
 NSString *ISHLLMToolTimeoutTitle(NSInteger seconds);
-NSArray<NSDictionary<NSString *, id> *> *ISHLLMChatToolDefinitions(void);
 NSString *ISHLLMToolCallID(NSDictionary *toolCall);
 NSString *ISHLLMToolCallName(NSDictionary *toolCall);
 NSString *ISHLLMToolCallCommand(NSDictionary *toolCall);
+NSDictionary *ISHLLMToolCallArguments(NSDictionary *toolCall);
 NSArray<NSDictionary *> *ISHLLMValidToolCalls(NSDictionary *message);
 NSData *ISHLLMSynchronousChatPost(NSURL *url, NSData *body, NSString *apiKey,
                                          NSInteger *statusCodeOut, NSError **errorOut);
-NSString *ISHLLMRunGuestShellCommand(NSString *command, NSString **summaryOut);
-NSString *ISHLLMDetectGuestEnvironmentNote(void);
-NSString *ISHLLMToolSystemNote(NSString *environmentNote);
+NSString *ISHLLMRunGuestShellCommand(NSString *command, NSString *workingDirectory, NSString **summaryOut);
+// homeOut: the command account's $HOME, the default working directory.
+NSString *ISHLLMDetectGuestEnvironmentNote(NSString **homeOut);
+// fileTools: the full tool set (OpenAI-compatible), or run_shell alone (Apple FM).
+NSString *ISHLLMToolSystemNote(NSString *environmentNote, NSString *workingDirectory, BOOL fileTools);
+// POSIX single-quoting for a guest shell command line.
+NSString *ISHLLMShellQuote(NSString *text);
+
+// What one chat's tool calls share. Main thread only; the tools copy what
+// they need before leaving it.
+@interface ISHLLMToolContext : NSObject
+// Where relative paths start and run_shell runs. nil until the chat has one
+// (its saved setting, or the account's home once the environment probe says).
+@property (nonatomic, copy) NSString *workingDirectory;
+// write_file and edit_file refuse a file the model has not read in this chat,
+// or one that changed since it did, so a stale picture is never written back
+// over someone else's change. Keyed by absolute path.
+- (void)recordReadOfPath:(NSString *)path size:(unsigned long long)size modified:(NSDate *)modified;
+- (NSString *)stalenessProblemForPath:(NSString *)path size:(unsigned long long)size modified:(NSDate *)modified;
+- (void)forgetReads;
+@end
+
+// One tool call from the model, parsed and checked, ready to confirm and run.
+@interface ISHLLMToolInvocation : NSObject
+@property (nonatomic, copy, readonly) NSString *callID;
+@property (nonatomic, copy, readonly) NSString *name;
+@property (nonatomic, readonly) ISHLLMToolCategory category;
+@property (nonatomic, copy, readonly) NSString *command;   // run_shell
+@property (nonatomic, copy, readonly) NSString *path;      // file tools: absolute
+@property (nonatomic, copy, readonly) NSDictionary *arguments;
+// Set when the call cannot run as asked (unknown tool, missing argument);
+// this text goes back to the model as the result, nothing runs.
+@property (nonatomic, copy, readonly) NSString *problem;
++ (instancetype)invocationWithToolCall:(NSDictionary *)toolCall context:(ISHLLMToolContext *)context;
+// The rules' answer; reasonOut names what decided it.
+- (ISHLLMPermissionAction)permissionWithReason:(NSString **)reasonOut;
+- (NSString *)confirmationTitle;
+- (NSString *)confirmationMessage;
+@end
+
+NSArray<NSDictionary<NSString *, id> *> *ISHLLMChatToolDefinitions(void);
+// Runs an invocation (whose problem is nil) off the main thread and completes
+// on main with the text for the model and a one-line summary for compaction.
+void ISHLLMRunToolInvocation(ISHLLMToolInvocation *invocation, ISHLLMToolContext *context,
+                             void (^completion)(NSString *result, NSString *summary));
+// One short line per call ("$ ls -la", "Read src/main.c"), for the transcript.
+NSArray<NSString *> *ISHLLMToolCallDescriptions(NSArray *toolCalls);
 
 // LLMChatSettings.m
 void ISHConfigureLLMSettingsNavigationController(UINavigationController *navigationController);
