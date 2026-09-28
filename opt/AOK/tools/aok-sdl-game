@@ -10,7 +10,9 @@
 #     AOK_GAMES_GPU, in software for the rest: zink gives only OpenGL 2.1 /
 #     ES 2.0, and older GPUs (A10X) cannot run it at all
 #
-# Any variable already set when the game starts wins.
+# The desktop exports LIBGL_ALWAYS_SOFTWARE=1 to everything it starts, so the
+# GPU list overrides it; AOK_GAMES_GL=gpu or =software in the environment
+# overrides the list for one run. Sound and video variables already set win.
 name=${0##*/}
 if [ "$name" = aok-sdl-game ]; then
     echo "aok-sdl-game: run it through a game's symlink (see /AOK/tools/setup-games.sh)" >&2
@@ -23,16 +25,18 @@ AOK_GAMES_GPU=
 [ -w /dev/dsp ] && export SDL_AUDIODRIVER="${SDL_AUDIODRIVER:-dsp}"
 [ -n "${WAYLAND_DISPLAY:-}" ] && export SDL_VIDEODRIVER="${SDL_VIDEODRIVER:-wayland}"
 
-case " $AOK_GAMES_GPU " in
-    *" $name "*)
-        export LIBGL_ALWAYS_SOFTWARE="${LIBGL_ALWAYS_SOFTWARE:-0}"
-        export MESA_LOADER_DRIVER_OVERRIDE="${MESA_LOADER_DRIVER_OVERRIDE:-zink}"
-        ;;
-    *)
-        export LIBGL_ALWAYS_SOFTWARE="${LIBGL_ALWAYS_SOFTWARE:-1}"
-        export SDL_RENDER_DRIVER="${SDL_RENDER_DRIVER:-software}"
-        [ "$LIBGL_ALWAYS_SOFTWARE" = 1 ] && unset MESA_LOADER_DRIVER_OVERRIDE
-        ;;
-esac
+gl=${AOK_GAMES_GL:-}
+if [ -z "$gl" ]; then
+    case " $AOK_GAMES_GPU " in
+        *" $name "*) gl=gpu ;;
+        *) gl=software ;;
+    esac
+fi
+if [ "$gl" = gpu ]; then
+    export LIBGL_ALWAYS_SOFTWARE=0 MESA_LOADER_DRIVER_OVERRIDE=zink
+else
+    export LIBGL_ALWAYS_SOFTWARE=1 SDL_RENDER_DRIVER="${SDL_RENDER_DRIVER:-software}"
+    unset MESA_LOADER_DRIVER_OVERRIDE
+fi
 
 exec "/usr/games/$name" "$@"
