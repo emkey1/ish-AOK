@@ -646,6 +646,22 @@ static const struct virtgpu_present_ops display_direct_ops = {
     [self addSpecialKeyWithInput:UIKeyInputRightArrow keysym:0xFF53];
     [self addSpecialKeyWithInput:UIKeyInputEscape keysym:0xFF1B];
     [self addSpecialKeyWithInput:@"\t" keysym:0xFF09];
+    // The arrows under every mix of Shift, Control and Option -- selection
+    // and word moves in programs, and the desktop's Ctrl+Alt+Left/Right
+    // (switch desktops) and Ctrl+Alt+Shift+Left/Right (take the window along).
+    // Like every modified key, they never arrive at all without a key command
+    // of their own. Cmd+arrows stay with Workspace's Desktops around the view.
+    static const UIKeyModifierFlags arrowModifiers[] = {
+        UIKeyModifierShift, UIKeyModifierControl, UIKeyModifierAlternate,
+        UIKeyModifierShift | UIKeyModifierControl, UIKeyModifierShift | UIKeyModifierAlternate,
+        UIKeyModifierControl | UIKeyModifierAlternate,
+        UIKeyModifierShift | UIKeyModifierControl | UIKeyModifierAlternate,
+    };
+    NSArray<NSArray *> *arrows = @[@[UIKeyInputUpArrow, @0xFF52], @[UIKeyInputDownArrow, @0xFF54],
+                                   @[UIKeyInputLeftArrow, @0xFF51], @[UIKeyInputRightArrow, @0xFF53]];
+    for (NSArray *arrow in arrows)
+        for (size_t i = 0; i < sizeof(arrowModifiers) / sizeof(arrowModifiers[0]); i++)
+            [self addModifiedKeyWithInput:arrow[0] keysym:[arrow[1] unsignedIntValue] modifierFlags:arrowModifiers[i]];
     // Ctrl+<key> (Ctrl+C, Ctrl+D, Ctrl+Z, ...): not covered by UIKeyInput
     // at all -- iOS only routes plain character insertion through
     // -insertText:, not modified combinations, so without an explicit
@@ -687,6 +703,13 @@ static const struct virtgpu_present_ops display_direct_ops = {
         [_keyCommands addObject:altCommand];
         [_keyCommands addObject:altShiftCommand];
     }
+    // Ctrl+Alt+<letter or digit>: the desktop's Ctrl+Alt+1-4 (go to that
+    // desktop), and whatever else programs bind there.
+    static const char *controlAltKeys = "abcdefghijklmnopqrstuvwxyz0123456789";
+    for (size_t i = 0; controlAltKeys[i] != '\0'; i++)
+        [self addModifiedKeyWithInput:[NSString stringWithFormat:@"%c", controlAltKeys[i]]
+                               keysym:(uint32_t) controlAltKeys[i]
+                        modifierFlags:UIKeyModifierControl | UIKeyModifierAlternate];
     // Cmd+= / Cmd++ / Cmd+- / Cmd+0: the Apple-conventional zoom chords.
     // Terminal apps in the guest only understand the Ctrl forms (foot's
     // font-increase/decrease/reset are Control+equal/plus/minus/0), so these
@@ -787,6 +810,41 @@ static uint32_t DisplayRFBKeysymForKeyCommandInput(NSString *input) {
     if (@available(iOS 15, *))
         command.wantsPriorityOverSystemBehavior = YES;
     [_keyCommands addObject:command];
+}
+
+// A key under modifiers, sent as the guest would see it typed: the modifiers
+// down, the key, the modifiers up.
+- (void)addModifiedKeyWithInput:(NSString *)input keysym:(uint32_t)keysym modifierFlags:(UIKeyModifierFlags)flags {
+    UIKeyCommand *command = [UIKeyCommand commandWithTitle:@""
+                                                      image:nil
+                                                     action:@selector(handleModifiedKeyCommand:)
+                                                      input:input
+                                              modifierFlags:flags
+                                               propertyList:@(keysym)];
+    if (@available(iOS 15, *))
+        command.wantsPriorityOverSystemBehavior = YES;
+    [_keyCommands addObject:command];
+}
+
+- (void)handleModifiedKeyCommand:(UIKeyCommand *)command {
+    NSNumber *keysymNumber = command.propertyList;
+    if (![keysymNumber isKindOfClass:NSNumber.class] || _rfbClient == nil)
+        return;
+    [self releaseLatchedAccessoryModifiers];
+    uint32_t modifiers[3];
+    int count = 0;
+    if (command.modifierFlags & UIKeyModifierControl)
+        modifiers[count++] = 0xFFE3; // Control_L
+    if (command.modifierFlags & UIKeyModifierAlternate)
+        modifiers[count++] = 0xFFE9; // Alt_L
+    if (command.modifierFlags & UIKeyModifierShift)
+        modifiers[count++] = 0xFFE1; // Shift_L
+    for (int i = 0; i < count; i++)
+        [_rfbClient sendKeyEvent:modifiers[i] down:YES];
+    [_rfbClient sendKeyEvent:keysymNumber.unsignedIntValue down:YES];
+    [_rfbClient sendKeyEvent:keysymNumber.unsignedIntValue down:NO];
+    for (int i = count - 1; i >= 0; i--)
+        [_rfbClient sendKeyEvent:modifiers[i] down:NO];
 }
 
 - (void)handleSpecialKeyCommand:(UIKeyCommand *)command {
