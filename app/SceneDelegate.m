@@ -159,6 +159,13 @@ void ISHWindowShowSessionShell(UIWindow *window) {
         [terminal startNewSession];
 }
 
+void ISHWindowShowWaylandDisplay(UIWindow *window) {
+    if (window == nil)
+        return;
+    [ISHDiagnosticsStore recordBreadcrumb:@"scene.mode.waylandDisplay" details:@{}];
+    ISHWindowTransitionToRoot(window, CreateStandaloneDisplayViewController());
+}
+
 static NSUserActivity *SceneRequestedActivity(UISceneSession *session, UISceneConnectionOptions *connectionOptions) API_AVAILABLE(ios(13.0));
 static NSUserActivity *SceneRequestedActivity(UISceneSession *session, UISceneConnectionOptions *connectionOptions) {
     NSUserActivity *activity = connectionOptions.userActivities.anyObject;

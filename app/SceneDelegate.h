@@ -35,6 +35,9 @@ UIViewController * _Nullable ISHActivePresentationViewController(void);
 BOOL ISHWindowIsShowingWorkspace(UIWindow * _Nullable window);
 void ISHWindowShowWorkspace(UIWindow * _Nullable window);
 void ISHWindowShowSessionShell(UIWindow * _Nullable window);
+// The full-screen Wayland display, from the Workspace (kept alive to come back
+// to). Park the Workspace's session first so the display takes it over.
+void ISHWindowShowWaylandDisplay(UIWindow * _Nullable window);
 
 API_AVAILABLE(ios(13))
 @interface SceneDelegate : UIResponder <UIWindowSceneDelegate>

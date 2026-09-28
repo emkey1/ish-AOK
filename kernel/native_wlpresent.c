@@ -136,6 +136,7 @@ struct wp {
     int in_fds[32];
     int in_fd_count;
     bool synced, quiet;
+    bool verbose;       // -v: log the app's input events (a diagnostic)
     bool watched;       // the app took the last frame
     bool detached;      // wayvnc was told to let go of the compositor
     uint32_t display;   // the desktop's VNC port, naming it to the app
@@ -646,6 +647,14 @@ static void input_read(struct wp *w) {
         if (w->ilen - at - sizeof(ev) < ev.len)
             break;
         const uint8_t *data = w->ibuf + at + sizeof(ev);
+        if (w->verbose) {
+            if (ev.type == VIRTGPU_INPUT_KEY)
+                wp_log(w, "input: key 0x%x %s", ev.a, ev.b ? "down" : "up");
+            else if (ev.type == VIRTGPU_INPUT_POINTER)
+                wp_log(w, "input: pointer %u,%u buttons 0x%x", ev.a & 0xffff, ev.a >> 16, ev.b);
+            else
+                wp_log(w, "input: type %u, %u bytes", ev.type, ev.len);
+        }
         switch (ev.type) {
             case VIRTGPU_INPUT_POINTER:
                 pointer_event(w, ev.a & 0xffff, ev.a >> 16, ev.b);
@@ -1147,7 +1156,12 @@ int native_wlpresent_main(int argc, char *const argv[], char *const envp[]) {
     w.next_id = NEXT_ID;
     w.buf[0].fd = w.buf[1].fd = -1;
     w.offer_mime = -1;
-    w.quiet = argc > 1 && !strcmp(argv[1], "-q");
+    for (int i = 1; i < argc; i++) {
+        if (!strcmp(argv[i], "-q"))
+            w.quiet = true;
+        else if (!strcmp(argv[i], "-v"))
+            w.verbose = true;
+    }
     // The desktop's VNC port names it to the app (fs/virtgpu.h).
     const char *port = getenv("WAYVNC_PORT");
     w.display = port != NULL ? (uint32_t) strtoul(port, NULL, 10) : 5901;

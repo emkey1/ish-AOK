@@ -8,6 +8,8 @@
 #import "UserPreferences.h"
 #import "NSObject+SaneKVO.h"
 #import "UIViewController+Extras.h"
+#import "SceneDelegate.h"
+#import "WorkspaceViewController.h"
 #import <GameController/GameController.h>
 #include "kernel/init.h"
 #include "kernel/task.h"
@@ -159,7 +161,7 @@ typedef NS_ENUM(NSInteger, DisplayConnectionState) {
     DisplayConnectionStateFailed,
 };
 
-@interface DisplayViewController () <DisplayRFBClientDelegate>
+@interface DisplayViewController () <DisplayRFBClientDelegate, WorkspaceFocusable>
 @end
 
 @implementation DisplayViewController {
@@ -655,9 +657,67 @@ typedef NS_ENUM(NSInteger, DisplayConnectionState) {
 
 #pragma mark - Guest session
 
+// A running session handed over when the full-screen Wayland view gives way
+// to the Workspace (-switchToWorkspace:): the next Wayland view to start, the
+// Workspace applet opened with it, adopts it rather than starting another
+// (start-wayland.sh refuses a second while one runs). Cleared if the session
+// ends while parked. Main thread only.
+static Terminal *_Nullable DisplayParkedTerminal;
+static int DisplayParkedPid;
+static id _Nullable DisplayParkedObserver;
+
+static void DisplayClearParkedSession(void) {
+    if (DisplayParkedObserver != nil)
+        [NSNotificationCenter.defaultCenter removeObserver:DisplayParkedObserver];
+    DisplayParkedObserver = nil;
+    DisplayParkedTerminal = nil;
+    DisplayParkedPid = 0;
+}
+
+static void DisplayParkSession(Terminal *terminal, int pid) {
+    DisplayClearParkedSession();
+    DisplayParkedTerminal = terminal;
+    DisplayParkedPid = pid;
+    DisplayParkedObserver = [NSNotificationCenter.defaultCenter
+        addObserverForName:ProcessExitedNotification object:nil queue:NSOperationQueue.mainQueue
+                usingBlock:^(NSNotification *note) {
+        if ([note.userInfo[@"pid"] intValue] == DisplayParkedPid)
+            DisplayClearParkedSession();
+    }];
+}
+
+// Hands this view's running session to the next Wayland view instead of
+// ending it with this one.
+- (void)parkSession {
+    if (_sessionPid == 0 || _sessionTerminal == nil)
+        return;
+    [_displayView stopDirectFrames];
+    [_rfbClient disconnect];
+    _rfbClient = nil;
+    _rfbClientConnected = NO;
+    _displayView.rfbClient = nil;
+    DisplayParkSession(_sessionTerminal, _sessionPid);
+    _sessionTerminal = nil;
+    _sessionPid = 0;
+    _state = DisplayConnectionStateIdle;
+}
+
 - (void)startGuestSession {
     if (_state != DisplayConnectionStateIdle && _state != DisplayConnectionStateFailed)
         return;
+    // A session parked by the full-screen view: take it over and connect to
+    // it, as its ready file still says where.
+    if (DisplayParkedPid != 0 && DisplayParkedTerminal != nil) {
+        _sessionTerminal = DisplayParkedTerminal;
+        _sessionPid = DisplayParkedPid;
+        DisplayClearParkedSession();
+        _reconnectButton.hidden = YES;
+        _state = DisplayConnectionStateWaitingForReady;
+        _statusLabel.text = @"Reattaching to the Wayland session…";
+        _readyPollDeadline = nil;
+        [self pollForReadyFile];
+        return;
+    }
     // Which saved session, before ensureBooted decides it for us.
     //
     // A standalone Wayland display is a launch root like any other, and it is
@@ -1117,27 +1177,57 @@ static NSString *DisplayScaleChoiceTitle(NSString *name, NSInteger value, NSInte
     [sheet presentFromViewController:self sourceView:sender sourceRect:sender.bounds];
 }
 
-// Standalone (startup-mode) escape hatch: swap the scene's root over to the
-// Workspace. Releasing this controller tears the guest Wayland session down
-// (dealloc -> teardownSession -> pty SIGHUP), exactly like closing the
-// windowed applet -- which also means the Workspace's own Display applet can
-// then start a fresh session without racing the old one for WAYVNC_PORT.
+// Standalone (startup-mode) escape hatch: back to the Workspace -- the one the
+// window already had, if any, windows and all -- with its Wayland window
+// opened or brought forward. The running session is parked, not ended, and
+// that window takes it over (-startGuestSession), so the desktop carries on in
+// it. Closing that window ends it, as ever.
+
+// A Workspace window's keyboard goes to the display when the window comes to
+// the front (a tap, Ctrl+Tab, Cmd+arrow Desktop switching), as MotePad's does.
+- (void)workspaceToolDidBecomeFrontmost {
+    [self.displayView becomeFirstResponder];
+}
+
+// Set by the notice's "Don't Show Again".
+static NSString *const DisplayWorkspaceAttachNoticeHiddenKey = @"DisplayWorkspaceAttachNoticeHidden";
+
 - (void)switchToWorkspace:(id)sender {
-    UIAlertController *alert =
-        [UIAlertController alertControllerWithTitle:@"Open Workspace?"
-                                            message:@"This ends the current Wayland session. You can reopen it from the Workspace's Display applet."
-                                     preferredStyle:UIAlertControllerStyleAlert];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
-    __weak typeof(self) weakSelf = self;
-    [alert addAction:[UIAlertAction actionWithTitle:@"Open Workspace"
-                                              style:UIAlertActionStyleDefault
-                                            handler:^(__unused UIAlertAction *action) {
-        UIWindow *window = weakSelf.view.window;
-        if (window == nil)
+    UIWindow *window = self.view.window;
+    if (window == nil)
+        return;
+    [self parkSession];
+    ISHWindowShowWorkspace(window);
+    UIViewController *root = window.rootViewController;
+    if ([root isKindOfClass:UINavigationController.class])
+        root = ((UINavigationController *) root).viewControllers.firstObject;
+    if (![root isKindOfClass:WorkspaceViewController.class])
+        return;
+    WorkspaceViewController *workspace = (WorkspaceViewController *) root;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [workspace openOrFocusWorkspaceToolIdentifier:@"display"];
+    });
+    if ([NSUserDefaults.standardUserDefaults boolForKey:DisplayWorkspaceAttachNoticeHiddenKey])
+        return;
+    // After the cross-fade (ISHWindowTransitionToRoot, 0.3 s), so it lands on
+    // the Workspace rather than racing the swap.
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t) (0.6 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        if (workspace.view.window == nil || workspace.presentedViewController != nil)
             return;
-        window.rootViewController = ISHCreateWorkspaceNavigationController();
-    }]];
-    [self presentViewController:alert animated:YES completion:nil];
+        UIAlertController *notice =
+            [UIAlertController alertControllerWithTitle:@"Your Wayland Session Came Along"
+                                                message:@"It is running in the Workspace's Wayland window. The Wayland applet "
+                                                        @"attaches to a running Wayland session whenever you open it, and "
+                                                        @"the \u2630 menu's Wayland Full Screen takes it back to full screen."
+                                         preferredStyle:UIAlertControllerStyleAlert];
+        [notice addAction:[UIAlertAction actionWithTitle:@"Don't Show Again"
+                                                   style:UIAlertActionStyleDefault
+                                                 handler:^(__unused UIAlertAction *action) {
+            [NSUserDefaults.standardUserDefaults setBool:YES forKey:DisplayWorkspaceAttachNoticeHiddenKey];
+        }]];
+        [notice addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleCancel handler:nil]];
+        [workspace presentViewController:notice animated:YES completion:nil];
+    });
 }
 
 - (void)sendCtrlAltDel:(id)sender {

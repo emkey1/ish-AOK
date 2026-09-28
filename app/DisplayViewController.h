@@ -25,6 +25,11 @@ NS_ASSUME_NONNULL_BEGIN
 // bottom edge instead of stopping at the safe area. Set before the view loads.
 @property (nonatomic) BOOL standaloneMode;
 
+// Hands the running Wayland session to the next Wayland view to start, instead
+// of ending it with this one: how the session moves between full screen and
+// the Workspace's window. A no-op without a session.
+- (void)parkSession;
+
 @end
 
 // The desktop size the applet asks the compositor for, given the size of the

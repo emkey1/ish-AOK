@@ -175,6 +175,8 @@ void ISHWorkspaceForgetLayoutForSessionImage(NSString *_Nullable imagePath);
 // identifier has no factory registration.
 - (void)openWorkspaceToolWithIdentifier:(NSString *)toolIdentifier fileGuestPath:(NSString *)guestPath;
 - (void)openWorkspaceToolWithIdentifier:(NSString *)toolIdentifier;
+// Brings the tool's existing window forward, or opens one.
+- (void)openOrFocusWorkspaceToolIdentifier:(NSString *)toolIdentifier;
 
 // One text-size step for an applet adopting WorkspaceTextScalable: +1 bigger,
 // -1 smaller, 0 back to the default. What the Cmd+= / Cmd+- / Cmd+0 chords do,

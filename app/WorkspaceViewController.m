@@ -4797,6 +4797,11 @@ static NSString *ISHWorkspaceDesktopNamesSignature(NSArray<NSString *> *names) {
     return YES;
 }
 
+- (void)handleDesktopTap:(UITapGestureRecognizer *)recognizer {
+    if (recognizer.state == UIGestureRecognizerStateEnded)
+        [self becomeFirstResponder];
+}
+
 - (void)handleDesktopLongPress:(UILongPressGestureRecognizer *)recognizer {
     if (recognizer.state != UIGestureRecognizerStateBegan)
         return;
@@ -5718,7 +5723,44 @@ static UIResponder *ISHWorkspaceFirstResponderAmongViewControllers(UIViewControl
             textSize.wantsPriorityOverSystemBehavior = YES;
         [commands addObject:textSize];
     }
+    // Ctrl+Option+Left/Right and Ctrl+Option+1-9 switch Desktops too: the
+    // keys the Wayland desktop switches its own desktops with, so one habit
+    // works in both. Inside a Wayland window its view takes them first and
+    // they go to labwc; everywhere else they come here. Unlike Cmd+arrows,
+    // never a caret move in a text view.
+    NSArray<NSArray *> *ctrlOptArrows = @[@[UIKeyInputLeftArrow, @"Previous Desktop", NSStringFromSelector(@selector(hotkeyCtrlOptPreviousDesktop:))],
+                                          @[UIKeyInputRightArrow, @"Next Desktop", NSStringFromSelector(@selector(hotkeyCtrlOptNextDesktop:))]];
+    for (NSArray *arrow in ctrlOptArrows) {
+        UIKeyCommand *command = [UIKeyCommand keyCommandWithInput:arrow[0]
+                                                    modifierFlags:UIKeyModifierControl | UIKeyModifierAlternate
+                                                           action:NSSelectorFromString(arrow[2])];
+        if (@available(iOS 15, *))
+            command.wantsPriorityOverSystemBehavior = YES;
+        [commands addObject:command];
+    }
+    for (NSInteger n = 1; n <= 9; n++) {
+        UIKeyCommand *command = [UIKeyCommand keyCommandWithInput:[NSString stringWithFormat:@"%ld", (long) n]
+                                                    modifierFlags:UIKeyModifierControl | UIKeyModifierAlternate
+                                                           action:@selector(hotkeyGoToDesktop:)];
+        if (@available(iOS 15, *))
+            command.wantsPriorityOverSystemBehavior = YES;
+        [commands addObject:command];
+    }
     return commands;
+}
+
+- (void)hotkeyCtrlOptPreviousDesktop:(UIKeyCommand *)command {
+    [self switchToDesktopIndex:self.activeDesktopIndex - 1];
+}
+
+- (void)hotkeyCtrlOptNextDesktop:(UIKeyCommand *)command {
+    [self switchToDesktopIndex:self.activeDesktopIndex + 1];
+}
+
+- (void)hotkeyGoToDesktop:(UIKeyCommand *)command {
+    NSInteger index = command.input.integerValue - 1;
+    if (index >= 0 && index < self.desktopCount)
+        [self switchToDesktopIndex:index];
 }
 
 // A brief "Desktop N / M" toast so the swipe-only switch stays oriented.
@@ -5899,6 +5941,15 @@ static UIResponder *ISHWorkspaceFirstResponderAmongViewControllers(UIViewControl
     // feature whose whole job is to be used BEFORE iOS kills the app is not
     // one to go looking for. Always offered, including when the preference is
     // off: that is the only way the menu can say the feature exists.
+    // The Wayland desktop full screen, taking its running session along: the
+    // way back from the full-screen view's own "Open Workspace".
+    [sheet addActionWithTitle:@"Wayland Full Screen"
+                        style:UIAlertActionStyleDefault
+                      handler:^(__unused UIAlertAction *action) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self showWaylandFullScreen];
+        });
+    }];
     [sheet addActionWithTitle:@"Save Session"
                         style:UIAlertActionStyleDefault
                       handler:^(__unused UIAlertAction *action) {
@@ -6154,6 +6205,15 @@ static UIResponder *ISHWorkspaceFirstResponderAmongViewControllers(UIViewControl
     desktopRootMenuRecognizer.delegate = self;
     [self.desktopSurfaceView addGestureRecognizer:desktopRootMenuRecognizer];
 
+    // A tap on the bare desktop gives the Workspace the keyboard, so its
+    // shortcuts (Desktop switching among them) work with no window focused;
+    // without it nothing held first responder and every key went nowhere.
+    UITapGestureRecognizer *desktopFocusRecognizer =
+        [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(handleDesktopTap:)];
+    desktopFocusRecognizer.cancelsTouchesInView = NO;
+    desktopFocusRecognizer.delegate = self;
+    [self.desktopSurfaceView addGestureRecognizer:desktopFocusRecognizer];
+
     UILongPressGestureRecognizer *desktopTwoFingerMenuRecognizer =
         [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(handleDesktopTwoFingerLongPress:)];
     desktopTwoFingerMenuRecognizer.minimumPressDuration = 0.4;
@@ -6355,6 +6415,10 @@ static UIResponder *ISHWorkspaceFirstResponderAmongViewControllers(UIViewControl
 - (void)viewDidAppear:(BOOL)animated {
     [super viewDidAppear:animated];
     ISHWorkspaceActiveController = self;
+    // Nothing focused yet: take the keyboard, so the Workspace's shortcuts work
+    // before anything is tapped. A window that claims it later still does.
+    if ([self workspaceFirstResponder] == nil)
+        [self becomeFirstResponder];
     [self applyCurrentThemeWallpaperIfNeededForced:NO];
     [self applyCompactSizingToOpenWorkspaceToolWindows];
     // Which saved session, before a single window opens.
@@ -7505,6 +7569,24 @@ static UIResponder *ISHWorkspaceFirstResponderAmongViewControllers(UIViewControl
     } else {
         return @[];
     }
+}
+
+// The Wayland windows hand their session over (parked, not ended) and close;
+// the full-screen display takes the session over, or starts one. This
+// Workspace stays alive, to come back to.
+- (void)showWaylandFullScreen {
+    for (UIView *view in [self.desktopWindows copy]) {
+        if (![view isKindOfClass:ISHWorkspaceContainedWindowView.class])
+            continue;
+        ISHWorkspaceContainedWindowView *windowView = (ISHWorkspaceContainedWindowView *) view;
+        UIViewController *content = [self contentViewControllerForDesktopWindow:windowView];
+        if (![content isKindOfClass:DisplayViewController.class])
+            continue;
+        [(DisplayViewController *) content parkSession];
+        if (windowView.closeHandler != nil)
+            windowView.closeHandler();
+    }
+    ISHWindowShowWaylandDisplay(self.view.window);
 }
 
 - (void)closeHiddenWorkspaceWindows:(id)sender {
