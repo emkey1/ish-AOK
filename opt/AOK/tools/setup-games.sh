@@ -13,10 +13,10 @@
 # games listed in /etc/aok-games.conf, in software for the rest.
 #
 # The GPU is used where it works: an arm64 or amd64 root, the GPU device, and
-# a GPU zink can draw on (not the A8-A10X families: zink's first draw fails
-# there). --gpu and --software override that. On an M4, Doom's timedemo runs
-# at 280 fps on the GPU against under 35 in software; ScummVM's intro used
-# 26% of a CPU on the GPU against 70% in software (an M5 Mac).
+# a GPU zink can draw on (A9 and newer; the A10X needs MoltenVK 67d3f726).
+# --gpu and --software override that. Freedoom's timedemo: 280 fps on an M4's
+# GPU against under 35 in software; 79 fps on an A10X's against under 10.
+# ScummVM's intro used 26% of a CPU on the GPU against 70% in software (M5).
 #
 # Usage:
 #   sudo sh /AOK/tools/setup-games.sh              install, then check
@@ -79,7 +79,7 @@ gpu_blocker() {
     esac
     [ -c /dev/dri/renderD128 ] || { echo "this iSH-AOK build has no GPU device"; return; }
     case "$(host_chip)" in
-        A8*|A9*|A10*) echo "zink cannot draw on the $(host_chip)'s GPU"; return ;;
+        A7*|A8*) echo "zink cannot draw on the $(host_chip)'s GPU"; return ;;
     esac
 }
 
