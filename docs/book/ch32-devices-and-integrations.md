@@ -161,17 +161,147 @@ honest, it is correct, and it belongs in this book because it is the same
 instinct as everything in Chapter 40: describe the actual state of affairs,
 including the parts that make your feature look worse.
 
-## 32.5 Pixels
+## 32.5 The Wayland desktop
 
-`DisplayRFBClient` and `DisplayRFBView`, with Metal shaders, are a VNC client
-inside the app. There is no compositor and no window management on the app's
-side — the design note for the Wayland work is explicit that the app stays "a
-dumb pixel pipe".
+The Wayland applet is the one window in the app whose contents are drawn by
+guest programs rather than by UIKit: a real wlroots compositor, real Linux
+clients, a real session. It is also the clearest case of this chapter's pattern,
+because the design decision that made it tractable is the same one — keep every
+hard problem on the Linux side, where the software already exists, and give the
+app as little to do as possible. The app has no compositor and no window
+management. The design note called it "a dumb pixel pipe", and in 557 it still
+is one; what changed is what the pipe is made of.
 
-That deliberate minimalism is what makes the plan in Chapter 42 tractable: a
-guest-side headless `wlroots` compositor plus `wayvnc`, and an in-app viewer
-that only has to display frames and forward input. Every hard problem stays on
-the Linux side, where the software already exists.
+### Setting it up
+
+Two scripts do everything, and the division between them is the division
+between installing and running.
+
+`setup-wayland.sh` runs once, as root, and installs the stack from the
+distribution: `labwc` (the default compositor, a floating desktop with a
+right-click menu), `sway` as a tiling alternative, `foot` as the first terminal,
+`wofi`, `wayvnc`, `waybar` with the icon font it needs, and `dbus-daemon`.
+Three optional sets follow from `setup-wayland-extras.sh` — games, desktop
+tools, and Xwayland for X11-only programs — and `setup-gpu.sh` adds the Vulkan
+driver, zink and a checker (below). It has been run on Devuan and Alpine, on
+amd64 and arm64 guests; Arch resolves the same package names and nobody has run
+a session on it, and the user's guide says exactly that.
+
+`start-wayland.sh` is not something the user normally runs; the applet does. It
+runs as the session leader of a pseudo-terminal the applet owns — the same
+mechanism a terminal window uses, without the terminal — so closing the applet
+hangs up the pty and the script's `SIGHUP` trap tears the session down. It
+starts the compositor, the first terminal, `wayvnc` on port 5901, and a session
+D-Bus of its own, then tells the app it is ready by writing the port to
+`/tmp/ish-display.ready`. On failure it writes `.error` beside that file with
+the reason, so the applet can show *why* — the compositor crashed, `foot` died,
+`wayvnc` never listened — instead of timing out generically 45 seconds later.
+The script's stdout is useless for that: it travels through a terminal
+emulator's escape-sequence parser, not a pipe.
+
+Most of what the script does beyond that is the accumulated knowledge of what
+goes wrong on the first run of a desktop in a root nobody configured for one:
+
+- **A session bus.** These roots have no systemd user session, so GLib and Qt
+  programs found no bus and `waybar` refused to start ("Cannot autolaunch D-Bus
+  without X11 `$DISPLAY`"), which was also Falkon's report in #485. The
+  desktop now brings its own, and the fix surfaced a kernel bug on the way: a
+  GLib client authenticates from a worker thread, and AOK checked
+  `SCM_CREDENTIALS` against the *thread's* id where Linux wants the process's.
+- **Configuration that is the user's.** `labwc`'s menu and key bindings and
+  `waybar`'s config are written only when the user has none, and a file the
+  user has changed is never replaced. One still exactly as an earlier AOK wrote
+  it is brought up to date, which is how an existing desktop gets new menu
+  entries.
+- **One desktop at a time.** Sessions share the VNC port, the ready file and a
+  cache directory, and an early version of the script began by sweeping away
+  anything named `labwc`, `foot` or `wayvnc` — so a second start ended the
+  desktop the user was looking at. It now finds a live session through
+  `/proc` (not a lock file: `/tmp` is wiped part-way through boot) and refuses,
+  with the running session's pid in the message.
+- **A second session after the first.** wlroots creates `/tmp/.X11-unix` itself
+  with the session's umask, so a root desktop left it `0755`; once `bind()`
+  checked directory permissions as Linux does, the next non-root desktop could
+  not create its X display and exited. The script makes the directory `1777`.
+  And guest pids restart at 1 on every boot, so a stale `/tmp/.X0-lock` can
+  name the new compositor's own pid: anything that trusts a lock file by pid
+  needs a freshness check as well.
+
+### Two ways a frame reaches the screen
+
+**Through VNC**, which is how the applet was built. It began on 2026-07-12 as
+noVNC in a web view and was replaced the next day by a native RFB client,
+`DisplayRFBClient`, drawing with Metal. Since 555 the desktop is the size of
+the window showing it — the client asks with RFB `SetDesktopSize` whenever that
+window changes — except with a `neatvnc` older than 0.9.2, which crashes when
+the desktop shrinks under a connected client, so the script makes `wayvnc`
+refuse and the desktop keeps 1280x720, scaled.
+
+The VNC path has one cost that no tuning removes: `wayvnc` captures and encodes
+the whole framebuffer in software, *inside the emulator*. At one pixel per point
+that is affordable. An iPad at 2x is 1668x2420 at four bytes a pixel, which at
+30 frames a second asks an emulated guest for about 480 MB/s. It was reported as
+"terminal updates are glacially slow" while menus stayed responsive — the
+signature of a capture competing with the one client that redraws all the
+time — and the app answers by lowering `wayvnc`'s frame rate as the resolution
+goes up. Profiled on an M4 iPad during vkcube, `wayvnc`'s threads were 44% of
+the app's CPU: the display link, not the rendering, had become the cost.
+
+**Through `wl-present`**, which is 557's answer to that. It is a native program
+(Part V) that connects to the compositor as an ordinary Wayland client, asks it
+to copy each damaged frame into DRM dumb buffers on the GPU render node, and
+hands that shared memory to the app through the kernel. The app wraps it as a
+Metal buffer and blits the damaged rectangle. No pixel passes through emulated
+code. It carries the other direction too, from a kernel queue the app writes:
+pointer and keyboard through the compositor's virtual devices, the clipboard
+both ways, and the desktop's size. With all of that off its hands `wayvnc` has
+nothing left to do, so once the app is showing frames `wl-present` has it
+detached, and re-attached when `wl-present` ends however it ends; the app's VNC
+connection stays up throughout as the fallback.
+
+Measured on the M4 with vkcube running, in device-wide busy ticks a second:
+38–39 over VNC with frames capped at 30 a second, 35–36 with `wl-present` and
+`wayvnc` detached, with frames up to 60 a second and `wayvnc` at 0.2% of the
+CPU. `ISH_DISPLAY_DIRECT=0` puts everything back on VNC.
+
+### The GPU underneath
+
+`wl-present` needs the compositor to be drawing on the GPU, and since 557 it
+does by default wherever `setup-gpu.sh` has installed the pieces. The render
+node, `/dev/dri/renderD128`, is this chapter's pattern again: an iOS
+capability — Metal, the only way an app reaches the GPU — spelled as the Linux
+device node stock Mesa expects, with Vulkan replayed onto Metal through Venus
+and MoltenVK inside the kernel. Chapter 41 lists its edges and
+`docs/roadmap.md` has the gate it passed.
+
+Two choices in the script are worth knowing. The compositor loads zink only
+because a private driver config names it for `labwc` and `sway`: zink on this
+GPU offers OpenGL 2.1 and GLES 2.0 where software rendering offers 4.5, so
+every other GL program stays in software unless run through `gpu-run` — a
+program that needs more than 2.1 then runs slowly instead of failing. And if the
+compositor's output does not come up on the GPU, the script falls back to
+software rendering — wlroots' pixman renderer, with Chapter 33's accelerator
+underneath — and says so. `ISH_DISPLAY_GPU=0` starts there.
+
+### What the desktop found, and what is still open
+
+A desktop is a conformance test nobody wrote. Besides the credential and
+`bind()` bugs above, it found a signal and poll deadlock that `labwc`'s menu
+triggered by forking and exiting (it looked like an unreliable menu, and for a
+while `sway` was the default because of it), and a keyboard trap in `wayvnc`:
+sent Alt and Shift and a lowercase letter, it looks up the key for the letter's
+own level, lifts the held modifiers to type it, and so `labwc`'s Alt+Shift
+bindings had probably never fired from the app. The client now sends the
+uppercase letter while Shift is held; the same trap still lifts Ctrl from a
+Ctrl with `+`.
+
+What is open is recorded in `docs/TODO.md`: saving a session with the applet
+open is slow and has not been measured; a restore comes back in the mode the
+Settings preference names rather than the one it was saved in; and the
+standalone Wayland window has no Save Session action of its own. The newest
+report is a list of programs that misbehave on the desktop (#620), which is the
+shape this work has always had — the feature exists, and each program is a
+conformance question.
 
 ## 32.6 What every integration owes
 
@@ -211,6 +341,13 @@ developer does not have.
 [app/GuestCommandRunner.m](../../app/GuestCommandRunner.m),
 [app/AOKFoundationModelsBridge.swift](../../app/AOKFoundationModelsBridge.swift),
 [app/DisplayRFBClient.m](../../app/DisplayRFBClient.m),
+[app/DisplayViewController.m](../../app/DisplayViewController.m),
+[kernel/native_wlpresent.c](../../kernel/native_wlpresent.c),
+[fs/virtgpu.c](../../fs/virtgpu.c),
+[opt/AOK/tools/setup-wayland.sh](../../opt/AOK/tools/setup-wayland.sh),
+[opt/AOK/tools/start-wayland.sh](../../opt/AOK/tools/start-wayland.sh),
+[opt/AOK/tools/setup-gpu.sh](../../opt/AOK/tools/setup-gpu.sh),
+[opt/AOK/docs/workspace.md](../../opt/AOK/docs/workspace.md) ("The Wayland applet"),
 [kernel/init.h](../../kernel/init.h) (`run_guest_command_capture_shell`),
 [opt/AOK/docs/shortcuts.md](../../opt/AOK/docs/shortcuts.md),
 [opt/AOK/docs/llm-chat.md](../../opt/AOK/docs/llm-chat.md).

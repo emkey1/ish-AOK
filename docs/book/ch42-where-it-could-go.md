@@ -8,8 +8,11 @@ is the useful part.
 
 ## 42.1 Wayland, and why it became possible
 
-The most advanced unfinished work is a graphical desktop, and the interesting
-thing is that almost none of it is graphics.
+When this chapter was first written, the most advanced unfinished work was a
+graphical desktop. It has since shipped — Chapter 32 describes it as it is — so
+it stays here as the worked example of something going from *possible* to
+*built*, and because the interesting thing about it is still true: almost none
+of it was graphics.
 
 The architecture keeps every hard problem on the Linux side: a **headless
 `wlroots` compositor plus `wayvnc` running in the guest**, displayed by a VNC
@@ -49,11 +52,19 @@ policy note that says *implement rather than stub unless genuinely harmless*.
 That is what planning looks like when the unknown is conformance rather than
 design.
 
+Both tiers shipped, and the plan held in the way that mattered: the bugs were
+conformance bugs, found one program at a time, and the app stayed a pixel pipe.
+The pipe itself changed once, in 557, when frames began to reach the app from
+the compositor on the GPU instead of through VNC (Chapter 32) — which was the
+one part the plan had not expected to need, because the cost it removed only
+became visible once everything else was fast enough to measure it.
+
 ## 42.2 The display that was built and rejected
 
-External display and AirPlay mirroring exist on a branch and are not merged,
-because the maintainer judged the work flawed (Chapter 41). It stays fenced
-rather than merged or deleted.
+External display support shipped once and was reverted after testing on a
+real iPad and monitor; its last commit, mirroring the Wayland display, exists on
+a branch and is not merged, because the maintainer judged the work flawed
+(Chapter 41). It stays fenced rather than merged or deleted.
 
 Worth restating here only because a "future directions" chapter is exactly where
 an unmerged branch quietly becomes a promise. It is not one.
@@ -67,17 +78,23 @@ The no-copy property is real but conditional on a **blessed allocation** — a
 guest `MAP_SHARED|MAP_ANONYMOUS` mapping that stays one contiguous host region
 across `fork`. Anything else must decline, and the guest shim needs a CPU path
 regardless. The measurement that decides go or no-go has to come from an actual
-iPad, because no available quiet host can produce it: the Linux build host has
-no Metal, and the available Mac has an Intel integrated GPU and a 4 KB page
-size, which makes the 16 KB-page alignment failures an iDevice would hit
-invisible.
+iPad, because when the study was planned no available quiet host could produce
+it: the Linux build host has no Metal, and the Mac of the time had an Intel
+integrated GPU and a 4 KB page size, which makes the 16 KB-page alignment
+failures an iDevice would hit invisible.
 
 And milestone 1 is asymmetric by construction: a naive kernel with a per-call
 `bytesNoCopy` wrap means **a loss is not conclusive while a win is**.
 
-Beyond that sits the standing feature request for 3D acceleration through
-`virglrenderer`, which is a much larger proposition and would need the Wayland
-work to land first.
+Beyond that sat the standing feature request for 3D acceleration through
+`virglrenderer`, a much larger proposition that needed the Wayland work to land
+first. It did, and 557 took the request on the way this chapter recommends: as
+a feasibility gate with numbers attached before any estimate. Venus replaying
+Vulkan onto Metal through MoltenVK passed that gate on an M4 iPad, and the
+result is a GPU render node in every build and a desktop that composites on it
+(Chapter 32; Chapter 41 lists its edges). The single-`sgemm` study above is
+unaffected: it asks a different question, about compute the guest hands to
+Metal directly.
 
 ## 42.4 Nested AOK, which already works
 
