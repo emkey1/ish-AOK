@@ -1165,6 +1165,10 @@ COMPOSITOR_START_MARK="$XDG_RUNTIME_DIR/compositor-started"
 #   plus that one rule -- gives zink to the compositor and not to the programs
 #   it starts: zink here offers only OpenGL 2.1 and GLES 2.0 (MoltenVK lacks
 #   what GL 3 needs), where llvmpipe offers 4.5.
+# - Xwayland gets zink the same way, for its glamor: without it Xwayland has
+#   no DRI3, and an X11 OpenGL program (Extreme Tux Racer, anything on SFML or
+#   GLEW) cannot reach the GPU at all -- it runs in software, or not at all
+#   when it asked for zink.
 # - LIBGL_ALWAYS_SOFTWARE would put zink on a CPU device; the compositor's
 #   children therefore start without it, and Mesa falls back to software GL
 #   for them by itself.
@@ -1182,6 +1186,9 @@ wl_gpu_drirc() {
             <option name="dri_driver" value="zink" />
         </application>
         <application name="sway" executable="sway">
+            <option name="dri_driver" value="zink" />
+        </application>
+        <application name="Xwayland" executable="Xwayland">
             <option name="dri_driver" value="zink" />
         </application>
     </device>
