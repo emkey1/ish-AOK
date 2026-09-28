@@ -190,11 +190,13 @@ names, and its packages resolve, but no one has run a session on it.
 
 The desktop draws on the device's GPU when the guest has what that takes: the
 GPU device (`/dev/dri/renderD128`) and Mesa's Vulkan driver for it, with zink.
-Install them once:
+One script installs them, with vulkaninfo, vkcube and the Mesa demos, adds a
+`gpu-run` command, and checks the result (Devuan, Alpine and Arch; arm64 and
+amd64 roots):
 
 ```
-sudo apt install mesa-vulkan-drivers libgl1-mesa-dri   # Devuan/Debian
-sudo apk add mesa-vulkan-virtio mesa-dri-gallium       # Alpine (arm64, amd64)
+sudo sh /AOK/tools/setup-gpu.sh            # add --demos for glmark2
+sh /AOK/tools/setup-gpu.sh --check         # what works, without installing
 ```
 
 With those, `start-wayland.sh` composites on the GPU, and Vulkan programs
@@ -209,12 +211,20 @@ and window size the same way, so the VNC server has nothing to do and stops
 copying the screen. `ISH_DISPLAY_DIRECT=0` leaves all of that to VNC, as
 before.
 
-OpenGL programs still render in software by default. They can use the GPU
-through zink with `MESA_LOADER_DRIVER_OVERRIDE=zink`, but on this GPU zink
-offers only OpenGL 2.1 and OpenGL ES 2.0, where software rendering offers
-4.5 — so it suits older and simpler programs (glmark2 runs about ten times
-as fast), not everything. riscv64 and i386 guests have no Vulkan driver
-for the device and stay in software.
+OpenGL programs still render in software by default: on this GPU zink offers
+only OpenGL 2.1 and OpenGL ES 2.0, where software rendering offers 4.5, so a
+program needing more would fail on the GPU instead of running slowly. Put one
+on the GPU with `gpu-run`, which suits older and simpler programs (glmark2
+runs about twenty times as fast):
+
+```
+gpu-run glmark2-wayland
+```
+
+`sudo sh /AOK/tools/setup-gpu.sh --gl-default` makes the GPU the desktop's
+default for every OpenGL program from its next session, and `--gl-software`
+puts it back. riscv64 and i386 guests have no Vulkan driver for the device and
+stay in software.
 
 You may also come across `docs/historical/wayland_workspace_plan.md` in the project's design
 docs. That is the forward design document this applet came out of; where it and
