@@ -9,6 +9,10 @@
 // ISH_VIRTGPU=0 has not turned it off. Its sysfs identity follows this.
 bool virtgpu_available(void);
 
+// The app is entering (true) or leaving (false) the background, where iOS
+// refuses GPU work: until it leaves, the renderer's submissions wait.
+void virtgpu_set_background(bool background);
+
 #ifdef ISH_VIRTGPU
 extern struct dev_ops virtgpu_dev;
 #endif

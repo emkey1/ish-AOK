@@ -17,6 +17,7 @@
 #import "ShortcutActivityBridge.h"
 #import "UserPreferences.h"
 #import "WorkspaceViewController.h"
+#include "fs/virtgpu.h"
 
 TerminalViewController *currentTerminalViewController = NULL;
 
@@ -640,12 +641,16 @@ BOOL ISHApplyShortcutActivityToConnectedScene(NSUserActivity *activity) {
         if (other.activationState != UISceneActivationStateBackground)
             return;
     }
+    // iOS refuses GPU work from here on, and MoltenVK took a refusal for a
+    // lost GPU: hold the guest's GPU work until a window comes back.
+    virtgpu_set_background(true);
     ISHSuspendGuardEnterBackground();
 }
 
 - (void)sceneWillEnterForeground:(UIScene *)scene {
     [ISHDiagnosticsStore recordBreadcrumb:@"scene.willEnterForeground"
                                   details:@{@"session": scene.session.persistentIdentifier ?: @""}];
+    virtgpu_set_background(false);
     ISHSuspendGuardEnterForeground();
 }
 

@@ -1350,6 +1350,13 @@ int virtgpu_present_fd(int buf_fd, uint32_t display, uint32_t width, uint32_t he
     return shown;
 }
 
+// MoltenVK, iSH-AOK's fork (MVKAOKGPUGate.h).
+void mvkAOKSetGPUAllowed(int allowed);
+
+void virtgpu_set_background(bool background) {
+    mvkAOKSetGPUAllowed(!background);
+}
+
 void virtgpu_presenter_clipboard(uint32_t display, const char *text, size_t len) {
     lock(&present_lock, 0);
     struct present_hook *hook = present_hook_find(display);
@@ -1494,6 +1501,10 @@ struct dev_ops virtgpu_dev = {
 
 bool virtgpu_available(void) {
     return false;
+}
+
+void virtgpu_set_background(bool background) {
+    (void) background;
 }
 
 void virtgpu_set_present_hook(uint32_t display, const struct virtgpu_present_ops *ops, void *ctx) {

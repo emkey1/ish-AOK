@@ -687,6 +687,19 @@ whatever this becomes, like any other program.
   clipboard both ways, a resize to 1000x700. On the M4, vkcube, fresh boot:
   34-36 busy ticks/s detached, 38 after killing wl-present (wayvnc back at
   17.7%, frames up to 30 fps again).
+- **The background (2026-09-28).** Leaving the app with a GPU client
+  running (the camera, the app switcher) wedged the renderer for good: iOS
+  refuses command buffers committed in the background
+  (MTLCommandBufferErrorNotPermitted), and MoltenVK marked the device and
+  the physical device lost on it, so every fence a guest waited on stayed
+  unsignalled and even `vulkaninfo` hung. The fork now holds every commit at
+  a gate SceneDelegate closes once every window is in the background and
+  opens as one returns (virtgpu_set_background, MVKAOKGPUGate.h), and on iOS
+  a refused command buffer loses only its own work. Checked on the M4 by
+  opening Settings over the app with vkcube running: labwc and vkcube idle
+  while away, back at 11 ticks/s on return, wl-present showing frames again.
+  The display view now follows its own scene rather than UIApplication's
+  notifications, which a UIScene app does not get.
 - **Next:** gaps in the device, for later: no GUEST blobs or DRM syncobjs (Mesa needs
   neither), one lock around all renderer calls, and no checkpoint support for an
   open node or its fences.

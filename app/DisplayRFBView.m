@@ -343,14 +343,16 @@ static const struct virtgpu_present_ops display_direct_ops = {
     sink->_device = self.device;
     sink->_queue = _commandQueue;
     sink->_display = display;
-    atomic_init(&sink->_visible, self.window != nil && UIApplication.sharedApplication.applicationState != UIApplicationStateBackground);
+    atomic_init(&sink->_visible, [self directVisible]);
     sink.view = self;
     _direct = sink;
     virtgpu_set_present_hook(display, &display_direct_ops, (__bridge_retained void *) sink);
+    // Per scene: this app adopts UIScene, and one window may go to the
+    // background while another stays.
     [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(directVisibilityChanged:)
-                                               name:UIApplicationDidEnterBackgroundNotification object:nil];
+                                               name:UISceneDidEnterBackgroundNotification object:nil];
     [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(directVisibilityChanged:)
-                                               name:UIApplicationWillEnterForegroundNotification object:nil];
+                                               name:UISceneWillEnterForegroundNotification object:nil];
 }
 
 - (void)stopDirectFrames {
@@ -363,25 +365,32 @@ static const struct virtgpu_present_ops display_direct_ops = {
 - (void)detachDirectFrames {
     DisplayDirectFrames *sink = _direct;
     _direct = nil;
-    [NSNotificationCenter.defaultCenter removeObserver:self name:UIApplicationDidEnterBackgroundNotification object:nil];
-    [NSNotificationCenter.defaultCenter removeObserver:self name:UIApplicationWillEnterForegroundNotification object:nil];
+    [NSNotificationCenter.defaultCenter removeObserver:self name:UISceneDidEnterBackgroundNotification object:nil];
+    [NSNotificationCenter.defaultCenter removeObserver:self name:UISceneWillEnterForegroundNotification object:nil];
     // Waits out a frame in progress; after it, nothing calls the sink again.
     virtgpu_clear_present_hook(sink->_display, (__bridge void *) sink);
     CFRelease((__bridge CFTypeRef) sink);
 }
 
-// Nobody sees frames with the app in the background (and Metal refuses the
-// work there): wl-present is told so, and captures less often.
+// Nobody sees frames with this window in the background (and Metal refuses
+// the work when the whole app is): wl-present is told so, and captures less
+// often.
+- (BOOL)directVisible {
+    UIWindowScene *scene = self.window.windowScene;
+    return scene != nil && scene.activationState != UISceneActivationStateBackground;
+}
+
 - (void)directVisibilityChanged:(NSNotification *)note {
-    BOOL background = [note.name isEqualToString:UIApplicationDidEnterBackgroundNotification];
-    if (_direct != nil)
-        atomic_store(&_direct->_visible, !background && self.window != nil);
+    if (_direct == nil || note.object != self.window.windowScene)
+        return;
+    BOOL background = [note.name isEqualToString:UISceneDidEnterBackgroundNotification];
+    atomic_store(&_direct->_visible, !background);
 }
 
 - (void)didMoveToWindow {
     [super didMoveToWindow];
     if (_direct != nil)
-        atomic_store(&_direct->_visible, self.window != nil);
+        atomic_store(&_direct->_visible, [self directVisible]);
 }
 
 - (void)directFrameArrivedWithWidth:(uint32_t)width height:(uint32_t)height {
