@@ -51,12 +51,13 @@ usage() {
 
 CHECK_ONLY=0
 GL_CHOICE=auto
+GL_FORCED=0
 DEBS=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --check) CHECK_ONLY=1 ;;
-        --gpu) GL_CHOICE=gpu ;;
-        --software) GL_CHOICE=software ;;
+        --gpu) GL_CHOICE=gpu; GL_FORCED=1 ;;
+        --software) GL_CHOICE=software; GL_FORCED=1 ;;
         --debs) [ $# -ge 2 ] || { usage >&2; exit 2; }; DEBS=$2; shift ;;
         -h|--help) usage; exit 0 ;;
         *) usage >&2; exit 2 ;;
@@ -169,9 +170,22 @@ DEBIAN_FRONTEND=noninteractive apt-get $APT_OPTS install -y --no-install-recomme
     -o Dpkg::Options::=--force-confold $PKGS $MESA ||
     die "apt-get install failed -- see output above"
 
-if [ "$GL_CHOICE" = gpu ] && ! zink_context; then
-    GL_CHOICE=software
-    note "zink gave no OpenGL context; drawing in software instead"
+# iOS pauses the GPU while the app is in the background, and a check made then
+# times out: try a few times before settling for software.
+if [ "$GL_CHOICE" = gpu ] && [ "$GL_FORCED" = 0 ]; then
+    tries=1
+    until zink_context; do
+        if [ "$tries" -ge 3 ]; then
+            GL_CHOICE=software
+            log "zink gave no OpenGL context: drawing in software"
+            note "If iSH-AOK was in the background just now, the GPU was paused; run this"
+            note "again with the app in front, or with --gpu to skip the check."
+            break
+        fi
+        tries=$((tries + 1))
+        note "zink gave no OpenGL context; trying again ($tries of 3)"
+        sleep 5
+    done
 fi
 
 log "installing $WRAPPER"
@@ -202,6 +216,9 @@ log "done"
 if [ "$CHECK_FAILED" = 0 ]; then
     note "Start them from the desktop's menu, or in a terminal there:"
     note "  freedoom1    freedoom2    sky"
+    note "Doom: arrow keys move and turn, Ctrl fires, Space opens doors, Shift runs,"
+    note "      Alt+arrows strafe, 1-7 pick a weapon, Tab shows the map, Esc the menu."
+    note "Beneath a Steel Sky: left-click walks and looks, right-click uses; F5 menu."
 else
     note "Something above is missing; see the lines marked 'no'."
     exit 1

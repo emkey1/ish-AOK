@@ -259,7 +259,11 @@ sh /AOK/tools/setup-games.sh --check
 
 Start them from the desktop's menu, or as `freedoom1`, `freedoom2` and `sky`
 in a terminal there. Each goes through `/usr/local/bin/aok-sdl-game`, and
-`/etc/aok-games.conf` lists the ones that draw on the GPU. On an A10X or older
+`/etc/aok-games.conf` lists the ones that draw on the GPU. Doom's keys: the
+arrow keys move and turn, Ctrl fires, Space opens doors, Shift runs, Alt with
+the arrows strafes, 1-7 pick a weapon, Tab shows the map and Esc the menu. In
+Beneath a Steel Sky, left-click walks and looks at things, right-click uses
+them, and F5 opens the menu. On an A10X or older
 iPad everything draws in software: Beneath a Steel Sky plays well, Doom runs
 below full speed.
 
