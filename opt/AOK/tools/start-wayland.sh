@@ -357,6 +357,14 @@ export WLR_RENDERER="${WLR_RENDERER:-pixman}"
 # session launches -- typically from a shell inside foot -- inherits them
 # without the user needing to know this environment has no GPU.
 export GSK_RENDERER=cairo
+# OpenGL programs render in software unless /etc/aok-gpu.conf (written by
+# /AOK/tools/setup-gpu.sh --gl-default) says AOK_GL=gpu: zink on this GPU is
+# OpenGL 2.1 / ES 2.0 against llvmpipe's 4.5, so the GPU cannot be everyone's
+# default. A caller's own LIBGL_ALWAYS_SOFTWARE wins either way.
+if [ -z "${LIBGL_ALWAYS_SOFTWARE+set}" ] && [ -f /etc/aok-gpu.conf ] &&
+   grep -q '^AOK_GL=gpu' /etc/aok-gpu.conf 2>/dev/null && wl_gpu_usable; then
+    export LIBGL_ALWAYS_SOFTWARE=0 MESA_LOADER_DRIVER_OVERRIDE=zink
+fi
 export LIBGL_ALWAYS_SOFTWARE="${LIBGL_ALWAYS_SOFTWARE-1}"
 # Debian/Devuan firefox-esr routes its Wayland connection through a bundled
 # "wayland-proxy-compositor" shim by default. Under iSH that relay corrupts

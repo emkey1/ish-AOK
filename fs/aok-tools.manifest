@@ -22,6 +22,7 @@ manage-roots.sh
 suspend.sh
 setup-wayland.sh
 setup-wayland-extras.sh
+setup-gpu.sh
 start-wayland.sh
 fix-neatvnc 0555
 ktop/ktop.c
