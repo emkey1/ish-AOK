@@ -90,7 +90,8 @@ you built it in. That is the combination worth knowing about.
 every launch so they track the app:
 
     ws-motepad ws-filemanager ws-markdown ws-imageviewer ws-videoplayer
-    ws-audio ws-browser ws-llm ws-filesystems ws-storage ws-monitor
+    ws-audio ws-music ws-equalizer ws-eq ws-browser ws-llm ws-filesystems
+    ws-storage ws-monitor
     ws-networks ws-status ws-settings ws-themes ws-launcher ws-clock
     ws-info ws-diagnostics ws-sessions ws-wayland ws-desktops
     ws-quickactions

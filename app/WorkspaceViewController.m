@@ -140,6 +140,7 @@ static NSString *const ISHWorkspaceToolDiagnosticsIdentifier = @"diagnostics";
 static NSString *const ISHWorkspaceToolLLMIdentifier = @"llm";
 static NSString *const ISHWorkspaceToolLauncherIdentifier = @"launcher";
 static NSString *const ISHWorkspaceToolAudioIdentifier = @"audio";
+static NSString *const ISHWorkspaceToolEqualizerIdentifier = @"equalizer";
 static NSString *const ISHWorkspaceToolMotePadIdentifier = @"motepad";
 static NSString *const ISHWorkspaceToolFileManagerIdentifier = @"filemanager";
 static NSString *const ISHWorkspaceToolMarkdownViewerIdentifier = @"markdown";
@@ -170,6 +171,7 @@ static NSArray<NSString *> *ISHWorkspaceOpenableToolIdentifiers(void) {
         tools = @[ISHWorkspaceToolMotePadIdentifier, ISHWorkspaceToolFileManagerIdentifier,
                   ISHWorkspaceToolMarkdownViewerIdentifier, ISHWorkspaceToolImageViewerIdentifier,
                   ISHWorkspaceToolVideoPlayerIdentifier, ISHWorkspaceToolAudioIdentifier,
+                  ISHWorkspaceToolEqualizerIdentifier,
                   ISHWorkspaceToolBrowserIdentifier, ISHWorkspaceToolLLMIdentifier,
                   ISHWorkspaceToolFilesystemsIdentifier, ISHWorkspaceToolStorageIdentifier,
                   ISHWorkspaceToolMonitorIdentifier, ISHWorkspaceToolNetworksIdentifier,
@@ -406,6 +408,8 @@ static NSString *ISHWorkspaceLauncherToolIdentifierForCommand(NSString *command)
         @"chat": ISHWorkspaceToolLLMIdentifier,
         @"music": ISHWorkspaceToolAudioIdentifier,
         @"audio": ISHWorkspaceToolAudioIdentifier,
+        @"equalizer": ISHWorkspaceToolEqualizerIdentifier,
+        @"eq": ISHWorkspaceToolEqualizerIdentifier,
         @"motepad": ISHWorkspaceToolMotePadIdentifier,
         @"editor": ISHWorkspaceToolMotePadIdentifier,
         @"notepad": ISHWorkspaceToolMotePadIdentifier,
@@ -1106,6 +1110,8 @@ static CGSize ISHWorkspacePreferredToolContentSize(NSString *toolIdentifier) {
             return CGSizeMake(352, 560);
         if ([toolIdentifier isEqualToString:ISHWorkspaceToolLauncherIdentifier])
             return ISHWorkspaceLauncherContentSize(ISHWorkspaceLauncherShortcuts().count, NO);
+        if ([toolIdentifier isEqualToString:ISHWorkspaceToolEqualizerIdentifier])
+            return CGSizeMake(460, 300);
         if ([toolIdentifier isEqualToString:ISHWorkspaceToolAudioIdentifier])
             return CGSizeMake(ISHWorkspaceAudioWindowWidth(), 510);
         if ([toolIdentifier isEqualToString:ISHWorkspaceToolMotePadIdentifier])
@@ -1159,6 +1165,8 @@ static CGSize ISHWorkspacePreferredToolContentSize(NSString *toolIdentifier) {
         return CGSizeMake(560, 620);
     if ([toolIdentifier isEqualToString:ISHWorkspaceToolLauncherIdentifier])
         return ISHWorkspaceLauncherContentSize(ISHWorkspaceLauncherShortcuts().count, NO);
+    if ([toolIdentifier isEqualToString:ISHWorkspaceToolEqualizerIdentifier])
+        return CGSizeMake(460, 300);
     if ([toolIdentifier isEqualToString:ISHWorkspaceToolAudioIdentifier])
         return CGSizeMake(ISHWorkspaceAudioWindowWidth(), 470);
     if ([toolIdentifier isEqualToString:ISHWorkspaceToolMotePadIdentifier])
@@ -1258,6 +1266,8 @@ static CGSize ISHWorkspaceMinimumToolContentSize(NSString *toolIdentifier) {
             return CGSizeMake(300, 360);
         if ([toolIdentifier isEqualToString:ISHWorkspaceToolLauncherIdentifier])
             return CGSizeMake(200, 80);
+        if ([toolIdentifier isEqualToString:ISHWorkspaceToolEqualizerIdentifier])
+            return CGSizeMake(340, 240);
         if ([toolIdentifier isEqualToString:ISHWorkspaceToolAudioIdentifier])
             return CGSizeMake(ISHWorkspaceAudioWindowWidth(), 390);
         if ([toolIdentifier isEqualToString:ISHWorkspaceToolMotePadIdentifier])
@@ -1301,6 +1311,8 @@ static CGSize ISHWorkspaceMinimumToolContentSize(NSString *toolIdentifier) {
         return CGSizeMake(420, 420);
     if ([toolIdentifier isEqualToString:ISHWorkspaceToolLauncherIdentifier])
         return CGSizeMake(220, 96);
+    if ([toolIdentifier isEqualToString:ISHWorkspaceToolEqualizerIdentifier])
+        return CGSizeMake(340, 240);
     if ([toolIdentifier isEqualToString:ISHWorkspaceToolAudioIdentifier])
         return CGSizeMake(ISHWorkspaceAudioWindowWidth(), 360);
     if ([toolIdentifier isEqualToString:ISHWorkspaceToolMotePadIdentifier])
@@ -1374,6 +1386,8 @@ static NSString *ISHWorkspaceToolTitle(NSString *toolIdentifier) {
         return @"Launcher";
     if ([toolIdentifier isEqualToString:ISHWorkspaceToolAudioIdentifier])
         return @"Music";
+    if ([toolIdentifier isEqualToString:ISHWorkspaceToolEqualizerIdentifier])
+        return @"Equalizer";
     if ([toolIdentifier isEqualToString:ISHWorkspaceToolMotePadIdentifier])
         return @"MotePad";
     if ([toolIdentifier isEqualToString:ISHWorkspaceToolFileManagerIdentifier])
@@ -2853,6 +2867,9 @@ static BOOL ISHWorkspaceThemeIdentifierIsBuiltIn(NSString *identifier) {
 @interface WorkspaceThemesToolViewController : WorkspaceThemedToolViewController
 @end
 
+@interface WorkspaceEqualizerToolViewController : WorkspaceThemedToolViewController
+@end
+
 @interface WorkspaceAudioPlayerToolViewController : WorkspaceThemedToolViewController
 @end
 
@@ -2927,6 +2944,8 @@ static UIViewController *ISHCreateWorkspaceToolViewController(NSString *toolIden
         return [WorkspaceLauncherToolViewController new];
     if ([toolIdentifier isEqualToString:ISHWorkspaceToolAudioIdentifier])
         return [WorkspaceAudioPlayerToolViewController new];
+    if ([toolIdentifier isEqualToString:ISHWorkspaceToolEqualizerIdentifier])
+        return [WorkspaceEqualizerToolViewController new];
     if ([toolIdentifier isEqualToString:ISHWorkspaceToolMotePadIdentifier])
         return [WorkspaceMotePadToolViewController new];
     if ([toolIdentifier isEqualToString:ISHWorkspaceToolFileManagerIdentifier])
@@ -2977,6 +2996,8 @@ NSString *ISHWorkspaceToolIdentifierForViewController(UIViewController *viewCont
         return ISHWorkspaceToolFilesystemsIdentifier;
     if ([viewController isKindOfClass:WorkspaceAudioPlayerToolViewController.class])
         return ISHWorkspaceToolAudioIdentifier;
+    if ([viewController isKindOfClass:WorkspaceEqualizerToolViewController.class])
+        return ISHWorkspaceToolEqualizerIdentifier;
     if ([viewController isKindOfClass:WorkspaceMotePadToolViewController.class])
         return ISHWorkspaceToolMotePadIdentifier;
     if ([viewController isKindOfClass:WorkspaceFileManagerToolViewController.class])
@@ -5153,6 +5174,7 @@ static NSString *ISHWorkspaceDesktopNamesSignature(NSArray<NSString *> *names) {
         @{@"name": @"System Console", @"command": @"{console}"},
         @{@"name": @"Web Browser", @"command": @"{browser}"},
         @{@"name": @"Music", @"command": @"{music}"},
+        @{@"name": @"Equalizer", @"command": @"{equalizer}"},
         @{@"name": @"MotePad", @"command": @"{motepad}"},
         @{@"name": @"File Manager", @"command": @"{files}"},
         @{@"name": @"Markdown", @"command": @"{markdown}"},
@@ -7181,6 +7203,7 @@ static UIResponder *ISHWorkspaceFirstResponderAmongViewControllers(UIViewControl
         @{@"title": @"Quick Actions", @"identifier": ISHWorkspaceToolShortcutsIdentifier},
         @{@"title": @"Browser", @"identifier": ISHWorkspaceToolBrowserIdentifier},
         @{@"title": @"Music", @"identifier": ISHWorkspaceToolAudioIdentifier},
+        @{@"title": @"Equalizer", @"identifier": ISHWorkspaceToolEqualizerIdentifier},
         @{@"title": @"MotePad", @"identifier": ISHWorkspaceToolMotePadIdentifier},
         @{@"title": @"File Manager", @"identifier": ISHWorkspaceToolFileManagerIdentifier},
         @{@"title": @"Sessions", @"identifier": ISHWorkspaceToolSessionsIdentifier},
@@ -12802,6 +12825,10 @@ static UIColor *ISHAudioHexColor(uint32_t hex) {
         handler:^(__unused UIAlertAction *a) { dispatch_async(dispatch_get_main_queue(), ^{ [self addMusicTapped:self->_mButton]; }); }];
     [sheet addActionWithTitle:@"Playlists…" style:UIAlertActionStyleDefault
         handler:^(__unused UIAlertAction *a) { dispatch_async(dispatch_get_main_queue(), ^{ [self playlistsTapped:self->_mButton]; }); }];
+    [sheet addActionWithTitle:@"Equalizer…" style:UIAlertActionStyleDefault
+        handler:^(__unused UIAlertAction *a) {
+        [self.workspaceHostViewController openOrFocusWorkspaceToolIdentifier:ISHWorkspaceToolEqualizerIdentifier];
+    }];
     [sheet addActionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil];
     [self presentSheet:sheet fromView:_mButton];
 }
@@ -15043,6 +15070,142 @@ static NSURL *ISHWorkspaceBrowserURLFromInput(NSString *input) {
                                         attributes:@{NSForegroundColorAttributeName: theme[@"secondary"]}];
     _progressView.trackTintColor = [theme[@"backgroundTop"] colorWithAlphaComponent:0.24];
     _progressView.progressTintColor = theme[@"accent"];
+}
+
+@end
+
+// The Music player's 10-band equalizer (ISHAudioEqualizer): an on switch, a
+// preset menu and a vertical slider per band, +/-12 dB. Changes apply as the
+// sliders move.
+@implementation WorkspaceEqualizerToolViewController {
+    UISwitch *_enabledSwitch;
+    UIButton *_presetButton;
+    NSMutableArray<UISlider *> *_sliders;
+    NSMutableArray<UILabel *> *_gainLabels;
+}
+
+static NSString *ISHEqualizerFrequencyTitle(float hz) {
+    return hz >= 1000 ? [NSString stringWithFormat:@"%gk", hz / 1000] : [NSString stringWithFormat:@"%g", hz];
+}
+
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.title = @"Equalizer";
+    ISHAudioEqualizer *eq = ISHAudioEqualizer.shared;
+
+    UIView *card = [self workspaceThemeCardView];
+    [self.toolContentView addSubview:card];
+
+    UILabel *onLabel = [self workspaceThemePrimaryLabelWithTextStyle:UIFontTextStyleSubheadline monospaced:NO];
+    onLabel.text = @"Equalizer";
+    _enabledSwitch = [UISwitch new];
+    [_enabledSwitch addTarget:self action:@selector(enabledChanged) forControlEvents:UIControlEventValueChanged];
+    _presetButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    _presetButton.titleLabel.font = [UIFont preferredFontForTextStyle:UIFontTextStyleSubheadline];
+    [_presetButton addTarget:self action:@selector(presetTapped) forControlEvents:UIControlEventTouchUpInside];
+    UIView *spacer = [UIView new];
+    UIStackView *topRow = [[UIStackView alloc] initWithArrangedSubviews:@[onLabel, _enabledSwitch, spacer, _presetButton]];
+    topRow.axis = UILayoutConstraintAxisHorizontal;
+    topRow.spacing = 10;
+    topRow.alignment = UIStackViewAlignmentCenter;
+
+    UIStackView *bands = [UIStackView new];
+    bands.axis = UILayoutConstraintAxisHorizontal;
+    bands.distribution = UIStackViewDistributionFillEqually;
+    bands.spacing = 2;
+    _sliders = [NSMutableArray array];
+    _gainLabels = [NSMutableArray array];
+    NSArray<NSNumber *> *frequencies = eq.frequencies;
+    for (NSUInteger i = 0; i < frequencies.count; i++) {
+        UILabel *gain = [self workspaceThemeSecondaryLabelWithTextStyle:UIFontTextStyleCaption2 monospaced:YES];
+        gain.textAlignment = NSTextAlignmentCenter;
+        UILabel *freq = [self workspaceThemeSecondaryLabelWithTextStyle:UIFontTextStyleCaption2 monospaced:NO];
+        freq.textAlignment = NSTextAlignmentCenter;
+        freq.text = ISHEqualizerFrequencyTitle(frequencies[i].floatValue);
+        // A slider turned upright: laid out across its container's height.
+        UIView *track = [UIView new];
+        UISlider *slider = [UISlider new];
+        slider.minimumValue = -12;
+        slider.maximumValue = 12;
+        slider.tag = (NSInteger) i;
+        slider.translatesAutoresizingMaskIntoConstraints = NO;
+        slider.transform = CGAffineTransformMakeRotation(-M_PI_2);
+        [slider addTarget:self action:@selector(sliderChanged:) forControlEvents:UIControlEventValueChanged];
+        [track addSubview:slider];
+        [NSLayoutConstraint activateConstraints:@[
+            [slider.centerXAnchor constraintEqualToAnchor:track.centerXAnchor],
+            [slider.centerYAnchor constraintEqualToAnchor:track.centerYAnchor],
+            [slider.widthAnchor constraintEqualToAnchor:track.heightAnchor],
+        ]];
+        UIStackView *column = [[UIStackView alloc] initWithArrangedSubviews:@[gain, track, freq]];
+        column.axis = UILayoutConstraintAxisVertical;
+        column.spacing = 4;
+        [bands addArrangedSubview:column];
+        [_sliders addObject:slider];
+        [_gainLabels addObject:gain];
+    }
+
+    UIStackView *stack = [[UIStackView alloc] initWithArrangedSubviews:@[topRow, bands]];
+    stack.axis = UILayoutConstraintAxisVertical;
+    stack.spacing = 10;
+    stack.translatesAutoresizingMaskIntoConstraints = NO;
+    card.translatesAutoresizingMaskIntoConstraints = NO;
+    [card addSubview:stack];
+    [NSLayoutConstraint activateConstraints:@[
+        [card.topAnchor constraintEqualToAnchor:self.toolContentView.topAnchor constant:8],
+        [card.leadingAnchor constraintEqualToAnchor:self.toolContentView.leadingAnchor constant:8],
+        [card.trailingAnchor constraintEqualToAnchor:self.toolContentView.trailingAnchor constant:-8],
+        [card.bottomAnchor constraintEqualToAnchor:self.toolContentView.bottomAnchor constant:-8],
+        [stack.topAnchor constraintEqualToAnchor:card.topAnchor constant:10],
+        [stack.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:12],
+        [stack.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-12],
+        [stack.bottomAnchor constraintEqualToAnchor:card.bottomAnchor constant:-10],
+    ]];
+
+    [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(refresh)
+                                               name:ISHAudioEqualizerDidChangeNotification object:nil];
+    [self workspaceApplyTheme];
+    [self refresh];
+}
+
+- (void)dealloc {
+    [NSNotificationCenter.defaultCenter removeObserver:self];
+}
+
+- (void)refresh {
+    ISHAudioEqualizer *eq = ISHAudioEqualizer.shared;
+    _enabledSwitch.on = eq.enabled;
+    [_presetButton setTitle:[eq.currentPresetName stringByAppendingString:@" \u25BE"] forState:UIControlStateNormal];
+    for (NSUInteger i = 0; i < _sliders.count; i++) {
+        float gain = [eq gainForBand:i];
+        if (!_sliders[i].isTracking)
+            _sliders[i].value = gain;
+        _gainLabels[i].text = [NSString stringWithFormat:@"%+.0f", gain];
+        _sliders[i].enabled = eq.enabled;
+    }
+}
+
+- (void)enabledChanged {
+    ISHAudioEqualizer.shared.enabled = _enabledSwitch.on;
+}
+
+- (void)sliderChanged:(UISlider *)slider {
+    // Whole decibels: finer than a listener can place by thumb, and the labels
+    // stay honest.
+    [ISHAudioEqualizer.shared setGain:roundf(slider.value) forBand:(NSUInteger) slider.tag];
+}
+
+- (void)presetTapped {
+    ISHActionSheet *sheet = [ISHActionSheet actionSheetWithTitle:@"Preset" message:nil];
+    for (NSString *name in ISHAudioEqualizer.shared.presetNames) {
+        [sheet addActionWithTitle:name style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
+            [ISHAudioEqualizer.shared applyPreset:name];
+            if (!ISHAudioEqualizer.shared.enabled)
+                ISHAudioEqualizer.shared.enabled = YES;
+        }];
+    }
+    [sheet addActionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil];
+    [sheet presentFromViewController:self sourceView:_presetButton sourceRect:_presetButton.bounds];
 }
 
 @end

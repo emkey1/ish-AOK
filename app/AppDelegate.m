@@ -1924,6 +1924,7 @@ static void ISHWriteWorkspaceLaunchers(NSURL *binURL) {
     NSDictionary<NSString *, NSString *> *launchers = @{
         @"motepad": @"motepad", @"filemanager": @"filemanager", @"markdown": @"markdown",
         @"imageviewer": @"imageviewer", @"videoplayer": @"videoplayer", @"audio": @"audio",
+        @"music": @"audio", @"equalizer": @"equalizer", @"eq": @"equalizer",
         @"browser": @"browser", @"llm": @"llm", @"filesystems": @"filesystems",
         @"storage": @"storage", @"monitor": @"monitor", @"networks": @"networks",
         @"status": @"status", @"settings": @"settings", @"themes": @"themes",

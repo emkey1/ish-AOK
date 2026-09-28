@@ -78,6 +78,12 @@ An audio player applet with two kinds of sources:
 
 Playlists are saved as JSON under `/AOK/persist/playlists`.
 
+**Equalizer** (the Music menu's Equalizer…, the Workspace group in Utilities,
+the Launcher, or `ws-eq`) shapes what Music plays: ten bands from 31 Hz to
+16 kHz, ±12 dB each, an on/off switch and presets (Flat, Bass Boost, Treble
+Boost, Vocal, Loudness, Rock). Settings are kept and apply as the sliders move.
+Sound from guest programs does not pass through it.
+
 ## Video Player
 
 Plays a video opened from the File Manager (mp4, mov, m4v; mkv and webm open

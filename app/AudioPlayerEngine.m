@@ -68,6 +68,7 @@ static const double kInFlightSeconds = 6.0;
 @interface ISHAudioPlayerEngine ()
 @property (nonatomic, strong) AVAudioEngine *avEngine;
 @property (nonatomic, strong) AVAudioPlayerNode *playerNode;
+@property (nonatomic, strong) AVAudioUnitEQ *equalizerNode;
 @property (nonatomic, strong) dispatch_queue_t decodeQueue;
 @property (nonatomic, strong) dispatch_queue_t sessionQueue;  // serializes the blocking AVAudioSession calls off the main thread
 @property (nonatomic, strong, nullable) id<ISHPCMDecoder> decoder;
@@ -133,10 +134,26 @@ static const double kInFlightSeconds = 6.0;
         _avEngine = [[AVAudioEngine alloc] init];
         _playerNode = [[AVAudioPlayerNode alloc] init];
         [_avEngine attachNode:_playerNode];
+        // player -> equalizer -> mixer; the equalizer is bypassed when off.
+        NSArray<NSNumber *> *frequencies = ISHAudioEqualizer.shared.frequencies;
+        _equalizerNode = [[AVAudioUnitEQ alloc] initWithNumberOfBands:frequencies.count];
+        for (NSUInteger i = 0; i < frequencies.count; i++) {
+            AVAudioUnitEQFilterParameters *band = _equalizerNode.bands[i];
+            band.filterType = i == 0 ? AVAudioUnitEQFilterTypeLowShelf
+                : i + 1 == frequencies.count ? AVAudioUnitEQFilterTypeHighShelf
+                : AVAudioUnitEQFilterTypeParametric;
+            band.frequency = frequencies[i].floatValue;
+            band.bandwidth = 1.0f; // octaves
+            band.bypass = NO;
+        }
+        [_avEngine attachNode:_equalizerNode];
+        [self applyEqualizerSettings];
+        [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(applyEqualizerSettings)
+                                                   name:ISHAudioEqualizerDidChangeNotification object:nil];
         // Connect with a default format now; we reconnect per-track to the
         // decoder's processing format when a track loads.
         AVAudioFormat *defaultFormat = [_avEngine.mainMixerNode outputFormatForBus:0];
-        [_avEngine connect:_playerNode to:_avEngine.mainMixerNode format:defaultFormat];
+        [self connectPlayerWithFormat:defaultFormat];
         _avEngine.mainMixerNode.outputVolume = _volume;
 
         [self configureAudioSession];
@@ -464,7 +481,7 @@ static const double kInFlightSeconds = 6.0;
             self.currentNodeSampleRate = sampleRate;
             // Reconnect the player node to this track's processing format; the
             // mixer resamples to the output device.
-            [self.avEngine connect:self.playerNode to:self.avEngine.mainMixerNode format:decoder.processingFormat];
+            [self connectPlayerWithFormat:decoder.processingFormat];
             [self postNotification:ISHAudioPlayerTrackDidChangeNotification];
 
             dispatch_async(self.decodeQueue, ^{
@@ -653,6 +670,116 @@ bool ISHAudioKeepsAppAlive(void) {
 
 - (void)dealloc {
     [NSNotificationCenter.defaultCenter removeObserver:self];
+}
+
+
+- (void)connectPlayerWithFormat:(AVAudioFormat *)format {
+    [self.avEngine connect:self.playerNode to:self.equalizerNode format:format];
+    [self.avEngine connect:self.equalizerNode to:self.avEngine.mainMixerNode format:format];
+}
+
+- (void)applyEqualizerSettings {
+    ISHAudioEqualizer *settings = ISHAudioEqualizer.shared;
+    for (NSUInteger i = 0; i < self.equalizerNode.bands.count; i++)
+        self.equalizerNode.bands[i].gain = [settings gainForBand:i];
+    self.equalizerNode.bypass = !settings.enabled;
+}
+@end
+
+#pragma mark - Equalizer settings
+
+NSString *const ISHAudioEqualizerDidChangeNotification = @"ISHAudioEqualizerDidChangeNotification";
+static NSString *const kAudioEqualizerEnabledKey = @"ISHAudioEqualizerEnabled";
+static NSString *const kAudioEqualizerGainsKey = @"ISHAudioEqualizerGains";
+static NSString *const kAudioEqualizerPresetKey = @"ISHAudioEqualizerPreset";
+static const float kAudioEqualizerMaxGain = 12.0f;
+
+@implementation ISHAudioEqualizer {
+    NSMutableArray<NSNumber *> *_gains;
+    NSString *_currentPresetName;
+}
+
++ (instancetype)shared {
+    static ISHAudioEqualizer *shared;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        shared = [ISHAudioEqualizer new];
+    });
+    return shared;
+}
+
+// dB per band, 31 Hz to 16 kHz.
++ (NSDictionary<NSString *, NSArray<NSNumber *> *> *)presets {
+    return @{
+        @"Flat":         @[@0, @0, @0, @0, @0, @0, @0, @0, @0, @0],
+        @"Bass Boost":   @[@6, @5, @4, @2, @0, @0, @0, @0, @0, @0],
+        @"Treble Boost": @[@0, @0, @0, @0, @0, @1, @2, @4, @5, @6],
+        @"Vocal":        @[@-2, @-2, @-1, @1, @3, @4, @3, @1, @0, @-1],
+        @"Loudness":     @[@5, @4, @2, @0, @-1, @-1, @0, @2, @4, @5],
+        @"Rock":         @[@4, @3, @1, @-1, @-2, @-1, @1, @3, @4, @4],
+    };
+}
+
+- (instancetype)init {
+    self = [super init];
+    if (self != nil) {
+        NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+        _enabled = [defaults boolForKey:kAudioEqualizerEnabledKey];
+        NSArray *stored = [defaults arrayForKey:kAudioEqualizerGainsKey];
+        _gains = [NSMutableArray arrayWithCapacity:10];
+        for (NSUInteger i = 0; i < 10; i++) {
+            id value = i < stored.count ? stored[i] : nil;
+            _gains[i] = [value isKindOfClass:NSNumber.class] ? value : @0;
+        }
+        _currentPresetName = [defaults stringForKey:kAudioEqualizerPresetKey] ?: @"Flat";
+    }
+    return self;
+}
+
+- (NSArray<NSNumber *> *)frequencies {
+    return @[@31, @62, @125, @250, @500, @1000, @2000, @4000, @8000, @16000];
+}
+
+- (NSArray<NSString *> *)presetNames {
+    return @[@"Flat", @"Bass Boost", @"Treble Boost", @"Vocal", @"Loudness", @"Rock"];
+}
+
+- (NSString *)currentPresetName {
+    return _currentPresetName;
+}
+
+- (void)changed {
+    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+    [defaults setBool:_enabled forKey:kAudioEqualizerEnabledKey];
+    [defaults setObject:[_gains copy] forKey:kAudioEqualizerGainsKey];
+    [defaults setObject:_currentPresetName forKey:kAudioEqualizerPresetKey];
+    [NSNotificationCenter.defaultCenter postNotificationName:ISHAudioEqualizerDidChangeNotification object:self];
+}
+
+- (void)setEnabled:(BOOL)enabled {
+    _enabled = enabled;
+    [self changed];
+}
+
+- (float)gainForBand:(NSUInteger)band {
+    return band < _gains.count ? _gains[band].floatValue : 0.0f;
+}
+
+- (void)setGain:(float)gain forBand:(NSUInteger)band {
+    if (band >= _gains.count)
+        return;
+    _gains[band] = @(fmaxf(-kAudioEqualizerMaxGain, fminf(kAudioEqualizerMaxGain, gain)));
+    _currentPresetName = @"Custom";
+    [self changed];
+}
+
+- (void)applyPreset:(NSString *)name {
+    NSArray<NSNumber *> *gains = ISHAudioEqualizer.presets[name];
+    if (gains == nil)
+        return;
+    [_gains setArray:gains];
+    _currentPresetName = name;
+    [self changed];
 }
 
 @end

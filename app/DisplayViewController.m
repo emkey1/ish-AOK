@@ -106,6 +106,15 @@ static NSArray<NSString *> *DisplayRootCommand(void) {
              [NSString stringWithFormat:@"%@exec sh /AOK/tools/start-wayland.sh", prefix]];
 }
 
+// The account a new session runs as: the default user's when "Login As
+// Default User" is on and the root has one, else nil (root).
+static NSString *_Nullable DisplayWantedSessionAccount(void) {
+    if (!UserPreferences.shared.shouldLoginAsDefaultUser)
+        return nil;
+    NSString *accountName = [AppDelegate defaultUserAccountName];
+    return accountName.length > 0 ? accountName : nil;
+}
+
 static NSArray<NSString *> *DisplayGuestSessionCommand(void) {
     if (!UserPreferences.shared.shouldLoginAsDefaultUser)
         return DisplayRootCommand();
@@ -198,6 +207,8 @@ typedef NS_ENUM(NSInteger, DisplayConnectionState) {
     // the whole guest Wayland stack down.
     Terminal *_Nullable _sessionTerminal;
     int _sessionPid; // the currently active session's pid, 0 if none
+    NSString *_Nullable _sessionAccount; // who it runs as; nil for root
+    BOOL _askedAboutSessionAccount;      // the restart offer is up
 
     // The image the user asked to be rid of, held until there is a running
     // session to show for it (see ISHSessionConsumeResumedImage).
@@ -354,6 +365,16 @@ typedef NS_ENUM(NSInteger, DisplayConnectionState) {
                                             selector:@selector(guestProcessExited:)
                                                 name:ProcessExitedNotification
                                               object:nil];
+
+    // "Login As Default User" changed while a session runs as the other user:
+    // everything started in the desktop inherits the session's user, so offer
+    // to restart it as the right one.
+    [UserPreferences.shared observe:@[@"shouldLoginAsDefaultUser"]
+                            options:0 owner:self usingBlock:^(typeof(self) self) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self offerRestartIfSessionAccountChanged];
+        });
+    }];
 
     if (self.standaloneMode) {
         // Force -displayView's lazy creation now so its top-constraint pair
@@ -664,6 +685,7 @@ typedef NS_ENUM(NSInteger, DisplayConnectionState) {
 // ends while parked. Main thread only.
 static Terminal *_Nullable DisplayParkedTerminal;
 static int DisplayParkedPid;
+static NSString *_Nullable DisplayParkedAccount;
 static id _Nullable DisplayParkedObserver;
 
 static void DisplayClearParkedSession(void) {
@@ -672,12 +694,14 @@ static void DisplayClearParkedSession(void) {
     DisplayParkedObserver = nil;
     DisplayParkedTerminal = nil;
     DisplayParkedPid = 0;
+    DisplayParkedAccount = nil;
 }
 
-static void DisplayParkSession(Terminal *terminal, int pid) {
+static void DisplayParkSession(Terminal *terminal, int pid, NSString *_Nullable account) {
     DisplayClearParkedSession();
     DisplayParkedTerminal = terminal;
     DisplayParkedPid = pid;
+    DisplayParkedAccount = account;
     DisplayParkedObserver = [NSNotificationCenter.defaultCenter
         addObserverForName:ProcessExitedNotification object:nil queue:NSOperationQueue.mainQueue
                 usingBlock:^(NSNotification *note) {
@@ -696,7 +720,7 @@ static void DisplayParkSession(Terminal *terminal, int pid) {
     _rfbClient = nil;
     _rfbClientConnected = NO;
     _displayView.rfbClient = nil;
-    DisplayParkSession(_sessionTerminal, _sessionPid);
+    DisplayParkSession(_sessionTerminal, _sessionPid, _sessionAccount);
     _sessionTerminal = nil;
     _sessionPid = 0;
     _state = DisplayConnectionStateIdle;
@@ -710,6 +734,7 @@ static void DisplayParkSession(Terminal *terminal, int pid) {
     if (DisplayParkedPid != 0 && DisplayParkedTerminal != nil) {
         _sessionTerminal = DisplayParkedTerminal;
         _sessionPid = DisplayParkedPid;
+        _sessionAccount = DisplayParkedAccount;
         DisplayClearParkedSession();
         _reconnectButton.hidden = YES;
         _state = DisplayConnectionStateWaitingForReady;
@@ -791,6 +816,7 @@ static void DisplayParkSession(Terminal *terminal, int pid) {
     tty_release(tty);
 
     NSArray<NSString *> *command = DisplayGuestSessionCommand();
+    _sessionAccount = DisplayWantedSessionAccount();
     char argv[4096];
     [Terminal convertCommand:command toArgs:argv limitSize:sizeof(argv)];
     const char *envp = "PATH=/AOK/persist/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\0"
@@ -802,6 +828,7 @@ static void DisplayParkSession(Terminal *terminal, int pid) {
         // running as root rather than failing the whole session over a
         // preference that's a nice-to-have, not a hard requirement.
         command = DisplayRootCommand();
+        _sessionAccount = nil;
         [Terminal convertCommand:command toArgs:argv limitSize:sizeof(argv)];
         err = do_execve(command[0].UTF8String, command.count, argv, envp);
     }
@@ -947,6 +974,42 @@ static void DisplayParkSession(Terminal *terminal, int pid) {
         if (diedDuringStartup)
             [strongSelf showStartupExitReason];
     });
+}
+
+- (void)offerRestartIfSessionAccountChanged {
+    if (_sessionPid == 0 || _askedAboutSessionAccount || self.view.window == nil ||
+            self.presentedViewController != nil)
+        return;
+    NSString *wanted = DisplayWantedSessionAccount();
+    NSString *running = _sessionAccount;
+    if ((wanted == nil && running == nil) || [wanted isEqualToString:running])
+        return;
+    _askedAboutSessionAccount = YES;
+    NSString *message = [NSString stringWithFormat:
+        @"The Wayland session is running as %@, so programs started in it run as %@ too. "
+        @"\u201cLogin As Default User\u201d now asks for %@. Restarting the session closes "
+        @"everything open in it.",
+        running ?: @"root", running ?: @"root", wanted ?: @"root"];
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Restart the Wayland Session?"
+                                                                   message:message
+                                                            preferredStyle:UIAlertControllerStyleAlert];
+    __weak typeof(self) weakSelf = self;
+    [alert addAction:[UIAlertAction actionWithTitle:@"Not Now" style:UIAlertActionStyleCancel
+                                            handler:^(__unused UIAlertAction *action) {
+        typeof(self) strongSelf = weakSelf;
+        if (strongSelf != nil)
+            strongSelf->_askedAboutSessionAccount = NO;
+    }]];
+    [alert addAction:[UIAlertAction actionWithTitle:[NSString stringWithFormat:@"Restart as %@", wanted ?: @"root"]
+                                              style:UIAlertActionStyleDefault
+                                            handler:^(__unused UIAlertAction *action) {
+        typeof(self) strongSelf = weakSelf;
+        if (strongSelf == nil)
+            return;
+        strongSelf->_askedAboutSessionAccount = NO;
+        [strongSelf reconnect:nil];
+    }]];
+    [self presentViewController:alert animated:YES completion:nil];
 }
 
 - (void)showStartupExitReason {
@@ -1288,6 +1351,7 @@ static NSString *const DisplayWorkspaceAttachNoticeHiddenKey = @"DisplayWorkspac
     if (client != _rfbClient)
         return;
     self.displayView.rfbClient = client;
+    [self offerRestartIfSessionAccountChanged];
     // With the GPU compositor, wl-present (start-wayland.sh) sends the
     // desktop's frames straight here; VNC then carries only input.
     [self.displayView startDirectFramesForDisplay:_rfbGuestPort];

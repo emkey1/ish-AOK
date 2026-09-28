@@ -95,6 +95,28 @@ extern NSString *const ISHAudioPlayerQueueDidChangeNotification;   // queue cont
 
 @end
 
+// The Music player's 10-band graphic equalizer (an AVAudioUnitEQ between the
+// player and the mixer; guest audio does not pass through it). Settings
+// persist and apply at once. Main thread.
+extern NSString *const ISHAudioEqualizerDidChangeNotification;
+
+@interface ISHAudioEqualizer : NSObject
+
++ (instancetype)shared;
+
+// Band centres in Hz: 31 Hz to 16 kHz, an octave apart.
+@property (nonatomic, readonly) NSArray<NSNumber *> *frequencies;
+@property (nonatomic) BOOL enabled;
+// Gain in dB, clamped to +/-12. Editing a band makes the preset "Custom".
+- (float)gainForBand:(NSUInteger)band;
+- (void)setGain:(float)gain forBand:(NSUInteger)band;
+
+@property (nonatomic, readonly) NSArray<NSString *> *presetNames;
+@property (nonatomic, readonly) NSString *currentPresetName;
+- (void)applyPreset:(NSString *)name;
+
+@end
+
 // True while the engine is playing, which is what keeps iSH-AOK running in the
 // background (the audio background mode). The suspension guard in AppDelegate.m
 // uses it, like ISHLocationKeepsAppAlive, to tell "still running" from "about to
