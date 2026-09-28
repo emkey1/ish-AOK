@@ -245,6 +245,24 @@ default for every OpenGL program from its next session, and `--gl-software`
 puts it back. riscv64 and i386 guests have no Vulkan driver for the device and
 stay in software.
 
+### Games
+
+One script installs Freedoom (the free Doom, Phases 1 and 2, on Chocolate
+Doom) and Beneath a Steel Sky (the freeware ScummVM adventure), and sets each
+up to play sound through the app and to draw on the GPU where the GPU can
+(Devuan roots):
+
+```
+sudo sh /AOK/tools/setup-games.sh          # --software keeps them off the GPU
+sh /AOK/tools/setup-games.sh --check
+```
+
+Start them from the desktop's menu, or as `freedoom1`, `freedoom2` and `sky`
+in a terminal there. Each goes through `/usr/local/bin/aok-sdl-game`, and
+`/etc/aok-games.conf` lists the ones that draw on the GPU. On an A10X or older
+iPad everything draws in software: Beneath a Steel Sky plays well, Doom runs
+below full speed.
+
 You may also come across `docs/historical/wayland_workspace_plan.md` in the project's design
 docs. That is the forward design document this applet came out of; where it and
 the shipped applet disagree, the applet is right.

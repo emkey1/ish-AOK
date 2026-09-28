@@ -1,0 +1,38 @@
+#!/bin/sh
+# aok-sdl-game -- start an SDL game from /usr/games the way it works best
+# under iSH-AOK. Installed by /AOK/tools/setup-games.sh as
+# /usr/local/bin/aok-sdl-game, with a symlink per game (/usr/local/bin/sky,
+# /usr/local/bin/freedoom1, ...) that PATH finds before /usr/games.
+#
+#   - sound through the app's /dev/dsp (SDL's OSS driver)
+#   - the Wayland desktop, when there is one
+#   - OpenGL on the GPU (zink) for the games named in /etc/aok-games.conf's
+#     AOK_GAMES_GPU, in software for the rest: zink gives only OpenGL 2.1 /
+#     ES 2.0, and older GPUs (A10X) cannot run it at all
+#
+# Any variable already set when the game starts wins.
+name=${0##*/}
+if [ "$name" = aok-sdl-game ]; then
+    echo "aok-sdl-game: run it through a game's symlink (see /AOK/tools/setup-games.sh)" >&2
+    exit 2
+fi
+
+AOK_GAMES_GPU=
+[ -r /etc/aok-games.conf ] && . /etc/aok-games.conf
+
+[ -w /dev/dsp ] && export SDL_AUDIODRIVER="${SDL_AUDIODRIVER:-dsp}"
+[ -n "${WAYLAND_DISPLAY:-}" ] && export SDL_VIDEODRIVER="${SDL_VIDEODRIVER:-wayland}"
+
+case " $AOK_GAMES_GPU " in
+    *" $name "*)
+        export LIBGL_ALWAYS_SOFTWARE="${LIBGL_ALWAYS_SOFTWARE:-0}"
+        export MESA_LOADER_DRIVER_OVERRIDE="${MESA_LOADER_DRIVER_OVERRIDE:-zink}"
+        ;;
+    *)
+        export LIBGL_ALWAYS_SOFTWARE="${LIBGL_ALWAYS_SOFTWARE:-1}"
+        export SDL_RENDER_DRIVER="${SDL_RENDER_DRIVER:-software}"
+        [ "$LIBGL_ALWAYS_SOFTWARE" = 1 ] && unset MESA_LOADER_DRIVER_OVERRIDE
+        ;;
+esac
+
+exec "/usr/games/$name" "$@"
