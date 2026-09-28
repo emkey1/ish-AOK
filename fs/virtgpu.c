@@ -1233,7 +1233,7 @@ static int vgpu_open(int major, int minor, struct fd *fd) {
 static lock_t present_lock = LOCK_INITIALIZER;
 static struct present_hook {
     uint32_t display;
-    virtgpu_present_fn fn;  // NULL: a free slot
+    const struct virtgpu_present_ops *ops;  // NULL: a free slot
     void *ctx;
 } present_hooks[PRESENT_HOOKS];
 
@@ -1242,7 +1242,7 @@ static struct present_hook *present_hook_find(uint32_t display) {
     struct present_hook *any = NULL;
     for (int i = 0; i < PRESENT_HOOKS; i++) {
         struct present_hook *h = &present_hooks[i];
-        if (h->fn == NULL)
+        if (h->ops == NULL)
             continue;
         if (h->display == display)
             return h;
@@ -1252,20 +1252,20 @@ static struct present_hook *present_hook_find(uint32_t display) {
     return any;
 }
 
-void virtgpu_set_present_hook(uint32_t display, virtgpu_present_fn fn, void *ctx) {
+void virtgpu_set_present_hook(uint32_t display, const struct virtgpu_present_ops *ops, void *ctx) {
     lock(&present_lock, 0);
     struct present_hook *slot = NULL;
     for (int i = 0; i < PRESENT_HOOKS; i++) {
         struct present_hook *h = &present_hooks[i];
-        if (h->fn != NULL && h->display == display) {
+        if (h->ops != NULL && h->display == display) {
             slot = h;
             break;
         }
-        if (h->fn == NULL && slot == NULL)
+        if (h->ops == NULL && slot == NULL)
             slot = h;
     }
     if (slot != NULL)
-        *slot = (struct present_hook) {.display = display, .fn = fn, .ctx = ctx};
+        *slot = (struct present_hook) {.display = display, .ops = ops, .ctx = ctx};
     unlock(&present_lock);
 }
 
@@ -1273,7 +1273,7 @@ void virtgpu_clear_present_hook(uint32_t display, void *ctx) {
     lock(&present_lock, 0);
     for (int i = 0; i < PRESENT_HOOKS; i++) {
         struct present_hook *h = &present_hooks[i];
-        if (h->fn != NULL && h->display == display && h->ctx == ctx)
+        if (h->ops != NULL && h->display == display && h->ctx == ctx)
             *h = (struct present_hook) {0};
     }
     unlock(&present_lock);
@@ -1283,7 +1283,7 @@ static void presenter_gone(uint32_t display) {
     lock(&present_lock, 0);
     struct present_hook *h = present_hook_find(display);
     if (h != NULL)
-        h->fn(NULL, h->ctx);
+        h->ops->frame(NULL, h->ctx);
     unlock(&present_lock);
 }
 
@@ -1344,10 +1344,139 @@ int virtgpu_present_fd(int buf_fd, uint32_t display, uint32_t width, uint32_t he
             .width = width, .height = height, .stride = stride, .format = format,
             .damage_x = dx, .damage_y = dy, .damage_width = dw, .damage_height = dh,
         };
-        shown = hook->fn(&frame, hook->ctx) == 0 ? 0 : 1;
+        shown = hook->ops->frame(&frame, hook->ctx) == 0 ? 0 : 1;
     }
     unlock(&present_lock);
     return shown;
+}
+
+void virtgpu_presenter_clipboard(uint32_t display, const char *text, size_t len) {
+    lock(&present_lock, 0);
+    struct present_hook *hook = present_hook_find(display);
+    if (hook != NULL && hook->ops->clipboard != NULL)
+        hook->ops->clipboard(text, len, hook->ctx);
+    unlock(&present_lock);
+}
+
+// ---- input from the app (fs/virtgpu.h) ---------------------------------------
+
+// The queue behind a presenter's input descriptor. input_lock guards the list
+// and every queue; the app appends from its own threads, the presenter reads.
+#define INPUT_QUEUE_MAX (4u << 20)
+struct vgpu_input {
+    struct fd *fd;
+    uint32_t display;
+    char *buf;
+    size_t len, cap;
+    struct list link;       // vgpu_inputs
+};
+static lock_t input_lock = LOCK_INITIALIZER;
+static struct list vgpu_inputs = {&vgpu_inputs, &vgpu_inputs};
+
+static ssize_t input_read(struct fd *fd, void *buf, size_t size) {
+    struct vgpu_input *in = fd->data;
+    lock(&input_lock, 0);
+    size_t n = in->len < size ? in->len : size;
+    if (n == 0) {
+        unlock(&input_lock);
+        return _EAGAIN;
+    }
+    memcpy(buf, in->buf, n);
+    memmove(in->buf, in->buf + n, in->len - n);
+    in->len -= n;
+    unlock(&input_lock);
+    return (ssize_t) n;
+}
+
+static int input_poll(struct fd *fd) {
+    struct vgpu_input *in = fd->data;
+    lock(&input_lock, 0);
+    bool ready = in->len > 0;
+    unlock(&input_lock);
+    return ready ? POLL_READ : 0;
+}
+
+static int input_close(struct fd *fd) {
+    struct vgpu_input *in = fd->data;
+    lock(&input_lock, 0);
+    list_remove(&in->link);
+    unlock(&input_lock);
+    free(in->buf);
+    free(in);
+    return 0;
+}
+
+static const struct fd_ops vgpu_input_ops = {
+    .name = "aok-input",
+    .anon_inode_class = "aok-input",
+    .read = input_read,
+    .poll = input_poll,
+    .close = input_close,
+};
+
+int virtgpu_presenter_input(uint32_t display) {
+    struct vgpu_input *in = calloc(1, sizeof(*in));
+    struct fd *fd = in != NULL ? adhoc_fd_create(&vgpu_input_ops) : NULL;
+    if (fd == NULL) {
+        free(in);
+        return _ENOMEM;
+    }
+    in->fd = fd;
+    in->display = display;
+    fd->data = in;
+    fd->flags = O_RDONLY_ | O_NONBLOCK_;
+    lock(&input_lock, 0);
+    // The newest presenter for a display takes its input.
+    list_add(&vgpu_inputs, &in->link);
+    unlock(&input_lock);
+    return f_install(fd, O_CLOEXEC_);
+}
+
+int virtgpu_present_input(uint32_t display, uint32_t type, uint32_t a, uint32_t b,
+                          const void *data, uint32_t len) {
+    struct virtgpu_input_event ev = {.type = type, .a = a, .b = b, .len = len};
+    size_t need = sizeof(ev) + len;
+    lock(&input_lock, 0);
+    struct vgpu_input *in = NULL, *it;
+    list_for_each_entry(&vgpu_inputs, it, link) {
+        if (it->display == display) {
+            in = it;
+            break;
+        }
+    }
+    struct fd *fd = in != NULL ? fd_retain_if_live(in->fd) : NULL;
+    if (fd == NULL) {
+        unlock(&input_lock);
+        return _ENOENT;
+    }
+    int err = 0;
+    if (in->len + need > INPUT_QUEUE_MAX) {
+        err = _EAGAIN;
+    } else {
+        if (in->len + need > in->cap) {
+            size_t cap = in->cap != 0 ? in->cap : 4096;
+            while (cap < in->len + need)
+                cap *= 2;
+            char *grown = realloc(in->buf, cap);
+            if (grown == NULL)
+                err = _ENOMEM;
+            else {
+                in->buf = grown;
+                in->cap = cap;
+            }
+        }
+        if (err == 0) {
+            memcpy(in->buf + in->len, &ev, sizeof(ev));
+            if (len > 0)
+                memcpy(in->buf + in->len + sizeof(ev), data, len);
+            in->len += need;
+        }
+    }
+    unlock(&input_lock);
+    if (err == 0)
+        poll_wakeup(fd, POLL_READ);
+    fd_close(fd);
+    return err;
 }
 
 struct dev_ops virtgpu_dev = {
@@ -1367,10 +1496,25 @@ bool virtgpu_available(void) {
     return false;
 }
 
-void virtgpu_set_present_hook(uint32_t display, virtgpu_present_fn fn, void *ctx) {
+void virtgpu_set_present_hook(uint32_t display, const struct virtgpu_present_ops *ops, void *ctx) {
     (void) display;
-    (void) fn;
+    (void) ops;
     (void) ctx;
+}
+
+int virtgpu_present_input(uint32_t display, uint32_t type, uint32_t a, uint32_t b,
+                          const void *data, uint32_t len) {
+    (void) display; (void) type; (void) a; (void) b; (void) data; (void) len;
+    return _ENOENT;
+}
+
+int virtgpu_presenter_input(uint32_t display) {
+    (void) display;
+    return _ENODEV;
+}
+
+void virtgpu_presenter_clipboard(uint32_t display, const char *text, size_t len) {
+    (void) display; (void) text; (void) len;
 }
 
 void virtgpu_clear_present_hook(uint32_t display, void *ctx) {

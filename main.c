@@ -5,6 +5,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <termios.h>
+#include <time.h>
 #include <sys/ioctl.h>
 #include <pthread.h>
 
@@ -544,10 +545,13 @@ static struct tty *cli_pty_open_session(void) {
 // ISH_PRESENT_DUMP=<file>: a stand-in for the app's viewer of wl-present's
 // frames (fs/virtgpu.h), for testing that path from the command line. Counts
 // frames and damaged pixels on stderr every 100 frames, and writes the frame
-// it has as a PPM at the first frame and every 100th.
+// it has as a PPM at the first frame, when the size changes, and otherwise at
+// most once a second.
 static int cli_present_frame(const struct virtgpu_frame *f, void *ctx) {
     static unsigned long frames;
     static unsigned long long damaged;
+    static uint32_t last_width, last_height;
+    static time_t last_dump;
     const char *path = ctx;
     if (f == NULL) {
         fprintf(stderr, "present: presenter gone after %lu frames\n", frames);
@@ -555,7 +559,11 @@ static int cli_present_frame(const struct virtgpu_frame *f, void *ctx) {
     }
     frames++;
     damaged += (unsigned long long) f->damage_width * (unsigned long long) f->damage_height;
-    if (frames % 100 == 1) {
+    time_t now = time(NULL);
+    if (frames == 1 || f->width != last_width || f->height != last_height || now != last_dump) {
+        last_width = f->width;
+        last_height = f->height;
+        last_dump = now;
         FILE *out = fopen(path, "wb");
         if (out != NULL) {
             fprintf(out, "P6\n%u %u\n255\n", f->width, f->height);
@@ -575,9 +583,61 @@ static int cli_present_frame(const struct virtgpu_frame *f, void *ctx) {
     return 0;
 }
 
+static void cli_present_clipboard(const char *text, size_t len, void *ctx) {
+    (void) ctx;
+    fprintf(stderr, "present: clipboard, %zu bytes: %.*s\n", len, (int) (len > 200 ? 200 : len), text);
+}
+
+static const struct virtgpu_present_ops cli_present_ops = {
+    .frame = cli_present_frame,
+    .clipboard = cli_present_clipboard,
+};
+
+// ISH_PRESENT_INPUT=<fifo>, with ISH_PRESENT_DISPLAY=<the desktop's VNC
+// port>: the app's input to wl-present, from the command line. One event a
+// line: `ptr X Y MASK`, `key KEYSYM 1|0`, `type TEXT` (each character down and
+// up), `clip TEXT`, `resize W H`.
+static void *cli_present_input(void *arg) {
+    const char *path = arg;
+    const char *d = getenv("ISH_PRESENT_DISPLAY");
+    uint32_t display = d != NULL ? (uint32_t) strtoul(d, NULL, 10) : 5901;
+    char line[4096];
+    for (;;) {
+        FILE *in = fopen(path, "r");
+        if (in == NULL)
+            return NULL;
+        while (fgets(line, sizeof(line), in) != NULL) {
+            line[strcspn(line, "\n")] = '\0';
+            unsigned long a = 0, b = 0, c = 0;
+            int err = 0;
+            if (sscanf(line, "ptr %lu %lu %lu", &a, &b, &c) == 3)
+                err = virtgpu_present_input(display, VIRTGPU_INPUT_POINTER, (uint32_t) (a | b << 16), (uint32_t) c, NULL, 0);
+            else if (sscanf(line, "key %li %lu", (long *) &a, &b) == 2)
+                err = virtgpu_present_input(display, VIRTGPU_INPUT_KEY, (uint32_t) a, (uint32_t) b, NULL, 0);
+            else if (sscanf(line, "resize %lu %lu", &a, &b) == 2)
+                err = virtgpu_present_input(display, VIRTGPU_INPUT_RESIZE, (uint32_t) a, (uint32_t) b, NULL, 0);
+            else if (strncmp(line, "clip ", 5) == 0)
+                err = virtgpu_present_input(display, VIRTGPU_INPUT_CLIPBOARD, 0, 0, line + 5, (uint32_t) strlen(line + 5));
+            else if (strncmp(line, "type ", 5) == 0)
+                for (const char *p = line + 5; *p != '\0' && err == 0; p++) {
+                    err = virtgpu_present_input(display, VIRTGPU_INPUT_KEY, (uint8_t) *p, 1, NULL, 0);
+                    if (err == 0)
+                        err = virtgpu_present_input(display, VIRTGPU_INPUT_KEY, (uint8_t) *p, 0, NULL, 0);
+                }
+            fprintf(stderr, "present: input '%s': %d\n", line, err);
+        }
+        fclose(in);
+    }
+}
+
 int main(int argc, char *const argv[]) {
     if (getenv("ISH_PRESENT_DUMP") != NULL)
-        virtgpu_set_present_hook(0, cli_present_frame, getenv("ISH_PRESENT_DUMP"));
+        virtgpu_set_present_hook(0, &cli_present_ops, getenv("ISH_PRESENT_DUMP"));
+    if (getenv("ISH_PRESENT_INPUT") != NULL) {
+        pthread_t thread;
+        if (pthread_create(&thread, NULL, cli_present_input, getenv("ISH_PRESENT_INPUT")) == 0)
+            pthread_detach(thread);
+    }
     // The system's memory-pressure source, which outranks our own per-process
     // headroom arithmetic; see host_mem_pressure_start() in platform/darwin.c.
     host_mem_pressure_start();

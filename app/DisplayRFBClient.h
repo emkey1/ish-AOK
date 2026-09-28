@@ -83,6 +83,9 @@ NS_ASSUME_NONNULL_BEGIN
 
 #pragma mark - Input
 
+// Input, the clipboard and desktop resizes go to wl-present instead of VNC
+// whenever it takes them for this desktop (virtgpu_present_input,
+// fs/virtgpu.h): it drives the compositor itself, so wayvnc can let go of it.
 - (void)sendPointerEventAtX:(uint16_t)x y:(uint16_t)y buttonMask:(uint8_t)buttonMask;
 - (void)sendKeyEvent:(uint32_t)keysym down:(BOOL)down;
 - (void)sendCtrlAltDel;
@@ -104,6 +107,10 @@ NS_ASSUME_NONNULL_BEGIN
 // with wayvnc 0.10.0). Only the latest size asked for is kept, and after a
 // "prohibited" answer none are sent.
 - (void)requestDesktopSizeWidth:(uint16_t)width height:(uint16_t)height;
+
+// The desktop's clipboard, arriving some other way than VNC (wl-present):
+// told to the delegate as if the server had sent it. Any thread.
+- (void)deliverServerCutText:(NSString *)text;
 
 @end
 

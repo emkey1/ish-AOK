@@ -204,9 +204,10 @@ falls back to drawing in software, as it always has; `ISH_DISPLAY_GPU=0`
 keeps it in software from the start.
 
 On the GPU the app also takes the desktop's frames straight from the
-compositor, up to 60 a second, rather than through the VNC connection, which
-then carries only the keyboard, pointer and clipboard. `ISH_DISPLAY_DIRECT=0`
-leaves the frames to VNC too.
+compositor, up to 60 a second, and sends it the keyboard, pointer, clipboard
+and window size the same way, so the VNC server has nothing to do and stops
+copying the screen. `ISH_DISPLAY_DIRECT=0` leaves all of that to VNC, as
+before.
 
 OpenGL programs still render in software by default. They can use the GPU
 through zink with `MESA_LOADER_DRIVER_OVERRIDE=zink`, but on this GPU zink

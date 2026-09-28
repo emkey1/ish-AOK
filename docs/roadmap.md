@@ -670,10 +670,24 @@ whatever this becomes, like any other program.
   Pausing requests does not stop wayvnc: it screen-copies for as long as a
   client is connected, requests or not. Detached it costs nothing and the
   connection stays up, but it then carries no input, clipboard or resize
-  either -- so that is the next step (docs/TODO.md). labwc's extra 3-4% is
-  the second copy per frame at twice the rate.
-- **Next:** input, clipboard and resize through wl-present, so wayvnc can
-  detach while the app shows frames. Gaps in the device, for later: no GUEST blobs or DRM syncobjs (Mesa needs
+  either. labwc's extra 3-4% is the second copy per frame at twice the rate.
+- **Step 5c, third part (2026-09-28): VNC out of the way.** wl-present now
+  carries the app's side too, from a kernel queue the app writes
+  (virtgpu_present_input: RFB's pointer and key events, the clipboard as
+  UTF-8, desktop sizes): the compositor's virtual pointer and keyboard (a us
+  keymap, as wayvnc uses, with the modifier state sent explicitly, since
+  wlroots' virtual keyboard does not work it out), wlr-data-control both
+  ways, and wlr-output-management custom modes. The app sends there
+  whenever the queue exists, VNC otherwise. Once the app shows frames,
+  wl-present prints `detach` and start-wayland.sh runs `wayvncctl detach`;
+  when wl-present ends, however it ends, wayvnc is attached again and the
+  app, whose VNC connection stayed up, takes its pixels from it. Checked in
+  the Mac CLI with `ISH_PRESENT_INPUT` (main.c): typed text with shifted
+  characters, a click opening labwc's root menu at the pointer, the
+  clipboard both ways, a resize to 1000x700. On the M4, vkcube, fresh boot:
+  34-36 busy ticks/s detached, 38 after killing wl-present (wayvnc back at
+  17.7%, frames up to 30 fps again).
+- **Next:** gaps in the device, for later: no GUEST blobs or DRM syncobjs (Mesa needs
   neither), one lock around all renderer calls, and no checkpoint support for an
   open node or its fences.
 

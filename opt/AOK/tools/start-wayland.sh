@@ -1412,13 +1412,24 @@ while true; do
 done
 
 # On the GPU, wl-present (compiled into iSH-AOK) hands each frame the
-# compositor draws straight to the app, which then asks wayvnc for no pixels:
-# VNC carries only input, and nothing copies or encodes frames on the CPU.
-# Without it, or with a software compositor (whose buffers the app cannot
-# take), the app shows wayvnc's pixels as before.
+# compositor draws straight to the app, and takes the app's pointer, keyboard,
+# clipboard and resizes to the compositor itself. Once the app is showing its
+# frames it prints "detach": wayvnc, which otherwise screen-copies for as long
+# as the app is connected, lets go of the compositor, and nothing copies or
+# encodes frames on the CPU. It prints "attach" as it ends, and wayvnc is
+# attached again however it ends, so the app's VNC connection -- kept up
+# throughout -- can take over. Without it, or with a software compositor
+# (whose buffers the app cannot take), the app uses wayvnc as before.
 if [ "$WL_GPU_COMPOSITOR" = 1 ] && [ "${ISH_DISPLAY_DIRECT:-1}" != 0 ] && [ -x /AOK/native/wl-present ]; then
     log "presenting the desktop to the app directly"
-    spawn_logged wl-present env WAYVNC_PORT="$WAYVNC_PORT" /AOK/native/wl-present
+    spawn_logged wl-present env WAYVNC_PORT="$WAYVNC_PORT" sh -c '
+        /AOK/native/wl-present | while read -r cmd; do
+            case "$cmd" in
+                detach) wayvncctl detach ;;
+                attach) wayvncctl attach "$WAYLAND_DISPLAY" ;;
+            esac >/dev/null 2>&1
+        done
+        wayvncctl attach "$WAYLAND_DISPLAY" >/dev/null 2>&1'
     PRESENT_PID=$SPAWN_PID
 fi
 

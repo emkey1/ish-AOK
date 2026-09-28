@@ -98,6 +98,12 @@ NS_ASSUME_NONNULL_BEGIN
     return YES;
 }
 
+- (void)clipboardText:(NSString *)text {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self.view.rfbClient deliverServerCutText:text];
+    });
+}
+
 - (void)presenterGone {
     @synchronized (self) {
         _texture = nil;
@@ -123,6 +129,20 @@ static int display_direct_frame(const struct virtgpu_frame *frame, void *ctx) {
         return [sink presentFrame:frame] ? 0 : 1;
     }
 }
+
+static void display_direct_clipboard(const char *text, size_t len, void *ctx) {
+    DisplayDirectFrames *sink = (__bridge DisplayDirectFrames *) ctx;
+    @autoreleasepool {
+        NSString *string = [[NSString alloc] initWithBytes:text length:len encoding:NSUTF8StringEncoding];
+        if (string != nil)
+            [sink clipboardText:string];
+    }
+}
+
+static const struct virtgpu_present_ops display_direct_ops = {
+    .frame = display_direct_frame,
+    .clipboard = display_direct_clipboard,
+};
 
 @interface DisplayRFBView () <MTKViewDelegate, UIKeyInput>
 @end
@@ -326,7 +346,7 @@ static int display_direct_frame(const struct virtgpu_frame *frame, void *ctx) {
     atomic_init(&sink->_visible, self.window != nil && UIApplication.sharedApplication.applicationState != UIApplicationStateBackground);
     sink.view = self;
     _direct = sink;
-    virtgpu_set_present_hook(display, display_direct_frame, (__bridge_retained void *) sink);
+    virtgpu_set_present_hook(display, &display_direct_ops, (__bridge_retained void *) sink);
     [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(directVisibilityChanged:)
                                                name:UIApplicationDidEnterBackgroundNotification object:nil];
     [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(directVisibilityChanged:)

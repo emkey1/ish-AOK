@@ -1,5 +1,6 @@
 #import "DisplayRFBClient.h"
 #import <Network/Network.h>
+#include "fs/virtgpu.h"
 
 NS_ASSUME_NONNULL_BEGIN
 
@@ -906,6 +907,9 @@ static inline void rfb_write_u32(uint8_t *p, uint32_t hostValue) {
 }
 
 - (void)requestDesktopSizeWidth:(uint16_t)width height:(uint16_t)height {
+    if (width != 0 && height != 0 &&
+            virtgpu_present_input(_guestPort, VIRTGPU_INPUT_RESIZE, width, height, NULL, 0) == 0)
+        return;
     dispatch_async(_queue, ^{
         if (width == 0 || height == 0)
             return;
@@ -1000,6 +1004,16 @@ static inline void rfb_write_u32(uint8_t *p, uint32_t hostValue) {
                         NW_CONNECTION_DEFAULT_STREAM_CONTEXT, false, ^(nw_error_t _Nullable sendError) {});
 }
 
+- (void)deliverServerCutText:(NSString *)text {
+    __weak typeof(self) weakSelf = self;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        typeof(self) strongSelf = weakSelf;
+        if (strongSelf == nil || text.length == 0)
+            return;
+        [strongSelf.delegate rfbClient:strongSelf didReceiveServerCutText:text];
+    });
+}
+
 - (void)_readServerCutTextHeader {
     [self _readExactly:7 completion:^(const uint8_t *bytes) {
         uint32_t length = rfb_read_u32(&bytes[3]);
@@ -1061,6 +1075,9 @@ static inline void rfb_write_u32(uint8_t *p, uint32_t hostValue) {
 #pragma mark - Input
 
 - (void)sendPointerEventAtX:(uint16_t)x y:(uint16_t)y buttonMask:(uint8_t)buttonMask {
+    if (virtgpu_present_input(_guestPort, VIRTGPU_INPUT_POINTER, (uint32_t) x | (uint32_t) y << 16,
+                              buttonMask, NULL, 0) == 0)
+        return;
     dispatch_async(_queue, ^{
         if (self->_connection == nil)
             return;
@@ -1075,6 +1092,8 @@ static inline void rfb_write_u32(uint8_t *p, uint32_t hostValue) {
 }
 
 - (void)sendKeyEvent:(uint32_t)keysym down:(BOOL)down {
+    if (virtgpu_present_input(_guestPort, VIRTGPU_INPUT_KEY, keysym, down ? 1 : 0, NULL, 0) == 0)
+        return;
     dispatch_async(_queue, ^{
         if (self->_connection == nil)
             return;
@@ -1101,6 +1120,10 @@ static inline void rfb_write_u32(uint8_t *p, uint32_t hostValue) {
 }
 
 - (void)sendClientCutText:(NSString *)text {
+    NSData *utf8 = [text dataUsingEncoding:NSUTF8StringEncoding];
+    if (utf8 != nil && utf8.length <= UINT32_MAX &&
+            virtgpu_present_input(_guestPort, VIRTGPU_INPUT_CLIPBOARD, 0, 0, utf8.bytes, (uint32_t) utf8.length) == 0)
+        return;
     NSData *latin1 = [text dataUsingEncoding:NSISOLatin1StringEncoding allowLossyConversion:YES];
     if (latin1 == nil)
         return;
