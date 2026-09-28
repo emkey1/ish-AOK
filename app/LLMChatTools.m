@@ -149,6 +149,14 @@ NSArray<NSDictionary<NSString *, id> *> *ISHLLMChatToolDefinitions(void) {
             @{@"pattern": ISHLLMStringParameter(@"The glob pattern."),
               @"path": ISHLLMStringParameter(@"The directory to search. Optional; defaults to the working directory.")},
             @[@"pattern"]),
+        ISHLLMFunctionTool(@"todo_write",
+            @"Keep a short task list for multi-step work, shown back to you with every change: pass the whole list each time, with each item's status. Use it for tasks of three or more steps; mark one item in_progress while you work on it and completed as soon as it is done.",
+            @{@"todos": @{@"type": @"array", @"description": @"The complete list, in order.",
+                          @"items": @{@"type": @"object",
+                                      @"properties": @{@"content": ISHLLMStringParameter(@"What to do."),
+                                                       @"status": @{@"type": @"string", @"enum": @[@"pending", @"in_progress", @"completed"]}},
+                                      @"required": @[@"content", @"status"]}}},
+            @[@"todos"]),
         ISHLLMFunctionTool(@"grep",
             @"Search file contents for a regular expression (extended syntax), recursively. Returns matching lines as path:line:text, at most 100. Skips .git and node_modules.",
             @{@"pattern": ISHLLMStringParameter(@"The regular expression."),
@@ -460,6 +468,7 @@ static const size_t kISHLLMSearchCaptureBytes = 4 * 1024 * 1024;
 
 @implementation ISHLLMToolContext {
     NSMutableDictionary<NSString *, NSArray *> *_reads; // path -> @[size, mtime or NSNull]
+    NSArray<NSDictionary *> *_todos;
 }
 
 - (instancetype)init {
@@ -494,6 +503,18 @@ static const size_t kISHLLMSearchCaptureBytes = 4 * 1024 * 1024;
     }
 }
 
+- (NSArray<NSDictionary *> *)todos {
+    @synchronized (self) {
+        return _todos ?: @[];
+    }
+}
+
+- (void)setTodos:(NSArray<NSDictionary *> *)todos {
+    @synchronized (self) {
+        _todos = [todos copy];
+    }
+}
+
 @end
 
 // Where a chat starts before the environment probe reports the real $HOME.
@@ -505,7 +526,7 @@ static NSString *ISHLLMDefaultWorkingDirectory(void) {
 // Lexical normalisation of a guest path: absolute, no ".", "..", or repeated
 // slashes. Not NSString's stringByStandardizingPath, which expands ~ to the
 // HOST home and consults the host filesystem.
-static NSString *ISHLLMResolveGuestPath(NSString *raw, NSString *workingDirectory) {
+NSString *ISHLLMResolveGuestPath(NSString *raw, NSString *workingDirectory) {
     NSString *path = raw;
     if ([path isEqualToString:@"~"] || [path hasPrefix:@"~/"]) {
         NSString *home = [AppDelegate headlessCommandAccountName] != nil ? ISHLLMDefaultWorkingDirectory() : @"/root";
@@ -578,7 +599,7 @@ static NSUInteger ISHLLMLineCount(NSString *text) {
     static NSSet<NSString *> *set;
     static dispatch_once_t once;
     dispatch_once(&once, ^{
-        set = [NSSet setWithArray:@[@"run_shell", @"read_file", @"write_file", @"edit_file", @"list_directory", @"glob", @"grep"]];
+        set = [NSSet setWithArray:@[@"run_shell", @"read_file", @"write_file", @"edit_file", @"list_directory", @"glob", @"grep", @"todo_write"]];
     });
     return set;
 }
@@ -608,6 +629,12 @@ static NSUInteger ISHLLMLineCount(NSString *text) {
             _problem = @"run_shell needs a non-empty \"command\".";
         return;
     }
+    if ([name isEqualToString:@"todo_write"]) {
+        _category = ISHLLMToolCategoryRead;
+        if (![_arguments[@"todos"] isKindOfClass:NSArray.class])
+            _problem = @"todo_write needs \"todos\", an array of {content, status}.";
+        return;
+    }
     BOOL edits = [name isEqualToString:@"write_file"] || [name isEqualToString:@"edit_file"];
     _category = edits ? ISHLLMToolCategoryEdit : ISHLLMToolCategoryRead;
     NSString *rawPath = ISHLLMStringArgument(_arguments, @"path") ?: ISHLLMStringArgument(_arguments, @"file_path");
@@ -631,6 +658,12 @@ static NSUInteger ISHLLMLineCount(NSString *text) {
 }
 
 - (ISHLLMPermissionAction)permissionWithReason:(NSString **)reasonOut {
+    // The task list lives in the chat and touches nothing else.
+    if ([_name isEqualToString:@"todo_write"]) {
+        if (reasonOut != NULL)
+            *reasonOut = nil;
+        return ISHLLMPermissionAllow;
+    }
     ISHLLMPermissionAction categoryAction = ISHLLMCategoryAction(_category);
     if (_category == ISHLLMToolCategoryShell)
         return ISHLLMEvaluateShellCommand(_command ?: @"", ISHLLMShellRules(), categoryAction, reasonOut);
@@ -681,6 +714,14 @@ NSArray<NSString *> *ISHLLMToolCallDescriptions(NSArray *toolCalls) {
         NSString *name = ISHLLMToolCallName(toolCall) ?: @"tool";
         NSDictionary *arguments = ISHLLMToolCallArguments(toolCall);
         NSString *line;
+        if ([name isEqualToString:@"todo_write"]) {
+            NSArray *todos = [arguments[@"todos"] isKindOfClass:NSArray.class] ? arguments[@"todos"] : @[];
+            NSUInteger done = 0;
+            for (NSDictionary *todo in todos)
+                done += [todo isKindOfClass:NSDictionary.class] && [todo[@"status"] isEqual:@"completed"];
+            [lines addObject:[NSString stringWithFormat:@"todo: %lu of %lu done", (unsigned long) done, (unsigned long) todos.count]];
+            continue;
+        }
         if ([name isEqualToString:@"run_shell"]) {
             NSString *command = ISHLLMToolCallCommand(toolCall) ?: @"";
             NSString *firstLine = [command componentsSeparatedByString:@"\n"].firstObject ?: @"";
@@ -1273,6 +1314,59 @@ static NSString *ISHLLMGrepTool(ISHLLMToolInvocation *invocation, NSString **sum
     return out;
 }
 
+static NSString *ISHLLMTodoWriteTool(ISHLLMToolInvocation *invocation, ISHLLMToolContext *context, NSString **summaryOut) {
+    NSMutableArray<NSDictionary *> *todos = [NSMutableArray array];
+    for (id item in invocation.arguments[@"todos"]) {
+        if (![item isKindOfClass:NSDictionary.class])
+            continue;
+        NSString *content = ISHLLMStringArgument(item, @"content");
+        NSString *status = ISHLLMStringArgument(item, @"status");
+        if (content.length == 0)
+            continue;
+        if (![@[@"pending", @"in_progress", @"completed"] containsObject:status])
+            status = @"pending";
+        [todos addObject:@{@"content": content, @"status": status}];
+    }
+    context.todos = todos;
+    NSMutableString *out = [NSMutableString string];
+    NSUInteger done = 0;
+    for (NSDictionary *todo in todos) {
+        NSString *status = todo[@"status"];
+        done += [status isEqualToString:@"completed"];
+        NSString *box = [status isEqualToString:@"completed"] ? @"[x]" : ([status isEqualToString:@"in_progress"] ? @"[>]" : @"[ ]");
+        [out appendFormat:@"%@ %@\n", box, todo[@"content"]];
+    }
+    *summaryOut = [NSString stringWithFormat:@"todo %lu/%lu done", (unsigned long) done, (unsigned long) todos.count];
+    return out.length > 0 ? out : @"The task list is empty.";
+}
+
+// Project instructions, as OpenCode reads them: the nearest AGENTS.md at or
+// above the working directory (CLAUDE.md where there is none), whole up to
+// 32 KB. Blocks on the bridge; call on the guest command queue.
+NSString *ISHLLMLoadProjectInstructions(NSString *workingDirectory, NSString **sourceOut) {
+    if (workingDirectory.length == 0 || ![ISHGuestFileBridge.sharedBridge isGuestAvailable])
+        return nil;
+    NSString *directory = workingDirectory;
+    while (YES) {
+        for (NSString *name in @[@"AGENTS.md", @"CLAUDE.md"]) {
+            NSString *path = [directory isEqualToString:@"/"] ? [@"/" stringByAppendingString:name] : [directory stringByAppendingPathComponent:name];
+            ISHGuestFileItem *item = ISHLLMStat(path, NULL);
+            if (item == nil || item.kind != ISHGuestFileKindRegular || ISHLLMAccessProblem(item, 4, path) != nil)
+                continue;
+            NSData *data = ISHLLMReadWhole(path, 32 * 1024, NULL);
+            NSString *text = data != nil ? ISHLLMDecodeText(data, NULL) : nil;
+            if (text.length == 0)
+                continue;
+            if (sourceOut != NULL)
+                *sourceOut = path;
+            return text;
+        }
+        if ([directory isEqualToString:@"/"] || directory.length == 0)
+            return nil;
+        directory = [directory stringByDeletingLastPathComponent];
+    }
+}
+
 void ISHLLMRunToolInvocation(ISHLLMToolInvocation *invocation, ISHLLMToolContext *context,
                              void (^completion)(NSString *result, NSString *summary)) {
     dispatch_async(ISHLLMGuestCommandQueue(), ^{
@@ -1282,6 +1376,8 @@ void ISHLLMRunToolInvocation(ISHLLMToolInvocation *invocation, ISHLLMToolContext
         if (invocation.problem != nil) {
             result = invocation.problem;
             summary = @"not run";
+        } else if ([name isEqualToString:@"todo_write"]) {
+            result = ISHLLMTodoWriteTool(invocation, context, &summary);
         } else if ([name isEqualToString:@"run_shell"]) {
             result = ISHLLMRunGuestShellCommand(invocation.command, context.workingDirectory, &summary);
         } else if (![ISHGuestFileBridge.sharedBridge isGuestAvailable]) {

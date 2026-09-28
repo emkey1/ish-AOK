@@ -218,6 +218,9 @@ NSString *ISHLLMRunGuestShellCommand(NSString *command, NSString *workingDirecto
 NSString *ISHLLMDetectGuestEnvironmentNote(NSString **homeOut);
 // fileTools: the full tool set (OpenAI-compatible), or run_shell alone (Apple FM).
 NSString *ISHLLMToolSystemNote(NSString *environmentNote, NSString *workingDirectory, BOOL fileTools);
+// A guest path made absolute against workingDirectory and normalised
+// lexically (".", "..", "//"; "~" is the tool account's home).
+NSString *ISHLLMResolveGuestPath(NSString *raw, NSString *workingDirectory);
 // POSIX single-quoting for a guest shell command line.
 NSString *ISHLLMShellQuote(NSString *text);
 
@@ -233,6 +236,8 @@ NSString *ISHLLMShellQuote(NSString *text);
 - (void)recordReadOfPath:(NSString *)path size:(unsigned long long)size modified:(NSDate *)modified;
 - (NSString *)stalenessProblemForPath:(NSString *)path size:(unsigned long long)size modified:(NSDate *)modified;
 - (void)forgetReads;
+// The model's todo_write list: dictionaries with "content" and "status".
+@property (nonatomic, copy) NSArray<NSDictionary *> *todos;
 @end
 
 // One tool call from the model, parsed and checked, ready to confirm and run.
@@ -258,6 +263,9 @@ NSArray<NSDictionary<NSString *, id> *> *ISHLLMChatToolDefinitions(void);
 // on main with the text for the model and a one-line summary for compaction.
 void ISHLLMRunToolInvocation(ISHLLMToolInvocation *invocation, ISHLLMToolContext *context,
                              void (^completion)(NSString *result, NSString *summary));
+// The nearest AGENTS.md (or CLAUDE.md) at or above workingDirectory, or nil.
+// Blocks on the guest file bridge: call on ISHLLMGuestCommandQueue().
+NSString *ISHLLMLoadProjectInstructions(NSString *workingDirectory, NSString **sourceOut);
 // One short line per call ("$ ls -la", "Read src/main.c"), for the transcript.
 NSArray<NSString *> *ISHLLMToolCallDescriptions(NSArray *toolCalls);
 

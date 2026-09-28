@@ -14,6 +14,7 @@
 #import "WorkspaceViewController.h"
 #import "MarkdownRenderer.h"
 #import "Terminal.h"
+#import "GuestFileBridge.h"
 #import "LLMChatInternal.h"
 #if __has_include("libiSH_AOKApp-Swift.h")
 #import "libiSH_AOKApp-Swift.h" // AOKFoundationModelsBridge (Swift, iOS 26+ FoundationModels wrapper)
@@ -471,6 +472,8 @@ static const CGFloat kISHLLMMaximumTextScale = 3.0;
     NSString *_guestEnvironmentNote; // cached distro/tool probe for the tool system prompt
     NSString *_guestHomeDirectory; // the tool account's $HOME, from the same probe; the default working directory
     ISHLLMToolContext *_toolContext; // this chat's working directory and the files its model has read
+    NSString *_projectInstructions; // AGENTS.md (or CLAUDE.md) found from the working directory, reloaded per prompt
+    NSString *_projectInstructionsSource; // its path
     UILabel *_statusLabel;
     UIActivityIndicatorView *_activityIndicator;
     NSMutableSet<NSNumber *> *_expandedThinkingIndices; // indices into _messages whose <think> block the user expanded
@@ -981,7 +984,17 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
     delete.attributes = UIMenuElementAttributesDestructive;
 
     UIMenu *switchSection = [UIMenu menuWithTitle:@"" image:nil identifier:nil options:UIMenuOptionsDisplayInline children:recent];
-    UIMenu *currentSection = [UIMenu menuWithTitle:@"" image:nil identifier:nil options:UIMenuOptionsDisplayInline children:@[rename, systemPrompt, clear, delete]];
+    UIAction *workingDirectory = [UIAction actionWithTitle:@"Working Directory…"
+                                                     image:[UIImage systemImageNamed:@"folder"]
+                                                identifier:nil
+                                                   handler:^(__unused UIAction *action) { [self editWorkingDirectoryForCurrentChat]; }];
+    workingDirectory.subtitle = _toolContext.workingDirectory;
+    UIAction *summarize = [UIAction actionWithTitle:@"Summarize Chat"
+                                              image:[UIImage systemImageNamed:@"text.redaction"]
+                                         identifier:nil
+                                            handler:^(__unused UIAction *action) { [self compactConversation]; }];
+    summarize.subtitle = @"Send the model a summary instead of the history";
+    UIMenu *currentSection = [UIMenu menuWithTitle:@"" image:nil identifier:nil options:UIMenuOptionsDisplayInline children:@[rename, systemPrompt, workingDirectory, summarize, clear, delete]];
     return @[newChat, browse, switchSection, currentSection];
 }
 
@@ -1411,6 +1424,16 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
     return NO;
 }
 
+// Everything from the latest summary on; what came before it reaches the
+// model only as that summary. The transcript on screen keeps all of it.
+- (NSArray<NSDictionary<NSString *, id> *> *)messagesSentToModel {
+    for (NSInteger i = (NSInteger) _messages.count - 1; i >= 0; i--) {
+        if ([_messages[(NSUInteger) i][@"compacted"] isEqual:@"1"])
+            return [_messages subarrayWithRange:NSMakeRange((NSUInteger) i, _messages.count - (NSUInteger) i)];
+    }
+    return _messages;
+}
+
 - (NSArray<NSDictionary<NSString *, id> *> *)providerMessages {
     // Which tool results are recent enough to send in full: walk them newest
     // to oldest, keeping full content until the running estimate would blow
@@ -1421,7 +1444,8 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
     NSInteger budget = [self toolResultContextBudgetTokens];
     NSMutableSet<NSValue *> *fullContentToolMessages = [NSMutableSet set];
     NSInteger runningTokens = 0;
-    for (NSDictionary<NSString *, id> *message in _messages.reverseObjectEnumerator) {
+    NSArray<NSDictionary<NSString *, id> *> *live = [self messagesSentToModel];
+    for (NSDictionary<NSString *, id> *message in live.reverseObjectEnumerator) {
         NSString *role = [message[@"role"] isKindOfClass:NSString.class] ? message[@"role"] : @"";
         if (![role isEqualToString:@"tool"])
             continue;
@@ -1439,7 +1463,7 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
     // conversation, retroactively, the way a system prompt is expected to.
     if (_sessionSystemPrompt.length > 0)
         [messages addObject:@{@"role": @"system", @"content": _sessionSystemPrompt}];
-    for (NSDictionary<NSString *, id> *message in _messages) {
+    for (NSDictionary<NSString *, id> *message in live) {
         if ([self messageIsLocalOnly:message])
             continue;
         NSString *role = [message[@"role"] isKindOfClass:NSString.class] ? message[@"role"] : nil;
@@ -1547,11 +1571,12 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
             // Intentionally omit the server URL here -- it shows after Clear and
             // may contain a private host/IP the user doesn't want on screen.
             NSString *model = UserPreferences.shared.llmModel;
-            _emptyStateLabel.text = [NSString stringWithFormat:@"%@\n\nDestination: %@%@%@",
+            _emptyStateLabel.text = [NSString stringWithFormat:@"%@\n\nDestination: %@%@%@\n\n%@",
                                       _messages.count > 0 ? @"Nothing to show yet." : @"Send a prompt to start this chat.",
                                       ISHLLMDestinationDisplayName(ISHLLMActiveDestination()),
                                       model.length > 0 ? [@"\nModel: " stringByAppendingString:model] : @"\nNo model set — pick one from the destination menu.",
-                                      _sessionSystemPrompt.length > 0 ? @"\nSystem prompt set for this chat." : @""];
+                                      _sessionSystemPrompt.length > 0 ? @"\nSystem prompt set for this chat." : @"",
+                                      [self toolsSummaryText]];
         }
     }
     [_transcriptTable reloadData];
@@ -2321,6 +2346,11 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
     NSString *prompt = [_promptField.text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
     if (prompt.length == 0)
         return;
+    if ([prompt isEqualToString:@"/compact"]) {
+        [self setPromptFieldText:@""];
+        [self compactConversation];
+        return;
+    }
     if ([prompt isEqualToString:@"/models"]) {
         [self setPromptFieldText:@""];
         [self appendLocalRole:@"user" content:prompt];
@@ -2355,6 +2385,30 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
     [self probeContextWindowIfNeeded];
     [self setSending:YES];
 
+    // A conversation about to outgrow the model's window is summarised
+    // first, as OpenCode does, rather than failing or losing its start.
+    // Only when the window is known: guessing would compact chats that fit.
+    if ([self shouldCompactBeforeSending]) {
+        __weak typeof(self) weakSelf = self;
+        [self summarizeConversationKeepingLastMessage:YES then:^(__unused BOOL ok) {
+            typeof(self) self = weakSelf;
+            if (self == nil)
+                return;
+            if (self->_cancelled) {
+                self->_cancelled = NO;
+                [self setSending:NO];
+                return;
+            }
+            [self dispatchPromptWithModel:model apiKey:apiKey];
+        }];
+        return;
+    }
+    [self dispatchPromptWithModel:model apiKey:apiKey];
+}
+
+// The part of -sendPrompt: after the prompt is on the transcript: pick the
+// transport (tool loop, Gemini, streaming) and send.
+- (void)dispatchPromptWithModel:(NSString *)model apiKey:(NSString *)apiKey {
     // Guest-shell tool use (OpenAI-compatible only): runs a non-streaming
     // function-calling loop so the model can run commands in the iSH shell.
     if (!ISHLLMUsesGeminiAPI() && UserPreferences.shared.llmToolsEnabled) {
@@ -2653,7 +2707,38 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
             });
         });
     }
-    continuation();
+    [self loadProjectInstructionsThen:continuation];
+}
+
+// AGENTS.md is read again for every prompt, so an edit to it (by the user,
+// or by the model) applies from the next message. The bridge answers in
+// milliseconds; if it does not answer within two seconds the prompt goes
+// without the instructions rather than waiting on it.
+- (void)loadProjectInstructionsThen:(void (^)(void))continuation {
+    NSString *workingDirectory = _toolContext.workingDirectory;
+    __block BOOL finished = NO;
+    __weak typeof(self) weakSelf = self;
+    void (^finish)(NSString *, NSString *, BOOL) = ^(NSString *text, NSString *source, BOOL loaded) {
+        if (finished)
+            return;
+        finished = YES;
+        typeof(self) self = weakSelf;
+        if (self != nil && loaded) {
+            self->_projectInstructions = text;
+            self->_projectInstructionsSource = source;
+        }
+        continuation();
+    };
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        NSString *source = nil;
+        NSString *text = ISHLLMLoadProjectInstructions(workingDirectory, &source);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            finish(text, source, YES);
+        });
+    });
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+        finish(nil, nil, NO);
+    });
 }
 
 // "model|models-endpoint" -- re-probes whenever either changes (switching
@@ -2727,6 +2812,8 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
     [self setStatus:(round == 0 ? @"Contacting model…" : @"Thinking…") busy:YES];
     NSMutableArray<NSDictionary<NSString *, id> *> *messages = [NSMutableArray array];
     NSString *systemNote = ISHLLMToolSystemNote(_guestEnvironmentNote, _toolContext.workingDirectory, YES);
+    if (_projectInstructions.length > 0)
+        systemNote = [systemNote stringByAppendingFormat:@"\n\nProject instructions from %@ -- follow them:\n\n%@", _projectInstructionsSource, _projectInstructions];
     if (systemNote.length > 0)
         [messages addObject:@{@"role": @"system", @"content": systemNote}];
     [messages addObjectsFromArray:[self providerMessages]];
@@ -2999,6 +3086,163 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
         completion(ISHLLMToolRunDecline);
     }]];
     [[self ish_presentationViewController] presentViewController:alert animated:YES completion:nil];
+}
+
+#pragma mark - Working directory, summaries, what the tools can do
+
+// One paragraph for the empty chat, so what the model can do here is on
+// screen rather than three levels into Settings.
+- (NSString *)toolsSummaryText {
+    if (!UserPreferences.shared.llmToolsEnabled)
+        return @"Tools are off: the model can only talk. Turn on Tools in LLM Settings to let it read, search and edit files and run commands.";
+    if (ISHLLMCurrentBackend() == AOKLLMBackendAppleFoundationModels)
+        return @"Tools: shell commands only (the on-device model's context is too small for the file tools).";
+    if (ISHLLMUsesGeminiAPI())
+        return @"Tools are not available with the Gemini API.";
+    NSString *where = _toolContext.workingDirectory.length > 0 ? _toolContext.workingDirectory : @"your home directory";
+    return [NSString stringWithFormat:@"Tools: files and shell, working in %@.\nReading: %@ · Edits: %@ · Commands: %@\n/compact summarizes a long chat.",
+            where,
+            ISHLLMPermissionActionTitle(ISHLLMCategoryAction(ISHLLMToolCategoryRead)),
+            ISHLLMPermissionActionTitle(ISHLLMCategoryAction(ISHLLMToolCategoryEdit)),
+            ISHLLMPermissionActionTitle(ISHLLMCategoryAction(ISHLLMToolCategoryShell))];
+}
+
+- (void)editWorkingDirectoryForCurrentChat {
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Working Directory"
+        message:@"Where this chat's commands start and its relative file paths point, and where AGENTS.md is looked for. File edits outside it always ask. Leave empty for the home directory."
+        preferredStyle:UIAlertControllerStyleAlert];
+    [alert addTextFieldWithConfigurationHandler:^(UITextField *textField) {
+        textField.text = self->_toolContext.workingDirectory;
+        textField.placeholder = @"/root/project";
+        textField.clearButtonMode = UITextFieldViewModeWhileEditing;
+        textField.autocapitalizationType = UITextAutocapitalizationTypeNone;
+        textField.autocorrectionType = UITextAutocorrectionTypeNo;
+        textField.spellCheckingType = UITextSpellCheckingTypeNo;
+    }];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Save" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
+        NSString *raw = [alert.textFields.firstObject.text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet] ?: @"";
+        [self setWorkingDirectoryFromInput:raw];
+    }]];
+    [[self ish_presentationViewController] presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)setWorkingDirectoryFromInput:(NSString *)raw {
+    if (raw.length == 0) {
+        _toolContext.workingDirectory = _guestHomeDirectory;
+        ISHLLMUpdateSessionEntry(_sessionID, @{@"workingDirectory": @""});
+        [self appendLocalRole:@"assistant" content:[NSString stringWithFormat:@"Working directory: %@ (the home directory).", _guestHomeDirectory ?: @"the home directory"]];
+        return;
+    }
+    NSString *path = ISHLLMResolveGuestPath(raw, _toolContext.workingDirectory);
+    __weak typeof(self) weakSelf = self;
+    [ISHGuestFileBridge.sharedBridge statAtGuestPath:path completion:^(ISHGuestFileItem *item, NSError *error) {
+        typeof(self) self = weakSelf;
+        if (self == nil)
+            return;
+        if (item == nil || item.kind != ISHGuestFileKindDirectory) {
+            UIAlertController *failure = [UIAlertController alertControllerWithTitle:@"Not a directory"
+                message:[NSString stringWithFormat:@"%@: %@", path, item == nil ? (error.localizedDescription ?: @"not found") : @"not a directory"]
+                preferredStyle:UIAlertControllerStyleAlert];
+            [failure addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleCancel handler:nil]];
+            [[self ish_presentationViewController] presentViewController:failure animated:YES completion:nil];
+            return;
+        }
+        self->_toolContext.workingDirectory = path;
+        ISHLLMUpdateSessionEntry(self->_sessionID, @{@"workingDirectory": path});
+        [self appendLocalRole:@"assistant" content:[NSString stringWithFormat:@"Working directory: %@", path]];
+    }];
+}
+
+- (BOOL)shouldCompactBeforeSending {
+    if (_knownContextWindowTokens <= 0 || ISHLLMUsesGeminiAPI() || ISHLLMCurrentBackend() == AOKLLMBackendAppleFoundationModels)
+        return NO;
+    return ISHLLMEstimateMessagesTokenCount([self providerMessages]) > (NSInteger) (_knownContextWindowTokens * 0.75);
+}
+
+// "/compact" and the menu item.
+- (void)compactConversation {
+    if ([self isBusy])
+        return;
+    if (ISHLLMUsesGeminiAPI() || ISHLLMCurrentBackend() == AOKLLMBackendAppleFoundationModels) {
+        [self appendLocalRole:@"assistant" content:@"Summarizing needs an OpenAI-compatible destination."];
+        return;
+    }
+    [self setSending:YES];
+    __weak typeof(self) weakSelf = self;
+    [self summarizeConversationKeepingLastMessage:NO then:^(__unused BOOL ok) {
+        typeof(self) self = weakSelf;
+        if (self == nil)
+            return;
+        self->_cancelled = NO;
+        [self setSending:NO];
+    }];
+}
+
+// Asks the model for a summary of the history it is sent, then records it
+// as a message marked "compacted": from then on the model gets the summary
+// in place of everything before it (see -messagesSentToModel). With
+// keepLastMessage the newest message -- the prompt about to be sent -- stays
+// after the summary, not inside it.
+- (void)summarizeConversationKeepingLastMessage:(BOOL)keepLastMessage then:(void (^)(BOOL ok))continuation {
+    NSMutableArray<NSDictionary<NSString *, id> *> *history = [[self providerMessages] mutableCopy];
+    if (keepLastMessage && history.count > 0)
+        [history removeLastObject];
+    NSUInteger conversational = 0;
+    for (NSDictionary *message in history)
+        conversational += ![message[@"role"] isEqual:@"system"];
+    if (conversational < 2) {
+        if (!keepLastMessage)
+            [self appendLocalRole:@"assistant" content:@"Nothing to summarize yet."];
+        continuation(NO);
+        return;
+    }
+    NSURL *url = [NSURL URLWithString:ISHLLMChatEndpoint()];
+    NSString *model = [UserPreferences.shared.llmModel stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    NSString *apiKey = UserPreferences.shared.llmAPIKey;
+    [history addObject:@{@"role": @"user", @"content":
+        @"Summarize this conversation so that it can be continued from the summary alone: what the user wants, "
+        @"decisions made, files read or changed and their current state, commands run and results that still matter, "
+        @"and what remains to do. Be complete but brief. Reply with the summary only."}];
+    NSData *body = [NSJSONSerialization dataWithJSONObject:@{@"model": model ?: @"", @"messages": history, @"stream": @NO} options:0 error:nil];
+    if (url == nil || body == nil) {
+        [self appendLocalRole:@"assistant" content:@"Could not summarize: invalid server URL or request."];
+        continuation(NO);
+        return;
+    }
+    [self setStatus:@"Summarizing the conversation…" busy:YES];
+    NSUInteger insertAt = keepLastMessage && _messages.count > 0 ? _messages.count - 1 : _messages.count;
+    __weak typeof(self) weakSelf = self;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        NSInteger statusCode = 0;
+        NSError *error = nil;
+        NSData *data = ISHLLMSynchronousChatPost(url, body, apiKey, &statusCode, &error);
+        id json = data.length > 0 ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+        NSArray *choices = [json isKindOfClass:NSDictionary.class] && [json[@"choices"] isKindOfClass:NSArray.class] ? json[@"choices"] : nil;
+        NSDictionary *message = choices.count > 0 && [choices[0] isKindOfClass:NSDictionary.class] ? choices[0][@"message"] : nil;
+        NSString *content = [message isKindOfClass:NSDictionary.class] && [message[@"content"] isKindOfClass:NSString.class] ? message[@"content"] : nil;
+        NSString *summary = [ISHLLMSanitizedAssistantContent(content ?: @"") stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            typeof(self) self = weakSelf;
+            if (self == nil)
+                return;
+            if (summary.length == 0) {
+                NSString *why = error.localizedDescription ?: (statusCode > 0 ? [NSString stringWithFormat:@"HTTP %ld", (long) statusCode] : @"empty reply");
+                [self appendLocalRole:@"assistant" content:[NSString stringWithFormat:@"Could not summarize the conversation (%@); the full history is still sent.", why]];
+                continuation(NO);
+                return;
+            }
+            NSDictionary *entry = @{
+                @"role": @"user",
+                @"content": [@"Summary of the conversation so far (the messages before this are no longer sent to the model):\n\n" stringByAppendingString:summary],
+                @"compacted": @"1",
+            };
+            [self->_messages insertObject:entry atIndex:MIN(insertAt, self->_messages.count)];
+            [self saveTranscript];
+            [self refreshTranscript];
+            continuation(YES);
+        });
+    });
 }
 
 @end
