@@ -863,6 +863,11 @@ config_cksum() {
 install_default_config() {
     config_target="$1"
     config_new="$config_target.new.$$"
+    # Temporaries earlier sessions left behind: every default user's session
+    # left one while smallclue's mv refused `mv -f` (fixed in smallclue).
+    for config_stale in "$config_target".new.*; do
+        [ -e "$config_stale" ] && rm -f "$config_stale"
+    done
     cat > "$config_new" || { rm -f "$config_new"; return 1; }
     if [ -e "$config_target" ]; then
         config_current="$(config_cksum "$config_target")"

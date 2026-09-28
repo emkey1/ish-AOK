@@ -530,9 +530,11 @@ static uid_t read_proc_uid(pid_t pid) {
 
 // Width of everything to the left of the Command column. Kept in one place so
 // the header and the rows agree on where Command starts and how wide it is.
+// ARCH is 9 wide (%-9s): counted as 7 here, the header ran 2 columns past
+// the terminal, wrapped, and every frame scrolled the top line away.
 static int command_column_start(void) {
     return 6 + 1 + 8 + 1 + 3 + 1 + 3 + 1 + 7 + 1 + 7 + 1 + 1 + 1
-         + 7 + 1 + 5 + 1 + 5 + 1 + 8 + 1;
+         + 9 + 1 + 5 + 1 + 5 + 1 + 8 + 1;
 }
 
 static void read_proc_cmdline(pid_t pid, char *buf, size_t bufsize) {
@@ -1117,10 +1119,18 @@ static void draw_header(int cols, int ncpu,
     read_loadavg(&l1, &l5, &l15);
 
     int rows = 0;
-    printf("\033[K%sktop%s - %s up %s   Tasks: %s%d%s, %s%d%s running   Load: %.2f %.2f %.2f\n",
-           C_LABEL, C_RESET, timebuf, uptime,
-           C_LABEL, task_total, C_RESET, C_LABEL, task_running, C_RESET,
-           l1, l5, l15);
+    // A line wider than the terminal wraps into a row the frame did not count
+    // and scrolls it: on a narrow terminal the summary goes out plain and cut.
+    char plain[256];
+    int plain_len = snprintf(plain, sizeof(plain), "ktop - %s up %s   Tasks: %d, %d running   Load: %.2f %.2f %.2f",
+                             timebuf, uptime, task_total, task_running, l1, l5, l15);
+    if (plain_len > cols)
+        printf("\033[K%.*s\n", cols, plain);
+    else
+        printf("\033[K%sktop%s - %s up %s   Tasks: %s%d%s, %s%d%s running   Load: %.2f %.2f %.2f\n",
+               C_LABEL, C_RESET, timebuf, uptime,
+               C_LABEL, task_total, C_RESET, C_LABEL, task_running, C_RESET,
+               l1, l5, l15);
     rows++;
 
     // CPU meters, two per row. Meter inner width sized so two meters + labels
@@ -1271,6 +1281,14 @@ static void draw_column_header(int cols) {
     // highlight color.
     char line[64];
     fputs("\033[K", stdout);
+    // Too narrow for the whole header: the same text, cut to the width.
+    if (cols < command_column_start() + 7) {
+        char full[160];
+        snprintf(full, sizeof(full), "%6s %-8.8s %3s %3s %7s %7s %1s %-9s %5s %5s %8s Command",
+                 "PID", "USER", "PR", "NI", "VIRT", "RES", "S", "ARCH", "%CPU", "%MEM", "TIME+");
+        printf("%s%-*.*s%s\n", C_HDR, cols, cols, full, C_RESET);
+        return;
+    }
     fputs(C_HDR, stdout);
     snprintf(line, sizeof(line), "%6s %-8.8s %3s %3s %7s %7s %1s %-9s ",
              "PID", "USER", "PR", "NI", "VIRT", "RES", "S", "ARCH");
