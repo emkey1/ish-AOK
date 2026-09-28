@@ -173,6 +173,10 @@
 		BB28C7A426896B1F00BDC834 /* AppGroup.m in Sources */ = {isa = PBXBuildFile; fileRef = BB9C7B84240A240E00F5D4F0 /* AppGroup.m */; };
 		BB28C7A526896B1F00BDC834 /* UIApplication+OpenURL.m in Sources */ = {isa = PBXBuildFile; fileRef = BBFB557B215878C600DFE6DE /* UIApplication+OpenURL.m */; };
 		BB28C7A626896B1F00BDC834 /* AboutViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = BBFB5578215876CD00DFE6DE /* AboutViewController.m */; };
+		9BB992DCCE1343B81D71A938 /* LLMChatSupport.m in Sources */ = {isa = PBXBuildFile; fileRef = 1BCB82C7F2994769EADB8945 /* LLMChatSupport.m */; };
+		086DF4AE2BCA3731D05CF391 /* LLMChatTools.m in Sources */ = {isa = PBXBuildFile; fileRef = 0D4A622DB170BCCE9126AFC9 /* LLMChatTools.m */; };
+		66F6D8D15BB25D55FC157BDD /* LLMChatViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = 8A878C6B5BF3537BE23A280C /* LLMChatViewController.m */; };
+		C9DC7E00D7ACBDB0B88FAE97 /* LLMChatSettings.m in Sources */ = {isa = PBXBuildFile; fileRef = 37D9BDEB8D8CF285B64CA4C9 /* LLMChatSettings.m */; };
 		BB28C7A726896B1F00BDC834 /* UIViewController+Extras.m in Sources */ = {isa = PBXBuildFile; fileRef = BBFB557021586C4800DFE6DE /* UIViewController+Extras.m */; };
 		BB28C7A826896B1F00BDC834 /* NSObject+SaneKVO.m in Sources */ = {isa = PBXBuildFile; fileRef = BBCED896255BB65A00CA0701 /* NSObject+SaneKVO.m */; };
 		BB28C7AE26896C1D00BDC834 /* libiSH-AOKApp.a in Frameworks */ = {isa = PBXBuildFile; fileRef = BBEF191E26806364001225BD /* libiSH-AOKApp.a */; platformFilter = ios; };
@@ -741,6 +745,11 @@
 		BBFB557021586C4800DFE6DE /* UIViewController+Extras.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = "UIViewController+Extras.m"; sourceTree = "<group>"; };
 		BBFB5577215876CD00DFE6DE /* AboutViewController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = AboutViewController.h; sourceTree = "<group>"; };
 		BBFB5578215876CD00DFE6DE /* AboutViewController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = AboutViewController.m; sourceTree = "<group>"; };
+		222FF3C6D16AAB7D6D90E559 /* LLMChatInternal.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = LLMChatInternal.h; sourceTree = "<group>"; };
+		1BCB82C7F2994769EADB8945 /* LLMChatSupport.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = LLMChatSupport.m; sourceTree = "<group>"; };
+		0D4A622DB170BCCE9126AFC9 /* LLMChatTools.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = LLMChatTools.m; sourceTree = "<group>"; };
+		8A878C6B5BF3537BE23A280C /* LLMChatViewController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = LLMChatViewController.m; sourceTree = "<group>"; };
+		37D9BDEB8D8CF285B64CA4C9 /* LLMChatSettings.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = LLMChatSettings.m; sourceTree = "<group>"; };
 		BBFB557A215878C600DFE6DE /* UIApplication+OpenURL.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "UIApplication+OpenURL.h"; sourceTree = "<group>"; };
 		BBFB557B215878C600DFE6DE /* UIApplication+OpenURL.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = "UIApplication+OpenURL.m"; sourceTree = "<group>"; };
 		BBFB557E21587B6800DFE6DE /* ArrowBarButton.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ArrowBarButton.h; sourceTree = "<group>"; };
@@ -1427,6 +1436,11 @@
 				BB1D9D92234A8FE100F364E8 /* AboutNavigationController.m */,
 				BBFB5577215876CD00DFE6DE /* AboutViewController.h */,
 				BBFB5578215876CD00DFE6DE /* AboutViewController.m */,
+				222FF3C6D16AAB7D6D90E559 /* LLMChatInternal.h */,
+				1BCB82C7F2994769EADB8945 /* LLMChatSupport.m */,
+				0D4A622DB170BCCE9126AFC9 /* LLMChatTools.m */,
+				8A878C6B5BF3537BE23A280C /* LLMChatViewController.m */,
+				37D9BDEB8D8CF285B64CA4C9 /* LLMChatSettings.m */,
 				BB267FA423A48F1500ED7CAF /* AltIconViewController.h */,
 				BB267FA523A48F1500ED7CAF /* AltIconViewController.m */,
 				BB101B362364CF57000A93BC /* FontPickerViewController.h */,
@@ -2219,6 +2233,10 @@
 				BB28C7A526896B1F00BDC834 /* UIApplication+OpenURL.m in Sources */,
 				497A08C12963401100B323CF /* AccessibilityFixes.m in Sources */,
 				BB28C7A626896B1F00BDC834 /* AboutViewController.m in Sources */,
+				9BB992DCCE1343B81D71A938 /* LLMChatSupport.m in Sources */,
+				086DF4AE2BCA3731D05CF391 /* LLMChatTools.m in Sources */,
+				66F6D8D15BB25D55FC157BDD /* LLMChatViewController.m in Sources */,
+				C9DC7E00D7ACBDB0B88FAE97 /* LLMChatSettings.m in Sources */,
 				C0A000032E00000300000001 /* WorkspaceViewController.m in Sources */,
 				BB28C7A726896B1F00BDC834 /* UIViewController+Extras.m in Sources */,
 				BB28C7A826896B1F00BDC834 /* NSObject+SaneKVO.m in Sources */,
