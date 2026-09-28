@@ -159,6 +159,11 @@ letters, such as **Games (A–N)**. The same actions have keys: Alt+Return opens
 terminal, Alt+Shift+D the launcher, Alt+Tab switches windows, Alt+Shift+Q closes
 one, Alt+Shift+R reloads labwc's settings and Alt+Shift+E ends the session.
 
+The desktop has four desktops of its own. Ctrl+Alt+Left and Ctrl+Alt+Right
+move between them, adding Shift takes the focused window along, and
+Ctrl+Alt+1 to 4 goes straight to one. (Cmd+Left and Cmd+Right switch
+Workspace's own Desktops, around the window.)
+
 The menu and the keys live in `~/.config/labwc/menu.xml` and `rc.xml`, which are
 yours to edit: a file you have changed is never replaced. One still exactly as an
 earlier AOK wrote it is brought up to date, which is how an existing desktop gets

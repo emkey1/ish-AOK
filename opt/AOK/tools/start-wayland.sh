@@ -950,10 +950,17 @@ fi
 # free for in-terminal Ctrl combos). Alt+Shift+D opens the launcher, sway's
 # $mod+d with Shift added: plain Alt+D would take kill-word from readline in
 # every terminal. labwc expands ~ in an Execute command.
+#
+# Four desktops, since labwc starts with one. Ctrl+Alt+Left/Right switches
+# (labwc's own convention; Cmd+arrows belong to Workspace's Desktops around
+# the window, and Alt+digit is readline's digit-argument in every terminal),
+# with Shift taking the focused window along, and Ctrl+Alt+1-4 goes straight
+# to one.
 if [ "$COMPOSITOR_CMD" = "labwc" ]; then
     # The earlier defaults: 2c7e6aa7 to 02cfc17f, 6fc49f06 (it maximized every
-    # window), and c862512d to 583ce462.
-    install_default_config "$HOME/.config/labwc/rc.xml" "1331651033:528 1672038269:1609 240916693:1110" <<'RC_XML_EOF'
+    # window), c862512d to 583ce462, and the one-desktop default before the
+    # desktop keys.
+    install_default_config "$HOME/.config/labwc/rc.xml" "1331651033:528 1672038269:1609 240916693:1110 3367275241:1236" <<'RC_XML_EOF'
 <?xml version="1.0"?>
 <labwc_config>
   <theme>
@@ -967,6 +974,7 @@ if [ "$COMPOSITOR_CMD" = "labwc" ]; then
        made that gap confusing, and forcing EVERY app fullscreen was wrong
        for normal desktop use (user-reported). Windows open floating at
        their natural size, like any stock labwc desktop. -->
+  <desktops number="4" popupTime="500" />
   <keyboard>
     <keybind key="A-Return">
       <action name="Execute"><command>foot</command></action>
@@ -985,6 +993,30 @@ if [ "$COMPOSITOR_CMD" = "labwc" ]; then
     </keybind>
     <keybind key="A-S-d">
       <action name="Execute"><command>~/.config/labwc/launcher.sh</command></action>
+    </keybind>
+    <keybind key="C-A-Left">
+      <action name="GoToDesktop" to="left" wrap="yes"/>
+    </keybind>
+    <keybind key="C-A-Right">
+      <action name="GoToDesktop" to="right" wrap="yes"/>
+    </keybind>
+    <keybind key="C-A-S-Left">
+      <action name="SendToDesktop" to="left" wrap="yes"/>
+    </keybind>
+    <keybind key="C-A-S-Right">
+      <action name="SendToDesktop" to="right" wrap="yes"/>
+    </keybind>
+    <keybind key="C-A-1">
+      <action name="GoToDesktop" to="1"/>
+    </keybind>
+    <keybind key="C-A-2">
+      <action name="GoToDesktop" to="2"/>
+    </keybind>
+    <keybind key="C-A-3">
+      <action name="GoToDesktop" to="3"/>
+    </keybind>
+    <keybind key="C-A-4">
+      <action name="GoToDesktop" to="4"/>
     </keybind>
   </keyboard>
 </labwc_config>
