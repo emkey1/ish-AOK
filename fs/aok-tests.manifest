@@ -305,6 +305,7 @@ exec_shebang_interpreter.c
 exec_empty_env_string.c
 exec_cred_ids.c
 sock_bind_refuse.c
+unix_listen_nonblock.c
 time_clocks_ticks.c
 futex_robust_requeue.c
 futex_shared_mapping.c

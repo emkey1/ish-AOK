@@ -2075,14 +2075,21 @@ static bool socket_guest_signal_pending(void) {
     return !!pending;
 }
 
+// A host call interrupted by a signal (a guest signal's poke, or AOK's own) is
+// retried unless a guest signal is waiting for the blocking call it belongs to.
+// A non-blocking call is always retried: Linux never answers one with EINTR --
+// it transfers or says EAGAIN, and nothing in it sleeps for a signal to cut
+// short -- so programs treat EINTR there as a dead peer. Xwayland's recvmsg on
+// its window-manager socket got EINTR this way, closed the compositor's
+// connection, and labwc crashed on the end-of-file.
 static bool socket_should_retry_io_eintr(struct fd *sock, int real_flags) {
     if (errno != EINTR)
         return false;
     if (fd_getflags(sock) & O_NONBLOCK_)
-        return false;
+        return true;
 #ifdef MSG_DONTWAIT
     if (real_flags & MSG_DONTWAIT)
-        return false;
+        return true;
 #endif
     return !socket_guest_signal_pending();
 }
@@ -6303,6 +6310,22 @@ int_t sys_connect_guest(fd_t sock_fd, guest_addr_t sockaddr_addr, uint_t sockadd
     return sys_connect_common(sock_fd, sockaddr_addr, sockaddr_len);
 }
 
+// The host backlog for a guest listen(). An AF_UNIX listener on Linux queues
+// backlog + 1 connections, and a blocking connect() beyond that waits for room.
+// Darwin queues fewer and refuses the rest at once with ECONNREFUSED, which
+// Linux never says to a listener that exists: wlroots listens on the X display
+// with a backlog of 1, so with one X client queued the compositor's own
+// connect was refused and labwc and Xwayland ended up waiting on each other
+// (the desktop froze when Extreme Tux Racer started). Give AF_UNIX the most
+// Darwin allows; a connect Linux would have made wait just succeeds. TCP keeps
+// the guest's number: both kernels drop a SYN to a full queue and the client
+// retries.
+static int sock_host_backlog(int domain, int backlog) {
+    if (domain == AF_LOCAL_)
+        return SOMAXCONN;
+    return backlog;
+}
+
 int_t sys_listen(fd_t sock_fd, int_t backlog) {
     STRACE("listen(%d, %d)", sock_fd, backlog);
     int_t sock_err;
@@ -6314,7 +6337,7 @@ int_t sys_listen(fd_t sock_fd, int_t backlog) {
     int bind_err = sock_bind_materialize(sock);
     if (bind_err < 0)
         return bind_err;
-    int err = listen(sock->real_fd, backlog);
+    int err = listen(sock->real_fd, sock_host_backlog(sock->socket.domain, backlog));
     if (err < 0)
         return errno_map();
     sock->socket.listening = true;
@@ -7291,7 +7314,14 @@ static int_t sys_recvfrom_common(fd_t sock_fd, guest_addr_t buffer_addr, dword_t
             // good -- every other reader of the socket then hangs on it, and
             // so does the thread's own exit, which waits for its locks. The
             // read never blocks, so it needs no unwinding out of.
-            if (!unix_seqpacket && !socket_blocking_syscall_begin(&oldmask)) {
+            //
+            // Nor for a non-blocking call: Linux never fails one with EINTR --
+            // a pending signal is delivered when it returns -- and programs
+            // take EINTR there for a dead peer (Xwayland dropped its window
+            // manager this way, and labwc crashed). The host socket is
+            // non-blocking, so the call cannot sleep for a poke to end.
+            bool host_call_guarded = !unix_seqpacket && socket_call_is_blocking(sock, real_flags);
+            if (host_call_guarded && !socket_blocking_syscall_begin(&oldmask)) {
                 // A failed begin may be nothing but an unwound host SIGUSR1
                 // poke, with no guest signal behind it -- the case fs/real.c's
                 // two sigunwind branches retry and socket_wait_ready ignores.
@@ -7323,7 +7353,7 @@ static int_t sys_recvfrom_common(fd_t sock_fd, guest_addr_t buffer_addr, dword_t
                                sockaddr_addr != 0 ? (void *) sockaddr : NULL,
                                sockaddr_len_addr != 0 ? &sockaddr_len : NULL);
             }
-            if (!unix_seqpacket)
+            if (host_call_guarded)
                 socket_blocking_syscall_end();
             if (res >= 0) {
                 if (!waitall)
@@ -9828,8 +9858,10 @@ static int_t sys_recvmsg_guest_abi(fd_t sock_fd, guest_addr_t msghdr_addr, int_t
             sock->socket.ipv6_recverr;
         while (1) {
             sigset_t oldmask;
-            // Not around a SEQPACKET read; see sys_recvfrom_common.
-            if (!unix_seqpacket && !socket_blocking_syscall_begin(&oldmask)) {
+            // Not around a SEQPACKET read, nor a non-blocking call; see
+            // sys_recvfrom_common.
+            bool host_call_guarded = !unix_seqpacket && socket_call_is_blocking(sock, real_flags);
+            if (host_call_guarded && !socket_blocking_syscall_begin(&oldmask)) {
                 // A stray poke is not an interruption; see sys_recvfrom_common.
                 if (!socket_guest_signal_pending())
                     continue;
@@ -9851,7 +9883,7 @@ static int_t sys_recvmsg_guest_abi(fd_t sock_fd, guest_addr_t msghdr_addr, int_t
             } else {
                 res = recvmsg(sock->real_fd, attempt, host_flags);
             }
-            if (!unix_seqpacket)
+            if (host_call_guarded)
                 socket_blocking_syscall_end();
             if (res >= 0) {
                 if (!waitall)
@@ -11535,7 +11567,7 @@ static struct fd *sock_ckpt_rebuild_unix(const struct sock_ckpt_desc *desc, int 
         return sock_ckpt_hungup_fd(desc, err);
     }
     if (desc->state == SOCK_CKPT_LISTEN) {
-        if (listen(s, desc->backlog > 0 ? (int) desc->backlog : 128) < 0) {
+        if (listen(s, sock_host_backlog(AF_LOCAL_, (int) desc->backlog)) < 0) {
             sock_ckpt_note_failure(desc, "listen", errno);
             printk("WARNING: checkpoint: relistening unix socket failed: %s\n", strerror(errno));
             fd_close(fd);
