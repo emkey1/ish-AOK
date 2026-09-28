@@ -208,6 +208,7 @@ static struct pt_directory_chunk *mem_pgdir_chunk_new(struct mem *mem, page_t pa
     chunk = calloc(1, sizeof(*chunk));
     if (chunk == NULL)
         return NULL;
+    atomic_fetch_add_explicit(&mem->pt_bytes, sizeof(*chunk), memory_order_relaxed);
     page_t root = PGDIR_ROOT_INDEX(page);
     atomic_store_explicit(&mem->pgdir_root[root], chunk, memory_order_release);
     // Record the root in the scan bitmap (after publishing the chunk, so any
@@ -239,6 +240,7 @@ static struct pt_entry *mem_pt_leaf_new(struct mem *mem, page_t page) {
     struct pt_leaf *leaf = calloc(1, sizeof(*leaf));
     if (leaf == NULL)
         return NULL;
+    atomic_fetch_add_explicit(&mem->pt_bytes, sizeof(*leaf), memory_order_relaxed);
     entries = leaf->entries;
     page_t mid = PGDIR_MID_INDEX(page);
     atomic_store_explicit(slot, entries, memory_order_release);
@@ -772,6 +774,7 @@ void mem_init(struct mem *mem) {
     atomic_init(&mem->locked_pages, 0);
     for (unsigned c = 0; c < MEM_PAGE_CLASSES; c++)
         atomic_init(&mem->class_entries[c], 0);
+    atomic_init(&mem->pt_bytes, 0);
     // Same reason as mem->lazy above: mm_copy copies the whole struct and then
     // calls this on the child, so an inherited pointer here would be a double
     // free of the parent's array and a double close of its descriptors.
@@ -1344,6 +1347,10 @@ size_t mem_mapped_page_count(struct mem *mem) {
     return mem_page_count_walk(mem, false);
 }
 
+size_t mem_page_table_bytes(struct mem *mem) {
+    return mem == NULL ? 0 : atomic_load_explicit(&mem->pt_bytes, memory_order_relaxed);
+}
+
 bool mmu_page_executable(struct mmu *mmu, page_t page) {
     struct mem *mem = container_of(mmu, struct mem, mmu);
     if (page >= mem->page_limit)
@@ -1836,7 +1843,8 @@ bool mem_lazy_reserve_any_size(struct mem *mem, page_t start, pages_t pages, uns
     // one over the committed pages. SEGV_ACCERR at the first write.
     //
     // A commit strictly inside a reservation splits it. When the split is
-    // refused, materialise that reservation and decline, so the caller's eager
+    // refused, materialise the commit's range (and the reservation's smaller
+    // side) and decline, so the caller's eager
     // pt_map replaces the entries under the commit. Materialising and then
     // reserving anyway is what this used to do, and it left the commit over
     // PROT_NONE entries: the same SEGV_ACCERR, at old-gen start under
@@ -1933,29 +1941,22 @@ static int mem_lazy_map_pages(struct mem *mem, page_t start, pages_t pages, unsi
     return err;
 }
 
-void mem_lazy_materialize_range(struct mem *mem, page_t start, page_t end) {
-    // Bounded by MEM_LAZY_MAX, never by the page count: this is called from
-    // fork's COW pass with the WHOLE address space, and a per-page scan there
-    // took a one-second compile to 216 seconds.
-    for (unsigned i = 0; i < mem->lazy_count; i++) {
-        struct mem_lazy_map *l = &mem->lazy[i];
-        if (l->start >= l->end || end <= l->start || l->end <= start)
-            continue;
-        page_t s = l->start, e = l->end;
-        unsigned flags = l->flags;
-        LAZY_TRACE("materialize_range [%llx,%llx) for req [%llx,%llx) flags=%#x\n",
-                   (unsigned long long) s, (unsigned long long) e,
-                   (unsigned long long) start, (unsigned long long) end, flags);
-        l->start = l->end = 0;          // clear BEFORE mapping: pt_map_nothing
-                                        // must not see this range as reserved
-        mem_lazy_map_pages(mem, s, e - s, flags);
-    }
-}
-
 // Give [start, end) entries without materialising more of any reservation than
 // the range itself. The exception is a reservation strictly containing the
-// range: leaving both of its sides reserved takes a slot, and this is the
-// fallback for when there is none to take, so that one is materialised whole.
+// range when the split that would leave both of its sides reserved is refused
+// (MEM_LAZY_SPLIT_LIMIT): then the SMALLER side is materialised with the range,
+// and the larger stays reserved, which needs no slot.
+//
+// It used to be the whole reservation, here and in every caller of
+// mem_lazy_materialize_range, and a reservation can be enormous: Bun's
+// JavaScriptCore reserves 64 GiB and mprotects 622 MiB at its top, which
+// materialised all 64 GiB -- 16 million entries, 1.1 GB of host page tables and
+// two seconds under the address-space write lock, with every guest thread
+// stopped. OpenCode's server sat at a 2.2 GB footprint for it.
+//
+// Bounded by MEM_LAZY_MAX, never by the page count: this is called from fork's
+// COW pass with the WHOLE address space, and a per-page scan there took a
+// one-second compile to 216 seconds.
 static void mem_lazy_materialize_only(struct mem *mem, page_t start, page_t end) {
     for (unsigned i = 0; i < mem->lazy_count; i++) {
         struct mem_lazy_map *l = &mem->lazy[i];
@@ -1964,8 +1965,21 @@ static void mem_lazy_materialize_only(struct mem *mem, page_t start, page_t end)
         page_t s = l->start > start ? l->start : start;
         page_t e = l->end < end ? l->end : end;
         if (s > l->start && e < l->end) {
-            s = l->start;
-            e = l->end;
+            // Reservations never overlap, so this is the only one in range.
+            // The split leaves [l->start, s) in this slot and [e, l->end) in
+            // another; the range between is the caller's to have entries.
+            unsigned flags = l->flags;
+            if (mem_lazy_drop(mem, s, e)) {
+                LAZY_TRACE("materialize [%llx,%llx) split out for req [%llx,%llx) flags=%#x\n",
+                           (unsigned long long) s, (unsigned long long) e,
+                           (unsigned long long) start, (unsigned long long) end, flags);
+                mem_lazy_map_pages(mem, s, e - s, flags);
+                continue;
+            }
+            if (s - l->start <= l->end - e)
+                s = l->start;
+            else
+                e = l->end;
         }
         unsigned flags = l->flags;
         LAZY_TRACE("materialize [%llx,%llx) of [%llx,%llx) for req [%llx,%llx) flags=%#x\n",
@@ -1981,6 +1995,10 @@ static void mem_lazy_materialize_only(struct mem *mem, page_t start, page_t end)
             l->end = s;
         mem_lazy_map_pages(mem, s, e - s, flags);
     }
+}
+
+void mem_lazy_materialize_range(struct mem *mem, page_t start, page_t end) {
+    mem_lazy_materialize_only(mem, start, end);
 }
 
 void mem_lazy_join(struct mem *mem, page_t page) {
@@ -2003,6 +2021,63 @@ void mem_lazy_join(struct mem *mem, page_t page) {
     above->start = above->end = 0;
 }
 
+// mprotect of the reserved pages of [start, end): the protection is the
+// reservation's, so change the reservation -- splitting off the part in range
+// while MEM_LAZY_SPLIT_LIMIT allows -- rather than build entries for it. Linux
+// changes a VMA's flags and touches no page tables either. Returns whether any
+// reserved page's exec permission changed, which the caller's JIT invalidation
+// has to cover. Pure range math except where it falls back to
+// mem_lazy_materialize_only, so it maps, with that function's locking rule.
+//
+// Materialising first, which this replaces, turned JavaScriptCore's mprotect of
+// 622 MiB at the top of its 64 GiB reservation into 16 million entries.
+static bool mem_lazy_protect(struct mem *mem, page_t start, page_t end, unsigned prot) {
+    bool exec_changed = false;
+    for (unsigned i = 0; i < mem->lazy_count; i++) {
+        struct mem_lazy_map *l = &mem->lazy[i];
+        if (l->start >= l->end || end <= l->start || l->end <= start)
+            continue;
+        unsigned flags = l->flags;
+        unsigned new_flags = (flags & ~(unsigned) P_RWX) | prot;
+        if (new_flags == flags)
+            continue;
+        page_t s = l->start > start ? l->start : start;
+        page_t e = l->end < end ? l->end : end;
+        // A locked reservation made accessible is populated (mlock's rule,
+        // mem_mprotect_populates), which is the entries' business: give it
+        // entries and let pt_set_flags handle them as it always has.
+        unsigned pieces = (s > l->start) + (e < l->end);
+        if ((flags & MEM_LAZY_LOCKED) ||
+                (pieces != 0 && mem_lazy_in_use(mem) + pieces > MEM_LAZY_SPLIT_LIMIT)) {
+            mem_lazy_materialize_only(mem, s, e);
+            continue;
+        }
+        // The pieces outside the range keep the old flags. Added before this
+        // slot narrows, as mem_lazy_drop does, so a lock-free reader of the
+        // table (VmSize, maps) sees a page twice for a moment rather than not
+        // at all. Neither overlaps [start, end), so the loop skips them.
+        page_t old_start = l->start, old_end = l->end;
+        if (e < old_end)
+            mem_lazy_add(mem, e, old_end, flags);
+        if (s > old_start)
+            mem_lazy_add(mem, old_start, s, flags);
+        l->flags = new_flags;
+        l->start = s;
+        l->end = e;
+        if ((flags ^ new_flags) & P_EXEC)
+            exec_changed = true;
+        LAZY_TRACE("protect [%llx,%llx) of [%llx,%llx) flags %#x -> %#x\n",
+                   (unsigned long long) s, (unsigned long long) e,
+                   (unsigned long long) old_start, (unsigned long long) old_end,
+                   flags, new_flags);
+        // Rejoin neighbours the change made equal -- a protection put back,
+        // as a guard page's often is -- so toggling does not use up slots.
+        mem_lazy_join(mem, s);
+        mem_lazy_join(mem, e);
+    }
+    return exec_changed;
+}
+
 // True iff every page of [start, start + pages) has an entry or is reserved.
 // Steps over a reservation in one go: a per-page lookup in a large untouched
 // one costs MEM_LAZY_MAX comparisons a page.
@@ -2022,27 +2097,11 @@ static bool mem_range_is_mapped(struct mem *mem, page_t start, pages_t pages) {
 }
 
 void mem_lazy_populate(struct mem *mem, page_t start, page_t end) {
-    if (start >= end)
-        return;
-    for (unsigned i = 0; i < mem->lazy_count; i++) {
-        struct mem_lazy_map *l = &mem->lazy[i];
-        if (l->start < l->end && l->start < start && end < l->end) {
-            // Reservations never overlap, so this is the only one in range.
-            // Split it rather than let mem_lazy_materialize_only take it
-            // whole: an mlock of one page in a 1 GiB reservation must not
-            // build page tables for the gigabyte.
-            unsigned flags = l->flags;
-            LAZY_TRACE("populate [%llx,%llx) inside [%llx,%llx)\n",
-                       (unsigned long long) start, (unsigned long long) end,
-                       (unsigned long long) l->start, (unsigned long long) l->end);
-            if (mem_lazy_drop(mem, start, end)) {
-                mem_lazy_map_pages(mem, start, end - start, flags);
-                return;
-            }
-            break;
-        }
-    }
-    mem_lazy_materialize_only(mem, start, end);
+    // mem_lazy_materialize_only splits a reservation strictly containing the
+    // range before it gives up anything more: an mlock of one page in a 1 GiB
+    // reservation must not build page tables for the gigabyte.
+    if (start < end)
+        mem_lazy_materialize_only(mem, start, end);
 }
 
 bool mem_lazy_lock_range_needed(struct mem *mem, page_t start, page_t end, uint8_t lock,
@@ -2269,28 +2328,61 @@ static unsigned mem_lazy_take_pieces(struct mem *mem, page_t start, page_t end,
     return n;
 }
 
-// Fault handler. Materialises [l->start, end of the chunk holding `page`) and
-// trims the front -- a reservation only ever shrinks from the left, never
-// splits. Caller holds the write lock.
+// How far into a reservation a fault may materialise everything below it rather
+// than split the reservation around its chunk: 16 chunks, 32 MiB, half a MiB of
+// entries. A sequential walk -- the common case -- faults at the front and
+// never gets near it.
+#define MEM_LAZY_FAULT_PREFIX_PAGES (16 * MEM_LAZY_CHUNK_PAGES)
+
+// Fault handler. Materialises the chunk holding `page`. A chunk at or near the
+// front of the reservation takes everything below it too, trimming the front,
+// which costs no slot; one further in is split out, leaving both sides
+// reserved, while MEM_LAZY_SPLIT_LIMIT allows, and otherwise takes the smaller
+// of the prefix and the suffix around it.
+//
+// It used to take the prefix always: a first touch 39 GiB into a 64 GiB
+// reservation built 39 GiB of entries, 675 MB of host page tables and 1.5 s
+// under the write lock, where Linux maps one page. JavaScriptCore's allocator
+// lives in exactly such a reservation. Caller holds the write lock.
 static bool mem_lazy_fault(struct mem *mem, page_t page) {
     struct mem_lazy_map *l = mem_lazy_find(mem, page);
     if (l == NULL)
         return false;
-    page_t s = l->start;
     page_t e = page + MEM_LAZY_CHUNK_PAGES;
     e -= (e - l->start) % MEM_LAZY_CHUNK_PAGES;   // round up to a chunk edge
     if (e <= page)
         e = page + 1;
     if (e > l->end)
         e = l->end;
+    page_t s = e - l->start > MEM_LAZY_CHUNK_PAGES ? e - MEM_LAZY_CHUNK_PAGES : l->start;
+    if (s > page)
+        s = page;   // only when e was clamped to page + 1
     unsigned flags = l->flags;
+    if (s - l->start <= MEM_LAZY_FAULT_PREFIX_PAGES) {
+        s = l->start;
+    } else if (e < l->end) {
+        if (!mem_lazy_drop(mem, s, e)) {
+            // No slot for the split: give up the smaller side with the chunk.
+            if (s - l->start <= l->end - e)
+                s = l->start;
+            else
+                e = l->end;
+        } else {
+            LAZY_TRACE("fault page=%llx -> split out [%llx,%llx) flags=%#x\n",
+                       (unsigned long long) page, (unsigned long long) s,
+                       (unsigned long long) e, flags);
+            return mem_lazy_map_pages(mem, s, e - s, flags) == 0;
+        }
+    }
     LAZY_TRACE("fault page=%llx -> materialize [%llx,%llx) flags=%#x (res was [%llx,%llx))\n",
                (unsigned long long) page, (unsigned long long) s, (unsigned long long) e,
                flags, (unsigned long long) l->start, (unsigned long long) l->end);
-    if (e >= l->end)
+    if (s == l->start && e >= l->end)
         l->start = l->end = 0;      // consumed entirely
-    else
+    else if (s == l->start)
         l->start = e;               // front trim
+    else
+        l->end = s;                 // back trim: e is l->end here
     return mem_lazy_map_pages(mem, s, e - s, flags) == 0;
 }
 
@@ -3186,8 +3278,8 @@ int pt_unmap_always(struct mem *mem, page_t start, pages_t pages) {
     // Reservations are handled HERE, outside the JIT invalidate lock taken
     // below, because materialising maps and pt_map_nothing takes that same
     // lock. A hole punched through the middle of a reservation splits it; only
-    // when that split is refused (MEM_LAZY_SPLIT_LIMIT) is it materialised in
-    // full, for the ordinary path below to tear down.
+    // when that split is refused (MEM_LAZY_SPLIT_LIMIT) are the hole and the
+    // smaller side materialised, for the ordinary path below to tear down.
     if (!mem_lazy_drop(mem, start, start + pages))
         mem_lazy_materialize_range(mem, start, start + pages);
 #if ENGINE_JIT
@@ -3853,18 +3945,23 @@ static bool mem_mprotect_populates(uint8_t lock, unsigned old_flags, unsigned ne
 }
 
 int pt_set_flags(struct mem *mem, page_t start, pages_t pages, int flags) {
-    // mprotect rewrites per-page flags, so materialise any overlapping reservation first rather than
-    // teaching this path about them. Iterates reservations, never pages.
-    mem_lazy_materialize_range(mem, start, start + pages);
-
     if (!mem_page_range_valid(mem, start, pages))
         return _ENOMEM;
-    for (page_t page = start; page < start + pages; page++)
-        if (mem_pt(mem, page) == NULL)
-            return _ENOMEM;
+    if (!mem_range_is_mapped(mem, start, pages))
+        return _ENOMEM;
+    // Reserved pages take the new protection as a reservation (see
+    // mem_lazy_protect); the loop below only sees the pages with entries.
+    bool lazy_exec_changed = mem_lazy_protect(mem, start, start + pages, (unsigned) flags);
     bool exec_changed = false;
     for (page_t page = start; page < start + pages; page++) {
         struct pt_entry *entry = mem_pt(mem, page);
+        if (entry == NULL) {
+            // Reserved: step over the whole reservation at once.
+            struct mem_lazy_map *l = mem_lazy_find(mem, page);
+            if (l != NULL && l->end > page + 1)
+                page = (l->end < start + pages ? l->end : start + pages) - 1;
+            continue;
+        }
         int old_flags = entry->flags;
         int keep_flags = old_flags & ~(P_READ | P_WRITE | P_EXEC);
         int new_flags = keep_flags | flags;
@@ -3972,9 +4069,16 @@ int pt_set_flags(struct mem *mem, page_t start, pages_t pages, int flags) {
     // and riscv64 it is registered on its first page only -- so the page below
     // the range goes too. Here, after the loop: the pt_map above may take the
     // same lock, and it is not recursive.
-    if (exec_changed) {
+    //
+    // A reserved page has never been touched, so holds no block; of the pages a
+    // change to reserved ones concerns, only the one below the range can (a
+    // block ending in a fetch fault on the range's first page). Walking a
+    // 64 GiB reservation page by page for nothing would be most of the call.
+    if (exec_changed || lazy_exec_changed) {
+        page_t inval_start = start > 0 ? start - 1 : 0;
+        page_t inval_end = exec_changed ? start + pages : start;
         bool jit_locked = jit_invalidate_lock(mem->mmu.jit);
-        jit_invalidate_range(mem->mmu.jit, start > 0 ? start - 1 : 0, start + pages);
+        jit_invalidate_range(mem->mmu.jit, inval_start, inval_end);
         if (jit_locked)
             jit_invalidate_unlock(mem->mmu.jit);
     }

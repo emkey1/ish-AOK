@@ -191,6 +191,7 @@ static int proc_pid_copy_environ(struct task *task, struct mem *mem, guest_addr_
 // the entries whose frames are in memory.
 struct proc_mem_usage {
     size_t vm, vm_peak, locked, rss, rss_peak, swap;
+    size_t pte_bytes;
 };
 
 static struct proc_mem_usage proc_mem_usage(struct mem *mem) {
@@ -205,6 +206,7 @@ static struct proc_mem_usage proc_mem_usage(struct mem *mem) {
     u.locked = mem_locked_page_count(mem);
     u.rss = mem_rss_pages_now(mem);
     u.rss_peak = mem_rss_pages_peak(mem);
+    u.pte_bytes = mem_page_table_bytes(mem);
     if (swap_enabled()) {
         // Two lock-free walks at two instants; a mapping made between them
         // must not wrap the difference into sixteen exabytes of swap.
@@ -794,6 +796,11 @@ static int proc_pid_status_show(struct proc_entry *entry, struct proc_data *buf)
     proc_printf(buf, "VmPin:\t0 kB\n");
     proc_printf(buf, "VmHWM:\t%lu kB\n", (unsigned long) usage.rss_peak * page_kb);
     proc_printf(buf, "VmRSS:\t%lu kB\n", (unsigned long) usage.rss * page_kb);
+    // VmPTE, as Linux has it: the host memory in this address space's page
+    // tables, which is what a guest can see of an emulator cost that has been
+    // over a gigabyte (emu/memory.c, mem_lazy_materialize_only). Linux's order,
+    // less the Vm lines between VmRSS and VmPTE that AOK does not print.
+    proc_printf(buf, "VmPTE:\t%lu kB\n", (unsigned long) (usage.pte_bytes / 1024));
     // VmSwap appears only when swap is on, because with it off this file has to
     // be byte-for-byte what it was before the pager existed and there was no
     // VmSwap line here at all. Linux prints it unconditionally; the comment on

@@ -1601,7 +1601,18 @@ dword_t sys_madvise_guest(guest_addr_t addr, qword_t len, dword_t advice) {
     struct mem *mem = current->mem;
     int err = 0;
     bool saw_hole = false;
-    mem_write_lock_with_pokes(mem);
+    // Only these change the address space. Every other advice is a hint that
+    // reads it -- the range must be mapped, and a locked page refuses COLD and
+    // PAGEOUT -- so it takes the read lock like mincore rather than stopping
+    // every thread of the process: JavaScriptCore marks its heap MADV_DONTDUMP
+    // and MADV_DODUMP piece by piece, 2,500 calls in one `opencode --version`,
+    // each of which was a stop-the-world barrier.
+    bool changes = advice == MADV_DONTNEED_ || advice == MADV_FREE_ ||
+            advice == MADV_REMOVE_ || advice == MADV_WIPEONFORK_ || advice == MADV_KEEPONFORK_;
+    if (changes)
+        mem_write_lock_with_pokes(mem);
+    else
+        mem_read_lock_quiesce_aware(mem);
     page_t start = PAGE(addr);
     page_t end = start + pages;
     if (end < start || end > mem->page_limit) {
@@ -1609,8 +1620,8 @@ dword_t sys_madvise_guest(guest_addr_t addr, qword_t len, dword_t advice) {
         end = mem->page_limit; // clamp the loop bound / guard overflow
     }
     // The FORK pair records itself in per-page flags, so any lazy reservation
-    // in range has to become real entries before the loop can mark them --
-    // pt_set_flags does the same for mprotect. No other advice materialises,
+    // in range has to become real entries before the loop can mark them. No
+    // other advice materialises,
     // and that is the point: MADV_DONTDUMP over a 128 MB buffer pool must not
     // fault in 128 MB to answer a hint.
     if (advice == MADV_WIPEONFORK_ || advice == MADV_KEEPONFORK_)
@@ -1743,7 +1754,10 @@ dword_t sys_madvise_guest(guest_addr_t addr, qword_t len, dword_t advice) {
         if (err < 0)
             break;
     }
-    mem_write_unlock_with_pokes(mem);
+    if (changes)
+        mem_write_unlock_with_pokes(mem);
+    else
+        mem_read_unlock_quiesce_aware(mem);
     if (err < 0)
         return err;
     if (saw_hole)

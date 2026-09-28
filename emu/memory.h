@@ -30,18 +30,19 @@ struct data;
 // any real entries, since a reservation over them is never consulted; mem_init
 // clears the table a fork's whole-struct copy inherited.
 //
-// A fault never splits a reservation: it materialises the whole prefix up to
-// the end of the faulting chunk and trims the front. The cost: a fault at the
-// far end of a reservation materialises everything before it, i.e. exactly the
-// eager behaviour and no worse. The win is every case that reserves and
-// touches little or nothing.
+// A fault materialises the chunk it lands in. Near the front of a reservation
+// it takes the prefix too and trims the front; further in it splits the chunk
+// out, and when the split is refused takes the smaller of the prefix and the
+// suffix (mem_lazy_fault). It used to take the prefix always, which made a
+// fault at the far end of a 64 GiB reservation cost 64 GiB of entries.
 //
 // Dropping coverage from the MIDDLE of one (a MAP_FIXED commit into a PROT_NONE
-// heap, a munmap of a hole) does split it, by range arithmetic alone: it maps
+// heap, a munmap of a hole) splits it, by range arithmetic alone: it maps
 // nothing, so it cannot recurse into a lock, and it cannot fail half way. A
 // split is refused when MEM_LAZY_SPLIT_LIMIT slots are already in use, and the
-// caller then materialises that one reservation in full instead, at a call site
-// where mapping is safe.
+// caller then materialises the range and the smaller side of it instead, at a
+// call site where mapping is safe (mem_lazy_materialize_range). mprotect
+// changes a reservation's protection without materialising it at all.
 //
 // So a split leaves its remainders RESERVED, where materialising used to give
 // them entries, and everything that reads entries has to read reservations too
@@ -90,8 +91,8 @@ struct mem_lazy_map {
 // live reservations were made after the last split (or other change that adds
 // slots: a move, an mlock or munlock), so the old 32-slot table would have been
 // full too: a split never turns a mapping eager that would otherwise have
-// stayed lazy. A refused split materialises only the reservation that holds the
-// range, never more than the old code did.
+// stayed lazy. A refused split materialises the range and the smaller side of
+// the reservation that holds it, never more than the old code did.
 //
 // Rejected alternatives. Keeping a few slots free for new reservations only
 // moves the cliff: the mapping after those few goes eager where the old table
@@ -256,6 +257,11 @@ struct mem {
     // live entry (mprotect keeps them, a COW break maps a copy with the same
     // ones). Same mm_copy rule as the counters above.
     _Atomic size_t class_entries[MEM_PAGE_CLASSES];
+    // Bytes of page-table chunks and leaves this address space has allocated:
+    // /proc/<pid>/status VmPTE. They are freed only by mem_destroy, so this
+    // only grows. Bumped where they are allocated, under the same exclusion.
+    // Same mm_copy rule as the counters above.
+    _Atomic size_t pt_bytes;
 };
 #define MEM_MEMLOCK_UNLIMITED ((page_t) -1)
 
@@ -359,13 +365,17 @@ void mem_lazy_join(struct mem *mem, page_t page);
 // the range's lock (see pt_entry::locked).
 bool mem_range_flags(struct mem *mem, page_t start, pages_t pages,
                      unsigned *flags, struct data **data, uint8_t *lock);
-// Materialise every reservation overlapping [start, end), IN FULL. Maps, so it
-// must not be called with the JIT invalidate lock held.
+// Give every reserved page of [start, end) an entry. Of a reservation the range
+// only partly covers, the rest stays reserved: one strictly containing it is
+// split around it while MEM_LAZY_SPLIT_LIMIT allows, and otherwise gives up its
+// smaller side with the range -- never the whole reservation, which can be tens
+// of GiB (emu/memory.c, mem_lazy_materialize_only). Maps, so it must not be
+// called with the JIT invalidate lock held.
 void mem_lazy_materialize_range(struct mem *mem, page_t start, page_t end);
-// Give [start, end) entries and leave the rest of each reservation it overlaps
-// reserved. A reservation strictly containing the range is split around it
-// while MEM_LAZY_SPLIT_LIMIT allows, and materialised whole otherwise. Maps:
-// the same locking rule as mem_lazy_materialize_range.
+// Host memory in this address space's page tables (struct mem's pt_bytes).
+size_t mem_page_table_bytes(struct mem *mem);
+// mem_lazy_materialize_range's result, for mlock's populate. Maps: the same
+// locking rule as mem_lazy_materialize_range.
 void mem_lazy_populate(struct mem *mem, page_t start, page_t end);
 // mlock and munlock of [start, end), for reserved pages; pt_set_locked does the
 // entries. `lock` is what the range gets (see pt_entry::locked). A plain lock
