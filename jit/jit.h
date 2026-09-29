@@ -227,7 +227,11 @@ void jit_note_shared_write(struct jit *jit, const struct pt_entry *entry);
 // newly compiled blocks: an interleaved A/B must start a fresh guest process
 // per rep (fresh jit, fresh translations) after flipping the knob.
 #define JIT_FUSE_RV_RETCACHE (1u << 2)
-#define JIT_FUSE_RV_ALL (JIT_FUSE_RV_FOLD | JIT_FUSE_RV_JAL | JIT_FUSE_RV_RETCACHE)
+// gen_riscv64_try_pair: two 64-bit loads (or stores) off one base in one gadget,
+// the ldp/stp RV64 lacks -- register saves and restores in every prologue.
+#define JIT_FUSE_RV_PAIR (1u << 3)
+#define JIT_FUSE_RV_ALL (JIT_FUSE_RV_FOLD | JIT_FUSE_RV_JAL | JIT_FUSE_RV_RETCACHE | \
+                         JIT_FUSE_RV_PAIR)
 
 // The amd64 guest's bits are not fusions in the i386 sense (two gadgets folded
 // into one) but NATIVE-vs-BRIDGE switches, which is the same A/B in the shape

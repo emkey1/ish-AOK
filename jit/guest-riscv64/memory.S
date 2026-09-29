@@ -227,6 +227,63 @@ store_gadget sh, 16, rvsh, strh, w19
 store_gadget sw, 32, rvsw, str,  w19
 store_gadget sd, 64, rvsd, str,  x19
 
+// ---- Pairs: two 64-bit loads, or two 64-bit stores, off one base ----------
+// RV64 has no ldp/stp, so a function's register saves and restores are runs
+// of sd and ld: ld->ld and sd->sd are 12% of adjacent pairs in a gcc compile
+// (tools/jitprof-report.py). gen_riscv64_try_pair folds each pair into one
+// gadget; fld/fsd take part too, through their f-register slot offsets.
+// Code stream: [gadget][r1_off][rs1_off][imm1][r2_off][imm2][pc2][pc1]
+// pc1 is last, as for every memory gadget, so a fault in the first access
+// restarts there. The second access steps _ip back a word first, so a fault
+// in it reports -- and a kernel-resolved one restarts at -- its own pc2, with
+// the first access already done, exactly as unfused. The base register is
+// read once: gen refuses a pair whose first load replaces it.
+.gadget ld_ld
+    ldr x19, [_ip]            // r1_off
+    ldr x9, [_ip, #8]         // rs1_off
+    ldr x10, [_ip, #16]       // imm1
+    ldr x20, [_ip, #24]       // r2_off
+    ldr x22, [_ip, #32]       // imm2
+    add _ip, _ip, #56
+    ldr x21, [_cpu, x9]       // base
+    add x7, x21, x10
+    read_prep 64, rvldld1
+    ldr x11, [x7]
+    str x11, [_cpu, x19]
+    sub _ip, _ip, #8          // [_ip, #-8] = pc2 for the second access
+    add x7, x21, x22
+    read_prep 64, rvldld2
+    ldr x11, [x7]
+    str x11, [_cpu, x20]
+    add _ip, _ip, #8
+    gret
+    read_bullshit 64, rvldld1
+    read_bullshit 64, rvldld2
+
+.gadget sd_sd
+    ldr x9, [_ip]             // r1_off (first value)
+    ldr x10, [_ip, #8]        // rs1_off
+    ldr x11, [_ip, #16]       // imm1
+    ldr x12, [_ip, #24]       // r2_off (second value)
+    ldr x22, [_ip, #32]       // imm2
+    add _ip, _ip, #56
+    ldr x19, [_cpu, x9]       // both values and the base survive prep in
+    ldr x20, [_cpu, x12]      // callee-saved registers
+    ldr x21, [_cpu, x10]
+    add x7, x21, x11
+    write_prep 64, rvsdsd1
+    str x19, [x7]
+    write_done 64, rvsdsd1
+    sub _ip, _ip, #8          // [_ip, #-8] = pc2 for the second access
+    add x7, x21, x22
+    write_prep 64, rvsdsd2
+    str x20, [x7]
+    write_done 64, rvsdsd2
+    add _ip, _ip, #8
+    gret
+    write_bullshit 64, rvsdsd1
+    write_bullshit 64, rvsdsd2
+
 // ---- FP loads/stores (F/D extension) --------------------------------------
 // fld/fsd/fsw reuse the integer ld/sd/sw gadgets directly: gen passes the
 // f-register slot's byte offset instead of an x-register's, and the byte

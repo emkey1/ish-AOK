@@ -5066,6 +5066,66 @@ static unsigned gen_riscv64_peek(struct gen_state *state, struct tlb *tlb,
     return 4;
 }
 
+// Two 64-bit loads (or two 64-bit stores) off the same base register, back to
+// back, become one ld_ld / sd_sd gadget (jit/guest-riscv64/memory.S): the
+// ldp/stp RV64 lacks, which every prologue and epilogue spends as runs of sd
+// and ld -- 12% of adjacent pairs in a gcc compile (ISH_JIT_PROFILE). fld/fsd
+// take part through their f-register slots. The pair is refused when the first
+// load replaces the base, so the gadget reads the base once; each access keeps
+// its own fault pc. reg1_off is the first instruction's value/destination slot
+// and load_rd its integer destination (-1 for fld).
+static bool gen_riscv64_try_pair(struct gen_state *state, struct tlb *tlb, bool is_load,
+        unsigned long reg1_off, int load_rd, unsigned rs1, int64_t imm1) {
+    extern void gadget_riscv64_ld_ld(void);
+    extern void gadget_riscv64_sd_sd(void);
+    if (!(riscv64_jit_fuse_mask() & JIT_FUSE_RV_PAIR))
+        return false;
+    if (is_load && load_rd >= 0 && (unsigned) load_rd == rs1 && rs1 != 0)
+        return false;
+    uint32_t next;
+    unsigned len = gen_riscv64_peek(state, tlb, &next);
+    if (len == 0)
+        return false;
+    // Same page budget as gen_riscv64_fold_const.
+    if (state->riscv64_ip + len - state->block->addr > PAGE_SIZE)
+        return false;
+    if (riscv64_funct3(next) != 3 || riscv64_rs1(next) != rs1)
+        return false;
+    unsigned opcode = riscv64_opcode(next);
+    unsigned long freg_base = offsetof(struct cpu_state, riscv64_f);
+    unsigned long reg2_off;
+    int64_t imm2;
+    if (is_load) {
+        if (opcode == RISCV64_OP_LOAD)
+            reg2_off = riscv64_rd_off(riscv64_rd(next));
+        else if (opcode == RISCV64_OP_LOAD_FP)
+            reg2_off = freg_base + riscv64_rd(next) * sizeof(qword_t);
+        else
+            return false;
+        imm2 = riscv64_imm_i(next);
+    } else {
+        if (opcode == RISCV64_OP_STORE)
+            reg2_off = riscv64_rs_off(riscv64_rs2(next));
+        else if (opcode == RISCV64_OP_STORE_FP)
+            reg2_off = freg_base + riscv64_rs2(next) * sizeof(qword_t);
+        else
+            return false;
+        imm2 = riscv64_imm_s(next);
+    }
+    gen(state, (unsigned long) (is_load ? gadget_riscv64_ld_ld : gadget_riscv64_sd_sd));
+    gen(state, reg1_off);
+    gen(state, riscv64_rs_off(rs1));
+    gen(state, (uint64_t) imm1);
+    gen(state, reg2_off);
+    gen(state, (uint64_t) imm2);
+    gen(state, state->riscv64_ip);       // pc2: the second access's fault pc
+    gen(state, state->riscv64_orig_ip);  // pc1, ALWAYS last
+    if (unlikely(state->jitprof != NULL))
+        jitprof_note(state->jitprof, next);
+    state->riscv64_ip += len;
+    return true;
+}
+
 // lui/auipc + {addi, addiw, load} same-register pairs fold into a single
 // gadget: the first instruction's result is compile-time known (gen knows
 // the guest pc), so the pair costs one dispatch instead of two, and the
@@ -5616,6 +5676,9 @@ int gen_step_riscv64(struct gen_state *state, struct tlb *tlb) {
         void (*gadget)(void) = load_gadgets[funct3];
         if (gadget == NULL)
             return gen_riscv64_undefined(state, insn);
+        if (funct3 == 3 && gen_riscv64_try_pair(state, tlb, true, riscv64_rd_off(rd), (int) rd,
+                rs1, riscv64_imm_i(insn)))
+            return 1;
         gen(state, (unsigned long) gadget);
         gen(state, riscv64_rd_off(rd)); // x0 target still faults; sink absorbs it
         gen(state, riscv64_rs_off(rs1));
@@ -5632,6 +5695,9 @@ int gen_step_riscv64(struct gen_state *state, struct tlb *tlb) {
         void (*gadget)(void) = store_gadgets[funct3];
         if (gadget == NULL)
             return gen_riscv64_undefined(state, insn);
+        if (funct3 == 3 && gen_riscv64_try_pair(state, tlb, false,
+                riscv64_rs_off(riscv64_rs2(insn)), -1, rs1, riscv64_imm_s(insn)))
+            return 1;
         gen(state, (unsigned long) gadget);
         gen(state, riscv64_rs_off(riscv64_rs2(insn)));
         gen(state, riscv64_rs_off(rs1));
@@ -5687,6 +5753,9 @@ int gen_step_riscv64(struct gen_state *state, struct tlb *tlb) {
             gadget = funct3 == 3 ? gadget_riscv64_ld : gadget_riscv64_flw;
         else
             gadget = funct3 == 3 ? gadget_riscv64_sd : gadget_riscv64_sw;
+        if (funct3 == 3 && gen_riscv64_try_pair(state, tlb, is_load, freg_off, -1, rs1,
+                is_load ? riscv64_imm_i(insn) : riscv64_imm_s(insn)))
+            return 1;
         gen(state, (unsigned long) gadget);
         gen(state, freg_off);
         gen(state, riscv64_rs_off(rs1));
@@ -12906,7 +12975,7 @@ static const struct jit_fuse_entry arm64_fuse_names[] = {
 };
 static const struct jit_fuse_entry riscv64_fuse_names[] = {
     {"fold", JIT_FUSE_RV_FOLD}, {"jal", JIT_FUSE_RV_JAL},
-    {"retcache", JIT_FUSE_RV_RETCACHE},
+    {"retcache", JIT_FUSE_RV_RETCACHE}, {"pair", JIT_FUSE_RV_PAIR},
 };
 static const struct jit_fuse_entry amd64_fuse_names[] = {
     {"incdec_reg", JIT_FUSE_AMD64_INCDEC_REG},
