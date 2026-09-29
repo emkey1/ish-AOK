@@ -360,8 +360,22 @@ static void amd64_jit_debug(const char *fmt, ...) {
 }
 
 int gen_step(struct gen_state *state, struct tlb *tlb) {
-    if (state->arm64)
-        return gen_step_arm64(state, tlb);
+    if (state->arm64) {
+        if (state->jitprof == NULL)
+            return gen_step_arm64(state, tlb);
+        // ISH_JIT_PROFILE: gen_step_arm64 notes the word it decodes, but a
+        // lookahead fusion (compare + b.cond, load-op-store, movz + movk...)
+        // consumes more; note those too, or the profile loses every fused
+        // branch and a loop looks like it ends in its compare.
+        guest_addr_t start = state->arm64_ip;
+        int ret = gen_step_arm64(state, tlb);
+        for (guest_addr_t a = start + 4; a < state->arm64_ip && a < start + 64; a += 4) {
+            uint32_t w;
+            if (tlb_read(tlb, a, &w, sizeof(w)))
+                jitprof_note(state->jitprof, w);
+        }
+        return ret;
+    }
     if (state->riscv64)
         return gen_step_riscv64(state, tlb);
     state->orig_ip = state->ip;
@@ -5606,12 +5620,16 @@ static bool gen_riscv64_fold_const(struct gen_state *state, struct tlb *tlb,
     if (opcode == RISCV64_OP_OP_IMM && funct3 == 0) { // addi
         gen_riscv64_mov_const(state, rd,
                 value + (uint64_t) riscv64_imm_i(next));
+        if (unlikely(state->jitprof != NULL))
+            jitprof_note(state->jitprof, next);
         state->riscv64_ip += len;
         return true;
     }
     if (opcode == RISCV64_OP_OP_IMM_32 && funct3 == 0) { // addiw (sext.w)
         gen_riscv64_mov_const(state, rd, (uint64_t) (int64_t) (int32_t)
                 (value + (uint64_t) riscv64_imm_i(next)));
+        if (unlikely(state->jitprof != NULL))
+            jitprof_note(state->jitprof, next);
         state->riscv64_ip += len;
         return true;
     }
@@ -5636,6 +5654,8 @@ static bool gen_riscv64_fold_const(struct gen_state *state, struct tlb *tlb,
         gen(state, riscv64_rs_off(0)); // always-zero slot: absolute address
         gen(state, value + (uint64_t) riscv64_imm_i(next));
         gen(state, state->riscv64_orig_ip); // pair start; ALWAYS last
+        if (unlikely(state->jitprof != NULL))
+            jitprof_note(state->jitprof, next);
         state->riscv64_ip += len;
         return true;
     }

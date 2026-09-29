@@ -19,8 +19,8 @@
 
 // HLE "giant gadget" -- riscv64 twin of guest-arm64 control.S's hle_call
 // (see that gadget's comment for the full contract). Bridges to
-// hle_call(cpu, tlb, fn, entry_ip); INT_NONE -> jit_ret with the pc the C
-// side stored, any real interrupt code -> jit_exit. x27 carries the result
+// hle_call(cpu, tlb, fn, entry_ip); INT_NONE -> the pc the C side stored,
+// through the jalr cache (else jit_ret), any real interrupt code -> jit_exit. x27 carries the result
 // across restore_c. Code stream: [fn | abi<<8][entry_ip].
 .gadget hle_call
     ldr x8, [_ip]
@@ -36,7 +36,24 @@
     tbnz w27, #31, 1f          // INT_NONE (-1): success, pc updated
     mov w0, w27
     b jit_exit
-1:  b jit_ret
+    // Success: enter the return address through the jalr cache (alu.S's
+    // jalr_cached, same hash and checks) rather than always exiting to the
+    // dispatcher, which was most of an intercepted call's cost.
+1:  ldr x10, [_cpu, #CPU_riscv64_pc]
+    eor x13, x10, x10, lsr #12
+    ubfx x13, x13, #1, #12
+    mov x14, LOCAL_ret_cache
+    add x14, _cpu, x14
+    ldr x14, [x14, x13, lsl #3]
+    cbz x14, 2f
+    ldur x15, [x14, #(JIT_BLOCK_addr - JIT_BLOCK_code)]
+    cmp x15, x10
+    b.ne 2f
+    ldurb w15, [x14, #(JIT_BLOCK_is_jetsam - JIT_BLOCK_code)]
+    cbnz w15, 2f
+    mov _ip, x14
+    b riscv64_chain
+2:  b jit_ret
 
 .extern hle_call
 

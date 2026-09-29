@@ -162,9 +162,10 @@ arm64_chain_poked:
 // HLE "giant gadget": the whole block is one fingerprinted libc function
 // (jit/hle.c). Bridges to hle_call(cpu, tlb, fn, entry_ip), which performs
 // the function against guest memory, writes the return register, and sets
-// cpu->pc to the guest return address. Result INT_NONE -> exit the block
-// via jit_ret (dispatcher continues at the new pc); any other interrupt
-// (INT_PF after a guest memory fault, pc rewound to entry) -> jit_exit.
+// cpu->pc to the guest return address. Result INT_NONE -> continue at the
+// new pc through the ret cache (hle_call_return; jit_ret on a miss); any
+// other interrupt (INT_PF after a guest memory fault, pc rewound to entry)
+// -> jit_exit.
 // x27 carries the result across restore_c (x0-x18 + lr are reloaded).
 // Code stream: [fn | abi<<8][entry_ip].
 .gadget hle_call
@@ -181,7 +182,7 @@ arm64_chain_poked:
     tbnz w27, #31, 1f          // INT_NONE (-1): success, pc updated
     mov w0, w27
     b jit_exit
-1:  b jit_ret
+1:  b hle_call_return          // the return address, through the ret cache
 
 .extern hle_call
 
@@ -415,6 +416,15 @@ arm64_chain_poked:
 8:  str \target, [_cpu, #CPU_pc]
     b jit_ret
 .endm
+
+// hle_call's success tail: the function "returned" to the pc the C side
+// stored, so enter it the way ret_cached does -- straight into the translated
+// block when the cache has it -- instead of always exiting to the dispatcher.
+// That exit was most of an intercepted call's cost, which made HLE slower
+// than the guest's own code for small copies.
+hle_call_return:
+    ldr x10, [_cpu, #CPU_pc]
+    ret_cache_dispatch x10
 
 .gadget br_cached
     ldr x8, [_ip]

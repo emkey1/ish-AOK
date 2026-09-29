@@ -22,6 +22,7 @@ inventory, generated from `fs/proc/ish.c`.
 - `/proc/ish/defaults` (directory)
 - `/proc/ish/documents` (file)
 - `/proc/ish/host_info` (file)
+- `/proc/ish/hle` (file)
 - `/proc/ish/host_ports` (file)
 - `/proc/ish/i386_jit_fuse` (file)
 - `/proc/ish/i386_no_cache_comm` (file)

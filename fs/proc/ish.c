@@ -1481,6 +1481,24 @@ static int proc_ish_update_arm64_mops(struct proc_entry *UNUSED(e), struct proc_
     return 0;
 }
 
+// /proc/ish/hle: 1 when high-level emulation of libc functions is on
+// (jit/hle.c; the app's HLE toggle and ISH_HLE set it too). Write 0 or 1;
+// blocks translated afterwards follow it.
+extern bool doEnableHLE;
+static int proc_ish_show_hle(struct proc_entry *UNUSED(e), struct proc_data *buf) {
+    proc_printf(buf, "%d\n", doEnableHLE ? 1 : 0);
+    return 0;
+}
+static int proc_ish_update_hle(struct proc_entry *UNUSED(e), struct proc_data *d) {
+    size_t n = d->size;
+    while (n > 0 && (d->data[n - 1] == '\n' || d->data[n - 1] == ' '))
+        n--;
+    if (n != 1 || (d->data[0] != '0' && d->data[0] != '1'))
+        return _EINVAL;
+    doEnableHLE = d->data[0] == '1';
+    return 0;
+}
+
 static int proc_ish_update_amd64_jit(struct proc_entry *UNUSED(entry), struct proc_data *data) {
     size_t start = 0;
     size_t end = data->size;
@@ -2076,6 +2094,7 @@ struct proc_children proc_ish_children = PROC_CHILDREN({
     {"amd64_jit_fuse", S_IFREG | 0644, .show = proc_ish_show_amd64_jit_fuse, .update = proc_ish_update_amd64_jit_fuse},
     {"arm64_jit_fuse", S_IFREG | 0644, .show = proc_ish_show_arm64_jit_fuse, .update = proc_ish_update_arm64_jit_fuse},
     {"arm64_mops", S_IFREG | 0644, .show = proc_ish_show_arm64_mops, .update = proc_ish_update_arm64_mops},
+    {"hle", S_IFREG | 0644, .show = proc_ish_show_hle, .update = proc_ish_update_hle},
     {"i386_jit_fuse", S_IFREG | 0644, .show = proc_ish_show_i386_jit_fuse, .update = proc_ish_update_i386_jit_fuse},
     {"riscv64_jit_fuse", S_IFREG | 0644, .show = proc_ish_show_riscv64_jit_fuse, .update = proc_ish_update_riscv64_jit_fuse},
     {"i386_no_cache_comm", S_IFREG | 0644, .show = proc_ish_show_i386_no_cache_comm, .update = proc_ish_update_i386_no_cache_comm},
