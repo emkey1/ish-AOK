@@ -59,6 +59,20 @@ Focused tests (arm64/, aarch64 guests):
                        specialised gadget (simd_spec3.S), v5/v17/v29, hashed
                        against simd_three_same.golden, which an Apple Silicon
                        Mac produces running the file natively -DPRINT_GOLDEN.
+  alu_ospec.c          Scalar add/sub/adds/subs/cmp/cmn (imm, reg, LSL),
+                       and/orr/eor/ands (reg, imm), mov and the SP-source
+                       forms, 32/64-bit, on x3/x17/x26 over carry/overflow/
+                       sign edges; result and NZCV hashed against
+                       alu_ospec.golden (native Mac, -DPRINT_GOLDEN). Covers
+                       the ospec gadgets (alu_spec.S) and, with ospec=0, the
+                       index-decoding ones.
+  ldst_lspec.c         Loads/stores with post/pre-index writeback and register
+                       offsets (LSL/SXTX, SXTW, UXTW), every size and sign
+                       extension, on x3/x17/x26, hashed against
+                       ldst_lspec.golden (native Mac, -DPRINT_GOLDEN); then a
+                       faulting post-index load and pre-index store must
+                       report their pc/address and leave the base unchanged.
+                       lspec=0 runs the generic gadgets.
   ands_bcond_fusion.c  ANDS+B.cond gadget fusion (jit/guest-arm64/control.S
                        fused_andsi/fused_andsr): all 14 conditions x
                        {imm,reg} x {32,64-bit} x {TST,normal-Rd}, checking

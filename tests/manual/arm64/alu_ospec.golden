@@ -1,0 +1,138 @@
+0xe521f3f4e808882eull, // add x3, x17, #0
+0xdc56dd110a24b6a8ull, // add x3, x17, #1
+0xbf17fda9bd6ed3a8ull, // add x3, x17, #4095
+0x348533175aaa482eull, // add x3, x17, #1, lsl #12
+0x371503725cfe882eull, // add x3, x17, #0xabc, lsl #12
+0xe521f3f4e808882eull, // sub x3, x17, #0
+0x9f22705e7d12f3a8ull, // sub x3, x17, #1
+0x720a73c04e0b96a8ull, // sub x3, x17, #4095
+0xde08e3204359082eull, // sub x3, x17, #1, lsl #12
+0xc9cd3431107c882eull, // sub x3, x17, #0xabc, lsl #12
+0xa3f64711400eb99aull, // adds x3, x17, #0
+0xb59ee4225d5910a9ull, // adds x3, x17, #1
+0xa34f98d759a4998dull, // adds x3, x17, #4095
+0x3354c70959717e33ull, // adds x3, x17, #1, lsl #12
+0x8b69e50bdb68be33ull, // adds x3, x17, #0xabc, lsl #12
+0xfbbe54f4b3692f0aull, // subs x3, x17, #0
+0x6cc5a68df151aba5ull, // subs x3, x17, #1
+0x2cae10e393b15301ull, // subs x3, x17, #4095
+0x93665872a3cfa1a3ull, // subs x3, x17, #1, lsl #12
+0xcd99d805fb5e61a3ull, // subs x3, x17, #0xabc, lsl #12
+0x5bc48e8663d93961ull, // cmp x17, #0
+0xb5f5d0d7cc76e084ull, // cmp x17, #1
+0x7acd8912fc2ab890ull, // cmp x17, #4095
+0x7acd8912fc2ab890ull, // cmp x17, #0x123, lsl #12
+0x63361f7112eb0291ull, // cmn x17, #0
+0x903a068b57226048ull, // cmn x17, #1
+0xf145cb01fcff2994ull, // cmn x17, #4095
+0xf145cb01fcff2994ull, // cmn x17, #0x123, lsl #12
+0x7f217e6e0f139017ull, // add x3, x17, x26
+0x2c4461e73cad2e29ull, // sub x3, x17, x26
+0x2fe66b3c515c7aabull, // adds x3, x17, x26
+0x8a7e9c53490ab921ull, // subs x3, x17, x26
+0x8fef11d2247fadb7ull, // and x3, x17, x26
+0x28b6fccdd289b6b9ull, // orr x3, x17, x26
+0x6a6be7417a6a295bull, // eor x3, x17, x26
+0x5c098452724a267bull, // ands x3, x17, x26
+0x8e85db398c11deacull, // add x3, x17, x26, lsl #1
+0xf06a6efa9576f8f6ull, // add x3, x17, x26, lsl #3
+0x141e94dbe808882eull, // add x3, x17, x26, lsl #32
+0x6521f3f4e808882eull, // add x3, x17, x26, lsl #63
+0x91f353ac584d7e18ull, // sub x3, x17, x26, lsl #1
+0xe10b9fe642ea7be6ull, // sub x3, x17, x26, lsl #3
+0xfeb101f5e808882eull, // sub x3, x17, x26, lsl #32
+0x6521f3f4e808882eull, // sub x3, x17, x26, lsl #63
+0x95ba140fba1fa07dull, // cmp x17, x26
+0x2672aa5bdb2753f5ull, // cmn x17, x26
+0x5dfc7f258f94032eull, // and x3, x17, #0xff
+0x45ce5aa8377c0935ull, // and x3, x17, #0xffff0000ffff0000
+0x2259aff98c6a7684ull, // and x3, x17, #0x8000000000000001
+0xd2bdff265478d404ull, // and x3, x17, #0x5555555555555555
+0x9fb3ef472e4b6e9full, // and x3, x17, #0x7ffffffffffffffe
+0x356a49708dcfcc3dull, // orr x3, x17, #0xff
+0xf5538679203b882eull, // orr x3, x17, #0xffff0000ffff0000
+0x3f01dd4134810ae7ull, // orr x3, x17, #0x8000000000000001
+0x6daecfa70be5c487ull, // orr x3, x17, #0x5555555555555555
+0xa04dc6f021c75df4ull, // orr x3, x17, #0x7ffffffffffffffe
+0xecad42d97a6e47a6ull, // eor x3, x17, #0xff
+0x58a36512b508882eull, // eor x3, x17, #0xffff0000ffff0000
+0x29a4a5db6dabc2a6ull, // eor x3, x17, #0x8000000000000001
+0x82274480b92dcfe6ull, // eor x3, x17, #0x5555555555555555
+0x720fd2ba9a08c25eull, // eor x3, x17, #0x7ffffffffffffffe
+0x53494909fbf0eb7aull, // ands x3, x17, #0xff
+0xa93fc68ca5345ec1ull, // ands x3, x17, #0xffff0000ffff0000
+0x6c632d2dc4359570ull, // ands x3, x17, #0x8000000000000001
+0x60ba5990b3e457a4ull, // ands x3, x17, #0x5555555555555555
+0x6ed7eabf74131e23ull, // ands x3, x17, #0x7ffffffffffffffe
+0x10aa36de254059f0ull, // mov x3, x26
+0xae95b5eae808882eull, // add w3, w17, #0
+0x72eacefe0a24b6a8ull, // add w3, w17, #1
+0x0da2f5d8bd6ed3a8ull, // add w3, w17, #4095
+0xd79f78fa5aaa482eull, // add w3, w17, #1, lsl #12
+0xaa3bcb8f5cfe882eull, // add w3, w17, #0xabc, lsl #12
+0xae95b5eae808882eull, // sub w3, w17, #0
+0x9839c3497d12f3a8ull, // sub w3, w17, #1
+0x29d1700d4e0b96a8ull, // sub w3, w17, #4095
+0x9b594aa94359082eull, // sub w3, w17, #1, lsl #12
+0x1c3817f0107c882eull, // sub w3, w17, #0xabc, lsl #12
+0xa6e11b78cf57a43aull, // adds w3, w17, #0
+0x369245534c7752a9ull, // adds w3, w17, #1
+0xb175eb6ca91002f9ull, // adds w3, w17, #4095
+0xdc7ac5ea03d0b537ull, // adds w3, w17, #1, lsl #12
+0x6eaa2104a7871537ull, // adds w3, w17, #0xabc, lsl #12
+0x75a71f99c4fb452aull, // subs w3, w17, #0
+0x11cb206f0a5e1652ull, // subs w3, w17, #1
+0x964651380ca90d9aull, // subs w3, w17, #4095
+0xb1edbb1145b767c4ull, // subs w3, w17, #1, lsl #12
+0xd03d3432bdbe27c4ull, // subs w3, w17, #0xabc, lsl #12
+0xae7b248cdb095819ull, // cmp w17, #0
+0x9ef571272d68f48bull, // cmp w17, #1
+0x1d038580ddf563c7ull, // cmp w17, #4095
+0x1d038580ddf563c7ull, // cmp w17, #0x123, lsl #12
+0xf6ec016c6c9c8509ull, // cmn w17, #0
+0x84c3d31cdee87e54ull, // cmn w17, #1
+0x0968c6ecaddf68b0ull, // cmn w17, #4095
+0x0968c6ecaddf68b0ull, // cmn w17, #0x123, lsl #12
+0x5ec08d8d0f139017ull, // add w3, w17, w26
+0x3c7b3fb73cad2e29ull, // sub w3, w17, w26
+0xe6f63075ef800a42ull, // adds w3, w17, w26
+0xb893e9674d2da086ull, // subs w3, w17, w26
+0x0fef11d2247fadb7ull, // and w3, w17, w26
+0xb6a9f41fd289b6b9ull, // orr w3, w17, w26
+0x8f1e09ed7a6a295bull, // eor w3, w17, w26
+0xb7b1031a4825e3efull, // ands w3, w17, w26
+0x80818e198c11deacull, // add w3, w17, w26, lsl #1
+0x4704cd939576f8f6ull, // add w3, w17, w26, lsl #3
+0xee6c464536ae882eull, // add w3, w17, w26, lsl #17
+0x5c0c283b6808882eull, // add w3, w17, w26, lsl #31
+0x55db225c584d7e18ull, // sub w3, w17, w26, lsl #1
+0xad839a7742ea7be6ull, // sub w3, w17, w26, lsl #3
+0x9e55fc2ef35a882eull, // sub w3, w17, w26, lsl #17
+0x5c0c283b6808882eull, // sub w3, w17, w26, lsl #31
+0x51dbf683adee3f32ull, // cmp w17, w26
+0x0c9b663a5db5f85cull, // cmn w17, w26
+0x5dfc7f258f94032eull, // and w3, w17, #0xff
+0xda325aaf32819035ull, // and w3, w17, #0xff00
+0x4c8533448c6a7684ull, // and w3, w17, #0x80000001
+0x947bf9085478d404ull, // and w3, w17, #0x55555555
+0xaa1d9ffb2e4b6e9full, // and w3, w17, #0x7ffffffe
+0x81dde81a8dcfcc3dull, // orr w3, w17, #0xff
+0x03e4abad30f7cb2eull, // orr w3, w17, #0xff00
+0x8f8388a334810ae7ull, // orr w3, w17, #0x80000001
+0x41df7c390be5c487ull, // orr w3, w17, #0x55555555
+0xe1d65b6321c75df4ull, // orr w3, w17, #0x7ffffffe
+0xc6b498a17a6e47a6ull, // eor w3, w17, #0xff
+0x076884bb7a85642eull, // eor w3, w17, #0xff00
+0xa429a6486dabc2a6ull, // eor w3, w17, #0x80000001
+0xd48b84d2b92dcfe6ull, // eor w3, w17, #0x55555555
+0xbf1e32709a08c25eull, // eor w3, w17, #0x7ffffffe
+0x53494909fbf0eb7aull, // ands w3, w17, #0xff
+0x545d60ad476a4409ull, // ands w3, w17, #0xff00
+0xd5ba5e73138c3678ull, // ands w3, w17, #0x80000001
+0x3e547b42b3e450d8ull, // ands w3, w17, #0x55555555
+0xba47e51c741324efull, // ands w3, w17, #0x7ffffffe
+0x032b0eb6254059f0ull, // mov w3, w26
+0xdbada47de73fefb5ull, // add x3, sp, #16
+0xee85fafd354b0935ull, // mov x3, sp
+0xc828f9ba4e081ab5ull, // add w3, wsp, #0x40
+0x223ccbbf04890935ull, // sub x3, sp, #0x10, lsl #12

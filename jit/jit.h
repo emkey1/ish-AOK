@@ -216,9 +216,16 @@ void jit_note_shared_write(struct jit *jit, const struct pt_entry *entry);
 // precomputed cpu_state offsets (jit/guest-arm64/simd_spec.S) instead of the
 // generic gadgets that decode registers, size and lane at run time.
 #define JIT_FUSE_A64_VSPEC (1u << 4)
+// Scalar ALU gadgets fed precomputed cpu_state offsets (SP included), the
+// same idea for the integer side (jit/guest-arm64/alu_spec.S).
+#define JIT_FUSE_A64_OSPEC (1u << 5)
+// Loads/stores with writeback (post/pre-index) and register offsets through
+// fast gadgets fed slot offsets (jit/guest-arm64/memory.S's _post/_pre/_rx*).
+#define JIT_FUSE_A64_LSPEC (1u << 6)
 #define JIT_FUSE_A64_ALL (JIT_FUSE_A64_BCOND | JIT_FUSE_A64_LDST | \
                           JIT_FUSE_A64_LDCMP | JIT_FUSE_A64_RETCACHE | \
-                          JIT_FUSE_A64_VSPEC)
+                          JIT_FUSE_A64_VSPEC | JIT_FUSE_A64_OSPEC | \
+                          JIT_FUSE_A64_LSPEC)
 
 // riscv64 had NO switch at all for either of its fusions, so neither could be
 // A/B'd without rebuilding. ISH_RISCV64_NO_FUSE now clears both.

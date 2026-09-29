@@ -158,6 +158,10 @@ if [ "$is_arm64_guest" -eq 1 ]; then
     need_file arm64/simd_elem_moves.c
     need_file arm64/simd_three_same.c
     need_file arm64/simd_three_same.golden
+    need_file arm64/alu_ospec.c
+    need_file arm64/alu_ospec.golden
+    need_file arm64/ldst_lspec.c
+    need_file arm64/ldst_lspec.golden
     need_file arm64/smc_stale_block.c
     need_file arm64/ret_retcache.c
     need_file arm64/stlr_ldar_publish.c
@@ -837,6 +841,12 @@ extra_key_files_for() {
         simd_three_same)
             echo "$src_dir/arm64/simd_three_same.golden"
             ;;
+        alu_ospec)
+            echo "$src_dir/arm64/alu_ospec.golden"
+            ;;
+        ldst_lspec)
+            echo "$src_dir/arm64/ldst_lspec.golden"
+            ;;
     esac
 }
 
@@ -947,7 +957,7 @@ if [ "$is_amd64_guest" -eq 1 ]; then
     all_tests="$all_tests amd64_regress avx_regress amd64_incdec amd64_singlestep amd64_segment_regs amd64_gs_base"
 fi
 if [ "$is_arm64_guest" -eq 1 ]; then
-    all_tests="$all_tests atomics64 arm64_regress vector_smoke simd_elem_moves simd_three_same smc_stale_block ret_retcache stlr_ldar_publish ptrace_singlestep ands_bcond_fusion hle_loop dc_zva arm64_fp_env"
+    all_tests="$all_tests atomics64 arm64_regress vector_smoke simd_elem_moves simd_three_same alu_ospec ldst_lspec smc_stale_block ret_retcache stlr_ldar_publish ptrace_singlestep ands_bcond_fusion hle_loop dc_zva arm64_fp_env"
 fi
 if [ "$is_riscv64_guest" -eq 1 ]; then
     all_tests="$all_tests ptrace_regset jalr_retcache riscv64_singlestep riscv64_fp_env"

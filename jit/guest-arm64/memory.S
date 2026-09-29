@@ -686,6 +686,180 @@ store_single_fast store16_fast,  16, strh, w17
 store_single_fast store32_fast,  32, str,  w17
 store_single_fast store64_fast,  64, str,  x17
 
+// ---- Fast writeback and register-offset forms (the "lspec" pass) ---------
+// The same precomputed-slot treatment for the forms the fast family above
+// leaves to the generic gadgets, which pay the full decode and mode compare
+// chain (twice the fast form's cost on an A10X): post-index and pre-index
+// (`ldrb w0, [x1], #1`, loops walking a buffer) and register offset
+// (`ldr w0, [x1, x2, lsl #2]`, `ldrb w0, [x1, w2, sxtw]`, array indexing).
+// gen.c keeps rt = 31, rm = 31 and a writeback whose rt is also rn on the
+// generic gadgets. Selected by gen_arm64_ldst_lspec_gadget; the "lspec" bit
+// of /proc/ish/arm64_jit_fuse switches it.
+//
+// Writeback: [gadget][rt_slot | rn_slot<<16][imm][orig_ip]. The new base is
+// computed before the access and written after it, so a fault leaves rn
+// untouched and the instruction restarts whole. x21 carries it across the
+// prep macro's helpers (callee-saved, as in the generic family).
+// Register offset: [gadget][rt_slot | rn_slot<<16 | rm_slot<<32 | shift<<48]
+// [orig_ip], the extend chosen by the gadget.
+.macro load_single_wb name, bits, ldinsn, reg, pre
+.gadget \name
+    ldp x8, x19, [_ip]
+    add _ip, _ip, #24
+    ubfx x9, x8, #16, #16
+    ldr x10, [_cpu, x9]       // base
+    add x21, x10, x19         // base + imm: the written-back value
+.if \pre
+    mov x7, x21
+.else
+    mov x7, x10
+.endif
+    read_prep \bits, \name
+    \ldinsn \reg, [_addr]
+    and x9, x8, #0xffff
+    str x17, [_cpu, x9]
+    ubfx x9, x8, #16, #16
+    str x21, [_cpu, x9]
+    gret
+    read_bullshit \bits, \name
+.endm
+
+.macro store_single_wb name, bits, stinsn, reg, pre
+.gadget \name
+    ldp x8, x19, [_ip]
+    add _ip, _ip, #24
+    ubfx x9, x8, #16, #16
+    ldr x10, [_cpu, x9]
+    add x21, x10, x19
+    and x9, x8, #0xffff
+    ldr x17, [_cpu, x9]       // value (survives write_prep's helpers)
+.if \pre
+    mov x7, x21
+.else
+    mov x7, x10
+.endif
+    write_prep \bits, \name
+    \stinsn \reg, [_addr]
+    write_done \bits, \name   // clobbers x9 only
+    ubfx x9, x8, #16, #16
+    str x21, [_cpu, x9]
+    gret
+    write_bullshit \bits, \name
+.endm
+
+// ext: 0 = LSL/UXTX/SXTX (Rm as a whole X register), 1 = SXTW, 2 = UXTW.
+.macro rx_index ext
+    ubfx x9, x8, #32, #16
+    ldr x11, [_cpu, x9]
+.if \ext == 1
+    sxtw x11, w11
+.elseif \ext == 2
+    mov w11, w11
+.endif
+    lsr x12, x8, #48
+    lslv x11, x11, x12
+.endm
+
+.macro load_single_rx name, bits, ldinsn, reg, ext
+.gadget \name
+    ldr x8, [_ip]
+    add _ip, _ip, #16
+    ubfx x9, x8, #16, #16
+    ldr x10, [_cpu, x9]
+    rx_index \ext
+    add x7, x10, x11
+    read_prep \bits, \name
+    \ldinsn \reg, [_addr]
+    and x9, x8, #0xffff
+    str x17, [_cpu, x9]
+    gret
+    read_bullshit \bits, \name
+.endm
+
+.macro store_single_rx name, bits, stinsn, reg, ext
+.gadget \name
+    ldr x8, [_ip]
+    add _ip, _ip, #16
+    ubfx x9, x8, #16, #16
+    ldr x10, [_cpu, x9]
+    rx_index \ext
+    add x7, x10, x11
+    and x9, x8, #0xffff
+    ldr x17, [_cpu, x9]
+    write_prep \bits, \name
+    \stinsn \reg, [_addr]
+    write_done \bits, \name
+    gret
+    write_bullshit \bits, \name
+.endm
+
+// Suffixes: _post, _pre, _rxl (LSL/UXTX/SXTX), _rxs (SXTW), _rxu (UXTW).
+load_single_wb load8_post, 8, ldrb, w17, 0
+load_single_wb load8_pre, 8, ldrb, w17, 1
+load_single_rx load8_rxl, 8, ldrb, w17, 0
+load_single_rx load8_rxs, 8, ldrb, w17, 1
+load_single_rx load8_rxu, 8, ldrb, w17, 2
+load_single_wb load16_post, 16, ldrh, w17, 0
+load_single_wb load16_pre, 16, ldrh, w17, 1
+load_single_rx load16_rxl, 16, ldrh, w17, 0
+load_single_rx load16_rxs, 16, ldrh, w17, 1
+load_single_rx load16_rxu, 16, ldrh, w17, 2
+load_single_wb load32_post, 32, ldr, w17, 0
+load_single_wb load32_pre, 32, ldr, w17, 1
+load_single_rx load32_rxl, 32, ldr, w17, 0
+load_single_rx load32_rxs, 32, ldr, w17, 1
+load_single_rx load32_rxu, 32, ldr, w17, 2
+load_single_wb load64_post, 64, ldr, x17, 0
+load_single_wb load64_pre, 64, ldr, x17, 1
+load_single_rx load64_rxl, 64, ldr, x17, 0
+load_single_rx load64_rxs, 64, ldr, x17, 1
+load_single_rx load64_rxu, 64, ldr, x17, 2
+load_single_wb loads8_32_post, 8, ldrsb, w17, 0
+load_single_wb loads8_32_pre, 8, ldrsb, w17, 1
+load_single_rx loads8_32_rxl, 8, ldrsb, w17, 0
+load_single_rx loads8_32_rxs, 8, ldrsb, w17, 1
+load_single_rx loads8_32_rxu, 8, ldrsb, w17, 2
+load_single_wb loads8_64_post, 8, ldrsb, x17, 0
+load_single_wb loads8_64_pre, 8, ldrsb, x17, 1
+load_single_rx loads8_64_rxl, 8, ldrsb, x17, 0
+load_single_rx loads8_64_rxs, 8, ldrsb, x17, 1
+load_single_rx loads8_64_rxu, 8, ldrsb, x17, 2
+load_single_wb loads16_32_post, 16, ldrsh, w17, 0
+load_single_wb loads16_32_pre, 16, ldrsh, w17, 1
+load_single_rx loads16_32_rxl, 16, ldrsh, w17, 0
+load_single_rx loads16_32_rxs, 16, ldrsh, w17, 1
+load_single_rx loads16_32_rxu, 16, ldrsh, w17, 2
+load_single_wb loads16_64_post, 16, ldrsh, x17, 0
+load_single_wb loads16_64_pre, 16, ldrsh, x17, 1
+load_single_rx loads16_64_rxl, 16, ldrsh, x17, 0
+load_single_rx loads16_64_rxs, 16, ldrsh, x17, 1
+load_single_rx loads16_64_rxu, 16, ldrsh, x17, 2
+load_single_wb loads32_64_post, 32, ldrsw, x17, 0
+load_single_wb loads32_64_pre, 32, ldrsw, x17, 1
+load_single_rx loads32_64_rxl, 32, ldrsw, x17, 0
+load_single_rx loads32_64_rxs, 32, ldrsw, x17, 1
+load_single_rx loads32_64_rxu, 32, ldrsw, x17, 2
+store_single_wb store8_post, 8, strb, w17, 0
+store_single_wb store8_pre, 8, strb, w17, 1
+store_single_rx store8_rxl, 8, strb, w17, 0
+store_single_rx store8_rxs, 8, strb, w17, 1
+store_single_rx store8_rxu, 8, strb, w17, 2
+store_single_wb store16_post, 16, strh, w17, 0
+store_single_wb store16_pre, 16, strh, w17, 1
+store_single_rx store16_rxl, 16, strh, w17, 0
+store_single_rx store16_rxs, 16, strh, w17, 1
+store_single_rx store16_rxu, 16, strh, w17, 2
+store_single_wb store32_post, 32, str, w17, 0
+store_single_wb store32_pre, 32, str, w17, 1
+store_single_rx store32_rxl, 32, str, w17, 0
+store_single_rx store32_rxs, 32, str, w17, 1
+store_single_rx store32_rxu, 32, str, w17, 2
+store_single_wb store64_post, 64, str, x17, 0
+store_single_wb store64_pre, 64, str, x17, 1
+store_single_rx store64_rxl, 64, str, x17, 0
+store_single_rx store64_rxs, 64, str, x17, 1
+store_single_rx store64_rxu, 64, str, x17, 2
+
 // ---- Fused -O0 idioms (the pattern-fusion pass) --------------------------
 // The single-gadget fast path above brought per-gadget cost to parity with
 // the amd64 engine, but unoptimized RISC output needs ~2x the instructions

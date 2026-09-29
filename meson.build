@@ -542,6 +542,7 @@ if jit_cpu_family == 'aarch64' and guest_archs.contains('arm64')
         'jit/guest-arm64/simd.S',
         'jit/guest-arm64/simd_spec.S',
         'jit/guest-arm64/simd_spec3.S',
+        'jit/guest-arm64/alu_spec.S',
         'jit/guest-arm64/simd_arith.S',
         'jit/guest-arm64/simd_misc.S',
         'jit/guest-arm64/simd_shift.S',
