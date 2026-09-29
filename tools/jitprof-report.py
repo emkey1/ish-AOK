@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Report on an ISH_JIT_PROFILE file (jit/jitprof.c): the dynamic instruction
-mix of arm64 and riscv64 guest code, how long the runs of SIMD/FP instructions
+mix of arm64, riscv64, i386 and amd64 guest code, how long the runs of SIMD/FP instructions
 are, and the commonest adjacent pairs -- the numbers for deciding between
 fusing gadgets and translating runs natively.
 
@@ -22,6 +22,8 @@ import subprocess
 import sys
 
 MC_TRIPLES = {
+    "i386": ["-triple=i386"],
+    "amd64": ["-triple=x86_64"],
     "arm64": ["-triple=aarch64"],
     "riscv64": ["-triple=riscv64", "-mattr=+m,+a,+f,+d,+c,+zba,+zbb,+zbs,+zicsr,+zifencei"],
 }
@@ -88,6 +90,97 @@ def riscv64_class(w):
     }.get(opcode, "other")
 
 
+# x86 records are byte strings (one per translation step, possibly several
+# instructions); they are classified by mnemonic after disassembly.
+X86_ABIS = {"i386", "amd64"}
+
+
+def x86_class(text):
+    m = text.split()[0] if text else "?"
+    ops = text[len(m):]
+    if m.startswith("rep") or m.startswith("movs") and "(" not in ops and "%xmm" not in ops:
+        return "string"
+    if m.startswith(("push", "pop", "leave", "enter")):
+        return "stack"
+    if m.startswith("f") and not m.startswith("fx"):
+        return "x87"
+    if "%xmm" in ops or "%ymm" in ops or "%mm" in ops:
+        return "sse"
+    if m[0] == "j" or m.startswith(("call", "ret", "loop")):
+        return "branch"
+    if m.startswith(("cmp", "test", "bt")):
+        return "cmp/test"
+    if m.startswith(("mov", "lea", "cmov", "xchg", "set")):
+        return "mov-mem" if "(" in ops else "mov-reg"
+    return "alu-mem" if "(" in ops else "alu-reg"
+
+
+def x86_disassemble(mc, abi, chunks):
+    """{chunk hex: [instruction text, ...]} for the byte chunks llvm-mc can decode."""
+    out = {}
+    if mc is None:
+        return out
+    for i in range(0, len(chunks), 4000):
+        batch = chunks[i:i + 4000]
+        lines = [" ".join("0x" + c[j:j + 2] for j in range(0, len(c), 2)) for c in batch]
+        res = subprocess.run([mc, "--disassemble", "--show-encoding"] + MC_TRIPLES[abi],
+                             input="\n".join(lines), capture_output=True, text=True).stdout
+        insns = []
+        for line in res.splitlines():
+            if "encoding: [" not in line:
+                continue
+            text, enc = line.split("encoding: [", 1)
+            text = " ".join(text.rstrip().rstrip("/#").split())
+            n = len(enc.split("]")[0].split(","))
+            insns.append((text, n))
+        k = 0
+        for c in batch:
+            need, got = len(c) // 2, []
+            while need > 0 and k < len(insns):
+                got.append(insns[k][0])
+                need -= insns[k][1]
+                k += 1
+            out[c] = got
+    return out
+
+
+def x86_report(abi, recs, mc, top):
+    chunks = sorted({c for _, cs in recs for c in cs})
+    dis = x86_disassemble(mc, abi, chunks)
+    total = 0
+    by_class = collections.Counter()
+    by_mnem = collections.Counter()
+    pairs = collections.Counter()
+    steps = collections.Counter()      # instructions per translation step
+    for count, cs in recs:
+        seq = []
+        for c in cs:
+            ins = dis.get(c) or ["?"]
+            steps[len(ins)] += count
+            seq.extend(ins)
+        total += count * len(seq)
+        for t in seq:
+            by_class[x86_class(t)] += count
+            by_mnem[t.split()[0] if t else "?"] += count
+        mn = [t.split()[0] if t else "?" for t in seq]
+        for a, b in zip(mn, mn[1:]):
+            pairs[(a, b)] += count
+    print("=" * 72)
+    print("%s: %d blocks ran, %.1fM dynamic instructions" % (abi, len(recs), total / 1e6))
+    print("\nby class")
+    for c, n in by_class.most_common():
+        print("  %-12s %6.2f%%" % (c, 100.0 * n / total))
+    fused = sum(n * (k - 1) for k, n in steps.items() if k > 1)
+    print("\ninstructions folded into an earlier step by fusion: %.2f%%" % (100.0 * fused / total))
+    print("\ntop %d mnemonics" % top)
+    for m, n in by_mnem.most_common(top):
+        print("  %-14s %6.2f%%" % (m, 100.0 * n / total))
+    print("\ntop %d adjacent pairs" % top)
+    for (a, b), n in pairs.most_common(top):
+        print("  %-12s -> %-12s %6.2f%%" % (a, b, 100.0 * n / total))
+    print()
+
+
 CLASSIFY = {"arm64": arm64_class, "riscv64": riscv64_class}
 SIMD_FP = {"simd-vector", "simd-ldst", "fp-scalar", "fp-ldst"}
 # Register-only data processing: what a native translation of a straight run
@@ -130,9 +223,15 @@ def main():
             parts = line.split()
             if len(parts) < 4:
                 continue
-            blocks[parts[0]].append((int(parts[1]), [int(x, 16) for x in parts[3:]]))
+            if parts[0] in X86_ABIS:
+                blocks[parts[0]].append((int(parts[1]), parts[3:]))
+            else:
+                blocks[parts[0]].append((int(parts[1]), [int(x, 16) for x in parts[3:]]))
 
     for abi, recs in sorted(blocks.items()):
+        if abi in X86_ABIS:
+            x86_report(abi, recs, mc, args.top)
+            continue
         classify = CLASSIFY[abi]
         words = sorted({w for _, insns in recs for w in insns})
         names = disassemble(mc, abi, words)

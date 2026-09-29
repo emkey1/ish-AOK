@@ -237,6 +237,24 @@ Validation was differential: bit-identical runs on all three images, dedicated
 edge-case tests for both libcs, and the full guest regression suite passing
 under `ISH_HLE=1`.
 
+### Why it was off by default, and why it no longer is
+
+For most of its life HLE shipped off. An intercepted call finished by leaving
+the translated code for the C dispatcher, which looked the return address up
+and entered its block; for a large copy that cost vanished in the work saved,
+but for the small, frequent calls real programs make it was most of the call.
+PSCAL, a heavy user of tiny string operations, ran its hello-world in 83 ms
+with HLE against 46 ms without.
+
+The fix was to return the way `ret` already did: through the return-address
+cache, straight into the caller's translated block, with the dispatcher only
+on a miss. That halved an intercepted call on an A10X (a 16-byte musl
+`memcpy`, 97.6 to 45.9 ns), and HLE then won at every size on both test
+iPads, arm64 and riscv64. Whole programs with HLE on gained up to 18%
+(riscv64 shell loops and `sort`, whose musl string functions are plain C) and
+nothing got slower -- PSCAL included -- so HLE is now on by default.
+`ISH_HLE=0`, the app toggle or `/proc/ish/hle` turn it off.
+
 ## 8.6 Where it does not apply
 
 HLE is gated to the arm64 and riscv64 guests. `ISH_HLE=1` on an i386 or amd64

@@ -475,3 +475,12 @@ do_helper_tlb_retint 2
     ldrh w10, [_cpu, CPU_fsw]
     movs eax, w10, h
     gret
+
+// ISH_JIT_PROFILE (jit/jitprof.c): count one entry of this block, emitted
+// first in every i386/amd64 block while profiling. Code stream: [&counter].
+.gadget block_count
+    ldr x9, [_ip], #8
+    ldr x10, [x9]
+    add x10, x10, #1
+    str x10, [x9]
+    gret

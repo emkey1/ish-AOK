@@ -28,6 +28,9 @@ struct jitprof_block {
     uint32_t *insns;
     uint32_t n, cap;
     uint8_t abi;
+    // x86: consumed bytes as [len][bytes]... records.
+    uint8_t *bytes;
+    uint32_t nb, capb;
 };
 
 static pthread_once_t jitprof_once = PTHREAD_ONCE_INIT;
@@ -46,12 +49,24 @@ void jitprof_dump(void) {
     pthread_mutex_lock(&jitprof_lock);
     for (struct jitprof_block *b = jitprof_blocks; b != NULL; b = b->next) {
         uint64_t count = __atomic_load_n(&b->count, __ATOMIC_RELAXED);
-        if (count == 0 || b->n == 0)
+        if (count == 0 || (b->n == 0 && b->nb == 0))
             continue;
-        fprintf(f, "%s %llu %#llx", b->abi == JITPROF_RISCV64 ? "riscv64" : "arm64",
+        static const char *const names[] = {
+            [JITPROF_ARM64] = "arm64", [JITPROF_RISCV64] = "riscv64",
+            [JITPROF_I386] = "i386", [JITPROF_AMD64] = "amd64",
+        };
+        fprintf(f, "%s %llu %#llx", names[b->abi],
                 (unsigned long long) count, (unsigned long long) b->addr);
         for (uint32_t i = 0; i < b->n; i++)
             fprintf(f, " %08x", b->insns[i]);
+        // x86: one hex token per translation step (a fused step may hold
+        // several instructions; the report splits them).
+        for (uint32_t i = 0; i < b->nb; ) {
+            unsigned len = b->bytes[i++];
+            fputc(' ', f);
+            for (unsigned j = 0; j < len && i < b->nb; j++)
+                fprintf(f, "%02x", b->bytes[i++]);
+        }
         fputc('\n', f);
     }
     pthread_mutex_unlock(&jitprof_lock);
@@ -83,6 +98,24 @@ struct jitprof_block *jitprof_block_new(uint64_t addr, enum jitprof_abi abi) {
 
 uint64_t *jitprof_counter(struct jitprof_block *block) {
     return &block->count;
+}
+
+void jitprof_note_bytes(struct jitprof_block *block, const uint8_t *bytes, unsigned len) {
+    if (len == 0 || len > 255)
+        return;
+    if (block->nb + len + 1 > block->capb) {
+        uint32_t cap = block->capb ? block->capb * 2 : 64;
+        while (cap < block->nb + len + 1)
+            cap *= 2;
+        uint8_t *b = realloc(block->bytes, cap);
+        if (b == NULL)
+            return;
+        block->bytes = b;
+        block->capb = cap;
+    }
+    block->bytes[block->nb++] = (uint8_t) len;
+    memcpy(block->bytes + block->nb, bytes, len);
+    block->nb += len;
 }
 
 void jitprof_note(struct jitprof_block *block, uint32_t insn) {

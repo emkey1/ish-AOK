@@ -242,7 +242,7 @@ void amd64_jit_preference_set(bool enabled) {
         _defaults = [NSUserDefaults standardUserDefaults];
         [_defaults registerDefaults:@{
             kPreferenceEnableMulticoreKey: @(YES),
-            kPreferenceEnableHLEKey: @(NO),
+            kPreferenceEnableHLEKey: @(YES),
             kPreferenceEnableCryptoAccelKey: @(NO),
             kPreferenceEnablePixAccelKey: @(NO),
             kPreferenceEnableExtraLockingKey: @(YES),

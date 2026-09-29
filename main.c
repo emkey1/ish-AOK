@@ -668,14 +668,15 @@ int main(int argc, char *const argv[]) {
                            strcasecmp(mc, "no") == 0 || strcasecmp(mc, "off") == 0))
             doEnableMulticore = false;
     }
-    // HLE of fingerprinted guest libc functions (jit/hle.c). Default OFF;
-    // ISH_HLE=1 enables it (arm64/riscv64 guests only).
+    // HLE of fingerprinted guest libc functions (jit/hle.c). Default ON
+    // since its calls return through the ret cache (arm64/riscv64 guests
+    // only); ISH_HLE=0 turns it off.
     {
         extern bool doEnableHLE;
         const char *hle = getenv("ISH_HLE");
-        if (hle != NULL && strcmp(hle, "0") != 0 && strcasecmp(hle, "false") != 0 &&
-                strcasecmp(hle, "no") != 0 && strcasecmp(hle, "off") != 0)
-            doEnableHLE = true;
+        if (hle != NULL && (strcmp(hle, "0") == 0 || strcasecmp(hle, "false") == 0 ||
+                strcasecmp(hle, "no") == 0 || strcasecmp(hle, "off") == 0))
+            doEnableHLE = false;
     }
     // Crypto accelerator (kernel/ish_accel.c): host-native ChaCha20-Poly1305
     // via ISH_SYS_AEAD. Default OFF; ISH_CRYPTO_ACCEL=1 enables it (only takes

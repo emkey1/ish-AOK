@@ -9,7 +9,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-enum jitprof_abi { JITPROF_ARM64 = 1, JITPROF_RISCV64 = 2 };
+enum jitprof_abi { JITPROF_ARM64 = 1, JITPROF_RISCV64 = 2, JITPROF_I386 = 3, JITPROF_AMD64 = 4 };
 
 struct jitprof_block;
 
@@ -19,6 +19,9 @@ struct jitprof_block *jitprof_block_new(uint64_t addr, enum jitprof_abi abi);
 uint64_t *jitprof_counter(struct jitprof_block *block);
 // One guest instruction of the block, in order (RVC expanded to 32 bits).
 void jitprof_note(struct jitprof_block *block, uint32_t insn);
+// x86 guests: the bytes one translation step consumed (one instruction, or a
+// fused group), in order. The report disassembles them.
+void jitprof_note_bytes(struct jitprof_block *block, const uint8_t *bytes, unsigned len);
 // Write the file (main.c's cli_halt); no-op unless ISH_JIT_PROFILE.
 void jitprof_dump(void);
 

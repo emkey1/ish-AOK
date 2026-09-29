@@ -71,6 +71,7 @@ struct gen_state {
 
 bool gen_start(guest_addr_t addr, struct gen_state *state); // returns false on OOM
 bool gen_start_amd64(guest_addr_t addr, struct gen_state *state); // returns false on OOM
+void gen_start_x86_profile(guest_addr_t addr, struct gen_state *state);
 bool gen_start_arm64(guest_addr_t addr, struct gen_state *state); // returns false on OOM
 bool gen_start_riscv64(guest_addr_t addr, struct gen_state *state); // returns false on OOM
 void gen_exit(struct gen_state *state);

@@ -1927,7 +1927,7 @@ static struct jit_block *jit_block_compile_common(guest_addr_t ip, struct tlb *t
     bool started = arm64 ? gen_start_arm64(ip, &state)
                  : riscv64 ? gen_start_riscv64(ip, &state)
                  : amd64 ? gen_start_amd64(ip, &state)
-                 : gen_start(ip, &state);
+                 : (gen_start(ip, &state) && (gen_start_x86_profile(ip, &state), true));
     if (!started)
         return NULL;
     state.oom_active = true;

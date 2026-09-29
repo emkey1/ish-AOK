@@ -1,6 +1,7 @@
 // High-level emulation (HLE) of hot, well-specified guest libc functions.
 //
-// When enabled (default OFF; CLI: ISH_HLE=1, app: the HLE toggle), block
+// When enabled (default ON; CLI: ISH_HLE=0 turns it off, app: the HLE
+// toggle, live: /proc/ish/hle), block
 // translation for the arm64 and riscv64 guests checks whether the block's
 // start address is the entry point of a known libc function build --
 // identified by an exact 64-byte prologue fingerprint, hashed against a
@@ -47,7 +48,7 @@
 #include "misc.h"
 
 // Set from ISH_HLE (main.c) or the app preference observer (AppDelegate.m).
-bool doEnableHLE = false;
+bool doEnableHLE = true;
 
 enum hle_fn {
     HLE_MEMCPY,   // dst, src, n -> dst

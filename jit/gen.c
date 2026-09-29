@@ -380,10 +380,22 @@ int gen_step(struct gen_state *state, struct tlb *tlb) {
         return gen_step_riscv64(state, tlb);
     state->orig_ip = state->ip;
     state->orig_ip_extra = 0;
-    if (state->amd64)
-        return gen_step64(state, tlb);
-    state->x86_seg = X86_SEG_NONE;
-    return gen_step32(state, tlb);
+    // amd64 advances amd64_ip, i386 ip.
+    guest_addr_t start = state->amd64 ? state->amd64_ip : state->ip;
+    int ret;
+    if (state->amd64) {
+        ret = gen_step64(state, tlb);
+    } else {
+        state->x86_seg = X86_SEG_NONE;
+        ret = gen_step32(state, tlb);
+    }
+    guest_addr_t end = state->amd64 ? state->amd64_ip : state->ip;
+    if (unlikely(state->jitprof != NULL) && end > start && end - start <= 64) {
+        uint8_t bytes[64];
+        if (tlb_read(tlb, start, bytes, (unsigned) (end - start)))
+            jitprof_note_bytes(state->jitprof, bytes, (unsigned) (end - start));
+    }
+    return ret;
 }
 
 static void gen(struct gen_state *state, unsigned long thing) {
@@ -669,7 +681,24 @@ bool gen_start_amd64(guest_addr_t addr, struct gen_state *state) {
     if (!gen_start(addr, state))
         return false;
     state->amd64 = true;
+    gen_start_x86_profile(addr, state);
     return true;
+}
+
+// ISH_JIT_PROFILE for the x86 guests: a counter gadget at the block start
+// (gadgets-aarch64/misc.S) and, in gen_step, the bytes each step consumed.
+// Only the main compile path calls this (jit.c); aarch64 hosts only.
+void gen_start_x86_profile(guest_addr_t addr, struct gen_state *state) {
+#if defined(__aarch64__)
+    state->jitprof = jitprof_block_new(addr, state->amd64 ? JITPROF_AMD64 : JITPROF_I386);
+    if (unlikely(state->jitprof != NULL)) {
+        extern void gadget_block_count(void);
+        gen(state, (unsigned long) gadget_block_count);
+        gen(state, (unsigned long) jitprof_counter(state->jitprof));
+    }
+#else
+    (void) addr; (void) state;
+#endif
 }
 
 bool gen_start_arm64(guest_addr_t addr, struct gen_state *state) {
