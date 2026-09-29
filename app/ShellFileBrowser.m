@@ -214,10 +214,12 @@ NSString *ISHShellQuoteArgument(NSString *argument) {
                                                             style:UIBarButtonItemStylePlain
                                                            target:self
                                                            action:@selector(changeDirectoryHere:)];
+    cd.accessibilityHint = @"Changes the shell's current directory to this folder.";
     UIBarButtonItem *insert = [[UIBarButtonItem alloc] initWithTitle:@"Insert Path"
                                                                 style:UIBarButtonItemStylePlain
                                                                target:self
                                                                action:@selector(insertCurrentDirectoryPath:)];
+    insert.accessibilityHint = @"Pastes this folder's path into the shell terminal.";
     UIBarButtonItem *flex = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace
                                                                           target:nil
                                                                           action:nil];
@@ -403,6 +405,7 @@ NSString *ISHShellQuoteArgument(NSString *argument) {
                                                                   menu:menu];
     // The same name as the workspace File Manager's identical menu.
     overflow.accessibilityLabel = @"More Actions";
+    overflow.accessibilityHint = @"Shows a menu with options to create a folder, show hidden files, or refresh.";
     self.navigationItem.rightBarButtonItem = overflow;
 }
 
