@@ -107,6 +107,12 @@ arm64_chain:
     b.le arm64_chain_poked
     sub x8, _ip, #JIT_BLOCK_code       // recover the block pointer for the
     str x8, [_cpu, #LOCAL_last_block]  // C loop's chaining bookkeeping
+#if !defined(ISH_ARM64_GRET_LDAR)
+    // The one barrier of the default build: _ip came from a chain link another
+    // thread may just have patched, so order it before the new block's contents
+    // (gadgets.h's gret carries none).
+    dmb ishld
+#endif
     gret
 arm64_chain_poked:
     // Poked or out of budget mid-chain: resume at the DESTINATION block.

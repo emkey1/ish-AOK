@@ -125,6 +125,17 @@ _addr   .req x7
 // hardware is the trade this project wants, and iSH-AOK ships one binary for
 // both. -Darm64_gret=ldar restores the other spelling; a build using it says
 // " gret=ldar" in `uname -v`.
+//
+// WHERE the barrier is needed (2026-09-29): only after loading a chain link,
+// the one word in a code stream another thread patches (jit.c publishes it with
+// a release store). Every other gadget pointer is in the block already being
+// run, written before the block could be reached -- through a chain link, or
+// by the C loop under jit->lock -- and every read of the stream is addressed
+// through _ip, which the link's value produced. So in the default (dmb) build
+// gret itself carries no barrier, and arm64_chain (control.S) issues the one
+// `dmb ishld` when execution crosses into another block. Every branch gadget
+// reaches the next block through arm64_branch_dispatch/arm64_chain. Measured on
+// an M5 with the riscv64 engine (same gret): 10-25% less per instruction.
 // A future refinement could pick per host at startup, but that needs two full
 // gadget tables, and 1.7x on old devices is worth having now.
 .macro gret pop=0
@@ -134,8 +145,7 @@ _addr   .req x7
 .endif
     ldar x9, [_ip]
 #else
-    ldr x9, [_ip, \pop*8]!
-    dmb ishld
+    ldr x9, [_ip, \pop*8]!   // no barrier: see arm64_chain (guest-arm64 gadgets.h)
 #endif
     add _ip, _ip, 8
     cbnz x9, 0f

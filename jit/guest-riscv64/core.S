@@ -125,6 +125,11 @@ riscv64_chain:
     b.le riscv64_chain_poked
     sub x8, _ip, #JIT_BLOCK_code
     str x8, [_cpu, #LOCAL_last_block]
+#if !defined(ISH_ARM64_GRET_LDAR)
+    // The one barrier of the default build; see guest-arm64 control.S's
+    // arm64_chain (gadgets.h's gret carries none).
+    dmb ishld
+#endif
     gret
 riscv64_chain_poked:
     ldur x8, [_ip, #(JIT_BLOCK_addr - JIT_BLOCK_code)]

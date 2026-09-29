@@ -74,8 +74,7 @@ _addr   .req x7
 .endif
     ldar x9, [_ip]
 #else
-    ldr x9, [_ip, \pop*8]!
-    dmb ishld
+    ldr x9, [_ip, \pop*8]!   // no barrier: see arm64_chain (guest-arm64 gadgets.h)
 #endif
     add _ip, _ip, 8
     cbnz x9, 0f
