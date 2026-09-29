@@ -1935,6 +1935,15 @@ if not meson.is_cross_build()
             objc_args: ['-fobjc-arc'],
             link_args: ['-framework', 'Foundation'])
         test('llm_permissions', llm_permissions_test)
+
+        # The diff the chat shows for the model's file changes; patch(1) is
+        # the oracle.
+        llm_diff_test = executable('llm_diff_test',
+            ['app/LLMChatDiff.m', 'tests/unit/llm_diff_test.m'],
+            include_directories: include_directories('app'),
+            objc_args: ['-fobjc-arc'],
+            link_args: ['-framework', 'Foundation'])
+        test('llm_diff', llm_diff_test, timeout: 180)
     endif
 endif
 

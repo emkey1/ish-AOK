@@ -42,6 +42,16 @@
 @property (nonatomic, copy) void (^sessionSelected)(NSString *sessionID);
 @end
 
+@class ISHLLMToolContext, ISHLLMFileChange;
+
+// The chat menu's "Changes…": the files the model changed, as diffs, each
+// revertible. The chat does the reverting (it also tells the model), and
+// calls `done` so the list and the open diff redraw.
+@interface LLMChangesViewController : UITableViewController <WorkspaceTextScaledPage>
+@property (nonatomic, strong) ISHLLMToolContext *toolContext;
+@property (nonatomic, copy) void (^revertRequested)(ISHLLMFileChange *change, UIViewController *presenter, void (^done)(void));
+@end
+
 // LLM Settings -> Tool Permissions: allow/ask/deny per tool category, and the
 // shell command rules. See LLMChatPermissions.h.
 @interface LLMToolPermissionsViewController : UITableViewController <WorkspaceTextScaledPage>
@@ -224,6 +234,18 @@ NSString *ISHLLMResolveGuestPath(NSString *raw, NSString *workingDirectory);
 // POSIX single-quoting for a guest shell command line.
 NSString *ISHLLMShellQuote(NSString *text);
 
+// One file change the model made, kept so the user can review and revert it.
+@interface ISHLLMFileChange : NSObject
+@property (nonatomic, copy) NSString *path;
+@property (nonatomic, copy) NSString *toolName;   // write_file or edit_file
+@property (nonatomic, copy) NSData *before;       // nil when the file was created (or too large to keep)
+@property (nonatomic, copy) NSData *after;
+@property (nonatomic, copy) NSDate *date;
+@property (nonatomic) BOOL created;
+@property (nonatomic) BOOL revertible;
+@property (atomic) BOOL reverted;
+@end
+
 // What one chat's tool calls share. Main thread only; the tools copy what
 // they need before leaving it.
 @interface ISHLLMToolContext : NSObject
@@ -236,6 +258,9 @@ NSString *ISHLLMShellQuote(NSString *text);
 - (void)recordReadOfPath:(NSString *)path size:(unsigned long long)size modified:(NSDate *)modified;
 - (NSString *)stalenessProblemForPath:(NSString *)path size:(unsigned long long)size modified:(NSDate *)modified;
 - (void)forgetReads;
+// The file changes made in this chat, oldest first (16 MB of history).
+@property (nonatomic, readonly) NSArray<ISHLLMFileChange *> *changes;
+- (void)recordChange:(ISHLLMFileChange *)change;
 // The model's todo_write list: dictionaries with "content" and "status".
 @property (nonatomic, copy) NSArray<NSDictionary *> *todos;
 @end
@@ -266,8 +291,17 @@ void ISHLLMRunToolInvocation(ISHLLMToolInvocation *invocation, ISHLLMToolContext
 // The nearest AGENTS.md (or CLAUDE.md) at or above workingDirectory, or nil.
 // Blocks on the guest file bridge: call on ISHLLMGuestCommandQueue().
 NSString *ISHLLMLoadProjectInstructions(NSString *workingDirectory, NSString **sourceOut);
+// Puts the file back as it was before `change` (removes it if the change
+// created it). Refuses, with changedSince, when the file is no longer what
+// the change left, unless force. Completes on main.
+void ISHLLMRevertFileChange(ISHLLMFileChange *change, ISHLLMToolContext *context, BOOL force,
+                            void (^completion)(BOOL reverted, BOOL changedSince, NSString *message));
 // One short line per call ("$ ls -la", "Read src/main.c"), for the transcript.
 NSArray<NSString *> *ISHLLMToolCallDescriptions(NSArray *toolCalls);
+
+// LLMChatChanges.m
+// "edited · −3 +5 · 14:02", with " · reverted" once it is.
+NSString *ISHLLMChangeSummary(ISHLLMFileChange *change);
 
 // LLMChatSettings.m
 void ISHConfigureLLMSettingsNavigationController(UINavigationController *navigationController);

@@ -994,7 +994,13 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
                                          identifier:nil
                                             handler:^(__unused UIAction *action) { [self compactConversation]; }];
     summarize.subtitle = @"Send the model a summary instead of the history";
-    UIMenu *currentSection = [UIMenu menuWithTitle:@"" image:nil identifier:nil options:UIMenuOptionsDisplayInline children:@[rename, systemPrompt, workingDirectory, summarize, clear, delete]];
+    UIAction *changes = [UIAction actionWithTitle:@"Changes…"
+                                            image:[UIImage systemImageNamed:@"plusminus"]
+                                       identifier:nil
+                                          handler:^(__unused UIAction *action) { [self showChanges]; }];
+    NSUInteger changeCount = _toolContext.changes.count;
+    changes.subtitle = changeCount == 0 ? @"No file changes yet (also /changes)" : [NSString stringWithFormat:@"%lu file change%@ · /undo reverts the last", (unsigned long) changeCount, changeCount == 1 ? @"" : @"s"];
+    UIMenu *currentSection = [UIMenu menuWithTitle:@"" image:nil identifier:nil options:UIMenuOptionsDisplayInline children:@[rename, systemPrompt, workingDirectory, changes, summarize, clear, delete]];
     return @[newChat, browse, switchSection, currentSection];
 }
 
@@ -2346,6 +2352,16 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
     NSString *prompt = [_promptField.text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
     if (prompt.length == 0)
         return;
+    if ([prompt isEqualToString:@"/changes"]) {
+        [self setPromptFieldText:@""];
+        [self showChanges];
+        return;
+    }
+    if ([prompt isEqualToString:@"/undo"]) {
+        [self setPromptFieldText:@""];
+        [self undoLastChange];
+        return;
+    }
     if ([prompt isEqualToString:@"/compact"]) {
         [self setPromptFieldText:@""];
         [self compactConversation];
@@ -3100,7 +3116,7 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
     if (ISHLLMUsesGeminiAPI())
         return @"Tools are not available with the Gemini API.";
     NSString *where = _toolContext.workingDirectory.length > 0 ? _toolContext.workingDirectory : @"your home directory";
-    return [NSString stringWithFormat:@"Tools: files and shell, working in %@.\nReading: %@ · Edits: %@ · Commands: %@\n/compact summarizes a long chat.",
+    return [NSString stringWithFormat:@"Tools: files and shell, working in %@.\nReading: %@ · Edits: %@ · Commands: %@\n/compact summarizes a long chat; /undo reverts the last file change.",
             where,
             ISHLLMPermissionActionTitle(ISHLLMCategoryAction(ISHLLMToolCategoryRead)),
             ISHLLMPermissionActionTitle(ISHLLMCategoryAction(ISHLLMToolCategoryEdit)),
@@ -3242,6 +3258,73 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
             [self refreshTranscript];
             continuation(YES);
         });
+    });
+}
+
+#pragma mark - Change review and undo
+
+- (void)showChanges {
+    LLMChangesViewController *list = [LLMChangesViewController new];
+    list.toolContext = _toolContext;
+    __weak typeof(self) weakSelf = self;
+    list.revertRequested = ^(ISHLLMFileChange *change, UIViewController *presenter, void (^done)(void)) {
+        [weakSelf revertChange:change presenter:presenter force:NO completion:done];
+    };
+    UINavigationController *navigationController = [[UINavigationController alloc] initWithRootViewController:list];
+    ISHConfigureLLMSettingsNavigationController(navigationController);
+    [[self ish_presentationViewController] presentViewController:navigationController animated:YES completion:nil];
+}
+
+- (void)undoLastChange {
+    if ([self isBusy]) {
+        [self appendLocalRole:@"assistant" content:@"Wait for the reply to finish before undoing a change."];
+        return;
+    }
+    for (ISHLLMFileChange *change in _toolContext.changes.reverseObjectEnumerator) {
+        if (!change.reverted) {
+            [self revertChange:change presenter:[self ish_presentationViewController] force:NO completion:nil];
+            return;
+        }
+    }
+    [self appendLocalRole:@"assistant" content:@"No file change in this chat to undo."];
+}
+
+// A file edited again since the change asks first: reverting would throw the
+// later edit away too. A revert is recorded in the transcript as the user's
+// own message, so the model knows its change is gone and re-reads the file
+// before touching it again (its read of it is stale now anyway).
+- (void)revertChange:(ISHLLMFileChange *)change presenter:(UIViewController *)presenter force:(BOOL)force completion:(void (^)(void))completion {
+    __weak typeof(self) weakSelf = self;
+    ISHLLMRevertFileChange(change, _toolContext, force, ^(BOOL reverted, BOOL changedSince, NSString *message) {
+        typeof(self) self = weakSelf;
+        if (self == nil)
+            return;
+        if (changedSince) {
+            UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Changed since"
+                message:message preferredStyle:UIAlertControllerStyleAlert];
+            [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:^(__unused UIAlertAction *action) {
+                if (completion != nil)
+                    completion();
+            }]];
+            [alert addAction:[UIAlertAction actionWithTitle:@"Revert Anyway" style:UIAlertActionStyleDestructive handler:^(__unused UIAlertAction *action) {
+                [self revertChange:change presenter:presenter force:YES completion:completion];
+            }]];
+            [presenter presentViewController:alert animated:YES completion:nil];
+            return;
+        }
+        if (reverted) {
+            [self->_messages addObject:@{@"role": @"user",
+                                         @"content": [NSString stringWithFormat:@"(I reverted your change to %@. %@)", change.path, message]}];
+            [self saveTranscript];
+            [self refreshTranscript];
+        } else {
+            UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Could not revert"
+                message:message preferredStyle:UIAlertControllerStyleAlert];
+            [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleCancel handler:nil]];
+            [presenter presentViewController:alert animated:YES completion:nil];
+        }
+        if (completion != nil)
+            completion();
     });
 }
 

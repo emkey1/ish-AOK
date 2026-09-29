@@ -466,15 +466,44 @@ static const NSUInteger kISHLLMGrepMaxLineLength = 300;
 // room than a run_shell result before being cut off.
 static const size_t kISHLLMSearchCaptureBytes = 4 * 1024 * 1024;
 
+@implementation ISHLLMFileChange
+@end
+
+// What the change review keeps, oldest dropped first: every change's before
+// and after content is held in memory while the chat is open.
+static const NSUInteger kISHLLMChangeHistoryBytes = 16 * 1024 * 1024;
+
 @implementation ISHLLMToolContext {
     NSMutableDictionary<NSString *, NSArray *> *_reads; // path -> @[size, mtime or NSNull]
     NSArray<NSDictionary *> *_todos;
+    NSMutableArray<ISHLLMFileChange *> *_changes;
 }
 
 - (instancetype)init {
-    if ((self = [super init]))
+    if ((self = [super init])) {
         _reads = [NSMutableDictionary dictionary];
+        _changes = [NSMutableArray array];
+    }
     return self;
+}
+
+- (NSArray<ISHLLMFileChange *> *)changes {
+    @synchronized (self) {
+        return [_changes copy];
+    }
+}
+
+- (void)recordChange:(ISHLLMFileChange *)change {
+    @synchronized (self) {
+        [_changes addObject:change];
+        NSUInteger total = 0;
+        for (ISHLLMFileChange *each in _changes)
+            total += each.before.length + each.after.length;
+        while (total > kISHLLMChangeHistoryBytes && _changes.count > 1) {
+            total -= _changes[0].before.length + _changes[0].after.length;
+            [_changes removeObjectAtIndex:0];
+        }
+    }
 }
 
 - (void)recordReadOfPath:(NSString *)path size:(unsigned long long)size modified:(NSDate *)modified {
@@ -971,6 +1000,7 @@ static NSString *ISHLLMWriteFileTool(ISHLLMToolInvocation *invocation, ISHLLMToo
     NSError *error = nil;
     ISHGuestFileItem *item = ISHLLMStat(path, &error);
     BOOL exists = item != nil;
+    NSData *previous = nil;
     if (!exists && error.code != -2) {
         *summaryOut = @"failed";
         return ISHLLMFileError(path, error);
@@ -985,6 +1015,8 @@ static NSString *ISHLLMWriteFileTool(ISHLLMToolInvocation *invocation, ISHLLMToo
             *summaryOut = @"refused";
             return problem;
         }
+        // Kept so the user can review and revert the overwrite.
+        previous = item.size <= kISHLLMReadMaxBytes ? ISHLLMReadWhole(path, kISHLLMReadMaxBytes, NULL) : nil;
     } else {
         NSString *problem = ISHLLMEnsureParentDirectory(path);
         if (problem != nil) {
@@ -1000,6 +1032,15 @@ static NSString *ISHLLMWriteFileTool(ISHLLMToolInvocation *invocation, ISHLLMToo
     ISHGuestFileItem *written = ISHLLMStat(path, NULL);
     if (written != nil)
         [context recordReadOfPath:path size:written.size modified:written.modificationDate];
+    ISHLLMFileChange *change = [ISHLLMFileChange new];
+    change.path = path;
+    change.toolName = @"write_file";
+    change.created = !exists;
+    change.revertible = !exists || previous != nil;
+    change.before = previous;
+    change.after = data;
+    change.date = [NSDate date];
+    [context recordChange:change];
     *summaryOut = [NSString stringWithFormat:@"%@ %lu bytes", exists ? @"overwrote" : @"created", (unsigned long) data.length];
     return [NSString stringWithFormat:@"%@ %@ (%lu lines, %lu bytes).", exists ? @"Overwrote" : @"Created", path,
             (unsigned long) ISHLLMLineCount(content), (unsigned long) data.length];
@@ -1123,6 +1164,14 @@ static NSString *ISHLLMEditFileTool(ISHLLMToolInvocation *invocation, ISHLLMTool
     ISHGuestFileItem *written = ISHLLMStat(path, NULL);
     if (written != nil)
         [context recordReadOfPath:path size:written.size modified:written.modificationDate];
+    ISHLLMFileChange *change = [ISHLLMFileChange new];
+    change.path = path;
+    change.toolName = @"edit_file";
+    change.revertible = YES;
+    change.before = data;
+    change.after = updatedData;
+    change.date = [NSDate date];
+    [context recordChange:change];
     NSUInteger startLine = ISHLLMLineNumberAt(updated, firstLocation);
     NSUInteger newLines = MAX((NSUInteger) 1, [newText componentsSeparatedByString:@"\n"].count);
     NSInteger delta = (NSInteger) ISHLLMLineCount(updated) - (NSInteger) ISHLLMLineCount(text);
@@ -1365,6 +1414,52 @@ NSString *ISHLLMLoadProjectInstructions(NSString *workingDirectory, NSString **s
             return nil;
         directory = [directory stringByDeletingLastPathComponent];
     }
+}
+
+static BOOL ISHLLMRemoveFile(NSString *path, NSError **errorOut) {
+    __block BOOL result = NO;
+    __block NSError *resultError = nil;
+    dispatch_semaphore_t done = dispatch_semaphore_create(0);
+    [ISHGuestFileBridge.sharedBridge removeItemAtGuestPath:path recursive:NO completion:^(BOOL ok, NSError *error) {
+        result = ok;
+        resultError = error;
+        dispatch_semaphore_signal(done);
+    }];
+    dispatch_semaphore_wait(done, DISPATCH_TIME_FOREVER);
+    if (errorOut != NULL)
+        *errorOut = resultError;
+    return result;
+}
+
+void ISHLLMRevertFileChange(ISHLLMFileChange *change, ISHLLMToolContext *context, BOOL force,
+                            void (^completion)(BOOL reverted, BOOL changedSince, NSString *message)) {
+    dispatch_async(ISHLLMGuestCommandQueue(), ^{
+        BOOL reverted = NO, changedSince = NO;
+        NSString *message;
+        NSString *path = change.path;
+        NSError *error = nil;
+        ISHGuestFileItem *item = ISHLLMStat(path, &error);
+        NSData *current = item != nil && item.size <= kISHLLMReadMaxBytes ? ISHLLMReadWhole(path, kISHLLMReadMaxBytes, NULL) : nil;
+        if (!change.revertible) {
+            message = [NSString stringWithFormat:@"%@ was too large to keep a copy of, so this change cannot be reverted.", path];
+        } else if (!force && ![current isEqualToData:change.after]) {
+            changedSince = YES;
+            message = item == nil
+                ? [NSString stringWithFormat:@"%@ no longer exists.", path]
+                : [NSString stringWithFormat:@"%@ has changed since this edit. Reverting would also throw away the later changes.", path];
+        } else if (change.created) {
+            reverted = item == nil || ISHLLMRemoveFile(path, &error);
+            message = reverted ? [NSString stringWithFormat:@"Removed %@, which the model had created.", path] : ISHLLMFileError(path, error);
+        } else {
+            reverted = ISHLLMWriteWhole(change.before ?: NSData.data, path, &error);
+            message = reverted ? [NSString stringWithFormat:@"Restored %@ to how it was before the change.", path] : ISHLLMFileError(path, error);
+        }
+        if (reverted)
+            change.reverted = YES;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            completion(reverted, changedSince, message);
+        });
+    });
 }
 
 void ISHLLMRunToolInvocation(ISHLLMToolInvocation *invocation, ISHLLMToolContext *context,
