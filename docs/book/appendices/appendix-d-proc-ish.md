@@ -16,6 +16,7 @@ inventory, generated from `fs/proc/ish.c`.
 - `/proc/ish/applets` (file)
 - `/proc/ish/arch` (file)
 - `/proc/ish/arm64_jit_fuse` (file)
+- `/proc/ish/arm64_mops` (file)
 - `/proc/ish/checkpoint` (file)
 - `/proc/ish/colors` (file)
 - `/proc/ish/defaults` (directory)

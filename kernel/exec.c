@@ -32,6 +32,7 @@
 #include "kernel/xattr.h"
 #include "kernel/rseq.h"
 #include "kernel/anonfd_ckpt.h"
+#include "jit/arm64_mops.h"
 
 #define ARGV_MAX 32 * PAGE_SIZE
 
@@ -1397,6 +1398,12 @@ static intptr_t elf_exec(struct fd *fd, const char *file, struct exec_args argv,
             hwcap = (1u << ('i' - 'a')) | (1u << ('m' - 'a')) |
                     (1u << ('a' - 'a')) | (1u << ('f' - 'a')) |
                     (1u << ('d' - 'a')) | (1u << ('c' - 'a'));
+        // AT_HWCAP2: MOPS(43) on aarch64, the CPY/CPYF/SET memcpy and memset
+        // instructions (jit/arm64_mops.c); glibc then picks __memcpy_mops
+        // and friends. Matches ID_AA64ISAR2.MOPS in gen.c. ISH_MOPS=0 hides it.
+        qword_t hwcap2 = 0;
+        if (current->abi == GUEST_ABI_ARM64 && arm64_mops_advertised())
+            hwcap2 = 1ull << 43;
         struct aux64_ent aux[] = {
             // First, where Linux's ARCH_DLINFO puts it, and left out entirely
             // when there is no vDSO rather than handed over as 0.
@@ -1416,7 +1423,7 @@ static intptr_t elf_exec(struct fd *fd, const char *file, struct exec_args argv,
             {AX_EGID, current->exec_auxv_egid},
             {AX_SECURE, current->exec_secure ? 1 : 0},
             {AX_RANDOM, random_addr},
-            {AX_HWCAP2, 0},
+            {AX_HWCAP2, hwcap2},
             {AX_EXECFN, file_addr},
             {AX_PLATFORM, platform_addr},
             {0, 0}

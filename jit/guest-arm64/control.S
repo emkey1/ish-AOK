@@ -185,6 +185,172 @@ arm64_chain_poked:
 
 .extern hle_call
 
+// FEAT_MOPS CPY*/CPYF*/SET* (jit/arm64_mops.c): the C routine does the whole
+// operation against cpu's registers. 0 -> next instruction; INT_PF -> exit
+// with pc at this instruction and the registers describing what is left, so
+// the instruction restarts where it stopped.
+//
+// Two cases stay out of C. The prologue does everything, so the main and
+// epilogue find Xn = 0: nothing to do. And most memcpy/memset calls are
+// small: up to 64 bytes, each side inside one page and a TLB hit, is done
+// here, every load before any store (glibc's small-copy shape), which is a
+// memmove whichever way the ranges overlap. NZCV is left as the C routine
+// leaves it (0). Anything else -- a miss, a page crossing, a TLB that needs
+// flushing or revalidating -- goes to C, which handles it all.
+// Code stream: [insn][orig_ip].
+
+// \out = host pointer for guest \addr if the TLB entry's \field holds its
+// page, else branch to \fail. Clobbers x11-x13.
+.macro mops_tlb addr, out, field, fail
+    and x11, \addr, #0xfffffffffffff000
+    ubfx x12, \addr, #12, #10
+    eor x12, x12, \addr, lsr #22
+    and x12, x12, #(1 << TLB_BITS) - 1
+    mov w13, #TLB_ENTRY_SIZE
+    madd x12, x12, x13, _tlb
+    ldr x13, [x12, #\field]
+    cmp x11, x13
+    b.ne \fail
+    ldr x13, [x12, #TLB_ENTRY_data_minus_addr]
+    add \out, x13, \addr
+.endm
+
+.gadget mops
+    ldr x8, [_ip]
+    ubfx x9, x8, #5, #5        // Rn, the count (never 31: gen.c)
+    add x10, _cpu, #CPU_x0
+    ldr x14, [x10, x9, lsl #3]
+    cbz x14, 8f
+    cmp x14, #64
+    b.hi 9f                    // big, or a "negative" count
+    ldr x11, [_tlb, #(-TLB_entries+TLB_mmu)]
+    ldr x12, [_tlb, #(-TLB_entries+TLB_mem_changes)]
+    ldr x13, [x11, #MMU_changes]
+    cmp x12, x13
+    b.ne 9f
+    ldrb w13, [x11, #MMU_requires_write_revalidate]
+    cbnz w13, 9f
+    and x20, x8, #0x1f         // Rd
+    ldr x15, [x10, x20, lsl #3] // dst
+    and x11, x15, #0xfff
+    add x11, x11, x14
+    cmp x11, #0x1000
+    b.hi 9f
+    mops_tlb x15, x16, TLB_ENTRY_page_if_writable, 9f
+    ubfx x21, x8, #16, #5      // Rs: the source, or SET's value
+    ubfx x11, x8, #22, #2      // op1: 3 = SET
+    cmp x11, #3
+    b.eq 5f
+
+    ldr x22, [x10, x21, lsl #3] // src
+    and x11, x22, #0xfff
+    add x11, x11, x14
+    cmp x11, #0x1000
+    b.hi 9f
+    mops_tlb x22, x17, TLB_ENTRY_page, 9f
+    and x11, x15, #0xfffffffffffff000
+    str x11, [_tlb, #(-TLB_entries+TLB_dirty_page)]
+    add x12, x17, x14          // source end
+    add x13, x16, x14          // destination end
+    cmp x14, #16
+    b.lo 3f
+    cmp x14, #32
+    b.ls 2f
+    ldp q0, q1, [x17]          // 33..64
+    ldp q2, q3, [x12, #-32]
+    stp q0, q1, [x16]
+    stp q2, q3, [x13, #-32]
+    b 7f
+2:  ldr q0, [x17]              // 16..32
+    ldr q1, [x12, #-16]
+    str q0, [x16]
+    str q1, [x13, #-16]
+    b 7f
+3:  cmp x14, #8
+    b.lo 4f
+    ldr x11, [x17]             // 8..15
+    ldr x12, [x12, #-8]
+    str x11, [x16]
+    str x12, [x13, #-8]
+    b 7f
+4:  cmp x14, #4
+    b.lo 6f
+    ldr w11, [x17]             // 4..7
+    ldr w12, [x12, #-4]
+    str w11, [x16]
+    str w12, [x13, #-4]
+    b 7f
+6:  lsr x11, x14, #1           // 1..3: first, middle, last
+    ldrb w12, [x17]
+    ldrb w13, [x17, x11]
+    add x17, x17, x14
+    ldurb w17, [x17, #-1]
+    strb w12, [x16]
+    strb w13, [x16, x11]
+    add x16, x16, x14
+    sturb w17, [x16, #-1]
+7:  add x22, x22, x14          // Xs += n
+    str x22, [x10, x21, lsl #3]
+    b 1f
+
+5:  mov x12, #0                // SET: the low byte of Xs (31 = XZR)
+    cmp x21, #31
+    b.eq 51f
+    ldr x12, [x10, x21, lsl #3]
+51: and x11, x15, #0xfffffffffffff000
+    str x11, [_tlb, #(-TLB_entries+TLB_dirty_page)]
+    dup v0.16b, w12
+    add x13, x16, x14
+    cmp x14, #16
+    b.lo 53f
+    cmp x14, #32
+    b.ls 52f
+    stp q0, q0, [x16]          // 33..64
+    stp q0, q0, [x13, #-32]
+    b 1f
+52: str q0, [x16]              // 16..32
+    str q0, [x13, #-16]
+    b 1f
+53: fmov x12, d0
+    cmp x14, #8
+    b.lo 54f
+    str x12, [x16]             // 8..15
+    str x12, [x13, #-8]
+    b 1f
+54: cmp x14, #4
+    b.lo 55f
+    str w12, [x16]             // 4..7
+    str w12, [x13, #-4]
+    b 1f
+55: lsr x11, x14, #1           // 1..3: first, middle, last
+    strb w12, [x16]
+    strb w12, [x16, x11]
+    sturb w12, [x13, #-1]
+
+1:  add x15, x15, x14          // Xd += n, Xn = 0
+    str x15, [x10, x20, lsl #3]
+    str xzr, [x10, x9, lsl #3]
+8:  add _ip, _ip, #16
+    str wzr, [_cpu, #CPU_nzcv]
+    gret
+
+9:  ldr x19, [_ip, #8]         // orig_ip (fault restart), callee-saved
+    add _ip, _ip, #16
+    save_c
+    mov x0, x1                 // cpu   (x1 = _cpu; read before x1 is written)
+    sub x1, x2, #TLB_entries   // tlb   (consumes x2 before x2 is written)
+    mov w2, w8                 // insn
+    bl NAME(arm64_mops)
+    mov x27, x0
+    restore_c
+    cbnz w27, 1f
+    gret
+1:  str x19, [_cpu, #CPU_pc]
+    mov w0, w27
+    b jit_exit
+
+.extern arm64_mops
+
 // RET has identical semantics to BR (branch to register value) -- same
 // gadget body, just invoked for a different guest mnemonic/encoding.
 .gadget ret

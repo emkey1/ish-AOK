@@ -9,6 +9,7 @@
 #include <dlfcn.h>
 #include "jit/gen.h"
 #include "jit/jitprof.h"
+#include "jit/arm64_mops.h"
 #include "emu/fpenv.h"
 #include "emu/modrm.h"
 #include "emu/cpuid.h"
@@ -1310,6 +1311,31 @@ int gen_step_arm64(struct gen_state *state, struct tlb *tlb) {
     state->arm64_ip += sizeof(insn);
     if (unlikely(state->jitprof != NULL))
         jitprof_note(state->jitprof, insn);
+
+    // FEAT_MOPS: CPYF* (o0=0) / CPY* (o0=1), op1 = P/M/E stage 0-2, and
+    // SET* (o0=0, op1=3, op2<15:14> = stage). 00 011 o0 01 op1 0 Rs op2 01
+    // Rn Rd. Any op2 hint (unprivileged, non-temporal) is the same thing
+    // for user code. SETG* (o0=1, op1=3) needs MTE: undefined. The
+    // register overlaps and 31s the architecture calls CONSTRAINED
+    // UNPREDICTABLE are undefined here. jit/arm64_mops.c does the work.
+    if ((insn & 0xfb200c00) == 0x19000400) {
+        extern void gadget_arm64_mops(void);
+        unsigned rd = insn & 0x1f, rn = (insn >> 5) & 0x1f, rs = (insn >> 16) & 0x1f;
+        bool o0 = (insn >> 26) & 1;
+        unsigned op1 = (insn >> 22) & 3;
+        if (op1 == 3) {
+            if (o0 || ((insn >> 14) & 3) == 3 || rd == 31 || rn == 31 ||
+                    rd == rn || rs == rd || rs == rn)
+                return gen_arm64_undefined(state);
+        } else if (rd == 31 || rn == 31 || rs == 31 ||
+                rd == rn || rs == rd || rs == rn) {
+            return gen_arm64_undefined(state);
+        }
+        gen(state, (unsigned long) gadget_arm64_mops);
+        gen(state, insn);
+        gen(state, state->arm64_orig_ip);
+        return 1;
+    }
 
     // Move wide (immediate): MOVN/MOVZ/MOVK — same mask as
     // emu/arm64_interp.c's arm64_execute() (bits[28:23]=100101).
@@ -4882,7 +4908,7 @@ int gen_step_arm64(struct gen_state *state, struct tlb *tlb) {
     // for EL0, so real binaries do read them — musl/glibc feature probes).
     // Values advertise exactly what this JIT implements: base FP+AdvSIMD
     // (PFR0), AES+PMULL / SHA1 / SHA2+SHA512 / SHA3 / CRC32 / LSE atomics
-    // (ISAR0). SHA512/SHA3/CRC32 hold on every host: gadgets fall back to
+    // (ISAR0), MOPS (ISAR2). SHA512/SHA3/CRC32 hold on every host: gadgets fall back to
     // soft implementations where the host instruction is missing. The
     // rest read as zero. Ported from OpenMinis' d5300000 sysreg fallback,
     // with the values matched to OUR feature set rather than theirs.
@@ -4902,6 +4928,9 @@ int gen_step_arm64(struct gen_state *state, struct tlb *tlb) {
             value = 0x212120 | (1ULL << 32);
         else if (op1 == 0 && crn == 0 && crm == 6 && op2 == 1)
             value = 0;    // ID_AA64ISAR1_EL1
+        else if (op1 == 0 && crn == 0 && crm == 6 && op2 == 2)
+            // ID_AA64ISAR2_EL1: MOPS=1 (jit/arm64_mops.c)
+            value = arm64_mops_advertised() ? 1ULL << 16 : 0;
         else if (op1 == 0 && crn == 0 && crm == 7 && (op2 == 0 || op2 == 1 || op2 == 2))
             value = 0;    // ID_AA64MMFR0/1/2_EL1
         else if (op1 == 0 && crn == 0 && crm == 5 && (op2 == 0 || op2 == 1))

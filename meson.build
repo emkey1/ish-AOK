@@ -508,6 +508,7 @@ emu_src = [
     'jit/gen.c',
     'jit/jitprof.c',
     'jit/hle.c',
+    'jit/arm64_mops.c',
     'jit/helpers.c',
     'jit/riscv64_vendor_ext.c', # portable C, inert unless gen_step_riscv64 ever runs
 ]

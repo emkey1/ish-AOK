@@ -2,6 +2,7 @@
 #include "fs/proc/ish.h"
 #include "fs/proc/net.h"
 #include "jit/jit.h"
+#include "jit/arm64_mops.h"
 #include "kernel/errno.h"
 #include "kernel/fs.h"
 // For the Phase 1 gate prototype's swap_evict control: pid_get_task and
@@ -1463,6 +1464,23 @@ static int proc_ish_update_amd64_jit_fuse(struct proc_entry *UNUSED(e), struct p
     return proc_ish_update_jit_fuse(JIT_FUSE_ARCH_AMD64, d);
 }
 
+// /proc/ish/arm64_mops: 1 when arm64 programs are told about FEAT_MOPS
+// (jit/arm64_mops.c), and so glibc's memcpy/memmove/memset use it; write 0
+// or 1. Takes effect at the next exec.
+static int proc_ish_show_arm64_mops(struct proc_entry *UNUSED(e), struct proc_data *buf) {
+    proc_printf(buf, "%d\n", arm64_mops_advertised() ? 1 : 0);
+    return 0;
+}
+static int proc_ish_update_arm64_mops(struct proc_entry *UNUSED(e), struct proc_data *d) {
+    size_t n = d->size;
+    while (n > 0 && (d->data[n - 1] == '\n' || d->data[n - 1] == ' '))
+        n--;
+    if (n != 1 || (d->data[0] != '0' && d->data[0] != '1'))
+        return _EINVAL;
+    arm64_mops_set_advertised(d->data[0] == '1');
+    return 0;
+}
+
 static int proc_ish_update_amd64_jit(struct proc_entry *UNUSED(entry), struct proc_data *data) {
     size_t start = 0;
     size_t end = data->size;
@@ -2057,6 +2075,7 @@ struct proc_children proc_ish_children = PROC_CHILDREN({
     {"amd_jit", S_IFREG | 0644, .show = proc_ish_show_amd64_jit, .update = proc_ish_update_amd64_jit},
     {"amd64_jit_fuse", S_IFREG | 0644, .show = proc_ish_show_amd64_jit_fuse, .update = proc_ish_update_amd64_jit_fuse},
     {"arm64_jit_fuse", S_IFREG | 0644, .show = proc_ish_show_arm64_jit_fuse, .update = proc_ish_update_arm64_jit_fuse},
+    {"arm64_mops", S_IFREG | 0644, .show = proc_ish_show_arm64_mops, .update = proc_ish_update_arm64_mops},
     {"i386_jit_fuse", S_IFREG | 0644, .show = proc_ish_show_i386_jit_fuse, .update = proc_ish_update_i386_jit_fuse},
     {"riscv64_jit_fuse", S_IFREG | 0644, .show = proc_ish_show_riscv64_jit_fuse, .update = proc_ish_update_riscv64_jit_fuse},
     {"i386_no_cache_comm", S_IFREG | 0644, .show = proc_ish_show_i386_no_cache_comm, .update = proc_ish_update_i386_no_cache_comm},
