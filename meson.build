@@ -1952,6 +1952,14 @@ if not meson.is_cross_build()
             objc_args: ['-fobjc-arc'],
             link_args: ['-framework', 'Foundation'])
         test('llm_anthropic', llm_anthropic_test)
+
+        # Streamed replies reassembled into the non-streaming message.
+        llm_stream_test = executable('llm_stream_test',
+            ['app/LLMChatStream.m', 'app/LLMChatAnthropic.m', 'tests/unit/llm_stream_test.m'],
+            include_directories: include_directories('app'),
+            objc_args: ['-fobjc-arc'],
+            link_args: ['-framework', 'Foundation'])
+        test('llm_stream', llm_stream_test)
     endif
 endif
 

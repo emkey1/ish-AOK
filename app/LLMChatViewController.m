@@ -16,6 +16,7 @@
 #import "Terminal.h"
 #import "GuestFileBridge.h"
 #import "LLMChatAnthropic.h"
+#import "LLMChatStream.h"
 #import "LLMChatInternal.h"
 #if __has_include("libiSH_AOKApp-Swift.h")
 #import "libiSH_AOKApp-Swift.h" // AOKFoundationModelsBridge (Swift, iOS 26+ FoundationModels wrapper)
@@ -2846,18 +2847,28 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
         @"tools": ISHLLMChatToolDefinitions(),
         @"stop": @[@"<file_sep>"],
     };
-    NSData *bodyData = [NSJSONSerialization dataWithJSONObject:body options:0 error:nil];
-    if (bodyData == nil) {
+    if ([NSJSONSerialization dataWithJSONObject:body options:0 error:nil] == nil) {
         [self appendRole:@"assistant" content:@"Could not encode the request."];
         [self setSending:NO];
         return;
     }
+    [self streamRoundToURL:url body:body anthropic:NO round:round model:model apiKey:apiKey];
+}
 
+// The non-streaming request, for a server that refused the streamed one.
+- (void)sendRoundWithoutStreamingToURL:(NSURL *)url body:(NSDictionary *)body anthropic:(BOOL)anthropic
+                                 round:(NSInteger)round model:(NSString *)model apiKey:(NSString *)apiKey {
+    NSMutableDictionary *plain = [body mutableCopy];
+    [plain removeObjectForKey:@"stream"];
+    if (!anthropic)
+        plain[@"stream"] = @NO;
+    NSData *bodyData = [NSJSONSerialization dataWithJSONObject:plain options:0 error:nil];
     __weak typeof(self) weakSelf = self;
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         NSInteger statusCode = 0;
         NSError *error = nil;
-        NSData *data = ISHLLMSynchronousChatPost(url, bodyData, apiKey, &statusCode, &error);
+        NSData *data = anthropic ? ISHLLMAnthropicPost(plain, apiKey, &statusCode, &error)
+                                 : ISHLLMSynchronousChatPost(url, bodyData, apiKey, &statusCode, &error);
         dispatch_async(dispatch_get_main_queue(), ^{
             typeof(self) self = weakSelf;
             if (self == nil)
@@ -2865,6 +2876,107 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
             [self handleToolRoundData:data statusCode:statusCode error:error round:round model:model apiKey:apiKey];
         });
     });
+}
+
+// One round of the tool loop, streamed: the reply's text appears in a
+// placeholder bubble as it arrives, then the assembled message -- the same
+// shape a non-streaming response has -- goes through -handleToolRoundData:
+// exactly as before, so tool calls, permissions and saving are unchanged.
+// Stop cancels the request itself (the task, or the socket). A server that
+// answers the streamed request with an HTTP error gets one plain retry.
+- (void)streamRoundToURL:(NSURL *)url body:(NSDictionary *)body anthropic:(BOOL)anthropic
+                   round:(NSInteger)round model:(NSString *)model apiKey:(NSString *)apiKey {
+    NSMutableDictionary *streamed = [body mutableCopy];
+    streamed[@"stream"] = @YES;
+    NSData *bodyData = [NSJSONSerialization dataWithJSONObject:streamed options:0 error:nil];
+    [_messages addObject:@{@"role": @"assistant", @"content": @""}];
+    NSUInteger placeholder = _messages.count - 1;
+    [self refreshTranscript];
+
+    ISHLLMOpenAIStreamAssembler *openAI = anthropic ? nil : [ISHLLMOpenAIStreamAssembler new];
+    ISHLLMAnthropicStreamAssembler *claude = anthropic ? [ISHLLMAnthropicStreamAssembler new] : nil;
+    __weak typeof(self) weakSelf = self;
+    void (^payloadHandler)(NSString *) = ^(NSString *payload) {
+        NSString *text = anthropic ? [claude consumePayload:payload] : [openAI consumePayload:payload];
+        if (text.length == 0)
+            return;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [weakSelf appendStreamingAssistantChunk:text toMessageAtIndex:placeholder];
+        });
+    };
+    // Runs on the transport's thread, after the last payload.
+    void (^finished)(NSData *, NSInteger, NSError *) = ^(NSData *plainBody, NSInteger statusCode, NSError *error) {
+        BOOL sawEvents = anthropic ? claude.sawEvents : openAI.sawEvents;
+        NSData *assembled = nil;
+        if (sawEvents) {
+            NSDictionary *response = anthropic ? claude.response : ({
+                NSDictionary *message = openAI.responseMessage;
+                message[@"error"] != nil ? @{@"error": message[@"error"]} : @{@"choices": @[@{@"message": message}]};
+            });
+            assembled = [NSJSONSerialization dataWithJSONObject:response options:0 error:nil];
+            if (anthropic && !claude.finished && error == nil)
+                error = [NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorNetworkConnectionLost
+                                        userInfo:@{NSLocalizedDescriptionKey: @"the reply stream ended early"}];
+        }
+        dispatch_async(dispatch_get_main_queue(), ^{
+            typeof(self) self = weakSelf;
+            if (self == nil)
+                return;
+            self->_activeTask = nil;
+            NSString *partial = placeholder < self->_messages.count ? ISHLLMStringValue(self->_messages[placeholder], @"content") : @"";
+            if (placeholder < self->_messages.count)
+                [self->_messages removeObjectAtIndex:placeholder];
+            if (self->_cancelled) {
+                // What arrived before Stop stays, as the streaming chat does.
+                self->_cancelled = NO;
+                [self appendRole:@"assistant" content:partial.length > 0 ? [partial stringByAppendingString:@"\n\n(stopped)"] : @"(stopped)"];
+                [self setSending:NO];
+                [self saveTranscript];
+                return;
+            }
+            if (!sawEvents && error == nil && statusCode >= 400) {
+                [self refreshTranscript];
+                [self sendRoundWithoutStreamingToURL:url body:body anthropic:anthropic round:round model:model apiKey:apiKey];
+                return;
+            }
+            [self handleToolRoundData:sawEvents ? assembled : plainBody statusCode:statusCode error:error round:round model:model apiKey:apiKey];
+        });
+    };
+
+    NSMutableDictionary<NSString *, NSString *> *extraHeaders = [NSMutableDictionary dictionary];
+    if (anthropic && body[@"fallbacks"] != nil)
+        extraHeaders[@"anthropic-beta"] = @"server-side-fallback-2026-07-01";
+    if ([url.scheme.lowercaseString isEqualToString:@"http"]) {
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+            typeof(self) self = weakSelf; // held for the call, so Stop can shut its socket
+            if (self == nil)
+                return;
+            NSInteger statusCode = 0;
+            NSError *error = nil;
+            NSMutableData *plainBody = [NSMutableData data];
+            ISHLLMDirectHTTPPostStreamingPayloads(url, bodyData, apiKey, extraHeaders, payloadHandler,
+                                                  &self->_activeStreamFD, &statusCode, plainBody, &error);
+            finished(plainBody, statusCode, error);
+        });
+        return;
+    }
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
+    request.HTTPMethod = @"POST";
+    [request setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
+    [request setValue:@"text/event-stream" forHTTPHeaderField:@"Accept"];
+    ISHLLMApplyAuthHeaders(request, apiKey);
+    for (NSString *name in extraHeaders)
+        [request setValue:extraHeaders[name] forHTTPHeaderField:name];
+    request.HTTPBody = bodyData;
+    ISHLLMRawStreamDelegate *delegate = [ISHLLMRawStreamDelegate new];
+    delegate.payloadHandler = payloadHandler;
+    delegate.completionHandler = finished;
+    NSURLSessionConfiguration *configuration = NSURLSessionConfiguration.defaultSessionConfiguration;
+    // A model can think for minutes before the first byte of its answer.
+    configuration.timeoutIntervalForRequest = 600;
+    NSURLSession *session = [NSURLSession sessionWithConfiguration:configuration delegate:delegate delegateQueue:nil];
+    _activeTask = [session dataTaskWithRequest:request];
+    [_activeTask resume];
 }
 
 // One Messages API request. The stable half of the system note (tool
@@ -2879,20 +2991,12 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
         if (_projectInstructions.length > 0)
             stable = [stable stringByAppendingFormat:@"\n\nProject instructions from %@ -- follow them:\n\n%@", _projectInstructionsSource, _projectInstructions];
     }
-    NSDictionary *body = ISHLLMAnthropicRequestBody(model, 16000, [self providerMessages], stable, ISHLLMClockNote(),
+    // Streamed, so a long answer shows as it is written; 32000 leaves room
+    // for thinking that a non-streaming request's timeout would not.
+    NSDictionary *body = ISHLLMAnthropicRequestBody(model, 32000, [self providerMessages], stable, ISHLLMClockNote(),
                                                     tools ? ISHLLMChatToolDefinitions() : nil);
-    __weak typeof(self) weakSelf = self;
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-        NSInteger statusCode = 0;
-        NSError *error = nil;
-        NSData *data = ISHLLMAnthropicPost(body, apiKey, &statusCode, &error);
-        dispatch_async(dispatch_get_main_queue(), ^{
-            typeof(self) self = weakSelf;
-            if (self == nil)
-                return;
-            [self handleToolRoundData:data statusCode:statusCode error:error round:round model:model apiKey:apiKey];
-        });
-    });
+    [self streamRoundToURL:[NSURL URLWithString:ISHLLMAnthropicMessagesEndpoint()] body:body anthropic:YES
+                     round:round model:model apiKey:apiKey];
 }
 
 - (void)handleToolRoundData:(NSData *)data statusCode:(NSInteger)statusCode error:(NSError *)error round:(NSInteger)round model:(NSString *)model apiKey:(NSString *)apiKey {

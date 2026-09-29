@@ -1234,6 +1234,11 @@ NSString *ISHLLMContentFromStreamingPayload(NSString *payload) {
 // fdOut, if non-NULL, receives the connected socket fd for as long as this
 // call is blocked in send()/recv() -- so a caller on another thread can
 // shutdown() it to unblock a cancelled request. Always left at 0 on return.
+BOOL ISHLLMDirectHTTPPostStreamingPayloads(NSURL *url, NSData *body, NSString *apiKey,
+                                           NSDictionary<NSString *, NSString *> *extraHeaders,
+                                           void (^payloadHandler)(NSString *payload),
+                                           int *fdOut, NSInteger *statusCodeOut,
+                                           NSMutableData *plainBody, NSError **errorOut);
 BOOL ISHLLMDirectHTTPPostStreaming(NSURL *url,
                                           NSData *body,
                                           NSString *apiKey,
@@ -1241,6 +1246,22 @@ BOOL ISHLLMDirectHTTPPostStreaming(NSURL *url,
                                           int *fdOut,
                                           NSInteger *statusCodeOut,
                                           NSError **errorOut) {
+    return ISHLLMDirectHTTPPostStreamingPayloads(url, body, apiKey, nil, ^(NSString *payload) {
+        NSString *content = ISHLLMContentFromStreamingPayload(payload);
+        if (content.length > 0 && chunkHandler != nil)
+            chunkHandler(content);
+    }, fdOut, statusCodeOut, nil, errorOut);
+}
+
+// The streaming POST underneath: every SSE `data:` payload goes to
+// payloadHandler as it arrives ("[DONE]" is dropped), extraHeaders are sent
+// as they are, and plainBody (optional) collects the whole response body, for
+// a server that answered with plain JSON instead of an event stream.
+BOOL ISHLLMDirectHTTPPostStreamingPayloads(NSURL *url, NSData *body, NSString *apiKey,
+                                           NSDictionary<NSString *, NSString *> *extraHeaders,
+                                           void (^payloadHandler)(NSString *payload),
+                                           int *fdOut, NSInteger *statusCodeOut,
+                                           NSMutableData *plainBody, NSError **errorOut) {
     NSString *host = url.host;
     if (host.length == 0) {
         if (errorOut != nil)
@@ -1287,6 +1308,8 @@ BOOL ISHLLMDirectHTTPPostStreaming(NSURL *url,
         @"Content-Length: %lu\r\n",
         path, hostHeader, (unsigned long) body.length];
     [headers appendString:ISHLLMRawAuthHeaders(apiKey)];
+    for (NSString *name in extraHeaders)
+        [headers appendFormat:@"%@: %@\r\n", name, extraHeaders[name]];
     [headers appendString:@"\r\n"];
 
     NSMutableData *requestData = [NSMutableData dataWithData:[headers dataUsingEncoding:NSUTF8StringEncoding]];
@@ -1344,6 +1367,7 @@ BOOL ISHLLMDirectHTTPPostStreaming(NSURL *url,
         NSString *text = [[NSString alloc] initWithData:bufferedData encoding:NSUTF8StringEncoding];
         if (text.length == 0)
             continue;
+        [plainBody appendData:bufferedData];
         [bufferedData setLength:0];
         [eventBuffer appendString:text];
         for (;;) {
@@ -1357,9 +1381,8 @@ BOOL ISHLLMDirectHTTPPostStreaming(NSURL *url,
             NSString *payload = [[line substringFromIndex:5] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
             if ([payload isEqualToString:@"[DONE]"])
                 continue;
-            NSString *content = ISHLLMContentFromStreamingPayload(payload);
-            if (content.length > 0 && chunkHandler != nil)
-                chunkHandler(content);
+            if (payloadHandler != nil)
+                payloadHandler(payload);
         }
     }
     if (fdOut != NULL) *fdOut = 0;
@@ -1449,6 +1472,69 @@ didReceiveResponse:(NSURLResponse *)response
     // NSURLSession holds its delegate strongly until it is invalidated, so a
     // session left alive here would leak this object and, through the
     // handlers, the view controller.
+    [session finishTasksAndInvalidate];
+}
+
+@end
+
+// The payload-level twin of ISHLLMStreamingResponseDelegate, for the tool
+// loop: it hands on every SSE `data:` payload rather than extracting chat
+// completions text, and always keeps the whole body so a server that
+// answered with plain JSON can still be read.
+@implementation ISHLLMRawStreamDelegate {
+    NSMutableData *_pending;
+    NSMutableData *_body;
+    NSInteger _statusCode;
+}
+
+- (instancetype)init {
+    if ((self = [super init])) {
+        _pending = [NSMutableData data];
+        _body = [NSMutableData data];
+    }
+    return self;
+}
+
+- (void)URLSession:(NSURLSession *)session dataTask:(NSURLSessionDataTask *)dataTask
+didReceiveResponse:(NSURLResponse *)response completionHandler:(void (^)(NSURLSessionResponseDisposition))completionHandler {
+    (void) session;
+    (void) dataTask;
+    if ([response isKindOfClass:NSHTTPURLResponse.class])
+        _statusCode = ((NSHTTPURLResponse *) response).statusCode;
+    completionHandler(NSURLSessionResponseAllow);
+}
+
+- (void)URLSession:(NSURLSession *)session dataTask:(NSURLSessionDataTask *)dataTask didReceiveData:(NSData *)data {
+    (void) session;
+    (void) dataTask;
+    [_body appendData:data];
+    if (_statusCode != 200)
+        return;
+    [_pending appendData:data];
+    while (YES) {
+        const char newline = '\n';
+        NSRange lineBreak = [_pending rangeOfData:[NSData dataWithBytes:&newline length:1] options:0 range:NSMakeRange(0, _pending.length)];
+        if (lineBreak.location == NSNotFound)
+            return;
+        NSData *lineData = [_pending subdataWithRange:NSMakeRange(0, lineBreak.location)];
+        [_pending replaceBytesInRange:NSMakeRange(0, NSMaxRange(lineBreak)) withBytes:NULL length:0];
+        NSString *line = [[[NSString alloc] initWithData:lineData encoding:NSUTF8StringEncoding] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+        if (![line hasPrefix:@"data:"])
+            continue;
+        NSString *payload = [[line substringFromIndex:5] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
+        if ([payload isEqualToString:@"[DONE]"])
+            continue;
+        if (self.payloadHandler != nil)
+            self.payloadHandler(payload);
+    }
+}
+
+- (void)URLSession:(NSURLSession *)session task:(NSURLSessionTask *)task didCompleteWithError:(NSError *)error {
+    (void) task;
+    if (self.completionHandler != nil)
+        self.completionHandler(_body, _statusCode, error);
+    self.payloadHandler = nil;
+    self.completionHandler = nil;
     [session finishTasksAndInvalidate];
 }
 

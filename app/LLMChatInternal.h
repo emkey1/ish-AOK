@@ -108,6 +108,12 @@ static const CGFloat kISHLLMToolContextBudgetFraction = 0.5; // fraction of a KN
 // the ones that already existed: a non-200, or a server that ignores
 // "stream": true and answers with an ordinary JSON body, ends with zero
 // chunks and the buffered body is handed to the normal response handler.
+// See LLMChatSupport.m. Payloads arrive on the session's delegate queue.
+@interface ISHLLMRawStreamDelegate : NSObject <NSURLSessionDataDelegate>
+@property (nonatomic, copy) void (^payloadHandler)(NSString *payload);
+@property (nonatomic, copy) void (^completionHandler)(NSData *body, NSInteger statusCode, NSError *error);
+@end
+
 @interface ISHLLMStreamingResponseDelegate : NSObject <NSURLSessionDataDelegate>
 @property (nonatomic, copy) void (^chunkHandler)(NSString *chunk);
 // receivedChunks is what tells the caller whether the reply already went on
@@ -132,6 +138,11 @@ static NSString *const kISHLLMDestinationModel = @"model";
 static NSString *const kISHLLMDestinationAPIKey = @"apiKey";
 
 // LLMChatSupport.m
+BOOL ISHLLMDirectHTTPPostStreamingPayloads(NSURL *url, NSData *body, NSString *apiKey,
+                                           NSDictionary<NSString *, NSString *> *extraHeaders,
+                                           void (^payloadHandler)(NSString *payload),
+                                           int *fdOut, NSInteger *statusCodeOut,
+                                           NSMutableData *plainBody, NSError **errorOut);
 int ISHLLMConnectWithTimeout(struct addrinfo *results, int timeoutMs, int *errnoOut);
 NSError *ISHLLMConnectionError(NSString *host, NSString *port, int errnoValue);
 dispatch_queue_t ISHLLMGuestCommandQueue(void);
