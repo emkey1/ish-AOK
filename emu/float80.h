@@ -30,6 +30,12 @@ bool f80_iszero(float80 f);
 bool f80_isdenormal(float80 f);
 bool f80_is_supported(float80 f);
 
+// Round-to-nearest fast paths for normal operands and results at p bits of
+// precision (64, 53 or 24); false means "use f80_add/f80_mul instead" and
+// leaves nothing changed. Report PE (inexact) and C1 (rounded up) through the
+// out-parameters instead of the thread-local flags. See emu/float80.c.
+bool f80_add_fast(float80 a, float80 b, int p, float80 *out, bool *inexact, bool *up);
+bool f80_mul_fast(float80 a, float80 b, int p, float80 *out, bool *inexact, bool *up);
 float80 f80_add(float80 a, float80 b);
 float80 f80_sub(float80 a, float80 b);
 float80 f80_mul(float80 a, float80 b);

@@ -525,6 +525,103 @@ float80 f80_abs(float80 f) {
         return b; \
 } while(0)
 
+// ---- Fast paths for the common case -------------------------------------
+// Two normal operands, round to nearest, and a normal result: that is almost
+// every x87 add, subtract and multiply a program does, and the general code
+// above pays for the cases it isn't (NaN and infinity checks, denormal
+// exponents, directed rounding, tininess, overflow) plus the thread-local
+// rounding state it reads and writes on every step. These compute the same
+// exact 128-bit sum or product and round it once, to nearest-even at p bits
+// (the precision-control width: 64, 53 or 24), and give up (false) whenever
+// any of those other cases could apply, so the caller falls back to the
+// general functions and nothing about the result, the precision flag (PE) or
+// C1 changes. emu/float80-fast-test.c checks them against the general code.
+
+static inline bool f80_fast_normal(float80 f) {
+    return f.exp >= EXP_MIN && f.exp <= EXP_MAX && (f.signif >> 63) != 0;
+}
+
+// s: nonzero with bit 127 set, the value s * 2^(exp - 127). Round to p bits.
+static inline bool f80_fast_finish(uint128_t s, int exp, int sign, int p,
+        float80 *out, bool *inexact, bool *up) {
+    int shift = 128 - p;
+    uint128_t kept = s >> shift;
+    uint128_t rem = s & (((uint128_t) 1 << shift) - 1);
+    uint128_t half = (uint128_t) 1 << (shift - 1);
+    bool rounded_up = false;
+    if (rem > half || (rem == half && (kept & 1))) {
+        kept++;
+        rounded_up = true;
+    }
+    if (kept >> p) {
+        kept >>= 1;
+        exp++;
+    }
+    if (exp < unbias(EXP_MIN) || exp > unbias(EXP_MAX))
+        return false;
+    out->signif = (uint64_t) (kept << (64 - p));
+    out->exp = bias(exp);
+    out->sign = sign;
+    *inexact = rem != 0;
+    *up = rounded_up;
+    return true;
+}
+
+bool f80_add_fast(float80 a, float80 b, int p, float80 *out, bool *inexact, bool *up) {
+    if (!f80_fast_normal(a) || !f80_fast_normal(b))
+        return false;
+    if (a.exp < b.exp) {
+        float80 t = a;
+        a = b;
+        b = t;
+    }
+    int d = a.exp - b.exp;
+    if (d > 63)
+        return false; // b is below the rounding point: leave it to the general code
+    // Exact: b's 64 bits shifted right by at most 63 stay inside 128 bits.
+    uint128_t A = (uint128_t) a.signif << 64, B = ((uint128_t) b.signif << 64) >> d;
+    int exp = unbias(a.exp);
+    int sign = a.sign;
+    uint128_t S;
+    if (a.sign == b.sign) {
+        if (__builtin_add_overflow(A, B, &S)) {
+            S = (S >> 1) | (S & 1) | ((uint128_t) 1 << 127);
+            exp++;
+        }
+    } else {
+        if (A >= B) {
+            S = A - B;
+        } else {
+            S = B - A;
+            sign = b.sign;
+        }
+        if (S == 0) {
+            *out = (float80) {0}; // x - x is +0 when rounding to nearest
+            *inexact = false;
+            *up = false;
+            return true;
+        }
+        int z = __builtin_clzll((uint64_t) (S >> 64));
+        if ((uint64_t) (S >> 64) == 0)
+            z = 64 + __builtin_clzll((uint64_t) S);
+        S <<= z;
+        exp -= z;
+    }
+    return f80_fast_finish(S, exp, sign, p, out, inexact, up);
+}
+
+bool f80_mul_fast(float80 a, float80 b, int p, float80 *out, bool *inexact, bool *up) {
+    if (!f80_fast_normal(a) || !f80_fast_normal(b))
+        return false;
+    uint128_t P = (uint128_t) a.signif * b.signif; // >= 2^126
+    int exp = unbias(a.exp) + unbias(b.exp) + 1;
+    if (!(P >> 127)) {
+        P <<= 1;
+        exp--;
+    }
+    return f80_fast_finish(P, exp, a.sign ^ b.sign, p, out, inexact, up);
+}
+
 float80 f80_add(float80 a, float80 b) {
     handle_nans(a, b);
 

@@ -356,22 +356,64 @@ void fpu_chs(struct cpu_state *cpu) {
     ST(0) = f80_neg(ST(0));
 }
 
+// Round-to-nearest fast paths (float80.c's f80_add_fast/f80_mul_fast): two
+// normal operands and a normal result, which is nearly every x87 add,
+// subtract and multiply. They report PE and C1 exactly as FPU_BEGIN/FPU_END
+// would and decline everything else, which then takes the general path below.
+static inline int fpu_fast_precision(struct cpu_state *cpu) {
+    if (cpu->rc != round_to_nearest)
+        return 0;
+    return cpu->pc == 0 ? 24 : cpu->pc == 2 ? 53 : 64; // f80_precision_from_pc
+}
+static inline bool fpu_fast_add(struct cpu_state *cpu, float80 a, float80 b, float80 *dst) {
+    int p = fpu_fast_precision(cpu);
+    float80 r;
+    bool inexact, up;
+    if (p == 0 || !f80_add_fast(a, b, p, &r, &inexact, &up))
+        return false;
+    *dst = r;
+    if (inexact)
+        cpu->fsw |= 0x20;
+    cpu->c1 = up;
+    return true;
+}
+static inline bool fpu_fast_mul(struct cpu_state *cpu, float80 a, float80 b, float80 *dst) {
+    int p = fpu_fast_precision(cpu);
+    float80 r;
+    bool inexact, up;
+    if (p == 0 || !f80_mul_fast(a, b, p, &r, &inexact, &up))
+        return false;
+    *dst = r;
+    if (inexact)
+        cpu->fsw |= 0x20;
+    cpu->c1 = up;
+    return true;
+}
+
 void fpu_add(struct cpu_state *cpu, int srci, int dsti) {
+    if (fpu_fast_add(cpu, ST(dsti), ST(srci), &ST(dsti)))
+        return;
     FPU_BEGIN();
     ST(dsti) = f80_add(ST(dsti), ST(srci));
     FPU_END();
 }
 void fpu_sub(struct cpu_state *cpu, int srci, int dsti) {
+    if (fpu_fast_add(cpu, ST(dsti), f80_neg(ST(srci)), &ST(dsti)))
+        return;
     FPU_BEGIN();
     ST(dsti) = f80_sub(ST(dsti), ST(srci));
     FPU_END();
 }
 void fpu_subr(struct cpu_state *cpu, int srci, int dsti) {
+    if (fpu_fast_add(cpu, ST(srci), f80_neg(ST(dsti)), &ST(dsti)))
+        return;
     FPU_BEGIN();
     ST(dsti) = f80_sub(ST(srci), ST(dsti));
     FPU_END();
 }
 void fpu_mul(struct cpu_state *cpu, int srci, int dsti) {
+    if (fpu_fast_mul(cpu, ST(dsti), ST(srci), &ST(dsti)))
+        return;
     FPU_BEGIN();
     ST(dsti) = f80_mul(ST(dsti), ST(srci));
     FPU_END();
@@ -388,21 +430,29 @@ void fpu_divr(struct cpu_state *cpu, int srci, int dsti) {
 }
 
 void fpu_iadd16(struct cpu_state *cpu, int16_t *i) {
+    if (fpu_fast_add(cpu, ST(0), f80_from_int(*i), &ST(0)))
+        return;
     FPU_BEGIN();
     ST(0) = f80_add(ST(0), f80_from_int(*i));
     FPU_END();
 }
 void fpu_isub16(struct cpu_state *cpu, int16_t *i) {
+    if (fpu_fast_add(cpu, ST(0), f80_neg(f80_from_int(*i)), &ST(0)))
+        return;
     FPU_BEGIN();
     ST(0) = f80_sub(ST(0), f80_from_int(*i));
     FPU_END();
 }
 void fpu_isubr16(struct cpu_state *cpu, int16_t *i) {
+    if (fpu_fast_add(cpu, f80_from_int(*i), f80_neg(ST(0)), &ST(0)))
+        return;
     FPU_BEGIN();
     ST(0) = f80_sub(f80_from_int(*i), ST(0));
     FPU_END();
 }
 void fpu_imul16(struct cpu_state *cpu, int16_t *i) {
+    if (fpu_fast_mul(cpu, ST(0), f80_from_int(*i), &ST(0)))
+        return;
     FPU_BEGIN();
     ST(0) = f80_mul(ST(0), f80_from_int(*i));
     FPU_END();
@@ -419,21 +469,29 @@ void fpu_idivr16(struct cpu_state *cpu, int16_t *i) {
 }
 
 void fpu_iadd32(struct cpu_state *cpu, int32_t *i) {
+    if (fpu_fast_add(cpu, ST(0), f80_from_int(*i), &ST(0)))
+        return;
     FPU_BEGIN();
     ST(0) = f80_add(ST(0), f80_from_int(*i));
     FPU_END();
 }
 void fpu_isub32(struct cpu_state *cpu, int32_t *i) {
+    if (fpu_fast_add(cpu, ST(0), f80_neg(f80_from_int(*i)), &ST(0)))
+        return;
     FPU_BEGIN();
     ST(0) = f80_sub(ST(0), f80_from_int(*i));
     FPU_END();
 }
 void fpu_isubr32(struct cpu_state *cpu, int32_t *i) {
+    if (fpu_fast_add(cpu, f80_from_int(*i), f80_neg(ST(0)), &ST(0)))
+        return;
     FPU_BEGIN();
     ST(0) = f80_sub(f80_from_int(*i), ST(0));
     FPU_END();
 }
 void fpu_imul32(struct cpu_state *cpu, int32_t *i) {
+    if (fpu_fast_mul(cpu, ST(0), f80_from_int(*i), &ST(0)))
+        return;
     FPU_BEGIN();
     ST(0) = f80_mul(ST(0), f80_from_int(*i));
     FPU_END();
@@ -450,21 +508,29 @@ void fpu_idivr32(struct cpu_state *cpu, int32_t *i) {
 }
 
 void fpu_addm32(struct cpu_state *cpu, float32 *f) {
+    if (fpu_fast_add(cpu, ST(0), FPU_M(*f), &ST(0)))
+        return;
     FPU_BEGIN();
     ST(0) = f80_add(ST(0), FPU_M(*f));
     FPU_END();
 }
 void fpu_subm32(struct cpu_state *cpu, float32 *f) {
+    if (fpu_fast_add(cpu, ST(0), f80_neg(FPU_M(*f)), &ST(0)))
+        return;
     FPU_BEGIN();
     ST(0) = f80_sub(ST(0), FPU_M(*f));
     FPU_END();
 }
 void fpu_subrm32(struct cpu_state *cpu, float32 *f) {
+    if (fpu_fast_add(cpu, FPU_M(*f), f80_neg(ST(0)), &ST(0)))
+        return;
     FPU_BEGIN();
     ST(0) = f80_sub(FPU_M(*f), ST(0));
     FPU_END();
 }
 void fpu_mulm32(struct cpu_state *cpu, float32 *f) {
+    if (fpu_fast_mul(cpu, ST(0), FPU_M(*f), &ST(0)))
+        return;
     FPU_BEGIN();
     ST(0) = f80_mul(ST(0), FPU_M(*f));
     FPU_END();
@@ -481,21 +547,29 @@ void fpu_divrm32(struct cpu_state *cpu, float32 *f) {
 }
 
 void fpu_addm64(struct cpu_state *cpu, float64 *f) {
+    if (fpu_fast_add(cpu, ST(0), FPU_M(*f), &ST(0)))
+        return;
     FPU_BEGIN();
     ST(0) = f80_add(ST(0), FPU_M(*f));
     FPU_END();
 }
 void fpu_subm64(struct cpu_state *cpu, float64 *f) {
+    if (fpu_fast_add(cpu, ST(0), f80_neg(FPU_M(*f)), &ST(0)))
+        return;
     FPU_BEGIN();
     ST(0) = f80_sub(ST(0), FPU_M(*f));
     FPU_END();
 }
 void fpu_subrm64(struct cpu_state *cpu, float64 *f) {
+    if (fpu_fast_add(cpu, FPU_M(*f), f80_neg(ST(0)), &ST(0)))
+        return;
     FPU_BEGIN();
     ST(0) = f80_sub(FPU_M(*f), ST(0));
     FPU_END();
 }
 void fpu_mulm64(struct cpu_state *cpu, float64 *f) {
+    if (fpu_fast_mul(cpu, ST(0), FPU_M(*f), &ST(0)))
+        return;
     FPU_BEGIN();
     ST(0) = f80_mul(ST(0), FPU_M(*f));
     FPU_END();

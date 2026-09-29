@@ -1907,6 +1907,10 @@ if not meson.is_cross_build()
     # test for floating point library
     float80_test = executable('float80_test', ['emu/float80.c', 'emu/float80-test.c'], dependencies: [libm])
     test('float80', float80_test)
+    # The round-to-nearest fast paths against the general code, bit for bit.
+    float80_fast_test = executable('float80_fast_test', ['emu/float80.c', 'emu/float80-fast-test.c'],
+        include_directories: includes, dependencies: [libm])
+    test('float80_fast', float80_fast_test, args: ['400000'])
 
     # The compressed-page pool holds guest memory the guest can no longer see,
     # so a bug in it is silent corruption. Host unit test rather than a guest
