@@ -57,6 +57,11 @@
 @interface LLMToolPermissionsViewController : UITableViewController <WorkspaceTextScaledPage>
 @end
 
+// LLM Settings -> MCP Servers: remote and in-guest MCP servers whose tools
+// the chat offers. See LLMChatMCP.h.
+@interface LLMMCPServersViewController : UITableViewController <WorkspaceTextScaledPage>
+@end
+
 // The saved destinations: select, edit, duplicate, delete, add from a preset.
 // Reachable both from the chat's destination menu and from LLM Settings.
 @interface LLMDestinationListViewController : UITableViewController <WorkspaceTextScaledPage>

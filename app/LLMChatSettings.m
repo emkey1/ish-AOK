@@ -14,6 +14,7 @@
 #import "WorkspaceViewController.h"
 #import "MarkdownRenderer.h"
 #import "LLMChatInternal.h"
+#import "LLMChatMCP.h"
 #if __has_include("libiSH_AOKApp-Swift.h")
 #import "libiSH_AOKApp-Swift.h" // AOKFoundationModelsBridge (Swift, iOS 26+ FoundationModels wrapper)
 #endif
@@ -70,6 +71,7 @@ typedef NS_ENUM(NSInteger, ISHLLMSettingsRow) {
     ISHLLMSettingsRowTestConnection,
     ISHLLMSettingsRowShellTools,
     ISHLLMSettingsRowToolPermissions,
+    ISHLLMSettingsRowMCPServers,
     ISHLLMSettingsRowCommandTimeout,
     ISHLLMSettingsRowOutputLimit,
     ISHLLMSettingsRowToolRounds,
@@ -212,6 +214,14 @@ typedef NS_ENUM(NSInteger, ISHLLMSettingsRow) {
                 ISHLLMPermissionActionTitle(ISHLLMCategoryAction(ISHLLMToolCategoryEdit)),
                 ISHLLMPermissionActionTitle(ISHLLMCategoryAction(ISHLLMToolCategoryShell))];
             break;
+        case ISHLLMSettingsRowMCPServers: {
+            NSUInteger on = 0, total = ISHLLMMCPServers().count;
+            for (NSDictionary *server in ISHLLMMCPServers())
+                on += [server[@"enabled"] boolValue];
+            cell.textLabel.text = @"MCP Servers";
+            cell.detailTextLabel.text = total == 0 ? @"None" : [NSString stringWithFormat:@"%lu on", (unsigned long) on];
+            break;
+        }
         case ISHLLMSettingsRowCommandTimeout:
             cell.textLabel.text = @"Command Timeout";
             cell.detailTextLabel.text = ISHLLMToolTimeoutTitle(ISHLLMToolTimeoutSeconds());
@@ -272,6 +282,9 @@ typedef NS_ENUM(NSInteger, ISHLLMSettingsRow) {
             return;
         case ISHLLMSettingsRowToolPermissions:
             [self.navigationController pushViewController:[LLMToolPermissionsViewController new] animated:YES];
+            return;
+        case ISHLLMSettingsRowMCPServers:
+            [self.navigationController pushViewController:[LLMMCPServersViewController new] animated:YES];
             return;
         case ISHLLMSettingsRowCommandTimeout:
             [self pickToolTimeoutFromView:cell];
@@ -1131,7 +1144,7 @@ typedef NS_ENUM(NSInteger, ISHLLMPermissionsSection) {
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
     (void) tableView;
     switch ((ISHLLMPermissionsSection) section) {
-        case ISHLLMPermissionsSectionCategories: return 3;
+        case ISHLLMPermissionsSectionCategories: return 4;
         case ISHLLMPermissionsSectionRules: return (NSInteger) ISHLLMShellRules().count + 1;
         case ISHLLMPermissionsSectionActions: return 1;
         case ISHLLMPermissionsSectionCount: break;

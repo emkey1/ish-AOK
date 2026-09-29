@@ -1963,6 +1963,14 @@ if not meson.is_cross_build()
             objc_args: ['-fobjc-arc'],
             link_args: ['-framework', 'Foundation'])
         test('llm_stream', llm_stream_test)
+
+        # MCP JSON-RPC framing and tool translation.
+        llm_mcp_test = executable('llm_mcp_test',
+            ['app/LLMChatMCPCore.m', 'tests/unit/llm_mcp_test.m'],
+            include_directories: include_directories('app'),
+            objc_args: ['-fobjc-arc'],
+            link_args: ['-framework', 'Foundation'])
+        test('llm_mcp', llm_mcp_test)
     endif
 endif
 

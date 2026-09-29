@@ -13,6 +13,7 @@ NSString *const kISHLLMShellRuleAction = @"action";
 static NSString *const kISHLLMPermissionReadKey = @"LLM Tool Permission Read";
 static NSString *const kISHLLMPermissionEditKey = @"LLM Tool Permission Edit";
 static NSString *const kISHLLMPermissionShellKey = @"LLM Tool Permission Shell";
+static NSString *const kISHLLMPermissionMCPKey = @"LLM Tool Permission MCP";
 static NSString *const kISHLLMShellRulesKey = @"LLM Tool Shell Rules";
 
 NSString *ISHLLMPermissionActionTitle(ISHLLMPermissionAction action) {
@@ -29,6 +30,7 @@ NSString *ISHLLMToolCategoryTitle(ISHLLMToolCategory category) {
         case ISHLLMToolCategoryRead: return @"Read Files";
         case ISHLLMToolCategoryEdit: return @"Edit Files";
         case ISHLLMToolCategoryShell: return @"Shell Commands";
+        case ISHLLMToolCategoryMCP: return @"MCP Tools";
     }
     return @"";
 }
@@ -38,6 +40,7 @@ static NSString *ISHLLMCategoryKey(ISHLLMToolCategory category) {
         case ISHLLMToolCategoryRead: return kISHLLMPermissionReadKey;
         case ISHLLMToolCategoryEdit: return kISHLLMPermissionEditKey;
         case ISHLLMToolCategoryShell: return kISHLLMPermissionShellKey;
+        case ISHLLMToolCategoryMCP: return kISHLLMPermissionMCPKey;
     }
     return kISHLLMPermissionShellKey;
 }

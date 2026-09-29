@@ -28,6 +28,7 @@ typedef NS_ENUM(NSInteger, ISHLLMToolCategory) {
     ISHLLMToolCategoryRead,   // read_file, list_directory, glob, grep
     ISHLLMToolCategoryEdit,   // write_file, edit_file
     ISHLLMToolCategoryShell,  // run_shell
+    ISHLLMToolCategoryMCP,    // tools from MCP servers (LLMChatMCP.h)
 };
 
 extern NSString *const kISHLLMShellRulePattern; // NSString, a wildcard pattern
@@ -37,7 +38,7 @@ NSString *ISHLLMPermissionActionTitle(ISHLLMPermissionAction action);
 NSString *ISHLLMToolCategoryTitle(ISHLLMToolCategory category);
 
 // The saved settings (NSUserDefaults). Reads a missing or malformed value as
-// the default: Read allow, Edit ask, Shell ask.
+// the default: Read allow, Edit ask, Shell ask, MCP ask.
 ISHLLMPermissionAction ISHLLMCategoryAction(ISHLLMToolCategory category);
 void ISHLLMSetCategoryAction(ISHLLMToolCategory category, ISHLLMPermissionAction action);
 // First match wins. Never saved until edited, so the defaults below can

@@ -18,6 +18,7 @@
 #import "LLMChatAnthropic.h"
 #import "LLMChatStream.h"
 #import "LLMChatInternal.h"
+#import "LLMChatMCP.h"
 #if __has_include("libiSH_AOKApp-Swift.h")
 #import "libiSH_AOKApp-Swift.h" // AOKFoundationModelsBridge (Swift, iOS 26+ FoundationModels wrapper)
 #endif
@@ -1214,6 +1215,18 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
     [[self ish_presentationViewController] presentViewController:navigationController animated:YES completion:nil];
 }
 
+// /mcp: straight to LLM Settings -> MCP Servers.
+- (void)showMCPServers {
+    UIViewController *serversViewController = [LLMMCPServersViewController new];
+    if (self.ish_canPushSubpage) {
+        [self.navigationController pushViewController:serversViewController animated:YES];
+    } else {
+        UINavigationController *navigationController = [[UINavigationController alloc] initWithRootViewController:serversViewController];
+        ISHConfigureLLMSettingsNavigationController(navigationController);
+        [[self ish_presentationViewController] presentViewController:navigationController animated:YES completion:nil];
+    }
+}
+
 - (void)showLLMSettings:(id)sender {
     (void) sender;
     UIViewController *settingsViewController = ISHCreateLLMSettingsViewController();
@@ -2360,6 +2373,11 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
         [self undoLastChange];
         return;
     }
+    if ([prompt isEqualToString:@"/mcp"]) {
+        [self setPromptFieldText:@""];
+        [self showMCPServers];
+        return;
+    }
     if ([prompt isEqualToString:@"/compact"]) {
         [self setPromptFieldText:@""];
         [self compactConversation];
@@ -2435,9 +2453,16 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
         _autoRunCommandsThisReply = NO; // a new prompt re-arms confirmation for this reply
         __weak typeof(self) weakSelf = self;
         [self prepareGuestEnvironmentNoteThen:^{
-            typeof(self) self = weakSelf;
-            if (self != nil)
+            // MCP servers' tools join the built-in ones; a server that could
+            // not connect is named in the chat and left out.
+            [ISHLLMMCPManager.shared prepareWithCompletion:^(NSArray<NSString *> *problems) {
+                typeof(self) self = weakSelf;
+                if (self == nil)
+                    return;
+                if (problems.count > 0)
+                    [self appendLocalRole:@"assistant" content:[problems componentsJoinedByString:@"\n"]];
                 [self runToolLoopRound:0 model:model apiKey:apiKey];
+            }];
         }];
         return;
     }
@@ -3244,7 +3269,8 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
         // Only when the category setting is what asked: an edit outside the
         // working directory asks whatever the setting says.
         ISHLLMToolCategory category = invocation.category;
-        NSString *title = category == ISHLLMToolCategoryEdit ? @"Always allow file edits" : @"Always allow reading files";
+        NSString *title = category == ISHLLMToolCategoryEdit ? @"Always allow file edits"
+            : category == ISHLLMToolCategoryMCP ? @"Always allow MCP tools" : @"Always allow reading files";
         [alert addAction:[UIAlertAction actionWithTitle:title style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
             ISHLLMSetCategoryAction(category, ISHLLMPermissionAllow);
             completion(ISHLLMToolRunOnce);
@@ -3271,11 +3297,16 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
     if (ISHLLMUsesGeminiAPI())
         return @"Tools are not available with the Gemini API.";
     NSString *where = _toolContext.workingDirectory.length > 0 ? _toolContext.workingDirectory : @"your home directory";
-    return [NSString stringWithFormat:@"Tools: files and shell, working in %@.\nReading: %@ · Edits: %@ · Commands: %@\n/compact summarizes a long chat; /undo reverts the last file change.",
+    NSUInteger mcpServers = 0;
+    for (NSDictionary *server in ISHLLMMCPServers())
+        mcpServers += [server[@"enabled"] boolValue];
+    NSString *mcp = mcpServers == 0 ? @"" : [NSString stringWithFormat:@" · MCP (%lu server%@): %@", (unsigned long) mcpServers,
+                                             mcpServers == 1 ? @"" : @"s", ISHLLMPermissionActionTitle(ISHLLMCategoryAction(ISHLLMToolCategoryMCP))];
+    return [NSString stringWithFormat:@"Tools: files and shell, working in %@.\nReading: %@ · Edits: %@ · Commands: %@%@\n/compact summarizes a long chat; /undo reverts the last file change; /mcp lists MCP servers.",
             where,
             ISHLLMPermissionActionTitle(ISHLLMCategoryAction(ISHLLMToolCategoryRead)),
             ISHLLMPermissionActionTitle(ISHLLMCategoryAction(ISHLLMToolCategoryEdit)),
-            ISHLLMPermissionActionTitle(ISHLLMCategoryAction(ISHLLMToolCategoryShell))];
+            ISHLLMPermissionActionTitle(ISHLLMCategoryAction(ISHLLMToolCategoryShell)), mcp];
 }
 
 - (void)editWorkingDirectoryForCurrentChat {

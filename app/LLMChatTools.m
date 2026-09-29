@@ -25,6 +25,8 @@
 #include <errno.h>
 #include "kernel/init.h" // run_guest_command_capture (guest-shell tool)
 #import "GuestFileBridge.h"
+#import "LLMChatMCP.h"
+#import "LLMChatMCPCore.h"
 
 // MARK: - Guest-shell tool support (OpenAI-compatible function calling)
 
@@ -117,7 +119,7 @@ NSArray<NSDictionary<NSString *, id> *> *ISHLLMChatToolDefinitions(void) {
         ? @"Commands run as the unprivileged default user account (not root) when this filesystem has one. "
         : @"";
     NSString *pathNote = @"Absolute, or relative to the working directory.";
-    return @[
+    NSArray *builtIn = @[
         ISHLLMFunctionTool(@"run_shell",
             [NSString stringWithFormat:@"Run a command line in the local iSH-AOK Linux shell, starting in the working directory, and return its combined stdout and stderr. %@Use it to run programs, build and test, fetch web pages or APIs (curl/wget), or install packages. Prefer read_file, edit_file, write_file, grep and glob for working with files. The userland varies by distro -- it may be a minimal BusyBox/Alpine system or a full Debian/Devuan/glibc one -- so use the tools that are actually present (a per-session environment note lists what was detected) and try an alternative if a command reports 'not found'. Output is capped at %ld KB and the command is killed after %ld seconds.", identityNote, (long) ISHLLMToolOutputLimitKB(), (long) ISHLLMToolTimeoutSeconds()],
             @{@"command": ISHLLMStringParameter(@"The shell command line to execute, e.g. curl -fsSL 'https://wttr.in/Paris?format=3' (or wget -qO- on BusyBox systems)")},
@@ -165,6 +167,8 @@ NSArray<NSDictionary<NSString *, id> *> *ISHLLMChatToolDefinitions(void) {
               @"ignore_case": ISHLLMBooleanParameter(@"Match case-insensitively. Optional.")},
             @[@"pattern"]),
     ];
+    // Tools from connected MCP servers, named mcp__<server>__<tool>.
+    return [builtIn arrayByAddingObjectsFromArray:ISHLLMMCPManager.shared.toolDefinitions];
 }
 
 NSString *ISHLLMToolCallID(NSDictionary *toolCall) {
@@ -655,6 +659,12 @@ static NSUInteger ISHLLMLineCount(NSString *text) {
 
 - (void)parse {
     NSString *name = _name;
+    if ([name hasPrefix:kISHLLMMCPToolPrefix]) {
+        _category = ISHLLMToolCategoryMCP;
+        if (![ISHLLMMCPManager.shared knowsTool:name])
+            _problem = [NSString stringWithFormat:@"No connected MCP server offers a tool named '%@'.", name];
+        return;
+    }
     if (![ISHLLMToolInvocation.knownTools containsObject:name]) {
         _category = ISHLLMToolCategoryShell;
         _problem = [NSString stringWithFormat:@"There is no tool named '%@'. The tools are: %@.", name.length > 0 ? name : @"(unnamed)",
@@ -704,12 +714,19 @@ static NSUInteger ISHLLMLineCount(NSString *text) {
         return ISHLLMPermissionAllow;
     }
     ISHLLMPermissionAction categoryAction = ISHLLMCategoryAction(_category);
+    if (_category == ISHLLMToolCategoryMCP) {
+        if (reasonOut != NULL)
+            *reasonOut = nil;
+        return categoryAction;
+    }
     if (_category == ISHLLMToolCategoryShell)
         return ISHLLMEvaluateShellCommand(_command ?: @"", ISHLLMShellRules(), categoryAction, reasonOut);
     return ISHLLMEvaluatePathAccess(_category, _path ?: @"/", _workingDirectory, categoryAction, reasonOut);
 }
 
 - (NSString *)confirmationTitle {
+    if (_category == ISHLLMToolCategoryMCP)
+        return @"Use MCP tool?";
     if ([_name isEqualToString:@"run_shell"])
         return @"Run shell command?";
     if ([_name isEqualToString:@"write_file"])
@@ -724,6 +741,13 @@ static NSUInteger ISHLLMLineCount(NSString *text) {
 }
 
 - (NSString *)confirmationMessage {
+    if (_category == ISHLLMToolCategoryMCP) {
+        NSData *json = [NSJSONSerialization isValidJSONObject:_arguments ?: @{}]
+            ? [NSJSONSerialization dataWithJSONObject:_arguments ?: @{} options:NSJSONWritingPrettyPrinted | NSJSONWritingSortedKeys error:nil]
+            : nil;
+        NSString *text = json != nil ? [[NSString alloc] initWithData:json encoding:NSUTF8StringEncoding] : @"{}";
+        return [NSString stringWithFormat:@"%@\n\n%@", [ISHLLMMCPManager.shared describeTool:_name], ISHLLMPreviewLines(text ?: @"{}", 16, @"")];
+    }
     if ([_name isEqualToString:@"run_shell"])
         return [NSString stringWithFormat:@"The model wants to run this in the iSH-AOK shell, in %@:\n\n%@", _workingDirectory, _command];
     if ([_name isEqualToString:@"write_file"]) {
@@ -759,6 +783,10 @@ NSArray<NSString *> *ISHLLMToolCallDescriptions(NSArray *toolCalls) {
             for (NSDictionary *todo in todos)
                 done += [todo isKindOfClass:NSDictionary.class] && [todo[@"status"] isEqual:@"completed"];
             [lines addObject:[NSString stringWithFormat:@"todo: %lu of %lu done", (unsigned long) done, (unsigned long) todos.count]];
+            continue;
+        }
+        if ([name hasPrefix:kISHLLMMCPToolPrefix]) {
+            [lines addObject:[@"mcp " stringByAppendingString:[ISHLLMMCPManager.shared describeTool:name]]];
             continue;
         }
         if ([name isEqualToString:@"run_shell"]) {
@@ -1483,6 +1511,11 @@ void ISHLLMRunToolInvocation(ISHLLMToolInvocation *invocation, ISHLLMToolContext
             summary = @"not run";
         } else if ([name isEqualToString:@"todo_write"]) {
             result = ISHLLMTodoWriteTool(invocation, context, &summary);
+        } else if (invocation.category == ISHLLMToolCategoryMCP) {
+            BOOL isError = NO;
+            result = [ISHLLMMCPManager.shared callTool:name arguments:invocation.arguments isError:&isError summary:&summary];
+            if (isError)
+                result = [@"Error: " stringByAppendingString:result];
         } else if ([name isEqualToString:@"run_shell"]) {
             result = ISHLLMRunGuestShellCommand(invocation.command, context.workingDirectory, &summary);
         } else if (![ISHGuestFileBridge.sharedBridge isGuestAvailable]) {
