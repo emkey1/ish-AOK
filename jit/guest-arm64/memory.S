@@ -825,3 +825,13 @@ ldld_op_st ldldeor_st_fast32, 32, eor, ldr, str, w17, w21
 load_literal load_lit32,   32, ldr,   w17
 load_literal load_lit64,   64, ldr,   x17
 load_literal load_lit_sw,  32, ldrsw, x17
+
+// ISH_JIT_PROFILE (jit/jitprof.c): count one entry of this block. Emitted
+// first in every block while profiling, so chained entries count too.
+// Code stream: [&counter].
+.gadget block_count
+    ldr x8, [_ip], #8
+    ldr x9, [x8]
+    add x9, x9, #1
+    str x9, [x8]
+    gret

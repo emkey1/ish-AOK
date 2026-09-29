@@ -25,6 +25,8 @@ struct gen_state {
     bool amd64;
     bool arm64;
     bool riscv64;
+    // ISH_JIT_PROFILE's record of this block (jit/jitprof.c); NULL when off.
+    struct jitprof_block *jitprof;
     // True when the previous gen_step_arm64 emitted a gadget that ends
     // with HOST NZCV still equal to the guest flags it just computed
     // (the fast flag-setting ALU/CMP gadgets — nothing after their

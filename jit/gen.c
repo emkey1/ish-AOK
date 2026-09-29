@@ -8,6 +8,7 @@
 #include <time.h>
 #include <dlfcn.h>
 #include "jit/gen.h"
+#include "jit/jitprof.h"
 #include "emu/fpenv.h"
 #include "emu/modrm.h"
 #include "emu/cpuid.h"
@@ -611,6 +612,7 @@ bool gen_start(guest_addr_t addr, struct gen_state *state) {
     state->arm64_ip = addr;
     state->arm64_orig_ip = addr;
     state->riscv64 = false; // same uninitialized-flag bug class as arm64 above
+    state->jitprof = NULL;
     state->riscv64_ip = addr;
     state->riscv64_orig_ip = addr;
     state->amd64 = false;
@@ -661,6 +663,14 @@ bool gen_start_arm64(guest_addr_t addr, struct gen_state *state) {
     state->arm64 = true;
     state->arm64_ip = addr;
     state->arm64_orig_ip = addr;
+#ifdef ISH_JIT_ARM64_GUEST
+    state->jitprof = jitprof_block_new(addr, JITPROF_ARM64);
+    if (unlikely(state->jitprof != NULL)) {
+        extern void gadget_arm64_block_count(void);
+        gen(state, (unsigned long) gadget_arm64_block_count);
+        gen(state, (unsigned long) jitprof_counter(state->jitprof));
+    }
+#endif
     return true;
 }
 
@@ -1298,6 +1308,8 @@ int gen_step_arm64(struct gen_state *state, struct tlb *tlb) {
         return 0;
     }
     state->arm64_ip += sizeof(insn);
+    if (unlikely(state->jitprof != NULL))
+        jitprof_note(state->jitprof, insn);
 
     // Move wide (immediate): MOVN/MOVZ/MOVK — same mask as
     // emu/arm64_interp.c's arm64_execute() (bits[28:23]=100101).
@@ -4955,6 +4967,12 @@ bool gen_start_riscv64(guest_addr_t addr, struct gen_state *state) {
     state->riscv64 = true;
     state->riscv64_ip = addr;
     state->riscv64_orig_ip = addr;
+    state->jitprof = jitprof_block_new(addr, JITPROF_RISCV64);
+    if (unlikely(state->jitprof != NULL)) {
+        extern void gadget_riscv64_block_count(void);
+        gen(state, (unsigned long) gadget_riscv64_block_count);
+        gen(state, (unsigned long) jitprof_counter(state->jitprof));
+    }
     return true;
 }
 
@@ -5440,6 +5458,8 @@ int gen_step_riscv64(struct gen_state *state, struct tlb *tlb) {
         insn = (uint32_t) low16 | ((uint32_t) high16 << 16);
     }
     state->riscv64_ip += length;
+    if (unlikely(state->jitprof != NULL))
+        jitprof_note(state->jitprof, insn);
 
     unsigned rd = riscv64_rd(insn);
     unsigned rs1 = riscv64_rs1(insn);

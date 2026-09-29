@@ -506,6 +506,7 @@ emu_src = [
     'emu/amd64_interp.c', # always built: host gadgets + jit/gen.c link its amd64_jit_* helpers
     'jit/jit.c',
     'jit/gen.c',
+    'jit/jitprof.c',
     'jit/hle.c',
     'jit/helpers.c',
     'jit/riscv64_vendor_ext.c', # portable C, inert unless gen_step_riscv64 ever runs

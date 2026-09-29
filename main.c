@@ -219,6 +219,10 @@ static noreturn void cli_halt(int status) {
         // no-op unless ISH_GUEST_PROFILE is set
         guestprof_dump();
     }
+    {
+        extern void jitprof_dump(void); // no-op unless ISH_JIT_PROFILE is set
+        jitprof_dump();
+    }
     // Deliberately NOT fflush(NULL). That walks every host stream and takes
     // each one's lock, and the shim gives a native program host FILEs for its
     // stdout and stderr -- so a guest task killed inside stdio leaves a stream

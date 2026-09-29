@@ -245,3 +245,12 @@ store_gadget sd, 64, rvsd, str,  x19
     str x11, [_cpu, x19]
     gret
     read_bullshit 32, rvflw
+
+// ISH_JIT_PROFILE (jit/jitprof.c): count one entry of this block; see
+// jit/guest-arm64/memory.S. Code stream: [&counter].
+.gadget block_count
+    ldr x8, [_ip], #8
+    ldr x9, [x8]
+    add x9, x9, #1
+    str x9, [x8]
+    gret
