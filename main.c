@@ -8,6 +8,7 @@
 #include <time.h>
 #include <sys/ioctl.h>
 #include <pthread.h>
+#include <poll.h>
 
 #include "fs/dev.h"
 #include "fs/devices.h"
@@ -846,6 +847,60 @@ int main(int argc, char *const argv[]) {
         const char *linger_str = getenv("ISH_TEST_GUEST_LINGER_MS");
         if (linger_str != NULL)
             usleep((useconds_t) atoi(linger_str) * 1000);
+        sock_host_dir_cleanup();
+        _exit(0);
+    }
+
+    // Dev harness for guest_process_spawn_user, the persistent guest process
+    // behind the LLM Chat's in-guest MCP servers. With ISH_TEST_GUEST_PROCESS
+    // set, start that command, then for each line of ISH_TEST_GUEST_LINES
+    // (default "one" and "two") write it to the process's stdin and read one
+    // line back from its stdout -- two round trips through one process prove
+    // it stays alive between them -- print what came back and anything on
+    // stderr, stop it, and report whether it was reaped. ISH_TEST_GUEST_USER
+    // selects the su path as for ISH_TEST_GUEST_CMD.
+    // e.g. ISH_TEST_GUEST_PROCESS='while read l; do echo "got $l"; echo "err $l" >&2; done' ./build/ish -f root /bin/sh
+    const char *proc_cmd = getenv("ISH_TEST_GUEST_PROCESS");
+    if (proc_cmd != NULL) {
+        struct guest_process process;
+        int rc = guest_process_spawn_user(getenv("ISH_TEST_GUEST_USER"), proc_cmd, NULL, &process);
+        int pid = process.pid;
+        fprintf(stderr, "[guest-proc] spawn rc=%d pid=%d\n", rc, pid);
+        const char *lines = getenv("ISH_TEST_GUEST_LINES");
+        char *copy = strdup(lines != NULL ? lines : "one\ntwo");
+        for (char *save = NULL, *line = strtok_r(copy, "\n", &save); rc == 0 && line != NULL; line = strtok_r(NULL, "\n", &save)) {
+            char request[512];
+            int length = snprintf(request, sizeof(request), "%s\n", line);
+            ssize_t wrote = write(process.stdin_fd, request, (size_t) length);
+            char reply[512];
+            size_t got = 0;
+            while (got + 1 < sizeof(reply)) {
+                struct pollfd pfd = {.fd = process.stdout_fd, .events = POLLIN};
+                if (poll(&pfd, 1, 10000) <= 0)
+                    break;
+                ssize_t n = read(process.stdout_fd, reply + got, 1);
+                if (n <= 0)
+                    break;
+                got += (size_t) n;
+                if (reply[got - 1] == '\n')
+                    break;
+            }
+            reply[got] = '\0';
+            fprintf(stderr, "[guest-proc] wrote %zd, read: %s%s", wrote, reply, got > 0 && reply[got - 1] == '\n' ? "" : "(no newline)\n");
+        }
+        free(copy);
+        if (rc == 0) {
+            char err[1024];
+            struct pollfd pfd = {.fd = process.stderr_fd, .events = POLLIN};
+            ssize_t n = poll(&pfd, 1, 500) > 0 ? read(process.stderr_fd, err, sizeof(err) - 1) : 0;
+            err[n > 0 ? n : 0] = '\0';
+            fprintf(stderr, "[guest-proc] stderr: %s\n", err);
+            guest_process_stop(&process);
+            struct task *left = pid_get_task_zombie_ref((dword_t) pid);
+            fprintf(stderr, "[guest-proc] after stop: %s\n", left == NULL ? "reaped" : (left->zombie ? "zombie" : "still running"));
+            if (left != NULL)
+                task_ref_cnt_mod(left, -1);
+        }
         sock_host_dir_cleanup();
         _exit(0);
     }

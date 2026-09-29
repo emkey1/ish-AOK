@@ -519,6 +519,102 @@ int run_guest_command_capture_user(const char *user, const char *command,
                                           timeout_ms, max_output, result);
 }
 
+static int spawn_guest_child(const char *const *args, int argc, const char *env,
+                             int fd0, int fd1, int fd2,
+                             dword_t *pid_out, bool *own_pgroup_out);
+
+// A long-lived guest process with host ends of its stdio; see init.h.
+static int pipe_pair_nosigpipe(int fds[2], bool writer_is_host) {
+    if (pipe(fds) < 0)
+        return -errno;
+#ifdef F_SETNOSIGPIPE
+    // The host end we write to: a peer that exited must give EPIPE, not a
+    // SIGPIPE to the app (init ignores it globally; this does not rely on that).
+    if (writer_is_host)
+        fcntl(fds[1], F_SETNOSIGPIPE, 1);
+#else
+    (void) writer_is_host;
+#endif
+    return 0;
+}
+
+static void spawn_guest_child_close_all(int *fds, int count) {
+    for (int i = 0; i < count; i++) {
+        if (fds[i] >= 0)
+            close(fds[i]);
+    }
+}
+
+int guest_process_spawn_user(const char *user, const char *command, const char *env,
+                             struct guest_process *process) {
+    if (command == NULL || process == NULL)
+        return _EINVAL;
+    memset(process, 0, sizeof(*process));
+    process->stdin_fd = process->stdout_fd = process->stderr_fd = -1;
+    int in[2] = {-1, -1}, out[2] = {-1, -1}, err[2] = {-1, -1};
+    int rc = pipe_pair_nosigpipe(in, true);
+    if (rc == 0)
+        rc = pipe_pair_nosigpipe(out, false);
+    if (rc == 0)
+        rc = pipe_pair_nosigpipe(err, false);
+    if (rc < 0) {
+        int all[] = {in[0], in[1], out[0], out[1], err[0], err[1]};
+        spawn_guest_child_close_all(all, 6);
+        return rc;
+    }
+    const char *shell_args[] = {"/bin/sh", "-c", command};
+    const char *su_args[] = {"/bin/su", "-", user != NULL ? user : "", "-c", command};
+    bool as_user = user != NULL && user[0] != '\0';
+    dword_t pid = 0;
+    bool own_pgroup = false;
+    // The guest's ends (in[0], out[1], err[1]) are consumed by the spawn.
+    rc = spawn_guest_child(as_user ? su_args : shell_args, as_user ? 5 : 3, env,
+                           in[0], out[1], err[1], &pid, &own_pgroup);
+    if (rc < 0) {
+        int host[] = {in[1], out[0], err[0]};
+        spawn_guest_child_close_all(host, 3);
+        return rc;
+    }
+    process->pid = (int) pid;
+    process->own_pgroup = own_pgroup;
+    process->stdin_fd = in[1];
+    process->stdout_fd = out[0];
+    process->stderr_fd = err[0];
+    return 0;
+}
+
+static void capture_child_kill(dword_t child_pid, bool own_pgroup);
+
+void guest_process_stop(struct guest_process *process) {
+    if (process == NULL || process->pid <= 0)
+        return;
+    dword_t pid = (dword_t) process->pid;
+    capture_child_kill(pid, process->own_pgroup);
+    int host[] = {process->stdin_fd, process->stdout_fd, process->stderr_fd};
+    spawn_guest_child_close_all(host, 3);
+    process->stdin_fd = process->stdout_fd = process->stderr_fd = -1;
+    process->pid = 0;
+    // Reap, bounded, as the capture does: the guest's own init may win the
+    // race, which only loses an exit status nobody here reads.
+    struct task *saved = current;
+    struct task *init = pid_get_task_ref(1);
+    if (init == NULL)
+        return;
+    current = init;
+    struct timespec start;
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    for (;;) {
+        int status = 0;
+        if (wait_child_status(pid, &status, true /*nonblock*/) != 0)
+            break;
+        if (ish_monotonic_ms_since(&start) > 3000)
+            break;
+        nanosleep(&(struct timespec){.tv_nsec = 5 * 1000 * 1000}, NULL);
+    }
+    current = saved;
+    task_ref_cnt_mod(init, -1);
+}
+
 // SIGKILL the capture child and everything it spawned. Two nets, because
 // neither alone covers the tree: the process-group kill catches tasks that
 // reparented away inside the group (a shell that backgrounded a child and
@@ -582,42 +678,22 @@ collected:
         free(victims);
 }
 
-static int run_guest_command_capture_argv(const char *const *args, int argc,
-                                          const char *env, int timeout_ms,
-                                          size_t max_output,
-                                          struct guest_command_result *result) {
-    if (result == NULL || args == NULL || argc < 1)
-        return _EINVAL;
-    memset(result, 0, sizeof(*result));
-    if (max_output == 0)
-        max_output = 64 * 1024;
-
-    // Host pipe: the guest writes stdout/stderr into the write ends, we drain the
-    // read end. Two write ends (one dup'd) so guest fd 1 and fd 2 each own an
-    // independent host descriptor and close()ing one never closes the other.
-    int pipefd[2];
-    if (pipe(pipefd) < 0)
-        return -errno;
-    int read_fd = pipefd[0];
-    int write_fd = pipefd[1];
-    int write_fd2 = dup(write_fd);
-    if (write_fd2 < 0) {
-        int saved_errno = errno;
-        close(read_fd);
-        close(write_fd);
-        return -saved_errno;
-    }
-    int null_fd = open("/dev/null", O_RDONLY); // guest stdin -> immediate EOF
-
+// Start `args` as a fresh child of init with fd0/fd1/fd2 (host descriptors,
+// -1 for none) as its stdin, stdout and stderr. Every descriptor passed is
+// consumed: wrapped into the child's fd table, which closes it when the child
+// exits, or closed here on failure. Returns 0 with the child running on its
+// own host thread, or a negative errno. MUST be called on a dedicated host
+// thread, not a guest task thread: it temporarily repoints `current`.
+static int spawn_guest_child(const char *const *args, int argc, const char *env,
+                             int fd0, int fd1, int fd2,
+                             dword_t *pid_out, bool *own_pgroup_out) {
     struct task *saved = current;
 
     intptr_t spawn_err = become_new_init_child();
     if (spawn_err < 0) {
-        close(read_fd);
-        close(write_fd);
-        close(write_fd2);
-        if (null_fd >= 0)
-            close(null_fd);
+        if (fd0 >= 0) close(fd0);
+        if (fd1 >= 0) close(fd1);
+        if (fd2 >= 0) close(fd2);
         current = saved;
         return (int) spawn_err;
     }
@@ -635,7 +711,7 @@ static int run_guest_command_capture_argv(const char *const *args, int argc,
     // breaks, capture_child_kill falls back to the old per-pid kill instead
     // of signaling a group the child doesn't own.
     lock(&child->group->lock, 0);
-    bool own_pgroup = child->group->pgid == child_pid && child->group->sid == child_pid;
+    bool own_pgroup = (dword_t) child->group->pgid == child_pid && (dword_t) child->group->sid == child_pid;
     unlock(&child->group->lock);
 
     // Pack argv as do_execve expects: "<arg>\0<arg>\0...\0\0", note the
@@ -664,42 +740,78 @@ static int run_guest_command_capture_argv(const char *const *args, int argc,
         free(argv);
     }
     if (launch_err < 0) {
-        close(read_fd);
-        close(write_fd);
-        close(write_fd2);
-        if (null_fd >= 0)
-            close(null_fd);
+        if (fd0 >= 0) close(fd0);
+        if (fd1 >= 0) close(fd1);
+        if (fd2 >= 0) close(fd2);
         current = saved;
         return launch_err;
     }
 
-    struct fd *in_fd = null_fd >= 0 ? open_fd_from_actual_fd(null_fd) : NULL;
-    struct fd *out_fd = open_fd_from_actual_fd(write_fd);
-    struct fd *err_fd = open_fd_from_actual_fd(write_fd2);
+    struct fd *in_fd = fd0 >= 0 ? open_fd_from_actual_fd(fd0) : NULL;
+    struct fd *out_fd = fd1 >= 0 ? open_fd_from_actual_fd(fd1) : NULL;
+    struct fd *err_fd = fd2 >= 0 ? open_fd_from_actual_fd(fd2) : NULL;
     child->files->files[0] = in_fd;
     child->files->files[1] = out_fd;
     child->files->files[2] = err_fd;
     // Each wrapped guest fd now owns its host descriptor and will close() it when
-    // the guest exits, which is what finally delivers EOF to read_fd. Only close
-    // directly here for any wrap that failed (otherwise the write end would leak
-    // and read_fd would never see EOF).
-    if (out_fd == NULL) close(write_fd);
-    if (err_fd == NULL) close(write_fd2);
-    if (in_fd == NULL && null_fd >= 0) close(null_fd);
+    // the guest exits, which is what finally delivers EOF to a reader of the
+    // other end. Only close directly here for any wrap that failed (otherwise
+    // the write end would leak and the reader would never see EOF).
+    if (in_fd == NULL && fd0 >= 0) close(fd0);
+    if (out_fd == NULL && fd1 >= 0) close(fd1);
+    if (err_fd == NULL && fd2 >= 0) close(fd2);
 
-    result->launched = 1;
     if (task_start(child) < 0) {
         // Host thread limit/memory: the child never ran. Its fdtable owns the
-        // pipe write ends, so the release inside task_never_ran_destroy closes
-        // them; only the read end is still ours to clean up.
-        printk("ERROR: could not start host thread for command child %d\n", child_pid);
-        result->launched = 0;
+        // wrapped descriptors, so the release inside task_never_ran_destroy
+        // closes them.
         task_never_ran_destroy(child);
         current = saved;
-        close(read_fd);
         return _EAGAIN;
     }
     current = saved; // the child runs on its own thread now; stop impersonating it
+    *pid_out = child_pid;
+    *own_pgroup_out = own_pgroup;
+    return 0;
+}
+
+static int run_guest_command_capture_argv(const char *const *args, int argc,
+                                          const char *env, int timeout_ms,
+                                          size_t max_output,
+                                          struct guest_command_result *result) {
+    if (result == NULL || args == NULL || argc < 1)
+        return _EINVAL;
+    memset(result, 0, sizeof(*result));
+    if (max_output == 0)
+        max_output = 64 * 1024;
+
+    // Host pipe: the guest writes stdout/stderr into the write ends, we drain the
+    // read end. Two write ends (one dup'd) so guest fd 1 and fd 2 each own an
+    // independent host descriptor and close()ing one never closes the other.
+    int pipefd[2];
+    if (pipe(pipefd) < 0)
+        return -errno;
+    int read_fd = pipefd[0];
+    int write_fd = pipefd[1];
+    int write_fd2 = dup(write_fd);
+    if (write_fd2 < 0) {
+        int saved_errno = errno;
+        close(read_fd);
+        close(write_fd);
+        return -saved_errno;
+    }
+    int null_fd = open("/dev/null", O_RDONLY); // guest stdin -> immediate EOF
+
+    dword_t child_pid = 0;
+    bool own_pgroup = false;
+    int spawn_err = spawn_guest_child(args, argc, env, null_fd, write_fd, write_fd2, &child_pid, &own_pgroup);
+    if (spawn_err < 0) {
+        close(read_fd);
+        if (spawn_err == _EAGAIN)
+            printk("ERROR: could not start host thread for command child\n");
+        return spawn_err;
+    }
+    result->launched = 1;
 
     // Drain the pipe until EOF (guest exit closes both write ends), bounding total
     // bytes and wall-clock time. On timeout, SIGKILL the child's process group and
@@ -788,6 +900,7 @@ static int run_guest_command_capture_argv(const char *const *args, int argc,
     // poll with WNOHANG, escalate to SIGKILL if the child lingers, and give up
     // after a short grace. The captured output does not depend on this -- if the
     // guest's real init wins the reap race we just lose the exit code, not output.
+    struct task *saved = current;
     struct task *init = pid_get_task_ref(1);
     if (init != NULL) {
         current = init;

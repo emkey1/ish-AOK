@@ -85,4 +85,26 @@ int run_guest_command_capture_user(const char *user, const char *command,
                                    size_t max_output,
                                    struct guest_command_result *result);
 
+// A guest process that keeps running, with the host ends of its stdio: for a
+// host component that talks to a guest program over stdin/stdout (the LLM
+// Chat's MCP servers run inside the guest). `command` runs under /bin/sh -c,
+// or as `user` through su exactly as run_guest_command_capture_user does.
+// Write requests to stdin_fd, read replies from stdout_fd, and read (or
+// drain) stderr_fd -- a pipe nobody drains stalls the program once it fills.
+// All three are blocking host descriptors; stdin_fd never raises SIGPIPE.
+// Returns 0 or a negative errno. MUST be called on a dedicated host thread,
+// not a guest task thread: it temporarily repoints `current`.
+struct guest_process {
+    int pid;
+    int stdin_fd;
+    int stdout_fd;
+    int stderr_fd;
+    int own_pgroup;
+};
+int guest_process_spawn_user(const char *user, const char *command, const char *env,
+                             struct guest_process *process);
+// SIGKILLs the process and everything it started, closes the host ends and
+// reaps it (bounded to about three seconds). Same threading rule as spawn.
+void guest_process_stop(struct guest_process *process);
+
 #endif
