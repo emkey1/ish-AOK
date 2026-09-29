@@ -548,6 +548,70 @@ ldp_fast ldp32_fast, 64, 4, w17, w25
 stp_fast stp64_fast, 128, 8, x17, x25
 stp_fast stp32_fast, 64, 4, w17, w25
 
+// Post-index and pre-index LDP/STP (`stp x29, x30, [sp, #-16]!` opens most
+// functions, `ldp x29, x30, [sp], #16` closes them), the "lspec" pass: the
+// same code stream as the offset form; the new base (base + offset) is
+// computed before the access and written to rn after it, so a fault leaves
+// rn untouched. gen.c keeps rt or rt2 == rn on the generic gadgets. x23
+// holds the new base and x24 rn's slot across the prep helpers.
+.macro ldp_wb name, bits, bytes, ldr_reg1, ldr_reg2, pre
+.gadget \name
+    ldp x8, x24, [_ip]
+    ldr x19, [_ip, #16]
+    add _ip, _ip, #32
+    ldr x10, [_cpu, x24]
+    add x23, x10, x19
+.if \pre
+    mov x7, x23
+.else
+    mov x7, x10
+.endif
+    read_prep \bits, \name
+    ldr \ldr_reg1, [_addr]
+    ldr \ldr_reg2, [_addr, #\bytes]
+    and x9, x8, #0xffff
+    str x17, [_cpu, x9]
+    ubfx x9, x8, #16, 16
+    str x25, [_cpu, x9]
+    str x23, [_cpu, x24]
+    gret
+    read_bullshit \bits, \name
+.endm
+
+.macro stp_wb name, bits, bytes, str_reg1, str_reg2, pre
+.gadget \name
+    ldp x8, x24, [_ip]
+    ldr x19, [_ip, #16]
+    add _ip, _ip, #32
+    and x21, x8, #0xffff
+    ubfx x22, x8, #16, #16
+    ldr \str_reg1, [_cpu, x21]
+    ldr \str_reg2, [_cpu, x22]
+    ldr x10, [_cpu, x24]
+    add x23, x10, x19
+.if \pre
+    mov x7, x23
+.else
+    mov x7, x10
+.endif
+    write_prep \bits, \name
+    str \str_reg1, [_addr]
+    str \str_reg2, [_addr, #\bytes]
+    write_done \bits, \name
+    str x23, [_cpu, x24]
+    gret
+    write_bullshit \bits, \name
+.endm
+
+ldp_wb ldp64_post, 128, 8, x17, x25, 0
+ldp_wb ldp64_pre, 128, 8, x17, x25, 1
+ldp_wb ldp32_post, 64, 4, w17, w25, 0
+ldp_wb ldp32_pre, 64, 4, w17, w25, 1
+stp_wb stp64_post, 128, 8, x17, x25, 0
+stp_wb stp64_pre, 128, 8, x17, x25, 1
+stp_wb stp32_post, 64, 4, w17, w25, 0
+stp_wb stp32_pre, 64, 4, w17, w25, 1
+
 // ---- Single-register load/store ----------------------------------------
 // One generic gadget per (size, direction, extend) covering four guest
 // encoding families through a shared parameter format, so gen_step_arm64
@@ -632,8 +696,10 @@ store_single store64,  64, str,  x17
 // [sp, #imm]): the generic single load/store path was 68% of total
 // runtime; this form covers every load and store in that loop.
 //
-// Code stream: [gadget][rt_slot | rn_slot<<16][offset][orig_ip]
-// — 3 param words, same trailing-orig_ip fault-restart contract at
+// Code stream: [gadget][rt_slot][rn_slot][offset][orig_ip] — 4 param words
+// (separate words, not one packed [rt | rn<<16]: rn's slot feeds the address,
+// and unpacking it put a ubfx on the critical path; plain loads measured
+// faster, see alu_spec.S), same trailing-orig_ip fault-restart contract at
 // [_ip, #-8] as the generic family (see arm64_segfault_read/write).
 //
 // Register discipline: x8 (the param word) must survive the prep macro —
@@ -643,27 +709,25 @@ store_single store64,  64, str,  x17
 // across write_prep.
 .macro load_single_fast name, bits, ldinsn, reg
 .gadget \name
-    ldp x8, x19, [_ip]        // [rt_slot | rn_slot<<16], offset
-    add _ip, _ip, #24
-    ubfx x9, x8, #16, #16
+    ldp x8, x9, [_ip]         // rt_slot, rn_slot
+    ldr x19, [_ip, #16]       // offset
+    add _ip, _ip, #32
     ldr x10, [_cpu, x9]       // base
     add x7, x10, x19
     read_prep \bits, \name
     \ldinsn \reg, [_addr]
-    and x9, x8, #0xffff
-    str x17, [_cpu, x9]       // full X store: 32-bit loads must clear the upper half
+    str x17, [_cpu, x8]       // full X store: 32-bit loads must clear the upper half
     gret
     read_bullshit \bits, \name
 .endm
 
 .macro store_single_fast name, bits, stinsn, reg
 .gadget \name
-    ldp x8, x19, [_ip]        // [rt_slot | rn_slot<<16], offset
-    add _ip, _ip, #24
-    ubfx x9, x8, #16, #16
+    ldp x8, x9, [_ip]         // rt_slot, rn_slot
+    ldr x19, [_ip, #16]       // offset
+    add _ip, _ip, #32
     ldr x10, [_cpu, x9]       // base
-    and x9, x8, #0xffff
-    ldr x17, [_cpu, x9]       // value (x17 survives write_prep's helpers)
+    ldr x17, [_cpu, x8]       // value (x17 survives write_prep's helpers)
     add x7, x10, x19
     write_prep \bits, \name
     \stinsn \reg, [_addr]
@@ -696,18 +760,18 @@ store_single_fast store64_fast,  64, str,  x17
 // generic gadgets. Selected by gen_arm64_ldst_lspec_gadget; the "lspec" bit
 // of /proc/ish/arm64_jit_fuse switches it.
 //
-// Writeback: [gadget][rt_slot | rn_slot<<16][imm][orig_ip]. The new base is
+// Writeback: [gadget][rt_slot][rn_slot][imm][orig_ip]. The new base is
 // computed before the access and written after it, so a fault leaves rn
 // untouched and the instruction restarts whole. x21 carries it across the
 // prep macro's helpers (callee-saved, as in the generic family).
-// Register offset: [gadget][rt_slot | rn_slot<<16 | rm_slot<<32 | shift<<48]
-// [orig_ip], the extend chosen by the gadget.
+// Register offset: [gadget][rt_slot][rn_slot][rm_slot][shift][orig_ip], the
+// extend chosen by the gadget. x24 keeps rn's slot for the writeback.
 .macro load_single_wb name, bits, ldinsn, reg, pre
 .gadget \name
-    ldp x8, x19, [_ip]
-    add _ip, _ip, #24
-    ubfx x9, x8, #16, #16
-    ldr x10, [_cpu, x9]       // base
+    ldp x8, x24, [_ip]        // rt_slot, rn_slot
+    ldr x19, [_ip, #16]
+    add _ip, _ip, #32
+    ldr x10, [_cpu, x24]      // base
     add x21, x10, x19         // base + imm: the written-back value
 .if \pre
     mov x7, x21
@@ -716,23 +780,20 @@ store_single_fast store64_fast,  64, str,  x17
 .endif
     read_prep \bits, \name
     \ldinsn \reg, [_addr]
-    and x9, x8, #0xffff
-    str x17, [_cpu, x9]
-    ubfx x9, x8, #16, #16
-    str x21, [_cpu, x9]
+    str x17, [_cpu, x8]
+    str x21, [_cpu, x24]
     gret
     read_bullshit \bits, \name
 .endm
 
 .macro store_single_wb name, bits, stinsn, reg, pre
 .gadget \name
-    ldp x8, x19, [_ip]
-    add _ip, _ip, #24
-    ubfx x9, x8, #16, #16
-    ldr x10, [_cpu, x9]
+    ldp x8, x24, [_ip]
+    ldr x19, [_ip, #16]
+    add _ip, _ip, #32
+    ldr x10, [_cpu, x24]
     add x21, x10, x19
-    and x9, x8, #0xffff
-    ldr x17, [_cpu, x9]       // value (survives write_prep's helpers)
+    ldr x17, [_cpu, x8]       // value (survives write_prep's helpers)
 .if \pre
     mov x7, x21
 .else
@@ -741,51 +802,47 @@ store_single_fast store64_fast,  64, str,  x17
     write_prep \bits, \name
     \stinsn \reg, [_addr]
     write_done \bits, \name   // clobbers x9 only
-    ubfx x9, x8, #16, #16
-    str x21, [_cpu, x9]
+    str x21, [_cpu, x24]
     gret
     write_bullshit \bits, \name
 .endm
 
 // ext: 0 = LSL/UXTX/SXTX (Rm as a whole X register), 1 = SXTW, 2 = UXTW.
+// x11 = rm_slot, x12 = shift on entry; x11 = the scaled index on exit.
 .macro rx_index ext
-    ubfx x9, x8, #32, #16
-    ldr x11, [_cpu, x9]
+    ldr x11, [_cpu, x11]
 .if \ext == 1
     sxtw x11, w11
 .elseif \ext == 2
     mov w11, w11
 .endif
-    lsr x12, x8, #48
     lslv x11, x11, x12
 .endm
 
 .macro load_single_rx name, bits, ldinsn, reg, ext
 .gadget \name
-    ldr x8, [_ip]
-    add _ip, _ip, #16
-    ubfx x9, x8, #16, #16
+    ldp x8, x9, [_ip]         // rt_slot, rn_slot
+    ldp x11, x12, [_ip, #16]  // rm_slot, shift
+    add _ip, _ip, #40
     ldr x10, [_cpu, x9]
     rx_index \ext
     add x7, x10, x11
     read_prep \bits, \name
     \ldinsn \reg, [_addr]
-    and x9, x8, #0xffff
-    str x17, [_cpu, x9]
+    str x17, [_cpu, x8]
     gret
     read_bullshit \bits, \name
 .endm
 
 .macro store_single_rx name, bits, stinsn, reg, ext
 .gadget \name
-    ldr x8, [_ip]
-    add _ip, _ip, #16
-    ubfx x9, x8, #16, #16
+    ldp x8, x9, [_ip]         // rt_slot, rn_slot
+    ldp x11, x12, [_ip, #16]  // rm_slot, shift
+    add _ip, _ip, #40
     ldr x10, [_cpu, x9]
     rx_index \ext
     add x7, x10, x11
-    and x9, x8, #0xffff
-    ldr x17, [_cpu, x9]
+    ldr x17, [_cpu, x8]
     write_prep \bits, \name
     \stinsn \reg, [_addr]
     write_done \bits, \name

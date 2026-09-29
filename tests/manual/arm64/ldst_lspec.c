@@ -1,4 +1,5 @@
-// Single-register loads and stores with writeback (post/pre-index) and
+// LDP/STP with writeback, and single-register loads and stores with
+// writeback (post/pre-index) and
 // register offsets (LSL/UXTX/SXTX, SXTW, UXTW) on the arm64 JIT: every size,
 // sign extension and extend, which have fast gadgets fed slot offsets
 // (jit/guest-arm64/memory.S's "lspec" family, /proc/ish/arm64_jit_fuse) as
@@ -31,7 +32,7 @@ typedef void (*case_fn)(struct st *);
 #define CASE(i, insn) \
     static void case_##i(struct st *s) { \
         __asm__ volatile("ldr x3, [%0]\n ldr x17, [%0, #8]\n ldr x26, [%0, #16]\n" insn "\n" \
-                         "str x3, [%0]\n str x17, [%0, #8]" \
+                         "str x3, [%0]\n str x17, [%0, #8]\n str x26, [%0, #16]" \
                          :: "r"(s) : "x3", "x17", "x26", "memory"); \
     }
 CASE(0, "ldrb w3, [x17], #8")
@@ -204,6 +205,30 @@ CASE(166, "str x3, [x17, x26, lsl #3]")
 CASE(167, "str x3, [x17, w26, sxtw #3]")
 CASE(168, "str x3, [x17, w26, uxtw #3]")
 CASE(169, "str x3, [x17, x26, sxtx #3]")
+CASE(170, "ldp x3, x26, [x17], #16")
+CASE(171, "ldp x3, x26, [x17, #16]!")
+CASE(172, "ldp x3, x26, [x17], #-16")
+CASE(173, "ldp x3, x26, [x17, #-16]!")
+CASE(174, "ldp x3, x26, [x17], #8")
+CASE(175, "ldp x3, x26, [x17, #8]!")
+CASE(176, "ldp w3, w26, [x17], #16")
+CASE(177, "ldp w3, w26, [x17, #16]!")
+CASE(178, "ldp w3, w26, [x17], #-16")
+CASE(179, "ldp w3, w26, [x17, #-16]!")
+CASE(180, "ldp w3, w26, [x17], #8")
+CASE(181, "ldp w3, w26, [x17, #8]!")
+CASE(182, "stp x3, x26, [x17], #16")
+CASE(183, "stp x3, x26, [x17, #16]!")
+CASE(184, "stp x3, x26, [x17], #-16")
+CASE(185, "stp x3, x26, [x17, #-16]!")
+CASE(186, "stp x3, x26, [x17], #8")
+CASE(187, "stp x3, x26, [x17, #8]!")
+CASE(188, "stp w3, w26, [x17], #16")
+CASE(189, "stp w3, w26, [x17, #16]!")
+CASE(190, "stp w3, w26, [x17], #-16")
+CASE(191, "stp w3, w26, [x17, #-16]!")
+CASE(192, "stp w3, w26, [x17], #8")
+CASE(193, "stp w3, w26, [x17, #8]!")
 #undef CASE
 
 struct desc { case_fn fn; const char *insn; };
@@ -379,6 +404,30 @@ CASE(166, "str x3, [x17, x26, lsl #3]")
 CASE(167, "str x3, [x17, w26, sxtw #3]")
 CASE(168, "str x3, [x17, w26, uxtw #3]")
 CASE(169, "str x3, [x17, x26, sxtx #3]")
+CASE(170, "ldp x3, x26, [x17], #16")
+CASE(171, "ldp x3, x26, [x17, #16]!")
+CASE(172, "ldp x3, x26, [x17], #-16")
+CASE(173, "ldp x3, x26, [x17, #-16]!")
+CASE(174, "ldp x3, x26, [x17], #8")
+CASE(175, "ldp x3, x26, [x17, #8]!")
+CASE(176, "ldp w3, w26, [x17], #16")
+CASE(177, "ldp w3, w26, [x17, #16]!")
+CASE(178, "ldp w3, w26, [x17], #-16")
+CASE(179, "ldp w3, w26, [x17, #-16]!")
+CASE(180, "ldp w3, w26, [x17], #8")
+CASE(181, "ldp w3, w26, [x17, #8]!")
+CASE(182, "stp x3, x26, [x17], #16")
+CASE(183, "stp x3, x26, [x17, #16]!")
+CASE(184, "stp x3, x26, [x17], #-16")
+CASE(185, "stp x3, x26, [x17, #-16]!")
+CASE(186, "stp x3, x26, [x17], #8")
+CASE(187, "stp x3, x26, [x17, #8]!")
+CASE(188, "stp w3, w26, [x17], #16")
+CASE(189, "stp w3, w26, [x17, #16]!")
+CASE(190, "stp w3, w26, [x17], #-16")
+CASE(191, "stp w3, w26, [x17, #-16]!")
+CASE(192, "stp w3, w26, [x17], #8")
+CASE(193, "stp w3, w26, [x17, #8]!")
 };
 #undef CASE
 
@@ -442,6 +491,7 @@ int main(int argc, char **argv) {
                     continue;
                 uint64_t rel = s.x17 - (uint64_t) (uintptr_t) buf;
                 h = fnv(h, &s.x3, 8);
+                h = fnv(h, &s.x26, 8);
                 h = fnv(h, &rel, 8);
                 h = fnv(h, buf, sizeof(buf));
             }
@@ -497,6 +547,17 @@ int main(int argc, char **argv) {
     ck("pre-index store fault: pc", fault_pc, pc);
     ck("pre-index store fault: address", fault_addr, (uintptr_t) (map + pg));
     ck("pre-index store fault: base unchanged", base, (uintptr_t) (map + pg - 8));
+    base = (uint64_t) (uintptr_t) (map + pg + 16);
+    faults = 0;
+    {
+        register uint64_t r17 __asm__("x17") = base;
+        __asm__ volatile("adr %1, 1f\n1: stp x17, x17, [x17, #-16]!" : "+r"(r17), "=&r"(pc) :: "memory");
+        base = r17;
+    }
+    ck("pre-index stp fault: one fault", faults, 1);
+    ck("pre-index stp fault: pc", fault_pc, pc);
+    ck("pre-index stp fault: address", fault_addr, (uintptr_t) (map + pg));
+    ck("pre-index stp fault: base unchanged", base, (uintptr_t) (map + pg + 16));
 #endif
     return finish_suite("ldst_lspec");
 #endif
