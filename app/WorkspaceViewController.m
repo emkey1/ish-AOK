@@ -3015,6 +3015,316 @@ NSString *ISHWorkspaceToolIdentifierForViewController(UIViewController *viewCont
     return nil;
 }
 
+// A Workspace Terminal window's content: its terminals as tabs. The window's
+// hostedTerminalViewController is always the selected tab, so everything that
+// works on "the window's terminal" (focus, text size, Snippets, the dock) works
+// on the tab showing. The strip of tab buttons shows only with two or more.
+// Tab 0's role is the window's own (workspaceTerminalRole: Session Shell,
+// System Console or a plain Terminal); a tab opened later is a plain Terminal.
+@interface ISHWorkspaceTerminalTabsViewController : UIViewController
+@property (nonatomic, weak) ISHWorkspaceContainedWindowView *windowView;
+// Opens a new tab in this window (a new shell).
+@property (nonatomic, copy) void (^newTabHandler)(void);
+@property (nonatomic, readonly) NSArray<TerminalViewController *> *tabs;
+@property (nonatomic, readonly) NSInteger selectedIndex;
+- (void)addTab:(TerminalViewController *)tab role:(nullable NSString *)role select:(BOOL)select;
+- (void)selectTabAtIndex:(NSInteger)index;
+// Ends that tab's shell and removes it; closing the last closes the window.
+- (void)closeTab:(TerminalViewController *)tab;
+- (void)disposeAllSessions;
+// The role a tab is saved and restored with.
+- (NSString *)roleForTab:(TerminalViewController *)tab;
+// After a restore: the tabs in their saved order, with their roles.
+- (void)arrangeTabs:(NSArray<TerminalViewController *> *)tabs roles:(NSArray<NSString *> *)roles selectedIndex:(NSInteger)selectedIndex;
+- (BOOL)selectTabShowingTerminalUUID:(NSUUID *)terminalUUID orSessionUUID:(BOOL)orSession;
+@end
+
+@implementation ISHWorkspaceTerminalTabsViewController {
+    NSMutableArray<TerminalViewController *> *_tabs;
+    NSMutableArray<NSString *> *_roles;     // per tab; tab 0's is ignored (the window's)
+    NSInteger _selectedIndex;
+    UIStackView *_strip;
+    UIView *_content;
+    NSLayoutConstraint *_stripHeight;
+    NSString *_firstTabTitle;               // the window's title while tab 0 is not showing
+}
+
+static const CGFloat ISHTerminalTabStripHeight = 30.0;
+
+- (instancetype)init {
+    self = [super initWithNibName:nil bundle:nil];
+    if (self != nil) {
+        _tabs = [NSMutableArray array];
+        _roles = [NSMutableArray array];
+    }
+    return self;
+}
+
+- (NSArray<TerminalViewController *> *)tabs {
+    return [_tabs copy];
+}
+
+- (NSInteger)selectedIndex {
+    return _selectedIndex;
+}
+
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    _strip = [UIStackView new];
+    _strip.axis = UILayoutConstraintAxisHorizontal;
+    _strip.spacing = 6;
+    _strip.alignment = UIStackViewAlignmentCenter;
+    _strip.translatesAutoresizingMaskIntoConstraints = NO;
+    _strip.layoutMargins = UIEdgeInsetsMake(0, 8, 0, 8);
+    _strip.layoutMarginsRelativeArrangement = YES;
+    _strip.clipsToBounds = YES;
+    _content = [UIView new];
+    _content.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.view addSubview:_strip];
+    [self.view addSubview:_content];
+    _stripHeight = [_strip.heightAnchor constraintEqualToConstant:0];
+    [NSLayoutConstraint activateConstraints:@[
+        [_strip.topAnchor constraintEqualToAnchor:self.view.topAnchor],
+        [_strip.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
+        [_strip.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
+        _stripHeight,
+        [_content.topAnchor constraintEqualToAnchor:_strip.bottomAnchor],
+        [_content.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
+        [_content.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
+        [_content.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
+    ]];
+}
+
+- (void)addTab:(TerminalViewController *)tab role:(NSString *)role select:(BOOL)select {
+    [self loadViewIfNeeded];
+    [_tabs addObject:tab];
+    [_roles addObject:role ?: ISHWorkspaceTerminalRoleGeneric];
+    [self addChildViewController:tab];
+    tab.view.translatesAutoresizingMaskIntoConstraints = NO;
+    [_content addSubview:tab.view];
+    [NSLayoutConstraint activateConstraints:@[
+        [tab.view.topAnchor constraintEqualToAnchor:_content.topAnchor],
+        [tab.view.leadingAnchor constraintEqualToAnchor:_content.leadingAnchor],
+        [tab.view.trailingAnchor constraintEqualToAnchor:_content.trailingAnchor],
+        [tab.view.bottomAnchor constraintEqualToAnchor:_content.bottomAnchor],
+    ]];
+    [tab didMoveToParentViewController:self];
+    // A shell that exits closes its tab, and the window with the last one.
+    __weak typeof(self) weakSelf = self;
+    __weak typeof(tab) weakTab = tab;
+    tab.workspaceSessionDidEndHandler = ^{
+        TerminalViewController *strongTab = weakTab;
+        if (strongTab != nil)
+            [weakSelf closeTab:strongTab];
+    };
+    if (select || _tabs.count == 1)
+        [self selectTabAtIndex:(NSInteger) _tabs.count - 1];
+    else
+        [self refreshStrip];
+}
+
+static NSString *ISHTerminalTabTitleForRole(NSString *role, Terminal *terminal) {
+    if (role.length == 0 || [role isEqualToString:ISHWorkspaceTerminalRoleGeneric])
+        return @"Terminal";
+    return ISHWorkspaceTitleForTerminalRole(role, terminal);
+}
+
+// Tab 0's title is whatever the window was given (a Launcher shortcut's name,
+// "Session Shell", ...), kept aside while another tab shows; nil while tab 0
+// shows, as the window's title is then the one to keep.
+- (NSString *)titleForTabAtIndex:(NSInteger)index {
+    TerminalViewController *tab = _tabs[(NSUInteger) index];
+    if (index == 0)
+        return _selectedIndex == 0 ? self.windowView.titleLabel.text : _firstTabTitle;
+    return ISHTerminalTabTitleForRole(_roles[(NSUInteger) index], tab.terminal);
+}
+
+- (void)selectTabAtIndex:(NSInteger)index {
+    if (index < 0 || index >= (NSInteger) _tabs.count)
+        return;
+    // The window's title is tab 0's while tab 0 shows; kept aside while not.
+    if (_selectedIndex == 0 && index != 0 && _tabs.count > 1 && self.windowView.titleLabel.text.length > 0)
+        _firstTabTitle = self.windowView.titleLabel.text;
+    _selectedIndex = index;
+    for (NSUInteger i = 0; i < _tabs.count; i++)
+        _tabs[i].view.hidden = (NSInteger) i != index;
+    TerminalViewController *tab = _tabs[(NSUInteger) index];
+    self.windowView.hostedTerminalViewController = tab;
+    if (index != 0)
+        self.windowView.titleLabel.text = [self titleForTabAtIndex:index];
+    else if (_firstTabTitle != nil)
+        self.windowView.titleLabel.text = _firstTabTitle;
+    [self refreshStrip];
+    [tab focusTerminal];
+}
+
+- (void)closeTab:(TerminalViewController *)tab {
+    NSUInteger index = [_tabs indexOfObject:tab];
+    if (index == NSNotFound)
+        return;
+    if (_tabs.count == 1) {
+        // The last tab: the window goes, as it did before tabs.
+        if (self.windowView.closeHandler != nil)
+            self.windowView.closeHandler();
+        return;
+    }
+    if (index == 0) {
+        // The next tab becomes the first, and the window takes its role and title.
+        self.windowView.workspaceTerminalRole = _roles[1];
+        _firstTabTitle = ISHTerminalTabTitleForRole(_roles[1], _tabs[1].terminal);
+    }
+    [tab disposeSessionForWorkspaceClose];
+    [tab willMoveToParentViewController:nil];
+    [tab.view removeFromSuperview];
+    [tab removeFromParentViewController];
+    [_tabs removeObjectAtIndex:index];
+    [_roles removeObjectAtIndex:index];
+    NSInteger next = _selectedIndex;
+    if ((NSInteger) index < _selectedIndex || _selectedIndex >= (NSInteger) _tabs.count)
+        next = _selectedIndex - 1;
+    _selectedIndex = -1;
+    [self selectTabAtIndex:MAX(0, next)];
+}
+
+- (void)disposeAllSessions {
+    for (TerminalViewController *tab in [_tabs copy])
+        [tab disposeSessionForWorkspaceClose];
+}
+
+- (NSString *)roleForTab:(TerminalViewController *)tab {
+    NSUInteger index = [_tabs indexOfObject:tab];
+    if (index == NSNotFound)
+        return nil;
+    if (index == 0)
+        return self.windowView.workspaceTerminalRole;
+    return _roles[index];
+}
+
+- (void)arrangeTabs:(NSArray<TerminalViewController *> *)tabs roles:(NSArray<NSString *> *)roles selectedIndex:(NSInteger)selectedIndex {
+    if (tabs.count != _tabs.count || roles.count != tabs.count)
+        return;
+    [_tabs setArray:tabs];
+    [_roles setArray:roles];
+    self.windowView.workspaceTerminalRole = roles.firstObject;
+    _firstTabTitle = ISHWorkspaceTitleForTerminalRole(roles.firstObject, tabs.firstObject.terminal);
+    _selectedIndex = -1;
+    [self selectTabAtIndex:MAX(0, MIN(selectedIndex, (NSInteger) tabs.count - 1))];
+}
+
+- (BOOL)selectTabShowingTerminalUUID:(NSUUID *)terminalUUID orSessionUUID:(BOOL)orSession {
+    for (NSUInteger i = 0; i < _tabs.count; i++) {
+        TerminalViewController *tab = _tabs[i];
+        if ([tab.terminal.uuid isEqual:terminalUUID] || (orSession && [tab.sessionTerminalUUID isEqual:terminalUUID])) {
+            if ((NSInteger) i != _selectedIndex)
+                [self selectTabAtIndex:(NSInteger) i];
+            return YES;
+        }
+    }
+    return NO;
+}
+
+- (void)refreshStrip {
+    if (_strip == nil)
+        return;
+    for (UIView *view in _strip.arrangedSubviews.copy) {
+        [_strip removeArrangedSubview:view];
+        [view removeFromSuperview];
+    }
+    BOOL show = _tabs.count >= 2;
+    _stripHeight.constant = show ? ISHTerminalTabStripHeight : 0;
+    _strip.hidden = !show;
+    if (!show)
+        return;
+    for (NSUInteger i = 0; i < _tabs.count; i++) {
+        UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem];
+        [button setTitle:[NSString stringWithFormat:@"%lu", (unsigned long) i + 1] forState:UIControlStateNormal];
+        button.titleLabel.font = [UIFont monospacedDigitSystemFontOfSize:13 weight:(NSInteger) i == _selectedIndex ? UIFontWeightBold : UIFontWeightRegular];
+        button.tag = (NSInteger) i;
+        button.layer.cornerRadius = 6;
+        button.layer.borderWidth = 1;
+        button.layer.borderColor = [button.tintColor colorWithAlphaComponent:(NSInteger) i == _selectedIndex ? 0.9 : 0.3].CGColor;
+        button.backgroundColor = (NSInteger) i == _selectedIndex ? [button.tintColor colorWithAlphaComponent:0.18] : UIColor.clearColor;
+        button.accessibilityLabel = [NSString stringWithFormat:@"Tab %lu, %@", (unsigned long) i + 1, [self titleForTabAtIndex:(NSInteger) i]];
+        [button addTarget:self action:@selector(tabButtonTapped:) forControlEvents:UIControlEventTouchUpInside];
+        __weak typeof(self) weakSelf = self;
+        TerminalViewController *tab = _tabs[i];
+        __weak typeof(tab) weakTab = tab;
+        button.menu = [UIMenu menuWithChildren:@[
+            [UIAction actionWithTitle:@"Close Tab" image:[UIImage systemImageNamed:@"xmark"] identifier:nil
+                              handler:^(__unused UIAction *action) {
+                TerminalViewController *strongTab = weakTab;
+                if (strongTab != nil)
+                    [weakSelf closeTab:strongTab];
+            }],
+        ]];
+        [button.widthAnchor constraintGreaterThanOrEqualToConstant:34].active = YES;
+        [button.heightAnchor constraintEqualToConstant:22].active = YES;
+        [_strip addArrangedSubview:button];
+    }
+    UIButton *add = [UIButton buttonWithType:UIButtonTypeSystem];
+    [add setImage:[UIImage systemImageNamed:@"plus"] forState:UIControlStateNormal];
+    add.accessibilityLabel = @"New Tab";
+    [add addTarget:self action:@selector(newTab) forControlEvents:UIControlEventTouchUpInside];
+    [add.widthAnchor constraintEqualToConstant:30].active = YES;
+    [_strip addArrangedSubview:add];
+    [_strip addArrangedSubview:[UIView new]]; // pushes the buttons to the left
+}
+
+- (void)tabButtonTapped:(UIButton *)button {
+    [self selectTabAtIndex:button.tag];
+}
+
+- (void)newTab {
+    if (self.newTabHandler != nil)
+        self.newTabHandler();
+}
+
+// Cmd+T new tab, Cmd+W close tab, Cmd+Shift+[ and ] previous/next, Cmd+1-9
+// that tab. The terminal is the first responder and this its parent, so these
+// reach here after the terminal's own.
+- (NSArray<UIKeyCommand *> *)keyCommands {
+    NSMutableArray<UIKeyCommand *> *commands = [NSMutableArray array];
+    void (^add)(NSString *, UIKeyModifierFlags, SEL, NSString *) =
+        ^(NSString *input, UIKeyModifierFlags flags, SEL action, NSString *title) {
+        UIKeyCommand *command = [UIKeyCommand keyCommandWithInput:input modifierFlags:flags action:action];
+        if (title.length > 0)
+            command.discoverabilityTitle = title;
+        if (@available(iOS 15, *))
+            command.wantsPriorityOverSystemBehavior = YES;
+        [commands addObject:command];
+    };
+    add(@"t", UIKeyModifierCommand, @selector(newTab), @"New Tab");
+    add(@"w", UIKeyModifierCommand, @selector(closeSelectedTab), @"Close Tab");
+    add(@"]", UIKeyModifierCommand | UIKeyModifierShift, @selector(nextTab), _tabs.count > 1 ? @"Next Tab" : @"");
+    add(@"[", UIKeyModifierCommand | UIKeyModifierShift, @selector(previousTab), _tabs.count > 1 ? @"Previous Tab" : @"");
+    add(@"}", UIKeyModifierCommand, @selector(nextTab), @"");
+    add(@"{", UIKeyModifierCommand, @selector(previousTab), @"");
+    for (NSInteger n = 1; n <= 9; n++)
+        add([NSString stringWithFormat:@"%ld", (long) n], UIKeyModifierCommand, @selector(selectTabFromKey:), @"");
+    return commands;
+}
+
+- (void)closeSelectedTab {
+    if (_selectedIndex >= 0 && _selectedIndex < (NSInteger) _tabs.count)
+        [self closeTab:_tabs[(NSUInteger) _selectedIndex]];
+}
+
+- (void)nextTab {
+    if (_tabs.count > 1)
+        [self selectTabAtIndex:(_selectedIndex + 1) % (NSInteger) _tabs.count];
+}
+
+- (void)previousTab {
+    if (_tabs.count > 1)
+        [self selectTabAtIndex:(_selectedIndex + (NSInteger) _tabs.count - 1) % (NSInteger) _tabs.count];
+}
+
+- (void)selectTabFromKey:(UIKeyCommand *)command {
+    [self selectTabAtIndex:command.input.integerValue - 1];
+}
+
+@end
+
 @implementation WorkspaceViewController
 
 - (void)applyWorkspaceWallpaperImage:(UIImage *)image {
@@ -3679,6 +3989,69 @@ static UIView *ISHWorkspaceFindFirstResponder(UIView *view) {
     return ISHWorkspaceTerminalRoleForTerminal(terminalViewController.terminal);
 }
 
+// What a terminal tab needs to come back: which terminal it showed, the shell
+// it owns, its role, its scrollback and its font size.
+- (nullable NSDictionary<NSString *, id> *)savedDescriptorForTerminalTab:(TerminalViewController *)hosted
+                                                                   role:(nullable NSString *)terminalRole {
+    NSUUID *sessionTerminalUUID = hosted.sessionTerminalUUID ?: hosted.terminal.uuid;
+    NSUUID *displayTerminalUUID = hosted.terminal.uuid;
+    if (terminalRole.length == 0 && hosted.terminal != nil)
+        terminalRole = ISHWorkspaceTerminalRoleForTerminal(hosted.terminal);
+    if (sessionTerminalUUID == nil && displayTerminalUUID == nil)
+        return nil;
+    NSMutableDictionary<NSString *, id> *descriptor = [@{
+        @"terminalUUID": (displayTerminalUUID ?: sessionTerminalUUID).UUIDString,
+    } mutableCopy];
+    if (sessionTerminalUUID != nil)
+        descriptor[@"sessionTerminalUUID"] = sessionTerminalUUID.UUIDString;
+    if (terminalRole.length > 0)
+        descriptor[@"terminalRole"] = terminalRole;
+    // The session leader pid -- the only identifier for this window's shell
+    // that survives a suspend to disk. The Terminal UUID above dies with
+    // the process and the restore hands out fresh pts numbers, but the
+    // checkpoint restores pids, so this is what lets the window ask for
+    // its OWN shell back rather than whichever one is next in the queue.
+    //
+    // Its OWN shell: the one on the pseudo-terminal this window started
+    // (sessionTerminal), not whatever it happens to be displaying. A System
+    // Console window shows tty1 while its shell sits on a pts behind it,
+    // and this used to record tty1's session -- the console login's --
+    // which no restore ever hands out, because only pts sessions come back
+    // through the queue. So the console window asked for a pid that could
+    // not match, fell back to queue order, and took the FIRST restored
+    // session: the other window's ktop. That window then got the console's
+    // hidden shell, or nothing. Reported as "the former ktop window was
+    // blank and the console window had a wedged ktop in it".
+    //
+    // A window does not always start the session it shows: one that adopted
+    // an existing pts never learned a pid, so the tty is asked for its
+    // session -- a session leader's pid IS the session id, which is what
+    // the restore reports. Only a window with no shell of its own falls
+    // through to the displayed terminal, and then only for a pts.
+    int sessionPid = hosted.sessionTerminal.guestSessionId;
+    if (sessionPid <= 0)
+        sessionPid = hosted.sessionPid;
+    if (sessionPid <= 0 && hosted.sessionTerminal == nil &&
+            hosted.terminal.type == TTY_PSEUDO_SLAVE_MAJOR)
+        sessionPid = hosted.terminal.guestSessionId;
+    if (sessionPid > 0)
+        descriptor[@"sessionPid"] = @(sessionPid);
+    // Whether there is a shell to ask for at all. A window with none (a
+    // console with nothing behind it) must not adopt one on the way back.
+    descriptor[@"ownsSession"] = @(sessionPid > 0);
+    // What this terminal had printed. Not part of the guest at all -- it
+    // lives in hterm -- so without this a resumed window came back blank
+    // and the session's whole history was gone.
+    NSString *captured = ISHWorkspaceCapturedTerminalContents[
+        (displayTerminalUUID ?: sessionTerminalUUID).UUIDString];
+    if (captured.length > 0)
+        descriptor[@"contents"] = captured;
+    CGFloat overrideFontSize = hosted.overrideFontSize;
+    if (overrideFontSize > 0)
+        descriptor[@"fontSize"] = @(overrideFontSize);
+    return descriptor;
+}
+
 - (NSDictionary<NSString *, id> *)savedLayoutDescriptorForWindow:(ISHWorkspaceContainedWindowView *)windowView {
     NSDictionary<NSString *, NSNumber *> *frameDescriptor = [self normalizedFrameDescriptorForFrame:windowView.frame];
     if (frameDescriptor == nil)
@@ -3702,65 +4075,30 @@ static UIView *ISHWorkspaceFindFirstResponder(UIView *view) {
     }
 
     if (windowView.hostedTerminalViewController != nil) {
-        NSUUID *sessionTerminalUUID = [self persistentTerminalUUIDForWindow:windowView];
-        NSUUID *displayTerminalUUID = [self displayedTerminalUUIDForWindow:windowView];
-        NSString *terminalRole = [self persistentTerminalRoleForWindow:windowView];
-        if (sessionTerminalUUID == nil && displayTerminalUUID == nil)
+        // One entry per tab. The window's own fields are its FIRST tab's, as
+        // they were before tabs, so a layout saved with one tab is exactly what
+        // it always was and an older build still restores the first tab; the
+        // rest ride in "tabs", with the one showing in "selectedTab".
+        NSArray<TerminalViewController *> *tabs = [self terminalViewControllersInWindow:windowView];
+        ISHWorkspaceTerminalTabsViewController *tabsController = [self terminalTabsForWindow:windowView];
+        NSMutableArray<NSDictionary<NSString *, id> *> *tabDescriptors = [NSMutableArray array];
+        for (TerminalViewController *tab in tabs) {
+            NSString *role = tabsController != nil ? [tabsController roleForTab:tab]
+                                                   : [self persistentTerminalRoleForWindow:windowView];
+            NSDictionary<NSString *, id> *tabDescriptor = [self savedDescriptorForTerminalTab:tab role:role];
+            if (tabDescriptor != nil)
+                [tabDescriptors addObject:tabDescriptor];
+        }
+        if (tabDescriptors.count == 0)
             return nil;
-        NSMutableDictionary<NSString *, id> *descriptor = [@{
-            @"kind": ISHWorkspaceSavedLayoutKindTerminal,
-            @"frame": frameDescriptor,
-            @"terminalUUID": (displayTerminalUUID ?: sessionTerminalUUID).UUIDString,
-        } mutableCopy];
-        if (sessionTerminalUUID != nil)
-            descriptor[@"sessionTerminalUUID"] = sessionTerminalUUID.UUIDString;
-        if (terminalRole.length > 0)
-            descriptor[@"terminalRole"] = terminalRole;
-        // The session leader pid -- the only identifier for this window's shell
-        // that survives a suspend to disk. The Terminal UUID above dies with
-        // the process and the restore hands out fresh pts numbers, but the
-        // checkpoint restores pids, so this is what lets the window ask for
-        // its OWN shell back rather than whichever one is next in the queue.
-        //
-        // Its OWN shell: the one on the pseudo-terminal this window started
-        // (sessionTerminal), not whatever it happens to be displaying. A System
-        // Console window shows tty1 while its shell sits on a pts behind it,
-        // and this used to record tty1's session -- the console login's --
-        // which no restore ever hands out, because only pts sessions come back
-        // through the queue. So the console window asked for a pid that could
-        // not match, fell back to queue order, and took the FIRST restored
-        // session: the other window's ktop. That window then got the console's
-        // hidden shell, or nothing. Reported as "the former ktop window was
-        // blank and the console window had a wedged ktop in it".
-        //
-        // A window does not always start the session it shows: one that adopted
-        // an existing pts never learned a pid, so the tty is asked for its
-        // session -- a session leader's pid IS the session id, which is what
-        // the restore reports. Only a window with no shell of its own falls
-        // through to the displayed terminal, and then only for a pts.
-        TerminalViewController *hosted = windowView.hostedTerminalViewController;
-        int sessionPid = hosted.sessionTerminal.guestSessionId;
-        if (sessionPid <= 0)
-            sessionPid = hosted.sessionPid;
-        if (sessionPid <= 0 && hosted.sessionTerminal == nil &&
-                hosted.terminal.type == TTY_PSEUDO_SLAVE_MAJOR)
-            sessionPid = hosted.terminal.guestSessionId;
-        if (sessionPid > 0)
-            descriptor[@"sessionPid"] = @(sessionPid);
-        // Whether there is a shell to ask for at all. A window with none (a
-        // console with nothing behind it) must not adopt one on the way back.
-        descriptor[@"ownsSession"] = @(sessionPid > 0);
-        // What this terminal had printed. Not part of the guest at all -- it
-        // lives in hterm -- so without this a resumed window came back blank
-        // and the session's whole history was gone.
-        NSString *captured = ISHWorkspaceCapturedTerminalContents[
-            (displayTerminalUUID ?: sessionTerminalUUID).UUIDString];
-        if (captured.length > 0)
-            descriptor[@"contents"] = captured;
-        CGFloat overrideFontSize = windowView.hostedTerminalViewController.overrideFontSize;
-        if (overrideFontSize > 0)
-            descriptor[@"fontSize"] = @(overrideFontSize);
+        NSMutableDictionary<NSString *, id> *descriptor = [tabDescriptors.firstObject mutableCopy];
+        descriptor[@"kind"] = ISHWorkspaceSavedLayoutKindTerminal;
+        descriptor[@"frame"] = frameDescriptor;
         descriptor[@"desktopIndex"] = @(windowView.workspaceDesktopIndex);
+        if (tabDescriptors.count > 1) {
+            descriptor[@"tabs"] = tabDescriptors;
+            descriptor[@"selectedTab"] = @(tabsController.selectedIndex);
+        }
         return descriptor;
     }
 
@@ -3838,6 +4176,19 @@ static UIView *ISHWorkspaceFindFirstResponder(UIView *view) {
                                     inWindow:(ISHWorkspaceContainedWindowView *)windowView
                             displayTerminalUUID:(NSUUID *)displayTerminalUUID
                                   terminalRole:(NSString *)terminalRole {
+    Terminal *displayTerminal = [self showRestoredTerminalIn:terminalViewController
+                                         displayTerminalUUID:displayTerminalUUID
+                                                terminalRole:terminalRole];
+    NSString *effectiveRole = terminalRole.length > 0 ? terminalRole : ISHWorkspaceTerminalRoleForTerminal(displayTerminal);
+    windowView.workspaceTerminalRole = effectiveRole;
+    windowView.titleLabel.text = ISHWorkspaceTitleForTerminalRole(effectiveRole, displayTerminal);
+}
+
+// Which terminal a restored tab shows, by its role: the console, the session
+// shell, or the terminal it had. Returns it.
+- (Terminal *)showRestoredTerminalIn:(TerminalViewController *)terminalViewController
+                 displayTerminalUUID:(NSUUID *)displayTerminalUUID
+                        terminalRole:(NSString *)terminalRole {
     Terminal *displayTerminal = displayTerminalUUID != nil ? [Terminal terminalWithUUID:displayTerminalUUID] : terminalViewController.terminal;
     if ([terminalRole isEqualToString:ISHWorkspaceTerminalRoleSystemConsole]) {
         if ([ISHWorkspaceTerminalRoleForTerminal(displayTerminal) isEqualToString:ISHWorkspaceTerminalRoleSystemConsole]) {
@@ -3856,9 +4207,52 @@ static UIView *ISHWorkspaceFindFirstResponder(UIView *view) {
     } else if (displayTerminal != nil) {
         terminalViewController.terminal = displayTerminal;
     }
-    NSString *effectiveRole = terminalRole.length > 0 ? terminalRole : ISHWorkspaceTerminalRoleForTerminal(displayTerminal);
-    windowView.workspaceTerminalRole = effectiveRole;
-    windowView.titleLabel.text = ISHWorkspaceTitleForTerminalRole(effectiveRole, displayTerminal);
+    return displayTerminal;
+}
+
+// A saved tab beyond a window's first, added to the window's tabs (unselected)
+// and reconnected to its own shell the way a restored window is. nil when that
+// terminal is already showing somewhere, or lives in another scene.
+- (nullable TerminalViewController *)restoreTerminalTab:(NSDictionary<NSString *, id> *)tab
+                                                   role:(NSString *)terminalRole
+                                             intoWindow:(ISHWorkspaceContainedWindowView *)windowView {
+    ISHWorkspaceTerminalTabsViewController *tabs = [self terminalTabsForWindow:windowView];
+    NSUUID *displayTerminalUUID = [[NSUUID alloc] initWithUUIDString:tab[@"terminalUUID"] ?: @""];
+    NSUUID *sessionTerminalUUID = [[NSUUID alloc] initWithUUIDString:tab[@"sessionTerminalUUID"] ?: @""];
+    if (tabs == nil || (displayTerminalUUID == nil && sessionTerminalUUID == nil))
+        return nil;
+    if (@available(iOS 13.0, *)) {
+        UISceneSession *existingSession = [self sceneSessionHostingTerminalUUID:(displayTerminalUUID ?: sessionTerminalUUID)];
+        if (existingSession != nil && existingSession != self.view.window.windowScene.session)
+            return nil;
+    }
+    if (displayTerminalUUID != nil && [self desktopWindowDisplayingTerminalUUID:displayTerminalUUID] != nil)
+        return nil;
+    Terminal *displayTerminal = displayTerminalUUID != nil ? [Terminal terminalWithUUID:displayTerminalUUID] : nil;
+    if (displayTerminal != nil && displayTerminal.webView.superview != nil)
+        return nil;
+    TerminalViewController *terminalViewController = [self createDesktopTerminalViewController];
+    if (terminalViewController == nil)
+        return nil;
+    // As restoreDesktopTerminalWindowWithSessionUUID: all of it before the
+    // reconnect, which is what claims the restored shell.
+    terminalViewController.alwaysLoginAsRoot = [terminalRole isEqualToString:ISHWorkspaceTerminalRoleSessionShell];
+    terminalViewController.desiredRestoredSessionPid = [tab[@"sessionPid"] intValue];
+    terminalViewController.declinesRestoredSession = !(tab[@"ownsSession"] == nil || [tab[@"ownsSession"] boolValue]);
+    terminalViewController.freshSessionTerminalDisplayMode =
+        [terminalRole isEqualToString:ISHWorkspaceTerminalRoleSystemConsole]
+            ? ISHFreshSessionTerminalDisplayModeSystemConsole
+            : ISHFreshSessionTerminalDisplayModeSessionShell;
+    [tabs addTab:terminalViewController role:terminalRole select:NO];
+    [terminalViewController reconnectSessionFromTerminalUUID:(sessionTerminalUUID ?: displayTerminalUUID)];
+    [self showRestoredTerminalIn:terminalViewController displayTerminalUUID:displayTerminalUUID terminalRole:terminalRole];
+    NSString *savedContents = tab[@"contents"];
+    if ([savedContents isKindOfClass:NSString.class] && savedContents.length > 0)
+        [terminalViewController.terminal writeRestoredContents:savedContents];
+    CGFloat savedFontSize = [tab[@"fontSize"] doubleValue];
+    if (savedFontSize > 0)
+        terminalViewController.overrideFontSize = savedFontSize;
+    return terminalViewController;
 }
 
 - (ISHWorkspaceContainedWindowView *)restoreDesktopTerminalWindowWithSessionUUID:(NSUUID *)sessionTerminalUUID
@@ -4146,16 +4540,18 @@ static UIView *ISHWorkspaceFindFirstResponder(UIView *view) {
         if (![subview isKindOfClass:ISHWorkspaceContainedWindowView.class])
             continue;
         ISHWorkspaceContainedWindowView *windowView = (ISHWorkspaceContainedWindowView *) subview;
-        Terminal *terminal = windowView.hostedTerminalViewController.terminal;
-        NSString *key = terminal.uuid.UUIDString;
-        if (terminal == nil || key.length == 0)
-            continue;
-        dispatch_group_enter(group);
-        [terminal fetchContentsWithCompletion:^(NSString *contents) {
-            if (contents.length > 0)
-                captured[key] = contents;
-            dispatch_group_leave(group);
-        }];
+        for (TerminalViewController *tab in [self terminalViewControllersInWindow:windowView]) {
+            Terminal *terminal = tab.terminal;
+            NSString *key = terminal.uuid.UUIDString;
+            if (terminal == nil || key.length == 0)
+                continue;
+            dispatch_group_enter(group);
+            [terminal fetchContentsWithCompletion:^(NSString *contents) {
+                if (contents.length > 0)
+                    captured[key] = contents;
+                dispatch_group_leave(group);
+            }];
+        }
     }
     dispatch_group_notify(group, dispatch_get_main_queue(), ^{
         ISHWorkspaceCapturedTerminalContents = captured;
@@ -4608,16 +5004,43 @@ static NSString *ISHWorkspaceDesktopNamesSignature(NSArray<NSString *> *names) {
     // makes the fallback safe: by the time it runs, everything that could be
     // claimed by name has been. The saved stacking order is put back below,
     // so this changes who gets which shell and nothing the user can see.
+    //
+    // Every TAB claims a shell, so the unit here is a tab: a Terminal window's
+    // tabs are listed one by one ({window, tab, index}), exact claims first
+    // across all windows. The first of a window's tabs to be restored creates
+    // the window; the rest join it, and the saved order and selection are put
+    // back once all are in.
     NSMutableArray<NSDictionary<NSString *, id> *> *orderedDescriptors = [NSMutableArray array];
     NSMutableArray<NSDictionary<NSString *, id> *> *deferredTerminals = [NSMutableArray array];
     for (NSDictionary<NSString *, id> *descriptor in windowDescriptors) {
-        if ([descriptor[@"kind"] isEqualToString:ISHWorkspaceSavedLayoutKindTerminal] &&
-                !checkpoint_restored_session_pending([descriptor[@"sessionPid"] intValue]))
-            [deferredTerminals addObject:descriptor];
-        else
+        if (![descriptor[@"kind"] isEqualToString:ISHWorkspaceSavedLayoutKindTerminal]) {
             [orderedDescriptors addObject:descriptor];
+            continue;
+        }
+        NSArray *savedTabs = [descriptor[@"tabs"] isKindOfClass:NSArray.class] ? descriptor[@"tabs"] : nil;
+        if (savedTabs.count < 2)
+            savedTabs = @[descriptor];
+        for (NSUInteger index = 0; index < savedTabs.count; index++) {
+            NSDictionary<NSString *, id> *tab = savedTabs[index];
+            if (![tab isKindOfClass:NSDictionary.class])
+                continue;
+            NSDictionary<NSString *, id> *unit = @{@"kind": ISHWorkspaceSavedLayoutKindTerminal,
+                                                   @"window": descriptor, @"tab": tab, @"index": @(index)};
+            if (checkpoint_restored_session_pending([tab[@"sessionPid"] intValue]))
+                [orderedDescriptors addObject:unit];
+            else
+                [deferredTerminals addObject:unit];
+        }
     }
     [orderedDescriptors addObjectsFromArray:deferredTerminals];
+    // The terminal each restored tab ended up in, by window descriptor and tab
+    // index; for putting the tabs back in order below.
+    NSMapTable<NSDictionary<NSString *, id> *, NSMutableDictionary<NSNumber *, TerminalViewController *> *> *restoredTabs =
+        [[NSMapTable alloc] initWithKeyOptions:NSPointerFunctionsStrongMemory | NSPointerFunctionsObjectPointerPersonality
+                                  valueOptions:NSPointerFunctionsStrongMemory capacity:4];
+    NSMapTable<NSDictionary<NSString *, id> *, NSMutableDictionary<NSNumber *, NSString *> *> *restoredTabRoles =
+        [[NSMapTable alloc] initWithKeyOptions:NSPointerFunctionsStrongMemory | NSPointerFunctionsObjectPointerPersonality
+                                  valueOptions:NSPointerFunctionsStrongMemory capacity:4];
     // Keyed by the descriptor OBJECT, not its contents: two windows of the
     // same applet at the same spot (a cascade that wrapped, or two zoomed
     // windows) have equal dictionaries, and an isEqual: map would hand both
@@ -4659,44 +5082,88 @@ static NSString *ISHWorkspaceDesktopNamesSignature(NSArray<NSString *> *names) {
             continue;
         }
         if ([kind isEqualToString:ISHWorkspaceSavedLayoutKindTerminal]) {
-            NSUUID *displayTerminalUUID = [[NSUUID alloc] initWithUUIDString:descriptor[@"terminalUUID"]];
-            NSUUID *sessionTerminalUUID = [[NSUUID alloc] initWithUUIDString:descriptor[@"sessionTerminalUUID"]];
+            // A unit: the saved window and one of its tabs (see above).
+            NSDictionary<NSString *, id> *windowDescriptor = descriptor[@"window"];
+            NSDictionary<NSString *, id> *tabDescriptor = descriptor[@"tab"];
+            NSNumber *tabIndex = descriptor[@"index"];
+            frameDescriptor = windowDescriptor[@"frame"];
+            NSUUID *displayTerminalUUID = [[NSUUID alloc] initWithUUIDString:tabDescriptor[@"terminalUUID"] ?: @""];
+            NSUUID *sessionTerminalUUID = [[NSUUID alloc] initWithUUIDString:tabDescriptor[@"sessionTerminalUUID"] ?: @""];
             if (displayTerminalUUID == nil && sessionTerminalUUID == nil)
                 continue;
             Terminal *displayTerminal = displayTerminalUUID != nil ? [Terminal terminalWithUUID:displayTerminalUUID] : nil;
-            NSString *terminalRole = [self terminalRoleFromSavedDescriptor:descriptor displayTerminal:displayTerminal];
+            NSString *terminalRole = [self terminalRoleFromSavedDescriptor:tabDescriptor displayTerminal:displayTerminal];
             if ([deduplicatedTerminalRoles containsObject:terminalRole] && [restoredTerminalRoles containsObject:terminalRole])
                 continue;
+            ISHWorkspaceContainedWindowView *tabsWindow = [windowsByDescriptor objectForKey:windowDescriptor];
+            if (tabsWindow != nil) {
+                // The window exists: this tab joins it.
+                TerminalViewController *restoredTab = [self restoreTerminalTab:tabDescriptor role:terminalRole intoWindow:tabsWindow];
+                if (restoredTab != nil) {
+                    [[restoredTabs objectForKey:windowDescriptor] setObject:restoredTab forKey:tabIndex];
+                    [[restoredTabRoles objectForKey:windowDescriptor] setObject:terminalRole forKey:tabIndex];
+                    if ([deduplicatedTerminalRoles containsObject:terminalRole])
+                        [restoredTerminalRoles addObject:terminalRole];
+                }
+                continue;
+            }
+            NSDictionary<NSString *, id> *fields = tabDescriptor; // the tab's, below
             // A layout from before "ownsSession" was recorded says nothing
             // either way; those windows keep the old behaviour and may adopt.
-            BOOL ownsSession = descriptor[@"ownsSession"] == nil || [descriptor[@"ownsSession"] boolValue];
+            BOOL ownsSession = fields[@"ownsSession"] == nil || [fields[@"ownsSession"] boolValue];
             ISHWorkspaceContainedWindowView *windowView =
                 [self restoreDesktopTerminalWindowWithSessionUUID:(sessionTerminalUUID ?: displayTerminalUUID)
                                               displayTerminalUUID:displayTerminalUUID
                                                     terminalRole:terminalRole
-                                                      sessionPid:[descriptor[@"sessionPid"] intValue]
+                                                      sessionPid:[fields[@"sessionPid"] intValue]
                                                      ownsSession:ownsSession];
             if (windowView != nil) {
-                [windowsByDescriptor setObject:windowView forKey:descriptor];
+                [windowsByDescriptor setObject:windowView forKey:windowDescriptor];
+                if (windowView.hostedTerminalViewController != nil) {
+                    [restoredTabs setObject:[@{tabIndex: windowView.hostedTerminalViewController} mutableCopy]
+                                     forKey:windowDescriptor];
+                    [restoredTabRoles setObject:[@{tabIndex: terminalRole} mutableCopy] forKey:windowDescriptor];
+                }
                 if ([deduplicatedTerminalRoles containsObject:terminalRole])
                     [restoredTerminalRoles addObject:terminalRole];
                 [self applySavedFrameDescriptor:frameDescriptor
                                        toWindow:windowView
                                    fallbackSize:ISHWorkspacePreferredTerminalContentSize()];
-                [self assignRestoredWindow:windowView toDesktopFromDescriptor:descriptor];
+                [self assignRestoredWindow:windowView toDesktopFromDescriptor:windowDescriptor];
                 // The history first, before the restored session writes a
                 // thing, so the shell's prompt lands after it rather than in
                 // the middle of it. sendOutput buffers until the web view has
                 // loaded, so this is safe this early.
-                NSString *savedContents = descriptor[@"contents"];
+                NSString *savedContents = fields[@"contents"];
                 if ([savedContents isKindOfClass:NSString.class] && savedContents.length > 0)
                     [windowView.hostedTerminalViewController.terminal
                         writeRestoredContents:savedContents];
-                CGFloat savedFontSize = [descriptor[@"fontSize"] doubleValue];
+                CGFloat savedFontSize = [fields[@"fontSize"] doubleValue];
                 if (savedFontSize > 0)
                     windowView.hostedTerminalViewController.overrideFontSize = savedFontSize;
             }
         }
+    }
+    // Each Terminal window's tabs in their saved order, the saved one showing.
+    for (NSDictionary<NSString *, id> *windowDescriptor in restoredTabs) {
+        ISHWorkspaceContainedWindowView *windowView = [windowsByDescriptor objectForKey:windowDescriptor];
+        ISHWorkspaceTerminalTabsViewController *tabsController = [self terminalTabsForWindow:windowView];
+        NSDictionary<NSNumber *, TerminalViewController *> *byIndex = [restoredTabs objectForKey:windowDescriptor];
+        NSDictionary<NSNumber *, NSString *> *rolesByIndex = [restoredTabRoles objectForKey:windowDescriptor];
+        if (tabsController == nil || byIndex.count < 2)
+            continue;
+        NSArray<NSNumber *> *indices = [byIndex.allKeys sortedArrayUsingSelector:@selector(compare:)];
+        NSMutableArray<TerminalViewController *> *ordered = [NSMutableArray array];
+        NSMutableArray<NSString *> *roles = [NSMutableArray array];
+        NSInteger selected = 0;
+        NSInteger savedSelected = [windowDescriptor[@"selectedTab"] integerValue];
+        for (NSNumber *index in indices) {
+            if (index.integerValue == savedSelected)
+                selected = (NSInteger) ordered.count;
+            [ordered addObject:byIndex[index]];
+            [roles addObject:rolesByIndex[index] ?: ISHWorkspaceTerminalRoleGeneric];
+        }
+        [tabsController arrangeTabs:ordered roles:roles selectedIndex:selected];
     }
     // The stacking the layout saved, front to back: the loop above created
     // the windows in claiming order, not this one.
@@ -4741,6 +5208,13 @@ static NSString *ISHWorkspaceDesktopNamesSignature(NSArray<NSString *> *names) {
         if (![view isKindOfClass:ISHWorkspaceContainedWindowView.class])
             continue;
         ISHWorkspaceContainedWindowView *windowView = (ISHWorkspaceContainedWindowView *) view;
+        // Any tab; a match in a background tab is brought forward.
+        ISHWorkspaceTerminalTabsViewController *tabs = [self terminalTabsForWindow:windowView];
+        if (tabs != nil) {
+            if ([tabs selectTabShowingTerminalUUID:terminalUUID orSessionUUID:NO])
+                return windowView;
+            continue;
+        }
         TerminalViewController *terminalViewController = windowView.hostedTerminalViewController;
         if (terminalViewController == nil)
             continue;
@@ -5912,6 +6386,15 @@ static UIResponder *ISHWorkspaceFirstResponderAmongViewControllers(UIViewControl
                                          reuseExisting:NO
                                        trackPrimaryRole:NO];
     }];
+    // Raised from a Terminal window's own menu button: a tab in that window.
+    ISHWorkspaceContainedWindowView *menuTerminalWindow = [self terminalWindowForMenuSourceView:sourceView];
+    if (menuTerminalWindow != nil) {
+        [sheet addActionWithTitle:@"New Tab"
+                            style:UIAlertActionStyleDefault
+                          handler:^(__unused UIAlertAction *action) {
+            [self openNewTerminalTabInWindow:menuTerminalWindow];
+        }];
+    }
     [sheet addActionWithTitle:@"Terminal…"
                         style:UIAlertActionStyleDefault
                       handler:^(__unused UIAlertAction *action) {
@@ -6099,6 +6582,12 @@ static UIResponder *ISHWorkspaceFirstResponderAmongViewControllers(UIViewControl
         if (![view isKindOfClass:ISHWorkspaceContainedWindowView.class])
             continue;
         ISHWorkspaceContainedWindowView *windowView = (ISHWorkspaceContainedWindowView *) view;
+        ISHWorkspaceTerminalTabsViewController *tabs = [self terminalTabsForWindow:windowView];
+        if (tabs != nil) {
+            if ([tabs selectTabShowingTerminalUUID:terminalUUID orSessionUUID:YES])
+                return windowView;
+            continue;
+        }
         TerminalViewController *terminalViewController = windowView.hostedTerminalViewController;
         if (terminalViewController == nil)
             continue;
@@ -6144,11 +6633,20 @@ static UIResponder *ISHWorkspaceFirstResponderAmongViewControllers(UIViewControl
         [self createDesktopWindowWithTitle:title
                              preferredSize:windowSize
                           showsCloseButton:YES];
-    windowView.hostedTerminalViewController = terminalViewController;
     windowView.resizable = YES;
     windowView.titleBarDoubleTapZoomEnabled = YES;
     windowView.minimumSize = ISHWorkspaceMinimumTerminalContentSize();
-    [self attachViewController:terminalViewController toDesktopWindow:windowView];
+    // The window holds its terminals as tabs; this one is the first.
+    ISHWorkspaceTerminalTabsViewController *tabs = [ISHWorkspaceTerminalTabsViewController new];
+    tabs.windowView = windowView;
+    tabs.preferredContentSize = preferredSize;
+    [self attachViewController:tabs toDesktopWindow:windowView];
+    [tabs addTab:terminalViewController role:nil select:YES];
+    __weak typeof(self) weakSelf = self;
+    __weak typeof(windowView) weakTabsWindow = windowView;
+    tabs.newTabHandler = ^{
+        [weakSelf openNewTerminalTabInWindow:weakTabsWindow];
+    };
 
     // A workspace terminal window owns its shell session (desktop-style): closing the window
     // ends the shell, and an exiting shell ("exit") closes the window instead of relaunching the
@@ -6157,20 +6655,50 @@ static UIResponder *ISHWorkspaceFirstResponderAmongViewControllers(UIViewControl
     //     programmatic close) first disposes the session, then tears the window down.
     //   - Hand the terminal a workspaceSessionDidEndHandler so a shell exit routes back through
     //     that same close handler rather than respawning.
+    //     (Every tab's shell: the window closes with all of them.)
+    //   - Each tab's workspaceSessionDidEndHandler (set by the tabs controller) closes that
+    //     tab, and the window with its last one, rather than respawning.
     dispatch_block_t genericCloseHandler = windowView.closeHandler;
-    __weak typeof(terminalViewController) weakTerminalViewController = terminalViewController;
+    __weak typeof(tabs) weakTabs = tabs;
     windowView.closeHandler = ^{
-        [weakTerminalViewController disposeSessionForWorkspaceClose];
+        [weakTabs disposeAllSessions];
         if (genericCloseHandler != nil)
             genericCloseHandler();
     };
-    __weak typeof(windowView) weakWindowView = windowView;
-    terminalViewController.workspaceSessionDidEndHandler = ^{
-        ISHWorkspaceContainedWindowView *strongWindowView = weakWindowView;
-        if (strongWindowView.closeHandler != nil)
-            strongWindowView.closeHandler();
-    };
     return windowView;
+}
+
+- (nullable ISHWorkspaceTerminalTabsViewController *)terminalTabsForWindow:(ISHWorkspaceContainedWindowView *)windowView {
+    UIViewController *content = windowView != nil ? [self contentViewControllerForDesktopWindow:windowView] : nil;
+    return [content isKindOfClass:ISHWorkspaceTerminalTabsViewController.class]
+        ? (ISHWorkspaceTerminalTabsViewController *) content : nil;
+}
+
+// Every terminal a window holds, the selected one included.
+- (NSArray<TerminalViewController *> *)terminalViewControllersInWindow:(ISHWorkspaceContainedWindowView *)windowView {
+    ISHWorkspaceTerminalTabsViewController *tabs = [self terminalTabsForWindow:windowView];
+    if (tabs != nil)
+        return tabs.tabs;
+    return windowView.hostedTerminalViewController != nil ? @[windowView.hostedTerminalViewController] : @[];
+}
+
+// A new tab in a Terminal window: a fresh shell, as a plain Terminal (the
+// default-user preference applies, whatever the window's first tab is).
+- (void)openNewTerminalTabInWindow:(ISHWorkspaceContainedWindowView *)windowView {
+    ISHWorkspaceTerminalTabsViewController *tabs = [self terminalTabsForWindow:windowView];
+    if (tabs == nil)
+        return;
+    TerminalViewController *terminalViewController = [self createDesktopTerminalViewController];
+    if (terminalViewController == nil)
+        return;
+    terminalViewController.freshSessionTerminalDisplayMode = ISHFreshSessionTerminalDisplayModeSessionShell;
+    terminalViewController.alwaysLoginAsRoot = NO;
+    terminalViewController.declinesRestoredSession = YES;
+    [tabs addTab:terminalViewController role:ISHWorkspaceTerminalRoleGeneric select:YES];
+    [terminalViewController startNewSession];
+    [terminalViewController showSessionShellForCurrentSession];
+    [self focusDesktopWindow:windowView];
+    [self refreshDockButtons];
 }
 
 - (void)workspaceClearArrangedSubviewsFromStack:(UIStackView *)stackView {
