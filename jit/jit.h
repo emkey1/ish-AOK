@@ -212,8 +212,13 @@ void jit_note_shared_write(struct jit *jit, const struct pt_entry *entry);
 // that matters. Same design as riscv64's (JIT_FUSE_RV_RETCACHE); both engines
 // return through a link register and share LINKREG_RET_CACHE_HASH.
 #define JIT_FUSE_A64_RETCACHE (1u << 3)
+// SIMD element moves through gadgets specialised by element size, fed
+// precomputed cpu_state offsets (jit/guest-arm64/simd_spec.S) instead of the
+// generic gadgets that decode registers, size and lane at run time.
+#define JIT_FUSE_A64_VSPEC (1u << 4)
 #define JIT_FUSE_A64_ALL (JIT_FUSE_A64_BCOND | JIT_FUSE_A64_LDST | \
-                          JIT_FUSE_A64_LDCMP | JIT_FUSE_A64_RETCACHE)
+                          JIT_FUSE_A64_LDCMP | JIT_FUSE_A64_RETCACHE | \
+                          JIT_FUSE_A64_VSPEC)
 
 // riscv64 had NO switch at all for either of its fusions, so neither could be
 // A/B'd without rebuilding. ISH_RISCV64_NO_FUSE now clears both.

@@ -49,6 +49,16 @@ Focused tests (arm64/, aarch64 guests):
                        three-same int, saturating, pairwise, across-lanes,
                        widening/narrowing, shifts, permute (zip/uzp/ext/tbl),
                        two-reg misc, FP arithmetic/compares/converts/FMA
+  simd_elem_moves.c    UMOV/INS/DUP-by-element/FMOV general<->FP/vector MOV at
+                       every size and lane against a byte-level model (kept
+                       lanes, cleared upper halves); the vspec gadgets
+                       (jit/guest-arm64/simd_spec.S) and, with
+                       `echo vspec=0 > /proc/ish/arm64_jit_fuse`, the generic
+                       ones. Passes natively on an Apple Silicon Mac.
+  simd_three_same.c    Every AdvSIMD three-same op and arrangement with a
+                       specialised gadget (simd_spec3.S), v5/v17/v29, hashed
+                       against simd_three_same.golden, which an Apple Silicon
+                       Mac produces running the file natively -DPRINT_GOLDEN.
   ands_bcond_fusion.c  ANDS+B.cond gadget fusion (jit/guest-arm64/control.S
                        fused_andsi/fused_andsr): all 14 conditions x
                        {imm,reg} x {32,64-bit} x {TST,normal-Rd}, checking
