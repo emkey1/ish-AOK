@@ -36,6 +36,7 @@ bool f80_is_supported(float80 f);
 // out-parameters instead of the thread-local flags. See emu/float80.c.
 bool f80_add_fast(float80 a, float80 b, int p, float80 *out, bool *inexact, bool *up);
 bool f80_mul_fast(float80 a, float80 b, int p, float80 *out, bool *inexact, bool *up);
+bool f80_div_fast(float80 a, float80 b, int p, float80 *out, bool *inexact, bool *up);
 float80 f80_add(float80 a, float80 b);
 float80 f80_sub(float80 a, float80 b);
 float80 f80_mul(float80 a, float80 b);

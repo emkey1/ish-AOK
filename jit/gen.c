@@ -7112,6 +7112,12 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
     if (!insn.two_byte_opcode && !insn.address_size_prefix && !insn.lock_prefix &&
             insn.rep_mode == amd64_jit_rep_none && insn.has_modrm &&
             insn.opcode >= 0xd8 && insn.opcode <= 0xdf) {
+        // Memory forms: the addressing decoded now, from the opcode position,
+        // before amd64_ip moves past the instruction.
+        unsigned long x87_meta = 0, x87_disp = 0;
+        guest_addr_t x87_mem_next = 0;
+        bool x87_meta_ok = (insn.modrm >> 6) != 3 &&
+            gen_amd64_decode_mem_meta(state, tlb, &insn, 64, &x87_meta, &x87_disp, &x87_mem_next);
         if (!gen_amd64_decode_rm_extent(state, tlb, &insn, &next_ip)) {
             state->amd64_ip = state->amd64_orig_ip;
             state->amd64_fallback_to_interp = true;
@@ -7123,8 +7129,21 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
                 (unsigned long long) next_ip);
         gen_amd64_flush_reg_cache(state);
         gen_amd64_flush_rip(state);
-        gen_amd64_helper_tlb_2_retint(state, amd64_jit_x87,
-                (unsigned long) insn.opcode, (unsigned long) next_ip);
+        if ((insn.modrm >> 6) == 3) {
+            // Register form: fully decoded here, so the helper runs the
+            // operation without re-fetching and re-decoding the instruction.
+            gen_amd64_helper_tlb_2_retint(state, amd64_jit_x87_reg,
+                    ((unsigned long) insn.opcode << 8) | insn.modrm, (unsigned long) next_ip);
+        } else {
+            // Memory form: the addressing was decoded above; only the
+            // effective address is computed at run time.
+            if (x87_meta_ok && x87_mem_next == next_ip)
+                gen_amd64_helper_tlb_3_retint(state, amd64_jit_x87_mem, x87_meta, x87_disp,
+                        (unsigned long) next_ip);
+            else
+                gen_amd64_helper_tlb_2_retint(state, amd64_jit_x87,
+                        (unsigned long) insn.opcode, (unsigned long) next_ip);
+        }
         gen_amd64_defer_rip(state, next_ip);
         return true;
     }
@@ -14598,6 +14617,37 @@ static inline bool gen_vec(enum arg src, enum arg dst, void (*helper)(), gadget_
     bool rm_is_src = !could_be_memory(dst);
     enum arg rm = rm_is_src ? src : dst;
     enum arg reg = rm_is_src ? dst : src;
+
+    // Scalar SSE arithmetic, register to register: the amd64 engine's native
+    // gadgets (gadgets-aarch64/math.S, amd64_v_scalar_double/single) do exactly
+    // what the C helpers below do -- the host's own fadd/fsub/fmul/fdiv on the
+    // low lane, the rest of the destination kept -- and touch only cpu->xmm,
+    // so the i386 engine uses them instead of a C call per instruction.
+    // Operand word: source xmm in bits 0-3, destination in bits 4-7.
+    if (rm_is_src && !has_imm && src == arg_xmm_modrm_val && dst == arg_xmm_modrm_reg &&
+            modrm->type == modrm_reg) {
+        extern void gadget_amd64_v_addsd_reg(void), gadget_amd64_v_subsd_reg(void);
+        extern void gadget_amd64_v_mulsd_reg(void), gadget_amd64_v_divsd_reg(void);
+        extern void gadget_amd64_v_addss_reg(void), gadget_amd64_v_subss_reg(void);
+        extern void gadget_amd64_v_mulss_reg(void), gadget_amd64_v_divss_reg(void);
+        static const struct { void (*helper)(); void (*gadget)(void); } native[] = {
+            {(void (*)()) vec_single_fadd64, gadget_amd64_v_addsd_reg},
+            {(void (*)()) vec_single_fsub64, gadget_amd64_v_subsd_reg},
+            {(void (*)()) vec_single_fmul64, gadget_amd64_v_mulsd_reg},
+            {(void (*)()) vec_single_fdiv64, gadget_amd64_v_divsd_reg},
+            {(void (*)()) vec_single_fadd32, gadget_amd64_v_addss_reg},
+            {(void (*)()) vec_single_fsub32, gadget_amd64_v_subss_reg},
+            {(void (*)()) vec_single_fmul32, gadget_amd64_v_mulss_reg},
+            {(void (*)()) vec_single_fdiv32, gadget_amd64_v_divss_reg},
+        };
+        for (size_t i = 0; i < sizeof(native) / sizeof(native[0]); i++) {
+            if (native[i].helper == helper) {
+                GEN(native[i].gadget);
+                GEN((modrm->rm_opcode & 0xf) | ((modrm->opcode & 0xf) << 4));
+                return true;
+            }
+        }
+    }
 
     uint16_t reg_offset = cpu_reg_offset(reg, modrm->opcode);
     uint16_t rm_reg_offset = cpu_reg_offset(rm, modrm->rm_opcode);

@@ -622,6 +622,51 @@ bool f80_mul_fast(float80 a, float80 b, int p, float80 *out, bool *inexact, bool
     return f80_fast_finish(P, exp, a.sign ^ b.sign, p, out, inexact, up);
 }
 
+// (u1:u0) / v for a normalized v (bit 63 set) and u1 < v, the quotient fitting
+// 64 bits: Hacker's Delight's divlu with the hardware's 64/64 divide, rather
+// than the compiler's general 128/128 division routine.
+static inline uint64_t f80_divlu(uint64_t u1, uint64_t u0, uint64_t v, uint64_t *rem) {
+    const uint64_t b = 1ull << 32;
+    uint64_t vn1 = v >> 32, vn0 = v & 0xffffffff;
+    uint64_t un1 = u0 >> 32, un0 = u0 & 0xffffffff;
+    uint64_t q1 = u1 / vn1, rhat = u1 - q1 * vn1;
+    while (q1 >= b || q1 * vn0 > b * rhat + un1) {
+        q1--;
+        rhat += vn1;
+        if (rhat >= b)
+            break;
+    }
+    uint64_t un21 = u1 * b + un1 - q1 * v; // wraps as intended
+    uint64_t q0 = un21 / vn1;
+    rhat = un21 - q0 * vn1;
+    while (q0 >= b || q0 * vn0 > b * rhat + un0) {
+        q0--;
+        rhat += vn1;
+        if (rhat >= b)
+            break;
+    }
+    *rem = un21 * b + un0 - q0 * v;
+    return q1 * b + q0;
+}
+
+bool f80_div_fast(float80 a, float80 b, int p, float80 *out, bool *inexact, bool *up) {
+    if (!f80_fast_normal(a) || !f80_fast_normal(b))
+        return false;
+    // The general f80_div's quotient, 128 bits of it: (as << 63) / bs, then the
+    // remainder's next 64 bits, then a sticky bit for whatever is left.
+    uint64_t as = a.signif, bs = b.signif, r, r2;
+    uint64_t q_hi = f80_divlu(as >> 1, as << 63, bs, &r);
+    uint64_t q_lo = f80_divlu(r, 0, bs, &r2);
+    uint128_t q = ((uint128_t) q_hi << 64) | q_lo;
+    if (r2 != 0)
+        q |= 1;
+    int exp = unbias(a.exp) - unbias(b.exp);
+    int z = __builtin_clzll(q_hi); // q_hi >= 2^62
+    q <<= z;
+    exp -= z;
+    return f80_fast_finish(q, exp, a.sign ^ b.sign, p, out, inexact, up);
+}
+
 float80 f80_add(float80 a, float80 b) {
     handle_nans(a, b);
 

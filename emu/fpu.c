@@ -356,9 +356,9 @@ void fpu_chs(struct cpu_state *cpu) {
     ST(0) = f80_neg(ST(0));
 }
 
-// Round-to-nearest fast paths (float80.c's f80_add_fast/f80_mul_fast): two
-// normal operands and a normal result, which is nearly every x87 add,
-// subtract and multiply. They report PE and C1 exactly as FPU_BEGIN/FPU_END
+// Round-to-nearest fast paths (float80.c's f80_add_fast/f80_mul_fast/
+// f80_div_fast): two normal operands and a normal result, which is nearly
+// every x87 add, subtract, multiply and divide. They report PE and C1 exactly as FPU_BEGIN/FPU_END
 // would and decline everything else, which then takes the general path below.
 static inline int fpu_fast_precision(struct cpu_state *cpu) {
     if (cpu->rc != round_to_nearest)
@@ -370,6 +370,18 @@ static inline bool fpu_fast_add(struct cpu_state *cpu, float80 a, float80 b, flo
     float80 r;
     bool inexact, up;
     if (p == 0 || !f80_add_fast(a, b, p, &r, &inexact, &up))
+        return false;
+    *dst = r;
+    if (inexact)
+        cpu->fsw |= 0x20;
+    cpu->c1 = up;
+    return true;
+}
+static inline bool fpu_fast_div(struct cpu_state *cpu, float80 a, float80 b, float80 *dst) {
+    int p = fpu_fast_precision(cpu);
+    float80 r;
+    bool inexact, up;
+    if (p == 0 || !f80_div_fast(a, b, p, &r, &inexact, &up))
         return false;
     *dst = r;
     if (inexact)
@@ -419,11 +431,15 @@ void fpu_mul(struct cpu_state *cpu, int srci, int dsti) {
     FPU_END();
 }
 void fpu_div(struct cpu_state *cpu, int srci, int dsti) {
+    if (fpu_fast_div(cpu, ST(dsti), ST(srci), &ST(dsti)))
+        return;
     FPU_BEGIN();
     ST(dsti) = f80_div(ST(dsti), ST(srci));
     FPU_END();
 }
 void fpu_divr(struct cpu_state *cpu, int srci, int dsti) {
+    if (fpu_fast_div(cpu, ST(srci), ST(dsti), &ST(dsti)))
+        return;
     FPU_BEGIN();
     ST(dsti) = f80_div(ST(srci), ST(dsti));
     FPU_END();
@@ -458,11 +474,15 @@ void fpu_imul16(struct cpu_state *cpu, int16_t *i) {
     FPU_END();
 }
 void fpu_idiv16(struct cpu_state *cpu, int16_t *i) {
+    if (fpu_fast_div(cpu, ST(0), f80_from_int(*i), &ST(0)))
+        return;
     FPU_BEGIN();
     ST(0) = f80_div(ST(0), f80_from_int(*i));
     FPU_END();
 }
 void fpu_idivr16(struct cpu_state *cpu, int16_t *i) {
+    if (fpu_fast_div(cpu, f80_from_int(*i), ST(0), &ST(0)))
+        return;
     FPU_BEGIN();
     ST(0) = f80_div(f80_from_int(*i), ST(0));
     FPU_END();
@@ -497,11 +517,15 @@ void fpu_imul32(struct cpu_state *cpu, int32_t *i) {
     FPU_END();
 }
 void fpu_idiv32(struct cpu_state *cpu, int32_t *i) {
+    if (fpu_fast_div(cpu, ST(0), f80_from_int(*i), &ST(0)))
+        return;
     FPU_BEGIN();
     ST(0) = f80_div(ST(0), f80_from_int(*i));
     FPU_END();
 }
 void fpu_idivr32(struct cpu_state *cpu, int32_t *i) {
+    if (fpu_fast_div(cpu, f80_from_int(*i), ST(0), &ST(0)))
+        return;
     FPU_BEGIN();
     ST(0) = f80_div(f80_from_int(*i), ST(0));
     FPU_END();
@@ -536,11 +560,15 @@ void fpu_mulm32(struct cpu_state *cpu, float32 *f) {
     FPU_END();
 }
 void fpu_divm32(struct cpu_state *cpu, float32 *f) {
+    if (fpu_fast_div(cpu, ST(0), FPU_M(*f), &ST(0)))
+        return;
     FPU_BEGIN();
     ST(0) = f80_div(ST(0), FPU_M(*f));
     FPU_END();
 }
 void fpu_divrm32(struct cpu_state *cpu, float32 *f) {
+    if (fpu_fast_div(cpu, FPU_M(*f), ST(0), &ST(0)))
+        return;
     FPU_BEGIN();
     ST(0) = f80_div(FPU_M(*f), ST(0));
     FPU_END();
@@ -575,11 +603,15 @@ void fpu_mulm64(struct cpu_state *cpu, float64 *f) {
     FPU_END();
 }
 void fpu_divm64(struct cpu_state *cpu, float64 *f) {
+    if (fpu_fast_div(cpu, ST(0), FPU_M(*f), &ST(0)))
+        return;
     FPU_BEGIN();
     ST(0) = f80_div(ST(0), FPU_M(*f));
     FPU_END();
 }
 void fpu_divrm64(struct cpu_state *cpu, float64 *f) {
+    if (fpu_fast_div(cpu, FPU_M(*f), ST(0), &ST(0)))
+        return;
     FPU_BEGIN();
     ST(0) = f80_div(FPU_M(*f), ST(0));
     FPU_END();
