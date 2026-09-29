@@ -482,6 +482,7 @@ static const CGFloat kISHLLMMaximumTextScale = 3.0;
     NSMutableSet<NSNumber *> *_expandedThinkingIndices; // indices into _messages whose <think> block the user expanded
     BOOL _streamingThinkingOpen; // the in-flight reply is currently inside an unterminated <think>, drives the status line
     NSInteger _knownContextWindowTokens; // 0 = unknown; best-effort from /models, see probeContextWindowIfNeeded
+    NSInteger _toolLoopCompactedRound; // the round this reply last compacted before, so a round compacts once
     NSString *_knownContextWindowProbeKey; // "model|endpoint" the value above was probed for; re-probes when it changes
     BOOL _contextWindowProbeInFlight;
     NSString *_sessionID; // the chat currently on screen; _messages is its content
@@ -1923,8 +1924,8 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
     if (used <= 0)
         return @"";
     NSString *usedText = ISHLLMFormattedTokenCount(used);
-    if (_knownContextWindowTokens > 0)
-        return [NSString stringWithFormat:@" · ~%@/%@ ctx", usedText, ISHLLMFormattedTokenCount(_knownContextWindowTokens)];
+    if ([self contextWindowTokens] > 0)
+        return [NSString stringWithFormat:@" · ~%@/%@ ctx", usedText, ISHLLMFormattedTokenCount([self contextWindowTokens])];
     return [NSString stringWithFormat:@" · ~%@ ctx", usedText];
 }
 
@@ -2419,7 +2420,6 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
 
     // A conversation about to outgrow the model's window is summarised
     // first, as OpenCode does, rather than failing or losing its start.
-    // Only when the window is known: guessing would compact chats that fit.
     if ([self shouldCompactBeforeSending]) {
         __weak typeof(self) weakSelf = self;
         [self summarizeConversationKeepingLastMessage:YES then:^(__unused BOOL ok) {
@@ -2827,8 +2827,8 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
 // resending history to the model -- see providerMessages. Sized against the
 // real context window when known; a fixed conservative default otherwise.
 - (NSInteger)toolResultContextBudgetTokens {
-    if (_knownContextWindowTokens > 0)
-        return MAX(1024, (NSInteger) (_knownContextWindowTokens * kISHLLMToolContextBudgetFraction));
+    if ([self contextWindowTokens] > 0)
+        return MAX(1024, (NSInteger) ([self contextWindowTokens] * kISHLLMToolContextBudgetFraction));
     return kISHLLMToolContextDefaultBudgetTokens;
 }
 
@@ -2850,6 +2850,19 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
         [self appendRole:@"assistant" content:[NSString stringWithFormat:@"Stopped after %ld tool calls in a row (adjustable in Settings as \"Tool Call Rounds\"). Send another message to continue.", (long) ISHLLMToolMaxRounds()]];
         [self setSending:NO];
         [self saveTranscript];
+        return;
+    }
+
+    // One prompt can run dozens of tool rounds, so the window is checked
+    // between rounds too, not only before the prompt is sent.
+    if (round == 0)
+        _toolLoopCompactedRound = 0;
+    if (round > 0 && _toolLoopCompactedRound != round && [self shouldCompactBeforeSending]) {
+        _toolLoopCompactedRound = round;
+        __weak typeof(self) weakSelf = self;
+        [self summarizeConversationKeepingTrailing:[self currentToolRoundMessageCount] then:^(__unused BOOL ok) {
+            [weakSelf runToolLoopRound:round model:model apiKey:apiKey];
+        }];
         return;
     }
 
@@ -2878,6 +2891,20 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
         return;
     }
     [self streamRoundToURL:url body:body anthropic:NO round:round model:model apiKey:apiKey];
+}
+
+// The newest assistant message with tool calls and the results after it, as
+// the model is sent them: what a compaction mid-loop keeps after the summary.
+- (NSUInteger)currentToolRoundMessageCount {
+    NSArray<NSDictionary<NSString *, id> *> *sent = [self providerMessages];
+    for (NSUInteger count = 1; count <= sent.count; count++) {
+        NSDictionary *message = sent[sent.count - count];
+        if ([message[@"role"] isEqual:@"assistant"] && [message[@"tool_calls"] isKindOfClass:NSArray.class] && [message[@"tool_calls"] count] > 0)
+            return count;
+        if ([message[@"role"] isEqual:@"user"])
+            break;
+    }
+    return 0;
 }
 
 // The non-streaming request, for a server that refused the streamed one.
@@ -3356,10 +3383,22 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
     }];
 }
 
+// The window as far as anyone has said: the user's setting, else what the
+// server reported; 0 when neither has.
+- (NSInteger)contextWindowTokens {
+    NSInteger setting = ISHLLMContextWindowSetting();
+    return setting > 0 ? setting : _knownContextWindowTokens;
+}
+
+// A chat is compacted at 75% of the window. With no window from the setting
+// or the server it still is, against kISHLLMFallbackContextWindowTokens:
+// never compacting let a chat on a proxy that reports nothing reach 100K+
+// tokens, where the model answered in garbage.
 - (BOOL)shouldCompactBeforeSending {
-    if (_knownContextWindowTokens <= 0 || ISHLLMUsesGeminiAPI() || ISHLLMCurrentBackend() == AOKLLMBackendAppleFoundationModels)
+    if (ISHLLMUsesGeminiAPI() || ISHLLMCurrentBackend() == AOKLLMBackendAppleFoundationModels)
         return NO;
-    return ISHLLMEstimateMessagesTokenCount([self providerMessages]) > (NSInteger) (_knownContextWindowTokens * 0.75);
+    NSInteger window = [self contextWindowTokens] > 0 ? [self contextWindowTokens] : kISHLLMFallbackContextWindowTokens;
+    return ISHLLMEstimateMessagesTokenCount([self providerMessages]) > (NSInteger) (window * 0.75);
 }
 
 // "/compact" and the menu item.
@@ -3387,9 +3426,17 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
 // keepLastMessage the newest message -- the prompt about to be sent -- stays
 // after the summary, not inside it.
 - (void)summarizeConversationKeepingLastMessage:(BOOL)keepLastMessage then:(void (^)(BOOL ok))continuation {
+    [self summarizeConversationKeepingTrailing:keepLastMessage ? 1 : 0 then:continuation];
+}
+
+// keepTrailing: how many of the newest messages the model is sent stay after
+// the summary instead of inside it -- the prompt about to be sent, or, inside
+// a tool loop, the round's tool calls with their results (a tool result must
+// follow the call it answers).
+- (void)summarizeConversationKeepingTrailing:(NSUInteger)keepTrailing then:(void (^)(BOOL ok))continuation {
+    BOOL keepLastMessage = keepTrailing > 0;
     NSMutableArray<NSDictionary<NSString *, id> *> *history = [[self providerMessages] mutableCopy];
-    if (keepLastMessage && history.count > 0)
-        [history removeLastObject];
+    [history removeObjectsInRange:NSMakeRange(history.count - MIN(keepTrailing, history.count), MIN(keepTrailing, history.count))];
     NSUInteger conversational = 0;
     for (NSDictionary *message in history)
         conversational += ![message[@"role"] isEqual:@"system"];
@@ -3415,7 +3462,13 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
         return;
     }
     [self setStatus:@"Summarizing the conversation…" busy:YES];
-    NSUInteger insertAt = keepLastMessage && _messages.count > 0 ? _messages.count - 1 : _messages.count;
+    // Before the kept messages; local notes (never sent) do not count.
+    NSUInteger insertAt = _messages.count;
+    for (NSUInteger kept = 0; kept < keepTrailing && insertAt > 0; ) {
+        insertAt--;
+        if (![_messages[insertAt][@"local"] isEqual:@"1"])
+            kept++;
+    }
     __weak typeof(self) weakSelf = self;
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         NSInteger statusCode = 0;

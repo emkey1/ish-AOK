@@ -54,6 +54,15 @@ NSInteger ISHLLMEstimateMessagesTokenCount(NSArray<NSDictionary<NSString *, id> 
     return total;
 }
 
+// 131072 -> "128K", 1000000 -> "1M": a window size as people say it.
+NSString *ISHLLMFormattedTokenCountShort(NSInteger tokens) {
+    if (tokens >= 1000000 && tokens % 1000000 == 0)
+        return [NSString stringWithFormat:@"%ldM", (long) (tokens / 1000000)];
+    if (tokens % 1024 == 0)
+        return [NSString stringWithFormat:@"%ldK", (long) (tokens / 1024)];
+    return [NSString stringWithFormat:@"%ldK", (long) (tokens / 1000)];
+}
+
 NSString *ISHLLMFormattedTokenCount(NSInteger tokens) {
     if (tokens >= 1000)
         return [NSString stringWithFormat:@"%.1fK", tokens / 1000.0];

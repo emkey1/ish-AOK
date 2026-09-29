@@ -65,6 +65,7 @@ typedef NS_ENUM(NSInteger, ISHLLMSettingsRow) {
     ISHLLMSettingsRowProvider,
     ISHLLMSettingsRowServerURL,
     ISHLLMSettingsRowModel,
+    ISHLLMSettingsRowContextWindow,
     ISHLLMSettingsRowAPIFormat,
     ISHLLMSettingsRowAPIKey,
     ISHLLMSettingsRowQueryModels,
@@ -182,6 +183,14 @@ typedef NS_ENUM(NSInteger, ISHLLMSettingsRow) {
             cell.textLabel.text = @"Model";
             cell.detailTextLabel.text = UserPreferences.shared.llmModel;
             break;
+        case ISHLLMSettingsRowContextWindow:
+            cell.textLabel.text = @"Context Window";
+            cell.detailTextLabel.text = ISHLLMContextWindowSetting() > 0
+                ? [ISHLLMFormattedTokenCountShort(ISHLLMContextWindowSetting()) stringByAppendingString:@" tokens"]
+                : @"Automatic";
+            if (onDevice)
+                cell.accessoryType = UITableViewCellAccessoryNone;
+            break;
         case ISHLLMSettingsRowAPIFormat:
             cell.textLabel.text = @"API Format";
             cell.detailTextLabel.text = ISHLLMCurrentAPIFormat();
@@ -295,6 +304,10 @@ typedef NS_ENUM(NSInteger, ISHLLMSettingsRow) {
         case ISHLLMSettingsRowToolRounds:
             [self pickToolMaxRoundsFromView:cell];
             return;
+        case ISHLLMSettingsRowContextWindow:
+            if (!ISHLLMUsesAppleFoundationModels())
+                [self pickContextWindowFromView:cell];
+            return;
         case ISHLLMSettingsRowHideThinking:
             UserPreferences.shared.llmHideThinking = !UserPreferences.shared.llmHideThinking;
             [tableView reloadData];
@@ -381,6 +394,23 @@ typedef NS_ENUM(NSInteger, ISHLLMSettingsRow) {
         NSString *title = [NSString stringWithFormat:@"%ld KB%@", (long) kb, kb == current ? @" ✓" : @""];
         [sheet addActionWithTitle:title style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
             UserPreferences.shared.llmToolOutputLimitKB = kb;
+            [self.tableView reloadData];
+        }];
+    }
+    [sheet addActionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil];
+    [sheet presentFromViewController:self sourceView:sourceView sourceRect:sourceView.bounds];
+}
+
+- (void)pickContextWindowFromView:(UIView *)sourceView {
+    ISHActionSheet *sheet = [ISHActionSheet actionSheetWithTitle:@"Context Window"
+        message:@"How many tokens this model can really use. A chat is summarized when it reaches three quarters of it. Automatic takes what the server reports, or assumes 64K when it reports nothing (as proxies often do). Set it lower than the model's advertised window if long chats turn into nonsense."];
+    NSInteger current = ISHLLMContextWindowSetting();
+    NSArray<NSNumber *> *choices = @[@0, @32768, @65536, @131072, @200000, @262144, @1000000];
+    for (NSNumber *choice in choices) {
+        NSInteger tokens = choice.integerValue;
+        NSString *label = tokens == 0 ? @"Automatic" : ISHLLMFormattedTokenCountShort(tokens);
+        [sheet addActionWithTitle:[label stringByAppendingString:tokens == current ? @" ✓" : @""] style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
+            ISHLLMSetContextWindowSetting(tokens);
             [self.tableView reloadData];
         }];
     }

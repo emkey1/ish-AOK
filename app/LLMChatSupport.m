@@ -784,6 +784,19 @@ NSArray<NSString *> *ISHLLMModelIdentifiersFromResponseData(NSData *data) {
 // server adds "max_model_len", Gemini's ListModels uses "inputTokenLimit".
 // Plain OpenAI/Ollama don't expose it at all. Returns 0 if the model or a
 // usable field can't be found -- callers must treat that as "unknown", not 0.
+static NSString *const kISHLLMContextWindowKey = @"LLM Context Window Tokens";
+
+NSInteger ISHLLMContextWindowSetting(void) {
+    return MAX(0, [NSUserDefaults.standardUserDefaults integerForKey:kISHLLMContextWindowKey]);
+}
+
+void ISHLLMSetContextWindowSetting(NSInteger tokens) {
+    if (tokens > 0)
+        [NSUserDefaults.standardUserDefaults setInteger:tokens forKey:kISHLLMContextWindowKey];
+    else
+        [NSUserDefaults.standardUserDefaults removeObjectForKey:kISHLLMContextWindowKey];
+}
+
 NSInteger ISHLLMContextWindowFromModelsResponse(NSData *data, NSString *modelID) {
     if (modelID.length == 0)
         return 0;

@@ -209,6 +209,17 @@ BOOL ISHLLMProviderRequiresAPIKey(void);
 NSString *ISHLLMMissingAPIKeyMessage(void);
 NSArray<NSString *> *ISHLLMModelIdentifiersFromResponseData(NSData *data);
 NSInteger ISHLLMContextWindowFromModelsResponse(NSData *data, NSString *modelID);
+// LLM Settings -> Context Window: the model's usable window in tokens, set by
+// the user; 0 = automatic (whatever the server's /models reports). Wins over
+// the reported value: a proxy may report none, or a model may fall apart
+// well before its advertised window.
+NSInteger ISHLLMContextWindowSetting(void);
+void ISHLLMSetContextWindowSetting(NSInteger tokens);
+NSString *ISHLLMFormattedTokenCountShort(NSInteger tokens);
+// What a chat is compacted against when neither the setting nor the server
+// gives a window: small enough for the local models behind proxies that
+// report nothing, which degrade into garbage well before 128K.
+static const NSInteger kISHLLMFallbackContextWindowTokens = 65536;
 NSString *ISHLLMSanitizedAssistantContent(NSString *content);
 NSString *ISHLLMStreamingAssistantContent(NSString *content);
 BOOL ISHLLMHideThinkingEnabled(void);
