@@ -1944,6 +1944,14 @@ if not meson.is_cross_build()
             objc_args: ['-fobjc-arc'],
             link_args: ['-framework', 'Foundation'])
         test('llm_diff', llm_diff_test, timeout: 180)
+
+        # The Anthropic Messages API translation: tool turns, caching, replay.
+        llm_anthropic_test = executable('llm_anthropic_test',
+            ['app/LLMChatAnthropic.m', 'tests/unit/llm_anthropic_test.m'],
+            include_directories: include_directories('app'),
+            objc_args: ['-fobjc-arc'],
+            link_args: ['-framework', 'Foundation'])
+        test('llm_anthropic', llm_anthropic_test)
     endif
 endif
 

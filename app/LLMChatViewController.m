@@ -15,6 +15,7 @@
 #import "MarkdownRenderer.h"
 #import "Terminal.h"
 #import "GuestFileBridge.h"
+#import "LLMChatAnthropic.h"
 #import "LLMChatInternal.h"
 #if __has_include("libiSH_AOKApp-Swift.h")
 #import "libiSH_AOKApp-Swift.h" // AOKFoundationModelsBridge (Swift, iOS 26+ FoundationModels wrapper)
@@ -1496,7 +1497,12 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
         // empty, which is valid alongside tool_calls and must not be dropped.
         NSArray *toolCalls = [message[@"tool_calls"] isKindOfClass:NSArray.class] ? message[@"tool_calls"] : nil;
         if (toolCalls.count > 0) {
-            [messages addObject:@{@"role": role, @"content": content, @"tool_calls": toolCalls}];
+            NSMutableDictionary *entry = [@{@"role": role, @"content": content, @"tool_calls": toolCalls} mutableCopy];
+            // Only the Anthropic translation reads it; an OpenAI-compatible
+            // server could reject an unknown field.
+            if (ISHLLMUsesAnthropicAPI() && [message[kISHLLMAnthropicContentKey] isKindOfClass:NSArray.class])
+                entry[kISHLLMAnthropicContentKey] = message[kISHLLMAnthropicContentKey];
+            [messages addObject:entry];
             continue;
         }
         if (content.length > 0)
@@ -2077,8 +2083,7 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
     }
 
     NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
-    if (apiKey.length > 0 && !ISHLLMUsesGeminiAPI())
-        [request setValue:[@"Bearer " stringByAppendingString:apiKey] forHTTPHeaderField:@"Authorization"];
+    ISHLLMApplyAuthHeaders(request, apiKey);
     // Not _activeTask: that slot belongs to the reply, and a probe parked in it
     // both survives the request (nothing nils it, so the chat reads as busy
     // forever) and displaces a streaming reply that Stop would then miss.
@@ -2132,19 +2137,12 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
         return;
     }
 
-    NSURL *url = [NSURL URLWithString:ISHLLMUsesGeminiAPI() ? ISHLLMGeminiGenerateEndpoint() : ISHLLMChatEndpoint()];
+    NSURL *url = ISHLLMProbeURL();
     if (url == nil) {
         [self appendLocalRole:@"assistant" content:[NSString stringWithFormat:@"Model set to %@, but the provider URL is invalid.", model]];
         return;
     }
-    NSDictionary *body = ISHLLMUsesGeminiAPI()
-        ? @{@"contents": @[@{@"role": @"user", @"parts": @[@{@"text": @"Reply with ok."}]}]}
-        : @{
-            @"model": model,
-            @"messages": @[@{@"role": @"user", @"content": @"Reply with ok."}],
-            @"stream": @NO,
-            @"max_tokens": @1,
-        };
+    NSDictionary *body = ISHLLMProbeBody(model, @"Reply with ok.", 1);
     NSData *bodyData = [NSJSONSerialization dataWithJSONObject:body options:0 error:nil];
     [self setSending:YES];
     if ([[url.scheme lowercaseString] isEqualToString:@"http"]) {
@@ -2165,8 +2163,7 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
     NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
     request.HTTPMethod = @"POST";
     [request setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
-    if (apiKey.length > 0 && !ISHLLMUsesGeminiAPI())
-        [request setValue:[@"Bearer " stringByAppendingString:apiKey] forHTTPHeaderField:@"Authorization"];
+    ISHLLMApplyAuthHeaders(request, apiKey);
     request.HTTPBody = bodyData;
     __weak typeof(self) weakSelf = self;
     _auxiliaryTask = [NSURLSession.sharedSession dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
@@ -2427,6 +2424,12 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
 - (void)dispatchPromptWithModel:(NSString *)model apiKey:(NSString *)apiKey {
     // Guest-shell tool use (OpenAI-compatible only): runs a non-streaming
     // function-calling loop so the model can run commands in the iSH shell.
+    // Anthropic's Messages API always goes through this loop, with or
+    // without tools: it is where the Messages translation lives.
+    if (ISHLLMUsesAnthropicAPI() && !UserPreferences.shared.llmToolsEnabled) {
+        [self runToolLoopRound:0 model:model apiKey:apiKey];
+        return;
+    }
     if (!ISHLLMUsesGeminiAPI() && UserPreferences.shared.llmToolsEnabled) {
         _autoRunCommandsThisReply = NO; // a new prompt re-arms confirmation for this reply
         __weak typeof(self) weakSelf = self;
@@ -2484,8 +2487,7 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
     NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
     request.HTTPMethod = @"POST";
     [request setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
-    if (apiKey.length > 0)
-        [request setValue:[@"Bearer " stringByAppendingString:apiKey] forHTTPHeaderField:@"Authorization"];
+    ISHLLMApplyAuthHeaders(request, apiKey);
 
     // Both transports stream now: http through the raw socket (ATS blocks it
     // from NSURLSession), https through the data-task delegate below.
@@ -2826,6 +2828,10 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
     }
 
     [self setStatus:(round == 0 ? @"Contacting model…" : @"Thinking…") busy:YES];
+    if (ISHLLMUsesAnthropicAPI()) {
+        [self runAnthropicRound:round model:model apiKey:apiKey];
+        return;
+    }
     NSMutableArray<NSDictionary<NSString *, id> *> *messages = [NSMutableArray array];
     NSString *systemNote = ISHLLMToolSystemNote(_guestEnvironmentNote, _toolContext.workingDirectory, YES);
     if (_projectInstructions.length > 0)
@@ -2861,6 +2867,34 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
     });
 }
 
+// One Messages API request. The stable half of the system note (tool
+// guidance, environment, AGENTS.md) is cached with the tools; the clock
+// follows the cache breakpoint. The reply arrives as the same assistant
+// message shape the OpenAI path produces, so everything after is shared.
+- (void)runAnthropicRound:(NSInteger)round model:(NSString *)model apiKey:(NSString *)apiKey {
+    BOOL tools = UserPreferences.shared.llmToolsEnabled;
+    NSString *stable = nil;
+    if (tools) {
+        stable = ISHLLMToolSystemNoteWithoutClock(_guestEnvironmentNote, _toolContext.workingDirectory, YES);
+        if (_projectInstructions.length > 0)
+            stable = [stable stringByAppendingFormat:@"\n\nProject instructions from %@ -- follow them:\n\n%@", _projectInstructionsSource, _projectInstructions];
+    }
+    NSDictionary *body = ISHLLMAnthropicRequestBody(model, 16000, [self providerMessages], stable, ISHLLMClockNote(),
+                                                    tools ? ISHLLMChatToolDefinitions() : nil);
+    __weak typeof(self) weakSelf = self;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        NSInteger statusCode = 0;
+        NSError *error = nil;
+        NSData *data = ISHLLMAnthropicPost(body, apiKey, &statusCode, &error);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            typeof(self) self = weakSelf;
+            if (self == nil)
+                return;
+            [self handleToolRoundData:data statusCode:statusCode error:error round:round model:model apiKey:apiKey];
+        });
+    });
+}
+
 - (void)handleToolRoundData:(NSData *)data statusCode:(NSInteger)statusCode error:(NSError *)error round:(NSInteger)round model:(NSString *)model apiKey:(NSString *)apiKey {
     if (_cancelled) {
         _cancelled = NO;
@@ -2879,6 +2913,17 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
     NSArray *choices = [dict[@"choices"] isKindOfClass:NSArray.class] ? dict[@"choices"] : nil;
     NSDictionary *choice = choices.count > 0 && [choices[0] isKindOfClass:NSDictionary.class] ? choices[0] : nil;
     NSDictionary *message = [choice[@"message"] isKindOfClass:NSDictionary.class] ? choice[@"message"] : nil;
+    NSString *anthropicNote = nil;
+    if (ISHLLMUsesAnthropicAPI() && dict != nil) {
+        NSString *anthropicError = nil;
+        message = ISHLLMAnthropicMessageFromResponse(dict, &anthropicError, &anthropicNote);
+        if (message == nil) {
+            [self appendRole:@"assistant" content:anthropicError ?: @"Unexpected response from the Anthropic API."];
+            [self setSending:NO];
+            [self saveTranscript];
+            return;
+        }
+    }
     if (message == nil) {
         NSString *errorMessage = [dict[@"error"] isKindOfClass:NSDictionary.class] && [dict[@"error"][@"message"] isKindOfClass:NSString.class]
             ? dict[@"error"][@"message"] : nil;
@@ -2897,6 +2942,8 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
     NSArray<NSDictionary *> *toolCalls = ISHLLMValidToolCalls(message);
     if (toolCalls.count == 0) {
         NSString *finalText = ISHLLMSanitizedAssistantContent(content);
+        if (anthropicNote.length > 0)
+            finalText = finalText.length > 0 ? [finalText stringByAppendingFormat:@"\n\n%@", anthropicNote] : anthropicNote;
         [self appendRole:@"assistant" content:finalText.length > 0 ? finalText : @"(The model returned an empty response.)"];
         [self setSending:NO];
         [self saveTranscript];
@@ -2905,11 +2952,15 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
 
     // Record the assistant turn (provider needs it paired with the tool results),
     // then execute each requested command.
-    [_messages addObject:@{
+    NSMutableDictionary *turn = [@{
         @"role": @"assistant",
         @"content": ISHLLMSanitizedAssistantContent(content),
         @"tool_calls": toolCalls,
-    }];
+    } mutableCopy];
+    // Sent back verbatim next round: thinking blocks must return unchanged.
+    if ([message[kISHLLMAnthropicContentKey] isKindOfClass:NSArray.class])
+        turn[kISHLLMAnthropicContentKey] = message[kISHLLMAnthropicContentKey];
+    [_messages addObject:turn];
     [self refreshTranscript];
     [self saveTranscript];
     [self runToolCalls:toolCalls index:0 round:round model:model apiKey:apiKey];
@@ -3220,6 +3271,8 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
         @"Summarize this conversation so that it can be continued from the summary alone: what the user wants, "
         @"decisions made, files read or changed and their current state, commands run and results that still matter, "
         @"and what remains to do. Be complete but brief. Reply with the summary only."}];
+    BOOL anthropic = ISHLLMUsesAnthropicAPI();
+    NSDictionary *anthropicBody = anthropic ? ISHLLMAnthropicRequestBody(model ?: @"", 16000, history, nil, nil, nil) : nil;
     NSData *body = [NSJSONSerialization dataWithJSONObject:@{@"model": model ?: @"", @"messages": history, @"stream": @NO} options:0 error:nil];
     if (url == nil || body == nil) {
         [self appendLocalRole:@"assistant" content:@"Could not summarize: invalid server URL or request."];
@@ -3232,10 +3285,13 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         NSInteger statusCode = 0;
         NSError *error = nil;
-        NSData *data = ISHLLMSynchronousChatPost(url, body, apiKey, &statusCode, &error);
+        NSData *data = anthropic ? ISHLLMAnthropicPost(anthropicBody, apiKey, &statusCode, &error)
+                                 : ISHLLMSynchronousChatPost(url, body, apiKey, &statusCode, &error);
         id json = data.length > 0 ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
         NSArray *choices = [json isKindOfClass:NSDictionary.class] && [json[@"choices"] isKindOfClass:NSArray.class] ? json[@"choices"] : nil;
         NSDictionary *message = choices.count > 0 && [choices[0] isKindOfClass:NSDictionary.class] ? choices[0][@"message"] : nil;
+        if (anthropic && [json isKindOfClass:NSDictionary.class])
+            message = ISHLLMAnthropicMessageFromResponse(json, NULL, NULL);
         NSString *content = [message isKindOfClass:NSDictionary.class] && [message[@"content"] isKindOfClass:NSString.class] ? message[@"content"] : nil;
         NSString *summary = [ISHLLMSanitizedAssistantContent(content ?: @"") stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
         dispatch_async(dispatch_get_main_queue(), ^{

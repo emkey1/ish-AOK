@@ -426,12 +426,19 @@ NSString *ISHLLMDetectGuestEnvironmentNote(NSString **homeOut) {
 // current-time anchor. The time anchor matters because time/date questions
 // otherwise lead the model to guess or reuse a stale timestamp from an earlier
 // turn (especially when a network tool call fails).
-NSString *ISHLLMToolSystemNote(NSString *environmentNote, NSString *workingDirectory, BOOL fileTools) {
+// The one sentence of the system note that changes every request. Kept
+// separate so a provider with prompt caching (Anthropic) can place it after
+// the cache breakpoint instead of invalidating the whole prefix each time.
+NSString *ISHLLMClockNote(void) {
     NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
     formatter.locale = [NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
     formatter.timeZone = [NSTimeZone timeZoneWithAbbreviation:@"UTC"];
     formatter.dateFormat = @"EEEE yyyy-MM-dd HH:mm:ss";
-    NSString *now = [formatter stringFromDate:[NSDate date]];
+    return [NSString stringWithFormat:@"The current date and time is %@ UTC -- treat this as the authoritative clock and convert to other time zones from it, rather than guessing or reusing a time from an earlier message.",
+            [formatter stringFromDate:[NSDate date]]];
+}
+
+NSString *ISHLLMToolSystemNoteWithoutClock(NSString *environmentNote, NSString *workingDirectory, BOOL fileTools) {
     NSMutableString *note = [NSMutableString string];
     if (fileTools)
         [note appendFormat:@"You can work in this iSH-AOK Linux guest with tools: read_file, write_file, edit_file, list_directory, glob and grep for files, and run_shell for commands (combined stdout+stderr, capped at %ld KB, killed after %lds). Prefer the file tools to shell commands for reading, searching and changing files. ",
@@ -443,8 +450,11 @@ NSString *ISHLLMToolSystemNote(NSString *environmentNote, NSString *workingDirec
         [note appendFormat:@"%@ ", environmentNote];
     if (workingDirectory.length > 0)
         [note appendFormat:@"The working directory is %@: run_shell starts there and relative paths in the file tools resolve against it. ", workingDirectory];
-    [note appendFormat:@"The current date and time is %@ UTC -- treat this as the authoritative clock and convert to other time zones from it, rather than guessing or reusing a time from an earlier message.", now];
-    return note;
+    return [note stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
+}
+
+NSString *ISHLLMToolSystemNote(NSString *environmentNote, NSString *workingDirectory, BOOL fileTools) {
+    return [NSString stringWithFormat:@"%@ %@", ISHLLMToolSystemNoteWithoutClock(environmentNote, workingDirectory, fileTools), ISHLLMClockNote()];
 }
 
 // MARK: - File tools and the tool context

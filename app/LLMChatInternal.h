@@ -177,6 +177,14 @@ AOKLLMBackend ISHLLMCurrentBackend(void);
 NSString *ISHLLMAppleFoundationModelsUnavailableMessage(void);
 BOOL ISHLLMFoundationModelsReady(void);
 BOOL ISHLLMUsesGeminiAPI(void);
+// Anthropic's Messages API (provider name contains "anthropic", or the URL is
+// api.anthropic.com). See LLMChatAnthropic.h for the translation.
+BOOL ISHLLMUsesAnthropicAPI(void);
+NSString *ISHLLMAnthropicMessagesEndpoint(void);
+void ISHLLMApplyAuthHeaders(NSMutableURLRequest *request, NSString *apiKey);
+NSURL *ISHLLMProbeURL(void);
+NSDictionary *ISHLLMProbeBody(NSString *model, NSString *prompt, NSUInteger maxTokens);
+NSData *ISHLLMAnthropicPost(NSDictionary *body, NSString *apiKey, NSInteger *statusCodeOut, NSError **errorOut);
 NSString *ISHLLMGeminiGenerateEndpoint(void);
 NSString *ISHLLMModelsEndpoint(void);
 NSArray<NSDictionary<NSString *, NSString *> *> *ISHLLMProviderPresets(void);
@@ -228,6 +236,10 @@ NSString *ISHLLMRunGuestShellCommand(NSString *command, NSString *workingDirecto
 NSString *ISHLLMDetectGuestEnvironmentNote(NSString **homeOut);
 // fileTools: the full tool set (OpenAI-compatible), or run_shell alone (Apple FM).
 NSString *ISHLLMToolSystemNote(NSString *environmentNote, NSString *workingDirectory, BOOL fileTools);
+// The same note in its two parts: everything but the clock (stable, so it can
+// be cached), and the clock sentence (new every request).
+NSString *ISHLLMToolSystemNoteWithoutClock(NSString *environmentNote, NSString *workingDirectory, BOOL fileTools);
+NSString *ISHLLMClockNote(void);
 // A guest path made absolute against workingDirectory and normalised
 // lexically (".", "..", "//"; "~" is the tool account's home).
 NSString *ISHLLMResolveGuestPath(NSString *raw, NSString *workingDirectory);

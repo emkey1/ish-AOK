@@ -126,7 +126,9 @@ typedef NS_ENUM(NSInteger, ISHLLMSettingsRow) {
     NSString *destinationsNote = @"Destinations are the saved endpoints the chat can switch between from its own toolbar; the rows below configure whichever one is selected. Chats are saved in /AOK/persist/llm-chats.";
     if (ISHLLMUsesAppleFoundationModels())
         return [NSString stringWithFormat:@"Apple Foundation Models is an iOS/iPadOS 26+ on-device backend; no server URL or API key needed. %@ Tools lets it run commands in the iSH-AOK shell, as Tool Permissions allows; the command timeout, output limit, and tool call round cap are adjustable above. %@ %@", ISHLLMAppleFoundationModelsUnavailableMessage(), thinkingNote, destinationsNote];
-    return [NSString stringWithFormat:@"Use a /v1 OpenAI-compatible server, or the Gemini preset. Hosted providers require API keys.\nTools lets an OpenAI-compatible model read, search and edit files and run commands in the iSH-AOK shell, as Tool Permissions allows; not available for Gemini. The command timeout, output limit, and tool call round cap are adjustable above.\n%@\n%@", thinkingNote, destinationsNote];
+    if (ISHLLMUsesAnthropicAPI())
+        thinkingNote = [thinkingNote stringByAppendingString:@"\nAnthropic Claude uses Anthropic's Messages API directly, with prompt caching of the tools and instructions. With Claude Opus 5 or Claude Fable 5.1, a request the model declines on safety grounds is retried on Anthropic's recommended fallback model instead of failing."];
+    return [NSString stringWithFormat:@"Use a /v1 OpenAI-compatible server, the Anthropic Claude preset, or the Gemini preset. Hosted providers require API keys, which are kept in the Keychain.\nTools lets an OpenAI-compatible model read, search and edit files and run commands in the iSH-AOK shell, as Tool Permissions allows; not available for Gemini. The command timeout, output limit, and tool call round cap are adjustable above.\n%@\n%@", thinkingNote, destinationsNote];
 }
 
 // At the text size of the Workspace window this page is in; see
@@ -448,8 +450,7 @@ typedef NS_ENUM(NSInteger, ISHLLMSettingsRow) {
         return;
     }
     NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
-    if (apiKey.length > 0 && !ISHLLMUsesGeminiAPI())
-        [request setValue:[@"Bearer " stringByAppendingString:apiKey] forHTTPHeaderField:@"Authorization"];
+    ISHLLMApplyAuthHeaders(request, apiKey);
     NSURLSessionDataTask *task = [NSURLSession.sharedSession dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
         NSArray<NSString *> *models = [self modelIdentifiersFromResponseData:data];
         NSHTTPURLResponse *http = [response isKindOfClass:NSHTTPURLResponse.class] ? (NSHTTPURLResponse *) response : nil;
@@ -466,7 +467,7 @@ typedef NS_ENUM(NSInteger, ISHLLMSettingsRow) {
         return;
     }
     NSString *model = [UserPreferences.shared.llmModel stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
-    NSURL *url = [NSURL URLWithString:ISHLLMUsesGeminiAPI() ? ISHLLMGeminiGenerateEndpoint() : ISHLLMChatEndpoint()];
+    NSURL *url = ISHLLMProbeURL();
     if (model.length == 0 || url == nil) {
         [self showConnectionResult:@"Set a valid server URL and model first." title:@"LLM Test Failed"];
         return;
@@ -476,14 +477,7 @@ typedef NS_ENUM(NSInteger, ISHLLMSettingsRow) {
         [self showConnectionResult:ISHLLMMissingAPIKeyMessage() title:@"LLM Test Failed"];
         return;
     }
-    NSDictionary *body = ISHLLMUsesGeminiAPI()
-        ? @{@"contents": @[@{@"role": @"user", @"parts": @[@{@"text": @"Reply with exactly: ok"}]}]}
-        : @{
-            @"model": model,
-            @"messages": @[@{@"role": @"user", @"content": @"Reply with exactly: ok"}],
-            @"stream": @NO,
-            @"max_tokens": @8,
-        };
+    NSDictionary *body = ISHLLMProbeBody(model, @"Reply with exactly: ok", 8);
     NSData *bodyData = [NSJSONSerialization dataWithJSONObject:body options:0 error:nil];
     if ([[url.scheme lowercaseString] isEqualToString:@"http"]) {
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
@@ -505,8 +499,7 @@ typedef NS_ENUM(NSInteger, ISHLLMSettingsRow) {
     NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
     request.HTTPMethod = @"POST";
     [request setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
-    if (apiKey.length > 0 && !ISHLLMUsesGeminiAPI())
-        [request setValue:[@"Bearer " stringByAppendingString:apiKey] forHTTPHeaderField:@"Authorization"];
+    ISHLLMApplyAuthHeaders(request, apiKey);
     request.HTTPBody = bodyData;
     NSURLSessionDataTask *task = [NSURLSession.sharedSession dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
         dispatch_async(dispatch_get_main_queue(), ^{

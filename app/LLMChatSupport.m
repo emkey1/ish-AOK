@@ -15,6 +15,7 @@
 #import "WorkspaceViewController.h"
 #import "MarkdownRenderer.h"
 #import "LLMChatInternal.h"
+#import "LLMChatAnthropic.h"
 #if __has_include("libiSH_AOKApp-Swift.h")
 #import "libiSH_AOKApp-Swift.h" // AOKFoundationModelsBridge (Swift, iOS 26+ FoundationModels wrapper)
 #endif
@@ -574,6 +575,104 @@ BOOL ISHLLMUsesGeminiAPI(void) {
     return [provider containsString:@"gemini"] || [host containsString:@"generativelanguage.googleapis.com"];
 }
 
+BOOL ISHLLMUsesAnthropicAPI(void) {
+    if (ISHLLMUsesAppleFoundationModels())
+        return NO;
+    NSString *provider = UserPreferences.shared.llmProvider.lowercaseString;
+    NSString *host = [NSURL URLWithString:UserPreferences.shared.llmServerURL].host.lowercaseString ?: @"";
+    return [provider containsString:@"anthropic"] || [host isEqualToString:@"api.anthropic.com"];
+}
+
+// The same headers as ISHLLMApplyAuthHeaders, as raw HTTP/1.1 lines, for
+// the hand-rolled socket requests to plain-http servers.
+static NSString *ISHLLMRawAuthHeaders(NSString *apiKey) {
+    if (ISHLLMUsesAnthropicAPI())
+        return [NSString stringWithFormat:@"%@anthropic-version: %@\r\n",
+                apiKey.length > 0 ? [NSString stringWithFormat:@"x-api-key: %@\r\n", apiKey] : @"", kISHLLMAnthropicVersion];
+    return apiKey.length > 0 ? [NSString stringWithFormat:@"Authorization: Bearer %@\r\n", apiKey] : @"";
+}
+
+NSString *ISHLLMAnthropicMessagesEndpoint(void) {
+    NSString *base = [UserPreferences.shared.llmServerURL stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    if (base.length == 0)
+        base = @"https://api.anthropic.com/v1";
+    while ([base hasSuffix:@"/"])
+        base = [base substringToIndex:base.length - 1];
+    if ([base hasSuffix:@"/messages"])
+        return base;
+    return [base stringByAppendingString:@"/messages"];
+}
+
+// Every provider's authentication in one place: Anthropic takes x-api-key
+// and a version header, Gemini its key in the URL, everything else a Bearer.
+void ISHLLMApplyAuthHeaders(NSMutableURLRequest *request, NSString *apiKey) {
+    if (ISHLLMUsesAnthropicAPI()) {
+        if (apiKey.length > 0)
+            [request setValue:apiKey forHTTPHeaderField:@"x-api-key"];
+        [request setValue:kISHLLMAnthropicVersion forHTTPHeaderField:@"anthropic-version"];
+        return;
+    }
+    if (apiKey.length > 0 && !ISHLLMUsesGeminiAPI())
+        [request setValue:[@"Bearer " stringByAppendingString:apiKey] forHTTPHeaderField:@"Authorization"];
+}
+
+// A Messages API call. Its own session, because a long reply (or a model
+// that thinks first) can go quiet for longer than the shared session's
+// 60-second idle timeout. Blocks; call from a background queue.
+NSData *ISHLLMAnthropicPost(NSDictionary *body, NSString *apiKey, NSInteger *statusCodeOut, NSError **errorOut) {
+    static NSURLSession *session;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        NSURLSessionConfiguration *configuration = NSURLSessionConfiguration.defaultSessionConfiguration;
+        configuration.timeoutIntervalForRequest = 600;
+        configuration.timeoutIntervalForResource = 1800;
+        session = [NSURLSession sessionWithConfiguration:configuration];
+    });
+    NSURL *url = [NSURL URLWithString:ISHLLMAnthropicMessagesEndpoint()];
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
+    request.HTTPMethod = @"POST";
+    [request setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
+    ISHLLMApplyAuthHeaders(request, apiKey);
+    if (body[@"fallbacks"] != nil)
+        [request setValue:@"server-side-fallback-2026-07-01" forHTTPHeaderField:@"anthropic-beta"];
+    request.HTTPBody = [NSJSONSerialization dataWithJSONObject:body options:0 error:nil];
+    __block NSData *resultData = nil;
+    __block NSInteger statusCode = 0;
+    __block NSError *resultError = nil;
+    dispatch_semaphore_t done = dispatch_semaphore_create(0);
+    [[session dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        resultData = data;
+        resultError = error;
+        if ([response isKindOfClass:NSHTTPURLResponse.class])
+            statusCode = ((NSHTTPURLResponse *) response).statusCode;
+        dispatch_semaphore_signal(done);
+    }] resume];
+    dispatch_semaphore_wait(done, DISPATCH_TIME_FOREVER);
+    if (statusCodeOut != NULL)
+        *statusCodeOut = statusCode;
+    if (errorOut != NULL)
+        *errorOut = resultError;
+    return resultData;
+}
+
+// A tiny request that proves the destination answers ("Test Connection",
+// "/model"), in the shape the current API format takes.
+NSURL *ISHLLMProbeURL(void) {
+    if (ISHLLMUsesGeminiAPI())
+        return [NSURL URLWithString:ISHLLMGeminiGenerateEndpoint()];
+    if (ISHLLMUsesAnthropicAPI())
+        return [NSURL URLWithString:ISHLLMAnthropicMessagesEndpoint()];
+    return [NSURL URLWithString:ISHLLMChatEndpoint()];
+}
+
+NSDictionary *ISHLLMProbeBody(NSString *model, NSString *prompt, NSUInteger maxTokens) {
+    if (ISHLLMUsesGeminiAPI())
+        return @{@"contents": @[@{@"role": @"user", @"parts": @[@{@"text": prompt}]}]};
+    if (ISHLLMUsesAnthropicAPI())
+        return @{@"model": model, @"max_tokens": @(MAX(maxTokens, (NSUInteger) 16)), @"messages": @[@{@"role": @"user", @"content": prompt}]};
+    return @{@"model": model, @"messages": @[@{@"role": @"user", @"content": prompt}], @"stream": @NO, @"max_tokens": @(maxTokens)};
+}
+
 NSString *ISHLLMGeminiGenerateEndpoint(void) {
     NSString *base = [UserPreferences.shared.llmServerURL stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
     if (base.length == 0)
@@ -617,6 +716,7 @@ NSArray<NSDictionary<NSString *, NSString *> *> *ISHLLMProviderPresets(void) {
         @{@"name": @"Apple Foundation Models", @"url": @"", @"model": @"system-language-model", @"format": @"Apple on-device Foundation Models"},
         @{@"name": @"OpenRouter Free", @"url": @"https://openrouter.ai/api/v1", @"model": @"openrouter/free", @"format": @"OpenAI-compatible chat completions"},
         @{@"name": @"Groq Llama", @"url": @"https://api.groq.com/openai/v1", @"model": @"llama-3.1-8b-instant", @"format": @"OpenAI-compatible chat completions"},
+        @{@"name": @"Anthropic Claude", @"url": @"https://api.anthropic.com/v1", @"model": @"claude-opus-5", @"format": @"Anthropic Messages"},
         @{@"name": @"Gemini Flash", @"url": @"https://generativelanguage.googleapis.com/v1beta", @"model": @"gemini-2.5-flash", @"format": @"Google Gemini generateContent"},
         @{@"name": @"LM Studio", @"url": @"http://127.0.0.1:1234/v1", @"model": @"local-model", @"format": @"OpenAI-compatible chat completions"},
         @{@"name": @"Ollama", @"url": @"http://127.0.0.1:11434/v1", @"model": @"llama3.2", @"format": @"OpenAI-compatible chat completions"},
@@ -630,6 +730,8 @@ NSString *ISHLLMCurrentAPIFormat(void) {
         return @"Apple on-device Foundation Models";
     if (ISHLLMUsesGeminiAPI())
         return @"Google Gemini generateContent";
+    if (ISHLLMUsesAnthropicAPI())
+        return @"Anthropic Messages";
     return @"OpenAI-compatible chat completions";
 }
 
@@ -638,7 +740,7 @@ BOOL ISHLLMProviderRequiresAPIKey(void) {
         return NO;
     NSString *provider = UserPreferences.shared.llmProvider.lowercaseString;
     NSString *host = [NSURL URLWithString:UserPreferences.shared.llmServerURL].host.lowercaseString ?: @"";
-    return [provider containsString:@"openrouter"] || [provider containsString:@"openai"] ||
+    return [provider containsString:@"openrouter"] || [provider containsString:@"openai"] || ISHLLMUsesAnthropicAPI() ||
         [provider containsString:@"groq"] || [provider containsString:@"gemini"] ||
         [host containsString:@"openrouter.ai"] || [host containsString:@"api.openai.com"] ||
         [host containsString:@"api.groq.com"] || [host containsString:@"generativelanguage.googleapis.com"];
@@ -705,7 +807,7 @@ NSInteger ISHLLMContextWindowFromModelsResponse(NSData *data, NSString *modelID)
         }
         if (entryID.length == 0 || ![entryID isEqualToString:modelID])
             continue;
-        for (NSString *key in @[@"context_length", @"context_window", @"max_model_len", @"max_context_length", @"n_ctx"]) {
+        for (NSString *key in @[@"context_length", @"context_window", @"max_model_len", @"max_context_length", @"n_ctx", @"max_input_tokens"]) {
             id value = model[key];
             if ([value isKindOfClass:NSNumber.class] && [value integerValue] > 0)
                 return [value integerValue];
@@ -940,8 +1042,7 @@ NSData *ISHLLMDirectHTTPPost(NSURL *url, NSData *body, NSString *apiKey, NSInteg
         @"Content-Length: %lu\r\n"
         @"Connection: close\r\n",
         path, hostHeader, (unsigned long) body.length];
-    if (apiKey.length > 0)
-        [headers appendFormat:@"Authorization: Bearer %@\r\n", apiKey];
+    [headers appendString:ISHLLMRawAuthHeaders(apiKey)];
     [headers appendString:@"\r\n"];
 
     NSMutableData *requestData = [NSMutableData dataWithData:[headers dataUsingEncoding:NSUTF8StringEncoding]];
@@ -1037,8 +1138,7 @@ NSData *ISHLLMDirectHTTPGet(NSURL *url, NSString *apiKey, NSInteger *statusCodeO
         @"Accept: application/json\r\n"
         @"Connection: close\r\n",
         path, hostHeader];
-    if (apiKey.length > 0)
-        [requestText appendFormat:@"Authorization: Bearer %@\r\n", apiKey];
+    [requestText appendString:ISHLLMRawAuthHeaders(apiKey)];
     [requestText appendString:@"\r\n"];
     NSData *requestData = [requestText dataUsingEncoding:NSUTF8StringEncoding];
     const uint8_t *bytes = requestData.bytes;
@@ -1105,8 +1205,7 @@ void ISHLLMFetchModelsDataAsync(void (^completion)(NSData *data, NSInteger statu
         return;
     }
     NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
-    if (apiKey.length > 0 && !ISHLLMUsesGeminiAPI())
-        [request setValue:[@"Bearer " stringByAppendingString:apiKey] forHTTPHeaderField:@"Authorization"];
+    ISHLLMApplyAuthHeaders(request, apiKey);
     NSURLSessionDataTask *task = [NSURLSession.sharedSession dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
         NSHTTPURLResponse *http = [response isKindOfClass:NSHTTPURLResponse.class] ? (NSHTTPURLResponse *) response : nil;
         completion(data, http.statusCode, error);
@@ -1187,8 +1286,7 @@ BOOL ISHLLMDirectHTTPPostStreaming(NSURL *url,
         @"Accept: text/event-stream\r\n"
         @"Content-Length: %lu\r\n",
         path, hostHeader, (unsigned long) body.length];
-    if (apiKey.length > 0)
-        [headers appendFormat:@"Authorization: Bearer %@\r\n", apiKey];
+    [headers appendString:ISHLLMRawAuthHeaders(apiKey)];
     [headers appendString:@"\r\n"];
 
     NSMutableData *requestData = [NSMutableData dataWithData:[headers dataUsingEncoding:NSUTF8StringEncoding]];
