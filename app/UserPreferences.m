@@ -6,6 +6,7 @@
 //
 
 #import "UserPreferences.h"
+#import "LLMKeychain.h"
 #import "fs/proc/ish.h"
 #include "jit/jit.h"
 #include "task.h"
@@ -771,12 +772,25 @@ void amd64_jit_preference_set(bool enabled) {
 }
 
 // MARK: llmAPIKey
+// In the Keychain, not the defaults: every defaults key is readable by any
+// guest process as /proc/ish/defaults/<name>, which handed the user's keys to
+// anything the model ran. The guest can still set it (llm_api_key) but reads
+// back only the registered empty string. See LLMKeychain.h.
 - (NSString *)llmAPIKey {
-    return [_defaults stringForKey:kPreferenceLLMAPIKeyKey] ?: @"";
+    NSString *legacy = [_defaults stringForKey:kPreferenceLLMAPIKeyKey];
+    if (legacy.length > 0) {
+        if (!ISHLLMKeychainWrite(kISHLLMKeychainActiveAccount, legacy))
+            return legacy;
+        [_defaults removeObjectForKey:kPreferenceLLMAPIKeyKey];
+    }
+    return ISHLLMKeychainRead(kISHLLMKeychainActiveAccount) ?: @"";
 }
 
 - (void)setLlmAPIKey:(NSString *)llmAPIKey {
-    [_defaults setObject:llmAPIKey ?: @"" forKey:kPreferenceLLMAPIKeyKey];
+    if (ISHLLMKeychainWrite(kISHLLMKeychainActiveAccount, llmAPIKey))
+        [_defaults removeObjectForKey:kPreferenceLLMAPIKeyKey];
+    else
+        [_defaults setObject:llmAPIKey ?: @"" forKey:kPreferenceLLMAPIKeyKey];
 }
 
 // MARK: llmDestinations
@@ -784,13 +798,64 @@ void amd64_jit_preference_set(bool enabled) {
 // dictionaries has no sensible string form for the guest-side `defaults`
 // tool, and a destination id set there without the matching four scalars
 // would make the next settings edit write into the wrong saved entry.
+//
+// Each entry's "apiKey" lives in the Keychain under the entry's "id" (see
+// llmAPIKey for why). Callers still see and pass "apiKey" in the
+// dictionaries; only the stored copy goes without it. A stored key from an
+// older build is moved on first read.
 - (NSArray<NSDictionary<NSString *, NSString *> *> *)llmDestinations {
     NSArray *stored = [_defaults arrayForKey:kPreferenceLLMDestinationsKey];
-    return [stored isKindOfClass:NSArray.class] ? stored : @[];
+    if (![stored isKindOfClass:NSArray.class])
+        return @[];
+    NSMutableArray *result = [NSMutableArray array];
+    BOOL migrated = NO;
+    for (id entry in stored) {
+        if (![entry isKindOfClass:NSDictionary.class]) {
+            [result addObject:entry];
+            continue;
+        }
+        NSString *identifier = [entry[@"id"] isKindOfClass:NSString.class] ? entry[@"id"] : nil;
+        NSString *legacy = [entry[@"apiKey"] isKindOfClass:NSString.class] ? entry[@"apiKey"] : nil;
+        if (identifier.length > 0 && legacy.length > 0 && ISHLLMKeychainWrite(ISHLLMKeychainDestinationAccount(identifier), legacy))
+            migrated = YES;
+        NSMutableDictionary *filled = [entry mutableCopy];
+        if (identifier.length > 0)
+            filled[@"apiKey"] = ISHLLMKeychainRead(ISHLLMKeychainDestinationAccount(identifier)) ?: (legacy ?: @"");
+        [result addObject:filled];
+    }
+    if (migrated)
+        self.llmDestinations = result;
+    return result;
 }
 
 - (void)setLlmDestinations:(NSArray<NSDictionary<NSString *, NSString *> *> *)llmDestinations {
-    [_defaults setObject:llmDestinations ?: @[] forKey:kPreferenceLLMDestinationsKey];
+    NSMutableSet<NSString *> *previousIDs = [NSMutableSet set];
+    for (id entry in [_defaults arrayForKey:kPreferenceLLMDestinationsKey]) {
+        if ([entry isKindOfClass:NSDictionary.class] && [entry[@"id"] isKindOfClass:NSString.class])
+            [previousIDs addObject:entry[@"id"]];
+    }
+    NSMutableArray *stored = [NSMutableArray array];
+    for (id entry in llmDestinations ?: @[]) {
+        if (![entry isKindOfClass:NSDictionary.class]) {
+            [stored addObject:entry];
+            continue;
+        }
+        NSString *identifier = [entry[@"id"] isKindOfClass:NSString.class] ? entry[@"id"] : nil;
+        NSMutableDictionary *stripped = [entry mutableCopy];
+        id key = entry[@"apiKey"];
+        // Kept in the stored copy only if the Keychain refused it, so a key
+        // is never lost; the next read retries the move.
+        if (identifier.length > 0 && key != nil &&
+            ISHLLMKeychainWrite(ISHLLMKeychainDestinationAccount(identifier), [key isKindOfClass:NSString.class] ? key : nil))
+            [stripped removeObjectForKey:@"apiKey"];
+        if (identifier.length > 0)
+            [previousIDs removeObject:identifier];
+        [stored addObject:stripped];
+    }
+    // A deleted destination takes its key with it.
+    for (NSString *identifier in previousIDs)
+        ISHLLMKeychainWrite(ISHLLMKeychainDestinationAccount(identifier), nil);
+    [_defaults setObject:stored forKey:kPreferenceLLMDestinationsKey];
 }
 
 // MARK: snippets
