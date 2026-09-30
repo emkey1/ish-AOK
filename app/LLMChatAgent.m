@@ -273,10 +273,8 @@ static const NSUInteger kISHLLMMaxRunningSubagents = 4;
 - (NSString *)statusLine {
     switch (_phase) {
         case ISHLLMAgentPhaseIdle:
-            if (ISHLLMUsesAppleFoundationModelsForDestination([self destination]))
-                return @"Apple Foundation Models";
-            if ([self modelName].length == 0)
-                return @"Set a model in Settings";
+            if ([self modelName].length == 0 && !ISHLLMUsesAppleFoundationModelsForDestination([self destination]))
+                return @"No model set";
             return _lastOutcome.length > 0 ? _lastOutcome : @"Ready";
         case ISHLLMAgentPhasePreparing: return @"Getting ready";
         case ISHLLMAgentPhaseContacting: return _round > 0 ? @"Waiting for the model" : @"Contacting the model";

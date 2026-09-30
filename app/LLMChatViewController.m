@@ -1050,9 +1050,7 @@ static NSString *ISHLLMElapsedText(NSDate *since) {
 
     // Line 3: destination, context, tasks, changes, sub-agents.
     NSMutableArray<NSString *> *parts = [NSMutableArray array];
-    NSString *model = [agent modelName];
-    NSString *destinationName = ISHLLMDestinationDisplayName([agent destination]);
-    [parts addObject:model.length > 0 ? [NSString stringWithFormat:@"%@ @ %@", model, destinationName] : destinationName];
+    [parts addObject:ISHLLMDestinationLabel([agent destination])];
     NSInteger used = [agent estimatedContextTokens];
     NSInteger window = [agent effectiveContextWindowTokens];
     if (used > 0) {
@@ -1444,16 +1442,18 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
         [items addObject:item];
     }
 
-    UIAction *chooseModel = [UIAction actionWithTitle:@"Choose Model…"
-                                                image:[UIImage systemImageNamed:@"cube"]
+    NSDictionary<NSString *, NSString *> *current = [_agent destination];
+    UIAction *chooseModel = [UIAction actionWithTitle:[NSString stringWithFormat:@"Edit “%@”…", ISHLLMDestinationDisplayName(current)]
+                                                image:[UIImage systemImageNamed:@"slider.horizontal.3"]
                                            identifier:nil
-                                              handler:^(__unused UIAction *action) { [self queryModelsInTranscript]; }];
+                                              handler:^(__unused UIAction *action) { [self editDestination:current]; }];
+    chooseModel.subtitle = @"Model, server, key; choose from the server's models";
     UIAction *addDestination = [UIAction actionWithTitle:@"Add Destination…"
                                                    image:[UIImage systemImageNamed:@"plus"]
                                               identifier:nil
                                                  handler:^(__unused UIAction *action) { [self addDestinationFromPreset]; }];
     UIAction *manage = [UIAction actionWithTitle:@"Manage Destinations…"
-                                           image:[UIImage systemImageNamed:@"slider.horizontal.3"]
+                                           image:[UIImage systemImageNamed:@"list.bullet"]
                                       identifier:nil
                                          handler:^(__unused UIAction *action) { [self showDestinationList]; }];
     UIMenu *switchSection = [UIMenu menuWithTitle:@"Chat With" image:nil identifier:nil options:UIMenuOptionsDisplayInline children:items];
@@ -1511,6 +1511,22 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
     [[self ish_presentationViewController] presentViewController:alert animated:YES completion:nil];
 }
 
+// The one place a chat's model is set: its destination's editor.
+- (void)editDestination:(NSDictionary<NSString *, NSString *> *)destination {
+    LLMDestinationEditorViewController *editor = [LLMDestinationEditorViewController new];
+    editor.destination = destination;
+    __weak typeof(self) weakSelf = self;
+    editor.destinationSaved = ^{
+        typeof(self) self = weakSelf;
+        [self updateChatHeaderTitles];
+        [self refreshTranscript];
+        [self updateStatusPanel];
+    };
+    UINavigationController *navigationController = [[UINavigationController alloc] initWithRootViewController:editor];
+    ISHConfigureLLMSettingsNavigationController(navigationController);
+    [[self ish_presentationViewController] presentViewController:navigationController animated:YES completion:nil];
+}
+
 - (void)showDestinationList {
     LLMDestinationListViewController *listViewController = [LLMDestinationListViewController new];
     __weak typeof(self) weakSelf = self;
@@ -1541,7 +1557,8 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
 
 - (void)showLLMSettings:(id)sender {
     (void) sender;
-    UIViewController *settingsViewController = ISHCreateLLMSettingsViewController();
+    LLMSettingsViewController *settingsViewController = [LLMSettingsViewController new];
+    settingsViewController.hidesModels = YES; // the model button is where a model is chosen
     // NOT `navigationController != nil`. In Workspace mode the chat is a bare
     // child of a host whose navigation bar is hidden, so it INHERITS that
     // navigation controller -- pushing succeeds and leaves the user with no
@@ -1724,10 +1741,10 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
             // Intentionally omit the server URL here -- it shows after Clear and
             // may contain a private host/IP the user doesn't want on screen.
             NSString *model = [_agent modelName];
-            _emptyStateLabel.text = [NSString stringWithFormat:@"%@\n\nDestination: %@%@%@\n\n%@",
+            _emptyStateLabel.text = [NSString stringWithFormat:@"%@\n\nModel: %@%@%@\n\n%@",
                                       [self messages].count > 0 ? @"Nothing to show yet." : @"Send a prompt to start this chat.",
-                                      ISHLLMDestinationDisplayName([_agent destination]),
-                                      model.length > 0 ? [@"\nModel: " stringByAppendingString:model] : @"\nNo model set — pick one from the destination menu.",
+                                      ISHLLMDestinationLabel([_agent destination]),
+                                      model.length > 0 ? @"" : @"\nNo model set: choose one with the model button.",
                                       _agent.systemPrompt.length > 0 ? @"\nSystem prompt set for this chat." : @"",
                                       [_agent toolsSummaryText] ?: @""];
         }

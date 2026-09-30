@@ -200,6 +200,14 @@ NSString *ISHLLMDestinationDisplayName(NSDictionary<NSString *, NSString *> *des
     return provider.length > 0 ? provider : @"Destination";
 }
 
+NSString *ISHLLMDestinationLabel(NSDictionary<NSString *, NSString *> *destination) {
+    NSString *name = ISHLLMDestinationDisplayName(destination);
+    NSString *model = [ISHLLMStringValue(destination, kISHLLMDestinationModel) ?: @"" stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    if (model.length == 0 || [model isEqualToString:name] || [model isEqualToString:@"system-language-model"])
+        return name;
+    return [NSString stringWithFormat:@"%@ · %@", name, model];
+}
+
 // One-line "what does this destination point at" summary for pickers.
 NSString *ISHLLMDestinationSubtitle(NSDictionary<NSString *, NSString *> *destination) {
     NSString *model = ISHLLMStringValue(destination, kISHLLMDestinationModel);

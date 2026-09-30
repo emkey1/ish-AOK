@@ -62,15 +62,8 @@ void ISHConfigureLLMSettingsNavigationController(UINavigationController *navigat
 // two long if/else chains; naming them keeps adding a row from silently
 // renumbering the ones after it.
 typedef NS_ENUM(NSInteger, ISHLLMSettingsRow) {
-    ISHLLMSettingsRowDestinations,
-    ISHLLMSettingsRowProvider,
-    ISHLLMSettingsRowServerURL,
-    ISHLLMSettingsRowModel,
+    ISHLLMSettingsRowDestinations, // "Models": only where the chat's own model button is not at hand
     ISHLLMSettingsRowContextWindow,
-    ISHLLMSettingsRowAPIFormat,
-    ISHLLMSettingsRowAPIKey,
-    ISHLLMSettingsRowQueryModels,
-    ISHLLMSettingsRowTestConnection,
     ISHLLMSettingsRowShellTools,
     ISHLLMSettingsRowToolPermissions,
     ISHLLMSettingsRowMCPServers,
@@ -83,12 +76,15 @@ typedef NS_ENUM(NSInteger, ISHLLMSettingsRow) {
 
 @implementation LLMSettingsViewController
 
+// Inset grouped like the pages it opens; a plain table cut its footer to
+// one line.
+- (instancetype)init {
+    return [super initWithStyle:UITableViewStyleInsetGrouped];
+}
+
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.title = @"LLM Client";
-    self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemDone
-                                                                                           target:self
-                                                                                           action:@selector(done:)];
     self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemDone
                                                                                           target:self
                                                                                           action:@selector(done:)];
@@ -115,11 +111,28 @@ typedef NS_ENUM(NSInteger, ISHLLMSettingsRow) {
     return 2;
 }
 
+// Which model a chat talks to is chosen in one place, the chat's model
+// button; opened from the chat, these settings leave it out.
+- (NSArray<NSNumber *> *)visibleRows {
+    NSMutableArray<NSNumber *> *rows = [NSMutableArray array];
+    for (NSInteger row = 0; row < ISHLLMSettingsRowCount; row++) {
+        if (row == ISHLLMSettingsRowDestinations && self.hidesModels)
+            continue;
+        [rows addObject:@(row)];
+    }
+    return rows;
+}
+
+- (ISHLLMSettingsRow)settingsRowAtIndexPath:(NSIndexPath *)indexPath {
+    NSArray<NSNumber *> *rows = [self visibleRows];
+    return (NSUInteger) indexPath.row < rows.count ? (ISHLLMSettingsRow) rows[(NSUInteger) indexPath.row].integerValue : ISHLLMSettingsRowCount;
+}
+
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
     (void) tableView;
     if (section == 0)
         return 1;
-    return ISHLLMSettingsRowCount;
+    return (NSInteger) [self visibleRows].count;
 }
 
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
@@ -127,12 +140,10 @@ typedef NS_ENUM(NSInteger, ISHLLMSettingsRow) {
     if (section == 0)
         return nil;
     NSString *thinkingNote = @"Hide Thinking collapses a reasoning model's <think> blocks behind a “Thinking” line in the transcript; tap it to expand or copy the reasoning. The full text is always kept in the saved history.";
-    NSString *destinationsNote = @"Destinations are the saved endpoints the chat can switch between from its own toolbar; the rows below configure whichever one is selected. Chats are saved in /AOK/persist/llm-chats.";
-    if (ISHLLMUsesAppleFoundationModels())
-        return [NSString stringWithFormat:@"Apple Foundation Models is an iOS/iPadOS 26+ on-device backend; no server URL or API key needed. %@ Tools lets it run commands in the iSH-AOK shell, as Tool Permissions allows; the command timeout, output limit, and tool call round cap are adjustable above. %@ %@", ISHLLMAppleFoundationModelsUnavailableMessage(), thinkingNote, destinationsNote];
-    if (ISHLLMUsesAnthropicAPI())
-        thinkingNote = [thinkingNote stringByAppendingString:@"\nAnthropic Claude uses Anthropic's Messages API directly, with prompt caching of the tools and instructions. With Claude Opus 5 or Claude Fable 5.1, a request the model declines on safety grounds is retried on Anthropic's recommended fallback model instead of failing."];
-    return [NSString stringWithFormat:@"Use a /v1 OpenAI-compatible server, the Anthropic Claude preset, or the Gemini preset. Hosted providers require API keys, which are kept in the Keychain.\nTools lets an OpenAI-compatible model read, search and edit files and run commands in the iSH-AOK shell, as Tool Permissions allows; not available for Gemini. The command timeout, output limit, and tool call round cap are adjustable above.\n%@\n%@", thinkingNote, destinationsNote];
+    NSString *models = self.hidesModels
+        ? @"Which model a chat talks to is chosen with the chat's model button, next to Chats."
+        : @"Models lists the saved destinations -- provider, server, model and key -- that chats choose from with their model button.";
+    return [NSString stringWithFormat:@"%@ A chat is summarized when it reaches three quarters of its Context Window. Tools lets the model read, search and edit files and run commands in the iSH-AOK shell, as Tool Permissions allows (Apple Foundation Models: shell only; Gemini: none). %@ Chats are saved in /AOK/persist/llm-chats.", models, thinkingNote];
 }
 
 // At the text size of the Workspace window this page is in; see
@@ -157,33 +168,15 @@ typedef NS_ENUM(NSInteger, ISHLLMSettingsRow) {
         return cell;
     }
     BOOL onDevice = ISHLLMUsesAppleFoundationModels();
-    switch ((ISHLLMSettingsRow) indexPath.row) {
+    switch ([self settingsRowAtIndexPath:indexPath]) {
         case ISHLLMSettingsRowDestinations: {
-            // Name the ACTIVE one, not just how many there are. A bare count
-            // reads as bookkeeping; the name reads as "this is what you are
-            // talking to, and this row is where you change it".
             NSUInteger count = ISHLLMDestinations().count;
-            NSString *active = ISHLLMDestinationDisplayName(ISHLLMActiveDestination());
-            cell.textLabel.text = @"Destinations";
+            cell.textLabel.text = @"Models";
             cell.detailTextLabel.text = count == 1
-                ? active
-                : [NSString stringWithFormat:@"%@ · %lu saved", active, (unsigned long) count];
+                ? ISHLLMDestinationLabel(ISHLLMActiveDestination())
+                : [NSString stringWithFormat:@"%@ · %lu saved", ISHLLMDestinationLabel(ISHLLMActiveDestination()), (unsigned long) count];
             break;
         }
-        case ISHLLMSettingsRowProvider:
-            cell.textLabel.text = @"Provider";
-            cell.detailTextLabel.text = UserPreferences.shared.llmProvider;
-            break;
-        case ISHLLMSettingsRowServerURL:
-            cell.textLabel.text = @"Server URL";
-            cell.detailTextLabel.text = onDevice ? @"On-device" : UserPreferences.shared.llmServerURL;
-            if (onDevice)
-                cell.accessoryType = UITableViewCellAccessoryNone;
-            break;
-        case ISHLLMSettingsRowModel:
-            cell.textLabel.text = @"Model";
-            cell.detailTextLabel.text = UserPreferences.shared.llmModel;
-            break;
         case ISHLLMSettingsRowContextWindow:
             cell.textLabel.text = @"Context Window";
             cell.detailTextLabel.text = ISHLLMContextWindowSetting() > 0
@@ -191,27 +184,6 @@ typedef NS_ENUM(NSInteger, ISHLLMSettingsRow) {
                 : @"Automatic";
             if (onDevice)
                 cell.accessoryType = UITableViewCellAccessoryNone;
-            break;
-        case ISHLLMSettingsRowAPIFormat:
-            cell.textLabel.text = @"API Format";
-            cell.detailTextLabel.text = ISHLLMCurrentAPIFormat();
-            cell.accessoryType = UITableViewCellAccessoryNone;
-            break;
-        case ISHLLMSettingsRowAPIKey:
-            cell.textLabel.text = @"API Key";
-            cell.detailTextLabel.text = onDevice ? @"Not used" : (UserPreferences.shared.llmAPIKey.length > 0 ? @"Set" : (ISHLLMProviderRequiresAPIKey() ? @"Required" : @"Optional"));
-            if (onDevice)
-                cell.accessoryType = UITableViewCellAccessoryNone;
-            break;
-        case ISHLLMSettingsRowQueryModels:
-            cell.textLabel.text = @"Query Models";
-            cell.detailTextLabel.text = @"/models";
-            cell.accessoryType = UITableViewCellAccessoryNone;
-            break;
-        case ISHLLMSettingsRowTestConnection:
-            cell.textLabel.text = @"Test Connection";
-            cell.detailTextLabel.text = @"";
-            cell.accessoryType = UITableViewCellAccessoryNone;
             break;
         case ISHLLMSettingsRowShellTools:
             cell.textLabel.text = @"Tools";
@@ -262,12 +234,7 @@ typedef NS_ENUM(NSInteger, ISHLLMSettingsRow) {
         return;
     }
     UITableViewCell *cell = [tableView cellForRowAtIndexPath:indexPath];
-    // The rows below edit the SELECTED destination; the Destinations row is
-    // where a second one is added or a different one selected.
-    ISHLLMSettingsRow row = (ISHLLMSettingsRow) indexPath.row;
-    if (ISHLLMUsesAppleFoundationModels() && (row == ISHLLMSettingsRowServerURL || row == ISHLLMSettingsRowAPIKey))
-        return;
-    switch (row) {
+    switch ([self settingsRowAtIndexPath:indexPath]) {
         case ISHLLMSettingsRowDestinations: {
             LLMDestinationListViewController *destinations = [LLMDestinationListViewController new];
             __weak typeof(self) weakSelf = self;
@@ -275,17 +242,7 @@ typedef NS_ENUM(NSInteger, ISHLLMSettingsRow) {
             [self.navigationController pushViewController:destinations animated:YES];
             return;
         }
-        case ISHLLMSettingsRowProvider:
-            [self.navigationController pushViewController:[LLMProviderPickerViewController new] animated:YES];
-            return;
-        case ISHLLMSettingsRowAPIFormat:
         case ISHLLMSettingsRowCount:
-            return;
-        case ISHLLMSettingsRowQueryModels:
-            [self queryAvailableModelsFromView:cell];
-            return;
-        case ISHLLMSettingsRowTestConnection:
-            [self testConnection];
             return;
         case ISHLLMSettingsRowShellTools:
             [self toggleShellToolsFromView:cell];
@@ -313,38 +270,7 @@ typedef NS_ENUM(NSInteger, ISHLLMSettingsRow) {
             UserPreferences.shared.llmHideThinking = !UserPreferences.shared.llmHideThinking;
             [tableView reloadData];
             return;
-        case ISHLLMSettingsRowServerURL:
-        case ISHLLMSettingsRowModel:
-        case ISHLLMSettingsRowAPIKey:
-            break; // the free-text rows, edited below
     }
-
-    NSString *title = row == ISHLLMSettingsRowServerURL ? @"Server URL" : (row == ISHLLMSettingsRowModel ? @"Model" : @"API Key");
-    NSString *current = row == ISHLLMSettingsRowServerURL ? UserPreferences.shared.llmServerURL : (row == ISHLLMSettingsRowModel ? UserPreferences.shared.llmModel : UserPreferences.shared.llmAPIKey);
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:title message:nil preferredStyle:UIAlertControllerStyleAlert];
-    [alert addTextFieldWithConfigurationHandler:^(UITextField *textField) {
-        textField.text = current;
-        textField.clearButtonMode = UITextFieldViewModeWhileEditing;
-        textField.autocapitalizationType = UITextAutocapitalizationTypeNone;
-        textField.autocorrectionType = UITextAutocorrectionTypeNo;
-        textField.spellCheckingType = UITextSpellCheckingTypeNo;
-        if (row == ISHLLMSettingsRowAPIKey)
-            textField.secureTextEntry = YES;
-    }];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Save" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
-        NSString *value = alert.textFields.firstObject.text ?: @"";
-        if (row == ISHLLMSettingsRowServerURL)
-            UserPreferences.shared.llmServerURL = value;
-        else if (row == ISHLLMSettingsRowModel)
-            UserPreferences.shared.llmModel = value;
-        else
-            UserPreferences.shared.llmAPIKey = value;
-        // Keeps the saved destination describing the live configuration.
-        ISHLLMSyncActiveDestinationFromPreferences();
-        [self.tableView reloadData];
-    }]];
-    [self presentViewController:alert animated:YES completion:nil];
 }
 
 - (void)toggleShellToolsFromView:(UIView *)sourceView {
@@ -435,221 +361,8 @@ typedef NS_ENUM(NSInteger, ISHLLMSettingsRow) {
     [sheet presentFromViewController:self sourceView:sourceView sourceRect:sourceView.bounds];
 }
 
-- (NSArray<NSString *> *)modelIdentifiersFromResponseData:(NSData *)data {
-    return ISHLLMModelIdentifiersFromResponseData(data);
-}
-
-- (void)presentModelPickerWithModels:(NSArray<NSString *> *)models statusCode:(NSInteger)statusCode error:(NSError *)error fromView:(UIView *)sourceView {
-    if (error != nil) {
-        [self showConnectionResult:error.localizedDescription title:@"Model Query Failed"];
-        return;
-    }
-    if (models.count == 0) {
-        NSString *message = statusCode > 0 ? [NSString stringWithFormat:@"No models found. HTTP %ld", (long) statusCode] : @"No models found.";
-        [self showConnectionResult:message title:@"Model Query Failed"];
-        return;
-    }
-    ISHActionSheet *alert = [ISHActionSheet actionSheetWithTitle:@"Choose Model"
-                                                         message:[NSString stringWithFormat:@"%lu models returned by %@", (unsigned long) models.count, ISHLLMModelsEndpoint()]];
-    NSUInteger limit = MIN(models.count, 80);
-    for (NSUInteger i = 0; i < limit; i++) {
-        NSString *model = models[i];
-        NSString *title = [model isEqualToString:UserPreferences.shared.llmModel] ? [model stringByAppendingString:@"  Current"] : model;
-        [alert addActionWithTitle:title style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
-            UserPreferences.shared.llmModel = model;
-            ISHLLMSyncActiveDestinationFromPreferences();
-            [self.tableView reloadData];
-        }];
-    }
-    if (models.count > limit) {
-        [alert addActionWithTitle:[NSString stringWithFormat:@"Showing first %lu of %lu", (unsigned long) limit, (unsigned long) models.count]
-                            style:UIAlertActionStyleDefault
-                          handler:nil];
-    }
-    [alert addActionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil];
-    [alert presentFromViewController:self source:sourceView];
-}
-
-- (void)queryAvailableModelsFromView:(UIView *)sourceView {
-    if (ISHLLMCurrentBackend() == AOKLLMBackendAppleFoundationModels) {
-        [self showConnectionResult:[NSString stringWithFormat:@"Current on-device model: %@\n%@", UserPreferences.shared.llmModel.length > 0 ? UserPreferences.shared.llmModel : @"system-language-model", ISHLLMAppleFoundationModelsUnavailableMessage()] title:@"Apple Foundation Models"];
-        return;
-    }
-    NSURL *url = [NSURL URLWithString:ISHLLMModelsEndpoint()];
-    if (url == nil) {
-        [self showConnectionResult:@"Invalid models URL." title:@"Model Query Failed"];
-        return;
-    }
-    NSString *apiKey = UserPreferences.shared.llmAPIKey;
-    if ([[url.scheme lowercaseString] isEqualToString:@"http"]) {
-        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-            NSInteger statusCode = 0;
-            NSError *error = nil;
-            NSData *data = ISHLLMDirectHTTPGet(url, apiKey, &statusCode, &error);
-            NSArray<NSString *> *models = [self modelIdentifiersFromResponseData:data];
-            dispatch_async(dispatch_get_main_queue(), ^{
-                [self presentModelPickerWithModels:models statusCode:statusCode error:error fromView:sourceView];
-            });
-        });
-        return;
-    }
-    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
-    ISHLLMApplyAuthHeaders(request, apiKey);
-    NSURLSessionDataTask *task = [NSURLSession.sharedSession dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
-        NSArray<NSString *> *models = [self modelIdentifiersFromResponseData:data];
-        NSHTTPURLResponse *http = [response isKindOfClass:NSHTTPURLResponse.class] ? (NSHTTPURLResponse *) response : nil;
-        dispatch_async(dispatch_get_main_queue(), ^{
-            [self presentModelPickerWithModels:models statusCode:http.statusCode error:error fromView:sourceView];
-        });
-    }];
-    [task resume];
-}
-
-- (void)testConnection {
-    if (ISHLLMCurrentBackend() == AOKLLMBackendAppleFoundationModels) {
-        [self showConnectionResult:ISHLLMAppleFoundationModelsUnavailableMessage() title:@"Apple Foundation Models"];
-        return;
-    }
-    NSString *model = [UserPreferences.shared.llmModel stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
-    NSURL *url = ISHLLMProbeURL();
-    if (model.length == 0 || url == nil) {
-        [self showConnectionResult:@"Set a valid server URL and model first." title:@"LLM Test Failed"];
-        return;
-    }
-    NSString *apiKey = UserPreferences.shared.llmAPIKey;
-    if (ISHLLMProviderRequiresAPIKey() && apiKey.length == 0) {
-        [self showConnectionResult:ISHLLMMissingAPIKeyMessage() title:@"LLM Test Failed"];
-        return;
-    }
-    NSDictionary *body = ISHLLMProbeBody(model, @"Reply with exactly: ok", 8);
-    NSData *bodyData = [NSJSONSerialization dataWithJSONObject:body options:0 error:nil];
-    if ([[url.scheme lowercaseString] isEqualToString:@"http"]) {
-        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-            NSInteger statusCode = 0;
-            NSError *error = nil;
-            NSData *data = ISHLLMDirectHTTPPost(url, bodyData, apiKey, &statusCode, &error);
-            dispatch_async(dispatch_get_main_queue(), ^{
-                if (error != nil) {
-                    [self showConnectionResult:error.localizedDescription title:@"LLM Test Failed"];
-                } else {
-                    NSString *raw = data.length > 0 ? [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] : @"";
-                    NSString *message = [NSString stringWithFormat:@"HTTP %ld\n%@", (long) statusCode, raw.length > 240 ? [raw substringToIndex:240] : raw];
-                    [self showConnectionResult:message title:(statusCode >= 200 && statusCode < 300 ? @"LLM Test OK" : @"LLM Test Failed")];
-                }
-            });
-        });
-        return;
-    }
-    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
-    request.HTTPMethod = @"POST";
-    [request setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
-    ISHLLMApplyAuthHeaders(request, apiKey);
-    request.HTTPBody = bodyData;
-    NSURLSessionDataTask *task = [NSURLSession.sharedSession dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            if (error != nil) {
-                [self showConnectionResult:error.localizedDescription title:@"LLM Test Failed"];
-            } else {
-                NSHTTPURLResponse *http = [response isKindOfClass:NSHTTPURLResponse.class] ? (NSHTTPURLResponse *) response : nil;
-                NSString *raw = data.length > 0 ? [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] : @"";
-                NSString *message = [NSString stringWithFormat:@"HTTP %ld\n%@", (long) http.statusCode, raw.length > 240 ? [raw substringToIndex:240] : raw];
-                [self showConnectionResult:message title:(http.statusCode >= 200 && http.statusCode < 300 ? @"LLM Test OK" : @"LLM Test Failed")];
-            }
-        });
-    }];
-    [task resume];
-}
-
-- (void)showConnectionResult:(NSString *)message title:(NSString *)title {
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:title message:message preferredStyle:UIAlertControllerStyleAlert];
-    [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
-    [self presentViewController:alert animated:YES completion:nil];
-}
-
 @end
 
-@implementation LLMProviderPickerViewController
-
-- (void)viewDidLoad {
-    [super viewDidLoad];
-    self.title = @"LLM Provider";
-}
-
-- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
-    (void) tableView;
-    (void) section;
-    return ISHLLMProviderPresets().count;
-}
-
-- (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
-    (void) tableView;
-    (void) section;
-    return @"Choose a provider preset. Custom values can still be edited afterward.";
-}
-
-// At the text size of the Workspace window this page is in; see
-// WorkspaceTextScaledPage. Anywhere else the rows are left as they are.
-- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
-    UITableViewCell *cell = [self unscaledTableView:tableView cellForRowAtIndexPath:indexPath];
-    ISHWorkspaceScaleTableViewCell(cell, ISHWorkspaceTextScaleForViewController(self));
-    return cell;
-}
-
-- (void)workspaceTextScaleDidChange {
-    ISHWorkspaceRescaleTableView(self.tableView, ISHWorkspaceTextScaleForViewController(self));
-}
-
-- (UITableViewCell *)unscaledTableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
-    UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:nil];
-    NSString *name = ISHLLMProviderPresets()[indexPath.row][@"name"];
-    cell.textLabel.text = name;
-    cell.accessoryType = [name isEqualToString:UserPreferences.shared.llmProvider]
-        ? UITableViewCellAccessoryCheckmark
-        : UITableViewCellAccessoryNone;
-    return cell;
-}
-
-- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
-    [tableView deselectRowAtIndexPath:indexPath animated:YES];
-    NSDictionary<NSString *, NSString *> *preset = ISHLLMProviderPresets()[indexPath.row];
-    NSString *name = preset[@"name"];
-
-    // Picking a provider SWITCHES destinations; it does not overwrite one.
-    //
-    // This used to write the four scalars and then sync them into the active
-    // destination, so choosing Groq while OpenAI was active replaced the OpenAI
-    // entry -- its model, its URL, and the fact it existed at all. Anyone who
-    // uses two providers had to know to go to Destinations and add one FIRST,
-    // and if they did not, the only copy of the old setup was gone. It also
-    // carried the previous provider's API key over to the new one, which is
-    // both wrong and quietly confusing to debug.
-    //
-    // So: if a saved destination already uses this provider, activate it and
-    // restore its model, URL and key. Otherwise add a new one seeded from the
-    // preset and leave the current destination untouched.
-    for (NSDictionary<NSString *, NSString *> *destination in ISHLLMDestinations()) {
-        if ([ISHLLMStringValue(destination, kISHLLMDestinationProvider) isEqualToString:name]) {
-            ISHLLMActivateDestination(destination);
-            [self.navigationController popViewControllerAnimated:YES];
-            return;
-        }
-    }
-
-    NSDictionary<NSString *, NSString *> *fresh = @{
-        kISHLLMDestinationID: NSUUID.UUID.UUIDString,
-        kISHLLMDestinationName: name,
-        kISHLLMDestinationProvider: name,
-        kISHLLMDestinationURL: preset[@"url"] ?: @"",
-        kISHLLMDestinationModel: preset[@"model"] ?: @"",
-        // Deliberately empty: a key belongs to the provider that issued it.
-        kISHLLMDestinationAPIKey: @"",
-    };
-    ISHLLMSaveDestination(fresh);
-    ISHLLMActivateDestination(fresh);
-    [self.navigationController popViewControllerAnimated:YES];
-}
-
-@end
 
 #pragma mark - Chat list
 
@@ -836,11 +549,6 @@ NSString *ISHLLMRelativeDateDescription(double timestamp) {
 // Edits ONE saved destination, active or not. Writes go through
 // ISHLLMSaveDestination, which re-activates the entry if it is the selected
 // one, so editing the destination you are chatting with takes effect at once.
-@interface LLMDestinationEditorViewController : UITableViewController <WorkspaceTextScaledPage>
-@property (nonatomic, copy) NSDictionary<NSString *, NSString *> *destination;
-@property (nonatomic, copy) void (^destinationSaved)(void);
-@end
-
 typedef NS_ENUM(NSInteger, ISHLLMDestinationEditorRow) {
     ISHLLMDestinationEditorRowName,
     ISHLLMDestinationEditorRowPreset,
@@ -861,16 +569,28 @@ typedef NS_ENUM(NSInteger, ISHLLMDestinationEditorRow) {
     self.title = @"Destination";
 }
 
+// Section 1: what can be asked of the server itself.
+typedef NS_ENUM(NSInteger, ISHLLMDestinationActionRow) {
+    ISHLLMDestinationActionRowChooseModel,
+    ISHLLMDestinationActionRowTest,
+    ISHLLMDestinationActionRowCount,
+};
+
+- (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
+    (void) tableView;
+    return 2;
+}
+
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
     (void) tableView;
-    (void) section;
-    return ISHLLMDestinationEditorRowCount;
+    return section == 0 ? (NSInteger) ISHLLMDestinationEditorRowCount : (NSInteger) ISHLLMDestinationActionRowCount;
 }
 
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
     (void) tableView;
-    (void) section;
-    return @"A preset fills in the provider, server URL and model; each stays editable. The API key is stored with this destination, in app preferences, the same place the single-endpoint key was always kept.";
+    if (section == 0)
+        return @"A preset fills in the provider, server URL and model; each stays editable. The API key is kept in the Keychain.";
+    return @"Choose Model lists the models the server offers. Test Connection sends it a one-line request.";
 }
 
 // At the text size of the Workspace window this page is in; see
@@ -888,6 +608,12 @@ typedef NS_ENUM(NSInteger, ISHLLMDestinationEditorRow) {
 - (UITableViewCell *)unscaledTableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
     UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1 reuseIdentifier:nil];
     cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+    if (indexPath.section == 1) {
+        cell.textLabel.text = indexPath.row == ISHLLMDestinationActionRowChooseModel ? @"Choose Model…" : @"Test Connection";
+        cell.textLabel.textColor = self.view.tintColor;
+        cell.accessoryType = UITableViewCellAccessoryNone;
+        return cell;
+    }
     switch ((ISHLLMDestinationEditorRow) indexPath.row) {
         case ISHLLMDestinationEditorRowName:
             cell.textLabel.text = @"Name";
@@ -917,6 +643,14 @@ typedef NS_ENUM(NSInteger, ISHLLMDestinationEditorRow) {
 
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
     [tableView deselectRowAtIndexPath:indexPath animated:YES];
+    if (indexPath.section == 1) {
+        UIView *cell = [tableView cellForRowAtIndexPath:indexPath];
+        if (indexPath.row == ISHLLMDestinationActionRowChooseModel)
+            [self chooseModelFromView:cell];
+        else
+            [self testConnection];
+        return;
+    }
     if (indexPath.row == ISHLLMDestinationEditorRowPreset) {
         [self pickPresetFromView:[tableView cellForRowAtIndexPath:indexPath]];
         return;
@@ -978,6 +712,147 @@ typedef NS_ENUM(NSInteger, ISHLLMDestinationEditorRow) {
     [self.tableView reloadData];
     if (self.destinationSaved != nil)
         self.destinationSaved();
+}
+
+// Both requests go to this destination, not the one selected elsewhere:
+// built inside its scope, and sent from a background thread in it too.
+- (void)inDestination:(dispatch_block_t)block {
+    ISHLLMRunWithDestination(self.destination, block);
+}
+
+- (void)inBackgroundDestination:(dispatch_block_t)block {
+    NSDictionary<NSString *, NSString *> *destination = self.destination;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        ISHLLMRunWithDestination(destination, block);
+    });
+}
+
+- (void)showResult:(NSString *)message title:(NSString *)title {
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:title message:message preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)chooseModelFromView:(UIView *)sourceView {
+    [self inDestination:^{
+        if (ISHLLMCurrentBackend() == AOKLLMBackendAppleFoundationModels) {
+            [self showResult:[NSString stringWithFormat:@"The on-device model is the system's own.\n%@", ISHLLMAppleFoundationModelsUnavailableMessage()] title:@"Apple Foundation Models"];
+            return;
+        }
+        NSURL *url = [NSURL URLWithString:ISHLLMModelsEndpoint()];
+        if (url == nil) {
+            [self showResult:@"Invalid models URL." title:@"Model Query Failed"];
+            return;
+        }
+        NSString *apiKey = ISHLLMCurrentAPIKey();
+        NSString *endpoint = ISHLLMModelsEndpoint();
+        void (^present)(NSData *, NSInteger, NSError *) = ^(NSData *data, NSInteger statusCode, NSError *error) {
+            __block NSArray<NSString *> *models = nil;
+            [self inDestination:^{
+                models = ISHLLMModelIdentifiersFromResponseData(data); // Gemini and OpenAI list them differently
+            }];
+            [self presentModelPicker:models statusCode:statusCode error:error endpoint:endpoint fromView:sourceView];
+        };
+        if ([url.scheme.lowercaseString isEqualToString:@"http"]) {
+            [self inBackgroundDestination:^{
+                NSInteger statusCode = 0;
+                NSError *error = nil;
+                NSData *data = ISHLLMDirectHTTPGet(url, apiKey, &statusCode, &error);
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    present(data, statusCode, error);
+                });
+            }];
+            return;
+        }
+        NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
+        ISHLLMApplyAuthHeaders(request, apiKey);
+        [[NSURLSession.sharedSession dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+            NSHTTPURLResponse *http = [response isKindOfClass:NSHTTPURLResponse.class] ? (NSHTTPURLResponse *) response : nil;
+            dispatch_async(dispatch_get_main_queue(), ^{
+                present(data, http.statusCode, error);
+            });
+        }] resume];
+    }];
+}
+
+- (void)presentModelPicker:(NSArray<NSString *> *)models statusCode:(NSInteger)statusCode error:(NSError *)error
+                  endpoint:(NSString *)endpoint fromView:(UIView *)sourceView {
+    if (error != nil) {
+        [self showResult:error.localizedDescription title:@"Model Query Failed"];
+        return;
+    }
+    if (models.count == 0) {
+        [self showResult:statusCode > 0 ? [NSString stringWithFormat:@"No models found. HTTP %ld", (long) statusCode] : @"No models found." title:@"Model Query Failed"];
+        return;
+    }
+    NSString *current = ISHLLMStringValue(self.destination, kISHLLMDestinationModel);
+    ISHActionSheet *sheet = [ISHActionSheet actionSheetWithTitle:@"Choose Model"
+                                                         message:[NSString stringWithFormat:@"%lu models returned by %@", (unsigned long) models.count, endpoint]];
+    NSUInteger limit = MIN(models.count, (NSUInteger) 80);
+    for (NSUInteger i = 0; i < limit; i++) {
+        NSString *model = models[i];
+        [sheet addActionWithTitle:[model isEqualToString:current] ? [model stringByAppendingString:@" ✓"] : model style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
+            NSMutableDictionary<NSString *, NSString *> *updated = [self.destination mutableCopy];
+            updated[kISHLLMDestinationModel] = model;
+            [self commitDestination:updated];
+        }];
+    }
+    if (models.count > limit)
+        [sheet addActionWithTitle:[NSString stringWithFormat:@"Showing first %lu of %lu", (unsigned long) limit, (unsigned long) models.count] style:UIAlertActionStyleDefault handler:nil];
+    [sheet addActionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil];
+    [sheet presentFromViewController:self source:sourceView];
+}
+
+- (void)testConnection {
+    [self inDestination:^{
+        if (ISHLLMCurrentBackend() == AOKLLMBackendAppleFoundationModels) {
+            [self showResult:ISHLLMAppleFoundationModelsUnavailableMessage() title:@"Apple Foundation Models"];
+            return;
+        }
+        NSString *model = [ISHLLMCurrentModel() stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+        NSURL *url = ISHLLMProbeURL();
+        if (model.length == 0 || url == nil) {
+            [self showResult:@"Set a valid server URL and model first." title:@"Test Failed"];
+            return;
+        }
+        NSString *apiKey = ISHLLMCurrentAPIKey();
+        if (ISHLLMProviderRequiresAPIKey() && apiKey.length == 0) {
+            [self showResult:ISHLLMMissingAPIKeyMessage() title:@"Test Failed"];
+            return;
+        }
+        NSData *bodyData = [NSJSONSerialization dataWithJSONObject:ISHLLMProbeBody(model, @"Reply with exactly: ok", 8) options:0 error:nil];
+        void (^report)(NSData *, NSInteger, NSError *) = ^(NSData *data, NSInteger statusCode, NSError *error) {
+            if (error != nil) {
+                [self showResult:error.localizedDescription title:@"Test Failed"];
+                return;
+            }
+            NSString *raw = data.length > 0 ? ([[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] ?: @"") : @"";
+            [self showResult:[NSString stringWithFormat:@"HTTP %ld\n%@", (long) statusCode, raw.length > 240 ? [raw substringToIndex:240] : raw]
+                       title:statusCode >= 200 && statusCode < 300 ? @"Connection OK" : @"Test Failed"];
+        };
+        if ([url.scheme.lowercaseString isEqualToString:@"http"]) {
+            [self inBackgroundDestination:^{
+                NSInteger statusCode = 0;
+                NSError *error = nil;
+                NSData *data = ISHLLMDirectHTTPPost(url, bodyData, apiKey, &statusCode, &error);
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    report(data, statusCode, error);
+                });
+            }];
+            return;
+        }
+        NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
+        request.HTTPMethod = @"POST";
+        [request setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
+        ISHLLMApplyAuthHeaders(request, apiKey);
+        request.HTTPBody = bodyData;
+        [[NSURLSession.sharedSession dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+            NSHTTPURLResponse *http = [response isKindOfClass:NSHTTPURLResponse.class] ? (NSHTTPURLResponse *) response : nil;
+            dispatch_async(dispatch_get_main_queue(), ^{
+                report(data, http.statusCode, error);
+            });
+        }] resume];
+    }];
 }
 
 @end

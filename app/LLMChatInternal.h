@@ -29,9 +29,17 @@
 @end
 
 @interface LLMSettingsViewController : UITableViewController <WorkspaceTextScaledPage>
+// Opened from a chat: no Models row, the chat's model button is where a
+// model is chosen.
+@property (nonatomic) BOOL hidesModels;
 @end
 
-@interface LLMProviderPickerViewController : UITableViewController <WorkspaceTextScaledPage>
+// One destination: name, provider, server, model and key, plus picking the
+// model from the server's list and a connection test. Each change is saved
+// as it is made.
+@interface LLMDestinationEditorViewController : UITableViewController <WorkspaceTextScaledPage>
+@property (nonatomic, copy) NSDictionary<NSString *, NSString *> *destination;
+@property (nonatomic, copy) void (^destinationSaved)(void);
 @end
 
 // The saved chats, newest first: switch, rename, delete. Presented modally
@@ -178,6 +186,9 @@ NSArray<NSDictionary<NSString *, NSString *> *> *ISHLLMDestinations(void);
 NSUInteger ISHLLMActiveDestinationIndex(void);
 NSDictionary<NSString *, NSString *> *ISHLLMActiveDestination(void);
 NSString *ISHLLMDestinationDisplayName(NSDictionary<NSString *, NSString *> *destination);
+// How a destination is named everywhere it is shown with its model:
+// "LM Studio · ornith-1.5-35b", or the name alone when the model adds nothing.
+NSString *ISHLLMDestinationLabel(NSDictionary<NSString *, NSString *> *destination);
 NSString *ISHLLMDestinationSubtitle(NSDictionary<NSString *, NSString *> *destination);
 void ISHLLMActivateDestination(NSDictionary<NSString *, NSString *> *destination);
 void ISHLLMSyncActiveDestinationFromPreferences(void);
