@@ -503,6 +503,48 @@ static NSData *ISHBuildBonjourDnsResponse(const uint8_t *queryBytes, size_t quer
     return response;
 }
 
+// The largest UDP reply the guest asked for: 512 bytes, or the size in its
+// EDNS OPT record.
+static size_t ISHDnsClientUdpLimit(ns_msg *message) {
+    size_t limit = NS_PACKETSZ;
+    int additional = ns_msg_count(*message, ns_s_ar);
+    for (int i = 0; i < additional; i++) {
+        ns_rr rr;
+        if (ns_parserr(message, ns_s_ar, i, &rr) != 0)
+            break;
+        if (ns_rr_type(rr) == ns_t_opt && ns_rr_class(rr) > limit)
+            limit = ns_rr_class(rr);
+    }
+    return limit;
+}
+
+// A reply carrying no records: the query's ID and question, with QR, RA and
+// the given flags and rcode. Sent instead of silence, because a guest resolver
+// that hears nothing waits its whole timeout (5 s in glibc) before trying the
+// next nameserver.
+static NSData *ISHBuildDnsEmptyResponse(const uint8_t *queryBytes, size_t queryLength,
+                                        uint16_t flags, uint16_t rcode) {
+    if (queryBytes == NULL || queryLength < NS_HFIXEDSZ)
+        return nil;
+    const uint8_t *eom = queryBytes + queryLength;
+    int nameLength = dn_skipname(queryBytes + NS_HFIXEDSZ, eom);
+    if (nameLength < 0 || NS_HFIXEDSZ + (size_t) nameLength + NS_QFIXEDSZ > queryLength)
+        return nil;
+    size_t questionEnd = NS_HFIXEDSZ + (size_t) nameLength + NS_QFIXEDSZ;
+
+    NSMutableData *response = [NSMutableData dataWithBytes:queryBytes length:questionEnd];
+    uint8_t *header = response.mutableBytes;
+    uint16_t queryFlags = ISHReadBigEndianUInt16(queryBytes + 2);
+    uint16_t responseFlags = (uint16_t) (0x8000 | 0x0080 | flags | (rcode & 0x000f)); // QR, RA
+    responseFlags |= queryFlags & (0x7800 | 0x0100); // opcode, RD
+    ISHWriteBigEndianUInt16(header + 2, responseFlags);
+    ISHWriteBigEndianUInt16(header + 4, 1);
+    ISHWriteBigEndianUInt16(header + 6, 0);
+    ISHWriteBigEndianUInt16(header + 8, 0);
+    ISHWriteBigEndianUInt16(header + 10, 0);
+    return response;
+}
+
 static void ios_handle_exit(struct task *task, int code) {
     // we are interested in init and in children of init
     // this is called with pids_lock as an implementation side effect, please do not cite as an example of good API design
@@ -4414,15 +4456,22 @@ static TerminalViewController *CreateTerminalViewController(void) {
     if (ISHIsBonjourLocalHostname(qname))
         return ISHBuildBonjourDnsResponse(queryBytes, queryLength, qname, qtype);
 
+    // Forward the guest's own packet rather than asking res_nquery to build a
+    // new one: a new query has a new ID, which the guest's resolver discards
+    // as a stray reply, and res_nquery returns nothing for NXDOMAIN or an
+    // empty answer, which the guest needs to hear to stop asking. Either way a
+    // glibc guest sat out its 5 s timeout on every lookup before trying the
+    // next nameserver.
     struct __res_state state = {0};
     if (res_ninit(&state) != 0)
         return nil;
 
-    u_char response[NS_PACKETSZ * 8];
-    int responseLength = res_nquery(&state, qname.UTF8String, ns_c_in, qtype, response, sizeof(response));
+    u_char response[NS_MAXMSG];
+    int responseLength = res_nsend(&state, queryBytes, (int) queryLength, response, sizeof(response));
     res_nclose(&state);
-    if (responseLength <= 0)
+    if (responseLength < NS_HFIXEDSZ)
         return nil;
+    memcpy(response, queryBytes, 2); // the ID the guest is waiting for
     return [NSData dataWithBytes:response length:(NSUInteger) responseLength];
 }
 
@@ -4457,6 +4506,14 @@ static TerminalViewController *CreateTerminalViewController(void) {
                                       length:(size_t) received
                                        qname:qname
                                        qtype:ns_rr_type(question)];
+    if (response.length == 0) {
+        // No upstream answer at all: say so, so the guest moves on now.
+        response = ISHBuildDnsEmptyResponse(buffer, (size_t) received, 0, ns_r_servfail);
+    } else if (response.length > ISHDnsClientUdpLimit(&message)) {
+        // Too big for the guest's buffer: TC tells it to retry over TCP, which
+        // this relay does not serve, so it moves on to the next nameserver.
+        response = ISHBuildDnsEmptyResponse(buffer, (size_t) received, 0x0200, ns_r_noerror);
+    }
     if (response.length == 0)
         return;
 
@@ -4495,6 +4552,7 @@ static TerminalViewController *CreateTerminalViewController(void) {
     addr.sin_port = htons(53);
     addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     if (bind(fd, (struct sockaddr *) &addr, sizeof(addr)) != 0) {
+        NSLog(@"dns: local relay cannot bind 127.0.0.1:53: %s", strerror(errno));
         close(fd);
         [ISHDiagnosticsStore recordBreadcrumb:@"dns.localServer.failed"
                                       details:@{@"stage": @"bind",
