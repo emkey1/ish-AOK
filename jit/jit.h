@@ -250,8 +250,12 @@ void jit_note_shared_write(struct jit *jit, const struct pt_entry *entry);
 // gen_riscv64_try_li_branch/_andi_branch: li t,K or andi t,rs,K followed by a
 // conditional branch on t, as one compare-and-branch gadget.
 #define JIT_FUSE_RV_BRANCH (1u << 5)
+// Not a fusion: backward conditional branches use the gadget layout whose taken
+// path is straight-line (loops), forward ones the fallthrough-straight layout.
+#define JIT_FUSE_RV_BTFN (1u << 6)
 #define JIT_FUSE_RV_ALL (JIT_FUSE_RV_FOLD | JIT_FUSE_RV_JAL | JIT_FUSE_RV_RETCACHE | \
-                         JIT_FUSE_RV_PAIR | JIT_FUSE_RV_ALU | JIT_FUSE_RV_BRANCH)
+                         JIT_FUSE_RV_PAIR | JIT_FUSE_RV_ALU | JIT_FUSE_RV_BRANCH | \
+                         JIT_FUSE_RV_BTFN)
 
 // The amd64 guest's bits are not fusions in the i386 sense (two gadgets folded
 // into one) but NATIVE-vs-BRIDGE switches, which is the same A/B in the shape

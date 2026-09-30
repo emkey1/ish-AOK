@@ -1,6 +1,8 @@
-// riscv64 JIT constant-compare branch fusions (gen_riscv64_try_li_branch /
+// riscv64 JIT conditional branches: the constant-compare fusions (gen_riscv64_try_li_branch /
 // _andi_branch, the "br" bit of /proc/ish/riscv64_jit_fuse): each fused pair
-// must branch exactly as the two instructions do and leave t written.
+// must branch exactly as the two instructions do and leave t written, and
+// every branch must go the same way forward and backward (the "btfn" gadget
+// layouts).
 //   li t, K ; b{eq,ne,lt,ge,ltu,geu} rs, t / t, rs
 //   andi t, rs, K ; beqz/bnez t, and beq/bne with x0 first
 // Expected values are plain C. Run once with `echo br=0 >
@@ -16,13 +18,21 @@ static const uint64_t vals[] = {0, 1, 2, 5, 6, 7, 0x7f, 0x80, 0x7ff, 0x800, (uin
     0x123456789abcdef0ull};
 #define NV (sizeof(vals) / sizeof(vals[0]))
 
+// A branch shape, forward (to 1f) or backward (to 1b, a loop's layout): the
+// JIT picks a different gadget layout for each direction ("btfn").
+#define FWD(setup, br) setup "\n " br " 1f\n li %1, 0\n j 2f\n1: li %1, 1\n2:"
+#define BWD(setup, br) "j 3f\n1: li %1, 1\n j 2f\n3: " setup "\n " br " 1b\n li %1, 0\n2:"
+
 // t is preset to a junk value so a missing write shows.
 #define LI_BR(br, k, first, second, want_expr) do { \
-    for (unsigned i = 0; i < NV; i++) { \
-        uint64_t x = vals[i], t, taken; \
-        __asm__ volatile("li %0, 0x5a5a\n li %0, " #k "\n " br " " first ", " second ", 1f\n" \
-                         " li %1, 0\n j 2f\n1: li %1, 1\n2:" \
-                         : "=&r"(t), "=&r"(taken) : "r"(x)); \
+    for (unsigned i = 0; i < NV * 2; i++) { \
+        uint64_t x = vals[i % NV], t, taken; \
+        if (i < NV) \
+            __asm__ volatile(FWD("li %0, 0x5a5a\n li %0, " #k, br " " first ", " second ",") \
+                             : "=&r"(t), "=&r"(taken) : "r"(x)); \
+        else \
+            __asm__ volatile(BWD("li %0, 0x5a5a\n li %0, " #k, br " " first ", " second ",") \
+                             : "=&r"(t), "=&r"(taken) : "r"(x)); \
         int64_t sx = (int64_t) x, sk = (int64_t) (k); uint64_t ux = x, uk = (uint64_t) (int64_t) (k); \
         (void) sx; (void) sk; (void) ux; (void) uk; \
         CHECK(taken == (uint64_t) (want_expr) && t == (uint64_t) (int64_t) (k), \
@@ -40,11 +50,14 @@ static const uint64_t vals[] = {0, 1, 2, 5, 6, 7, 0x7f, 0x80, 0x7ff, 0x800, (uin
     } while (0)
 
 #define ANDI_BR(br, k, first, second, want_expr) do { \
-    for (unsigned i = 0; i < NV; i++) { \
-        uint64_t x = vals[i], t, taken; \
-        __asm__ volatile("li %0, 0x5a5a\n andi %0, %2, " #k "\n " br " " first ", " second ", 1f\n" \
-                         " li %1, 0\n j 2f\n1: li %1, 1\n2:" \
-                         : "=&r"(t), "=&r"(taken) : "r"(x)); \
+    for (unsigned i = 0; i < NV * 2; i++) { \
+        uint64_t x = vals[i % NV], t, taken; \
+        if (i < NV) \
+            __asm__ volatile(FWD("li %0, 0x5a5a\n andi %0, %2, " #k, br " " first ", " second ",") \
+                             : "=&r"(t), "=&r"(taken) : "r"(x)); \
+        else \
+            __asm__ volatile(BWD("li %0, 0x5a5a\n andi %0, %2, " #k, br " " first ", " second ",") \
+                             : "=&r"(t), "=&r"(taken) : "r"(x)); \
         uint64_t m = x & (uint64_t) (int64_t) (k); \
         CHECK(taken == (uint64_t) (want_expr) && t == m, "%s andi x=%#llx k=%lld", br " " first "," second, \
               (unsigned long long) x, (long long) (k)); \
@@ -55,7 +68,23 @@ static const uint64_t vals[] = {0, 1, 2, 5, 6, 7, 0x7f, 0x80, 0x7ff, 0x800, (uin
     ANDI_BR("bne", k, "%0", "zero", m != 0); ANDI_BR("bne", k, "zero", "%0", m != 0); \
     } while (0)
 
+// Plain two-register branches, both directions.
+#define REG_BR(br, want_expr) do { \
+    for (unsigned i = 0; i < NV; i++) for (unsigned j = 0; j < NV; j++) { \
+        uint64_t x = vals[i], y = vals[j], taken, fw, bw; \
+        __asm__ volatile(FWD("", br " %2, %3,") : "=&r"(taken), "=&r"(fw) : "r"(x), "r"(y)); \
+        __asm__ volatile(BWD("", br " %2, %3,") : "=&r"(taken), "=&r"(bw) : "r"(x), "r"(y)); \
+        (void) taken; \
+        int64_t sx = (int64_t) x, sy = (int64_t) y; (void) sx; (void) sy; \
+        CHECK(fw == (uint64_t) (want_expr) && bw == fw, "%s x=%#llx y=%#llx: fwd %llu bwd %llu", br, \
+              (unsigned long long) x, (unsigned long long) y, (unsigned long long) fw, \
+              (unsigned long long) bw); \
+    } } while (0)
+
 int main(void) {
+    REG_BR("beq", x == y); REG_BR("bne", x != y); REG_BR("blt", sx < sy);
+    REG_BR("bge", sx >= sy); REG_BR("bltu", x < y); REG_BR("bgeu", x >= y);
+
     LI_ALL(0); LI_ALL(1); LI_ALL(5); LI_ALL(-1); LI_ALL(-2); LI_ALL(31); LI_ALL(-32);
     LI_ALL(0x7f); LI_ALL(2047); LI_ALL(-2048);
     ANDI_ALL(1); ANDI_ALL(2); ANDI_ALL(7); ANDI_ALL(0x80); ANDI_ALL(-1); ANDI_ALL(-2048); ANDI_ALL(0);

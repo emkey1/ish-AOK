@@ -191,34 +191,62 @@ alu_opw sra, asr w10, w10, w11
 // ---- Conditional branches (fused compare+branch, the ISA's own shape) ----
 // Code stream: [gadget][rs1_off][rs2_off][taken][fallthrough]; both target
 // words use the tagged-chainable scheme (riscv64_branch_dispatch).
-.macro branch_op name, cond
+//
+// Each branch comes in two layouts, and gen picks by direction (the "btfn"
+// fuse bit): b<name> keeps the fallthrough straight-line for forward branches
+// (mostly not taken), b<name>_bk keeps the taken path straight-line for
+// backward ones (loops, mostly taken). On the A10X whichever path jumps inside
+// the gadget pays ~1.3 ns more (a lone beq: 3.0 vs 4.4 ns); a branchless csel
+// select was slower on both paths (5.1-5.5 ns), since the next block's
+// address then waits on the compare instead of being predicted.
+.macro branch_tail cond, taken_off, fall_off, bk
+.ifc \bk, bk
+    b.\cond 1f
+    ldr _ip, [_ip, #\taken_off]
+    b riscv64_branch_dispatch
+1:  ldr _ip, [_ip, #\fall_off]
+    b riscv64_branch_dispatch
+.else
+    b.\cond 1f
+    ldr _ip, [_ip, #\fall_off]
+    b riscv64_branch_dispatch
+1:  ldr _ip, [_ip, #\taken_off]
+    b riscv64_branch_dispatch
+.endif
+.endm
+
+// cond is the branch's condition; ncond its inverse (the _bk layout jumps on
+// it to reach the fallthrough).
+.macro branch_op name, cond, ncond
 .gadget b\name
     ldr x9, [_ip]
     ldr x10, [_ip, #8]
     ldr x9, [_cpu, x9]
     ldr x10, [_cpu, x10]
     cmp x9, x10
-    b.\cond 1f
-    ldr _ip, [_ip, #24]      // fallthrough
-    b riscv64_branch_dispatch
-1:  ldr _ip, [_ip, #16]      // taken
-    b riscv64_branch_dispatch
+    branch_tail \cond, 16, 24, fw
+.gadget b\name\()_bk
+    ldr x9, [_ip]
+    ldr x10, [_ip, #8]
+    ldr x9, [_cpu, x9]
+    ldr x10, [_cpu, x10]
+    cmp x9, x10
+    branch_tail \ncond, 16, 24, bk
 .endm
 
-branch_op eq, eq
-branch_op ne, ne
-branch_op lt, lt
-branch_op ge, ge
-branch_op ltu, lo
-branch_op geu, hs
+branch_op eq, eq, ne
+branch_op ne, ne, eq
+branch_op lt, lt, ge
+branch_op ge, ge, lt
+branch_op ltu, lo, hs
+branch_op geu, hs, lo
 
 // li t, K ; b<cond> with t as one operand (the "br" fuse bit): the constant
 // compare gcc emits for switch cases and loop bounds. Code stream:
 // [gadget][t_off][rs_off][K][taken][fallthrough]. _ri compares rs against K
 // (t was rs2), _ir compares K against rs (t was rs1); eq/ne need only _ri.
 // rs is read before t is written: gen refuses rs == t.
-.macro branch_const name, cond, order
-.gadget b\name\()_\order
+.macro branch_const_body cond, order, bk
     ldp x9, x10, [_ip]        // t_off, rs_off
     ldr x11, [_ip, #16]       // K
     ldr x10, [_cpu, x10]
@@ -228,39 +256,42 @@ branch_op geu, hs
 .else
     cmp x11, x10
 .endif
-    b.\cond 1f
-    ldr _ip, [_ip, #32]       // fallthrough
-    b riscv64_branch_dispatch
-1:  ldr _ip, [_ip, #24]       // taken
-    b riscv64_branch_dispatch
+    branch_tail \cond, 24, 32, \bk
 .endm
-branch_const eq, eq, ri
-branch_const ne, ne, ri
-branch_const lt, lt, ri
-branch_const ge, ge, ri
-branch_const ltu, lo, ri
-branch_const geu, hs, ri
-branch_const lt, lt, ir
-branch_const ge, ge, ir
-branch_const ltu, lo, ir
-branch_const geu, hs, ir
+.macro branch_const name, cond, ncond, order
+.gadget b\name\()_\order
+    branch_const_body \cond, \order, fw
+.gadget b\name\()_\order\()_bk
+    branch_const_body \ncond, \order, bk
+.endm
+branch_const eq, eq, ne, ri
+branch_const ne, ne, eq, ri
+branch_const lt, lt, ge, ri
+branch_const ge, ge, lt, ri
+branch_const ltu, lo, hs, ri
+branch_const geu, hs, lo, ri
+branch_const lt, lt, ge, ir
+branch_const ge, ge, lt, ir
+branch_const ltu, lo, hs, ir
+branch_const geu, hs, lo, ir
 
 // andi t, rs, K ; beqz/bnez t (bit and flag tests). Same code stream as above.
-.macro andi_branch name, insn
-.gadget andi_\name
+.macro andi_branch_body cond, bk
     ldp x9, x10, [_ip]        // t_off, rs_off
     ldr x11, [_ip, #16]       // K
     ldr x10, [_cpu, x10]
-    and x10, x10, x11
+    ands x10, x10, x11
     str x10, [_cpu, x9]
-    \insn x10, 1f
-    ldr _ip, [_ip, #32]       // fallthrough
-    b riscv64_branch_dispatch
-1:  ldr _ip, [_ip, #24]       // taken
-    b riscv64_branch_dispatch
+    branch_tail \cond, 24, 32, \bk
 .endm
-andi_branch beqz, cbz
-andi_branch bnez, cbnz
+.macro andi_branch name, cond, ncond
+.gadget andi_\name
+    andi_branch_body \cond, fw
+.gadget andi_\name\()_bk
+    andi_branch_body \ncond, bk
+.endm
+andi_branch beqz, eq, ne
+andi_branch bnez, ne, eq
 
 // JAL with rd != 0 -- i.e. a CALL -- in one gadget instead of two.
 //

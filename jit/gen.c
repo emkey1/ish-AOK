@@ -5949,6 +5949,11 @@ static bool gen_riscv64_try_after_add(struct gen_state *state, struct tlb *tlb,
 // beqz/bnez t -- 0.8% and 0.6% of adjacent pairs in a riscv64 gcc compile. t
 // is written as unfused and the branch ends the block, so on success the
 // caller returns 0.
+// A backward conditional branch (a loop) gets the _bk gadget, whose taken path
+// is the straight-line one (alu.S branch_tail).
+static bool gen_riscv64_branch_backward(uint32_t insn) {
+    return (riscv64_jit_fuse_mask() & JIT_FUSE_RV_BTFN) && riscv64_imm_b(insn) < 0;
+}
 static void gen_riscv64_branch_targets(struct gen_state *state, uint32_t next) {
     // riscv64_ip is still the branch's own pc here.
     gen(state, (state->riscv64_ip + riscv64_imm_b(next)) | 0x8000000000000000ULL);
@@ -5977,6 +5982,21 @@ static bool gen_riscv64_try_li_branch(struct gen_state *state, struct tlb *tlb,
     extern void gadget_riscv64_bltu_ri(void), gadget_riscv64_bgeu_ri(void);
     extern void gadget_riscv64_blt_ir(void), gadget_riscv64_bge_ir(void);
     extern void gadget_riscv64_bltu_ir(void), gadget_riscv64_bgeu_ir(void);
+    extern void gadget_riscv64_beq_ri_bk(void), gadget_riscv64_bne_ri_bk(void);
+    extern void gadget_riscv64_blt_ri_bk(void), gadget_riscv64_bge_ri_bk(void);
+    extern void gadget_riscv64_bltu_ri_bk(void), gadget_riscv64_bgeu_ri_bk(void);
+    extern void gadget_riscv64_blt_ir_bk(void), gadget_riscv64_bge_ir_bk(void);
+    extern void gadget_riscv64_bltu_ir_bk(void), gadget_riscv64_bgeu_ir_bk(void);
+    static void (*const ri_bk[8])(void) = {
+        gadget_riscv64_beq_ri_bk, gadget_riscv64_bne_ri_bk, NULL, NULL,
+        gadget_riscv64_blt_ri_bk, gadget_riscv64_bge_ri_bk,
+        gadget_riscv64_bltu_ri_bk, gadget_riscv64_bgeu_ri_bk,
+    };
+    static void (*const ir_bk[8])(void) = {
+        gadget_riscv64_beq_ri_bk, gadget_riscv64_bne_ri_bk, NULL, NULL,
+        gadget_riscv64_blt_ir_bk, gadget_riscv64_bge_ir_bk,
+        gadget_riscv64_bltu_ir_bk, gadget_riscv64_bgeu_ir_bk,
+    };
     static void (*const ri[8])(void) = {
         gadget_riscv64_beq_ri, gadget_riscv64_bne_ri, NULL, NULL,
         gadget_riscv64_blt_ri, gadget_riscv64_bge_ri,
@@ -5987,7 +6007,8 @@ static bool gen_riscv64_try_li_branch(struct gen_state *state, struct tlb *tlb,
         gadget_riscv64_blt_ir, gadget_riscv64_bge_ir,
         gadget_riscv64_bltu_ir, gadget_riscv64_bgeu_ir,
     };
-    void (*g)(void) = t_is_rs2 ? ri[f3] : ir[f3];
+    bool bk = gen_riscv64_branch_backward(next);
+    void (*g)(void) = t_is_rs2 ? (bk ? ri_bk : ri)[f3] : (bk ? ir_bk : ir)[f3];
     if (g == NULL)
         return false;
     gen(state, (unsigned long) g);
@@ -6013,7 +6034,11 @@ static bool gen_riscv64_try_andi_branch(struct gen_state *state, struct tlb *tlb
     if (f3 > 1 || !((a == t && b == 0) || (a == 0 && b == t)))
         return false;
     extern void gadget_riscv64_andi_beqz(void), gadget_riscv64_andi_bnez(void);
-    gen(state, (unsigned long) (f3 == 0 ? gadget_riscv64_andi_beqz : gadget_riscv64_andi_bnez));
+    extern void gadget_riscv64_andi_beqz_bk(void), gadget_riscv64_andi_bnez_bk(void);
+    if (gen_riscv64_branch_backward(next))
+        gen(state, (unsigned long) (f3 == 0 ? gadget_riscv64_andi_beqz_bk : gadget_riscv64_andi_bnez_bk));
+    else
+        gen(state, (unsigned long) (f3 == 0 ? gadget_riscv64_andi_beqz : gadget_riscv64_andi_bnez));
     gen(state, riscv64_rd_off(t));
     gen(state, riscv64_rs_off(rs));
     gen(state, (uint64_t) k);
@@ -6565,7 +6590,16 @@ int gen_step_riscv64(struct gen_state *state, struct tlb *tlb) {
             gadget_riscv64_blt, gadget_riscv64_bge,
             gadget_riscv64_bltu, gadget_riscv64_bgeu,
         };
-        void (*gadget)(void) = branch_gadgets[funct3];
+        extern void gadget_riscv64_beq_bk(void), gadget_riscv64_bne_bk(void);
+        extern void gadget_riscv64_blt_bk(void), gadget_riscv64_bge_bk(void);
+        extern void gadget_riscv64_bltu_bk(void), gadget_riscv64_bgeu_bk(void);
+        static void (*const branch_gadgets_bk[8])(void) = {
+            gadget_riscv64_beq_bk, gadget_riscv64_bne_bk, NULL, NULL,
+            gadget_riscv64_blt_bk, gadget_riscv64_bge_bk,
+            gadget_riscv64_bltu_bk, gadget_riscv64_bgeu_bk,
+        };
+        void (*gadget)(void) = (gen_riscv64_branch_backward(insn) ? branch_gadgets_bk
+                                                                  : branch_gadgets)[funct3];
         if (gadget == NULL)
             return gen_riscv64_undefined(state, insn);
         guest_addr_t taken = state->riscv64_orig_ip + riscv64_imm_b(insn);
@@ -14040,7 +14074,7 @@ static const struct jit_fuse_entry arm64_fuse_names[] = {
 static const struct jit_fuse_entry riscv64_fuse_names[] = {
     {"fold", JIT_FUSE_RV_FOLD}, {"jal", JIT_FUSE_RV_JAL},
     {"retcache", JIT_FUSE_RV_RETCACHE}, {"pair", JIT_FUSE_RV_PAIR},
-    {"alu", JIT_FUSE_RV_ALU}, {"br", JIT_FUSE_RV_BRANCH},
+    {"alu", JIT_FUSE_RV_ALU}, {"br", JIT_FUSE_RV_BRANCH}, {"btfn", JIT_FUSE_RV_BTFN},
 };
 static const struct jit_fuse_entry amd64_fuse_names[] = {
     {"incdec_reg", JIT_FUSE_AMD64_INCDEC_REG},
