@@ -5642,13 +5642,16 @@ static int_t sys_bind_common(fd_t sock_fd, guest_addr_t sockaddr_addr, uint_t so
             // to 127.0.0.1:<ephemeral>; see inet_nat_bind_fallback.
             int nat_err = inet_nat_bind_fallback(sock,
                     (struct sockaddr_in *) &sockaddr, mapped_err);
-            if (nat_err == 0)
+            if (nat_err == 0) {
+                sockrestart_note_bound(sock);
                 return 0;
+            }
             mapped_err = nat_err;
         }
         unix_bind_failed(sock);
         return mapped_err;
     }
+    sockrestart_note_bound(sock);
     return 0;
 }
 
@@ -8980,6 +8983,15 @@ static int sock_cmsg_type_to_fake(int level, int type) {
             case IPV6_HOPLIMIT: return IPV6_HOPLIMIT_;
             case IPV6_TCLASS: return IPV6_TCLASS_;
             case IPV6_RECVERR_: return IPV6_RECVERR_;
+#if defined(__APPLE__)
+            // What IPV6_RECVPKTINFO (set by value, 61: see fs/sock.h) delivers:
+            // Darwin's RFC 3542 IPV6_PKTINFO, 46, hidden behind
+            // __APPLE_USE_RFC_3542 like the option. Linux's is 50. The same
+            // 20-byte in6_pktinfo either way. It was dropped, so an IPv6 server
+            // that asked where a datagram was addressed -- chronyd's [::1]:323
+            // -- never heard.
+            case 46: return 50;
+#endif
         }
     }
     return -1;

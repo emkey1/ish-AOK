@@ -8,6 +8,7 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
+#include <netinet/in.h>
 #ifdef __APPLE__
 #include <TargetConditionals.h>
 // For the ISH_SOCKRESTART_TEST_DESTROY=defunct knob, which uses private calls:
@@ -40,6 +41,22 @@ void sockrestart_begin_listen(struct fd *sock) {
     if (list_null(&sock->sockrestart.listen))
         list_add(&listen_fds, &sock->sockrestart.listen);
     unlock(&sockrestart_lock);
+}
+
+// A bound UDP socket is killed by a suspension exactly as a listener is, and
+// never recovers on its own: afterwards the host reports it readable and hung
+// up for good, and every receive fails (ENOTCONN) -- so a daemon waiting on it
+// spins. chronyd's command sockets, 127.0.0.1:323 and [::1]:323, took a whole
+// core that way on an iPad. So a successful bind puts a datagram socket on the
+// same list, and a resume rebuilds it (rebuild_datagram). AF_UNIX is spared by
+// iOS, as for listeners; a UDP socket nobody bound gets a new port from any
+// send, and is left alone.
+void sockrestart_note_bound(struct fd *sock) {
+    if (sock->ops != &socket_fdops || sock->socket.type != SOCK_DGRAM_)
+        return;
+    if (sock->socket.domain != AF_INET_ && sock->socket.domain != AF_INET6_)
+        return;
+    sockrestart_begin_listen(sock);
 }
 
 void sockrestart_end_listen(struct fd *sock) {
@@ -110,7 +127,126 @@ struct saved_socket {
     socklen_t name_len;
     bool rebuilt;
     struct list saved;
+    // Datagram sockets only: the options a rebuild carries over (read while
+    // the socket was alive, at the save), and the peer of a connected one.
+    int opt_value[16];
+    bool opt_saved[16];
+    union {
+        char peer[128];
+        struct sockaddr peer_addr;
+    };
+    socklen_t peer_len;
 };
+
+// What a rebuilt datagram socket must carry to behave as the guest set it up.
+// Integer-valued only; the ones sock.c translates guest setsockopt calls into
+// that matter for a server socket. Multicast memberships cannot be read back
+// and are lost -- a gap, not a choice.
+static const struct {
+    int level;
+    int name;
+} dgram_options[] = {
+    {SOL_SOCKET, SO_REUSEADDR},
+#ifdef SO_REUSEPORT
+    {SOL_SOCKET, SO_REUSEPORT},
+#endif
+    {SOL_SOCKET, SO_BROADCAST},
+    {SOL_SOCKET, SO_TIMESTAMP},
+    {SOL_SOCKET, SO_RCVBUF},
+    {SOL_SOCKET, SO_SNDBUF},
+    {IPPROTO_IP, IP_PKTINFO},
+    {IPPROTO_IP, IP_RECVTTL},
+    {IPPROTO_IP, IP_RECVTOS},
+    {IPPROTO_IP, IP_TOS},
+    {IPPROTO_IP, IP_TTL},
+    // IPV6_V6ONLY is set before the bind, like every option here, which is the
+    // order it has to be in.
+    {IPPROTO_IPV6, IPV6_V6ONLY},
+    // IPV6_RECVPKTINFO by value, as fs/sock.h does: Darwin hides the name
+    // behind __APPLE_USE_RFC_3542.
+    {IPPROTO_IPV6, 61},
+    {IPPROTO_IPV6, IPV6_RECVHOPLIMIT},
+    {IPPROTO_IPV6, IPV6_TCLASS},
+    {IPPROTO_IPV6, IPV6_UNICAST_HOPS},
+};
+_Static_assert(sizeof(dgram_options) / sizeof(dgram_options[0]) <= 16,
+        "saved_socket.opt_value holds 16");
+#define DGRAM_OPTION_COUNT (sizeof(dgram_options) / sizeof(dgram_options[0]))
+
+static void save_datagram(struct saved_socket *saved) {
+    int fd = saved->sock->real_fd;
+    for (size_t i = 0; i < DGRAM_OPTION_COUNT; i++) {
+        int level = dgram_options[i].level;
+        if ((level == IPPROTO_IP && saved->name_addr.sa_family != AF_INET) ||
+                (level == IPPROTO_IPV6 && saved->name_addr.sa_family != AF_INET6)) {
+            saved->opt_saved[i] = false;
+            continue;
+        }
+        socklen_t len = sizeof(saved->opt_value[i]);
+        saved->opt_saved[i] = getsockopt(fd, level, dgram_options[i].name,
+                &saved->opt_value[i], &len) == 0 && len == sizeof(int);
+    }
+    saved->peer_len = sizeof(saved->peer);
+    if (getpeername(fd, &saved->peer_addr, &saved->peer_len) < 0)
+        saved->peer_len = 0;
+}
+
+// A defunct datagram socket answers a receive with ENOTCONN, which a live one
+// never does -- a pending ICMP error is reported as itself, and a peek clears
+// nothing. Measured on macOS 26 after pid_shutdown_sockets.
+static bool datagram_is_dead(struct saved_socket *saved) {
+    union {
+        char name[sizeof(saved->name)];
+        struct sockaddr addr;
+    } now;
+    socklen_t now_len = sizeof(now.name);
+    if (getsockname(saved->sock->real_fd, &now.addr, &now_len) < 0 ||
+            now_len != saved->name_len || memcmp(now.name, saved->name, now_len) != 0)
+        return true;
+    char byte;
+    return recv(saved->sock->real_fd, &byte, 1, MSG_PEEK | MSG_DONTWAIT) < 0 &&
+            errno == ENOTCONN;
+}
+
+// Unlike a listener's, the new socket cannot be bound while the dead one is
+// open: the dead one still holds the port (EADDRINUSE, even with SO_REUSEPORT
+// on the new one, since the old one may not have it). So it goes in over the
+// guest's descriptor first -- dup2 closes the dead socket and keeps the number
+// -- and binds there. If the bind then fails the guest has an unbound socket
+// that waits quietly instead of a dead one that spins.
+static bool rebuild_datagram(struct saved_socket *saved) {
+    int new_sock = socket(saved->name_addr.sa_family, saved->type, saved->proto);
+    if (new_sock < 0) {
+        printk("WARNING: restarting datagram socket(%d, %d, %d) failed: %s\n",
+                saved->name_addr.sa_family, saved->type, saved->proto, strerror(errno));
+        return false;
+    }
+    for (size_t i = 0; i < DGRAM_OPTION_COUNT; i++) {
+        if (!saved->opt_saved[i])
+            continue;
+        // A buffer size of 0 is what a dead socket reports, never a setting.
+        if (dgram_options[i].level == SOL_SOCKET &&
+                (dgram_options[i].name == SO_RCVBUF || dgram_options[i].name == SO_SNDBUF) &&
+                saved->opt_value[i] <= 0)
+            continue;
+        setsockopt(new_sock, dgram_options[i].level, dgram_options[i].name,
+                &saved->opt_value[i], sizeof(saved->opt_value[i]));
+    }
+    if (saved->flags >= 0)
+        fcntl(new_sock, F_SETFL, saved->flags);
+    if (dup2(new_sock, saved->sock->real_fd) < 0) {
+        printk("WARNING: replacing datagram socket fd failed: %s\n", strerror(errno));
+        close(new_sock);
+        return false;
+    }
+    close(new_sock);
+    if (bind(saved->sock->real_fd, &saved->name_addr, saved->name_len) < 0)
+        printk("WARNING: rebinding datagram socket failed: %s\n", strerror(errno));
+    else if (saved->peer_len != 0 &&
+            connect(saved->sock->real_fd, &saved->peer_addr, saved->peer_len) < 0)
+        printk("WARNING: reconnecting datagram socket failed: %s\n", strerror(errno));
+    return true;
+}
 
 static struct list saved_sockets = LIST_INITIALIZER(saved_sockets);
 
@@ -253,6 +389,8 @@ unsigned sockrestart_on_suspend() {
         assert(size == sizeof(saved->type));
         saved->name_len = sizeof(saved->name);
         getsockname(sock->real_fd, (struct sockaddr *) &saved->name, &saved->name_len);
+        if (saved->type == SOCK_DGRAM)
+            save_datagram(saved);
         list_add(&saved_sockets, &saved->saved);
         saved_count++;
         // ISH_SOCKRESTART_TEST_DESTROY -- kill the listeners on the way down,
@@ -310,6 +448,13 @@ unsigned sockrestart_on_resume() {
         // address nobody is serving until the close below.
         if (saved->sock->refcount == 1)
             continue;
+        if (saved->type == SOCK_DGRAM) {
+            if (datagram_is_dead(saved) && rebuild_datagram(saved)) {
+                saved->rebuilt = true;
+                restored++;
+            }
+            continue;
+        }
         if (!listener_is_dead(saved))
             continue;
         int new_sock = socket(saved->name_addr.sa_family, saved->type, saved->proto);
