@@ -46,6 +46,24 @@ _xaddr .req x3
 // brutal there. Old devices are the point of this project, so they win.
 // (Open, untested: guest-arm64 still dispatches via ldar, so the arm64 guest
 // may be paying that same penalty on ARMv8.0. A/B it on an ARMv8.0 device.)
+// gret_nomem: gret without the barrier, for a gadget that reads NO guest
+// memory (register ALU and moves, immediates, address arithmetic, lea). The
+// `dmb ishld` in every other gret is load-bearing for more than code patching:
+// ordering each guest load before every later access is what gives i386/amd64
+// guests x86's load->load and load->store ordering -- dropping it from all
+// gadgets made an xchg spinlock lose updates across threads
+// (tests/manual/x86/atomic_lock_contended.c). A gadget with no guest load has
+// nothing of its own to order, and a chain link is only ever loaded by a
+// branch gadget, which keeps the full gret -- so skipping the barrier here
+// changes no ordering the guest can observe.
+.macro gret_nomem pop=0
+    ldr x8, [_ip, \pop*8]!
+    add _ip, _ip, 8
+    cbnz x8, 0f
+    b jit_ret
+0:  br x8
+.endm
+
 .macro gret pop=0
     ldr x8, [_ip, \pop*8]!
     dmb ishld /* Jason Conway's Re Ordering patch (upstream PR #1944 */

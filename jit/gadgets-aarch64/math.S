@@ -4,7 +4,7 @@
 
 .gadget load32_addr
     mov _tmp, _addr
-    gret
+    gret_nomem
 
 .gadget amd64_set_rip
     ldr x8, [_ip]
@@ -1842,7 +1842,7 @@ amd64_gen_shift_count shift_count64, 8
 .macro mov32_reg_reg dst_name, dst, src_name, src
     .gadget mov32_reg_reg_\dst_name\()_\src_name
         mov \dst, \src
-        gret
+        gret_nomem
 .endm
 
 .macro mov32_reg_reg_row dst_name, dst
@@ -2062,7 +2062,7 @@ amd64_gen_shift_count shift_count64, 8
 .macro do_reg_op op, armop, size, reg
     .gadget \op\size\()_reg_\reg
         do_op \armop, \size, e\reg\()x
-        gret
+        gret_nomem
 .endm
 
 .macro do_hi_op op, size, reg
@@ -2076,7 +2076,7 @@ amd64_gen_shift_count shift_count64, 8
         .gadget \op\size\()_imm
             ldr\s w8, [_ip]
             do_op \armop, \size, w8
-            gret 1
+            gret_nomem 1
     .endif
 
     .ifnc \op,xchg
@@ -2133,7 +2133,7 @@ amd64_gen_shift_count shift_count64, 8
             .else
                 do_op \armop, \size, e\reg
             .endif
-            gret
+            gret_nomem
     .endr
 
 .endm
@@ -2200,7 +2200,7 @@ amd64_gen_shift_count shift_count64, 8
     .gadget fused_add32_imm_\name
         ldr w8, [_ip]
         do_op add, 32, w8, \reg
-        gret 1
+        gret_nomem 1
 .endm
 .each_reg xfa_add
 .purgem xfa_add
@@ -2209,7 +2209,7 @@ amd64_gen_shift_count shift_count64, 8
     .gadget fused_or32_imm_\name
         ldr w8, [_ip]
         do_op orr, 32, w8, \reg
-        gret 1
+        gret_nomem 1
 .endm
 .each_reg xfa_or
 .purgem xfa_or
@@ -2218,7 +2218,7 @@ amd64_gen_shift_count shift_count64, 8
     .gadget fused_adc32_imm_\name
         ldr w8, [_ip]
         do_op adc, 32, w8, \reg
-        gret 1
+        gret_nomem 1
 .endm
 .each_reg xfa_adc
 .purgem xfa_adc
@@ -2227,7 +2227,7 @@ amd64_gen_shift_count shift_count64, 8
     .gadget fused_sbb32_imm_\name
         ldr w8, [_ip]
         do_op sbc, 32, w8, \reg
-        gret 1
+        gret_nomem 1
 .endm
 .each_reg xfa_sbb
 .purgem xfa_sbb
@@ -2236,7 +2236,7 @@ amd64_gen_shift_count shift_count64, 8
     .gadget fused_and32_imm_\name
         ldr w8, [_ip]
         do_op and, 32, w8, \reg
-        gret 1
+        gret_nomem 1
 .endm
 .each_reg xfa_and
 .purgem xfa_and
@@ -2245,7 +2245,7 @@ amd64_gen_shift_count shift_count64, 8
     .gadget fused_sub32_imm_\name
         ldr w8, [_ip]
         do_op sub, 32, w8, \reg
-        gret 1
+        gret_nomem 1
 .endm
 .each_reg xfa_sub
 .purgem xfa_sub
@@ -2254,7 +2254,7 @@ amd64_gen_shift_count shift_count64, 8
     .gadget fused_xor32_imm_\name
         ldr w8, [_ip]
         do_op eor, 32, w8, \reg
-        gret 1
+        gret_nomem 1
 .endm
 .each_reg xfa_xor
 .purgem xfa_xor
@@ -2600,7 +2600,7 @@ amd64_gen_shift_count shift_count64, 8
     .irp size, SIZE_LIST
         .gadget \op\()_\size
             ss \size, do_\op
-            gret
+            gret_nomem
     .endr
     .gadget_list \op, SIZE_LIST
 .endr

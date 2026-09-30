@@ -100,13 +100,13 @@
     .gadget addr_\name
         ldr _addr, [_ip]
         add _addr, _addr, \reg
-        gret 1
+        gret_nomem 1
 .endm
 .each_reg x
 .purgem x
 .gadget addr_none
     ldr _addr, [_ip]
-    gret 1
+    gret_nomem 1
 .gadget_list addr, REG_LIST
 
 # Address-computation FUSED into the memory-operand load/store, saving one whole
@@ -360,7 +360,7 @@
     .gadget fused_lea32_\dst_name\()_\base_name
         ldr w8, [_ip]
         add \dst, w8, \base
-        gret 1
+        gret_nomem 1
 .endm
 
 .macro flea32_row dst_name, dst
@@ -395,7 +395,7 @@
             .else N .ifc \times,8
                 add _addr, _addr, \reg, lsl 3
             .endif N .endif N .endif N .endif
-            gret
+            gret_nomem
     .endr
 .endm
 .each_reg x
