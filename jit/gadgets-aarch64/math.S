@@ -36,6 +36,72 @@
     str x25, [x8, 56]
     gret
 
+# A register-form x87 instruction: [opcode<<8|modrm][next rip][start rip].
+# amd64_jit_x87_reg touches only cpu->fp and the flags in struct cpu_state
+# (FNSTSW AX, the exception, keeps the flushing bridge), and x20-x27 are
+# callee-saved, so the register cache stays live across the call instead of
+# being stored and reloaded around it. On an interrupt the cache is stored
+# (the _cached form, when it holds the registers) and rip set to the
+# instruction before leaving.
+.macro amd64_x87_reg_gadget name, cached
+.gadget \name
+    save_c
+    mov x0, _cpu
+    sub x1, _tlb, TLB_entries
+    ldr x2, [_ip]
+    ldr x3, [_ip, 8]
+    bl NAME(amd64_jit_x87_reg)
+    mov x14, x0
+    restore_c
+    cmn w14, #1
+    b.ne 1f
+    gret 3
+1:
+    .if \cached
+        add x8, _cpu, CPU_amd64_regs
+        str x20, [x8, 0]
+        str x22, [x8, 8]
+        str x23, [x8, 16]
+        str x21, [x8, 24]
+        str x27, [x8, 32]
+        str x26, [x8, 40]
+        str x24, [x8, 48]
+        str x25, [x8, 56]
+    .endif
+    ldr x8, [_ip, 16]
+    str x8, [_cpu, CPU_amd64_rip]
+    mov x0, x14
+    ldr eip, [_ip, 16]
+    b jit_exit
+.endm
+amd64_x87_reg_gadget amd64_x87_reg, 0
+amd64_x87_reg_gadget amd64_x87_reg_cached, 1
+
+# A memory-form x87 instruction: [meta][disp][next rip], addressing decoded at
+# translation (gen_amd64_decode_mem_meta). amd64_jit_x87_mem reads the base
+# and index registers from cpu->amd64_regs, so the generator stores a dirty
+# cache first, but it writes no general register, so the cache stays valid
+# across the call (the flushing bridge ended in load_regs, which reloads the
+# i386 view and leaves the cache to be reloaded by the next instruction).
+.gadget amd64_x87_mem
+    save_c
+    mov x0, _cpu
+    sub x1, _tlb, TLB_entries
+    ldr x2, [_ip]
+    ldr x3, [_ip, 8]
+    ldr x4, [_ip, 16]
+    bl NAME(amd64_jit_x87_mem)
+    mov x14, x0
+    restore_c
+    cmn w14, #1
+    b.ne 1f
+    gret 3
+1:
+    mov x0, x14
+    ldr x8, [_cpu, CPU_amd64_rip]
+    mov eip, w8
+    b jit_exit
+
 .macro amd64_cached_read id, dst
     cmp \id, 0
     b.ne .Lamd64_cached_read_1_\@

@@ -220,12 +220,14 @@
     gret 1
     write_bullshit 64, cmpxchg8b
 
-.macro do_helper type, size=
-    .gadget helper_\type\size
+.macro do_helper type, size=, pfx=helper, regs=1
+    .gadget \pfx\()_\type\size
         .ifin(\type, read,write)
-            \type\()_prep (\size), helper_\type\size
+            \type\()_prep (\size), \pfx\()_\type\size
         .endifin
-        save_regs
+        .if \regs
+            save_regs
+        .endif
         save_c
         mov x0, _cpu
         .ifc \type,1
@@ -244,9 +246,11 @@
         .endifin
         blr x8
         restore_c
-        load_regs
+        .if \regs
+            load_regs
+        .endif
         .ifc \type,write
-            write_done (\size), helper_\type\size
+            write_done (\size), \pfx\()_\type\size
         .endif
         .ifc \type,0
             gret 1
@@ -256,14 +260,21 @@
             gret 2
         .endif N .endif
         .ifc \type,read
-            read_bullshit (\size), helper_\type\size
+            read_bullshit (\size), \pfx\()_\type\size
         .else N .ifc \type,write
-            write_bullshit (\size), helper_\type\size
+            write_bullshit (\size), \pfx\()_\type\size
         .endif N .endif
 .endm
 do_helper 0
 do_helper 1
 do_helper 2
+# The x87 helpers (emu/fpu.c) read and write only cpu->fp and the flags in
+# struct cpu_state, never a guest general register, and the guest registers
+# live in callee-saved x20-x28, so these skip the spill and reload. FNSTSW AX,
+# the one x87 op that writes a GPR, has its own gadget (fstsw_ax).
+do_helper 0,, fhelper, 0
+do_helper 1,, fhelper, 0
+do_helper 2,, fhelper, 0
 # The FPU state-save/restore area widths (bits, so /8 gives bytes): FSTENV and
 # FLDENV move 28 bytes, FNSAVE and FRSTOR 108, FXSAVE and FXRSTOR 512. These
 # are fixed by the instruction, not by an operand-size prefix, and they are
@@ -274,6 +285,8 @@ do_helper 2
 .irp size, SIZE_LIST,64,80,224,864,4096
     do_helper read, \size
     do_helper write, \size
+    do_helper read, \size, fhelper, 0
+    do_helper write, \size, fhelper, 0
 .endr
 
 .macro do_helper_tlb_retint type

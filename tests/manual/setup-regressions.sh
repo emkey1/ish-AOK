@@ -498,6 +498,7 @@ if [ "$is_amd64_guest" -eq 1 ]; then
     need_file x86/amd64_regress.c
     need_file x86/avx_regress.c
     need_file x86/amd64_incdec.c
+    need_file x86/amd64_x87_cache.c
     need_file x86/amd64_singlestep.c
     need_file x86/amd64_segment_regs.c
     need_file x86/amd64_gs_base.c
@@ -955,7 +956,7 @@ if [ "$is_x86_guest" -eq 1 ] && [ "$is_amd64_guest" -eq 0 ]; then
     all_tests="avx32_smoke bcd_adjust i386_segment_regs i386_push16 i386_enter_branch16 $all_tests"
 fi
 if [ "$is_amd64_guest" -eq 1 ]; then
-    all_tests="$all_tests amd64_regress avx_regress amd64_incdec amd64_singlestep amd64_segment_regs amd64_gs_base"
+    all_tests="$all_tests amd64_regress avx_regress amd64_incdec amd64_x87_cache amd64_singlestep amd64_segment_regs amd64_gs_base"
 fi
 if [ "$is_arm64_guest" -eq 1 ]; then
     all_tests="$all_tests atomics64 arm64_regress vector_smoke simd_elem_moves simd_three_same alu_ospec ldst_lspec smc_stale_block ret_retcache stlr_ldar_publish ptrace_singlestep ands_bcond_fusion hle_loop dc_zva arm64_fp_env"

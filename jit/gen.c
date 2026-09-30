@@ -7127,6 +7127,44 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
         amd64_jit_debug("x87-helper ip=%llx opcode=%02x modrm=%02x next=%llx",
                 (unsigned long long) insn.start_ip, insn.opcode, insn.modrm,
                 (unsigned long long) next_ip);
+        if ((insn.modrm >> 6) == 3 && !(insn.opcode == 0xdf && ((insn.modrm >> 3) & 7) == 4)) {
+#if defined(__aarch64__)
+            // Register form other than FNSTSW AX: no general register read or
+            // written, so the register cache and the deferred rip stay as they
+            // are (see amd64_x87_reg_gadget in gadgets-aarch64/math.S).
+            extern void gadget_amd64_x87_reg(void);
+            extern void gadget_amd64_x87_reg_cached(void);
+            amd64_bridge_note(amd64_jit_x87_reg, insn.opcode);
+            gen(state, (unsigned long) (state->amd64_reg_cache_valid
+                    ? gadget_amd64_x87_reg_cached : gadget_amd64_x87_reg));
+            gen(state, ((unsigned long) insn.opcode << 8) | insn.modrm);
+            gen(state, (unsigned long) next_ip);
+            gen(state, (unsigned long) insn.start_ip);
+            gen_amd64_defer_rip(state, next_ip);
+            return true;
+#endif
+        }
+#if defined(__aarch64__)
+        if ((insn.modrm >> 6) != 3 && x87_meta_ok && x87_mem_next == next_ip) {
+            // Memory form: the helper reads the address registers from
+            // cpu->amd64_regs and writes none, so store a dirty cache but keep
+            // it (see amd64_x87_mem in gadgets-aarch64/math.S).
+            extern void gadget_amd64_x87_mem(void);
+            extern void gadget_amd64_store_low8_reg_cache(void);
+            amd64_bridge_note(amd64_jit_x87_mem, insn.opcode);
+            if (state->amd64_reg_cache_valid && state->amd64_reg_cache_dirty) {
+                gen(state, (unsigned long) gadget_amd64_store_low8_reg_cache);
+                state->amd64_reg_cache_dirty = false;
+            }
+            gen_amd64_flush_rip(state);
+            gen(state, (unsigned long) gadget_amd64_x87_mem);
+            gen(state, x87_meta);
+            gen(state, x87_disp);
+            gen(state, (unsigned long) next_ip);
+            gen_amd64_defer_rip(state, next_ip);
+            return true;
+        }
+#endif
         gen_amd64_flush_reg_cache(state);
         gen_amd64_flush_rip(state);
         if ((insn.modrm >> 6) == 3) {
@@ -14435,38 +14473,57 @@ void helper_rdtsc(struct cpu_state *cpu);
 #define ATOMIC_CMPXCHG8B(dst,z) g_addr(); gg(atomic_cmpxchg8b, state->orig_ip)
 
 // fpu
+// The x87 helpers go through the fhelper gadgets, which skip the guest
+// register spill and reload (see jit/gadgets-aarch64/misc.S).
+#if defined(__aarch64__)
+#define fh(h) gg(fhelper_0, h)
+#define fhh(h, a) ggg(fhelper_1, h, a)
+#define fhhh(h, a, b) gggg(fhelper_2, h, a, b)
+#define fh_read(h, z) do { g_addr(); ggg(fhelper_read##z, state->orig_ip, h##z); } while (0)
+#define fh_write(h, z) do { g_addr(); ggg(fhelper_write##z, state->orig_ip, h##z); } while (0)
+#define fh_read_bits(h, z, bits) do { g_addr(); ggg(fhelper_read##bits, state->orig_ip, h##z); } while (0)
+#define fh_write_bits(h, z, bits) do { g_addr(); ggg(fhelper_write##bits, state->orig_ip, h##z); } while (0)
+#else
+#define fh h
+#define fhh hh
+#define fhhh hhh
+#define fh_read h_read
+#define fh_write h_write
+#define fh_read_bits h_read_bits
+#define fh_write_bits h_write_bits
+#endif
 #define st_0 0
 #define st_i modrm.rm_opcode
-#define FLD() hh(fpu_ld, st_i);
-#define FILD(val,z) h_read(fpu_ild, z)
-#define FLDM(val,z) h_read(fpu_ldm, z)
-#define FSTM(dst,z) h_write(fpu_stm, z)
-#define FIST(dst,z) h_write(fpu_ist, z)
-#define FISTT(dst,z) h_write(fpu_istt, z)
-#define FXCH() hh(fpu_xch, st_i)
-#define FCOM() hh(fpu_com, st_i)
-#define FCOMM(val,z) h_read(fpu_comm, z)
-#define FICOM(val,z) h_read(fpu_icom, z)
-#define FUCOM() hh(fpu_ucom, st_i)
-#define FUCOMI() hh(fpu_ucomi, st_i)
-#define FCOMI() hh(fpu_comi, st_i)
-#define FTST() h(fpu_tst)
-#define FXAM() h(fpu_xam)
-#define FST() hh(fpu_st, st_i)
-#define FCHS() h(fpu_chs)
-#define FABS() h(fpu_abs)
-#define FLDC(what) hh(fpu_ldc, fconst_##what)
-#define FPREM() h(fpu_prem)
-#define FPREM1() h(fpu_prem1)
-#define FRNDINT() h(fpu_rndint)
-#define FSCALE() h(fpu_scale)
-#define FSQRT() h(fpu_sqrt)
-#define FYL2X() h(fpu_yl2x)
-#define FYL2XP1() h(fpu_yl2xp1)
-#define F2XM1() h(fpu_2xm1)
-#define FSTSW(dst) if (arg_##dst == arg_reg_a) g(fstsw_ax); else h_write(fpu_stsw, 16)
-#define FSTCW(dst) if (arg_##dst == arg_reg_a) UNDEFINED; else h_write(fpu_stcw, 16)
-#define FLDCW(dst) if (arg_##dst == arg_reg_a) UNDEFINED; else h_read(fpu_ldcw, 16)
+#define FLD() fhh(fpu_ld, st_i);
+#define FILD(val,z) fh_read(fpu_ild, z)
+#define FLDM(val,z) fh_read(fpu_ldm, z)
+#define FSTM(dst,z) fh_write(fpu_stm, z)
+#define FIST(dst,z) fh_write(fpu_ist, z)
+#define FISTT(dst,z) fh_write(fpu_istt, z)
+#define FXCH() fhh(fpu_xch, st_i)
+#define FCOM() fhh(fpu_com, st_i)
+#define FCOMM(val,z) fh_read(fpu_comm, z)
+#define FICOM(val,z) fh_read(fpu_icom, z)
+#define FUCOM() fhh(fpu_ucom, st_i)
+#define FUCOMI() fhh(fpu_ucomi, st_i)
+#define FCOMI() fhh(fpu_comi, st_i)
+#define FTST() fh(fpu_tst)
+#define FXAM() fh(fpu_xam)
+#define FST() fhh(fpu_st, st_i)
+#define FCHS() fh(fpu_chs)
+#define FABS() fh(fpu_abs)
+#define FLDC(what) fhh(fpu_ldc, fconst_##what)
+#define FPREM() fh(fpu_prem)
+#define FPREM1() fh(fpu_prem1)
+#define FRNDINT() fh(fpu_rndint)
+#define FSCALE() fh(fpu_scale)
+#define FSQRT() fh(fpu_sqrt)
+#define FYL2X() fh(fpu_yl2x)
+#define FYL2XP1() fh(fpu_yl2xp1)
+#define F2XM1() fh(fpu_2xm1)
+#define FSTSW(dst) if (arg_##dst == arg_reg_a) g(fstsw_ax); else fh_write(fpu_stsw, 16)
+#define FSTCW(dst) if (arg_##dst == arg_reg_a) UNDEFINED; else fh_write(fpu_stcw, 16)
+#define FLDCW(dst) if (arg_##dst == arg_reg_a) UNDEFINED; else fh_read(fpu_ldcw, 16)
 // The x87 state-area instructions. The width in the third argument is the
 // architectural size of the memory operand -- 28 bytes for the environment
 // (struct fpu_env32), 108 for the full state (struct fpu_state32) -- and NOT
@@ -14479,56 +14536,56 @@ void helper_rdtsc(struct cpu_state *cpu);
 // from a read-only mapping raised a spurious #GP, and one from a private
 // clean page broke COW and dirtied it -- and then flushed the staging buffer
 // back out over the source bytes on the crosspage path.
-#define FSTENV(val,z) h_write_bits(fpu_stenv, z, 224)
-#define FLDENV(val,z) h_read_bits(fpu_ldenv, z, 224)
-#define FSAVE(val,z) h_write_bits(fpu_save, z, 864)
-#define FRESTORE(val,z) h_read_bits(fpu_restore, z, 864)
+#define FSTENV(val,z) fh_write_bits(fpu_stenv, z, 224)
+#define FLDENV(val,z) fh_read_bits(fpu_ldenv, z, 224)
+#define FSAVE(val,z) fh_write_bits(fpu_save, z, 864)
+#define FRESTORE(val,z) fh_read_bits(fpu_restore, z, 864)
 // The 0f ae memory forms. The helper suffix is a literal 32 rather than `oz`
 // because these instructions have no operand-size form and decode.h is
 // compiled once per OP_SIZE, so both passes must reach the same helper.
 // FXSAVE/FXRSTOR move 512 bytes; LDMXCSR/STMXCSR move four, which is the one
 // case here where the helper suffix and the access width do coincide.
-#define FXSAVE()  h_write_bits(fpu_fxsave, 32, 4096)
-#define FXRSTOR() h_read_bits(fpu_fxrestore, 32, 4096)
-#define STMXCSR() h_write(fpu_stmxcsr, 32)
-#define LDMXCSR() h_read(fpu_ldmxcsr, 32)
-#define FINIT() h(fpu_init)
-#define FCLEX() h(fpu_clex)
-#define FPOP h(fpu_pop)
-#define FINCSTP() h(fpu_incstp)
-#define FDECSTP() h(fpu_decstp)
-#define FADD(src, dst) hhh(fpu_add, src, dst)
-#define FIADD(val,z) h_read(fpu_iadd, z)
-#define FADDM(val,z) h_read(fpu_addm, z)
-#define FSUB(src, dst) hhh(fpu_sub, src, dst)
-#define FSUBM(val,z) h_read(fpu_subm, z)
-#define FISUB(val,z) h_read(fpu_isub, z)
-#define FISUBR(val,z) h_read(fpu_isubr, z)
-#define FSUBR(src, dst) hhh(fpu_subr, src, dst)
-#define FSUBRM(val,z) h_read(fpu_subrm, z)
-#define FMUL(src, dst) hhh(fpu_mul, src, dst)
-#define FIMUL(val,z) h_read(fpu_imul, z)
-#define FMULM(val,z) h_read(fpu_mulm, z)
-#define FDIV(src, dst) hhh(fpu_div, src, dst)
-#define FIDIV(val,z) h_read(fpu_idiv, z)
-#define FDIVM(val,z) h_read(fpu_divm, z)
-#define FDIVR(src, dst) hhh(fpu_divr, src, dst)
-#define FIDIVR(val,z) h_read(fpu_idivr, z)
-#define FDIVRM(val,z) h_read(fpu_divrm, z)
-#define FPATAN() h(fpu_patan)
-#define FPTAN() h(fpu_ptan)
-#define FSIN() h(fpu_sin)
-#define FCOS() h(fpu_cos)
-#define FSINCOS() h(fpu_sincos)
-#define FXTRACT() h(fpu_xtract)
-#define FCMOVB(src) hh(fpu_cmovb, src)
-#define FCMOVE(src) hh(fpu_cmove, src)
-#define FCMOVBE(src) hh(fpu_cmovbe, src)
-#define FCMOVU(src) hh(fpu_cmovu, src)
-#define FCMOVNB(src) hh(fpu_cmovnb, src)
-#define FCMOVNE(src) hh(fpu_cmovne, src)
-#define FCMOVNBE(src) hh(fpu_cmovnbe, src)
-#define FCMOVNU(src) hh(fpu_cmovnu, src)
+#define FXSAVE()  fh_write_bits(fpu_fxsave, 32, 4096)
+#define FXRSTOR() fh_read_bits(fpu_fxrestore, 32, 4096)
+#define STMXCSR() fh_write(fpu_stmxcsr, 32)
+#define LDMXCSR() fh_read(fpu_ldmxcsr, 32)
+#define FINIT() fh(fpu_init)
+#define FCLEX() fh(fpu_clex)
+#define FPOP fh(fpu_pop)
+#define FINCSTP() fh(fpu_incstp)
+#define FDECSTP() fh(fpu_decstp)
+#define FADD(src, dst) fhhh(fpu_add, src, dst)
+#define FIADD(val,z) fh_read(fpu_iadd, z)
+#define FADDM(val,z) fh_read(fpu_addm, z)
+#define FSUB(src, dst) fhhh(fpu_sub, src, dst)
+#define FSUBM(val,z) fh_read(fpu_subm, z)
+#define FISUB(val,z) fh_read(fpu_isub, z)
+#define FISUBR(val,z) fh_read(fpu_isubr, z)
+#define FSUBR(src, dst) fhhh(fpu_subr, src, dst)
+#define FSUBRM(val,z) fh_read(fpu_subrm, z)
+#define FMUL(src, dst) fhhh(fpu_mul, src, dst)
+#define FIMUL(val,z) fh_read(fpu_imul, z)
+#define FMULM(val,z) fh_read(fpu_mulm, z)
+#define FDIV(src, dst) fhhh(fpu_div, src, dst)
+#define FIDIV(val,z) fh_read(fpu_idiv, z)
+#define FDIVM(val,z) fh_read(fpu_divm, z)
+#define FDIVR(src, dst) fhhh(fpu_divr, src, dst)
+#define FIDIVR(val,z) fh_read(fpu_idivr, z)
+#define FDIVRM(val,z) fh_read(fpu_divrm, z)
+#define FPATAN() fh(fpu_patan)
+#define FPTAN() fh(fpu_ptan)
+#define FSIN() fh(fpu_sin)
+#define FCOS() fh(fpu_cos)
+#define FSINCOS() fh(fpu_sincos)
+#define FXTRACT() fh(fpu_xtract)
+#define FCMOVB(src) fhh(fpu_cmovb, src)
+#define FCMOVE(src) fhh(fpu_cmove, src)
+#define FCMOVBE(src) fhh(fpu_cmovbe, src)
+#define FCMOVU(src) fhh(fpu_cmovu, src)
+#define FCMOVNB(src) fhh(fpu_cmovnb, src)
+#define FCMOVNE(src) fhh(fpu_cmovne, src)
+#define FCMOVNBE(src) fhh(fpu_cmovnbe, src)
+#define FCMOVNU(src) fhh(fpu_cmovnu, src)
 
 // vector
 
