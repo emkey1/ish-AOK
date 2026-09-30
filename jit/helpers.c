@@ -48,10 +48,129 @@ void helper_collapse_flags(struct cpu_state *cpu) {
     collapse_flags(cpu);
 }
 
-void helper_trace_unaligned_atomic(struct cpu_state *cpu, dword_t addr, dword_t tag) {
-    (void) cpu;
-    (void) addr;
-    (void) tag;
+// Misaligned i386 LOCK operations, 16 and 32 bits. The gadgets' fast path is
+// an ARM exclusive pair (ldaxr/stlxr), which needs a naturally aligned host
+// address -- a misaligned one is an alignment fault that killed the whole host
+// process (a `lock addl` at buf+15 took the app down). x86 permits any
+// alignment, so the gadgets test it and bring a misaligned operand here, where
+// x86_atomic_rmw/x86_atomic_cas do it exactly (see "Misaligned LOCK" in
+// emu/tlb.c): a 16-byte host compare-exchange inside one aligned block, the
+// address space's writer lock across two.
+//
+// The flags left behind are the gadgets' own lazy deposit, so every reader
+// sees the same state either way: op1/op2/res for the add family (res
+// sign-extended to 32 bits, as setf_zsp leaves it), eager CF/OF, flags_res
+// with ZF/SF/PF_RES and AF_OPS; the logic family clears CF, OF and AF.
+//
+// Returns the gadget's new _tmp in the low 32 bits (the old value for xadd
+// and xchg, else unchanged), or 1 << 32 on a fault with the fault address set
+// for the gadget's segfault_write exit.
+enum {
+    UA_ADD, UA_SUB, UA_ADC, UA_SBB, UA_AND, UA_OR, UA_XOR, UA_INC, UA_DEC,
+    UA_XADD, UA_NOT, UA_NEG, UA_XCHG, UA_CMPXCHG, UA_BTS, UA_BTR, UA_BTC,
+};
+struct ua_ctx { unsigned op, bits; dword_t operand, cin; };
+
+static qword_t ua_mask(unsigned bits) { return bits == 32 ? 0xffffffffull : (1ull << bits) - 1; }
+
+static qword_t ua_apply(qword_t old, void *p) {
+    struct ua_ctx *c = p;
+    qword_t x = old, y = c->operand, r;
+    switch (c->op) {
+    case UA_ADD: r = x + y; break;
+    case UA_ADC: r = x + y + c->cin; break;
+    case UA_SUB: r = x - y; break;
+    case UA_SBB: r = x - y - c->cin; break;
+    case UA_AND: r = x & y; break;
+    case UA_OR: r = x | y; break;
+    case UA_XOR: r = x ^ y; break;
+    case UA_INC: r = x + 1; break;
+    case UA_DEC: r = x - 1; break;
+    case UA_XADD: r = x + y; break;
+    case UA_NOT: r = ~x; break;
+    case UA_NEG: r = 0 - x; break;
+    case UA_XCHG: r = y; break;
+    case UA_BTS: r = x | (1ull << (y & (c->bits - 1))); break;
+    case UA_BTR: r = x & ~(1ull << (y & (c->bits - 1))); break;
+    case UA_BTC: r = x ^ (1ull << (y & (c->bits - 1))); break;
+    default: r = x; break;
+    }
+    return r & ua_mask(c->bits);
+}
+
+static int32_t ua_sext(qword_t v, unsigned bits) {
+    return bits == 32 ? (int32_t) v : bits == 16 ? (int16_t) v : (int8_t) v;
+}
+
+// The add family's deposit: dst OP src (+ carry in), with op1 = src and
+// op2 = dst as setf_a stores them.
+static void ua_flags_addsub(struct cpu_state *cpu, bool sub, qword_t dst, qword_t src,
+        qword_t cin, qword_t res, unsigned bits, bool set_cf) {
+    qword_t m = ua_mask(bits), sign = 1ull << (bits - 1);
+    dst &= m; src &= m;
+    if (set_cf)
+        cpu->cf = sub ? (src + cin > dst) : (dst + src + cin > m);
+    cpu->of = sub ? (((dst ^ src) & (dst ^ res) & sign) != 0)
+                  : (((dst ^ res) & (src ^ res) & sign) != 0);
+    cpu->op1 = ua_sext(src, bits);
+    cpu->op2 = ua_sext(dst, bits);
+    cpu->res = ua_sext(res, bits);
+    cpu->flags_res = ZF_RES | SF_RES | PF_RES | AF_OPS;
+}
+
+uint64_t helper_atomic_unaligned(struct cpu_state *cpu, struct tlb *tlb, dword_t addr,
+        dword_t op_bits, dword_t operand) {
+    struct ua_ctx c = { op_bits & 0xff, op_bits >> 8, operand, cpu->cf };
+    unsigned bits = c.bits;
+    qword_t old, neu;
+    if (c.op == UA_CMPXCHG) {
+        bool swapped;
+        qword_t expected = cpu->eax & ua_mask(bits);
+        if (x86_atomic_cas(cpu, tlb, addr, bits / 8, expected, operand & ua_mask(bits),
+                    &old, &swapped) != 0)
+            return 1ull << 32;
+        // cmp eax, [mem]: eax - old, with op1 = old and op2 = eax.
+        ua_flags_addsub(cpu, true, expected, old, 0, (expected - old) & ua_mask(bits), bits, true);
+        if (!swapped)
+            cpu->eax = (cpu->eax & ~(dword_t) ua_mask(bits)) | (dword_t) old;
+        return operand;
+    }
+    if (c.op == UA_XCHG) {
+        if (x86_atomic_xchg(cpu, tlb, addr, bits / 8, operand & ua_mask(bits), &old) != 0)
+            return 1ull << 32;
+        return (dword_t) old;
+    }
+    if (x86_atomic_rmw(cpu, tlb, addr, bits / 8, ua_apply, &c, &old, &neu) != 0)
+        return 1ull << 32;
+    switch (c.op) {
+    case UA_ADD: case UA_SUB: case UA_ADC: case UA_SBB:
+        ua_flags_addsub(cpu, c.op == UA_SUB || c.op == UA_SBB, old, operand,
+                (c.op == UA_ADC || c.op == UA_SBB) ? c.cin : 0, neu, bits, true);
+        return operand;
+    case UA_XADD:
+        // The gadget: exchange, then add -- op1 = old, op2 = the register.
+        ua_flags_addsub(cpu, false, operand, old, 0, neu, bits, true);
+        return (dword_t) old;
+    case UA_INC: case UA_DEC:
+        // CF is not touched; op1 = 1, op2 = the old value.
+        ua_flags_addsub(cpu, c.op == UA_DEC, old, 1, 0, neu, bits, false);
+        return operand;
+    case UA_NEG:
+        // 0 - old, with op1 = old and op2 = 0 as the gadget's setf_a has it.
+        ua_flags_addsub(cpu, true, 0, old, 0, neu, bits, true);
+        return operand;
+    case UA_AND: case UA_OR: case UA_XOR:
+        cpu->cf = cpu->of = 0;
+        cpu->eflags &= ~AF_FLAG;
+        cpu->res = ua_sext(neu, bits);
+        cpu->flags_res = ZF_RES | SF_RES | PF_RES;
+        return operand;
+    case UA_BTS: case UA_BTR: case UA_BTC:
+        cpu->cf = (old >> (operand & (bits - 1))) & 1;
+        return operand;
+    default: // UA_NOT: no flags
+        return operand;
+    }
 }
 
 // Unaligned i386 `lock cmpxchg8b [addr]`. The aarch64 fast path is an ARM

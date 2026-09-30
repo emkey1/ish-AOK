@@ -99,6 +99,52 @@ _xaddr .req x3
     b poke
 .endm
 
+# A misaligned 16/32-bit LOCK operand: helper_atomic_unaligned (jit/helpers.c)
+# does it exactly in C, because the ldaxr/stlxr fast path faults the host on a
+# misaligned address. \code is the helper's UA_* number; _tmp goes in as the
+# operand and comes back as the new _tmp (the old value for xadd/xchg). Only
+# cmpxchg reads a guest register (eax), so only it spills and reloads one.
+.macro ua_slow code, size, spill_eax=0
+    .if \spill_eax
+        str eax, [_cpu, CPU_eax]
+    .endif
+    save_c
+    mov w4, _tmp        // first: _tmp is w0, which the cpu argument overwrites
+    mov x0, _cpu
+    sub x1, _tlb, TLB_entries
+    mov w2, _addr
+    mov w3, (\code | (\size << 8))
+    bl NAME(helper_atomic_unaligned)
+    mov x14, x0
+    restore_c
+    .if \spill_eax
+        ldr eax, [_cpu, CPU_eax]
+    .endif
+    tbnz x14, 32, 8703f
+    mov _tmp, w14
+    gret 1
+8703:
+    b segfault_write
+.endm
+# UA_* numbers, as in jit/helpers.c.
+#define UA_ADD 0
+#define UA_SUB 1
+#define UA_ADC 2
+#define UA_SBB 3
+#define UA_AND 4
+#define UA_OR 5
+#define UA_XOR 6
+#define UA_INC 7
+#define UA_DEC 8
+#define UA_XADD 9
+#define UA_NOT 10
+#define UA_NEG 11
+#define UA_XCHG 12
+#define UA_CMPXCHG 13
+#define UA_BTS 14
+#define UA_BTR 15
+#define UA_BTC 16
+
 # memory reading and writing
 .irp type, read,write
 

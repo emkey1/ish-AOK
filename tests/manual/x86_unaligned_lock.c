@@ -184,16 +184,14 @@ int main(int argc, char **argv) {
     run_case("qword_at_1", base + 1, 64);
     run_case("qword_across_page", page + 4092, 64);
     // 32- and 16-bit: misaligned inside a block, and across a 16-byte boundary.
-    // Not yet on i386: its JIT's 16- and 32-bit locked gadgets still run an
-    // exclusive load on the misaligned address, which the host faults (SIGBUS)
-    // unless it happens to tolerate it -- see docs/TODO.md. The amd64 engine
-    // takes these through the same exact path as the 64-bit ones.
-#ifndef __i386__
+    // Both engines take these through the same exact path as the 64-bit ones
+    // (on i386, helper_atomic_unaligned in jit/helpers.c; before it the i386
+    // gadgets ran an exclusive load on the misaligned address and the host
+    // faulted).
     run_case("dword_at_2", base + 2, 32);
     run_case("dword_at_14", base + 14, 32);
     run_case("word_at_1", base + 1, 16);
     run_case("word_at_15", base + 15, 16);
-#endif
     return finish_suite("x86_unaligned_lock");
 }
 

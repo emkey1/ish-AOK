@@ -11,6 +11,7 @@
 // form (op1 = res, op2 = 0) instead of clearing it in EFLAGS.
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 
 #define CF 0x001
 #define PF 0x004
@@ -118,6 +119,22 @@ static uint32_t vals[] = {0, 1, 2, 0xf, 0x10, 0x7f, 0x80, 0xff, 0x100, 0x7fff, 0
         check("rm", OPE, BITS, a, b, cin, r, fl); \
     }
 
+// Locked, misaligned memory destination: the i386 JIT runs these through
+// helper_atomic_unaligned (jit/helpers.c), whose flag deposit must match the
+// gadgets'. Offsets 1 (inside a 16-byte block) and 15 (straddling two).
+static unsigned char lockbuf[64] __attribute__((aligned(64)));
+#define LOCK_MIS(OPE, INSN, SFX, BITS, R2) \
+    for (unsigned i = 0; i < NV; i++) for (unsigned j = 0; j < NV; j++) for (unsigned cin = 0; cin < 2; cin++) \
+    for (int off = 1; off < 16; off += 14) { \
+        uint32_t a = vals[i], b = vals[j], got = 0; unsigned long fl; \
+        memcpy(lockbuf + off, &a, BITS / 8); \
+        __asm__ volatile(PRE "lock " INSN SFX " %" R2 "[b], (%[p])\n pushf\n pop %[fl]\n" \
+            : [fl] "=r" (fl) : [b] "q" (b), [p] "r" (lockbuf + off), [cin] "r" (cin) : "cc", "memory"); \
+        memcpy(&got, lockbuf + off, BITS / 8); \
+        check(off == 1 ? "lock1" : "lock15", OPE, BITS, a, b, cin, got, fl); \
+    }
+#define LOCK_ALL(OPE, INSN) LOCK_MIS(OPE, INSN, "l", 32, "k") LOCK_MIS(OPE, INSN, "w", 16, "w")
+
 #define ALL_SIZES(OPE, INSN) \
     RR_MEM(OPE, INSN, "l", 32, "k", "k") \
     RR_MEM(OPE, INSN, "w", 16, "w", "w") \
@@ -192,6 +209,8 @@ int main(void) {
     ALL_SIZES(XOR, "xor")
     ALL_SIZES(CMP, "cmp")
     ALL_SIZES(TEST, "test")
+    LOCK_ALL(ADD, "add") LOCK_ALL(SUB, "sub") LOCK_ALL(ADC, "adc") LOCK_ALL(SBB, "sbb")
+    LOCK_ALL(AND, "and") LOCK_ALL(OR, "or") LOCK_ALL(XOR, "xor")
     UNARY(INC, "inc", "l", 32, "k") UNARY(INC, "inc", "w", 16, "w") UNARY(INC, "inc", "b", 8, "b")
     UNARY(DEC, "dec", "l", 32, "k") UNARY(DEC, "dec", "w", 16, "w") UNARY(DEC, "dec", "b", 8, "b")
 

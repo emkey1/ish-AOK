@@ -2105,6 +2105,12 @@ amd64_gen_shift_count shift_count64, 8
     .else
         # xchg must be atomic
         .gadget \op\size\()_mem
+            .if \size != 8   // on the guest address, before write_prep
+                tst _addr, (\size/8)-1
+                b.eq 9f
+                ua_slow UA_XCHG, \size
+            9:
+            .endif
             write_prep \size, \op\size\()_mem
             dmb ish
         1:
@@ -2278,22 +2284,26 @@ amd64_gen_shift_count shift_count64, 8
     .gadget atomic_\opname\size\()_mem
         # There's so much stuff going on inside most of these operations that
         # the implementation is a compare-and-swap loop, instead of just ldaxr/stlxr
-        write_prep \size, atomic_\opname\size\()_mem
+        # Alignment first, on the GUEST address: write_prep replaces _addr
+        # with the host pointer.
         .if \size != 8
             tst _addr, (\size/8)-1
             b.eq 9f
-            save_c
-            mov x0, _cpu
-            mov w1, _addr
-            .if \size == 16
-                mov w2, 3
-            .else
-                mov w2, 4
-            .endif
-            bl NAME(helper_trace_unaligned_atomic)
-            restore_c
+            .ifc \op,add N ua_slow UA_ADD, \size N .endif
+            .ifc \op,sub N ua_slow UA_SUB, \size N .endif
+            .ifc \op,adc N ua_slow UA_ADC, \size N .endif
+            .ifc \op,sbc N ua_slow UA_SBB, \size N .endif
+            .ifc \op,and N ua_slow UA_AND, \size N .endif
+            .ifc \op,orr N ua_slow UA_OR, \size N .endif
+            .ifc \op,eor N ua_slow UA_XOR, \size N .endif
+            .ifc \op,inc N ua_slow UA_INC, \size N .endif
+            .ifc \op,dec N ua_slow UA_DEC, \size N .endif
+            .ifc \op,xadd N ua_slow UA_XADD, \size N .endif
+            .ifc \op,not N ua_slow UA_NOT, \size N .endif
+            .ifc \op,neg N ua_slow UA_NEG, \size N .endif
         9:
         .endif
+        write_prep \size, atomic_\opname\size\()_mem
         dmb ish
         ldr\s w12, [_xaddr]
         .ifin(\op, adc,sbc)

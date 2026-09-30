@@ -517,8 +517,15 @@ static int x86_atomic_split(struct cpu_state *cpu, struct tlb *tlb,
     // Make both pages present and writable -- breaking copy-on-write and
     // dropping code compiled from them -- while this thread holds only the
     // read side, which is all those paths may be called with.
-    if (tlb_write_ptr_slow(tlb, addr) == NULL || tlb_write_ptr_slow(tlb, last) == NULL)
+    if (tlb_write_ptr_slow(tlb, addr) == NULL)
         return x86_atomic_fault(cpu, tlb);
+    if (tlb_write_ptr_slow(tlb, last) == NULL) {
+        // Linux reports the first byte that faulted -- the start of the
+        // second page -- not the operand's last byte (camd: a `lock incl`
+        // two bytes before a PROT_NONE page gives si_addr = that page).
+        tlb->segfault_addr = last & ~(guest_addr_t) (PAGE_SIZE - 1);
+        return x86_atomic_fault(cpu, tlb);
+    }
     if (trylock(&x86_split_lock) != 0)
         return x86_atomic_split_retry(cpu, tlb, addr);
     // Siblings running guest code hold the read side until their next exit

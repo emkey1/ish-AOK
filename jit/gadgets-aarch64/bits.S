@@ -277,6 +277,12 @@
     .gadget atomic_\op\size\()_mem
         and w8, _tmp, ~(\size-1)
         add _addr, _addr, w8, lsr 3
+        tst _addr, (\size/8)-1   // on the guest address, before write_prep
+        b.eq 9f
+        .ifc \op,bts N ua_slow UA_BTS, \size N .endif
+        .ifc \op,btr N ua_slow UA_BTR, \size N .endif
+        .ifc \op,btc N ua_slow UA_BTC, \size N .endif
+    9:
         write_prep \size, atomic_\op\size\()_mem
         dmb ish
         # this is simple enough that I'm comfortable doing it with ldaxr/stlxr

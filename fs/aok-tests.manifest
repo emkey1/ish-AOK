@@ -29,6 +29,7 @@ x86/cow_atomic_fault.c
 x86/x87_fpu.c
 x86/x87_fsqrt.c
 x86/alu_flags.c
+x86/lock_misaligned.c
 x86/mmap2_high_offset.c
 x86/sse_scalar.c
 x86/x86_loop.c
