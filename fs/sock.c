@@ -5455,6 +5455,52 @@ static void inet_nat_remove_owner(struct fd *fd) {
     unlock(&inet_nat_lock);
 }
 
+// A host-side service that guests reach at a loopback endpoint the host
+// cannot give it -- the app's DNS relay, at 127.0.0.53:53 like
+// systemd-resolved's stub, while it really listens on 127.0.0.1:<ephemeral>.
+// Registered as if a guest had bound it, with no guest socket as owner, so
+// the same edge rewriting applies: guest sends to the endpoint reach the
+// host port, and replies read as coming from the endpoint. Network byte
+// order throughout; `type` is the guest's SOCK_*_ value.
+int inet_nat_register_host(uint32_t guest_addr, uint16_t guest_port, uint16_t host_port, int type) {
+    struct inet_nat_entry *entry = malloc(sizeof(*entry));
+    if (entry == NULL)
+        return _ENOMEM;
+    entry->guest_addr = guest_addr;
+    entry->guest_port = guest_port;
+    entry->host_port = host_port;
+    entry->type = type;
+    entry->reuseport = false;
+    entry->owner = NULL;
+    lock(&inet_nat_lock, 0);
+    struct inet_nat_entry *other;
+    list_for_each_entry(&inet_nat_table, other, list) {
+        if (other->guest_port != guest_port || other->type != type)
+            continue;
+        if (other->guest_addr == guest_addr || other->guest_addr == htonl(INADDR_ANY)) {
+            unlock(&inet_nat_lock);
+            free(entry);
+            return _EADDRINUSE;
+        }
+    }
+    list_add_tail(&inet_nat_table, &entry->list);
+    unlock(&inet_nat_lock);
+    return 0;
+}
+
+void inet_nat_unregister_host(uint32_t guest_addr, uint16_t guest_port, int type) {
+    lock(&inet_nat_lock, 0);
+    struct inet_nat_entry *entry, *tmp;
+    list_for_each_entry_safe(&inet_nat_table, entry, tmp, list) {
+        if (entry->owner == NULL && entry->guest_addr == guest_addr &&
+                entry->guest_port == guest_port && entry->type == type) {
+            list_remove(&entry->list);
+            free(entry);
+        }
+    }
+    unlock(&inet_nat_lock);
+}
+
 // Releases whatever unix bind-name (inode-backed or abstract) `fd` currently
 // holds and clears both fields, so a later re-release (e.g. a failed rebind
 // followed by fd close) can't double-release the same name.

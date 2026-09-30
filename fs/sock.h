@@ -54,6 +54,12 @@ int sock_recv_queue(struct fd *sock);
 // local address, in /proc/net and sock_diag at all.
 bool sock_inet_is_listed(int type, int state, const struct sockaddr *local);
 
+// A host-side service reachable by guests at guest_addr:guest_port, which
+// the loopback NAT maps to 127.0.0.1:host_port (network byte order; type is
+// SOCK_DGRAM_ or SOCK_STREAM_). _EADDRINUSE if a guest already holds it.
+int inet_nat_register_host(uint32_t guest_addr, uint16_t guest_port, uint16_t host_port, int type);
+void inet_nat_unregister_host(uint32_t guest_addr, uint16_t guest_port, int type);
+
 int_t sys_socketcall(dword_t call_num, addr_t args_addr);
 int_t sys_socketcall_guest(dword_t call_num, guest_addr_t args_addr);
 

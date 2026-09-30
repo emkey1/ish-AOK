@@ -67,6 +67,7 @@
 #include "kernel/swap.h"
 #include "kernel/zswap.h"
 #include "fs/sockrestart.h"
+#include "fs/sock.h"
 #import <os/log.h>
 #import <os/lock.h>
 #include "platform/platform.h"
@@ -4520,9 +4521,18 @@ static TerminalViewController *CreateTerminalViewController(void) {
     sendto(self.localDnsServerFD, response.bytes, response.length, 0, (struct sockaddr *) &peer, peerLength);
 }
 
+// Where guests find the relay: systemd-resolved's stub address, mapped by the
+// loopback NAT (fs/sock.c) onto the relay's real 127.0.0.1:<ephemeral>.
+// Not 127.0.0.1:53 -- iOS itself can hold that port (seen on an iPadOS 16
+// iPad, where every bind failed EADDRINUSE and nothing answered), and a
+// guest's own resolver wants it.
+#define ISH_DNS_RELAY_GUEST_ADDR "127.0.0.53"
+
 - (void)stopLocalDnsServer {
     int fd = self.localDnsServerFD;
     self.localDnsServerFD = -1;
+    if (self.localDnsServerRunning)
+        inet_nat_unregister_host(htonl(0x7f000035), htons(53), SOCK_DGRAM_);
     if (self.localDnsServerReadSource != nil) {
         dispatch_source_cancel(self.localDnsServerReadSource);
         self.localDnsServerReadSource = nil;
@@ -4549,14 +4559,27 @@ static TerminalViewController *CreateTerminalViewController(void) {
     struct sockaddr_in addr = {0};
     addr.sin_len = sizeof(addr);
     addr.sin_family = AF_INET;
-    addr.sin_port = htons(53);
+    addr.sin_port = 0;
     addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    if (bind(fd, (struct sockaddr *) &addr, sizeof(addr)) != 0) {
-        NSLog(@"dns: local relay cannot bind 127.0.0.1:53: %s", strerror(errno));
+    socklen_t addrLength = sizeof(addr);
+    if (bind(fd, (struct sockaddr *) &addr, sizeof(addr)) != 0 ||
+            getsockname(fd, (struct sockaddr *) &addr, &addrLength) != 0) {
+        int err = errno;
+        NSLog(@"dns: local relay cannot bind 127.0.0.1: %s", strerror(err));
         close(fd);
         [ISHDiagnosticsStore recordBreadcrumb:@"dns.localServer.failed"
                                       details:@{@"stage": @"bind",
-                                                @"errno": @(errno)}];
+                                                @"errno": @(err)}];
+        return NO;
+    }
+    int natErr = inet_nat_register_host(htonl(0x7f000035), htons(53), addr.sin_port, SOCK_DGRAM_);
+    if (natErr < 0) {
+        // A guest resolver already answers there; leave it be.
+        NSLog(@"dns: " ISH_DNS_RELAY_GUEST_ADDR ":53 is taken in the guest (%d)", natErr);
+        close(fd);
+        [ISHDiagnosticsStore recordBreadcrumb:@"dns.localServer.failed"
+                                      details:@{@"stage": @"nat",
+                                                @"errno": @(-natErr)}];
         return NO;
     }
 
@@ -4581,14 +4604,15 @@ static TerminalViewController *CreateTerminalViewController(void) {
     self.localDnsServerRunning = YES;
     dispatch_resume(source);
     [ISHDiagnosticsStore recordBreadcrumb:@"dns.localServer.started"
-                                  details:@{@"address": @"127.0.0.1:53"}];
+                                  details:@{@"address": @ISH_DNS_RELAY_GUEST_ADDR ":53",
+                                            @"hostPort": @(ntohs(addr.sin_port))}];
     return YES;
 }
 
 - (void)configureDns {
     [ISHDiagnosticsStore recordBreadcrumb:@"dns.configure.begin"];
-    // Not even at boot: the responder binds 127.0.0.1:53 on the host, which a
-    // guest resolver asking for that port gets EADDRINUSE from.
+    // Not even at boot: the responder holds 127.0.0.53:53 in the guest's
+    // loopback NAT, which a guest resolver asking for it gets EADDRINUSE from.
     if (!UserPreferences.shared.shouldDisableResolvConfRewrite)
         [self ensureLocalDnsServer];
     [self scheduleDnsRefresh:@"manual"];
@@ -4677,7 +4701,7 @@ static TerminalViewController *CreateTerminalViewController(void) {
 - (void)performDnsRefresh:(NSString *)reason {
     // The guest owns its own resolv.conf when the user says so. Checked before
     // the custom list below, so a list left behind in preferences cannot bring
-    // the rewrite back, and paired with releasing 127.0.0.1:53: a root running
+    // the rewrite back, and paired with releasing 127.0.0.53:53: a root running
     // its own resolver wants the file AND the port, and holding one without the
     // other is the half-configured state that breaks it.
     if (UserPreferences.shared.shouldDisableResolvConfRewrite) {
@@ -4781,7 +4805,7 @@ static TerminalViewController *CreateTerminalViewController(void) {
     if (includeLocalDnsServer) {
         if (resolvConf == nil)
             resolvConf = [NSMutableString new];
-        [resolvConf insertString:@"nameserver 127.0.0.1\n" atIndex:0];
+        [resolvConf insertString:@"nameserver " ISH_DNS_RELAY_GUEST_ADDR "\n" atIndex:0];
     }
 
     [ISHDiagnosticsStore recordBreadcrumb:@"dns.refresh.generated"

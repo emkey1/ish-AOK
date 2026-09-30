@@ -202,7 +202,7 @@ extern NSString *const kThemeBackgroundColor;
 @property NSInteger displayDesktopScale;
 @property NSInteger displayUIScale;
 // When YES, AOK never writes the guest's /etc/resolv.conf and never binds the
-// local DNS responder on 127.0.0.1:53, leaving name resolution entirely to the
+// local DNS responder at 127.0.0.53:53, leaving name resolution entirely to the
 // guest. The default (NO) rewrites the file on every network path change, which
 // is what most roots want -- but a root running its own resolver (dnsmasq,
 // systemd-resolved, unbound) owns that file and wants that port, and the
