@@ -514,6 +514,675 @@ vseacc velem_mls, mls, 4h
 vseacc velem_mls, mls, 8h
 vseacc velem_mls, mls, 2s
 vseacc velem_mls, mls, 4s
+.gadget vs2_vabs_8b
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    abs v0.8b, v1.8b
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vabs_16b
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    abs v0.16b, v1.16b
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vabs_4h
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    abs v0.4h, v1.4h
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vabs_8h
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    abs v0.8h, v1.8h
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vabs_2s
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    abs v0.2s, v1.2s
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vabs_4s
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    abs v0.4s, v1.4s
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vabs_2d
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    abs v0.2d, v1.2d
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vneg_8b
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    neg v0.8b, v1.8b
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vneg_16b
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    neg v0.16b, v1.16b
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vneg_4h
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    neg v0.4h, v1.4h
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vneg_8h
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    neg v0.8h, v1.8h
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vneg_2s
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    neg v0.2s, v1.2s
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vneg_4s
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    neg v0.4s, v1.4s
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vneg_2d
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    neg v0.2d, v1.2d
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vcnt_8b
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    cnt v0.8b, v1.8b
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vcnt_16b
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    cnt v0.16b, v1.16b
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vrev64_8b
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    rev64 v0.8b, v1.8b
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vrev64_16b
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    rev64 v0.16b, v1.16b
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vrev64_4h
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    rev64 v0.4h, v1.4h
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vrev64_8h
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    rev64 v0.8h, v1.8h
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vrev64_2s
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    rev64 v0.2s, v1.2s
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vrev64_4s
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    rev64 v0.4s, v1.4s
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vcmeq0_8b
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    cmeq v0.8b, v1.8b, #0
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vcmeq0_16b
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    cmeq v0.16b, v1.16b, #0
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vcmeq0_4h
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    cmeq v0.4h, v1.4h, #0
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vcmeq0_8h
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    cmeq v0.8h, v1.8h, #0
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vcmeq0_2s
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    cmeq v0.2s, v1.2s, #0
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vcmeq0_4s
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    cmeq v0.4s, v1.4s, #0
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vcmeq0_2d
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    cmeq v0.2d, v1.2d, #0
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vcmgt0_8b
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    cmgt v0.8b, v1.8b, #0
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vcmgt0_16b
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    cmgt v0.16b, v1.16b, #0
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vcmgt0_4h
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    cmgt v0.4h, v1.4h, #0
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vcmgt0_8h
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    cmgt v0.8h, v1.8h, #0
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vcmgt0_2s
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    cmgt v0.2s, v1.2s, #0
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vcmgt0_4s
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    cmgt v0.4s, v1.4s, #0
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vcmgt0_2d
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    cmgt v0.2d, v1.2d, #0
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vcmge0_8b
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    cmge v0.8b, v1.8b, #0
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vcmge0_16b
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    cmge v0.16b, v1.16b, #0
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vcmge0_4h
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    cmge v0.4h, v1.4h, #0
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vcmge0_8h
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    cmge v0.8h, v1.8h, #0
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vcmge0_2s
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    cmge v0.2s, v1.2s, #0
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vcmge0_4s
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    cmge v0.4s, v1.4s, #0
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vcmge0_2d
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    cmge v0.2d, v1.2d, #0
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vcmle0_8b
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    cmle v0.8b, v1.8b, #0
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vcmle0_16b
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    cmle v0.16b, v1.16b, #0
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vcmle0_4h
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    cmle v0.4h, v1.4h, #0
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vcmle0_8h
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    cmle v0.8h, v1.8h, #0
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vcmle0_2s
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    cmle v0.2s, v1.2s, #0
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vcmle0_4s
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    cmle v0.4s, v1.4s, #0
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vcmle0_2d
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    cmle v0.2d, v1.2d, #0
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vcmlt0_8b
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    cmlt v0.8b, v1.8b, #0
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vcmlt0_16b
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    cmlt v0.16b, v1.16b, #0
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vcmlt0_4h
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    cmlt v0.4h, v1.4h, #0
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vcmlt0_8h
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    cmlt v0.8h, v1.8h, #0
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vcmlt0_2s
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    cmlt v0.2s, v1.2s, #0
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vcmlt0_4s
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    cmlt v0.4s, v1.4s, #0
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vcmlt0_2d
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    cmlt v0.2d, v1.2d, #0
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vxtn_8b
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    xtn v0.8b, v1.8h
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vxtn_16b
+    ldp x9, x10, [_ip]
+    ldr q0, [_cpu, x9]
+    ldr q1, [_cpu, x10]
+    xtn2 v0.16b, v1.8h
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vxtn_4h
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    xtn v0.4h, v1.4s
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vxtn_8h
+    ldp x9, x10, [_ip]
+    ldr q0, [_cpu, x9]
+    ldr q1, [_cpu, x10]
+    xtn2 v0.8h, v1.4s
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vxtn_2s
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    xtn v0.2s, v1.2d
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vxtn_4s
+    ldp x9, x10, [_ip]
+    ldr q0, [_cpu, x9]
+    ldr q1, [_cpu, x10]
+    xtn2 v0.4s, v1.2d
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vscvtf_2s
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    scvtf v0.2s, v1.2s
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vscvtf_4s
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    scvtf v0.4s, v1.4s
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vscvtf_2d
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    scvtf v0.2d, v1.2d
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vucvtf_2s
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    ucvtf v0.2s, v1.2s
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vucvtf_4s
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    ucvtf v0.4s, v1.4s
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vucvtf_2d
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    ucvtf v0.2d, v1.2d
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vfcvtzs_2s
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    fcvtzs v0.2s, v1.2s
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vfcvtzs_4s
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    fcvtzs v0.4s, v1.4s
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vfcvtzs_2d
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    fcvtzs v0.2d, v1.2d
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vfcvtzu_2s
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    fcvtzu v0.2s, v1.2s
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vfcvtzu_4s
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    fcvtzu v0.4s, v1.4s
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vfcvtzu_2d
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    fcvtzu v0.2d, v1.2d
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vfabs_2s
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    fabs v0.2s, v1.2s
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vfabs_4s
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    fabs v0.4s, v1.4s
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vfabs_2d
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    fabs v0.2d, v1.2d
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vfneg_2s
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    fneg v0.2s, v1.2s
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vfneg_4s
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    fneg v0.4s, v1.4s
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vfneg_2d
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    fneg v0.2d, v1.2d
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vfsqrt_2s
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    fsqrt v0.2s, v1.2s
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vfsqrt_4s
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    fsqrt v0.4s, v1.4s
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vfsqrt_2d
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    fsqrt v0.2d, v1.2d
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vfrintn_2s
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    frintn v0.2s, v1.2s
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vfrintn_4s
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    frintn v0.4s, v1.4s
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vfrintn_2d
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    frintn v0.2d, v1.2d
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vfrintm_2s
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    frintm v0.2s, v1.2s
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vfrintm_4s
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    frintm v0.4s, v1.4s
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vfrintm_2d
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    frintm v0.2d, v1.2d
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vfrintp_2s
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    frintp v0.2s, v1.2s
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vfrintp_4s
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    frintp v0.4s, v1.4s
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vfrintp_2d
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    frintp v0.2d, v1.2d
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vfrintz_2s
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    frintz v0.2s, v1.2s
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vfrintz_4s
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    frintz v0.4s, v1.4s
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vfrintz_2d
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    frintz v0.2d, v1.2d
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vfcmgt0_2s
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    fcmgt v0.2s, v1.2s, #0.0
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vfcmgt0_4s
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    fcmgt v0.4s, v1.4s, #0.0
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vfcmgt0_2d
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    fcmgt v0.2d, v1.2d, #0.0
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vfcmge0_2s
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    fcmge v0.2s, v1.2s, #0.0
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vfcmge0_4s
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    fcmge v0.4s, v1.4s, #0.0
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vfcmge0_2d
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    fcmge v0.2d, v1.2d, #0.0
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vfcmeq0_2s
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    fcmeq v0.2s, v1.2s, #0.0
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vfcmeq0_4s
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    fcmeq v0.4s, v1.4s, #0.0
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vfcmeq0_2d
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    fcmeq v0.2d, v1.2d, #0.0
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vfcmle0_2s
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    fcmle v0.2s, v1.2s, #0.0
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vfcmle0_4s
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    fcmle v0.4s, v1.4s, #0.0
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vfcmle0_2d
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    fcmle v0.2d, v1.2d, #0.0
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vfcmlt0_2s
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    fcmlt v0.2s, v1.2s, #0.0
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vfcmlt0_4s
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    fcmlt v0.4s, v1.4s, #0.0
+    str q0, [_cpu, x9]
+    gret 2
+.gadget vs2_vfcmlt0_2d
+    ldp x9, x10, [_ip]
+    ldr q1, [_cpu, x10]
+    fcmlt v0.2d, v1.2d, #0.0
+    str q0, [_cpu, x9]
+    gret 2
 
 .data
 .balign 8
@@ -802,4 +1471,87 @@ NAME(arm64_vse_index):
     .quad NAME(gadget_arm64_velem_mul), Lvsetab_velem_mul
     .quad NAME(gadget_arm64_velem_mla), Lvsetab_velem_mla
     .quad NAME(gadget_arm64_velem_mls), Lvsetab_velem_mls
+    .quad 0, 0
+
+Lvs2tab_vabs:
+    .quad NAME(gadget_arm64_vs2_vabs_8b), NAME(gadget_arm64_vs2_vabs_16b), NAME(gadget_arm64_vs2_vabs_4h), NAME(gadget_arm64_vs2_vabs_8h), NAME(gadget_arm64_vs2_vabs_2s), NAME(gadget_arm64_vs2_vabs_4s), 0, NAME(gadget_arm64_vs2_vabs_2d)
+Lvs2tab_vneg:
+    .quad NAME(gadget_arm64_vs2_vneg_8b), NAME(gadget_arm64_vs2_vneg_16b), NAME(gadget_arm64_vs2_vneg_4h), NAME(gadget_arm64_vs2_vneg_8h), NAME(gadget_arm64_vs2_vneg_2s), NAME(gadget_arm64_vs2_vneg_4s), 0, NAME(gadget_arm64_vs2_vneg_2d)
+Lvs2tab_vcnt:
+    .quad NAME(gadget_arm64_vs2_vcnt_8b), NAME(gadget_arm64_vs2_vcnt_16b), 0, 0, 0, 0, 0, 0
+Lvs2tab_vrev64:
+    .quad NAME(gadget_arm64_vs2_vrev64_8b), NAME(gadget_arm64_vs2_vrev64_16b), NAME(gadget_arm64_vs2_vrev64_4h), NAME(gadget_arm64_vs2_vrev64_8h), NAME(gadget_arm64_vs2_vrev64_2s), NAME(gadget_arm64_vs2_vrev64_4s), 0, 0
+Lvs2tab_vcmeq0:
+    .quad NAME(gadget_arm64_vs2_vcmeq0_8b), NAME(gadget_arm64_vs2_vcmeq0_16b), NAME(gadget_arm64_vs2_vcmeq0_4h), NAME(gadget_arm64_vs2_vcmeq0_8h), NAME(gadget_arm64_vs2_vcmeq0_2s), NAME(gadget_arm64_vs2_vcmeq0_4s), 0, NAME(gadget_arm64_vs2_vcmeq0_2d)
+Lvs2tab_vcmgt0:
+    .quad NAME(gadget_arm64_vs2_vcmgt0_8b), NAME(gadget_arm64_vs2_vcmgt0_16b), NAME(gadget_arm64_vs2_vcmgt0_4h), NAME(gadget_arm64_vs2_vcmgt0_8h), NAME(gadget_arm64_vs2_vcmgt0_2s), NAME(gadget_arm64_vs2_vcmgt0_4s), 0, NAME(gadget_arm64_vs2_vcmgt0_2d)
+Lvs2tab_vcmge0:
+    .quad NAME(gadget_arm64_vs2_vcmge0_8b), NAME(gadget_arm64_vs2_vcmge0_16b), NAME(gadget_arm64_vs2_vcmge0_4h), NAME(gadget_arm64_vs2_vcmge0_8h), NAME(gadget_arm64_vs2_vcmge0_2s), NAME(gadget_arm64_vs2_vcmge0_4s), 0, NAME(gadget_arm64_vs2_vcmge0_2d)
+Lvs2tab_vcmle0:
+    .quad NAME(gadget_arm64_vs2_vcmle0_8b), NAME(gadget_arm64_vs2_vcmle0_16b), NAME(gadget_arm64_vs2_vcmle0_4h), NAME(gadget_arm64_vs2_vcmle0_8h), NAME(gadget_arm64_vs2_vcmle0_2s), NAME(gadget_arm64_vs2_vcmle0_4s), 0, NAME(gadget_arm64_vs2_vcmle0_2d)
+Lvs2tab_vcmlt0:
+    .quad NAME(gadget_arm64_vs2_vcmlt0_8b), NAME(gadget_arm64_vs2_vcmlt0_16b), NAME(gadget_arm64_vs2_vcmlt0_4h), NAME(gadget_arm64_vs2_vcmlt0_8h), NAME(gadget_arm64_vs2_vcmlt0_2s), NAME(gadget_arm64_vs2_vcmlt0_4s), 0, NAME(gadget_arm64_vs2_vcmlt0_2d)
+Lvs2tab_vxtn:
+    .quad NAME(gadget_arm64_vs2_vxtn_8b), NAME(gadget_arm64_vs2_vxtn_16b), NAME(gadget_arm64_vs2_vxtn_4h), NAME(gadget_arm64_vs2_vxtn_8h), NAME(gadget_arm64_vs2_vxtn_2s), NAME(gadget_arm64_vs2_vxtn_4s), 0, 0
+Lvs2tab_vscvtf:
+    .quad NAME(gadget_arm64_vs2_vscvtf_2s), NAME(gadget_arm64_vs2_vscvtf_4s), 0, NAME(gadget_arm64_vs2_vscvtf_2d), 0, 0, 0, 0
+Lvs2tab_vucvtf:
+    .quad NAME(gadget_arm64_vs2_vucvtf_2s), NAME(gadget_arm64_vs2_vucvtf_4s), 0, NAME(gadget_arm64_vs2_vucvtf_2d), 0, 0, 0, 0
+Lvs2tab_vfcvtzs:
+    .quad NAME(gadget_arm64_vs2_vfcvtzs_2s), NAME(gadget_arm64_vs2_vfcvtzs_4s), 0, NAME(gadget_arm64_vs2_vfcvtzs_2d), 0, 0, 0, 0
+Lvs2tab_vfcvtzu:
+    .quad NAME(gadget_arm64_vs2_vfcvtzu_2s), NAME(gadget_arm64_vs2_vfcvtzu_4s), 0, NAME(gadget_arm64_vs2_vfcvtzu_2d), 0, 0, 0, 0
+Lvs2tab_vfabs:
+    .quad NAME(gadget_arm64_vs2_vfabs_2s), NAME(gadget_arm64_vs2_vfabs_4s), 0, NAME(gadget_arm64_vs2_vfabs_2d), 0, 0, 0, 0
+Lvs2tab_vfneg:
+    .quad NAME(gadget_arm64_vs2_vfneg_2s), NAME(gadget_arm64_vs2_vfneg_4s), 0, NAME(gadget_arm64_vs2_vfneg_2d), 0, 0, 0, 0
+Lvs2tab_vfsqrt:
+    .quad NAME(gadget_arm64_vs2_vfsqrt_2s), NAME(gadget_arm64_vs2_vfsqrt_4s), 0, NAME(gadget_arm64_vs2_vfsqrt_2d), 0, 0, 0, 0
+Lvs2tab_vfrintn:
+    .quad NAME(gadget_arm64_vs2_vfrintn_2s), NAME(gadget_arm64_vs2_vfrintn_4s), 0, NAME(gadget_arm64_vs2_vfrintn_2d), 0, 0, 0, 0
+Lvs2tab_vfrintm:
+    .quad NAME(gadget_arm64_vs2_vfrintm_2s), NAME(gadget_arm64_vs2_vfrintm_4s), 0, NAME(gadget_arm64_vs2_vfrintm_2d), 0, 0, 0, 0
+Lvs2tab_vfrintp:
+    .quad NAME(gadget_arm64_vs2_vfrintp_2s), NAME(gadget_arm64_vs2_vfrintp_4s), 0, NAME(gadget_arm64_vs2_vfrintp_2d), 0, 0, 0, 0
+Lvs2tab_vfrintz:
+    .quad NAME(gadget_arm64_vs2_vfrintz_2s), NAME(gadget_arm64_vs2_vfrintz_4s), 0, NAME(gadget_arm64_vs2_vfrintz_2d), 0, 0, 0, 0
+Lvs2tab_vfcmgt0:
+    .quad NAME(gadget_arm64_vs2_vfcmgt0_2s), NAME(gadget_arm64_vs2_vfcmgt0_4s), 0, NAME(gadget_arm64_vs2_vfcmgt0_2d), 0, 0, 0, 0
+Lvs2tab_vfcmge0:
+    .quad NAME(gadget_arm64_vs2_vfcmge0_2s), NAME(gadget_arm64_vs2_vfcmge0_4s), 0, NAME(gadget_arm64_vs2_vfcmge0_2d), 0, 0, 0, 0
+Lvs2tab_vfcmeq0:
+    .quad NAME(gadget_arm64_vs2_vfcmeq0_2s), NAME(gadget_arm64_vs2_vfcmeq0_4s), 0, NAME(gadget_arm64_vs2_vfcmeq0_2d), 0, 0, 0, 0
+Lvs2tab_vfcmle0:
+    .quad NAME(gadget_arm64_vs2_vfcmle0_2s), NAME(gadget_arm64_vs2_vfcmle0_4s), 0, NAME(gadget_arm64_vs2_vfcmle0_2d), 0, 0, 0, 0
+Lvs2tab_vfcmlt0:
+    .quad NAME(gadget_arm64_vs2_vfcmlt0_2s), NAME(gadget_arm64_vs2_vfcmlt0_4s), 0, NAME(gadget_arm64_vs2_vfcmlt0_2d), 0, 0, 0, 0
+// Two-register misc: [gadget][d_off][n_off], indexed size*2+Q (FP: sz*2+Q).
+.global NAME(arm64_vs2_index)
+NAME(arm64_vs2_index):
+    .quad NAME(gadget_arm64_vabs), Lvs2tab_vabs
+    .quad NAME(gadget_arm64_vneg), Lvs2tab_vneg
+    .quad NAME(gadget_arm64_vcnt), Lvs2tab_vcnt
+    .quad NAME(gadget_arm64_vrev64), Lvs2tab_vrev64
+    .quad NAME(gadget_arm64_vcmeq0), Lvs2tab_vcmeq0
+    .quad NAME(gadget_arm64_vcmgt0), Lvs2tab_vcmgt0
+    .quad NAME(gadget_arm64_vcmge0), Lvs2tab_vcmge0
+    .quad NAME(gadget_arm64_vcmle0), Lvs2tab_vcmle0
+    .quad NAME(gadget_arm64_vcmlt0), Lvs2tab_vcmlt0
+    .quad NAME(gadget_arm64_vxtn), Lvs2tab_vxtn
+    .quad NAME(gadget_arm64_vscvtf), Lvs2tab_vscvtf
+    .quad NAME(gadget_arm64_vucvtf), Lvs2tab_vucvtf
+    .quad NAME(gadget_arm64_vfcvtzs), Lvs2tab_vfcvtzs
+    .quad NAME(gadget_arm64_vfcvtzu), Lvs2tab_vfcvtzu
+    .quad NAME(gadget_arm64_vfabs), Lvs2tab_vfabs
+    .quad NAME(gadget_arm64_vfneg), Lvs2tab_vfneg
+    .quad NAME(gadget_arm64_vfsqrt), Lvs2tab_vfsqrt
+    .quad NAME(gadget_arm64_vfrintn), Lvs2tab_vfrintn
+    .quad NAME(gadget_arm64_vfrintm), Lvs2tab_vfrintm
+    .quad NAME(gadget_arm64_vfrintp), Lvs2tab_vfrintp
+    .quad NAME(gadget_arm64_vfrintz), Lvs2tab_vfrintz
+    .quad NAME(gadget_arm64_vfcmgt0), Lvs2tab_vfcmgt0
+    .quad NAME(gadget_arm64_vfcmge0), Lvs2tab_vfcmge0
+    .quad NAME(gadget_arm64_vfcmeq0), Lvs2tab_vfcmeq0
+    .quad NAME(gadget_arm64_vfcmle0), Lvs2tab_vfcmle0
+    .quad NAME(gadget_arm64_vfcmlt0), Lvs2tab_vfcmlt0
     .quad 0, 0

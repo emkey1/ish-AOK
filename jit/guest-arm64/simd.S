@@ -149,6 +149,30 @@ vlane_store_fast vlane_st8_fast,   8, ldrb, strb, w17
 vlane_store_fast vlane_st16_fast, 16, ldrh, strh, w17
 vlane_store_fast vlane_st32_fast, 32, ldr,  str,  w17
 vlane_store_fast vlane_st64_fast, 64, ldr,  str,  x17
+
+// LD1R {Vt.T}, [xn], no writeback: the host's own ld1r, by arrangement --
+// [gadget][vt_slot][rn_slot][orig_ip]. A Q=0 arrangement zeroes the upper
+// half, as the architecture does. The generic ldst_struct path cost 42 ns
+// on an A10X for `ld1r {v0.4s}, [x11]`.
+.macro vld1r_fast name, bits, arr
+.gadget \name
+    ldp x8, x9, [_ip]         // vt_slot, rn_slot
+    add _ip, _ip, #24
+    ldr x7, [_cpu, x9]
+    read_prep \bits, \name
+    ld1r {v31\arr}, [_addr]
+    str q31, [_cpu, x8]
+    gret
+    read_bullshit \bits, \name
+.endm
+vld1r_fast vld1r_8b_fast,   8,  .8b
+vld1r_fast vld1r_16b_fast,  8,  .16b
+vld1r_fast vld1r_4h_fast,  16,  .4h
+vld1r_fast vld1r_8h_fast,  16,  .8h
+vld1r_fast vld1r_2s_fast,  32,  .2s
+vld1r_fast vld1r_4s_fast,  32,  .4s
+vld1r_fast vld1r_1d_fast,  64,  .1d
+vld1r_fast vld1r_2d_fast,  64,  .2d
 vstore_single vstore8,     8, str, b31
 vstore_single vstore16,   16, str, h31
 vstore_single vstore32,   32, str, s31

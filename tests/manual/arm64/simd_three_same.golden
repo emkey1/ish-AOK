@@ -539,3 +539,222 @@
 0x751bfd41baced2b6ull, // sshll2 v5.4s, v17.8h, #5
 0x60cbc885e05a8e61ull, // ushll2 v5.2d, v17.4s, #31
 0x2390cd55691440f1ull, // sshll v5.2d, v17.2s, #1
+0xbea993a46e328756ull, // abs v5.8b, v17.8b
+0xe966899134a105b2ull, // abs v5.16b, v17.16b
+0x33483174dca015a0ull, // abs v5.4h, v17.4h
+0xb920daef5b0fdb5eull, // abs v5.8h, v17.8h
+0x6a6d63b97b803959ull, // abs v5.2s, v17.2s
+0xa7d1310bf06d2a9dull, // abs v5.4s, v17.4s
+0xe51e2eeda0a6ab50ull, // abs v5.2d, v17.2d
+0xd7d54cf0c7887de2ull, // neg v5.8b, v17.8b
+0xb2c6135a8657e38aull, // neg v5.16b, v17.16b
+0x31f971ddffe594bbull, // neg v5.4h, v17.4h
+0xa7c86f04f27c4d2aull, // neg v5.8h, v17.8h
+0xc58a3e116d62c1efull, // neg v5.2s, v17.2s
+0x08df6bbf5349e292ull, // neg v5.4s, v17.4s
+0x51c21461cab48210ull, // neg v5.2d, v17.2d
+0x8cbdeffcd521856dull, // cnt v5.8b, v17.8b
+0x8a7d1c187cff9ba3ull, // cnt v5.16b, v17.16b
+0xbfa750c21c560782ull, // rev64 v5.8b, v17.8b
+0x987138bbd4ca1212ull, // rev64 v5.16b, v17.16b
+0xb25c6e15ad74bb30ull, // rev64 v5.4h, v17.4h
+0x021eec29449774b8ull, // rev64 v5.8h, v17.8h
+0xd7a2b0076a686b78ull, // rev64 v5.2s, v17.2s
+0x3eceae50d8662800ull, // rev64 v5.4s, v17.4s
+0xee44c129ddf4bc66ull, // cmeq v5.8b, v17.8b, #0
+0x4c4a8e6862f50445ull, // cmeq v5.16b, v17.16b, #0
+0x1516b62e44f86c51ull, // cmeq v5.4h, v17.4h, #0
+0x45fded20292e577dull, // cmeq v5.8h, v17.8h, #0
+0x0c8210784d8af5a5ull, // cmeq v5.2s, v17.2s, #0
+0x0c8210784d8af5a5ull, // cmeq v5.4s, v17.4s, #0
+0x0c8210784d8af5a5ull, // cmeq v5.2d, v17.2d, #0
+0xa39224b453be9011ull, // cmgt v5.8b, v17.8b, #0
+0xb98bb1558025c245ull, // cmgt v5.16b, v17.16b, #0
+0x78f8d6424b3eda4dull, // cmgt v5.4h, v17.4h, #0
+0x5398a365ee375cb9ull, // cmgt v5.8h, v17.8h, #0
+0xeb8d8582ad71eef9ull, // cmgt v5.2s, v17.2s, #0
+0x7d551ff4fda978b1ull, // cmgt v5.4s, v17.4s, #0
+0x9ac5e12119fd3f85ull, // cmgt v5.2d, v17.2d, #0
+0xb5fc26af89c93fbeull, // cmge v5.8b, v17.8b, #0
+0x48bdbd48d09d8569ull, // cmge v5.16b, v17.16b, #0
+0xeb8d8582ad71eef9ull, // cmge v5.4h, v17.4h, #0
+0xbd0c29d55530a691ull, // cmge v5.8h, v17.8h, #0
+0xeb8d8582ad71eef9ull, // cmge v5.2s, v17.2s, #0
+0x7d551ff4fda978b1ull, // cmge v5.4s, v17.4s, #0
+0x9ac5e12119fd3f85ull, // cmge v5.2d, v17.2d, #0
+0x1e0e9406a4b2ab3dull, // cmle v5.8b, v17.8b, #0
+0xb79e0edcfaa0fe1dull, // cmle v5.16b, v17.16b, #0
+0x295f6a941f9b1bedull, // cmle v5.4h, v17.4h, #0
+0xfd9fd08456491071ull, // cmle v5.8h, v17.8h, #0
+0x6d56f9eb4bacb141ull, // cmle v5.2s, v17.2s, #0
+0xd02f66d1e4fcfa79ull, // cmle v5.4s, v17.4s, #0
+0x0c8210784d8af5a5ull, // cmle v5.2d, v17.2d, #0
+0xf175a8d5b6d594ceull, // cmlt v5.8b, v17.8b, #0
+0x6f498fe558143f29ull, // cmlt v5.16b, v17.16b, #0
+0x6d56f9eb4bacb141ull, // cmlt v5.4h, v17.4h, #0
+0x0f832ee53e06fe99ull, // cmlt v5.8h, v17.8h, #0
+0x6d56f9eb4bacb141ull, // cmlt v5.2s, v17.2s, #0
+0xd02f66d1e4fcfa79ull, // cmlt v5.4s, v17.4s, #0
+0x0c8210784d8af5a5ull, // cmlt v5.2d, v17.2d, #0
+0x5c5969bfb5f0de9dull, // xtn v5.8b, v17.8h
+0xd11fcfc964654a00ull, // xtn2 v5.16b, v17.8h
+0x2a61161c184cb4b5ull, // xtn v5.4h, v17.4s
+0x12b018173d1217b8ull, // xtn2 v5.8h, v17.4s
+0x0451e17adf265dedull, // xtn v5.2s, v17.2d
+0x3ea8f2cffc888c90ull, // xtn2 v5.4s, v17.2d
+0x46632ba60814b3e8ull, // scvtf v5.2s, v17.2s
+0x6ff46837bc2235dfull, // scvtf v5.4s, v17.4s
+0xc97dac7c7ad60388ull, // scvtf v5.2d, v17.2d
+0x44a83e58f52bb650ull, // ucvtf v5.2s, v17.2s
+0x77712356f5d7edb1ull, // ucvtf v5.4s, v17.4s
+0xc97dac7c7ad60388ull, // ucvtf v5.2d, v17.2d
+0xdc50e553e358cbc2ull, // fcvtzs v5.2s, v17.2s
+0x7bc23dd807f76842ull, // fcvtzs v5.4s, v17.4s
+0x71ec592eb1035edfull, // fcvtzs v5.2d, v17.2d
+0x2cfae146c70ab1c2ull, // fcvtzu v5.2s, v17.2s
+0xed0589361a9f38a0ull, // fcvtzu v5.4s, v17.4s
+0x0a7397c13461f55full, // fcvtzu v5.2d, v17.2d
+0x4baab67fd622ac28ull, // fabs v5.2s, v17.2s
+0x94d79b286a270cd0ull, // fabs v5.4s, v17.4s
+0xe51e2eeda0a6ab50ull, // fabs v5.2d, v17.2d
+0xa0af66b671d1eaa8ull, // fneg v5.2s, v17.2s
+0xb955292ebd4e1050ull, // fneg v5.4s, v17.4s
+0xe2e2539db7446750ull, // fneg v5.2d, v17.2d
+0x1b98894a6f1f0761ull, // fsqrt v5.2s, v17.2s
+0xc586e10499198b9dull, // fsqrt v5.4s, v17.4s
+0x3ba505903b5b9f8cull, // fsqrt v5.2d, v17.2d
+0x576374033a15e005ull, // frintn v5.2s, v17.2s
+0x85939625e25ca9a2ull, // frintn v5.4s, v17.4s
+0xf7599ea02928cdc5ull, // frintn v5.2d, v17.2d
+0x576374033a15e005ull, // frintm v5.2s, v17.2s
+0x41c73697b775dafbull, // frintm v5.4s, v17.4s
+0xf7599ea02928cdc5ull, // frintm v5.2d, v17.2d
+0x3c2d492b03add528ull, // frintp v5.2s, v17.2s
+0x43f2d247e9aaf145ull, // frintp v5.4s, v17.4s
+0x618d1468d18983ddull, // frintp v5.2d, v17.2d
+0x576374033a15e005ull, // frintz v5.2s, v17.2s
+0xd9dce6372501bea5ull, // frintz v5.4s, v17.4s
+0xf7599ea02928cdc5ull, // frintz v5.2d, v17.2d
+0xeb8d8582ad71eef9ull, // fcmgt v5.2s, v17.2s, #0.0
+0x7d551ff4fda978b1ull, // fcmgt v5.4s, v17.4s, #0.0
+0x9ac5e12119fd3f85ull, // fcmgt v5.2d, v17.2d, #0.0
+0xeb8d8582ad71eef9ull, // fcmge v5.2s, v17.2s, #0.0
+0x7d551ff4fda978b1ull, // fcmge v5.4s, v17.4s, #0.0
+0x9ac5e12119fd3f85ull, // fcmge v5.2d, v17.2d, #0.0
+0x0c8210784d8af5a5ull, // fcmeq v5.2s, v17.2s, #0.0
+0x0c8210784d8af5a5ull, // fcmeq v5.4s, v17.4s, #0.0
+0x0c8210784d8af5a5ull, // fcmeq v5.2d, v17.2d, #0.0
+0x6d56f9eb4bacb141ull, // fcmle v5.2s, v17.2s, #0.0
+0xd02f66d1e4fcfa79ull, // fcmle v5.4s, v17.4s, #0.0
+0x0c8210784d8af5a5ull, // fcmle v5.2d, v17.2d, #0.0
+0x6d56f9eb4bacb141ull, // fcmlt v5.2s, v17.2s, #0.0
+0xd02f66d1e4fcfa79ull, // fcmlt v5.4s, v17.4s, #0.0
+0x0c8210784d8af5a5ull, // fcmlt v5.2d, v17.2d, #0.0
+0x4c88dc1af6ce9390ull, // sshr v5.8b, v17.8b, #1
+0xe2cd46392d854d10ull, // ushr v5.8b, v17.8b, #1
+0x878b183afff3ac8aull, // sshr v5.8b, v17.8b, #3
+0xf67ef968c009272aull, // ushr v5.8b, v17.8b, #3
+0x8374996070de8a81ull, // sshr v5.8b, v17.8b, #4
+0x4ac0cfd239813971ull, // ushr v5.8b, v17.8b, #4
+0xf175a8d5b6d594ceull, // sshr v5.8b, v17.8b, #8
+0x0c8210784d8af5a5ull, // ushr v5.8b, v17.8b, #8
+0x8ebdcaecabbef9a8ull, // shl v5.8b, v17.8b, #0
+0x27108ef53895d84bull, // shl v5.8b, v17.8b, #1
+0x5505b79a94f63db5ull, // shl v5.8b, v17.8b, #4
+0x0c5fecb7cd7c4f25ull, // shl v5.8b, v17.8b, #7
+0x7f90d3e027666ce4ull, // sshr v5.16b, v17.16b, #1
+0x2c1a27b4c6b641e4ull, // ushr v5.16b, v17.16b, #1
+0xdee47d0e09ec32cbull, // sshr v5.16b, v17.16b, #3
+0x4caffc202ff56a8bull, // ushr v5.16b, v17.16b, #3
+0x29b23228a8d8da83ull, // sshr v5.16b, v17.16b, #4
+0xd4fc4112ea614603ull, // ushr v5.16b, v17.16b, #4
+0x6f498fe558143f29ull, // sshr v5.16b, v17.16b, #8
+0x0c8210784d8af5a5ull, // ushr v5.16b, v17.16b, #8
+0xe51e2eeda0a6ab50ull, // shl v5.16b, v17.16b, #0
+0x5658c95c91f2064bull, // shl v5.16b, v17.16b, #1
+0x03725e286408ff35ull, // shl v5.16b, v17.16b, #4
+0xb0c2168801e3a725ull, // shl v5.16b, v17.16b, #7
+0x53239bfa46392d90ull, // sshr v5.4h, v17.4h, #1
+0x355dc7fad5967190ull, // ushr v5.4h, v17.4h, #1
+0xd51ca473ad18ebcaull, // sshr v5.4h, v17.4h, #3
+0x2d26c71f27a06ccaull, // ushr v5.4h, v17.4h, #3
+0xeac7ad8c6fd9b8aeull, // sshr v5.4h, v17.4h, #8
+0x077ad3b0b9b92752ull, // ushr v5.4h, v17.4h, #8
+0x6d56f9eb4bacb141ull, // sshr v5.4h, v17.4h, #16
+0x0c8210784d8af5a5ull, // ushr v5.4h, v17.4h, #16
+0x8ebdcaecabbef9a8ull, // shl v5.4h, v17.4h, #0
+0x96ff5009c6111ac0ull, // shl v5.4h, v17.4h, #1
+0xbad5669ee10607a5ull, // shl v5.4h, v17.4h, #8
+0x0b74073542f008a5ull, // shl v5.4h, v17.4h, #15
+0xa74ecfaa6d2ddc64ull, // sshr v5.8h, v17.8h, #1
+0xd989a5f31ea51d64ull, // ushr v5.8h, v17.8h, #1
+0x70be864694f7c3abull, // sshr v5.8h, v17.8h, #3
+0x0b576f6a972363abull, // ushr v5.8h, v17.8h, #3
+0x8e078b389de63822ull, // sshr v5.8h, v17.8h, #8
+0x98db98cedc788d12ull, // ushr v5.8h, v17.8h, #8
+0x0f832ee53e06fe99ull, // sshr v5.8h, v17.8h, #16
+0x0c8210784d8af5a5ull, // ushr v5.8h, v17.8h, #16
+0xe51e2eeda0a6ab50ull, // shl v5.8h, v17.8h, #0
+0xa56cec1460f1bf87ull, // shl v5.8h, v17.8h, #1
+0x89d998d1d0b6334dull, // shl v5.8h, v17.8h, #8
+0x104f32c8f580bba5ull, // shl v5.8h, v17.8h, #15
+0xf8c38f280cb07f10ull, // sshr v5.2s, v17.2s, #1
+0x044aeeaf28065490ull, // ushr v5.2s, v17.2s, #1
+0xe54a810691f92a2aull, // sshr v5.2s, v17.2s, #3
+0x42ebe52b8258c14aull, // ushr v5.2s, v17.2s, #3
+0xc071c03142382336ull, // sshr v5.2s, v17.2s, #16
+0xec92a5988818ee54ull, // ushr v5.2s, v17.2s, #16
+0x6d56f9eb4bacb141ull, // sshr v5.2s, v17.2s, #32
+0x0c8210784d8af5a5ull, // ushr v5.2s, v17.2s, #32
+0x8ebdcaecabbef9a8ull, // shl v5.2s, v17.2s, #0
+0x0b9d7c7153bbde6dull, // shl v5.2s, v17.2s, #1
+0xc632ebf61c285d55ull, // shl v5.2s, v17.2s, #16
+0x7812887fd1c59da5ull, // shl v5.2s, v17.2s, #31
+0x37321e6f181db9e4ull, // sshr v5.4s, v17.4s, #1
+0x83a6d6d99664e864ull, // ushr v5.4s, v17.4s, #1
+0x82b6ebf50fb0c58bull, // sshr v5.4s, v17.4s, #3
+0x91f5e8c159025febull, // ushr v5.4s, v17.4s, #3
+0xd403bdc15325a71aull, // sshr v5.4s, v17.4s, #16
+0xf236f39f5cc0e790ull, // ushr v5.4s, v17.4s, #16
+0xd02f66d1e4fcfa79ull, // sshr v5.4s, v17.4s, #32
+0x0c8210784d8af5a5ull, // ushr v5.4s, v17.4s, #32
+0xe51e2eeda0a6ab50ull, // shl v5.4s, v17.4s, #0
+0x2aa58f8ccc0dbf66ull, // shl v5.4s, v17.4s, #1
+0x2aa7532e17cf7575ull, // shl v5.4s, v17.4s, #16
+0x25ab5f8b1cbb45a5ull, // shl v5.4s, v17.4s, #31
+0xdfc0893070688864ull, // sshr v5.2d, v17.2d, #1
+0xdfc0893070688864ull, // ushr v5.2d, v17.2d, #1
+0x0438e650f56a59ebull, // sshr v5.2d, v17.2d, #3
+0x0438e650f56a59ebull, // ushr v5.2d, v17.2d, #3
+0xd11b34f7d691a8b8ull, // sshr v5.2d, v17.2d, #32
+0xd11b34f7d691a8b8ull, // ushr v5.2d, v17.2d, #32
+0x0c8210784d8af5a5ull, // sshr v5.2d, v17.2d, #64
+0x0c8210784d8af5a5ull, // ushr v5.2d, v17.2d, #64
+0xe51e2eeda0a6ab50ull, // shl v5.2d, v17.2d, #0
+0x5ed4bdd7299a3fdfull, // shl v5.2d, v17.2d, #1
+0x6728507d64e6e40dull, // shl v5.2d, v17.2d, #32
+0x10ab4b413d04c5a5ull, // shl v5.2d, v17.2d, #63
+0xe51e2eeda0a6ab50ull, // ext v5.16b, v17.16b, v29.16b, #0
+0x77261f12e46fee49ull, // ext v5.16b, v17.16b, v29.16b, #1
+0xc06d75e894aee92cull, // ext v5.16b, v17.16b, v29.16b, #2
+0x3200331e93d34549ull, // ext v5.16b, v17.16b, v29.16b, #3
+0x13e355b70a512805ull, // ext v5.16b, v17.16b, v29.16b, #4
+0xbe38b7a6850ac91eull, // ext v5.16b, v17.16b, v29.16b, #5
+0x61e705def4c471f1ull, // ext v5.16b, v17.16b, v29.16b, #6
+0xbc77317e1a298c7eull, // ext v5.16b, v17.16b, v29.16b, #7
+0x5ce6591d92373ac0ull, // ext v5.16b, v17.16b, v29.16b, #8
+0x3d28355b9bcc88d1ull, // ext v5.16b, v17.16b, v29.16b, #9
+0x4f928a0b3ded2524ull, // ext v5.16b, v17.16b, v29.16b, #10
+0x990fbcbde97c5d31ull, // ext v5.16b, v17.16b, v29.16b, #11
+0xef43130aee3a882aull, // ext v5.16b, v17.16b, v29.16b, #12
+0xf15d2bdcb66acf37ull, // ext v5.16b, v17.16b, v29.16b, #13
+0xc4f7cec56cd90176ull, // ext v5.16b, v17.16b, v29.16b, #14
+0xe1b29669a850b067ull, // ext v5.16b, v17.16b, v29.16b, #15
+0x8ebdcaecabbef9a8ull, // ext v5.8b, v17.8b, v29.8b, #0
+0x7f9a2c6d306cc149ull, // ext v5.8b, v17.8b, v29.8b, #1
+0xff29a8b9ece69054ull, // ext v5.8b, v17.8b, v29.8b, #2
+0xfa471140dc2f5251ull, // ext v5.8b, v17.8b, v29.8b, #3
+0xdc06b1ebe686bcfdull, // ext v5.8b, v17.8b, v29.8b, #4
+0xcbb0784fb271465eull, // ext v5.8b, v17.8b, v29.8b, #5
+0x7d3c47233fc242b9ull, // ext v5.8b, v17.8b, v29.8b, #6
+0xafd61a4291637706ull, // ext v5.8b, v17.8b, v29.8b, #7

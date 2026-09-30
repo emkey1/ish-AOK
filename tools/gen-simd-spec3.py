@@ -119,6 +119,40 @@ velem_mla mla HS ACC
 velem_mls mls HS ACC
 """
 
+# Two-register misc, [gadget][d_off][n_off]: name, template, class. The
+# template's {a} is the arrangement; class as above, or FP (sz*2+Q), or XTN
+# (narrows: source is the double-width arrangement, the Q=1 form is the
+# "2" variant writing the upper half and keeping the lower, so it reads Vd).
+TWO_OPS = """
+vabs|abs v0.{a}, v1.{a}|D
+vneg|neg v0.{a}, v1.{a}|D
+vcnt|cnt v0.{a}, v1.{a}|B
+vrev64|rev64 v0.{a}, v1.{a}|NOD
+vcmeq0|cmeq v0.{a}, v1.{a}, #0|D
+vcmgt0|cmgt v0.{a}, v1.{a}, #0|D
+vcmge0|cmge v0.{a}, v1.{a}, #0|D
+vcmle0|cmle v0.{a}, v1.{a}, #0|D
+vcmlt0|cmlt v0.{a}, v1.{a}, #0|D
+vxtn|xtn|XTN
+vscvtf|scvtf v0.{a}, v1.{a}|FP
+vucvtf|ucvtf v0.{a}, v1.{a}|FP
+vfcvtzs|fcvtzs v0.{a}, v1.{a}|FP
+vfcvtzu|fcvtzu v0.{a}, v1.{a}|FP
+vfabs|fabs v0.{a}, v1.{a}|FP
+vfneg|fneg v0.{a}, v1.{a}|FP
+vfsqrt|fsqrt v0.{a}, v1.{a}|FP
+vfrintn|frintn v0.{a}, v1.{a}|FP
+vfrintm|frintm v0.{a}, v1.{a}|FP
+vfrintp|frintp v0.{a}, v1.{a}|FP
+vfrintz|frintz v0.{a}, v1.{a}|FP
+vfcmgt0|fcmgt v0.{a}, v1.{a}, #0.0|FP
+vfcmge0|fcmge v0.{a}, v1.{a}, #0.0|FP
+vfcmeq0|fcmeq v0.{a}, v1.{a}, #0.0|FP
+vfcmle0|fcmle v0.{a}, v1.{a}, #0.0|FP
+vfcmlt0|fcmlt v0.{a}, v1.{a}, #0.0|FP
+"""
+XTN_SRC = {"8b": "8h", "16b": "8h", "4h": "4s", "8h": "4s", "2s": "2d", "4s": "2d"}
+
 INT_ARR = ["8b", "16b", "4h", "8h", "2s", "4s", None, "2d"]   # size*2+Q
 FP_ARR = ["2s", "4s", None, "2d", None, None, None, None]      # sz*2+Q
 LOGIC_ARR = ["8b", "16b", None, None, None, None, None, None]  # Q
@@ -257,6 +291,34 @@ def main():
         etables.append((name, ents))
         eindex.append((name, name))
 
+    ttables, tindex = [], []
+    for line in TWO_OPS.strip().splitlines():
+        name, tmpl, cls = line.split("|")
+        ents = []
+        for i in range(8):
+            if cls == "FP":
+                a = FP_ARR[i]
+            elif cls == "XTN":
+                a = INT_ARR[i] if i < 6 else None
+            else:
+                a = INT_ARR[i] if int_valid(cls, i) else None
+            if a is None:
+                ents.append("0")
+                continue
+            acc = False
+            if cls == "XTN":
+                q = i & 1
+                insn = ("xtn2 v0.%s, v1.%s" if q else "xtn v0.%s, v1.%s") % (a, XTN_SRC[a])
+                acc = bool(q)
+            else:
+                insn = tmpl.format(a=a)
+            g = "vs2_%s_%s" % (name, a)
+            body.append(".gadget %s\n    ldp x9, x10, [_ip]\n%s    ldr q1, [_cpu, x10]\n    %s\n    str q0, [_cpu, x9]\n    gret 2"
+                        % (g, "    ldr q0, [_cpu, x9]\n" if acc else "", insn))
+            ents.append("NAME(gadget_arm64_%s)" % g)
+        ttables.append((name, ents))
+        tindex.append((name, name))
+
     out = [HEADER]
     out += body
     out.append("\n.data\n.balign 8")
@@ -272,6 +334,13 @@ def main():
     out.append(".global NAME(arm64_vse_index)\nNAME(arm64_vse_index):")
     for generic, name in eindex:
         out.append("    .quad NAME(gadget_arm64_%s), Lvsetab_%s" % (generic, name))
+    out.append("    .quad 0, 0\n")
+    for name, ents in ttables:
+        out.append("Lvs2tab_%s:\n    .quad %s" % (name, ", ".join(ents)))
+    out.append("// Two-register misc: [gadget][d_off][n_off], indexed size*2+Q (FP: sz*2+Q).")
+    out.append(".global NAME(arm64_vs2_index)\nNAME(arm64_vs2_index):")
+    for generic, name in tindex:
+        out.append("    .quad NAME(gadget_arm64_%s), Lvs2tab_%s" % (generic, name))
     out.append("    .quad 0, 0\n")
     with open(out_path, "w") as f:
         f.write("\n".join(out))

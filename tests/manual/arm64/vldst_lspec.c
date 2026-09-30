@@ -27,7 +27,7 @@ static void on_segv(int sig, siginfo_t *si, void *ctx) {
     fault_pc = (uintptr_t) ((ucontext_t *) ctx)->uc_mcontext.pc;
     siglongjmp(jb, 1);
 }
-extern char vl_fault_ld[], vl_fault_st[], vl_fault_lane[];
+extern char vl_fault_ld[], vl_fault_st[], vl_fault_lane[], vl_fault_r1[];
 #endif
 
 static int fails;
@@ -160,6 +160,19 @@ int main(void) {
         LANE_LD("s", 1, 4); LANE_LD("s", 3, 4); LANE_LD("d", 0, 8); LANE_LD("d", 1, 8);
 #undef LANE_LD
     }
+    // LD1R {Vt.T}, [xn]: the element in every lane; Q=0 clears the upper half.
+    {
+        unsigned char got[16], want[16];
+#define R1(T, esize, q) do { \
+        __asm__ volatile("movi v27.2d, #0xffffffffffffffff\n ld1r {v27." T "}, [%1]\n str q27, [%0]" \
+                         :: "r"(got), "r"(buf + 330) : "v27", "memory"); \
+        memset(want, 0, 16); \
+        for (int k = 0; k < ((q) ? 16 : 8); k += (esize)) memcpy(want + k, buf + 330, esize); \
+        CHECK(!memcmp(got, want, 16), "ld1r {v27." T "}"); } while (0)
+        R1("8b", 1, 0); R1("16b", 1, 1); R1("4h", 2, 0); R1("8h", 2, 1);
+        R1("2s", 4, 0); R1("4s", 4, 1); R1("1d", 8, 0); R1("2d", 8, 1);
+#undef R1
+    }
     // ST1 {Vt.T}[lane], [xn]: exactly the lane's bytes land.
     {
         unsigned char dst[32], want[32];
@@ -198,6 +211,11 @@ int main(void) {
             __asm__ volatile("mov x9, %0\n .globl vl_fault_lane\n vl_fault_lane: ld1 {v6.s}[2], [x9]"
                              :: "r"(page + 4096) : "x9", "v6", "memory");
         CHECK(fault_pc == (uintptr_t) vl_fault_lane, "lane load fault pc");
+        fault_pc = 0;
+        if (!sigsetjmp(jb, 1))
+            __asm__ volatile("mov x9, %0\n .globl vl_fault_r1\n vl_fault_r1: ld1r {v6.8h}, [x9]"
+                             :: "r"(page + 4096) : "x9", "v6", "memory");
+        CHECK(fault_pc == (uintptr_t) vl_fault_r1, "ld1r fault pc");
     }
 #endif
     printf("vldst_lspec: %s\n", fails ? "FAIL" : "PASS");

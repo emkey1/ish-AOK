@@ -127,3 +127,39 @@ vspec_xtl vspec_uxtl_4h,  uxtl,  .4h,  .4s
 vspec_xtl vspec_uxtl2_8h,  uxtl2, .8h,  .4s
 vspec_xtl vspec_uxtl_2s,  uxtl,  .2s,  .2d
 vspec_xtl vspec_uxtl2_4s,  uxtl2, .4s,  .2d
+
+// SSHR/USHR/SHL by arrangement: [gadget][d_off][n_off][amount]. The generic
+// vshift_gadget's body (dup the signed amount, register-form shift: negative
+// shifts right) fed offsets instead of a packed word. The accumulating and
+// rounding forms keep their generic gadgets.
+.macro vspec_shift name, shiftop, arr, dupw
+.gadget \name
+    ldp x8, x10, [_ip]
+    ldr x9, [_ip, #16]
+    ldr q30, [_cpu, x10]
+    dup v29\arr, \dupw
+    \shiftop v30\arr, v30\arr, v29\arr
+    str q30, [_cpu, x8]
+    gret 3
+.endm
+.irp arr, 8b,16b,4h,8h,2s,4s
+    vspec_shift vspec_sshl_\arr, sshl, .\arr, w9
+    vspec_shift vspec_ushl_\arr, ushl, .\arr, w9
+.endr
+vspec_shift vspec_sshl_2d, sshl, .2d, x9
+vspec_shift vspec_ushl_2d, ushl, .2d, x9
+
+// EXT by a table lookup: [gadget][d_off][n_off][m_off][index_vector]. The
+// byte immediate cannot be a runtime operand of the host EXT, so gen.c hands
+// over a pointer to a 16-byte TBL index for it (arm64_ext_index): bytes
+// imm..imm+15 of {Vn, Vm}, and for the 8-byte form bytes of the two low
+// halves with the upper eight lanes out of range (zero).
+.gadget vspec_ext
+    ldp x8, x9, [_ip]
+    ldp x10, x11, [_ip, #16]
+    ldr q1, [_cpu, x9]
+    ldr q2, [_cpu, x10]
+    ldr q3, [x11]
+    tbl v0.16b, {v1.16b, v2.16b}, v3.16b
+    str q0, [_cpu, x8]
+    gret 4
