@@ -1,7 +1,7 @@
 #!/bin/sh
 # Link iSH-AOK's native programs into a bin directory so they run natively:
 # SmallCLUE's applets, and the standalone programs beside it in /AOK/native --
-# zsh, dash (also linked as `sh`, here and in /usr/local/bin), helix (`hx`), ktop, motepad, the bmm/bmt
+# zsh, dash (also linked as `sh`), helix (`hx`), ktop, motepad, the bmm/bmt
 # benchmarks, and the setuid-root su, sudo and passwd. (bash, when a build
 # enables it; builds from 556 on do not.)
 #
@@ -48,12 +48,16 @@
 # Pass /usr/local/bin explicitly if you want the links ahead of the distro's own
 # /usr/local/bin entries too.
 #
-# dash and `sh` are the exception: they go into /usr/local/bin as well, whatever
-# the directory. profile.d only reaches login shells, and a bare `sh` is run
-# from everywhere else too -- sshd's `ssh host cmd`, cron, init scripts --
+# Every link also goes into /usr/local/bin, whatever the directory (unless
+# --target-only). profile.d only reaches login shells, and native commands are
+# run from everywhere else too -- sshd's `ssh host cmd`, cron, init scripts --
 # whose PATH is the distro's compiled-in one, with /usr/local/bin ahead of
-# /bin. There, /usr/local/bin/sh makes `sh` mean native dash. `#!/bin/sh`
-# scripts are untouched: a shebang names /bin/sh itself.
+# /bin. That includes `sh`, so a bare `sh` means native dash there; #!/bin/sh
+# scripts are untouched, since a shebang names /bin/sh itself. It also means
+# those contexts -- package maintainer scripts among them -- get SmallCLUE's
+# sed, grep and awk ahead of the distro's; see the caution above, and
+# --target-only if that bites. Nothing there that is not ours is replaced
+# without --force.
 #
 # Usage:
 #   sh /AOK/tools/native-links.sh [options] [directory]
@@ -64,6 +68,7 @@
 #   --force    replace files that are not our own symlinks
 #   --no-shell leave the UID 1000 login shell alone
 #   --no-sh    link dash, but do not make `sh` mean it
+#   --target-only  link into the target directory only, not /usr/local/bin too
 #   --shell S  which native shell to switch to: bash, zsh or an absolute path
 #   --help
 #
@@ -82,9 +87,9 @@ NATIVE_DASH=/AOK/native/dash
 # Native dash by its other name: kernel/native.c dispatches both to dash, and
 # as `sh` it runs in POSIX mode the way /bin/sh would.
 NATIVE_SH=/AOK/native/sh
-# Where dash and `sh` are linked in addition to the target directory (see the
+# Where every link also goes, in addition to the target directory (see the
 # header): the directory every default PATH has ahead of /bin.
-SH_DIR=/usr/local/bin
+ALSO_DIR=/usr/local/bin
 
 # The standalone native programs -- everything in /AOK/native that is NOT
 # SmallCLUE -- get linked too. They are whole programs rather than applets of a
@@ -127,6 +132,7 @@ FORCE=0
 DO_SHELL=1
 DO_PATH=1
 DO_SH=1
+DO_ALSO=1
 # Where the previous shell is remembered so --remove can restore it. In /etc
 # because that is where the thing it describes lives, and because /usr/local
 # may be a different filesystem.
@@ -320,8 +326,42 @@ link_is_native() {
     for _np in $NATIVE_ALL; do
         [ "$1" -ef "$NATIVE_DIR/$_np" ] && return 0
     done
+    link_is_dangling_native "$1"
+}
+
+# A link into /AOK/native whose target this build no longer has -- `bash`, on
+# any install linked before 556 dropped native bash. -ef cannot see it, since
+# there is nothing to compare, so its text is read instead, with the distro's
+# readlink (READLINK, set below; the check is skipped until it is).
+link_is_dangling_native() {
+    [ -L "$1" ] && [ ! -e "$1" ] && [ -n "${READLINK:-}" ] || return 1
+    case "$("$READLINK" "$1" 2>/dev/null)" in
+        "$NATIVE_DIR"/*) return 0 ;;
+    esac
     return 1
 }
+
+# The distro's own rm, ln, mkdir, cp and mv, by absolute path. This script puts
+# SmallCLUE's versions of all five first on every PATH, /usr/local/bin
+# included, and a script that installs commands must not then run on them --
+# the same rule the applet-list parser and the passwd code keep. SmallCLUE's rm
+# once globbed its arguments, which left a `[` link that --remove could not
+# take away. Not `command -p`: dash's default path has /usr/local/bin in it.
+host_tool() {
+    for _d in /bin /usr/bin /sbin /usr/sbin; do
+        if [ -x "$_d/$1" ] && ! link_is_native "$_d/$1"; then
+            printf '%s' "$_d/$1"
+            return 0
+        fi
+    done
+    printf '%s' "$1"
+}
+RM=$(host_tool rm)
+LN=$(host_tool ln)
+MKDIR=$(host_tool mkdir)
+CP=$(host_tool cp)
+MV=$(host_tool mv)
+READLINK=$(host_tool readlink)
 
 # Link $2 -> $1 under the same rules as the loops below: made when absent,
 # left alone when already right, repointed when it is a link of ours to
@@ -347,8 +387,8 @@ link_native_file() {
     if [ "$DRY_RUN" -eq 1 ]; then
         echo "  would link $_dest -> $_src"
     else
-        [ -d "${_dest%/*}" ] || mkdir -p "${_dest%/*}"
-        if ! ln -sf "$_src" "$_dest"; then
+        [ -d "${_dest%/*}" ] || "$MKDIR" -p "${_dest%/*}"
+        if ! "$LN" -sf "$_src" "$_dest"; then
             LINK_RESULT=blocked
             return 0
         fi
@@ -357,14 +397,14 @@ link_native_file() {
     LINK_RESULT=linked
 }
 
-# The links that make `sh` mean native dash, and dash reachable, outside the
-# target directory: $SH_DIR's, when that is a different directory. Printed one
-# per line, for the --remove loop to walk as well.
-sh_dir_links() {
-    [ -d "$SH_DIR" ] || return 0
-    [ "$TARGET_DIR" -ef "$SH_DIR" ] && return 0
-    echo "$SH_DIR/dash"
-    echo "$SH_DIR/sh"
+# $ALSO_DIR, when it applies: it exists, it is not the target directory, and
+# --target-only was not given. With an argument, prints that name inside it;
+# without, the directory. Fails, printing nothing, when it does not apply.
+also_dir() {
+    [ "$DO_ALSO" -eq 1 ] || return 1
+    [ -d "$ALSO_DIR" ] || return 1
+    [ "$TARGET_DIR" -ef "$ALSO_DIR" ] && return 1
+    if [ $# -gt 0 ]; then echo "$ALSO_DIR/$1"; else echo "$ALSO_DIR"; fi
 }
 
 # Inlined rather than read out of the file header with sed: `sed` is itself an
@@ -383,12 +423,14 @@ usage() {
     echo "  --force    replace files that are not our own symlinks"
     echo "  --no-shell leave the UID 1000 login shell alone"
     echo "  --no-sh    link dash, but do not make \`sh\` mean it"
+    echo "  --target-only  link into the target directory only, not $ALSO_DIR too"
     echo "  --shell S  which native shell to switch to: bash, zsh, or a path"
     echo "  --no-path  do not put the link directory on PATH"
     echo "  --help"
     echo
-    echo "dash and sh are also linked into $SH_DIR, which every default PATH"
-    echo "has ahead of /bin, so a bare \`sh\` means native dash everywhere."
+    echo "Everything is also linked into $ALSO_DIR, which every default PATH"
+    echo "has ahead of /bin -- sshd, cron and init scripts included -- unless"
+    echo "--target-only is given. A bare \`sh\` then means native dash everywhere."
     echo
     echo "The UID 1000 user's login shell is switched unless --no-shell is"
     echo "given; --remove restores whatever it was before. Without --shell the"
@@ -412,6 +454,7 @@ while [ $# -gt 0 ]; do
         --shell=*) SHELL_WANT=${1#--shell=} ;;
         --no-path) DO_PATH=0 ;;
         --no-sh) DO_SH=0 ;;
+        --target-only) DO_ALSO=0 ;;
         -h|--help) usage 0 ;;
         -*) echo "$0: unknown option $1" >&2; usage 1 ;;
         *) TARGET_DIR="$1" ;;
@@ -479,12 +522,12 @@ set_uid1000_shell() {
     n_new=0; while IFS= read -r _l; do n_new=$((n_new + 1)); done < /etc/passwd.aok-new
     if [ "$n_old" != "$n_new" ]; then
         echo "$0: /etc/passwd rewrite changed the line count ($n_old -> $n_new); not applying" >&2
-        rm -f /etc/passwd.aok-new
+        "$RM" -f /etc/passwd.aok-new
         return 1
     fi
-    cp /etc/passwd /etc/passwd.aok-bak 2>/dev/null || :
+    "$CP" /etc/passwd /etc/passwd.aok-bak 2>/dev/null || :
     printf '%s' "$new" > /etc/passwd || return 1
-    rm -f /etc/passwd.aok-new
+    "$RM" -f /etc/passwd.aok-new
     return 0
 }
 
@@ -507,7 +550,7 @@ apply_path() {
             if [ "$DRY_RUN" -eq 1 ]; then
                 echo "  would remove $PATH_FILE (PATH reverts at next login)"
             else
-                if rm -f "$PATH_FILE" 2>/dev/null && [ ! -f "$PATH_FILE" ]; then
+                if "$RM" -f "$PATH_FILE" 2>/dev/null && [ ! -f "$PATH_FILE" ]; then
                     echo "  removed $PATH_FILE (PATH reverts at next login)"
                 else
                     echo "  could NOT remove $PATH_FILE (need root?)" >&2
@@ -532,14 +575,14 @@ apply_path() {
                             "$ZSH_MARK_END")   skip=0; continue ;;
                         esac
                         [ "$skip" -eq 1 ] || printf '%s\n' "$zline"
-                     done < "$zfile" > "$tmp"; } 2>/dev/null && mv "$tmp" "$zfile" 2>/dev/null; then
+                     done < "$zfile" > "$tmp"; } 2>/dev/null && "$MV" "$tmp" "$zfile" 2>/dev/null; then
                     # A file left empty was one this script created. Only
                     # considered once the rewrite actually landed, or a failed
                     # run could delete a file it never managed to touch.
-                    [ -s "$zfile" ] || rm -f "$zfile"
+                    [ -s "$zfile" ] || "$RM" -f "$zfile"
                     echo "  removed the PATH block from $zfile"
                 else
-                    rm -f "$tmp" 2>/dev/null || :
+                    "$RM" -f "$tmp" 2>/dev/null || :
                     echo "  could NOT edit $zfile (need root?); its PATH block is still there" >&2
                 fi
             fi
@@ -576,7 +619,7 @@ PATHEOF
         echo "  $zfile already sources it (zsh)"
     else
         zdir=${zfile%/*}
-        [ -d "$zdir" ] || mkdir -p "$zdir" 2>/dev/null || true
+        [ -d "$zdir" ] || "$MKDIR" -p "$zdir" 2>/dev/null || true
         {
             echo "$ZSH_MARK_BEGIN"
             echo "# zsh does not read /etc/profile.d; source the snippet that does."
@@ -676,12 +719,12 @@ convert_native_bash_shells() {
     n_new=0; while IFS= read -r _l; do n_new=$((n_new + 1)); done < /etc/passwd.aok-new
     if [ "$n_old" != "$n_new" ]; then
         echo "$0: /etc/passwd rewrite changed the line count ($n_old -> $n_new); not applying" >&2
-        rm -f /etc/passwd.aok-new
+        "$RM" -f /etc/passwd.aok-new
         return 1
     fi
-    cp /etc/passwd /etc/passwd.aok-bak 2>/dev/null || :
+    "$CP" /etc/passwd /etc/passwd.aok-bak 2>/dev/null || :
     printf '%s' "$_new" > /etc/passwd || return 1
-    rm -f /etc/passwd.aok-new
+    "$RM" -f /etc/passwd.aok-new
     return 0
 }
 
@@ -710,7 +753,7 @@ apply_shell() {
         fi
         # The saved shell is what a real --remove consumes; a preview must
         # leave it behind or the run that follows has nothing to restore from.
-        [ "$DRY_RUN" -eq 1 ] || rm -f "$SHELL_STATE"
+        [ "$DRY_RUN" -eq 1 ] || "$RM" -f "$SHELL_STATE"
         return 0
     fi
 
@@ -760,14 +803,14 @@ is_excluded() {
 if [ "$MODE" = remove ]; then
     removed=0
     failed=0
-    for f in "$TARGET_DIR"/* $(sh_dir_links); do
+    for f in "$TARGET_DIR"/* $(also_dir >/dev/null && echo "$ALSO_DIR"/*); do
         # `readlink` is itself an applet this script may have linked, so avoid
         # it: link_is_native compares what the paths resolve to, using the
         # shell alone, and covers the standalone programs as well as SmallCLUE.
         link_is_native "$f" || continue
         if [ "$DRY_RUN" -eq 1 ]; then
             echo "  would unlink $f"
-        elif rm -f "$f" 2>/dev/null && [ ! -e "$f" ] && [ ! -L "$f" ]; then
+        elif "$RM" -f "$f" 2>/dev/null && [ ! -e "$f" ] && [ ! -L "$f" ]; then
             :
         else
             # Counting a removal that did not happen is how "removed 115
@@ -779,9 +822,9 @@ if [ "$MODE" = remove ]; then
         removed=$((removed + 1))
     done
     if [ "$DRY_RUN" -eq 1 ]; then
-        echo "would remove $removed link(s) from $TARGET_DIR (and $SH_DIR's dash and sh, if ours)"
+        echo "would remove $removed link(s) from $TARGET_DIR$(also_dir >/dev/null && echo " and $ALSO_DIR")"
     else
-        echo "removed $removed link(s) from $TARGET_DIR (and $SH_DIR's dash and sh, if ours)"
+        echo "removed $removed link(s) from $TARGET_DIR$(also_dir >/dev/null && echo " and $ALSO_DIR")"
         if [ "$failed" -gt 0 ]; then
             echo "  $failed link(s) could NOT be removed (need root?)" >&2
             REMOVE_FAILED=1
@@ -826,132 +869,139 @@ if [ -z "$APPLETS" ]; then
     exit 1
 fi
 
-[ "$DRY_RUN" -eq 1 ] || mkdir -p "$TARGET_DIR"
-
 linked=0; skipped=0; excluded=0; blocked=0
 pruned=0
-for applet in $APPLETS; do
-    # `sh` is native dash's when there is one ($NATIVE_SH), not an applet's.
-    if [ "$applet" = sh ] && [ -x "$NATIVE_SH" ]; then
-        continue
-    fi
-    if is_excluded "$applet"; then
-        excluded=$((excluded + 1))
-        # PRUNE a link this script made before the applet was excluded. Without
-        # this, exclusions only ever applied to installs that had never run the
-        # script: an older version linked dmesg, dmesg was later found not to
-        # work here and added to EXCLUDED, and every subsequent run skipped it
-        # and left the broken link in place -- shadowing the distro's dmesg,
-        # which works. Reported on an install whose dmesg link was made on
-        # 2026-08-16.
-        #
-        # Same ownership test --remove uses: only ever unlink a symlink that
-        # resolves to the native binary, so a real file of the same name, or
-        # somebody else's link, is never touched.
-        stale="$TARGET_DIR/$applet"
-        if [ -L "$stale" ] && [ "$stale" -ef "$NATIVE" ]; then
-            if [ "$DRY_RUN" -eq 1 ]; then
-                echo "  would unlink $stale (now excluded)"
-            else
-                rm -f "$stale"
-                echo "  unlinked $stale (now excluded)"
-            fi
-            pruned=$((pruned + 1))
-        fi
-        continue
-    fi
-    dest="$TARGET_DIR/$applet"
-
-    if [ -L "$dest" ] && [ "$dest" -ef "$NATIVE" ]; then
-        skipped=$((skipped + 1))   # already ours; idempotent
-        continue
-    fi
-    if [ -e "$dest" ] || [ -L "$dest" ]; then
-        if [ "$FORCE" -eq 0 ]; then
-            [ "$DRY_RUN" -eq 1 ] && echo "  would NOT replace $dest (exists; --force to override)"
-            blocked=$((blocked + 1))
-            continue
-        fi
-    fi
-
-    if [ "$DRY_RUN" -eq 1 ]; then
-        echo "  would link $dest -> $NATIVE"
-    else
-        ln -sf "$NATIVE" "$dest"
-    fi
-    linked=$((linked + 1))
-done
-
-# The standalone programs. Same rules as the applets -- never replace
-# something that is not ours without --force, idempotent when the link is
-# already right -- but each points at its own file rather than at $NATIVE.
 programs=0
-for prog in $NATIVE_ALL; do
-    skip=0
-    for e in $PROGRAMS_EXCLUDED; do
-        [ "$prog" = "$e" ] && skip=1
+
+# Every link, into one directory: the applets, then the standalone programs.
+# Run for the target directory and then for $ALSO_DIR (see the header).
+link_all_into() {
+    LINK_DIR=$1
+    [ "$DRY_RUN" -eq 1 ] || "$MKDIR" -p "$LINK_DIR"
+    # Links to a native program this build no longer has point at nothing.
+    for stale in "$LINK_DIR"/*; do
+        link_is_dangling_native "$stale" || continue
+        if [ "$DRY_RUN" -eq 1 ]; then
+            echo "  would unlink $stale (its program is gone)"
+        else
+            "$RM" -f "$stale"
+            echo "  unlinked $stale (its program is gone)"
+        fi
+        pruned=$((pruned + 1))
     done
-    [ "$prog" = sh ] && [ "$DO_SH" -eq 0 ] && skip=1
-    [ "$skip" -eq 1 ] && continue
-
-    src="$NATIVE_DIR/$prog"
-    dest="$TARGET_DIR/$prog"
-
-    if [ -L "$dest" ] && [ "$dest" -ef "$src" ]; then
-        skipped=$((skipped + 1))   # already ours and already right
-        continue
-    fi
-    # A link of ours pointing somewhere else in /AOK/native is ours to correct
-    # -- an applet link left by an older run whose name a program has since
-    # taken, say -- and is repointed without needing --force.
-    if [ -e "$dest" ] || [ -L "$dest" ]; then
-        if ! link_is_native "$dest" && [ "$FORCE" -eq 0 ]; then
-            [ "$DRY_RUN" -eq 1 ] && echo "  would NOT replace $dest (exists; --force to override)"
-            blocked=$((blocked + 1))
+    for applet in $APPLETS; do
+        # `sh` is native dash's when there is one ($NATIVE_SH), not an applet's.
+        if [ "$applet" = sh ] && [ -x "$NATIVE_SH" ]; then
             continue
         fi
-    fi
+        if is_excluded "$applet"; then
+            excluded=$((excluded + 1))
+            # PRUNE a link this script made before the applet was excluded. Without
+            # this, exclusions only ever applied to installs that had never run the
+            # script: an older version linked dmesg, dmesg was later found not to
+            # work here and added to EXCLUDED, and every subsequent run skipped it
+            # and left the broken link in place -- shadowing the distro's dmesg,
+            # which works. Reported on an install whose dmesg link was made on
+            # 2026-08-16.
+            #
+            # Same ownership test --remove uses: only ever unlink a symlink that
+            # resolves to the native binary, so a real file of the same name, or
+            # somebody else's link, is never touched.
+            stale="$LINK_DIR/$applet"
+            if [ -L "$stale" ] && [ "$stale" -ef "$NATIVE" ]; then
+                if [ "$DRY_RUN" -eq 1 ]; then
+                    echo "  would unlink $stale (now excluded)"
+                else
+                    "$RM" -f "$stale"
+                    echo "  unlinked $stale (now excluded)"
+                fi
+                pruned=$((pruned + 1))
+            fi
+            continue
+        fi
+        dest="$LINK_DIR/$applet"
 
-    if [ "$DRY_RUN" -eq 1 ]; then
-        echo "  would link $dest -> $src"
-    else
-        ln -sf "$src" "$dest"
-    fi
-    programs=$((programs + 1))
-done
+        if [ -L "$dest" ] && [ "$dest" -ef "$NATIVE" ]; then
+            skipped=$((skipped + 1))   # already ours; idempotent
+            continue
+        fi
+        if [ -e "$dest" ] || [ -L "$dest" ]; then
+            if [ "$FORCE" -eq 0 ]; then
+                [ "$DRY_RUN" -eq 1 ] && echo "  would NOT replace $dest (exists; --force to override)"
+                blocked=$((blocked + 1))
+                continue
+            fi
+        fi
 
-# dash and `sh` in $SH_DIR as well (the loop above put them in the target);
-# see the header for why: it is the directory on every default PATH,
-# profile.d or not.
+        if [ "$DRY_RUN" -eq 1 ]; then
+            echo "  would link $dest -> $NATIVE"
+        else
+            "$LN" -sf "$NATIVE" "$dest"
+        fi
+        linked=$((linked + 1))
+    done
+
+    # The standalone programs. Same rules as the applets -- never replace
+    # something that is not ours without --force, idempotent when the link is
+    # already right -- but each points at its own file rather than at $NATIVE.
+    for prog in $NATIVE_ALL; do
+        skip=0
+        for e in $PROGRAMS_EXCLUDED; do
+            [ "$prog" = "$e" ] && skip=1
+        done
+        [ "$prog" = sh ] && [ "$DO_SH" -eq 0 ] && skip=1
+        [ "$skip" -eq 1 ] && continue
+
+        src="$NATIVE_DIR/$prog"
+        dest="$LINK_DIR/$prog"
+
+        if [ -L "$dest" ] && [ "$dest" -ef "$src" ]; then
+            skipped=$((skipped + 1))   # already ours and already right
+            continue
+        fi
+        # A link of ours pointing somewhere else in /AOK/native is ours to correct
+        # -- an applet link left by an older run whose name a program has since
+        # taken, say -- and is repointed without needing --force.
+        if [ -e "$dest" ] || [ -L "$dest" ]; then
+            if ! link_is_native "$dest" && [ "$FORCE" -eq 0 ]; then
+                [ "$DRY_RUN" -eq 1 ] && echo "  would NOT replace $dest (exists; --force to override)"
+                blocked=$((blocked + 1))
+                continue
+            fi
+        fi
+
+        if [ "$DRY_RUN" -eq 1 ]; then
+            echo "  would link $dest -> $src"
+        else
+            "$LN" -sf "$src" "$dest"
+        fi
+        programs=$((programs + 1))
+    done
+}
+
+link_all_into "$TARGET_DIR"
+also_dir >/dev/null && link_all_into "$ALSO_DIR"
+
+# --no-sh takes back an `sh` a previous run made to mean native dash; one that
+# is somebody else's is not ours to touch.
 if [ "$DO_SH" -eq 0 ]; then
-    # --no-sh takes back an `sh` a previous run made; one that is somebody
-    # else's is not ours to touch.
-    for d in "$TARGET_DIR/sh" "$SH_DIR/sh"; do
+    for d in "$TARGET_DIR/sh" $(also_dir sh); do
         if [ -L "$d" ] && { [ "$d" -ef "$NATIVE_SH" ] || [ "$d" -ef "$NATIVE_DASH" ]; }; then
             if [ "$DRY_RUN" -eq 1 ]; then
                 echo "  would unlink $d (--no-sh)"
             else
-                rm -f "$d" && echo "  unlinked $d (--no-sh)"
+                "$RM" -f "$d" && echo "  unlinked $d (--no-sh)"
             fi
         fi
     done
 fi
-for dest in $(sh_dir_links); do
-    src="$NATIVE_DIR/${dest##*/}"
-    [ -x "$src" ] || continue
-    [ "${dest##*/}" = sh ] && [ "$DO_SH" -eq 0 ] && continue
-    link_native_file "$src" "$dest"
-    case "$LINK_RESULT" in
-        linked)  programs=$((programs + 1)) ;;
-        already) skipped=$((skipped + 1)) ;;
-        blocked) blocked=$((blocked + 1)) ;;
-    esac
-done
 
+where="$TARGET_DIR"
+also_dir >/dev/null && where="$TARGET_DIR and $ALSO_DIR"
 if [ "$DRY_RUN" -eq 1 ]; then
-    echo "would link $linked applet(s) and $programs program(s), leave $blocked in place, skip $excluded excluded, $skipped already linked, unlink $pruned now-excluded"
+    echo "would link $linked applet(s) and $programs program(s) into $where, leave $blocked in place, skip $excluded excluded, $skipped already linked, unlink $pruned now-excluded"
 else
-    echo "linked $linked applet(s) and $programs program(s) into $TARGET_DIR ($skipped already, $blocked left in place, $excluded excluded, $pruned stale removed)"
+    echo "linked $linked applet(s) and $programs program(s) into $where ($skipped already, $blocked left in place, $excluded excluded, $pruned stale removed)"
     [ "$blocked" -gt 0 ] && echo "  $blocked existing command(s) left alone; --force to replace, --list to see them"
 fi
 

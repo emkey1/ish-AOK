@@ -924,6 +924,8 @@ smallclue_c_args = [
     # so SmallCLUE must not swap in the host's hw.machine -- `uname -m` said
     # "iPad17,3" where scripts expect "aarch64" (#622).
     '-DSMALLCLUE_UNAME_FROM_KERNEL',
+    # A guest shell has already expanded every pattern: rm must not glob again.
+    '-DSMALLCLUE_ARGS_EXPANDED',
     '-w',  # vendored code, not ours to police
 ]
 

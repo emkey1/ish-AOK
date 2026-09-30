@@ -631,8 +631,8 @@ write_tmux /root root
 log "iSH-AOK native programs"
 # ===========================================================================
 # native-links.sh links the app's native programs -- SmallCLUE's applets, zsh,
-# dash, motepad and the rest of /AOK/native -- into /usr/local/native-bin, put
-# first on PATH for login shells, and makes `sh` native dash, there and in
+# dash as `sh`, motepad and the rest of /AOK/native -- into
+# /usr/local/native-bin, put first on PATH for login shells, and into
 # /usr/local/bin, which every default PATH has ahead of /bin. --no-shell,
 # because this script chose the login shells above. persist-links.sh links your
 # own /AOK/persist/bin into /usr/local/bin, for the sessions that never read

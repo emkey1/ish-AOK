@@ -248,8 +248,8 @@ All of them are idempotent (safe to re-run) and interactively prompt for
 their settings unless you pre-set them in the environment.
 
 Each one ends by linking iSH-AOK's native programs in, with
-[`native-links.sh`](native-setup.md) — so `sh` is native dash, from
-`/usr/local/bin` — and your own `/AOK/persist/bin` with
+[`native-links.sh`](native-setup.md) — into `/usr/local/native-bin` and
+`/usr/local/bin`, so `sh` is native dash — and your own `/AOK/persist/bin` with
 [`persist-links.sh`](persist.md). The Alpine, Devuan and Arch scripts leave the
 login shell they chose alone (`--no-shell`); `NATIVE_LINKS=0` skips the step.
 

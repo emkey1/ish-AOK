@@ -30,9 +30,9 @@ No `sudo` — a stock Alpine or Devuan root does not have it installed, and the
 app logs you in as root anyway. If you have added `sudo` and are running as
 someone else, prefix it.
 
-That creates a symlink per applet in `/usr/local/native-bin`, puts that
-directory first on your `PATH`, and switches the UID 1000 user's login shell to
-a native one. On a current build it links about 110 applets and skips a couple
+That creates a symlink per applet in `/usr/local/native-bin` **and in
+`/usr/local/bin`**, puts `/usr/local/native-bin` first on your `PATH`, and
+switches the UID 1000 user's login shell to a native one. On a current build it links about 110 applets and skips a couple
 of dozen it knows do not work.
 
 It links the **standalone** native programs too, not only SmallCLUE's applets —
@@ -48,14 +48,23 @@ so a stock install has neither `/AOK/native/bash` nor a `bash` link. `su`,
 
 **`sh` is worth singling out.** Because this directory goes first on your
 `PATH`, that link is what makes a bare `sh`, and any script you run as
-`sh script`, mean native dash rather than your distro's shell. `dash` and `sh`
-are linked into `/usr/local/bin` as well, whatever directory you chose:
-`/etc/profile.d` only reaches login shells, while `/usr/local/bin` is ahead of
-`/bin` on every default `PATH` — `ssh host cmd`, cron and init scripts
-included — so `sh` means native dash there too. Scripts with `#!/bin/sh` in
-them are unaffected — a shebang names an absolute path, and `/bin/sh` is left
-alone. If you would rather keep `sh` as it was, pass `--no-sh`, which also takes
-back an `sh` link an earlier run made; the rest keep working. It enumerates `/AOK/native` rather than
+`sh script`, mean native dash rather than your distro's shell. Scripts with
+`#!/bin/sh` in them are unaffected — a shebang names an absolute path, and
+`/bin/sh` is left alone. If you would rather keep `sh` as it was, pass
+`--no-sh`, which also takes back an `sh` link an earlier run made; the rest keep
+working.
+
+**Why `/usr/local/bin` as well.** `/etc/profile.d` only reaches login shells.
+`ssh host cmd`, cron and init scripts take the distro's compiled-in `PATH`,
+which has `/usr/local/bin` ahead of `/bin`, so the second set of links is what
+makes `sh` and every other native command the default there too. It reaches
+further than the first set for the same reason: a package's install scripts
+then run SmallCLUE's `sed`, `grep` and `awk` rather than the distro's. If one of
+them trips over a flag SmallCLUE lacks, `--target-only` keeps everything in
+`/usr/local/native-bin`. Nothing already in `/usr/local/bin` that is not a link
+of ours is replaced without `--force`.
+
+It enumerates `/AOK/native` rather than
 naming them, so a program this build does not have is simply absent. Three names
 are deliberately left out: `smallclue` itself (its applets are linked by name,
 so a bare `smallclue` link would only print the banner), `zsh-multio` (an
@@ -135,6 +144,7 @@ of its own, so that link still points at the last guest binary the task loaded.
 | `--no-path` | create the links but leave `PATH` alone |
 | `--no-shell` | leave the login shell alone |
 | `--no-sh` | link `dash`, but do not make `sh` mean it |
+| `--target-only` | link into the target directory only, not `/usr/local/bin` too |
 | `--shell S` | `bash`, `zsh`, or an absolute path |
 | `--all` | include applets that are known not to work in this build |
 | `--force` | replace files that are not our own symlinks |
@@ -189,7 +199,8 @@ sh /AOK/tools/native-links.sh --remove
 ```
 
 That removes every link it owns, restores the login shell it saved, and deletes
-`/etc/profile.d/05-aok-native-bin.sh`. It removes any symlink in that directory
+`/etc/profile.d/05-aok-native-bin.sh`. It removes any symlink in that directory,
+and in `/usr/local/bin`,
 pointing **anywhere into `/AOK/native`** — not just SmallCLUE's applets, but the
 standalone programs too, and that includes a link you made to `/AOK/native/bash`
 or `/AOK/native/hx` by hand: the script now creates those itself, so it treats

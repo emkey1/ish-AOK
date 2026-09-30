@@ -477,8 +477,8 @@ if [ -n "$NEW_HOSTNAME" ]; then
     note "hostname set to $NEW_HOSTNAME"
 fi
 
-# native-links.sh also makes `sh` native dash, in /usr/local/native-bin and in
-# /usr/local/bin; persist-links.sh links /AOK/persist/bin into /usr/local/bin
+# native-links.sh links into /usr/local/native-bin and /usr/local/bin, `sh`
+# (native dash) included; persist-links.sh links /AOK/persist/bin into /usr/local/bin
 # for the sessions that never read /etc/profile.d.
 if [ "$NATIVE_LINKS" = 1 ]; then
     if [ -f /AOK/tools/native-links.sh ] && [ -x /AOK/native/smallclue ]; then
