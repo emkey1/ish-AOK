@@ -724,7 +724,7 @@ static int spawn_guest_child(const char *const *args, int argc, const char *env,
     char *argv = malloc(argv_size);
     const char *envp = (env != NULL && env[0] != '\0') ? env
         : "PATH=/AOK/persist/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\0"
-          "HOME=/root\0TERM=dumb\0";
+          "HOME=/root\0TERM=dumb\0LANG=C.UTF-8\0";
     int launch_err = argv != NULL ? 0 : _ENOMEM;
     if (argv != NULL) {
         size_t off = 0;

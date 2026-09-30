@@ -821,7 +821,11 @@ static void DisplayParkSession(Terminal *terminal, int pid, NSString *_Nullable 
     [Terminal convertCommand:command toArgs:argv limitSize:sizeof(argv)];
     const char *envp = "PATH=/AOK/persist/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\0"
                         "HOME=/root\0"
-                        "TERM=xterm\0";
+                        "TERM=xterm\0"
+                        // Every program in the desktop inherits this, and a
+                        // su without -l never reaches login's locale: btop
+                        // refused to start with no UTF-8 (#620).
+                        "LANG=C.UTF-8\0";
     err = do_execve(command[0].UTF8String, command.count, argv, envp);
     if (err < 0 && ![command isEqualToArray:DisplayRootCommand()]) {
         // "su" missing (or otherwise failed) on this root -- fall back to

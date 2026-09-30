@@ -246,6 +246,14 @@ if [ -n "$PW_LINE" ]; then
     [ -n "$PW_HOME" ] && export HOME="$PW_HOME"
 fi
 export HOME="${HOME:-/root}"
+# A UTF-8 locale when nothing named one. A session started from a shell that
+# never passed through login has no LANG, and every program in the desktop
+# inherits that: btop refuses to start without UTF-8 (#620), and terminals and
+# GTK programs mangle anything non-ASCII. LANG only; LC_ALL would outrank a
+# per-category choice made later.
+if [ -z "${LANG:-}${LC_ALL:-}" ]; then
+    export LANG=C.UTF-8
+fi
 # SHELL: prefer bash outright rather than trusting the passwd entry's shell
 # field, which is often stale or minimal -- the "Open Everything as Default
 # User" account this su targets (AppDelegate.m's ProvisionDefaultUserAccount)

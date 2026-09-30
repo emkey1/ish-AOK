@@ -982,6 +982,12 @@ static NSData *BootEnvironmentForCommand(NSString *commandPath) {
         @"LOGNAME=root",
         [NSString stringWithFormat:@"SHELL=%@", shell],
         @"PATH=/AOK/persist/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        // A UTF-8 locale for everything started from here -- init, its
+        // services, and a Wayland session the app starts, whose programs never
+        // pass through login and so never see /etc/environment (btop, #620,
+        // refused to start there). C.UTF-8 is built into glibc and needs no data
+        // under musl. LANG only: LC_ALL would outrank anything set later.
+        @"LANG=C.UTF-8",
         @"PS1=# ",
         @"COLUMNS=80",
         @"LINES=24",
@@ -1788,6 +1794,25 @@ static void ProvisionGuestHostFiles(void) {
     // tools/build-devuan-minirootfs.sh, or provisioned by provision-ultimate-*.sh)
     // keeps exactly what it has.
     EnsureRegularFileNonEmpty("/etc/environment", "LANG=C.UTF-8\n", 0644);
+
+    // The same default for the logins PAM never touches, in every root rather
+    // than only the Devuan images that ship it: ssh (sshd runs with UsePAM no),
+    // Alpine's busybox login, and a launch command that is a bare shell. Only
+    // fills a vacuum, so a locale the ssh client forwards or PAM set wins. zsh
+    // reads none of /etc/profile.d, so its global zshenv gets the same line --
+    // /etc/zshenv, the file native zsh falls back to, and only when the distro
+    // has no /etc/zsh/zshenv of its own and nothing is there yet.
+    static const char locale_sh[] =
+        "# Written by iSH-AOK: a UTF-8 locale when nothing else named one. Reaches\n"
+        "# sessions PAM never touches (ssh, busybox login). Rewritten only when\n"
+        "# missing or empty; to turn it off, replace this with a comment.\n"
+        "[ -n \"${LANG:-}${LC_ALL:-}\" ] || export LANG=C.UTF-8\n";
+    struct statbuf localeDir;
+    if (generic_statat(AT_PWD, "/etc/profile.d", &localeDir, 0) >= 0 && S_ISDIR(localeDir.mode))
+        EnsureRegularFileNonEmpty("/etc/profile.d/00-aok-locale.sh", locale_sh, 0644);
+    struct statbuf distroZshenv;
+    if (generic_statat(AT_PWD, "/etc/zsh/zshenv", &distroZshenv, 0) < 0)
+        EnsureRegularFileNonEmpty("/etc/zshenv", locale_sh, 0644);
 
     // /AOK/persist/bin on a login shell's PATH. BootEnvironmentForCommand puts
     // it first, but that PATH never reaches the terminal: "/bin/login -f root"

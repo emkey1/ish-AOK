@@ -2093,7 +2093,9 @@ static const void *ISHToolbarCustomKeySendsKey = &ISHToolbarCustomKeySendsKey;
 
     char argv[4096];
     [Terminal convertCommand:command toArgs:argv limitSize:sizeof(argv)];
-    const char *envp = "TERM=screen-256color\0";
+    // LANG as in BootEnvironmentForCommand: a launch command that is a shell
+    // rather than login would otherwise start without a UTF-8 locale.
+    const char *envp = "TERM=screen-256color\0LANG=C.UTF-8\0";
 	    err = do_execve(command[0].UTF8String, command.count, argv, envp);
 	    if (err < 0) {
 	        NSString *failureTitle = @"Could not start session command";

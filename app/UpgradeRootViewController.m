@@ -99,7 +99,7 @@
     err = create_stdio(stdioFile.fileSystemRepresentation, TTY_PSEUDO_SLAVE_MAJOR, self.tty->num);
     if (err < 0)
         return err;
-    err = do_execve("/sbin/apk", 2, "/sbin/apk\0upgrade\0", "TERM=screen-256color\0");
+    err = do_execve("/sbin/apk", 2, "/sbin/apk\0upgrade\0", "TERM=screen-256color\0LANG=C.UTF-8\0");
     if (err < 0)
         return err;
     self.upgradePid = current->pid;
