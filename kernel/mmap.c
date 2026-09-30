@@ -793,7 +793,11 @@ guest_addr_t sys_mmap_guest(guest_addr_t addr, qword_t len, dword_t prot, dword_
 }
 
 addr_t sys_mmap2(addr_t addr, dword_t len, dword_t prot, dword_t flags, fd_t fd_no, dword_t offset) {
-    return (addr_t) mmap_common_guest(addr, len, prot, flags, fd_no, offset << PAGE_BITS);
+    // mmap2 counts the offset in 4 KiB pages so a 32-bit caller can reach past
+    // 4 GiB: widen BEFORE the shift. `offset << PAGE_BITS` in 32 bits wrapped
+    // every offset >= 4 GiB -- a large file's tail, and every virtgpu MAP
+    // offset (they start at 1 << 32), which came back as offset 0.
+    return (addr_t) mmap_common_guest(addr, len, prot, flags, fd_no, (qword_t) offset << PAGE_BITS);
 }
 
 enum membarrier_cmd {
