@@ -411,6 +411,99 @@ for games_dir in /usr/local/games /usr/games; do
         *) PATH="$PATH:$games_dir" ;;
     esac
 done
+
+# pkexec, for this desktop only. Programs that need root from a menu --
+# Synaptic's entry runs synaptic-pkexec, which is `pkexec synaptic` -- ask
+# polkit, and polkit asks an authentication agent registered for the caller's
+# login session. There are no login sessions here (no elogind), so no agent
+# can register, lxpolkit included (tried), and pkexec gives up: "Error
+# creating textual authentication agent" (#620: Synaptic "refuses to start").
+# This one, first on the session's PATH, asks for the password with sudo in a
+# terminal and starts the program with this display, then closes the
+# terminal. The wrappers find it because they call pkexec by name. Root runs
+# the program straight away, as polkit would allow.
+AOK_SESSION_BIN="$WL_RUNTIME_BASE/bin"
+mkdir -p "$AOK_SESSION_BIN"
+cat > "$AOK_SESSION_BIN/pkexec" <<'PKEXEC_EOF'
+#!/bin/sh
+# Written by /AOK/tools/start-wayland.sh for the Wayland desktop (see there).
+user=root
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --user|-u) user=${2:-root}; shift 2 ;;
+        --user=*) user=${1#--user=}; shift ;;
+        --disable-internal-agent|--keep-cwd) shift ;;
+        --help|--version) exec /usr/bin/pkexec "$@" ;;
+        --) shift; break ;;
+        *) break ;;
+    esac
+done
+[ $# -gt 0 ] || exec /usr/bin/pkexec
+# The distro's sudo, or iSH-AOK's own on a root that has none.
+AOK_PKEXEC_SUDO=$(command -v sudo 2>/dev/null || echo /AOK/native/sudo)
+export AOK_PKEXEC_SUDO
+if [ "$(id -u)" = 0 ] && [ "$user" = root ]; then
+    exec "$@"
+fi
+# Started as root on this display: sudo resets the environment, so the
+# display variables go through env explicitly, and HOME is the target's.
+as_user() {
+    target_home=$(getent passwd "$user" 2>/dev/null | cut -d: -f6)
+    "$AOK_PKEXEC_SUDO" -u "$user" env HOME="${target_home:-/root}" LANG="${LANG:-C.UTF-8}" \
+        WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-}" XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-}" \
+        DISPLAY="${DISPLAY:-}" "$@"
+}
+if [ -t 0 ]; then
+    as_user "$@"
+    exit $?
+fi
+# From a menu there is nothing to type a password into: a terminal asks,
+# starts the program in its own session so closing the terminal leaves it
+# running, and closes -- unless sudo refused, which stays on screen.
+command -v foot >/dev/null 2>&1 || exec /usr/bin/pkexec "$@"
+export AOK_PKEXEC_USER="$user"
+export AOK_PKEXEC_DETACH="${0%/*}/aok-detach"
+# sudo in the foreground, where it can ask; aok-detach starts the program in
+# a session of its own and returns, so the terminal can close.
+exec foot --title "Administrator password" sh -c '
+    user=$AOK_PKEXEC_USER
+    target_home=$(getent passwd "$user" 2>/dev/null | cut -d: -f6)
+    printf "%s needs %s rights.\n" "${1##*/}" "$user"
+    "$AOK_PKEXEC_SUDO" -u "$user" env HOME="${target_home:-/root}" LANG="${LANG:-C.UTF-8}" \
+        WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-}" XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-}" \
+        DISPLAY="${DISPLAY:-}" "$AOK_PKEXEC_DETACH" "$@"
+    status=$?
+    if [ "$status" -ne 0 ]; then
+        printf "\nCould not start %s (%s). Press Enter to close.\n" "$1" "$status"
+        read -r _
+    fi
+' pkexec "$@"
+PKEXEC_EOF
+cat > "$AOK_SESSION_BIN/aok-detach" <<'DETACH_EOF'
+#!/bin/sh
+# Written by /AOK/tools/start-wayland.sh: run a program in a session of its
+# own and return at once, so the terminal that started it can close.
+[ $# -gt 0 ] || exit 2
+command -v "$1" >/dev/null 2>&1 || { echo "$1: not found" >&2; exit 127; }
+# The new session has to exist BEFORE this returns. Backgrounding
+# `setsid PROGRAM` raced the terminal: sudo returned, the terminal closed,
+# and its hangup killed the program before setsid had run -- under emulation,
+# every time. So setsid runs in the foreground; the shell it starts is already
+# in the new session when it puts the program in the background. Without
+# setsid, SIGHUP is ignored before the fork, which is just as race-free.
+if command -v setsid >/dev/null 2>&1; then
+    setsid sh -c '"$@" </dev/null >/dev/null 2>&1 &' sh "$@"
+else
+    trap '' HUP
+    "$@" </dev/null >/dev/null 2>&1 &
+fi
+exit 0
+DETACH_EOF
+chmod 755 "$AOK_SESSION_BIN/pkexec" "$AOK_SESSION_BIN/aok-detach"
+case ":$PATH:" in
+    *":$AOK_SESSION_BIN:"*) ;;
+    *) PATH="$AOK_SESSION_BIN:$PATH" ;;
+esac
 export PATH
 
 # Pixman accelerator (kernel/ish_accel_pix.c via ISH_SYS_PIXOP): loaded only

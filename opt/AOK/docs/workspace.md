@@ -205,6 +205,17 @@ may well work, but nobody has run them. And it has been run on **Devuan** (apt)
 and **Alpine** (apk); **Arch** (pacman) installs the same stack under the same
 names, and its packages resolve, but no one has run a session on it.
 
+### Programs that need root
+
+Menu entries that need root — Synaptic's, GParted's, anything whose
+launcher runs `pkexec` — open a small **Administrator password** terminal.
+Your password goes to `sudo`, the program starts as root on the desktop, and
+the terminal closes. A distro desktop would ask through polkit, but polkit
+only talks to an authentication agent registered for a login session, and
+there are none here, so the desktop puts its own `pkexec` first on `PATH`.
+Your account needs a `sudo` rule, as for `sudo` anywhere. If you run the
+desktop as root, the program starts straight away.
+
 ### The GPU
 
 The desktop draws on the device's GPU when the guest has what that takes: the
