@@ -5922,6 +5922,81 @@ _gadget_array_start fused_test32
     .endr
     .popsection
 
+# ---- 8-bit cmp/test + jcc -------------------------------------------------
+#
+# The same fusion for byte compares (gzip's match loop is 4% `cmpb reg,mem`
+# alone). The 8-bit do_op leaves no usable host flags -- do_add works on
+# sign-extended values to find OF -- so after it deposits the lazy state the
+# gadget re-derives NZCV for the branch: for cmp, a native compare of the two
+# bytes shifted into the top of a word (a = result + b; (a<<24) - (b<<24) sets
+# N Z C V exactly as the x86 8-bit subtract does), for test, tst of the
+# shifted result (C = V = 0, as x86 test leaves them). The source is intact
+# after do_op (do_add writes only its destination).
+#
+# Register sources: al/cl/dl/bl only. At size 8, reg_sp..reg_di name the
+# high bytes ah/ch/dh/bh (do_hi_op); those slots stay 0 and gen.c declines.
+.macro fused_flagop8_retest kind, arg
+    .ifc \kind,cmp
+        add w9, _tmp, \arg
+        lsl w9, w9, 24
+        cmp w9, \arg, lsl 24
+    .else
+        lsl w9, _tmp, 24
+        tst w9, w9
+    .endif
+.endm
+
+.macro fused_flagop8_reg name, armop, cond, bcond, reg, hostreg
+    .gadget fused_\name\()8_\cond\()_reg_\reg
+        do_op \armop, 8, \hostreg
+        fused_flagop8_retest \name, \hostreg
+        fused_jcc_tail \bcond, 0
+.endm
+
+.macro fused_flagop8_family name, armop, cond, bcond
+    .gadget fused_\name\()8_\cond\()_imm
+        ldrb w8, [_ip]
+        do_op \armop, 8, w8
+        fused_flagop8_retest \name, w8
+        fused_jcc_tail \bcond, 8
+    fused_flagop8_reg \name, \armop, \cond, \bcond, a, eax
+    fused_flagop8_reg \name, \armop, \cond, \bcond, c, ecx
+    fused_flagop8_reg \name, \armop, \cond, \bcond, d, edx
+    fused_flagop8_reg \name, \armop, \cond, \bcond, b, ebx
+    .gadget fused_\name\()8_\cond\()_mem
+        read_prep 8, fused_\name\()8_\cond\()_mem
+        ldrb w8, [_xaddr]
+        do_op \armop, 8, w8
+        fused_flagop8_retest \name, w8
+        fused_jcc_tail \bcond, 8
+        read_bullshit 8, fused_\name\()8_\cond\()_mem
+.endm
+
+fused_flagop8_family cmp, sub, o, vs
+fused_flagop8_family cmp, sub, c, cc
+fused_flagop8_family cmp, sub, z, eq
+fused_flagop8_family cmp, sub, cz, ls
+fused_flagop8_family cmp, sub, s, mi
+fused_flagop8_family cmp, sub, sxo, lt
+fused_flagop8_family cmp, sub, sxoz, le
+
+fused_flagop8_family test, and, z, eq
+fused_flagop8_family test, and, cz, eq
+fused_flagop8_family test, and, s, mi
+fused_flagop8_family test, and, sxo, mi
+fused_flagop8_family test, and, sxoz, le
+
+_gadget_array_start fused_cmp8
+    .irp cond, COND_LIST
+        gadgets fused_cmp8_\cond, GADGET_LIST
+    .endr
+    .popsection
+_gadget_array_start fused_test8
+    .irp cond, COND_LIST
+        gadgets fused_test8_\cond, GADGET_LIST
+    .endr
+    .popsection
+
 # ---- amd64 fused cmp + jcc -----------------------------------------------
 #
 # Twins of amd64_cached_arith_reg_imm (op==7) / amd64_cached_arith_reg_reg

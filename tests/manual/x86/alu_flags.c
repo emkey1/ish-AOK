@@ -131,6 +131,57 @@ static uint32_t vals[] = {0, 1, 2, 0xf, 0x10, 0x7f, 0x80, 0xff, 0x100, 0x7fff, 0
         check("r", OPE, BITS, a, 0, cin, r, fl); \
     }
 
+
+// x86 condition from a flags word, for the jcc checks.
+static int cond_true(const char *cc, unsigned f) {
+    int c = !!(f & CF), z = !!(f & ZF), sgn = !!(f & SF), o = !!(f & OF), p = !!(f & PF);
+    int neg = cc[0] == 'n';
+    const char *k = neg ? cc + 1 : cc;
+    int v;
+    if (!__builtin_strcmp(k, "o")) v = o;
+    else if (!__builtin_strcmp(k, "b")) v = c;
+    else if (!__builtin_strcmp(k, "e")) v = z;
+    else if (!__builtin_strcmp(k, "be")) v = c || z;
+    else if (!__builtin_strcmp(k, "s")) v = sgn;
+    else if (!__builtin_strcmp(k, "p")) v = p;
+    else if (!__builtin_strcmp(k, "l")) v = sgn != o;
+    else v = z || (sgn != o); // le
+    return neg ? !v : v;
+}
+
+// Byte cmp/test + jcc (the fused_cmp8/fused_test8 gadgets): every condition,
+// register, immediate and memory sources; the branch and the flags after it.
+#define JCC8(CC) do { \
+    unsigned long fl; unsigned t; uint8_t mb = b; \
+    __asm__ volatile("mov $1, %[t]\n cmpb %b[b], %b[a]\n j" CC " 1f\n mov $0, %[t]\n1: pushf\n pop %[fl]\n" \
+        : [t] "=&r" (t), [fl] "=r" (fl) : [a] "q" (a), [b] "q" (b) : "cc"); \
+    jcc_check("cmpb r " CC, CMP, a, b, t, fl, CC); \
+    __asm__ volatile("mov $1, %[t]\n cmpb %[m], %b[a]\n j" CC " 1f\n mov $0, %[t]\n1: pushf\n pop %[fl]\n" \
+        : [t] "=&r" (t), [fl] "=r" (fl) : [a] "q" (a), [m] "m" (mb) : "cc"); \
+    jcc_check("cmpb m " CC, CMP, a, b, t, fl, CC); \
+    __asm__ volatile("mov $1, %[t]\n cmpb $0x81, %b[a]\n j" CC " 1f\n mov $0, %[t]\n1: pushf\n pop %[fl]\n" \
+        : [t] "=&r" (t), [fl] "=r" (fl) : [a] "q" (a) : "cc"); \
+    jcc_check("cmpb i " CC, CMP, a, 0x81, t, fl, CC); \
+    __asm__ volatile("mov $1, %[t]\n testb %b[b], %b[a]\n j" CC " 1f\n mov $0, %[t]\n1: pushf\n pop %[fl]\n" \
+        : [t] "=&r" (t), [fl] "=r" (fl) : [a] "q" (a), [b] "q" (b) : "cc"); \
+    jcc_check("testb r " CC, TEST, a, b, t, fl, CC); \
+    __asm__ volatile("mov $1, %[t]\n testb %[m], %b[a]\n j" CC " 1f\n mov $0, %[t]\n1: pushf\n pop %[fl]\n" \
+        : [t] "=&r" (t), [fl] "=r" (fl) : [a] "q" (a), [m] "m" (mb) : "cc"); \
+    jcc_check("testb m " CC, TEST, a, b, t, fl, CC); \
+} while (0)
+
+static void jcc_check(const char *what, enum op op, uint32_t a, uint32_t b, unsigned taken,
+        unsigned long fl, const char *cc) {
+    uint32_t res;
+    unsigned want = model(op, a, b, 0, 8, &res);
+    checks++;
+    if ((unsigned) (fl & MASK) != want || taken != (unsigned) cond_true(cc, want)) {
+        if (failures++ < 20)
+            printf("FAIL %s a=%#x b=%#x: taken %u flags %#x want %#x\n", what, a & 0xff, b & 0xff,
+                    taken, (unsigned) (fl & MASK), want);
+    }
+}
+
 int main(void) {
     ALL_SIZES(ADD, "add")
     ALL_SIZES(SUB, "sub")
@@ -190,6 +241,16 @@ int main(void) {
             printf("FAIL test+je a=%#x b=%#x taken=%u\n", a, b, taken);
     }
 
+
+    {
+        static const uint8_t bv[] = {0, 1, 0x0f, 0x10, 0x7f, 0x80, 0x81, 0xfe, 0xff, 0x55, 0xaa};
+        for (unsigned i = 0; i < sizeof(bv); i++) for (unsigned j = 0; j < sizeof(bv); j++) {
+            uint32_t a = bv[i], b = bv[j];
+            JCC8("o"); JCC8("no"); JCC8("b"); JCC8("nb"); JCC8("e"); JCC8("ne");
+            JCC8("be"); JCC8("nbe"); JCC8("s"); JCC8("ns"); JCC8("p"); JCC8("np");
+            JCC8("l"); JCC8("nl"); JCC8("le"); JCC8("nle");
+        }
+    }
 #ifdef __i386__
     // AF consumed by DAA right after a logic op (AF must read 0): with
     // AL = 0x0f, DAA adds 6 only if AF or the low nibble > 9 -- the nibble

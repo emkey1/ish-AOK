@@ -13383,7 +13383,8 @@ static inline int sz(int size) {
 // defeat the position check and are flag-transparent, so fusing across
 // them is still exact.
 static inline void gen_note_flag_op_fuse(struct gen_state *state, int size, int op) {
-    state->x86_fuse_op = size == 32 ? op : 0;
+    // op 1 = cmp, 2 = test; +2 for the 8-bit forms (fused_cmp8/fused_test8).
+    state->x86_fuse_op = size == 32 ? op : size == 8 ? op + 2 : 0;
     state->x86_fuse_end = state->size;
 }
 
@@ -13393,8 +13394,14 @@ static inline bool gen_try_fuse_jcc(struct gen_state *state, int cond) {
         return false;
     extern gadget_t sub_gadgets[], and_gadgets[];
     extern gadget_t fused_cmp32_gadgets[], fused_test32_gadgets[];
-    gadget_t *ops = state->x86_fuse_op == 1 ? sub_gadgets : and_gadgets;
-    gadget_t *fused = state->x86_fuse_op == 1 ? fused_cmp32_gadgets : fused_test32_gadgets;
+    extern gadget_t fused_cmp8_gadgets[], fused_test8_gadgets[];
+    bool byte = state->x86_fuse_op > 2;
+    if (byte && !(i386_jit_fuse_mask() & JIT_FUSE_JCC8))
+        return false;
+    bool is_cmp = state->x86_fuse_op == 1 || state->x86_fuse_op == 3;
+    gadget_t *ops = (is_cmp ? sub_gadgets : and_gadgets) + (byte ? size_8 : size_32) * arg_count;
+    gadget_t *fused = byte ? (is_cmp ? fused_cmp8_gadgets : fused_test8_gadgets)
+                           : (is_cmp ? fused_cmp32_gadgets : fused_test32_gadgets);
     // The op gadget is the last word (reg source) or second-to-last
     // (imm/mem source, which trail one operand word). Identify the source
     // form by pointer-matching against the op's own gadget table; only a
@@ -13406,7 +13413,7 @@ static inline bool gen_try_fuse_jcc(struct gen_state *state, int cond) {
         unsigned slot = state->size - 1 - trailing;
         unsigned long g = state->block->code[slot];
         for (int arg = 0; arg < arg_count; arg++) {
-            if ((unsigned long) ops[size_32 * arg_count + arg] != g)
+            if ((unsigned long) ops[arg] != g)
                 continue;
             bool has_trailing = arg == arg_imm || arg == arg_mem;
             if (has_trailing != (trailing == 1))
@@ -13519,7 +13526,7 @@ static unsigned amd64_fuse_seed(void) {
 
 static const struct jit_fuse_entry i386_fuse_names[] = {
     {"addr", JIT_FUSE_ADDR}, {"movmr", JIT_FUSE_MOVMR}, {"lea", JIT_FUSE_LEA},
-    {"alu", JIT_FUSE_ALU}, {"pushpop", JIT_FUSE_PUSHPOP},
+    {"alu", JIT_FUSE_ALU}, {"pushpop", JIT_FUSE_PUSHPOP}, {"jcc8", JIT_FUSE_JCC8},
 };
 static const struct jit_fuse_entry arm64_fuse_names[] = {
     {"bcond", JIT_FUSE_A64_BCOND}, {"ldst", JIT_FUSE_A64_LDST},
