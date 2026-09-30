@@ -120,26 +120,27 @@ def x86_disassemble(mc, abi, chunks):
     out = {}
     if mc is None:
         return out
+    # Each chunk is followed by a ud2 (0f 0b) marker, so a chunk llvm-mc cannot
+    # decode costs only itself: without it, one bad chunk shifted every later
+    # instruction in the batch onto the wrong chunk.
     for i in range(0, len(chunks), 4000):
         batch = chunks[i:i + 4000]
-        lines = [" ".join("0x" + c[j:j + 2] for j in range(0, len(c), 2)) for c in batch]
+        lines = [" ".join("0x" + c[j:j + 2] for j in range(0, len(c), 2)) + " 0x0f 0x0b"
+                 for c in batch]
         res = subprocess.run([mc, "--disassemble", "--show-encoding"] + MC_TRIPLES[abi],
                              input="\n".join(lines), capture_output=True, text=True).stdout
-        insns = []
+        groups, cur = [], []
         for line in res.splitlines():
             if "encoding: [" not in line:
                 continue
             text, enc = line.split("encoding: [", 1)
             text = " ".join(text.rstrip().rstrip("/#").split())
-            n = len(enc.split("]")[0].split(","))
-            insns.append((text, n))
-        k = 0
-        for c in batch:
-            need, got = len(c) // 2, []
-            while need > 0 and k < len(insns):
-                got.append(insns[k][0])
-                need -= insns[k][1]
-                k += 1
+            if enc.startswith("0x0f,0x0b]"):
+                groups.append(cur)
+                cur = []
+                continue
+            cur.append(text)
+        for c, got in zip(batch, groups):
             out[c] = got
     return out
 

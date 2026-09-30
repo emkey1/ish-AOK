@@ -1883,10 +1883,9 @@ amd64_gen_shift_count shift_count64, 8
     .endif N .endif
 
     .ifin(\op, add,sub,adc,sbc)
-        setf_a \arg, \dst, \s
+        setf_ops \arg, \dst, \s
     .endifin
     .ifin(\op, and,orr,eor)
-        clearf_a
         clearf_oc
     .endifin
     .ifin(\op, adc,sbc)
@@ -2044,8 +2043,11 @@ amd64_gen_shift_count shift_count64, 8
         movs \arg, w9, \s
     .endif
 
-    .ifin(\op, add,sub,adc,sbc,and,orr,eor)
-        setf_zsp \s, \dst
+    .ifin(\op, add,sub,adc,sbc)
+        setf_all_res \s, \dst
+    .endifin
+    .ifin(\op, and,orr,eor)
+        setf_logic_res \s, \dst
     .endifin
 .endm
 # dst defaults to _tmp, so every existing caller is unchanged. It exists so a
@@ -2431,7 +2433,7 @@ amd64_gen_shift_count shift_count64, 8
 
 .macro do_inc size, s
     mov w10, 1
-    setf_a w10, _tmp, \s
+    setf_ops w10, _tmp, \s
     .ifb \s
         adds _tmp, _tmp, 1
         cset w8, vs
@@ -2442,11 +2444,11 @@ amd64_gen_shift_count shift_count64, 8
         cset w8, ne
     .endif
     strb w8, [_cpu, CPU_of]
-    setf_zsp \s
+    setf_all_res \s
 .endm
 .macro do_dec size, s
     mov w10, 1
-    setf_a w10, _tmp, \s
+    setf_ops w10, _tmp, \s
     .ifb \s
         subs _tmp, _tmp, 1
         cset w8, vs
@@ -2457,7 +2459,7 @@ amd64_gen_shift_count shift_count64, 8
         cset w8, ne
     .endif
     strb w8, [_cpu, CPU_of]
-    setf_zsp \s
+    setf_all_res \s
 .endm
 
 .macro do_sign_extend size, s

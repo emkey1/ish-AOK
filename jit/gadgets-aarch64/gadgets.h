@@ -190,6 +190,41 @@ back_write_done_\id :
     strb wzr, [_cpu, CPU_of]
     strb wzr, [_cpu, CPU_cf]
 .endm
+# The deposit an add-family op (add/sub/adc/sbc/inc/dec) leaves: op1 and op2
+# for AF, the result for ZF/SF/PF. flags_res holds only those four bits, so
+# afterwards it is exactly ZF_RES|SF_RES|PF_RES|AF_OPS whatever it was before:
+# a constant byte store, where setf_a + setf_zsp did two load-or-store rounds
+# on it. On the A10X those rounds chained through store-to-load forwarding
+# from one ALU instruction to the next.
+.macro setf_ops src, dst, s=
+    movs w10, \src, \s
+    str w10, [_cpu, CPU_op1]
+    movs w10, \dst, \s
+    str w10, [_cpu, CPU_op2]
+.endm
+.macro setf_all_res s, val=_tmp
+    .ifnb \s
+        sxt\s \val, \val
+    .endif
+    str \val, [_cpu, CPU_res]
+    mov w10, (ZF_RES|SF_RES|PF_RES|AF_OPS)
+    strb w10, [_cpu, CPU_flags_res]
+.endm
+# The logic family (and/or/xor/test) clears AF. Rather than clear it in
+# eflags (a load-and-store of eflags plus one of flags_res), AF is left in the
+# lazy form with op1 = res and op2 = 0, so op1^op2^res is 0 -- the same three
+# plain stores and constant flags_res byte as the add family.
+.macro setf_logic_res s, val=_tmp
+    .ifnb \s
+        sxt\s \val, \val
+    .endif
+    str \val, [_cpu, CPU_res]
+    str \val, [_cpu, CPU_op1]
+    str wzr, [_cpu, CPU_op2]
+    mov w10, (ZF_RES|SF_RES|PF_RES|AF_OPS)
+    strb w10, [_cpu, CPU_flags_res]
+.endm
+
 .macro setf_zsp s, val=_tmp
     .ifnb \s
         sxt\s \val, \val

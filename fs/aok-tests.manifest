@@ -27,6 +27,7 @@ x86/atomic_lock_contended.c
 x86/atomic_neg_not.c
 x86/cow_atomic_fault.c
 x86/x87_fpu.c
+x86/alu_flags.c
 x86/sse_scalar.c
 x86/x86_loop.c
 x86/bcd_adjust.c
