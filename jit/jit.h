@@ -243,8 +243,12 @@ void jit_note_shared_write(struct jit *jit, const struct pt_entry *entry);
 // gen_riscv64_try_pair: two 64-bit loads (or stores) off one base in one gadget,
 // the ldp/stp RV64 lacks -- register saves and restores in every prologue.
 #define JIT_FUSE_RV_PAIR (1u << 3)
+// gen_riscv64_try_after_slli/_after_add: slli+srli/srai, slli+add and
+// add+load pairs in one gadget each (the shifts RV64GC uses for zext.w/sext
+// and shNadd, and indexed loads).
+#define JIT_FUSE_RV_ALU (1u << 4)
 #define JIT_FUSE_RV_ALL (JIT_FUSE_RV_FOLD | JIT_FUSE_RV_JAL | JIT_FUSE_RV_RETCACHE | \
-                         JIT_FUSE_RV_PAIR)
+                         JIT_FUSE_RV_PAIR | JIT_FUSE_RV_ALU)
 
 // The amd64 guest's bits are not fusions in the i386 sense (two gadgets folded
 // into one) but NATIVE-vs-BRIDGE switches, which is the same A/B in the shape

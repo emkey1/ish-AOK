@@ -314,3 +314,39 @@ branch_op geu, hs
     b riscv64_chain
 1:  str x10, [_cpu, #CPU_riscv64_pc]
     b jit_ret
+
+// ---- Fused ALU pairs (gen_riscv64_try_alu_pair, the "alu" fuse bit) -------
+// slli rd, rs, a ; srli/srai rd, rd, b -- the zero/sign extension and
+// bit-field idiom RV64GC spells with two shifts (slli+srli 32 is zext.w):
+// [gadget][rd_off][rs_off][a][b].
+.gadget sll_srl
+    ldp x9, x10, [_ip]
+    ldp x11, x12, [_ip, #16]
+    ldr x10, [_cpu, x10]
+    lslv x10, x10, x11
+    lsrv x10, x10, x12
+    str x10, [_cpu, x9]
+    gret 4
+.gadget sll_sra
+    ldp x9, x10, [_ip]
+    ldp x11, x12, [_ip, #16]
+    ldr x10, [_cpu, x10]
+    lslv x10, x10, x11
+    asrv x10, x10, x12
+    str x10, [_cpu, x9]
+    gret 4
+
+// slli t, rs, s ; add rd, t, rb (or rb, t) -- the scaled index RV64GC has no
+// shNadd for: [gadget][t_off][rs_off][s][rd_off][rb_off]. t is written first
+// and rb read after, so rb == t (and rd == t) come out as unfused.
+.gadget sll_add
+    ldp x9, x10, [_ip]        // t_off, rs_off
+    ldp x11, x12, [_ip, #16]  // s, rd_off
+    ldr x13, [_ip, #32]       // rb_off
+    ldr x10, [_cpu, x10]
+    lslv x10, x10, x11
+    str x10, [_cpu, x9]
+    ldr x14, [_cpu, x13]
+    add x14, x14, x10
+    str x14, [_cpu, x12]
+    gret 5

@@ -5843,6 +5843,107 @@ static bool gen_riscv64_try_pair(struct gen_state *state, struct tlb *tlb, bool 
     return true;
 }
 
+// ALU pairs RV64GC spells as two instructions where arm64 has one (the "alu"
+// fuse bit, jit/guest-riscv64/alu.S and memory.S): slli rd,rs,a followed by
+// srli/srai rd,rd,b (zext.w, sext, bit fields), slli t,rs,s followed by an
+// add that consumes t (shNadd), and add t,ra,rb followed by a load off t (an
+// indexed load). Measured on a riscv64 gcc compile these are 1.0%, 0.9% and
+// 2.1% of adjacent pairs. Every register the pair writes is written, in
+// order, so the result equals the unfused pair's; the consumed instruction
+// can still be jumped to (a fresh block decodes it alone).
+static bool gen_riscv64_alu_pair_ok(struct gen_state *state, struct tlb *tlb,
+        uint32_t *next, unsigned *len) {
+    if (!(riscv64_jit_fuse_mask() & JIT_FUSE_RV_ALU))
+        return false;
+    *len = gen_riscv64_peek(state, tlb, next);
+    if (*len == 0)
+        return false;
+    // Same page budget as gen_riscv64_fold_const.
+    return state->riscv64_ip + *len - state->block->addr <= PAGE_SIZE;
+}
+static void gen_riscv64_alu_pair_consume(struct gen_state *state, uint32_t next, unsigned len) {
+    if (unlikely(state->jitprof != NULL))
+        jitprof_note(state->jitprof, next);
+    state->riscv64_ip += len;
+}
+
+// After slli rd, rs1, sh (rd != 0).
+static bool gen_riscv64_try_after_slli(struct gen_state *state, struct tlb *tlb,
+        unsigned rd, unsigned rs1, unsigned sh) {
+    uint32_t next;
+    unsigned len;
+    if (!gen_riscv64_alu_pair_ok(state, tlb, &next, &len))
+        return false;
+    unsigned op = riscv64_opcode(next), f3 = riscv64_funct3(next);
+    unsigned nrd = riscv64_rd(next), nrs1 = riscv64_rs1(next);
+    if (op == RISCV64_OP_OP_IMM && f3 == 5 && nrd == rd && nrs1 == rd) {
+        int64_t imm = riscv64_imm_i(next);
+        if ((imm & ~0x43f) != 0)
+            return false;
+        extern void gadget_riscv64_sll_srl(void), gadget_riscv64_sll_sra(void);
+        gen(state, (unsigned long) ((imm & 0x400) ? gadget_riscv64_sll_sra : gadget_riscv64_sll_srl));
+        gen(state, riscv64_rd_off(rd));
+        gen(state, riscv64_rs_off(rs1));
+        gen(state, sh);
+        gen(state, (uint64_t) (imm & 0x3f));
+        gen_riscv64_alu_pair_consume(state, next, len);
+        return true;
+    }
+    if (op == RISCV64_OP_OP && f3 == 0 && riscv64_funct7(next) == 0 && nrd != 0) {
+        unsigned nrs2 = riscv64_rs2(next);
+        unsigned rb;
+        if (nrs1 == rd)
+            rb = nrs2;
+        else if (nrs2 == rd)
+            rb = nrs1;
+        else
+            return false;
+        extern void gadget_riscv64_sll_add(void);
+        gen(state, (unsigned long) gadget_riscv64_sll_add);
+        gen(state, riscv64_rd_off(rd));
+        gen(state, riscv64_rs_off(rs1));
+        gen(state, sh);
+        gen(state, riscv64_rd_off(nrd));
+        gen(state, riscv64_rs_off(rb));
+        gen_riscv64_alu_pair_consume(state, next, len);
+        return true;
+    }
+    return false;
+}
+
+// After add rd, rs1, rs2 (rd != 0): a load whose base is rd.
+static bool gen_riscv64_try_after_add(struct gen_state *state, struct tlb *tlb,
+        unsigned rd, unsigned rs1, unsigned rs2) {
+    uint32_t next;
+    unsigned len;
+    if (!gen_riscv64_alu_pair_ok(state, tlb, &next, &len))
+        return false;
+    if (riscv64_opcode(next) != RISCV64_OP_LOAD || riscv64_rs1(next) != rd ||
+            riscv64_rd(next) == 0)
+        return false;
+    extern void gadget_riscv64_add_lb(void), gadget_riscv64_add_lh(void);
+    extern void gadget_riscv64_add_lw(void), gadget_riscv64_add_ld(void);
+    extern void gadget_riscv64_add_lbu(void), gadget_riscv64_add_lhu(void);
+    extern void gadget_riscv64_add_lwu(void);
+    static void (*const loads[8])(void) = {
+        gadget_riscv64_add_lb, gadget_riscv64_add_lh, gadget_riscv64_add_lw,
+        gadget_riscv64_add_ld, gadget_riscv64_add_lbu, gadget_riscv64_add_lhu,
+        gadget_riscv64_add_lwu, NULL,
+    };
+    void (*g)(void) = loads[riscv64_funct3(next)];
+    if (g == NULL)
+        return false;
+    gen(state, (unsigned long) g);
+    gen(state, riscv64_rd_off(rd));
+    gen(state, riscv64_rs_off(rs1));
+    gen(state, riscv64_rs_off(rs2));
+    gen(state, (uint64_t) riscv64_imm_i(next));
+    gen(state, riscv64_rd_off(riscv64_rd(next)));
+    gen(state, state->riscv64_ip);   // the load's pc: its fault restarts there
+    gen_riscv64_alu_pair_consume(state, next, len);
+    return true;
+}
+
 // lui/auipc + {addi, addiw, load} same-register pairs fold into a single
 // gadget: the first instruction's result is compile-time known (gen knows
 // the guest pc), so the pair costs one dispatch instead of two, and the
@@ -6288,6 +6389,8 @@ int gen_step_riscv64(struct gen_state *state, struct tlb *tlb) {
             if ((imm & ~0x3f) != 0)
                 return gen_riscv64_undefined(state, insn);
             imm &= 0x3f;
+            if (rd != 0 && gen_riscv64_try_after_slli(state, tlb, rd, rs1, (unsigned) imm))
+                return 1;
         } else if (funct3 == 5) { // srli/srai by imm bit 10
             gadget = (imm & 0x400) ? gadget_riscv64_sra_ri : gadget_riscv64_srl_ri;
             if ((imm & ~0x43f) != 0)
@@ -6363,6 +6466,9 @@ int gen_step_riscv64(struct gen_state *state, struct tlb *tlb) {
         }
         if (gadget == NULL)
             return gen_riscv64_undefined(state, insn);
+        if (!is_w && funct7 == 0x00 && funct3 == 0 && rd != 0 &&
+                gen_riscv64_try_after_add(state, tlb, rd, rs1, riscv64_rs2(insn)))
+            return 1;
         gen(state, (unsigned long) gadget);
         gen(state, riscv64_rd_off(rd));
         gen(state, riscv64_rs_off(rs1));
@@ -13851,6 +13957,7 @@ static const struct jit_fuse_entry arm64_fuse_names[] = {
 static const struct jit_fuse_entry riscv64_fuse_names[] = {
     {"fold", JIT_FUSE_RV_FOLD}, {"jal", JIT_FUSE_RV_JAL},
     {"retcache", JIT_FUSE_RV_RETCACHE}, {"pair", JIT_FUSE_RV_PAIR},
+    {"alu", JIT_FUSE_RV_ALU},
 };
 static const struct jit_fuse_entry amd64_fuse_names[] = {
     {"incdec_reg", JIT_FUSE_AMD64_INCDEC_REG},

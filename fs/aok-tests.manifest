@@ -400,6 +400,7 @@ arm64/dc_zva.c
 riscv64/ptrace_regset.c
 riscv64/riscv64_singlestep.c
 riscv64/jalr_retcache.c
+riscv64/alu_pair.c
 riscv64/riscv64_fp_env.c
 arm64/ret_retcache.c
 jit_fuse_ab.sh

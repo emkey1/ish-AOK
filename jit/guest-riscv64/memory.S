@@ -197,6 +197,36 @@ riscv64_crosspage_store:
     read_bullshit \size, \id
 .endm
 
+// add t, ra, rb ; l{b,h,w,d}[u] rd, imm(t) -- an indexed load, the second
+// instruction consuming the first's sum: [gadget][t_off][ra_off][rb_off][imm]
+// [rd_off][pc_of_load]. t is written before the access, so a fault restarts
+// at the load's own pc (last word, as for every memory gadget) with the add
+// already done, exactly as unfused.
+.macro add_load_gadget name, size, id, ld_insn, reg
+.gadget \name
+    ldp x9, x10, [_ip]        // t_off, ra_off
+    ldp x11, x12, [_ip, #16]  // rb_off, imm
+    ldr x19, [_ip, #32]       // rd_off (callee-saved across prep)
+    add _ip, _ip, #48
+    ldr x10, [_cpu, x10]
+    ldr x11, [_cpu, x11]
+    add x10, x10, x11
+    str x10, [_cpu, x9]
+    add x7, x10, x12
+    read_prep \size, \id
+    \ld_insn \reg, [x7]
+    str x11, [_cpu, x19]
+    gret
+    read_bullshit \size, \id
+.endm
+add_load_gadget add_lb,  8,  rvalb,  ldrsb, x11
+add_load_gadget add_lbu, 8,  rvalbu, ldrb,  w11
+add_load_gadget add_lh,  16, rvalh,  ldrsh, x11
+add_load_gadget add_lhu, 16, rvalhu, ldrh,  w11
+add_load_gadget add_lw,  32, rvalw,  ldrsw, x11
+add_load_gadget add_lwu, 32, rvalwu, ldr,   w11
+add_load_gadget add_ld,  64, rvald,  ldr,   x11
+
 load_gadget lb,  8,  rvlb,  ldrsb, x11
 load_gadget lbu, 8,  rvlbu, ldrb,  w11
 load_gadget lh,  16, rvlh,  ldrsh, x11
