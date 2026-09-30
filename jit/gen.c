@@ -14784,6 +14784,7 @@ static inline bool gen_vec(enum arg src, enum arg dst, void (*helper)(), gadget_
     // low lane, the rest of the destination kept -- and touch only cpu->xmm,
     // so the i386 engine uses them instead of a C call per instruction.
     // Operand word: source xmm in bits 0-3, destination in bits 4-7.
+#if defined(__aarch64__)   // the amd64 native gadgets exist for the aarch64 host only
     if (rm_is_src && !has_imm && src == arg_xmm_modrm_val && dst == arg_xmm_modrm_reg &&
             modrm->type == modrm_reg) {
         extern void gadget_amd64_v_addsd_reg(void), gadget_amd64_v_subsd_reg(void);
@@ -14808,6 +14809,7 @@ static inline bool gen_vec(enum arg src, enum arg dst, void (*helper)(), gadget_
             }
         }
     }
+#endif
 
     uint16_t reg_offset = cpu_reg_offset(reg, modrm->opcode);
     uint16_t rm_reg_offset = cpu_reg_offset(rm, modrm->rm_opcode);

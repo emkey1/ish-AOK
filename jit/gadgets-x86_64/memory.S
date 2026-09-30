@@ -1,6 +1,22 @@
 #include "gadgets.h"
 #include "emu/interrupt.h"
 
+# [vec_align16][orig_ip]: a legacy-SSE 128-bit memory operand must be 16-byte
+# aligned; misaligned is #GP(0) at the instruction. The aarch64 twin is in
+# jit/gadgets-aarch64/memory.S, and jit/gen.c emits it for both hosts.
+.gadget vec_align16
+    testl $15, %_addr
+    jnz 1f
+    gret 1
+1:
+    movq $0, CPU_segfault_addr(%_cpu)
+    movb $0, CPU_segfault_was_write(%_cpu)
+    movb $0, CPU_segfault_reported(%_cpu)
+    movl (%_ip), %_eip
+    movl $INT_GPF, %_tmp
+    jmp jit_exit
+
+
 .gadget push
     leal -4(%_esp), %_addr
     write_prep 32, push
