@@ -597,13 +597,25 @@ void poll_note_host_resume(void) {
     atomic_fetch_add_explicit(&poll_host_resume_gen, 1, memory_order_relaxed);
 }
 
+// These two walk the registration list for epoll_ctl, which holds no poll lock,
+// so they take poll->lock themselves: a sibling thread's EPOLL_CTL_ADD/DEL on
+// the same epoll relinks and frees entries under it. Unlocked, the walk read a
+// freed entry and the host fault aborted the app -- seen on an iPad under a Go
+// scanner, whose netpoller adds and removes thousands of sockets on one epoll
+// from many threads at once.
 bool poll_has_fd(struct poll *poll, struct fd *fd, fd_t guest_fd) {
-    return poll_find_fd(poll, fd, guest_fd) != NULL;
+    lock(&poll->lock, 0);
+    bool found = poll_find_fd(poll, fd, guest_fd) != NULL;
+    unlock(&poll->lock);
+    return found;
 }
 
 bool poll_fd_is_exclusive(struct poll *poll, struct fd *fd, fd_t guest_fd) {
+    lock(&poll->lock, 0);
     struct poll_fd *poll_fd = poll_find_fd(poll, fd, guest_fd);
-    return poll_fd != NULL && (poll_fd->types & POLL_EXCLUSIVE) != 0;
+    bool exclusive = poll_fd != NULL && (poll_fd->types & POLL_EXCLUSIVE) != 0;
+    unlock(&poll->lock);
+    return exclusive;
 }
 
 // Wake any thread currently blocked in poll_wait on this poll so it re-scans fd
