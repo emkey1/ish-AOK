@@ -118,6 +118,11 @@ static bool amd64_opcode_needs_modrm(const struct amd64_jit_insn *insn) {
         case 0x2f:
         case 0x28:
         case 0x29:
+        // 0x2b MOVNTPS/MOVNTPD and 0xc3 MOVNTI: claimed by the store arms in
+        // gen_step64 (memory forms); a register form reaches the 0f-rm bridge
+        // and is #UD, as on hardware.
+        case 0x2b:
+        case 0xc3:
         case 0x50:
         case 0x54:
         case 0x55:
@@ -7447,6 +7452,50 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
         return false;
     }
 
+    // Ring-0 two-byte instructions: #GP(0) at the instruction, as Linux
+    // reports them (SIGSEGV, SI_KERNEL, trap 13 -- camd, both ABIs;
+    // tests/manual/x86/priv_gp.c). They fell through to the unhandled-opcode
+    // path, which is SIGILL. CLTS, INVD, WBINVD, MOV to/from CR and DR,
+    // WRMSR, RDMSR, RDPMC; in 0f 00, LLDT and LTR; in 0f 01, LGDT/LIDT/INVLPG
+    // (memory forms of /2, /3, /7), LMSW (/6) and XSETBV (d1). The group
+    // members a user may run (SLDT, XGETBV, RDTSCP, RDPKRU, ...) are left to
+    // their own arms. The ModRM is read here rather than by the generic
+    // decode, which does not take one for these two groups.
+    if (insn.two_byte_opcode && !insn.lock_prefix) {
+        bool priv = false;
+        switch (insn.op2) {
+        case 0x06: case 0x08: case 0x09:
+        case 0x20: case 0x21: case 0x22: case 0x23:
+        case 0x30: case 0x32: case 0x33:
+            priv = true;
+            break;
+        case 0x00:
+        case 0x01: {
+            byte_t m;
+            if (!tlb_read(tlb, state->amd64_ip, &m, sizeof(m))) {
+                state->amd64_ip = state->amd64_orig_ip;
+                state->amd64_fallback_to_interp = true;
+                return false;
+            }
+            unsigned reg = (m >> 3) & 7, mod = m >> 6;
+            if (insn.op2 == 0x00)
+                priv = reg == 2 || reg == 3;
+            else
+                priv = reg == 6 || m == 0xd1 ||
+                    (mod != 3 && (reg == 2 || reg == 3 || reg == 7));
+            break;
+        }
+        }
+        if (priv) {
+            amd64_jit_debug("priv-gpf ip=%llx op2=%02x",
+                    (unsigned long long) insn.start_ip, (unsigned) insn.op2);
+            gen_amd64_helper_tlb_1_retint(state, amd64_jit_port_io,
+                    (unsigned long) insn.start_ip);
+            gen_exit(state);
+            return false;
+        }
+    }
+
     if (amd64_jit_plain_prefixes(&insn) && insn.two_byte_opcode &&
             insn.op2 == 0x05) {
         next_ip = insn.end_ip;
@@ -10218,7 +10267,9 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
             !insn.seg_prefix && !insn.lock_prefix &&
             amd64_modrm_mod(insn.modrm) != 3 &&
             insn.rep_mode == amd64_jit_rep_none &&
-            (insn.op2 == 0x29 || insn.op2 == 0x11)) {
+            (insn.op2 == 0x29 || insn.op2 == 0x11 || insn.op2 == 0x2b)) {
+        // (0F 2B, MOVNTPS/MOVNTPD, is the same store: the non-temporal hint
+        // has nothing to bypass here. It was SIGILL.)
         unsigned long meta, disp;
         if (!gen_amd64_decode_mem_meta(state, tlb, &insn, 128, &meta, &disp, &next_ip)) {
             state->amd64_ip = state->amd64_orig_ip;
@@ -10233,6 +10284,32 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
         gen_amd64_flush_rip(state);
         extern void gadget_amd64_v_store128_mem(void);
         gen(state, (unsigned long) gadget_amd64_v_store128_mem);
+        gen(state, meta);
+        gen(state, disp);
+        gen(state, (unsigned long) next_ip);
+        gen_amd64_defer_rip(state, next_ip);
+        return true;
+    }
+
+    // MOVNTI (0F C3 /r, memory only): a plain 32- or 64-bit (REX.W) store of
+    // a general register, the non-temporal hint aside -- the mov-store gadget.
+    // It was SIGILL. 66 and F2/F3 forms are #UD and are left to the bridge.
+    if (!insn.address_size_prefix && insn.two_byte_opcode && insn.has_modrm &&
+            !insn.lock_prefix && !insn.operand_size_prefix &&
+            insn.rep_mode == amd64_jit_rep_none &&
+            amd64_modrm_mod(insn.modrm) != 3 && insn.op2 == 0xc3) {
+        unsigned size = insn.rex.w ? 64 : 32;
+        unsigned long meta, disp;
+        if (!gen_amd64_decode_mem_meta(state, tlb, &insn, size, &meta, &disp, &next_ip)) {
+            state->amd64_ip = state->amd64_orig_ip;
+            state->amd64_fallback_to_interp = true;
+            return false;
+        }
+        state->amd64_ip = next_ip;
+        gen_amd64_flush_reg_cache(state);
+        gen_amd64_flush_rip(state);
+        extern void gadget_amd64_mov_store32(void), gadget_amd64_mov_store64(void);
+        gen(state, (unsigned long) (size == 64 ? gadget_amd64_mov_store64 : gadget_amd64_mov_store32));
         gen(state, meta);
         gen(state, disp);
         gen(state, (unsigned long) next_ip);

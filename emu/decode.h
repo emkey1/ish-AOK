@@ -95,6 +95,27 @@ restart:
 
                 case 0x31: TRACEI("rdtsc");
                            RDTSC; break;
+
+                // Ring-0 instructions: #GP(0) from user mode, as Linux reports
+                // them (SIGSEGV, SI_KERNEL, trap 13 -- camd, i386 and x86_64;
+                // tests/manual/x86/priv_gp.c). They were SIGILL.
+                case 0x06: TRACEI("clts"); PRIV(); break;
+                case 0x08: TRACEI("invd"); PRIV(); break;
+                case 0x09: TRACEI("wbinvd"); PRIV(); break;
+                case 0x20 ... 0x23: TRACEI("mov cr/dr"); READMODRM; PRIV(); break;
+                case 0x30: TRACEI("wrmsr"); PRIV(); break;
+                case 0x32: TRACEI("rdmsr"); PRIV(); break;
+                case 0x33: TRACEI("rdpmc"); PRIV(); break;
+                // 0f 00: LLDT (/2) and LTR (/3) are ring-0. SLDT/STR/VERR/VERW
+                // are user-mode and stay as they were.
+                case 0x00: TRACEI("group 0f00");
+                           READMODRM;
+                           if (modrm.opcode == 2 || modrm.opcode == 3) {
+                               PRIV();
+                           } else {
+                               UNDEFINED;
+                           }
+                           break;
                 case 0x05: TRACEI("syscall");
                            SYSCALL_AMD64; break;
 
@@ -205,8 +226,19 @@ restart:
                 // OSXSAVE, and glibc runs XGETBV right after seeing that bit to
                 // decide whether the OS enabled the YMM/ZMM state. Raising
                 // SIGILL here would kill every glibc process at startup.
-                case 0x01: TRACEI("xgetbv");
+                //
+                // The ring-0 members are #GP(0): LGDT/LIDT/INVLPG (the memory
+                // forms of /2, /3, /7), LMSW (/6, either form) and XSETBV
+                // (0f 01 d1). SGDT/SIDT/SMSW depend on UMIP and stay #UD here.
+                case 0x01: TRACEI("group 0f01");
                            READMODRM;
+                           if (modrm.opcode == 6 ||
+                                   (modrm.type != modrm_reg && (modrm.opcode == 2 || modrm.opcode == 3 ||
+                                                                modrm.opcode == 7)) ||
+                                   (modrm.type == modrm_reg && modrm.opcode == 2 && modrm.base == reg_ecx)) {
+                               PRIV();
+                               break;
+                           }
                            if (modrm.type != modrm_reg || modrm.opcode != 2 || modrm.base != reg_eax)
                                UNDEFINED;
                            XGETBV(); break;
@@ -726,6 +758,9 @@ restart:
                            READMODRM; V_OP(cvttpd2dq, xmm_modrm_val, xmm_modrm_reg,64); break;
                 case 0xe7: TRACEI("movntdq xmm, xmm:modrm");
                            READMODRM; VMOV(xmm_modrm_reg, xmm_modrm_val,128); break;
+                case 0x2b: TRACEI("movntpd xmm, m128");
+                           READMODRM; if (modrm.type == modrm_reg) UNDEFINED;
+                           VMOV(xmm_modrm_reg, xmm_modrm_val,128); break;
                 case 0xe8: TRACEI("psubsb xmm:modrm, xmm");
                            READMODRM; V_OP(subss_b, xmm_modrm_val, xmm_modrm_reg,128); break;
                 case 0xe9: TRACEI("psubsw xmm:modrm, xmm");
@@ -769,6 +804,15 @@ restart:
                 case 0xfe: TRACEI("paddd xmm:modrm, xmm");
                            READMODRM; V_OP(add_d, xmm_modrm_val, xmm_modrm_reg,128); break;
 #else
+                // Non-temporal stores: plain stores here (the hint has no
+                // meaning without a cache to bypass). Memory forms only; the
+                // register forms are #UD on hardware. They were SIGILL.
+                case 0x2b: TRACEI("movntps xmm, m128");
+                           READMODRM; if (modrm.type == modrm_reg) UNDEFINED;
+                           VMOV(xmm_modrm_reg, xmm_modrm_val,128); break;
+                case 0xc3: TRACEI("movnti reg, m32");
+                           READMODRM; if (modrm.type == modrm_reg) UNDEFINED;
+                           MOV(modrm_reg, modrm_val,32); break;
                 case 0x10: TRACEI("movups xmm:modrm, xmm");
                            READMODRM; VMOV(xmm_modrm_val, xmm_modrm_reg,128); break;
                 case 0x11: TRACEI("movups xmm, xmm:modrm");
