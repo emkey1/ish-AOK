@@ -15042,6 +15042,40 @@ static inline void amd64_sse_cvtpd2dq(const union xmm_reg *src, union xmm_reg *d
     dst->u32[3] = 0;
 }
 
+// Does this legacy-SSE 0F opcode, with its mandatory prefix, take a 16-byte
+// aligned m128? Such an operand that is misaligned is #GP(0) (camd;
+// tests/manual/x86/sse_align_gp.c). No prefix is packed single or (for the
+// integer opcodes) MMX, whose m64 never checks; 66 is packed double or
+// 128-bit integer; F3/F2 are scalar except where noted. The explicitly
+// unaligned moves (MOVUPS/MOVUPD, MOVDQU, LDDQU) and the m64/m32 forms
+// (MOVLPS/MOVHPS, CVTPS2PD, CVTDQ2PD, MOVQ, the scalars) are not listed.
+static bool amd64_sse_m128_aligned(unsigned op2, bool p66, enum amd64_rep_mode rep) {
+    bool none = !p66 && rep == AMD64_REP_NONE;
+    bool f3 = !p66 && rep == AMD64_REPZ;
+    bool f2 = !p66 && rep == AMD64_REPNZ;
+    switch (op2) {
+    case 0x14: case 0x15: case 0x28: case 0x29: case 0x2b:
+    case 0x51: case 0x52: case 0x53: case 0x54: case 0x55: case 0x56: case 0x57:
+    case 0x58: case 0x59: case 0x5c: case 0x5d: case 0x5e: case 0x5f:
+    case 0xc2: case 0xc6:
+        return none || p66;                     // packed single / double
+    case 0x5a: return p66;                      // CVTPD2PS (CVTPS2PD is m64)
+    case 0x5b: return none || p66 || f3;        // CVTDQ2PS, CVTPS2DQ, CVTTPS2DQ
+    case 0x70: return p66 || f3 || f2;          // PSHUFD, PSHUFHW, PSHUFLW
+    case 0xe6: return p66 || f2;                // CVTTPD2DQ, CVTPD2DQ (F3 is m64)
+    case 0x6e: case 0x7e: case 0xd6: case 0xd7: case 0xf0: case 0xf7:
+    case 0x71: case 0x72: case 0x73:
+        return false;
+    case 0x6f: case 0x7f: return p66;           // MOVDQA (F3 is MOVDQU)
+    default:
+        // The 66-prefixed 128-bit integer ops: 0F 60-6D, 74-76, D1-FE.
+        if ((op2 >= 0x60 && op2 <= 0x6d) || (op2 >= 0x74 && op2 <= 0x76) ||
+                (op2 >= 0xd1 && op2 <= 0xfe))
+            return p66;
+        return false;
+    }
+}
+
 int amd64_jit_0f_vec_rm(struct cpu_state *cpu, struct tlb *tlb,
         unsigned long op2, unsigned long next_ip) {
     amd64_jit_note_vec_bridge(op2);
@@ -15142,6 +15176,12 @@ int amd64_jit_0f_vec_rm(struct cpu_state *cpu, struct tlb *tlb,
                 op2 == 0xc4 || op2 == 0xc5 || op2 == 0xc6) &&
             !amd64_fetch(cpu, tlb, &imm8, sizeof(imm8)))
         goto amd64_0f_vec_rm_pf;
+    if (!modrm.is_reg && amd64_sse_m128_aligned((unsigned) op2, operand_size_prefix, rep_mode) &&
+            (amd64_effective_addr(cpu, &modrm, seg_prefix) & 15) != 0) {
+        cpu->amd64_rip = saved_rip;
+        amd64_sync_legacy_regs(cpu);
+        return INT_GPF;
+    }
     cpu->amd64_rip = (qword_t) next_ip;
 
     if (op2 == 0x6e) {

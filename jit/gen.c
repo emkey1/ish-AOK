@@ -77,6 +77,9 @@ enum amd64_jit_mem_meta {
     AMD64_JIT_MEM_REX_PRESENT = 1ul << 34,
     AMD64_JIT_MEM_LOCK = 1ul << 35,
     AMD64_JIT_MEM_GS = 1ul << 36,
+    // A legacy-SSE 128-bit operand that must be 16-byte aligned: the vector
+    // gadgets' amd64_vmem_addr raises #GP(0) when it is not (math.S).
+    AMD64_JIT_MEM_ALIGN16 = 1ul << 37,
 };
 
 static inline byte_t amd64_modrm_mod(byte_t modrm) {
@@ -392,6 +395,8 @@ int gen_step(struct gen_state *state, struct tlb *tlb) {
         ret = gen_step64(state, tlb);
     } else {
         state->x86_seg = X86_SEG_NONE;
+        state->vec_noalign = false;
+        state->vec_align128 = false;
         ret = gen_step32(state, tlb);
     }
     guest_addr_t end = state->amd64 ? state->amd64_ip : state->ip;
@@ -6800,6 +6805,19 @@ static bool gen_amd64_decode_mem_meta(struct gen_state *state, struct tlb *tlb,
         *meta_out |= AMD64_JIT_MEM_GS;
     if (insn->rex.present)
         *meta_out |= AMD64_JIT_MEM_REX_PRESENT;
+    // Every 128-bit operand this reaches is legacy SSE (VEX has its own
+    // path), and legacy SSE requires it 16-byte aligned -- #GP(0) otherwise,
+    // as Linux reports it (camd; tests/manual/x86/sse_align_gp.c) -- except
+    // MOVUPS/MOVUPD (0F 10/11), MOVDQU (F3 0F 6F/7F), LDDQU (F2 0F F0) and the
+    // SSE4.2 string compares (0F 3A 60-63).
+    if (size == 128 && insn->two_byte_opcode) {
+        bool unaligned_ok = insn->op2 == 0x10 || insn->op2 == 0x11 ||
+            ((insn->op2 == 0x6f || insn->op2 == 0x7f) && insn->rep_mode == amd64_jit_repz) ||
+            (insn->op2 == 0xf0 && insn->rep_mode == amd64_jit_repnz) ||
+            insn->op2 == 0x3a;
+        if (!unaligned_ok)
+            *meta_out |= AMD64_JIT_MEM_ALIGN16;
+    }
     *disp_out = (unsigned long) (qword_t) (sqword_t) disp;
     *next_ip_out = ip;
     return true;
@@ -14754,7 +14772,7 @@ static inline bool gen_vex32(struct gen_state *state, struct tlb *tlb, struct mo
     return true;
 }
 
-static inline bool gen_vec(enum arg src, enum arg dst, void (*helper)(), gadget_t read_mem_gadget, gadget_t write_mem_gadget, struct gen_state *state, struct modrm *modrm, uint8_t imm, bool seg_tls, bool has_imm) {
+static inline bool gen_vec(enum arg src, enum arg dst, void (*helper)(), gadget_t read_mem_gadget, gadget_t write_mem_gadget, struct gen_state *state, struct modrm *modrm, uint8_t imm, bool seg_tls, bool has_imm, int size) {
     bool rm_is_src = !could_be_memory(dst);
     enum arg rm = rm_is_src ? src : dst;
     enum arg reg = rm_is_src ? dst : src;
@@ -14822,6 +14840,13 @@ static inline bool gen_vec(enum arg src, enum arg dst, void (*helper)(), gadget_
 
         case arg_mem:
             gen_addr(state, modrm, seg_tls);
+            // Legacy SSE: a 128-bit memory operand must be 16-byte aligned
+            // unless the instruction says otherwise (vec_noalign).
+            if ((size == 128 || state->vec_align128) && !state->vec_noalign) {
+                extern void gadget_vec_align16(void);
+                GEN(gadget_vec_align16);
+                GEN(state->orig_ip);
+            }
             GEN(rm_is_src ? read_mem_gadget : write_mem_gadget);
             GEN(state->orig_ip);
             GEN(helper);
@@ -14843,12 +14868,14 @@ static inline bool gen_vec(enum arg src, enum arg dst, void (*helper)(), gadget_
     return true;
 }
 
+#define VEC_NOALIGN state->vec_noalign = true
+#define VEC_ALIGN128 state->vec_align128 = true
 #define has_imm_ false
 #define has_imm__imm true
 #define _v(src, dst, helper, _imm, z) do { \
     extern void gadget_vec_helper_read##z##_imm(void); \
     extern void gadget_vec_helper_write##z##_imm(void); \
-    if (!gen_vec(src, dst, (void (*)()) helper, gadget_vec_helper_read##z##_imm, gadget_vec_helper_write##z##_imm, state, &modrm, imm, seg_tls, has_imm_##_imm)) return false; \
+    if (!gen_vec(src, dst, (void (*)()) helper, gadget_vec_helper_read##z##_imm, gadget_vec_helper_write##z##_imm, state, &modrm, imm, seg_tls, has_imm_##_imm, z)) return false; \
 } while (0)
 #define v_(op, src, dst, _imm,z) _v(arg_##src, arg_##dst, vec_##op##z, _imm,z)
 #define v(op, src, dst,z) v_(op, src, dst,,z)

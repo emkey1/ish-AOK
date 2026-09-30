@@ -1,6 +1,25 @@
 #include "gadgets.h"
 #include "emu/interrupt.h"
 
+# [vec_align16][orig_ip], after the address of a legacy-SSE 128-bit memory
+# operand is computed: MOVAPS/MOVDQA and the packed ops require it 16-byte
+# aligned, and a misaligned one is #GP(0) at the instruction -- SIGSEGV,
+# SI_KERNEL, no address, as Linux reports it (camd, both ABIs). The unaligned
+# forms (MOVUPS, MOVDQU, LDDQU, PCMPxSTRx) and the sub-128-bit operands never
+# get this gadget (jit/gen.c, vec_noalign).
+.gadget vec_align16
+    tst _addr, 15
+    b.ne 1f
+    gret 1
+1:
+    str xzr, [_cpu, CPU_segfault_addr]
+    strb wzr, [_cpu, CPU_segfault_was_write]
+    strb wzr, [_cpu, CPU_segfault_reported]
+    ldr x8, [_ip]
+    mov eip, w8
+    mov x0, INT_GPF
+    b jit_exit
+
 .gadget push
     sub _addr, esp, 4
     write_prep 32, push

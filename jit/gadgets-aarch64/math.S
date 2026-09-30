@@ -3091,7 +3091,21 @@ amd64_vmem_segfault_read:
     ldr  x14, [_cpu, CPU_amd64_gs_base]
     add  x9, x9, x14
 7005:
+    /* AMD64_JIT_MEM_ALIGN16 (bit 37): a legacy-SSE m128 that must be 16-byte
+       aligned; misaligned is #GP(0) at the instruction (rip was flushed to it
+       before the gadget). */
+    tbz  x8, 37, 7006f
+    tst  x9, 15
+    b.ne amd64_vmem_misaligned
+7006:
 .endm
+
+amd64_vmem_misaligned:
+    str  xzr, [_cpu, CPU_segfault_addr]
+    strb wzr, [_cpu, CPU_segfault_was_write]
+    strb wzr, [_cpu, CPU_segfault_reported]
+    mov  x0, INT_GPF
+    b    jit_exit
 
 # movaps/movups xmm, m128 (0F 28 / 0F 10): cpu->xmm[reg] = [addr]
 .gadget amd64_v_load128_mem

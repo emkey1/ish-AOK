@@ -22,6 +22,15 @@ struct gen_state {
     guest_addr_t riscv64_ip;
     guest_addr_t riscv64_orig_ip;
     unsigned long orig_ip_extra;
+    // Set by decode.h for a vector instruction whose 128-bit memory operand
+    // is NOT alignment-checked (MOVUPS, MOVDQU, LDDQU, PCMPxSTRx) or is really
+    // narrower (INSERTPS, PEXTRB/W, PINSRW); gen_vec consumes it. Reset per
+    // i386 instruction.
+    bool vec_noalign;
+    // Set by decode.h for a packed float op (ADDPS, SQRTPD, ...) whose helper
+    // size is the element width but whose memory operand is a whole m128:
+    // it is alignment-checked like any other.
+    bool vec_align128;
     bool amd64;
     bool arm64;
     bool riscv64;
