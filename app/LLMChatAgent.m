@@ -1307,31 +1307,36 @@ static const NSUInteger kISHLLMMaxRunningSubagents = 4;
 }
 #endif
 
-// One flat prompt of recent turns: this backend keeps no history between
-// calls and has a ~4K-token window.
-- (NSString *)appleFoundationModelsPromptWithHistory {
-    NSMutableArray<NSString *> *turns = [NSMutableArray array];
-    for (NSDictionary<NSString *, id> *message in _messages) {
+// The turns before the newest prompt, most recent kept within a rough
+// character budget (the on-device window is ~4K tokens), as the session's
+// transcript. Tool results are left out: the answers that used them are in.
+- (NSArray<NSDictionary<NSString *, NSString *> *> *)appleFoundationModelsHistory {
+    NSMutableArray<NSDictionary<NSString *, NSString *> *> *turns = [NSMutableArray array];
+    for (NSDictionary<NSString *, id> *message in [self messagesSentToModel]) {
         if ([self messageIsLocalOnly:message])
             continue;
         NSString *role = ISHLLMStringValue(message, @"role");
         NSString *content = ISHLLMStringValue(message, @"content");
-        if (content.length == 0 || [role isEqualToString:@"tool"] || [role isEqualToString:@"system"])
+        if (content.length == 0 || !([role isEqualToString:@"user"] || [role isEqualToString:@"assistant"]))
             continue;
-        [turns addObject:[NSString stringWithFormat:@"%@: %@", [role isEqualToString:@"assistant"] ? @"Assistant" : @"User", content]];
+        [turns addObject:@{@"role": role, @"content": content}];
     }
+    // The newest user message is the prompt itself.
+    if ([turns.lastObject[@"role"] isEqualToString:@"user"])
+        [turns removeLastObject];
     NSUInteger budget = 6000;
-    NSMutableArray<NSString *> *kept = [NSMutableArray array];
+    NSMutableArray<NSDictionary<NSString *, NSString *> *> *kept = [NSMutableArray array];
     NSUInteger total = 0;
-    for (NSString *turn in turns.reverseObjectEnumerator) {
-        total += turn.length;
-        if (total > budget && kept.count > 0)
+    for (NSDictionary<NSString *, NSString *> *turn in turns.reverseObjectEnumerator) {
+        total += turn[@"content"].length;
+        if (total > budget)
             break;
         [kept insertObject:turn atIndex:0];
     }
-    if (_systemPrompt.length > 0)
-        [kept insertObject:[NSString stringWithFormat:@"Instructions: %@", _systemPrompt] atIndex:0];
-    return [kept componentsJoinedByString:@"\n\n"];
+    // A transcript opens with the user's turn.
+    while ([kept.firstObject[@"role"] isEqualToString:@"assistant"])
+        [kept removeObjectAtIndex:0];
+    return kept;
 }
 
 - (void)sendPromptToAppleFoundationModels:(NSString *)prompt {
@@ -1347,12 +1352,21 @@ static const NSUInteger kISHLLMMaxRunningSubagents = 4;
         [self installAppleFoundationModelsShellHandler];
     }
     void (^startRequest)(void) = ^{
-        NSString *instructions = [@"The prompt is this conversation so far, formatted as alternating \"User:\"/\"Assistant:\" turns. Continue it naturally as the Assistant, responding only to the latest User message -- the earlier turns are context, not something to repeat back."
-            stringByAppendingString:toolsEnabled ? [@" " stringByAppendingString:ISHLLMToolSystemNote(ISHLLMAgentManager.shared.guestEnvironmentNote, self->_toolContext.workingDirectory, NO)] : @""];
-        NSString *promptWithHistory = [self appleFoundationModelsPromptWithHistory];
+        NSMutableArray<NSString *> *instructionParts = [NSMutableArray array];
+        if (self->_systemPrompt.length > 0)
+            [instructionParts addObject:self->_systemPrompt];
+        [instructionParts addObject:@"Answer only the user's newest message; earlier ones in this conversation have been answered already. Answer questions of arithmetic, general knowledge and conversation directly."];
+        // Only the tool's own definition describes it: the longer tool note
+        // the other models get made this one run nearly every question as
+        // a shell command ("what is the capital of France").
+        if (toolsEnabled && self->_toolContext.workingDirectory.length > 0)
+            [instructionParts addObject:[NSString stringWithFormat:@"Shell commands start in %@.", self->_toolContext.workingDirectory]];
+        NSString *instructions = [instructionParts componentsJoinedByString:@"\n\n"];
+        NSArray *history = [self appleFoundationModelsHistory];
         [self setSending:YES];
         NSUInteger streamingIndex = [self addStreamingPlaceholder];
-        [AOKFoundationModelsBridge streamResponseToPrompt:promptWithHistory.length > 0 ? promptWithHistory : prompt
+        [AOKFoundationModelsBridge streamResponseToPrompt:prompt
+                                                   history:history
                                               instructions:instructions
                                               toolsEnabled:toolsEnabled
                                                  onPartial:^(NSString *partial) {

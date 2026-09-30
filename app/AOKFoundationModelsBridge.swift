@@ -26,7 +26,9 @@ import FoundationModels
 @available(iOS 26.0, *)
 struct AOKShellTool: Tool {
     let name = "run_shell"
-    let description = "Run a shell command in the iSH guest Linux environment and return its combined stdout+stderr. Use this to list/read files, check installed tools, or run quick scripts. Each call runs one command and may require the user's confirmation before it executes."
+    // Apple's small model calls a tool it is told about for nearly anything
+    // (arithmetic, a greeting); the description has to say when not to.
+    let description = "Run one shell command in the iSH-AOK Linux system and return its output. Use it only when the question is about this system: its files, installed programs, processes, or what a command prints. Never use it for arithmetic, general knowledge, or conversation; answer those directly."
 
     @Generable
     struct Arguments {
@@ -127,6 +129,59 @@ public final class AOKFoundationModelsBridge: NSObject {
         }
         #endif
         completion(nil, availabilityDescription())
+    }
+
+    // The conversation so far as the session's own transcript: each earlier
+    // user turn a prompt, each reply a response, after the instructions. The
+    // model then knows those questions were answered; flattened into one
+    // prompt of "User:"/"Assistant:" lines it answered them all over again.
+    // `history` holds dictionaries with "role" ("user" or "assistant") and
+    // "content", oldest first, not including `prompt`.
+    @objc public static func streamResponse(toPrompt prompt: String, history: [[String: String]], instructions: String?, toolsEnabled: Bool, onPartial: @escaping (String) -> Void, completion: @escaping (String?, String?) -> Void) {
+        #if canImport(FoundationModels)
+        if #available(iOS 26.0, *), case .available = SystemLanguageModel.default.availability {
+            activeTask = Task {
+                do {
+                    let tools: [any Tool] = toolsEnabled ? [AOKShellTool()] : []
+                    var entries: [Transcript.Entry] = []
+                    let toolDefinitions = toolsEnabled ? [Transcript.ToolDefinition(tool: AOKShellTool())] : []
+                    let instructionText = instructions ?? ""
+                    if !instructionText.isEmpty || !toolDefinitions.isEmpty {
+                        entries.append(.instructions(Transcript.Instructions(segments: [.text(Transcript.TextSegment(content: instructionText))], toolDefinitions: toolDefinitions)))
+                    }
+                    for turn in history {
+                        let text = turn["content"] ?? ""
+                        if text.isEmpty { continue }
+                        let segments: [Transcript.Segment] = [.text(Transcript.TextSegment(content: text))]
+                        if turn["role"] == "assistant" {
+                            entries.append(.response(Transcript.Response(assetIDs: [], segments: segments)))
+                        } else {
+                            entries.append(.prompt(Transcript.Prompt(segments: segments)))
+                        }
+                    }
+                    let session = LanguageModelSession(tools: tools, transcript: Transcript(entries: entries))
+                    var last = ""
+                    for try await snapshot in session.streamResponse(to: prompt) {
+                        last = snapshot.content
+                        onPartial(last)
+                    }
+                    completion(last, nil)
+                } catch {
+                    completion(nil, describe(error))
+                }
+                activeTask = nil
+            }
+            return
+        }
+        #endif
+        completion(nil, availabilityDescription())
+    }
+
+    // localizedDescription of a GenerationError is only "error -1"; the
+    // case name says which (guardrail, context size, rate limit, ...).
+    static func describe(_ error: Error) -> String {
+        let detail = String(describing: error)
+        return detail.isEmpty ? error.localizedDescription : "\(error.localizedDescription) [\(detail)]"
     }
 
     // Streaming variant. onPartial is called repeatedly with the cumulative
