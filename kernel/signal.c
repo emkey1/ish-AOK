@@ -3948,6 +3948,25 @@ qword_t sys_rt_sigreturn_amd64(void) {
             frame.uc.stack.size, frame.uc.stack.flags);
     sigmask_set(frame.uc.sigmask);
     unlock(&current->sighand->lock);
+
+    // The return to the frame's CS and SS (CSGSFS: CS in bits 0-15, SS in
+    // 48-63). Anything but the 64-bit user CS 0x33 and data SS 0x2b is a
+    // #GP at the restored rip, with the error code Linux reports (camd,
+    // tests/manual/x86/gpf_siginfo.c): CS's selector if CS is bad -- 0 for
+    // the 32-bit user CS 0x23 -- else SS's; 0 whenever SS names the LDT
+    // (espfix, as on i386). It was ignored and the task resumed normally.
+    word_t cs = (word_t) (frame.uc.mcontext.gregs[AMD64_GREG_CSGSFS] | 3);
+    word_t ss = (word_t) ((frame.uc.mcontext.gregs[AMD64_GREG_CSGSFS] >> 48) | 3);
+    if (cs != AMD64_SEL_USER_CS || ss != AMD64_SEL_USER_DS) {
+        word_t err;
+        if (ss & 4)
+            err = 0;
+        else if (cs != AMD64_SEL_USER_CS)
+            err = cs == 0x23 ? 0 : cs & 0xfffc;
+        else
+            err = ss & 0xfffc;
+        i386_sigreturn_gpf(cpu, err);
+    }
     return cpu->amd64_regs[amd64_rax];
 }
 

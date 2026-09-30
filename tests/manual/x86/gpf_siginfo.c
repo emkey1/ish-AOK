@@ -26,12 +26,10 @@
 // number, in its own child process: a frame that kept the primer's number
 // fails here instead of passing by coincidence.
 //
-// Not asserted, because AOK does not raise them yet (each is SIGILL, or no
-// fault at all, where Linux raises #GP): privileged 0F opcodes such as RDMSR
-// and MOV from CR0, misaligned MOVAPS/MOVDQA, `int n` on amd64, IRET on i386,
-// and rt_sigreturn to a bad CS or SS on amd64. Nor are the page fault's
-// present and instruction-fetch error-code bits, or CR2 surviving into a later
-// #GP's frame (Linux keeps the last page fault's address there).
+// Covered elsewhere: privileged 0F opcodes (priv_gp.c) and misaligned
+// MOVAPS/MOVDQA (sse_align_gp.c). Not asserted: IRET on i386, the page
+// fault's present and instruction-fetch error-code bits, and CR2 surviving
+// into a later #GP's frame (Linux keeps the last page fault's address there).
 //
 // Each faulting instruction carries a global label, so its address is a
 // symbol rather than label arithmetic (which would need different spellings
@@ -163,9 +161,8 @@ NI static void p_pf(void) {
     __asm__ volatile(AT(at_pf) "movb (%0), %%al" :: "r"(none_page + 0x123) : "eax");
 }
 
-#ifdef __i386__
-// int n. The gates user mode may use -- 3, 4 and 0x80 -- trap after the
-// instruction; the rest are #GP at it.
+// int n, both ABIs. The gates user mode may use -- 3, 4 (and 0x80 on i386)
+// -- trap after the instruction; the rest are #GP at it.
 extern const char at_int81[] HIDDEN, at_int0[] HIDDEN, at_int1[] HIDDEN,
     at_int6[] HIDDEN, at_int0e[] HIDDEN, at_int20[] HIDDEN, at_intff[] HIDDEN,
     at_int4[] HIDDEN, at_int3[] HIDDEN;
@@ -179,6 +176,8 @@ NI static void p_intff(void) { __asm__ volatile(AT(at_intff) "int $0xff"); }
 NI static void p_int4(void) { __asm__ volatile(AT(at_int4) "int $4"); }
 NI static void p_int3(void) { __asm__ volatile(AT(at_int3) ".byte 0xcd, 0x03"); }
 
+#ifdef __i386__
+
 extern const char at_pop_es[] HIDDEN, at_pop_ss[] HIDDEN, at_pop_ds[] HIDDEN;
 NI static void p_pop_es(void) {
     __asm__ volatile("pushl %0\n\t" AT(at_pop_es) "pop %%es" :: "m"(arg) : "memory");
@@ -190,19 +189,31 @@ NI static void p_pop_ds(void) {
     __asm__ volatile("pushl %0\n\t" AT(at_pop_ds) "pop %%ds" :: "m"(arg) : "memory");
 }
 
+#endif
+
 // sigreturn to a frame whose CS or SS the handler broke: the #GP is where
-// the task would have resumed.
+// the task would have resumed. Both ABIs.
 static volatile unsigned sr_cs, sr_ss;
 static volatile uintptr_t sr_resume;
 static void usr1_break_frame(int sig, siginfo_t *si, void *ucv) {
     ucontext_t *uc = ucv;
     (void) sig;
     (void) si;
+#ifdef __x86_64__
+    // x86_64 keeps CS in bits 0-15 of CSGSFS and SS in bits 48-63.
+    greg_t *csgsfs = &uc->uc_mcontext.gregs[REG_CSGSFS];
+    if (sr_cs != 0)
+        *csgsfs = (*csgsfs & ~(greg_t) 0xffff) | sr_cs;
+    if (sr_ss != 0xffff)
+        *csgsfs = (*csgsfs & ~((greg_t) 0xffff << 48)) | ((greg_t) sr_ss << 48);
+    sr_resume = (uintptr_t) uc->uc_mcontext.gregs[REG_RIP];
+#else
     if (sr_cs != 0)
         uc->uc_mcontext.gregs[REG_CS] = sr_cs;
     if (sr_ss != 0xffff)
         uc->uc_mcontext.gregs[REG_SS] = sr_ss;
     sr_resume = (uintptr_t) uc->uc_mcontext.gregs[REG_EIP];
+#endif
 }
 NI static void p_sigreturn(void) {
     struct sigaction sa;
@@ -212,7 +223,6 @@ NI static void p_sigreturn(void) {
     sigaction(SIGUSR1, &sa, NULL);
     raise(SIGUSR1);
 }
-#endif
 
 #ifdef __x86_64__
 extern const char at_nc_load[] HIDDEN, at_nc_store[] HIDDEN, at_kaddr[] HIDDEN,
@@ -224,6 +234,20 @@ NI static void p_nc_load(void) {
 NI static void p_nc_store(void) {
     __asm__ volatile("movabs $0x0000900000001000, %%rax\n\t"
                      AT(at_nc_store) "movq $0, (%%rax)" ::: "rax", "memory");
+}
+// A branch to a non-canonical address is #GP at the branch itself.
+extern const char at_nc_jmp[] HIDDEN, at_nc_call[] HIDDEN, at_nc_ret[] HIDDEN;
+NI static void p_nc_jmp(void) {
+    __asm__ volatile("movabs $0x8000000000001000, %%rax\n\t"
+                     AT(at_nc_jmp) "jmp *%%rax" ::: "rax");
+}
+NI static void p_nc_call(void) {
+    __asm__ volatile("movabs $0x8000000000001000, %%rax\n\t"
+                     AT(at_nc_call) "call *%%rax" ::: "rax", "memory");
+}
+NI static void p_nc_ret(void) {
+    __asm__ volatile("movabs $0x0000900000000000, %%rax\n\t"
+                     "push %%rax\n\t" AT(at_nc_ret) "ret" ::: "rax", "memory");
 }
 // Canonical, but the kernel's half: a page fault, not a #GP.
 NI static void p_kaddr(void) {
@@ -268,10 +292,8 @@ enum { ADDR_NULL, ADDR_PAGE, ADDR_INSN };
 static int check(const struct expect *e) {
     int bad = 0;
     uintptr_t want_ip = e->ip_off == IP_RESUME ? 0 : (uintptr_t) e->at + e->ip_off;
-#ifdef __i386__
     if (e->ip_off == IP_RESUME)
         want_ip = sr_resume;
-#endif
     uintptr_t want_addr = e->addr == ADDR_PAGE ? (uintptr_t) none_page + 0x123 :
                           e->addr == ADDR_INSN ? (uintptr_t) e->at : 0;
     unsigned long mask = e->err_mask != 0 ? e->err_mask : ~0ul;
@@ -405,8 +427,7 @@ int main(int argc, char **argv) {
     for (unsigned i = 0; i < sizeof common / sizeof common[0]; i++)
         run(&common[i]);
 
-#ifdef __i386__
-    static const struct expect i386_only[] = {
+    static const struct expect ints[] = {
         GP("int $0x81", p_int81, at_int81, 0x81 * 8 + 2, 0),
         GP("int $0", p_int0, at_int0, 2, 0),
         GP("int $1", p_int1, at_int1, 1 * 8 + 2, 0),
@@ -417,6 +438,12 @@ int main(int argc, char **argv) {
         // The gates user mode may use: traps, reported after the two bytes.
         {"int $4", p_int4, at_int4, 2, SIGSEGV, SI_KERNEL, 4, 0, 0, ADDR_NULL, 0},
         {"int $3 (cd 03)", p_int3, at_int3, 2, SIGTRAP, SI_KERNEL, 3, 0, 0, ADDR_NULL, 0},
+    };
+    for (unsigned i = 0; i < sizeof ints / sizeof ints[0]; i++)
+        run(&ints[i]);
+
+#ifdef __i386__
+    static const struct expect i386_only[] = {
 
         GP("pop es, 0x13", p_pop_es, at_pop_es, 0x10, 0x13),
         GP("pop ds, 0x43", p_pop_ds, at_pop_ds, 0x40, 0x43),
@@ -425,9 +452,21 @@ int main(int argc, char **argv) {
     for (unsigned i = 0; i < sizeof i386_only / sizeof i386_only[0]; i++)
         run(&i386_only[i]);
 
+#endif
+
     // sigreturn: CS's selector if CS is bad, else SS's -- but 0 whenever SS
-    // names the LDT (Linux returns there through its espfix stack).
+    // names the LDT (Linux returns there through its espfix stack), and on
+    // x86_64 0 for the 32-bit user CS 0x23.
     static const struct { const char *what; unsigned cs, ss, err; } srs[] = {
+#ifdef __x86_64__
+        {"sigreturn to cs 0x2b", 0x2b, 0xffff, 0x28},
+        {"sigreturn to cs 0x10", 0x10, 0xffff, 0x10},
+        {"sigreturn to cs 0x07 (LDT)", 0x07, 0xffff, 0x04},
+        {"sigreturn to cs 0x23 (32-bit)", 0x23, 0xffff, 0},
+        {"sigreturn to ss 0x13", 0, 0x13, 0x10},
+        {"sigreturn to ss 0x33", 0, 0x33, 0x30},
+        {"sigreturn to ss 0x07 (LDT)", 0, 0x07, 0},
+#else
         {"sigreturn to cs 0x2b", 0x2b, 0xffff, 0x28},
         {"sigreturn to cs 0x10", 0x10, 0xffff, 0x10},
         {"sigreturn to cs 0x07 (LDT)", 0x07, 0xffff, 0x04},
@@ -435,6 +474,7 @@ int main(int argc, char **argv) {
         {"sigreturn to ss 0x23", 0, 0x23, 0x20},
         {"sigreturn to ss 0x07 (LDT)", 0, 0x07, 0},
         {"sigreturn to cs 0x2b, ss 0x0f (LDT)", 0x2b, 0x0f, 0},
+#endif
     };
     for (unsigned i = 0; i < sizeof srs / sizeof srs[0]; i++) {
         struct expect e = {srs[i].what, p_sigreturn, NULL, IP_RESUME, SIGSEGV,
@@ -443,12 +483,14 @@ int main(int argc, char **argv) {
         sr_ss = srs[i].ss;
         run(&e);
     }
-#endif
 
 #ifdef __x86_64__
     static const struct expect amd64_only[] = {
         GP("load from 0x8000000000001000", p_nc_load, at_nc_load, 0, 0),
         GP("store to 0x0000900000001000", p_nc_store, at_nc_store, 0, 0),
+        GP("jmp to 0x8000000000001000", p_nc_jmp, at_nc_jmp, 0, 0),
+        GP("call to 0x8000000000001000", p_nc_call, at_nc_call, 0, 0),
+        GP("ret to 0x0000900000000000", p_nc_ret, at_nc_ret, 0, 0),
     };
     for (unsigned i = 0; i < sizeof amd64_only / sizeof amd64_only[0]; i++)
         run(&amd64_only[i]);

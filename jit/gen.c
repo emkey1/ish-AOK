@@ -10933,6 +10933,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
                 extern void gadget_amd64_jmp_indir_reg(void);
                 gen(state, (unsigned long) gadget_amd64_jmp_indir_reg);
                 gen(state, rm);
+                gen(state, (unsigned long) insn.start_ip);  // #GP rip if non-canonical
             } else {
                 amd64_jit_debug("call-indir-reg ip=%llx rm=%lu next=%llx",
                         (unsigned long long) insn.start_ip, rm,

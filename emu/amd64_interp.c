@@ -12363,6 +12363,27 @@ restart_prefix:
     // amd64_rip for this ABI.
     case 0xcc:
         return INT_BREAKPOINT;
+    // int imm8. Linux's 64-bit IDT lets user mode through only the #BP (3)
+    // and #OF (4) gates, as traps reported after the instruction; every other
+    // vector is #GP with error code vector * 8 + 2 (IDT, EXT clear), reported
+    // AT the instruction (camd; tests/manual/x86/gpf_siginfo.c). It was
+    // SIGILL for every vector. int $0x80 is left undefined: on a 64-bit
+    // kernel it is the 32-bit compat syscall gate, which this engine does
+    // not provide.
+    case 0xcd: {
+        byte_t vector;
+        if (!amd64_fetch_u8(cpu, tlb, &vector))
+            return INT_PF;
+        if (vector == 3)
+            return INT_BREAKPOINT;
+        if (vector == 4)
+            return INT_OVERFLOW;
+        if (vector == 0x80)
+            return INT_UNDEFINED;
+        cpu->amd64_rip = cpu->amd64_current_insn_rip;
+        amd64_sync_legacy_regs(cpu);
+        return INT_GPF_CODE(vector * 8 + 2);
+    }
     case 0xf4:
         return INT_PRIV;
     case 0xf5:

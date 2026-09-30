@@ -3556,6 +3556,25 @@ amd64_v_str3a_mem pcmpestri, amd64_jit_pcmpestri
     gret 0
     amd64_vread_bullshit 8, leave
 
+# A branch target must be canonical (bits 63-47 all equal). A non-canonical
+# one is #GP(0) on the branch itself -- rip at the jmp/call/ret, no stack
+# change -- as Linux reports it (camd; tests/manual/x86/gpf_siginfo.c); it was
+# reported at the target. Every gadget below checks before committing
+# anything, with rip already flushed to the instruction (jmp_indir_reg stores
+# it from its own operand).
+.macro amd64_branch_canonical reg
+    sbfx x12, \reg, 0, 48
+    cmp  x12, \reg
+    b.ne amd64_branch_noncanonical
+.endm
+
+amd64_branch_noncanonical:
+    str  xzr, [_cpu, CPU_segfault_addr]
+    strb wzr, [_cpu, CPU_segfault_was_write]
+    strb wzr, [_cpu, CPU_segfault_reported]
+    mov  x0, INT_GPF
+    b    jit_exit
+
 # amd64 ret (0xc3): pop the 64-bit return address into RIP and exit the block;
 # the main loop then finds/runs the target block (indirect target, so no static
 # link). Saves the gadget->C->gadget round-trip the bridge paid. A page fault on
@@ -3566,6 +3585,7 @@ amd64_v_str3a_mem pcmpestri, amd64_jit_pcmpestri
     ldr  x9, [x14, 4*8]               /* x9 = RSP = read address */
     amd64_vread_prep 8, ret
     ldr  x10, [x9]                    /* x10 = return address (popped) */
+    amd64_branch_canonical x10
     add  x14, _cpu, CPU_amd64_regs
     ldr  x8, [x14, 4*8]
     add  x8, x8, 8
@@ -3581,6 +3601,14 @@ amd64_v_str3a_mem pcmpestri, amd64_jit_pcmpestri
     ldr  x8, [_ip]
     add  x14, _cpu, CPU_amd64_regs
     ldr  x10, [x14, x8, lsl 3]       /* target = regs[rm] */
+    sbfx x12, x10, 0, 48
+    cmp  x12, x10
+    b.eq 1f
+    ldr  x11, [_ip, 8]               /* the jmp's own rip (operand 1) */
+    str  x11, [_cpu, CPU_amd64_rip]
+    str  w11, [_cpu, CPU_eip]
+    b    amd64_branch_noncanonical
+1:
     str  x10, [_cpu, CPU_amd64_rip]
     str  w10, [_cpu, CPU_eip]
     b    jit_ret
@@ -3593,6 +3621,7 @@ amd64_v_str3a_mem pcmpestri, amd64_jit_pcmpestri
     add  x14, _cpu, CPU_amd64_regs
     ldr  x8, [_ip]
     ldr  x10, [x14, x8, lsl 3]       /* x10 = target = regs[rm] (survives prep) */
+    amd64_branch_canonical x10
     ldr  x9, [x14, 4*8]              /* RSP */
     sub  x9, x9, 8                   /* new RSP = store address */
     amd64_vwrite_prep 8, call_ir
@@ -3620,6 +3649,7 @@ amd64_v_str3a_mem pcmpestri, amd64_jit_pcmpestri
     amd64_vmem_addr                  /* x9 = effective address */
     amd64_vread_prep 8, jmp_im       /* x9 = host addr of the target */
     ldr  x10, [x9]                   /* target = *(u64 *)addr */
+    amd64_branch_canonical x10
     str  x10, [_cpu, CPU_amd64_rip]
     str  w10, [_cpu, CPU_eip]
     b    jit_ret
@@ -3637,6 +3667,7 @@ amd64_v_str3a_mem pcmpestri, amd64_jit_pcmpestri
     amd64_vmem_addr                  /* x9 = effective address */
     amd64_vread_prep 8, call_im      /* x9 = host addr of the target */
     ldr  x10, [x9]                   /* x10 = target (survives the push prep) */
+    amd64_branch_canonical x10
     add  x14, _cpu, CPU_amd64_regs
     ldr  x9, [x14, 4*8]              /* RSP */
     sub  x9, x9, 8                   /* new RSP = push store address */
