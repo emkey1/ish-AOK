@@ -628,7 +628,7 @@ That is instruction fusion, and each guest has its own families:
 |---|---|
 | i386 | `ADDR`, `MOVMR`, `LEA`, `ALU`, `PUSHPOP` |
 | arm64 | `BCOND` (compare + branch), `LDST` (load/store RMW), `LDCMP` (load + compare), `RETCACHE` |
-| riscv64 | `FOLD` (`lui`/`auipc` + `addi`/load), `JAL` (link write + branch in one), `RETCACHE` |
+| riscv64 | `FOLD` (`lui`/`auipc` + `addi`/load), `JAL` (link write + branch in one), `RETCACHE`, `PAIR` (`ld`/`sd` pairs), `ALU` (`slli` + shift/`add`, `add` + load), `BR` (`li`/`andi` + branch) |
 | amd64 | `INCDEC_REG` |
 
 The amd64 entry is the gadget from Section 6.6 — the one that replaced a bridge

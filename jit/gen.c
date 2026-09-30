@@ -5851,9 +5851,9 @@ static bool gen_riscv64_try_pair(struct gen_state *state, struct tlb *tlb, bool 
 // 2.1% of adjacent pairs. Every register the pair writes is written, in
 // order, so the result equals the unfused pair's; the consumed instruction
 // can still be jumped to (a fresh block decodes it alone).
-static bool gen_riscv64_alu_pair_ok(struct gen_state *state, struct tlb *tlb,
+static bool gen_riscv64_pair_ok(struct gen_state *state, struct tlb *tlb, unsigned bit,
         uint32_t *next, unsigned *len) {
-    if (!(riscv64_jit_fuse_mask() & JIT_FUSE_RV_ALU))
+    if (!(riscv64_jit_fuse_mask() & bit))
         return false;
     *len = gen_riscv64_peek(state, tlb, next);
     if (*len == 0)
@@ -5872,7 +5872,7 @@ static bool gen_riscv64_try_after_slli(struct gen_state *state, struct tlb *tlb,
         unsigned rd, unsigned rs1, unsigned sh) {
     uint32_t next;
     unsigned len;
-    if (!gen_riscv64_alu_pair_ok(state, tlb, &next, &len))
+    if (!gen_riscv64_pair_ok(state, tlb, JIT_FUSE_RV_ALU, &next, &len))
         return false;
     unsigned op = riscv64_opcode(next), f3 = riscv64_funct3(next);
     unsigned nrd = riscv64_rd(next), nrs1 = riscv64_rs1(next);
@@ -5916,7 +5916,7 @@ static bool gen_riscv64_try_after_add(struct gen_state *state, struct tlb *tlb,
         unsigned rd, unsigned rs1, unsigned rs2) {
     uint32_t next;
     unsigned len;
-    if (!gen_riscv64_alu_pair_ok(state, tlb, &next, &len))
+    if (!gen_riscv64_pair_ok(state, tlb, JIT_FUSE_RV_ALU, &next, &len))
         return false;
     if (riscv64_opcode(next) != RISCV64_OP_LOAD || riscv64_rs1(next) != rd ||
             riscv64_rd(next) == 0)
@@ -5941,6 +5941,85 @@ static bool gen_riscv64_try_after_add(struct gen_state *state, struct tlb *tlb,
     gen(state, riscv64_rd_off(riscv64_rd(next)));
     gen(state, state->riscv64_ip);   // the load's pc: its fault restarts there
     gen_riscv64_alu_pair_consume(state, next, len);
+    return true;
+}
+
+// A constant compare or bit test feeding a conditional branch (the "br" fuse
+// bit): li t,K then b<cond> with t as one operand, and andi t,rs,K then
+// beqz/bnez t -- 0.8% and 0.6% of adjacent pairs in a riscv64 gcc compile. t
+// is written as unfused and the branch ends the block, so on success the
+// caller returns 0.
+static void gen_riscv64_branch_targets(struct gen_state *state, uint32_t next) {
+    // riscv64_ip is still the branch's own pc here.
+    gen(state, (state->riscv64_ip + riscv64_imm_b(next)) | 0x8000000000000000ULL);
+    state->jump_ip[0] = state->size - 1;
+}
+static void gen_riscv64_branch_fallthrough(struct gen_state *state) {
+    gen(state, state->riscv64_ip | 0x8000000000000000ULL);
+    state->jump_ip[1] = state->size - 1;
+}
+
+// After li t, K (addi t, x0, K; t != 0).
+static bool gen_riscv64_try_li_branch(struct gen_state *state, struct tlb *tlb,
+        unsigned t, int64_t k) {
+    uint32_t next;
+    unsigned len;
+    if (!gen_riscv64_pair_ok(state, tlb, JIT_FUSE_RV_BRANCH, &next, &len))
+        return false;
+    if (riscv64_opcode(next) != RISCV64_OP_BRANCH)
+        return false;
+    unsigned f3 = riscv64_funct3(next), a = riscv64_rs1(next), b = riscv64_rs2(next);
+    bool t_is_rs2 = b == t && a != t, t_is_rs1 = a == t && b != t;
+    if (!t_is_rs2 && !t_is_rs1)
+        return false;
+    extern void gadget_riscv64_beq_ri(void), gadget_riscv64_bne_ri(void);
+    extern void gadget_riscv64_blt_ri(void), gadget_riscv64_bge_ri(void);
+    extern void gadget_riscv64_bltu_ri(void), gadget_riscv64_bgeu_ri(void);
+    extern void gadget_riscv64_blt_ir(void), gadget_riscv64_bge_ir(void);
+    extern void gadget_riscv64_bltu_ir(void), gadget_riscv64_bgeu_ir(void);
+    static void (*const ri[8])(void) = {
+        gadget_riscv64_beq_ri, gadget_riscv64_bne_ri, NULL, NULL,
+        gadget_riscv64_blt_ri, gadget_riscv64_bge_ri,
+        gadget_riscv64_bltu_ri, gadget_riscv64_bgeu_ri,
+    };
+    static void (*const ir[8])(void) = {
+        gadget_riscv64_beq_ri, gadget_riscv64_bne_ri, NULL, NULL,
+        gadget_riscv64_blt_ir, gadget_riscv64_bge_ir,
+        gadget_riscv64_bltu_ir, gadget_riscv64_bgeu_ir,
+    };
+    void (*g)(void) = t_is_rs2 ? ri[f3] : ir[f3];
+    if (g == NULL)
+        return false;
+    gen(state, (unsigned long) g);
+    gen(state, riscv64_rd_off(t));
+    gen(state, riscv64_rs_off(t_is_rs2 ? a : b));
+    gen(state, (uint64_t) k);
+    gen_riscv64_branch_targets(state, next);
+    gen_riscv64_alu_pair_consume(state, next, len);
+    gen_riscv64_branch_fallthrough(state);
+    return true;
+}
+
+// After andi t, rs, K (t != 0): beq/bne of t against x0.
+static bool gen_riscv64_try_andi_branch(struct gen_state *state, struct tlb *tlb,
+        unsigned t, unsigned rs, int64_t k) {
+    uint32_t next;
+    unsigned len;
+    if (!gen_riscv64_pair_ok(state, tlb, JIT_FUSE_RV_BRANCH, &next, &len))
+        return false;
+    if (riscv64_opcode(next) != RISCV64_OP_BRANCH)
+        return false;
+    unsigned f3 = riscv64_funct3(next), a = riscv64_rs1(next), b = riscv64_rs2(next);
+    if (f3 > 1 || !((a == t && b == 0) || (a == 0 && b == t)))
+        return false;
+    extern void gadget_riscv64_andi_beqz(void), gadget_riscv64_andi_bnez(void);
+    gen(state, (unsigned long) (f3 == 0 ? gadget_riscv64_andi_beqz : gadget_riscv64_andi_bnez));
+    gen(state, riscv64_rd_off(t));
+    gen(state, riscv64_rs_off(rs));
+    gen(state, (uint64_t) k);
+    gen_riscv64_branch_targets(state, next);
+    gen_riscv64_alu_pair_consume(state, next, len);
+    gen_riscv64_branch_fallthrough(state);
     return true;
 }
 
@@ -6368,6 +6447,8 @@ int gen_step_riscv64(struct gen_state *state, struct tlb *tlb) {
         int64_t imm = riscv64_imm_i(insn);
         if (funct3 == 0) { // addi (li/mv/nop forms included)
             if (rs1 == 0) {
+                if (rd != 0 && gen_riscv64_try_li_branch(state, tlb, rd, imm))
+                    return 0; // block ends at the branch
                 gen_riscv64_mov_const(state, rd, (uint64_t) imm);
             } else {
                 extern void gadget_riscv64_addi(void);
@@ -6385,6 +6466,8 @@ int gen_step_riscv64(struct gen_state *state, struct tlb *tlb) {
             gadget_riscv64_and_ri,
         };
         void (*gadget)(void) = op_imm_gadgets[funct3];
+        if (funct3 == 7 && rd != 0 && gen_riscv64_try_andi_branch(state, tlb, rd, rs1, imm))
+            return 0; // block ends at the branch
         if (funct3 == 1) { // slli: shamt[5:0], upper imm bits must be 0
             if ((imm & ~0x3f) != 0)
                 return gen_riscv64_undefined(state, insn);
@@ -13957,7 +14040,7 @@ static const struct jit_fuse_entry arm64_fuse_names[] = {
 static const struct jit_fuse_entry riscv64_fuse_names[] = {
     {"fold", JIT_FUSE_RV_FOLD}, {"jal", JIT_FUSE_RV_JAL},
     {"retcache", JIT_FUSE_RV_RETCACHE}, {"pair", JIT_FUSE_RV_PAIR},
-    {"alu", JIT_FUSE_RV_ALU},
+    {"alu", JIT_FUSE_RV_ALU}, {"br", JIT_FUSE_RV_BRANCH},
 };
 static const struct jit_fuse_entry amd64_fuse_names[] = {
     {"incdec_reg", JIT_FUSE_AMD64_INCDEC_REG},

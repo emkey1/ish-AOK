@@ -212,6 +212,56 @@ branch_op ge, ge
 branch_op ltu, lo
 branch_op geu, hs
 
+// li t, K ; b<cond> with t as one operand (the "br" fuse bit): the constant
+// compare gcc emits for switch cases and loop bounds. Code stream:
+// [gadget][t_off][rs_off][K][taken][fallthrough]. _ri compares rs against K
+// (t was rs2), _ir compares K against rs (t was rs1); eq/ne need only _ri.
+// rs is read before t is written: gen refuses rs == t.
+.macro branch_const name, cond, order
+.gadget b\name\()_\order
+    ldp x9, x10, [_ip]        // t_off, rs_off
+    ldr x11, [_ip, #16]       // K
+    ldr x10, [_cpu, x10]
+    str x11, [_cpu, x9]
+.ifc \order, ri
+    cmp x10, x11
+.else
+    cmp x11, x10
+.endif
+    b.\cond 1f
+    ldr _ip, [_ip, #32]       // fallthrough
+    b riscv64_branch_dispatch
+1:  ldr _ip, [_ip, #24]       // taken
+    b riscv64_branch_dispatch
+.endm
+branch_const eq, eq, ri
+branch_const ne, ne, ri
+branch_const lt, lt, ri
+branch_const ge, ge, ri
+branch_const ltu, lo, ri
+branch_const geu, hs, ri
+branch_const lt, lt, ir
+branch_const ge, ge, ir
+branch_const ltu, lo, ir
+branch_const geu, hs, ir
+
+// andi t, rs, K ; beqz/bnez t (bit and flag tests). Same code stream as above.
+.macro andi_branch name, insn
+.gadget andi_\name
+    ldp x9, x10, [_ip]        // t_off, rs_off
+    ldr x11, [_ip, #16]       // K
+    ldr x10, [_cpu, x10]
+    and x10, x10, x11
+    str x10, [_cpu, x9]
+    \insn x10, 1f
+    ldr _ip, [_ip, #32]       // fallthrough
+    b riscv64_branch_dispatch
+1:  ldr _ip, [_ip, #24]       // taken
+    b riscv64_branch_dispatch
+.endm
+andi_branch beqz, cbz
+andi_branch bnez, cbnz
+
 // JAL with rd != 0 -- i.e. a CALL -- in one gadget instead of two.
 //
 // gen used to emit the link write and the branch separately:

@@ -247,8 +247,11 @@ void jit_note_shared_write(struct jit *jit, const struct pt_entry *entry);
 // add+load pairs in one gadget each (the shifts RV64GC uses for zext.w/sext
 // and shNadd, and indexed loads).
 #define JIT_FUSE_RV_ALU (1u << 4)
+// gen_riscv64_try_li_branch/_andi_branch: li t,K or andi t,rs,K followed by a
+// conditional branch on t, as one compare-and-branch gadget.
+#define JIT_FUSE_RV_BRANCH (1u << 5)
 #define JIT_FUSE_RV_ALL (JIT_FUSE_RV_FOLD | JIT_FUSE_RV_JAL | JIT_FUSE_RV_RETCACHE | \
-                         JIT_FUSE_RV_PAIR | JIT_FUSE_RV_ALU)
+                         JIT_FUSE_RV_PAIR | JIT_FUSE_RV_ALU | JIT_FUSE_RV_BRANCH)
 
 // The amd64 guest's bits are not fusions in the i386 sense (two gadgets folded
 // into one) but NATIVE-vs-BRIDGE switches, which is the same A/B in the shape
