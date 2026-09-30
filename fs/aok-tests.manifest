@@ -141,6 +141,7 @@ fuse_basic.c
 fuse_threaded_daemon.c
 sysfs_dev_ns.c
 native_stdio_lock.c
+native_sed.c
 devtmpfs_mount.c
 clone_error_cleanup.c
 uts_namespace.c

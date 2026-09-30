@@ -862,6 +862,13 @@ else
             'silently. Populate it with: git -C deps/smallclue submodule ' +
             'update --init third-party/nextvi')
 endif
+# The glob runs at configure time only, so a source file added to SmallCLUE
+# was invisible to an existing build directory -- ninja and Xcode's meson.sh
+# both went straight to a link that lacked it (sed_app.c, 2026-09-30).
+# SmallCLUE's CMakeLists.txt lists every source, so it changes whenever one
+# is added; reading it makes it a regeneration dependency, and the next build
+# re-runs this glob.
+fs_mod.read('deps/smallclue/CMakeLists.txt')
 # Space-separated, not newline: meson interprets \n inside its own string
 # literals, which would break the one-liner before python ever sees it.
 foreach f : run_command(python, '-c',
