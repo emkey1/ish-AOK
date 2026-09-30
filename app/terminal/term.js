@@ -77,7 +77,16 @@ function scheduleViewportRefresh() {
         pendingViewportRefresh = false;
         if (!term.scrollPort_)
             return;
-        term.scrollPort_.scheduleInvalidate();
+        // Not while text is selected. invalidate() throws away every row node
+        // on screen and draws new ones, so the selection is left pointing at
+        // detached nodes: hterm then cannot find the rows it starts and ends
+        // on, and it also stops keeping an off-screen end row alive. Any output
+        // during a selection -- a prompt, a clock, tmux's status line -- cut
+        // what Copy copied down to what was on screen, or to nothing (#617).
+        // hterm's own redraw keeps the selection's rows, so it alone runs
+        // until the selection is gone; htop's stale cells can wait that long.
+        if (liveSelection() == null)
+            term.scrollPort_.scheduleInvalidate();
         term.scrollPort_.scheduleRedraw();
         syncScroll();
     });
