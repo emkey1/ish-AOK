@@ -986,6 +986,34 @@ static void *gen_arm64_vldst_single_gadget(unsigned size_log2, bool is_load) {
 // SIMD/FP load/store size decode: the access size is size:opc<1>
 // (0..4 = B/H/S/D/Q); opc<0> is the load bit. Returns size_log2 or -1
 // for the unallocated size=Q-with-size!=00 combinations.
+static uint64_t arm64_xsp_off(unsigned r);
+static uint64_t arm64_v_off(unsigned v, unsigned byte);
+// The "lspec" fast SIMD load/store for the no-writeback forms, 32/64/128-bit
+// (jit/guest-arm64/simd.S vload_single_fast): [gadget][vt_slot][rn_slot]
+// [offset][orig_ip]. False when the pass is off or the size has no fast form,
+// and the caller emits the generic gadget.
+static bool gen_arm64_vldst_fast(struct gen_state *state, unsigned size_log2, bool is_load,
+        unsigned rt, unsigned rn, int64_t offset) {
+    if (!arm64_fuse_pass_enabled(JIT_FUSE_A64_LSPEC) || size_log2 < 2)
+        return false;
+    extern void gadget_arm64_vload32_fast(void), gadget_arm64_vload64_fast(void);
+    extern void gadget_arm64_vload128_fast(void);
+    extern void gadget_arm64_vstore32_fast(void), gadget_arm64_vstore64_fast(void);
+    extern void gadget_arm64_vstore128_fast(void);
+    static void *const tab[2][3] = {
+        { (void *) gadget_arm64_vstore32_fast, (void *) gadget_arm64_vstore64_fast,
+          (void *) gadget_arm64_vstore128_fast },
+        { (void *) gadget_arm64_vload32_fast, (void *) gadget_arm64_vload64_fast,
+          (void *) gadget_arm64_vload128_fast },
+    };
+    gen(state, (unsigned long) tab[is_load][size_log2 - 2]);
+    gen(state, arm64_v_off(rt, 0));
+    gen(state, arm64_xsp_off(rn));
+    gen(state, (uint64_t) offset);
+    gen(state, state->arm64_orig_ip);
+    return true;
+}
+
 static int gen_arm64_vldst_size(unsigned size, unsigned opc, bool *is_load) {
     *is_load = opc & 1;
     if (opc & 2) {
@@ -2454,6 +2482,9 @@ int gen_step_arm64(struct gen_state *state, struct tlb *tlb) {
         if (gadget == NULL) {
             return gen_arm64_undefined(state);
         }
+        if (gen_arm64_vldst_fast(state, (unsigned) size_log2, is_load, rt, rn,
+                    (int64_t) (imm12 << size_log2)))
+            return 1;
         gen(state, (unsigned long) gadget);
         gen(state, rt | ((uint64_t) rn << 8) | (0ULL << 16));
         gen(state, imm12 << size_log2); // scaled by the ACCESS size, incl. Q's 16
@@ -2477,6 +2508,8 @@ int gen_step_arm64(struct gen_state *state, struct tlb *tlb) {
         if (gadget == NULL || insn_mode == 2 /* no LDTR/STTR in SIMD space */) {
             return gen_arm64_undefined(state);
         }
+        if (mode == 0 && gen_arm64_vldst_fast(state, (unsigned) size_log2, is_load, rt, rn, imm9))
+            return 1;   // LDUR/STUR: no writeback
         gen(state, (unsigned long) gadget);
         gen(state, rt | ((uint64_t) rn << 8) | ((uint64_t) mode << 16));
         gen(state, (uint64_t) imm9);
@@ -2501,6 +2534,33 @@ int gen_step_arm64(struct gen_state *state, struct tlb *tlb) {
             return gen_arm64_undefined(state);
         }
         unsigned shift = S ? (unsigned) size_log2 : 0;
+        // 32/64/128-bit: the offset-fed "lspec" form (memory.S vload_single_rx).
+        if (rm != 31 && size_log2 >= 2 && arm64_fuse_pass_enabled(JIT_FUSE_A64_LSPEC)) {
+            extern void gadget_arm64_vload32_rxl(void), gadget_arm64_vload32_rxs(void), gadget_arm64_vload32_rxu(void);
+            extern void gadget_arm64_vload64_rxl(void), gadget_arm64_vload64_rxs(void), gadget_arm64_vload64_rxu(void);
+            extern void gadget_arm64_vload128_rxl(void), gadget_arm64_vload128_rxs(void), gadget_arm64_vload128_rxu(void);
+            extern void gadget_arm64_vstore32_rxl(void), gadget_arm64_vstore32_rxs(void), gadget_arm64_vstore32_rxu(void);
+            extern void gadget_arm64_vstore64_rxl(void), gadget_arm64_vstore64_rxs(void), gadget_arm64_vstore64_rxu(void);
+            extern void gadget_arm64_vstore128_rxl(void), gadget_arm64_vstore128_rxs(void), gadget_arm64_vstore128_rxu(void);
+            // [load][size 32/64/128][ext LSL/SXTW/UXTW]
+            static void (*const rx[2][3][3])(void) = {
+                { { gadget_arm64_vstore32_rxl, gadget_arm64_vstore32_rxs, gadget_arm64_vstore32_rxu },
+                  { gadget_arm64_vstore64_rxl, gadget_arm64_vstore64_rxs, gadget_arm64_vstore64_rxu },
+                  { gadget_arm64_vstore128_rxl, gadget_arm64_vstore128_rxs, gadget_arm64_vstore128_rxu } },
+                { { gadget_arm64_vload32_rxl, gadget_arm64_vload32_rxs, gadget_arm64_vload32_rxu },
+                  { gadget_arm64_vload64_rxl, gadget_arm64_vload64_rxs, gadget_arm64_vload64_rxu },
+                  { gadget_arm64_vload128_rxl, gadget_arm64_vload128_rxs, gadget_arm64_vload128_rxu } },
+            };
+            // option 011 (LSL/UXTX) and 111 (SXTX) use Rm whole.
+            unsigned ext = (option & 1) ? 0 : (option & 4) ? 1 : 2;
+            gen(state, (unsigned long) rx[is_load][size_log2 - 2][ext]);
+            gen(state, arm64_v_off(rt, 0));
+            gen(state, arm64_xsp_off(rn));
+            gen(state, arm64_x_off(rm));
+            gen(state, shift);
+            gen(state, state->arm64_orig_ip);
+            return 1;
+        }
         gen(state, (unsigned long) gadget);
         gen(state, rt | ((uint64_t) rn << 8) | (3ULL << 16));
         gen(state, rm | ((uint64_t) option << 8) | ((uint64_t) shift << 16));
@@ -2541,6 +2601,23 @@ int gen_step_arm64(struct gen_state *state, struct tlb *tlb) {
             (void *) gadget_arm64_vstp32, (void *) gadget_arm64_vstp64,
             (void *) gadget_arm64_vstp128,
         };
+        if (mode == 2 && arm64_fuse_pass_enabled(JIT_FUSE_A64_LSPEC)) {
+            extern void gadget_arm64_vldp32_fast(void), gadget_arm64_vldp64_fast(void);
+            extern void gadget_arm64_vldp128_fast(void);
+            extern void gadget_arm64_vstp32_fast(void), gadget_arm64_vstp64_fast(void);
+            extern void gadget_arm64_vstp128_fast(void);
+            static void (*const fast[2][3])(void) = {
+                { gadget_arm64_vstp32_fast, gadget_arm64_vstp64_fast, gadget_arm64_vstp128_fast },
+                { gadget_arm64_vldp32_fast, gadget_arm64_vldp64_fast, gadget_arm64_vldp128_fast },
+            };
+            gen(state, (unsigned long) fast[is_load][opc]);
+            gen(state, arm64_v_off(rt, 0));
+            gen(state, arm64_v_off(rt2, 0));
+            gen(state, arm64_xsp_off(rn));
+            gen(state, (uint64_t) offset);
+            gen(state, state->arm64_orig_ip);
+            return 1;
+        }
         gen(state, (unsigned long) (is_load ? vldp_gadgets[opc] : vstp_gadgets[opc]));
         gen(state, rt | ((uint64_t) rt2 << 8) | ((uint64_t) rn << 16) | ((uint64_t) mode << 24));
         gen(state, (uint64_t) offset);
@@ -3199,6 +3276,24 @@ int gen_step_arm64(struct gen_state *state, struct tlb *tlb) {
             }
             kind = 2;
         }
+        // One lane of one register, no writeback: the "lspec" fast form.
+        if (kind == 2 && count == 1 && mode == 0 && arm64_fuse_pass_enabled(JIT_FUSE_A64_LSPEC)) {
+            extern void gadget_arm64_vlane_ld8_fast(void), gadget_arm64_vlane_ld16_fast(void);
+            extern void gadget_arm64_vlane_ld32_fast(void), gadget_arm64_vlane_ld64_fast(void);
+            extern void gadget_arm64_vlane_st8_fast(void), gadget_arm64_vlane_st16_fast(void);
+            extern void gadget_arm64_vlane_st32_fast(void), gadget_arm64_vlane_st64_fast(void);
+            static void (*const lanes[2][4])(void) = {
+                { gadget_arm64_vlane_st8_fast, gadget_arm64_vlane_st16_fast,
+                  gadget_arm64_vlane_st32_fast, gadget_arm64_vlane_st64_fast },
+                { gadget_arm64_vlane_ld8_fast, gadget_arm64_vlane_ld16_fast,
+                  gadget_arm64_vlane_ld32_fast, gadget_arm64_vlane_ld64_fast },
+            };
+            gen(state, (unsigned long) lanes[is_load][esize_log2]);
+            gen(state, arm64_v_off(rt, lane << esize_log2));
+            gen(state, arm64_xsp_off(rn));
+            gen(state, state->arm64_orig_ip);
+            return 1;
+        }
         gen(state, (unsigned long) gadget_arm64_ldst_struct);
         gen(state, rt | ((uint64_t) rn << 5) | ((uint64_t) count << 10)
             | ((uint64_t) q << 13) | ((uint64_t) is_load << 14)
@@ -3429,6 +3524,26 @@ int gen_step_arm64(struct gen_state *state, struct tlb *tlb) {
         }
         case 0x14: // SSHLL/USHLL
             if (esize_log2 < 3) {
+                // #0 is UXTL/SXTL: a specialised gadget with no shift (simd_spec.S).
+                if (lshift == 0) {
+                    extern void gadget_arm64_vspec_sxtl_8b(void), gadget_arm64_vspec_sxtl2_16b(void);
+                    extern void gadget_arm64_vspec_sxtl_4h(void), gadget_arm64_vspec_sxtl2_8h(void);
+                    extern void gadget_arm64_vspec_sxtl_2s(void), gadget_arm64_vspec_sxtl2_4s(void);
+                    extern void gadget_arm64_vspec_uxtl_8b(void), gadget_arm64_vspec_uxtl2_16b(void);
+                    extern void gadget_arm64_vspec_uxtl_4h(void), gadget_arm64_vspec_uxtl2_8h(void);
+                    extern void gadget_arm64_vspec_uxtl_2s(void), gadget_arm64_vspec_uxtl2_4s(void);
+                    static void (*const xtl[2][3][2])(void) = {
+                        { { gadget_arm64_vspec_sxtl_8b, gadget_arm64_vspec_sxtl2_16b },
+                          { gadget_arm64_vspec_sxtl_4h, gadget_arm64_vspec_sxtl2_8h },
+                          { gadget_arm64_vspec_sxtl_2s, gadget_arm64_vspec_sxtl2_4s } },
+                        { { gadget_arm64_vspec_uxtl_8b, gadget_arm64_vspec_uxtl2_16b },
+                          { gadget_arm64_vspec_uxtl_4h, gadget_arm64_vspec_uxtl2_8h },
+                          { gadget_arm64_vspec_uxtl_2s, gadget_arm64_vspec_uxtl2_4s } },
+                    };
+                    if (gen_arm64_vspec(state, xtl[u][esize_log2][q], arm64_v_off(rd, 0),
+                                arm64_v_off(rn, 0)))
+                        return 1;
+                }
                 gadget = (u ? t_shll_u : t_shll_s)[esize_log2][q];
                 amount = (int64_t) lshift;
             }
@@ -4318,6 +4433,10 @@ int gen_step_arm64(struct gen_state *state, struct tlb *tlb) {
         }
         if (gadget == NULL || (size == 3 && q == 0))
             return gen_arm64_undefined(state);
+        // Specialised by arrangement (simd_spec3.S, "vspec"): on an A10X the
+        // generic permute gadget cost ~2.9 ns against 1.3 for a vspec op.
+        if (gen_arm64_vs3(state, gadget, size * 2 + q, rd, rn, rm))
+            return 1;
         gen(state, (unsigned long) gadget);
         gen(state, rd | ((uint64_t) rn << 8) | ((uint64_t) rm << 16) |
                    ((uint64_t) size << 24) | ((uint64_t) q << 26));

@@ -388,6 +388,7 @@ arm64/simd_three_same.golden
 arm64/alu_ospec.c
 arm64/alu_ospec.golden
 arm64/ldst_lspec.c
+arm64/vldst_lspec.c
 arm64/ldst_lspec.golden
 arm64/smc_stale_block.c
 arm64/arm64_fp_env.c

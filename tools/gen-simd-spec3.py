@@ -5,8 +5,8 @@ generic gadget (simd_arith.S, simd.S's bitwise ones) to its table of them.
 
     python3 tools/gen-simd-spec3.py [OUTPUT]
 
-The op lists below mirror simd_arith.S's instantiations and gen.c's validity
-classes; add an op to both.
+The op lists below mirror simd_arith.S's instantiations (and the permutes,
+simd_misc.S's permute_vec) and gen.c's validity classes; add an op to both.
 """
 
 import sys
@@ -59,6 +59,12 @@ vmla mla NOD ACC
 vmls mls NOD ACC
 vsaba saba NOD ACC
 vuaba uaba NOD ACC
+vuzp1 uzp1 D
+vuzp2 uzp2 D
+vtrn1 trn1 D
+vtrn2 trn2 D
+vzip1 zip1 D
+vzip2 zip2 D
 """
 
 FP_OPS = """

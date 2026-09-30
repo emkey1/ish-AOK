@@ -102,3 +102,28 @@ vspec_dup vspec_dup2d, 2d
     ldr d0, [_cpu, x10]
     str q0, [_cpu, x8]
     gret 2
+
+// UXTL/SXTL (USHLL/SSHLL #0), and their "2" forms, by arrangement:
+// [gadget][d_off][n_off]. The generic vshll_gadget (simd.S) always follows the
+// widen with a dup + ushl for the shift, which for #0 -- nearly every use --
+// is a dependent pair doing nothing; a non-zero shift keeps that gadget.
+.macro vspec_xtl name, xtl, srcarr, dstarr
+.gadget \name
+    ldp x8, x10, [_ip]
+    ldr q30, [_cpu, x10]
+    \xtl v30\dstarr, v30\srcarr
+    str q30, [_cpu, x8]
+    gret 2
+.endm
+vspec_xtl vspec_sxtl_8b,  sxtl,  .8b,  .8h
+vspec_xtl vspec_sxtl2_16b, sxtl2, .16b, .8h
+vspec_xtl vspec_sxtl_4h,  sxtl,  .4h,  .4s
+vspec_xtl vspec_sxtl2_8h,  sxtl2, .8h,  .4s
+vspec_xtl vspec_sxtl_2s,  sxtl,  .2s,  .2d
+vspec_xtl vspec_sxtl2_4s,  sxtl2, .4s,  .2d
+vspec_xtl vspec_uxtl_8b,  uxtl,  .8b,  .8h
+vspec_xtl vspec_uxtl2_16b, uxtl2, .16b, .8h
+vspec_xtl vspec_uxtl_4h,  uxtl,  .4h,  .4s
+vspec_xtl vspec_uxtl2_8h,  uxtl2, .8h,  .4s
+vspec_xtl vspec_uxtl_2s,  uxtl,  .2s,  .2d
+vspec_xtl vspec_uxtl2_4s,  uxtl2, .4s,  .2d

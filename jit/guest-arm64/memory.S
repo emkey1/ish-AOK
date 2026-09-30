@@ -850,6 +850,62 @@ store_single_fast store64_fast,  64, str,  x17
     write_bullshit \bits, \name
 .endm
 
+// The SIMD/FP twins (ldr q0, [x1, x2, lsl #4]; ldr s0, [x1, w2, sxtw #2]):
+// [gadget][vt_slot][rn_slot][rm_slot][shift][orig_ip]. A narrower load
+// clears the rest of Vt; v31 only after the prep (see simd.S).
+.macro vload_single_rx name, bits, ldinsn, vreg, ext
+.gadget \name
+    ldp x8, x9, [_ip]         // vt_slot, rn_slot
+    ldp x11, x12, [_ip, #16]  // rm_slot, shift
+    add _ip, _ip, #40
+    ldr x10, [_cpu, x9]
+    rx_index \ext
+    add x7, x10, x11
+    read_prep \bits, \name
+    .if \bits != 128
+        movi v31.2d, #0
+    .endif
+    \ldinsn \vreg, [_addr]
+    str q31, [_cpu, x8]
+    gret
+    read_bullshit \bits, \name
+.endm
+
+.macro vstore_single_rx name, bits, stinsn, vreg, ext
+.gadget \name
+    ldp x8, x9, [_ip]         // vt_slot, rn_slot
+    ldp x11, x12, [_ip, #16]  // rm_slot, shift
+    add _ip, _ip, #40
+    ldr x10, [_cpu, x9]
+    rx_index \ext
+    add x7, x10, x11
+    write_prep \bits, \name
+    ldr q31, [_cpu, x8]
+    \stinsn \vreg, [_addr]
+    write_done \bits, \name
+    gret
+    write_bullshit \bits, \name
+.endm
+
+vload_single_rx vload32_rxl, 32, ldr, s31, 0
+vload_single_rx vload32_rxs, 32, ldr, s31, 1
+vload_single_rx vload32_rxu, 32, ldr, s31, 2
+vload_single_rx vload64_rxl, 64, ldr, d31, 0
+vload_single_rx vload64_rxs, 64, ldr, d31, 1
+vload_single_rx vload64_rxu, 64, ldr, d31, 2
+vload_single_rx vload128_rxl, 128, ldr, q31, 0
+vload_single_rx vload128_rxs, 128, ldr, q31, 1
+vload_single_rx vload128_rxu, 128, ldr, q31, 2
+vstore_single_rx vstore32_rxl, 32, str, s31, 0
+vstore_single_rx vstore32_rxs, 32, str, s31, 1
+vstore_single_rx vstore32_rxu, 32, str, s31, 2
+vstore_single_rx vstore64_rxl, 64, str, d31, 0
+vstore_single_rx vstore64_rxs, 64, str, d31, 1
+vstore_single_rx vstore64_rxu, 64, str, d31, 2
+vstore_single_rx vstore128_rxl, 128, str, q31, 0
+vstore_single_rx vstore128_rxs, 128, str, q31, 1
+vstore_single_rx vstore128_rxu, 128, str, q31, 2
+
 // Suffixes: _post, _pre, _rxl (LSL/UXTX/SXTX), _rxs (SXTW), _rxu (UXTW).
 load_single_wb load8_post, 8, ldrb, w17, 0
 load_single_wb load8_pre, 8, ldrb, w17, 1

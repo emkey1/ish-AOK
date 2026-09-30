@@ -62,6 +62,93 @@ vload_single vload16,   16, ldr, h31
 vload_single vload32,   32, ldr, s31
 vload_single vload64,   64, ldr, d31
 vload_single vload128, 128, ldr, q31
+
+// ---- Fast forms (the "lspec" pass) ----------------------------------------
+// The integer fast loads' treatment (memory.S's load_single_fast) for the
+// no-writeback SIMD forms, [xn|sp, #imm] and the unscaled [xn|sp, #simm9]:
+// gen.c precomputes the cpu_state byte offsets of Vt's and Xn's slots and the
+// final byte offset, so nothing is decoded at run time. The generic gadgets
+// above unpack a packed word and walk the addressing-mode chain; on an A10X
+// `ldr q0, [x11]` cost 4.8 ns there against 2.7 for `ldr x9, [x11]`.
+//
+// Code stream: [gadget][vt_slot][rn_slot][offset][orig_ip]. v31 only after the
+// prep, as above.
+.macro vload_single_fast name, bits, ldinsn, vreg
+.gadget \name
+    ldp x8, x9, [_ip]         // vt_slot, rn_slot
+    ldr x19, [_ip, #16]       // offset
+    add _ip, _ip, #32
+    ldr x10, [_cpu, x9]       // base
+    add x7, x10, x19
+    read_prep \bits, \name
+    .if \bits != 128
+        movi v31.2d, #0
+    .endif
+    \ldinsn \vreg, [_addr]
+    str q31, [_cpu, x8]
+    gret
+    read_bullshit \bits, \name
+.endm
+
+.macro vstore_single_fast name, bits, stinsn, vreg
+.gadget \name
+    ldp x8, x9, [_ip]         // vt_slot, rn_slot
+    ldr x19, [_ip, #16]       // offset
+    add _ip, _ip, #32
+    ldr x10, [_cpu, x9]       // base
+    add x7, x10, x19
+    write_prep \bits, \name
+    ldr q31, [_cpu, x8]       // after the prep: no vector state across its C calls
+    \stinsn \vreg, [_addr]
+    write_done \bits, \name
+    gret
+    write_bullshit \bits, \name
+.endm
+
+vload_single_fast vload32_fast,   32, ldr, s31
+vload_single_fast vload64_fast,   64, ldr, d31
+vload_single_fast vload128_fast, 128, ldr, q31
+vstore_single_fast vstore32_fast,   32, str, s31
+vstore_single_fast vstore64_fast,   64, str, d31
+vstore_single_fast vstore128_fast, 128, str, q31
+
+// LD1/ST1 of one lane, [xn] with no writeback: [gadget][lane_slot][rn_slot]
+// [orig_ip]. lane_slot is the cpu_state byte offset of Vt's lane, so the
+// gadget moves 1-8 bytes and leaves the other lanes alone, as the
+// architecture does. The generic ldst_struct gadget decodes a packed word
+// for every structure kind at run time: `ld1 {v0.s}[1], [x11]` cost 8 ns on
+// an M-series Mac there, against 0.9 for `ldr q0`.
+.macro vlane_load_fast name, bits, ld, st, reg
+.gadget \name
+    ldp x8, x9, [_ip]         // lane_slot, rn_slot
+    add _ip, _ip, #24
+    ldr x7, [_cpu, x9]        // address = xn
+    read_prep \bits, \name
+    \ld \reg, [_addr]
+    \st \reg, [_cpu, x8]
+    gret
+    read_bullshit \bits, \name
+.endm
+.macro vlane_store_fast name, bits, ld, st, reg
+.gadget \name
+    ldp x8, x9, [_ip]         // lane_slot, rn_slot
+    add _ip, _ip, #24
+    ldr x7, [_cpu, x9]
+    \ld \reg, [_cpu, x8]     // x17 survives write_prep's helpers
+    write_prep \bits, \name
+    \st \reg, [_addr]
+    write_done \bits, \name
+    gret
+    write_bullshit \bits, \name
+.endm
+vlane_load_fast  vlane_ld8_fast,   8, ldrb, strb, w17
+vlane_load_fast  vlane_ld16_fast, 16, ldrh, strh, w17
+vlane_load_fast  vlane_ld32_fast, 32, ldr,  str,  w17
+vlane_load_fast  vlane_ld64_fast, 64, ldr,  str,  x17
+vlane_store_fast vlane_st8_fast,   8, ldrb, strb, w17
+vlane_store_fast vlane_st16_fast, 16, ldrh, strh, w17
+vlane_store_fast vlane_st32_fast, 32, ldr,  str,  w17
+vlane_store_fast vlane_st64_fast, 64, ldr,  str,  x17
 vstore_single vstore8,     8, str, b31
 vstore_single vstore16,   16, str, h31
 vstore_single vstore32,   32, str, s31
@@ -203,6 +290,54 @@ vldp_gadget vldp128, 256, 16, ldr, q30, q31
 vstp_gadget vstp32,   64,  4, str, s30, s31
 vstp_gadget vstp64,  128,  8, str, d30, d31
 vstp_gadget vstp128, 256, 16, str, q30, q31
+
+// Offset-form (no writeback) LDP/STP of S/D/Q, and LDNP/STNP: the "lspec"
+// fast form, [gadget][vt_slot][vt2_slot][rn_slot][offset][orig_ip]. The slots
+// ride in x21/x22, which survive the prep's helper calls (memory.S stp_fast).
+// The generic pair gadgets above decode four fields and branch on the mode.
+.macro vldp_fast name, bits, bytes, vreg1, vreg2
+.gadget \name
+    ldp x21, x22, [_ip]        // vt_slot, vt2_slot
+    ldp x9, x19, [_ip, #16]    // rn_slot, offset
+    add _ip, _ip, #40
+    ldr x10, [_cpu, x9]
+    add x7, x10, x19
+    read_prep \bits, \name
+    .if \bytes != 16
+        movi v30.2d, #0
+        movi v31.2d, #0
+    .endif
+    ldr \vreg1, [_addr]
+    ldr \vreg2, [_addr, #\bytes]
+    str q30, [_cpu, x21]
+    str q31, [_cpu, x22]
+    gret
+    read_bullshit \bits, \name
+.endm
+
+.macro vstp_fast name, bits, bytes, vreg1, vreg2
+.gadget \name
+    ldp x21, x22, [_ip]        // vt_slot, vt2_slot
+    ldp x9, x19, [_ip, #16]    // rn_slot, offset
+    add _ip, _ip, #40
+    ldr x10, [_cpu, x9]
+    add x7, x10, x19
+    write_prep \bits, \name
+    ldr q30, [_cpu, x21]       // after the prep: see the file header
+    ldr q31, [_cpu, x22]
+    str \vreg1, [_addr]
+    str \vreg2, [_addr, #\bytes]
+    write_done \bits, \name
+    gret
+    write_bullshit \bits, \name
+.endm
+
+vldp_fast vldp32_fast,   64,  4, s30, s31
+vldp_fast vldp64_fast,  128,  8, d30, d31
+vldp_fast vldp128_fast, 256, 16, q30, q31
+vstp_fast vstp32_fast,   64,  4, s30, s31
+vstp_fast vstp64_fast,  128,  8, d30, d31
+vstp_fast vstp128_fast, 256, 16, q30, q31
 
 // ---- DUP (general register to all vector lanes) --------------------------
 // Code stream: [gadget][vd | rn<<8 | size<<16 (0=B,1=H,2=S,3=D) | q<<19]

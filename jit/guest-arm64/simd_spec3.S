@@ -360,6 +360,48 @@ vs3acc vuaba, uaba, 4h
 vs3acc vuaba, uaba, 8h
 vs3acc vuaba, uaba, 2s
 vs3acc vuaba, uaba, 4s
+vs3 vuzp1, uzp1, 8b
+vs3 vuzp1, uzp1, 16b
+vs3 vuzp1, uzp1, 4h
+vs3 vuzp1, uzp1, 8h
+vs3 vuzp1, uzp1, 2s
+vs3 vuzp1, uzp1, 4s
+vs3 vuzp1, uzp1, 2d
+vs3 vuzp2, uzp2, 8b
+vs3 vuzp2, uzp2, 16b
+vs3 vuzp2, uzp2, 4h
+vs3 vuzp2, uzp2, 8h
+vs3 vuzp2, uzp2, 2s
+vs3 vuzp2, uzp2, 4s
+vs3 vuzp2, uzp2, 2d
+vs3 vtrn1, trn1, 8b
+vs3 vtrn1, trn1, 16b
+vs3 vtrn1, trn1, 4h
+vs3 vtrn1, trn1, 8h
+vs3 vtrn1, trn1, 2s
+vs3 vtrn1, trn1, 4s
+vs3 vtrn1, trn1, 2d
+vs3 vtrn2, trn2, 8b
+vs3 vtrn2, trn2, 16b
+vs3 vtrn2, trn2, 4h
+vs3 vtrn2, trn2, 8h
+vs3 vtrn2, trn2, 2s
+vs3 vtrn2, trn2, 4s
+vs3 vtrn2, trn2, 2d
+vs3 vzip1, zip1, 8b
+vs3 vzip1, zip1, 16b
+vs3 vzip1, zip1, 4h
+vs3 vzip1, zip1, 8h
+vs3 vzip1, zip1, 2s
+vs3 vzip1, zip1, 4s
+vs3 vzip1, zip1, 2d
+vs3 vzip2, zip2, 8b
+vs3 vzip2, zip2, 16b
+vs3 vzip2, zip2, 4h
+vs3 vzip2, zip2, 8h
+vs3 vzip2, zip2, 2s
+vs3 vzip2, zip2, 4s
+vs3 vzip2, zip2, 2d
 vs3 vfadd, fadd, 2s
 vs3 vfadd, fadd, 4s
 vs3 vfadd, fadd, 2d
@@ -565,6 +607,18 @@ Lvs3tab_vsaba:
     .quad NAME(gadget_arm64_vs3_vsaba_8b), NAME(gadget_arm64_vs3_vsaba_16b), NAME(gadget_arm64_vs3_vsaba_4h), NAME(gadget_arm64_vs3_vsaba_8h), NAME(gadget_arm64_vs3_vsaba_2s), NAME(gadget_arm64_vs3_vsaba_4s), 0, 0
 Lvs3tab_vuaba:
     .quad NAME(gadget_arm64_vs3_vuaba_8b), NAME(gadget_arm64_vs3_vuaba_16b), NAME(gadget_arm64_vs3_vuaba_4h), NAME(gadget_arm64_vs3_vuaba_8h), NAME(gadget_arm64_vs3_vuaba_2s), NAME(gadget_arm64_vs3_vuaba_4s), 0, 0
+Lvs3tab_vuzp1:
+    .quad NAME(gadget_arm64_vs3_vuzp1_8b), NAME(gadget_arm64_vs3_vuzp1_16b), NAME(gadget_arm64_vs3_vuzp1_4h), NAME(gadget_arm64_vs3_vuzp1_8h), NAME(gadget_arm64_vs3_vuzp1_2s), NAME(gadget_arm64_vs3_vuzp1_4s), 0, NAME(gadget_arm64_vs3_vuzp1_2d)
+Lvs3tab_vuzp2:
+    .quad NAME(gadget_arm64_vs3_vuzp2_8b), NAME(gadget_arm64_vs3_vuzp2_16b), NAME(gadget_arm64_vs3_vuzp2_4h), NAME(gadget_arm64_vs3_vuzp2_8h), NAME(gadget_arm64_vs3_vuzp2_2s), NAME(gadget_arm64_vs3_vuzp2_4s), 0, NAME(gadget_arm64_vs3_vuzp2_2d)
+Lvs3tab_vtrn1:
+    .quad NAME(gadget_arm64_vs3_vtrn1_8b), NAME(gadget_arm64_vs3_vtrn1_16b), NAME(gadget_arm64_vs3_vtrn1_4h), NAME(gadget_arm64_vs3_vtrn1_8h), NAME(gadget_arm64_vs3_vtrn1_2s), NAME(gadget_arm64_vs3_vtrn1_4s), 0, NAME(gadget_arm64_vs3_vtrn1_2d)
+Lvs3tab_vtrn2:
+    .quad NAME(gadget_arm64_vs3_vtrn2_8b), NAME(gadget_arm64_vs3_vtrn2_16b), NAME(gadget_arm64_vs3_vtrn2_4h), NAME(gadget_arm64_vs3_vtrn2_8h), NAME(gadget_arm64_vs3_vtrn2_2s), NAME(gadget_arm64_vs3_vtrn2_4s), 0, NAME(gadget_arm64_vs3_vtrn2_2d)
+Lvs3tab_vzip1:
+    .quad NAME(gadget_arm64_vs3_vzip1_8b), NAME(gadget_arm64_vs3_vzip1_16b), NAME(gadget_arm64_vs3_vzip1_4h), NAME(gadget_arm64_vs3_vzip1_8h), NAME(gadget_arm64_vs3_vzip1_2s), NAME(gadget_arm64_vs3_vzip1_4s), 0, NAME(gadget_arm64_vs3_vzip1_2d)
+Lvs3tab_vzip2:
+    .quad NAME(gadget_arm64_vs3_vzip2_8b), NAME(gadget_arm64_vs3_vzip2_16b), NAME(gadget_arm64_vs3_vzip2_4h), NAME(gadget_arm64_vs3_vzip2_8h), NAME(gadget_arm64_vs3_vzip2_2s), NAME(gadget_arm64_vs3_vzip2_4s), 0, NAME(gadget_arm64_vs3_vzip2_2d)
 Lvs3tab_vfadd:
     .quad NAME(gadget_arm64_vs3_vfadd_2s), NAME(gadget_arm64_vs3_vfadd_4s), 0, NAME(gadget_arm64_vs3_vfadd_2d), 0, 0, 0, 0
 Lvs3tab_vfsub:
@@ -676,6 +730,12 @@ NAME(arm64_vs3_index):
     .quad NAME(gadget_arm64_vmls), Lvs3tab_vmls
     .quad NAME(gadget_arm64_vsaba), Lvs3tab_vsaba
     .quad NAME(gadget_arm64_vuaba), Lvs3tab_vuaba
+    .quad NAME(gadget_arm64_vuzp1), Lvs3tab_vuzp1
+    .quad NAME(gadget_arm64_vuzp2), Lvs3tab_vuzp2
+    .quad NAME(gadget_arm64_vtrn1), Lvs3tab_vtrn1
+    .quad NAME(gadget_arm64_vtrn2), Lvs3tab_vtrn2
+    .quad NAME(gadget_arm64_vzip1), Lvs3tab_vzip1
+    .quad NAME(gadget_arm64_vzip2), Lvs3tab_vzip2
     .quad NAME(gadget_arm64_vfadd), Lvs3tab_vfadd
     .quad NAME(gadget_arm64_vfsub), Lvs3tab_vfsub
     .quad NAME(gadget_arm64_vfmul), Lvs3tab_vfmul
