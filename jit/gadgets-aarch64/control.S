@@ -16,7 +16,7 @@
     str _ip, [x13, x12, lsl 3]
     // jump to target
     ldr _ip, [_ip, 32]
-    b jit_ret_chain
+    chain_ip
     write_bullshit 32, call
 
 .gadget call_indir
@@ -99,7 +99,7 @@
     b jit_ret
 .gadget jmp
     ldr _ip, [_ip]
-    b jit_ret_chain
+    chain_ip
 .gadget amd64_jmp
     # target word is bit-63 tagged; amd64_branch_dispatch (below, after
     # the jcc family) handles tagged-exit vs patched-chain uniformly.
@@ -108,10 +108,10 @@
 .gadget jcxz
     cbnz ecx, 1f
     ldr _ip, [_ip]
-    b jit_ret_chain
+    chain_ip
 1:
     ldr _ip, [_ip, 8]
-    b jit_ret_chain
+    chain_ip
 
 #define COND_LIST o,c,z,cz,s,p,sxo,sxoz
 
@@ -195,28 +195,28 @@
     do_jump z, 5f
 4:
     ldr _ip, [_ip, 8]
-    b jit_ret_chain
+    chain_ip
 5:
     ldr _ip, [_ip]
-    b jit_ret_chain
+    chain_ip
 
 .gadget loopnz
     cbz ecx, 4f
     do_jump z, 4f
     ldr _ip, [_ip]
-    b jit_ret_chain
+    chain_ip
 4:
     ldr _ip, [_ip, 8]
-    b jit_ret_chain
+    chain_ip
 
 .irp cond, COND_LIST
     .gadget jmp_\cond
         do_jump \cond, 1f
         ldr _ip, [_ip, 8]
-        b jit_ret_chain
+        chain_ip
     1:
         ldr _ip, [_ip]
-        b jit_ret_chain
+        chain_ip
 
     .gadget set_\cond
         do_jump \cond, 1f

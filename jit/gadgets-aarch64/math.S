@@ -5848,10 +5848,10 @@ amd64_v_unpck unpckhps, zip2, 4s
 .macro fused_jcc_tail bcond, off
     b\bcond 1f
     ldr _ip, [_ip, \off+8]
-    b jit_ret_chain
+    chain_ip
 1:
     ldr _ip, [_ip, \off]
-    b jit_ret_chain
+    chain_ip
 .endm
 
 .macro fused_flagop_reg name, armop, cond, bcond, reg, hostreg, retest

@@ -73,6 +73,32 @@ _xaddr .req x3
 0:  br x8
 .endm
 
+# jit_ret_chain (entry.S) inlined: enter the block whose code _ip points at.
+# Each branch gadget carries its own copy so its final indirect `br` is a
+# separate site for the host's branch predictor; with one shared copy every
+# chained transition in the engine went through the same `br`, and call/ret
+# (whose targets depend on a chain of loads) paid for the mispredictions.
+# Conditional branches cannot reach jit_ret/poke in another object file, hence
+# the local trampolines.
+.macro chain_ip
+    cmp _ip, 0
+    b.lt 8701f
+    ldr x8, [_cpu, CPU_poked_ptr]
+    ldrb w8, [x8]
+    cbnz w8, 8702f
+    ldr x8, [_cpu, LOCAL_chain_budget]
+    subs x8, x8, 1
+    str x8, [_cpu, LOCAL_chain_budget]
+    b.le 8702f
+    sub x8, _ip, JIT_BLOCK_code
+    str x8, [_cpu, LOCAL_last_block]
+    gret
+8701:
+    b jit_ret
+8702:
+    b poke
+.endm
+
 # memory reading and writing
 .irp type, read,write
 
