@@ -35,6 +35,7 @@ x86/priv_gp.expected.h
 x86/movnt_stores.c
 x86/sse_align_gp.c
 x86/sse_align_gp.expected.h
+x86/pf_error_code.c
 x86/mmap2_high_offset.c
 x86/sse_scalar.c
 x86/x86_loop.c

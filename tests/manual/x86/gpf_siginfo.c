@@ -27,9 +27,9 @@
 // fails here instead of passing by coincidence.
 //
 // Covered elsewhere: privileged 0F opcodes (priv_gp.c) and misaligned
-// MOVAPS/MOVDQA (sse_align_gp.c). Not asserted: IRET on i386, the page
-// fault's present and instruction-fetch error-code bits, and CR2 surviving
-// into a later #GP's frame (Linux keeps the last page fault's address there).
+// MOVAPS/MOVDQA (sse_align_gp.c), and the page fault's error-code bits and
+// CR2 surviving into a later frame (pf_error_code.c). Not asserted: IRET on
+// i386.
 //
 // Each faulting instruction carries a global label, so its address is a
 // symbol rather than label arithmetic (which would need different spellings

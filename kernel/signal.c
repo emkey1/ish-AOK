@@ -2768,17 +2768,29 @@ static bool signal_should_capture_trap_state(int sig) {
 static qword_t signal_trap_error(struct cpu_state *cpu) {
     switch (cpu->trapno) {
         case INT_PF: {
-            qword_t err = 0x4; // user-mode fault
+            // X86_PF_USER always; WRITE for a store; INSTR for a fetch; PROT
+            // (present) when the page is populated with some access -- not
+            // for PROT_NONE and not for a page never touched, which Linux has
+            // no PTE for (camd, both ABIs: a read of PROT_NONE is 0x4, a store
+            // to an untouched read-only page 0x6, to a touched one 0x7, a
+            // fetch from an unmapped page 0x14, from a mapped non-exec one
+            // 0x15). This used to guess INSTR from "not a write, page not
+            // executable", which called every PROT_NONE read a fetch and
+            // missed a fetch from nothing.
+            qword_t err = 0x4;
             if (cpu->segfault_was_write)
                 err |= 0x2;
+            // A fetch faults at the instruction pointer, or on a page the
+            // instruction runs onto: within 15 bytes of it.
+            guest_addr_t ip = current->abi == GUEST_ABI_AMD64 ? cpu->amd64_rip : cpu->eip;
+            if (!cpu->segfault_was_write && cpu->segfault_addr - ip < 15)
+                err |= 0x10;
             mem_read_lock_quiesce_aware(current->mem);
-            if (mem_segv_reason(current->mem, cpu->segfault_addr) == SEGV_ACCERR_)
+            struct pt_entry *pt = mem_pt(current->mem, PAGE(cpu->segfault_addr));
+            // Populated = touched since it was mapped (PT_TOUCHED, the RSS
+            // bit): an mprotect'd lazy range has entries before any access.
+            if (pt != NULL && (pt->flags & P_RWX) != 0 && (pt->accessed & PT_TOUCHED))
                 err |= 0x1;
-            // An instruction fetch from a mapped page that may not be
-            // executed: X86_PF_INSTR, and the page is present.
-            if (!cpu->segfault_was_write &&
-                    !mmu_page_executable(&current->mem->mmu, PAGE(cpu->segfault_addr)))
-                err |= 0x10 | 0x1;
             mem_read_unlock_quiesce_aware(current->mem);
             return err;
         }
@@ -2873,9 +2885,8 @@ static void setup_sigcontext(struct sigcontext_ *sc, struct cpu_state *cpu, int 
     sc->trapno = signal_should_capture_trap_state(sig) ? cpu->trapno : 0;
     sc->err = signal_should_capture_trap_state(sig) ? (dword_t) signal_trap_error(cpu) : 0;
     if (sc->trapno == INT_PF)
-        sc->cr2 = cpu->segfault_addr;
-    else
-        sc->cr2 = 0;
+        cpu->pf_cr2 = cpu->segfault_addr;
+    sc->cr2 = (dword_t) cpu->pf_cr2;
     sc->gs = i386_sreg_read(cpu, AMD64_SREG_GS);
     sc->fs = i386_sreg_read(cpu, AMD64_SREG_FS);
     sc->es = i386_sreg_read(cpu, AMD64_SREG_ES);
@@ -2996,8 +3007,9 @@ static void setup_rt_sigframe_amd64(struct siginfo_ *info, struct rt_sigframe_am
     if (signal_should_capture_trap_state(info->sig)) {
         frame->uc.mcontext.gregs[AMD64_GREG_TRAPNO] = current->cpu.trapno;
         if (current->cpu.trapno == INT_PF)
-            frame->uc.mcontext.gregs[AMD64_GREG_CR2] = current->cpu.segfault_addr;
+            current->cpu.pf_cr2 = current->cpu.segfault_addr;
     }
+    frame->uc.mcontext.gregs[AMD64_GREG_CR2] = current->cpu.pf_cr2;
     frame->uc.sigmask = sigmask_to_save();
     siginfo_to_amd64_user(&frame->info, info);
 

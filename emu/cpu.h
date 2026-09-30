@@ -509,6 +509,11 @@ struct cpu_state {
     // and signal delivery leaves it alone. Appended for the gadget offset
     // range; see the AVX note above.
     guest_addr_t amd64_gs_base;
+
+    // x86 CR2 as a signal frame reports it: the address of the last page
+    // fault that raised a signal. Linux keeps it per thread (thread.cr2) and
+    // writes it into EVERY later frame, a #GP's included; fork copies it.
+    guest_addr_t pf_cr2;
 };
 
 #define AMD64_SREG_ES 0
