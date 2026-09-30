@@ -42,6 +42,13 @@
 @property (nonatomic, copy) void (^sessionSelected)(NSString *sessionID);
 @end
 
+// The chats whose agents are working, waiting for approval, or have an
+// unread answer (LLMChatAgentList.m); picking one opens it.
+@interface LLMAgentListViewController : UITableViewController
+@property (nonatomic, copy) NSString *currentSessionID;
+@property (nonatomic, copy) void (^agentSelected)(NSString *sessionID);
+@end
+
 @class ISHLLMToolContext, ISHLLMFileChange;
 
 // The chat menu's "Changes…": the files the model changed, as diffs, each
@@ -151,6 +158,15 @@ BOOL ISHLLMDirectHTTPPostStreamingPayloads(NSURL *url, NSData *body, NSString *a
 int ISHLLMConnectWithTimeout(struct addrinfo *results, int timeoutMs, int *errnoOut);
 NSError *ISHLLMConnectionError(NSString *host, NSString *port, int errnoValue);
 dispatch_queue_t ISHLLMGuestCommandQueue(void);
+// The destination requests on this thread go to; nil = the one selected in
+// Settings (the global scalars). See ISHLLMRunWithDestination.
+NSDictionary<NSString *, NSString *> *ISHLLMThreadDestination(void);
+void ISHLLMRunWithDestination(NSDictionary<NSString *, NSString *> *destination, void (^block)(void));
+NSString *ISHLLMCurrentServerURL(void);
+NSString *ISHLLMCurrentModel(void);
+NSString *ISHLLMCurrentAPIKey(void);
+NSString *ISHLLMCurrentProvider(void);
+NSDictionary<NSString *, id> *ISHLLMCreateBackgroundSession(NSString *title, NSDictionary<NSString *, id> *extra);
 NSURL *ISHLLMPersistDirectoryURL(void);
 NSURL *ISHLLMTranscriptURL(void);
 NSURL *ISHLLMExtractsDirectoryURL(void);
@@ -302,6 +318,9 @@ NSString *ISHLLMShellQuote(NSString *text);
 - (void)recordChange:(ISHLLMFileChange *)change;
 // The model's todo_write list: dictionaries with "content" and "status".
 @property (nonatomic, copy) NSArray<NSDictionary *> *todos;
+// Where this chat's tools run: a serial queue of its own, so one chat's long
+// command does not hold up another's. nil = ISHLLMGuestCommandQueue().
+@property (nonatomic, strong) dispatch_queue_t queue;
 @end
 
 // One tool call from the model, parsed and checked, ready to confirm and run.
@@ -323,6 +342,10 @@ NSString *ISHLLMShellQuote(NSString *text);
 @end
 
 NSArray<NSDictionary<NSString *, id> *> *ISHLLMChatToolDefinitions(void);
+// spawn_agent and agent_result, which the agent runs itself (LLMChatAgent.m).
+extern NSString *const kISHLLMSpawnAgentTool;
+extern NSString *const kISHLLMAgentResultTool;
+NSArray<NSDictionary<NSString *, id> *> *ISHLLMAgentToolDefinitions(void);
 // Runs an invocation (whose problem is nil) off the main thread and completes
 // on main with the text for the model and a one-line summary for compaction.
 void ISHLLMRunToolInvocation(ISHLLMToolInvocation *invocation, ISHLLMToolContext *context,

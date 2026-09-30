@@ -499,6 +499,18 @@ NSDictionary<NSString *, id> *ISHLLMCreateSession(NSString *title) {
     return entry;
 }
 
+// A chat started by an agent (a sub-agent's): added to the index without
+// becoming the selected chat, with `extra` merged into its entry.
+NSDictionary<NSString *, id> *ISHLLMCreateBackgroundSession(NSString *title, NSDictionary<NSString *, id> *extra) {
+    NSDictionary<NSString *, id> *document = ISHLLMLoadSessionIndexDocument();
+    NSMutableArray<NSDictionary<NSString *, id> *> *sessions = [document[@"sessions"] mutableCopy];
+    NSMutableDictionary<NSString *, id> *entry = [ISHLLMNewSessionEntry(title) mutableCopy];
+    [entry addEntriesFromDictionary:extra ?: @{}];
+    [sessions addObject:entry];
+    ISHLLMWriteSessionIndex(sessions, ISHLLMStringValue(document, @"active"));
+    return entry;
+}
+
 // Deleting the last chat leaves an empty one rather than no chat at all --
 // the client always has somewhere to put the next message.
 NSString *ISHLLMDeleteSession(NSString *sessionID) {
@@ -525,8 +537,51 @@ NSString *ISHLLMDeleteSession(NSString *sessionID) {
     return activeID;
 }
 
+// MARK: The destination a request goes to
+//
+// Several chats can be mid-reply at once, each on its own destination, while
+// the four global scalars describe only the one selected in Settings. A
+// running agent therefore sets its destination on the thread for as long as
+// it builds or sends a request (ISHLLMRunWithDestination), and every helper
+// below reads through these four instead of UserPreferences.
+
+static NSString *const kISHLLMThreadDestinationKey = @"ISHLLMThreadDestination";
+
+NSDictionary<NSString *, NSString *> *ISHLLMThreadDestination(void) {
+    return NSThread.currentThread.threadDictionary[kISHLLMThreadDestinationKey];
+}
+
+void ISHLLMRunWithDestination(NSDictionary<NSString *, NSString *> *destination, void (^block)(void)) {
+    NSMutableDictionary *threadDictionary = NSThread.currentThread.threadDictionary;
+    id previous = threadDictionary[kISHLLMThreadDestinationKey];
+    if (destination != nil)
+        threadDictionary[kISHLLMThreadDestinationKey] = destination;
+    else
+        [threadDictionary removeObjectForKey:kISHLLMThreadDestinationKey];
+    block();
+    if (previous != nil)
+        threadDictionary[kISHLLMThreadDestinationKey] = previous;
+    else
+        [threadDictionary removeObjectForKey:kISHLLMThreadDestinationKey];
+}
+
+static NSString *ISHLLMScopedValue(NSString *key, NSString *global) {
+    NSDictionary<NSString *, NSString *> *destination = ISHLLMThreadDestination();
+    if (destination == nil)
+        return global ?: @"";
+    return ISHLLMStringValue(destination, key) ?: @"";
+}
+
+NSString *ISHLLMCurrentServerURL(void) { return ISHLLMScopedValue(kISHLLMDestinationURL, UserPreferences.shared.llmServerURL); }
+NSString *ISHLLMCurrentModel(void) { return ISHLLMScopedValue(kISHLLMDestinationModel, UserPreferences.shared.llmModel); }
+NSString *ISHLLMCurrentAPIKey(void) { return ISHLLMScopedValue(kISHLLMDestinationAPIKey, UserPreferences.shared.llmAPIKey); }
+NSString *ISHLLMCurrentProvider(void) {
+    NSString *provider = ISHLLMScopedValue(kISHLLMDestinationProvider, UserPreferences.shared.llmProvider);
+    return provider.length > 0 ? provider : @"Custom";
+}
+
 NSString *ISHLLMChatEndpoint(void) {
-    NSString *base = [UserPreferences.shared.llmServerURL stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    NSString *base = [ISHLLMCurrentServerURL() stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
     if (base.length == 0)
         base = @"http://localhost:11434/v1";
     while ([base hasSuffix:@"/"])
@@ -537,7 +592,7 @@ NSString *ISHLLMChatEndpoint(void) {
 }
 
 BOOL ISHLLMUsesAppleFoundationModels(void) {
-    return [UserPreferences.shared.llmProvider.lowercaseString containsString:@"foundation models"];
+    return [ISHLLMCurrentProvider().lowercaseString containsString:@"foundation models"];
 }
 
 AOKLLMBackend ISHLLMCurrentBackend(void) {
@@ -570,16 +625,16 @@ BOOL ISHLLMFoundationModelsReady(void) {
 BOOL ISHLLMUsesGeminiAPI(void) {
     if (ISHLLMUsesAppleFoundationModels())
         return NO;
-    NSString *provider = UserPreferences.shared.llmProvider.lowercaseString;
-    NSString *host = [NSURL URLWithString:UserPreferences.shared.llmServerURL].host.lowercaseString ?: @"";
+    NSString *provider = ISHLLMCurrentProvider().lowercaseString;
+    NSString *host = [NSURL URLWithString:ISHLLMCurrentServerURL()].host.lowercaseString ?: @"";
     return [provider containsString:@"gemini"] || [host containsString:@"generativelanguage.googleapis.com"];
 }
 
 BOOL ISHLLMUsesAnthropicAPI(void) {
     if (ISHLLMUsesAppleFoundationModels())
         return NO;
-    NSString *provider = UserPreferences.shared.llmProvider.lowercaseString;
-    NSString *host = [NSURL URLWithString:UserPreferences.shared.llmServerURL].host.lowercaseString ?: @"";
+    NSString *provider = ISHLLMCurrentProvider().lowercaseString;
+    NSString *host = [NSURL URLWithString:ISHLLMCurrentServerURL()].host.lowercaseString ?: @"";
     return [provider containsString:@"anthropic"] || [host isEqualToString:@"api.anthropic.com"];
 }
 
@@ -593,7 +648,7 @@ static NSString *ISHLLMRawAuthHeaders(NSString *apiKey) {
 }
 
 NSString *ISHLLMAnthropicMessagesEndpoint(void) {
-    NSString *base = [UserPreferences.shared.llmServerURL stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    NSString *base = [ISHLLMCurrentServerURL() stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
     if (base.length == 0)
         base = @"https://api.anthropic.com/v1";
     while ([base hasSuffix:@"/"])
@@ -674,32 +729,32 @@ NSDictionary *ISHLLMProbeBody(NSString *model, NSString *prompt, NSUInteger maxT
 }
 
 NSString *ISHLLMGeminiGenerateEndpoint(void) {
-    NSString *base = [UserPreferences.shared.llmServerURL stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    NSString *base = [ISHLLMCurrentServerURL() stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
     if (base.length == 0)
         base = @"https://generativelanguage.googleapis.com/v1beta";
     while ([base hasSuffix:@"/"])
         base = [base substringToIndex:base.length - 1];
-    NSString *model = [UserPreferences.shared.llmModel stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    NSString *model = [ISHLLMCurrentModel() stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
     if (![model hasPrefix:@"models/"])
         model = [@"models/" stringByAppendingString:model];
     NSString *encodedModel = [model stringByAddingPercentEncodingWithAllowedCharacters:NSCharacterSet.URLPathAllowedCharacterSet] ?: model;
     NSString *endpoint = [base stringByAppendingFormat:@"/%@:generateContent", encodedModel];
-    NSString *apiKey = [UserPreferences.shared.llmAPIKey stringByAddingPercentEncodingWithAllowedCharacters:NSCharacterSet.URLQueryAllowedCharacterSet] ?: @"";
+    NSString *apiKey = [ISHLLMCurrentAPIKey() stringByAddingPercentEncodingWithAllowedCharacters:NSCharacterSet.URLQueryAllowedCharacterSet] ?: @"";
     return apiKey.length > 0 ? [endpoint stringByAppendingFormat:@"?key=%@", apiKey] : endpoint;
 }
 
 NSString *ISHLLMModelsEndpoint(void) {
     if (ISHLLMUsesGeminiAPI()) {
-        NSString *base = [UserPreferences.shared.llmServerURL stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+        NSString *base = [ISHLLMCurrentServerURL() stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
         if (base.length == 0)
             base = @"https://generativelanguage.googleapis.com/v1beta";
         while ([base hasSuffix:@"/"])
             base = [base substringToIndex:base.length - 1];
-        NSString *apiKey = [UserPreferences.shared.llmAPIKey stringByAddingPercentEncodingWithAllowedCharacters:NSCharacterSet.URLQueryAllowedCharacterSet] ?: @"";
+        NSString *apiKey = [ISHLLMCurrentAPIKey() stringByAddingPercentEncodingWithAllowedCharacters:NSCharacterSet.URLQueryAllowedCharacterSet] ?: @"";
         NSString *endpoint = [base stringByAppendingString:@"/models"];
         return apiKey.length > 0 ? [endpoint stringByAppendingFormat:@"?key=%@", apiKey] : endpoint;
     }
-    NSString *base = [UserPreferences.shared.llmServerURL stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    NSString *base = [ISHLLMCurrentServerURL() stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
     if (base.length == 0)
         base = @"https://openrouter.ai/api/v1";
     while ([base hasSuffix:@"/"])
@@ -738,8 +793,8 @@ NSString *ISHLLMCurrentAPIFormat(void) {
 BOOL ISHLLMProviderRequiresAPIKey(void) {
     if (ISHLLMUsesAppleFoundationModels())
         return NO;
-    NSString *provider = UserPreferences.shared.llmProvider.lowercaseString;
-    NSString *host = [NSURL URLWithString:UserPreferences.shared.llmServerURL].host.lowercaseString ?: @"";
+    NSString *provider = ISHLLMCurrentProvider().lowercaseString;
+    NSString *host = [NSURL URLWithString:ISHLLMCurrentServerURL()].host.lowercaseString ?: @"";
     return [provider containsString:@"openrouter"] || [provider containsString:@"openai"] || ISHLLMUsesAnthropicAPI() ||
         [provider containsString:@"groq"] || [provider containsString:@"gemini"] ||
         [host containsString:@"openrouter.ai"] || [host containsString:@"api.openai.com"] ||
@@ -1207,12 +1262,16 @@ void ISHLLMFetchModelsDataAsync(void (^completion)(NSData *data, NSInteger statu
         completion(nil, 0, [NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorBadURL userInfo:nil]);
         return;
     }
-    NSString *apiKey = UserPreferences.shared.llmAPIKey;
+    NSString *apiKey = ISHLLMCurrentAPIKey();
+    NSDictionary<NSString *, NSString *> *destination = ISHLLMThreadDestination();
     if ([url.scheme.lowercaseString isEqualToString:@"http"]) {
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
-            NSInteger statusCode = 0;
-            NSError *error = nil;
-            NSData *data = ISHLLMDirectHTTPGet(url, apiKey, &statusCode, &error);
+            __block NSInteger statusCode = 0;
+            __block NSError *error = nil;
+            __block NSData *data = nil;
+            ISHLLMRunWithDestination(destination, ^{
+                data = ISHLLMDirectHTTPGet(url, apiKey, &statusCode, &error);
+            });
             completion(data, statusCode, error);
         });
         return;

@@ -115,6 +115,25 @@ static NSDictionary *ISHLLMBooleanParameter(NSString *description) {
 // tools that do the common jobs without shell quoting (an edit is an exact
 // string replacement, the form models are trained to produce). run_shell
 // keeps its name so saved chats replay.
+NSString *const kISHLLMSpawnAgentTool = @"spawn_agent";
+NSString *const kISHLLMAgentResultTool = @"agent_result";
+
+// Offered to a chat's own agent, not to sub-agents (one level deep).
+NSArray<NSDictionary<NSString *, id> *> *ISHLLMAgentToolDefinitions(void) {
+    return @[
+        ISHLLMFunctionTool(kISHLLMSpawnAgentTool,
+            @"Start a sub-agent: a separate model conversation with the same tools and working directory, working on one self-contained task in the background while you continue. It sees only the prompt you give it, so include everything it needs (paths, goals, constraints, what to report back). Returns an id at once; get its final report with agent_result. Start several for independent tasks, then collect each. Its tool calls ask the user for permission like yours do.",
+            @{@"description": ISHLLMStringParameter(@"A short name for the task, 3-6 words, shown to the user."),
+              @"prompt": ISHLLMStringParameter(@"The complete task for the sub-agent.")},
+            @[@"description", @"prompt"]),
+        ISHLLMFunctionTool(kISHLLMAgentResultTool,
+            @"Get a sub-agent's final report. By default waits until it finishes; with wait=false returns its current status at once.",
+            @{@"id": ISHLLMStringParameter(@"The id spawn_agent returned."),
+              @"wait": ISHLLMBooleanParameter(@"Wait for it to finish (default true).")},
+            @[@"id"]),
+    ];
+}
+
 NSArray<NSDictionary<NSString *, id> *> *ISHLLMChatToolDefinitions(void) {
     // Rebuilt per request, so the description tracks the current "Open
     // Everything as Default User" state: commands run as that account (via su
@@ -651,7 +670,8 @@ static NSUInteger ISHLLMLineCount(NSString *text) {
     static NSSet<NSString *> *set;
     static dispatch_once_t once;
     dispatch_once(&once, ^{
-        set = [NSSet setWithArray:@[@"run_shell", @"read_file", @"write_file", @"edit_file", @"list_directory", @"glob", @"grep", @"todo_write"]];
+        set = [NSSet setWithArray:@[@"run_shell", @"read_file", @"write_file", @"edit_file", @"list_directory", @"glob", @"grep", @"todo_write",
+                                    kISHLLMSpawnAgentTool, kISHLLMAgentResultTool]];
     });
     return set;
 }
@@ -687,6 +707,18 @@ static NSUInteger ISHLLMLineCount(NSString *text) {
             _problem = @"run_shell needs a non-empty \"command\".";
         return;
     }
+    if ([name isEqualToString:kISHLLMSpawnAgentTool]) {
+        _category = ISHLLMToolCategoryRead;
+        if (ISHLLMStringArgument(_arguments, @"prompt").length == 0)
+            _problem = @"spawn_agent needs a non-empty \"prompt\": the whole task, since the sub-agent sees nothing else.";
+        return;
+    }
+    if ([name isEqualToString:kISHLLMAgentResultTool]) {
+        _category = ISHLLMToolCategoryRead;
+        if (ISHLLMStringArgument(_arguments, @"id").length == 0)
+            _problem = @"agent_result needs the \"id\" spawn_agent returned.";
+        return;
+    }
     if ([name isEqualToString:@"todo_write"]) {
         _category = ISHLLMToolCategoryRead;
         if (![_arguments[@"todos"] isKindOfClass:NSArray.class])
@@ -716,8 +748,9 @@ static NSUInteger ISHLLMLineCount(NSString *text) {
 }
 
 - (ISHLLMPermissionAction)permissionWithReason:(NSString **)reasonOut {
-    // The task list lives in the chat and touches nothing else.
-    if ([_name isEqualToString:@"todo_write"]) {
+    // The task list lives in the chat and touches nothing else; a sub-agent's
+    // own tool calls are each checked as they happen.
+    if ([_name isEqualToString:@"todo_write"] || [_name isEqualToString:kISHLLMSpawnAgentTool] || [_name isEqualToString:kISHLLMAgentResultTool]) {
         if (reasonOut != NULL)
             *reasonOut = nil;
         return ISHLLMPermissionAllow;
@@ -792,6 +825,16 @@ NSArray<NSString *> *ISHLLMToolCallDescriptions(NSArray *toolCalls) {
             for (NSDictionary *todo in todos)
                 done += [todo isKindOfClass:NSDictionary.class] && [todo[@"status"] isEqual:@"completed"];
             [lines addObject:[NSString stringWithFormat:@"todo: %lu of %lu done", (unsigned long) done, (unsigned long) todos.count]];
+            continue;
+        }
+        if ([name isEqualToString:kISHLLMSpawnAgentTool]) {
+            NSString *description = ISHLLMStringArgument(arguments, @"description") ?: @"";
+            [lines addObject:[@"start agent: " stringByAppendingString:description.length > 0 ? description : @"sub-task"]];
+            continue;
+        }
+        if ([name isEqualToString:kISHLLMAgentResultTool]) {
+            [lines addObject:[ISHLLMBoolArgument(arguments, @"wait") || arguments[@"wait"] == nil ? @"wait for agent " : @"check agent "
+                              stringByAppendingString:ISHLLMStringArgument(arguments, @"id") ?: @""]];
             continue;
         }
         if ([name hasPrefix:kISHLLMMCPToolPrefix]) {
@@ -1511,7 +1554,7 @@ void ISHLLMRevertFileChange(ISHLLMFileChange *change, ISHLLMToolContext *context
 
 void ISHLLMRunToolInvocation(ISHLLMToolInvocation *invocation, ISHLLMToolContext *context,
                              void (^completion)(NSString *result, NSString *summary)) {
-    dispatch_async(ISHLLMGuestCommandQueue(), ^{
+    dispatch_async(context.queue ?: ISHLLMGuestCommandQueue(), ^{
         NSString *summary = nil;
         NSString *result;
         NSString *name = invocation.name;

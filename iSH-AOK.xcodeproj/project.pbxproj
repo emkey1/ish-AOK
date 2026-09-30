@@ -25,6 +25,8 @@
 		086DF4AE2BCA3731D05CF391 /* LLMChatTools.m in Sources */ = {isa = PBXBuildFile; fileRef = 0D4A622DB170BCCE9126AFC9 /* LLMChatTools.m */; };
 		69D530C0057201B5AB1A590F /* LLMChatPermissions.m in Sources */ = {isa = PBXBuildFile; fileRef = 07A0595A97B6DF8D65AEF053 /* LLMChatPermissions.m */; };
 		34B09685798168F52E0B9AB0 /* LLMChatStream.m in Sources */ = {isa = PBXBuildFile; fileRef = F937E5C61786F757E4B47CA4 /* LLMChatStream.m */; };
+		E37291A5FA70F3B2182D2F9C /* LLMChatAgent.m in Sources */ = {isa = PBXBuildFile; fileRef = B9554C53D967A54A37AC584F /* LLMChatAgent.m */; };
+		04BA7021CFB26C2DC772BD05 /* LLMChatAgentList.m in Sources */ = {isa = PBXBuildFile; fileRef = 3DB371C3ECEB181CF0D25DDE /* LLMChatAgentList.m */; };
 		ED6E6B2726629191AA23D521 /* LLMChatMCPSettings.m in Sources */ = {isa = PBXBuildFile; fileRef = DAC4877EBB5B59AA3D11F59B /* LLMChatMCPSettings.m */; };
 		962CD6E0986D335994B027D2 /* LLMChatMCPCore.m in Sources */ = {isa = PBXBuildFile; fileRef = 0A5C9251995EA202236D64C9 /* LLMChatMCPCore.m */; };
 		081C7D4CE20147D638F563B6 /* LLMChatMCP.m in Sources */ = {isa = PBXBuildFile; fileRef = C286A4E6F6B366006F462308 /* LLMChatMCP.m */; };
@@ -405,6 +407,9 @@
 		07A0595A97B6DF8D65AEF053 /* LLMChatPermissions.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = LLMChatPermissions.m; sourceTree = "<group>"; };
 		F937E5C61786F757E4B47CA4 /* LLMChatStream.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = LLMChatStream.m; sourceTree = "<group>"; };
 		2E6E2B86707191634253F32E /* LLMChatStream.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = LLMChatStream.h; sourceTree = "<group>"; };
+		B9554C53D967A54A37AC584F /* LLMChatAgent.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = LLMChatAgent.m; sourceTree = "<group>"; };
+		ABDE15E92250726C18235CA4 /* LLMChatAgent.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = LLMChatAgent.h; sourceTree = "<group>"; };
+		3DB371C3ECEB181CF0D25DDE /* LLMChatAgentList.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = LLMChatAgentList.m; sourceTree = "<group>"; };
 		DAC4877EBB5B59AA3D11F59B /* LLMChatMCPSettings.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = LLMChatMCPSettings.m; sourceTree = "<group>"; };
 		0A5C9251995EA202236D64C9 /* LLMChatMCPCore.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = LLMChatMCPCore.m; sourceTree = "<group>"; };
 		36D55C3995325274D6161457 /* LLMChatMCPCore.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = LLMChatMCPCore.h; sourceTree = "<group>"; };
@@ -1467,6 +1472,9 @@
 				07A0595A97B6DF8D65AEF053 /* LLMChatPermissions.m */,
 				F937E5C61786F757E4B47CA4 /* LLMChatStream.m */,
 				2E6E2B86707191634253F32E /* LLMChatStream.h */,
+				B9554C53D967A54A37AC584F /* LLMChatAgent.m */,
+				ABDE15E92250726C18235CA4 /* LLMChatAgent.h */,
+				3DB371C3ECEB181CF0D25DDE /* LLMChatAgentList.m */,
 				DAC4877EBB5B59AA3D11F59B /* LLMChatMCPSettings.m */,
 				0A5C9251995EA202236D64C9 /* LLMChatMCPCore.m */,
 				36D55C3995325274D6161457 /* LLMChatMCPCore.h */,
@@ -2278,6 +2286,8 @@
 				086DF4AE2BCA3731D05CF391 /* LLMChatTools.m in Sources */,
 				69D530C0057201B5AB1A590F /* LLMChatPermissions.m in Sources */,
 				34B09685798168F52E0B9AB0 /* LLMChatStream.m in Sources */,
+				E37291A5FA70F3B2182D2F9C /* LLMChatAgent.m in Sources */,
+				04BA7021CFB26C2DC772BD05 /* LLMChatAgentList.m in Sources */,
 				ED6E6B2726629191AA23D521 /* LLMChatMCPSettings.m in Sources */,
 				962CD6E0986D335994B027D2 /* LLMChatMCPCore.m in Sources */,
 				081C7D4CE20147D638F563B6 /* LLMChatMCP.m in Sources */,

@@ -15,6 +15,7 @@
 #import "MarkdownRenderer.h"
 #import "LLMChatInternal.h"
 #import "LLMChatMCP.h"
+#import "LLMChatAgent.h"
 #if __has_include("libiSH_AOKApp-Swift.h")
 #import "libiSH_AOKApp-Swift.h" // AOKFoundationModelsBridge (Swift, iOS 26+ FoundationModels wrapper)
 #endif
@@ -663,9 +664,14 @@ NSString *ISHLLMDestinationNameForID(NSString *destinationID) {
 NSString *ISHLLMRelativeDateDescription(double timestamp) {
     if (timestamp <= 0.0)
         return @"";
+    // Just written (or a hair in the future, as a save a moment ago can be)
+    // reads "in 0 sec." from the formatter.
+    NSDate *date = [NSDate dateWithTimeIntervalSince1970:timestamp];
+    if (fabs(date.timeIntervalSinceNow) < 10)
+        return @"just now";
     NSRelativeDateTimeFormatter *formatter = [NSRelativeDateTimeFormatter new];
     formatter.unitsStyle = NSRelativeDateTimeFormatterUnitsStyleShort;
-    return [formatter localizedStringForDate:[NSDate dateWithTimeIntervalSince1970:timestamp] relativeToDate:NSDate.date];
+    return [formatter localizedStringForDate:date relativeToDate:NSDate.date];
 }
 
 @implementation LLMChatSessionListViewController {
@@ -685,7 +691,12 @@ NSString *ISHLLMRelativeDateDescription(double timestamp) {
     self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemCompose
                                                                                           target:self
                                                                                           action:@selector(newChat:)];
+    [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(reload) name:ISHLLMAgentStateDidChangeNotification object:nil];
     [self reload];
+}
+
+- (void)dealloc {
+    [NSNotificationCenter.defaultCenter removeObserver:self];
 }
 
 - (void)reload {
@@ -719,7 +730,7 @@ NSString *ISHLLMRelativeDateDescription(double timestamp) {
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
     (void) tableView;
     (void) section;
-    return @"Each chat keeps its own history, destination and system prompt. Swipe a chat to rename or delete it. Chats are saved in /AOK/persist/llm-chats.";
+    return @"Each chat keeps its own history, destination and system prompt, and keeps working when you switch to another. Chats starting with ↳ are sub-agents' work. Swipe a chat to rename or delete it. Chats are saved in /AOK/persist/llm-chats.";
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
@@ -739,10 +750,19 @@ NSString *ISHLLMRelativeDateDescription(double timestamp) {
         [parts addObject:destination];
     if (ISHLLMStringValue(entry, @"system").length > 0)
         [parts addObject:@"system prompt"];
+    // What its agent is doing, when it is doing anything.
+    ISHLLMAgent *agent = [ISHLLMAgentManager.shared existingAgentForSessionID:ISHLLMStringValue(entry, @"id")];
+    BOOL needsApproval = [agent pendingApprovalIncludingSubagents] != nil;
+    if (needsApproval)
+        [parts insertObject:@"Needs approval" atIndex:0];
+    else if (agent.busy)
+        [parts insertObject:[@"Working: " stringByAppendingString:[agent statusLine].lowercaseString] atIndex:0];
+    else if (agent.finishedUnseen)
+        [parts insertObject:@"New answer" atIndex:0];
     cell.detailTextLabel.text = [parts componentsJoinedByString:@" · "];
     cell.detailTextLabel.numberOfLines = 1;
     if (@available(iOS 13.0, *))
-        cell.detailTextLabel.textColor = UIColor.secondaryLabelColor;
+        cell.detailTextLabel.textColor = needsApproval ? UIColor.systemOrangeColor : (agent.busy ? UIColor.systemBlueColor : UIColor.secondaryLabelColor);
     cell.accessoryType = [ISHLLMStringValue(entry, @"id") isEqualToString:self.currentSessionID]
         ? UITableViewCellAccessoryCheckmark
         : UITableViewCellAccessoryNone;
@@ -767,6 +787,7 @@ NSString *ISHLLMRelativeDateDescription(double timestamp) {
                                                                               title:@"Delete"
                                                                             handler:^(__unused UIContextualAction *action, __unused UIView *sourceView, void (^completion)(BOOL)) {
         NSString *nextSessionID = ISHLLMDeleteSession(sessionID);
+        [ISHLLMAgentManager.shared forgetSessionID:sessionID];
         completion(YES);
         [self reload];
         // Deleting the chat that is open leaves the chat view showing content
