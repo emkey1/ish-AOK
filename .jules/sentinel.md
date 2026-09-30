@@ -48,3 +48,8 @@
 **Vulnerability:** Widespread use of unbounded `sprintf` and `vsprintf` calls (e.g. `fs/pty.c`, `fs/proc/pid.c`, `fs/proc/root.c`, `fs/sock.c`, `emu/regid.h`, `emu/float80-test.c`, `tools/ptutil.c`, `tools/vdso-transplant.c`) writing to fixed-size buffers, posing significant buffer overflow risks.
 **Learning:** Hardcoded stack buffer sizes with string formatting lacking bounds checking create systemic vulnerabilities across various domains of the codebase (kernel, emulation, tooling, etc.).
 **Prevention:** Strictly utilize bounds-checked functions (`snprintf`, `vsnprintf`) combined with explicit buffer length parameters (e.g. `sizeof(buf)`) to inherently prevent buffer overflow conditions when constructing paths or log messages.
+
+## 2026-09-30 - Buffer Overflow Prevention in main.c
+**Vulnerability:** Unbounded `sprintf` call when constructing the `TERM` environment variable during guest environment initialization in `main.c` could write out of bounds if not carefully aligned with dynamic lengths.
+**Learning:** Hardcoding string formatting directly into fixed-size structures without using bounded functions like `snprintf` creates critical security risks.
+**Prevention:** Always use `snprintf` combined with explicit buffer length parameters when formatting strings into dynamically allocated buffers.
