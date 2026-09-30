@@ -5137,8 +5137,23 @@ int gen_step_arm64(struct gen_state *state, struct tlb *tlb) {
         int64_t offset = arm64_branch_imm19(insn);
         uint64_t taken = state->arm64_orig_ip + (uint64_t) offset;
         uint64_t fallthrough = state->arm64_ip;
-        gen(state, (unsigned long) (is_cbnz ? gadget_arm64_cbnz : gadget_arm64_cbz));
-        gen(state, rt | ((uint64_t) sf << 8));
+        if (rt != 31 && arm64_fuse_pass_enabled(JIT_FUSE_A64_OSPEC)) {
+            extern void gadget_arm64_cbz_x(void), gadget_arm64_cbz_w(void);
+            extern void gadget_arm64_cbnz_x(void), gadget_arm64_cbnz_w(void);
+            extern void gadget_arm64_cbz_x_bk(void), gadget_arm64_cbz_w_bk(void);
+            extern void gadget_arm64_cbnz_x_bk(void), gadget_arm64_cbnz_w_bk(void);
+            static void (*const cb[2][2][2])(void) = { // [bk][cbnz][sf]
+                {{gadget_arm64_cbz_w, gadget_arm64_cbz_x}, {gadget_arm64_cbnz_w, gadget_arm64_cbnz_x}},
+                {{gadget_arm64_cbz_w_bk, gadget_arm64_cbz_x_bk},
+                 {gadget_arm64_cbnz_w_bk, gadget_arm64_cbnz_x_bk}},
+            };
+            bool bk = offset < 0 && arm64_fuse_pass_enabled(JIT_FUSE_A64_BTFN);
+            gen(state, (unsigned long) cb[bk][is_cbnz][sf]);
+            gen(state, arm64_x_off(rt));
+        } else {
+            gen(state, (unsigned long) (is_cbnz ? gadget_arm64_cbnz : gadget_arm64_cbz));
+            gen(state, rt | ((uint64_t) sf << 8));
+        }
         gen(state, taken | 0x8000000000000000ULL);
         state->jump_ip[0] = state->size - 1;
         gen(state, fallthrough | 0x8000000000000000ULL);
@@ -5156,8 +5171,18 @@ int gen_step_arm64(struct gen_state *state, struct tlb *tlb) {
         int64_t offset = arm64_branch_imm14(insn);
         uint64_t taken = state->arm64_orig_ip + (uint64_t) offset;
         uint64_t fallthrough = state->arm64_ip;
-        gen(state, (unsigned long) (is_tbnz ? gadget_arm64_tbnz : gadget_arm64_tbz));
-        gen(state, rt | ((uint64_t) bit_pos << 8));
+        if (rt != 31 && arm64_fuse_pass_enabled(JIT_FUSE_A64_OSPEC)) {
+            extern void gadget_arm64_tb_z(void), gadget_arm64_tb_nz(void);
+            extern void gadget_arm64_tb_z_bk(void), gadget_arm64_tb_nz_bk(void);
+            bool bk = offset < 0 && arm64_fuse_pass_enabled(JIT_FUSE_A64_BTFN);
+            gen(state, (unsigned long) (bk ? (is_tbnz ? gadget_arm64_tb_nz_bk : gadget_arm64_tb_z_bk)
+                                           : (is_tbnz ? gadget_arm64_tb_nz : gadget_arm64_tb_z)));
+            gen(state, arm64_x_off(rt));
+            gen(state, 1ULL << bit_pos);
+        } else {
+            gen(state, (unsigned long) (is_tbnz ? gadget_arm64_tbnz : gadget_arm64_tbz));
+            gen(state, rt | ((uint64_t) bit_pos << 8));
+        }
         gen(state, taken | 0x8000000000000000ULL);
         state->jump_ip[0] = state->size - 1;
         gen(state, fallthrough | 0x8000000000000000ULL);
@@ -14069,7 +14094,7 @@ static const struct jit_fuse_entry arm64_fuse_names[] = {
     {"bcond", JIT_FUSE_A64_BCOND}, {"ldst", JIT_FUSE_A64_LDST},
     {"ldcmp", JIT_FUSE_A64_LDCMP}, {"retcache", JIT_FUSE_A64_RETCACHE},
     {"vspec", JIT_FUSE_A64_VSPEC}, {"ospec", JIT_FUSE_A64_OSPEC},
-    {"lspec", JIT_FUSE_A64_LSPEC},
+    {"lspec", JIT_FUSE_A64_LSPEC}, {"btfn", JIT_FUSE_A64_BTFN},
 };
 static const struct jit_fuse_entry riscv64_fuse_names[] = {
     {"fold", JIT_FUSE_RV_FOLD}, {"jal", JIT_FUSE_RV_JAL},

@@ -1345,9 +1345,10 @@ static int proc_ish_show_i386_no_cache_comm(struct proc_entry *UNUSED(entry), st
 //   echo "addr=0 alu=1" > /proc/ish/i386_jit_fuse    (space or comma separated)
 //   echo all=1 > /proc/ish/riscv64_jit_fuse
 //
-// Families: i386 addr/movmr/lea/alu/pushpop/jcc8; arm64 bcond/ldst/ldcmp;
-// riscv64 fold/jal/retcache/pair/alu/br/btfn; amd64 incdec_reg (native gadget vs. the C-helper bridge,
-// see jit/jit.h -- same A/B, different mechanism).
+// Families: i386 addr/movmr/lea/alu/pushpop/jcc8; arm64 bcond/ldst/ldcmp/
+// retcache/vspec/ospec/lspec/btfn; riscv64 fold/jal/retcache/pair/alu/br/btfn;
+// amd64 incdec_reg (native gadget vs. the C-helper bridge, see jit/jit.h --
+// same A/B, different mechanism).
 //
 // Exists for measurement: it makes a fusion A/B a file write instead of an app
 // relaunch, so arms can be interleaved rep by rep (the only way to keep thermal

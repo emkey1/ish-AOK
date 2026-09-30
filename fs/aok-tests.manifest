@@ -395,6 +395,7 @@ arm64/arm64_fp_env.c
 arm64/stlr_ldar_publish.c
 arm64/ptrace_singlestep.c
 arm64/ands_bcond_fusion.c
+arm64/cbz_tbz.c
 arm64/hle_loop.c
 arm64/dc_zva.c
 riscv64/ptrace_regset.c

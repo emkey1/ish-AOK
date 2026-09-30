@@ -223,10 +223,13 @@ void jit_note_shared_write(struct jit *jit, const struct pt_entry *entry);
 // Loads/stores with writeback (post/pre-index) and register offsets through
 // fast gadgets fed slot offsets (jit/guest-arm64/memory.S's _post/_pre/_rx*).
 #define JIT_FUSE_A64_LSPEC (1u << 6)
+// Not a fusion: backward conditional branches use the gadget layout whose taken
+// path is straight-line (loops); see JIT_FUSE_RV_BTFN.
+#define JIT_FUSE_A64_BTFN (1u << 7)
 #define JIT_FUSE_A64_ALL (JIT_FUSE_A64_BCOND | JIT_FUSE_A64_LDST | \
                           JIT_FUSE_A64_LDCMP | JIT_FUSE_A64_RETCACHE | \
                           JIT_FUSE_A64_VSPEC | JIT_FUSE_A64_OSPEC | \
-                          JIT_FUSE_A64_LSPEC)
+                          JIT_FUSE_A64_LSPEC | JIT_FUSE_A64_BTFN)
 
 // riscv64 had NO switch at all for either of its fusions, so neither could be
 // A/B'd without rebuilding. ISH_RISCV64_NO_FUSE now clears both.

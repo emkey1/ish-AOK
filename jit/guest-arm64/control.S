@@ -547,6 +547,61 @@ not_taken_tbnz:
     ldr _ip, [_ip, #16]
     b arm64_branch_dispatch
 
+// Offset-fed CBZ/CBNZ/TBZ/TBNZ (the "ospec" pass; rt != 31). Streams:
+//   cb_*: [gadget][rt_off][taken][fallthrough]
+//   tb_*: [gadget][rt_off][bit mask][taken][fallthrough]
+// Two layouts each, picked by gen from the branch's direction (the "btfn"
+// bit): the plain one keeps the fallthrough straight-line (forward branches,
+// mostly not taken), _bk keeps the taken path straight-line (backward ones,
+// loops). Whichever path jumps inside the gadget costs ~1.3 ns more on the
+// A10X (measured on the riscv64 twins, jit/guest-riscv64/alu.S branch_tail).
+// No host flags are touched: bcond_nf relies on NZCV surviving other gadgets.
+.macro a64_cb name, reg, jmp, jmp_bk
+.gadget \name
+    ldr x9, [_ip]
+    ldr x9, [_cpu, x9]
+    \jmp \reg, 1f
+    ldr _ip, [_ip, #16]      // fallthrough
+    b arm64_branch_dispatch
+1:  ldr _ip, [_ip, #8]       // taken
+    b arm64_branch_dispatch
+.gadget \name\()_bk
+    ldr x9, [_ip]
+    ldr x9, [_cpu, x9]
+    \jmp_bk \reg, 1f
+    ldr _ip, [_ip, #8]       // taken
+    b arm64_branch_dispatch
+1:  ldr _ip, [_ip, #16]      // fallthrough
+    b arm64_branch_dispatch
+.endm
+a64_cb cbz_x,  x9, cbz,  cbnz
+a64_cb cbz_w,  w9, cbz,  cbnz
+a64_cb cbnz_x, x9, cbnz, cbz
+a64_cb cbnz_w, w9, cbnz, cbz
+
+.macro a64_tb name, jmp, jmp_bk
+.gadget \name
+    ldp x9, x10, [_ip]       // rt_off, mask
+    ldr x9, [_cpu, x9]
+    and x9, x9, x10
+    \jmp x9, 1f
+    ldr _ip, [_ip, #24]      // fallthrough
+    b arm64_branch_dispatch
+1:  ldr _ip, [_ip, #16]      // taken
+    b arm64_branch_dispatch
+.gadget \name\()_bk
+    ldp x9, x10, [_ip]
+    ldr x9, [_cpu, x9]
+    and x9, x9, x10
+    \jmp_bk x9, 1f
+    ldr _ip, [_ip, #16]      // taken
+    b arm64_branch_dispatch
+1:  ldr _ip, [_ip, #24]      // fallthrough
+    b arm64_branch_dispatch
+.endm
+a64_tb tb_z,  cbz,  cbnz
+a64_tb tb_nz, cbnz, cbz
+
 // B.cond family — code stream: [gadget][taken_pc][fallthrough_pc]. One
 // gadget per condition code; gen_step_arm64 picks the right one at
 // compile time based on the decoded cond field.

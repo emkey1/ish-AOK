@@ -179,6 +179,7 @@ if [ "$is_arm64_guest" -eq 1 ]; then
     need_file arm64/stlr_ldar_publish.c
     need_file arm64/ptrace_singlestep.c
     need_file arm64/ands_bcond_fusion.c
+    need_file arm64/cbz_tbz.c
     need_file arm64/hle_loop.c
     need_file arm64/dc_zva.c
     need_file arm64/arm64_fp_env.c
@@ -973,7 +974,7 @@ if [ "$is_amd64_guest" -eq 1 ]; then
     all_tests="$all_tests amd64_regress avx_regress amd64_incdec amd64_x87_cache amd64_singlestep amd64_segment_regs amd64_gs_base"
 fi
 if [ "$is_arm64_guest" -eq 1 ]; then
-    all_tests="$all_tests atomics64 arm64_regress vector_smoke simd_elem_moves simd_three_same alu_ospec ldst_lspec vldst_lspec smc_stale_block ret_retcache stlr_ldar_publish ptrace_singlestep ands_bcond_fusion hle_loop dc_zva arm64_fp_env"
+    all_tests="$all_tests atomics64 arm64_regress vector_smoke simd_elem_moves simd_three_same alu_ospec ldst_lspec vldst_lspec smc_stale_block ret_retcache stlr_ldar_publish ptrace_singlestep ands_bcond_fusion cbz_tbz hle_loop dc_zva arm64_fp_env"
 fi
 if [ "$is_riscv64_guest" -eq 1 ]; then
     all_tests="$all_tests ptrace_regset jalr_retcache alu_pair branch_pair riscv64_singlestep riscv64_fp_env"
