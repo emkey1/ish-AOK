@@ -205,6 +205,32 @@ while [ -n "$_wl_others" ]; do
     _wl_others=$(aok_other_wayland_sessions)
 done
 
+# Wait out the guest's early boot, the stage that wipes /tmp (Devuan's
+# `rc S`, whose bootclean honours TMPTIME=0; OpenRC's sysinit and boot
+# runlevels). The runtime dir already lives under $HOME for this reason (see
+# WL_RUNTIME_BASE), but X cannot move: the compositor's display is
+# /tmp/.X<n>-lock and /tmp/.X11-unix/X<n>. The app opens this session as soon
+# as it launches, so on a slow device labwc was up 4 s after boot and the
+# cleanup deleted both at 26 s (5th-generation iPad, 2026-09-30). Nothing then
+# names the display, DISPLAY stayed unset, and every X11 game failed with
+# "x11 not available". Waiting costs nothing when boot is over, and
+# DisplayViewController's ready timeout allows for it.
+aok_early_boot_running() {
+    for _eb_cmdline in /proc/[0-9]*/cmdline; do
+        _eb_args=$(tr '\0' ' ' < "$_eb_cmdline" 2>/dev/null) || continue
+        case "$_eb_args" in
+            *"/etc/init.d/rc S "*|*"/etc/init.d/rcS "*|*"openrc sysinit "*|*"openrc boot "*) return 0 ;;
+        esac
+    done
+    return 1
+}
+_eb_waited=0
+while aok_early_boot_running && [ "$_eb_waited" -lt 240 ]; do
+    [ "$_eb_waited" -eq 0 ] && log "waiting for the guest's boot to finish cleaning /tmp"
+    sleep 0.5
+    _eb_waited=$((_eb_waited + 1))
+done
+
 rm -f "$READY_FILE" "$ERROR_FILE"
 
 for bin in $COMPOSITOR_CMD foot wayvnc; do
