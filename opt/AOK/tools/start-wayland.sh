@@ -332,6 +332,17 @@ fi
 
 export WLR_BACKENDS=headless
 export WLR_LIBINPUT_NO_DEVICES=1
+# A headless output can never scan a client's buffer out directly, yet
+# wlroots' scene (0.18) tries it every frame for a fullscreen window: it sends
+# the surface dmabuf feedback with a scanout tranche, the test commit fails,
+# and the render path sends feedback without one. The two alternate, so both
+# go out every frame, each with a new format-table descriptor. Mesa's EGL
+# surface keeps its feedback object on a queue it never dispatches once zink
+# presents through Vulkan, so those descriptors pile up in the client: a
+# fullscreen Doom gained ~5 a second and hit its 1024 limit ("dup failed: Too
+# many open files", then VK_ERROR_TOO_MANY_OBJECTS on the next swapchain) on
+# a 5th-generation iPad, 2026-09-30. Windowed, it stayed at 20.
+export WLR_SCENE_DISABLE_DIRECT_SCANOUT=1
 # Which renderer the compositor uses. With the GPU render node (/dev/dri/
 # renderD128, #484) and the guest's Mesa able to use it -- the Venus Vulkan
 # driver and zink -- it composites on the host GPU: wlroots' Vulkan renderer,
