@@ -44,3 +44,6 @@
 ## 2024-05-30 - Missing Accessibility Hints in Applet Toolbars
 **Learning:** Adding an `accessibilityLabel` to a UI element allows a screen reader to announce its name, but if its purpose or effect isn't clear, VoiceOver users won't know what action will result from activating it. This applies to applet toolbars where actions might be context-specific.
 **Action:** Always provide an `accessibilityHint` that concisely describes the outcome of activating the element for applet toolbars (e.g., "Navigates back to the previous document.", "Cancels the video extraction process.").
+## 2024-09-26 - Add VoiceOver hints to file manager navigation buttons
+**Learning:** Icon-only navigation buttons in toolbars (like Back, Forward, Up, More Actions) often only have short `accessibilityLabel`s which lack context for screen readers. In iOS, these buttons can benefit greatly from an `accessibilityHint` to provide clearer action descriptions.
+**Action:** When evaluating toolbars with icon-only buttons, ensure an `accessibilityHint` is provided alongside the `accessibilityLabel` if the label alone is not sufficiently descriptive of the resulting action (e.g., "Navigates to the previously visited folder." instead of just "Back").
