@@ -13,6 +13,33 @@
 #include "emu/float80.h"
 
 extern __thread int f80_inexact, f80_rounded_up, f80_exceptions;
+typedef unsigned __int128 u128;
+uint64_t f80_u128_isqrt(u128 n, u128 *rem);
+
+// The digit-by-digit integer root f80_u128_isqrt replaced, as the reference.
+static uint64_t isqrt_ref(u128 n, u128 *rem) {
+    u128 res = 0, bit = (u128) 1 << 126;
+    while (bit > n)
+        bit >>= 2;
+    while (bit != 0) {
+        if (n >= res + bit) { n -= res + bit; res = (res >> 1) + bit; }
+        else res >>= 1;
+        bit >>= 2;
+    }
+    *rem = n;
+    return (uint64_t) res;
+}
+
+static int isqrt_check(u128 n) {
+    u128 r1, r2;
+    uint64_t a = f80_u128_isqrt(n, &r1), b = isqrt_ref(n, &r2);
+    if (a != b || r1 != r2) {
+        printf("FAIL isqrt n=%016llx%016llx: %llx vs ref %llx\n", (unsigned long long) (n >> 64),
+                (unsigned long long) n, (unsigned long long) a, (unsigned long long) b);
+        return 1;
+    }
+    return 0;
+}
 
 static uint64_t rng = 0x9e3779b97f4a7c15ull;
 static uint64_t next(void) {
@@ -59,6 +86,29 @@ int main(int argc, char **argv) {
     static const int precs[] = { 64, 53, 24 };
     long bad = 0, taken[3] = { 0, 0, 0 }, tried[3] = { 0, 0, 0 };
     f80_rounding_mode = round_to_nearest;
+    // f80_u128_isqrt (FSQRT's integer root) against the digit-by-digit one:
+    // squares and their neighbours near both ends, then random operands.
+    {
+        long isq = 0;
+        static const uint64_t ks[] = { 1, 2, 3, 0xffffffffull, 1ull << 63, (1ull << 63) + 1,
+            0xb504f333f9de6484ull, ~0ull, ~0ull - 1, 0xfffffffffffffffeull >> 1 };
+        for (unsigned i = 0; i < sizeof(ks) / sizeof(ks[0]); i++) {
+            u128 sq = (u128) ks[i] * ks[i];
+            isq += isqrt_check(sq) + isqrt_check(sq - 1) + isqrt_check(sq + 1);
+        }
+        isq += isqrt_check(0) + isqrt_check(~(u128) 0) + isqrt_check((u128) 1 << 126) +
+               isqrt_check(((u128) 1 << 126) - 1);
+        for (long i = 0; i < n; i++) {
+            u128 v = ((u128) next() << 64) | next();
+            isq += isqrt_check(v | ((u128) 1 << 126));      // FSQRT's range
+            isq += isqrt_check(v >> (next() % 128));          // anything
+            uint64_t k = next();
+            u128 sq = (u128) k * k;
+            isq += isqrt_check(sq) + isqrt_check(sq - 1);
+        }
+        printf("isqrt: %ld mismatches\n", isq);
+        bad += isq;
+    }
     for (int pi = 0; pi < 3; pi++) {
         int p = precs[pi];
         f80_precision = p;

@@ -258,6 +258,11 @@ void fpu_sqrt(struct cpu_state *cpu) {
     FPU_BEGIN();
     ST(0) = f80_sqrt(ST(0));
     FPU_END();
+    // Real FSQRT leaves C1 clear even when it rounds up (PE set): an AMD
+    // (camd) and an Intel i9 (mint) agree on all 36000 cases of
+    // tests/manual/x86/x87_fsqrt.c -- every rounding mode and precision --
+    // with C1 = 0 throughout, where this set it on ~12000 of them.
+    cpu->c1 = 0;
 }
 
 void fpu_yl2x(struct cpu_state *cpu) {

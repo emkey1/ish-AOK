@@ -1166,23 +1166,41 @@ float80 f80_log2p1(float80 x) {
     return res;
 }
 
-// floor(sqrt(n)) and the remainder n - floor(sqrt(n))^2, digit by digit.
-static uint64_t u128_isqrt(uint128_t n, uint128_t *rem) {
-    uint128_t res = 0;
-    uint128_t bit = (uint128_t) 1 << 126;
-    while (bit > n)
-        bit >>= 2;
-    while (bit != 0) {
-        if (n >= res + bit) {
-            n -= res + bit;
-            res = (res >> 1) + bit;
-        } else {
-            res >>= 1;
-        }
-        bit >>= 2;
+// floor(sqrt(n)) and the remainder n - floor(sqrt(n))^2, for n < 2^128.
+// The host's double sqrt gives the root to ~52 bits; one correction step
+// through the remainder (|n - r0^2| / 2r0 is ~2^12, well inside a double's
+// precision) lands within a unit or two, and the loops make it exact -- so
+// the answer is the same floor root the digit-by-digit version produced
+// (emu/float80-fast-test.c checks the two against each other), at a few
+// dozen host instructions instead of 64 rounds of 128-bit arithmetic. FSQRT
+// cost ~270 ns on an A10X that way.
+uint64_t f80_u128_isqrt(uint128_t n, uint128_t *rem) {
+    if (n == 0) {
+        *rem = 0;
+        return 0;
     }
-    *rem = n;
-    return (uint64_t) res;
+    double d = sqrt((double) n);
+    uint64_t r = d >= 18446744073709551615.0 ? ~0ull : (uint64_t) d;
+    if (r != 0) {
+        uint128_t sq = (uint128_t) r * r;
+        double e = sq > n ? -(double) (sq - n) : (double) (n - sq);
+        int64_t delta = (int64_t) (e / (2.0 * (double) r));
+        // Clamp: near n = 2^128 the correction steps r past 2^64 - 1, and a
+        // wrapped r sent the loop below counting up from 0.
+        if (delta > 0 && r > ~0ull - (uint64_t) delta)
+            r = ~0ull;
+        else
+            r = (uint64_t) ((int64_t) r + delta);
+    }
+    while ((uint128_t) r * r > n)
+        r--;
+    while (r != ~0ull && (uint128_t) (r + 1) * (r + 1) <= n)
+        r++;
+    *rem = n - (uint128_t) r * r;
+    return r;
+}
+static uint64_t u128_isqrt(uint128_t n, uint128_t *rem) {
+    return f80_u128_isqrt(n, rem);
 }
 
 // FSQRT, correctly rounded in every mode and precision. This used to iterate
