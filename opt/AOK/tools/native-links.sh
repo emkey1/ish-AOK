@@ -1,7 +1,7 @@
 #!/bin/sh
 # Link iSH-AOK's native programs into a bin directory so they run natively:
 # SmallCLUE's applets, and the standalone programs beside it in /AOK/native --
-# zsh, dash (also linked as `sh`), helix (`hx`), ktop, motepad, the bmm/bmt
+# zsh, dash (also linked as `sh`, here and in /usr/local/bin), helix (`hx`), ktop, motepad, the bmm/bmt
 # benchmarks, and the setuid-root su, sudo and passwd. (bash, when a build
 # enables it; builds from 556 on do not.)
 #
@@ -48,6 +48,13 @@
 # Pass /usr/local/bin explicitly if you want the links ahead of the distro's own
 # /usr/local/bin entries too.
 #
+# dash and `sh` are the exception: they go into /usr/local/bin as well, whatever
+# the directory. profile.d only reaches login shells, and a bare `sh` is run
+# from everywhere else too -- sshd's `ssh host cmd`, cron, init scripts --
+# whose PATH is the distro's compiled-in one, with /usr/local/bin ahead of
+# /bin. There, /usr/local/bin/sh makes `sh` mean native dash. `#!/bin/sh`
+# scripts are untouched: a shebang names /bin/sh itself.
+#
 # Usage:
 #   sh /AOK/tools/native-links.sh [options] [directory]
 #
@@ -56,6 +63,7 @@
 #   --all      include applets that do not work in this build (see EXCLUDED)
 #   --force    replace files that are not our own symlinks
 #   --no-shell leave the UID 1000 login shell alone
+#   --no-sh    link dash, but do not make `sh` mean it
 #   --shell S  which native shell to switch to: bash, zsh or an absolute path
 #   --help
 #
@@ -70,6 +78,13 @@ NATIVE=/AOK/native/smallclue
 NATIVE_DIR=/AOK/native
 NATIVE_BASH=/AOK/native/bash
 NATIVE_ZSH=/AOK/native/zsh
+NATIVE_DASH=/AOK/native/dash
+# Native dash by its other name: kernel/native.c dispatches both to dash, and
+# as `sh` it runs in POSIX mode the way /bin/sh would.
+NATIVE_SH=/AOK/native/sh
+# Where dash and `sh` are linked in addition to the target directory (see the
+# header): the directory every default PATH has ahead of /bin.
+SH_DIR=/usr/local/bin
 
 # The standalone native programs -- everything in /AOK/native that is NOT
 # SmallCLUE -- get linked too. They are whole programs rather than applets of a
@@ -111,6 +126,7 @@ INCLUDE_ALL=0
 FORCE=0
 DO_SHELL=1
 DO_PATH=1
+DO_SH=1
 # Where the previous shell is remembered so --remove can restore it. In /etc
 # because that is where the thing it describes lives, and because /usr/local
 # may be a different filesystem.
@@ -307,6 +323,50 @@ link_is_native() {
     return 1
 }
 
+# Link $2 -> $1 under the same rules as the loops below: made when absent,
+# left alone when already right, repointed when it is a link of ours to
+# something else in /AOK/native, and anything else kept unless --force. Sets
+# LINK_RESULT to linked, already or blocked for the caller's counts.
+link_native_file() {
+    _src=$1; _dest=$2
+    if [ -L "$_dest" ] && [ "$_dest" -ef "$_src" ]; then
+        LINK_RESULT=already
+        return 0
+    fi
+    if [ -e "$_dest" ] || [ -L "$_dest" ]; then
+        if ! link_is_native "$_dest" && [ "$FORCE" -eq 0 ]; then
+            if [ "$DRY_RUN" -eq 1 ]; then
+                echo "  would NOT replace $_dest (exists; --force to override)"
+            else
+                echo "  left $_dest alone (not ours; --force to replace it)"
+            fi
+            LINK_RESULT=blocked
+            return 0
+        fi
+    fi
+    if [ "$DRY_RUN" -eq 1 ]; then
+        echo "  would link $_dest -> $_src"
+    else
+        [ -d "${_dest%/*}" ] || mkdir -p "${_dest%/*}"
+        if ! ln -sf "$_src" "$_dest"; then
+            LINK_RESULT=blocked
+            return 0
+        fi
+        echo "  linked $_dest -> $_src"
+    fi
+    LINK_RESULT=linked
+}
+
+# The links that make `sh` mean native dash, and dash reachable, outside the
+# target directory: $SH_DIR's, when that is a different directory. Printed one
+# per line, for the --remove loop to walk as well.
+sh_dir_links() {
+    [ -d "$SH_DIR" ] || return 0
+    [ "$TARGET_DIR" -ef "$SH_DIR" ] && return 0
+    echo "$SH_DIR/dash"
+    echo "$SH_DIR/sh"
+}
+
 # Inlined rather than read out of the file header with sed: `sed` is itself an
 # applet this script links, so --help would break after installation. Same
 # reason the applet list is parsed with builtins.
@@ -322,9 +382,13 @@ usage() {
     echo "  --all      include applets that do not work in this build"
     echo "  --force    replace files that are not our own symlinks"
     echo "  --no-shell leave the UID 1000 login shell alone"
+    echo "  --no-sh    link dash, but do not make \`sh\` mean it"
     echo "  --shell S  which native shell to switch to: bash, zsh, or a path"
     echo "  --no-path  do not put the link directory on PATH"
     echo "  --help"
+    echo
+    echo "dash and sh are also linked into $SH_DIR, which every default PATH"
+    echo "has ahead of /bin, so a bare \`sh\` means native dash everywhere."
     echo
     echo "The UID 1000 user's login shell is switched unless --no-shell is"
     echo "given; --remove restores whatever it was before. Without --shell the"
@@ -347,6 +411,7 @@ while [ $# -gt 0 ]; do
                  SHELL_WANT=$2; shift ;;
         --shell=*) SHELL_WANT=${1#--shell=} ;;
         --no-path) DO_PATH=0 ;;
+        --no-sh) DO_SH=0 ;;
         -h|--help) usage 0 ;;
         -*) echo "$0: unknown option $1" >&2; usage 1 ;;
         *) TARGET_DIR="$1" ;;
@@ -695,7 +760,7 @@ is_excluded() {
 if [ "$MODE" = remove ]; then
     removed=0
     failed=0
-    for f in "$TARGET_DIR"/*; do
+    for f in "$TARGET_DIR"/* $(sh_dir_links); do
         # `readlink` is itself an applet this script may have linked, so avoid
         # it: link_is_native compares what the paths resolve to, using the
         # shell alone, and covers the standalone programs as well as SmallCLUE.
@@ -714,9 +779,9 @@ if [ "$MODE" = remove ]; then
         removed=$((removed + 1))
     done
     if [ "$DRY_RUN" -eq 1 ]; then
-        echo "would remove $removed link(s) from $TARGET_DIR"
+        echo "would remove $removed link(s) from $TARGET_DIR (and $SH_DIR's dash and sh, if ours)"
     else
-        echo "removed $removed link(s) from $TARGET_DIR"
+        echo "removed $removed link(s) from $TARGET_DIR (and $SH_DIR's dash and sh, if ours)"
         if [ "$failed" -gt 0 ]; then
             echo "  $failed link(s) could NOT be removed (need root?)" >&2
             REMOVE_FAILED=1
@@ -766,6 +831,10 @@ fi
 linked=0; skipped=0; excluded=0; blocked=0
 pruned=0
 for applet in $APPLETS; do
+    # `sh` is native dash's when there is one ($NATIVE_SH), not an applet's.
+    if [ "$applet" = sh ] && [ -x "$NATIVE_SH" ]; then
+        continue
+    fi
     if is_excluded "$applet"; then
         excluded=$((excluded + 1))
         # PRUNE a link this script made before the applet was excluded. Without
@@ -822,6 +891,7 @@ for prog in $NATIVE_ALL; do
     for e in $PROGRAMS_EXCLUDED; do
         [ "$prog" = "$e" ] && skip=1
     done
+    [ "$prog" = sh ] && [ "$DO_SH" -eq 0 ] && skip=1
     [ "$skip" -eq 1 ] && continue
 
     src="$NATIVE_DIR/$prog"
@@ -848,6 +918,34 @@ for prog in $NATIVE_ALL; do
         ln -sf "$src" "$dest"
     fi
     programs=$((programs + 1))
+done
+
+# dash and `sh` in $SH_DIR as well (the loop above put them in the target);
+# see the header for why: it is the directory on every default PATH,
+# profile.d or not.
+if [ "$DO_SH" -eq 0 ]; then
+    # --no-sh takes back an `sh` a previous run made; one that is somebody
+    # else's is not ours to touch.
+    for d in "$TARGET_DIR/sh" "$SH_DIR/sh"; do
+        if [ -L "$d" ] && { [ "$d" -ef "$NATIVE_SH" ] || [ "$d" -ef "$NATIVE_DASH" ]; }; then
+            if [ "$DRY_RUN" -eq 1 ]; then
+                echo "  would unlink $d (--no-sh)"
+            else
+                rm -f "$d" && echo "  unlinked $d (--no-sh)"
+            fi
+        fi
+    done
+fi
+for dest in $(sh_dir_links); do
+    src="$NATIVE_DIR/${dest##*/}"
+    [ -x "$src" ] || continue
+    [ "${dest##*/}" = sh ] && [ "$DO_SH" -eq 0 ] && continue
+    link_native_file "$src" "$dest"
+    case "$LINK_RESULT" in
+        linked)  programs=$((programs + 1)) ;;
+        already) skipped=$((skipped + 1)) ;;
+        blocked) blocked=$((blocked + 1)) ;;
+    esac
 done
 
 if [ "$DRY_RUN" -eq 1 ]; then

@@ -50,7 +50,7 @@
 #       NEW_HOSTNAME=pscal-ish     # hostname to set (else prompted)
 #       PERSIST_SSH=1              # 0 = never touch /AOK/persist
 #       PASSWORD_AUTH=1            # 1 = sshd PasswordAuthentication yes
-#       NATIVE_LINKS=0             # 1 = also run /AOK/tools/native-links.sh
+#       NATIVE_LINKS=1             # 0 = skip /AOK/tools/native-links.sh
 #       AUTHORIZED_KEY=            # a public key line to install
 #
 # Passwords are never taken from the environment and never echoed: this hands
@@ -179,7 +179,7 @@ if [ "$PERSIST_SSH" = 1 ] && [ "$PERSIST_AVAILABLE" = 0 ]; then
     PERSIST_SSH=0
 fi
 ask_yn PASSWORD_AUTH "Allow SSH password authentication"                          1
-ask_yn NATIVE_LINKS  "Also link iSH-AOK's native programs into PATH"              0
+ask_yn NATIVE_LINKS  "Also link iSH-AOK's native programs into PATH"              1
 
 case "$TARGET_USER" in
     ''|root|*[!a-z0-9_-]*)
@@ -477,8 +477,16 @@ if [ -n "$NEW_HOSTNAME" ]; then
     note "hostname set to $NEW_HOSTNAME"
 fi
 
-if [ "$NATIVE_LINKS" = 1 ] && [ -f /AOK/tools/native-links.sh ]; then
-    sh /AOK/tools/native-links.sh
+# native-links.sh also makes `sh` native dash, in /usr/local/native-bin and in
+# /usr/local/bin; persist-links.sh links /AOK/persist/bin into /usr/local/bin
+# for the sessions that never read /etc/profile.d.
+if [ "$NATIVE_LINKS" = 1 ]; then
+    if [ -f /AOK/tools/native-links.sh ] && [ -x /AOK/native/smallclue ]; then
+        sh /AOK/tools/native-links.sh
+    fi
+    if [ -f /AOK/tools/persist-links.sh ] && [ -d /AOK/persist/bin ]; then
+        sh /AOK/tools/persist-links.sh
+    fi
 fi
 
 # Remember the choices so the next image can offer them back.

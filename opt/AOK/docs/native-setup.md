@@ -48,10 +48,14 @@ so a stock install has neither `/AOK/native/bash` nor a `bash` link. `su`,
 
 **`sh` is worth singling out.** Because this directory goes first on your
 `PATH`, that link is what makes a bare `sh`, and any script you run as
-`sh script`, mean native dash rather than your distro's shell. Scripts with
-`#!/bin/sh` in them are unaffected — a shebang names an absolute path, and
-`/bin/sh` is left alone. If you would rather keep `sh` as it was, remove that
-one link; the rest keep working. It enumerates `/AOK/native` rather than
+`sh script`, mean native dash rather than your distro's shell. `dash` and `sh`
+are linked into `/usr/local/bin` as well, whatever directory you chose:
+`/etc/profile.d` only reaches login shells, while `/usr/local/bin` is ahead of
+`/bin` on every default `PATH` — `ssh host cmd`, cron and init scripts
+included — so `sh` means native dash there too. Scripts with `#!/bin/sh` in
+them are unaffected — a shebang names an absolute path, and `/bin/sh` is left
+alone. If you would rather keep `sh` as it was, pass `--no-sh`, which also takes
+back an `sh` link an earlier run made; the rest keep working. It enumerates `/AOK/native` rather than
 naming them, so a program this build does not have is simply absent. Three names
 are deliberately left out: `smallclue` itself (its applets are linked by name,
 so a bare `smallclue` link would only print the banner), `zsh-multio` (an
@@ -130,6 +134,7 @@ of its own, so that link still points at the last guest binary the task loaded.
 | `--remove` | remove the links, restore the login shell, delete the PATH file |
 | `--no-path` | create the links but leave `PATH` alone |
 | `--no-shell` | leave the login shell alone |
+| `--no-sh` | link `dash`, but do not make `sh` mean it |
 | `--shell S` | `bash`, `zsh`, or an absolute path |
 | `--all` | include applets that are known not to work in this build |
 | `--force` | replace files that are not our own symlinks |

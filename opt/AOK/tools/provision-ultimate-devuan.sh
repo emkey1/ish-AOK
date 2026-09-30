@@ -23,6 +23,7 @@
 #       TZ_NAME=America/Los_Angeles    # timezone (else prompted, offering the device's)
 #       TARGET_USER=mke                # primary login to set up (else prompted)
 #       NEW_HOSTNAME=                  # hostname to set (else prompted)
+#       NATIVE_LINKS=1                 # 0 = skip linking /AOK/native (native-links.sh)
 #       SUDO_NOPASSWD=0                # 1 = passwordless sudo-group sudo
 #
 # Arch note: every package below is arch-independent in Devuan, so the same
@@ -625,6 +626,29 @@ TMUXCONF
 }
 write_tmux /root root
 [ -n "$TARGET_HOME" ] && write_tmux "$TARGET_HOME" "$TARGET_USER"
+
+# ===========================================================================
+log "iSH-AOK native programs"
+# ===========================================================================
+# native-links.sh links the app's native programs -- SmallCLUE's applets, zsh,
+# dash, motepad and the rest of /AOK/native -- into /usr/local/native-bin, put
+# first on PATH for login shells, and makes `sh` native dash, there and in
+# /usr/local/bin, which every default PATH has ahead of /bin. --no-shell,
+# because this script chose the login shells above. persist-links.sh links your
+# own /AOK/persist/bin into /usr/local/bin, for the sessions that never read
+# /etc/profile.d (`ssh host cmd`, cron, services). NATIVE_LINKS=0 skips both.
+if [ "${NATIVE_LINKS:-1}" = 1 ]; then
+    if [ -f /AOK/tools/native-links.sh ] && [ -x /AOK/native/smallclue ]; then
+        sh /AOK/tools/native-links.sh --no-shell 2>&1 | sed 's/^/    /'
+    else
+        note "this iSH-AOK has no /AOK/native; native links skipped"
+    fi
+    if [ -f /AOK/tools/persist-links.sh ] && [ -d /AOK/persist/bin ]; then
+        sh /AOK/tools/persist-links.sh 2>&1 | sed 's/^/    /'
+    fi
+else
+    note "NATIVE_LINKS=0: native links skipped"
+fi
 
 # ===========================================================================
 log "Enable + start services"

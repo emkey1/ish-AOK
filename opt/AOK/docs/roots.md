@@ -247,6 +247,12 @@ sh /AOK/tools/provision-ultimate-pscal.sh            # PSCAL + SmallCLUE
 All of them are idempotent (safe to re-run) and interactively prompt for
 their settings unless you pre-set them in the environment.
 
+Each one ends by linking iSH-AOK's native programs in, with
+[`native-links.sh`](native-setup.md) — so `sh` is native dash, from
+`/usr/local/bin` — and your own `/AOK/persist/bin` with
+[`persist-links.sh`](persist.md). The Alpine, Devuan and Arch scripts leave the
+login shell they chose alone (`--no-shell`); `NATIVE_LINKS=0` skips the step.
+
 The PSCAL one is the odd one out, because a PSCAL root has no package manager
 and nothing to install. It configures instead: it gives root and your login
 passwords (the image ships every account locked), puts your login in `wheel`
