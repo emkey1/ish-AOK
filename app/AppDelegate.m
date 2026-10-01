@@ -3364,9 +3364,9 @@ static void ISHSessionPresentResumeDisposition(UIViewController *host,
 static NSString *ISHSessionSlotTitle(NSDictionary *slot, NSDateFormatter *when) {
     NSString *stamp = [when stringFromDate:slot[@"date"]];
     if (![slot[@"loadable"] boolValue])
-        return [NSString stringWithFormat:@"%@ (saved by a different build)", stamp];
+        return [NSString stringWithFormat:@"%@ (saved by a different build; can't be restored)", stamp];
     if ([slot[@"orphan"] boolValue])
-        return [NSString stringWithFormat:@"%@ (saved on %@, which is gone)", stamp,
+        return [NSString stringWithFormat:@"%@ (saved on %@, which is gone; can't be restored)", stamp,
                 [slot[@"rootName"] length] != 0 ? slot[@"rootName"] : @"a filesystem"];
     // An automatic save is named, because "which of these did I choose to keep"
     // is the question somebody deleting them is trying to answer.
