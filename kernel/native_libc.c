@@ -33,6 +33,7 @@
 #include "platform/platform.h"
 #include "kernel/errno.h"
 #include "kernel/fs.h"
+#include "fs/dev.h"
 #include "kernel/native.h"
 #include "kernel/native_io.h"
 #include "kernel/native_kqueue.h"
@@ -350,7 +351,9 @@ static void nlibc_guest_stat_to_host(const struct arm64_stat_ *in, struct stat *
     out->st_nlink = (nlink_t) in->nlink;
     out->st_uid = (uid_t) in->uid;
     out->st_gid = (gid_t) in->gid;
-    out->st_rdev = (dev_t) in->rdev;
+    // Linux's packing, repacked for the host: native `ls -l /dev/null` read
+    // the raw number with Darwin's major()/minor() and showed "0, 259".
+    out->st_rdev = dev_real_from_fake((dev_t_) in->rdev);
     out->st_size = (off_t) in->size;
     out->st_blksize = (blksize_t) in->blksize;
     out->st_blocks = (blkcnt_t) in->blocks;
@@ -2092,9 +2095,9 @@ int nlibc_linkat(int oldfd, const char *from, int newfd, const char *to, int fla
 int nlibc_mknod(const char *path, mode_t mode, dev_t dev) {
     NATIVE_FRAME;
     NLIBC_PATH(guest_path, path);
-    // Darwin packs a dev_t as major:minor = 24:8, the guest as 8:8 in the low
-    // 16 bits (fs/dev.h). Repacking rather than passing the raw number through.
-    dword_t guest_dev = (dword_t) (((major(dev) & 0xff) << 8) | (minor(dev) & 0xff));
+    // Darwin packs a dev_t as major:minor = 24:8, the guest as Linux does
+    // (fs/dev.h). Repacking rather than passing the raw number through.
+    dword_t guest_dev = (dword_t) dev_fake_from_real(dev);
     return (int) nlibc_ret(native_syscall(NATIVE_SYS_mknodat, AT_FDCWD_, guest_path,
             mode, guest_dev));
 }

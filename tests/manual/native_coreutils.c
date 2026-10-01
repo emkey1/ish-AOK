@@ -1,6 +1,6 @@
-// native_coreutils.c -- SmallCLUE's rm, wc, head, tail, sort, cp, mv, date, chmod,
-// xargs, find and grep against the answers of GNU coreutils 9.4, findutils
-// 4.9 and grep 3.11.
+// native_coreutils.c -- SmallCLUE's ls, rm, wc, head, tail, sort, cp, mv,
+// date, chmod, xargs, find and grep against the answers of GNU coreutils 9.4,
+// findutils 4.9 and grep 3.11.
 //
 // iSH-AOK's native-links.sh puts SmallCLUE's applets ahead of the distro's on
 // PATH, so they run every script that names them. The versions these
@@ -528,6 +528,56 @@ static const struct cu_case cases[] = {
      "", 0, 1, NULL},
     {"chmod", "755", NULL, 0,
      "", 0, 1, NULL},
+    {"ls", "", NULL, 0,
+     "data.txt\ndir\nempty\nempty.txt\nlines.txt\nnonl.txt\ntext.txt\n", 57, 0, NULL},
+    {"ls", "-a", NULL, 0,
+     ".\n..\ndata.txt\ndir\nempty\nempty.txt\nlines.txt\nnonl.txt\ntext.txt\n", 62, 0, NULL},
+    {"ls", "-A dir", NULL, 0,
+     "f1\nsub\n", 7, 0, NULL},
+    {"ls", "-C -w 30", NULL, 0,
+     "data.txt  empty.txt  text.txt\ndir\t  lines.txt\nempty\t  nonl.txt\n", 63, 0, NULL},
+    {"ls", "-x -w 30", NULL, 0,
+     "data.txt   dir\nempty\t   empty.txt\nlines.txt  nonl.txt\ntext.txt\n", 63, 0, NULL},
+    {"ls", "-m -w 30", NULL, 0,
+     "data.txt, dir, empty,\nempty.txt, lines.txt,\nnonl.txt, text.txt\n", 63, 0, NULL},
+    {"ls", "-F", NULL, 0,
+     "data.txt\ndir/\nempty/\nempty.txt\nlines.txt\nnonl.txt\ntext.txt\n", 59, 0, NULL},
+    {"ls", "-p dir", NULL, 0,
+     "f1\nsub/\n", 8, 0, NULL},
+    {"ls", "-d dir data.txt", NULL, 0,
+     "data.txt\ndir\n", 13, 0, NULL},
+    {"ls", "data.txt dir lines.txt", NULL, 0,
+     "data.txt\nlines.txt\n\ndir:\nf1\nsub\n", 32, 0, NULL},
+    {"ls", "-R dir", NULL, 0,
+     "dir:\nf1\nsub\n\ndir/sub:\nf2\n", 25, 0, NULL},
+    {"ls", "-r -X", NULL, 0,
+     "text.txt\nnonl.txt\nlines.txt\nempty.txt\ndata.txt\nempty\ndir\n", 57, 0, NULL},
+    {"ls", "-S", NULL, 0,
+     "dir\nempty\nlines.txt\ndata.txt\ntext.txt\nnonl.txt\nempty.txt\n", 57, 0, NULL},
+    {"ls", "-v", NULL, 0,
+     "data.txt\ndir\nempty\nempty.txt\nlines.txt\nnonl.txt\ntext.txt\n", 57, 0, NULL},
+    {"ls", "-Q", NULL, 0,
+     "\"data.txt\"\n\"dir\"\n\"empty\"\n\"empty.txt\"\n\"lines.txt\"\n\"nonl.txt\"\n\"text.txt\"\n", 71, 0, NULL},
+    {"ls", "-I *.txt", NULL, 0,
+     "dir\nempty\n", 10, 0, NULL},
+    {"ls", "--group-directories-first", NULL, 0,
+     "dir\nempty\ndata.txt\nempty.txt\nlines.txt\nnonl.txt\ntext.txt\n", 57, 0, NULL},
+    {"ls", "-l --time-style=+ data.txt lines.txt", NULL, 0,
+     "-rw-r--r-- 1 root root 50  data.txt\n-rw-r--r-- 1 root root 63  lines.txt\n", 73, 0, NULL},
+    {"ls", "-n --time-style=+ data.txt", NULL, 0,
+     "-rw-r--r-- 1 0 0 50  data.txt\n", 30, 0, NULL},
+    {"ls", "-go --time-style=+ lines.txt", NULL, 0,
+     "-rw-r--r-- 1 63  lines.txt\n", 27, 0, NULL},
+    {"ls", "-l --si --time-style=+ lines.txt", NULL, 0,
+     "-rw-r--r-- 1 root root 63  lines.txt\n", 37, 0, NULL},
+    {"ls", "nosuch", NULL, 0,
+     "", 0, 2, NULL},
+    {"ls", "nosuch data.txt", NULL, 0,
+     "data.txt\n", 9, 2, NULL},
+    {"ls", "--sort=bogus", NULL, 0,
+     "", 0, 1, NULL},
+    {"ls", "-z", NULL, 0,
+     "", 0, 2, NULL},
 };
 
 static void write_file(const char *path, const char *text) {
@@ -671,7 +721,7 @@ int main(int argc, char **argv) {
     alarm(test_watchdog_secs(180));
     mkdir(TDIR, 0755);
     mkdir(TDIR "/bin", 0755);
-    static const char *const applets[] = {"head", "tail", "wc", "rm", "sort", "xargs", "find", "grep", "cp", "mv", "date", "sudo", "chmod"};
+    static const char *const applets[] = {"head", "tail", "wc", "rm", "sort", "xargs", "find", "grep", "cp", "mv", "date", "sudo", "chmod", "ls"};
     for (size_t i = 0; i < sizeof(applets) / sizeof(applets[0]); i++) {
         char link[256];
         snprintf(link, sizeof(link), TDIR "/bin/%s", applets[i]);
