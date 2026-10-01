@@ -3529,7 +3529,7 @@ void ISHSessionPresentResumePicker(UIViewController *host,
     [sheet presentFromViewController:host source:nil];
 }
 
-int ISHSuspendSessionSaveNow(void) {
+int ISHSuspendSessionSaveNow(BOOL leaveOutGPU) {
     // Nothing to save once init has exited: no machine is left to freeze.
     if (ISHGuestHalted())
         return _ESRCH;
@@ -3541,7 +3541,47 @@ int ISHSuspendSessionSaveNow(void) {
     // running machine nobody can see -- which is exactly what a Workspace
     // suspend did before this: every shell alive, no terminals on screen.
     ISHWorkspaceCaptureLayoutForSuspend(image);
-    return checkpoint_save_external(image.fileSystemRepresentation);
+    return checkpoint_save_external_flags(image.fileSystemRepresentation,
+                                          leaveOutGPU ? CKPT_SAVE_LEAVE_OUT_GPU : 0);
+}
+
+void ISHSuspendSessionConfirmGPUThen(UIViewController *host, NSString *verb,
+                                     void (^proceed)(BOOL leaveOutGPU)) {
+    char names[192];
+    unsigned holders = checkpoint_gpu_holders(names, sizeof(names));
+    if (holders == 0 || host == nil) {
+        proceed(NO);
+        return;
+    }
+    BOOL suspending = [verb isEqualToString:@"Suspend"];
+    NSString *message = [NSString stringWithFormat:
+        @"%s %@ the GPU, and what %@ there lives in the app, outside the session. "
+        @"%@ anyway and everything else is saved, but the Wayland desktop and "
+        @"every program in it %@ — any unsaved work in them is lost.",
+        names, holders == 1 ? @"is using" : @"are using", holders == 1 ? @"it holds" : @"they hold",
+        verb,
+        suspending ? @"will be gone when the session resumes"
+                   : @"keep running now, and will be missing from a resume of this save"];
+    UIAlertController *alert =
+        [UIAlertController alertControllerWithTitle:@"The Wayland desktop can't be saved"
+                                            message:message
+                                     preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:[verb stringByAppendingString:@" Anyway"]
+                                              style:UIAlertActionStyleDestructive
+                                            handler:^(__unused UIAlertAction *a) {
+        proceed(YES);
+    }]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel"
+                                              style:UIAlertActionStyleCancel
+                                            handler:nil]];
+    // Next turn: callers are inside another alert's handler, and presenting
+    // while that one is still going away is dropped as "already presenting".
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIViewController *top = host;
+        while (top.presentedViewController != nil && !top.presentedViewController.isBeingDismissed)
+            top = top.presentedViewController;
+        [top presentViewController:alert animated:YES completion:nil];
+    });
 }
 
 // Write the session and GO, which is a different thing from saving one.
@@ -3558,14 +3598,15 @@ int ISHSuspendSessionSaveNow(void) {
 // image describes the guest as it was when the freeze stopped it, while the
 // filesystem keeps changing for as long as the app is alive. Every millisecond
 // between the two is a millisecond the root can drift from the image.
-int ISHSuspendSessionSuspendAndExit(void) {
+int ISHSuspendSessionSuspendAndExit(BOOL leaveOutGPU) {
     if (ISHGuestHalted())
         return _ESRCH;
     NSString *image = ISHSuspendSessionImagePath();
     if (image == nil)
         return _ENOENT;
     ISHWorkspaceCaptureLayoutForSuspend(image);
-    int err = checkpoint_save_external(image.fileSystemRepresentation);
+    int err = checkpoint_save_external_flags(image.fileSystemRepresentation,
+                                             leaveOutGPU ? CKPT_SAVE_LEAVE_OUT_GPU : 0);
     if (err < 0)
         return err;
     os_log(ISHSuspendLog(), "session suspended on request; exiting");
@@ -5608,7 +5649,11 @@ void ISHSuspendGuardEnterBackground(void) {
                 // effect, so a path that does not pin would have filed the
                 // arrangement against a different name and lost it on resume.
                 ISHWorkspaceCaptureLayoutForSuspend(image);
-                int cerr = checkpoint_save_external(image.fileSystemRepresentation);
+                // Nobody to ask: the app is going to the background, and may
+                // not come back. Save what can be saved; the Wayland desktop
+                // and GPU programs are left out and keep running.
+                int cerr = checkpoint_save_external_flags(image.fileSystemRepresentation,
+                                                          CKPT_SAVE_LEAVE_OUT_GPU);
                 struct checkpoint_status ck;
                 checkpoint_get_status(&ck);
                 if (cerr == 0) {

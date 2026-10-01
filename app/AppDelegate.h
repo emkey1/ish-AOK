@@ -83,7 +83,10 @@ NSString *ISHSuspendAutomaticSessionImagePath(void);
 // file -- picking the older of two sessions used to come back wearing the newer
 // session's scrollback.
 NSString *_Nullable ISHSessionRestoredImagePath(void);
-int ISHSuspendSessionSaveNow(void);
+// leaveOutGPU: save everything except the processes holding the GPU or the
+// Wayland view, with their children (CKPT_SAVE_LEAVE_OUT_GPU). Without it such
+// a save is refused; ask first with ISHSuspendSessionConfirmGPUThen.
+int ISHSuspendSessionSaveNow(BOOL leaveOutGPU);
 
 // True once the guest's init has exited (reboot, poweroff, halt, or init dying)
 // for the rest of this launch. Nothing restarts it in place.
@@ -92,7 +95,15 @@ bool ISHGuestHalted(void);
 // Save the session and terminate the app, so the next launch resumes it. Does
 // not return on success. A SAVE is a copy and the guest carries on; this is the
 // departure.
-int ISHSuspendSessionSuspendAndExit(void);
+int ISHSuspendSessionSuspendAndExit(BOOL leaveOutGPU);
+
+// Before a Save or Suspend the user asked for: when the Wayland desktop or
+// another GPU program is running, which cannot be saved, say so and ask --
+// "Suspend Anyway" calls `proceed(YES)` (save everything else), Cancel does
+// nothing. With nothing on the GPU, `proceed(NO)` straight away. `verb` is the
+// button's word: @"Suspend" or @"Save". Main thread.
+void ISHSuspendSessionConfirmGPUThen(UIViewController *host, NSString *verb,
+                                     void (^proceed)(BOOL leaveOutGPU));
 
 // ---- saved sessions -----------------------------------------------------
 // A session belongs to the root it was saved on. These are the current root's

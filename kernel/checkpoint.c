@@ -1237,6 +1237,68 @@ static uint64_t ckpt_tty_identity(int type, int num) {
 // descriptor opened through /tmp/bp-dst has to be recorded as the /tmp/bp-src
 // that holds it, which the restore can reach, not as the bind path Linux
 // would print for it, which on restore is an empty mount-point directory.
+// The GPU's render node, or the Wayland view's input queue: descriptors whose
+// other side lives in the app (Vulkan contexts, blobs, the presenter) and so
+// cannot go into an image. `path` gets the node's path when there is one.
+static bool ckpt_fd_is_gpu(struct fd *fd, char *path, size_t path_size) {
+    (void) path_size;
+    path[0] = '\0';
+    if (fd->ops != NULL && fd->ops->name != NULL && strcmp(fd->ops->name, "aok-input") == 0)
+        return true;
+    if (S_ISCHR(fd->type) && generic_getpath_backing(fd, path) >= 0 &&
+            strncmp(path, "/dev/dri/", 9) == 0)
+        return true;
+    path[0] = '\0';
+    return false;
+}
+
+static bool ckpt_task_holds_gpu(struct task *task) {
+    struct fdtable *files = task->files;
+    if (files == NULL)
+        return false;
+    char path[MAX_PATH];
+    bool holds = false;
+    lock(&files->lock, 0);
+    for (unsigned i = 0; i < files->size && !holds; i++) {
+        struct fd *fd = files->files[i];
+        if (fd != NULL && ckpt_fd_is_gpu(fd, path, sizeof(path)))
+            holds = true;
+    }
+    unlock(&files->lock);
+    return holds;
+}
+
+// Appends a process name to a ", "-separated list, once.
+static void ckpt_note_name(char *note, size_t size, const char *name) {
+    size_t len = strlen(name);
+    for (const char *at = note; (at = strstr(at, name)) != NULL; at += len) {
+        bool starts = at == note || (at >= note + 2 && at[-2] == ',' && at[-1] == ' ');
+        if (starts && (at[len] == '\0' || at[len] == ','))
+            return;
+    }
+    size_t used = strlen(note);
+    snprintf(note + used, size - used, "%s%s", used != 0 ? ", " : "", name);
+}
+
+unsigned checkpoint_gpu_holders(char *names, size_t size) {
+    if (names != NULL && size != 0)
+        names[0] = '\0';
+    struct task_snapshot snap = {0};
+    if (task_snapshot_collect(&snap, true) < 0)
+        return 0;
+    unsigned count = 0;
+    for (unsigned i = 0; i < snap.count; i++) {
+        struct task *t = snap.tasks[i];
+        if (t->zombie || !ckpt_task_holds_gpu(t))
+            continue;
+        count++;
+        if (names != NULL && size != 0)
+            ckpt_note_name(names, size, t->comm);
+    }
+    task_snapshot_release(&snap);
+    return count;
+}
+
 static int ckpt_classify_fd(int num, struct fd *fd, char *path, size_t path_size) {
     // Descriptors with no file behind them, identified by what they ARE rather
     // than by what they look like. Before this they reached the standard-
@@ -1327,9 +1389,9 @@ static int ckpt_classify_fd(int num, struct fd *fd, char *path, size_t path_size
     // and cannot be written into an image. Reopened, the render node would be
     // a blank device under a compositor that believes it has a GPU, so the
     // suspend is refused, in words that say what to do.
-    if ((fd->ops != NULL && fd->ops->name != NULL && strcmp(fd->ops->name, "aok-input") == 0) ||
-            (S_ISCHR(fd->type) && generic_getpath_backing(fd, path) >= 0 &&
-             strncmp(path, "/dev/dri/", 9) == 0)) {
+    // A save asked to leave such processes out (CKPT_SAVE_LEAVE_OUT_GPU) has
+    // already dropped them, so reaching this means no one was asked.
+    if (ckpt_fd_is_gpu(fd, path, path_size)) {
         ckpt_refuse("a Wayland desktop or GPU program is running (fd %d is %s); "
                     "close it, then suspend", num,
                     path[0] == '/' ? path : "the Wayland view's input");
@@ -2413,6 +2475,8 @@ static struct timespec ckpt_host_deadline_after(int64_t left_ns) {
     return timespec_add(timespec_now(CLOCK_MONOTONIC), left);
 }
 
+static bool ckpt_task_as_killed(struct task *t);   // with CKPT_SAVE_LEAVE_OUT_GPU, below
+
 static int ckpt_save_task(struct ckpt_writer *w, struct task *task,
         struct ckpt_header *h, uint64_t *pages_out, struct ckpt_fd_ids *ids,
         const struct ckpt_shares *sh) {
@@ -2432,7 +2496,8 @@ static int ckpt_save_task(struct ckpt_writer *w, struct task *task,
     struct ckpt_sigqueue *own_signals = NULL, *group_signals = NULL;
 
     bool departed = ckpt_task_departed(task);
-    if (task->zombie || departed) {
+    bool as_killed = ckpt_task_as_killed(task);
+    if (task->zombie || departed || as_killed) {
         // Nothing but the status its parent has not collected. No address
         // space, no descriptors, no register file -- a zombie has already run
         // its last instruction, and what makes it worth recording is that
@@ -2444,9 +2509,10 @@ static int ckpt_save_task(struct ckpt_writer *w, struct task *task,
             .pgid = task->group != NULL ? task->group->pgid : 0,
             .sid = task->group != NULL ? task->group->sid : 0,
             .abi = (uint32_t) task->abi,
-            .zombie = departed ? 0 : 1,
-            .departed = departed ? 1 : 0,
-            .exit_code = task->exit_code,
+            .zombie = departed && !as_killed ? 0 : 1,
+            .departed = departed && !as_killed ? 1 : 0,
+            // Killed by SIGKILL, in wait()'s encoding (do_exit_group(sig)).
+            .exit_code = as_killed ? 9 : task->exit_code,
             .exit_signal = task->exit_signal,
             .n_sigactions = NUM_SIGS,
             .tgid = (uint32_t) task->tgid,
@@ -3093,14 +3159,125 @@ int checkpoint_save_external(const char *host_path) {
     // returned, tidied up and exited -- so the session the image was taken to
     // preserve was a pair of zombies a millisecond after the resume, with
     // nothing anywhere reporting a failure. See [[current-is-not-always-your-task]].
+    return checkpoint_save_external_flags(host_path, 0);
+}
+
+static int ckpt_save(const char *host_path, unsigned flags);
+
+int checkpoint_save_external_flags(const char *host_path, unsigned flags) {
     struct task *saved = current;
     current = NULL;
-    int err = checkpoint_save(host_path);
+    int err = ckpt_save(host_path, flags);
     current = saved;
     return err;
 }
 
 int checkpoint_save(const char *host_path) {
+    return ckpt_save(host_path, 0);
+}
+
+// What the last save left out (CKPT_SAVE_LEAVE_OUT_GPU), for its status.
+static unsigned long ckpt_left_out;
+static char ckpt_left_out_note[192];
+// The left-out processes whose parent stays: written as zombies killed by
+// SIGKILL (ckpt_save_task), which is what they are to that parent -- gone at
+// the moment of the save. Dropped outright, a shell's `wait` for one never
+// returned: the job was still running as far as the shell knew, and its
+// status never came.
+static struct task **ckpt_as_killed;
+static unsigned ckpt_as_killed_count;
+
+static bool ckpt_task_as_killed(struct task *t) {
+    for (unsigned i = 0; i < ckpt_as_killed_count; i++)
+        if (ckpt_as_killed[i] == t)
+            return true;
+    return false;
+}
+
+// Leave the GPU holders out, and everything that belongs with them: their
+// threads (one process) and their descendants -- the Wayland desktop is
+// labwc and every window it started, and a client restored without its
+// compositor is a program talking to a dead socket. What is left behind is
+// handled as a task reparented mid-collection already is: a kept parent's
+// wait for a left-out child finds none, and the restore hands any orphan to
+// init. Called frozen, with the snapshot already filtered.
+static void ckpt_leave_out_gpu(struct task_snapshot *snap) {
+    ckpt_left_out = 0;
+    ckpt_left_out_note[0] = '\0';
+    if (snap->count == 0)
+        return;
+    bool *out = calloc(snap->count, sizeof(*out));
+    if (out == NULL)
+        return;
+    for (unsigned i = 0; i < snap->count; i++) {
+        struct task *t = snap->tasks[i];
+        if (!t->zombie && ckpt_task_holds_gpu(t)) {
+            out[i] = true;
+            ckpt_note_name(ckpt_left_out_note, sizeof(ckpt_left_out_note), t->comm);
+        }
+    }
+    complex_lockt(&pids_lock, 0);
+    // The whole thread group of a holder: threads share the descriptor table,
+    // so each is a holder already -- this is for a zombie leader whose live
+    // threads hold one.
+    for (unsigned i = 0; i < snap->count; i++) {
+        if (!out[i])
+            continue;
+        for (unsigned j = 0; j < snap->count; j++)
+            if (!out[j] && snap->tasks[j]->group == snap->tasks[i]->group)
+                out[j] = true;
+    }
+    // And every descendant: a task is out when any ancestor is.
+    for (unsigned i = 0; i < snap->count; i++) {
+        if (out[i])
+            continue;
+        for (struct task *a = snap->tasks[i]->parent; a != NULL && !out[i]; a = a->parent) {
+            for (unsigned j = 0; j < snap->count; j++) {
+                if (out[j] && snap->tasks[j] == a) {
+                    out[i] = true;
+                    break;
+                }
+            }
+            if (a->parent == a)
+                break;
+        }
+    }
+    // Which of them a kept parent is waiting on: a process leader, out,
+    // whose parent is not.
+    free(ckpt_as_killed);
+    ckpt_as_killed = calloc(snap->count, sizeof(*ckpt_as_killed));
+    ckpt_as_killed_count = 0;
+    bool *as_killed = calloc(snap->count, sizeof(*as_killed));
+    for (unsigned i = 0; i < snap->count && ckpt_as_killed != NULL && as_killed != NULL; i++) {
+        struct task *t = snap->tasks[i];
+        if (!out[i] || t->group == NULL || t->group->leader != t || t->parent == NULL ||
+                t->parent == t)
+            continue;
+        bool parent_out = false;
+        for (unsigned j = 0; j < snap->count; j++)
+            if (snap->tasks[j] == t->parent)
+                parent_out = out[j];
+        if (!parent_out) {
+            as_killed[i] = true;
+            ckpt_as_killed[ckpt_as_killed_count++] = t;
+        }
+    }
+    unlock(&pids_lock);
+    unsigned kept = 0;
+    for (unsigned i = 0; i < snap->count; i++) {
+        if (out[i])
+            ckpt_left_out++;
+        if (out[i] && !(as_killed != NULL && as_killed[i]))
+            task_ref_cnt_mod(snap->tasks[i], -1);
+        else
+            snap->tasks[kept++] = snap->tasks[i];
+    }
+    snap->count = kept;
+    free(as_killed);
+    free(out);
+}
+
+static int ckpt_save(const char *host_path, unsigned flags) {
     int err = ckpt_check_scope();
     if (err < 0)
         return err;
@@ -3179,6 +3356,11 @@ int checkpoint_save(const char *host_path) {
     }
     free(keep);
     snap.count = live;
+    ckpt_left_out = 0;
+    ckpt_left_out_note[0] = '\0';
+    ckpt_as_killed_count = 0;
+    if (flags & CKPT_SAVE_LEAVE_OUT_GPU)
+        ckpt_leave_out_gpu(&snap);
     ckpt_order_tasks(snap.tasks, snap.count);
 
     // Written to a temporary beside the target and renamed into place only when
@@ -3375,6 +3557,8 @@ int checkpoint_save(const char *host_path) {
     ckpt_status.pages = (unsigned long) pages;
     ckpt_status.tasks = h.n_tasks;
     ckpt_status.natives_restarted = ckpt_natives_restarted;
+    ckpt_status.left_out = ckpt_left_out;
+    snprintf(ckpt_status.left_out_note, sizeof(ckpt_status.left_out_note), "%s", ckpt_left_out_note);
     snprintf(ckpt_status.natives_note, sizeof(ckpt_status.natives_note),
              "%s", ckpt_natives_note);
     ckpt_status.fds = nfds_total;

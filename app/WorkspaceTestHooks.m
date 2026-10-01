@@ -30,6 +30,7 @@
 //    restore-arrangement          the Desktops applet's Restore
 //    save-session                 Save Session (the guest keeps running)
 //    suspend-exit                 Suspend: save the session and exit
+//    menu-save                    the root menu's Save Session, prompts and all
 //    tap <title>                  press the button of the alert on screen whose
 //                                 title starts with <title> (the resume picker)
 //
@@ -68,6 +69,7 @@
 - (void)applyDesktopVisibility;
 - (void)saveWorkspaceDesktops;
 - (void)restoreWorkspaceDesktops;
+- (void)saveSessionFromRootMenu;
 @end
 
 // ISHWorkspaceTerminalTabsViewController's, likewise private.
@@ -141,7 +143,13 @@ static void ISHWorkspaceTestDump(NSString *seq) {
     checkpoint_get_status(&ck);
     NSMutableDictionary *result = [@{@"ok": @YES,
                                      @"workspace": @(workspace != nil),
-                                     @"restored": @(ck.restored != 0)} mutableCopy];
+                                     @"restored": @(ck.restored != 0),
+                                     @"saves": @(ck.saves),
+                                     @"lastError": @(ck.last_err),
+                                     @"lastRefusal": @(ck.last_refusal),
+                                     @"tasks": @(ck.tasks),
+                                     @"leftOut": @(ck.left_out),
+                                     @"leftOutNote": @(ck.left_out_note)} mutableCopy];
     if (workspace == nil) {
         ISHWorkspaceTestWriteResult(seq, result);
         return;
@@ -292,6 +300,11 @@ static void ISHWorkspaceTestRun(NSString *line) {
         answer(YES, nil);
         return;
     }
+    if ([verb isEqualToString:@"menu-save"]) {
+        [workspace saveSessionFromRootMenu];
+        answer(YES, nil);
+        return;
+    }
     if ([verb isEqualToString:@"save-arrangement"]) {
         [workspace saveWorkspaceDesktops];
         answer(YES, nil);
@@ -318,7 +331,7 @@ static void ISHWorkspaceTestRun(NSString *line) {
         // Off the main thread, as the app's own callers do: the layout capture
         // waits on the main queue for the terminals' contents.
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-            int err = exits ? ISHSuspendSessionSuspendAndExit() : ISHSuspendSessionSaveNow();
+            int err = exits ? ISHSuspendSessionSuspendAndExit(NO) : ISHSuspendSessionSaveNow(NO);
             // Reached only when the save failed, or for save-session.
             ISHWorkspaceTestWriteResult(seq, @{@"ok": @(err == 0), @"rc": @(err)});
         });

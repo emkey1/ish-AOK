@@ -6350,32 +6350,35 @@ static UIResponder *ISHWorkspaceFirstResponderAmongViewControllers(UIViewControl
     }
     if (self.rootMenuSaveInProgress)
         return;
-    self.rootMenuSaveInProgress = YES;
-    [self showDesktopToastWithText:@"  Saving session…  " holdFor:-1.0];
-    // Off the main thread; see suspendSessionShortcut for why.
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-        int err = ISHSuspendSessionSaveNow();
-        struct checkpoint_status ck;
-        checkpoint_get_status(&ck);
-        dispatch_async(dispatch_get_main_queue(), ^{
-            self.rootMenuSaveInProgress = NO;
-            if (err == 0) {
-                [self showDesktopToastWithText:
-                    [NSString stringWithFormat:@"  Session saved — %lu processes  ", ck.tasks]
-                                       holdFor:2.5];
-                return;
-            }
-            [self hideDesktopToast];
-            UIAlertController *alert = [UIAlertController
-                alertControllerWithTitle:@"Session not saved"
-                                 message:ck.last_refusal[0] != '\0'
-                                         ? @(ck.last_refusal)
-                                         : @"iSH-AOK could not write the session."
-                          preferredStyle:UIAlertControllerStyleAlert];
-            [alert addAction:[UIAlertAction actionWithTitle:@"OK"
-                                                      style:UIAlertActionStyleDefault
-                                                    handler:nil]];
-            [self presentViewController:alert animated:YES completion:nil];
+    // The Wayland desktop and GPU programs cannot be saved: ask first.
+    ISHSuspendSessionConfirmGPUThen(self, @"Save", ^(BOOL leaveOutGPU) {
+        self.rootMenuSaveInProgress = YES;
+        [self showDesktopToastWithText:@"  Saving session…  " holdFor:-1.0];
+        // Off the main thread; see suspendSessionShortcut for why.
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+            int err = ISHSuspendSessionSaveNow(leaveOutGPU);
+            struct checkpoint_status ck;
+            checkpoint_get_status(&ck);
+            dispatch_async(dispatch_get_main_queue(), ^{
+                self.rootMenuSaveInProgress = NO;
+                if (err == 0) {
+                    [self showDesktopToastWithText:
+                        [NSString stringWithFormat:@"  Session saved — %lu processes  ", ck.tasks]
+                                           holdFor:2.5];
+                    return;
+                }
+                [self hideDesktopToast];
+                UIAlertController *alert = [UIAlertController
+                    alertControllerWithTitle:@"Session not saved"
+                                     message:ck.last_refusal[0] != '\0'
+                                             ? @(ck.last_refusal)
+                                             : @"iSH-AOK could not write the session."
+                              preferredStyle:UIAlertControllerStyleAlert];
+                [alert addAction:[UIAlertAction actionWithTitle:@"OK"
+                                                          style:UIAlertActionStyleDefault
+                                                        handler:nil]];
+                [self presentViewController:alert animated:YES completion:nil];
+            });
         });
     });
 }
@@ -10220,32 +10223,35 @@ static CGFloat ISHWorkspaceToolScaledFontSize(WorkspaceThemedToolViewController 
     }
     if (_suspendInProgress)
         return;
-    _suspendInProgress = YES;
-    [self refreshSuspendCard];
+    // The Wayland desktop and GPU programs cannot be saved: ask first.
+    ISHSuspendSessionConfirmGPUThen(self, @"Save", ^(BOOL leaveOutGPU) {
+        _suspendInProgress = YES;
+        [self refreshSuspendCard];
 
-    // OFF the main thread: the save freezes every guest task, writes the image
-    // and thaws before it returns, and on a large session that is long enough
-    // to be a visible stall. The guest is stopped for that time either way --
-    // it is the UI that must not be.
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-        int err = ISHSuspendSessionSaveNow();
-        dispatch_async(dispatch_get_main_queue(), ^{
-            self->_suspendInProgress = NO;
-            [self refreshSuspendCard];
-            if (err != 0) {
-                struct checkpoint_status ck;
-                checkpoint_get_status(&ck);
-                UIAlertController *alert = [UIAlertController
-                    alertControllerWithTitle:@"Session not saved"
-                                     message:ck.last_refusal[0] != '\0'
-                                             ? @(ck.last_refusal)
-                                             : @"iSH-AOK could not write the session."
-                              preferredStyle:UIAlertControllerStyleAlert];
-                [alert addAction:[UIAlertAction actionWithTitle:@"OK"
-                                                          style:UIAlertActionStyleDefault
-                                                        handler:nil]];
-                [self presentViewController:alert animated:YES completion:nil];
-            }
+        // OFF the main thread: the save freezes every guest task, writes the image
+        // and thaws before it returns, and on a large session that is long enough
+        // to be a visible stall. The guest is stopped for that time either way --
+        // it is the UI that must not be.
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+            int err = ISHSuspendSessionSaveNow(leaveOutGPU);
+            dispatch_async(dispatch_get_main_queue(), ^{
+                self->_suspendInProgress = NO;
+                [self refreshSuspendCard];
+                if (err != 0) {
+                    struct checkpoint_status ck;
+                    checkpoint_get_status(&ck);
+                    UIAlertController *alert = [UIAlertController
+                        alertControllerWithTitle:@"Session not saved"
+                                         message:ck.last_refusal[0] != '\0'
+                                                 ? @(ck.last_refusal)
+                                                 : @"iSH-AOK could not write the session."
+                                  preferredStyle:UIAlertControllerStyleAlert];
+                    [alert addAction:[UIAlertAction actionWithTitle:@"OK"
+                                                              style:UIAlertActionStyleDefault
+                                                            handler:nil]];
+                    [self presentViewController:alert animated:YES completion:nil];
+                }
+            });
         });
     });
 }
@@ -14118,24 +14124,27 @@ static NSURL *ISHWorkspaceBrowserURLFromInput(NSString *input) {
         [sheet addActionWithTitle:@"Save Session Now"
                             style:UIAlertActionStyleDefault
                           handler:^(__unused UIAlertAction *a) {
-            dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-                int err = ISHSuspendSessionSaveNow();
-                struct checkpoint_status after;
-                checkpoint_get_status(&after);
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    if (err == 0)
-                        return;   // the confirmation is the absence of a complaint
-                    UIAlertController *alert =
-                        [UIAlertController alertControllerWithTitle:@"Session not saved"
-                                                            message:after.last_refusal[0] != '\0'
-                                                                    ? @(after.last_refusal)
-                                                                    : @"iSH-AOK could not write the session."
-                                                     preferredStyle:UIAlertControllerStyleAlert];
-                    [alert addAction:[UIAlertAction actionWithTitle:@"OK"
-                                                              style:UIAlertActionStyleCancel
-                                                            handler:nil]];
-                    if (presenter.presentedViewController == nil)
-                        [presenter presentViewController:alert animated:YES completion:nil];
+            // The Wayland desktop and GPU programs cannot be saved: ask first.
+            ISHSuspendSessionConfirmGPUThen(self, @"Save", ^(BOOL leaveOutGPU) {
+                dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+                    int err = ISHSuspendSessionSaveNow(leaveOutGPU);
+                    struct checkpoint_status after;
+                    checkpoint_get_status(&after);
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        if (err == 0)
+                            return;   // the confirmation is the absence of a complaint
+                        UIAlertController *alert =
+                            [UIAlertController alertControllerWithTitle:@"Session not saved"
+                                                                message:after.last_refusal[0] != '\0'
+                                                                        ? @(after.last_refusal)
+                                                                        : @"iSH-AOK could not write the session."
+                                                         preferredStyle:UIAlertControllerStyleAlert];
+                        [alert addAction:[UIAlertAction actionWithTitle:@"OK"
+                                                                  style:UIAlertActionStyleCancel
+                                                                handler:nil]];
+                        if (presenter.presentedViewController == nil)
+                            [presenter presentViewController:alert animated:YES completion:nil];
+                    });
                 });
             });
         }];
@@ -14180,24 +14189,27 @@ static NSURL *ISHWorkspaceBrowserURLFromInput(NSString *input) {
             [confirm addAction:[UIAlertAction actionWithTitle:@"Suspend and Exit"
                                                         style:UIAlertActionStyleDefault
                                                       handler:^(__unused UIAlertAction *go) {
-                dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-                    // Returns only on FAILURE: on success the process is gone.
-                    int err = ISHSuspendSessionSuspendAndExit();
-                    (void) err;
-                    struct checkpoint_status after;
-                    checkpoint_get_status(&after);
-                    dispatch_async(dispatch_get_main_queue(), ^{
-                        UIAlertController *alert =
-                            [UIAlertController alertControllerWithTitle:@"Session not suspended"
-                                                                message:after.last_refusal[0] != '\0'
-                                                                        ? @(after.last_refusal)
-                                                                        : @"iSH-AOK could not write the session."
-                                                         preferredStyle:UIAlertControllerStyleAlert];
-                        [alert addAction:[UIAlertAction actionWithTitle:@"OK"
-                                                                  style:UIAlertActionStyleCancel
-                                                                handler:nil]];
-                        if (presenter.presentedViewController == nil)
-                            [presenter presentViewController:alert animated:YES completion:nil];
+                // The Wayland desktop and GPU programs cannot be saved: ask first.
+                ISHSuspendSessionConfirmGPUThen(self, @"Suspend", ^(BOOL leaveOutGPU) {
+                    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+                        // Returns only on FAILURE: on success the process is gone.
+                        int err = ISHSuspendSessionSuspendAndExit(leaveOutGPU);
+                        (void) err;
+                        struct checkpoint_status after;
+                        checkpoint_get_status(&after);
+                        dispatch_async(dispatch_get_main_queue(), ^{
+                            UIAlertController *alert =
+                                [UIAlertController alertControllerWithTitle:@"Session not suspended"
+                                                                    message:after.last_refusal[0] != '\0'
+                                                                            ? @(after.last_refusal)
+                                                                            : @"iSH-AOK could not write the session."
+                                                             preferredStyle:UIAlertControllerStyleAlert];
+                            [alert addAction:[UIAlertAction actionWithTitle:@"OK"
+                                                                      style:UIAlertActionStyleCancel
+                                                                    handler:nil]];
+                            if (presenter.presentedViewController == nil)
+                                [presenter presentViewController:alert animated:YES completion:nil];
+                        });
                     });
                 });
             }]];

@@ -54,6 +54,19 @@ int checkpoint_request(const char *host_path, bool and_halt);
 // Returns 0, or a guest _E* code with /proc/ish/checkpoint's last_refusal
 // naming the cause.
 int checkpoint_save_external(const char *host_path);
+
+// The same, with options. CKPT_SAVE_LEAVE_OUT_GPU writes everything EXCEPT the
+// processes holding the GPU or the Wayland view's input -- what stands behind
+// those lives in the app and cannot be imaged -- together with their children
+// and threads. They keep running; a resume comes back without them. Without
+// it such a save is refused.
+#define CKPT_SAVE_LEAVE_OUT_GPU 1u
+int checkpoint_save_external_flags(const char *host_path, unsigned flags);
+
+// How many processes hold the GPU or the Wayland view's input right now, and
+// their names ("labwc, wl-present"), so a caller can ask before a save that
+// would leave them out. Not frozen: an answer for a question, not an image.
+unsigned checkpoint_gpu_holders(char *names, size_t size);
 void checkpoint_run_pending(void);
 
 // The session file the entry point was given, if any: restored at startup and
@@ -165,6 +178,10 @@ struct checkpoint_status {
     // it is an error.
     unsigned long natives_restarted;
     char natives_note[192];   // their names, comma separated
+    // Processes the last image left out on purpose (CKPT_SAVE_LEAVE_OUT_GPU):
+    // the GPU holders, their children and threads.
+    unsigned long left_out;
+    char left_out_note[192];  // the holders' names, comma separated
 };
 void checkpoint_get_status(struct checkpoint_status *out);
 

@@ -1204,23 +1204,26 @@ static const CGFloat kFindBarHeight = 44;
             [confirm addAction:[UIAlertAction actionWithTitle:@"Suspend and Exit"
                                                         style:UIAlertActionStyleDefault
                                                       handler:^(__unused UIAlertAction *go) {
-                [self _scheduleSaveProgressHUD];
-                self.saveSessionInProgress = YES;
-                dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-                    // Returns only on FAILURE: on success the process is gone,
-                    // so there is no value to inspect -- the reason is read
-                    // from checkpoint_get_status below.
-                    (void) ISHSuspendSessionSuspendAndExit();
-                    struct checkpoint_status ck;
-                    checkpoint_get_status(&ck);
-                    dispatch_async(dispatch_get_main_queue(), ^{
-                        self.saveSessionInProgress = NO;
-                        [self _dismissSaveProgressHUDThen:^{
-                            [self showMessage:@"Session not suspended"
-                                     subtitle:ck.last_refusal[0] != '\0'
-                                              ? @(ck.last_refusal)
-                                              : @"iSH-AOK could not write the session."];
-                        }];
+                // The Wayland desktop and GPU programs cannot be saved: ask first.
+                ISHSuspendSessionConfirmGPUThen(self, @"Suspend", ^(BOOL leaveOutGPU) {
+                    [self _scheduleSaveProgressHUD];
+                    self.saveSessionInProgress = YES;
+                    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+                        // Returns only on FAILURE: on success the process is gone,
+                        // so there is no value to inspect -- the reason is read
+                        // from checkpoint_get_status below.
+                        (void) ISHSuspendSessionSuspendAndExit(leaveOutGPU);
+                        struct checkpoint_status ck;
+                        checkpoint_get_status(&ck);
+                        dispatch_async(dispatch_get_main_queue(), ^{
+                            self.saveSessionInProgress = NO;
+                            [self _dismissSaveProgressHUDThen:^{
+                                [self showMessage:@"Session not suspended"
+                                         subtitle:ck.last_refusal[0] != '\0'
+                                                  ? @(ck.last_refusal)
+                                                  : @"iSH-AOK could not write the session."];
+                            }];
+                        });
                     });
                 });
             }]];
@@ -1351,32 +1354,35 @@ static const NSTimeInterval kSaveProgressDelay = 0.4;
 - (void)saveSessionFromBar:(__unused id)sender {
     if (self.saveSessionInProgress)
         return;
-    self.saveSessionInProgress = YES;
-    self.saveSessionButton.enabled = NO;
-    [self _scheduleSaveProgressHUD];
+    // The Wayland desktop and GPU programs cannot be saved: ask first.
+    ISHSuspendSessionConfirmGPUThen(self, @"Save", ^(BOOL leaveOutGPU) {
+        self.saveSessionInProgress = YES;
+        self.saveSessionButton.enabled = NO;
+        [self _scheduleSaveProgressHUD];
 
-    // OFF the main thread: the save freezes every guest task, writes the image
-    // and thaws before it returns. The guest is stopped for that time either
-    // way -- it is the UI that must not be. Measured at ~260ms for a nine
-    // process session, which is why the confirmation below has to linger: the
-    // work is over before a spinner would have finished appearing.
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-        int err = ISHSuspendSessionSaveNow();
-        struct checkpoint_status ck;
-        checkpoint_get_status(&ck);
-        dispatch_async(dispatch_get_main_queue(), ^{
-            self.saveSessionInProgress = NO;
-            self.saveSessionButton.enabled = YES;
-            [self _dismissSaveProgressHUDThen:^{
-                if (err == 0) {
-                    [self flashSaveSessionConfirmation];
-                    return;
-                }
-                [self showMessage:@"Session not saved"
-                         subtitle:ck.last_refusal[0] != '\0'
-                                  ? @(ck.last_refusal)
-                                  : @"iSH-AOK could not write the session."];
-            }];
+        // OFF the main thread: the save freezes every guest task, writes the image
+        // and thaws before it returns. The guest is stopped for that time either
+        // way -- it is the UI that must not be. Measured at ~260ms for a nine
+        // process session, which is why the confirmation below has to linger: the
+        // work is over before a spinner would have finished appearing.
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+            int err = ISHSuspendSessionSaveNow(leaveOutGPU);
+            struct checkpoint_status ck;
+            checkpoint_get_status(&ck);
+            dispatch_async(dispatch_get_main_queue(), ^{
+                self.saveSessionInProgress = NO;
+                self.saveSessionButton.enabled = YES;
+                [self _dismissSaveProgressHUDThen:^{
+                    if (err == 0) {
+                        [self flashSaveSessionConfirmation];
+                        return;
+                    }
+                    [self showMessage:@"Session not saved"
+                             subtitle:ck.last_refusal[0] != '\0'
+                                      ? @(ck.last_refusal)
+                                      : @"iSH-AOK could not write the session."];
+                }];
+            });
         });
     });
 }

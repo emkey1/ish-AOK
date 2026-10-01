@@ -377,11 +377,43 @@ def test_suspend(sim, f):
             f.check(False, "%s's shell answered after the resume" % name)
 
 
+def test_gpu(sim, f):
+    # The Wayland desktop and GPU programs cannot be saved. Asked, the user may
+    # save everything else; the holder keeps running.
+    print("gpu: Save Session with a GPU holder -- Cancel, then Save Anyway")
+    sim.forget_sessions()
+    sim.launch()
+    sim.enter_workspace()
+    sim.command("open-terminal")
+    d = sim.wait_for_terminals(1)
+    w = sim.terminals(d)[0]["id"]
+    sim.command("type", w, 0, "sleep 600 5<>/dev/dri/renderD128 & echo HOLDER=$!\\r")
+    sim.wait_for_text(w, 0, "HOLDER=", 60)
+    before = sim.dump()["saves"]
+    sim.command("menu-save")
+    sim.wait(lambda: sim.command("tap", "Cancel") is not None, 30, "the GPU prompt")
+    time.sleep(3)
+    f.check(sim.dump()["saves"] == before, "Cancel saved nothing")
+    sim.command("menu-save")
+    sim.wait(lambda: sim.command("tap", "Save Anyway") is not None, 30, "the GPU prompt again")
+    sim.wait(lambda: sim.dump()["saves"] > before, 120, "the save")
+    d = sim.dump()
+    f.check(d["lastError"] == 0, "Save Anyway saved (%s)" % d.get("lastRefusal"))
+    f.check(d["leftOut"] >= 1 and "sleep" in d["leftOutNote"],
+            "the holder was left out (%s: %s)" % (d["leftOut"], d["leftOutNote"]))
+    sim.command("type", w, 0, "kill -0 %1 && echo STILL-RUNNING\\r")
+    try:
+        sim.wait_for_text(w, 0, "STILL-RUNNING", 30)
+        f.check(True, "the holder is still running after the save")
+    except RuntimeError:
+        f.check(False, "the holder is still running after the save")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--app", required=True)
     parser.add_argument("--rootfs", default=os.path.join(REPO, "alpine-minirootfs-3.24.2-aarch64.tar.xz"))
-    parser.add_argument("--only", choices=("arrangement", "suspend"))
+    parser.add_argument("--only", choices=("arrangement", "suspend", "gpu"))
     parser.add_argument("--keep", action="store_true", help="leave the app running at the end")
     args = parser.parse_args()
 
@@ -389,7 +421,7 @@ def main():
     sim.ensure_device()
     sim.install()
     f = Failures()
-    tests = {"arrangement": test_arrangement, "suspend": test_suspend}
+    tests = {"arrangement": test_arrangement, "suspend": test_suspend, "gpu": test_gpu}
     for name, test in tests.items():
         if args.only and args.only != name:
             continue
