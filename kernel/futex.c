@@ -646,7 +646,7 @@ static int futex_read_timeout(guest_addr_t timeout_addr, bool time64, struct tim
         if (user_get(timeout_addr, timeout_guest))
             return _EFAULT;
         timeout->tv_sec = timeout_guest.sec;
-        timeout->tv_nsec = timeout_guest.nsec;
+        timeout->tv_nsec = timespec64_nsec_from_guest(timeout_guest.nsec);
     }
     if (timeout->tv_sec < 0 || timeout->tv_nsec < 0 || timeout->tv_nsec >= 1000000000)
         return _EINVAL;

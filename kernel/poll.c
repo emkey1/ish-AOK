@@ -824,7 +824,7 @@ dword_t sys_pselect_time64(fd_t nfds, addr_t readfds_addr, addr_t writefds_addr,
         if (user_get(timeout_addr, timeout_timespec))
             return _EFAULT;
         timeout_ts.tv_sec = timeout_timespec.sec;
-        timeout_ts.tv_nsec = timeout_timespec.nsec;
+        timeout_ts.tv_nsec = timespec64_nsec_from_guest(timeout_timespec.nsec);
         if (!select_timeout_valid(timeout_ts))
             return _EINVAL;
         timeout_ts_ptr = &timeout_ts;

@@ -85,6 +85,13 @@ struct timespec64_ {
     int64_t sec;
     int64_t nsec;
 };
+// The tv_nsec of a struct timespec64_ read from the guest. For a 32-bit guest
+// (i386's *_time64 calls) it is a 32-bit long followed by 4 bytes of padding
+// that musl and glibc never fill, so only the low half counts -- Linux's
+// get_timespec64 masks it under in_compat_syscall(). Reading all 64 bits made
+// stack garbage in the padding an EINVAL: futex_time64 rejected FUTEX_WAIT_BITSET
+// deadlines on the device, where that word happened not to be zero.
+int64_t timespec64_nsec_from_guest(int64_t nsec);
 struct timezone_ {
     dword_t minuteswest;
     dword_t dsttime;

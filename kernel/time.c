@@ -153,9 +153,9 @@ static struct itimerspec_ timer_spec_from_real(struct timer_spec spec) {
 static struct timer_spec timer_spec_to_real64(struct itimerspec64_ itspec) {
     struct timer_spec spec = {
         .value.tv_sec = itspec.value.sec,
-        .value.tv_nsec = itspec.value.nsec,
+        .value.tv_nsec = timespec64_nsec_from_guest(itspec.value.nsec),
         .interval.tv_sec = itspec.interval.sec,
-        .interval.tv_nsec = itspec.interval.nsec,
+        .interval.tv_nsec = timespec64_nsec_from_guest(itspec.interval.nsec),
     };
     return spec;
 };
@@ -190,10 +190,16 @@ static struct timespec timespec_from_guest(struct timespec_ ts) {
     };
 }
 
+int64_t timespec64_nsec_from_guest(int64_t nsec) {
+    if (current != NULL && !task_is_64bit(current))
+        return (int64_t) (uint32_t) nsec;
+    return nsec;
+}
+
 static struct timespec timespec_from_guest64(struct timespec64_ ts) {
     return (struct timespec) {
         .tv_sec = ts.sec,
-        .tv_nsec = ts.nsec,
+        .tv_nsec = timespec64_nsec_from_guest(ts.nsec),
     };
 }
 
@@ -650,6 +656,7 @@ dword_t sys_ppoll_time64(addr_t fds, dword_t nfds, addr_t timeout_addr, addr_t s
         struct timespec64_ timeout_timespec;
         if (user_get(timeout_addr, timeout_timespec))
             return _EFAULT;
+        timeout_timespec.nsec = timespec64_nsec_from_guest(timeout_timespec.nsec);
         if (timeout_timespec.sec < 0 || timeout_timespec.nsec < 0 || timeout_timespec.nsec >= 1000000000)
             return _EINVAL;
 
@@ -956,7 +963,7 @@ static dword_t clock_settime_common(dword_t clock, guest_addr_t tp, bool time64)
         if (user_get(tp, guest_ts))
             return _EFAULT;
         ts.tv_sec = (time_t) guest_ts.sec;
-        ts.tv_nsec = (long) guest_ts.nsec;
+        ts.tv_nsec = (long) timespec64_nsec_from_guest(guest_ts.nsec);
     } else if (read_guest_timespec_abi(current->abi, tp, &ts)) {
         return _EFAULT;
     }

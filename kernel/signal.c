@@ -4429,7 +4429,7 @@ static int_t sys_rt_sigtimedwait_common(guest_addr_t set_addr, guest_addr_t info
             if (user_get(timeout_addr, fake_timeout))
                 return _EFAULT;
             timeout.tv_sec = fake_timeout.sec;
-            timeout.tv_nsec = fake_timeout.nsec;
+            timeout.tv_nsec = timespec64_nsec_from_guest(fake_timeout.nsec);
         } else {
             struct timespec_ fake_timeout;
             if (user_get(timeout_addr, fake_timeout))

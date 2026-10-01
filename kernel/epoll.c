@@ -440,7 +440,7 @@ int_t sys_epoll_pwait2_guest(fd_t epoll_f, guest_addr_t events_addr, int_t max_e
         if (user_get(timeout_addr, timeout_ts64))
             return _EFAULT;
         timeout_ts.tv_sec = timeout_ts64.sec;
-        timeout_ts.tv_nsec = timeout_ts64.nsec;
+        timeout_ts.tv_nsec = timespec64_nsec_from_guest(timeout_ts64.nsec);
         if (timeout_ts.tv_sec < 0 || timeout_ts.tv_nsec < 0 || timeout_ts.tv_nsec >= 1000000000)
             return _EINVAL;
         timeout_ts_ptr = &timeout_ts;
