@@ -119,19 +119,26 @@ class Sim:
         if not os.path.isdir(os.path.join(root, "data")):
             os.makedirs(os.path.dirname(root), exist_ok=True)
             run(os.path.join(REPO, "build", "tools", "fakefsify"), self.rootfs, root)
-        self.defaults("write", BUNDLE, "Default Root", "-string", ROOT_NAME)
-        self.defaults("write", BUNDLE, "Suspend To Disk", "-bool", "YES")
+        self.defaults("write", "Default Root", "-string", ROOT_NAME)
+        self.defaults("write", "Suspend To Disk", "-bool", "YES")
 
     def forget_sessions(self):
-        """No saved session, so a launch boots fresh instead of asking."""
+        """No saved session and no saved arrangement: a launch boots fresh,
+        without asking, and opens nothing an earlier run left behind."""
         self.terminate()
+        for key in ("ISHWorkspaceSavedDesktops", "ISHWorkspaceSavedLayout", "ISHWorkspaceSavedLayoutTimes"):
+            self.defaults("delete", key)
         sessions = os.path.join(self.group_dir, "sessions")
         if os.path.isdir(sessions):
             for name in os.listdir(sessions):
                 os.unlink(os.path.join(sessions, name))
 
-    def defaults(self, *args):
-        simctl("spawn", self.udid, "defaults", *args)
+    def defaults(self, verb, key, *value):
+        # By the app's own plist, as a path domain: `defaults ... app.ish.iSH-AOK`
+        # from simctl spawn reads and writes some other file, so a delete there
+        # removed nothing and a read said every key was absent.
+        domain = os.path.join(self.data_dir(), "Library", "Preferences", BUNDLE)
+        simctl("spawn", self.udid, "defaults", verb, domain, key, *value, check=verb != "delete")
 
     def data_dir(self):
         return simctl("get_app_container", self.udid, BUNDLE, "data").strip()
@@ -237,8 +244,9 @@ def window_with(dump, marker):
     return None, None
 
 
-def build_scenario(sim, tag):
-    """Two terminals: A alone on Desktop 2, B with two tabs on Desktop 1.
+def build_scenario(sim, tag, extra=0):
+    """Two terminals: A alone on Desktop 2, B with two tabs on Desktop 1; and
+    `extra` more two-tab windows, C1.., on Desktop 1 where they open.
 
     Returns {name: (window id, tab, shell pid)} and the dump."""
     sim.enter_workspace()
@@ -258,15 +266,26 @@ def build_scenario(sim, tag):
     sim.command("assign", a, 1)
     sim.command("assign", b, 0)
     sim.command("switch", 0)
+    tabs = {"A": (a, 0), "B0": (b, 0), "B1": (b, 1)}
+    for n in range(1, extra + 1):
+        known = {w["id"] for w in sim.terminals(sim.dump())}
+        sim.command("open-terminal")
+        d = sim.wait_for_terminals(len(known) + 1)
+        c = [w for w in sim.terminals(d) if w["id"] not in known][0]["id"]
+        sim.command("new-tab", c)
+        sim.wait(lambda: len([w for w in sim.terminals(sim.dump()) if w["id"] == c][0]["tabs"]) == 2,
+                 30, "C%d's second tab" % n)
+        tabs["C%d-0" % n] = (c, 0)
+        tabs["C%d-1" % n] = (c, 1)
     shells = {}
-    for name, (window, tab) in {"A": (a, 0), "B0": (b, 0), "B1": (b, 1)}.items():
+    for name, (window, tab) in tabs.items():
         marker = "%s-%s" % (tag, name)
         # The shell prints its own pid after the marker: the pid is what a
         # resume has to give back, and the marker finds the window again.
         sim.command("type", window, tab, "echo %s=$$\\r" % marker)
         sim.wait_for_text(window, tab, marker + "=", 60)
     d = sim.dump()
-    for name in ("A", "B0", "B1"):
+    for name in tabs:
         marker = "%s-%s=" % (tag, name)
         w, index = window_with(d, marker)
         contents = w["tabs"][index]["contents"]
@@ -299,7 +318,7 @@ def test_arrangement(sim, f):
     except RuntimeError:
         d = sim.dump()
     terms = sim.terminals(d)
-    f.check(len(terms) >= 2, "both terminal windows back (found %d)" % len(terms))
+    f.check(len(terms) == 2, "both terminal windows back, and no others (found %d)" % len(terms))
     by_tabs = sorted(terms, key=lambda w: len(w["tabs"]))
     if len(terms) >= 2:
         single, double = by_tabs[0], by_tabs[-1]
@@ -316,10 +335,12 @@ def test_arrangement(sim, f):
 
 
 def test_suspend(sim, f):
-    print("suspend: suspend to disk, relaunch, the same live shells back")
+    # Nine sessions: the restore used to publish only eight, and the rest came
+    # back as fresh shells under the old scrollback.
+    print("suspend: suspend to disk, relaunch, the same live shells back (9 sessions)")
     sim.forget_sessions()
     sim.launch()
-    shells, d = build_scenario(sim, "SUS")
+    shells, d = build_scenario(sim, "SUS", extra=3)
     want = snapshot(d, shells)
     sim.command("suspend-exit", wait=False)
     sim.wait(lambda: not sim.running(), 120, "the suspend to exit the app")

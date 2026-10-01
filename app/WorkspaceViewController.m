@@ -95,6 +95,7 @@
 - (void)applyInitialPlacementToLauncherWindow:(ISHWorkspaceContainedWindowView *)windowView;
 - (void)persistLauncherWindowFrame;
 - (void)restoreLauncherWindowPlacement;
+- (nullable ISHWorkspaceContainedWindowView *)openTerminalWindowForArrangementDescriptor:(NSDictionary<NSString *, id> *)descriptor;
 - (void)persistDockWindowFrame;
 - (NSString *)persistentDockWindowDescriptorDefaultsKey;
 - (void)applyInitialPlacementToDockWindow:(ISHWorkspaceContainedWindowView *)windowView;
@@ -4908,9 +4909,10 @@ static NSString *ISHWorkspaceDesktopNamesSignature(NSArray<NSString *> *names) {
             windowView.closeHandler();
     }
 
-    // Terminals are MOVED, never made and never closed. One whose window is gone
-    // is simply not mentioned again -- bringing it back is the checkpoint's job,
-    // not this one's.
+    // Terminals are moved, and never closed: closing one kills a shell. One
+    // whose window is gone -- every one, after a relaunch -- is opened fresh in
+    // its place (openTerminalWindowForArrangementDescriptor:); bringing back the
+    // SHELL it had is the checkpoint's job, not this one's.
     for (NSDictionary<NSString *, id> *descriptor in terminalDescriptors) {
         NSString *displayString = descriptor[@"terminalUUID"];
         NSString *sessionString = descriptor[@"sessionTerminalUUID"];
@@ -4922,6 +4924,8 @@ static NSString *ISHWorkspaceDesktopNamesSignature(NSArray<NSString *> *names) {
             displayUUID != nil ? [self desktopWindowDisplayingTerminalUUID:displayUUID] : nil;
         if (windowView == nil && sessionUUID != nil)
             windowView = [self desktopWindowHostingTerminalUUID:sessionUUID];
+        if (windowView == nil)
+            windowView = [self openTerminalWindowForArrangementDescriptor:descriptor];
         if (windowView == nil)
             continue;
         [self applySavedFrameDescriptor:descriptor[@"frame"]
@@ -7965,22 +7969,23 @@ static UIResponder *ISHWorkspaceFirstResponderAmongViewControllers(UIViewControl
     [sheet presentFromViewController:self sourceView:anchor sourceRect:anchor.bounds];
 }
 
-- (void)openDesktopTerminalHerePreferringConsole:(BOOL)preferConsole
-                                  reuseExisting:(BOOL)reuseExisting
-                                trackPrimaryRole:(BOOL)trackPrimaryRole {
+// Returns the window it opened or focused, or nil.
+- (nullable ISHWorkspaceContainedWindowView *)openDesktopTerminalHerePreferringConsole:(BOOL)preferConsole
+                                                                        reuseExisting:(BOOL)reuseExisting
+                                                                      trackPrimaryRole:(BOOL)trackPrimaryRole {
     NSString *terminalRole = preferConsole ? ISHWorkspaceTerminalRoleSystemConsole : ISHWorkspaceTerminalRoleSessionShell;
     if (reuseExisting) {
         ISHWorkspaceContainedWindowView *existingWindow = [self desktopWindowForTerminalRole:terminalRole];
         if (existingWindow != nil) {
             [self focusDesktopWindow:existingWindow];
-            return;
+            return existingWindow;
         }
     }
 
     TerminalViewController *terminalViewController = [self createDesktopTerminalViewController];
     if (terminalViewController == nil) {
         [self presentSceneActivationError:nil];
-        return;
+        return nil;
     }
     terminalViewController.freshSessionTerminalDisplayMode =
         preferConsole ? ISHFreshSessionTerminalDisplayModeSystemConsole
@@ -8011,6 +8016,30 @@ static UIResponder *ISHWorkspaceFirstResponderAmongViewControllers(UIViewControl
         windowView.titleLabel.text = title;
     }
     [self refreshDockButtons];
+    return windowView;
+}
+
+// A terminal a saved arrangement names whose window is not here -- the case on
+// every launch, since the Terminal it named went with the last process. It
+// comes back as a fresh shell in a window of the same kind, with as many tabs
+// as it had: an arrangement carries no processes, and a terminal that is
+// simply missing read as "layouts do not save terminals". A Session Shell or
+// System Console that IS open is used rather than doubled, as everywhere else.
+- (nullable ISHWorkspaceContainedWindowView *)openTerminalWindowForArrangementDescriptor:(NSDictionary<NSString *, id> *)descriptor {
+    NSString *role = [descriptor[@"terminalRole"] isKindOfClass:NSString.class] ? descriptor[@"terminalRole"] : nil;
+    BOOL console = [role isEqualToString:ISHWorkspaceTerminalRoleSystemConsole];
+    BOOL primary = console || [role isEqualToString:ISHWorkspaceTerminalRoleSessionShell];
+    ISHWorkspaceContainedWindowView *windowView =
+        [self openDesktopTerminalHerePreferringConsole:console reuseExisting:primary trackPrimaryRole:primary];
+    if (windowView == nil)
+        return nil;
+    NSArray *savedTabs = [descriptor[@"tabs"] isKindOfClass:NSArray.class] ? descriptor[@"tabs"] : nil;
+    NSUInteger have = [self terminalViewControllersInWindow:windowView].count;
+    for (NSUInteger tab = have; tab < savedTabs.count; tab++)
+        [self openNewTerminalTabInWindow:windowView];
+    if (savedTabs.count > 1)
+        [[self terminalTabsForWindow:windowView] selectTabAtIndex:[descriptor[@"selectedTab"] integerValue]];
+    return windowView;
 }
 
 - (void)openTerminalHerePreferringConsole:(BOOL)preferConsole {

@@ -3544,8 +3544,14 @@ struct tty *(*checkpoint_open_session_tty)(void);
 // show them. Not part of ckpt_restore_state: the restore is over long before
 // the first terminal view controller asks, and there may be several launches
 // worth of view controllers.
-static struct checkpoint_restored_session ckpt_sessions[8];
-static unsigned ckpt_session_count, ckpt_session_taken;
+//
+// As many as the image has. This was a fixed eight, and the ninth pseudo-
+// terminal on was never published: its shell ran on with nothing showing it,
+// and the window that had shown it -- asking by pid and finding no match --
+// took a fresh session and painted the old scrollback over it. Seven Terminal
+// windows and tabs came back live and the rest silently did not.
+static struct checkpoint_restored_session *ckpt_sessions;
+static unsigned ckpt_session_count, ckpt_session_taken, ckpt_session_cap;
 
 // Every process exit, when ISH_CHECKPOINT_DEBUG is on. A restored guest that
 // comes back and then quietly falls over is the failure mode this feature has
@@ -6024,9 +6030,15 @@ int checkpoint_restore(const char *host_path) {
     // restore that failed half way leaves tasks that are about to be torn
     // down, and a window adopting one of those would show a corpse.
     ckpt_session_count = ckpt_session_taken = 0;
-    for (uint32_t i = 0; i < st.set_count &&
-                         ckpt_session_count < (sizeof(ckpt_sessions) /
-                                               sizeof(ckpt_sessions[0])); i++) {
+    if (st.set_count > ckpt_session_cap) {
+        struct checkpoint_restored_session *grown =
+            realloc(ckpt_sessions, st.set_count * sizeof(*grown));
+        if (grown != NULL) {
+            ckpt_sessions = grown;
+            ckpt_session_cap = st.set_count;
+        }
+    }
+    for (uint32_t i = 0; i < st.set_count && ckpt_session_count < ckpt_session_cap; i++) {
         if (st.sets[i].kind != CKPT_TTY_PTS || st.sets[i].terminal == NULL)
             continue;
         ckpt_sessions[ckpt_session_count++] = (struct checkpoint_restored_session) {

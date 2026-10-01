@@ -60,7 +60,7 @@
 - (nullable id)terminalTabsForWindow:(UIView *)windowView;
 - (NSArray<TerminalViewController *> *)terminalViewControllersInWindow:(UIView *)windowView;
 - (void)openNewTerminalTabInWindow:(UIView *)windowView;
-- (void)openDesktopTerminalHerePreferringConsole:(BOOL)preferConsole
+- (nullable UIView *)openDesktopTerminalHerePreferringConsole:(BOOL)preferConsole
                                   reuseExisting:(BOOL)reuseExisting
                                 trackPrimaryRole:(BOOL)trackPrimaryRole;
 - (void)assignRestoredWindow:(UIView *)windowView toDesktopFromDescriptor:(NSDictionary<NSString *, id> *)descriptor;
