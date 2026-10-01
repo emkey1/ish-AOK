@@ -115,6 +115,9 @@ extern CGFloat ISHWorkspaceTextScaledRowHeight(CGFloat height, CGFloat scale);
 // belongs to the machine being resumed; pass nil (a background save, with no
 // particular image in hand) and it lands in the shared defaults as before.
 void ISHWorkspaceCaptureLayoutForSuspend(NSString *_Nullable imagePath);
+// The Workspace on screen, or nil in shell mode. For app/WorkspaceTestHooks.m.
+@class WorkspaceViewController;
+WorkspaceViewController *_Nullable ISHWorkspaceCurrentController(void);
 // The layout filed with that image, or nil if it has none.
 NSArray<NSDictionary<NSString *, id> *> *_Nullable ISHWorkspaceLayoutForSessionImage(NSString *_Nullable imagePath);
 // Remove an image's layout when the image itself goes.

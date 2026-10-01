@@ -262,6 +262,7 @@
 		C0A200042F2F000100000001 /* ISHAppShortcuts.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0A200042F2F000100000002 /* ISHAppShortcuts.swift */; };
 		C0A200042F2F000100000003 /* ISHRunCommandIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0A200042F2F000100000004 /* ISHRunCommandIntent.swift */; };
 		C0A200042F2F000100000005 /* GuestCommandRunner.m in Sources */ = {isa = PBXBuildFile; fileRef = C0A200042F2F000100000006 /* GuestCommandRunner.m */; };
+		C0A200042F2F0001000000A2 /* WorkspaceTestHooks.m in Sources */ = {isa = PBXBuildFile; fileRef = C0A200042F2F0001000000A1 /* WorkspaceTestHooks.m */; };
 		C3060403DA76F382061A1170 /* DisplayRFBClient.m in Sources */ = {isa = PBXBuildFile; fileRef = 704575CA466EF25ECC14EA7B /* DisplayRFBClient.m */; };
 		C9DC7E00D7ACBDB0B88FAE97 /* LLMChatSettings.m in Sources */ = {isa = PBXBuildFile; fileRef = 37D9BDEB8D8CF285B64CA4C9 /* LLMChatSettings.m */; };
 		DC09D58C8595F3ACD279A0D2 /* AudioPlayerEngine.m in Sources */ = {isa = PBXBuildFile; fileRef = 59516B05C7A2120D1EE19975 /* AudioPlayerEngine.m */; };
@@ -803,6 +804,7 @@
 		C0A200042F2F000100000002 /* ISHAppShortcuts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ISHAppShortcuts.swift; sourceTree = "<group>"; };
 		C0A200042F2F000100000004 /* ISHRunCommandIntent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ISHRunCommandIntent.swift; sourceTree = "<group>"; };
 		C0A200042F2F000100000006 /* GuestCommandRunner.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = GuestCommandRunner.m; sourceTree = "<group>"; };
+		C0A200042F2F0001000000A1 /* WorkspaceTestHooks.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WorkspaceTestHooks.m; sourceTree = "<group>"; };
 		C0A200042F2F000100000007 /* GuestCommandRunner.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = GuestCommandRunner.h; sourceTree = "<group>"; };
 		C0A200042F2F000100000008 /* ShortcutActivityBridge.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ShortcutActivityBridge.h; sourceTree = "<group>"; };
 		C100D3488E931E73E9A1AC8C /* WorkspaceImageViewer.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; path = WorkspaceImageViewer.h; sourceTree = "<group>"; };
@@ -1509,6 +1511,7 @@
 				C0A200042F2F000100000004 /* ISHRunCommandIntent.swift */,
 				C0A200042F2F000100000007 /* GuestCommandRunner.h */,
 				C0A200042F2F000100000006 /* GuestCommandRunner.m */,
+				C0A200042F2F0001000000A1 /* WorkspaceTestHooks.m */,
 				C0A200042F2F000100000008 /* ShortcutActivityBridge.h */,
 			);
 			name = About;
@@ -2323,6 +2326,7 @@
 				8D457CFF8048C780CA8A5561 /* DisplayRFBView.m in Sources */,
 				A143B4E425BDFAE03A1725CD /* AOKFoundationModelsBridge.swift in Sources */,
 				C0A200042F2F000100000005 /* GuestCommandRunner.m in Sources */,
+				C0A200042F2F0001000000A2 /* WorkspaceTestHooks.m in Sources */,
 				BB28C8F326896C1D00BDC834 /* SwapFilePicker.m in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

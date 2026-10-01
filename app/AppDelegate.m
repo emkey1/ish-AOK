@@ -50,6 +50,7 @@
 #import "UIApplication+OpenURL.h"
 #import "UIViewController+Extras.h"
 #import "WorkspaceViewController.h"
+#import "WorkspaceTestHooks.h"
 #include "kernel/init.h"
 #include "kernel/calls.h"
 #include "kernel/task.h"
@@ -5117,6 +5118,9 @@ static UINavigationController *CreateAboutNavigationController(BOOL recoveryMode
 }
 
 - (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
+    // tests/workspace/restore_test.sh's remote control; inert without
+    // ISH_WORKSPACE_TEST=1 in the environment.
+    ISHWorkspaceTestHooksStart();
     [ISHDiagnosticsStore recordLaunchStage:@"application.didFinishLaunching"
                                    details:launchOptions.count != 0 ? @{@"launchOptions": launchOptions.description} : nil];
     [ISHDiagnosticsStore recordBreadcrumb:@"application.didFinishLaunching"

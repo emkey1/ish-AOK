@@ -17087,6 +17087,10 @@ static void ISHWorkspaceWriteLayoutBesideImage(WorkspaceViewController *workspac
     [layout writeToFile:path atomically:YES];
 }
 
+WorkspaceViewController *ISHWorkspaceCurrentController(void) {
+    return ISHWorkspaceActiveController;
+}
+
 void ISHWorkspaceCaptureLayoutForSuspend(NSString *imagePath) {
     WorkspaceViewController *workspace = ISHWorkspaceActiveController;
     if (workspace == nil)
