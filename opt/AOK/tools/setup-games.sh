@@ -221,12 +221,43 @@ cp "$WRAPPER_SRC" "$WRAPPER" && chmod 755 "$WRAPPER" || die "could not write $WR
 for name in $WRAPPED $MORE_WRAPPED; do
     [ -e "/usr/games/$name" ] || continue
     ln -sf aok-sdl-game "/usr/local/bin/$name"
-    # The desktop menu reads only /usr/share/applications; an entry naming
-    # /usr/games/<game> outright would skip the wrapper.
+    # An entry naming /usr/games/<game> outright would skip the wrapper.
     for f in /usr/share/applications/*.desktop; do
         [ -f "$f" ] && grep -q "^Exec=/usr/games/$name\( \|$\)" "$f" &&
             sed -i "s|^Exec=/usr/games/$name|Exec=$name|" "$f"
     done
+done
+
+# Chocolate Doom's package also starts Heretic, Hexen and Strife, which are
+# commercial games: nothing free stands in for their data the way Freedoom does
+# for Doom's, so their menu entries opened only a "No IWAD was found" error
+# box. Each is hidden by an override in /usr/local/share/applications (the
+# desktop menu and launchers honour it) until its IWAD is installed; running
+# this again then shows it.
+mkdir -p /usr/local/share/applications
+for game in Heretic Hexen Strife; do
+    case $game in
+        Heretic) wads="heretic.wad heretic1.wad" ;;
+        Hexen)   wads="hexen.wad" ;;
+        Strife)  wads="strife1.wad" ;;
+    esac
+    [ -f "/usr/share/applications/org.chocolate_doom.$game.desktop" ] || continue
+    override=/usr/local/share/applications/org.chocolate_doom.$game.desktop
+    have=
+    for dir in /usr/share/games/doom /usr/local/share/games/doom ${DOOMWADDIR:-}; do
+        for wad in $wads; do
+            upper=$(printf '%s' "$wad" | tr a-z A-Z)
+            { [ -f "$dir/$wad" ] || [ -f "$dir/$upper" ]; } && have=1
+        done
+    done
+    if [ -z "$have" ]; then
+        printf '%s\n' "[Desktop Entry]" "Type=Application" "Name=Chocolate $game" \
+            "# Hidden by /AOK/tools/setup-games.sh: none of $wads is installed." \
+            "NoDisplay=true" > "$override"
+        note "Chocolate $game hidden from the menu: it needs $wads (commercial)"
+    elif grep -q "setup-games.sh" "$override" 2>/dev/null; then
+        rm -f "$override"
+    fi
 done
 
 log "writing $CONF"

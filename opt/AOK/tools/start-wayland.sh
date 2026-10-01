@@ -708,8 +708,15 @@ set -u
 MAP_FILE="$(mktemp)"
 trap 'rm -f "$MAP_FILE"' EXIT INT TERM
 
-for f in /usr/share/applications/*.desktop; do
+# The same entries list-apps.sh offers, overrides included (see there).
+local_apps=/usr/local/share/applications
+user_apps=$HOME/.local/share/applications
+for d in /usr/share/applications "$local_apps" "$user_apps"; do
+  for f in "$d"/*.desktop; do
     [ -f "$f" ] || continue
+    b=${f##*/}
+    [ "$d" != "$user_apps" ] && [ -f "$user_apps/$b" ] && continue
+    [ "$d" = /usr/share/applications ] && [ -f "$local_apps/$b" ] && continue
     awk '
         /^NoDisplay=true/ { hidden=1 }
         /^Hidden=true/ { hidden=1 }
@@ -728,6 +735,7 @@ for f in /usr/share/applications/*.desktop; do
             printf "%s\t%s\n", name, execline
         }
     ' "$f" >> "$MAP_FILE"
+  done
 done
 
 [ -s "$MAP_FILE" ] || exit 0
@@ -845,7 +853,24 @@ if [ "$COMPOSITOR_CMD" = "labwc" ]; then
     # a user would hand-edit, and it needs to actually pick up fixes.
     cat > "$HOME/.config/labwc/list-apps.sh" <<'LIST_APPS_EOF'
 #!/bin/sh
-set -- /usr/share/applications/*.desktop
+# The menu's entries, by the freedesktop rule: a file of the same name in
+# /usr/local/share/applications or ~/.local/share/applications replaces the
+# packaged one (the user's above both), and entries only there count too.
+# setup-games.sh hides a game whose data is not installed that way -- Chocolate
+# Heretic, Hexen and Strife need commercial IWADs, and without them each one
+# opened a "No IWAD was found" error box. No forks: this has labwc's 4 s.
+local_apps=/usr/local/share/applications
+user_apps=$HOME/.local/share/applications
+set --
+for d in /usr/share/applications "$local_apps" "$user_apps"; do
+    for f in "$d"/*.desktop; do
+        [ -f "$f" ] || continue
+        b=${f##*/}
+        [ "$d" != "$user_apps" ] && [ -f "$user_apps/$b" ] && continue
+        [ "$d" = /usr/share/applications ] && [ -f "$local_apps/$b" ] && continue
+        set -- "$@" "$f"
+    done
+done
 echo '<openbox_pipe_menu>'
 # The panel's switch (panel.sh), labelled by whether waybar is running now.
 if command -v waybar >/dev/null 2>&1; then
@@ -853,7 +878,7 @@ if command -v waybar >/dev/null 2>&1; then
     printf '<item label="%s"><action name="Execute" command="%s/.config/labwc/panel.sh toggle"/></item>\n<separator/>\n' \
         "$panel_label" "$HOME"
 fi
-if [ -e "$1" ]; then
+if [ $# -gt 0 ]; then
     awk -v max_items=24 '
         function xml(s) {
             gsub(/&/, "\\&amp;", s); gsub(/</, "\\&lt;", s); gsub(/>/, "\\&gt;", s); gsub(/"/, "\\&quot;", s)
