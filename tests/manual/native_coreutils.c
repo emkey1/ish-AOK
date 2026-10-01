@@ -578,6 +578,54 @@ static const struct cu_case cases[] = {
      "", 0, 1, NULL},
     {"ls", "-z", NULL, 0,
      "", 0, 2, NULL},
+    {"diff", "data.txt data.txt", NULL, 0,
+     "", 0, 0, NULL},
+    {"diff", "data.txt lines.txt", NULL, 0,
+     "1,5c1,12\n< alpha 3 x\n< beta 1 y\n< gamma 2 z\n< alpha 3 x\n< delta 10 w\n---\n> one\n> two\n> three\n> four\n> five\n> six\n> seven\n> eight\n> nine\n> ten\n> eleven\n> twelve\n", 160, 1, NULL},
+    {"diff", "-q data.txt lines.txt", NULL, 0,
+     "Files data.txt and lines.txt differ\n", 36, 1, NULL},
+    {"diff", "-s data.txt data.txt", NULL, 0,
+     "Files data.txt and data.txt are identical\n", 42, 0, NULL},
+    {"diff", "nonl.txt empty.txt", NULL, 0,
+     "1d0\n< no newline\n\\ No newline at end of file\n", 45, 1, NULL},
+    {"diff", "empty.txt nonl.txt", NULL, 0,
+     "0a1\n> no newline\n\\ No newline at end of file\n", 45, 1, NULL},
+    {"diff", "-u --label A --label B data.txt lines.txt", NULL, 0,
+     "--- A\n+++ B\n@@ -1,5 +1,12 @@\n-alpha 3 x\n-beta 1 y\n-gamma 2 z\n-alpha 3 x\n-delta 10 w\n+one\n+two\n+three\n+four\n+five\n+six\n+seven\n+eight\n+nine\n+ten\n+eleven\n+twelve\n", 159, 1, NULL},
+    {"diff", "-U1 --label A --label B data.txt text.txt", NULL, 0,
+     "--- A\n+++ B\n@@ -1,5 +1,3 @@\n-alpha 3 x\n-beta 1 y\n-gamma 2 z\n-alpha 3 x\n-delta 10 w\n+Hello World\n+foo bar baz\n+HELLO \303\251t\303\251\n", 122, 1, NULL},
+    {"diff", "-c --label A --label B lines.txt data.txt", NULL, 0,
+     "*** A\n--- B\n***************\n*** 1,12 ****\n! one\n! two\n! three\n! four\n! five\n! six\n! seven\n! eight\n! nine\n! ten\n! eleven\n! twelve\n--- 1,5 ----\n! alpha 3 x\n! beta 1 y\n! gamma 2 z\n! alpha 3 x\n! delta 10 w\n", 202, 1, NULL},
+    {"diff", "-u --label A --label B nonl.txt data.txt", NULL, 0,
+     "--- A\n+++ B\n@@ -1 +1,5 @@\n-no newline\n\\ No newline at end of file\n+alpha 3 x\n+beta 1 y\n+gamma 2 z\n+alpha 3 x\n+delta 10 w\n", 121, 1, NULL},
+    {"diff", "-e data.txt lines.txt", NULL, 0,
+     "1,5c\none\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\neleven\ntwelve\n.\n", 70, 1, NULL},
+    {"diff", "-n data.txt lines.txt", NULL, 0,
+     "d1 5\na5 12\none\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\neleven\ntwelve\n", 74, 1, NULL},
+    {"diff", "-i text.txt text.txt", NULL, 0,
+     "", 0, 0, NULL},
+    {"diff", "-y -W 50 data.txt lines.txt", NULL, 0,
+     "alpha 3 x\t      |\tone\nbeta 1 y\t      |\ttwo\ngamma 2 z\t      |\tthree\nalpha 3 x\t      |\tfour\ndelta 10 w\t      |\tfive\n\t\t      >\tsix\n\t\t      >\tseven\n\t\t      >\teight\n\t\t      >\tnine\n\t\t      >\tten\n\t\t      >\televen\n\t\t      >\ttwelve\n", 223, 1, NULL},
+    {"diff", "-y --suppress-common-lines data.txt text.txt", NULL, 0,
+     "alpha 3 x\t\t\t\t\t\t      |\tHello World\nbeta 1 y\t\t\t\t\t\t      |\tfoo bar baz\ngamma 2 z\t\t\t\t\t\t      |\tHELLO \303\251t\303\251\nalpha 3 x\t\t\t\t\t\t      <\ndelta 10 w\t\t\t\t\t\t      <\n", 151, 1, NULL},
+    {"diff", "-r dir empty", NULL, 0,
+     "Only in dir: f1\nOnly in dir: sub\n", 33, 1, NULL},
+    {"diff", "-rN dir empty", NULL, 0,
+     "diff -rN dir/f1 empty/f1\n1d0\n< x\ndiff -rN dir/sub/f2 empty/sub/f2\n1d0\n< yy\n", 75, 1, NULL},
+    {"diff", "-u --label A --label B - data.txt", NULL, 0,
+     "--- A\n+++ B\n@@ -0,0 +1,5 @@\n+alpha 3 x\n+beta 1 y\n+gamma 2 z\n+alpha 3 x\n+delta 10 w\n", 83, 1, NULL},
+    {"diff", "-i - data.txt", "alpha 3 x\nBETA 1 y\ngamma 2 z\n", 29,
+     "3a4,5\n> alpha 3 x\n> delta 10 w\n", 31, 1, NULL},
+    {"diff", "nosuch data.txt", NULL, 0,
+     "", 0, 2, NULL},
+    {"diff", "-C x data.txt lines.txt", NULL, 0,
+     "", 0, 2, NULL},
+    {"diff", "data.txt", NULL, 0,
+     "", 0, 2, NULL},
+    {"diff", "-u -c data.txt lines.txt", NULL, 0,
+     "", 0, 2, NULL},
+    {"diff", "--bogus data.txt lines.txt", NULL, 0,
+     "", 0, 2, NULL},
 };
 
 static void write_file(const char *path, const char *text) {
@@ -721,7 +769,7 @@ int main(int argc, char **argv) {
     alarm(test_watchdog_secs(180));
     mkdir(TDIR, 0755);
     mkdir(TDIR "/bin", 0755);
-    static const char *const applets[] = {"head", "tail", "wc", "rm", "sort", "xargs", "find", "grep", "cp", "mv", "date", "sudo", "chmod", "ls"};
+    static const char *const applets[] = {"head", "tail", "wc", "rm", "sort", "xargs", "find", "grep", "cp", "mv", "date", "sudo", "chmod", "ls", "diff"};
     for (size_t i = 0; i < sizeof(applets) / sizeof(applets[0]); i++) {
         char link[256];
         snprintf(link, sizeof(link), TDIR "/bin/%s", applets[i]);
