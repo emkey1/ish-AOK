@@ -606,7 +606,8 @@ if [ -z "$DEBUG_LOG" ]; then
     mkdir -p "${DEBUG_LOG%/*}" 2>/dev/null
     [ -s "$DEBUG_LOG" ] && mv -f "$DEBUG_LOG" "$DEBUG_LOG.prev" 2>/dev/null
     # -sf, not -sfn: SmallCLUE's ln (first on PATH after native-links.sh)
-    # rejects -n, and the target is a file, so -n changes nothing.
+    # rejected -n until smallclue's GNU-compatible ln, and the target is a
+    # file, so -n changes nothing here anyway.
     ln -sf "$DEBUG_LOG" /tmp/ish-wayland-debug.log 2>/dev/null
 fi
 # An unwritable $DEBUG_LOG is FATAL downstream, not cosmetic: spawn_logged
