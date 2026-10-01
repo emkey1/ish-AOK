@@ -1168,9 +1168,13 @@ static FILE *nlibc_std_stream(int fd) {
             // A funopen stream is fully buffered by default, and a native
             // program exits by returning rather than through exit(), so
             // nothing would ever flush it -- printf output simply vanished.
-            // Match what a terminal program expects instead: stderr
-            // unbuffered, stdout line-buffered. nlibc_flush_std() below still
-            // catches the tail when stdout is a pipe.
+            // Match what a C program gets instead: stderr unbuffered, stdout
+            // line-buffered on a terminal and fully buffered otherwise, as
+            // glibc and Darwin decide it. nlibc_flush_std() below catches the
+            // tail. Line-buffering a file or pipe too made `seq 1 300000 >f`
+            // one write per line (6.5x slower than the emulated GNU seq) and
+            // put stdout ahead of stderr in a `2>&1` file where Linux has
+            // stderr first (`cmp -l a b >out 2>&1`).
             //
             // stdin stays FULLY buffered, deliberately diverging from a
             // terminal program's usual line-buffered stdin. Darwin's __srefill
@@ -1185,11 +1189,25 @@ static FILE *nlibc_std_stream(int fd) {
             // available either way); the only casualty is the implicit
             // flush-stdout-before-reading-stdin idiom, which cross-program is
             // exactly the coupling this exists to break.
+            // (The tty probe sets ENOTTY; the first printf must not.)
+            int saved = errno;
             setvbuf(nlibc_std[fd], NULL,
-                    fd == 2 ? _IONBF : fd == 0 ? _IOFBF : _IOLBF, BUFSIZ);
+                    fd == 2 ? _IONBF : fd == 0 || !nlibc_isatty(fd) ? _IOFBF : _IOLBF, BUFSIZ);
+            errno = saved;
         }
     }
     return nlibc_std[fd];
+}
+
+// Before another program shares our stdout: a fully buffered stdout (see
+// nlibc_std_stream) would otherwise land after the child's output -- awk's
+// `print "a"; print "x" | "cat"` printed x first, find -ok prompted before
+// the names it had printed. One-true-awk and GNU find flush here themselves
+// only sometimes; when stdout was line-buffered every program got this
+// order for free, so the shim keeps giving it.
+static void nlibc_flush_stdout_for_child(void) {
+    if (nlibc_std[1] != NULL)
+        fflush(nlibc_std[1]);
 }
 
 // Called once a native program returns, before its task exits: a return from
@@ -1474,6 +1492,7 @@ static int nlibc_wait_for_child(dword_t pid, int *status) {
 }
 
 static int nlibc_exec_common(const char *path, char *const argv[], int search_path) {
+    nlibc_flush_stdout_for_child();
     if (path == NULL || argv == NULL)
         return nlibc_fail(_EFAULT);
 
@@ -1552,7 +1571,10 @@ int nlibc_execlp(const char *file, const char *arg0, ...) {
 int nlibc_system(const char *command) {
     if (command == NULL)
         return 1;   // a shell is available
-    char *argv[] = { (char *) "/bin/sh", (char *) "-c", (char *) command, NULL };
+    nlibc_flush_stdout_for_child();
+    // argv[0] "sh", as glibc and musl give it: the shell's errors are
+    // "sh: 1: x: not found", not "/bin/sh: ...".
+    char *argv[] = { (char *) "sh", (char *) "-c", (char *) command, NULL };
     dword_t pid = 0;
     int err = native_spawn("/bin/sh", argv, native_env_vector(), &pid);
     if (err < 0)
@@ -1670,6 +1692,7 @@ FILE *nlibc_popen(const char *command, const char *mode) {
         return NULL;
     }
     bool reading = mode[0] == 'r';
+    nlibc_flush_stdout_for_child();
 
     int fds[2];
     if (nlibc_pipe(fds) < 0)
@@ -1702,7 +1725,9 @@ FILE *nlibc_popen(const char *command, const char *mode) {
     };
 
     struct nlibc_popen *entry = malloc(sizeof(*entry));
-    char *argv[] = { (char *) "/bin/sh", (char *) "-c", (char *) command, NULL };
+    // argv[0] "sh", as glibc and musl give it: the shell's errors are
+    // "sh: 1: x: not found", not "/bin/sh: ...".
+    char *argv[] = { (char *) "sh", (char *) "-c", (char *) command, NULL };
     dword_t pid = 0;
     int err = entry != NULL
         ? native_spawn_opts("/bin/sh", argv, native_env_vector(), &opts, &pid)
@@ -8464,6 +8489,7 @@ int nlibc_getlogin_r(char *buf, size_t len) {
 int nlibc_execve(const char *path, char *const argv[], char *const envp[]) {
     if (path == NULL || argv == NULL)
         return nlibc_fail(_EFAULT);
+    nlibc_flush_stdout_for_child();
     if (native_exec_in_place_wanted())
         return nlibc_fail(nlibc_exec_in_place(path, argv,
                 envp != NULL ? envp : native_env_vector()));
@@ -8909,6 +8935,7 @@ static int nlibc_posix_spawn_common(pid_t *pid_out, const char *file,
         char *const argv[], char *const envp[], bool search_path) {
     if (file == NULL || argv == NULL)
         return EINVAL;
+    nlibc_flush_stdout_for_child();
 
     struct native_spawn_opts opts = { .pgid = NATIVE_SPAWN_PGID_INHERIT };
     nlibc_spawn_default_sigmask(&opts);
