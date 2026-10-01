@@ -8,7 +8,6 @@
 //     gcc -O1 -o unix_unconnected_poll unix_unconnected_poll.c
 //
 // Oracle: Linux 6.12 (camd) passes every case.
-// and the same with the end closed in-process. Also an unconnected socket.
 #include <poll.h>
 #include <signal.h>
 #include <stdio.h>
