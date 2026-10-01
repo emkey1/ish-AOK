@@ -1,6 +1,6 @@
-// native_coreutils.c -- SmallCLUE's rm, wc, head, tail, sort, cp, mv, xargs,
-// find and grep against the answers of GNU coreutils 9.4, findutils 4.9 and
-// grep 3.11.
+// native_coreutils.c -- SmallCLUE's rm, wc, head, tail, sort, cp, mv, date,
+// xargs, find and grep against the answers of GNU coreutils 9.4, findutils
+// 4.9 and grep 3.11.
 //
 // iSH-AOK's native-links.sh puts SmallCLUE's applets ahead of the distro's on
 // PATH, so they run every script that names them. The versions these
@@ -469,6 +469,36 @@ static const struct cu_case cases[] = {
      "", 0, 1, NULL},
     {"mv", "data.txt data.txt", NULL, 0,
      "", 0, 1, NULL},
+    {"date", "-u -d @1700000000.123456789 +%F.%T.%N.%Z", NULL, 0,
+     "2023-11-14.22:13:20.123456789.UTC\n", 34, 0, NULL},
+    {"date", "-u -d 2024-03-13T10:20:30+0230 +%F.%T", NULL, 0,
+     "2024-03-13.07:50:30\n", 20, 0, NULL},
+    {"date", "-u -d @0 -R", NULL, 0,
+     "Thu, 01 Jan 1970 00:00:00 +0000\n", 32, 0, NULL},
+    {"date", "-u -d @0 -Ins", NULL, 0,
+     "1970-01-01T00:00:00,000000000+00:00\n", 36, 0, NULL},
+    {"date", "-u -d @0 --rfc-3339=seconds", NULL, 0,
+     "1970-01-01 00:00:00+00:00\n", 26, 0, NULL},
+    {"date", "-u -d @1700000000 +%-d|%_m|%^a|%#Z|%:z|%q|%P|%10Y|%e|%j|%U|%W|%V|%G|%s", NULL, 0,
+     "14|11|TUE|utc|+00:00|4|pm|0000002023|14|318|46|46|46|2023|1700000000\n", 69, 0, NULL},
+    {"date", "-u -d 2024-01-31+1month +%F", NULL, 0,
+     "2024-03-02\n", 11, 0, NULL},
+    {"date", "-u -d 20240313 +%F", NULL, 0,
+     "2024-03-13\n", 11, 0, NULL},
+    {"date", "-u -d 3/5/2024 +%F", NULL, 0,
+     "2024-03-05\n", 11, 0, NULL},
+    {"date", "-u -d 5-Mar-2024 +%F", NULL, 0,
+     "2024-03-05\n", 11, 0, NULL},
+    {"date", "-u -d foo", NULL, 0,
+     "", 0, 1, NULL},
+    {"date", "-u -d 2024-02-30", NULL, 0,
+     "", 0, 1, NULL},
+    {"date", "+%Y +%m", NULL, 0,
+     "", 0, 1, NULL},
+    {"date", "-I -R", NULL, 0,
+     "", 0, 1, NULL},
+    {"date", "-u +%Y -d @0", NULL, 0,
+     "1970\n", 5, 0, NULL},
 };
 
 static void write_file(const char *path, const char *text) {
@@ -612,7 +642,7 @@ int main(int argc, char **argv) {
     alarm(test_watchdog_secs(180));
     mkdir(TDIR, 0755);
     mkdir(TDIR "/bin", 0755);
-    static const char *const applets[] = {"head", "tail", "wc", "rm", "sort", "xargs", "find", "grep", "cp", "mv"};
+    static const char *const applets[] = {"head", "tail", "wc", "rm", "sort", "xargs", "find", "grep", "cp", "mv", "date"};
     for (size_t i = 0; i < sizeof(applets) / sizeof(applets[0]); i++) {
         char link[256];
         snprintf(link, sizeof(link), TDIR "/bin/%s", applets[i]);
