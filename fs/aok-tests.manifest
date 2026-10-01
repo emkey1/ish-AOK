@@ -138,6 +138,7 @@ netlink_blocking_recv.c
 sock_timeo_eintr.c
 mount_flags.c
 mount_bind_rbind.c
+chroot_mountinfo.c
 fuse_basic.c
 fuse_threaded_daemon.c
 sysfs_dev_ns.c

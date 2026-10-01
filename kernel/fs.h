@@ -108,6 +108,8 @@ int generic_getpath_shown(struct fd *fd, char *buf, bool *unreachable);
 // checkpoint restore reopens by path in a boot that never made them.
 int generic_getpath_backing(struct fd *fd, char *buf);
 int fs_rebase_path_to_root(struct fs_info *fs, char *path);
+// The path of fs's root ("/" when not chrooted) into out (MAX_PATH + 1 bytes).
+int fs_root_path(struct fs_info *fs, char *out);
 int fs_rebase_readlink_path(struct fs_info *fs, char *path);
 int fs_rebase_shown_link_path(struct fs_info *fs, char *path);
 // src_norm are the fs/path.h N_* flags the SOURCE is resolved with: which of

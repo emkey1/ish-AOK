@@ -8,6 +8,7 @@
 #endif
 #include "kernel/calls.h"
 #include "kernel/task.h"
+#include "kernel/fs.h"
 #include "kernel/swap.h"
 #include "fs/mem.h"
 #include "fs/proc.h"
@@ -944,7 +945,60 @@ static void proc_print_escaped(struct proc_data *buf, const char *str) {
     *(at_start) = false; \
 } while (0)
 
-int proc_show_mounts(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
+// The root a mount listing is relative to: that of the task for a
+// /proc/<pid>/{mounts,mountinfo} (as on Linux, which takes it from the task at
+// open), the reader's for /proc/mounts and /proc/mountinfo. "/" unchrooted.
+// Resolved before mounts_lock is taken: a path lookup may take it too.
+static int proc_mounts_root(struct proc_entry *entry, char *root_path) {
+    struct fs_info *fs = NULL;
+    if (entry->pid != 0) {
+        struct task *task = pid_get_task_zombie_ref(entry->pid);
+        if (task != NULL) {
+            if (task_lock_unless_exiting(task)) {
+                if (task->fs != NULL)
+                    fs = fs_info_retain(task->fs);
+                unlock(&task->general_lock);
+            }
+            task_ref_cnt_mod(task, -1);
+        }
+    } else if (current != NULL && current->fs != NULL) {
+        fs = fs_info_retain(current->fs);
+    }
+    strcpy(root_path, "/");
+    if (fs == NULL)
+        return 0;
+    int err = fs_root_path(fs, root_path);
+    fs_info_release(fs);
+    return err;
+}
+
+// A mount point (fs/mount.c's form: "" for the root) as seen from `root`,
+// into out; false when it lies outside that root. Linux leaves such a mount
+// out of the listing (seq_path_root's SEQ_SKIP) and shows the rest relative
+// to the root. Printing every mount with its global path made a chroot's
+// listing name paths that do not exist inside it: in the device suite's
+// chroot legs a bind the test had just made never matched its own path.
+static bool proc_mount_point_in_root(const char *point, const char *root, char *out) {
+    if (strcmp(root, "/") == 0) {
+        strcpy(out, point[0] == '\0' ? "/" : point);
+        return true;
+    }
+    size_t n = strlen(root);
+    if (strcmp(point, root) == 0) {
+        strcpy(out, "/");
+        return true;
+    }
+    if (strncmp(point, root, n) != 0 || point[n] != '/')
+        return false;
+    strcpy(out, point + n);
+    return true;
+}
+
+int proc_show_mounts(struct proc_entry *entry, struct proc_data *buf) {
+    char root_path[MAX_PATH + 1];
+    int err = proc_mounts_root(entry, root_path);
+    if (err < 0)
+        return err;
     // The mounts list is mutated under mounts_lock (fs/mount.c) and was walked
     // here without it, so a concurrent mount or umount could free the entry
     // this loop was standing on -- a use-after-free reachable from an ordinary
@@ -961,9 +1015,9 @@ int proc_show_mounts(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
     }
     for (size_t i = 0; i < count; i++) {
         struct mount *mount = listed[i];
-        const char *point = mount->point;
-        if (point[0] == '\0')
-            point = "/";
+        char point[MAX_PATH + 1];
+        if (!proc_mount_point_in_root(mount->point, root_path, point))
+            continue;
 
         // An empty source would print as an empty field, and /proc/mounts is
         // space-separated with no quoting: busybox then reads the mount point
@@ -1035,7 +1089,11 @@ static int proc_mountinfo_parent_id(struct mount *target) {
     return MOUNT_ID_HIDDEN;
 }
 
-int proc_show_mountinfo(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
+int proc_show_mountinfo(struct proc_entry *entry, struct proc_data *buf) {
+    char root_path[MAX_PATH + 1];
+    int err = proc_mounts_root(entry, root_path);
+    if (err < 0)
+        return err;
     // See proc_show_mounts, for the lock and the order. Held across
     // proc_mountinfo_parent_id's own walk of the list, which is why that one
     // must not lock.
@@ -1048,9 +1106,9 @@ int proc_show_mountinfo(struct proc_entry *UNUSED(entry), struct proc_data *buf)
     }
     for (size_t i = 0; i < count; i++) {
         struct mount *mount = listed[i];
-        const char *point = mount->point;
-        if (point[0] == '\0')
-            point = "/";
+        char point[MAX_PATH + 1];
+        if (!proc_mount_point_in_root(mount->point, root_path, point))
+            continue;
 
         int id = mount_id(mount);
         int parent_id = proc_mountinfo_parent_id(mount);

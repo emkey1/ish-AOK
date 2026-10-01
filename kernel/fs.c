@@ -2060,6 +2060,19 @@ static int fs_try_rebase_path(struct fs_info *fs, char *path) {
     return 0;
 }
 
+int fs_root_path(struct fs_info *fs, char *out) {
+    lock(&fs->lock, 0);
+    struct fd *root = fs->root != NULL ? fd_retain(fs->root) : NULL;
+    unlock(&fs->lock);
+    if (root == NULL) {
+        strcpy(out, "/");
+        return 0;
+    }
+    int err = generic_getpath(root, out);
+    fd_close(root);
+    return err;
+}
+
 // Rebase a mount-absolute path (as returned by generic_getpath) to be
 // relative to `fs`'s chroot root, matching Linux getcwd(2) semantics: the
 // root's own path becomes "/", a path under the root has the root prefix
