@@ -180,9 +180,11 @@ PURE = {
     # The gz* family is emphatically NOT here and must never be. Those are the
     # half of zlib that opens files and reads descriptors, and being a host
     # dylib is exactly why they cannot be allowed to -- see the header. This is
-    # a list of seven functions, not permission to link zlib and call it.
+    # a list of eight functions, not permission to link zlib and call it.
+    # crc32 is arithmetic over a buffer the caller hands it (gzip writes its
+    # own header and trailer).
     "deflate", "deflateEnd", "deflateInit2_",
-    "inflate", "inflateEnd", "inflateInit2_", "inflateReset",
+    "inflate", "inflateEnd", "inflateInit2_", "inflateReset", "crc32",
     # termios helpers that only edit a struct in memory. Not tcgetattr or
     # tcsetattr, which talk to a terminal and are redirected: these set or read
     # fields, and the redirected calls translate the result on its way to the

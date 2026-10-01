@@ -1020,6 +1020,26 @@ static const struct cu_case cases[] = {
      "", 0, 1, NULL},
     {"du", "nosuch", NULL, 0,
      "", 0, 1, NULL},
+    {"gzip", "-c -n data.txt", NULL, 0,
+     "\037\213\010\000\000\000\000\000\000\003K\314)\310HT0V\250\340JJ-IT0T\250\344JO\314\315MT0R\250\342J\204K\246\244\346\200d\015\024\312\271\000\273Q\356\2612\000\000\000", 60, 0, NULL},
+    {"gzip", "-9 -c -n lines.txt", NULL, 0,
+     "\037\213\010\000\000\000\000\000\002\003\035\312I\n\0000\010\004\301\373\374s\022\205\240\020\315\362\374,\307n\312\215\310\345H\351$\212\217\216\242\223\010\335\010N\032\250U\022\246\017\276l\377\346b\273\354\000V\026!\206?\000\000\000", 70, 0, NULL},
+    {"gzip", "-dc", "\037\213\010\000\000\000\000\000\000\003\313\310\344\002\000zzo\355\003\000\000\000", 23,
+     "hi\n", 3, 0, NULL},
+    {"gzip", "-dc", "junk\n", 5,
+     "", 0, 1, NULL},
+    {"gzip", "-dcf", "junk\n", 5,
+     "junk\n", 5, 0, NULL},
+    {"gzip", "-k data.txt", NULL, 0,
+     "", 0, 0, ".\n./data.txt\n./data.txt.gz\n./dir\n./dir/f1\n./dir/sub\n./dir/sub/f2\n./empty\n./empty.txt\n./lines.txt\n./nonl.txt\n./text.txt\n"},
+    {"gzip", "dir", NULL, 0,
+     "", 0, 2, NULL},
+    {"gzip", "nosuch", NULL, 0,
+     "", 0, 1, NULL},
+    {"gunzip", "data.txt", NULL, 0,
+     "", 0, 2, NULL},
+    {"zcat", "-", "\037\213\010\000\000\000\000\000\000\003\313\310\344\002\000zzo\355\003\000\000\000", 23,
+     "hi\n", 3, 0, NULL},
 };
 
 static void write_file(const char *path, const char *text) {
@@ -1163,7 +1183,7 @@ int main(int argc, char **argv) {
     alarm(test_watchdog_secs(180));
     mkdir(TDIR, 0755);
     mkdir(TDIR "/bin", 0755);
-    static const char *const applets[] = {"head", "tail", "wc", "rm", "sort", "xargs", "find", "grep", "cp", "mv", "date", "sudo", "chmod", "ls", "diff", "cmp", "sed", "uniq", "tr", "nl", "seq", "touch", "stat", "realpath", "readlink", "env", "sum", "rmdir", "cat", "fold", "tac", "dd", "od", "split", "du"};
+    static const char *const applets[] = {"head", "tail", "wc", "rm", "sort", "xargs", "find", "grep", "cp", "mv", "date", "sudo", "chmod", "ls", "diff", "cmp", "sed", "uniq", "tr", "nl", "seq", "touch", "stat", "realpath", "readlink", "env", "sum", "rmdir", "cat", "fold", "tac", "dd", "od", "split", "du", "gzip", "gunzip", "zcat"};
     for (size_t i = 0; i < sizeof(applets) / sizeof(applets[0]); i++) {
         char link[256];
         snprintf(link, sizeof(link), TDIR "/bin/%s", applets[i]);
