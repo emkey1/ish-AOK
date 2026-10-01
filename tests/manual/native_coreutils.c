@@ -844,6 +844,50 @@ static const struct cu_case cases[] = {
      "", 0, 1, NULL},
     {"stat", "-f -c %l /", NULL, 0,
      "255\n", 4, 0, NULL},
+    {"realpath", "--relative-to=dir dir/sub/f2", NULL, 0,
+     "sub/f2\n", 7, 0, NULL},
+    {"realpath", "--relative-to=dir/sub data.txt", NULL, 0,
+     "../../data.txt\n", 15, 0, NULL},
+    {"realpath", "--relative-base=. data.txt dir/f1 /", NULL, 0,
+     "data.txt\ndir/f1\n/\n", 18, 0, NULL},
+    {"realpath", "--relative-to=/usr /etc", NULL, 0,
+     "../etc\n", 7, 0, NULL},
+    {"realpath", "-s --relative-to=/a/b /a/c/d", NULL, 0,
+     "../c/d\n", 7, 0, NULL},
+    {"realpath", "-e nosuch", NULL, 0,
+     "", 0, 1, NULL},
+    {"realpath", "nosuch/x", NULL, 0,
+     "", 0, 1, NULL},
+    {"realpath", "data.txt/", NULL, 0,
+     "", 0, 1, NULL},
+    {"realpath", "-m --relative-to=. a/b/../c", NULL, 0,
+     "a/c\n", 4, 0, NULL},
+    {"readlink", "-n dir", NULL, 0,
+     "", 0, 1, NULL},
+    {"readlink", "data.txt", NULL, 0,
+     "", 0, 1, NULL},
+    {"readlink", "-f nosuch/x", NULL, 0,
+     "", 0, 1, NULL},
+    {"readlink", "-m --relative-to=x a", NULL, 0,
+     "", 0, 1, NULL},
+    {"env", "-i A=1 B=2 env", NULL, 0,
+     "A=1\nB=2\n", 8, 0, NULL},
+    {"env", "-i - C=4 env", NULL, 0,
+     "C=4\n", 4, 0, NULL},
+    {"env", "-u HOME -i X=1 env", NULL, 0,
+     "X=1\n", 4, 0, NULL},
+    {"env", "-S -i\\_Y=2\\_env", NULL, 0,
+     "Y=2\n", 4, 0, NULL},
+    {"env", "-i -0 A=1 B=2", NULL, 0,
+     "A=1\000B=2\000", 8, 0, NULL},
+    {"env", "nosuchcmd", NULL, 0,
+     "", 0, 127, NULL},
+    {"env", "-u A=B true", NULL, 0,
+     "", 0, 125, NULL},
+    {"env", "-C", NULL, 0,
+     "", 0, 125, NULL},
+    {"env", "--ignore-signal=FOO true", NULL, 0,
+     "", 0, 125, NULL},
 };
 
 static void write_file(const char *path, const char *text) {
@@ -987,7 +1031,7 @@ int main(int argc, char **argv) {
     alarm(test_watchdog_secs(180));
     mkdir(TDIR, 0755);
     mkdir(TDIR "/bin", 0755);
-    static const char *const applets[] = {"head", "tail", "wc", "rm", "sort", "xargs", "find", "grep", "cp", "mv", "date", "sudo", "chmod", "ls", "diff", "cmp", "sed", "uniq", "tr", "nl", "seq", "touch", "stat"};
+    static const char *const applets[] = {"head", "tail", "wc", "rm", "sort", "xargs", "find", "grep", "cp", "mv", "date", "sudo", "chmod", "ls", "diff", "cmp", "sed", "uniq", "tr", "nl", "seq", "touch", "stat", "realpath", "readlink", "env"};
     for (size_t i = 0; i < sizeof(applets) / sizeof(applets[0]); i++) {
         char link[256];
         snprintf(link, sizeof(link), TDIR "/bin/%s", applets[i]);

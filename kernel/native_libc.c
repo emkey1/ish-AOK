@@ -5628,6 +5628,25 @@ static int nlibc_set_disposition(int guest_sig, nlibc_sighandler handler) {
     return err;
 }
 
+// What the kernel has for a signal this program never set. The table starts
+// all SIG_DFL, but SIG_IGN survives exec: a shell that ran `trap "" INT`
+// hands its children an ignored SIGINT, and they must be able to see it --
+// dash and bash refuse to trap a signal ignored on entry, nohup-style code
+// leaves it alone, env --list-signal-handling lists it. Until this, every
+// native program read SIG_DFL back.
+static nlibc_sighandler nlibc_inherited_disposition(int guest_sig) {
+    NATIVE_FRAME;
+    guest_addr_t guest_old = native_scratch_alloc(sizeof(struct sigaction_));
+    if (guest_old == 0)
+        return SIG_DFL;
+    if (native_syscall(NATIVE_SYS_rt_sigaction, guest_sig, 0, guest_old, sizeof(sigset_t_)) < 0)
+        return SIG_DFL;
+    struct sigaction_ old;
+    if (native_scratch_get(&old, guest_old, sizeof(old)) < 0)
+        return SIG_DFL;
+    return old.handler == SIG_IGN_ ? SIG_IGN : SIG_DFL;
+}
+
 int nlibc_sigaction(int host_sig, const struct sigaction *act, struct sigaction *oact) {
     if (host_sig <= 0 || host_sig >= NSIG)
         return nlibc_fail(_EINVAL);
@@ -5647,6 +5666,8 @@ int nlibc_sigaction(int host_sig, const struct sigaction *act, struct sigaction 
             oact->sa_flags |= SA_SIGINFO;
         } else {
             oact->sa_handler = nlibc_handlers[host_sig];
+            if (oact->sa_handler == SIG_DFL)
+                oact->sa_handler = nlibc_inherited_disposition(guest_sig);
         }
     }
     if (act == NULL)
@@ -5696,6 +5717,8 @@ nlibc_sighandler nlibc_signal(int host_sig, nlibc_sighandler handler) {
         return SIG_ERR;
     }
     nlibc_sighandler previous = nlibc_handlers[host_sig];
+    if (previous == SIG_DFL)
+        previous = nlibc_inherited_disposition(guest_sig);
     int err = nlibc_set_disposition(guest_sig, handler);
     if (err < 0) {
         nlibc_fail(err);
