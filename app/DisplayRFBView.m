@@ -437,18 +437,32 @@ static const struct virtgpu_present_ops display_direct_ops = {
 
 #pragma mark - Pointer input
 
+static BOOL DisplayHardwareKeyboardAttached(void) {
+    if (@available(iOS 14.0, *))
+        return GCKeyboard.coalescedKeyboard != nil;
+    return NO;
+}
+
 - (void)takeKeyboardFocusIfWanted {
     if (self.isFirstResponder)
         return;
-    BOOL hardware = NO;
-    if (@available(iOS 14.0, *))
-        hardware = GCKeyboard.coalescedKeyboard != nil;
-    if (hardware || (UserPreferences.shared.autoShowKeyboard && !self.keyboardPutAway))
+    if (DisplayHardwareKeyboardAttached() ||
+            (UserPreferences.shared.autoShowKeyboard && !self.keyboardPutAway))
+        [self becomeFirstResponder];
+}
+
+// A touch is a click in the desktop, not a request to type: it takes focus
+// only for a hardware keyboard's keys. Taking it otherwise brings up the
+// software keyboard, which on an iPad with no keyboard came back on every
+// click, Auto-Show or not. The software keyboard comes from Auto-Show when
+// the display opens, or from the menu's Show Keyboard.
+- (void)takeKeyboardFocusFromTouch {
+    if (!self.isFirstResponder && DisplayHardwareKeyboardAttached())
         [self becomeFirstResponder];
 }
 
 - (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *_Nullable)event {
-    [self takeKeyboardFocusIfWanted];
+    [self takeKeyboardFocusFromTouch];
     [self sendPointerEventFromTouches:touches down:YES];
 }
 

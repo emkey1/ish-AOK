@@ -1273,7 +1273,7 @@ static NSString *DisplayScaleChoiceTitle(NSString *name, NSInteger value, NSInte
 // A Workspace window's keyboard goes to the display when the window comes to
 // the front (a tap, Ctrl+Tab, Cmd+arrow Desktop switching), as MotePad's does.
 - (void)workspaceToolDidBecomeFrontmost {
-    [self.displayView takeKeyboardFocusIfWanted];
+    [self.displayView takeKeyboardFocusFromTouch];
 }
 
 // Set by the notice's "Don't Show Again".

@@ -32,14 +32,15 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic) BOOL accessoryBarExternallyHosted;
 
 // Taking keyboard focus brings up the software keyboard when no hardware one
-// is attached, so a touch takes it only when it may: always with a hardware
-// keyboard (keys need a first responder), otherwise only while Auto-Show
-// Keyboard is on and the keyboard has not been put away from the menu
-// (keyboardPutAway, cleared by the menu's Show Keyboard). Every tap used to
-// take it, so on an iPad with no keyboard the software one came back on each
-// click in the desktop.
+// is attached. A touch (or the Workspace window coming to the front) takes it
+// only for a hardware keyboard: takeKeyboardFocusFromTouch. Auto-Show
+// Keyboard takes it when the display opens, unless the keyboard was put away
+// from the menu (keyboardPutAway, cleared by the menu's Show Keyboard):
+// takeKeyboardFocusIfWanted. Every tap used to take it, so on an iPad with no
+// keyboard the software one came back on each click in the desktop.
 @property (nonatomic) BOOL keyboardPutAway;
 - (void)takeKeyboardFocusIfWanted;
+- (void)takeKeyboardFocusFromTouch;
 
 // Frames straight from the guest for the desktop whose VNC port is `display`
 // (wl-present, fs/virtgpu.h). While they flow, directFrames is YES: the view
