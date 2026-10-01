@@ -161,6 +161,30 @@ $(tr '\0' '\n' < "/proc/$1/cmdline" 2>/dev/null)
 AOK_CMDLINE_EOF
     return $_wl_hit
 }
+# A session with no compositor under it that is past its start-up is not a
+# desktop anyone can use: what is left of one whose compositor died -- a crash,
+# or a resume that left the desktop out of the saved session (the GPU cannot be
+# saved) while the script and something it waits on came back. It used to
+# refuse every new desktop as "already running". The age keeps a session that
+# is still starting, and has no compositor YET, from being taken for one.
+aok_session_stale() {
+    for _wl_c in /proc/[0-9]*; do
+        [ "$(aok_ppid "${_wl_c#/proc/}")" = "$1" ] || continue
+        case "$(cat "$_wl_c/comm" 2>/dev/null)" in labwc|sway) return 1 ;; esac
+    done
+    _wl_hz=$(getconf CLK_TCK 2>/dev/null || echo 100)
+    _wl_started=$(awk '{print $22}' "/proc/$1/stat" 2>/dev/null)
+    _wl_up=$(awk -v hz="$_wl_hz" '{print int($1 * hz)}' /proc/uptime 2>/dev/null)
+    [ -n "$_wl_started" ] && [ -n "$_wl_up" ] && [ $(( (_wl_up - _wl_started) / _wl_hz )) -ge 30 ]
+}
+# End a stale session: its children (wayvnc, tee, a foot) and then the script.
+aok_end_stale_session() {
+    printf 'start-wayland.sh: clearing a stale Wayland session (pid %s): its compositor is gone\n' "$1" >&2
+    for _wl_c in /proc/[0-9]*; do
+        [ "$(aok_ppid "${_wl_c#/proc/}")" = "$1" ] && kill -TERM "${_wl_c#/proc/}" 2>/dev/null
+    done
+    kill -TERM "$1" 2>/dev/null
+}
 # Pids of every OTHER session. This run is excluded, and so are its ancestors
 # (the su/sh wrappers DisplayViewController starts it through) and its own
 # subshells, whose cmdline fork copies unchanged -- including the $(...) this
@@ -183,7 +207,12 @@ aok_other_wayland_sessions() {
             [ "$_wl_p" = "$$" ] && { _wl_own=1; break; }
             _wl_p=$(aok_ppid "$_wl_p")
         done
-        [ "$_wl_own" = 1 ] || printf '%s ' "$_wl_pid"
+        [ "$_wl_own" = 1 ] && continue
+        if aok_session_stale "$_wl_pid"; then
+            aok_end_stale_session "$_wl_pid"
+            continue
+        fi
+        printf '%s ' "$_wl_pid"
     done
 }
 _wl_others=$(aok_other_wayland_sessions)

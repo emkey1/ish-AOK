@@ -12,8 +12,13 @@
 #
 # The guest shell starts G, a subshell holding the render node with a child of
 # its own; M, a process holding an 80 MB memfd; and K, an unrelated process.
-# After the restore: G, its child and M are gone, K is alive, and the shell's
-# waits for G and M return instead of hanging.  (Needs gcc in the root.)
+# And J, a job shaped like the Wayland desktop session: a setsid shell whose
+# process group holds a GPU subshell and a plain `sleep 302` that holds
+# nothing. The whole group goes, not only the holder -- a kept wayvnc and
+# start-wayland.sh used to linger after a resume and refuse every new
+# desktop as "already running".
+# After the restore: G, its child, M and all of J are gone, K is alive, and
+# the shell's waits return instead of hanging.  (Needs gcc in the root.)
 set -e
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
 ISH=${ISH:-$REPO/build/ish}
@@ -40,8 +45,16 @@ cat > "$WORK/probe.sh" <<'EOF'
 G=$!
 /realmnt/bigmemfd &
 M=$!
+setsid sh -c '( exec 5<>/dev/dri/renderD128; sleep 303 ) & sleep 302 & wait' &
+J=$!
 sleep 301 &
 K=$!
+# J's children exist before the checkpoint, or the save lands first and the
+# restored shell starts them afresh.
+n=0
+while [ "$(ps -e -o args= | grep -c -E '^sleep 30[23]$')" -lt 2 ] && [ $n -lt 100 ]; do
+    sleep 0.1; n=$((n+1))
+done
 touch /realmnt/ready
 sleep 6
 # Only the restored guest gets here: the save run is killed once the image exists.
@@ -50,10 +63,14 @@ if kill -0 $K 2>/dev/null; then echo "OK kept: alive"; else echo "FAIL kept: gon
 n300=$(ps -e -o args= | grep -c '^sleep 300$' || true)
 [ "$n300" -eq 0 ] && echo "OK descendants: left out" || echo "FAIL descendants: $n300 left"
 if kill -0 $M 2>/dev/null; then echo "FAIL memfd: still here"; else echo "OK memfd: left out"; fi
+n302=$(ps -e -o args= | grep -c -E '^sleep 30[23]$' || true)
+[ "$n302" -eq 0 ] && echo "OK group: left out whole" || echo "FAIL group: $n302 of the job left"
 wait $G
 echo "OK wait: returned $?"
 wait $M
 echo "OK waitm: returned $?"
+wait $J
+echo "OK waitj: returned $?"
 kill $K
 EOF
 
@@ -82,7 +99,7 @@ save ISH_CHECKPOINT_LEAVE_OUT=1
 [ -s "$WORK/img" ] || { echo "FAIL: no image written: $(cat "$WORK/img.log" 2>/dev/null)"; exit 1; }
 out=$(ISH_REAL_MNT=$WORK ISH_RESTORE="$WORK/img" perl -e 'alarm 60; exec @ARGV' "$ISH" -f "$ROOT" < /dev/null 2>&1 || true)
 echo "$out" | grep -E '^(OK|FAIL)' | sed 's/^/  /'
-for k in holder memfd kept descendants wait waitm; do
+for k in holder memfd group kept descendants wait waitm waitj; do
     echo "$out" | grep -q "^OK $k" || { echo "  FAIL    | $k"; fail=1; }
 done
 [ $fail -eq 0 ] || { echo "FAIL"; exit 1; }

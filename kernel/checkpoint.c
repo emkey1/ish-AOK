@@ -3272,29 +3272,51 @@ static void ckpt_leave_out(struct task_snapshot *snap) {
         }
     }
     complex_lockt(&pids_lock, 0);
-    // The whole thread group of a holder: threads share the descriptor table,
-    // so each is a holder already -- this is for a zombie leader whose live
-    // threads hold one.
-    for (unsigned i = 0; i < snap->count; i++) {
-        if (!out[i])
-            continue;
-        for (unsigned j = 0; j < snap->count; j++)
-            if (!out[j] && snap->tasks[j]->group == snap->tasks[i]->group)
-                out[j] = true;
-    }
-    // And every descendant: a task is out when any ancestor is.
-    for (unsigned i = 0; i < snap->count; i++) {
-        if (out[i])
-            continue;
-        for (struct task *a = snap->tasks[i]->parent; a != NULL && !out[i]; a = a->parent) {
+    // Then everything that goes with them, until nothing more is added:
+    //
+    //  - the whole PROCESS GROUP: a job is one unit. The Wayland desktop is the
+    //    shell that started it, start-wayland.sh, labwc, wl-present, wayvnc,
+    //    tee and the rest, all in one group. Leaving out only the GPU holders
+    //    and their children kept wayvnc and the script: after the resume
+    //    wayvnc sat detached waiting for a compositor that would never come,
+    //    the script waited for wayvnc, and "a Wayland session is already
+    //    running" refused every new desktop. Never group 1 (init's), and never
+    //    init itself.
+    //  - the whole thread group (one process);
+    //  - every descendant: a task is out when any ancestor is.
+    bool grew = true;
+    while (grew) {
+        grew = false;
+        for (unsigned i = 0; i < snap->count; i++) {
+            if (!out[i])
+                continue;
+            struct tgroup *g = snap->tasks[i]->group;
+            pid_t_ pgid = g != NULL ? g->pgid : 0;
             for (unsigned j = 0; j < snap->count; j++) {
-                if (out[j] && snap->tasks[j] == a) {
-                    out[i] = true;
-                    break;
+                struct task *u = snap->tasks[j];
+                if (out[j] || u->pid == 1)
+                    continue;
+                if (u->group == g ||
+                        (pgid > 1 && u->group != NULL && u->group->pgid == pgid)) {
+                    out[j] = true;
+                    grew = true;
                 }
             }
-            if (a->parent == a)
-                break;
+        }
+        for (unsigned i = 0; i < snap->count; i++) {
+            if (out[i] || snap->tasks[i]->pid == 1)
+                continue;
+            for (struct task *a = snap->tasks[i]->parent; a != NULL && !out[i]; a = a->parent) {
+                for (unsigned j = 0; j < snap->count; j++) {
+                    if (out[j] && snap->tasks[j] == a) {
+                        out[i] = true;
+                        grew = true;
+                        break;
+                    }
+                }
+                if (a->parent == a)
+                    break;
+            }
         }
     }
     // Which of them a kept parent is waiting on: a process leader, out,
