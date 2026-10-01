@@ -193,7 +193,49 @@ struct vgpu_res {
     bool woken;             // pollers told of wid's retirement
     void *host_map;         // host_fd mapped for presenting, or NULL
     size_t host_map_size;
+    bool counted;           // in the blob totals (blob_account)
 };
+
+// What the blobs alive right now cost the host, logged each time the total
+// climbs past another 256 MB. On iOS that memory is the app's own: a GPU
+// client's allocations land in the footprint jetsam kills on, and Tux Racer's
+// course load took the M4's app from 1 GB to 3.8 GB, then past its 6 GB
+// limit when the race ended, while the game's own memory stayed under 200 MB.
+// This says how much of that is blobs (and how much of it is mappable, so
+// shared memory as well).
+static _Atomic uint64_t blob_live_bytes, blob_live_mappable_bytes;
+static _Atomic uint32_t blob_live_count;
+static _Atomic uint64_t blob_reported_mark;   // in units of 256 MB
+
+static void blob_account(struct vgpu_res *res, bool add) {
+    if (add == res->counted)
+        return;
+    res->counted = add;
+    uint64_t size = res->size;
+    bool mappable = res->host_fd >= 0;
+    uint64_t live;
+    if (add) {
+        live = atomic_fetch_add(&blob_live_bytes, size) + size;
+        if (mappable)
+            atomic_fetch_add(&blob_live_mappable_bytes, size);
+        atomic_fetch_add(&blob_live_count, 1);
+    } else {
+        live = atomic_fetch_sub(&blob_live_bytes, size) - size;
+        if (mappable)
+            atomic_fetch_sub(&blob_live_mappable_bytes, size);
+        atomic_fetch_sub(&blob_live_count, 1);
+    }
+    uint64_t mark = live >> 28;
+    uint64_t reported = atomic_load(&blob_reported_mark);
+    if (mark > reported) {
+        if (atomic_compare_exchange_strong(&blob_reported_mark, &reported, mark))
+            printk("virtgpu: %u blobs live, %llu MB (%llu MB mappable)\n",
+                   atomic_load(&blob_live_count), (unsigned long long) (live >> 20),
+                   (unsigned long long) (atomic_load(&blob_live_mappable_bytes) >> 20));
+    } else if (mark + 1 < reported) {
+        atomic_compare_exchange_strong(&blob_reported_mark, &reported, mark);
+    }
+}
 
 // A dma-buf descriptor (PRIME export), for waking its pollers when the
 // buffer's implicit fence retires.
@@ -404,6 +446,7 @@ static int fence_wait(fd_t f) {
 static void res_release(struct vgpu_res *res) {
     if (atomic_fetch_sub(&res->refcount, 1) != 1)
         return;
+    blob_account(res, false);
     if (res->wctx != NULL)
         ctx_release(res->wctx);
     lock(&renderer_lock, 0);
@@ -689,6 +732,7 @@ static int ioctl_create_blob(struct vgpu_file *file, struct drm_virtgpu_resource
         res_release(res);
         return _EINVAL;
     }
+    blob_account(res, true);
 
     lock(&file->lock, 0);
     struct vgpu_handle *h = handle_add(file, res, false);
