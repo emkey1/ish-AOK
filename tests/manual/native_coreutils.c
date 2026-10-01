@@ -1,5 +1,5 @@
-// native_coreutils.c -- SmallCLUE's rm, wc, head, tail, sort, xargs and find
-// against GNU coreutils 9.4's and findutils 4.9's answers.
+// native_coreutils.c -- SmallCLUE's rm, wc, head, tail, sort, xargs, find and
+// grep against GNU coreutils 9.4's, findutils 4.9's and grep 3.11's answers.
 //
 // iSH-AOK's native-links.sh puts SmallCLUE's applets ahead of the distro's on
 // PATH, so they run every script that names them. The versions these
@@ -348,6 +348,76 @@ static const struct cu_case cases[] = {
      "", 0, 1, NULL},
     {"find", ". -newer nosuch", NULL, 0,
      "", 0, 1, NULL},
+    {"grep", "-n alpha data.txt", NULL, 0,
+     "1:alpha 3 x\n4:alpha 3 x\n", 24, 0, NULL},
+    {"grep", "-c alpha data.txt", NULL, 0,
+     "2\n", 2, 0, NULL},
+    {"grep", "-vi ALPHA data.txt", NULL, 0,
+     "beta 1 y\ngamma 2 z\ndelta 10 w\n", 30, 0, NULL},
+    {"grep", "-w o text.txt", NULL, 0,
+     "", 0, 1, NULL},
+    {"grep", "-x foo text.txt", NULL, 0,
+     "", 0, 1, NULL},
+    {"grep", "-ob o text.txt", NULL, 0,
+     "4:o\n7:o\n13:o\n14:o\n", 18, 0, NULL},
+    {"grep", "alpha\\|beta data.txt", NULL, 0,
+     "alpha 3 x\nbeta 1 y\nalpha 3 x\n", 29, 0, NULL},
+    {"grep", "-E (a)\\1 data.txt", NULL, 0,
+     "", 0, 1, NULL},
+    {"grep", "-F a.b data.txt", NULL, 0,
+     "", 0, 1, NULL},
+    {"grep", "-e alpha -e delta data.txt", NULL, 0,
+     "alpha 3 x\nalpha 3 x\ndelta 10 w\n", 31, 0, NULL},
+    {"grep", "-l a data.txt lines.txt text.txt", NULL, 0,
+     "data.txt\ntext.txt\n", 18, 0, NULL},
+    {"grep", "-L a data.txt lines.txt text.txt", NULL, 0,
+     "lines.txt\n", 10, 0, NULL},
+    {"grep", "-q alpha data.txt", NULL, 0,
+     "", 0, 0, NULL},
+    {"grep", "zzz nosuch", NULL, 0,
+     "", 0, 2, NULL},
+    {"grep", "-q alpha nosuch data.txt", NULL, 0,
+     "", 0, 0, NULL},
+    {"grep", "-m1 -A2 a data.txt", NULL, 0,
+     "alpha 3 x\nbeta 1 y\ngamma 2 z\n", 29, 0, NULL},
+    {"grep", "-C1 -n one\\|six\\|ten lines.txt", NULL, 0,
+     "1:one\n2-two\n--\n5-five\n6:six\n7-seven\n--\n9-nine\n10:ten\n11-eleven\n", 63, 0, NULL},
+    {"grep", "-A1 --group-separator=XX two\\|nine lines.txt", NULL, 0,
+     "two\nthree\nXX\nnine\nten\n", 22, 0, NULL},
+    {"grep", "-T -n alpha data.txt", NULL, 0,
+     " 1:\talpha 3 x\n 4:\talpha 3 x\n", 28, 0, NULL},
+    {"grep", "-r x dir", NULL, 0,
+     "dir/f1:x\n", 9, 0, NULL},
+    {"grep", "-r --include=*.txt -l alpha .", NULL, 0,
+     "./data.txt\n", 11, 0, NULL},
+    {"grep", "-r --exclude-dir=sub -l . dir", NULL, 0,
+     "dir/f1\n", 7, 0, NULL},
+    {"grep", "x dir", NULL, 0,
+     "", 0, 2, NULL},
+    {"grep", "\\w\\+.1 data.txt", NULL, 0,
+     "beta 1 y\ndelta 10 w\n", 20, 0, NULL},
+    {"grep", "\\d data.txt", NULL, 0,
+     "delta 10 w\n", 11, 0, NULL},
+    {"grep", "-oP alpha.\\K\\d data.txt", NULL, 0,
+     "3\n3\n", 4, 0, NULL},
+    {"grep", "-oP (?<=beta.)\\d data.txt", NULL, 0,
+     "1\n", 2, 0, NULL},
+    {"grep", "-oP \\w+(?=.2) data.txt", NULL, 0,
+     "gamma\n", 6, 0, NULL},
+    {"grep", "--color=always -n -H -C1 gamma data.txt", NULL, 0,
+     "\033[35m\033[Kdata.txt\033[m\033[K\033[36m\033[K-\033[m\033[K\033[32m\033[K2\033[m\033[K\033[36m\033[K-\033[m\033[Kbeta 1 y\n\033[35m\033[Kdata.txt\033[m\033[K\033[36m\033[K:\033[m\033[K\033[32m\033[K3\033[m\033[K\033[36m\033[K:\033[m\033[K\033[01;31m\033[Kgamma\033[m\033[K 2 z\n\033[35m\033[Kdata.txt\033[m\033[K\033[36m\033[K-\033[m\033[K\033[32m\033[K4\033[m\033[K\033[36m\033[K-\033[m\033[Kalpha 3 x\n", 247, 0, NULL},
+    {"grep", "-k x data.txt", NULL, 0,
+     "", 0, 2, NULL},
+    {"grep", "-A x a data.txt", NULL, 0,
+     "", 0, 2, NULL},
+    {"grep", "alpha", "alpha\nzz\000alpha\n", 15,
+     "", 0, 0, NULL},
+    {"grep", "-c alpha", "alpha\nzz\000alpha\n", 15,
+     "2\n", 2, 0, NULL},
+    {"grep", "-I alpha", "alpha\nzz\000alpha\n", 15,
+     "", 0, 1, NULL},
+    {"grep", "-z a", "a\000b\000ab\000", 7,
+     "a\000ab\000", 5, 0, NULL},
 };
 
 static void write_file(const char *path, const char *text) {
@@ -491,7 +561,7 @@ int main(int argc, char **argv) {
     alarm(test_watchdog_secs(180));
     mkdir(TDIR, 0755);
     mkdir(TDIR "/bin", 0755);
-    static const char *const applets[] = {"head", "tail", "wc", "rm", "sort", "xargs", "find"};
+    static const char *const applets[] = {"head", "tail", "wc", "rm", "sort", "xargs", "find", "grep"};
     for (size_t i = 0; i < sizeof(applets) / sizeof(applets[0]); i++) {
         char link[256];
         snprintf(link, sizeof(link), TDIR "/bin/%s", applets[i]);
