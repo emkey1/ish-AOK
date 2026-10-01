@@ -20,7 +20,7 @@ sudo sh /AOK/tools/manage-roots.sh list        # installed, and which boots next
 sudo sh /AOK/tools/manage-roots.sh available   # what you can install
 
 # From the catalog, then make it the root that boots and quit the app
-sudo sh /AOK/tools/manage-roots.sh install alpine3233arm64 --default --exit-app
+sudo sh /AOK/tools/manage-roots.sh install alpine3242aarch64 --default --exit-app
 
 # From an archive already on the device, or from a URL
 sudo sh /AOK/tools/manage-roots.sh install /AOK/persist/roots/mine.tar.gz Mine
@@ -88,9 +88,9 @@ Images** applet in Workspace — lists four groups:
   automatic download or because you (or the Files app) dropped a
   `.tar.xz`/`.tar.zst`/`.tar.gz`/etc. archive in yourself. Tap one to
   install it as a new named root.
-- **Official Distributions** — Alpine 3.23.3 and Devuan 6 (excalibur), one row
-  per distro with the architecture as a sub-choice. The `aarch64` images are
-  bundled in the app; `i386`, `x86_64` and `riscv64` download on demand into
+- **Official Distributions** — Alpine 3.24.2, Alpine 3.23.3 and Devuan 6
+  (excalibur), one row per distro with the architecture as a sub-choice. The
+  Alpine 3.24.2 and Devuan `aarch64` images are bundled in the app; `i386`, `x86_64` and `riscv64` download on demand into
   `/AOK/persist/roots` and import from there.
 - **Community Distributions** — PSCAL + SmallCLUE (arm64) and Arch Linux
   (`x86_64` and ARM `aarch64`). Contributed or experimental, without the same

@@ -22,13 +22,14 @@ as an amd64 guest and an aarch64 image as an arm64 one.
 
 They arrive three ways:
 
-**Bundled.** Alpine 3.23.3 and Devuan 6 (excalibur), `aarch64` only. The Xcode
+**Bundled.** Alpine 3.24.2 and Devuan 6 (excalibur), `aarch64` only (Alpine
+3.23.3 was bundled until October 2026). The Xcode
 "Download Root" build phase installs those two archives into the app and deletes
 the i386 and x86_64 ones from Resources, so those two are the only roots present
 before anything is downloaded.
 
 **From the catalogue.** The same two distributions for `i386`, `x86_64` and
-`riscv64`, plus community images — Arch Linux (`x86_64` and `aarch64`) and
+`riscv64` (Alpine as both 3.24.2 and 3.23.3), plus community images — Arch Linux (`x86_64` and `aarch64`) and
 PSCAL + SmallCLUE — downloaded on demand into `/AOK/persist/roots` and imported
 from there. The catalogue itself is `deps/rootfs-manifest`.
 

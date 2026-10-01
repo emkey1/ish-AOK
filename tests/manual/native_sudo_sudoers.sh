@@ -20,7 +20,7 @@ set -e
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
 ISH=${ISH:-$REPO/build/ish}
 FAKEFSIFY=${FAKEFSIFY:-$REPO/build/tools/fakefsify}
-TARBALL=$REPO/alpine-minirootfs-3.23.3-aarch64.tar.xz
+TARBALL=$REPO/alpine-minirootfs-3.24.2-aarch64.tar.xz
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/aok-native-sudo.XXXXXX")
 trap 'rm -rf "$WORK"' EXIT
 "$FAKEFSIFY" "$TARBALL" "$WORK/root" > "$WORK/fakefsify.log" 2>&1 || {

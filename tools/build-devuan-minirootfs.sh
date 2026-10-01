@@ -97,7 +97,7 @@ command -v "$COMP_TOOL" >/dev/null 2>&1 || die "compressor '$COMP_TOOL' not foun
 
 # i386 -> x86, amd64 -> x86_64, arm64 -> aarch64, riscv64 -> riscv64 (match the
 # Alpine minirootfs filename convention -- see
-# alpine-minirootfs-3.23.3-aarch64.tar.xz / -riscv64.tar.xz).
+# alpine-minirootfs-3.24.2-aarch64.tar.xz / -riscv64.tar.xz).
 arch_suffix() {
     case "$1" in
         i386)  echo x86 ;;

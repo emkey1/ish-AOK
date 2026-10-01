@@ -19,7 +19,7 @@ set -e
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
 ISH=${ISH:-$REPO/build/ish}
 FAKEFSIFY=${FAKEFSIFY:-$REPO/build/tools/fakefsify}
-TARBALL=${1:-$REPO/alpine-minirootfs-3.23.3-aarch64.tar.xz}
+TARBALL=${1:-$REPO/alpine-minirootfs-3.24.2-aarch64.tar.xz}
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/aok-rootid.XXXXXX")
 IMG=$WORK/img
 trap 'rm -rf "$WORK"' EXIT

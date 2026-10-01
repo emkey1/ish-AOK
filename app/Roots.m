@@ -97,6 +97,11 @@ static NSString *const kBundledRootTierCommunity = @"community";
 static NSString *const kBundledRootSeriesKey = @"series";
 static NSString *const kBundledRootVersionKey = @"version";
 static const NSUInteger kBundledRootSeriesVersionsOffered = 2;
+// A choice the picker never offers but that stays in the catalogue, so roots
+// imported from it still resolve (BundledRootChoiceMatchingName: the guest ABI
+// of a root whose metadata predates kRootMetadataGuestABIKey). The previously
+// bundled image, once a newer one replaces it in the app.
+static NSString *const kBundledRootLegacyKey = @"legacy";
 // Present only for choices whose archive isn't shipped in the app bundle --
 // importing them downloads this URL into /AOK/persist/roots on demand
 // instead (see DownloadBundledArchive / importBundledRootChoice:).
@@ -281,18 +286,35 @@ static NSArray<NSDictionary<NSString *, NSString *> *> *BuildRootChoices(void) {
             // splits into "Official Distributions" / "Community Distributions"
             // table sections along kBundledRootTierKey.
             @{
+                // The same image, identifier and import name as the
+                // manifest's download entry, which older app versions keep
+                // using; BuildRootChoices drops that entry here, so the
+                // bundled copy is the only one this build offers.
+                kBundledRootIdentifierKey: @"alpine3242aarch64",
+                kBundledRootDisplayNameKey: @"Alpine 3.24.2 (aarch64)",
+                kBundledRootArchiveNameKey: @"alpine-minirootfs-3.24.2-aarch64",
+                // Native AArch64 guest (same-architecture dispatch on Apple
+                // silicon — see aarch64_guest_plan.md).
+                kBundledRootImportNameKey: @"Alpine3.24.2-aarch64",
+                kBundledRootInitialWindowKey: @"session-shell",
+                kBundledRootGuestABIKey: @"arm64",
+                kBundledRootFamilyKey: @"alpine3242",
+                kBundledRootFamilyDisplayNameKey: @"Alpine 3.24.2",
+                kBundledRootTierKey: kBundledRootTierOfficial,
+            },
+            @{
+                // Bundled until 3.24.2 replaced it: no longer shipped, so
+                // not offered, but roots imported from it still match it.
                 kBundledRootIdentifierKey: @"alpine3233arm64",
                 kBundledRootDisplayNameKey: @"Alpine3.23.3(arm64)",
                 kBundledRootArchiveNameKey: @"alpine-minirootfs-3.23.3-aarch64",
-                // Native AArch64 guest (same-architecture dispatch on Apple
-                // silicon — see aarch64_guest_plan.md). Import name follows
-                // the RootNameIsValid rules like the x86_64 entry above.
                 kBundledRootImportNameKey: @"Alpine3.23.3-arm64",
                 kBundledRootInitialWindowKey: @"session-shell",
                 kBundledRootGuestABIKey: @"arm64",
                 kBundledRootFamilyKey: @"alpine3233",
                 kBundledRootFamilyDisplayNameKey: @"Alpine 3.23.3",
                 kBundledRootTierKey: kBundledRootTierOfficial,
+                kBundledRootLegacyKey: @"1",
             },
             @{
                 kBundledRootIdentifierKey: @"devuan6arm64",
@@ -306,7 +328,13 @@ static NSArray<NSDictionary<NSString *, NSString *> *> *BuildRootChoices(void) {
                 kBundledRootTierKey: kBundledRootTierOfficial,
             },
         ] mutableCopy];
-    [mutableChoices addObjectsFromArray:DownloadableRootChoices()];
+    // A bundled image wins over a manifest entry with the same identifier.
+    NSMutableSet<NSString *> *bundledIdentifiers = [NSMutableSet set];
+    for (NSDictionary<NSString *, NSString *> *choice in mutableChoices)
+        [bundledIdentifiers addObject:choice[kBundledRootIdentifierKey]];
+    for (NSDictionary<NSString *, NSString *> *choice in DownloadableRootChoices())
+        if (![bundledIdentifiers containsObject:choice[kBundledRootIdentifierKey] ?: @""])
+            [mutableChoices addObject:choice];
     return mutableChoices;
 }
 
@@ -352,6 +380,12 @@ static NSArray<NSDictionary<NSString *, NSString *> *> *BundledRootChoices(void)
 // guest ABI) and `ish-cli roots install source=catalog id=...` still installs
 // it for anyone whose script already names it.
 static NSArray<NSDictionary<NSString *, NSString *> *> *OfferedRootChoices(NSArray<NSDictionary<NSString *, NSString *> *> *choices) {
+    // Legacy choices are never offered (kBundledRootLegacyKey).
+    NSMutableArray<NSDictionary<NSString *, NSString *> *> *current = [NSMutableArray array];
+    for (NSDictionary<NSString *, NSString *> *choice in choices)
+        if (choice[kBundledRootLegacyKey].length == 0)
+            [current addObject:choice];
+    choices = current;
     NSMutableDictionary<NSString *, NSMutableOrderedSet<NSString *> *> *versionsBySeries = [NSMutableDictionary dictionary];
     for (NSDictionary<NSString *, NSString *> *choice in choices) {
         NSString *series = choice[kBundledRootSeriesKey];
@@ -2159,6 +2193,13 @@ static int ISHRootsCommandImpl(const char *fragment) {
             BOOL known = NO;
             for (NSDictionary<NSString *, NSString *> *choice in [roots bundledRootChoices]) {
                 if ([choice[kBundledRootIdentifierKey] isEqualToString:identifier]) {
+                    if (choice[kBundledRootLegacyKey].length != 0) {
+                        // Kept only so roots imported from it still resolve;
+                        // its archive is no longer in the app.
+                        [control rejectOp:op message:[NSString stringWithFormat:
+                            @"%@ is no longer shipped; see `manage-roots.sh available`", identifier]];
+                        return _ENOENT;
+                    }
                     known = YES;
                     break;
                 }

@@ -382,7 +382,7 @@ measurement, the method is given with it. Where a claim is a guess, it says so.
 > ```sh
 > meson setup build --buildtype=debugoptimized
 > ninja -C build
-> ./build/tools/fakefsify alpine-minirootfs-3.23.3-aarch64.tar.xz alpine
+> ./build/tools/fakefsify alpine-minirootfs-3.24.2-aarch64.tar.xz alpine
 > ./build/ish -f alpine /bin/sh
 > ```
 >
