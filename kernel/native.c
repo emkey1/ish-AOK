@@ -737,10 +737,14 @@ static void native_exec_run_one(struct native_exec_pending *pending) {
     //
     // The program gets arrays of its own, so that the kernel's copy of argv
     // and envp is still the kernel's when the program is abandoned
-    // (native_shallow_vector). Only for a traced task: nothing else can exec
-    // in place, and a program that finishes exits before the free below.
-    char **main_argv = current->ptrace.traced ? native_shallow_vector(argv) : NULL;
-    char **main_envp = current->ptrace.traced ? native_shallow_vector(envp) : NULL;
+    // (native_shallow_vector) -- and when it returns. It was only done for a
+    // traced task, on the reasoning that a program that finishes exits before
+    // the free below; but one that RETURNS from main reaches that free with
+    // whatever it left in its argv. SmallCLUE's sum wrote "-" into argv[argc]
+    // (the terminator slot), and `sum < f` aborted the whole app: "pointer
+    // being freed was not allocated" in native_free_vector (2026-10-01).
+    char **main_argv = native_shallow_vector(argv);
+    char **main_envp = native_shallow_vector(envp);
     if (main_argv != NULL)
         current->native_argv = main_argv;
     struct native_landing landing = { .task = current, .lockstats_depth = lockstats_depth };
