@@ -30,6 +30,9 @@ enum aokfs_node_kind {
     aokfs_fixes_arch_dir,
     aokfs_fixes_arch_readme,
     aokfs_fixes_arch_script,
+    aokfs_fixes_codex_dir,
+    aokfs_fixes_codex_readme,
+    aokfs_fixes_codex_script,
     aokfs_tests_dir,
     // Individual /tests/* files are no longer enumerated here -- they come from
     // the build-time generator (tools/gen-aokfs.py + fs/aok-tests.manifest) and
@@ -191,6 +194,7 @@ static bool aokfs_node_is_dir(enum aokfs_node_kind node) {
         node == aokfs_fakefs_dir ||
         node == aokfs_fixes_devuan_dir ||
         node == aokfs_fixes_arch_dir ||
+        node == aokfs_fixes_codex_dir ||
         node == aokfs_tools_dir ||
         node == aokfs_tests_dir ||
         node == aokfs_tests_audio_dir ||
@@ -278,6 +282,12 @@ static const char *aokfs_node_path(enum aokfs_node_kind node) {
             return "/fixes/arch/README.txt";
         case aokfs_fixes_arch_script:
             return "/fixes/arch/fix-pacman.sh";
+        case aokfs_fixes_codex_dir:
+            return "/fixes/codex";
+        case aokfs_fixes_codex_readme:
+            return "/fixes/codex/README.txt";
+        case aokfs_fixes_codex_script:
+            return "/fixes/codex/fix-codex.sh";
         case aokfs_tests_dir:
             return "/tests";
         case aokfs_tests_x86_dir:
@@ -341,6 +351,9 @@ static bool aokfs_lookup_node(const char *path, enum aokfs_node_kind *node_out) 
         aokfs_fixes_arch_dir,
         aokfs_fixes_arch_readme,
         aokfs_fixes_arch_script,
+        aokfs_fixes_codex_dir,
+        aokfs_fixes_codex_readme,
+        aokfs_fixes_codex_script,
         aokfs_tests_dir,
         aokfs_tests_x86_dir,
         aokfs_tests_arm64_dir,
@@ -587,6 +600,59 @@ static const char *aokfs_inline_file_data(enum aokfs_node_kind node, size_t *siz
         "fi\n"
         "\n";
 
+    static const char fixes_codex_readme[] =
+        "Codex CLI under iSH-AOK\n"
+        "\n"
+        "Codex runs every shell command it issues inside its own sandbox. On Linux\n"
+        "that sandbox is bubblewrap (bwrap), which needs user and mount namespaces.\n"
+        "AOK's kernel does not have them, so each command fails before it starts:\n"
+        "\n"
+        "    bwrap: Creating new namespace failed: Function not implemented\n"
+        "\n"
+        "(Builds before 557 failed one step earlier, with \"bwrap: Can't read\n"
+        "/proc/sys/kernel/overflowuid\".) Codex's older Landlock sandbox does not help\n"
+        "either: AOK does not implement Landlock, and will not pretend to -- a\n"
+        "sandbox that claims to confine what it does not is worse than one that says\n"
+        "it cannot. Codex itself works; only its command sandbox cannot start.\n"
+        "\n"
+        "Tell Codex to run commands without its sandbox. For one session:\n"
+        "\n"
+        "  codex --sandbox danger-full-access\n"
+        "\n"
+        "or for good, which sets sandbox_mode = \"danger-full-access\" in\n"
+        "~/.codex/config.toml:\n"
+        "\n"
+        "  sh /AOK/fixes/codex/fix-codex.sh\n"
+        "\n"
+        "Commands then run as you, with your access, like anything you type in the\n"
+        "terminal. Codex's approval settings are unchanged, so it still asks before\n"
+        "the commands its approval policy says to ask about.\n";
+    static const char fixes_codex_script[] =
+        "#!/bin/sh\n"
+        "# Let Codex CLI run shell commands under iSH-AOK: its bubblewrap sandbox\n"
+        "# needs namespaces AOK does not have. See /AOK/fixes/codex/README.txt.\n"
+        "set -e\n"
+        "\n"
+        "dir=\"${CODEX_HOME:-$HOME/.codex}\"\n"
+        "config=\"$dir/config.toml\"\n"
+        "mkdir -p \"$dir\"\n"
+        "\n"
+        "if [ -f \"$config\" ] && grep -q '^[[:space:]]*sandbox_mode[[:space:]]*=' \"$config\"; then\n"
+        "    echo \"ok: $config already sets sandbox_mode:\"\n"
+        "    grep '^[[:space:]]*sandbox_mode[[:space:]]*=' \"$config\"\n"
+        "    echo \"(change it to \\\"danger-full-access\\\" by hand if commands still fail)\"\n"
+        "    exit 0\n"
+        "fi\n"
+        "\n"
+        "# A top-level key has to come before the first [table] header, so the line\n"
+        "# goes at the top of the file.\n"
+        "tmp=\"$config.aok.$$\"\n"
+        "{\n"
+        "    echo 'sandbox_mode = \"danger-full-access\"  # AOK has no namespaces for bwrap'\n"
+        "    [ -f \"$config\" ] && cat \"$config\"\n"
+        "} >\"$tmp\"\n"
+        "mv \"$tmp\" \"$config\"\n"
+        "echo \"set: sandbox_mode = \\\"danger-full-access\\\" in $config\"\n";
     static const char fixes_devuan_readme[] =
         "pkcsslotd init fix\n"
         "\n"
@@ -807,6 +873,12 @@ static const char *aokfs_inline_file_data(enum aokfs_node_kind node, size_t *siz
         case aokfs_fixes_arch_script:
             *size_out = sizeof(fixes_arch_script) - 1;
             return fixes_arch_script;
+        case aokfs_fixes_codex_readme:
+            *size_out = sizeof(fixes_codex_readme) - 1;
+            return fixes_codex_readme;
+        case aokfs_fixes_codex_script:
+            *size_out = sizeof(fixes_codex_script) - 1;
+            return fixes_codex_script;
         case aokfs_tools_setup_ish_benchmark:
             *size_out = sizeof(setup_ish_benchmark) - 1;
             return setup_ish_benchmark;
@@ -1163,6 +1235,7 @@ static int aokfs_readdir(struct fd *fd, struct dir_entry *entry) {
                 case 0: child = aokfs_fixes_devuan_dir; break;
                 case 1: child = aokfs_fixes_debian_link; break;
                 case 2: child = aokfs_fixes_arch_dir; break;
+                case 3: child = aokfs_fixes_codex_dir; break;
                 default: return 0;
             }
             break;
@@ -1170,6 +1243,13 @@ static int aokfs_readdir(struct fd *fd, struct dir_entry *entry) {
             switch (fd->offset++) {
                 case 0: child = aokfs_fixes_arch_readme; break;
                 case 1: child = aokfs_fixes_arch_script; break;
+                default: return 0;
+            }
+            break;
+        case aokfs_fixes_codex_dir:
+            switch (fd->offset++) {
+                case 0: child = aokfs_fixes_codex_readme; break;
+                case 1: child = aokfs_fixes_codex_script; break;
                 default: return 0;
             }
             break;

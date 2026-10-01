@@ -1,6 +1,6 @@
 // /proc facts that ordinary tools read.
 //
-// Five things AOK got wrong, all of them visible to something a user runs:
+// Things AOK got wrong, all of them visible to something a user runs:
 //
 //   /proc/meminfo printed bytes/1000 as "kB". A kB there is 1024 bytes -- Linux
 //   prints pages << (PAGE_SHIFT - 10) -- so every figure was overstated by 2.4%
@@ -17,6 +17,9 @@
 //   /proc/self/oom_score_adj was mode 0444 though its write handler worked, so
 //   a process that checked the mode before lowering its own OOM score gave up
 //   without trying. /proc/sys/kernel/hostname was 0444 with no write handler.
+//
+//   /proc/sys/kernel/overflowuid and overflowgid did not exist, and
+//   bubblewrap exits at once without them.
 //
 // Measured against x86_64 glibc on Linux 6.12.
 #define _GNU_SOURCE
@@ -84,6 +87,24 @@ int main(int argc, char **argv) {
     }
 
     check("kernel/hostname is 0644", mode_of("/proc/sys/kernel/hostname"), 0644);
+
+    // bubblewrap reads both before anything else and will not start without
+    // them (Codex CLI's command sandbox, 2026-10-01); 65534 everywhere.
+    {
+        char buf[32];
+        const char *files[] = {"/proc/sys/kernel/overflowuid", "/proc/sys/kernel/overflowgid"};
+        for (int i = 0; i < 2; i++) {
+            long v = -1;
+            int fd = open(files[i], O_RDONLY);
+            if (fd >= 0) {
+                ssize_t n = read(fd, buf, sizeof buf - 1);
+                buf[n > 0 ? n : 0] = 0;
+                v = atol(buf);
+                close(fd);
+            }
+            check(files[i], v, 65534);
+        }
+    }
 
     // meminfo's kB is 1024 bytes, and must agree with sysinfo(2).
     {

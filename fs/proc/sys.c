@@ -716,6 +716,15 @@ static int sys_show_kernel_ngroups_max(struct proc_entry *UNUSED(entry), struct 
     return 0;
 }
 
+// The id a uid or gid reads as where it cannot be represented: across a user
+// namespace boundary, or through a 16-bit uid call. AOK has neither, so this
+// is Linux's default; bubblewrap reads both before anything else and refuses
+// to start without them.
+static int sys_show_kernel_overflowid(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
+    proc_printf(buf, "%d\n", 65534);
+    return 0;
+}
+
 static int sys_show_kernel_randomize_va_space(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
     proc_printf(buf, "%d\n", aslr_randomize_va_space());
     return 0;
@@ -738,6 +747,8 @@ struct proc_dir_entry proc_sys_kernel[] = {
     {"hostname", S_IFREG | 0644, .show = sys_show_net_unix_hostname, .update = sys_update_kernel_hostname},
     {"ngroups_max", .show = sys_show_kernel_ngroups_max},
     {"osrelease", .show = sys_show_kernel_osrelease},
+    {"overflowgid", .show = sys_show_kernel_overflowid},
+    {"overflowuid", .show = sys_show_kernel_overflowid},
     {"pid_max", S_IFREG | 0644, .show = sys_show_kernel_pid_max, .update = sys_update_kernel_pid_max},
     {"random", S_IFDIR, .readdir = proc_sys_kernel_random_readdir},
     {"randomize_va_space", S_IFREG | 0644, .show = sys_show_kernel_randomize_va_space,
