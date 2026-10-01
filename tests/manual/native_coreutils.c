@@ -1,4 +1,4 @@
-// native_coreutils.c -- SmallCLUE's rm, wc, head, tail, sort, cp, mv, date,
+// native_coreutils.c -- SmallCLUE's rm, wc, head, tail, sort, cp, mv, date, chmod,
 // xargs, find and grep against the answers of GNU coreutils 9.4, findutils
 // 4.9 and grep 3.11.
 //
@@ -500,6 +500,34 @@ static const struct cu_case cases[] = {
      "", 0, 1, NULL},
     {"date", "-u +%Y -d @0", NULL, 0,
      "1970\n", 5, 0, NULL},
+    {"chmod", "-v 755 data.txt", NULL, 0,
+     "mode of 'data.txt' changed from 0644 (rw-r--r--) to 0755 (rwxr-xr-x)\n", 69, 0, NULL},
+    {"chmod", "-v u+x,g-w,o= data.txt", NULL, 0,
+     "mode of 'data.txt' changed from 0644 (rw-r--r--) to 0740 (rwxr-----)\n", 69, 0, NULL},
+    {"chmod", "-v g=u,o=g data.txt", NULL, 0,
+     "mode of 'data.txt' changed from 0644 (rw-r--r--) to 0666 (rw-rw-rw-)\n", 69, 0, NULL},
+    {"chmod", "-v a+X data.txt", NULL, 0,
+     "mode of 'data.txt' retained as 0644 (rw-r--r--)\n", 48, 0, NULL},
+    {"chmod", "-v a+X dir", NULL, 0,
+     "mode of 'dir' retained as 0755 (rwxr-xr-x)\n", 43, 0, NULL},
+    {"chmod", "-v =x data.txt", NULL, 0,
+     "mode of 'data.txt' changed from 0644 (rw-r--r--) to 0111 (--x--x--x)\n", 69, 0, NULL},
+    {"chmod", "-v +t dir", NULL, 0,
+     "mode of 'dir' changed from 0755 (rwxr-xr-x) to 1755 (rwxr-xr-t)\n", 64, 0, NULL},
+    {"chmod", "-v -6000 dir", NULL, 0,
+     "mode of 'dir' retained as 0755 (rwxr-xr-x)\n", 43, 0, NULL},
+    {"chmod", "-c 644 data.txt", NULL, 0,
+     "", 0, 0, NULL},
+    {"chmod", "-Rv 700 dir", NULL, 0,
+     "mode of 'dir' changed from 0755 (rwxr-xr-x) to 0700 (rwx------)\nmode of 'dir/sub' changed from 0755 (rwxr-xr-x) to 0700 (rwx------)\nmode of 'dir/sub/f2' changed from 0644 (rw-r--r--) to 0700 (rwx------)\nmode of 'dir/f1' changed from 0644 (rw-r--r--) to 0700 (rwx------)\n", 270, 0, NULL},
+    {"chmod", "--reference=dir data.txt", NULL, 0,
+     "", 0, 0, NULL},
+    {"chmod", "xyz data.txt", NULL, 0,
+     "", 0, 1, NULL},
+    {"chmod", "755 nosuch", NULL, 0,
+     "", 0, 1, NULL},
+    {"chmod", "755", NULL, 0,
+     "", 0, 1, NULL},
 };
 
 static void write_file(const char *path, const char *text) {
@@ -643,7 +671,7 @@ int main(int argc, char **argv) {
     alarm(test_watchdog_secs(180));
     mkdir(TDIR, 0755);
     mkdir(TDIR "/bin", 0755);
-    static const char *const applets[] = {"head", "tail", "wc", "rm", "sort", "xargs", "find", "grep", "cp", "mv", "date", "sudo"};
+    static const char *const applets[] = {"head", "tail", "wc", "rm", "sort", "xargs", "find", "grep", "cp", "mv", "date", "sudo", "chmod"};
     for (size_t i = 0; i < sizeof(applets) / sizeof(applets[0]); i++) {
         char link[256];
         snprintf(link, sizeof(link), TDIR "/bin/%s", applets[i]);
