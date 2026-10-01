@@ -231,9 +231,10 @@ PURE = {
     # and the host's database is Darwin's, so a name has to be translated
     # rather than passed through -- C.UTF-8 exists on Linux and macOS but not
     # on iOS, which is a warning on every shell start.
-    "localeconv", "strftime", "strptime", "mktime", "timegm",
-    "gmtime", "gmtime_r", "localtime", "localtime_r", "difftime", "asctime",
-    "ctime", "tzset",
+    "localeconv", "strftime", "strptime", "timegm",
+    "gmtime", "gmtime_r", "difftime", "asctime", "asctime_r",
+    # NOT localtime, localtime_r, mktime, ctime or tzset: those convert in a
+    # zone, and the host's is the app's, not the guest's. kernel/native_tz.c.
     # Thread primitives. Creation is redirected -- a new thread needs the task
     # propagated onto it -- but locking and joining touch nothing the guest can
     # observe.

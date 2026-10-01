@@ -595,6 +595,7 @@ src = [
     'kernel/native_bench.c',
     'kernel/native_io.c',
     'kernel/native_libc.c',
+    'kernel/native_tz.c',
     'kernel/sha_crypt.c',
     'kernel/native_kqueue.c',
     'kernel/native_termcap.c',

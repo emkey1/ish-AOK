@@ -6807,9 +6807,37 @@ int nlibc_setgroups(int size, const gid_t *list) {
     return (int) nlibc_ret(native_syscall(NATIVE_SYS_setgroups, size, guest_list));
 }
 
+// The guest's /etc/group memberships of `user`, plus `group`, as the calling
+// task's supplementary groups. This was a no-op returning success, so native
+// sudo kept the INVOKER's groups: `sudo -u root id` run by uid 1500 printed
+// groups=0(root),1500(tester), where real sudo leaves root's groups only.
 int nlibc_initgroups(const char *user, gid_t group) {
-    (void) user; (void) group;
-    return 0;   // no supplementary groups to set; succeeding is the honest no-op
+    int room = 64;
+    for (;;) {
+        int *list = malloc((size_t) room * sizeof(int));
+        if (list == NULL) {
+            errno = ENOMEM;
+            return -1;
+        }
+        int n = room;
+        if (nlibc_getgrouplist(user, (int) group, list, &n) < 0 && n > room) {
+            free(list);
+            room = n;
+            continue;
+        }
+        gid_t *gids = malloc((size_t) n * sizeof(gid_t));
+        if (gids == NULL) {
+            free(list);
+            errno = ENOMEM;
+            return -1;
+        }
+        for (int i = 0; i < n; i++)
+            gids[i] = (gid_t) list[i];
+        int r = nlibc_setgroups(n, gids);
+        free(gids);
+        free(list);
+        return r;
+    }
 }
 
 // /etc/passwd and /etc/group, read from the GUEST. One entry is cached at a

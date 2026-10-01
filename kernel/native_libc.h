@@ -108,6 +108,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <time.h>
 #include <unistd.h>
 
 #ifdef __cplusplus
@@ -383,6 +384,13 @@ int nlibc_mkstemp(char *template);
 int nlibc_utimes(const char *path, const struct timeval times[2]);
 int nlibc_futimes(int fd, const struct timeval times[2]);
 int nlibc_utimensat(int dirfd, const char *path, const struct timespec times[2], int flags);
+/* Local time in the GUEST's zone (kernel/native_tz.c), not the host's. */
+struct tm *nlibc_localtime_r(const time_t *t, struct tm *out);
+struct tm *nlibc_localtime(const time_t *t);
+time_t nlibc_mktime(struct tm *tm);
+void nlibc_tzset(void);
+char *nlibc_ctime_r(const time_t *t, char *buf);
+char *nlibc_ctime(const time_t *t);
 int nlibc_futimens(int fd, const struct timespec times[2]);
 int nlibc_statfs(const char *path, void *buf);
 #ifndef NATIVE_LIBC_OWN_GLOB
@@ -905,6 +913,13 @@ const char *nlibc_dlerror(void);
 #define utimes      nlibc_utimes
 #define futimes     nlibc_futimes
 #define utimensat   nlibc_utimensat
+#define localtime_r nlibc_localtime_r
+#define localtime   nlibc_localtime
+#define mktime      nlibc_mktime
+#define timelocal   nlibc_mktime
+#define tzset       nlibc_tzset
+#define ctime_r     nlibc_ctime_r
+#define ctime       nlibc_ctime
 #define futimens    nlibc_futimens
 /* Function-like, as with stat above: `statfs` names both a function and a
  * struct tag, and an object-like macro would rewrite `struct statfs` too. */

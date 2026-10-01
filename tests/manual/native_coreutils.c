@@ -17,6 +17,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <pwd.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -642,7 +643,7 @@ int main(int argc, char **argv) {
     alarm(test_watchdog_secs(180));
     mkdir(TDIR, 0755);
     mkdir(TDIR "/bin", 0755);
-    static const char *const applets[] = {"head", "tail", "wc", "rm", "sort", "xargs", "find", "grep", "cp", "mv", "date"};
+    static const char *const applets[] = {"head", "tail", "wc", "rm", "sort", "xargs", "find", "grep", "cp", "mv", "date", "sudo"};
     for (size_t i = 0; i < sizeof(applets) / sizeof(applets[0]); i++) {
         char link[256];
         snprintf(link, sizeof(link), TDIR "/bin/%s", applets[i]);
@@ -722,6 +723,62 @@ int main(int argc, char **argv) {
         } else {
             printf("FAIL cp -p keeps nanosecond times (status %d)\n", status);
             failures_total++;
+        }
+    }
+
+    // Native local time is the GUEST's zone (kernel/native_tz.c), not the
+    // host's. POSIX rule strings need no zoneinfo files, so these hold on
+    // every root; the answers are GNU date's.
+    static const struct { const char *tz; struct cu_case c; } zoned[] = {
+        {"EST5EDT,M3.2.0,M11.1.0", {"date", "-d @1719835200 +%F_%T_%Z_%z", NULL, 0, "2024-07-01_08:00:00_EDT_-0400\n", 30, 0, NULL}},
+        {"EST5EDT,M3.2.0,M11.1.0", {"date", "-d @1704067200 +%F_%T_%Z_%z", NULL, 0, "2023-12-31_19:00:00_EST_-0500\n", 30, 0, NULL}},
+        {"<+0530>-5:30", {"date", "-d @0 +%F_%T_%Z_%z", NULL, 0, "1970-01-01_05:30:00_+0530_+0530\n", 32, 0, NULL}},
+        {"AEST-10AEDT,M10.1.0,M4.1.0/3", {"date", "-d @1719835200 +%F_%T_%Z", NULL, 0, "2024-07-01_22:00:00_AEST\n", 25, 0, NULL}},
+        {"CET-1CEST,M3.5.0,M10.5.0/3", {"date", "-d 2024-07-01T12:00 +%s_%Z", NULL, 0, "1719828000_CEST\n", 16, 0, NULL}},
+        {"CET-1CEST,M3.5.0,M10.5.0/3", {"date", "-d 2024-10-27T02:30 +%s_%Z", NULL, 0, "1729992600_CET\n", 15, 0, NULL}},
+        {"EST5EDT,M3.2.0,M11.1.0", {"date", "-d 2024-03-10T02:30 +%T", NULL, 0, "", 0, 1, NULL}},
+    };
+    for (size_t i = 0; i < sizeof(zoned) / sizeof(zoned[0]); i++) {
+        size_t len = 0;
+        setenv("TZ", zoned[i].tz, 1);
+        int status = run_case(&zoned[i].c, out, sizeof(out), &len);
+        unsetenv("TZ");
+        const struct cu_case *c = &zoned[i].c;
+        if (status == c->expect_status && len == c->expect_len && !memcmp(out, c->expect, len)) {
+            test_logf("ok   TZ=%s date %s\n", zoned[i].tz, c->args);
+        } else {
+            printf("FAIL TZ=%s date %s\n", zoned[i].tz, c->args);
+            print_bytes("want", c->expect, c->expect_len);
+            print_bytes("got ", out, len);
+            failures_total++;
+        }
+    }
+
+    // Native sudo: the target's groups (initgroups was a no-op in the shim,
+    // so the invoker's stayed), and leading NAME=value arguments as the
+    // command's environment, not as the command. Root only: sudo checks
+    // policy for anyone else.
+    if (geteuid() == 0) {
+        /* nobody's own group alone, when the root has a nobody at all. */
+        char nobodyGroups[32] = "";
+        struct passwd *pw = getpwnam("nobody");
+        if (pw) snprintf(nobodyGroups, sizeof(nobodyGroups), "%u\n", (unsigned)pw->pw_gid);
+        struct cu_case sudoCases[] = {
+            {"sudo", "-u nobody id -G", NULL, 0, nobodyGroups, strlen(nobodyGroups), 0, NULL},
+            {"sudo", "FOO=bar printenv FOO", NULL, 0, "bar\n", 4, 0, NULL},
+            {"sudo", "LD_PRELOAD=x printenv FOO", NULL, 0, "", 0, 1, NULL},
+        };
+        for (size_t i = pw ? 0 : 1; i < sizeof(sudoCases) / sizeof(sudoCases[0]); i++) {
+            size_t len = 0;
+            int status = run_case(&sudoCases[i], out, sizeof(out), &len);
+            const struct cu_case *c = &sudoCases[i];
+            if (status == c->expect_status && len == c->expect_len && !memcmp(out, c->expect, len)) {
+                test_logf("ok   sudo %s\n", c->args);
+            } else {
+                printf("FAIL sudo %s (status %d)\n", c->args, status);
+                print_bytes("got ", out, len);
+                failures_total++;
+            }
         }
     }
     if (chdir("/") != 0) {}
