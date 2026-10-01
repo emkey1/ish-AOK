@@ -125,9 +125,9 @@ static NSArray<NSString *> *DisplayGuestSessionCommand(void) {
              [NSString stringWithFormat:@"%@sh /AOK/tools/start-wayland.sh",
                  DisplayUIScaleEnvPrefix()]];
 }
-// start-wayland.sh waits up to 120 s for the guest's early boot to finish
-// wiping /tmp before it starts anything (a 5th-generation iPad took ~30 s), so
-// this allows for that plus the desktop's own start. A real failure does not
+// Generous because the desktop starts together with the guest's boot, and on a
+// slow device under that load it takes most of a minute (5th-generation iPad:
+// ready ~25 s after boot, plus the app's own start). A real failure does not
 // wait for it: the script's .error file ends the poll at once.
 static const NSTimeInterval DisplayReadyTimeout = 180.0;
 

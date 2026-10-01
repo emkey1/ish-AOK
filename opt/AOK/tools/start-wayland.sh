@@ -205,16 +205,16 @@ while [ -n "$_wl_others" ]; do
     _wl_others=$(aok_other_wayland_sessions)
 done
 
-# Wait out the guest's early boot, the stage that wipes /tmp (Devuan's
-# `rc S`, whose bootclean honours TMPTIME=0; OpenRC's sysinit and boot
-# runlevels). The runtime dir already lives under $HOME for this reason (see
-# WL_RUNTIME_BASE), but X cannot move: the compositor's display is
-# /tmp/.X<n>-lock and /tmp/.X11-unix/X<n>. The app opens this session as soon
-# as it launches, so on a slow device labwc was up 4 s after boot and the
-# cleanup deleted both at 26 s (5th-generation iPad, 2026-09-30). Nothing then
-# names the display, DISPLAY stayed unset, and every X11 game failed with
-# "x11 not available". Waiting costs nothing when boot is over, and
-# DisplayViewController's ready timeout allows for it.
+# The guest's early boot, the stage that wipes /tmp: Devuan's `rc S`, whose
+# bootclean honours TMPTIME=0, or OpenRC's sysinit and boot runlevels. The app
+# opens this session as soon as it launches, so on a slow device the compositor
+# is up long before that cleanup runs (5th-generation iPad: labwc at 4 s, the
+# cleanup at 26 s), and the cleanup deletes the compositor's /tmp/.X<n>-lock,
+# its /tmp/.X11-unix/X<n> and the applet's ready file. Waiting the cleanup out
+# before starting cost the desktop ~20 s there, so the session starts at once
+# and repairs afterwards instead (aok_repair_after_early_boot, below). The
+# runtime dir is under $HOME for the same reason (see WL_RUNTIME_BASE); X's
+# paths cannot move.
 aok_early_boot_running() {
     for _eb_cmdline in /proc/[0-9]*/cmdline; do
         _eb_args=$(tr '\0' ' ' < "$_eb_cmdline" 2>/dev/null) || continue
@@ -224,12 +224,21 @@ aok_early_boot_running() {
     done
     return 1
 }
-_eb_waited=0
-while aok_early_boot_running && [ "$_eb_waited" -lt 240 ]; do
-    [ "$_eb_waited" -eq 0 ] && log "waiting for the guest's boot to finish cleaning /tmp"
-    sleep 0.5
-    _eb_waited=$((_eb_waited + 1))
-done
+# Started near boot? The app starts this session together with the guest, so
+# init may not even have started its early boot yet: on a 5th-generation iPad
+# this script was pid 3. The repair is armed by uptime, not by catching the
+# early boot in the act.
+UPTIME_AT_START=$(cut -d. -f1 /proc/uptime 2>/dev/null || echo 9999)
+
+# The distro's env and sh, by path, for the commands whose pid this script
+# tracks. native-links.sh puts SmallCLUE's env and dash first on PATH, and a
+# native program cannot exec in place -- it runs the command as a child and
+# waits -- so $! named the wrapper and not the compositor: the X lock (written
+# with labwc's pid) never matched, the fallback looked at the wrapper's
+# sockets, and no X program in the desktop had a DISPLAY.
+AOK_ENV=/usr/bin/env
+[ -x "$AOK_ENV" ] || AOK_ENV=env
+AOK_SH=/bin/sh
 
 rm -f "$READY_FILE" "$ERROR_FILE"
 
@@ -585,7 +594,21 @@ trap cleanup TERM INT HUP EXIT
 # without it, a crash right after launch (e.g. wayvnc/foot dying before
 # their first line of output reaches the pty) leaves no way to diagnose
 # *why* short of re-running this script by hand over SSH.
-DEBUG_LOG="${ISH_DISPLAY_DEBUG_LOG:-/tmp/ish-wayland-debug.log}"
+#
+# It lives under $HOME and /tmp/ish-wayland-debug.log points at it: a session
+# started early in boot had its log deleted by the boot's /tmp cleanup along
+# with the evidence of why wayvnc died (5th-generation iPad, 2026-10-01), and
+# it is outside $WL_RUNTIME_BASE because each session (a Reconnect included)
+# empties that. The previous session's log is kept beside it as .prev.
+DEBUG_LOG="${ISH_DISPLAY_DEBUG_LOG:-}"
+if [ -z "$DEBUG_LOG" ]; then
+    DEBUG_LOG="${HOME:-/tmp}/.cache/ish-wayland-debug.log"
+    mkdir -p "${DEBUG_LOG%/*}" 2>/dev/null
+    [ -s "$DEBUG_LOG" ] && mv -f "$DEBUG_LOG" "$DEBUG_LOG.prev" 2>/dev/null
+    # -sf, not -sfn: SmallCLUE's ln (first on PATH after native-links.sh)
+    # rejects -n, and the target is a file, so -n changes nothing.
+    ln -sf "$DEBUG_LOG" /tmp/ish-wayland-debug.log 2>/dev/null
+fi
 # An unwritable $DEBUG_LOG is FATAL downstream, not cosmetic: spawn_logged
 # pipes every process through `tee -a $DEBUG_LOG`, so if tee can't open the
 # log it exits, the fifo loses its reader, and the compositor dies on SIGPIPE
@@ -1342,7 +1365,7 @@ start_compositor() {
     if [ "$WL_GPU_COMPOSITOR" = 1 ] && drirc_dir=$(wl_gpu_drirc); then
         log "starting $COMPOSITOR_CMD (headless, composited on the GPU)"
         log_mark=$(wc -c < "$DEBUG_LOG" 2>/dev/null || echo 0)
-        spawn_logged compositor env -u LIBGL_ALWAYS_SOFTWARE \
+        spawn_logged compositor "$AOK_ENV" -u LIBGL_ALWAYS_SOFTWARE \
             WLR_RENDERER=vulkan DRIRC_CONFIGDIR="$drirc_dir" $COMPOSITOR_CMD
         COMPOSITOR_PID=$SPAWN_PID
         # The output's first commit, where a failure shows, follows the
@@ -1397,6 +1420,20 @@ while [ -z "$WAYLAND_SOCKET_NAME" ] && [ $i -lt 100 ]; do
 done
 [ -n "$WAYLAND_SOCKET_NAME" ] || die "$COMPOSITOR_CMD did not create a wayland-* socket within 10s"
 export WAYLAND_DISPLAY="$WAYLAND_SOCKET_NAME"
+
+# If something still sits between this script and the compositor (a wrapper
+# that runs its command as a child -- see AOK_ENV), track the compositor
+# itself: the X lock names it, and its sockets are the ones looked at below.
+_comp_name=${COMPOSITOR_CMD%% *}
+_comp_name=${_comp_name##*/}
+if [ "$(cat /proc/"$COMPOSITOR_PID"/comm 2>/dev/null)" != "$_comp_name" ]; then
+    for _c in /proc/[0-9]*; do
+        [ "$(aok_ppid "${_c#/proc/}")" = "$COMPOSITOR_PID" ] || continue
+        [ "$(cat "$_c/comm" 2>/dev/null)" = "$_comp_name" ] || continue
+        COMPOSITOR_PID=${_c#/proc/}
+        break
+    done
+fi
 
 # The socket *file* existing doesn't mean labwc's event loop is actually
 # accepting Wayland client connections yet -- observed on-device: wayvnc
@@ -1556,9 +1593,30 @@ for x_lock in /tmp/.X*-lock; do
     [ "$x_lock_pid" = "$COMPOSITOR_PID" ] || continue
     x_display="${x_lock#/tmp/.X}"
     export DISPLAY=":${x_display%-lock}"
+    X_LOCK_PATH="$x_lock"
+    cp "$x_lock" "$XDG_RUNTIME_DIR/x-lock.copy" 2>/dev/null
     log "X programs use display $DISPLAY (Xwayland starts on the first one)"
     break
 done
+# The lock can already be gone when the session started before the guest's
+# boot cleaned /tmp. The compositor's listening X sockets survive that (the
+# abstract one is what clients connect to first), so the display is found
+# from them: the compositor's socket inodes against /proc/net/unix.
+if [ -z "${DISPLAY:-}" ] && [ -r /proc/net/unix ]; then
+    _x_inodes=" "
+    for _fd in /proc/"$COMPOSITOR_PID"/fd/*; do
+        _t=$(readlink "$_fd" 2>/dev/null) || continue
+        case "$_t" in socket:\[*\]) _t=${_t#socket:[}; _x_inodes="$_x_inodes${_t%]} " ;; esac
+    done
+    _x_num=$(awk -v inodes="$_x_inodes" '$8 ~ /^@?\/tmp\/\.X11-unix\/X[0-9]+$/ && index(inodes, " " $7 " ") {
+        sub(/.*X/, "", $8); print $8; exit }' /proc/net/unix 2>/dev/null)
+    if [ -n "$_x_num" ]; then
+        export DISPLAY=":$_x_num"
+        X_LOCK_PATH="/tmp/.X$_x_num-lock"
+        printf '%10d\n' "$COMPOSITOR_PID" > "$XDG_RUNTIME_DIR/x-lock.copy" 2>/dev/null
+        log "X programs use display $DISPLAY (found from the compositor's socket)"
+    fi
+fi
 
 # foot isn't load-bearing for the applet's own readiness (wayvnc is what the
 # bridge connects to), so a foot that dies here leaves a perfectly "Connected"
@@ -1573,6 +1631,11 @@ done
 # some output, then fully exited moments later). The old check here was a
 # single 0.2s sleep + one kill -0, far too narrow a window to catch a death
 # that lands just after it. Give foot the same watch-then-retry treatment.
+# The ready file comes only after this watch, and that matters beyond foot:
+# written straight after starting foot, the applet connected and wl-present
+# told wayvnc to detach while wayvnc was still on its first capture, and
+# wayvnc 0.9.1 crashed (a NULL write in libwayland-client's object map, the
+# connection it had just dropped) -- 5th-generation iPad, 2026-10-01.
 foot_attempt=1
 while true; do
     log "starting foot (attempt $foot_attempt)"
@@ -1601,6 +1664,8 @@ while true; do
     sleep 0.3
 done
 
+
+
 # On the GPU, wl-present (compiled into iSH-AOK) hands each frame the
 # compositor draws straight to the app, and takes the app's pointer, keyboard,
 # clipboard and resizes to the compositor itself. Once the app is showing its
@@ -1612,7 +1677,7 @@ done
 # (whose buffers the app cannot take), the app uses wayvnc as before.
 if [ "$WL_GPU_COMPOSITOR" = 1 ] && [ "${ISH_DISPLAY_DIRECT:-1}" != 0 ] && [ -x /AOK/native/wl-present ]; then
     log "presenting the desktop to the app directly"
-    spawn_logged wl-present env WAYVNC_PORT="$WAYVNC_PORT" sh -c '
+    spawn_logged wl-present "$AOK_ENV" WAYVNC_PORT="$WAYVNC_PORT" "$AOK_SH" -c '
         /AOK/native/wl-present | while read -r cmd; do
             case "$cmd" in
                 detach) wayvncctl detach ;;
@@ -1647,6 +1712,39 @@ if [ "$COMPOSITOR_CMD" = "labwc" ] && command -v waybar >/dev/null 2>&1 \
     log "starting the panel (waybar)"
     spawn_logged panel "$HOME/.config/labwc/panel.sh" start
     PANEL_PID=$SPAWN_PID
+fi
+
+# The repair the early-boot comment above promises: once the guest's boot has
+# cleaned /tmp, put back the compositor's X lock (aok-sdl-game and later
+# sessions find the display by it) and the applet's ready file (a Reconnect
+# polls for it). Only for a session that started near boot (UPTIME_AT_START).
+aok_repair_after_early_boot() {
+    # Wait for the early boot to show up and finish -- or, when none shows up
+    # within a minute (a root without one), repair anyway, which is harmless.
+    _rp_waited=0
+    _rp_seen=0
+    while [ "$_rp_waited" -lt 600 ]; do
+        if aok_early_boot_running; then
+            _rp_seen=1
+        elif [ "$_rp_seen" = 1 ] || [ "$_rp_waited" -ge 60 ]; then
+            break
+        fi
+        sleep 1
+        _rp_waited=$((_rp_waited + 1))
+    done
+    kill -0 "$COMPOSITOR_PID" 2>/dev/null || return 0
+    if [ -n "${X_LOCK_PATH:-}" ] && [ ! -e "$X_LOCK_PATH" ] && [ -s "$XDG_RUNTIME_DIR/x-lock.copy" ]; then
+        cp "$XDG_RUNTIME_DIR/x-lock.copy" "$X_LOCK_PATH" 2>/dev/null && chmod 444 "$X_LOCK_PATH" 2>/dev/null
+    fi
+    if [ -z "${ISH_DISPLAY_DEBUG_LOG:-}" ] && [ ! -e /tmp/ish-wayland-debug.log ]; then
+        ln -sf "$DEBUG_LOG" /tmp/ish-wayland-debug.log 2>/dev/null
+    fi
+    if [ ! -e "$READY_FILE" ] && [ ! -e "/tmp/ish-display.closing.$$" ]; then
+        printf '%s\n' "$WAYVNC_PORT" > "$READY_FILE" 2>/dev/null
+    fi
+}
+if [ "$UPTIME_AT_START" -lt 300 ] 2>/dev/null; then
+    aok_repair_after_early_boot &
 fi
 
 wait "$COMPOSITOR_PID" "$FOOT_PID" "$WAYVNC_PID"
