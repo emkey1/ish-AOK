@@ -571,6 +571,8 @@ static uint64_t ckpt_running_root(char *name, size_t name_size) {
     return id;
 }
 
+static uint64_t ckpt_fingerprint(void);
+
 int checkpoint_peek(const char *host_path, struct checkpoint_image_info *out) {
     memset(out, 0, sizeof(*out));
     FILE *f = fopen(host_path, "rb");
@@ -597,7 +599,12 @@ int checkpoint_peek(const char *host_path, struct checkpoint_image_info *out) {
              ? sizeof(h.hostname) : sizeof(out->hostname) - 1;
     memcpy(out->hostname, h.hostname, n);
     out->hostname[n] = '\0';
-    out->loadable = h.version == CKPT_VERSION && h.page_size == PAGE_SIZE;
+    // The same tests checkpoint_restore makes before it changes anything. The
+    // fingerprint used to be left out, so after a rebuild the picker offered
+    // an image the restore was certain to refuse, and "Resume" booted instead.
+    out->loadable = h.version == CKPT_VERSION && h.page_size == PAGE_SIZE &&
+            h.build_fingerprint == ckpt_fingerprint() &&
+            h.cpu_state_size == sizeof(struct cpu_state);
     // Only a header of this version has these fields where this build reads
     // them; in any other it is whatever followed a shorter header.
     if (h.version == CKPT_VERSION) {
@@ -611,6 +618,12 @@ int checkpoint_peek(const char *host_path, struct checkpoint_image_info *out) {
 void checkpoint_get_status(struct checkpoint_status *out) {
     lock(&ckpt_lock, 0);
     *out = ckpt_status;
+    unlock(&ckpt_lock);
+}
+
+static void ckpt_status_clear_refusal(void) {
+    lock(&ckpt_lock, 0);
+    ckpt_status.last_refusal[0] = '\0';
     unlock(&ckpt_lock);
 }
 
@@ -6028,19 +6041,37 @@ int checkpoint_restore(const char *host_path) {
     // What the restore builds as it goes: the shared standard streams, the
     // descriptor identity table, and the pipes. See ckpt_restore_task.
     struct ckpt_restore_state st = {0};
-    if ((err = rd(f, &h, sizeof(h))) < 0)
+    uint32_t restoring_pid = 0;     // for a failure that gave no reason
+    // Each refusal says why. They used to return -22 and nothing else, and the
+    // app logged "session NOT restored: -22 (no reason recorded)" for what was
+    // nearly always a rebuild between the save and the resume.
+    ckpt_status_clear_refusal();
+    if ((err = rd(f, &h, sizeof(h))) < 0) {
+        ckpt_refuse("the image is too short to hold a header");
         goto out;
+    }
     err = _EINVAL;
-    if (memcmp(h.magic, CKPT_MAGIC, sizeof(h.magic)) != 0)
+    if (memcmp(h.magic, CKPT_MAGIC, sizeof(h.magic)) != 0) {
+        ckpt_refuse("not a session image");
         goto out;
-    if (h.version != CKPT_VERSION || h.page_size != PAGE_SIZE)
+    }
+    if (h.version != CKPT_VERSION || h.page_size != PAGE_SIZE) {
+        ckpt_refuse("saved in session format %u with %u-byte pages; this build "
+                    "reads format %u with %u-byte pages",
+                    h.version, h.page_size, CKPT_VERSION, (unsigned) PAGE_SIZE);
         goto out;
+    }
     // The refusal that keeps a byte-copied struct cpu_state honest.
     if (h.build_fingerprint != ckpt_fingerprint() ||
-            h.cpu_state_size != sizeof(struct cpu_state))
+            h.cpu_state_size != sizeof(struct cpu_state)) {
+        ckpt_refuse("saved by a different build of iSH-AOK; a session can be "
+                    "resumed only by the build that saved it");
         goto out;
-    if (h.n_tasks == 0 || h.n_tasks > 4096)
+    }
+    if (h.n_tasks == 0 || h.n_tasks > 4096) {
+        ckpt_refuse("the image names %u processes", h.n_tasks);
         goto out;
+    }
     // The root, before anything is changed: the image is intact and belongs to
     // another root, so this refuses rather than fails, with a code of its own
     // so that whoever offered the image keeps it for that root. Only when both
@@ -6113,8 +6144,11 @@ int checkpoint_restore(const char *host_path) {
                 rec.exe_memfd_len > CKPT_ANON_MAX ||
                 rec.ngroups > MAX_GROUPS ||
                 rec.seccomp_nprogs > CKPT_MAX_SECCOMP_PROGS ||
-                rec.n_sigactions != NUM_SIGS)
+                rec.n_sigactions != NUM_SIGS) {
+            ckpt_refuse("the record of pid %u is malformed", rec.pid);
             goto out;
+        }
+        restoring_pid = rec.pid;
 
         struct task *task;
         if (i == 0 && rec.pid == (uint32_t) first->pid) {
@@ -6367,6 +6401,17 @@ int checkpoint_restore(const char *host_path) {
     err = 0;
 
 out:
+    // Whatever failed further down without a word of its own is still named
+    // by the process it was rebuilding.
+    if (err < 0) {
+        lock(&ckpt_lock, 0);
+        bool said = ckpt_status.last_refusal[0] != '\0';
+        unlock(&ckpt_lock);
+        if (!said && restoring_pid != 0)
+            ckpt_refuse("pid %u could not be restored (%d)", restoring_pid, err);
+        else if (!said)
+            ckpt_refuse("the image could not be read (%d)", err);
+    }
     // The seccomp filters the restore shared between tasks, which each task
     // now holds for itself.
     seccomp_ckpt_import_done();

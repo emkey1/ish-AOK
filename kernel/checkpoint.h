@@ -209,7 +209,7 @@ void checkpoint_get_restore_note(char *out, size_t size);
 #define CKPT_PEEK_HOSTNAME 65
 #define CKPT_PEEK_ROOT_NAME 64
 struct checkpoint_image_info {
-    bool loadable;          // magic, version and page size match THIS build
+    bool loadable;          // version, page size and build match THIS build
     uint32_t version;       // what it actually is, for "saved by an older build"
     uint32_t abi;
     uint32_t tasks;
