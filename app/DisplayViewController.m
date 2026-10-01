@@ -193,6 +193,10 @@ typedef NS_ENUM(NSInteger, DisplayConnectionState) {
     // hardware keyboard is attached and the user asked to hide extra keys.
     UIView *_Nullable _accessoryStrip;
     NSLayoutConstraint *_Nullable _accessoryStripZeroHeightConstraint;
+    // Hardware-keyboard notifications waiting out their burst, and when the
+    // last forced resign/become ran (-_updateAccessoryPresentationMode).
+    BOOL _keyboardChangeSettling;
+    CFTimeInterval _lastForcedResponderCycle;
     DisplayRFBView *_displayView;
     // Two alternate top constraints for _displayView, swapped by
     // -_updateMaximizeScreenSpaceLayout: the normal one sits below the
@@ -539,15 +543,37 @@ typedef NS_ENUM(NSInteger, DisplayConnectionState) {
     // responder, then immediately reclaim it, so UIKit tears down whatever
     // it was presenting before re-evaluating -inputAccessoryView from a
     // clean slate.
+    //
+    // At most once every two seconds, though. That cycle is itself one of the
+    // things that makes GameController report the keyboard disconnecting and
+    // connecting again, and each report came back here and cycled again: on
+    // the M4, after switching away from the app and back, the main thread
+    // spent the rest of the session rebuilding the keyboard (three samples,
+    // all in this resign/become) and the app took no input at all. Inside
+    // the window the new mode is recorded and the strip updated; only the
+    // forced cycle is skipped.
     if (modeChanged && self.displayView.isFirstResponder) {
-        [self.displayView resignFirstResponder];
-        [self.displayView becomeFirstResponder];
+        CFTimeInterval now = CACurrentMediaTime();
+        if (now - _lastForcedResponderCycle >= 2.0) {
+            _lastForcedResponderCycle = now;
+            [self.displayView resignFirstResponder];
+            [self.displayView becomeFirstResponder];
+        }
     }
 }
 
 - (void)_hardwareKeyboardChangedForStrip:(NSNotification *)notification {
     // GCKeyboard notifications are not guaranteed to arrive on the main queue.
+    // They come in bursts (connect, disconnect, connect again around a
+    // foreground return), so the burst is let settle and acted on once, on
+    // the state it settled in.
     dispatch_async(dispatch_get_main_queue(), ^{
+        if (self->_keyboardChangeSettling)
+            return;
+        self->_keyboardChangeSettling = YES;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t) (0.3 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+        self->_keyboardChangeSettling = NO;
         [self _updateAccessoryPresentationMode];
         // A hardware keyboard disconnecting mid-session is exactly the
         // no-hardware-keyboard condition -_autoShowKeyboardIfAppropriate
@@ -555,6 +581,7 @@ typedef NS_ENUM(NSInteger, DisplayConnectionState) {
         // later" case, not just the at-connect one. Harmless no-op if a
         // keyboard just connected instead -- the guard bails immediately.
         [self _autoShowKeyboardIfAppropriate];
+        });
     });
 }
 
