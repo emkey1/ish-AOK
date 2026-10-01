@@ -1054,6 +1054,57 @@ static const struct cu_case cases[] = {
      "", 0, 0, ".\n./a.tar\n./data.txt\n./dir\n./dir/f1\n./dir/sub\n./dir/sub/f2\n./empty\n./empty.txt\n./lines.txt\n./nonl.txt\n./text.txt\n"},
     {"tar", "-cf a.tar -C dir f1 sub", NULL, 0,
      "", 0, 0, ".\n./a.tar\n./data.txt\n./dir\n./dir/f1\n./dir/sub\n./dir/sub/f2\n./empty\n./empty.txt\n./lines.txt\n./nonl.txt\n./text.txt\n"},
+    /* awk: mawk 1.3.4 (Devuan's awk) is the reference */
+    {"awk", "BEGIN{x=1;x+=x+++(++x);print(x)}", NULL, 0,
+     "7\n", 2, 0, NULL},
+    {"awk", "BEGIN{i=1;a[i++]+=5;print(i,a[1])}", NULL, 0,
+     "2 5\n", 4, 0, NULL},
+    {"awk", "BEGIN{print(-2^2,!0+1,2^-1,1<2<3,!0&&0)}", NULL, 0,
+     "-4 2 0.5 1 0\n", 13, 0, NULL},
+    {"awk", "BEGIN{printf(\"[%*d][%-*s][%.*f]\\n\",5,42,4,\"ab\",2,3.14159)}", NULL, 0,
+     "[   42][ab  ][3.14]\n", 20, 0, NULL},
+    {"awk", "BEGIN{printf(\"%d|%d\\n\",1)}END{print(\"e\")}", NULL, 0,
+     "1|", 2, 2, NULL},
+    {"awk", "BEGIN{print(substr(\"x\"))}", NULL, 0,
+     "", 0, 2, NULL},
+    {"awk", "BEGIN{print(length(1,2))}", NULL, 0,
+     "", 0, 2, NULL},
+    {"awk", "BEGIN{s=\"aaa\";gsub(/x*/,\"-\",s);t=\"hello\";gsub(/l*/,\"X\",t);print(s,t)}", NULL, 0,
+     "-a-a-a- XhXeXoX\n", 16, 0, NULL},
+    {"awk", "BEGIN{print(\"0x10\"+0,\"+inf\"+0,\"1e3\"+0,\".5\"+0)}", NULL, 0,
+     "0 0 1000 0.5\n", 13, 0, NULL},
+    {"awk", "BEGIN{print(strftime(\"%Y-%m-%d.%H\",86400*365,1),mktime(\"x\"),length(strftime()))}", NULL, 0,
+     "1971-01-01.00 -1 24\n", 20, 0, NULL},
+    {"awk", "{while((getline<\"data.txt\")>0)n++;print(NR,n,$1)}", "a\nb\n", 4,
+     "1 5 delta\n2 5 b\n", 16, 0, NULL},
+    {"awk", "BEGIN{print(\"x\")>\"/dev/stderr\";print(\"y\")>\"/dev/stdout\"}", NULL, 0,
+     "y\n", 2, 0, NULL},
+    {"awk", "BEGIN{print(\"a\")>\"/nonexistent/x\"}", NULL, 0,
+     "", 0, 2, NULL},
+    {"awk", "BEGIN{print((getline<\"/nonexist\"))}", NULL, 0,
+     "-1\n", 3, 0, NULL},
+    {"awk", "{", NULL, 0,
+     "", 0, 2, NULL},
+    {"awk", "BEGIN{ARGV[1]=\"data.txt\";ARGC=2}{print($1)}", NULL, 0,
+     "alpha\nbeta\ngamma\nalpha\ndelta\n", 29, 0, NULL},
+    {"awk", "-v s=a\\tb\\\\n BEGIN{print(s)}", NULL, 0,
+     "a\tb\\n\n", 6, 0, NULL},
+    {"awk", "BEGIN{RS=\"[0-9]+\"}{print(NR,$0)}", "x1y22z333", 9,
+     "1 x\n2 y\n3 z\n", 12, 0, NULL},
+    {"awk", "BEGIN{CONVFMT=\"%.2g\";a[0.1234567]=1;print(a[\"0.12\"],a[0.1234567])}", NULL, 0,
+     "1 1\n", 4, 0, NULL},
+    {"awk", "-F\\t {print(NF,$4)}", "a\tb\t\tc\n", 7,
+     "4 c\n", 4, 0, NULL},
+    {"awk", "{printf(\"%c%c\\n\",$1,$2)}", "65 x\n", 5,
+     "Ax\n", 3, 0, NULL},
+    {"awk", "1 nosuchfile", NULL, 0,
+     "", 0, 2, NULL},
+    {"awk", "NR==2{printf(\"%d%d\\n\",1)}{print}", "l1\nl2\n", 6,
+     "l1\n1", 4, 2, NULL},
+    {"awk", "BEGIN{x[\"a\"];print(length(x))}", NULL, 0,
+     "1\n", 2, 0, NULL},
+    {"awk", "BEGIN{print(1/0,-1/0)}", NULL, 0,
+     "+inf -inf\n", 10, 0, NULL},
 };
 
 static void write_file(const char *path, const char *text) {
@@ -1197,7 +1248,7 @@ int main(int argc, char **argv) {
     alarm(test_watchdog_secs(180));
     mkdir(TDIR, 0755);
     mkdir(TDIR "/bin", 0755);
-    static const char *const applets[] = {"head", "tail", "wc", "rm", "sort", "xargs", "find", "grep", "cp", "mv", "date", "sudo", "chmod", "ls", "diff", "cmp", "sed", "uniq", "tr", "nl", "seq", "touch", "stat", "realpath", "readlink", "env", "sum", "rmdir", "cat", "fold", "tac", "dd", "od", "split", "du", "gzip", "gunzip", "zcat", "tar"};
+    static const char *const applets[] = {"head", "tail", "wc", "rm", "sort", "xargs", "find", "grep", "cp", "mv", "date", "sudo", "chmod", "ls", "diff", "cmp", "sed", "uniq", "tr", "nl", "seq", "touch", "stat", "realpath", "readlink", "env", "sum", "rmdir", "cat", "fold", "tac", "dd", "od", "split", "du", "gzip", "gunzip", "zcat", "tar", "awk"};
     for (size_t i = 0; i < sizeof(applets) / sizeof(applets[0]); i++) {
         char link[256];
         snprintf(link, sizeof(link), TDIR "/bin/%s", applets[i]);
