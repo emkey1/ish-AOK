@@ -1389,7 +1389,7 @@ static int ckpt_classify_fd(int num, struct fd *fd, char *path, size_t path_size
     // and cannot be written into an image. Reopened, the render node would be
     // a blank device under a compositor that believes it has a GPU, so the
     // suspend is refused, in words that say what to do.
-    // A save asked to leave such processes out (CKPT_SAVE_LEAVE_OUT_GPU) has
+    // A save asked to leave such processes out (CKPT_SAVE_LEAVE_OUT) has
     // already dropped them, so reaching this means no one was asked.
     if (ckpt_fd_is_gpu(fd, path, path_size)) {
         ckpt_refuse("a Wayland desktop or GPU program is running (fd %d is %s); "
@@ -2475,7 +2475,7 @@ static struct timespec ckpt_host_deadline_after(int64_t left_ns) {
     return timespec_add(timespec_now(CLOCK_MONOTONIC), left);
 }
 
-static bool ckpt_task_as_killed(struct task *t);   // with CKPT_SAVE_LEAVE_OUT_GPU, below
+static bool ckpt_task_as_killed(struct task *t);   // with CKPT_SAVE_LEAVE_OUT, below
 
 static int ckpt_save_task(struct ckpt_writer *w, struct task *task,
         struct ckpt_header *h, uint64_t *pages_out, struct ckpt_fd_ids *ids,
@@ -3176,7 +3176,7 @@ int checkpoint_save(const char *host_path) {
     return ckpt_save(host_path, 0);
 }
 
-// What the last save left out (CKPT_SAVE_LEAVE_OUT_GPU), for its status.
+// What the last save left out (CKPT_SAVE_LEAVE_OUT), for its status.
 static unsigned long ckpt_left_out;
 static char ckpt_left_out_note[192];
 // The left-out processes whose parent stays: written as zombies killed by
@@ -3194,14 +3194,69 @@ static bool ckpt_task_as_killed(struct task *t) {
     return false;
 }
 
-// Leave the GPU holders out, and everything that belongs with them: their
+// Whether anything a task holds would refuse the save: the GPU or the Wayland
+// view's input, a memfd too large to carry, or a descriptor with no restore
+// rule. Asked while frozen, before anything is written. The descriptors are
+// gathered with a reference and the table lock dropped before any is asked,
+// as the writer does (asking one can walk every task's table). A refusal the
+// classifier records while answering is put back: this is a question, not the
+// save.
+static bool ckpt_task_unsaveable(struct task *task) {
+    struct fdtable *files = task->files;
+    if (files == NULL)
+        return false;
+    lock(&files->lock, 0);
+    unsigned n = files->size;
+    struct fd **fds = calloc(n != 0 ? n : 1, sizeof(*fds));
+    int *nums = calloc(n != 0 ? n : 1, sizeof(*nums));
+    unsigned count = 0;
+    for (unsigned i = 0; i < files->size && fds != NULL && nums != NULL; i++) {
+        if (files->files[i] == NULL)
+            continue;
+        fds[count] = fd_retain(files->files[i]);
+        nums[count++] = (int) i;
+    }
+    unlock(&files->lock);
+    if (fds == NULL || nums == NULL) {
+        free(fds);
+        free(nums);
+        return false;
+    }
+    char refusal[sizeof(ckpt_status.last_refusal)];
+    lock(&ckpt_lock, 0);
+    memcpy(refusal, ckpt_status.last_refusal, sizeof(refusal));
+    unlock(&ckpt_lock);
+    char *path = malloc(MAX_PATH);
+    bool unsaveable = false;
+    for (unsigned i = 0; i < count; i++) {
+        struct fd *fd = fds[i];
+        if (!unsaveable && path != NULL) {
+            if (ckpt_fd_is_gpu(fd, path, MAX_PATH))
+                unsaveable = true;
+            else if (memfd_fd_is(fd) && memfd_ckpt_size(fd) > CKPT_MEMFD_MAX)
+                unsaveable = true;
+            else if (ckpt_classify_fd(nums[i], fd, path, MAX_PATH) == 0)
+                unsaveable = true;
+        }
+        fd_close(fd);
+    }
+    free(path);
+    free(fds);
+    free(nums);
+    lock(&ckpt_lock, 0);
+    memcpy(ckpt_status.last_refusal, refusal, sizeof(refusal));
+    unlock(&ckpt_lock);
+    return unsaveable;
+}
+
+// Leave out what cannot be saved, and everything that belongs with it: its
 // threads (one process) and their descendants -- the Wayland desktop is
 // labwc and every window it started, and a client restored without its
 // compositor is a program talking to a dead socket. What is left behind is
 // handled as a task reparented mid-collection already is: a kept parent's
 // wait for a left-out child finds none, and the restore hands any orphan to
 // init. Called frozen, with the snapshot already filtered.
-static void ckpt_leave_out_gpu(struct task_snapshot *snap) {
+static void ckpt_leave_out(struct task_snapshot *snap) {
     ckpt_left_out = 0;
     ckpt_left_out_note[0] = '\0';
     if (snap->count == 0)
@@ -3211,7 +3266,7 @@ static void ckpt_leave_out_gpu(struct task_snapshot *snap) {
         return;
     for (unsigned i = 0; i < snap->count; i++) {
         struct task *t = snap->tasks[i];
-        if (!t->zombie && ckpt_task_holds_gpu(t)) {
+        if (!t->zombie && ckpt_task_unsaveable(t)) {
             out[i] = true;
             ckpt_note_name(ckpt_left_out_note, sizeof(ckpt_left_out_note), t->comm);
         }
@@ -3359,8 +3414,8 @@ static int ckpt_save(const char *host_path, unsigned flags) {
     ckpt_left_out = 0;
     ckpt_left_out_note[0] = '\0';
     ckpt_as_killed_count = 0;
-    if (flags & CKPT_SAVE_LEAVE_OUT_GPU)
-        ckpt_leave_out_gpu(&snap);
+    if (flags & CKPT_SAVE_LEAVE_OUT)
+        ckpt_leave_out(&snap);
     ckpt_order_tasks(snap.tasks, snap.count);
 
     // Written to a temporary beside the target and renamed into place only when

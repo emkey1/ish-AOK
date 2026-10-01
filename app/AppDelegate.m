@@ -3542,7 +3542,7 @@ int ISHSuspendSessionSaveNow(BOOL leaveOutGPU) {
     // suspend did before this: every shell alive, no terminals on screen.
     ISHWorkspaceCaptureLayoutForSuspend(image);
     return checkpoint_save_external_flags(image.fileSystemRepresentation,
-                                          leaveOutGPU ? CKPT_SAVE_LEAVE_OUT_GPU : 0);
+                                          leaveOutGPU ? CKPT_SAVE_LEAVE_OUT : 0);
 }
 
 void ISHSuspendSessionConfirmGPUThen(UIViewController *host, NSString *verb,
@@ -3606,7 +3606,7 @@ int ISHSuspendSessionSuspendAndExit(BOOL leaveOutGPU) {
         return _ENOENT;
     ISHWorkspaceCaptureLayoutForSuspend(image);
     int err = checkpoint_save_external_flags(image.fileSystemRepresentation,
-                                             leaveOutGPU ? CKPT_SAVE_LEAVE_OUT_GPU : 0);
+                                             leaveOutGPU ? CKPT_SAVE_LEAVE_OUT : 0);
     if (err < 0)
         return err;
     os_log(ISHSuspendLog(), "session suspended on request; exiting");
@@ -5653,7 +5653,7 @@ void ISHSuspendGuardEnterBackground(void) {
                 // not come back. Save what can be saved; the Wayland desktop
                 // and GPU programs are left out and keep running.
                 int cerr = checkpoint_save_external_flags(image.fileSystemRepresentation,
-                                                          CKPT_SAVE_LEAVE_OUT_GPU);
+                                                          CKPT_SAVE_LEAVE_OUT);
                 struct checkpoint_status ck;
                 checkpoint_get_status(&ck);
                 if (cerr == 0) {

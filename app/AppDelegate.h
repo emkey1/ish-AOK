@@ -84,7 +84,7 @@ NSString *ISHSuspendAutomaticSessionImagePath(void);
 // session's scrollback.
 NSString *_Nullable ISHSessionRestoredImagePath(void);
 // leaveOutGPU: save everything except the processes holding the GPU or the
-// Wayland view, with their children (CKPT_SAVE_LEAVE_OUT_GPU). Without it such
+// Wayland view, with their children (CKPT_SAVE_LEAVE_OUT). Without it such
 // a save is refused; ask first with ISHSuspendSessionConfirmGPUThen.
 int ISHSuspendSessionSaveNow(BOOL leaveOutGPU);
 

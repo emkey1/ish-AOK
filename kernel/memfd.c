@@ -492,6 +492,14 @@ bool memfd_fd_is(struct fd *fd) {
     return fd != NULL && fd->ops == &memfd_ops;
 }
 
+uint64_t memfd_ckpt_size(struct fd *fd) {
+    struct memfd_state *state = memfd_state_get(fd);
+    struct stat st;
+    if (state == NULL || fstat(state->host_fd, &st) != 0)
+        return UINT64_MAX;
+    return (uint64_t) st.st_size;
+}
+
 char *memfd_ckpt_describe(struct fd *fd, size_t *len, uint64_t max_contents) {
     struct memfd_state *state = memfd_state_get(fd);
     struct stat st;

@@ -101,6 +101,8 @@ void pidfd_ckpt_bind(struct fd *fd, struct task *task);
 // whose contents are already back.
 bool memfd_fd_is(struct fd *fd);
 char *memfd_ckpt_describe(struct fd *fd, size_t *len, uint64_t max_contents);
+// Its contents' size, or UINT64_MAX if it cannot be read.
+uint64_t memfd_ckpt_size(struct fd *fd);
 bool memfd_ckpt_ident(const char *blob, size_t len, uint64_t *ident);
 struct fd *memfd_ckpt_new(const char *blob, size_t len, struct fd *same);
 

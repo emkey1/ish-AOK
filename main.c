@@ -182,11 +182,11 @@ static void *cli_checkpoint_after(void *unused) {
     } else {
         usleep((useconds_t) (cli_checkpoint_delay * 1000000));
     }
-    // ISH_CHECKPOINT_LEAVE_OUT_GPU=1: the app's no-prompt save, which leaves
-    // the GPU and Wayland processes out instead of refusing.
-    const char *leave_out = getenv("ISH_CHECKPOINT_LEAVE_OUT_GPU");
+    // ISH_CHECKPOINT_LEAVE_OUT=1: the app's save-what-can-be-saved, which
+    // leaves out the processes that cannot be saved instead of refusing.
+    const char *leave_out = getenv("ISH_CHECKPOINT_LEAVE_OUT");
     int err = checkpoint_save_external_flags(cli_checkpoint_path,
-            leave_out != NULL && strcmp(leave_out, "1") == 0 ? CKPT_SAVE_LEAVE_OUT_GPU : 0);
+            leave_out != NULL && strcmp(leave_out, "1") == 0 ? CKPT_SAVE_LEAVE_OUT : 0);
     // To a file beside the image, not to stderr: by the time this runs the
     // guest may have closed the host's standard streams on its way out, and a
     // diagnostic that vanishes is worse than none.
