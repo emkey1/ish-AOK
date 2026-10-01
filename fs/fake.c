@@ -1108,8 +1108,16 @@ const struct xattr_ops fakefs_xattr_ops = {
     .remove = fakefs_removexattr,
 };
 
+// statfs reports ext4's magic (EXT4_SUPER_MAGIC): fakefs is a persistent local
+// disk filesystem, and a type no Linux reports is one nothing has been tested
+// against. The old 'fake' (0x66616b65) was unknown to every table of local
+// filesystem types, so GNU tail treated each root as remote and polled once a
+// second instead of using inotify, and any program that special-cases unknown
+// types took its least-tested path. The name in /proc/mounts stays "fake".
+// realfs keeps its own type on purpose: a host directory changes underneath
+// the guest without inotify events, so polling is right there.
 const struct fs_ops fakefs = {
-    .name = "fake", .magic = 0x66616b65,
+    .name = "fake", .magic = 0xEF53,
     .mount = fakefs_mount,
     .umount = fakefs_umount,
     .statfs = realfs_statfs,

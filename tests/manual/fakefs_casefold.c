@@ -31,7 +31,9 @@
 
 #include "test_common.h"
 
-#define FAKEFS_MAGIC 0x66616b65
+// fakefs reports ext4's magic (fs/fake.c) since 2026-10-01; it was 'fake'
+// (0x66616b65). On a real ext4 the contract tested here holds trivially.
+#define FAKEFS_MAGIC 0xEF53
 
 static char g_dir[512];
 

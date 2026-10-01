@@ -102,7 +102,13 @@ static void *storer(void *p) {
         plain_store(j, marker);
         j->stores++;
         for (int i = 0; i < 64; i++) {
-            if (plain_load(j) < marker) {
+            // A lost store leaves what was there before it: the previous marker
+            // plus a few increments, so within one step below this marker. A
+            // 16-bit counter can also wrap past 0xffff while this thread is
+            // descheduled for a few milliseconds (~4k increments from the top
+            // marker); that reads far lower and is not a lost store.
+            uint64_t got = plain_load(j);
+            if (got < marker && marker - got <= step) {
                 j->lost++;
                 break;
             }
