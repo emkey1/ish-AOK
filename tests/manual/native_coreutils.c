@@ -1,5 +1,5 @@
-// native_coreutils.c -- SmallCLUE's rm, wc, head, tail and sort against GNU
-// coreutils 9.4's answers.
+// native_coreutils.c -- SmallCLUE's rm, wc, head, tail, sort and xargs against
+// GNU coreutils 9.4's and findutils 4.9's answers.
 //
 // iSH-AOK's native-links.sh puts SmallCLUE's applets ahead of the distro's on
 // PATH, so they run every script that names them. The versions these
@@ -236,6 +236,46 @@ static const struct cu_case cases[] = {
      "", 0, 1, NULL},
     {"sort", "-cu", "a\na\nb\n", 6,
      "", 0, 1, NULL},
+    {"xargs", "", "a b c\nd e\n", 10,
+     "a b c d e\n", 10, 0, NULL},
+    {"xargs", "-n 2 echo", "a b c\nd e\n", 10,
+     "a b\nc d\ne\n", 10, 0, NULL},
+    {"xargs", "-L 1 echo", "a b c\nd e\n\nf\n", 13,
+     "a b c\nd e\nf\n", 12, 0, NULL},
+    {"xargs", "-L 1 echo", "a b \nc\nd\n", 9,
+     "a b c\nd\n", 8, 0, NULL},
+    {"xargs", "-I {} echo [{}]", "a b c\nd e\n", 10,
+     "[a b c]\n[d e]\n", 14, 0, NULL},
+    {"xargs", "-I % echo <%>", "  lead\ntrail  \n\n", 16,
+     "<lead>\n<trail  >\n", 17, 0, NULL},
+    {"xargs", "-n1 echo", "'a b' c\n", 8,
+     "a b\nc\n", 6, 0, NULL},
+    {"xargs", "-n1 echo", "a\\ b c\n", 7,
+     "a b\nc\n", 6, 0, NULL},
+    {"xargs", "echo", "a 'b\n", 5,
+     "a\n", 2, 1, NULL},
+    {"xargs", "-0 -n1 echo", "a\000b c\000", 6,
+     "a\nb c\n", 6, 0, NULL},
+    {"xargs", "-d: -n1 echo", "a:b:c", 5,
+     "a\nb\nc\n", 6, 0, NULL},
+    {"xargs", "-E STOP echo", "a b STOP c d\n", 13,
+     "a b\n", 4, 0, NULL},
+    {"xargs", "echo hi", NULL, 0,
+     "hi\n", 3, 0, NULL},
+    {"xargs", "-r echo hi", NULL, 0,
+     "", 0, 0, NULL},
+    {"xargs", "-n1 false", "1 2\n", 4,
+     "", 0, 123, NULL},
+    {"xargs", "nosuchcommand", "a\n", 2,
+     "", 0, 127, NULL},
+    {"xargs", "-s 12 echo", "a b c d e f\n", 12,
+     "a b c\nd e f\n", 12, 0, NULL},
+    {"xargs", "-n 0 echo", "a b\n", 4,
+     "", 0, 1, NULL},
+    {"xargs", "-n 1 -I {} echo {}", "a b\n", 4,
+     "a b\n", 4, 0, NULL},
+    {"xargs", "-a lines.txt -n 5 echo", "a b\n", 4,
+     "one two three four five\nsix seven eight nine ten\neleven twelve\n", 63, 0, NULL},
 };
 
 static void write_file(const char *path, const char *text) {
@@ -379,7 +419,7 @@ int main(int argc, char **argv) {
     alarm(test_watchdog_secs(180));
     mkdir(TDIR, 0755);
     mkdir(TDIR "/bin", 0755);
-    static const char *const applets[] = {"head", "tail", "wc", "rm", "sort"};
+    static const char *const applets[] = {"head", "tail", "wc", "rm", "sort", "xargs"};
     for (size_t i = 0; i < sizeof(applets) / sizeof(applets[0]); i++) {
         char link[256];
         snprintf(link, sizeof(link), TDIR "/bin/%s", applets[i]);
