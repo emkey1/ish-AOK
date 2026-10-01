@@ -147,6 +147,7 @@ native_stdio_lock.c
 native_sed.c
 native_stty.c
 native_ln.c
+native_coreutils.c
 devtmpfs_mount.c
 clone_error_cleanup.c
 uts_namespace.c
