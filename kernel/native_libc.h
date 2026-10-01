@@ -189,6 +189,13 @@ int nlibc_printf(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 int nlibc_puts(const char *s);
 int nlibc_putchar(int c);
 void nlibc_perror(const char *s);
+/* glibc's wording for an error number: the guest's tools print glibc's
+ * messages, and Darwin words a dozen errnos differently (EBUSY "Resource
+ * busy", EXDEV "Cross-device link", ERANGE "Result too large", ...). */
+char *nlibc_strerror(int err);
+#if defined(__APPLE__)
+int nlibc_strerror_r(int err, char *buf, size_t len);
+#endif
 /* Flush the wrapped standard streams; see the note in nlibc_std_stream. */
 void nlibc_flush_std(void);
 /* Flush without ever waiting on a lock. What a shutdown path wants in place of
@@ -858,6 +865,10 @@ const char *nlibc_dlerror(void);
  * the stream stdout names here (vfprintf on our FILE is pure). */
 #define vprintf(f, a) vfprintf(nlibc_stdout(), (f), (a))
 #define perror      nlibc_perror
+#define strerror    nlibc_strerror
+#if defined(__APPLE__)
+#define strerror_r  nlibc_strerror_r
+#endif
 #define fileno      nlibc_fileno
 /* The GUEST's kernel ring buffer. There is no host klogctl on Darwin at all,
  * and on Linux the host's would be the wrong kernel; see the .c. */

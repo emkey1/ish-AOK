@@ -888,6 +888,48 @@ static const struct cu_case cases[] = {
      "", 0, 125, NULL},
     {"env", "--ignore-signal=FOO true", NULL, 0,
      "", 0, 125, NULL},
+    {"sum", "data.txt", NULL, 0,
+     "24576     1 data.txt\n", 21, 0, NULL},
+    {"sum", "-s data.txt lines.txt", NULL, 0,
+     "3755 1 data.txt\n5663 1 lines.txt\n", 33, 0, NULL},
+    {"sum", "-", "alpha\n", 6,
+     "18540     1 -\n", 14, 0, NULL},
+    {"sum", "- data.txt", "alpha\n", 6,
+     "18540     1 -\n24576     1 data.txt\n", 35, 0, NULL},
+    {"sum", "nosuch", NULL, 0,
+     "", 0, 1, NULL},
+    {"sum", "dir", NULL, 0,
+     "", 0, 1, NULL},
+    {"rmdir", "empty", NULL, 0,
+     "", 0, 0, ".\n./data.txt\n./dir\n./dir/f1\n./dir/sub\n./dir/sub/f2\n./empty.txt\n./lines.txt\n./nonl.txt\n./text.txt\n"},
+    {"rmdir", "dir", NULL, 0,
+     "", 0, 1, NULL},
+    {"rmdir", "--ignore-fail-on-non-empty dir", NULL, 0,
+     "", 0, 0, NULL},
+    {"rmdir", "-v empty", NULL, 0,
+     "rmdir: removing directory, 'empty'\n", 35, 0, ".\n./data.txt\n./dir\n./dir/f1\n./dir/sub\n./dir/sub/f2\n./empty.txt\n./lines.txt\n./nonl.txt\n./text.txt\n"},
+    {"rmdir", "nosuch", NULL, 0,
+     "", 0, 1, NULL},
+    {"rmdir", "data.txt", NULL, 0,
+     "", 0, 1, NULL},
+    {"cat", "-A nonl.txt", NULL, 0,
+     "no newline", 10, 0, NULL},
+    {"cat", "-A", "a\tb\015\n\001\377x\n", 9,
+     "a^Ib^M$\n^AM-^?x$\n", 17, 0, NULL},
+    {"cat", "-n nonl.txt data.txt", NULL, 0,
+     "     1\tno newlinealpha 3 x\n     2\tbeta 1 y\n     3\tgamma 2 z\n     4\talpha 3 x\n     5\tdelta 10 w\n", 95, 0, NULL},
+    {"cat", "-s", "a\n\n\n\nb\n", 7,
+     "a\n\nb\n", 5, 0, NULL},
+    {"cat", "-nE", "a\n\nb", 4,
+     "     1\ta$\n     2\t$\n     3\tb", 27, 0, NULL},
+    {"cat", "-b text.txt lines.txt", NULL, 0,
+     "     1\tHello World\n     2\tfoo bar baz\n     3\tHELLO \303\251t\303\251\n     4\tone\n     5\ttwo\n     6\tthree\n     7\tfour\n     8\tfive\n     9\tsix\n    10\tseven\n    11\teight\n    12\tnine\n    13\tten\n    14\televen\n    15\ttwelve\n", 204, 0, NULL},
+    {"cat", "-E", "x\015\ny\015", 5,
+     "x^M$\ny\015", 7, 0, NULL},
+    {"cat", "dir", NULL, 0,
+     "", 0, 1, NULL},
+    {"cat", "-z", NULL, 0,
+     "", 0, 1, NULL},
 };
 
 static void write_file(const char *path, const char *text) {
@@ -1031,7 +1073,7 @@ int main(int argc, char **argv) {
     alarm(test_watchdog_secs(180));
     mkdir(TDIR, 0755);
     mkdir(TDIR "/bin", 0755);
-    static const char *const applets[] = {"head", "tail", "wc", "rm", "sort", "xargs", "find", "grep", "cp", "mv", "date", "sudo", "chmod", "ls", "diff", "cmp", "sed", "uniq", "tr", "nl", "seq", "touch", "stat", "realpath", "readlink", "env"};
+    static const char *const applets[] = {"head", "tail", "wc", "rm", "sort", "xargs", "find", "grep", "cp", "mv", "date", "sudo", "chmod", "ls", "diff", "cmp", "sed", "uniq", "tr", "nl", "seq", "touch", "stat", "realpath", "readlink", "env", "sum", "rmdir", "cat"};
     for (size_t i = 0; i < sizeof(applets) / sizeof(applets[0]); i++) {
         char link[256];
         snprintf(link, sizeof(link), TDIR "/bin/%s", applets[i]);

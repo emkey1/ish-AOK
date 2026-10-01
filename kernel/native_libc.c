@@ -1334,11 +1334,58 @@ int nlibc_puts(const char *s) {
     return fputc('\n', nlibc_stdout()) == EOF ? EOF : 0;
 }
 int nlibc_putchar(int c) { return fputc(c, nlibc_stdout()); }
+// Only where the two differ; everything else Darwin already words as glibc
+// does (checked errno by errno against glibc 2.36).
+static const char *nlibc_glibc_errtext(int err) {
+    switch (err) {
+        case ENXIO:           return "No such device or address";
+        case ENODEV:          return "No such device";
+        case EBUSY:           return "Device or resource busy";
+        case EXDEV:           return "Invalid cross-device link";
+        case ERANGE:          return "Numerical result out of range";
+        case EOVERFLOW:       return "Value too large for defined data type";
+        case EILSEQ:          return "Invalid or incomplete multibyte or wide character";
+        case ETIMEDOUT:       return "Connection timed out";
+        case ENOTCONN:        return "Transport endpoint is not connected";
+        case EISCONN:         return "Transport endpoint is already connected";
+        case ESHUTDOWN:       return "Cannot send after transport endpoint shutdown";
+        case EADDRNOTAVAIL:   return "Cannot assign requested address";
+        case EAFNOSUPPORT:    return "Address family not supported by protocol";
+        case ETOOMANYREFS:    return "Too many references: cannot splice";
+        case ESTALE:          return "Stale file handle";
+        case EDQUOT:          return "Disk quota exceeded";
+#if defined(__APPLE__)
+        case EOPNOTSUPP:      return "Operation not supported";
+        case ENODATA:         return "No data available";
+        case ENOATTR:         return "No data available";
+        case EOWNERDEAD:      return "Owner died";
+#endif
+        default:              return NULL;
+    }
+}
+
+char *nlibc_strerror(int err) {
+    const char *text = nlibc_glibc_errtext(err);
+    return text != NULL ? (char *) text : strerror(err);
+}
+
+#if defined(__APPLE__)
+int nlibc_strerror_r(int err, char *buf, size_t len) {
+    const char *text = nlibc_glibc_errtext(err);
+    if (text == NULL)
+        return strerror_r(err, buf, len);
+    if (len == 0)
+        return ERANGE;
+    snprintf(buf, len, "%s", text);
+    return strlen(text) < len ? 0 : ERANGE;
+}
+#endif
+
 void nlibc_perror(const char *s) {
     if (s != NULL && s[0] != '\0')
-        fprintf(nlibc_stderr(), "%s: %s\n", s, strerror(errno));
+        fprintf(nlibc_stderr(), "%s: %s\n", s, nlibc_strerror(errno));
     else
-        fprintf(nlibc_stderr(), "%s\n", strerror(errno));
+        fprintf(nlibc_stderr(), "%s\n", nlibc_strerror(errno));
 }
 
 // ----------------------------------------------------------------- process
