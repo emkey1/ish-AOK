@@ -1,10 +1,10 @@
-// native_coreutils.c -- SmallCLUE's rm, wc, head and tail against GNU
+// native_coreutils.c -- SmallCLUE's rm, wc, head, tail and sort against GNU
 // coreutils 9.4's answers.
 //
 // iSH-AOK's native-links.sh puts SmallCLUE's applets ahead of the distro's on
 // PATH, so they run every script that names them. The versions these
-// replaced lacked head -c, tail -c and -F, rm -i/-I/-d/-v, and printed wc's
-// counts in their own widths (2026-10-01).
+// replaced lacked head -c, tail -c and -F, rm -i/-I/-d/-v, sort -k F,F and -o,
+// and printed wc's counts in their own widths (2026-10-01).
 //
 // The table is generated: each case was run through GNU coreutils in
 // build/devuan-amd64-test from the same fixture, and its stdout, exit status
@@ -174,6 +174,68 @@ static const struct cu_case cases[] = {
      "", 0, 1, NULL},
     {"rm", "-v nonl.txt nosuch empty.txt", NULL, 0,
      "removed 'nonl.txt'\nremoved 'empty.txt'\n", 39, 1, ".\n./data.txt\n./dir\n./dir/f1\n./dir/sub\n./dir/sub/f2\n./empty\n./lines.txt\n./text.txt\n"},
+    {"sort", "data.txt", NULL, 0,
+     "alpha 3 x\nalpha 3 x\nbeta 1 y\ndelta 10 w\ngamma 2 z\n", 50, 0, NULL},
+    {"sort", "-r data.txt", NULL, 0,
+     "gamma 2 z\ndelta 10 w\nbeta 1 y\nalpha 3 x\nalpha 3 x\n", 50, 0, NULL},
+    {"sort", "-k2,2n data.txt", NULL, 0,
+     "beta 1 y\ngamma 2 z\nalpha 3 x\nalpha 3 x\ndelta 10 w\n", 50, 0, NULL},
+    {"sort", "-k2n data.txt", NULL, 0,
+     "beta 1 y\ngamma 2 z\nalpha 3 x\nalpha 3 x\ndelta 10 w\n", 50, 0, NULL},
+    {"sort", "-k1,1 -k2,2nr data.txt", NULL, 0,
+     "alpha 3 x\nalpha 3 x\nbeta 1 y\ndelta 10 w\ngamma 2 z\n", 50, 0, NULL},
+    {"sort", "-u -k1,1 data.txt", NULL, 0,
+     "alpha 3 x\nbeta 1 y\ndelta 10 w\ngamma 2 z\n", 40, 0, NULL},
+    {"sort", "-s -k1,1 data.txt", NULL, 0,
+     "alpha 3 x\nalpha 3 x\nbeta 1 y\ndelta 10 w\ngamma 2 z\n", 50, 0, NULL},
+    {"sort", "-f text.txt", NULL, 0,
+     "foo bar baz\nHello World\nHELLO \303\251t\303\251\n", 36, 0, NULL},
+    {"sort", "-m lines.txt data.txt", NULL, 0,
+     "alpha 3 x\nbeta 1 y\ngamma 2 z\nalpha 3 x\ndelta 10 w\none\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\neleven\ntwelve\n", 113, 0, NULL},
+    {"sort", "-c data.txt", NULL, 0,
+     "", 0, 1, NULL},
+    {"sort", "-C data.txt", NULL, 0,
+     "", 0, 1, NULL},
+    {"sort", "-o out.txt data.txt", NULL, 0,
+     "", 0, 0, ".\n./data.txt\n./dir\n./dir/f1\n./dir/sub\n./dir/sub/f2\n./empty\n./empty.txt\n./lines.txt\n./nonl.txt\n./out.txt\n./text.txt\n"},
+    {"sort", "nosuch", NULL, 0,
+     "", 0, 2, NULL},
+    {"sort", "-k0 data.txt", NULL, 0,
+     "", 0, 2, NULL},
+    {"sort", "-gn data.txt", NULL, 0,
+     "", 0, 2, NULL},
+    {"sort", "-x data.txt", NULL, 0,
+     "", 0, 2, NULL},
+    {"sort", "--sort=bogus data.txt", NULL, 0,
+     "", 0, 1, NULL},
+    {"sort", "-n", "10\n9\n-3\n2.5\n-0\n0\nabc\n007\n.5\n-.5\n\n 8\n", 36,
+     "-3\n-.5\n\n-0\n0\nabc\n.5\n2.5\n007\n 8\n9\n10\n", 36, 0, NULL},
+    {"sort", "-un", "10\n9\n-3\n2.5\n-0\n0\nabc\n007\n.5\n-.5\n\n 8\n", 36,
+     "-3\n-.5\n-0\n.5\n2.5\n007\n 8\n9\n10\n", 29, 0, NULL},
+    {"sort", "-h", "2K\n1G\n500\n1M\n3k\n-1K\n0K\n1.5K\n10\n", 31,
+     "-1K\n0K\n10\n500\n1.5K\n2K\n3k\n1M\n1G\n", 31, 0, NULL},
+    {"sort", "-V", "a10\na2\na1.10\na1.9\nfile-1.0.tar.gz\nfile-1.0~rc1.tar.gz\nfile-1.0a.tar.gz\n.hidden\n..\n.\n1.0-2\nx~\nx\n", 95,
+     ".\n..\n.hidden\n1.0-2\na1.9\na1.10\na2\na10\nfile-1.0~rc1.tar.gz\nfile-1.0.tar.gz\nfile-1.0a.tar.gz\nx~\nx\n", 95, 0, NULL},
+    {"sort", "-M", "Mar 3\njan 1\nDEC 9\nfoo\n feb 2\nmaybe\n", 35,
+     "foo\njan 1\n feb 2\nMar 3\nmaybe\nDEC 9\n", 35, 0, NULL},
+    {"sort", "-g", "1e3\n-inf\nnan\nabc\n0x10\n2.5e-1\ninf\n-5\n", 36,
+     "abc\nnan\n-inf\n-5\n2.5e-1\n0x10\n1e3\ninf\n", 36, 0, NULL},
+    {"sort", "-k2,2n -k1,1r", "b 2 x\na 10 y\nc 2 a\na 2 z\nB 1 q\nb  3 r\n", 38,
+     "B 1 q\nc 2 a\nb 2 x\na 2 z\nb  3 r\na 10 y\n", 38, 0, NULL},
+    {"sort", "-k1.2,1.2 -k2b,2", "b 2 x\na 10 y\nc 2 a\na 2 z\nB 1 q\nb  3 r\n", 38,
+     "B 1 q\na 10 y\na 2 z\nb 2 x\nc 2 a\nb  3 r\n", 38, 0, NULL},
+    {"sort", "-fu -k1,1", "b 2 x\na 10 y\nc 2 a\na 2 z\nB 1 q\nb  3 r\n", 38,
+     "a 10 y\nb 2 x\nc 2 a\n", 19, 0, NULL},
+    {"sort", "-t: -k2,2n -k3,3r", "x:3:b\ny:1:a\nz:2:c\nw:1:b\nv::d\n", 29,
+     "v::d\nw:1:b\ny:1:a\nz:2:c\nx:3:b\n", 29, 0, NULL},
+    {"sort", "-d", "a,b\n!a\n_b\nA\nab\n", 15,
+     "A\n!a\na,b\nab\n_b\n", 15, 0, NULL},
+    {"sort", "-z", "b\000a\000c\000", 6,
+     "a\000b\000c\000", 6, 0, NULL},
+    {"sort", "-c", "a\nb\na\n", 6,
+     "", 0, 1, NULL},
+    {"sort", "-cu", "a\na\nb\n", 6,
+     "", 0, 1, NULL},
 };
 
 static void write_file(const char *path, const char *text) {
@@ -317,7 +379,7 @@ int main(int argc, char **argv) {
     alarm(test_watchdog_secs(180));
     mkdir(TDIR, 0755);
     mkdir(TDIR "/bin", 0755);
-    static const char *const applets[] = {"head", "tail", "wc", "rm"};
+    static const char *const applets[] = {"head", "tail", "wc", "rm", "sort"};
     for (size_t i = 0; i < sizeof(applets) / sizeof(applets[0]); i++) {
         char link[256];
         snprintf(link, sizeof(link), TDIR "/bin/%s", applets[i]);
