@@ -1678,7 +1678,7 @@ static ssize_t tmpfs_pwrite(struct fd *fd, const void *buf, size_t bufsize, off_
     // also keeps the two host-file-backed filesystems consistent with each
     // other. Done under inode->lock for the same atomicity reason as
     // tmpfs_write.
-    if (fd->flags & O_APPEND_)
+    if (fd_pwrite_appends(fd))
         off = (off_t) inode->stat.size;
     size_t end;
     if (__builtin_add_overflow((size_t) off, bufsize, &end)) {

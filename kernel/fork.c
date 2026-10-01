@@ -532,8 +532,15 @@ static dword_t sys_clone_common_wrap(dword_t flags, guest_addr_t stack, guest_ad
 static dword_t sys_clone_common_(dword_t flags, guest_addr_t stack, guest_addr_t ptid,
         guest_addr_t tls, guest_addr_t ctid, bool clear_sighand) {
     STRACE("clone(0x%x, 0x%x, 0x%x, 0x%x, 0x%x)", flags, stack, ptid, tls, ctid);
+    // A namespace this kernel does not have: ENOSYS, as unshare says for the
+    // same flags (sys_unshare). This was EPERM, which reads as "you may not"
+    // to a root caller who may; Linux itself says EINVAL for a namespace type
+    // it was built without, but unshare chose ENOSYS so `unshare -n` reports
+    // "Function not implemented" rather than "Invalid argument", and the two
+    // entry points now agree. (CLONE_NEWTIME is clone3/unshare-only: in clone
+    // its bit is part of the exit signal.)
     if (flags & CLONE_NEW_FLAGS_)
-        return _EPERM;
+        return _ENOSYS;
     // Creating any namespace needs CAP_SYS_ADMIN in real Linux.
     if ((flags & (CLONE_NEWUTS_ | CLONE_NEWIPC_)) && !current_capable(CAP_SYS_ADMIN_))
         return _EPERM;

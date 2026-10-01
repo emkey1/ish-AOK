@@ -39,6 +39,14 @@ void fd_open_creds_stamp(struct fd *fd) {
     fd->open_creds.fsgid = current->fsgid;
 }
 
+bool fd_pwrite_appends(const struct fd *fd) {
+    if (fd->pwrite_append == FD_PWRITE_APPEND_FORCE)
+        return true;
+    if (fd->pwrite_append == FD_PWRITE_APPEND_NEVER)
+        return false;
+    return (fd->flags & O_APPEND_) != 0;
+}
+
 struct fd *fd_create(const struct fd_ops *ops) {
     struct fd *fd = malloc(sizeof(struct fd));
     if (fd == NULL)
@@ -616,9 +624,12 @@ int fd_getflags(struct fd *fd) {
     // open was an ordinary read-only one).
     if (fd->flags & O_PATH_)
         return fd->flags & (O_PATH_ | O_DIRECTORY_ | O_NOFOLLOW_);
-    if (fd->ops->getflags)
-        return fd->ops->getflags(fd);
-    return fd->flags;
+    int flags = fd->ops->getflags ? fd->ops->getflags(fd) : (int) fd->flags;
+    if (flags < 0)
+        return flags;
+    // Linux drops the creation flags once the open is done (do_dentry_open),
+    // and O_CLOEXEC is a descriptor flag (F_GETFD), never a status flag.
+    return flags & ~(O_CREAT_ | O_EXCL_ | O_NOCTTY_ | O_TRUNC_ | O_CLOEXEC_);
 }
 
 #define FD_ALLOWED_FLAGS (O_APPEND_ | O_NONBLOCK_)

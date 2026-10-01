@@ -26,12 +26,13 @@ its `/proc/<pid>/ns` file. Every other kind is `ENOSYS` to `unshare`, and
 namespace's join moves the caller's root and working directory to the real
 root, as Linux's does, and changes nothing else.
 
-`clone` answers differently, and worse: measured as root for this chapter on
-557, `clone` with `CLONE_NEWNS`, `CLONE_NEWPID`, `CLONE_NEWNET` or
-`CLONE_NEWUSER` fails `EPERM`, which reads as "you may not" to a caller who is
-root and may. `unshare` with the same flags says `ENOSYS` — "this kernel has
-none" — which is the truth. The two entry points should agree, and the one
-that does not is recorded as a follow-up in `docs/TODO.md`.
+`clone` says the same: with `CLONE_NEWNS`, `CLONE_NEWPID`, `CLONE_NEWNET` or
+`CLONE_NEWUSER` it fails `ENOSYS`, as `unshare` does for those flags — "this
+kernel has none", which is the truth. (Until October 2026 `clone` answered
+`EPERM`, which reads as "you may not" to a caller who is root and may.) A Linux
+kernel built without a namespace type says `EINVAL` for it; AOK's `ENOSYS` is
+deliberate, so `unshare -n` reports "Function not implemented" rather than
+"Invalid argument".
 
 So nothing container-shaped runs. No Docker, no `unshare -m` or `-n`, no
 rootless podman, no per-service filesystem views. There is one process table,
@@ -75,7 +76,7 @@ shape, because the record had already done the hard part of deciding what the
 right shape was. The difference between a diagnosed gap and a deferral is that
 somebody can act on it — and eventually somebody did.
 
-## 41.3 Diagnosed: `fcntl(F_GETFL)` lies about a pipe
+## 41.3 Diagnosed, then fixed: `fcntl(F_GETFL)` lied about a pipe
 
 This one is small, current, and unusually instructive, because it is a bug
 sitting exactly between two correct decisions.
@@ -112,11 +113,11 @@ governs guest blocking semantics — still says blocking, and the two disagree
 until the idiom's "restore" writes the lie into `fd->flags` as well, and then
 they agree on the wrong answer.
 
-Still true in 557, measured for this chapter on aarch64 and x86_64 guests in the
-Mac CLI: a fresh pipe reports 0; its write end reports `O_NONBLOCK` after one
-blocking write, its read end after one blocking read, and after the
-get-set-restore the read end *is* non-blocking. The recorded next step was
-precise, including its own scope warning:
+It was still true in 557, measured for this chapter on aarch64 and x86_64
+guests in the Mac CLI: a fresh pipe reported 0; its write end reported
+`O_NONBLOCK` after one blocking write, its read end after one blocking read, and
+after the get-set-restore the read end *was* non-blocking. The recorded next
+step was precise, including its own scope warning:
 
 > `realfs_getflags` should report the guest-visible flags from `fd->flags` for
 > the bits the guest owns (`O_APPEND`, `O_NONBLOCK`) and take only the access
@@ -126,14 +127,13 @@ precise, including its own scope warning:
 > here. Worth checking whether sockets and ttys answer `F_GETFL` the same way
 > before fixing just the one path.
 
-That check is now done: the same probe against a `socketpair` and a pty
-reports no `O_NONBLOCK` before or after, so the pipe path really is the one
-path. And the shape of the fix is already in the function — a descriptor
-reopened through `/proc` keeps its own flags, and `realfs_getflags` answers
-those from `fd->flags` without asking the host. The ordinary descriptor still
-asks, which is also why a directory reopened through `/proc` reports neither
-the `O_DIRECTORY` nor the `O_LARGEFILE` Linux shows there: the host's `F_GETFL`
-keeps neither. Both are recorded in `docs/TODO.md`.
+The check came first -- a `socketpair` and a pty reported no `O_NONBLOCK`
+before or after, so the pipe path really was the one path -- and then the fix,
+in October 2026, exactly as recorded. `realfs_getflags` now answers the bits the
+guest owns from `fd->flags`, and with them the open-time flags the host's
+`F_GETFL` never keeps and Linux does report: `O_DIRECTORY`, `O_NOFOLLOW`, and
+the `O_LARGEFILE` a 64-bit Linux adds to every open. `fcntl_getfl_flags` covers
+the idiom and checks each flag against Linux, 64- and 32-bit.
 
 Two correct decisions, one wrong seam. That is the characteristic shape of a
 bug in a system this size, and it is why Chapter 40's rules are about *checking*
@@ -145,7 +145,7 @@ The `engine` build option offers exactly one value. New work targets the JIT.
 And yet:
 
 - `emu/amd64_interp.c` is still the **largest single file in the tree** at
-  17,902 lines.
+  about 18,000 lines.
 - It is still what runs on non-aarch64 hosts, because the amd64 JIT's gadgets
   exist only for aarch64 (Chapter 7).
 - It is still where AVX executes for amd64: the JIT cuts its block at a VEX or
@@ -467,8 +467,8 @@ That turns a gap into a decision, and sometimes into a fix. `PROT_EXEC` was
 never "we never got to NX" — it was a two-row table against Linux 6.12, a
 severity grade, two candidate designs and a reason, and it is closed. The
 external display is not an abandoned branch — it is a maintainer's judgement
-with a fence around it. The `F_GETFL` lie is not a mystery — it is two correct
-decisions and a named seam with a scoped next step. And this chapter's own
+with a fence around it. The `F_GETFL` lie was not a mystery — it was two correct
+decisions and a named seam with a scoped next step, and the step was taken. And this chapter's own
 record needed the same treatment: at 556 it still said GNU `as` ran on the
 interpreter, that a zsh divergence had a test, and that a yay failure was a
 timeout — and none of the three survived being checked.

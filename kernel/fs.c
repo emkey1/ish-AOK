@@ -626,6 +626,8 @@ static fd_t sys_openat_norm(fd_t at_f, guest_addr_t path_addr, dword_t flags, mo
     // open(f, O_PATH|O_WRONLY|O_TRUNC) emptied a root-owned 0644 file.
     if (flags & O_PATH_)
         flags &= O_PATH_FLAGS_;
+    else if (task_is_64bit(current))
+        flags |= O_LARGEFILE_; // force_o_largefile(); not on O_PATH, as on Linux
     if (flags & O_CREAT_)
         apply_umask(&mode);
 
@@ -1637,7 +1639,7 @@ dword_t sys_preadv_i386_guest(fd_t fd_no, guest_addr_t iovec_addr, dword_t iovec
 }
 
 static dword_t sys_pwritev_common(fd_t fd_no, guest_addr_t iovec_addr, dword_t iovec_count,
-        off_t_ off, enum guest_abi abi) {
+        off_t_ off, enum fd_pwrite_append append, enum guest_abi abi) {
     STRACE("pwritev(%d, %#llx, %d, %lld)", fd_no, (unsigned long long) iovec_addr,
            iovec_count, (long long) off);
     struct guest_iovec_ *iovec = user_read_iovecs_abi(current, abi, iovec_addr, iovec_count);
@@ -1676,6 +1678,7 @@ static dword_t sys_pwritev_common(fd_t fd_no, guest_addr_t iovec_addr, dword_t i
     }
     task_may_block_start();
     lock(&fd->lock, 0);
+    fd->pwrite_append = append;
     uint64_t delay_start = io_delay_start(fd);
     if (fd->ops->pwrite) {
         res = fd->ops->pwrite(fd, buf, offset, off);
@@ -1688,6 +1691,7 @@ static dword_t sys_pwritev_common(fd_t fd_no, guest_addr_t iovec_addr, dword_t i
     } else {
         res = _ESPIPE;
     }
+    fd->pwrite_append = FD_PWRITE_APPEND_DEFAULT;
     io_delay_end(delay_start);
     unlock(&fd->lock);
     task_may_block_end();
@@ -1700,45 +1704,110 @@ out:
 }
 
 dword_t sys_pwritev_guest(fd_t fd_no, guest_addr_t iovec_addr, dword_t iovec_count, off_t_ off) {
-    return sys_pwritev_common(fd_no, iovec_addr, iovec_count, off, GUEST_ABI_AMD64);
+    return sys_pwritev_common(fd_no, iovec_addr, iovec_count, off, FD_PWRITE_APPEND_DEFAULT,
+                              GUEST_ABI_AMD64);
 }
 
 dword_t sys_pwritev_i386_guest(fd_t fd_no, guest_addr_t iovec_addr, dword_t iovec_count, off_t_ off) {
-    return sys_pwritev_common(fd_no, iovec_addr, iovec_count, off, GUEST_ABI_I386);
+    return sys_pwritev_common(fd_no, iovec_addr, iovec_count, off, FD_PWRITE_APPEND_DEFAULT,
+                              GUEST_ABI_I386);
 }
 
 // preadv2/pwritev2: same as preadv/pwritev, but an offset of -1 means "use
 // and advance the current file position" (like plain readv/writev) rather
-// than a positioned access, and there's a trailing RWF_* flags word. The
-// flags (RWF_HIPRI, RWF_DSYNC, RWF_SYNC, RWF_NOWAIT, RWF_APPEND) are
-// performance/durability/append hints with no analog in our fd_ops
-// backends, so they're accepted but ignored, like fadvise64.
-dword_t sys_preadv2_guest(fd_t fd_no, guest_addr_t iovec_addr, dword_t iovec_count,
-        off_t_ off, uint_t UNUSED(flags)) {
+// than a positioned access, and there's a trailing RWF_* flags word.
+#define RWF_HIPRI_    0x01
+#define RWF_DSYNC_    0x02
+#define RWF_SYNC_     0x04
+#define RWF_NOWAIT_   0x08
+#define RWF_APPEND_   0x10
+#define RWF_NOAPPEND_ 0x20
+#define RWF_ATOMIC_   0x40
+
+// Reads: every flag Linux 6.12 defines is a hint here (no polled I/O, no
+// non-blocking page cache); anything else is EOPNOTSUPP, as on Linux.
+static dword_t sys_preadv2_common(fd_t fd_no, guest_addr_t iovec_addr, dword_t iovec_count,
+        off_t_ off, uint_t flags, enum guest_abi abi) {
+    if (flags & ~(RWF_HIPRI_ | RWF_DSYNC_ | RWF_SYNC_ | RWF_NOWAIT_ | RWF_APPEND_ |
+                  RWF_NOAPPEND_ | RWF_ATOMIC_))
+        return _EOPNOTSUPP;
     if (off == (off_t_) -1)
-        return sys_readv_common(fd_no, iovec_addr, iovec_count, GUEST_ABI_AMD64);
-    return sys_preadv_common(fd_no, iovec_addr, iovec_count, off, GUEST_ABI_AMD64);
+        return sys_readv_common(fd_no, iovec_addr, iovec_count, abi);
+    return sys_preadv_common(fd_no, iovec_addr, iovec_count, off, abi);
+}
+
+// Writes honour the flags that change where or how durably data lands:
+// RWF_APPEND writes at end of file and RWF_NOAPPEND at the offset even on an
+// O_APPEND description (both through fd->pwrite_append; with both, append
+// wins, as Linux's kiocb_set_rw_flags has it), and RWF_DSYNC / RWF_SYNC sync
+// after the write. RWF_HIPRI is a polling hint and is ignored. RWF_NOWAIT
+// (AOK cannot promise not to block), RWF_ATOMIC and unknown bits are
+// EOPNOTSUPP, which libcs fall back on. These used to be accepted and
+// ignored, and musl 1.2.6 (Alpine 3.24) sends every pwrite() as
+// pwritev2(..., RWF_NOAPPEND): on an O_APPEND file the data went to the end
+// instead of its offset (tests/manual/pwritev2_flags.c).
+static dword_t sys_pwritev2_common(fd_t fd_no, guest_addr_t iovec_addr, dword_t iovec_count,
+        off_t_ off, uint_t flags, enum guest_abi abi) {
+    if (flags & ~(RWF_HIPRI_ | RWF_DSYNC_ | RWF_SYNC_ | RWF_APPEND_ | RWF_NOAPPEND_))
+        return _EOPNOTSUPP;
+    enum fd_pwrite_append append = FD_PWRITE_APPEND_DEFAULT;
+    if (flags & RWF_APPEND_)
+        append = FD_PWRITE_APPEND_FORCE;
+    else if (flags & RWF_NOAPPEND_)
+        append = FD_PWRITE_APPEND_NEVER;
+
+    dword_t res;
+    struct fd *fd = f_get_io(fd_no);
+    if (fd == NULL)
+        return _EBADF;
+    if (off != (off_t_) -1) {
+        res = sys_pwritev_common(fd_no, iovec_addr, iovec_count, off, append, abi);
+    } else if (append == FD_PWRITE_APPEND_DEFAULT || fd->ops->lseek == NULL) {
+        res = sys_writev_common(fd_no, iovec_addr, iovec_count, abi);
+    } else {
+        // The file position, with this call's append rule: write there (or at
+        // the end), then leave the position after what was written.
+        lock(&fd->lock, 0);
+        off_t_ pos = fd->ops->lseek(fd, 0, LSEEK_CUR);
+        unlock(&fd->lock);
+        if (pos < 0)
+            return pos;
+        res = sys_pwritev_common(fd_no, iovec_addr, iovec_count, pos, append, abi);
+        if ((int) res > 0) {
+            lock(&fd->lock, 0);
+            if (append == FD_PWRITE_APPEND_FORCE)
+                fd->ops->lseek(fd, 0, LSEEK_END);
+            else
+                fd->ops->lseek(fd, pos + (int) res, LSEEK_SET);
+            unlock(&fd->lock);
+        }
+    }
+    if ((int) res > 0 && (flags & (RWF_DSYNC_ | RWF_SYNC_)) && fd->ops->fsync != NULL) {
+        int err = fd->ops->fsync(fd);
+        if (err < 0)
+            return err;
+    }
+    return res;
+}
+
+dword_t sys_preadv2_guest(fd_t fd_no, guest_addr_t iovec_addr, dword_t iovec_count,
+        off_t_ off, uint_t flags) {
+    return sys_preadv2_common(fd_no, iovec_addr, iovec_count, off, flags, GUEST_ABI_AMD64);
 }
 
 dword_t sys_pwritev2_guest(fd_t fd_no, guest_addr_t iovec_addr, dword_t iovec_count,
-        off_t_ off, uint_t UNUSED(flags)) {
-    if (off == (off_t_) -1)
-        return sys_writev_common(fd_no, iovec_addr, iovec_count, GUEST_ABI_AMD64);
-    return sys_pwritev_common(fd_no, iovec_addr, iovec_count, off, GUEST_ABI_AMD64);
+        off_t_ off, uint_t flags) {
+    return sys_pwritev2_common(fd_no, iovec_addr, iovec_count, off, flags, GUEST_ABI_AMD64);
 }
 
 dword_t sys_preadv2_i386_guest(fd_t fd_no, guest_addr_t iovec_addr, dword_t iovec_count,
-        off_t_ off, uint_t UNUSED(flags)) {
-    if (off == (off_t_) -1)
-        return sys_readv_common(fd_no, iovec_addr, iovec_count, GUEST_ABI_I386);
-    return sys_preadv_common(fd_no, iovec_addr, iovec_count, off, GUEST_ABI_I386);
+        off_t_ off, uint_t flags) {
+    return sys_preadv2_common(fd_no, iovec_addr, iovec_count, off, flags, GUEST_ABI_I386);
 }
 
 dword_t sys_pwritev2_i386_guest(fd_t fd_no, guest_addr_t iovec_addr, dword_t iovec_count,
-        off_t_ off, uint_t UNUSED(flags)) {
-    if (off == (off_t_) -1)
-        return sys_writev_common(fd_no, iovec_addr, iovec_count, GUEST_ABI_I386);
-    return sys_pwritev_common(fd_no, iovec_addr, iovec_count, off, GUEST_ABI_I386);
+        off_t_ off, uint_t flags) {
+    return sys_pwritev2_common(fd_no, iovec_addr, iovec_count, off, flags, GUEST_ABI_I386);
 }
 
 dword_t sys__llseek(fd_t f, dword_t off_high, dword_t off_low, addr_t res_addr, dword_t whence) {

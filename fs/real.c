@@ -843,7 +843,7 @@ ssize_t realfs_pwrite(struct fd *fd, const void *buf, size_t bufsize, off_t off)
     // exotic quirk.
     if (fd->realfs_own_offset && (fd->flags & O_ACCMODE_) == O_RDONLY_)
         return _EBADF;
-    if (fd->flags & O_APPEND_) {
+    if (fd_pwrite_appends(fd)) {
         struct stat real_stat;
         if (fstat(fd->real_fd, &real_stat) < 0)
             return errno_map();
@@ -1489,14 +1489,25 @@ int realfs_fsync(struct fd *fd) {
     return 0;
 }
 
+// The status flags the guest owns, answered from fd->flags rather than the
+// host. O_APPEND and O_NONBLOCK are what the guest set: realfs_read/write force
+// the HOST descriptor non-blocking for good the first time the guest blocks on
+// it (restoring it races a sibling into an unkillable host read), so the host
+// said O_NONBLOCK about a pipe the guest never made non-blocking, and the
+// get-set-restore idiom wrote that back and left the pipe non-blocking. And
+// O_DIRECTORY, O_NOFOLLOW and O_LARGEFILE are open-time flags Linux reports
+// and the host's F_GETFL never keeps.
+#define REALFS_GUEST_FLAGS (O_APPEND_ | O_NONBLOCK_ | O_DIRECTORY_ | O_NOFOLLOW_ | O_LARGEFILE_)
+
 int realfs_getflags(struct fd *fd) {
     // Not the host's, which are the description it duplicates.
     if (fd->realfs_own_offset)
-        return fd->flags & (O_ACCMODE_ | O_APPEND_ | O_NONBLOCK_);
+        return fd->flags & (O_ACCMODE_ | REALFS_GUEST_FLAGS);
     int flags = fcntl(fd->real_fd, F_GETFL);
     if (flags < 0)
         return errno_map();
-    return open_flags_fake_from_real(flags);
+    return (open_flags_fake_from_real(flags) & ~REALFS_GUEST_FLAGS) |
+        (fd->flags & REALFS_GUEST_FLAGS);
 }
 
 int realfs_setflags(struct fd *fd, dword_t flags) {

@@ -3004,12 +3004,16 @@ static bool handle_asm_generic_native_syscall(struct cpu_state *cpu, qword_t sys
     // preadv2/pwritev2: iov pointer and offset are full 64-bit values that
     // trip the legacy marshal's dword-fit check (SIGSYS). Route natively,
     // same pattern as the amd64 intercept in handle_amd64_native_memory_syscall.
-    case 286: // preadv2(fd, iov, iovcnt, offset, flags)
+    // The raw call is (fd, iov, iovcnt, pos_l, pos_h, flags) on every ABI;
+    // on a 64-bit one pos_l is the whole offset (Linux's pos_from_hilo shifts
+    // pos_h out) and musl passes the offset's high half there. Reading the
+    // flags from pos_h lost them: RWF_NOAPPEND and RWF_APPEND did nothing.
+    case 286: // preadv2(fd, iov, iovcnt, pos_l, pos_h, flags)
         result = (dword_t) sys_preadv2_guest((fd_t) raw_args[0], raw_args[1],
-                     (dword_t) raw_args[2], (off_t_) raw_args[3], (uint_t) raw_args[4]); break;
-    case 287: // pwritev2(fd, iov, iovcnt, offset, flags)
+                     (dword_t) raw_args[2], (off_t_) raw_args[3], (uint_t) raw_args[5]); break;
+    case 287: // pwritev2(fd, iov, iovcnt, pos_l, pos_h, flags)
         result = (dword_t) sys_pwritev2_guest((fd_t) raw_args[0], raw_args[1],
-                      (dword_t) raw_args[2], (off_t_) raw_args[3], (uint_t) raw_args[4]); break;
+                      (dword_t) raw_args[2], (off_t_) raw_args[3], (uint_t) raw_args[5]); break;
     case 272: // kcmp(pid1, pid2, type, idx1, idx2)
         result = (dword_t) sys_kcmp((pid_t_) raw_args[0], (pid_t_) raw_args[1],
                       (dword_t) raw_args[2], (dword_t) raw_args[3], (dword_t) raw_args[4]); break;
@@ -4110,12 +4114,12 @@ static bool handle_amd64_native_memory_syscall(struct cpu_state *cpu, qword_t sy
               // 64-bit iovec pointer and pos survive the marshaller
         amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) sys_preadv2_guest(
                 (fd_t) raw_args[0], raw_args[1], (dword_t) raw_args[2],
-                (off_t_) (raw_args[3] | (raw_args[4] << 32)), (uint_t) raw_args[5]));
+                (off_t_) raw_args[3], (uint_t) raw_args[5]));
         return true;
     case 328: // pwritev2(fd, iov, iovcnt, pos_l, pos_h, flags)
         amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) sys_pwritev2_guest(
                 (fd_t) raw_args[0], raw_args[1], (dword_t) raw_args[2],
-                (off_t_) (raw_args[3] | (raw_args[4] << 32)), (uint_t) raw_args[5]));
+                (off_t_) raw_args[3], (uint_t) raw_args[5]));
         return true;
     // vmsplice(fd, iov, iovcnt, flags). The legacy table routed this to
     // sys_vmsplice, which is the i386 entry point: it takes a 32-bit addr_t

@@ -396,6 +396,10 @@ bool mount_param_flag(const char *info, const char *flag);
 #define O_TRUNC_ (1 << 9)
 #define O_APPEND_ (1 << 10)
 #define O_NONBLOCK_ (1 << 11)
+// O_LARGEFILE (0100000; arm64 relocates it, calls.c). Every open by a 64-bit
+// task gets it (Linux's force_o_largefile in build_open_flags) and F_GETFL
+// reports it; a 32-bit task has it only if it asked, which musl always does.
+#define O_LARGEFILE_ (1 << 15)
 #define O_DIRECTORY_ (1 << 16)
 #define O_NOFOLLOW_ (1 << 17)
 #define O_CLOEXEC_ (1 << 19)

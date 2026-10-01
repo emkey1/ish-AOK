@@ -42,6 +42,10 @@
 //   - pwrite on an O_APPEND fd APPENDS and ignores the offset it was handed.
 //     POSIX says the opposite; Linux does this and documents it under BUGS in
 //     man 2 pwrite, and kernel/memfd.c already matched Linux, so tmpfs does too.
+//     That is the KERNEL's rule, so it is tested with the raw pwrite64 call:
+//     musl 1.2.6 (Alpine 3.24) sends pwrite() as pwritev2(..., RWF_NOAPPEND)
+//     precisely to get POSIX's behaviour, and on Linux that libc pwrite()
+//     writes at the offset (tests/manual/pwritev2_flags.c covers that flag).
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
@@ -54,6 +58,15 @@
 #include <sys/uio.h>
 #include <unistd.h>
 #include "test_common.h"
+
+// The kernel's pwrite, whatever the libc's pwrite() does on top of it.
+static ssize_t raw_pwrite(int fd, const void *buf, size_t n, off_t off) {
+#if defined(__i386__)
+    return syscall(SYS_pwrite64, fd, buf, n, (unsigned long) off, (unsigned long) ((long long) off >> 32));
+#else
+    return syscall(SYS_pwrite64, fd, buf, n, off);
+#endif
+}
 
 #define TMPFS_MAGIC_ 0x01021994
 
@@ -293,7 +306,7 @@ static void test_pwrite_append(const char *dir, const char *label) {
         // touches it. Both halves verified against a real kernel.
         check(lseek(fd, 2, SEEK_SET) == 2, "seek before pwrite");
         snprintf(what, sizeof(what), "%s: pwrite returns full count", label);
-        check(pwrite(fd, "TAIL", 4, 0) == 4, what);
+        check(raw_pwrite(fd, "TAIL", 4, 0) == 4, what);
         snprintf(what, sizeof(what), "%s: pwrite leaves the file offset alone", label);
         check(lseek(fd, 0, SEEK_CUR) == 2, what);
         close(fd);

@@ -85,27 +85,23 @@ second syscall table mechanism.
 Two things about amd64 are still true today and are worth stating plainly rather
 than discovering.
 
-The amd64 JIT is only implemented and validated on aarch64 hosts, which is to
-say on the iOS target. On other hosts the gadget path is incomplete and
-`SIGSEGV`s on trivial programs, so `main.c` defaults it *off* there and runs the
-interpreter instead; `ISH_HOST_AMD64_JIT=1` forces it on for development. A
-developer on an x86 Mac or a Linux box is therefore not exercising the same
-engine the device runs.
+The amd64 JIT's gadgets exist only for aarch64 hosts: the iOS device, and an
+Apple-silicon Mac running the CLI, which exercises the same engine. On any other
+host the gadget path is incomplete, so `main.c` defaults it *off* there and runs
+the interpreter instead; `ISH_HOST_AMD64_JIT=1` forces it on for development. A
+developer on an x86 Mac or a Linux box -- which includes the Linux CI build --
+is therefore not exercising the engine the device runs.
 
-And GNU `as` is explicitly kept off the amd64 JIT:
-
-```c
-if (current->comm[0] == 'a' && strcmp(current->comm, "as") == 0)
-    return cpu_run_to_interrupt_amd64(cpu, tlb);
-```
-
-That is a containment measure from commit `b71ce84d`, for real crashes under
-the amd64 JIT front end that were never root-caused. It is a workaround, it is
-labelled as one, and there is a probe harness
-(`tests/manual/x86/amd64_gas_probe.sh`) sitting in the tree waiting for someone to
-re-run the assembler under the JIT and either reproduce the crash or show it
-gone. Chapter 40 has something to say about workarounds that are documented
-versus workarounds that are absorbed.
+GNU `as` used to be kept off the amd64 JIT. Commit `b71ce84d` sent any process
+named `as` to the interpreter, as containment for crashes under the amd64 JIT
+front end that were never root-caused, and the probe harness
+(`tests/manual/x86/amd64_gas_probe.sh`) sat in the tree waiting for someone to
+re-run the assembler under the JIT. Someone did: `23edd81e` (September 2026)
+removed the bypass, and the assembler now runs on the JIT like everything else.
+The interpreter still carries a few `as`-named diagnostics from that hunt, which
+only fire when the interpreter is the engine running. Chapter 40 has something
+to say about workarounds that are documented versus workarounds that are
+absorbed; this one was documented, and so it could be retired.
 
 ## 7.3 arm64, and a disappointment worth understanding
 
@@ -263,9 +259,9 @@ path you would expect from reading the table.
 
 **The interpreters are legacy, and one of them is still load-bearing.** The
 `engine` build option offers exactly one value, `jit`. But `emu/amd64_interp.c`
-is still the largest single file in the tree at 16,675 lines, it is still what
-runs on non-aarch64 hosts, it is still what GNU `as` executes on, and it is
-still where AVX semantics get executed for amd64. "Legacy" here means "not
+is still the largest single file in the tree at about 18,000 lines, it is still
+what runs on non-aarch64 hosts, and it is still where AVX semantics get executed
+for amd64. "Legacy" here means "not
 where new work goes", not "dead". A reader who assumes the interpreters are
 vestigial will misread both the amd64 story and the AVX one.
 

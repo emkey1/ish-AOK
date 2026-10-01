@@ -1182,17 +1182,22 @@ static ssize_t fuse_fd_do_write(struct fd *fd, const void *buf, size_t bufsize, 
     return written;
 }
 
+// The end of the file as the daemon reports it, or `fallback` when it cannot.
+static uint64_t fuse_fd_end_offset(struct fd *fd, uint64_t fallback) {
+    struct fuse_file *file = fd->data;
+    struct fuse_conn *conn = fuse_mount_conn(fd->mount);
+    struct fuse_wire_attr attr;
+    if (conn != NULL &&
+            fuse_getattr(conn, file->nodeid, file->fh_valid, file->fh, &attr) == 0)
+        return attr.size;
+    return fallback;
+}
+
 // O_APPEND is honored here rather than trusting the daemon's backing fd:
 // find the current size and write there.
 static uint64_t fuse_fd_write_offset(struct fd *fd) {
-    struct fuse_file *file = fd->data;
-    if (fd->flags & O_APPEND_) {
-        struct fuse_conn *conn = fuse_mount_conn(fd->mount);
-        struct fuse_wire_attr attr;
-        if (conn != NULL &&
-                fuse_getattr(conn, file->nodeid, file->fh_valid, file->fh, &attr) == 0)
-            return attr.size;
-    }
+    if (fd->flags & O_APPEND_)
+        return fuse_fd_end_offset(fd, fd->offset);
     return fd->offset;
 }
 
@@ -1216,6 +1221,10 @@ static ssize_t fusefs_fd_pread(struct fd *fd, void *buf, size_t bufsize, off_t o
 }
 
 static ssize_t fusefs_fd_pwrite(struct fd *fd, const void *buf, size_t bufsize, off_t off) {
+    // At end of file on an O_APPEND description, as Linux's fuse_file_write_iter
+    // does through generic_write_checks; at the offset under RWF_NOAPPEND.
+    if (fd_pwrite_appends(fd))
+        return fuse_fd_do_write(fd, buf, bufsize, fuse_fd_end_offset(fd, (uint64_t) off));
     return fuse_fd_do_write(fd, buf, bufsize, (uint64_t) off);
 }
 

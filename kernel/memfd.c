@@ -142,7 +142,7 @@ static ssize_t memfd_pwrite(struct fd *fd, const void *buf, size_t bufsize, off_
     if (!memfd_writable(fd))
         return _EBADF;
     lock(&state->lock, 0);
-    if (fd->flags & O_APPEND_)
+    if (fd_pwrite_appends(fd))
         off = state->stat.size;
     if (off < 0) {
         unlock(&state->lock);

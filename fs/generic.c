@@ -1131,6 +1131,9 @@ struct fd *generic_reopen_by_path(struct fd *fd, int flags) {
         fd_close(reopened);
         return NULL;
     }
+    // The caller's flags, which F_GETFL reports -- not the O_NOFOLLOW this
+    // lookup added (a directory reopened through /proc said O_NOFOLLOW).
+    reopened->flags = flags;
     return reopened;
 }
 

@@ -489,7 +489,18 @@ struct fd {
     // position and flags, and every read, write and seek goes by position
     // instead. At the end, for the same reason as mnt_id.
     bool realfs_own_offset;
+    // pwritev2's RWF_APPEND / RWF_NOAPPEND for the one call in progress (set
+    // and cleared under `lock`); see fd_pwrite_appends.
+    enum fd_pwrite_append { FD_PWRITE_APPEND_DEFAULT, FD_PWRITE_APPEND_FORCE,
+        FD_PWRITE_APPEND_NEVER } pwrite_append;
 };
+
+// Whether a positioned write (an fd_ops pwrite) goes to end of file. Linux
+// appends on an O_APPEND description whatever offset it was given (man 2
+// pwrite, BUGS); pwritev2's RWF_APPEND and RWF_NOAPPEND override that for one
+// call (fd->pwrite_append). musl 1.2.6 sends every pwrite() as
+// pwritev2(..., RWF_NOAPPEND) to get POSIX's write-at-the-offset.
+bool fd_pwrite_appends(const struct fd *fd);
 
 typedef sdword_t fd_t;
 #define AT_FDCWD_ -100
