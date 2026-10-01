@@ -990,6 +990,36 @@ static const struct cu_case cases[] = {
      "0000000  \\0  \\0  \\0  \\0  \\0  \\0  \\0  \\0  \\0  \\0  \\0  \\0  \\0  \\0  \\0  \\0\n*\n0000060   x\n0000061\n", 94, 0, NULL},
     {"od", "-tx3 data.txt", NULL, 0,
      "", 0, 1, NULL},
+    {"split", "-n 2/3 lines.txt", NULL, 0,
+     "ve\nsix\nseven\neight\nni", 21, 0, NULL},
+    {"split", "-n l/2/3 lines.txt", NULL, 0,
+     "six\nseven\neight\nnine\n", 21, 0, NULL},
+    {"split", "-n r/2/3 lines.txt", NULL, 0,
+     "two\nfive\neight\neleven\n", 22, 0, NULL},
+    {"split", "-l 0 lines.txt", NULL, 0,
+     "", 0, 1, NULL},
+    {"split", "-n 3/2 lines.txt", NULL, 0,
+     "", 0, 1, NULL},
+    {"split", "-l 5 -d lines.txt sd_", NULL, 0,
+     "", 0, 0, ".\n./data.txt\n./dir\n./dir/f1\n./dir/sub\n./dir/sub/f2\n./empty\n./empty.txt\n./lines.txt\n./nonl.txt\n./sd_00\n./sd_01\n./sd_02\n./text.txt\n"},
+    {"split", "-C 20 lines.txt sc_", NULL, 0,
+     "", 0, 0, ".\n./data.txt\n./dir\n./dir/f1\n./dir/sub\n./dir/sub/f2\n./empty\n./empty.txt\n./lines.txt\n./nonl.txt\n./sc_aa\n./sc_ab\n./sc_ac\n./sc_ad\n./text.txt\n"},
+    {"split", "-n l/3 lines.txt sl_", NULL, 0,
+     "", 0, 0, ".\n./data.txt\n./dir\n./dir/f1\n./dir/sub\n./dir/sub/f2\n./empty\n./empty.txt\n./lines.txt\n./nonl.txt\n./sl_aa\n./sl_ab\n./sl_ac\n./text.txt\n"},
+    {"split", "--verbose -b 30 lines.txt v_", NULL, 0,
+     "creating file 'v_aa'\ncreating file 'v_ab'\ncreating file 'v_ac'\n", 63, 0, ".\n./data.txt\n./dir\n./dir/f1\n./dir/sub\n./dir/sub/f2\n./empty\n./empty.txt\n./lines.txt\n./nonl.txt\n./text.txt\n./v_aa\n./v_ab\n./v_ac\n"},
+    {"du", "-ab dir", NULL, 0,
+     "3\tdir/sub/f2\n3\tdir/sub\n2\tdir/f1\n5\tdir\n", 38, 0, NULL},
+    {"du", "-sb dir", NULL, 0,
+     "5\tdir\n", 6, 0, NULL},
+    {"du", "-b data.txt lines.txt", NULL, 0,
+     "50\tdata.txt\n63\tlines.txt\n", 25, 0, NULL},
+    {"du", "--inodes -s dir", NULL, 0,
+     "4\tdir\n", 6, 0, NULL},
+    {"du", "-s -a dir", NULL, 0,
+     "", 0, 1, NULL},
+    {"du", "nosuch", NULL, 0,
+     "", 0, 1, NULL},
 };
 
 static void write_file(const char *path, const char *text) {
@@ -1133,7 +1163,7 @@ int main(int argc, char **argv) {
     alarm(test_watchdog_secs(180));
     mkdir(TDIR, 0755);
     mkdir(TDIR "/bin", 0755);
-    static const char *const applets[] = {"head", "tail", "wc", "rm", "sort", "xargs", "find", "grep", "cp", "mv", "date", "sudo", "chmod", "ls", "diff", "cmp", "sed", "uniq", "tr", "nl", "seq", "touch", "stat", "realpath", "readlink", "env", "sum", "rmdir", "cat", "fold", "tac", "dd", "od"};
+    static const char *const applets[] = {"head", "tail", "wc", "rm", "sort", "xargs", "find", "grep", "cp", "mv", "date", "sudo", "chmod", "ls", "diff", "cmp", "sed", "uniq", "tr", "nl", "seq", "touch", "stat", "realpath", "readlink", "env", "sum", "rmdir", "cat", "fold", "tac", "dd", "od", "split", "du"};
     for (size_t i = 0; i < sizeof(applets) / sizeof(applets[0]); i++) {
         char link[256];
         snprintf(link, sizeof(link), TDIR "/bin/%s", applets[i]);
