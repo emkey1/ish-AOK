@@ -382,6 +382,8 @@ int nlibc_mknod(const char *path, mode_t mode, dev_t dev);
 int nlibc_mkstemp(char *template);
 int nlibc_utimes(const char *path, const struct timeval times[2]);
 int nlibc_futimes(int fd, const struct timeval times[2]);
+int nlibc_utimensat(int dirfd, const char *path, const struct timespec times[2], int flags);
+int nlibc_futimens(int fd, const struct timespec times[2]);
 int nlibc_statfs(const char *path, void *buf);
 #ifndef NATIVE_LIBC_OWN_GLOB
 int nlibc_glob(const char *pattern, int flags, void *errfunc, void *pglob);
@@ -902,6 +904,8 @@ const char *nlibc_dlerror(void);
 #define _ssh_mkstemp nlibc_mkstemp
 #define utimes      nlibc_utimes
 #define futimes     nlibc_futimes
+#define utimensat   nlibc_utimensat
+#define futimens    nlibc_futimens
 /* Function-like, as with stat above: `statfs` names both a function and a
  * struct tag, and an object-like macro would rewrite `struct statfs` too. */
 #define statfs(a, b) nlibc_statfs((a), (b))

@@ -1,5 +1,6 @@
-// native_coreutils.c -- SmallCLUE's rm, wc, head, tail, sort, xargs, find and
-// grep against GNU coreutils 9.4's, findutils 4.9's and grep 3.11's answers.
+// native_coreutils.c -- SmallCLUE's rm, wc, head, tail, sort, cp, mv, xargs,
+// find and grep against the answers of GNU coreutils 9.4, findutils 4.9 and
+// grep 3.11.
 //
 // iSH-AOK's native-links.sh puts SmallCLUE's applets ahead of the distro's on
 // PATH, so they run every script that names them. The versions these
@@ -418,6 +419,56 @@ static const struct cu_case cases[] = {
      "", 0, 1, NULL},
     {"grep", "-z a", "a\000b\000ab\000", 7,
      "a\000ab\000", 5, 0, NULL},
+    {"cp", "data.txt new.txt", NULL, 0,
+     "", 0, 0, ".\n./data.txt\n./dir\n./dir/f1\n./dir/sub\n./dir/sub/f2\n./empty\n./empty.txt\n./lines.txt\n./new.txt\n./nonl.txt\n./text.txt\n"},
+    {"cp", "data.txt lines.txt nonl.txt", NULL, 0,
+     "", 0, 1, NULL},
+    {"cp", "dir newdir", NULL, 0,
+     "", 0, 1, NULL},
+    {"cp", "-r dir newdir", NULL, 0,
+     "", 0, 0, ".\n./data.txt\n./dir\n./dir/f1\n./dir/sub\n./dir/sub/f2\n./empty\n./empty.txt\n./lines.txt\n./newdir\n./newdir/f1\n./newdir/sub\n./newdir/sub/f2\n./nonl.txt\n./text.txt\n"},
+    {"cp", "-rv dir dir3", NULL, 0,
+     "'dir' -> 'dir3'\n'dir/sub' -> 'dir3/sub'\n'dir/sub/f2' -> 'dir3/sub/f2'\n'dir/f1' -> 'dir3/f1'\n", 92, 0, ".\n./data.txt\n./dir\n./dir/f1\n./dir/sub\n./dir/sub/f2\n./dir3\n./dir3/f1\n./dir3/sub\n./dir3/sub/f2\n./empty\n./empty.txt\n./lines.txt\n./nonl.txt\n./text.txt\n"},
+    {"cp", "-r dir dir", NULL, 0,
+     "", 0, 1, ".\n./data.txt\n./dir\n./dir/dir\n./dir/dir/f1\n./dir/dir/sub\n./dir/dir/sub/f2\n./dir/f1\n./dir/sub\n./dir/sub/f2\n./empty\n./empty.txt\n./lines.txt\n./nonl.txt\n./text.txt\n"},
+    {"cp", "data.txt data.txt", NULL, 0,
+     "", 0, 1, NULL},
+    {"cp", "-n data.txt lines.txt", NULL, 0,
+     "", 0, 0, NULL},
+    {"cp", "-vb data.txt lines.txt", NULL, 0,
+     "'data.txt' -> 'lines.txt' (backup: 'lines.txt~')\n", 49, 0, ".\n./data.txt\n./dir\n./dir/f1\n./dir/sub\n./dir/sub/f2\n./empty\n./empty.txt\n./lines.txt\n./lines.txt~\n./nonl.txt\n./text.txt\n"},
+    {"cp", "--backup=numbered data.txt lines.txt", NULL, 0,
+     "", 0, 0, ".\n./data.txt\n./dir\n./dir/f1\n./dir/sub\n./dir/sub/f2\n./empty\n./empty.txt\n./lines.txt\n./lines.txt.~1~\n./nonl.txt\n./text.txt\n"},
+    {"cp", "--backup=bad data.txt lines.txt", NULL, 0,
+     "", 0, 1, NULL},
+    {"cp", "-t dir data.txt lines.txt", NULL, 0,
+     "", 0, 0, ".\n./data.txt\n./dir\n./dir/data.txt\n./dir/f1\n./dir/lines.txt\n./dir/sub\n./dir/sub/f2\n./empty\n./empty.txt\n./lines.txt\n./nonl.txt\n./text.txt\n"},
+    {"cp", "-T data.txt dir", NULL, 0,
+     "", 0, 1, NULL},
+    {"cp", "-s data.txt sym", NULL, 0,
+     "", 0, 0, ".\n./data.txt\n./dir\n./dir/f1\n./dir/sub\n./dir/sub/f2\n./empty\n./empty.txt\n./lines.txt\n./nonl.txt\n./sym\n./text.txt\n"},
+    {"cp", "--parents -v dir/f1 empty", NULL, 0,
+     "dir -> empty/dir\n'dir/f1' -> 'empty/dir/f1'\n", 44, 0, ".\n./data.txt\n./dir\n./dir/f1\n./dir/sub\n./dir/sub/f2\n./empty\n./empty.txt\n./empty/dir\n./empty/dir/f1\n./lines.txt\n./nonl.txt\n./text.txt\n"},
+    {"cp", "-u lines.txt nonl.txt", NULL, 0,
+     "", 0, 0, NULL},
+    {"cp", "--update=none-fail data.txt lines.txt", NULL, 0,
+     "", 0, 1, NULL},
+    {"mv", "data.txt new.txt", NULL, 0,
+     "", 0, 0, ".\n./dir\n./dir/f1\n./dir/sub\n./dir/sub/f2\n./empty\n./empty.txt\n./lines.txt\n./new.txt\n./nonl.txt\n./text.txt\n"},
+    {"mv", "-v data.txt lines.txt dir", NULL, 0,
+     "renamed 'data.txt' -> 'dir/data.txt'\nrenamed 'lines.txt' -> 'dir/lines.txt'\n", 76, 0, ".\n./dir\n./dir/data.txt\n./dir/f1\n./dir/lines.txt\n./dir/sub\n./dir/sub/f2\n./empty\n./empty.txt\n./nonl.txt\n./text.txt\n"},
+    {"mv", "dir dir/sub/x", NULL, 0,
+     "", 0, 1, NULL},
+    {"mv", "-b data.txt lines.txt", NULL, 0,
+     "", 0, 0, ".\n./dir\n./dir/f1\n./dir/sub\n./dir/sub/f2\n./empty\n./empty.txt\n./lines.txt\n./lines.txt~\n./nonl.txt\n./text.txt\n"},
+    {"mv", "-n data.txt lines.txt", NULL, 0,
+     "", 0, 0, NULL},
+    {"mv", "-T data.txt dir", NULL, 0,
+     "", 0, 1, NULL},
+    {"mv", "nosuch x", NULL, 0,
+     "", 0, 1, NULL},
+    {"mv", "data.txt data.txt", NULL, 0,
+     "", 0, 1, NULL},
 };
 
 static void write_file(const char *path, const char *text) {
@@ -561,7 +612,7 @@ int main(int argc, char **argv) {
     alarm(test_watchdog_secs(180));
     mkdir(TDIR, 0755);
     mkdir(TDIR "/bin", 0755);
-    static const char *const applets[] = {"head", "tail", "wc", "rm", "sort", "xargs", "find", "grep"};
+    static const char *const applets[] = {"head", "tail", "wc", "rm", "sort", "xargs", "find", "grep", "cp", "mv"};
     for (size_t i = 0; i < sizeof(applets) / sizeof(applets[0]); i++) {
         char link[256];
         snprintf(link, sizeof(link), TDIR "/bin/%s", applets[i]);
@@ -621,6 +672,25 @@ int main(int argc, char **argv) {
         } else {
             printf("FAIL find -newer by nanoseconds\n");
             print_bytes("got ", out, len);
+            failures_total++;
+        }
+    }
+
+    // cp -p keeps nanoseconds: native utimensat reached the host's libc,
+    // with a guest path, until it was routed through the shim (2026-10-01).
+    fixture();
+    times[0].tv_nsec = times[1].tv_nsec = 123456789;
+    utimensat(AT_FDCWD, "data.txt", times, 0);
+    {
+        static const struct cu_case keep = {"cp", "-p data.txt kept", NULL, 0, "", 0, 0, NULL};
+        size_t len = 0;
+        int status = run_case(&keep, out, sizeof(out), &len);
+        struct stat st;
+        if (status == 0 && stat("kept", &st) == 0 && st.st_mtim.tv_sec == 1700000000 &&
+            st.st_mtim.tv_nsec == 123456789) {
+            test_logf("ok   cp -p keeps nanosecond times\n");
+        } else {
+            printf("FAIL cp -p keeps nanosecond times (status %d)\n", status);
             failures_total++;
         }
     }

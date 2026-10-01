@@ -2009,6 +2009,44 @@ int nlibc_futimes(int fd_no, const struct timeval times[2]) {
     return nlibc_utimens(AT_FDCWD, NULL, fd_no, times);
 }
 
+// The nanosecond interface. It was not routed at all: SmallCLUE's cp -p
+// called the HOST's utimensat with a guest path, which failed with ENOENT
+// (or, for a path that also exists on the host, changed a host file's times).
+// The host's UTIME_NOW/UTIME_OMIT are not Linux's numbers on Darwin, so they
+// are translated rather than passed through.
+static guest_addr_t nlibc_put_timespecs(const struct timespec times[2]) {
+    struct nlibc_guest_timespec ts[2];
+    for (int i = 0; i < 2; i++) {
+        ts[i].sec = times[i].tv_sec;
+        if (times[i].tv_nsec == UTIME_NOW)
+            ts[i].nsec = NLIBC_UTIME_NOW;
+        else if (times[i].tv_nsec == UTIME_OMIT)
+            ts[i].nsec = NLIBC_UTIME_OMIT;
+        else
+            ts[i].nsec = times[i].tv_nsec;
+    }
+    return native_scratch_put(ts, sizeof(ts));
+}
+
+int nlibc_utimensat(int dirfd, const char *path, const struct timespec times[2], int flags) {
+    NATIVE_FRAME;
+    guest_addr_t guest_ts = 0;
+    if (times != NULL && (guest_ts = nlibc_put_timespecs(times)) == 0)
+        return nlibc_fail(_ENOMEM);
+    NLIBC_PATH(guest_path, path);
+    dword_t guest_flags = (flags & AT_SYMLINK_NOFOLLOW) ? AT_SYMLINK_NOFOLLOW_ : 0;
+    return (int) nlibc_ret(native_syscall(NATIVE_SYS_utimensat, nlibc_at_fd(dirfd),
+            guest_path, guest_ts, guest_flags));
+}
+
+int nlibc_futimens(int fd_no, const struct timespec times[2]) {
+    NATIVE_FRAME;
+    guest_addr_t guest_ts = 0;
+    if (times != NULL && (guest_ts = nlibc_put_timespecs(times)) == 0)
+        return nlibc_fail(_ENOMEM);
+    return (int) nlibc_ret(native_syscall(NATIVE_SYS_utimensat, fd_no, 0, guest_ts, 0));
+}
+
 int nlibc_chroot(const char *path) {
     NATIVE_FRAME;
     NLIBC_PATH(guest_path, path);

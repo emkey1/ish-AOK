@@ -623,6 +623,17 @@ def main():
     if not targets:
         root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         targets = [os.path.join(root, t) for t in DEFAULT_TARGETS]
+        # `ninja -C build ish` links SmallCLUE's objects without ever making
+        # its archive, and a missing target used to be skipped in silence --
+        # so the gate said "clean" about code it had not looked at, while cp
+        # called the host's utimensat (2026-10-01). SmallCLUE is in every
+        # build; its absence is an error, not a pass.
+        smallclue = os.path.join(root, "build/libsmallclue.a")
+        if not os.path.exists(smallclue):
+            print("check-native-libc: build/libsmallclue.a is not built -- run "
+                  "ninja -C build libsmallclue.a (ninja ish does not make it)",
+                  file=sys.stderr)
+            return 2
         targets = [t for t in targets if os.path.exists(t)]
         if not targets:
             print("check-native-libc: nothing built yet -- run ninja -C build, "
