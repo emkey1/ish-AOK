@@ -357,6 +357,18 @@ static void nlibc_guest_stat_to_host(const struct arm64_stat_ *in, struct stat *
     out->st_atime = (time_t) in->atime;
     out->st_mtime = (time_t) in->mtime;
     out->st_ctime = (time_t) in->ctime;
+    // The nanoseconds too: without them every native program saw whole
+    // seconds, so find -newer called a file made in the same second as its
+    // reference "not newer", and -printf %T@ printed .0000000000.
+#if defined(__APPLE__)
+    out->st_atimespec.tv_nsec = (long) in->atime_nsec;
+    out->st_mtimespec.tv_nsec = (long) in->mtime_nsec;
+    out->st_ctimespec.tv_nsec = (long) in->ctime_nsec;
+#else
+    out->st_atim.tv_nsec = (long) in->atime_nsec;
+    out->st_mtim.tv_nsec = (long) in->mtime_nsec;
+    out->st_ctim.tv_nsec = (long) in->ctime_nsec;
+#endif
 }
 
 static int nlibc_statat(int dirfd, const char *path, struct stat *st, dword_t at_flags) {

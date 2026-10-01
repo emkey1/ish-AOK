@@ -1,5 +1,5 @@
-// native_coreutils.c -- SmallCLUE's rm, wc, head, tail, sort and xargs against
-// GNU coreutils 9.4's and findutils 4.9's answers.
+// native_coreutils.c -- SmallCLUE's rm, wc, head, tail, sort, xargs and find
+// against GNU coreutils 9.4's and findutils 4.9's answers.
 //
 // iSH-AOK's native-links.sh puts SmallCLUE's applets ahead of the distro's on
 // PATH, so they run every script that names them. The versions these
@@ -276,6 +276,78 @@ static const struct cu_case cases[] = {
      "a b\n", 4, 0, NULL},
     {"xargs", "-a lines.txt -n 5 echo", "a b\n", 4,
      "one two three four five\nsix seven eight nine ten\neleven twelve\n", 63, 0, NULL},
+    {"find", "dir/sub", NULL, 0,
+     "dir/sub\ndir/sub/f2\n", 19, 0, NULL},
+    {"find", "-depth dir/sub", NULL, 0,
+     "", 0, 1, NULL},
+    {"find", ". -name f1", NULL, 0,
+     "./dir/f1\n", 9, 0, NULL},
+    {"find", ". -name f? -path *sub*", NULL, 0,
+     "./dir/sub/f2\n", 13, 0, NULL},
+    {"find", ". -iname DATA*", NULL, 0,
+     "./data.txt\n", 11, 0, NULL},
+    {"find", ". -regex .*/f\\(1\\|x\\)", NULL, 0,
+     "./dir/f1\n", 9, 0, NULL},
+    {"find", ". -regextype posix-extended -regex .*/(f2|zz)", NULL, 0,
+     "./dir/sub/f2\n", 13, 0, NULL},
+    {"find", ". -type f -size 0 -name e*", NULL, 0,
+     "./empty.txt\n", 12, 0, NULL},
+    {"find", ". -empty -type d", NULL, 0,
+     "./empty\n", 8, 0, NULL},
+    {"find", ". -size +10c -name *s.txt", NULL, 0,
+     "./lines.txt\n", 12, 0, NULL},
+    {"find", ". -perm 644 -name nonl.txt", NULL, 0,
+     "./nonl.txt\n", 11, 0, NULL},
+    {"find", ". -name sub -prune", NULL, 0,
+     "./dir/sub\n", 10, 0, NULL},
+    {"find", "dir -name sub -prune -o -type f -print", NULL, 0,
+     "dir/f1\n", 7, 0, NULL},
+    {"find", ". -maxdepth 0", NULL, 0,
+     ".\n", 2, 0, NULL},
+    {"find", ". -mindepth 3", NULL, 0,
+     "./dir/sub/f2\n", 13, 0, NULL},
+    {"find", ". -name f1 -printf %p|%f|%h|%P|%d|%y|%s|%m\\n", NULL, 0,
+     "./dir/f1|f1|./dir|dir/f1|2|f|2|644\n", 35, 0, NULL},
+    {"find", "dir -maxdepth 0 -printf %-6f|%6f|%.2f\\n", NULL, 0,
+     "dir   |   dir|di\n", 17, 0, NULL},
+    {"find", ". -name f1 -printf a\\tb\\\\c%%d\\101\\n", NULL, 0,
+     "a\tb\\c%dA\n", 9, 0, NULL},
+    {"find", ". -name f1 -exec echo X {} ;", NULL, 0,
+     "X ./dir/f1\n", 11, 0, NULL},
+    {"find", ". -name f1 -exec echo X {} +", NULL, 0,
+     "X ./dir/f1\n", 11, 0, NULL},
+    {"find", ". -name f1 -exec false ; -print", NULL, 0,
+     "", 0, 0, NULL},
+    {"find", ". -name f2 -execdir echo {} ;", NULL, 0,
+     "./f2\n", 5, 0, NULL},
+    {"find", ". -name f1 -print -quit", NULL, 0,
+     "./dir/f1\n", 9, 0, NULL},
+    {"find", "dir/sub -delete", NULL, 0,
+     "", 0, 0, ".\n./data.txt\n./dir\n./dir/f1\n./empty\n./empty.txt\n./lines.txt\n./nonl.txt\n./text.txt\n"},
+    {"find", ". -name nonl.txt -delete", NULL, 0,
+     "", 0, 0, ".\n./data.txt\n./dir\n./dir/f1\n./dir/sub\n./dir/sub/f2\n./empty\n./empty.txt\n./lines.txt\n./text.txt\n"},
+    {"find", "nosuch", NULL, 0,
+     "", 0, 1, NULL},
+    {"find", ". -foo", NULL, 0,
+     "", 0, 1, NULL},
+    {"find", ". -name", NULL, 0,
+     "", 0, 1, NULL},
+    {"find", ". -type q", NULL, 0,
+     "", 0, 1, NULL},
+    {"find", ". -size 3x", NULL, 0,
+     "", 0, 1, NULL},
+    {"find", ". -perm 999", NULL, 0,
+     "", 0, 1, NULL},
+    {"find", ". -o -print", NULL, 0,
+     "", 0, 1, NULL},
+    {"find", ". ( -name a", NULL, 0,
+     "", 0, 1, NULL},
+    {"find", ". -delete -prune", NULL, 0,
+     "", 0, 1, NULL},
+    {"find", ". -mtime x", NULL, 0,
+     "", 0, 1, NULL},
+    {"find", ". -newer nosuch", NULL, 0,
+     "", 0, 1, NULL},
 };
 
 static void write_file(const char *path, const char *text) {
@@ -419,7 +491,7 @@ int main(int argc, char **argv) {
     alarm(test_watchdog_secs(180));
     mkdir(TDIR, 0755);
     mkdir(TDIR "/bin", 0755);
-    static const char *const applets[] = {"head", "tail", "wc", "rm", "sort", "xargs"};
+    static const char *const applets[] = {"head", "tail", "wc", "rm", "sort", "xargs", "find"};
     for (size_t i = 0; i < sizeof(applets) / sizeof(applets[0]); i++) {
         char link[256];
         snprintf(link, sizeof(link), TDIR "/bin/%s", applets[i]);
@@ -460,6 +532,28 @@ int main(int argc, char **argv) {
         free(after);
     }
     free(fixture_tree);
+
+    // Native stat carried whole seconds only (fixed in kernel/native_libc.c,
+    // 2026-10-01), so a file 100 ns newer than its reference was "not newer".
+    fixture();
+    write_file("old", "");
+    write_file("new", "");
+    struct timespec times[2] = {{1700000000, 100}, {1700000000, 100}};
+    utimensat(AT_FDCWD, "old", times, 0);
+    times[0].tv_nsec = times[1].tv_nsec = 200;
+    utimensat(AT_FDCWD, "new", times, 0);
+    {
+        static const struct cu_case newer = {"find", "new old -newer old", NULL, 0, "new\n", 4, 0, NULL};
+        size_t len = 0;
+        int status = run_case(&newer, out, sizeof(out), &len);
+        if (status == 0 && len == 4 && !memcmp(out, "new\n", 4)) {
+            test_logf("ok   find -newer by nanoseconds\n");
+        } else {
+            printf("FAIL find -newer by nanoseconds\n");
+            print_bytes("got ", out, len);
+            failures_total++;
+        }
+    }
     if (chdir("/") != 0) {}
     rm_rf(TDIR);
     return finish_suite("native_coreutils");
