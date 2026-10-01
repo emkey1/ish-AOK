@@ -2251,6 +2251,25 @@ int nlibc_ioctl(int fd_no, unsigned long request, ...) {
             *(int *) arg = (int) value;
             return 0;
         }
+        // Linux's own termios requests, passed through untranslated, for a
+        // host program that speaks the guest's termios directly rather than
+        // Darwin's: SmallCLUE's stty, whose `stty -g` has to match GNU's on
+        // Linux bit for bit and whose settings include ones Darwin's struct
+        // has no field for (iuclc, olcuc, xcase, cmspar, swtch). The argument
+        // is the kernel's struct termios (termios_, 36 bytes). These numbers
+        // carry none of Darwin's IOC_IN/OUT/VOID bits, so no Darwin ioctl
+        // can be mistaken for one; on a real Darwin kernel the same call just
+        // fails, and stty falls back to tcgetattr.
+        case TCGETS_:
+            if (arg == NULL)
+                return nlibc_fail(_EFAULT);
+            return nlibc_tty_ioctl(fd_no, TCGETS_, arg, sizeof(struct termios_), true) < 0 ? -1 : 0;
+        case TCSETS_:
+        case TCSETSW_:
+        case TCSETSF_:
+            if (arg == NULL)
+                return nlibc_fail(_EFAULT);
+            return nlibc_tty_ioctl(fd_no, (dword_t) request, arg, sizeof(struct termios_), false) < 0 ? -1 : 0;
         default:
             return nlibc_fail(_ENOSYS);
     }
@@ -2684,24 +2703,108 @@ static int nlibc_tty_ioctl(int fd_no, dword_t cmd, void *arg, size_t size, bool 
 // So anything a caller might reasonably READ and pass on has to survive the
 // round trip, not just the handful the shim itself acts upon. These are the
 // flags OpenSSH's ttymodes.c actually puts on the wire.
+//
+// And then everything else Darwin can say too, for stty: `stty -g` saves a
+// terminal as all four flag words and every control character, `stty saved`
+// puts it back, and a bit this table drops is a setting that silently does
+// not survive the round trip. Linux-only bits (IUCLC, OLCUC, XCASE, CMSPAR,
+// VSWTC) have no Darwin field to travel in and stay as the guest has them.
 static const struct nlibc_flagmap nlibc_lflags[] = {
     { ISIG,   ISIG_ },   { ICANON,  ICANON_ },  { ECHO,   ECHO_ },
     { ECHOE,  ECHOE_ },  { ECHOK,   ECHOK_ },   { NOFLSH, NOFLSH_ },
     { ECHOCTL, ECHOCTL_ }, { ECHOKE, ECHOKE_ }, { IEXTEN, IEXTEN_ },
+    { ECHONL, ECHONL_ }, { TOSTOP,  TOSTOP_ },
+#ifdef ECHOPRT
+    { ECHOPRT, ECHOPRT_ },
+#endif
+#ifdef FLUSHO
+    { FLUSHO, FLUSHO_ },
+#endif
+#ifdef PENDIN
+    { PENDIN, PENDIN_ },
+#endif
+#ifdef EXTPROC
+    { EXTPROC, EXTPROC_ },
+#endif
 };
 static const struct nlibc_flagmap nlibc_iflags[] = {
     { ICRNL,  ICRNL_ },  { IXON,    IXON_ },    { INLCR,  INLCR_ },
-    { IGNCR,  IGNCR_ },
+    { IGNCR,  IGNCR_ },  { IGNBRK,  IGNBRK_ },  { BRKINT, BRKINT_ },
+    { IGNPAR, IGNPAR_ }, { PARMRK,  PARMRK_ },  { INPCK,  INPCK_ },
+    { ISTRIP, ISTRIP_ }, { IXANY,   IXANY_ },   { IXOFF,  IXOFF_ },
+#ifdef IMAXBEL
+    { IMAXBEL, IMAXBEL_ },
+#endif
+#ifdef IUTF8
+    { IUTF8,  IUTF8_ },
+#endif
 };
+// The delay fields' values are single bits on both sides except TABDLY,
+// where Darwin's TAB3 is OXTABS (0x4) rather than TAB1|TAB2: that one is
+// mapped by value below.
 static const struct nlibc_flagmap nlibc_oflags[] = {
     { OPOST,  OPOST_ },  { ONLCR,   ONLCR_ },   { OCRNL,  OCRNL_ },
     { ONOCR,  ONOCR_ },  { ONLRET,  ONLRET_ },
+#ifdef OFILL
+    { OFILL,  OFILL_ },
+#endif
+#ifdef OFDEL
+    { OFDEL,  OFDEL_ },
+#endif
+#ifdef NL1
+    { NL1,    NL1_ },
+#endif
+#if defined(CR1) && defined(CR2)
+    { CR1,    CR1_ },    { CR2,     CR2_ },
+#endif
+#ifdef BS1
+    { BS1,    BS1_ },
+#endif
+#ifdef VT1
+    { VT1,    VT1_ },
+#endif
+#ifdef FF1
+    { FF1,    FF1_ },
+#endif
 };
 // c_cflag's single bits. CSIZE is a field, not a flag, so it is mapped by
 // value below, and so is the speed.
 static const struct nlibc_flagmap nlibc_cflags[] = {
     { CSTOPB, CSTOPB_ }, { CREAD,   CREAD_ },   { PARENB, PARENB_ },
     { PARODD, PARODD_ }, { HUPCL,   HUPCL_ },   { CLOCAL, CLOCAL_ },
+#ifdef CRTSCTS
+    { CRTSCTS, CRTSCTS_ },
+#endif
+};
+
+#ifdef TABDLY
+static unsigned long nlibc_tabdly_to_host(dword_t oflags) {
+    switch (oflags & TABDLY_) {
+        case TAB1_: return TAB1;
+        case TAB2_: return TAB2;
+        case TAB3_: return TAB3;
+        default:    return TAB0;
+    }
+}
+static dword_t nlibc_tabdly_to_guest(unsigned long oflag) {
+    switch (oflag & TABDLY) {
+        case TAB1: return TAB1_;
+        case TAB2: return TAB2_;
+        case TAB3: return TAB3_;
+        default:   return 0;
+    }
+}
+#endif
+
+// The control characters, both ways. "No character" is 0 in Linux's c_cc
+// and _POSIX_VDISABLE (0xff) in Darwin's; VMIN and VTIME are counts, not
+// characters, and are copied as they are.
+static const struct { int host; int guest; } nlibc_cc_map[] = {
+    { VINTR, VINTR_ },   { VQUIT, VQUIT_ },     { VERASE, VERASE_ },
+    { VKILL, VKILL_ },   { VEOF, VEOF_ },       { VEOL, VEOL_ },
+    { VEOL2, VEOL2_ },   { VSTART, VSTART_ },   { VSTOP, VSTOP_ },
+    { VSUSP, VSUSP_ },   { VREPRINT, VREPRINT_ }, { VDISCARD, VDISCARD_ },
+    { VWERASE, VWERASE_ }, { VLNEXT, VLNEXT_ },
 };
 
 int nlibc_tcgetattr(int fd_no, struct termios *out) {
@@ -2714,28 +2817,21 @@ int nlibc_tcgetattr(int fd_no, struct termios *out) {
     out->c_lflag = nlibc_flags_to_host(t.lflags, nlibc_lflags, NLIBC_MAP_COUNT(nlibc_lflags));
     out->c_iflag = nlibc_flags_to_host(t.iflags, nlibc_iflags, NLIBC_MAP_COUNT(nlibc_iflags));
     out->c_oflag = nlibc_flags_to_host(t.oflags, nlibc_oflags, NLIBC_MAP_COUNT(nlibc_oflags));
+#ifdef TABDLY
+    out->c_oflag |= nlibc_tabdly_to_host(t.oflags);
+#endif
     out->c_cc[VMIN] = t.cc[VMIN_];
     out->c_cc[VTIME] = t.cc[VTIME_];
-    out->c_cc[VINTR] = t.cc[VINTR_];
-    out->c_cc[VQUIT] = t.cc[VQUIT_];
-    out->c_cc[VSUSP] = t.cc[VSUSP_];
-    out->c_cc[VEOF] = t.cc[VEOF_];
     // The rest of the control characters, for the same reason as the flags
     // above: a caller may be DESCRIBING this terminal to something else rather
     // than driving it. Measured over a real ssh session with only the six
     // above mapped, the remote pty came up reporting
     //     erase = <undef>; kill = <undef>; eol = <undef>
     // which is a terminal where backspace does not erase.
-    out->c_cc[VERASE] = t.cc[VERASE_];
-    out->c_cc[VKILL] = t.cc[VKILL_];
-    out->c_cc[VSTART] = t.cc[VSTART_];
-    out->c_cc[VSTOP] = t.cc[VSTOP_];
-    out->c_cc[VEOL] = t.cc[VEOL_];
-    out->c_cc[VREPRINT] = t.cc[VREPRINT_];
-    out->c_cc[VDISCARD] = t.cc[VDISCARD_];
-    out->c_cc[VWERASE] = t.cc[VWERASE_];
-    out->c_cc[VLNEXT] = t.cc[VLNEXT_];
-    out->c_cc[VEOL2] = t.cc[VEOL2_];
+    for (size_t i = 0; i < NLIBC_MAP_COUNT(nlibc_cc_map); i++) {
+        byte_t c = t.cc[nlibc_cc_map[i].guest];
+        out->c_cc[nlibc_cc_map[i].host] = c == 0 ? _POSIX_VDISABLE : c;
+    }
     // c_cflag, which was not translated at ALL. Measured on a real session,
     // the remote pty came up "speed 0 baud ... cs5" -- five-bit characters on
     // a hung line.
@@ -2773,11 +2869,36 @@ int nlibc_tcsetattr(int fd_no, int action, const struct termios *in) {
     for (size_t i = 0; i < NLIBC_MAP_COUNT(nlibc_lflags); i++) lmask |= nlibc_lflags[i].guest;
     for (size_t i = 0; i < NLIBC_MAP_COUNT(nlibc_iflags); i++) imask |= nlibc_iflags[i].guest;
     for (size_t i = 0; i < NLIBC_MAP_COUNT(nlibc_oflags); i++) omask |= nlibc_oflags[i].guest;
+    dword_t cmask = CSIZE_ | CBAUD_;
+    for (size_t i = 0; i < NLIBC_MAP_COUNT(nlibc_cflags); i++) cmask |= nlibc_cflags[i].guest;
+#ifdef TABDLY
+    omask |= TABDLY_;
+#endif
     t.lflags = (t.lflags & ~lmask) | nlibc_flags_to_guest(in->c_lflag, nlibc_lflags, NLIBC_MAP_COUNT(nlibc_lflags));
     t.iflags = (t.iflags & ~imask) | nlibc_flags_to_guest(in->c_iflag, nlibc_iflags, NLIBC_MAP_COUNT(nlibc_iflags));
-    t.oflags = (t.oflags & ~omask) | nlibc_flags_to_guest(in->c_oflag, nlibc_oflags, NLIBC_MAP_COUNT(nlibc_oflags));
+    dword_t oflags = nlibc_flags_to_guest(in->c_oflag, nlibc_oflags, NLIBC_MAP_COUNT(nlibc_oflags));
+#ifdef TABDLY
+    oflags |= nlibc_tabdly_to_guest(in->c_oflag);
+#endif
+    t.oflags = (t.oflags & ~omask) | oflags;
+    // c_cflag and the control characters were read back by tcgetattr but
+    // never written: `stty intr ^X`, `stty cs7` and restoring a `stty -g`
+    // string all reported success and changed nothing.
+    dword_t cflags = nlibc_flags_to_guest(in->c_cflag, nlibc_cflags, NLIBC_MAP_COUNT(nlibc_cflags));
+    switch (in->c_cflag & CSIZE) {
+        case CS5: cflags |= CS5_; break;
+        case CS6: cflags |= CS6_; break;
+        case CS7: cflags |= CS7_; break;
+        default:  cflags |= CS8_; break;
+    }
+    cflags |= tty_speed_from_host(cfgetospeed(in));
+    t.cflags = (t.cflags & ~cmask) | cflags;
     t.cc[VMIN_] = in->c_cc[VMIN];
     t.cc[VTIME_] = in->c_cc[VTIME];
+    for (size_t i = 0; i < NLIBC_MAP_COUNT(nlibc_cc_map); i++) {
+        cc_t c = in->c_cc[nlibc_cc_map[i].host];
+        t.cc[nlibc_cc_map[i].guest] = c == _POSIX_VDISABLE ? 0 : c;
+    }
     return nlibc_tty_ioctl(fd_no, TCSETS_, &t, sizeof(t), false);
 }
 

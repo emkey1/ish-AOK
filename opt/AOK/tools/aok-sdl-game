@@ -71,7 +71,8 @@ aok_in_foreground() {
 }
 
 # One key from the terminal, echo off; the terminal is put back even on ^C.
-# The distro's stty and dd, not SmallCLUE's linked in /usr/local/bin.
+# The distro's stty and dd where they exist (any root has them), else
+# whatever PATH finds: SmallCLUE's stty has had -g since 929ce11.
 aok_wait_key() {
     _stty=/bin/stty; [ -x "$_stty" ] || _stty=stty
     _dd=/bin/dd; [ -x "$_dd" ] || _dd=dd

@@ -86,6 +86,47 @@ struct termios2_ {
 #define ONOCR_ (1 << 4)
 #define ONLRET_ (1 << 5)
 
+// The rest of asm-generic/termbits.h's flags. The tty itself acts on none of
+// them, but a guest reads them back and stty prints and restores every one,
+// so the native shim (kernel/native_libc.c) carries them across to Darwin's
+// struct termios wherever Darwin has the same idea.
+#define XCASE_ (1 << 2)
+#define ECHONL_ (1 << 6)
+#define ECHOPRT_ (1 << 10)
+#define FLUSHO_ (1 << 12)
+#define PENDIN_ (1 << 14)
+#define EXTPROC_ (1 << 16)
+
+#define IGNBRK_ (1 << 0)
+#define BRKINT_ (1 << 1)
+#define IGNPAR_ (1 << 2)
+#define PARMRK_ (1 << 3)
+#define INPCK_ (1 << 4)
+#define ISTRIP_ (1 << 5)
+#define IUCLC_ (1 << 9)
+#define IMAXBEL_ (1 << 13)
+#define IUTF8_ (1 << 14)
+
+#define OLCUC_ (1 << 1)
+#define OFILL_ (1 << 6)
+#define OFDEL_ (1 << 7)
+#define NLDLY_ 0x100
+#define NL1_ 0x100
+#define CRDLY_ 0x600
+#define CR1_ 0x200
+#define CR2_ 0x400
+#define CR3_ 0x600
+#define TABDLY_ 0x1800
+#define TAB1_ 0x800
+#define TAB2_ 0x1000
+#define TAB3_ 0x1800
+#define BSDLY_ 0x2000
+#define BS1_ 0x2000
+#define VTDLY_ 0x4000
+#define VT1_ 0x4000
+#define FFDLY_ 0x8000
+#define FF1_ 0x8000
+
 // c_cflag bits, from Linux's asm-generic/termbits.h. AOK's ttys have no real
 // line discipline hardware, so nothing here changes how a tty behaves -- but
 // guests do read these bits back, and the baud rate in particular is not
@@ -108,6 +149,8 @@ struct termios2_ {
 #define HUPCL_ 0x400
 #define CLOCAL_ 0x800
 #define CBAUDEX_ 0x1000
+#define CMSPAR_ 0x40000000
+#define CRTSCTS_ 0x80000000
 
 // Index of a CBAUD code in a table laid out like the kernel's baud_table
 // (drivers/tty/tty_baudrate.c): codes with CBAUDEX set carry on after B38400,
