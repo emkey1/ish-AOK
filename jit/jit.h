@@ -298,6 +298,18 @@ const char *jit_fuse_name(enum jit_fuse_arch arch, unsigned index, unsigned *bit
 // Returns false for a name this arch does not have ("all" is accepted).
 bool jit_fuse_set_by_name(enum jit_fuse_arch arch, const char *name, bool on);
 
+// Block translation time, per guest architecture (i386, amd64, arm64, riscv64):
+// ISH_JIT_TIMING at start-up, or /proc/ish/jit_timing at run time.
+struct jit_timing_stats {
+    bool enabled;
+    unsigned long long bytes;
+    const char *arch[4];
+    unsigned long long ns[4];
+    unsigned long blocks[4];
+};
+void jit_timing_set(bool on);
+void jit_timing_get(struct jit_timing_stats *stats);
+
 bool amd64_jit_is_enabled(void);
 void amd64_jit_set_enabled(bool enabled);
 // Block-compile accounting for the amd64 frontend, published through

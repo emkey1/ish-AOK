@@ -50,16 +50,25 @@ static atomic_ullong jit_timing_ns_by_arch[4];
 static atomic_ulong jit_timing_count_by_arch[4];
 static const char *const jit_timing_arch_names[4] = {"i386", "amd64", "arm64", "riscv64"};
 
+// -1 until the first compile reads ISH_JIT_TIMING; /proc/ish/jit_timing can
+// turn it on and off at run time (the app has no environment to set).
+static atomic_int jit_timing_state = -1;
+
 static bool jit_timing_enabled(void) {
-    static int enabled = -1;
-    if (enabled == -1)
-        enabled = getenv("ISH_JIT_TIMING") != NULL ? 1 : 0;
-    return enabled == 1;
+    int state = atomic_load_explicit(&jit_timing_state, memory_order_relaxed);
+    if (state == -1) {
+        int env = getenv("ISH_JIT_TIMING") != NULL ? 1 : 0;
+        atomic_compare_exchange_strong(&jit_timing_state, &state, env);
+        state = atomic_load_explicit(&jit_timing_state, memory_order_relaxed);
+    }
+    return state == 1;
 }
 
 static unsigned long long jit_timing_now_ns(void) {
+    // RAW: Darwin's CLOCK_MONOTONIC ticks in microseconds, coarser than one
+    // block's translation.
     struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
+    clock_gettime(CLOCK_MONOTONIC_RAW, &ts);
     return (unsigned long long) ts.tv_sec * 1000000000ULL + (unsigned long long) ts.tv_nsec;
 }
 
@@ -69,6 +78,31 @@ static void jit_timing_note(unsigned arch_idx, unsigned long long elapsed_ns, si
     atomic_fetch_add_explicit(&jit_timing_bytes_total, bytes, memory_order_relaxed);
     atomic_fetch_add_explicit(&jit_timing_ns_by_arch[arch_idx], elapsed_ns, memory_order_relaxed);
     atomic_fetch_add_explicit(&jit_timing_count_by_arch[arch_idx], 1, memory_order_relaxed);
+}
+
+// /proc/ish/jit_timing: writing 1 zeroes the counters and starts counting,
+// so a workload can be measured on its own inside the app; 0 stops.
+void jit_timing_set(bool on) {
+    if (on) {
+        atomic_store_explicit(&jit_timing_ns_total, 0, memory_order_relaxed);
+        atomic_store_explicit(&jit_timing_count_total, 0, memory_order_relaxed);
+        atomic_store_explicit(&jit_timing_bytes_total, 0, memory_order_relaxed);
+        for (unsigned i = 0; i < 4; i++) {
+            atomic_store_explicit(&jit_timing_ns_by_arch[i], 0, memory_order_relaxed);
+            atomic_store_explicit(&jit_timing_count_by_arch[i], 0, memory_order_relaxed);
+        }
+    }
+    atomic_store_explicit(&jit_timing_state, on ? 1 : 0, memory_order_relaxed);
+}
+
+void jit_timing_get(struct jit_timing_stats *stats) {
+    stats->enabled = jit_timing_enabled();
+    stats->bytes = atomic_load_explicit(&jit_timing_bytes_total, memory_order_relaxed);
+    for (unsigned i = 0; i < 4; i++) {
+        stats->arch[i] = jit_timing_arch_names[i];
+        stats->ns[i] = atomic_load_explicit(&jit_timing_ns_by_arch[i], memory_order_relaxed);
+        stats->blocks[i] = atomic_load_explicit(&jit_timing_count_by_arch[i], memory_order_relaxed);
+    }
 }
 
 // dup'd from stderr by main.c before guest teardown closes the (possibly
