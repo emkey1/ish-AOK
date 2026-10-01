@@ -1777,4 +1777,18 @@ if [ "$UPTIME_AT_START" -lt 300 ] 2>/dev/null; then
     aok_repair_after_early_boot &
 fi
 
-wait "$COMPOSITOR_PID" "$FOOT_PID" "$WAYVNC_PID"
+# The session is over when the compositor is. This was `wait` on the
+# compositor, foot AND wayvnc, which returns only when all three have gone:
+# labwc crashed on the M4 with wayvnc still up, and the applet said "running
+# and connected" over a desktop that no longer existed. Exiting runs cleanup
+# (the EXIT trap), which takes wayvnc and the rest down, so the applet sees the
+# session end and can start a new one. foot closing is not the end of anything.
+#
+# Polled, through a waited-for sleep rather than a plain one: `wait` lets the
+# HUP/TERM traps run at once, and it reaps the compositor, so `kill -0` stops
+# finding a zombie.
+while kill -0 "$COMPOSITOR_PID" 2>/dev/null; do
+    sleep 2 &
+    wait $! 2>/dev/null
+done
+echo "start-wayland: $COMPOSITOR_CMD (pid $COMPOSITOR_PID) exited; ending the session" >&2
