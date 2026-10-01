@@ -141,6 +141,7 @@ mount_bind_rbind.c
 chroot_mountinfo.c
 time64_nsec_padding.c
 pwritev2_flags.c
+jit_fork_inherit.c
 clone_unshare_agree.c
 fcntl_getfl_flags.c
 fuse_basic.c

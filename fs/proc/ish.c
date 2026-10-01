@@ -1514,9 +1514,33 @@ static int proc_ish_show_jit_timing(struct proc_entry *UNUSED(e), struct proc_da
         blocks += st.blocks[i];
     }
     proc_printf(buf, "enabled %d\nblocks %lu\nns %llu\nbytes %llu\n", st.enabled ? 1 : 0, blocks, ns, st.bytes);
+    unsigned long inherited = 0;
+    for (unsigned i = 0; i < 4; i++)
+        inherited += st.inherited[i];
+    proc_printf(buf, "inherited %lu\n", inherited);
     for (unsigned i = 0; i < 4; i++)
         if (st.blocks[i] != 0)
-            proc_printf(buf, "%s %lu blocks %llu ns\n", st.arch[i], st.blocks[i], st.ns[i]);
+            proc_printf(buf, "%s %lu blocks %llu ns %lu inherited\n", st.arch[i], st.blocks[i], st.ns[i],
+                        st.inherited[i]);
+    return 0;
+}
+
+// /proc/ish/jit_inherit: 1 (the default; ISH_JIT_INHERIT=0 starts it at 0)
+// when a forked child copies its parent's translated blocks instead of
+// translating them again (jit_fork in jit/jit.c). Write 0 or 1.
+static int proc_ish_show_jit_inherit(struct proc_entry *UNUSED(e), struct proc_data *buf) {
+    proc_printf(buf, "%d\n", jit_inherit_enabled() ? 1 : 0);
+    return 0;
+}
+
+static int proc_ish_update_jit_inherit(struct proc_entry *UNUSED(e), struct proc_data *d) {
+    size_t n = d->size;
+    while (n > 0 && (d->data[n - 1] == '\n' || d->data[n - 1] == ' '))
+        n--;
+    if (n != 1 || (d->data[0] != '0' && d->data[0] != '1'))
+        return _EINVAL;
+    (void) jit_inherit_enabled(); // read the environment first, so it cannot undo this
+    jit_inherit_set(d->data[0] == '1');
     return 0;
 }
 
@@ -2126,6 +2150,7 @@ struct proc_children proc_ish_children = PROC_CHILDREN({
     {"arm64_jit_fuse", S_IFREG | 0644, .show = proc_ish_show_arm64_jit_fuse, .update = proc_ish_update_arm64_jit_fuse},
     {"arm64_mops", S_IFREG | 0644, .show = proc_ish_show_arm64_mops, .update = proc_ish_update_arm64_mops},
     {"hle", S_IFREG | 0644, .show = proc_ish_show_hle, .update = proc_ish_update_hle},
+    {"jit_inherit", S_IFREG | 0644, .show = proc_ish_show_jit_inherit, .update = proc_ish_update_jit_inherit},
     {"jit_timing", S_IFREG | 0644, .show = proc_ish_show_jit_timing, .update = proc_ish_update_jit_timing},
     {"i386_jit_fuse", S_IFREG | 0644, .show = proc_ish_show_i386_jit_fuse, .update = proc_ish_update_i386_jit_fuse},
     {"riscv64_jit_fuse", S_IFREG | 0644, .show = proc_ish_show_riscv64_jit_fuse, .update = proc_ish_update_riscv64_jit_fuse},

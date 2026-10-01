@@ -11,6 +11,7 @@
 #include "emu/memory.h"
 #include "platform/platform.h"
 #include "kernel/mm.h"
+#include "jit/jit.h"
 #include "kernel/resource.h"
 #include "kernel/swap.h"
 #include "util/sync.h"
@@ -274,6 +275,12 @@ struct mm *mm_copy(struct mm *mm) {
     int copy_err = pt_copy_on_write(&mm->mem, &new_mm->mem, 0, mm->mem.page_limit);
     if (copy_err == 0)
         ipc_mm_copy(new_mm, mm);
+#if ENGINE_JIT
+    // The child's misses may copy this address space's blocks while their
+    // code is still the same memory in both (jit_fork).
+    if (copy_err == 0)
+        jit_fork(mm->mem.mmu.jit, new_mm->mem.mmu.jit);
+#endif
     mem_write_unlock_with_pokes(&mm->mem);
 
     // pt_copy_on_write stops at the first page-table allocation it cannot make

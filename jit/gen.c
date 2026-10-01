@@ -14109,6 +14109,7 @@ void gen_end(struct gen_state *state) {
         list_init(&block->jumps_from[i]);
         list_init(&block->jumps_from_links[i]);
     }
+    block->patch_ip = state->block_patch_ip;
     if (state->block_patch_ip != 0) {
         block->code[state->block_patch_ip] = (unsigned long) block;
     }

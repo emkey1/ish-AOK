@@ -811,6 +811,11 @@ void mem_init(struct mem *mem) {
 }
 
 void mem_destroy(struct mem *mem) {
+#if ENGINE_JIT
+    // First: a forked child copying one of this jit's blocks reads these page
+    // tables under its own lock, which this waits for (jit_fork).
+    jit_lineage_detach(mem->mmu.jit);
+#endif
     write_lock(&mem->lock);
 #if ENGINE_JIT
     // Hold this across both the invalidation sweep below and jit_free --

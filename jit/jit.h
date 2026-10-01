@@ -86,6 +86,12 @@ struct jit {
     // The guest pages holding blocks compiled from shared memory, findable by
     // what they map. NULL until the first.
     struct jit_shared_code *shared_code;
+
+    // Fork inheritance (jit_fork in jit.c). `lineage` is shared with the
+    // children forked from this address space, NULL until the first fork;
+    // `origin` is the parent's, which this jit's misses consult first.
+    struct jit_lineage *lineage;
+    struct jit_lineage *origin;
 };
 
 // this is roughly the average number of instructions in a basic block according to anonymous sources
@@ -113,6 +119,9 @@ struct jit_block {
     // links for free list
     struct list jetsam;
     bool is_jetsam;
+    // The code[] slot holding this block's own address (i386 call gadgets),
+    // or 0; a copy of the block must point it at itself.
+    unsigned patch_ip;
 
     unsigned long code[];
 };
@@ -298,6 +307,15 @@ const char *jit_fuse_name(enum jit_fuse_arch arch, unsigned index, unsigned *bit
 // Returns false for a name this arch does not have ("all" is accepted).
 bool jit_fuse_set_by_name(enum jit_fuse_arch arch, const char *name, bool on);
 
+// A forked child starts with no blocks; jit_fork lets its misses copy the
+// parent's block at the same address when the code under it is still the
+// same memory in both. Call jit_lineage_detach before the parent's page tables
+// go away, and jit_inherit_set to switch it (/proc/ish/jit_inherit).
+void jit_fork(struct jit *parent, struct jit *child);
+void jit_lineage_detach(struct jit *jit);
+void jit_inherit_set(bool on);
+bool jit_inherit_enabled(void);
+
 // Block translation time, per guest architecture (i386, amd64, arm64, riscv64):
 // ISH_JIT_TIMING at start-up, or /proc/ish/jit_timing at run time.
 struct jit_timing_stats {
@@ -306,6 +324,8 @@ struct jit_timing_stats {
     const char *arch[4];
     unsigned long long ns[4];
     unsigned long blocks[4];
+    // Of those, how many were copied from the parent (jit_fork).
+    unsigned long inherited[4];
 };
 void jit_timing_set(bool on);
 void jit_timing_get(struct jit_timing_stats *stats);

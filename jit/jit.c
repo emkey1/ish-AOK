@@ -48,6 +48,7 @@ static atomic_ulong jit_timing_count_total;
 static atomic_ullong jit_timing_bytes_total; // sum of compiled code[] sizes, in bytes -- estimates what an on-disk cache would need to store
 static atomic_ullong jit_timing_ns_by_arch[4];
 static atomic_ulong jit_timing_count_by_arch[4];
+static atomic_ulong jit_timing_inherited_by_arch[4]; // of those, copied from the parent (jit_fork)
 static const char *const jit_timing_arch_names[4] = {"i386", "amd64", "arm64", "riscv64"};
 
 // -1 until the first compile reads ISH_JIT_TIMING; /proc/ish/jit_timing can
@@ -90,6 +91,7 @@ void jit_timing_set(bool on) {
         for (unsigned i = 0; i < 4; i++) {
             atomic_store_explicit(&jit_timing_ns_by_arch[i], 0, memory_order_relaxed);
             atomic_store_explicit(&jit_timing_count_by_arch[i], 0, memory_order_relaxed);
+            atomic_store_explicit(&jit_timing_inherited_by_arch[i], 0, memory_order_relaxed);
         }
     }
     atomic_store_explicit(&jit_timing_state, on ? 1 : 0, memory_order_relaxed);
@@ -102,6 +104,7 @@ void jit_timing_get(struct jit_timing_stats *stats) {
         stats->arch[i] = jit_timing_arch_names[i];
         stats->ns[i] = atomic_load_explicit(&jit_timing_ns_by_arch[i], memory_order_relaxed);
         stats->blocks[i] = atomic_load_explicit(&jit_timing_count_by_arch[i], memory_order_relaxed);
+        stats->inherited[i] = atomic_load_explicit(&jit_timing_inherited_by_arch[i], memory_order_relaxed);
     }
 }
 
@@ -124,8 +127,9 @@ void jit_timing_dump(void) {
         if (count == 0)
             continue;
         unsigned long long ns = atomic_load_explicit(&jit_timing_ns_by_arch[i], memory_order_relaxed);
-        dprintf(jit_timing_stats_fd, "jit-timing:   %-8s blocks=%lu ns_total=%llu ns_avg=%llu\n",
-                jit_timing_arch_names[i], count, ns, ns / count);
+        dprintf(jit_timing_stats_fd, "jit-timing:   %-8s blocks=%lu ns_total=%llu ns_avg=%llu inherited=%lu\n",
+                jit_timing_arch_names[i], count, ns, ns / count,
+                atomic_load_explicit(&jit_timing_inherited_by_arch[i], memory_order_relaxed));
     }
 }
 static atomic_bool amd64_jit_enabled = true;
@@ -1226,6 +1230,7 @@ void jit_invalidate_unlock(struct jit *jit) {
 // never released; the struct is freed while it is held.
 void jit_free(struct jit *jit) {
     if (!jit) return;
+    jit_lineage_detach(jit);
     lock(&jit->lock, 0);
     for (size_t i = 0; i < jit->hash_size; i++) {
         struct jit_block *block, *tmp;
@@ -2031,6 +2036,215 @@ static struct jit_block *jit_block_compile_common(guest_addr_t ip, struct tlb *t
     return state.block;
 }
 
+// ---- Fork inheritance -------------------------------------------------------
+// A forked child starts with an empty jit, and used to translate again every
+// block its parent already had: a `( : )` subshell spent ~20% of its CPU on
+// that (2026-10-01, docs/TODO.md). Instead, a miss in the child first looks
+// for the parent's block at the same address and copies it.
+//
+// The copy is right only if the child's code is the bytes the parent's block
+// was made from. A parent block in the parent's hash matches the parent's
+// current memory (the parent's own invalidation keeps it so), so it is enough
+// that each page the block covers is still the SAME memory in both: the same
+// struct data at the same offset, with the same flags. A store to a
+// copy-on-write page by either side gives the writer a private copy, so after
+// one the entries differ and the child translates for itself. MAP_SHARED
+// pages are left out: both sides can store to them in place.
+//
+// The parent may exec or exit while a child is copying. struct jit_lineage
+// is the link: the child takes its lock and finds the parent's jit there, or
+// NULL once jit_lineage_detach ran; detach runs before the parent's page
+// tables are torn down and waits for a copy in progress. While holding it the
+// child only TRIES the parent's locks, so it can never wait on a parent that
+// waits on it -- a failed try just means translating, as before.
+struct jit_lineage {
+    pthread_mutex_t lock;
+    struct jit *jit;
+    atomic_int refs;
+};
+
+static atomic_bool jit_inherit_on = true;
+
+void jit_inherit_set(bool on) {
+    atomic_store_explicit(&jit_inherit_on, on, memory_order_relaxed);
+}
+
+bool jit_inherit_enabled(void) {
+    static atomic_int env = -1;
+    int e = atomic_load_explicit(&env, memory_order_relaxed);
+    if (e == -1) {
+        const char *v = getenv("ISH_JIT_INHERIT");
+        e = v != NULL && strcmp(v, "0") == 0 ? 0 : 1;
+        if (e == 0)
+            jit_inherit_set(false);
+        atomic_store_explicit(&env, e, memory_order_relaxed);
+    }
+    return atomic_load_explicit(&jit_inherit_on, memory_order_relaxed);
+}
+
+static void jit_lineage_put(struct jit_lineage *lineage) {
+    if (lineage != NULL && atomic_fetch_sub_explicit(&lineage->refs, 1, memory_order_acq_rel) == 1) {
+        pthread_mutex_destroy(&lineage->lock);
+        free(lineage);
+    }
+}
+
+void jit_fork(struct jit *parent, struct jit *child) {
+    if (parent == NULL || child == NULL)
+        return;
+    lock(&parent->lock, 0);
+    struct jit_lineage *lineage = parent->lineage;
+    if (lineage == NULL) {
+        lineage = calloc(1, sizeof(*lineage));
+        if (lineage != NULL) {
+            pthread_mutex_init(&lineage->lock, NULL);
+            lineage->jit = parent;
+            atomic_init(&lineage->refs, 1); // the parent's
+            parent->lineage = lineage;
+        }
+    }
+    if (lineage != NULL)
+        atomic_fetch_add_explicit(&lineage->refs, 1, memory_order_relaxed);
+    unlock(&parent->lock);
+    child->origin = lineage;
+}
+
+void jit_lineage_detach(struct jit *jit) {
+    if (jit == NULL)
+        return;
+    struct jit_lineage *lineage = jit->lineage;
+    if (lineage != NULL) {
+        pthread_mutex_lock(&lineage->lock);
+        lineage->jit = NULL;
+        pthread_mutex_unlock(&lineage->lock);
+        jit->lineage = NULL;
+        jit_lineage_put(lineage);
+    }
+    jit_lineage_put(jit->origin);
+    jit->origin = NULL;
+}
+
+// Are the pages under `block` the same memory in both address spaces? Both
+// read locks are held: the child's by its run loop, the parent's tried.
+static bool jit_same_code(struct mem *mem, struct mem *pmem, const struct jit_block *block) {
+    for (page_t page = PAGE(block->addr); page <= PAGE(block->end_addr); page++) {
+        if (page >= mem->page_limit || page >= pmem->page_limit)
+            return false;
+        struct pt_entry *entry = mem_pt(mem, page);
+        struct pt_entry *pentry = mem_pt(pmem, page);
+        if (entry == NULL || pentry == NULL || entry->data != pentry->data ||
+                entry->offset != pentry->offset || entry->flags != pentry->flags ||
+                (entry->flags & P_SHARED))
+            return false;
+    }
+    return true;
+}
+
+// The block as gen_end leaves it: unchained, on no list.
+static struct jit_block *jit_block_clone(const struct jit_block *from) {
+    size_t size = sizeof(struct jit_block) + from->used * sizeof(unsigned long);
+    struct jit_block *block = malloc(size);
+    if (block == NULL)
+        return NULL;
+    memcpy(block, from, size);
+    for (int i = 0; i <= 1; i++) {
+        if (from->jump_ip[i] != NULL) {
+            block->jump_ip[i] = block->code + (from->jump_ip[i] - from->code);
+            *block->jump_ip[i] = from->old_jump_ip[i];
+        }
+        list_init(&block->jumps_from[i]);
+        list_init(&block->jumps_from_links[i]);
+        list_init(&block->page[i]);
+    }
+    list_init(&block->chain);
+    list_init(&block->jetsam);
+    block->is_jetsam = false;
+    if (block->patch_ip != 0)
+        block->code[block->patch_ip] = (unsigned long) block;
+    return block;
+}
+
+static struct jit_block *jit_inherit(struct jit *jit, guest_addr_t ip) {
+    struct jit_lineage *origin = jit->origin;
+    if (origin == NULL || !jit_inherit_enabled())
+        return NULL;
+    struct jit_block *copy = NULL;
+    pthread_mutex_lock(&origin->lock);
+    struct jit *pjit = origin->jit;
+    if (pjit != NULL) {
+        struct mem *mem = container_of(jit->mmu, struct mem, mmu);
+        struct mem *pmem = container_of(pjit->mmu, struct mem, mmu);
+        if (trylockr(&pmem->lock) == 0) {
+            if (trylock(&pjit->lock) == 0) {
+                struct jit_block *block = jit_lookup(pjit, ip);
+                if (block != NULL && !block->is_jetsam && jit_same_code(mem, pmem, block))
+                    copy = jit_block_clone(block);
+                unlock(&pjit->lock);
+            }
+            read_unlock(&pmem->lock);
+        }
+    }
+    pthread_mutex_unlock(&origin->lock);
+    return copy;
+}
+
+// A block this child translated goes to the parent as well, when its code is
+// still the same memory in both: the parent never runs a child's fork-return
+// and exit paths, so without this every sibling translated them again (half
+// of a `( : )` child's blocks). The parent drops it like one of its own: any
+// store of its to that page faults first (copy-on-write), and the fault
+// invalidates the page's blocks (mem_ptr's write path). arm64 and riscv64
+// only: their guests must also run IC IVAU / FENCE.I before executing changed
+// code, which drops it again. x86 has no such barrier and relies on
+// jit_code_write_prepare/jit_insert_checked around each compile, which a block
+// arriving from another address space did not go through.
+static void jit_donate(struct jit *jit, const struct jit_block *block) {
+    struct jit_lineage *origin = jit->origin;
+    if (origin == NULL || !jit_inherit_enabled())
+        return;
+    pthread_mutex_lock(&origin->lock);
+    struct jit *pjit = origin->jit;
+    if (pjit != NULL) {
+        struct mem *mem = container_of(jit->mmu, struct mem, mmu);
+        struct mem *pmem = container_of(pjit->mmu, struct mem, mmu);
+        if (trylockr(&pmem->lock) == 0) {
+            if (jit_same_code(mem, pmem, block) && trylock(&pjit->lock) == 0) {
+                if (jit_lookup(pjit, block->addr) == NULL) {
+                    struct jit_block *copy = jit_block_clone(block);
+                    if (copy != NULL)
+                        jit_insert(pjit, copy);
+                }
+                unlock(&pjit->lock);
+            }
+            read_unlock(&pmem->lock);
+        }
+    }
+    pthread_mutex_unlock(&origin->lock);
+}
+
+// The per-arch compile wrappers below: the parent's block if there is one,
+// else a translation.
+static struct jit_block *jit_block_inherit_or_compile(guest_addr_t ip, struct tlb *tlb,
+        unsigned arch_idx, bool amd64, bool arm64, bool riscv64, bool *fallback_to_interp) {
+    bool timing = jit_timing_enabled();
+    unsigned long long start = timing ? jit_timing_now_ns() : 0;
+    struct jit_block *block = jit_inherit(tlb->mmu->jit, ip);
+    if (block != NULL) {
+        if (fallback_to_interp != NULL)
+            *fallback_to_interp = false;
+        if (timing)
+            atomic_fetch_add_explicit(&jit_timing_inherited_by_arch[arch_idx], 1, memory_order_relaxed);
+    } else {
+        block = jit_block_compile_common(ip, tlb, amd64, arm64, riscv64, fallback_to_interp);
+        if (block != NULL && (arm64 || riscv64))
+            jit_donate(tlb->mmu->jit, block);
+    }
+    if (timing)
+        jit_timing_note(arch_idx, jit_timing_now_ns() - start,
+                block != NULL ? block->used * sizeof(unsigned long) : 0);
+    return block;
+}
+
 // Each wrapper below is jit_block_compile_common's ONE call site for its arch
 // (jit_block_compile_common itself has multiple early-return paths -- OOM
 // recovery, amd64 interp-fallback -- so timing wraps here instead, at the
@@ -2040,40 +2254,20 @@ static struct jit_block *jit_block_compile_common(guest_addr_t ip, struct tlb *t
 // lazy getenv on the first call) so this couldn't itself skew the measurement
 // it's trying to take.
 static struct jit_block *jit_block_compile(addr_t ip, struct tlb *tlb) {
-    if (!jit_timing_enabled())
-        return jit_block_compile_common(ip, tlb, false, false, false, NULL);
-    unsigned long long start = jit_timing_now_ns();
-    struct jit_block *block = jit_block_compile_common(ip, tlb, false, false, false, NULL);
-    jit_timing_note(0, jit_timing_now_ns() - start, block != NULL ? block->used * sizeof(unsigned long) : 0);
-    return block;
+    return jit_block_inherit_or_compile(ip, tlb, 0, false, false, false, NULL);
 }
 
 static struct jit_block *jit_block_compile_amd64(guest_addr_t ip, struct tlb *tlb,
         bool *fallback_to_interp) {
-    if (!jit_timing_enabled())
-        return jit_block_compile_common(ip, tlb, true, false, false, fallback_to_interp);
-    unsigned long long start = jit_timing_now_ns();
-    struct jit_block *block = jit_block_compile_common(ip, tlb, true, false, false, fallback_to_interp);
-    jit_timing_note(1, jit_timing_now_ns() - start, block != NULL ? block->used * sizeof(unsigned long) : 0);
-    return block;
+    return jit_block_inherit_or_compile(ip, tlb, 1, true, false, false, fallback_to_interp);
 }
 
 static struct jit_block *jit_block_compile_arm64(guest_addr_t ip, struct tlb *tlb) {
-    if (!jit_timing_enabled())
-        return jit_block_compile_common(ip, tlb, false, true, false, NULL);
-    unsigned long long start = jit_timing_now_ns();
-    struct jit_block *block = jit_block_compile_common(ip, tlb, false, true, false, NULL);
-    jit_timing_note(2, jit_timing_now_ns() - start, block != NULL ? block->used * sizeof(unsigned long) : 0);
-    return block;
+    return jit_block_inherit_or_compile(ip, tlb, 2, false, true, false, NULL);
 }
 
 static struct jit_block *jit_block_compile_riscv64(guest_addr_t ip, struct tlb *tlb) {
-    if (!jit_timing_enabled())
-        return jit_block_compile_common(ip, tlb, false, false, true, NULL);
-    unsigned long long start = jit_timing_now_ns();
-    struct jit_block *block = jit_block_compile_common(ip, tlb, false, false, true, NULL);
-    jit_timing_note(3, jit_timing_now_ns() - start, block != NULL ? block->used * sizeof(unsigned long) : 0);
-    return block;
+    return jit_block_inherit_or_compile(ip, tlb, 3, false, false, true, NULL);
 }
 
 // Unpatch and unlink every predecessor still on block's jumps_from[i]

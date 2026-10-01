@@ -401,8 +401,16 @@ the hot path must not touch shared state.
 
 **The block hash table.** On a miss, take `jit->lock` and look the address up in
 the jit's chained hash table, which resizes as the working set grows. There is
-one jit per address space, so a `fork` shares translations until the address
-spaces diverge and an `execve` starts over with a fresh one.
+one jit per address space. A `fork` gives the child a fresh, empty one, and an
+`execve` starts over too; but before translating, a forked child's miss looks
+for its parent's block at the same address and copies it, provided every page
+the block covers is still the same memory in both (the same `struct data` at
+the same offset -- a store by either side breaks the copy-on-write sharing and
+with it the match). On arm64 and riscv64 guests a block the child translates
+goes back to the parent too, so its later children find the fork-return and
+exit paths it never runs itself. A subshell (`( : )`, `$(...)`) then translates
+almost nothing: 14-20% less time on the M4 and A10X. `jit_fork` in `jit/jit.c`
+has the rules; `/proc/ish/jit_inherit` switches it off.
 
 **Compilation.** On a miss there too, translate. Decoding runs forward from the
 current ip until the block ends, which happens at a branch, at a page boundary —
