@@ -10595,6 +10595,23 @@ static int sock_poll(struct fd *fd) {
     if (fd->socket.conn_dead)
         return POLL_ERR | POLL_HUP;
     int types = realfs_poll(fd);
+    // A unix stream or seqpacket socket that is not connected -- never was,
+    // or only bound, or its connect() failed -- is POLLOUT|POLLHUP on Linux
+    // (unix_poll: a connection-based socket in TCP_CLOSE hangs up; measured
+    // 0x14 on 6.12), and nothing at all on Darwin, so a poll on one waited
+    // for ever. labwc did exactly that on the 5th-gen iPad after Xwayland
+    // crashed: its window manager waited on such a socket and the whole
+    // desktop froze. Asked only when the host reported nothing, which a
+    // connected socket almost never does (it is writable), and never of a
+    // listener, which Linux also reports as nothing.
+    if (types == 0 && fd->socket.domain == AF_LOCAL_ && !fd->socket.listening &&
+            (fd->socket.type == SOCK_STREAM_ || fd->socket.type == SOCK_SEQPACKET_)) {
+        struct sockaddr_storage peer;
+        socklen_t peer_len = sizeof(peer);
+        if (getpeername(fd->real_fd, (struct sockaddr *) &peer, &peer_len) < 0 &&
+                errno == ENOTCONN)
+            return POLL_WRITE | POLL_HUP;
+    }
     // An AF_UNIX datagram socket whose peer has closed polls readable on
     // Darwin, for the pending error Linux never raises (see
     // sock_host_error_is_peer_gone). Take it off, and look again. Only when
