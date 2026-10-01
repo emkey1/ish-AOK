@@ -12,6 +12,10 @@ guest Linux processes; the window chrome, dock, and most applets are pure
 native code. That's also why Workspace works on iPhone, not just iPad: it
 doesn't depend on iOS Scenes or Stage Manager multi-window support.
 
+With a hardware keyboard, ⌘← and ⌘→ (or ⌃⌥← and ⌃⌥→) switch Desktops and
+⌃Tab switches windows; every shortcut is listed in
+[keyboard-shortcuts.md](keyboard-shortcuts.md).
+
 ## Reaching the applets
 
 Which controls you get depends on the **Workspace Style** preference. The
@@ -176,7 +180,8 @@ one, Alt+Shift+R reloads labwc's settings and Alt+Shift+E ends the session.
 The desktop has four desktops of its own. Ctrl+Alt+Left and Ctrl+Alt+Right
 move between them, adding Shift takes the focused window along, and
 Ctrl+Alt+1 to 4 goes straight to one. (Cmd+Left and Cmd+Right switch
-Workspace's own Desktops, around the window.)
+Workspace's own Desktops, around the window; all the keys are in
+[keyboard-shortcuts.md](keyboard-shortcuts.md).)
 
 The menu and the keys live in `~/.config/labwc/menu.xml` and `rc.xml`, which are
 yours to edit: a file you have changed is never replaced. One still exactly as an

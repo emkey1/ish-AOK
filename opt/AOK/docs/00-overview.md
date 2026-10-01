@@ -138,6 +138,7 @@ six of them were not linked from anywhere at all.
 | --- | --- |
 | [workspace.md](workspace.md) | the in-app multi-window desktop, its applets and saved layouts |
 | [file-browser.md](file-browser.md) | the quick file picker on the keyboard bar (Cmd-B) |
+| [keyboard-shortcuts.md](keyboard-shortcuts.md) | every hardware-keyboard shortcut: desktops, windows, the terminal, MotePad, the Wayland desktop |
 | [keyboard-toolbar.md](keyboard-toolbar.md) | arranging the keys above the keyboard, and adding your own |
 | [motepad.md](motepad.md) | the built-in text editor |
 | [md.md](md.md) | the Markdown viewer |
