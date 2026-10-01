@@ -190,6 +190,7 @@ if [ "$is_riscv64_guest" -eq 1 ]; then
     need_file riscv64/jalr_retcache.c
     need_file riscv64/alu_pair.c
     need_file riscv64/branch_pair.c
+    need_file riscv64/rcache_run.c
     need_file riscv64/riscv64_fp_env.c
 fi
 need_file signal_core.c
@@ -979,7 +980,7 @@ if [ "$is_arm64_guest" -eq 1 ]; then
     all_tests="$all_tests atomics64 arm64_regress vector_smoke simd_elem_moves simd_three_same alu_ospec ldst_lspec vldst_lspec smc_stale_block ret_retcache stlr_ldar_publish ptrace_singlestep singlestep_fused ands_bcond_fusion cbz_tbz hle_loop dc_zva arm64_fp_env"
 fi
 if [ "$is_riscv64_guest" -eq 1 ]; then
-    all_tests="$all_tests ptrace_regset jalr_retcache alu_pair branch_pair riscv64_singlestep singlestep_fused riscv64_fp_env"
+    all_tests="$all_tests ptrace_regset jalr_retcache alu_pair branch_pair rcache_run riscv64_singlestep singlestep_fused riscv64_fp_env"
 fi
 
 test_selected() {

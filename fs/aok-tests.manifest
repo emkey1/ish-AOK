@@ -405,6 +405,7 @@ riscv64/riscv64_singlestep.c
 riscv64/jalr_retcache.c
 riscv64/alu_pair.c
 riscv64/branch_pair.c
+riscv64/rcache_run.c
 riscv64/riscv64_fp_env.c
 arm64/ret_retcache.c
 jit_fuse_ab.sh

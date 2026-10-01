@@ -559,6 +559,7 @@ if jit_cpu_family == 'aarch64' and guest_archs.contains('riscv64')
         'jit/guest-riscv64/memory.S',
         'jit/guest-riscv64/atomics.S',
         'jit/guest-riscv64/fp.S',
+        'jit/guest-riscv64/rcache.S',
     ]
 endif
 

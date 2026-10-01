@@ -256,9 +256,12 @@ void jit_note_shared_write(struct jit *jit, const struct pt_entry *entry);
 // Not a fusion: backward conditional branches use the gadget layout whose taken
 // path is straight-line (loops), forward ones the fallthrough-straight layout.
 #define JIT_FUSE_RV_BTFN (1u << 6)
+// gen_riscv64_try_rcache_run: straight register-only runs keep up to four guest
+// registers in host x23-x26 (jit/guest-riscv64/rcache.S).
+#define JIT_FUSE_RV_RCACHE (1u << 7)
 #define JIT_FUSE_RV_ALL (JIT_FUSE_RV_FOLD | JIT_FUSE_RV_JAL | JIT_FUSE_RV_RETCACHE | \
                          JIT_FUSE_RV_PAIR | JIT_FUSE_RV_ALU | JIT_FUSE_RV_BRANCH | \
-                         JIT_FUSE_RV_BTFN)
+                         JIT_FUSE_RV_BTFN | JIT_FUSE_RV_RCACHE)
 
 // The amd64 guest's bits are not fusions in the i386 sense (two gadgets folded
 // into one) but NATIVE-vs-BRIDGE switches, which is the same A/B in the shape

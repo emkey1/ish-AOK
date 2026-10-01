@@ -81,6 +81,10 @@ struct gen_state {
     // that would consume a second (fusions, constant folds, register-cached
     // runs) is refused -- gen_arm64_fits_block and gen_riscv64_peek say no.
     bool single_step;
+    // riscv64 register-cached runs (gen_riscv64_try_rcache_run): the end of the
+    // last window scanned, so instructions inside a rejected window are not
+    // rescanned one gen_step at a time (quadratic translation cost).
+    guest_addr_t rcache_scan_end;
 };
 
 bool gen_start(guest_addr_t addr, struct gen_state *state); // returns false on OOM
