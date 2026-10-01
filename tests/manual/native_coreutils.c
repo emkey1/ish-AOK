@@ -732,6 +732,58 @@ static const struct cu_case cases[] = {
      "", 0, 1, NULL},
     {"uniq", "nosuch", NULL, 0,
      "", 0, 1, NULL},
+    {"tr", "a-z A-Z", "Hello World\n", 12,
+     "HELLO WORLD\n", 12, 0, NULL},
+    {"tr", "-d lo", "Hello World\n", 12,
+     "He Wrd\n", 7, 0, NULL},
+    {"tr", "-s a-z", "aa  bb\n", 7,
+     "a  b\n", 5, 0, NULL},
+    {"tr", "-cs A-Za-z \\n", "Hello, World\n", 13,
+     "Hello\nWorld\n", 12, 0, NULL},
+    {"tr", "[:lower:] [:upper:]", "Hello World\n", 12,
+     "HELLO WORLD\n", 12, 0, NULL},
+    {"tr", "\\141-\\143 A-C", "abc\n", 4,
+     "ABC\n", 4, 0, NULL},
+    {"tr", "-t abcdef xy", "abcdef\n", 7,
+     "xycdef\n", 7, 0, NULL},
+    {"tr", "abcdef xy", "abcdef\n", 7,
+     "xyyyyy\n", 7, 0, NULL},
+    {"tr", "a [b*]c", "abc\n", 4,
+     "cbc\n", 4, 0, NULL},
+    {"tr", "a -d", "abc\n", 4,
+     "-bc\n", 4, 0, NULL},
+    {"tr", "z-a x", "abc\n", 4,
+     "", 0, 1, NULL},
+    {"tr", "a [:upper:]", "abc\n", 4,
+     "", 0, 1, NULL},
+    {"tr", "-d a b", "abc\n", 4,
+     "", 0, 1, NULL},
+    {"tr", "-cd [:lower:]", "aXb\n", 4,
+     "ab", 2, 0, NULL},
+    {"nl", "-ba -v0", "a\nb\n", 4,
+     "     0\ta\n     1\tb\n", 18, 0, NULL},
+    {"nl", "-", "a\n\nb\n", 5,
+     "     1\ta\n       \n     2\tb\n", 26, 0, NULL},
+    {"nl", "-ba -n rz -w3", "a\n\nb\n", 5,
+     "001\ta\n002\t\n003\tb\n", 17, 0, NULL},
+    {"nl", "-n ln -s :", "a\n\nb\n", 5,
+     "1     :a\n       \n2     :b\n", 26, 0, NULL},
+    {"nl", "-ba -l2", "\n\n\n\na\n", 6,
+     "       \n     1\t\n       \n     2\t\n     3\ta\n", 41, 0, NULL},
+    {"nl", "-ha -fa", "h1\n\\:\\:\\:\nH\n\\:\\:\nB1\n\nB2\n\\:\nF\n", 29,
+     "     1\th1\n\n     1\tH\n\n     1\tB1\n       \n     2\tB2\n\n     1\tF\n", 59, 0, NULL},
+    {"nl", "-p -ha", "h1\n\\:\\:\\:\nH\n\\:\\:\nB1\n", 20,
+     "     1\th1\n\n     2\tH\n\n     3\tB1\n", 31, 0, NULL},
+    {"nl", "-i 5 -v -3", "a\nb\n", 4,
+     "    -3\ta\n     2\tb\n", 18, 0, NULL},
+    {"nl", "-bpb", "a\nb\n", 4,
+     "       a\n     1\tb\n", 18, 0, NULL},
+    {"nl", "-b x", "a\nb\n", 4,
+     "", 0, 1, NULL},
+    {"nl", "-w 0", "a\nb\n", 4,
+     "", 0, 1, NULL},
+    {"nl", "data.txt lines.txt", NULL, 0,
+     "     1\talpha 3 x\n     2\tbeta 1 y\n     3\tgamma 2 z\n     4\talpha 3 x\n     5\tdelta 10 w\n     6\tone\n     7\ttwo\n     8\tthree\n     9\tfour\n    10\tfive\n    11\tsix\n    12\tseven\n    13\teight\n    14\tnine\n    15\tten\n    16\televen\n    17\ttwelve\n", 232, 0, NULL},
 };
 
 static void write_file(const char *path, const char *text) {
@@ -875,7 +927,7 @@ int main(int argc, char **argv) {
     alarm(test_watchdog_secs(180));
     mkdir(TDIR, 0755);
     mkdir(TDIR "/bin", 0755);
-    static const char *const applets[] = {"head", "tail", "wc", "rm", "sort", "xargs", "find", "grep", "cp", "mv", "date", "sudo", "chmod", "ls", "diff", "cmp", "sed", "uniq"};
+    static const char *const applets[] = {"head", "tail", "wc", "rm", "sort", "xargs", "find", "grep", "cp", "mv", "date", "sudo", "chmod", "ls", "diff", "cmp", "sed", "uniq", "tr", "nl"};
     for (size_t i = 0; i < sizeof(applets) / sizeof(applets[0]); i++) {
         char link[256];
         snprintf(link, sizeof(link), TDIR "/bin/%s", applets[i]);
