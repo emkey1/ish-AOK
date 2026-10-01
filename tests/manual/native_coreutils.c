@@ -784,6 +784,66 @@ static const struct cu_case cases[] = {
      "", 0, 1, NULL},
     {"nl", "data.txt lines.txt", NULL, 0,
      "     1\talpha 3 x\n     2\tbeta 1 y\n     3\tgamma 2 z\n     4\talpha 3 x\n     5\tdelta 10 w\n     6\tone\n     7\ttwo\n     8\tthree\n     9\tfour\n    10\tfive\n    11\tsix\n    12\tseven\n    13\teight\n    14\tnine\n    15\tten\n    16\televen\n    17\ttwelve\n", 232, 0, NULL},
+    {"seq", "5", NULL, 0,
+     "1\n2\n3\n4\n5\n", 10, 0, NULL},
+    {"seq", "-s, 1 2 9", NULL, 0,
+     "1,3,5,7,9\n", 10, 0, NULL},
+    {"seq", "-w 8 11", NULL, 0,
+     "08\n09\n10\n11\n", 12, 0, NULL},
+    {"seq", "0 0.1 0.5", NULL, 0,
+     "0.0\n0.1\n0.2\n0.3\n0.4\n0.5\n", 24, 0, NULL},
+    {"seq", "-f %03g 3", NULL, 0,
+     "001\n002\n003\n", 12, 0, NULL},
+    {"seq", "1e2 1e2 3e2", NULL, 0,
+     "100\n200\n300\n", 12, 0, NULL},
+    {"seq", "0x10 0x12", NULL, 0,
+     "16\n17\n18\n", 9, 0, NULL},
+    {"seq", "9999999999999999999 10000000000000000001", NULL, 0,
+     "9999999999999999999\n10000000000000000000\n10000000000000000001\n", 62, 0, NULL},
+    {"seq", "-w -.5 .5 1", NULL, 0,
+     "-0.5\n00.0\n00.5\n01.0\n", 20, 0, NULL},
+    {"seq", "-0 2", NULL, 0,
+     "-0\n1\n2\n", 7, 0, NULL},
+    {"seq", "3 1", NULL, 0,
+     "", 0, 0, NULL},
+    {"seq", "1 0 3", NULL, 0,
+     "", 0, 1, NULL},
+    {"seq", "-f %d 3", NULL, 0,
+     "", 0, 1, NULL},
+    {"seq", "a", NULL, 0,
+     "", 0, 1, NULL},
+    {"seq", "-f %.0f 0 1.2 1", NULL, 0,
+     "0\n1\n", 4, 0, NULL},
+    {"seq", "10 -2.5 0", NULL, 0,
+     "10.0\n7.5\n5.0\n2.5\n0.0\n", 21, 0, NULL},
+    {"touch", "-d @1000 data.txt", NULL, 0,
+     "", 0, 0, NULL},
+    {"touch", "-t 200102300405 data.txt", NULL, 0,
+     "", 0, 1, NULL},
+    {"touch", "-d garbage data.txt", NULL, 0,
+     "", 0, 1, NULL},
+    {"touch", "-c nope", NULL, 0,
+     "", 0, 0, NULL},
+    {"touch", "nodir/x", NULL, 0,
+     "", 0, 1, NULL},
+    {"touch", "--time=bogus data.txt", NULL, 0,
+     "", 0, 1, NULL},
+    {"touch", "-d @1 -t 200001010000 data.txt", NULL, 0,
+     "", 0, 1, NULL},
+    {"stat", "-c %a|%A|%F|%s|%h|%n|%N empty.txt", NULL, 0,
+     "644|-rw-r--r--|regular empty file|0|1|empty.txt|'empty.txt'\n", 60, 0, NULL},
+    {"stat", "-c %F|%a dir", NULL, 0,
+     "directory|755\n", 14, 0, NULL},
+    {"stat", "--printf %n:%s\\n data.txt lines.txt", NULL, 0,
+     "data.txt:50\nlines.txt:63\n", 25, 0, NULL},
+    {"stat", "-c %5s|%-5s|%05s data.txt", NULL, 0,
+     "   50|50   |00050\n", 18, 0, NULL},
+    {"stat", "-L -c %F nosuch", NULL, 0,
+     "", 0, 1, NULL},
+    {"stat", "-c %5% data.txt", NULL, 0,
+     "", 0, 1, NULL},
+    {"stat", "-f -c %l /", NULL, 0,
+     "255\n", 4, 0, NULL},
 };
 
 static void write_file(const char *path, const char *text) {
@@ -927,7 +987,7 @@ int main(int argc, char **argv) {
     alarm(test_watchdog_secs(180));
     mkdir(TDIR, 0755);
     mkdir(TDIR "/bin", 0755);
-    static const char *const applets[] = {"head", "tail", "wc", "rm", "sort", "xargs", "find", "grep", "cp", "mv", "date", "sudo", "chmod", "ls", "diff", "cmp", "sed", "uniq", "tr", "nl"};
+    static const char *const applets[] = {"head", "tail", "wc", "rm", "sort", "xargs", "find", "grep", "cp", "mv", "date", "sudo", "chmod", "ls", "diff", "cmp", "sed", "uniq", "tr", "nl", "seq", "touch", "stat"};
     for (size_t i = 0; i < sizeof(applets) / sizeof(applets[0]); i++) {
         char link[256];
         snprintf(link, sizeof(link), TDIR "/bin/%s", applets[i]);
@@ -1008,6 +1068,38 @@ int main(int argc, char **argv) {
             printf("FAIL cp -p keeps nanosecond times (status %d)\n", status);
             failures_total++;
         }
+    }
+
+    // touch sets what it is asked to: -d with fractions, -m alone, the -t
+    // leap second (GNU: 23:59:60 is the next minute), -r plus a relative -d.
+    {
+        static const struct { struct cu_case c; long long atime, mtime; long mnsec; } touched[] = {
+            {{"touch", "-d @1000.25 data.txt", NULL, 0, "", 0, 0, NULL}, 1000, 1000, 250000000},
+            {{"touch", "-m -d @1000 data.txt", NULL, 0, "", 0, 0, NULL}, 1700000000, 1000, 0},
+            {{"touch", "-t 197001010000.60 data.txt", NULL, 0, "", 0, 0, NULL}, -1, 60, 0},
+            {{"touch", "-r text.txt -d +1hour data.txt", NULL, 0, "", 0, 0, NULL}, -2, 1700003600, 0},
+        };
+        setenv("TZ", "UTC0", 1);   /* -t is local time */
+        for (size_t i = 0; i < sizeof(touched) / sizeof(touched[0]); i++) {
+            fixture();
+            struct timespec base[2] = {{1700000000, 0}, {1700000000, 0}};
+            utimensat(AT_FDCWD, "data.txt", base, 0);
+            utimensat(AT_FDCWD, "text.txt", base, 0);
+            size_t len = 0;
+            int status = run_case(&touched[i].c, out, sizeof(out), &len);
+            struct stat st;
+            int ok = status == 0 && stat("data.txt", &st) == 0 && st.st_mtim.tv_sec == touched[i].mtime &&
+                      st.st_mtim.tv_nsec == touched[i].mnsec &&
+                      (touched[i].atime < 0 || st.st_atim.tv_sec == touched[i].atime);
+            if (ok) {
+                test_logf("ok   touch %s\n", touched[i].c.args);
+            } else {
+                printf("FAIL touch %s (status %d, mtime %lld.%09ld)\n", touched[i].c.args, status,
+                       (long long)st.st_mtim.tv_sec, (long)st.st_mtim.tv_nsec);
+                failures_total++;
+            }
+        }
+        unsetenv("TZ");
     }
 
     // Native local time is the GUEST's zone (kernel/native_tz.c), not the

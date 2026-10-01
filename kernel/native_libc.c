@@ -2130,6 +2130,9 @@ int nlibc_mknod(const char *path, mode_t mode, dev_t dev) {
 // The guest writes the asm-generic statfs64 (fs/stat.h's amd64_statfs_, shared
 // by every 64-bit ABI here); Darwin's struct statfs is a different shape with
 // different field widths, so the fields are copied across by name.
+// The type and fsid matter as much as the counts: `stat -f` prints them,
+// and df and find -fstype ask the type. They were dropped, so every guest
+// filesystem looked like type 0.
 static void nlibc_guest_statfs_to_host(const struct amd64_statfs_ *in, struct statfs *out) {
     memset(out, 0, sizeof(*out));
     out->f_bsize = (uint32_t) (in->bsize > 0 ? in->bsize : 4096);
@@ -2138,6 +2141,54 @@ static void nlibc_guest_statfs_to_host(const struct amd64_statfs_ *in, struct st
     out->f_bavail = in->bavail;
     out->f_files = in->files;
     out->f_ffree = in->ffree;
+    out->f_type = (uint32_t) in->type;
+#if defined(__linux__)
+    out->f_fsid.__val[0] = (int) (uint32_t) in->fsid;
+    out->f_fsid.__val[1] = (int) (uint32_t) (in->fsid >> 32);
+    out->f_namelen = (long) in->namelen;
+    out->f_frsize = (long) in->frsize;
+#else
+    out->f_fsid.val[0] = (int32_t) (uint32_t) in->fsid;
+    out->f_fsid.val[1] = (int32_t) (uint32_t) (in->fsid >> 32);
+#endif
+}
+
+// statvfs from the guest's statfs directly, not through the host statfs:
+// Darwin's struct statfs has nowhere to keep the name length or the
+// fundamental block size, which statvfs does carry.
+static void nlibc_guest_statfs_to_statvfs(const struct amd64_statfs_ *in, struct statvfs *out) {
+    memset(out, 0, sizeof(*out));
+    out->f_bsize = (unsigned long) (in->bsize > 0 ? in->bsize : 4096);
+    out->f_frsize = (unsigned long) (in->frsize > 0 ? in->frsize : out->f_bsize);
+    out->f_blocks = in->blocks;
+    out->f_bfree = in->bfree;
+    out->f_bavail = in->bavail;
+    out->f_files = in->files;
+    out->f_ffree = in->ffree;
+    out->f_favail = in->ffree;
+    out->f_fsid = (unsigned long) in->fsid;
+    out->f_namemax = in->namelen > 0 ? (unsigned long) in->namelen : NAME_MAX;
+    // ST_RDONLY and ST_NOSUID are 1 and 2 on Linux and Darwin alike.
+    out->f_flag = (unsigned long) (in->flags & 3);
+}
+
+// The guest's statfs of a path (fd < 0) or a descriptor.
+static int nlibc_guest_statfs(const char *path, int fd_no, struct amd64_statfs_ *out) {
+    guest_addr_t guest_buf = native_scratch_alloc(sizeof(struct amd64_statfs_));
+    if (guest_buf == 0)
+        return nlibc_fail(_ENOMEM);
+    sqword_t res;
+    if (fd_no < 0) {
+        NLIBC_PATH(guest_path, path);
+        res = native_syscall(NATIVE_SYS_statfs, guest_path, guest_buf);
+    } else {
+        res = native_syscall(NATIVE_SYS_fstatfs, fd_no, guest_buf);
+    }
+    if (res < 0)
+        return nlibc_fail((int) res);
+    if (native_scratch_get(out, guest_buf, sizeof(*out)) < 0)
+        return nlibc_fail(_EFAULT);
+    return 0;
 }
 
 // The descriptor form. Rust reaches for it where a path form would race, and
@@ -2146,54 +2197,38 @@ int nlibc_fstatfs(int fd_no, void *buf) {
     NATIVE_FRAME;
     if (buf == NULL)
         return nlibc_fail(_EFAULT);
-    guest_addr_t guest_buf = native_scratch_alloc(sizeof(struct amd64_statfs_));
-    if (guest_buf == 0)
-        return nlibc_fail(_ENOMEM);
-    sqword_t res = native_syscall(NATIVE_SYS_fstatfs, fd_no, guest_buf);
-    if (res < 0)
-        return nlibc_fail((int) res);
+    if (fd_no < 0)
+        return nlibc_fail(_EBADF);
     struct amd64_statfs_ guest_statfs;
-    if (native_scratch_get(&guest_statfs, guest_buf, sizeof(guest_statfs)) < 0)
-        return nlibc_fail(_EFAULT);
+    if (nlibc_guest_statfs(NULL, fd_no, &guest_statfs) < 0)
+        return -1;
     nlibc_guest_statfs_to_host(&guest_statfs, buf);
     return 0;
 }
 
-// statvfs is POSIX's shape over the same information, and Darwin's struct
-// statvfs is a different layout from its struct statfs -- so this is a
-// translation of a translation rather than an alias. Only the fields a caller
-// can act on are filled; f_flag's ST_* bits have no guest counterpart the
-// guest statfs carries, so it is left zero rather than invented.
-static void nlibc_statfs_to_statvfs(const struct statfs *in, struct statvfs *out) {
-    memset(out, 0, sizeof(*out));
-    out->f_bsize = in->f_bsize;
-    out->f_frsize = in->f_bsize;
-    out->f_blocks = in->f_blocks;
-    out->f_bfree = in->f_bfree;
-    out->f_bavail = in->f_bavail;
-    out->f_files = in->f_files;
-    out->f_ffree = in->f_ffree;
-    out->f_favail = in->f_ffree;
-    out->f_namemax = NAME_MAX;
-}
-
+// statvfs is POSIX's shape over the same information; f_flag carries only
+// ST_RDONLY and ST_NOSUID, the bits both systems number alike.
 int nlibc_fstatvfs(int fd_no, struct statvfs *out) {
-    struct statfs host;
+    NATIVE_FRAME;
     if (out == NULL)
         return nlibc_fail(_EFAULT);
-    if (nlibc_fstatfs(fd_no, &host) < 0)
+    if (fd_no < 0)
+        return nlibc_fail(_EBADF);
+    struct amd64_statfs_ guest_statfs;
+    if (nlibc_guest_statfs(NULL, fd_no, &guest_statfs) < 0)
         return -1;
-    nlibc_statfs_to_statvfs(&host, out);
+    nlibc_guest_statfs_to_statvfs(&guest_statfs, out);
     return 0;
 }
 
 int nlibc_statvfs(const char *path, struct statvfs *out) {
-    struct statfs host;
+    NATIVE_FRAME;
     if (out == NULL)
         return nlibc_fail(_EFAULT);
-    if (nlibc_statfs(path, &host) < 0)
+    struct amd64_statfs_ guest_statfs;
+    if (nlibc_guest_statfs(path, -1, &guest_statfs) < 0)
         return -1;
-    nlibc_statfs_to_statvfs(&host, out);
+    nlibc_guest_statfs_to_statvfs(&guest_statfs, out);
     return 0;
 }
 
@@ -2201,16 +2236,9 @@ int nlibc_statfs(const char *path, void *buf) {
     NATIVE_FRAME;
     if (buf == NULL)
         return nlibc_fail(_EFAULT);
-    NLIBC_PATH(guest_path, path);
-    guest_addr_t guest_buf = native_scratch_alloc(sizeof(struct amd64_statfs_));
-    if (guest_buf == 0)
-        return nlibc_fail(_ENOMEM);
-    sqword_t res = native_syscall(NATIVE_SYS_statfs, guest_path, guest_buf);
-    if (res < 0)
-        return nlibc_fail((int) res);
     struct amd64_statfs_ guest_statfs;
-    if (native_scratch_get(&guest_statfs, guest_buf, sizeof(guest_statfs)) < 0)
-        return nlibc_fail(_EFAULT);
+    if (nlibc_guest_statfs(path, -1, &guest_statfs) < 0)
+        return -1;
     nlibc_guest_statfs_to_host(&guest_statfs, buf);
     return 0;
 }

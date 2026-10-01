@@ -854,6 +854,9 @@ const char *nlibc_dlerror(void);
 #define printf      nlibc_printf
 #define puts        nlibc_puts
 #define putchar     nlibc_putchar
+/* vprintf writes to the HOST's stdout, which is not the guest's: route it to
+ * the stream stdout names here (vfprintf on our FILE is pure). */
+#define vprintf(f, a) vfprintf(nlibc_stdout(), (f), (a))
 #define perror      nlibc_perror
 #define fileno      nlibc_fileno
 /* The GUEST's kernel ring buffer. There is no host klogctl on Darwin at all,
