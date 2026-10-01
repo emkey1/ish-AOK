@@ -437,8 +437,18 @@ static const struct virtgpu_present_ops display_direct_ops = {
 
 #pragma mark - Pointer input
 
+- (void)takeKeyboardFocusIfWanted {
+    if (self.isFirstResponder)
+        return;
+    BOOL hardware = NO;
+    if (@available(iOS 14.0, *))
+        hardware = GCKeyboard.coalescedKeyboard != nil;
+    if (hardware || (UserPreferences.shared.autoShowKeyboard && !self.keyboardPutAway))
+        [self becomeFirstResponder];
+}
+
 - (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *_Nullable)event {
-    [self becomeFirstResponder];
+    [self takeKeyboardFocusIfWanted];
     [self sendPointerEventFromTouches:touches down:YES];
 }
 

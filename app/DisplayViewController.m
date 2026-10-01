@@ -1195,6 +1195,8 @@ static NSString *DisplayScaleChoiceTitle(NSString *name, NSInteger value, NSInte
                         style:UIAlertActionStyleDefault
                       handler:^(__unused UIAlertAction *action) {
         UserPreferences.shared.autoShowKeyboard = !autoShowKeyboard;
+        if (!autoShowKeyboard)
+            weakSelf.displayView.keyboardPutAway = NO;
         [weakSelf _autoShowKeyboardIfAppropriate];
         // Re-present so the toggled state is reflected, matching the same
         // deferred re-present WorkspaceViewController's handler uses.
@@ -1207,11 +1209,25 @@ static NSString *DisplayScaleChoiceTitle(NSString *name, NSInteger value, NSInte
     // exactly this; Display had nothing). resignFirstResponder is a no-op if
     // the keyboard isn't up, so this is safe to always offer rather than
     // tracking first-responder state just to conditionally hide the action.
-    [sheet addActionWithTitle:@"Hide Keyboard"
-                        style:UIAlertActionStyleDefault
-                      handler:^(__unused UIAlertAction *action) {
-        [weakSelf.displayView resignFirstResponder];
-    }];
+    //
+    // Hidden stays hidden: a tap in the desktop no longer brings it back
+    // (DisplayRFBView's keyboardPutAway), which on an iPad with no keyboard
+    // it did on every click. Show Keyboard is the way back.
+    if (self.displayView.isFirstResponder) {
+        [sheet addActionWithTitle:@"Hide Keyboard"
+                            style:UIAlertActionStyleDefault
+                          handler:^(__unused UIAlertAction *action) {
+            weakSelf.displayView.keyboardPutAway = YES;
+            [weakSelf.displayView resignFirstResponder];
+        }];
+    } else {
+        [sheet addActionWithTitle:@"Show Keyboard"
+                            style:UIAlertActionStyleDefault
+                          handler:^(__unused UIAlertAction *action) {
+            weakSelf.displayView.keyboardPutAway = NO;
+            [weakSelf.displayView becomeFirstResponder];
+        }];
+    }
     [sheet addActionWithTitle:[NSString stringWithFormat:@"Resolution: %@…",
                                   DisplayDesktopScaleName(UserPreferences.shared.displayDesktopScale)]
                         style:UIAlertActionStyleDefault
@@ -1257,7 +1273,7 @@ static NSString *DisplayScaleChoiceTitle(NSString *name, NSInteger value, NSInte
 // A Workspace window's keyboard goes to the display when the window comes to
 // the front (a tap, Ctrl+Tab, Cmd+arrow Desktop switching), as MotePad's does.
 - (void)workspaceToolDidBecomeFrontmost {
-    [self.displayView becomeFirstResponder];
+    [self.displayView takeKeyboardFocusIfWanted];
 }
 
 // Set by the notice's "Don't Show Again".
@@ -1401,7 +1417,7 @@ static NSString *const DisplayWorkspaceAttachNoticeHiddenKey = @"DisplayWorkspac
         if (GCKeyboard.coalescedKeyboard != nil)
             return;
     }
-    [self.displayView becomeFirstResponder];
+    [self.displayView takeKeyboardFocusIfWanted];
 }
 
 - (void)rfbClientDidUpdateFramebuffer:(DisplayRFBClient *)client {
