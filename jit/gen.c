@@ -2840,6 +2840,15 @@ int gen_step_arm64(struct gen_state *state, struct tlb *tlb) {
         bool is_tbx = (insn >> 12) & 1;
         unsigned rn = (insn >> 5) & 0x1f;
         unsigned rd = insn & 0x1f;
+        if (arm64_fuse_pass_enabled(JIT_FUSE_A64_VSPEC)) {
+            extern void *const arm64_vspec_tbl_table[2][4][2]; // simd_spec.S
+            gen(state, (unsigned long) arm64_vspec_tbl_table[is_tbx][len][q]);
+            gen(state, arm64_v_off(rd, 0));
+            gen(state, arm64_v_off(rm, 0));
+            for (unsigned i = 0; i <= len; i++)
+                gen(state, arm64_v_off((rn + i) & 31, 0));
+            return 1;
+        }
         gen(state, (unsigned long) (is_tbx ? gadget_arm64_vtbx : gadget_arm64_vtbl));
         gen(state, rd | ((uint64_t) rn << 8) | ((uint64_t) rm << 16)
             | ((uint64_t) len << 24) | ((uint64_t) q << 26));
@@ -4496,6 +4505,13 @@ int gen_step_arm64(struct gen_state *state, struct tlb *tlb) {
         if (opcode == 0x0c || opcode == 0x0f) {
             if ((size & 1) || !q) // .4s only
                 return gen_arm64_undefined(state);
+            extern void gadget_arm64_vspec_fmaxv_4s(void), gadget_arm64_vspec_fminv_4s(void);
+            extern void gadget_arm64_vspec_fmaxnmv_4s(void), gadget_arm64_vspec_fminnmv_4s(void);
+            void (*spec)(void) = opcode == 0x0c
+                ? (size & 2 ? gadget_arm64_vspec_fminnmv_4s : gadget_arm64_vspec_fmaxnmv_4s)
+                : (size & 2 ? gadget_arm64_vspec_fminv_4s : gadget_arm64_vspec_fmaxv_4s);
+            if (gen_arm64_vspec(state, spec, arm64_v_off(rd, 0), arm64_v_off(rn, 0)))
+                return 1;
             gen(state, (unsigned long) gadget);
             gen(state, rd | ((uint64_t) rn << 8));
             return 1;
@@ -4503,6 +4519,26 @@ int gen_step_arm64(struct gen_state *state, struct tlb *tlb) {
         // Integer: size 3 reserved everywhere; size 2 requires Q=1 (.4s).
         if (size == 3 || (size == 2 && q == 0))
             return gen_arm64_undefined(state);
+        {
+            // simd_spec.S tables, indexed size*2+Q.
+            extern void *const arm64_vspec_addv_table[6], *const arm64_vspec_saddlv_table[6];
+            extern void *const arm64_vspec_uaddlv_table[6], *const arm64_vspec_smaxv_table[6];
+            extern void *const arm64_vspec_sminv_table[6], *const arm64_vspec_umaxv_table[6];
+            extern void *const arm64_vspec_uminv_table[6];
+            void *const *t = NULL;
+            switch ((u << 5) | opcode) {
+            case 0x03: t = arm64_vspec_saddlv_table; break;
+            case 0x23: t = arm64_vspec_uaddlv_table; break;
+            case 0x0a: t = arm64_vspec_smaxv_table; break;
+            case 0x2a: t = arm64_vspec_umaxv_table; break;
+            case 0x1a: t = arm64_vspec_sminv_table; break;
+            case 0x3a: t = arm64_vspec_uminv_table; break;
+            case 0x1b: t = arm64_vspec_addv_table; break;
+            }
+            if (t != NULL && gen_arm64_vspec(state, (void (*)(void)) t[size * 2 + q],
+                    arm64_v_off(rd, 0), arm64_v_off(rn, 0)))
+                return 1;
+        }
         gen(state, (unsigned long) gadget);
         gen(state, rd | ((uint64_t) rn << 8) | ((uint64_t) size << 16) |
                    ((uint64_t) q << 18));
@@ -4833,6 +4869,15 @@ int gen_step_arm64(struct gen_state *state, struct tlb *tlb) {
             // live Vd value; the third stream word is the high-half keep
             // mask (the 64-bit form's write architecturally zeroes it).
             extern void gadget_arm64_vorr_imm(void), gadget_arm64_vbic_imm(void);
+            extern void gadget_arm64_vspec_orr_imm(void), gadget_arm64_vspec_bic_imm(void);
+            if (arm64_fuse_pass_enabled(JIT_FUSE_A64_VSPEC)) {
+                gen(state, (unsigned long) (op ? gadget_arm64_vspec_bic_imm
+                                               : gadget_arm64_vspec_orr_imm));
+                gen(state, arm64_v_off(rd, 0));
+                gen(state, imm64);
+                gen(state, q ? ~0ULL : 0);
+                return 1;
+            }
             gen(state, (unsigned long) (op ? gadget_arm64_vbic_imm
                                            : gadget_arm64_vorr_imm));
             gen(state, rd);
@@ -4842,8 +4887,10 @@ int gen_step_arm64(struct gen_state *state, struct tlb *tlb) {
         }
         if (op == 1 && cmode <= 13)
             imm64 = ~imm64; // MVNI
-        gen(state, (unsigned long) gadget_arm64_vconst);
-        gen(state, rd);
+        extern void gadget_arm64_vspec_const(void);
+        bool spec = arm64_fuse_pass_enabled(JIT_FUSE_A64_VSPEC);
+        gen(state, (unsigned long) (spec ? gadget_arm64_vspec_const : gadget_arm64_vconst));
+        gen(state, spec ? arm64_v_off(rd, 0) : rd);
         gen(state, imm64);
         gen(state, q ? imm64 : 0);
         return 1;

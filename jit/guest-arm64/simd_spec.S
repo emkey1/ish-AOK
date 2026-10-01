@@ -163,3 +163,127 @@ vspec_shift vspec_ushl_2d, ushl, .2d, x9
     tbl v0.16b, {v1.16b, v2.16b}, v3.16b
     str q0, [_cpu, x8]
     gret 4
+
+// MOVI/MVNI/FMOV (vector, immediate): [gadget][d_off][lo][hi], the expanded
+// constant already split per half by gen.c (hi = 0 for the 64-bit forms).
+.gadget vspec_const
+    ldp x8, x9, [_ip]
+    ldr x10, [_ip, #16]
+    add x8, _cpu, x8
+    stp x9, x10, [x8]
+    gret 3
+
+// ORR/BIC (vector, immediate): [gadget][d_off][imm][keep], keep = Q ? ~0 : 0
+// (the 64-bit form zeroes the upper half).
+.macro vspec_bitimm name, op
+.gadget \name
+    ldp x8, x9, [_ip]
+    ldr x10, [_ip, #16]
+    add x8, _cpu, x8
+    ldp x11, x12, [x8]
+    \op x11, x11, x9
+    \op x12, x12, x9
+    and x12, x12, x10
+    stp x11, x12, [x8]
+    gret 3
+.endm
+vspec_bitimm vspec_orr_imm, orr
+vspec_bitimm vspec_bic_imm, bic
+
+// TBL/TBX by table length and arrangement: [gadget][d_off][m_off][n_off] x
+// len, the table registers' offsets (consecutive mod 32) resolved by gen.c.
+// TBX keeps out-of-range destination bytes, so it loads Vd first. The 8B
+// forms zero the upper half through the host's 64-bit write.
+.macro vspec_tbl name, op, len, arr, loads_dest
+.gadget \name
+    ldp x8, x9, [_ip]
+    ldr q5, [_cpu, x9]
+.if \loads_dest
+    ldr q0, [_cpu, x8]
+.endif
+    ldr x10, [_ip, #16]
+    ldr q1, [_cpu, x10]
+.if \len == 1
+    \op v0.\arr, {v1.16b}, v5.\arr
+.else
+    ldr x10, [_ip, #24]
+    ldr q2, [_cpu, x10]
+.if \len == 2
+    \op v0.\arr, {v1.16b, v2.16b}, v5.\arr
+.else
+    ldr x10, [_ip, #32]
+    ldr q3, [_cpu, x10]
+.if \len == 3
+    \op v0.\arr, {v1.16b, v2.16b, v3.16b}, v5.\arr
+.else
+    ldr x10, [_ip, #40]
+    ldr q4, [_cpu, x10]
+    \op v0.\arr, {v1.16b, v2.16b, v3.16b, v4.16b}, v5.\arr
+.endif
+.endif
+.endif
+    str q0, [_cpu, x8]
+    gret (2 + \len)
+.endm
+.irp len, 1, 2, 3, 4
+    vspec_tbl vspec_tbl\len\()_8b,  tbl, \len, 8b,  0
+    vspec_tbl vspec_tbl\len\()_16b, tbl, \len, 16b, 0
+    vspec_tbl vspec_tbx\len\()_8b,  tbx, \len, 8b,  1
+    vspec_tbl vspec_tbx\len\()_16b, tbx, \len, 16b, 1
+.endr
+
+// Across-lanes reductions by arrangement: [gadget][d_off][n_off]. The host's
+// scalar write zeroes the rest of v0, so storing all of it zeroes Vd's.
+.macro vspec_across name, op, dst, arr
+.gadget \name
+    ldp x8, x10, [_ip]
+    ldr q0, [_cpu, x10]
+    \op \dst\()0, v0.\arr
+    str q0, [_cpu, x8]
+    gret 2
+.endm
+.irp op, addv, smaxv, sminv, umaxv, uminv
+    vspec_across vspec_\op\()_8b,  \op, b, 8b
+    vspec_across vspec_\op\()_16b, \op, b, 16b
+    vspec_across vspec_\op\()_4h,  \op, h, 4h
+    vspec_across vspec_\op\()_8h,  \op, h, 8h
+    vspec_across vspec_\op\()_4s,  \op, s, 4s
+.endr
+.irp op, saddlv, uaddlv
+    vspec_across vspec_\op\()_8b,  \op, h, 8b
+    vspec_across vspec_\op\()_16b, \op, h, 16b
+    vspec_across vspec_\op\()_4h,  \op, s, 4h
+    vspec_across vspec_\op\()_8h,  \op, s, 8h
+    vspec_across vspec_\op\()_4s,  \op, d, 4s
+.endr
+.irp op, fmaxv, fminv, fmaxnmv, fminnmv
+    vspec_across vspec_\op\()_4s, \op, s, 4s
+.endr
+
+// Pointer tables for gen.c, indexed size*2+Q (.2s, size 2 Q 0, is reserved
+// and never looked up). In .data: .quad symbol references in .text are an
+// illegal text relocation on Mach-O.
+.data
+.balign 8
+.macro across_table op
+    .global NAME(arm64_vspec_\op\()_table)
+NAME(arm64_vspec_\op\()_table) :
+    .quad NAME(gadget_arm64_vspec_\op\()_8b), NAME(gadget_arm64_vspec_\op\()_16b)
+    .quad NAME(gadget_arm64_vspec_\op\()_4h), NAME(gadget_arm64_vspec_\op\()_8h)
+    .quad 0, NAME(gadget_arm64_vspec_\op\()_4s)
+.endm
+.irp op, addv, smaxv, sminv, umaxv, uminv, saddlv, uaddlv
+    across_table \op
+.endr
+.macro tbl_table_row tb, len
+    .quad NAME(gadget_arm64_vspec_\tb\len\()_8b), NAME(gadget_arm64_vspec_\tb\len\()_16b)
+.endm
+.global NAME(arm64_vspec_tbl_table)
+NAME(arm64_vspec_tbl_table) :   // [tbx][len-1][q]
+.irp len, 1, 2, 3, 4
+    tbl_table_row tbl, \len
+.endr
+.irp len, 1, 2, 3, 4
+    tbl_table_row tbx, \len
+.endr
+.text
