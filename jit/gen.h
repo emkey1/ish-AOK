@@ -76,6 +76,11 @@ struct gen_state {
     // OOM recovery: if oom_active, gen() longjmps instead of dying
     bool oom_active;
     jmp_buf oom_recovery;
+    // Compiling a PTRACE_SINGLESTEP block (jit.c cpu_single_step_*): one
+    // gen_step must consume exactly one guest instruction, so every lookahead
+    // that would consume a second (fusions, constant folds, register-cached
+    // runs) is refused -- gen_arm64_fits_block and gen_riscv64_peek say no.
+    bool single_step;
 };
 
 bool gen_start(guest_addr_t addr, struct gen_state *state); // returns false on OOM

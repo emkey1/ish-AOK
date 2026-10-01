@@ -3094,6 +3094,7 @@ static int cpu_single_step_arm64(struct cpu_state *cpu, struct tlb *tlb) {
     if (!gen_start_arm64(cpu->arm64_pc, &state))
         return INT_GPF; // OOM allocating the block
     state.oom_active = true;
+    state.single_step = true; // one instruction: no lookahead fusions
     // _setjmp, not setjmp: on Darwin (BSD semantics, unlike glibc) plain
     // setjmp/longjmp save and restore the signal mask, which is a real
     // sigprocmask SYSCALL -- and this runs once per block compilation, so a
@@ -3196,6 +3197,7 @@ static int cpu_single_step_riscv64(struct cpu_state *cpu, struct tlb *tlb) {
     if (!gen_start_riscv64(cpu->riscv64_pc, &state))
         return INT_GPF; // OOM allocating the block
     state.oom_active = true;
+    state.single_step = true; // one instruction: no lookahead fusions
     // _setjmp, not setjmp: on Darwin (BSD semantics, unlike glibc) plain
     // setjmp/longjmp save and restore the signal mask, which is a real
     // sigprocmask SYSCALL -- and this runs once per block compilation, so a

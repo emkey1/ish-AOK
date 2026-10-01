@@ -55,6 +55,7 @@ x86/x86_ud_siginfo.c
 x86/i386_push16.c
 x86/i386_enter_branch16.c
 signal_core.c
+singlestep_fused.c
 fp_env.c
 signal_restart.c
 signal_realtime.c
