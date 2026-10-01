@@ -60,6 +60,59 @@ case "$name" in
         ;;
 esac
 
+# Is this process in its terminal's foreground process group? A background
+# one (`freedoom1 &`, or under timeout(1)) that touches the terminal is
+# stopped by SIGTTOU instead of waiting for a key. /proc/self/stat after the
+# command name: state, ppid, pgrp, session, tty_nr, tpgid.
+aok_in_foreground() {
+    _st=$(sed 's/.*) //' /proc/$$/stat 2>/dev/null) || return 1
+    set -- $_st
+    [ -n "$3" ] && [ "$3" = "$6" ]
+}
+
+# One key from the terminal, echo off; the terminal is put back even on ^C.
+# The distro's stty and dd, not SmallCLUE's linked in /usr/local/bin.
+aok_wait_key() {
+    _stty=/bin/stty; [ -x "$_stty" ] || _stty=stty
+    _dd=/bin/dd; [ -x "$_dd" ] || _dd=dd
+    if ! _saved=$("$_stty" -g 2>/dev/null); then
+        read -r _ || true
+        return
+    fi
+    trap '"$_stty" "$_saved" 2>/dev/null; exit 130' INT TERM HUP
+    "$_stty" -icanon -echo min 1 time 0 2>/dev/null
+    "$_dd" bs=1 count=1 >/dev/null 2>&1
+    "$_stty" "$_saved" 2>/dev/null
+    trap - INT TERM HUP
+}
+
+# Chocolate Doom plays its music on an emulated OPL3 (Nuked OPL3) inside the
+# audio callback. On a 5th-generation iPad (2 CPUs) that thread took 97% of a
+# core at the title screen, and Freedoom's timedemo ran at 12.6 fps against
+# 36.9 with -nomusic (sound effects kept) and 37.5 with no sound at all. With
+# 2 CPUs or fewer the music goes, unless asked for: AOK_DOOM_MUSIC=1, or
+# -nomusic/-nosound already given. A10X (3) and up keep it.
+case "$name" in
+    chocolate-doom|doom|freedoom1|freedoom2)
+        cpus=$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)
+        case " $* " in *" -nomusic "*|*" -nosound "*) cpus=99 ;; esac
+        if [ "${AOK_DOOM_MUSIC:-0}" != 1 ] && [ "$cpus" -le 2 ] 2>/dev/null; then
+            set -- -nomusic "$@"
+            cat >&2 <<EOF
+$name: this device has $cpus CPUs, and Doom's music (an emulated OPL3
+synthesizer) needs a whole one of them -- with it the game runs at about a
+third of its speed. Starting without music; sound effects stay on.
+To keep the music anyway: AOK_DOOM_MUSIC=1 $name
+EOF
+            if [ -t 0 ] && [ -t 2 ] && aok_in_foreground; then
+                printf 'Press any key to continue...' >&2
+                aok_wait_key
+                printf '\n' >&2
+            fi
+        fi
+        ;;
+esac
+
 gl=${AOK_GAMES_GL:-}
 if [ -z "$gl" ]; then
     case " $AOK_GAMES_GPU " in
