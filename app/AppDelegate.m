@@ -189,6 +189,9 @@ static void ISHDispatchBootWork(NSString *name, void (^work)(void)) {
 @property BOOL localDnsServerRunning;
 @property (strong, nonatomic) dispatch_source_t localDnsServerReadSource;
 @property (strong, nonatomic) dispatch_queue_t localDnsServerQueue;
+// Where the relay forwards: resolv.conf's servers less any loopback one
+// (sockaddr bytes), set by each DNS refresh. Atomic: read per query.
+@property (copy) NSArray<NSData *> *dnsUpstreamServers;
 @property (strong, nonatomic) ISHMetricKitSubscriber *metricKitSubscriber;
 @property BOOL dnsRefreshQueued;
 @property NSUInteger dnsRefreshFailures;
@@ -544,6 +547,81 @@ static NSData *ISHBuildDnsEmptyResponse(const uint8_t *queryBytes, size_t queryL
     ISHWriteBigEndianUInt16(header + 8, 0);
     ISHWriteBigEndianUInt16(header + 10, 0);
     return response;
+}
+
+// The nameservers a resolv.conf names, as sockaddrs, leaving out loopback:
+// the relay must never forward to itself or to another relay on this host.
+static NSArray<NSData *> *ISHDnsUpstreamServers(NSString *resolvConf) {
+    NSMutableArray<NSData *> *servers = [NSMutableArray array];
+    for (NSString *line in [resolvConf componentsSeparatedByString:@"\n"]) {
+        NSArray<NSString *> *fields = [[line stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet]
+            componentsSeparatedByCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
+        if (fields.count < 2 || ![fields[0] isEqualToString:@"nameserver"])
+            continue;
+        struct addrinfo hints = {0};
+        hints.ai_flags = AI_NUMERICHOST;
+        hints.ai_socktype = SOCK_DGRAM;
+        struct addrinfo *result = NULL;
+        if (getaddrinfo(fields[1].UTF8String, "53", &hints, &result) != 0 || result == NULL)
+            continue;
+        BOOL loopback = NO;
+        if (result->ai_family == AF_INET)
+            loopback = (ntohl(((struct sockaddr_in *) result->ai_addr)->sin_addr.s_addr) >> 24) == 127;
+        else if (result->ai_family == AF_INET6)
+            loopback = IN6_IS_ADDR_LOOPBACK(&((struct sockaddr_in6 *) result->ai_addr)->sin6_addr);
+        if (!loopback)
+            [servers addObject:[NSData dataWithBytes:result->ai_addr length:result->ai_addrlen]];
+        freeaddrinfo(result);
+    }
+    return servers;
+}
+
+// The guest's query, exactly as it sent it, to each server in turn; the
+// first reply carrying its ID is returned whatever its rcode, so the guest
+// hears NXDOMAIN and empty answers too. libresolv cannot do this on an iOS
+// device: with no /etc/resolv.conf its res_ninit falls back to a nameserver
+// on this host, and every query failed (5th-generation iPad, 2026-10-01).
+static NSData *ISHForwardDnsQuery(const uint8_t *query, size_t length, NSArray<NSData *> *servers) {
+    const int timeoutMs = 2000;
+    NSMutableData *reply = [NSMutableData dataWithLength:65536];
+    for (NSData *server in servers) {
+        const struct sockaddr *address = server.bytes;
+        int fd = socket(address->sa_family, SOCK_DGRAM, 0);
+        if (fd < 0)
+            continue;
+        if (connect(fd, address, (socklen_t) server.length) != 0 ||
+                send(fd, query, length, 0) != (ssize_t) length) {
+            close(fd);
+            continue;
+        }
+        struct timespec start;
+        clock_gettime(CLOCK_MONOTONIC, &start);
+        for (;;) {
+            struct timespec now;
+            clock_gettime(CLOCK_MONOTONIC, &now);
+            long elapsed = (now.tv_sec - start.tv_sec) * 1000 + (now.tv_nsec - start.tv_nsec) / 1000000;
+            if (elapsed >= timeoutMs)
+                break;
+            struct pollfd pfd = {.fd = fd, .events = POLLIN};
+            int ready = poll(&pfd, 1, (int) (timeoutMs - elapsed));
+            if (ready < 0 && errno == EINTR)
+                continue;
+            if (ready <= 0)
+                break;
+            ssize_t got = recv(fd, reply.mutableBytes, reply.length, 0);
+            if (got < 0 && errno == EINTR)
+                continue;
+            if (got < 0)
+                break;
+            const uint8_t *bytes = reply.bytes;
+            if (got >= NS_HFIXEDSZ && bytes[0] == query[0] && bytes[1] == query[1]) {
+                close(fd);
+                return [NSData dataWithBytes:bytes length:(NSUInteger) got];
+            }
+        }
+        close(fd);
+    }
+    return nil;
 }
 
 static void ios_handle_exit(struct task *task, int code) {
@@ -4457,23 +4535,7 @@ static TerminalViewController *CreateTerminalViewController(void) {
     if (ISHIsBonjourLocalHostname(qname))
         return ISHBuildBonjourDnsResponse(queryBytes, queryLength, qname, qtype);
 
-    // Forward the guest's own packet rather than asking res_nquery to build a
-    // new one: a new query has a new ID, which the guest's resolver discards
-    // as a stray reply, and res_nquery returns nothing for NXDOMAIN or an
-    // empty answer, which the guest needs to hear to stop asking. Either way a
-    // glibc guest sat out its 5 s timeout on every lookup before trying the
-    // next nameserver.
-    struct __res_state state = {0};
-    if (res_ninit(&state) != 0)
-        return nil;
-
-    u_char response[NS_MAXMSG];
-    int responseLength = res_nsend(&state, queryBytes, (int) queryLength, response, sizeof(response));
-    res_nclose(&state);
-    if (responseLength < NS_HFIXEDSZ)
-        return nil;
-    memcpy(response, queryBytes, 2); // the ID the guest is waiting for
-    return [NSData dataWithBytes:response length:(NSUInteger) responseLength];
+    return ISHForwardDnsQuery(queryBytes, queryLength, self.dnsUpstreamServers);
 }
 
 - (void)handleLocalDnsPacket {
@@ -4502,47 +4564,73 @@ static TerminalViewController *CreateTerminalViewController(void) {
     NSString *qname = [NSString stringWithUTF8String:ns_rr_name(question)];
     if (qname.length == 0)
         return;
+    uint16_t qtype = ns_rr_type(question);
+    size_t udpLimit = ISHDnsClientUdpLimit(&message);
+    NSData *query = [NSData dataWithBytes:buffer length:(NSUInteger) received];
+    NSData *peerAddress = [NSData dataWithBytes:&peer length:peerLength];
+    int fd = self.localDnsServerFD;
 
-    NSData *response = [self forwardDnsQuery:buffer
-                                      length:(size_t) received
-                                       qname:qname
-                                       qtype:ns_rr_type(question)];
-    if (response.length == 0) {
-        // No upstream answer at all: say so, so the guest moves on now.
-        response = ISHBuildDnsEmptyResponse(buffer, (size_t) received, 0, ns_r_servfail);
-    } else if (response.length > ISHDnsClientUdpLimit(&message)) {
-        // Too big for the guest's buffer: TC tells it to retry over TCP, which
-        // this relay does not serve, so it moves on to the next nameserver.
-        response = ISHBuildDnsEmptyResponse(buffer, (size_t) received, 0x0200, ns_r_noerror);
-    }
-    if (response.length == 0)
-        return;
-
-    sendto(self.localDnsServerFD, response.bytes, response.length, 0, (struct sockaddr *) &peer, peerLength);
+    // Answered off the relay's serial queue: a slow or silent upstream costs
+    // that one query its timeout, not every query queued behind it.
+    __weak typeof(self) weakSelf = self;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        typeof(self) self = weakSelf;
+        if (self == nil)
+            return;
+        const uint8_t *bytes = query.bytes;
+        NSData *response = [self forwardDnsQuery:bytes length:query.length qname:qname qtype:qtype];
+        if (response.length == 0) {
+            // No upstream answer at all: say so, so the guest moves on now.
+            response = ISHBuildDnsEmptyResponse(bytes, query.length, 0, ns_r_servfail);
+        } else if (response.length > udpLimit) {
+            // Too big for the guest's buffer: TC tells it to retry over TCP,
+            // which this relay does not serve, so it moves on to the next
+            // nameserver.
+            response = ISHBuildDnsEmptyResponse(bytes, query.length, 0x0200, ns_r_noerror);
+        }
+        // The relay may have been stopped meanwhile, and its descriptor number
+        // reused: answer only on the socket the query came in on.
+        if (response.length == 0 || self.localDnsServerFD != fd)
+            return;
+        sendto(fd, response.bytes, response.length, 0, (const struct sockaddr *) peerAddress.bytes,
+               (socklen_t) peerAddress.length);
+    });
 }
 
 // Where guests find the relay: systemd-resolved's stub address, mapped by the
 // loopback NAT (fs/sock.c) onto the relay's real 127.0.0.1:<ephemeral>.
-// Not 127.0.0.1:53 -- iOS itself can hold that port (seen on an iPadOS 16
-// iPad, where every bind failed EADDRINUSE and nothing answered), and a
-// guest's own resolver wants it.
+// Not 127.0.0.1:53: a guest's own resolver wants that port, and a relay the
+// app had lost track of (localDnsServerFD reset under it, below) held it so
+// that every later bind failed EADDRINUSE.
 #define ISH_DNS_RELAY_GUEST_ADDR "127.0.0.53"
 
+// ensureLocalDnsServer and stopLocalDnsServer run on the main thread
+// (configureDns) and on the DNS refresh queue at once: the boot refresh
+// started the relay while launch went on. Both hold @synchronized(self),
+// which scheduleDnsRefresh already uses, so neither sees the other halfway.
 - (void)stopLocalDnsServer {
-    int fd = self.localDnsServerFD;
-    self.localDnsServerFD = -1;
-    if (self.localDnsServerRunning)
-        inet_nat_unregister_host(htonl(0x7f000035), htons(53), SOCK_DGRAM_);
-    if (self.localDnsServerReadSource != nil) {
-        dispatch_source_cancel(self.localDnsServerReadSource);
-        self.localDnsServerReadSource = nil;
-    } else if (fd >= 0) {
-        close(fd);
+    @synchronized (self) {
+        int fd = self.localDnsServerFD;
+        self.localDnsServerFD = -1;
+        if (self.localDnsServerRunning)
+            inet_nat_unregister_host(htonl(0x7f000035), htons(53), SOCK_DGRAM_);
+        if (self.localDnsServerReadSource != nil) {
+            dispatch_source_cancel(self.localDnsServerReadSource);
+            self.localDnsServerReadSource = nil;
+        } else if (fd >= 0) {
+            close(fd);
+        }
+        self.localDnsServerRunning = NO;
     }
-    self.localDnsServerRunning = NO;
 }
 
 - (BOOL)ensureLocalDnsServer {
+    @synchronized (self) {
+        return [self ensureLocalDnsServerLocked];
+    }
+}
+
+- (BOOL)ensureLocalDnsServerLocked {
     if (self.localDnsServerRunning && self.localDnsServerFD >= 0)
         return YES;
 
@@ -4802,6 +4890,8 @@ static TerminalViewController *CreateTerminalViewController(void) {
         }
     }
 
+    self.dnsUpstreamServers = ISHDnsUpstreamServers(resolvConf ?: @"");
+
     if (includeLocalDnsServer) {
         if (resolvConf == nil)
             resolvConf = [NSMutableString new];
@@ -4953,6 +5043,18 @@ static const NSUInteger ISHDnsRefreshRetryLimit = 8;
     [NSUserDefaults.standardUserDefaults setInteger:1 forKey:kSkipStartupMessage];
 }
 
+// The relay's descriptor starts at -1 here, before anything can start it. It
+// was set in didFinishLaunching, which runs after willFinishLaunching has
+// booted the guest -- and the boot's DNS refresh had already started the relay
+// on another thread by then. The reset made the app forget it: every later
+// start bound a second relay and failed (EADDRINUSE), and resolv.conf lost
+// the relay for the whole session (5th-generation iPad, 2026-10-01).
+- (instancetype)init {
+    if ((self = [super init]))
+        _localDnsServerFD = -1;
+    return self;
+}
+
 - (BOOL)application:(UIApplication *)application willFinishLaunchingWithOptions:(NSDictionary<UIApplicationLaunchOptionsKey,id> *)launchOptions {
     [ISHDiagnosticsStore recordLaunchStage:@"application.willFinishLaunching"
                                    details:launchOptions.count != 0 ? @{@"launchOptions": launchOptions.description} : nil];
@@ -5045,7 +5147,6 @@ static UINavigationController *CreateAboutNavigationController(BOOL recoveryMode
     if ([NSUserDefaults.standardUserDefaults boolForKey:@"FASTLANE_SNAPSHOT"])
         [UIView setAnimationsEnabled:NO];
 
-    self.localDnsServerFD = -1;
     NSString *ishVersion = [NSString stringWithFormat:@"iSH-AOK %@ (%@)",
                          [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleShortVersionString"],
                          [NSBundle.mainBundle objectForInfoDictionaryKey:(NSString *) kCFBundleVersionKey]];
