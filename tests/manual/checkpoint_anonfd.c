@@ -42,6 +42,7 @@
 #include <sys/wait.h>
 #include <poll.h>
 #include <errno.h>
+#include <sched.h>
 #include <unistd.h>
 
 extern char **environ;
@@ -154,6 +155,13 @@ int main(int argc, char **argv) {
             break;
         usleep(50000);
     }
+
+    // Namespace fds, as atop's logging daemon holds one (fd 5, from
+    // /proc/1/ns/...): with no rule, every suspend on a root running it was
+    // refused. The PID one is the plain kind; UTS carries a real namespace
+    // reference that setns() installs.
+    int nspid = open("/proc/self/ns/pid", O_RDONLY);
+    int nsuts = open("/proc/self/ns/uts", O_RDONLY);
 
     // Everything is set up: say so. The harness checkpoints the moment this
     // file exists (ISH_CHECKPOINT_AFTER=@...) rather than a fixed time after
@@ -291,5 +299,27 @@ int main(int argc, char **argv) {
                               exe_ino != 0 && exe_ino == held_ino, d);
     kill(exe_only, SIGKILL);
     kill(exe_shared, SIGKILL);
+
+    // nsfs: each still names the namespace /proc/self/ns does, and the UTS
+    // one can still be handed to setns().
+    const char *kinds[] = {"pid", "uts"};
+    int nsfds[] = {nspid, nsuts};
+    for (int i = 0; i < 2; i++) {
+        char held[128] = "", live[128] = "", link[64], self[64];
+        snprintf(link, sizeof(link), "/proc/self/fd/%d", nsfds[i]);
+        snprintf(self, sizeof(self), "/proc/self/ns/%s", kinds[i]);
+        ssize_t a = readlink(link, held, sizeof(held) - 1);
+        ssize_t b = readlink(self, live, sizeof(live) - 1);
+        if (a > 0) held[a] = '\0';
+        if (b > 0) live[b] = '\0';
+        int ok = a > 0 && b > 0 && strcmp(held, live) == 0;
+        if (i == 1)
+            ok = ok && setns(nsfds[i], CLONE_NEWUTS) == 0;
+        snprintf(d, sizeof(d), "fd %d -> \"%s\", /proc/self/ns/%s -> \"%s\"%s",
+                 nsfds[i], held, kinds[i], live, i == 1 ? " (and setns)" : "");
+        char name[16];
+        snprintf(name, sizeof(name), "nsfs-%s", kinds[i]);
+        check(name, ok, d);
+    }
     return 0;
 }

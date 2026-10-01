@@ -2104,6 +2104,53 @@ static struct fd *proc_ns_fd_for_index(unsigned index, unsigned long inode, void
     return fd;
 }
 
+bool proc_ns_fd_link(struct fd *fd, char *buf, size_t size) {
+    if (fd->ops != &proc_ns_fdops || fd->nsfs.type_index >= PROC_NS_TYPES_LEN)
+        return false;
+    // Named by the KIND, so pid_for_children's fd reads "pid:", as on Linux:
+    // the first entry of each kind in the table carries its plain name.
+    unsigned nstype = proc_ns_types[fd->nsfs.type_index].nstype;
+    const char *name = proc_ns_types[fd->nsfs.type_index].name;
+    for (unsigned i = 0; i < PROC_NS_TYPES_LEN; i++) {
+        if (proc_ns_types[i].nstype == nstype) {
+            name = proc_ns_types[i].name;
+            break;
+        }
+    }
+    snprintf(buf, size, "%s:[%lu]", name, (unsigned long) fd->stat.inode);
+    return true;
+}
+
+bool proc_ns_fd_is_initial(struct fd *fd) {
+    unsigned nstype;
+    void *ns;
+    if (!proc_ns_fd_info(fd, &nstype, &ns))
+        return false;
+    if (nstype == CLONE_NEWUTS_)
+        return ns == NULL || ns == &init_uts_ns;
+    if (nstype == CLONE_NEWIPC_)
+        return ns == NULL || ns == &init_ipc_ns;
+    return true;
+}
+
+struct fd *proc_ns_fd_initial(unsigned nstype) {
+    for (unsigned index = 0; index < PROC_NS_TYPES_LEN; index++) {
+        if (proc_ns_types[index].nstype != nstype)
+            continue;
+        void *ns = NULL;
+        unsigned long inode = proc_ns_types[index].inode;
+        if (nstype == CLONE_NEWUTS_) {
+            ns = uts_ns_retain(&init_uts_ns);
+            inode = init_uts_ns.inode;
+        } else if (nstype == CLONE_NEWIPC_) {
+            ns = ipc_ns_retain(&init_ipc_ns);
+            inode = init_ipc_ns.inode;
+        }
+        return proc_ns_fd_for_index(index, inode, ns);
+    }
+    return ERR_PTR(_EINVAL);
+}
+
 bool proc_ns_fd_info(struct fd *fd, unsigned *nstype, void **ns) {
     if (fd->ops != &proc_ns_fdops || fd->nsfs.type_index >= PROC_NS_TYPES_LEN)
         return false;

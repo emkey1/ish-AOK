@@ -71,6 +71,7 @@
 #include <unistd.h>
 
 #include "kernel/ipc_ns.h"
+#include "fs/proc.h"
 #include "kernel/calls.h"
 #include "kernel/checkpoint.h"
 #include "kernel/errno.h"
@@ -150,6 +151,11 @@ enum ckpt_fd_kind {
     // A named FIFO: reopened by its path -- the node itself comes back with
     // its filesystem -- with whatever was buffered in it following the record.
     CKPT_FD_FIFO,
+    // A namespace fd (an open /proc/<pid>/ns/* link): which kind, a uint32
+    // CLONE_NEW* after the record. Rebuilt on the system's namespace of that
+    // kind -- the only one there is, except for a private UTS or IPC
+    // namespace, which is refused. Last, so no older kind is renumbered.
+    CKPT_FD_NSFS,
 };
 
 // Which KIND of terminal a process's standard streams were on. The two are
@@ -215,6 +221,7 @@ static const char *ckpt_kind_name(uint32_t kind) {
         case CKPT_FD_PIDFD: return "pidfd";
         case CKPT_FD_MEMFD: return "memfd";
         case CKPT_FD_FIFO: return "fifo";
+        case CKPT_FD_NSFS: return "nsfs";
         default: return "?";
     }
 }
@@ -1251,6 +1258,19 @@ static int ckpt_classify_fd(int num, struct fd *fd, char *path, size_t path_size
         return CKPT_FD_PIDFD;
     if (memfd_fd_is(fd))
         return CKPT_FD_MEMFD;
+    // A namespace fd. atop's logging daemon keeps one open (fd 5, from
+    // /proc/1/ns/...), and with no rule every suspend on a root running it
+    // was refused: "fd 5 is a special file on unknown with no restore rule".
+    unsigned nstype;
+    void *nsref;
+    if (proc_ns_fd_info(fd, &nstype, &nsref)) {
+        if (!proc_ns_fd_is_initial(fd)) {
+            ckpt_refuse("fd %d holds a private UTS or IPC namespace, which a "
+                        "restore cannot recreate", num);
+            return 0;
+        }
+        return CKPT_FD_NSFS;
+    }
 
     const char *family = fd->ops != NULL && fd->ops->name != NULL
             ? fd->ops->name : "unknown";
@@ -1302,6 +1322,19 @@ static int ckpt_classify_fd(int num, struct fd *fd, char *path, size_t path_size
     // is set where the descriptor is made, and says which stream it is.
     if (fd->ops == &realfs_fdops && fd->host_stdio != 0)
         return CKPT_FD_STDIO;
+    // The GPU, and the Wayland view's input queue. What stands behind them
+    // lives in the app -- Vulkan contexts, blobs and fences, the presenter --
+    // and cannot be written into an image. Reopened, the render node would be
+    // a blank device under a compositor that believes it has a GPU, so the
+    // suspend is refused, in words that say what to do.
+    if ((fd->ops != NULL && fd->ops->name != NULL && strcmp(fd->ops->name, "aok-input") == 0) ||
+            (S_ISCHR(fd->type) && generic_getpath_backing(fd, path) >= 0 &&
+             strncmp(path, "/dev/dri/", 9) == 0)) {
+        ckpt_refuse("a Wayland desktop or GPU program is running (fd %d is %s); "
+                    "close it, then suspend", num,
+                    path[0] == '/' ? path : "the Wayland view's input");
+        return 0;
+    }
     // An ordinary character device -- /dev/null, /dev/zero, /dev/urandom.
     // These have a stable path and no state, so they come back by being
     // opened again, and they are NOT the terminal case above: treating
@@ -2118,6 +2151,15 @@ static int ckpt_describe_anon(struct ckpt_saved_fd *s) {
         int32_t pid = pidfd_ckpt_pid(s->fd);
         len = sizeof(pid);
         blob = ckpt_memdup(&pid, len);
+        break;
+    }
+    case CKPT_FD_NSFS: {
+        unsigned nstype = 0;
+        void *nsref;
+        proc_ns_fd_info(s->fd, &nstype, &nsref);
+        uint32_t kind = nstype;
+        len = sizeof(kind);
+        blob = ckpt_memdup(&kind, len);
         break;
     }
     case CKPT_FD_INOTIFY:
@@ -3924,13 +3966,20 @@ static struct fd *ckpt_rebuild_anon(struct ckpt_restore_state *st,
         st->pidfd_count++;
         return pidfd;
     }
+    case CKPT_FD_NSFS: {
+        uint32_t nstype;
+        if (len != sizeof(nstype))
+            return ERR_PTR(_EINVAL);
+        memcpy(&nstype, payload, sizeof(nstype));
+        return proc_ns_fd_initial(nstype);
+    }
     default:
         return ERR_PTR(_EINVAL);
     }
 }
 
 static bool ckpt_kind_is_anon(uint32_t kind) {
-    return kind >= CKPT_FD_EPOLL && kind <= CKPT_FD_MEMFD;
+    return (kind >= CKPT_FD_EPOLL && kind <= CKPT_FD_MEMFD) || kind == CKPT_FD_NSFS;
 }
 
 // The epoll registrations, once every descriptor in the image exists. One

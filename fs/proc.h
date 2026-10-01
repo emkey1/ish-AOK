@@ -95,6 +95,15 @@ struct fd *proc_ns_open(int pid, const char *name);
 // type, and the UTS or IPC namespace it holds (NULL for the other kinds, of
 // which there is only the initial one). `ns` is borrowed from the fd.
 bool proc_ns_fd_info(struct fd *fd, unsigned *nstype, void **ns);
+// Whether a namespace fd refers to the system's own namespace of its kind --
+// every kind but UTS and IPC has only that one. What a checkpoint can carry.
+bool proc_ns_fd_is_initial(struct fd *fd);
+// A namespace fd's /proc/<pid>/fd link text, as Linux prints it: "pid:[ino]".
+// False if `fd` is not a namespace fd.
+bool proc_ns_fd_link(struct fd *fd, char *buf, size_t size);
+// A namespace fd for the system's namespace of kind `nstype` (CLONE_NEW*_),
+// as kernel/checkpoint.c rebuilds one. ERR_PTR on an unknown kind.
+struct fd *proc_ns_fd_initial(unsigned nstype);
 
 extern struct proc_dir_entry proc_root;
 extern struct proc_dir_entry proc_pid;

@@ -3,6 +3,7 @@
 #include "debug.h"
 #include "kernel/fs.h"
 #include "fs/fd.h"
+#include "fs/proc.h"
 #include "kernel/errno.h"
 
 static struct mount adhoc_mount;
@@ -108,6 +109,10 @@ static int adhoc_getpath(struct fd *fd, char *buf) {
         snprintf(buf, MAX_PATH, "socket:[%lu]", ino);
     else if (S_ISFIFO(fd->stat.mode))
         snprintf(buf, MAX_PATH, "pipe:[%lu]", ino);
+    // A namespace fd reads as its namespace, the way /proc/<pid>/ns/* does:
+    // "pid:[4026531836]", not anon_inode:[nsfs].
+    else if (proc_ns_fd_link(fd, buf, MAX_PATH))
+        ;
     else {
         const char *cls = (fd->ops != NULL && fd->ops->anon_inode_class != NULL)
             ? fd->ops->anon_inode_class : "anon_inode";
