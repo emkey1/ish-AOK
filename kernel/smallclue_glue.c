@@ -35,6 +35,13 @@ bool pscalRuntimeStderrIsInteractive(void) {
     return false;
 }
 
+// SmallCLUE's weak hook for "was this run re-launched by a checkpoint
+// restore?" -- init and runit ask, so a restore does not start their children
+// a second time. See native_program_was_restored.
+bool smallclueHostWasRestored(void) {
+    return native_program_was_restored();
+}
+
 const char *pscal_program_version_string(void) {
     return "smallclue (iSH-AOK native)";
 }

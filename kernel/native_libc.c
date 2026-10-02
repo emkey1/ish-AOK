@@ -1670,6 +1670,15 @@ static int nlibc_wait_status_to_host(int status) {
 
 pid_t nlibc_waitpid(pid_t pid, int *status, int options) {
     int res = native_waitpid((dword_t) pid, status, options);
+    // Interrupted: run the handler BEFORE the caller sees EINTR, which is the
+    // order a real delivery has and what native_syscall does for every call it
+    // routes. This one calls the kernel directly, so the handler used to wait
+    // for the next checkpoint: a program that sets a flag in its handler and
+    // waits in a loop -- SmallCLUE's init, waiting for children until a
+    // shutdown signal -- found the flag still clear, waited again, and never
+    // shut down.
+    if (res == _EINTR)
+        native_checkpoint();
     if (res >= 0 && status != NULL)
         *status = nlibc_wait_status_to_host(*status);
     return res < 0 ? nlibc_fail(res) : res;

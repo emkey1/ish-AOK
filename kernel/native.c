@@ -537,6 +537,18 @@ int native_exec_set_pending(const struct native_program *prog, int argc,
     return 0;
 }
 
+// True for exactly the call of a native program that a checkpoint restore
+// re-launched (native_exec_mark_restored), on that program's own thread. A
+// supervisor -- SmallCLUE's init and runit -- is re-launched from its argv like
+// any native program, and must not start again what it started before: its
+// children were restored too. An environment variable would have said the
+// same thing to everything the program later ran.
+static __thread bool native_run_restored;
+
+bool native_program_was_restored(void) {
+    return native_run_restored;
+}
+
 void native_exec_mark_restored(dword_t standin_child) {
     struct native_exec_pending *pending = current != NULL ? current->native_exec : NULL;
     if (pending == NULL)
@@ -754,6 +766,7 @@ static void native_exec_run_one(struct native_exec_pending *pending) {
     // A new image starts in the default floating-point environment, and the
     // guest image this replaced left its own on the host FPU (emu/fpenv.c).
     fpenv_host_default();
+    native_run_restored = restored;
     if (sigsetjmp(landing.env, 0) == 0) {
         native_landing = &landing;
         status = prog->main(argc, main_argv != NULL ? main_argv : argv,
@@ -766,6 +779,7 @@ static void native_exec_run_one(struct native_exec_pending *pending) {
         replaced = true;
     }
     native_landing = outer;
+    native_run_restored = false;
 
     current->native_running = NULL;
     current->native_argv = NULL;

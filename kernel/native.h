@@ -155,6 +155,9 @@ void native_exec_run_pending(void);
 // And a task that was an exec stand-in (standin_child != 0) resumes as that
 // wait instead of running its program at all. Call with current = the task.
 void native_exec_mark_restored(dword_t standin_child);
+// Whether the native program running on this thread was re-launched by a
+// checkpoint restore rather than started afresh (see native.c).
+bool native_program_was_restored(void);
 
 // The exec stand-in's wait, entered directly: waits for `child`, forwarding
 // signals, and exits with its status word. For a stand-in coming back from a
