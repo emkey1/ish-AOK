@@ -36,6 +36,33 @@ ck() {
     fi
 }
 
+echo "== signal dispositions a job starts with =="
+# An interactive shell ignores TERM and QUIT for itself, and exec preserves
+# SIG_IGN, so a re-launched child kept both unless the spawn reset them the
+# way entersubsh does: `kill %1` and `kill PID` did nothing to any job started
+# from an interactive native zsh (found 2026-10-02 bringing up native mode).
+# -i makes the shell interactive; time is not asserted, the status is.
+cki() {
+    name=$1; want=$2; shift 2
+    got=$("$Z" -i -f -c "$*" 2>&1 | tail -1)
+    if [ "$got" = "$want" ]; then
+        pass=$((pass+1)); printf '  ok    %s\n' "$name"
+    else
+        fail=$((fail+1)); printf '  FAIL  %-34s want [%s] got [%s]\n' "$name" "$want" "$got"
+    fi
+}
+cki job-term-reaches-bg   143  'sleep 5 & p=$!; kill $p; wait $p; echo $?'
+cki job-term-reaches-fg   0000000000000000 'grep SigIgn /proc/self/status | cut -f2'
+cki job-term-in-cmdsubst  0000000000000000 'echo $(grep SigIgn /proc/self/status | cut -f2)'
+cki trap-ign-int-kept     0000000000000002 "trap '' INT; grep SigIgn /proc/self/status | cut -f2"
+# A background job with no job control ignores INT and QUIT as traps, in its
+# own body and not in a subshell nested inside it -- including when what it
+# runs is itself a ( ), which the re-launched child enters on its own.
+ck  async-ign-subsh       "trap -- '' QUIT" '(trap) & wait'
+ck  async-ign-brace       "trap -- '' QUIT" '{ trap } & wait'
+ck  async-ign-nested      'end'             '( (trap) ) & wait; echo end'
+ck  async-ign-exec        0000000000000006  '(grep SigIgn /proc/self/status | cut -f2) & wait'
+
 echo "== state crossing the boundary =="
 # Each of these was dropped or mangled by the serialiser at some point.
 ck scalar        hello    'v=hello; echo $(echo $v)'
