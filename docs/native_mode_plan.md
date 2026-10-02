@@ -268,9 +268,11 @@ marker.
 - **Skip** writes the marker. The root then has root only, exactly like a
   distro root with no uid 1000, so the setting below simply has no one to
   switch to.
-- Init and `/etc/rc` boot while the sheet is up. Only the terminal sessions
-  wait for it, so the sheet never holds the boot, and a slow answer cannot trip
-  the launch watchdog.
+- **Nothing waits for the sheet.** Init and `/etc/rc` boot while it is up,
+  and the root Session Shell is available at once, as it always is (see below).
+  A Workspace terminal opened before the account exists opens as root, which
+  is what the substitution already does when there is no uid 1000. So a slow
+  answer, or none, can neither hold the boot nor trip the launch watchdog.
 - Headless: `manage-roots.sh install aoknative --user NAME`, carried to the
   boot as a one-shot plist field, and `ISH_NATIVE_USER` in the CLI.
 
@@ -287,6 +289,16 @@ exists and `/bin/login` is SmallCLUE's:
   step 2 links to native su: AppDelegate.m:2899/2906, Display
   (DisplayViewController.m:112), LLM tools (LLMChatTools.m:146), and
   `run_guest_command_capture`'s `/bin/su - user`.
+- **The root Session Shell is always there.** The terminals already guarantee
+  a root prompt through the Session Shell (`alwaysLoginAsRoot`;
+  WorkspaceViewController.m:4240), and native mode must not weaken that.
+  `/bin/login -f root` must work whatever root's shadow field says (`-f`
+  skips authentication). The session fallback chain must end in
+  `/AOK/native/zsh`, which is native and needs no root file at all (step 4).
+  That way a user who breaks `/bin/login`, `/etc/passwd` or their own account
+  still gets a root prompt to repair it from. Root's shell is not taken from
+  `/etc/passwd` when that shell does not exist: `login` falls back to
+  `/AOK/native/zsh`.
 - What must hold for this to work: SmallCLUE `login -f <name>`, run by root,
   sets uid/gid/supplementary groups, `HOME`, `SHELL`, `USER`, `LOGNAME` and the
   cwd from `/etc/passwd`, then runs the shell as a login shell (`-zsh`). Since
@@ -340,7 +352,9 @@ queued in docs/TODO.md as a possible future feature. Native mode's answer to "I 
   `sshd`-less target, so use `ssh -G` plus a loopback to a distro leg if one is
   up); `curl -sI https://...`; `sudo -n true` as uid 1000 with sudoers; `su -`;
   `login -f <user>` gives the right `id`, `HOME`, cwd and `$0`, and job control
-  works under it;
+  works under it; a root prompt still comes up with `/bin/login` removed, with
+  root's passwd shell pointing at a missing file, and with root's shadow field
+  locked;
   TZ shows the device zone; `tput cols`; and a re-provision that adds a missing
   link and leaves a user file alone.
 - **The existing native suites** (`native_zsh_fork_state.sh`,
@@ -353,7 +367,8 @@ queued in docs/TODO.md as a possible future feature. Native mode's answer to "I 
 - **Xcode is the only build**: Debug on the simulator (first-launch picker →
   Native → user prompt → prompt), with "Open Everything as Default User" both
   off and on (a Workspace terminal opens as that user, while the Session Shell
-  stays root), and Skip. Then the device leg booting it with `ISH_BOOT_ROOT`.
+  stays root), and Skip. The Session Shell must give a root prompt while the
+  user sheet is still up. Then the device leg booting it with `ISH_BOOT_ROOT`.
   Include a suspend/restore cycle and an app update over an existing native
   root, to check the re-provision.
 
@@ -393,5 +408,7 @@ All answered by the maintainer, 2026-10-02:
 - Python/pip comes later.
 - The uid-1000 name is prompted for at first start, and "Open Everything as
   Default User" is honoured.
+- The root Session Shell is always available, including while the first-start
+  sheet is up and when the root's own login files are broken.
 
 No open questions remain. Revisit after the step-1 spike.
