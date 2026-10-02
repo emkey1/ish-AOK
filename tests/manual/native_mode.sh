@@ -111,6 +111,7 @@ check sudo_is_setuid_program /AOK/native/sudo "$(readlink /usr/bin/sudo)"
 check terminfo_link /AOK/native/libs/terminfo "$(readlink /usr/share/terminfo)"
 check os_release aok-native "$(. /etc/os-release; echo "$ID")"
 check uname_m aarch64 "$(uname -m)"
+check uname_o AOK/Linux "$(uname -o)"
 check root_owner "0 0" "$(stat -c '%u %g' /)"
 check tmp_mode 1777 "$(stat -c '%a' /tmp)"
 if [ -x /usr/bin/env ] && [ -x /bin/echo ]; then pass common_paths; else fail common_paths "no /usr/bin/env or /bin/echo"; fi

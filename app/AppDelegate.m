@@ -776,8 +776,13 @@ static void ISHPresentNativeUserPrompt(int attempt, NSString *problem) {
         field.textContentType = UITextContentTypeNewPassword;
     }];
     __weak UIAlertController *weakAlert = alert;
+    // Skip is an ordinary button, not the Cancel action. A Cancel-style action
+    // is what Escape on a hardware keyboard -- or any other dismissal UIKit
+    // makes on the user's behalf -- triggers, and this answer is remembered:
+    // seen in the simulator, a Skip nobody chose meant the question never came
+    // back.
     [alert addAction:[UIAlertAction actionWithTitle:@"Skip (Root Only)"
-                                              style:UIAlertActionStyleCancel
+                                              style:UIAlertActionStyleDefault
                                             handler:^(UIAlertAction *action) {
         ISHNativeRootGuestCall(^{
             native_root_skip_default_user();
@@ -821,6 +826,7 @@ static void ISHPresentNativeUserPrompt(int attempt, NSString *problem) {
             });
         }
     }]];
+    alert.preferredAction = alert.actions.lastObject;   // Create
     [host presentViewController:alert animated:YES completion:nil];
 }
 

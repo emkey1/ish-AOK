@@ -67,6 +67,10 @@ Run `ls /usr/bin` for the exact list in your build. The main pieces:
 Every one of these is the native program: there is no emulated copy
 underneath.
 
+`uname -o` says `AOK/Linux`: the kernel is AOK's, and there is no C library
+for a `GNU/` to name. On a distribution root it says `GNU/Linux` (glibc) or
+`Linux` (musl), as there.
+
 **Not here:** a package manager, compilers, Python, Perl, and the Wayland
 desktop, which needs a distribution's compositor. `git` does not yet speak
 `git@host:` (ssh) remotes; use the HTTPS URL. And `ps` shows a shell's
