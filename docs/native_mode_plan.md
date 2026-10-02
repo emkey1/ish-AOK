@@ -9,6 +9,9 @@ Decided by the maintainer, 2026-10-02:
   system (step 4a).
 - **Every applet gap in step 5 ships in 558**, mostly in SmallCLUE.
 - A native Python with `pip` is a future TODO (docs/TODO.md), not 558.
+- **The uid-1000 user's name is asked for at the first start of a native
+  root**, and the root honours **"Open Everything as Default User"** exactly as
+  a distro root does (step 4b).
 
 ## The idea in one paragraph
 
@@ -50,7 +53,7 @@ switching between it and a distro uses the machinery that already exists.
 | Gap | Where | Fix in this plan |
 |---|---|---|
 | `/bin/sh` is hardcoded: ENOEXEC fallback in zsh/dash, `nlibc_system`, the aokfs stub, `run_guest_command_capture` (kernel/init.c:500-566), Display, LLM tools | many | Step 2 creates `/bin/sh`, so they work unchanged |
-| `/bin/login -f root` is the default launch command (UserPreferences.m:1292); `ISHSessionCommandWithFallback` knows only guest paths | app | Step 4 |
+| `/bin/login -f root` is the default launch command (UserPreferences.m:1292), and "Open Everything as Default User" works by rewriting it to `-f <uid-1000 name>`; `ISHSessionCommandWithFallback` knows only guest paths | app | Steps 4, 4b, 5: SmallCLUE `login` at `/bin/login` |
 | Fake-init means "one console shell, no pty sessions" (TerminalViewController.m:2023) | app | Step 4: a new pid-1 mode |
 | No `/etc/passwd`: ssh exits with "No user exists for uid"; su/sudo need passwd/shadow/sudoers | native_libc.c:7102 | Step 2 |
 | No terminfo: zsh prints "can't find terminal definition" and ZLE degrades. The app sets `TERM=screen-256color` | native_termcap.c:930 | Step 3 |
@@ -113,6 +116,8 @@ creates:
   roots, where the distro's own init owns pid 1.
 - `/etc/rc`, `/etc/rc.shutdown`, an empty `/etc/rc.d` and `/etc/service`
   (step 4a), written only if missing.
+- `/bin/login` and `/usr/bin/login` -> `/AOK/native/smallclue` (step 5.3), so
+  the default launch command, `/bin/login -f root`, works unchanged.
 - `/bin/sh -> /AOK/native/sh`, `/bin/dash`, `/bin/zsh`, and
   `/bin/su`, `/usr/bin/sudo`, `/usr/bin/passwd`.
 - One link per working applet in `/usr/bin`, from the shared manifest
@@ -121,8 +126,10 @@ creates:
   is everywhere.
 - **Written only if missing**, so they are the user's after first boot:
   `/etc/passwd`, `/etc/group`, `/etc/shadow` (0600) and `/etc/sudoers` (0440).
-  These hold root plus one uid-1000 user (see Q1) in groups `wheel` and `sudo`,
-  with `%sudo ALL=(ALL) ALL` and both shells set to `/AOK/native/zsh`. Also
+  They hold root only, with shell `/AOK/native/zsh`, groups `wheel` and
+  `sudo`, and `%sudo ALL=(ALL) ALL`. The uid-1000 user is added later, from
+  the first-start prompt (step 4b), by `native_root_add_user()` in the same
+  file, which the CLI reaches through `ISH_NATIVE_USER=<name>`. Also
   `/etc/shells`, `/etc/profile` (PATH with `/AOK/persist/bin` first, matching
   `BootEnvironmentForCommand`), `/etc/zshrc` (a usable prompt and
   `compinit`) and `/etc/os-release` (`ID=aok-native`, `NAME="iSH-AOK Native"`,
@@ -174,14 +181,12 @@ Record each in `docs/CREDITS-aarch64.md` / the licences screen. None is GPL.
   - skip `FsInitialize`'s apk and login work;
   - boot `/sbin/init` as usual. It is SmallCLUE `init` (decision 5), so
     `BootCommandWithInitFallback` never takes the console-only fake-init path.
-- **Sessions**: for a native root the launch command is
-  `/AOK/native/zsh -l`. The login step that `/bin/login -f` does today
-  (uid/gid/groups, HOME, SHELL, USER, LOGNAME, cwd, from `/etc/passwd`) moves
-  into a small C helper called from `become_new_init_child`, rather than
-  depending on a `login` binary. `ISHCommandWithDefaultUserSubstitution` then
-  uses that helper too. Separately, and good for every root: add `/AOK/native/zsh`
-  and `/AOK/native/sh` as the last entries in `ISHSessionCommandWithFallback`,
-  so a broken distro root still gives you a shell.
+- **Sessions**: no app change. The launch command stays `/bin/login -f root`,
+  and `/bin/login` is SmallCLUE's `login` (step 5.3). The existing default-user
+  substitution therefore applies as-is (step 4b). Separately, and good for
+  every root: add `/AOK/native/zsh` and `/AOK/native/sh` as the last entries in
+  `ISHSessionCommandWithFallback`, so a broken distro root still gives you a
+  shell.
 - **The `/bin/sh`/`/bin/su` callers** (run_guest_command_capture, Display, LLM
   tools, Shortcuts) need no change, because step 2 creates those paths. Display's
   Wayland session cannot work without a distro: grey it out with a "needs a
@@ -189,6 +194,53 @@ Record each in `docs/CREDITS-aarch64.md` / the licences screen. None is GPL.
 - **Checkpoint/suspend**: the root identity works as-is. zsh restores its state
   through `ckpt_dump`, dash restarts, and `init` needs the restore rule in
   step 4a.
+
+### 4b. The first-start user prompt and "Open Everything as Default User"
+
+**The prompt.** The first time a native root boots, the app asks for the name
+of the everyday account. It asks at boot rather than at import, because a root
+can also be installed headlessly with `manage-roots.sh`. "First time" means
+`/etc/passwd` has no uid 1000 and there is no `/etc/aok-native-user-skipped`
+marker.
+
+- The sheet has a name field, validated as `[a-z_][a-z0-9_-]{0,31}` and not
+  an existing account, and an optional password with confirmation. It offers
+  **Create** and **Skip (root only)**.
+- **Create** calls `native_root_add_user(name, hash)`. That writes the
+  `/etc/passwd`, `/etc/group` and `/etc/shadow` lines (uid/gid 1000, groups
+  `users` and `sudo`, shell `/AOK/native/zsh`), creates `/home/<name>` 0700
+  owned by the user, and seeds it with `.zshrc` from `/etc/skel` if present. A
+  password is hashed `$6$` with kernel/sha_crypt.c. With no password the shadow
+  field is `!`: the account still opens through `login -f`, but `sudo` needs a
+  password set first (`passwd` from a root Session Shell).
+- **Skip** writes the marker. The root then has root only, exactly like a
+  distro root with no uid 1000, so the setting below simply has no one to
+  switch to.
+- Init and `/etc/rc` boot while the sheet is up. Only the terminal sessions
+  wait for it, so the sheet never holds the boot, and a slow answer cannot trip
+  the launch watchdog.
+- Headless: `manage-roots.sh install aoknative --user NAME`, carried to the
+  boot as a one-shot plist field, and `ISH_NATIVE_USER` in the CLI.
+
+**"Open Everything as Default User"** (`shouldLoginAsDefaultUser`, key
+"Login As Default User") needs no native-specific code once the account
+exists and `/bin/login` is SmallCLUE's:
+
+- Workspace terminals: `ISHCommandWithDefaultUserSubstitution`
+  (TerminalViewController.m:92) rewrites `/bin/login -f root` to
+  `/bin/login -f <name>`, using `+defaultUserAccountName`, which reads
+  `/etc/passwd`. Session Shell windows stay root (`alwaysLoginAsRoot`), as
+  they do on a distro root.
+- The other consumers already key off the same lookup and `/bin/su`, which
+  step 2 links to native su: AppDelegate.m:2899/2906, Display
+  (DisplayViewController.m:112), LLM tools (LLMChatTools.m:146), and
+  `run_guest_command_capture`'s `/bin/su - user`.
+- What must hold for this to work: SmallCLUE `login -f <name>`, run by root,
+  sets uid/gid/supplementary groups, `HOME`, `SHELL`, `USER`, `LOGNAME` and the
+  cwd from `/etc/passwd`, then runs the shell as a login shell (`-zsh`). Since
+  a native exec is spawn-then-wait, `login` stays as the session leader and the
+  shell must become the terminal's foreground process group. Ctrl-C, Ctrl-Z
+  and `fg` under `login` are spike items (step 1).
 
 ### 4a. `init` and `/etc/rc` (SmallCLUE)
 
@@ -252,10 +304,13 @@ person hits them:
    them, and the terminfo from step 3 is all they need. Golden-test them against
    ncurses' `tput` from the Devuan root.
 2. `free`, reading `/proc/meminfo`, with procps' column layout and `-h`/`-m`/`-g`.
-3. `login` as an applet: the step-4 login helper behind a password prompt,
-   checked against `/etc/shadow` with the existing `$5$`/`$6$` code
-   (kernel/sha_crypt.c). It must not be setuid itself; it is only useful when
-   run as root, as on Linux.
+3. `login`, which native mode's sessions depend on (step 4b). It supports
+   `-f <user>` (pre-authenticated, root only, as util-linux and busybox do) and
+   a plain `login [user]` that prompts for a password and checks it against
+   `/etc/shadow` with the existing `$5$`/`$6$` code (kernel/sha_crypt.c). It is
+   not setuid: like Linux's, it is only useful when run as root. Golden-test it
+   against busybox `login -f` on Alpine (environment, groups, cwd, argv[0]
+   `-zsh`).
 4. Native `mount`, `umount` and `chroot`. Their real bodies sit behind
    `#if __linux__`. Route `mount(2)`, `umount2(2)` and `chroot(2)` through the
    shim's syscall path (kernel/native_libc.c) and build those bodies for AOK.
@@ -284,6 +339,8 @@ queued in docs/TODO.md as a possible future feature. Native mode's answer to "I 
   subshell, pipeline and `$(...)` state; ssh/scp to localhost (needs a
   `sshd`-less target, so use `ssh -G` plus a loopback to a distro leg if one is
   up); `curl -sI https://...`; `sudo -n true` as uid 1000 with sudoers; `su -`;
+  `login -f <user>` gives the right `id`, `HOME`, cwd and `$0`, and job control
+  works under it;
   TZ shows the device zone; `tput cols`; and a re-provision that adds a missing
   link and leaves a user file alone.
 - **The existing native suites** (`native_zsh_fork_state.sh`,
@@ -294,7 +351,9 @@ queued in docs/TODO.md as a possible future feature. Native mode's answer to "I 
   binaries in the native leg. They are static guest ELFs, which native mode
   runs fine.
 - **Xcode is the only build**: Debug on the simulator (first-launch picker →
-  Native → prompt), then the device leg booting it with `ISH_BOOT_ROOT`.
+  Native → user prompt → prompt), with "Open Everything as Default User" both
+  off and on (a Workspace terminal opens as that user, while the Session Shell
+  stays root), and Skip. Then the device leg booting it with `ISH_BOOT_ROOT`.
   Include a suspend/restore cycle and an app update over an existing native
   root, to check the re-provision.
 
@@ -316,19 +375,23 @@ queued in docs/TODO.md as a possible future feature. Native mode's answer to "I 
 | 3 terminfo/zoneinfo/fpath | 1 day | 6 |
 | 4 app integration | 2–3 days | 6 (device) |
 | 4a init, rc, runit/sv, restore rule | 2 days | 6 |
+| 4b first-start user prompt, add_user | 1 day | 6 (needs 5.3 login) |
 | 5 reset/tput/free/login/mount/umount/chroot | 3–4 days | 6 |
 | 6 tests and gate leg | 1–2 days | release |
 | 7 docs | 0.5 day | release |
 
 Steps 2, 3, 4a and 5 can run in parallel after the spike; 4a and 5 are
-almost entirely SmallCLUE. The total is about 12–16 days.
+almost entirely SmallCLUE. The total is about 13–17 days.
 
-## Open questions (the user's call)
+## Decisions log
 
-1. **Who is the user in a fresh native root?** The recommendation is root plus a
-   uid-1000 account named after the app's existing default-user preference
-   (falling back to `user`), with no password set. Sessions open as root, as
-   today. sudo works for that user via `%sudo` after they `passwd` themselves.
+All answered by the maintainer, 2026-10-02:
 
-Answered 2026-10-02: not preselected but bundled; SmallCLUE `init` with
-`/etc/rc` from day one; all of step 5 in 558; Python/pip later.
+- Native is bundled but not preselected.
+- SmallCLUE `init` with `/etc/rc` from day one.
+- All of step 5 is in 558.
+- Python/pip comes later.
+- The uid-1000 name is prompted for at first start, and "Open Everything as
+  Default User" is honoured.
+
+No open questions remain. Revisit after the step-1 spike.
