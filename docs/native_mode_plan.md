@@ -2,6 +2,14 @@
 
 Status: **plan**, 2026-10-02. Nothing here is built yet.
 
+Decided by the maintainer, 2026-10-02:
+- Native is **bundled** (an Official Distributions entry beside Alpine and
+  Devuan, nothing to download), but **not preselected** on first launch.
+- **SmallCLUE `init` is pid 1 from the start**, with a simple `/etc/rc`
+  system (step 4a).
+- **Every applet gap in step 5 ships in 558**, mostly in SmallCLUE.
+- A native Python with `pip` is a future TODO (docs/TODO.md), not 558.
+
 ## The idea in one paragraph
 
 Today every session boots a distro root (Alpine, Devuan, ...) and the native
@@ -75,10 +83,10 @@ switching between it and a distro uses the machinery that already exists.
    EXCLUDED/PROBED applet lists today. Move them into a manifest that both the
    script and the provisioner read, so native mode and a distro with links can
    never disagree about which applets work.
-5. **pid 1 stays host-side.** Use a fake-init variant that only reaps and
-   respawns nothing, with every terminal a normal pty session. SmallCLUE's
-   `init` + `/etc/rc` is a later option for people who want services. It is not
-   needed to ship.
+5. **pid 1 is SmallCLUE `init`** (decided 2026-10-02). It is reached through
+   `/sbin/init -> /AOK/native/smallclue`, so the default Boot Command
+   (`/sbin/init`) needs no change, and every terminal is a normal pty session
+   as on a distro root. Step 4a covers what `init` lacks today.
 
 ## Steps
 
@@ -100,6 +108,11 @@ creates:
 - Directories: `/bin /sbin /usr/bin /usr/sbin /usr/local/bin /etc /etc/profile.d
   /root /home /tmp /var/tmp /run /var /dev /proc /sys`. Fold in
   `FakeInitPrepareGuestRoot` (AppDelegate.m:1149) rather than duplicating it.
+- `/sbin/init`, `/sbin/halt`, `/sbin/reboot`, `/sbin/poweroff` and `/usr/bin/sv`
+  -> `/AOK/native/smallclue`. `native-links.sh` keeps excluding them for distro
+  roots, where the distro's own init owns pid 1.
+- `/etc/rc`, `/etc/rc.shutdown`, an empty `/etc/rc.d` and `/etc/service`
+  (step 4a), written only if missing.
 - `/bin/sh -> /AOK/native/sh`, `/bin/dash`, `/bin/zsh`, and
   `/bin/su`, `/usr/bin/sudo`, `/usr/bin/passwd`.
 - One link per working applet in `/usr/bin`, from the shared manifest
@@ -159,8 +172,8 @@ Record each in `docs/CREDITS-aarch64.md` / the licences screen. None is GPL.
     `uname -m` says `aarch64` and the shim takes its 64-bit struct layouts
     consistently);
   - skip `FsInitialize`'s apk and login work;
-  - start pid 1 as the new "reaper" fake-init (decision 5) instead of
-    `/sbin/init`.
+  - boot `/sbin/init` as usual. It is SmallCLUE `init` (decision 5), so
+    `BootCommandWithInitFallback` never takes the console-only fake-init path.
 - **Sessions**: for a native root the launch command is
   `/AOK/native/zsh -l`. The login step that `/bin/login -f` does today
   (uid/gid/groups, HOME, SHELL, USER, LOGNAME, cwd, from `/etc/passwd`) moves
@@ -173,25 +186,89 @@ Record each in `docs/CREDITS-aarch64.md` / the licences screen. None is GPL.
   tools, Shortcuts) need no change, because step 2 creates those paths. Display's
   Wayland session cannot work without a distro: grey it out with a "needs a
   distribution" note rather than letting it fail.
-- **Checkpoint/suspend**: the root identity works as-is. Verify that the reaper
-  pid 1 is saved and restored. zsh restores its state through `ckpt_dump`, and
-  dash restarts.
+- **Checkpoint/suspend**: the root identity works as-is. zsh restores its state
+  through `ckpt_dump`, dash restarts, and `init` needs the restore rule in
+  step 4a.
 
-### 5. Applet gaps worth closing for 558
+### 4a. `init` and `/etc/rc` (SmallCLUE)
 
-Ranked by how soon a person hits them:
+SmallCLUE already has most of this (deps/smallclue/src/core.c:22079). `init`
+runs `/etc/rc` through `smallclueSpawn`, which was rewritten precisely because
+AOK has no `fork()`. It also reaps orphans with `waitpid(-1)` while rc runs.
+`runit` starts every `/etc/service/*/run`. Four things do not fit AOK yet:
 
-1. `reset` and `tput` (clear, cols/lines, setaf/sgr0). Scripts and prompts use
-   them, and the terminfo from step 3 is all they need.
-2. `free`, reading `/proc/meminfo`.
-3. `login` as an applet: the step-4 helper with a password prompt, for
-   `ssh`-less "switch user" flows. `su -` mostly covers it, so this is optional.
-4. Make `mount`, `umount` and `chroot` work natively by routing them through
-   the shim's syscall path instead of `#if __linux__`. This is what lets native
-   mode reach a distro installed alongside (`mount-root.sh <root>`). It is
-   valuable, but it can be 559.
+1. **`init` returns.** When rc exits, a pid-1 `init` does `kill(-1)` and
+   returns. In AOK, pid 1 exiting halts the guest (kernel/exit.c:1214, and the
+   app shows "System Halted", per the #587 fix 25e4591d). That shape suits
+   PSCAL's root, whose rc *is* the session (it ends by running exsh). It is
+   wrong here, so change it to the sysvinit shape: run rc to completion, then
+   reap forever.
+2. **There is no shutdown path.** `halt`/`reboot`/`poweroff` just `exit(0)`
+   themselves (core.c:22380). Use busybox's convention, which Alpine's init
+   already follows in AOK: the applets signal pid 1 (`halt` USR1, `poweroff`
+   USR2, `reboot` TERM). `init` then runs `/etc/rc.shutdown`, does
+   `kill(-1, TERM)`, waits up to 3 s, sends `kill(-1, KILL)` and exits, and the
+   app's existing halt handling takes over. Ctrl-Alt-Del (SIGINT) does nothing.
+3. **A restore must not re-run rc.** `init` has no `ckpt_dump`, so a restore
+   re-launches it from its argv (`ckpt_dispatch_native`), and every service
+   would start twice beside its restored self. Have `ckpt_dispatch_native` set
+   `AOK_NATIVE_RESTORED=1` in a re-launched program's environment, which is
+   useful to any native program, and have `init` skip rc and go straight to
+   reaping when it sees that.
+4. **`runit` does not supervise.** It starts each service once, and one that
+   dies stays dead. Add restart with backoff (1 s doubling to 60 s), honour a
+   `down` file, and add an `sv` applet (`status`/`up`/`down`/`restart`/`stop`)
+   that talks to it through `/run/service/<name>/` (pid, state, a control
+   FIFO). `runit` stays a plain process started by rc, not pid 1.
 
-Out of scope: a package manager. Native mode's answer to "I need X" is
+**The rc scheme**, kept deliberately small: these are provisioned shell
+scripts, written only if missing so they are the user's to edit, and run by
+native dash.
+
+- `/etc/rc`: runs every executable `/etc/rc.d/S??*` with `start`, in lexical
+  order; starts `runit /etc/service &` if that directory has entries; runs
+  `/etc/rc.local` if it is executable; then exits 0. One failing script is
+  logged to `/dev/kmsg` and does not stop the rest.
+- `/etc/rc.shutdown`: `sv stop` for everything, then the same `S??*` scripts
+  with `stop`, in reverse order.
+- Nothing is enabled by default. The hostname, `/etc/hosts` and DNS stay the
+  app's job, as they are on distro roots. The first real consumer is a native
+  sshd (native-sshd-plan) when it lands. A commented example lives at
+  `/etc/rc.d/S50example.disabled`.
+
+**Where:** SmallCLUE upstream (emkey1/smallclue, landing on `main`), then a
+`deps/smallclue` bump. The `AOK_NATIVE_RESTORED` half is in kernel/checkpoint.c.
+Check that the app learns when a terminal session ends while `init` reaps it:
+sessions are children of pid 1 (`become_new_init_child`), the same as under a
+distro's init, so this should already hold. Confirm it in the spike.
+
+### 5. Applet gaps, all for 558 (SmallCLUE)
+
+All of these ship in 558 (decided 2026-10-02). They are ordered by how soon a
+person hits them:
+
+1. `reset` and `tput` (`clear`, `cols`/`lines`, `setaf`/`setab`/`sgr0`,
+   `bold`, `cup`, `civis`/`cnorm`, `smcup`/`rmcup`). Scripts and prompts use
+   them, and the terminfo from step 3 is all they need. Golden-test them against
+   ncurses' `tput` from the Devuan root.
+2. `free`, reading `/proc/meminfo`, with procps' column layout and `-h`/`-m`/`-g`.
+3. `login` as an applet: the step-4 login helper behind a password prompt,
+   checked against `/etc/shadow` with the existing `$5$`/`$6$` code
+   (kernel/sha_crypt.c). It must not be setuid itself; it is only useful when
+   run as root, as on Linux.
+4. Native `mount`, `umount` and `chroot`. Their real bodies sit behind
+   `#if __linux__`. Route `mount(2)`, `umount2(2)` and `chroot(2)` through the
+   shim's syscall path (kernel/native_libc.c) and build those bodies for AOK.
+   This is what lets native mode reach a distro installed alongside it:
+   `mount-root.sh <root>` must then work in native mode, so test it there too.
+   Remove them from `native-links.sh`'s EXCLUDED list once they pass.
+5. `halt`/`reboot`/`poweroff` signalling pid 1, and `sv`: see step 4a.
+
+Each gets golden cases in `/AOK/tests` the way `native_coreutils.c` does, and
+each lands on SmallCLUE upstream first.
+
+Out of scope: a package manager. A native Python, which would bring `pip`, is
+queued in docs/TODO.md as a possible future feature. Native mode's answer to "I need X" is
 "install a distro root next to it", or drop a static guest ELF into
 `/AOK/persist/bin`, which still runs under emulation in native mode.
 
@@ -238,12 +315,13 @@ Out of scope: a package manager. Native mode's answer to "I need X" is
 | 2 provisioner + manifest | 1–2 days | 4, 6 |
 | 3 terminfo/zoneinfo/fpath | 1 day | 6 |
 | 4 app integration | 2–3 days | 6 (device) |
-| 5 reset/tput/free | 1 day | — |
+| 4a init, rc, runit/sv, restore rule | 2 days | 6 |
+| 5 reset/tput/free/login/mount/umount/chroot | 3–4 days | 6 |
 | 6 tests and gate leg | 1–2 days | release |
 | 7 docs | 0.5 day | release |
 
-Steps 2 and 3 can run in parallel after the spike. Step 5.4
-(mount/chroot) is the natural first item for 559.
+Steps 2, 3, 4a and 5 can run in parallel after the spike; 4a and 5 are
+almost entirely SmallCLUE. The total is about 12–16 days.
 
 ## Open questions (the user's call)
 
@@ -251,10 +329,6 @@ Steps 2 and 3 can run in parallel after the spike. Step 5.4
    uid-1000 account named after the app's existing default-user preference
    (falling back to `user`), with no password set. Sessions open as root, as
    today. sudo works for that user via `%sudo` after they `passwd` themselves.
-2. **Should Native be preselected on first launch,** or listed first beside
-   Alpine and Devuan with nothing preselected? It is the fastest start, but it
-   cannot install packages.
-3. **pid 1**: is the host reaper enough for 558, or do you want SmallCLUE
-   `init` + `/etc/rc` (services, for example a future native sshd) from day one?
-4. **Applet gaps**: are `reset`/`tput`/`free` enough for 558, or should native
-   `mount`/`chroot` (reaching other roots) be in 558 too?
+
+Answered 2026-10-02: not preselected but bundled; SmallCLUE `init` with
+`/etc/rc` from day one; all of step 5 in 558; Python/pip later.
