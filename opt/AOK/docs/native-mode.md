@@ -59,7 +59,7 @@ Run `ls /usr/bin` for the exact list in your build. The main pieces:
 | network | `ssh scp sftp ssh-keygen ssh-copy-id`, `curl`, `wget`, `ping`, `host`, `nslookup` |
 | git | `git`: init, clone and fetch over HTTPS, add, commit, status, diff, log, branch, checkout |
 | editors | `vi`, `hx` (helix), `motepad`, and `md` to read Markdown -- these documents included |
-| system | `ps top ktop kill df free dmesg mount umount chroot uname uptime` |
+| system | `ps top ktop kill df free dmesg mount umount chroot uname uptime who users` |
 | terminal | `tput reset clear stty resize` |
 | accounts | `login su sudo passwd id whoami` |
 | services | `init`, `runit`, `sv`, `halt poweroff reboot` |
@@ -136,6 +136,14 @@ app restart itself.
 **Suspend and restore.** A native root can be [suspended](suspend.md) like any
 other. On the way back, init does not run `/etc/rc` again and runit takes over
 the services it was already running, so nothing starts twice.
+
+**Who is logged in.** Each terminal is a login, and is recorded as one:
+`login` writes it to `/var/run/utmp` and `/var/log/wtmp`, init marks it
+ended when the session's shell exits, and init records each boot and
+shutdown. `who` lists the sessions (`who -b` the boot, `who -r` the
+runlevel, `who am i` this terminal) and `users` their names; `uptime` counts
+them. The files are in the layout the guest's own Linux programs use, so a
+distribution's `who` or `last` reads them too (`last -f /var/log/wtmp`).
 
 ## Reaching a distribution
 

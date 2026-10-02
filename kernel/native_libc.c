@@ -8438,8 +8438,16 @@ struct group *nlibc_getgrent(void) {
 //          40  char    ut_id[4]
 //          44  char    ut_user[32]
 //          76  char    ut_host[256]
-//         340  int32   ut_tv.tv_sec, then int32 tv_usec
-//                                      384 bytes per record
+//         340  int32   ut_tv.tv_sec, then int32 tv_usec   (i386, amd64)
+//         344  int64   ut_tv.tv_sec, then int64 tv_usec   (arm64, riscv64)
+//                                      384 bytes per record on x86, 400 on
+//                                      arm64 and riscv64
+//
+// Two sizes because glibc keeps 32-bit time fields in struct utmp only where
+// a 32-bit compat ABI shares the file (x86); arm64 and riscv64 have a long
+// ut_session and a struct timeval. Measured: four records from pututline on
+// Devuan arm64 made a 1600-byte file. This read 384 everywhere, so an arm64
+// root's utmp read as garbage from the second record on.
 //
 // Darwin's struct utmpx is a different shape entirely -- ut_user first and 256
 // bytes wide, ut_type after ut_pid -- so pointing the host's header at the
@@ -8448,23 +8456,22 @@ struct group *nlibc_getgrent(void) {
 // file straight into WATCH_STRUCT_UTMP. So the file is parsed here, by offset,
 // and a Darwin struct utmpx is BUILT from it.
 //
-// The offsets are not derived again: they are the ones deps/smallclue/src/
-// core.c's smallclueUtmpUserCount() already established and ships against, and
-// the two readers agree field for field so a guest cannot see `uptime` and
-// `log` disagree about who is logged in.
+// The offsets are the ones deps/smallclue/src/utmp_rec.c reads and writes
+// (uptime's user count, login's records, init's), and the two agree field for
+// field so a guest cannot see `uptime` and `log` disagree about who is logged
+// in. SmallCLUE picks the size from uname; here the task's ABI says it.
 //
 // Byte order is the guest's, and the guest's is the host's: every AOK guest ABI
 // (i386, amd64, arm64, riscv64) is little-endian, as is every device this runs
 // on, so the int32 fields are memcpy'd rather than assembled.
 
-#define NLIBC_UTMP_RECORD    384
+#define NLIBC_UTMP_RECORD_MAX 400
 #define NLIBC_UTMP_OFF_TYPE    0
 #define NLIBC_UTMP_OFF_PID     4
 #define NLIBC_UTMP_OFF_LINE    8
 #define NLIBC_UTMP_OFF_ID     40
 #define NLIBC_UTMP_OFF_USER   44
 #define NLIBC_UTMP_OFF_HOST   76
-#define NLIBC_UTMP_OFF_TV    340
 #define NLIBC_UTMP_LEN_LINE   32
 #define NLIBC_UTMP_LEN_ID      4
 #define NLIBC_UTMP_LEN_USER   32
@@ -8515,19 +8522,33 @@ static FILE *nlibc_utmp_open(void) {
 }
 
 static bool nlibc_utmp_next(FILE *f, struct utmpx *out) {
-    uint8_t rec[NLIBC_UTMP_RECORD];
-    if (f == NULL || fread(rec, sizeof(rec), 1, f) != 1)
+    bool wide = guest_abi_is_64bit(current->abi) && current->abi != GUEST_ABI_AMD64;
+    size_t size = wide ? 400 : 384;
+    uint8_t rec[NLIBC_UTMP_RECORD_MAX];
+    if (f == NULL || fread(rec, size, 1, f) != 1)
         return false;
-    int32_t type = 0, pid = 0, sec = 0, usec = 0;
+    // ut_type is a short followed by two bytes of padding a writer need not
+    // have zeroed.
+    int16_t type = 0;
+    int32_t pid = 0;
+    int64_t sec = 0, usec = 0;
     memcpy(&type, rec + NLIBC_UTMP_OFF_TYPE, sizeof(type));
     memcpy(&pid, rec + NLIBC_UTMP_OFF_PID, sizeof(pid));
-    memcpy(&sec, rec + NLIBC_UTMP_OFF_TV, sizeof(sec));
-    memcpy(&usec, rec + NLIBC_UTMP_OFF_TV + 4, sizeof(usec));
+    if (wide) {
+        memcpy(&sec, rec + 344, sizeof(sec));
+        memcpy(&usec, rec + 352, sizeof(usec));
+    } else {
+        int32_t sec32 = 0, usec32 = 0;
+        memcpy(&sec32, rec + 340, sizeof(sec32));
+        memcpy(&usec32, rec + 344, sizeof(usec32));
+        sec = sec32;
+        usec = usec32;
+    }
     memset(out, 0, sizeof(*out));
     out->ut_type = nlibc_utmp_type(type);
     out->ut_pid = (pid_t) pid;
-    out->ut_tv.tv_sec = sec;
-    out->ut_tv.tv_usec = usec;
+    out->ut_tv.tv_sec = (time_t) sec;
+    out->ut_tv.tv_usec = (suseconds_t) usec;
     nlibc_utmp_field(out->ut_user, sizeof(out->ut_user), rec,
             NLIBC_UTMP_OFF_USER, NLIBC_UTMP_LEN_USER);
     nlibc_utmp_field(out->ut_line, sizeof(out->ut_line), rec,

@@ -10,7 +10,10 @@
 #   (no argument)         the checks below, including what the boot repaired
 #   --install-init        an /etc/rc.local that runs --init-phase under init
 #   --init-phase          pid 1 is SmallCLUE's init: rc ran, runit supervises,
-#                         then poweroff -- whose exit is the end of that boot
+#                         the boot is in utmp and wtmp, then poweroff -- whose
+#                         exit is the end of that boot
+#   --login-tty           on a terminal (the gate runs it under script(1)):
+#                         login -f records the session in utmp and wtmp
 #
 # By hand, in the CLI:
 #   tar -cf /tmp/empty.tar -T /dev/null
@@ -84,8 +87,20 @@ case "${1:-}" in
     echo "$saved" > /proc/ish/foreign_exec
     exit 0
     ;;
+--login-tty)
+    # Run as the shell login -f started, on the terminal script(1) gave it.
+    check login_tty_who tester "$(who | awk '{ print $1 }' | sort -u | tr -d '\n')"
+    check login_tty_who_am_i "$(tty | sed 's|^/dev/||')" "$(who am i | awk '{ print $2 }')"
+    check login_tty_users tester "$(users)"
+    check login_tty_wtmp yes "$(who /var/log/wtmp | grep -q '^tester ' && echo yes || echo no)"
+    exit 0
+    ;;
 --init-phase)
     sleep 2
+    # The boot as init recorded it (SmallCLUE's init_app.c, utmp_rec.c).
+    case "$(who -b)" in *"system boot"*) pass utmp_boot ;; *) fail utmp_boot "who -b: $(who -b)" ;; esac
+    case "$(who -r)" in *"run-level 2"*) pass utmp_runlevel ;; *) fail utmp_runlevel "who -r: $(who -r)" ;; esac
+    case "$(who -b /var/log/wtmp)" in *"system boot"*) pass wtmp_boot ;; *) fail wtmp_boot "no boot record in wtmp" ;; esac
     check init_is_pid1 init "$(ps -o pid,comm | awk '$1 == 1 { print $2 }')"
     check init_exe /AOK/native/smallclue "$(readlink /proc/1/exe)"
     check rc_ran_once 1 "$(wc -l < /tmp/nm_rc.count | tr -d ' ')"

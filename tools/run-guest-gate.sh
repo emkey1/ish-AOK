@@ -248,6 +248,12 @@ leg_run_native() {
             fi
             wait "$_ipid" 2>/dev/null
             ISH_NATIVE_ROOT=1 "$ISH" -f "$_nroot" /bin/sh -c 'cat /tmp/native_mode_init.log'
+            # login records a session only on a terminal, so this one runs
+            # under script(1), which gives the guest a pty. Matched anywhere in
+            # the line: zsh's prompt marks (OSC 133) precede the first result.
+            printf 'sh /AOK/tests/native_mode.sh --login-tty\nexit\n' |
+                script -q /dev/null env ISH_NATIVE_ROOT=1 "$ISH" -f "$_nroot" /bin/login -f tester |
+                tr -d '\r' | grep -o 'native_mode_[a-z_]*: [A-Z].*'
             for _t in native_zsh_fork_state native_stdio_redirect; do
                 if ISH_NATIVE_ROOT=1 "$ISH" -f "$_nroot" /bin/sh "/AOK/tests/$_t.sh" \
                         > "$LOGDIR/native-$_t.out" 2>&1; then
