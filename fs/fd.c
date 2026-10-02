@@ -276,6 +276,26 @@ static int fdtable_expand(struct fdtable *table, fd_t max) {
     return fdtable_resize(table, max + 1);
 }
 
+// Whether f_install would find a descriptor now: a free slot below
+// RLIMIT_NOFILE, or room to grow the table to one. Linux reserves the
+// descriptor before accept() takes a connection off the queue
+// (get_unused_fd_flags, then do_accept), so a process at its limit gets
+// EMFILE at once and the connection stays queued for later. Taking the
+// connection first and failing to install it closed it: the client was
+// dropped. Another thread can still take the slot in between; accept then
+// fails on install as before, which is no worse.
+bool f_has_room(void) {
+    struct fdtable *table = current->files;
+    lock(&table->lock, 0);
+    unsigned limit = (unsigned) rlimit(RLIMIT_NOFILE_);
+    unsigned size = limit < table->size ? limit : table->size;
+    bool room = size < limit;
+    for (unsigned f = 0; !room && f < size; f++)
+        room = table->files[f] == NULL;
+    unlock(&table->lock);
+    return room;
+}
+
 struct fd *fdtable_get(struct fdtable *table, fd_t f) {
     if (f < 0 || (unsigned) f >= table->size)
         return NULL;

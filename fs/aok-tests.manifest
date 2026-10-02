@@ -328,6 +328,7 @@ exec_shebang_interpreter.c
 exec_empty_env_string.c
 exec_cred_ids.c
 sock_bind_refuse.c
+accept_emfile.c
 unix_listen_nonblock.c
 riscv64_ldst_pair.c
 arm64_mops.c

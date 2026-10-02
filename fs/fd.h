@@ -701,6 +701,8 @@ struct fd *f_get_retain(fd_t f);
 // steals a reference to the fd, gives it to the table on success and destroys it on error
 // flags is checked for O_CLOEXEC and O_NONBLOCK
 fd_t f_install(struct fd *fd, int flags);
+// Whether f_install would find a descriptor now (accept4 asks first).
+bool f_has_room(void);
 // Install at an exact number rather than the lowest free one, growing the
 // table if needed. For kernel/checkpoint.c, where the number is part of what
 // is being restored. Takes ownership of `fd` either way.

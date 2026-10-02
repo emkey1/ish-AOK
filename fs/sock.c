@@ -2673,10 +2673,17 @@ struct fd *sock_fd_adopt(int sock_fd, int domain, int type, int protocol) {
     return fd;
 }
 
+// Consumes SOCK_FD, the host socket, whatever happens: on success it belongs
+// to the new descriptor, and on failure it is closed here. A failed f_install
+// (EMFILE: the process is at RLIMIT_NOFILE) already closes it -- fd_close runs
+// sock_close -- and every caller used to close it again, so a second close hit
+// a host descriptor number another thread may already have been given.
 static fd_t sock_fd_create(int sock_fd, int domain, int type, int protocol) {
     struct fd *fd = sock_fd_adopt(sock_fd, domain, type, protocol);
-    if (fd == NULL)
+    if (fd == NULL) {
+        close(sock_fd);
         return _ENOMEM;
+    }
     return f_install(fd, type & ~SOCKET_TYPE_MASK);
 }
 
@@ -2846,10 +2853,7 @@ int_t sys_socket(dword_t domain, dword_t type, dword_t protocol) {
     }
 #endif
 
-    fd_t f = sock_fd_create(sock, domain, type, protocol);
-    if (f < 0)
-        close(sock);
-    return f;
+    return sock_fd_create(sock, domain, type, protocol);
 }
 
 static void inode_release_if_exist(struct inode_data *inode) {
@@ -6413,6 +6417,11 @@ static int_t sys_accept4_common(fd_t sock_fd, guest_addr_t sockaddr_addr, guest_
     struct fd *sock = sock_getfd(sock_fd, &sock_err);
     if (sock == NULL)
         return sock_err;
+    // The descriptor first, as Linux reserves it: at RLIMIT_NOFILE this is
+    // EMFILE straight away, and a pending connection stays queued rather than
+    // being taken and then closed for want of a slot (f_has_room).
+    if (!f_has_room())
+        return _EMFILE;
     dword_t sockaddr_len = 0;
     if (sockaddr_addr != 0) {
         if (user_get(sockaddr_len_addr, sockaddr_len))
@@ -6665,13 +6674,22 @@ static int_t sys_accept4_common(fd_t sock_fd, guest_addr_t sockaddr_addr, guest_
             return _EFAULT;
     }
 
-    fd_t client_f = sock_fd_create(client,
+    // The new socket is set up completely BEFORE it is installed, and never
+    // looked up by number afterwards. This installed it, then went back to the
+    // table with f_get(client_f) for the AF_LOCAL setup: NULL when the install
+    // had failed (the negative errno is no descriptor), and in a threaded
+    // process another thread could close or reuse that number in between. The
+    // write through the NULL aborted the whole app, three times on bip
+    // (2026-10-02) as Wayfire accepted a client -- with ~300 descriptors open,
+    // well under its limit, so the window, not EMFILE, is the likelier cause.
+    struct fd *client_fd = sock_fd_adopt(client,
             sock->socket.domain, sock->socket.type | flags, sock->socket.protocol);
-    if (client_f < 0)
+    if (client_fd == NULL) {
         close(client);
+        return _ENOMEM;
+    }
 
     if (sock->socket.domain == AF_LOCAL_) {
-        struct fd *client_fd = f_get(client_f);
         fill_cred(&client_fd->socket.unix_cred);
         client_fd->socket.unix_name_len = sock->socket.unix_name_len;
         memcpy(client_fd->socket.unix_name, sock->socket.unix_name, sock->socket.unix_name_len);
@@ -6682,7 +6700,8 @@ static int_t sys_accept4_common(fd_t sock_fd, guest_addr_t sockaddr_addr, guest_
             STRACE("accept4(%d) deferred unix peer link err=%d", sock_fd, peer_err);
     }
 
-    return client_f;
+    // On failure f_install closes the descriptor, and with it the host socket.
+    return f_install(client_fd, (sock->socket.type | flags) & ~SOCKET_TYPE_MASK);
 }
 
 int_t sys_accept4(fd_t sock_fd, addr_t sockaddr_addr, addr_t sockaddr_len_addr, int_t flags) {
@@ -7010,9 +7029,12 @@ static int_t sys_socketpair_common(dword_t domain, dword_t type, dword_t protoco
     // unix_peer metadata lagging until the lock below -- harmless next to a
     // guaranteed deadlock.
     int fake_sockets[2];
+    // sock_fd_create consumes the host socket it is given, success or not.
     err = fake_sockets[0] = sock_fd_create(sockets[0], domain, type, protocol);
-    if (fake_sockets[0] < 0)
-        goto close_sockets;
+    if (fake_sockets[0] < 0) {
+        close(sockets[1]);
+        return err;
+    }
     err = fake_sockets[1] = sock_fd_create(sockets[1], domain, type, protocol);
     if (fake_sockets[1] < 0)
         goto close_fake_0;
@@ -7038,13 +7060,12 @@ static int_t sys_socketpair_common(dword_t domain, dword_t type, dword_t protoco
     STRACE(" [%d, %d]", fake_sockets[0], fake_sockets[1]);
     return 0;
 
+    // The descriptors own the host sockets: closing them closes those, and
+    // closing sockets[] as well closed each host number twice.
 close_fake_1:
     sys_close(fake_sockets[1]);
 close_fake_0:
     sys_close(fake_sockets[0]);
-close_sockets:
-    close(sockets[0]);
-    close(sockets[1]);
     return err;
 }
 
