@@ -91,8 +91,8 @@ Beyond that sat the standing feature request for 3D acceleration through
 first. It did, and 557 took the request on the way this chapter recommends: as
 a feasibility gate with numbers attached before any estimate. Venus replaying
 Vulkan onto Metal through MoltenVK passed that gate on an M4 iPad, and the
-result is a GPU render node in every build and a desktop that composites on it
-(Chapter 32; Chapter 41 lists its edges). The single-`sgemm` study above is
+result is a GPU render node in every Darwin build and a desktop that composites
+on it (Chapter 32; Chapter 41 lists its edges). The single-`sgemm` study above is
 unaffected: it asks a different question, about compute the guest hands to
 Metal directly.
 
@@ -171,8 +171,10 @@ it holds diagnosed-but-unfixed entries with measurements and rejected designs
 with reasons, and says nothing about whether anyone intends to do them.
 `docs/roadmap.md`, added during the 554 run, is the other half: it is the one
 document that says what happens next and in what order, and it names what is
-*not* being done as carefully as what is. `docs/build_<N>_musts.md` is the
-single-release commitment between them. The release notes are a design record
+*not* being done as carefully as what is. Between them sat
+`docs/build_<N>_musts.md`, the single-release commitment, through 556; in the
+557 cycle that became the "Queued for a future release" list at the top of
+`docs/TODO.md` (Chapter 41). The release notes are a design record
 (Chapter 37). And the comments are unusually load-bearing, with the caveat of
 Chapter 40: they make checkable claims, and some of them are false.
 
@@ -204,7 +206,7 @@ empty because a completion library turned an option off.
 Each of those was found by somebody running real software and asking why. None
 of them was found by reading the specification. And the system is trustworthy in
 proportion to how many of them have been found — which is why the most valuable
-artifacts in this repository are not the JIT or the shim, but over two hundred
+artifacts in this repository are not the JIT or the shim, but over four hundred
 small programs in `tests/manual/`, each one a thing somebody once believed and
 was wrong about.
 

@@ -52,7 +52,19 @@ key lives in — the same button then floats over the bottom-right of the
 terminal. Cmd-J opens the list from the keyboard.
 
 Window arrangements can be bookmarked and saved, so a favorite layout of
-terminals and applets can be recalled later.
+terminals and applets can be recalled later. Restoring one after a relaunch
+opens fresh terminals where the saved ones were — the shells themselves ended
+with the app — with as many tabs as each had.
+
+## Terminal tabs
+
+A Terminal window holds its terminals as tabs. Open one with ⌘T, the **+** in
+the tab strip, or the window menu's **New Tab**; close one with ⌘W, its **Close
+Tab**, or `exit` in it — closing the last closes the window. ⌘1 to ⌘9 and
+⌘⇧[ / ⌘⇧] switch. The strip of numbered tabs appears once there are two.
+Focus, text size, [Snippets](snippets.md) and the dock all act on the tab
+showing. Saved layouts and [suspend to disk](suspend.md) keep every tab, in
+order, with the one that was showing still selected.
 
 ## MotePad
 
@@ -119,9 +131,17 @@ and say whether AVFoundation can play them), and streams from the web:
 
 The **Wayland** applet is the one window here whose contents are drawn by guest
 programs rather than by UIKit. A wlroots compositor, a terminal and a VNC server
-run as ordinary processes inside your root, and the applet is a native RFB
-client connected to them over localhost. It can also be the window the app opens
-on, rather than the terminal.
+run as ordinary processes inside your root. With the [GPU](#the-gpu) set up, the
+app takes the desktop's frames straight from the compositor through
+`wl-present` and sends your keys, pointer and clipboard back the same way;
+without it, the applet is a native RFB client connected to the VNC server over
+localhost. It can also be the window the app opens on, rather than the terminal.
+
+The session moves between full screen and Workspace without ending: **Open
+Workspace…** from full screen parks it and the Workspace's Wayland window takes it
+over, and **Wayland Full Screen** in the Workspace corner menu does the reverse.
+If you change **Open Everything as Default User**, the view offers to restart the session
+as the right user.
 
 It needs those programs installed in the guest first, and two scripts do that:
 
@@ -177,6 +197,12 @@ letters, such as **Games (A–N)**. The same actions have keys: Alt+Return opens
 terminal, Alt+Shift+D the launcher, Alt+Tab switches windows, Alt+Shift+Q closes
 one, Alt+Shift+R reloads labwc's settings and Alt+Shift+E ends the session.
 
+The Applications menu and the launcher follow the freedesktop override rule: an
+entry in `/usr/local/share/applications`, then `~/.local/share/applications`,
+replaces the one of the same name in `/usr/share/applications`, and one of your
+own appears beside them. So `NoDisplay=true` in a copy there hides an entry, and
+a `.desktop` file of your own adds one.
+
 The desktop has four desktops of its own. Ctrl+Alt+Left and Ctrl+Alt+Right
 move between them, adding Shift takes the focused window along, and
 Ctrl+Alt+1 to 4 goes straight to one. (Cmd+Left and Cmd+Right switch
@@ -226,10 +252,10 @@ desktop as root, the program starts straight away.
 The desktop draws on the device's GPU when the guest has what that takes: the
 GPU device (`/dev/dri/renderD128`) and Mesa's Vulkan driver for it, with zink.
 One script installs them, with vulkaninfo, vkcube and the Mesa demos, adds a
-`gpu-run` command, and checks the result (Devuan, Alpine and Arch; arm64 and
-amd64 roots):
+`gpu-run` command, and checks the result (Devuan 6, Alpine 3.24 and Arch Linux
+ARM carry the packages; arm64 and amd64 roots):
 
-```
+```sh
 sudo sh /AOK/tools/setup-gpu.sh            # add --demos for glmark2
 sh /AOK/tools/setup-gpu.sh --check         # what works, without installing
 ```
@@ -252,7 +278,7 @@ program needing more would fail on the GPU instead of running slowly. Put one
 on the GPU with `gpu-run`, which suits older and simpler programs (glmark2
 runs about twenty times as fast):
 
-```
+```sh
 gpu-run glmark2-wayland
 ```
 
@@ -269,19 +295,27 @@ adventure), Warzone 2100, Armagetron Advanced, Chromium B.S.U., Blobby
 Volley 2, Neverball and Trigger Rally -- and sets each up to play sound
 through the app and to draw on the GPU where the GPU can (Devuan roots):
 
-```
+```sh
 sudo sh /AOK/tools/setup-games.sh          # --minimal: Freedoom and Beneath a Steel Sky only
 sh /AOK/tools/setup-games.sh --check       # --software keeps them off the GPU
 ```
 
 Start them from the desktop's menu, or by name in a terminal there
-(`freedoom1`, `freedoom2`, `sky`, `etr`, `warzone2100`, `armagetronad`,
+(`freedoom1`, `freedoom2`, `sky`, `warzone2100`, `armagetronad`,
 `chromium-bsu`, `blobby`, `neverball`, `trigger-rally`). Each goes through `/usr/local/bin/aok-sdl-game`, and
 `/etc/aok-games.conf` lists the ones that draw on the GPU. Doom's keys: the
 arrow keys move and turn, Ctrl fires, Space opens doors, Shift runs, Alt with
 the arrows strafes, 1-7 pick a weapon, Tab shows the map and Esc the menu. In
 Beneath a Steel Sky, left-click walks and looks at things, right-click uses
 them, and F5 opens the menu.
+
+Chocolate Doom's package also adds menu entries for Heretic, Hexen and Strife,
+which are commercial and need their own data files (IWADs). Without one each
+only opens an error box, so `setup-games.sh` hides them, with an override in
+`/usr/local/share/applications`; install the IWAD and run it again to show that
+game. Extreme Tux Racer is left out of the set for now — its pointer is out of
+step at the desktop's scale on the GPU — though `aok-sdl-game` still handles
+`etr` if you install it yourself.
 
 You may also come across `docs/historical/wayland_workspace_plan.md` in the project's design
 docs. That is the forward design document this applet came out of; where it and

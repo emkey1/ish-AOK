@@ -12,16 +12,20 @@ This fork is not just a rebrand. It carries fork-specific behavior, bundled root
   - product name `iSH-AOK`
   - bundle root `app.ish.iSH-AOK`
 - **Four guest architectures**, all JIT: `i386`, `amd64` (x86_64), `arm64` (aarch64), and `riscv64`.
-- **Native programs**: zsh and SmallCLUE's busybox-style toolbox — which carries OpenSSH (`ssh`, `scp`, `sftp`, `ssh-keygen`, `ssh-copy-id`) and the Nextvi editor — are compiled into the app as host code and dispatched from guest `execve` through `/AOK/native/<name>`. They are host functions on a guest task's thread, not guest binaries, so they run at full speed instead of being translated instruction by instruction. bash has the same native implementation, but build 556 does not ship it — see [Native bash and licensing](#native-bash-and-licensing).
+- **Native programs**: zsh, dash (which provisioning makes `sh`) and SmallCLUE's busybox-style toolbox — which carries OpenSSH (`ssh`, `scp`, `sftp`, `ssh-keygen`, `ssh-copy-id`), the Nextvi editor, and GNU-compatible `sed`, `grep`, `find`, `ls`, `tar`, `gzip`, `diff`, `awk` and most of coreutils — are compiled into the app as host code and dispatched from guest `execve` through `/AOK/native/<name>`. They are host functions on a guest task's thread, not guest binaries, so they run at full speed instead of being translated instruction by instruction. bash has the same native implementation, but the shipped build has not included it since 556 — see [Native bash and licensing](#native-bash-and-licensing).
 - `/AOK`, a read-only in-app filesystem (`/AOK/docs`, `/AOK/tools`, `/AOK/tests`, `/AOK/native`) embedded at build time from `opt/AOK/` via `fs/aok-*.manifest` and `tools/gen-aokfs.py`.
-- Bundled root filesystems in the app build (Alpine 3.23.3 and Devuan 6, `aarch64` only), plus downloadable images for `i386`, `x86_64` and `riscv64`.
+- Bundled root filesystems in the app build (Alpine 3.24.2 and Devuan 6, `aarch64` only), plus downloadable images for `i386`, `x86_64` and `riscv64`.
+- **The device's GPU in the guest**: `/dev/dri/renderD128`, a virtio-gpu render node backed in-process by virglrenderer's Venus renderer over MoltenVK, so Mesa's Venus Vulkan driver (and zink on top of it) draws on Metal. `/AOK/tools/setup-gpu.sh` installs the guest side. See `/AOK/docs/workspace.md`.
+- **A Wayland desktop** (labwc, foot, waybar; four desktops of its own) that composites on the GPU and reaches the app through `/AOK/native/wl-present` — frames one way, keyboard, pointer, clipboard and resize the other — with VNC as the fallback. `/AOK/tools/setup-games.sh` adds a tested set of games. See `/AOK/docs/workspace.md`.
+- **LLM Chat**: an in-app chat client (OpenAI-compatible servers, Anthropic, Gemini, Apple's on-device model) that can read, edit and run commands in the guest under allow/ask/deny permissions, use MCP servers, and run several chats as background agents. Keys live in the Keychain. See `/AOK/docs/llm-chat.md`.
+- **Suspend to disk**: the whole session — processes, open files, terminals — saved and resumed across the app being killed. Off by default. See `/AOK/docs/suspend.md`.
 - File Provider support for exposing guest files through iOS.
 - **FUSE**: `/dev/fuse` and a `fuse` filesystem type (protocol 7.31), so guest `libfuse2`/`libfuse3` daemons mount and serve filesystems unmodified. No setuid `fusermount` is involved — the guest is already fake-root, so libfuse calls `mount(2)` directly. See `/AOK/docs/fuse.md`.
 - **Apple Shortcuts actions** (iOS 16+): a headless "Run Command" action that executes a command in the guest under the native zsh and returns its output to the shortcut — the app never has to come to the foreground — plus "Open iSH-AOK" destinations with Siri phrases. See `/AOK/docs/shortcuts.md`.
 - **`/dev/url`**: a character device the guest writes a URL to, handing it to iOS to open — including `shortcuts://` links, so a guest script can drive a Shortcut. See `app/URLDevice.m`.
 - **Simulated swap**: an opt-in swap area so a large, mostly idle guest working set can exist without spending real memory on it — with a 24-hour write budget, a thrash guard and a suspension gate, because it spends the device's flash. Off by default; turned on in the iOS Settings app, under iSH-AOK → Simulated Swap (both the switch and a size, effective at the next start). The guest sees it through `/proc/meminfo`, `free`, `vmstat`, `/proc/swaps` and a real `/dev/aokswap0`. See `/AOK/docs/swap.md`.
 - **`binfmt_misc`**: register an interpreter for a magic number or a filename extension, as on Linux, and `execve` honours it. See `/AOK/docs/binfmt-misc.md`.
-- Optional accelerators: native replacement of hot libc routines, and crypto and pixman offload.
+- Accelerators: native replacement of hot libc routines (on by default), and opt-in crypto and pixman offload.
 - Extra diagnostics and operational changes that are specific to this fork.
 
 ## Guest Architectures
@@ -69,27 +73,35 @@ translation time, so a change affects newly compiled blocks; run each timed
 measurement as its own process. [tests/manual/jit_fuse_ab.sh](tests/manual/jit_fuse_ab.sh)
 automates an interleaved A/B and restores the mask when it exits.
 
+Two instruments say where the time goes. `ISH_JIT_PROFILE=<file>` records the
+dynamic instruction mix of any guest, which
+[tools/jitprof-report.py](tools/jitprof-report.py) summarises; and
+`/proc/ish/jit_timing` measures time spent translating, inside the app as well
+as the CLI (`echo 1 > /proc/ish/jit_timing`, run the workload, `cat` it).
+`/proc/ish/host_vm` breaks down the app's own memory, GPU included.
+
 ## Optional Accelerators
 
-All three are **off by default** and opt-in:
+HLE is **on by default** since 557; the other two are off by default and opt-in:
 
 | feature | CLI | what it does |
 |---|---|---|
-| HLE | `ISH_HLE=1` | replaces hot libc routines (`memcpy`, `strlen`, `memcmp`, ...) with native code — **arm64 and riscv64 guests only** |
+| HLE | on; `ISH_HLE=0` turns it off | replaces hot libc routines (`memcpy`, `strlen`, `memcmp`, ...) with native code — **arm64 and riscv64 guests only** |
 | Crypto | `ISH_CRYPTO_ACCEL=1` | AES-GCM and ChaCha20-Poly1305 offload |
 | Pixman | `ISH_PIX_ACCEL=1` | pixman composite offload |
 
 HLE matters most, and only for the arm64 and riscv64 guests — `jit/jit.c` gates
-it on those two, so an i386 or amd64 guest never takes the path and `ISH_HLE=1`
-silently does nothing there. Measured against the same build with it off, on a
+it on those two, so an i386 or amd64 guest never takes the path. Measured against the same build with it off, on a
 memcpy/memset/memcmp/strlen loop: 1.23x at 256 B, 3.16x at 4 KB, 7.17x at 64 KB,
 6.68x at 1 MB
 ([docs/performance-optimizations-2026-07.md](docs/performance-optimizations-2026-07.md)).
 The work happens inside one native call rather than one dispatch per guest
 instruction, so it helps data-movement-heavy code and is neutral where a
 program's own arithmetic dominates. It is a pure fast path: an unrecognized libc
-simply never matches and falls through to ordinary translation.
-`ISH_HLE_STATS=1` prints per-function call counts.
+simply never matches and falls through to ordinary translation. It became the
+default once an intercepted call returned through the return cache instead of
+the dispatcher; nothing measured slower with it on. `/proc/ish/hle` switches it
+live, and `ISH_HLE_STATS=1` prints per-function call counts.
 
 ## Repository Layout
 
@@ -199,26 +211,33 @@ Create a filesystem from a rootfs tarball:
 A native program is host code compiled into the app. `execve` of a path under
 `/AOK/native` dispatches to a function inside iSH-AOK rather than loading a
 guest image, and the caller cannot tell the difference. `/AOK/native` holds one
-entry per program in the registry (`kernel/native.c`) — `smallclue`, `motepad`,
-`bmm`, `bmt`, `hx`, `rust-probe`, `bash`, `zsh`, `zsh-multio` — and everything
+entry per program in the registry (`kernel/native.c`) — `smallclue`, `sudo`,
+`su`, `passwd`, `motepad`, `ktop`, `wl-present`, `bmm`, `bmt`, `rust-probe`,
+`hx`, `bash`, `zsh`, `zsh-multio`, `dash`, `sh`, each present only when the
+build includes it — and everything
 else is a symlink to one of those, the link name selecting the applet exactly as
 busybox does:
 
 | program | what it is |
 |---|---|
-| `/AOK/native/smallclue` | busybox-style multicall toolbox, applet chosen by `argv[0]` |
+| `/AOK/native/smallclue` | busybox-style multicall toolbox, applet chosen by `argv[0]`; the applets that stand in for distro tools are checked against GNU's (`awk` against mawk's) |
 | `ssh`, `scp`, `sftp`, `ssh-keygen`, `ssh-copy-id` | OpenSSH, applets of SmallCLUE (built without OpenSSL) |
 | `vi` | the Nextvi editor, an applet of SmallCLUE |
 | `/AOK/native/motepad` | a modeless terminal text editor, the counterpart to Workspace's MotePad applet |
 | `/AOK/native/bmm`, `/AOK/native/bmt` | the `/AOK/tools` benchmarks compiled in as host code, so the same workload can be timed with and without emulation (`kernel/native_bench.c`) |
 | `/AOK/native/hx` | [helix](https://helix-editor.com), a modal editor with syntax highlighting. MPL-2.0, so like bash it has a build switch (`-Dnative_helix`); its grammars live under `/AOK/native/libs` |
 | `/AOK/native/rust-probe` | exercises the Rust-on-the-shim path that `hx` is built on; not a tool you have a use for |
+| `/AOK/native/sudo`, `su`, `passwd` | SmallCLUE's, as separate **setuid-root** programs; they check the booted root's own `/etc/shadow` and `/etc/sudoers` |
+| `/AOK/native/ktop` | the process viewer, the same source as `/AOK/tools/ktop` |
+| `/AOK/native/wl-present` | shows the Wayland desktop in the app without VNC; run by `start-wayland.sh` |
 | `/AOK/native/bash` | see [Native bash and licensing](#native-bash-and-licensing) |
 | `/AOK/native/zsh` | see [Native zsh](#native-zsh) |
+| `/AOK/native/dash`, `/AOK/native/sh` | dash, BSD-licensed; `native-links.sh` makes a bare `sh` mean it |
 
 `/AOK/tools/native-links.sh` builds the symlink farm that puts the applets on
-`PATH`, and `--shell bash|zsh|/path` switches the login shell; `--remove` undoes
-both. In-app documentation is at `/AOK/docs/native-programs.md` (what they are)
+`PATH` — in `/usr/local/native-bin` and `/usr/local/bin` — and `--shell
+bash|zsh|/path` switches the login shell; `--remove` undoes both. The
+provisioning scripts run it for you. In-app documentation is at `/AOK/docs/native-programs.md` (what they are)
 and `/AOK/docs/native-setup.md` (how to set them up), sources under
 [opt/AOK/docs/](opt/AOK/docs).
 
@@ -251,7 +270,7 @@ build.
 > See [docs/historical/shell_transition_plan.md](docs/historical/shell_transition_plan.md).
 
 bash can be compiled into the app as a native program (`-Dnative_bash=enabled`),
-though build 556 does not ship it by default. The win, when it is built in, is
+though the shipped build has not included it since 556. The win, when it is built in, is
 interpretation, not forking: an arithmetic loop runs roughly 16x faster than
 under the emulated shell, while subshells and command substitutions land near
 parity, because a native program cannot `fork` and re-launches itself instead.
@@ -299,7 +318,8 @@ objects remain with the registry entry deleted. Only the build option removes
 them.
 
 Nothing else in the binary is third-party GPL: SmallCLUE is MIT, OpenSSH and
-libarchive are BSD, and liblzma is public domain.
+libarchive are BSD, liblzma is public domain, and the GPU stack —
+virglrenderer and MoltenVK — is MIT and Apache-2.0.
 
 **dash is the one that needs a footnote, and it is deliberate rather than an
 oversight.** dash is BSD-3-Clause — except `src/mksignames.c`, which is GPL-2+,
@@ -401,7 +421,7 @@ in full on an x86_64 host.
 
 The guest-side suite is the primary regression gate. It lives in
 [tests/manual/](tests/manual) and is served read-only inside the guest at
-`/AOK/tests`, with roughly 200 focused programs covering signals, futexes,
+`/AOK/tests`, with roughly 400 focused programs covering signals, futexes,
 process lifecycle, the filesystem layer, the JIT, and per-architecture
 instruction behavior. Each exits non-zero on failure and accepts `-v`.
 
@@ -426,12 +446,15 @@ needs the matching native program to be present.
 
 ## Working with Root Filesystems
 
-Bundled in the app: Alpine 3.23.3 and Devuan 6 (excalibur), `aarch64` only. The
+Bundled in the app: Alpine 3.24.2 and Devuan 6 (excalibur), `aarch64` only. The
 Xcode "Download Root" phase installs those two archives and deletes the i386 and
 x86_64 ones from Resources, so they are the only roots present before any
-download. The same two distros for `i386`, `x86_64` and `riscv64`, plus Arch,
-are downloadable from within the app; the catalogue is
-[deps/rootfs-manifest](deps/rootfs-manifest).
+download. The same two distros for `i386`, `x86_64` and `riscv64` (Alpine as
+both 3.24.2 and 3.23.3), plus Arch and PSCAL + SmallCLUE, are downloadable from
+within the app; the catalogue is [deps/rootfs-manifest](deps/rootfs-manifest).
+`ISH_BOOT_ROOT=<name>` in the launch environment boots a named root for one
+launch without changing the default, which is how a device test leg boots each
+root in turn.
 
 The root-selection UI and metadata handling live in:
 

@@ -42,9 +42,9 @@ extracted on first boot. They are compiled into the application.
 Four manifest files list what ships:
 
 ```
-fs/aok-docs.manifest     27 lines
-fs/aok-tools.manifest    32 lines
-fs/aok-tests.manifest   ~235 lines  (it grows every cycle)
+fs/aok-docs.manifest     33 lines
+fs/aok-tools.manifest    41 lines
+fs/aok-tests.manifest   436 lines   (it grows every cycle)
 fs/aok-libs.manifest    334 lines   (grammars and support files for helix)
 ```
 
@@ -83,8 +83,10 @@ quietest of the three lives.
 
 `/AOK/fixes` is a small directory with a specific philosophy behind it. When a
 distribution ships something that does not work under AOK — Devuan's
-`pkcsslotd` init script, an Arch packaging assumption, a Debian symlink — the
-fix has to live somewhere.
+`pkcsslotd` init script, an Arch packaging assumption, a Debian symlink, and
+since 557 Codex CLI, which runs every command inside a bubblewrap sandbox that
+needs namespaces AOK does not have (Chapter 41) — the fix has to live
+somewhere.
 
 The obvious place is the root filesystem image, patched before it ships. That
 means the fix is frozen at image-build time, applies only to roots created

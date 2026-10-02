@@ -120,6 +120,13 @@ The rule that came out of it: **exit 137 may be the host, not the guest.** Check
 a guest-side story, and read the `asi` field, which names the assertion that
 failed.
 
+Its companion for a footprint that is growing rather than already dead is
+`/proc/ish/host_vm` (557): the app's own memory by the host's region tags,
+footprint first. It exists because Extreme Tux Racer's race took the app on an
+M4 from 1 GB to 3.9 GB and on past its 6 GB limit while everything the guest
+could see — its Vulkan device memory, MoltenVK's textures — stayed small. Only
+the host could say where the rest was.
+
 ## 28.5 Diagnostics as a subsystem
 
 `AppDelegate.m` is about 3,700 lines, and a striking fraction of it is not the
@@ -151,7 +158,10 @@ accelerators (Chapter 33).
 
 The second front door is `/proc/ish/defaults` (Chapter 18): the same store,
 one file per preference, readable by anyone and writable by root, with the same
-validation the Settings screen uses.
+validation the Settings screen uses. "Readable by anyone" is also why a secret
+cannot be a preference: until 557 the LLM chat's API keys were, and any guest
+process could `cat` them. They live in the Keychain now, and the file reads back
+empty.
 
 Two surfaces onto one store is a small thing that changes what the product is.
 A setting reachable only by tapping cannot be scripted, cannot be set from an

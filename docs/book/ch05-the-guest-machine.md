@@ -233,12 +233,18 @@ reservation coverage of whatever it maps; `mem_lazy_reserve` drops coverage and
 also unmaps any real entries in its range, which is the half that was missing;
 and `mem_init` clears the table that a fork's whole-struct copy inherited.
 
-**A fault never splits a reservation.** Materializing a fault takes the entire
-prefix up to the end of the faulting chunk and trims the front, so a fault only
-ever shrinks a reservation from the left or makes it vanish. It never needs a
-free slot and never leaves half an update behind. The worst case is a fault at
-the far end of a reservation materializing everything before it, which is
-precisely the old eager behavior and no worse.
+**A fault near the front takes the prefix.** Materializing a fault in the first
+32 MB of a reservation takes the entire prefix up to the end of the faulting
+chunk and trims the front, so it only ever shrinks a reservation from the left
+or makes it vanish, needs no free slot and never leaves half an update behind.
+That was once the rule for every fault, and its worst case — a fault at the far
+end materializing everything before it — turned out not to be hypothetical:
+JavaScriptCore reserves 64 GiB and allocates near the top, and a first touch
+39 GiB in built 675 MB of page tables in 1.5 s under the address-space write
+lock. Since 557 a fault further in splits its 2 MB chunk out and leaves both
+sides reserved, and where the slot limit below refuses the split it takes the
+smaller of the prefix and the suffix. OpenCode's server went from 1.08 GB of
+page tables (Linux's `VmPTE`, which `/proc/<pid>/status` now reports) to 18 MB.
 
 Dropping coverage is another matter. The design first shipped with no splits at
 all: anything that would punch a hole in a reservation — an `munmap` in the
@@ -256,7 +262,8 @@ table, and the next large `mmap` found no slot and went eager: 31 commits of
 host memory where never splitting held 77 MB. The answer is a limit, not a
 cleverer allocator. The table has 64 slots, and a split may take one only while
 fewer than 32 are in use. Past that the split is refused, and the caller
-materializes that one reservation in full, as every split used to. Once all 64
+materializes the range and the smaller side of the reservation around it —
+until 557 the whole reservation, as every split used to. Once all 64
 slots are in use, at least 32 of the live reservations were made after the last
 split, so the old 32-slot table would have been full as well. Splitting never
 turns a mapping eager that never splitting would have kept lazy, and the same
@@ -271,13 +278,16 @@ source page and returned `EFAULT`; a checkpoint walked entries only, so a
 restored process lost its reserved heap and the next `mmap` could land inside
 it; and `/proc/pid/smaps` listed one region where `maps` listed three. `mremap`
 is the instructive one. The obvious fix, materializing the source first as
-`mprotect` does, spends exactly what the design exists to save, on the path
+`mprotect` then did, spends exactly what the design exists to save, on the path
 `realloc` takes to grow a large block: growing a 256 MB block touched in one
 chunk to 512 MB built page tables for all 512 MB. So `pt_move` carries reserved
 pages to the destination as reservations, a grown tail joins the reserved end
 of its mapping, and a move that would add slots is held to the same limit as a
 split. A checkpoint writes a reservation as a range with no bytes, and the
-restore reserves it again.
+restore reserves it again. `mprotect` itself stopped materializing in 557: it
+changes a reservation's protection as a reservation, splitting off the part in
+range under the same limit, because JavaScriptCore's one `mprotect` of 622 MB at
+the top of its 64 GiB built 16 million entries with every guest thread stopped.
 
 Two more readers turned up after that. `mlock` wanted an entry for every page,
 so locking a remainder, or the tail `mremap` grew, returned `ENOMEM` where it
@@ -311,8 +321,9 @@ as a plain range, so reserving it is O(1) and `fork` has nothing extra to walk.
 prefixes of it by mapping real pages and advancing the start.
 
 The rules that fall out, and that the header states: **a page is either mapped or
-reserved, never both. A fault never splits a reservation; a drop may, but only
-while the slot limit allows, and a refused split materializes the reservation
+reserved, never both. A fault near the front trims a reservation; a fault
+further in, a drop or an `mprotect` splits it, but only while the slot limit
+allows, and a refused split materializes the range and the smaller side
 instead. Anything that reads page-table entries has to read reservations too.**
 
 ## 5.6 Sharing, copying, and three ways a shared mapping stopped being shared
@@ -433,6 +444,13 @@ against, so the test skips — and a skipped test is exactly as informative as i
 sounds. This is one of the few places in the tree where the primary development
 machine cannot validate the code, and the answer is Chapter 35's Linux CI,
 which is also an x86_64 host and runs it in full.
+
+The fast paths 557 added — add, subtract, multiply and divide of two normal
+operands under round-to-nearest, which skip the general code's special cases —
+are checked the way any host can: against that general code, bit for bit, at
+all three precisions (`emu/float80-fast-test.c`, millions of random and edge
+operand pairs). A deliberately wrong tie-break makes it fail thousands of
+times, which is how it is known to be looking.
 
 ## 5.9 Vectors
 

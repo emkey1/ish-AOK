@@ -103,8 +103,9 @@ start again from zero (a CPU-time timer still keeps the CPU time it had left).
 ## What it will not save, and how it tells you
 
 **A native program does not stop a save.** `/AOK/native/zsh` can describe
-itself and comes back exactly where it was. The others — bash, dash, the
-editors — cannot, so they are **re-launched from their command line** instead.
+itself and comes back exactly where it was. The others — dash (which is `sh`
+on a provisioned root), the editors — cannot, so they are **re-launched from
+their command line** instead.
 For a shell sitting at a prompt that is the same thing. For one part way
 through a script it means the script runs again from the top, so the save says
 which programs those were, in `/proc/ish/checkpoint` and in the confirmation.
@@ -130,8 +131,27 @@ refusal names the process and the reason, in `/proc/ish/checkpoint`:
   nowhere to stop it. A shell at a prompt is waiting on a read and is fine; a
   native program in a tight compute loop is not.
 
+- **The Wayland desktop, or any program using the GPU.** What stands behind
+  `/dev/dri/renderD128` and the Wayland view — Vulkan contexts, GPU memory, the
+  presenter — lives in the app and cannot be written down. The refusal says so
+  in words: "a Wayland desktop or GPU program is running (fd N is
+  /dev/dri/renderD128); close it, then suspend".
+
 A refusal costs nothing: the session carries on exactly as it was. A save is a
 copy, and the machine is stopped only for as long as it takes to write one.
+
+**The app saves what can be saved.** When you ask it to — **Save Session**,
+**Suspend and Exit**, the ⤓ button — while the Wayland desktop or another GPU
+program is running, it asks first: "The Wayland desktop can't be saved", naming
+the programs, with **Save Anyway** (or **Suspend Anyway**) and **Cancel**.
+Going ahead leaves out every process that would have refused the save — one holding the GPU or the Wayland view, a memfd
+over 64 MB, a descriptor with no rule — together with its whole job (its process
+group), its threads and its descendants. The rest is saved. The left-out ones
+keep running for now; after a resume they are gone, and a shell that started
+one sees it as killed by `SIGKILL` (exit status 137), so its `wait` returns
+rather than hanging. The automatic save when iOS backgrounds the app asks
+nobody and always leaves them out. `suspend.sh` and `/proc/ish/checkpoint`
+still refuse, by name.
 
 **A resumed Workspace session brings its screen back with it.** What each
 terminal had printed -- the screen and the scrollback -- is carried across with
@@ -168,16 +188,21 @@ destroys it during the suspension regardless.
 
 An image from a **different build** is refused on the way back in. The register
 file travels as bytes, and reinterpreting one from another build would be worse
-than declining it — so after an update, the first launch boots normally.
+than declining it — so after an update, the first launch boots normally. The
+start-screen picker and **Delete a Saved Session…** show such an image as
+"(saved by a different build; can't be restored)", and one saved against a root
+you have since deleted as "(saved on X, which is gone; can't be restored)", so
+the picker no longer offers a resume that is certain to fail. When a restore
+does refuse, it says why, naming the check that failed or the pid it was
+rebuilding.
 
-**A session saved on build 555 will not restore on 556.** The image carries a
-format version number, which went from 5 in 555 to 22 in 556 as the image
-learned to carry seccomp filters, capabilities, timers and a memfd's
-identity; a save whose version does not match this build's is refused the
-same as one from a different build entirely. This happens most releases that
-change what a checkpoint needs to carry, not only this one — check
-`/proc/ish/checkpoint` after an update if a saved session you expected to see
-does not resume.
+**A session saved on build 556 will not restore on 557.** Even apart from the
+build check, the image carries a format version number, which moved again in
+557 (to 23, so an executable that is a memfd comes back as one); a save whose
+version does not match this build's is refused the same as one from a different
+build entirely. This happens most releases that change what a checkpoint needs
+to carry — check `/proc/ish/checkpoint` after an update if a saved session you
+expected to see does not resume.
 
 ## What it is not
 

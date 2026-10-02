@@ -198,6 +198,18 @@ an inclusive subtree; its self time was ~12%.
 **Check which build produced a signal.** A diagnostic from one build directory
 attributed to another is a whole afternoon.
 
+**If cost is a count, count.** Sampling the guest's program counter cannot say
+how many of each instruction a workload ran, because the PC is published only
+when execution returns to the dispatcher. So 557 added `ISH_JIT_PROFILE=<file>`,
+which starts every translated block, on all four guests, with a gadget that
+bumps the block's own counter, and `tools/jitprof-report.py`, which turns the
+counts into the instruction mix, the adjacent pairs, and the runs that one
+dispatch per run would collapse. Its first answer for RISC-V was the model's
+answer: 1.2–6.3x arm64's instruction count on identical C, at the same cost per
+instruction. Translation itself is measured the same way, from inside the app:
+write 1 to `/proc/ish/jit_timing` and read back blocks and nanoseconds per
+guest architecture.
+
 ## 38.8 Where the non-CPU time goes
 
 Dispatch explains compute. It does not explain a system, and the other half is

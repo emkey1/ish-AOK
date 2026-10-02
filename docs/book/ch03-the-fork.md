@@ -145,6 +145,6 @@ tripled the size of the tree.
 *Anchors:* `git log --author=emkey1 --reverse`, [README.md](../../README.md)
 ("What This Fork Adds", "Upstream Relationship"),
 [docs/CREDITS-aarch64.md](../../docs/CREDITS-aarch64.md),
-[app/iSH.xcconfig](../../app/iSH.xcconfig), [CLAUDE.md](../../CLAUDE.md)
-(the naming rule and its identifier exceptions),
+[app/iSH.xcconfig](../../app/iSH.xcconfig), `CLAUDE.md` (the naming rule and
+its identifier exceptions; a local file, gitignored, so it is not in a clone),
 [ch00-foreword.md](ch00-foreword.md).

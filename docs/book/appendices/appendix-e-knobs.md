@@ -32,11 +32,13 @@ by the app; several have app-side equivalents under `/proc/ish/defaults`
 | `ISH_ARM64_TRACE_LOOKUP` | `emu/tlb.c` |
 | `ISH_ARM64_WATCH_LO16` | `emu/tlb.c` |
 | `ISH_ARM64_WATCH_VAL` | `emu/tlb.c` |
+| `ISH_BOOT_ROOT` | `app/Roots.m` |
 | `ISH_BRIDGE_LANE_LOG` | `app/GuestFileBridge.m` |
 | `ISH_BRIDGE_LANE_SELFTEST` | `app/GuestFileBridge.m` |
 | `ISH_BRIDGE_SINGLE_LANE` | `app/GuestFileBridge.m` |
 | `ISH_CHECKPOINT_AFTER` | `main.c` |
 | `ISH_CHECKPOINT_DEBUG` | `kernel/checkpoint.c` |
+| `ISH_CHECKPOINT_LEAVE_OUT` | `main.c` |
 | `ISH_CHECKPOINT_LOSE_WAKES` | `kernel/signal.c` |
 | `ISH_CHECKPOINT_TEST_FAIL_PID` | `kernel/checkpoint.c` |
 | `ISH_CLI_PTY` | `main.c` |
@@ -79,6 +81,8 @@ by the app; several have app-side equivalents under `/proc/ish/defaults`
 | `ISH_I386_CHAIN_MAX` | `jit/jit.c` |
 | `ISH_I386_NOBACKCHAIN` | `jit/jit.c` |
 | `ISH_I386_NOCHAIN` | `jit/jit.c` |
+| `ISH_JIT_INHERIT` | `jit/jit.c` |
+| `ISH_JIT_PROFILE` | `jit/jitprof.c` |
 | `ISH_JIT_TIMING` | `jit/jit.c`, `main.c` |
 | `ISH_LAZY_TRACE` | `emu/memory.c` |
 | `ISH_LOCKSTATS` | `main.c`, `util/lockstats.c` |
@@ -86,6 +90,7 @@ by the app; several have app-side equivalents under `/proc/ish/defaults`
 | `ISH_MEM_NO_PAGE_PACKING` | `emu/memory.c` |
 | `ISH_MEM_QUARANTINE` | `emu/memory.c` |
 | `ISH_MIRROR_NO_MPROTECT` | `emu/memory.c` |
+| `ISH_MOPS` | `jit/arm64_mops.c` |
 | `ISH_MULTICORE` | `main.c` |
 | `ISH_NETLINK_DIAG` | `fs/sock.c` |
 | `ISH_NO_ADDR_FUSE` | `jit/gen.c` |
@@ -96,13 +101,18 @@ by the app; several have app-side equivalents under `/proc/ish/defaults`
 | `ISH_PIXMAN_SHIM_OFF` | `opt/AOK/tools/pixman/ish_pixman_shim.c` |
 | `ISH_PIXMAN_STATS` | `opt/AOK/tools/pixman/ish_pixman_shim.c` |
 | `ISH_PIX_ACCEL` | `main.c` |
+| `ISH_PRESENT_DISPLAY` | `main.c` |
+| `ISH_PRESENT_DUMP` | `main.c` |
+| `ISH_PRESENT_INPUT` | `main.c` |
 | `ISH_PTHREAD_CANARY` | `kernel/task.c` |
 | `ISH_PTHREAD_WATCH` | `kernel/task.c` |
 | `ISH_PTHREAD_WATCH_SELFTEST` | `kernel/task.c` |
 | `ISH_PT_OCCUPANCY_CHECK` | `emu/memory.c` |
 | `ISH_QUIESCE_STATS` | `main.c` |
 | `ISH_RANDOMIZE_VA_SPACE` | `kernel/exec.c` |
+| `ISH_RCACHE_TEST_OFF` | `tests/manual/riscv64/rcache_run.c` |
 | `ISH_REAL_MNT` | `main.c` |
+| `ISH_REAL_MNT_SHARED` | `main.c` |
 | `ISH_RESTORE` | `xX_main_Xx.h` |
 | `ISH_RESTORE_FALLBACK` | `xX_main_Xx.h` |
 | `ISH_RISCV64_NO_FUSE` | `jit/gen.c` |
@@ -118,7 +128,9 @@ by the app; several have app-side equivalents under `/proc/ish/defaults`
 | `ISH_TASK_DUMP_EVERY` | `kernel/task.c` |
 | `ISH_TEST_FAIL_TASK_START_AFTER` | `kernel/task.c` |
 | `ISH_TEST_GUEST_CMD` | `main.c` |
+| `ISH_TEST_GUEST_LINES` | `main.c` |
 | `ISH_TEST_GUEST_LINGER_MS` | `main.c` |
+| `ISH_TEST_GUEST_PROCESS` | `main.c` |
 | `ISH_TEST_GUEST_TIMEOUT_MS` | `main.c` |
 | `ISH_TEST_GUEST_USER` | `main.c` |
 | `ISH_TEST_LOSE_WAKE_POKES` | `kernel/signal.c` |
@@ -164,14 +176,17 @@ by the app; several have app-side equivalents under `/proc/ish/defaults`
 | `ISH_TRACE_TERMINAL_LIFECYCLE` | `app/Terminal.m`, `app/TerminalView.m` |
 | `ISH_TRACE_WAITS` | `util/sync.c` |
 | `ISH_VDSO` | `kernel/exec.c` |
+| `ISH_VIRTGPU` | `fs/virtgpu.c` |
 | `ISH_WAITFLAG_LEAK` | `util/sync.c` |
 | `ISH_WAITFLAG_TRACE` | `util/sync.c` |
+| `ISH_WORKSPACE_TEST` | `app/WorkspaceTestHooks.m` |
 
 ## Build options
 
 | option | type | default |
 |---|---|---|
 | `log` | string | '' |
+| `gpu` | feature | 'auto' |
 | `cargo_home` | string | '~/.cargo' |
 | `native_rust_target` | string | '' |
 | `native_helix` | feature | 'disabled' |

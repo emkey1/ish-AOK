@@ -181,6 +181,9 @@ awkward part:
 | libarchive | BSD |
 | liblzma | public domain |
 | zsh | permissive (MIT-like) |
+| dash | BSD-3-Clause (its GPL `mksignames.c` replaced) |
+| virglrenderer (GPU render node, since 557) | MIT |
+| MoltenVK (GPU render node, since 557) | Apache-2.0 |
 | helix | MPL-2.0 (build option, default off) |
 | bash, readline, GNU termcap | **GPLv3** (build option) |
 | iSH-AOK itself | GPLv3, plus GPLv2 for post-relicensing contributions |

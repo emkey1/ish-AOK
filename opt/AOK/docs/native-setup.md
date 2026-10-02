@@ -36,8 +36,9 @@ switches the UID 1000 user's login shell to a native one. On a current build it 
 of dozen it knows do not work.
 
 It links the **standalone** native programs too, not only SmallCLUE's applets —
-`zsh`, `dash`, `sh`, [`motepad`](motepad.md), `su`, `sudo`, `passwd` and the
-`bmm`/`bmt` benchmarks each get a link pointing at their own file. `hx` joins
+`zsh`, `dash`, `sh`, [`motepad`](motepad.md), [`ktop`](ktop.md), `wl-present`,
+`su`, `sudo`, `passwd` and the `bmm`/`bmt` benchmarks each get a link pointing
+at their own file. `hx` joins
 them in the shipped app build, which enables it by default, but not in a plain
 CLI/meson build unless you pass `-Dnative_helix=enabled`. `bash` is **not** in
 the default build either way, as of 556 (`-Dnative_bash=enabled` builds it in),
@@ -59,8 +60,10 @@ working.
 which has `/usr/local/bin` ahead of `/bin`, so the second set of links is what
 makes `sh` and every other native command the default there too. It reaches
 further than the first set for the same reason: a package's install scripts
-then run SmallCLUE's `sed`, `grep` and `awk` rather than the distro's. If one of
-them trips over a flag SmallCLUE lacks, `--target-only` keeps everything in
+then run SmallCLUE's `sed`, `grep` and `awk` rather than the distro's. Those are
+checked against GNU sed and grep and against mawk (see
+[native-programs.md](native-programs.md#what-runs-natively)), but if one still
+trips a package up, `--target-only` keeps everything in
 `/usr/local/native-bin`. Nothing already in `/usr/local/bin` that is not a link
 of ours is replaced without `--force`.
 
@@ -87,8 +90,9 @@ would link 110 applet(s) and 6 program(s), leave 0 in place, skip 20 excluded, 0
   nu already uses /AOK/native/bash
 ```
 
-(captured on a build with `-Dnative_bash=enabled`; the default 556 build has no
-`/AOK/native/bash`, so that last line and the "program(s)" count will differ.)
+(captured on a build with `-Dnative_bash=enabled`; the default build has had no
+`/AOK/native/bash` since 556, so that last line and the "program(s)" count will
+differ.)
 
 **Do this once per root.** The links live in the root's own `/usr/local`, and
 the PATH snippet in its `/etc/profile.d`, so a second root — or one you install
@@ -104,13 +108,13 @@ and you will not notice it. On the bundled roots that user is `nu`; check with
 `getent passwd 1000`.
 
 By default it picks `/AOK/native/zsh` when that exists and `/AOK/native/bash`
-otherwise. It used to prefer bash, and it was changed deliberately: bash is
-**removed in build 556**, so preferring it would keep handing new installs the
-shell that is going away. Say so explicitly with `--shell`:
+otherwise. It used to prefer bash, and it was changed deliberately: bash was
+**removed from the shipped build in 556**, so preferring it would have kept
+handing new installs a shell that was going away. Say so explicitly with `--shell`:
 
 ```sh
 sh /AOK/tools/native-links.sh --shell zsh        # native zsh (the default)
-sh /AOK/tools/native-links.sh --shell bash       # native bash, while it lasts
+sh /AOK/tools/native-links.sh --shell bash       # native bash, on a build that has it
 sh /AOK/tools/native-links.sh --shell /bin/ash   # an absolute path is taken as given
 sh /AOK/tools/native-links.sh --no-shell         # link the applets, leave the shell alone
 ```
@@ -217,10 +221,12 @@ usable by full path, and nothing is shadowed.
 
 ## When something behaves oddly
 
-The applets are *smaller* implementations, not drop-in replacements, and the
-places they diverge tend to be individual flags rather than whole commands. A
-script that has always worked can fail on one option while the command itself is
-plainly present and working — that is the shape this problem takes.
+The applets that stand in for distro tools are checked against GNU's (and
+`awk` against mawk's) as of 557, but SmallCLUE is still its own implementation,
+and where one diverges it tends to be an individual flag rather than a whole
+command. A script that has always worked can fail on one option while the
+command itself is plainly present and working — that is the shape this problem
+takes.
 
 The excluded list is **measured** — each applet was run and its behaviour
 recorded — rather than predicted from the sources; `tools/native-applet-audit.py`

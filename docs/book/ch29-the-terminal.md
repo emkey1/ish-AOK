@@ -162,6 +162,15 @@ because a native program asking the *host's* terminfo database describes the
 wrong terminal. Window size is `TIOCGWINSZ`, and a resize sends `SIGWINCH`
 through the ordinary signal path of Chapter 12.
 
+The locale is the guest's too, and until 557 most of what the app started never
+got one: `/etc/environment` said `LANG=C.UTF-8`, but only `login`'s PAM reads
+it, and a terminal's shell, an `ssh` login and the Wayland session all came up
+in the C locale — which is how `btop` came to refuse to start in the desktop
+("No UTF-8 locale detected!", #620). Every environment the app builds now
+carries `LANG=C.UTF-8` unless a locale is already set, and every root gets an
+`/etc/profile.d` snippet (and an `/etc/zshenv` line, since zsh reads no
+`profile.d`) for the logins PAM never touches.
+
 And then there is capability negotiation, which produced an instructive false
 alarm.
 

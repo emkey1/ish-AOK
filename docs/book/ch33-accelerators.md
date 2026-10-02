@@ -125,9 +125,13 @@ abandoned.
 It matters because of where pixman sits: cairo uses it for GTK rasterization,
 and wlroots' pixman renderer is what a compositor like labwc uses for its own
 compositing. So one accelerator speeds up both halves of a Wayland desktop
-(Chapter 42), which is measured rather than assumed — **about 23.5% of the
+(Chapter 32), which is measured rather than assumed — **about 23.5% of the
 interactive redraw window's wall time was inside raw pixman calls**, consistently
 across repeated runs, with a headless labwc and a GTK3 redraw benchmark.
+Since 557 the compositor draws on the GPU wherever `setup-gpu.sh` has installed
+the pieces (Chapter 32), so wlroots' pixman renderer, and this accelerator
+under it, is the compositor's fallback; cairo's software rasterization in GTK
+programs still goes through pixman either way.
 
 The guest side is an `LD_PRELOAD` shim, and it carries a detail worth having:
 
@@ -219,6 +223,13 @@ Then the part that makes it good experimental design:
 
 An asymmetric experiment, stated as asymmetric before it is run. That is worth
 more than most results.
+
+A GPU did reach the guest in 557, by a different road and for a different
+purpose: `/dev/dri/renderD128`, which stock Mesa drives and which replays the
+guest's Vulkan onto Metal (Chapter 32). It is a device rather than an
+accelerator in this chapter's sense — nothing is intercepted, the guest's own
+graphics stack asks for it — and it leaves this study's question, compute the
+guest hands to Metal directly, where it was.
 
 ## 33.7 When to build an accelerator
 

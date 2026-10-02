@@ -125,10 +125,21 @@ combinations are where the latent bugs are.
 
 ## 32.4 A language model with a shell
 
-The LLM chat client talks to an OpenAI-compatible API, to Google Gemini, or — on
+The LLM chat client talks to an OpenAI-compatible API, to Google Gemini, to
+Anthropic's Messages API directly (since 557, with prompt caching), or — on
 iOS 26 and later — to Apple's on-device Foundation Models. It is off by default
 and appears in the terminal's session menu and in the Workspace dock once
 enabled.
+
+557 took it most of the way to a coding agent. Besides `run_shell` the model
+has file tools — read, write, exact-string edit, list, glob and grep — that go
+through the same bridge as the File Manager, refuse to write a file the model
+has not read or that changed since, and keep every change for a diff view with
+Revert. It has tools from MCP servers too, remote ones over HTTP and stdio ones
+started inside the guest. Each chat is an agent with its own working directory
+(and the `AGENTS.md` above it), its own model and its own tool queue, so several
+work at once in the background, and a chat can hand tasks to sub-agents, four
+at a time.
 
 The bridging is small and instructive. `AOKFoundationModelsBridge.swift` has to
 flatten Apple's own availability type, because `SystemLanguageModel.Availability.UnavailableReason`
@@ -143,11 +154,22 @@ has associated values and is not representable as an `@objc` enum. And the
 The interesting part is the **security posture**, which is worth reading as a
 model for this kind of feature.
 
-By default, every command is confirmed before it runs. Output is capped (64 KB),
-runtime is capped (30 seconds), and a single reply is capped at a number of tool
-rounds (20) — all three adjustable. There are escape hatches: "Run, don't ask
-again this reply", and an "Allow All" that lasts for the chat. Auto-run re-arms
-when the chat is cleared.
+Every tool belongs to a category — reading files, editing files, shell
+commands, MCP tools — and each category is Allow, Ask or Deny; reading is
+allowed by default and the rest ask, and shell commands also meet an ordered
+list of wildcard rules whose defaults allow only commands that look (`ls`,
+`cat`, `git status`). A command line is split at `;`, `&`, `|` and newlines and
+every piece must pass, and one that redirects into a file or substitutes a
+command cannot be allowed by a rule alone. Anything else is confirmed before
+it runs. The API keys moved from the app's preferences to the Keychain in 557,
+because every preference is readable by any guest process as
+`/proc/ish/defaults/<name>` — including the model's own `run_shell`.
+
+Output is capped (64 KB), runtime is capped (30 seconds), and a single reply is
+capped at a number of tool rounds (20) — all three adjustable. There are escape
+hatches: "Run, don't ask again this reply", "Always allow", which writes a rule
+such as `git status *`, and "Run, allow all this chat". Auto-run re-arms when
+the chat is cleared.
 
 And then the documentation says this, in its own voice, to its own users:
 
@@ -183,9 +205,15 @@ right-click menu), `sway` as a tiling alternative, `foot` as the first terminal,
 `wofi`, `wayvnc`, `waybar` with the icon font it needs, and `dbus-daemon`.
 Three optional sets follow from `setup-wayland-extras.sh` — games, desktop
 tools, and Xwayland for X11-only programs — and `setup-gpu.sh` adds the Vulkan
-driver, zink and a checker (below). It has been run on Devuan and Alpine, on
-amd64 and arm64 guests; Arch resolves the same package names and nobody has run
-a session on it, and the user's guide says exactly that.
+driver, zink and a checker (below). `setup-games.sh`, on Devuan, adds Freedoom,
+Beneath a Steel Sky and six more games, each started through a wrapper that
+plays its sound through `/dev/dsp` and draws on the GPU where that works; it
+hides Chocolate Doom's Heretic, Hexen and Strife entries until their commercial
+data is installed, and leaves Extreme Tux Racer out for now: its pointer is out
+of step at the desktop's 2x scale and two of its menu boxes draw wrong on zink.
+The stack has been run on Devuan and Alpine, on amd64 and arm64 guests; Arch
+resolves the same package names and nobody has run a session on it, and the
+user's guide says exactly that.
 
 `start-wayland.sh` is not something the user normally runs; the applet does. It
 runs as the session leader of a pseudo-terminal the applet owns — the same
@@ -218,7 +246,16 @@ goes wrong on the first run of a desktop in a root nobody configured for one:
   anything named `labwc`, `foot` or `wayvnc` — so a second start ended the
   desktop the user was looking at. It now finds a live session through
   `/proc` (not a lock file: `/tmp` is wiped part-way through boot) and refuses,
-  with the running session's pid in the message.
+  with the running session's pid in the message — unless that session has had
+  no compositor for more than 30 seconds, which is what a crash leaves, and is
+  cleared instead. The session itself now ends when its compositor does, rather
+  than when the compositor, the first terminal and `wayvnc` have all gone.
+- **Root from a menu.** Synaptic's menu entry runs `pkexec`, which needs a
+  polkit agent registered for a login session, and these roots have no login
+  sessions (#620). The script puts a `pkexec` of its own first on the
+  session's `PATH`: from a menu it opens an "Administrator password" terminal
+  and runs the program through `sudo`, keeping the display variables `sudo`
+  would drop.
 - **A second session after the first.** wlroots creates `/tmp/.X11-unix` itself
   with the session's umask, so a root desktop left it `0755`; once `bind()`
   checked directory permissions as Linux does, the next non-root desktop could
@@ -226,6 +263,12 @@ goes wrong on the first run of a desktop in a root nobody configured for one:
   And guest pids restart at 1 on every boot, so a stale `/tmp/.X0-lock` can
   name the new compositor's own pid: anything that trusts a lock file by pid
   needs a freshness check as well.
+
+`labwc`'s default configuration has four desktops: Ctrl+Alt+Left and Right
+move between them (with Shift, taking the focused window along) and
+Ctrl+Alt+1–4 go straight to one, leaving Cmd+arrows to Workspace's own
+desktops. The session can also move between full screen and a Workspace window
+without ending: either one parks it and the other adopts it.
 
 ### Two ways a frame reaches the screen
 
@@ -295,10 +338,13 @@ bindings had probably never fired from the app. The client now sends the
 uppercase letter while Shift is held; the same trap still lifts Ctrl from a
 Ctrl with `+`.
 
-What is open is recorded in `docs/TODO.md`: saving a session with the applet
-open is slow and has not been measured; a restore comes back in the mode the
-Settings preference names rather than the one it was saved in; and the
-standalone Wayland window has no Save Session action of its own. The newest
+Saving a session with the desktop running cannot carry it — what stands behind
+the render node and the view's input lives in the app — so since 557 a save
+asks first and, told to go ahead, leaves the whole desktop job out and saves
+the rest (Chapter 41). What is open is recorded in `docs/TODO.md`: a restore
+comes back in the mode the Settings preference names rather than the one it was
+saved in, and the standalone Wayland window has no Save Session action of its
+own. The newest
 report is a list of programs that misbehave on the desktop (#620), which is the
 shape this work has always had — the feature exists, and each program is a
 conformance question.
@@ -307,8 +353,9 @@ conformance question.
 
 Each feature in this chapter can be unavailable, and for a different reason.
 
-The device nodes do not exist in the command-line build, because there is no iOS
-underneath it. Foundation Models needs a recent OS, eligible hardware and Apple
+The device nodes of Section 32.1 do not exist in the command-line build,
+because there is no iOS underneath it; the render node does, because Metal is on
+the Mac as well. Foundation Models needs a recent OS, eligible hardware and Apple
 Intelligence enabled — five distinct unavailability reasons, which is why the
 bridge flattens them into an enum rather than a boolean. The File Provider is
 switched off on Macs entirely (Chapter 31). Shortcuts' enum parameters do not
@@ -340,6 +387,8 @@ developer does not have.
 [app/ISHRunCommandIntent.swift](../../app/ISHRunCommandIntent.swift),
 [app/GuestCommandRunner.m](../../app/GuestCommandRunner.m),
 [app/AOKFoundationModelsBridge.swift](../../app/AOKFoundationModelsBridge.swift),
+[app/LLMChatPermissions.m](../../app/LLMChatPermissions.m),
+[app/LLMKeychain.m](../../app/LLMKeychain.m),
 [app/DisplayRFBClient.m](../../app/DisplayRFBClient.m),
 [app/DisplayViewController.m](../../app/DisplayViewController.m),
 [kernel/native_wlpresent.c](../../kernel/native_wlpresent.c),
@@ -347,6 +396,7 @@ developer does not have.
 [opt/AOK/tools/setup-wayland.sh](../../opt/AOK/tools/setup-wayland.sh),
 [opt/AOK/tools/start-wayland.sh](../../opt/AOK/tools/start-wayland.sh),
 [opt/AOK/tools/setup-gpu.sh](../../opt/AOK/tools/setup-gpu.sh),
+[opt/AOK/tools/setup-games.sh](../../opt/AOK/tools/setup-games.sh),
 [opt/AOK/docs/workspace.md](../../opt/AOK/docs/workspace.md) ("The Wayland applet"),
 [kernel/init.h](../../kernel/init.h) (`run_guest_command_capture_shell`),
 [opt/AOK/docs/shortcuts.md](../../opt/AOK/docs/shortcuts.md),

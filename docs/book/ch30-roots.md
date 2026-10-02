@@ -125,7 +125,9 @@ the running root rather than the default one is the fix, not a decoration; the
 guard against deleting `/` had been checking only the default, so choosing a
 different one and then acting on the running root walked straight past it.
 `/proc/ish/roots` reports both: `default name=` (and `root default=1`) for the
-next launch, `booted name=` for this one.
+next launch, `booted name=` for this one. Any other root can be deleted from
+its own screen, and since 557 by swiping its row in the list too, where a user
+looked for it first and found nothing (#575).
 
 **Choosing the next root asks when.** The screen's Boot From This Filesystem
 used to set the default and quit on the spot: one tap, every running program
@@ -139,7 +141,7 @@ set in the app's launch environment, boots the named root for that launch and
 leaves the saved default alone:
 
 ```sh
-xcrun devicectl device process launch -e '{"ISH_BOOT_ROOT":"Alpine3.23.3"}' \
+xcrun devicectl device process launch -e '{"ISH_BOOT_ROOT":"Alpine3.24.2-aarch64"}' \
     --terminate-existing app.ish.iSH-AOK
 ```
 

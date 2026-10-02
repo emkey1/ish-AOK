@@ -260,8 +260,9 @@ reading.
 
 ## 9.6 The guest-side suite, and where it is registered
 
-The primary regression gate is not any of the above. It is roughly 170 small C
-programs in `tests/manual/`, which are published read-only inside the guest at
+The primary regression gate is not any of the above. It is the small C programs
+in `tests/manual/` — 448 of them at 557, of which one guest's run passes some
+320 to 340 — which are published read-only inside the guest at
 `/AOK/tests`, compiled *on the device* by the guest's own toolchain, and run
 there:
 

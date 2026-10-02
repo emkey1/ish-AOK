@@ -330,7 +330,7 @@ versions, and a guest running `free` would otherwise have killed the app.
 **It is dispatch-bound.** See Chapter 38 for what that means in practice, and
 for the measurements that say when it stops mattering.
 
-**And the fidelity tail never ends.** There are more than 170 C
+**And the fidelity tail never ends.** There are more than 400 C
 programs in `tests/manual/`, plus a handful of shell-script suites, and each one
 exists because something behaved differently from Linux and somebody had to find
 out why. Appendix F annotates them.

@@ -13,7 +13,7 @@ You reach them through `/AOK/native`:
 
 ```sh
 ls /AOK/native
-# bmm  bmt  dash  ktop  motepad  passwd  rust-probe  sh  smallclue  su  sudo  zsh  zsh-multio
+# bmm  bmt  dash  hx  ktop  motepad  passwd  rust-probe  sh  smallclue  su  sudo  wl-present  zsh  zsh-multio
 ```
 
 What is actually there depends on how the build was configured, so read the
@@ -69,8 +69,8 @@ test for whether a given function needs that treatment is not "is it pure?" but:
 > **can this function's answer differ between the host and the guest?**
 
 `getenv`, `getpwuid`, `gethostbyname`, `setlocale`, `uname`, `sysctl`, `isatty`,
-`tcgetattr` — every one of them answered about an iPhone until it was made to
-answer about your rootfs. In practice this means a native program reads *your*
+`tcgetattr`, `localtime` — every one of them answered about an iPhone until it
+was made to answer about your rootfs. In practice this means a native program reads *your*
 `/etc/passwd`, *your* `/etc/resolv.conf`, *your* terminfo, and writes to *your*
 files, with your guest uid and your guest permissions.
 
@@ -82,7 +82,10 @@ The rule is checked rather than trusted: `tools/check-native-libc.py`, run over
 the built objects, reports every host-libc symbol a native program references
 that is not on an explicit allowlist. It is a gate someone runs, not something
 wired into the build, and it covers the routed surface rather than proving there
-is nothing left — the timezone, for one, is still the host's.
+is nothing left. Local time is the most recent arrival: since 557 a native
+program converts times in the *guest's* zone — `TZ`, else `/etc/localtime`, read
+from your root's own zoneinfo — so native `ls -l` and `date` agree with the
+distro's.
 
 ## When a program is not in this build
 
@@ -99,7 +102,7 @@ do. So a script may reasonably assume those and should check for the rest.
 The files that *do* exist are worth a look:
 
 ```sh
-head -2 /AOK/native/bash
+head -2 /AOK/native/zsh
 # #!/bin/sh
 # # Placeholder for a program implemented natively inside iSH-AOK.
 ```
@@ -116,7 +119,7 @@ diagnostic rather than a program.
 | `/AOK/native/smallclue` | a busybox-style toolbox; the applet is chosen by the name it is invoked under |
 | `ssh`, `scp`, `sftp`, `ssh-keygen`, `ssh-copy-id` | OpenSSH, as applets of SmallCLUE — note it is built **without OpenSSL**, so the [crypto accelerator](crypto-accel.md) does not apply to it |
 | `vi` | the Nextvi editor, an applet of SmallCLUE |
-| `/AOK/native/bash` | bash 5.2. GPLv3, which is why it has a build switch at all — and why it is **removed in build 556**; your guest `/bin/bash` is unaffected |
+| `/AOK/native/bash` | bash 5.2, **not in the shipped app since build 556**. GPLv3, which is why it has a build switch at all; a build made with `-Dnative_bash=enabled` still has it. Your guest `/bin/bash` is unaffected |
 | `/AOK/native/zsh` | zsh, with fork-by-relaunch; `zsh --version` for the exact one. The only native program that can describe its own state, so the only one a [suspend](suspend.md) brings back where it was |
 | `/AOK/native/dash`, `/AOK/native/sh` | dash, the POSIX shell most scripts are written against. BSD-licensed. Its fork-by-relaunch hands the child the parse *tree* rather than the command text, so quoting cannot be lost on the way. Your `/bin/sh` is untouched — but see [native-setup.md](native-setup.md), since the link step is what makes a bare `sh` mean this shell |
 | `/AOK/native/zsh-multio` | a helper for zsh's MULTIOS redirections, which need a process that is not the shell to hold the descriptors |
@@ -125,14 +128,23 @@ diagnostic rather than a program.
 | `/AOK/native/hx` | [helix](https://helix-editor.com), a modal editor with syntax highlighting and multiple selections. MPL-2.0, so like bash it has a build switch; registered as `hx`, which is what helix calls itself. Its grammars and themes are served from `/AOK/native/libs` |
 | `/AOK/native/rust-probe` | a probe that exercises the Rust-on-the-shim path, not a tool you have a use for. Present because the Rust support it checks is what `hx` is built on |
 | `/AOK/native/bmm`, `/AOK/native/bmt` | the CPU and thread microbenchmarks, so the same workload can be timed with and without emulation — see [benchmarks.md](benchmarks.md) |
+| `/AOK/native/wl-present` | shows the Wayland desktop in the app without VNC: it takes the compositor's frames and hands the app's keyboard, pointer, clipboard and window size back. `start-wayland.sh` runs it; see [workspace.md](workspace.md#the-gpu) |
 | `/AOK/native/su`, `/AOK/native/sudo`, `/AOK/native/passwd` | SmallCLUE's su, sudo and passwd, each shipped as its own **setuid-root** program rather than an applet of the multicall binary — see below |
 
-SmallCLUE's applets are *smaller* implementations, not drop-in replacements for
-the distro's. They cover the common cases and diverge on individual flags — the
-kind of difference no audit of the sources finds, because the command is present
-and works, just not with that one option. That is worth knowing before you put
-them ahead of your distro's tools on `PATH`; see
-[native-setup.md](native-setup.md), which is also where the escape hatches are.
+SmallCLUE's applets used to be *smaller* implementations that diverged from the
+distro's on individual flags. As of 557 the ones that stand in for a distro tool
+are checked against GNU instead: `ls`, `cp`, `mv`, `rm`, `ln`, `cat`, `chmod`,
+`touch`, `stat`, `date`, `head`, `tail`, `wc`, `sort`, `uniq`, `cmp`, `tr`,
+`nl`, `seq`, `dd`, `od`, `fold`, `tac`, `split`, `du`, `sum`, `env`,
+`realpath`, `readlink`, `rmdir`, `stty`, `xargs`, `find`, `grep`, `diff`,
+`sed` (all of POSIX plus GNU's extensions), `gzip`/`gunzip`/`zcat` and `tar`
+against GNU coreutils, findutils, grep, diffutils, sed, gzip and tar, and `awk`
+against mawk 1.3.4, Debian's default. Each has golden cases recorded from the
+real tool in `/AOK/tests` (`native_coreutils.c`, `native_sed.c`,
+`native_stty.c`); error messages use glibc's
+wording. That matters because [native-setup.md](native-setup.md) puts them
+ahead of your distro's tools on `PATH`, so package scripts run them too — and
+that page is also where the escape hatches are, if one still differs.
 
 ## `su`, `sudo` and `passwd`: the only setuid-root native programs
 

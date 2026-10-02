@@ -32,8 +32,8 @@
 # Recommended packages are not installed on Devuan: with them, most GNOME
 # games pull in a help browser and WebKit, about 450 MB. The icons GTK games
 # draw need the SVG loader (librsvg2-common), which is in the games set, and
-# X programs need the core fonts, which are in x11. Left out after trying
-# them: SDL action games, which run but draw 2 to 6 frames a second over VNC.
+# X programs need the core fonts, which are in x11. SDL action games are not
+# here: setup-games.sh installs a tested set that draws on the GPU.
 # ---------------------------------------------------------------------------
 set -u
 

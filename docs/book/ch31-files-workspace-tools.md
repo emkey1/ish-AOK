@@ -110,10 +110,13 @@ Stage Manager, so multi-window is available on a device the platform does not
 give multiple windows to.
 
 The applet list is longer than a book chapter should enumerate — a file manager,
-MotePad, a markdown viewer, an image viewer, a video player, a music player, a
-browser, clock and monitor and network and log panels, storage, the Filesystems
-screen of Chapter 30, settings, diagnostics, an LLM chat (Chapter 32), and a
-Wayland display (Chapter 42).
+MotePad, a markdown viewer, an image viewer, a video player, a music player and
+its equalizer, a browser, clock and monitor and network and log panels, storage,
+the Filesystems screen of Chapter 30, settings, diagnostics, an LLM chat
+(Chapter 32), and a Wayland display (Chapter 32). 557 gave Terminal windows
+tabs, kept by saved layouts and by suspend; let the video player open web
+streams, HLS and `.m3u` playlists with a channel list; and let the browser open
+guest pages from the File Manager and `ws-browser`, in tabs.
 
 The design question from the top of this chapter applies hardest here, and
 `docs/historical/native_workspace_design.md` answers it directly: the goal "is not to build

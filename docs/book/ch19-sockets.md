@@ -199,6 +199,16 @@ freshly created root has *no* resolver configuration at all and every lookup
 fails with "Temporary failure in name resolution" while networking itself works
 perfectly — a confusing first ten minutes for anyone building a root by hand.
 
+The app writes the file itself, from the device's own servers, and since 557
+lists first a relay the app runs, reached at `127.0.0.53:53` — the stub address
+systemd-resolved uses — through the same loopback translation that maps other
+guest endpoints. The relay binds an ephemeral host port, because port 53 on an
+iPad's loopback is iOS's to hold, and it forwards the guest's own packet
+unchanged: an early version rebuilt each query, gave the reply a new ID, and
+sent nothing at all for a missing name. musl asks every nameserver at once and
+never noticed; glibc asks them in order, so every lookup on Devuan sat out a
+5-second timeout first, and `sshd` came up 67 seconds after boot.
+
 `fs/net_route.c` and the `/proc/net` files report interfaces, addresses and
 routes, built from the host's own interface list. Because the guest sees the
 host's interface names unchanged, `en0` in the guest is `en0` on the device,

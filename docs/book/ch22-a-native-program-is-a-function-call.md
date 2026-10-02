@@ -59,21 +59,30 @@ The whole mechanism is a table:
 struct native_program {
     const char *name;      // basename under /AOK/native/
     int (*main)(int argc, char *const argv[], char *const envp[]);
+    bool setuid_root;      // runs as root however invoked, as setuid-root does
+    ...                    // and a checkpoint hook, for zsh
 };
 ```
 
-and its contents in this build:
+and its contents in 557, the last seven behind build options:
 
 ```c
-{ "smallclue", smallclue_real_main },
-{ "motepad",   native_motepad_main },
-{ "bmm",       native_bmm_main },
-{ "bmt",       native_bmt_main },
+{ "smallclue",  smallclue_real_main },
+{ "sudo",       native_sudo_main, .setuid_root = true },
+{ "su",         native_su_main, .setuid_root = true },
+{ "passwd",     native_passwd_main, .setuid_root = true },
+{ "motepad",    native_motepad_main },
+{ "ktop",       native_ktop_main },
+{ "wl-present", native_wlpresent_main },
+{ "bmm",        native_bmm_main },
+{ "bmt",        native_bmt_main },
 { "rust-probe", rust_native_probe_main },
-{ "hx",        helix_native_main },
-{ "bash",      native_bash_main },
-{ "zsh",       native_zsh_main },
-{ "zsh-multio", native_zsh_multio_main },
+{ "hx",         helix_native_main },
+{ "bash",       native_bash_main },
+{ "zsh",        native_zsh_main, ... },
+{ "zsh-multio", native_zsh_multio_main, ... },
+{ "dash",       native_dash_main },
+{ "sh",         native_dash_main },
 ```
 
 Adding a program is one entry. The dispatcher does not change, and — the detail
@@ -118,6 +127,15 @@ symlinks live in the guest root and persist. A `grep` symlinked into
 its own output then reports every test as both passing and failing, and nothing
 in the output says "your PATH is poisoned". Put throwaway links somewhere off
 `PATH`, or remove them.
+
+Since 557 `native-links.sh` does that on purpose, and the provisioning scripts
+run it: every applet is linked into `/usr/local/bin` as well, so `ssh host
+cmd`, cron and init scripts — which never read `/etc/profile.d` — get the native
+commands, and a bare `sh` is native dash. That is only defensible because the
+same cycle made SmallCLUE's shadowing applets (`sed`, `grep`, `find`, `ls`,
+`tar`, `diff` and the rest) GNU-compatible and its `awk` mawk-compatible,
+checked against the originals' own output: with the links in place, a
+package's maintainer scripts run them too.
 
 ## 22.4 Why the handoff is a two-step
 

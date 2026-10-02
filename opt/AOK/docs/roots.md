@@ -47,7 +47,10 @@ Three things worth knowing:
   `job state=unavailable` there.
 
 The script is a thin front end over `/proc/ish/roots`, which is the whole
-mechanism. Reading it lists the roots, the catalog and the current job. Writing
+mechanism. Reading it lists the roots, the catalog and the current job, and
+`booted name=` says which root is at `/` this launch — not always the default,
+since `ISH_BOOT_ROOT` can boot another one for a single launch (see
+[tuning-knobs.md](tuning-knobs.md#ish_boot_root)). Writing
 sends a command, one `key=value` per line, with `run` on its own line to commit
 it. Every value runs to the end of its line, so paths and URLs need no quoting:
 
@@ -90,8 +93,11 @@ Images** applet in Workspace — lists four groups:
   install it as a new named root.
 - **Official Distributions** — Alpine 3.24.2, Alpine 3.23.3 and Devuan 6
   (excalibur), one row per distro with the architecture as a sub-choice. The
-  Alpine 3.24.2 and Devuan `aarch64` images are bundled in the app; `i386`, `x86_64` and `riscv64` download on demand into
-  `/AOK/persist/roots` and import from there.
+  Alpine 3.24.2 and Devuan `aarch64` images are bundled in the app; `i386`,
+  `x86_64` and `riscv64` download on demand into `/AOK/persist/roots` and
+  import from there. Alpine 3.23.3 is offered for those three only: the bundled
+  `aarch64` Alpine is 3.24.2 since 557, and a 3.23.3 `aarch64` root you already
+  have keeps working.
 - **Community Distributions** — PSCAL + SmallCLUE (arm64) and Arch Linux
   (`x86_64` and ARM `aarch64`). Contributed or experimental, without the same
   support guarantees as the official images.
@@ -230,6 +236,18 @@ what tells a UTC you chose from the one the distribution shipped. Where a root
 has an `/etc/timezone`, it is kept matching; it is never created, since current
 Debian no longer uses it. `cat /proc/ish/timezone` shows the device's zone.
 
+## The locale: UTF-8 everywhere
+
+Every root gets `LANG=C.UTF-8` — in what the app starts (init, the Wayland
+desktop, a terminal), and for logins that never pass through PAM, such as `ssh`
+and busybox `login`, from `/etc/profile.d/00-aok-locale.sh`, which the app writes
+into each root when it is missing or empty. zsh reads no `profile.d`, so the same
+line goes into `/etc/zshenv` unless the distribution ships `/etc/zsh/zshenv`.
+It sets `LANG` only, and only when neither `LANG` nor `LC_ALL` is set, so a
+locale you choose or forward over ssh wins. `C.UTF-8` is built into glibc and
+needs nothing under musl. Programs that refuse to start without a UTF-8 locale,
+such as `btop`, now start.
+
 ## Provisioning scripts: turning a bare rootfs into a full terminal environment
 
 A freshly-imported root is intentionally minimal. Scripts under `/AOK/tools`
@@ -341,3 +359,15 @@ sh /AOK/fixes/arch/fix-pacman.sh
 
 Safe to re-run; each step checks whether it is already done. The keyring step
 takes a few minutes and needs no network.
+
+`/AOK/fixes/codex` is for OpenAI's Codex CLI, which works until it runs a shell
+command: it runs each one inside bubblewrap, which needs user and mount
+namespaces AOK does not have, and it has no fallback. The script tells Codex to
+run commands without that sandbox, by putting
+`sandbox_mode = "danger-full-access"` at the top of `~/.codex/config.toml`;
+Codex's approval policy is unchanged, so it still asks before what it would
+have asked about. `README.txt` beside it says the same at more length.
+
+```sh
+sh /AOK/fixes/codex/fix-codex.sh         # or, for one session: codex --sandbox danger-full-access
+```

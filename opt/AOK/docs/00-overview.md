@@ -31,9 +31,9 @@ Everything else under `/AOK` is baked into the app at build time:
 /AOK/docs/                this documentation set, and book/ -- the whole book
 /AOK/tools/               scripts and utilities (native-links.sh, persist-links.sh,
                           manage-roots.sh, mount-root.sh, ktop, benchmarks,
-                          provisioning, Wayland)
+                          provisioning, Wayland, setup-gpu.sh, setup-games.sh)
 /AOK/tests/               the guest-side regression suite
-/AOK/fixes/               canned fixes for known upstream-distro bugs
+/AOK/fixes/               canned fixes for known upstream problems (Devuan, Arch, Codex)
 /AOK/native/              programs compiled into the app -- exec'ing one runs host
                           code instead of translated guest code (native-programs.md)
 /AOK/persist/             writable, host-backed, survives everything (see persist.md)
@@ -126,7 +126,7 @@ six of them were not linked from anywhere at all.
 | --- | --- |
 | [roots.md](roots.md) | installing, switching between and chrooting into several Linux root filesystems |
 | [persist.md](persist.md) | `/AOK/persist` and `/AOK/fakefs` — the two places that survive root switches, app updates and reinstalls |
-| [networking.md](networking.md) | reaching the device from another machine, and what the guest can and cannot listen on |
+| [networking.md](networking.md) | reaching the device from another machine, what the guest can and cannot listen on, and the DNS relay |
 | [files-app-integration.md](files-app-integration.md) | the File Provider extension, and how iSH-AOK appears in the iOS Files app |
 | [shortcuts.md](shortcuts.md) | driving iSH-AOK from Apple's Shortcuts app |
 | [swap.md](swap.md) | the simulated swap area — turning it on, what it costs, and what it will not do |
@@ -136,14 +136,14 @@ six of them were not linked from anywhere at all.
 
 | file | what it covers |
 | --- | --- |
-| [workspace.md](workspace.md) | the in-app multi-window desktop, its applets and saved layouts |
+| [workspace.md](workspace.md) | the in-app multi-window desktop, its applets and saved layouts — and the Wayland desktop, the GPU and the games set |
 | [file-browser.md](file-browser.md) | the quick file picker on the keyboard bar (Cmd-B) |
 | [keyboard-shortcuts.md](keyboard-shortcuts.md) | every hardware-keyboard shortcut: desktops, windows, the terminal, MotePad, the Wayland desktop |
 | [keyboard-toolbar.md](keyboard-toolbar.md) | arranging the keys above the keyboard, and adding your own |
 | [motepad.md](motepad.md) | the built-in text editor |
 | [md.md](md.md) | the Markdown viewer |
 | [themes.md](themes.md) | the fourteen bundled themes and writing your own |
-| [llm-chat.md](llm-chat.md) | the in-app LLM chat client |
+| [llm-chat.md](llm-chat.md) | the in-app LLM chat client — providers, file and shell tools, MCP servers, background agents |
 | [ktop.md](ktop.md) | the bundled process viewer, and building it from the source shipped here |
 
 **Going faster, and going native**
@@ -170,6 +170,6 @@ browser is exactly who it was written for. Start at
 
 | file | what it covers |
 | --- | --- |
-| [proc-ish.md](proc-ish.md) | `/proc/ish` — the build, the settings, and the guest-side preference surface |
+| [proc-ish.md](proc-ish.md) | `/proc/ish` — the build, the settings, the JIT switches, the app's own memory, and the guest-side preference surface |
 | [fuse.md](fuse.md) | the FUSE implementation, `/dev/fuse`, and what it supports |
 | [riscv64-vendor-extensions.md](riscv64-vendor-extensions.md) | how non-standard riscv64 vendor extensions are handled |

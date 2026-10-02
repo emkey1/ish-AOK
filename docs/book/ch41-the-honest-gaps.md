@@ -206,13 +206,17 @@ store from another thread could land in between, and
 16-byte host compare-exchange when the operand sits inside one 16-byte block,
 and the address space's writer lock when it straddles two.
 
-**Its i386 twin is open.** The i386 JIT's locked gadgets for 16- and 32-bit
-operands check alignment and then ignore the answer: on a misaligned operand
-they call a tracing helper that does nothing and run `ldaxr`/`stlxr` on the
-misaligned host address anyway. An M-series Mac tolerates that inside a 16-byte
-block and raises `SIGBUS` across one; older devices may fault on any
-misalignment. Only packed structures reach it, since the i386 ABI aligns those
-sizes naturally, and the fix is the amd64 JIT's: branch to a C slow path.
+**Its i386 twin closed later in the same cycle** (`ce74598e`). The i386 JIT's
+locked gadgets for 16- and 32-bit operands checked alignment and then ignored
+the answer: on a misaligned operand they called a tracing helper that did
+nothing and ran `ldaxr`/`stlxr` on the misaligned host address anyway, so a
+`lock addl` on a word straddling a 16-byte boundary killed the whole app with a
+bus error. Each such gadget now sends a misaligned operand to the amd64 JIT's C
+slow path. One edge is still open, found by the release's device leg: across a
+*page* the slow path takes the address space's writer lock, which prefers
+writers, so a thread doing locked increments there can starve a thread doing
+plain stores to the same word. The fix that removed the starvation cost that
+case about 100x in throughput and was not committed; `docs/TODO.md` has it.
 
 `emu/arm64_interp.c` survives for a different reason: as a bisection escape
 hatch behind `ISH_ARM64_FORCE_INTERP=1`, with a comment that is candid about
@@ -227,11 +231,14 @@ Part V's mechanism is finished; its coverage is not.
 
 **The `argv` ownership class** (Chapter 25) is fixed where it was found and not
 swept. `find` was fixed; `du`, `stat`, `rm` and `wget` were audited and are
-mostly unreachable for incidental reasons — a plain `du` in the guest hits the
+mostly unreachable for incidental reasons — a plain `du` in the guest hit the
 distribution's coreutils, since `/AOK/native` holds only the multicall entries,
 and `wget`'s fetch path is compiled out of every build so only its argument
 handling is reachable at all. "Unreachable today" is a weaker guarantee than
-"fixed", and the audit tool exists because the hand-written exclusion list was
+"fixed", and 557 proved it: `native-links.sh` now links every applet into
+`/usr/local/bin`, ahead of `/bin`, and the provisioning scripts run it, so the
+plain `du` is SmallCLUE's wherever that has been done. The audit tool
+exists because the hand-written exclusion list was
 not good enough: `env` was missed, and since one test harness runs
 `env ... bash ...`, installing the symlinks took its suite from 217 passing to
 zero.
@@ -341,13 +348,17 @@ closed: the Wayland applet now sizes the desktop to its window and Qt
 applications get a session bus (both 555), `gdb`'s `next`/`step` after a
 breakpoint no longer dies with `SIGILL` on amd64, and `pikaur` builds packages
 since 554. Only Buildroot's `make` dying at "checking for working sigaltstack"
-is still open. What is open now (2026-09-28) is mostly the app rather than the
-kernel: a terminal's last row hidden under the keyboard toolbar after returning
-to the foreground (a fix landed for 557; the issue is still open), window
-controls misplaced in iPadOS windowed mode, a copy that loses the part of a
-selection scrolled off screen, network throughput slower than it should be, and
-a new list of programs that misbehave in the Wayland desktop — `btop` needing a
-flag to start, Synaptic freezing the display.
+is still open. What was open at the start of the 557 run (2026-09-28) was
+mostly the app rather than the kernel, and most of it closed with 557: a
+terminal's last row hidden under the keyboard toolbar after returning to the
+foreground, window controls misplaced in iPadOS windowed mode, a copy that lost
+the part of a selection scrolled off screen, and network throughput slower than
+it should be, which its reporter found gone. Still open (2026-10-02) is a list
+of programs that misbehave in the Wayland desktop (#620): its first two,
+`btop` needing a flag to start and Synaptic freezing the display, were a missing
+UTF-8 locale and a `pkexec` with no polkit session to ask, both fixed in 557,
+and the list stays open for the programs after them. The newest report, filed
+2026-10-02, is a crash from the Filesystems screen's Browse Files (#625).
 
 This section also used to hold up a report as the model of a category:
 
@@ -372,8 +383,8 @@ woken, which is a correctness question dressed as a speed one.
 It is not settled. Re-measured for this chapter on 557 in the Mac CLI, 45 guest
 handshakes on aarch64, in two batches, had medians of 0.28 and 0.43 s and a
 maximum of 1.29 s: no tail. The original run was in an Arch Linux ARM root rather than Alpine, the
-device has not been re-measured, and the open throughput report is in the same
-neighbourhood.
+device has not been re-measured, and the throughput report closed for 557 was in
+the same neighbourhood.
 
 So the lesson got sharper rather than going away. "Make it faster" is not a
 triage outcome — and neither is "it is just slow" until somebody has looked at
@@ -393,11 +404,15 @@ the same place:
 - **Diagnosed, not built.** No guest-memory blobs and no DRM sync objects —
   Mesa's Venus path needs neither, and simulates the latter. One lock
   serialises every call into the renderer, as virglrenderer's own server does.
-- **Not carried by a checkpoint.** An open render node and its fences are not
-  in the image. What a restore then does has not been measured; by the
-  checkpoint's descriptor rules a character device with a path comes back by
-  being opened again, which would hand a restored Vulkan program a node with
-  none of its contexts behind it rather than a refusal.
+- **Not carried by a checkpoint.** What stands behind an open render node —
+  Vulkan contexts, blobs, the presenter — lives in the app and cannot be
+  imaged; reopened, the node would be a blank device under a compositor that
+  believes it has a GPU. So a save refuses in words ("a Wayland desktop or GPU
+  program is running … close it, then suspend"), and Save Anyway, or the
+  automatic save as the app goes to the background, leaves out every job
+  holding the GPU or anything else unsaveable — the whole desktop, from the
+  shell that started it down — and keeps the rest. To a kept parent a left-out
+  child is a process killed by `SIGKILL`, which is what it is after a resume.
 - **Bounded by the distributions.** Alpine builds no virgl GL driver at all, so
   GL goes through zink on top of Venus — and zink here is GL 2.1 and GLES 2.0,
   so GL programs stay on llvmpipe unless told otherwise, and only the

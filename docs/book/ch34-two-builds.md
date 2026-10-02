@@ -135,15 +135,18 @@ the registry rather than from a second list (Chapter 22).
 
 ## 34.6 Submodules, and a trap that eats worktrees
 
-The tree carries nine submodules — `libapps` (hterm), `libarchive`,
-`rootfs-manifest`, `smallclue`, `bash`, `zsh`, `helix`, `tokio`, `signal-hook` —
-and a full clone needs `--recurse-submodules`.
+The tree carries twelve submodules — `libapps` (hterm), `libarchive`,
+`rootfs-manifest`, `smallclue`, `bash`, `zsh`, `dash`, `helix`, `tokio`,
+`signal-hook`, and since 557 `virglrenderer` and `MoltenVK`, which build as
+meson subprojects into `libish` for the GPU render node (Chapter 32) — and a
+full clone needs `--recurse-submodules`.
 
 Two things about them are worth knowing before they cost a day.
 
-`--recursive` includes `deps/bash`, **which makes the default build a GPLv3
-one** (Chapter 26). That is stated in the README because a clone command should
-not silently decide a licensing question.
+`--recursive` includes `deps/bash`, **which through 555 made the default build a
+GPLv3 one** (Chapter 26); since 556 bash is compiled in only when asked for, so
+the checkout alone no longer decides it. That is stated in the README because a
+clone command should not silently decide a licensing question.
 
 And: **never run `submodule update --init` from a git worktree.** Worktrees share
 the main checkout's git directory, so a submodule update from one reaches into

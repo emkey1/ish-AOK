@@ -14,16 +14,20 @@ Testflight: https://testflight.apple.com/join/X1flyiqE
   - 产品名 `iSH-AOK`
   - Bundle root `app.ish.iSH-AOK`
 - **四种客户机架构**，全部基于 JIT：`i386`、`amd64`（x86_64）、`arm64`（aarch64）和 `riscv64`。
-- **原生程序**：zsh，以及携带 OpenSSH（`ssh`、`scp`、`sftp`、`ssh-keygen`、`ssh-copy-id`）和 Nextvi 编辑器的 SmallCLUE busybox 风格工具箱，都作为宿主代码编译进应用，并由客户机的 `execve` 经 `/AOK/native/<名称>` 分发。它们是运行在客户机任务线程上的宿主函数，而不是客户机二进制，因此以全速运行，无需逐条指令翻译。bash 拥有同样的原生实现，但构建 556 默认不包含它——参见[原生 bash 与许可证](#原生-bash-与许可证)。
+- **原生程序**：zsh、dash（预配置脚本会让它成为 `sh`），以及携带 OpenSSH（`ssh`、`scp`、`sftp`、`ssh-keygen`、`ssh-copy-id`）、Nextvi 编辑器和与 GNU 兼容的 `sed`、`grep`、`find`、`ls`、`tar`、`gzip`、`diff`、`awk` 及大部分 coreutils 的 SmallCLUE busybox 风格工具箱，都作为宿主代码编译进应用，并由客户机的 `execve` 经 `/AOK/native/<名称>` 分发。它们是运行在客户机任务线程上的宿主函数，而不是客户机二进制，因此以全速运行，无需逐条指令翻译。bash 拥有同样的原生实现，但自 556 起发布的构建不再包含它——参见[原生 bash 与许可证](#原生-bash-与许可证)。
 - `/AOK`，一个只读的应用内文件系统（`/AOK/docs`、`/AOK/tools`、`/AOK/tests`、`/AOK/native`），在构建时通过 `fs/aok-*.manifest` 和 `tools/gen-aokfs.py` 从 `opt/AOK/` 嵌入。
-- 内置在应用中的根文件系统（Alpine 3.23.3 与 Devuan 6，仅 `aarch64`），以及面向 `i386`、`x86_64` 和 `riscv64` 的可下载镜像。
+- 内置在应用中的根文件系统（Alpine 3.24.2 与 Devuan 6，仅 `aarch64`），以及面向 `i386`、`x86_64` 和 `riscv64` 的可下载镜像。
+- **在客户机中使用设备的 GPU**：`/dev/dri/renderD128`，一个 virtio-gpu 渲染节点，由进程内运行在 MoltenVK 之上的 virglrenderer Venus 渲染器支撑，因此 Mesa 的 Venus Vulkan 驱动（以及其上的 zink）通过 Metal 绘制。客户机一侧由 `/AOK/tools/setup-gpu.sh` 安装。参见 `/AOK/docs/workspace.md`。
+- **Wayland 桌面**（labwc、foot、waybar；自带四个桌面）：在 GPU 上合成，并通过 `/AOK/native/wl-present` 呈现到应用中——画面单向传出，键盘、指针、剪贴板和尺寸调整反向传入——VNC 作为后备。`/AOK/tools/setup-games.sh` 会安装一组经过测试的游戏。参见 `/AOK/docs/workspace.md`。
+- **LLM Chat**：应用内的聊天客户端（OpenAI 兼容服务器、Anthropic、Gemini、Apple 端侧模型），可在允许/询问/拒绝的权限下读取、编辑客户机中的文件并运行命令，可使用 MCP 服务器，还能把多个聊天作为后台代理同时运行。API 密钥保存在钥匙串中。参见 `/AOK/docs/llm-chat.md`。
+- **挂起到磁盘**：把整个会话——进程、打开的文件、终端——保存下来，在应用被终止后再恢复。默认关闭。参见 `/AOK/docs/suspend.md`。
 - 通过 iOS 系统 API 暴露客户机文件的 File Provider 支持。
 - **FUSE**：提供 `/dev/fuse` 与 `fuse` 文件系统类型（协议 7.31），因此客户机的 `libfuse2`/`libfuse3` 守护进程无需修改即可挂载并提供文件系统。由于客户机本身已是 fake-root，不涉及 setuid 的 `fusermount`，libfuse 会直接调用 `mount(2)`。参见 `/AOK/docs/fuse.md`。
 - **Apple 快捷指令（Shortcuts）操作**（iOS 16+）：无需打开应用即可通过原生 zsh 在客户机中执行命令并把输出返回给快捷指令的 "Run Command" 操作，以及带有 Siri 短语的 "Open iSH-AOK" 目标页面。参见 `/AOK/docs/shortcuts.md`。
 - **`/dev/url`**：一个字符设备，客户机往里写一个 URL，就把它交给 iOS 打开——包括 `shortcuts://` 链接，因此客户机脚本可以驱动一个快捷指令。参见 `app/URLDevice.m`。
 - **模拟交换空间**：可选的交换区，让大部分处于闲置状态的大型工作集无需占用真实内存即可存在——并带有 24 小时写入预算、抖动保护和挂起门控，因为它消耗的是设备的闪存。默认关闭；在 iOS“设置”App 中的 iSH-AOK → Simulated Swap 里开启（需要同时打开开关并选择大小，下次启动时生效）。客户机通过 `/proc/meminfo`、`free`、`vmstat`、`/proc/swaps` 和真实的 `/dev/aokswap0` 看到它。参见 `/AOK/docs/swap.md`。
 - **`binfmt_misc`**：像在 Linux 上一样，为魔数或文件扩展名注册解释器，`execve` 会遵循它。参见 `/AOK/docs/binfmt-misc.md`。
-- 可选加速器：用原生代码替换热点 libc 例程，以及加密与 pixman 卸载。
+- 加速器：用原生代码替换热点 libc 例程（默认开启），以及可选的加密与 pixman 卸载。
 - 该分支专属的额外诊断与运维相关改动。
 
 ## 客户机架构
@@ -68,24 +72,31 @@ echo all=1 > /proc/ish/riscv64_jit_fuse
 [tests/manual/jit_fuse_ab.sh](tests/manual/jit_fuse_ab.sh) 会自动执行交替的 A/B 测量，
 并在退出时恢复原有掩码。
 
+有两个工具能说明时间花在哪里。`ISH_JIT_PROFILE=<文件>` 记录任意客户机的动态指令构成，
+由 [tools/jitprof-report.py](tools/jitprof-report.py) 汇总；`/proc/ish/jit_timing`
+测量翻译所花的时间，在应用内和 CLI 中都可用（`echo 1 > /proc/ish/jit_timing`，运行负载，
+再 `cat` 它）。`/proc/ish/host_vm` 则按类别列出应用自身的内存，包括 GPU。
+
 ## 可选加速器
 
-三者**默认均为关闭**，需要显式启用：
+HLE 自 557 起**默认开启**；另外两者默认关闭，需要显式启用：
 
 | 功能 | CLI | 作用 |
 |---|---|---|
-| HLE | `ISH_HLE=1` | 用原生代码替换热点 libc 例程（`memcpy`、`strlen`、`memcmp` 等）——**仅限 arm64 与 riscv64 客户机** |
+| HLE | 开启；`ISH_HLE=0` 可关闭 | 用原生代码替换热点 libc 例程（`memcpy`、`strlen`、`memcmp` 等）——**仅限 arm64 与 riscv64 客户机** |
 | 加密 | `ISH_CRYPTO_ACCEL=1` | AES-GCM 与 ChaCha20-Poly1305 卸载 |
 | Pixman | `ISH_PIX_ACCEL=1` | pixman 合成卸载 |
 
 HLE 影响最大，但只对 arm64 和 riscv64 客户机有效：`jit/jit.c` 只为这两者开了门，因此
-i386 或 amd64 客户机根本不会走这条路径，在那里设置 `ISH_HLE=1` 会悄无声息地毫无作用。
+i386 或 amd64 客户机根本不会走这条路径。
 与关闭该选项的同一构建相比，在 memcpy/memset/memcmp/strlen 循环上实测：256 B 时
 1.23 倍，4 KB 时 3.16 倍，64 KB 时 7.17 倍，1 MB 时 6.68 倍
 （[docs/performance-optimizations-2026-07.md](docs/performance-optimizations-2026-07.md)）。
 工作发生在一次原生调用内部，而不是每条客户机指令一次分派，因此它对数据搬运密集的代码
 有帮助，而在程序自身算术占主导时则是中性的。它是纯粹的快速路径：无法识别的 libc 不会
-匹配，直接回退到普通翻译。`ISH_HLE_STATS=1` 会输出每个函数的调用次数。
+匹配，直接回退到普通翻译。被拦截的调用改为经返回缓存而非分派器返回之后，它便成为默认
+设置；开启后没有任何测量变慢。`/proc/ish/hle` 可在运行时切换它，`ISH_HLE_STATS=1` 会
+输出每个函数的调用次数。
 
 ## 仓库结构
 
@@ -194,23 +205,29 @@ ninja -C build
 原生程序是编译进应用内部的宿主代码。对 `/AOK/native` 下的路径执行 `execve`，不会去
 加载一个客户机镜像，而是直接分发到 iSH-AOK 内部的一个函数，调用方察觉不到区别。
 `/AOK/native` 中每个注册表（`kernel/native.c`）里的程序各占一项 —— `smallclue`、
-`motepad`、`bmm`、`bmt`、`hx`、`rust-probe`、`bash`、`zsh`、`zsh-multio` —— 其余全是
+`sudo`、`su`、`passwd`、`motepad`、`ktop`、`wl-present`、`bmm`、`bmt`、`rust-probe`、
+`hx`、`bash`、`zsh`、`zsh-multio`、`dash`、`sh`，各自仅在构建包含它时才存在 —— 其余全是
 指向它们的符号链接，和 busybox 一样由链接名选择 applet：
 
 | 程序 | 说明 |
 |---|---|
-| `/AOK/native/smallclue` | busybox 风格的多合一工具箱，由 `argv[0]` 选择 applet |
+| `/AOK/native/smallclue` | busybox 风格的多合一工具箱，由 `argv[0]` 选择 applet；替代发行版工具的那些 applet 都对照 GNU（`awk` 对照 mawk）验证过 |
 | `ssh`、`scp`、`sftp`、`ssh-keygen`、`ssh-copy-id` | OpenSSH，作为 SmallCLUE 的 applet（构建时不含 OpenSSL） |
 | `vi` | Nextvi 编辑器，SmallCLUE 的一个 applet |
 | `/AOK/native/motepad` | 无模式的终端文本编辑器，对应 Workspace 的 MotePad applet |
 | `/AOK/native/bmm`、`/AOK/native/bmt` | 把 `/AOK/tools` 的基准测试作为宿主代码编译进来，因此同一份负载可以在有无模拟两种情况下计时（`kernel/native_bench.c`） |
 | `/AOK/native/hx` | [helix](https://helix-editor.com)，带语法高亮的模式化编辑器。采用 MPL-2.0，因此和 bash 一样有构建开关（`-Dnative_helix`）；其语法文件位于 `/AOK/native/libs` |
 | `/AOK/native/rust-probe` | 用于验证 `hx` 所依赖的 Rust-on-shim 路径的探针，日常用不到 |
+| `/AOK/native/sudo`、`su`、`passwd` | SmallCLUE 的这三个程序，作为独立的 **setuid-root** 程序提供；它们检查已启动根文件系统自己的 `/etc/shadow` 和 `/etc/sudoers` |
+| `/AOK/native/ktop` | 进程查看器，与 `/AOK/tools/ktop` 同一份源码 |
+| `/AOK/native/wl-present` | 不经 VNC 在应用中显示 Wayland 桌面；由 `start-wayland.sh` 运行 |
 | `/AOK/native/bash` | 见[原生 bash 与许可证](#原生-bash-与许可证) |
 | `/AOK/native/zsh` | 见[原生 zsh](#原生-zsh) |
+| `/AOK/native/dash`、`/AOK/native/sh` | dash，BSD 许可证；`native-links.sh` 让直接输入的 `sh` 指向它 |
 
-`/AOK/tools/native-links.sh` 会建立把这些 applet 放进 `PATH` 的符号链接集合，
-`--shell bash|zsh|/path` 用于切换登录 shell，`--remove` 撤销这两者。应用内文档在
+`/AOK/tools/native-links.sh` 会在 `/usr/local/native-bin` 和 `/usr/local/bin` 中建立
+把这些 applet 放进 `PATH` 的符号链接集合，`--shell bash|zsh|/path` 用于切换登录 shell，
+`--remove` 撤销这两者。预配置脚本会替你运行它。应用内文档在
 `/AOK/docs/native-programs.md`（它们是什么）和 `/AOK/docs/native-setup.md`（如何配置），
 源文件在 [opt/AOK/docs/](opt/AOK/docs) 下。
 
@@ -239,8 +256,8 @@ libc 符号。它是特意手动运行的，没有接进构建流程。
 > bash，因此已经在用它的人不会因为这次变更而被挡在登录之外。
 > 参见 [docs/historical/shell_transition_plan.md](docs/historical/shell_transition_plan.md)。
 
-bash 可以作为原生程序编译进应用（`-Dnative_bash=enabled`），但构建 556 默认不会
-这样做。编译进去之后，收益在于解释执行而非 fork：算术循环比模拟执行的 shell
+bash 可以作为原生程序编译进应用（`-Dnative_bash=enabled`），但自 556 起发布的构建
+不再包含它。编译进去之后，收益在于解释执行而非 fork：算术循环比模拟执行的 shell
 快约 16 倍，而子 shell 和命令替换则接近持平，因为原生程序无法 `fork`，只能重新启动
 自身。数据与测量方法见 [docs/bash_native_plan.md](docs/bash_native_plan.md)。这同时
 也意味着二进制里带上了 GPLv3 代码：bash 本身、随附的 readline，以及 GNU termcap。
@@ -279,7 +296,7 @@ Licensing
 只有构建选项能真正移除它们。
 
 二进制中的其余部分不含第三方 GPL：SmallCLUE 是 MIT，OpenSSH 和 libarchive 是 BSD，
-liblzma 属于公有领域。
+liblzma 属于公有领域，GPU 相关的 virglrenderer 和 MoltenVK 分别是 MIT 和 Apache-2.0。
 
 **需要加脚注的是 dash，而且这是刻意为之而非疏漏。** dash 采用 BSD-3-Clause ——
 唯独 `src/mksignames.c` 是 GPL-2+，而它的*输出*会被链接进二进制。Debian 自己的
@@ -365,7 +382,7 @@ meson test -C build
 于这种情况，因为那里根本没有可供比较的参考值。在 x86_64 宿主机上它会完整运行。
 
 客户机侧套件是主要的回归关卡。它位于 [tests/manual/](tests/manual)，在客户机内以只读
-方式提供于 `/AOK/tests`，包含约 200 个专项程序，覆盖信号、futex、进程生命周期、文件
+方式提供于 `/AOK/tests`，包含约 400 个专项程序，覆盖信号、futex、进程生命周期、文件
 系统层、JIT 以及各架构的指令行为。每个程序在失败时以非零值退出，并支持 `-v`。
 
 在客户机内：
@@ -387,11 +404,13 @@ sh /AOK/tests/setup-regressions.sh --only fs_conformance,futex_core --run
 
 ## 使用根文件系统
 
-应用内置：Alpine 3.23.3 与 Devuan 6（excalibur），仅 `aarch64`。Xcode 的
+应用内置：Alpine 3.24.2 与 Devuan 6（excalibur），仅 `aarch64`。Xcode 的
 "Download Root" 阶段会安装这两个压缩包，并从 Resources 中删除 i386 和 x86_64 的压缩包，
 因此在下载任何东西之前，设备上只有这两个。同样这两个发行版的 `i386`、`x86_64` 和
-`riscv64` 版本，以及 Arch，都可在应用内下载，目录见
-[deps/rootfs-manifest](deps/rootfs-manifest)。
+`riscv64` 版本（Alpine 同时有 3.24.2 和 3.23.3），以及 Arch 和 PSCAL + SmallCLUE，
+都可在应用内下载，目录见 [deps/rootfs-manifest](deps/rootfs-manifest)。在启动环境中设置
+`ISH_BOOT_ROOT=<名称>` 可以只在这一次启动时引导指定的根文件系统，而不改变默认设置；
+真机测试就是这样依次引导每个根文件系统的。
 
 根文件系统选择界面与元数据处理位于：
 
@@ -468,6 +487,24 @@ iSH-AOK 基于上游 iSH，但有意与之分化。
 
 在带有 `upstream` 远端的克隆中使用 `gh` CLI 时，请加上 `--repo emkey1/ish-AOK`。否则
 `gh` 会解析到 `ish-app/ish`，回答的是上游的工作流、发布和标签，而不是本分支的。
+
+## 与 LLM 编程代理协作
+
+这棵代码树大量借助 LLM 编程代理开发。如果你 fork 了本仓库并打算让某个代理（Claude
+或其他）在这里工作，请先让它读 [docs/llm_onboarding.md](docs/llm_onboarding.md)。这份
+文档专门用来缩短熟悉本代码树的回归套件、调试工具（客户机代码没有调试器）以及
+`docs/TODO.md` 协作流程所需的时间。
+
+请注意，`.gitignore` 有意排除了本项目见过的所有工具专属代理配置文件（`CLAUDE.md`、
+`AGENTS.md`、`.claude/`、`.cursor/`、`.clinerules`、`.gemini/`、`.windsurfrules`、
+`opencode.json`……）——它们被视为每个检出各自的个人工具偏好，与 `.vscode/` 或
+`.prettierrc` 属于同一类，而不是共享的仓库内容。`docs/llm_onboarding.md` 是唯一提交
+进仓库、与工具无关的入口；如果你的工具需要自己的指引文件，请把它留在本地，并让它
+引用那份文档，而不是复制其内容。
+
+如果你使用 Claude Code，可以启用 [`CLAUDE.md.template`](CLAUDE.md.template)——把它
+复制为 `CLAUDE.md`（`cp CLAUDE.md.template CLAUDE.md`），Claude Code 就会在每次会话中
+自动加载一份精简的要点，而该文件永远不会被跟踪或提交。
 
 ## 致谢
 

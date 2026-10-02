@@ -83,7 +83,7 @@ had its say, and the rewrite silently does nothing.
 
 ## 11.3 `ENOSYS` or `SIGSYS`: what "not implemented" looks like
 
-Linux answers an unknown syscall number with `ENOSYS`. AOK answers with
+Linux answers an unknown syscall number with `ENOSYS`. AOK answered with
 `SIGSYS`:
 
 ```c
@@ -94,12 +94,16 @@ if (syscall_num >= dispatch->num_syscalls) {
 }
 ```
 
-That is a deliberate divergence and a defensible one — a guest making a syscall
-this build has never heard of is usually a sign of something worth investigating
-loudly, and `SIGSYS` produces "Bad system call" plus a log line, where `ENOSYS`
-produces a return value nobody prints.
+That was a deliberate divergence, and it looked defensible — a guest making a
+syscall this build has never heard of is usually a sign of something worth
+investigating loudly, and `SIGSYS` produces "Bad system call" plus a log line,
+where `ENOSYS` produces a return value nobody prints. Since August 2026 the
+same branch keeps the log line and returns `ENOSYS`, because `SIGSYS` is
+seccomp's and a kernel does not raise it on its own: glibc, libseccomp's tests
+and every "call it and see" feature probe died mid-probe with no way to catch
+it.
 
-It is also a decision with consequences, and one of them cost real work.
+It was also a decision with consequences, and one of them cost real work.
 
 > **The bug that taught us this**
 >

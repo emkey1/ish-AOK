@@ -1,16 +1,20 @@
 # 25. The catalogue
 
-Nine entries live in the registry, and everything else under `/AOK/native` is a
-symlink to one of them:
+Sixteen entries can live in the registry as of 557, and everything else under
+`/AOK/native` is a symlink to one of them:
 
 | entry | what it is |
 |---|---|
 | `smallclue` | a busybox-style MIT toolbox; applet chosen by `argv[0]` |
+| `sudo`, `su`, `passwd` | the three setuid-root programs, separate so no applet can be talked into root |
 | `motepad` | a modeless terminal text editor |
+| `ktop` | the `/AOK/tools` process viewer (Chapter 31), compiled as host code |
+| `wl-present` | carries the Wayland desktop's frames and input to the app (Chapter 32) |
 | `hx` | [helix](https://helix-editor.com), a modal editor with syntax highlighting |
-| `bash` | GNU bash, behind a build option (Chapter 26) |
+| `bash` | GNU bash, behind a build option that is off since 556 (Chapter 26) |
 | `zsh` | zsh, on by default |
 | `zsh-multio` | the byte pump behind zsh's MULTIOS redirections |
+| `dash`, `sh` | dash, on by default; `sh` is the same program by its POSIX name |
 | `rust-probe` | exercises the Rust-on-the-shim path |
 | `bmm`, `bmt` | the `/AOK/tools` benchmarks, as native programs |
 
@@ -52,6 +56,18 @@ That is Chapter 22's rule wearing different clothes. An ordinary program owns
 everything it was handed, because the kernel that handed it over is gone. A
 native program shares its arguments with a caller that is still running and will
 clean up afterwards.
+
+557 changed what SmallCLUE's applets are for. Once `native-links.sh` put them
+ahead of the distribution's commands on every `PATH` (Chapter 22), a busybox
+subset stopped being good enough: its `sed` knew four commands, and
+`setup-gpu.sh`'s checks died on `sed: unsupported flag 'p'` on a device whose GPU
+was working. So the applets that shadow a distribution's tools were brought up
+to GNU compatibility one at a time — `sed`, `grep`, `find`, `ls`, `cp`, `mv`,
+`rm`, `sort`, `xargs`, `date`, `diff`, `tar`, `gzip`, `stty` and others, with
+`awk` matching mawk 1.3.4 — each with golden cases whose expected output and
+exit status were recorded from the original program (`tests/manual/native_sed.c`,
+`native_coreutils.c`). `native_sed` has 134 of them, and its positive control is
+the point: the old `sed` failed 101.
 
 ## 25.2 OpenSSH: re-enabling, not porting
 

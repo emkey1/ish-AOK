@@ -36,7 +36,10 @@ about the wrong machine — the iOS account, which is called `mobile`, and which
 is not root. `uname` is the same: no state, no I/O, and it reports Darwin.
 `getenv`, `isatty`, `ttyname`, `gethostname`, `getpwnam`, `getloadavg`,
 `time`, `localtime` — every one of them is harmless by the usual test and wrong
-by this one.
+by this one. And the question has to be asked above the shim as well: in 557 the
+shim's `uname` already answered as the guest kernel, but SmallCLUE's applet
+replaced the machine with the host's own `hw.machine`, so `uname -m` printed
+`iPad17,3` where `/bin/uname` said `aarch64` (#622).
 
 ## 23.2 Force-include, and the order that matters
 

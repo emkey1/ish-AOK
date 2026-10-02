@@ -182,7 +182,7 @@ passes there too: 38 of its checks fail on the commit before this one.
 The fork adds a directory that no Linux has:
 
 ```sh
-cat /proc/ish/version        # iSH-AOK 1.3 (553)
+cat /proc/ish/version        # iSH-AOK 1.3 (557)
 cat /proc/ish/host_info      # the Mac or iPad underneath: OS, release, hardware
 cat /proc/ish/ips            # this device's network interfaces
 cat /proc/ish/colors         # the 16 ANSI colours, drawn -- a quick theme check
@@ -200,7 +200,14 @@ preference to its default.
 
 **`/proc/ish/<arch>_jit_fuse`** is Chapter 6's measurement surface: the
 instruction-fusion bits, readable and writable at run time, in the same variable
-the translator consults.
+the translator consults. 557 added more of the same kind: `hle` turns Chapter 8's
+interception on and off live, `jit_inherit` the fork-time copying of translated
+blocks (Chapter 6), `arm64_mops` the MOPS feature bit (Chapter 15), and
+`jit_timing` counts the time spent translating once a 1 is written to it. And
+one that only the host can answer: `host_vm` lists where the app's own memory
+is, by the host's region tags — the footprint jetsam kills on, then resident,
+dirty and compressed megabytes per tag — written when a game's race took the
+app from 1 GB to 3.9 GB and nothing inside the guest could say where it went.
 
 Both exist for the same reason, which is worth stating as a design principle. An
 app setting that can only be changed by tapping a switch cannot be scripted, and
@@ -242,6 +249,12 @@ for the shape is the argument of Section 18.4 restated: a device rather than a
 command, because it "composes with redirection and pipes the way a shell expects,
 and needs no binary in the guest filesystem". The command-line build has no iOS
 to ask, so these four exist only in the app.
+
+557 added the largest node of the family, and the one exception to that rule:
+`/dev/dri/renderD128` (`fs/virtgpu.c`), a virtio-gpu render node that stock Mesa
+drives and that replays the guest's Vulkan onto Metal in-process. Metal is on
+the Mac too, so it is in every Darwin build, the command-line one included
+(Chapter 32).
 
 Two of the standard nodes are worth a note too. `/dev/kmsg` is the kernel log, which the
 driver had always implemented and no rootfs had ever had a node for, so every

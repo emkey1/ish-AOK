@@ -6,8 +6,9 @@
 
 To type plain `motepad`, run `sh /AOK/tools/native-links.sh` once per root — it
 links the standalone native programs as well as SmallCLUE's applets, so
-`motepad` lands in `/usr/local/native-bin` along with `zsh` (and `bash`, in a
-build configured with `-Dnative_bash=enabled` — not the default as of 556). See
+`motepad` lands in `/usr/local/native-bin` and `/usr/local/bin` along with
+`zsh` (and `bash`, in a build configured with `-Dnative_bash=enabled` — not the
+default since 556). The provisioning scripts run it for you. See
 [native-setup.md](native-setup.md). The rest of this page writes it bare on the
 assumption you have.
 

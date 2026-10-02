@@ -634,8 +634,8 @@ That is instruction fusion, and each guest has its own families:
 
 | guest | families |
 |---|---|
-| i386 | `ADDR`, `MOVMR`, `LEA`, `ALU`, `PUSHPOP` |
-| arm64 | `BCOND` (compare + branch), `LDST` (load/store RMW), `LDCMP` (load + compare), `RETCACHE` |
+| i386 | `ADDR`, `MOVMR`, `LEA`, `ALU`, `PUSHPOP`, `JCC8` (8-bit `cmp`/`test` + `jcc`) |
+| arm64 | `BCOND` (compare + branch), `LDST` (load/store RMW), `LDCMP` (load + compare), `RETCACHE`, `VSPEC`/`OSPEC`/`LSPEC` (SIMD, scalar ALU and writeback or register-offset load/store gadgets fed precomputed register offsets), `BTFN` |
 | riscv64 | `FOLD` (`lui`/`auipc` + `addi`/load), `JAL` (link write + branch in one), `RETCACHE`, `PAIR` (`ld`/`sd` pairs), `ALU` (`slli` + shift/`add`, `add` + load), `BR` (`li`/`andi` + branch), `BTFN` (backward branches keep the taken path straight-line), `RCACHE` (register-cached runs; off by default) |
 | amd64 | `INCDEC_REG` |
 

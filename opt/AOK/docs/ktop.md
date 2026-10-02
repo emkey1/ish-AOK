@@ -39,14 +39,17 @@ translates it (measured 2.7x faster per refresh than the same source built for
 an i386 guest). It is the *same* `ktop.c` compiled a second time, not a
 variant, so the two cannot disagree about behaviour.
 
-Symlink it onto `PATH` if you want to type `ktop`:
+`native-links.sh` puts it on `PATH` with the other native programs — the
+provisioning scripts run that for you — so on a provisioned root `ktop` is
+already this one. To link it by hand instead:
 
 ```sh
-sudo ln -s /AOK/native/ktop /usr/local/bin/ktop
+sudo ln -s /AOK/native/ktop /usr/local/bin/ktop   # or: sh /AOK/tools/native-links.sh
 ```
 
 Beware if you already have one there: a symlink will not overwrite an existing
-file, and a `ktop` you built earlier keeps winning until you replace it. See
+file (nor will `native-links.sh` without `--force`), and a `ktop` you built
+earlier keeps winning until you replace it. See
 [native-setup.md](native-setup.md) for how these symlinks are meant to be
 managed.
 

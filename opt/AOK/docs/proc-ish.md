@@ -5,7 +5,7 @@ the host device, your settings, the JIT's state. It is AOK's own addition to
 procfs; nothing on real Linux has it.
 
 ```sh
-cat /proc/ish/version        # iSH-AOK 1.3 (556)
+cat /proc/ish/version        # iSH-AOK 1.3 (557)
 cat /proc/ish/host_info      # the Mac or iPad underneath: OS, release, hardware
 cat /proc/ish/ips            # this device's network interfaces
 cat /proc/ish/colors         # the 16 ANSI colours, drawn -- a quick theme check
@@ -18,6 +18,8 @@ cat /proc/ish/UIDevice       # the UIDevice the app sees: model, OS, orientation
 cat /proc/ish/applets        # the Workspace applets that are open
 cat /proc/ish/arch           # every process's guest architecture, one line each
 cat /proc/ish/host_ports     # Mach port usage -- a leak diagnostic
+cat /proc/ish/host_vm        # where the app's own memory is -- GPU included
+cat /proc/ish/hle            # 1 when libc calls are run as host code
 ```
 
 The Workspace applets are app interface, not processes, so `ps` and `top` do
@@ -140,7 +142,7 @@ stored name stayed put. A few notable ones:
 | entry | what it reflects |
 |---|---|
 | `theme`, `font_family`, `font_size`, `line_height` | [Appearance](themes.md) |
-| `enable_hle`, `enable_crypto_accel`, `enable_pix_accel` | the optional accelerators |
+| `enable_hle`, `enable_crypto_accel`, `enable_pix_accel` | the accelerators — HLE on by default, the other two opt-in |
 | `enable_multicore`, `enable_extralocking` | emulator behaviour |
 | `launch_command`, `boot_command` | what a session starts |
 | `llm_*` | the [LLM client](llm-chat.md) |
@@ -168,6 +170,7 @@ Most of `/proc/ish` is read-only. The exceptions:
 | `workspace` | `0666` | ask the app to open a [Workspace](workspace.md) tool; writable by an ordinary user, because opening a window is not an administrative act |
 | `roots` | `0644` | the installed [root filesystems](roots.md); root-only, because switching them is |
 | `amd_jit`, `amd64_jit`, `<arch>_jit_fuse` | `0644` | JIT engine and instruction-fusion switches, per guest architecture |
+| `hle`, `jit_inherit`, `jit_timing`, `arm64_mops` | `0644` | the JIT switches and the translation-time counter below |
 | `i386_no_cache_comm`, `i386_single_step_comm` | `0644` | i386 debugging aids, named for the process they apply to |
 
 The `*_jit_fuse` entries report which fusions are on and let you turn one off
@@ -180,6 +183,39 @@ cat /proc/ish/arm64_jit_fuse
 # ldcmp on
 # retcache on
 ```
+
+## The JIT, from the guest
+
+Four more files let you see and switch what the JIT does, live, without a
+relaunch. Each takes `0` or `1`, and root may write it:
+
+```sh
+cat /proc/ish/hle                  # 1: hot libc functions run as host code (the default)
+echo 0 > /proc/ish/hle             # off, for blocks translated from now on
+cat /proc/ish/jit_inherit          # 1: a forked child reuses its parent's translations
+cat /proc/ish/arm64_mops           # 1: arm64 programs are told about FEAT_MOPS
+echo 1 > /proc/ish/jit_timing      # zero the counters and start counting
+make -j4                           # ...the workload you are asking about
+cat /proc/ish/jit_timing           # blocks, ns and bytes translated, per guest architecture
+```
+
+- **`hle` is on by default.** High-level emulation spots well-known libc
+  functions (`memcpy`, `strlen`, `memcmp` and friends) in arm64 and riscv64
+  programs by their exact code, and runs each call as one host function rather
+  than translating it instruction by instruction. The app's HLE switch and the
+  CLI's `ISH_HLE=0` set the same thing; i386 and amd64 programs never take the
+  path.
+- **`jit_inherit` makes subshells cheaper.** A forked child copies the blocks its
+  parent already translated, where the memory under them is still the same,
+  instead of translating them again — 5 to 20% off a `( : )` or `$(…)` loop.
+  `ISH_JIT_INHERIT=0` starts it off.
+- **`arm64_mops` changes what new programs see.** With it on, glibc's `memcpy`,
+  `memmove` and `memset` use the FEAT_MOPS instructions, each one gadget.
+  It takes effect at the next `exec`; `ISH_MOPS=0` starts it off.
+- **`jit_timing` answers "is it translating or running?"** It counts time spent
+  turning guest code into gadget blocks, across every process, with an
+  `inherited` line for the blocks a fork copied instead. Counting costs two
+  clock reads per block, so turn it off again (`echo 0`) when you are done.
 
 ## Memory and swap
 
@@ -242,6 +278,22 @@ Two more exist for development and are of no use in normal running:
 `swap_evict`, which forces eviction of a named pid's address space, and
 `mem_release_probe`, which measures whether releasing pages moves the host's
 ledger at all. Both are writable only on a build that offered guest control.
+
+## Where the app's memory went
+
+```sh
+cat /proc/ish/host_vm
+```
+
+The files above describe guest memory. `host_vm` describes the app's own: its
+footprint — what iOS kills it on — and the host's split of that, including
+**graphics**, the GPU memory that no region shows; then the GPU stack's own
+totals (the guest's GPU buffers, Vulkan device memory, MoltenVK's textures,
+pipelines and temporary buffers); then every kind of host memory region with
+its dirty, compressed, resident and virtual megabytes, largest first. When a
+game or the Wayland desktop drives the app towards its memory limit, this is
+the file that says which layer is holding it. A host without Mach VM (the Linux
+command-line build) says `unsupported`.
 
 ## When something is not waking up
 

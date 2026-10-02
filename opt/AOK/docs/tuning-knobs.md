@@ -90,6 +90,56 @@ ISH_GUEST_PROFILE_OUT=/tmp/prof.txt ./ish -f build/alpine /bin/sh   # write the 
 The report is written at process exit. It is a no-op unless set, so it costs
 nothing in ordinary use.
 
+## `ISH_JIT_PROFILE`
+
+Where `ISH_GUEST_PROFILE` says which library the time went to, this says which
+*instructions* it went to. Every guest instruction costs about the same under
+the gadget JIT, so a workload's cost is set by how many of each kind it runs,
+and that is what this records: each translated block counts how often it ran
+and keeps the guest code it was made from. It covers all four guests.
+
+```sh
+ISH_JIT_PROFILE=/tmp/mix.txt ./ish -f build/alpine-arm64 /bin/sh -c 'gzip -9 < big > /dev/null'
+python3 tools/jitprof-report.py /tmp/mix.txt     # the mix, vector runs, commonest pairs
+```
+
+The file is written at exit. The report disassembles x86 blocks with `llvm-mc`.
+
+## The JIT and HLE switches
+
+Each of these has a matching `/proc/ish` file that switches it live (see
+[proc-ish.md](proc-ish.md#the-jit-from-the-guest)); the variable only sets where
+it starts:
+
+| variable | default | what `0` does |
+| --- | --- | --- |
+| `ISH_HLE` | on | stops running hot libc functions (`memcpy`, `strlen`, …) in arm64 and riscv64 programs as host code |
+| `ISH_JIT_INHERIT` | on | a forked child translates everything again instead of copying its parent's blocks |
+| `ISH_MOPS` | on | arm64 programs are not told about FEAT_MOPS, so glibc uses its NEON `memcpy` |
+| `ISH_VIRTGPU` | on | no GPU render node: `/dev/dri/renderD128` is absent |
+
+`ISH_HLE` was opt-in until 557. It became the default once an intercepted call
+returned through the return cache rather than the dispatcher; nothing measured
+slower with it on, and musl and riscv64 programs gained up to 18%.
+`ISH_HLE_STATS=1` prints per-function call counts at exit. `ISH_JIT_TIMING=1`
+counts translation time from the start, as writing `1` to
+`/proc/ish/jit_timing` does later.
+
+## `ISH_BOOT_ROOT`
+
+For the app rather than the CLI: boots the named root for **this launch only**,
+leaving the saved default alone, so a device driven from a Mac can boot each
+root in turn:
+
+```sh
+xcrun devicectl device process launch -e '{"ISH_BOOT_ROOT":"Alpine3.24.2-aarch64"}' \
+    --terminate-existing app.ish.iSH-AOK
+```
+
+A name that is not an installed root fails the boot by name, listing the ones
+there are, rather than quietly booting the default. `/proc/ish/roots` reports
+`booted name=` for the root at `/` — see [roots.md](roots.md).
+
 ## `ISH_GUEST_MEM_HEADROOM_MB`
 
 Sets the free-memory threshold (in MB) below which iSH-AOK stops handing the

@@ -85,6 +85,32 @@ So a service you only talk to from inside the guest can use port 80 or 22
 quite happily, as long as it runs as root. The port ≥ 1024 rule only matters
 when you want the outside world to reach it.
 
+## The DNS relay at `127.0.0.53`
+
+The `/etc/resolv.conf` iSH-AOK writes lists `127.0.0.53` first, ahead of the
+device's own nameservers — the address systemd-resolved's stub uses on Linux.
+Behind it is a small relay in the app that passes each query, unchanged, to
+the device's nameservers in turn and hands the reply straight back, whatever
+it says:
+
+```sh
+head -3 /etc/resolv.conf     # nameserver 127.0.0.53 first
+nslookup example.com         # answered from 127.0.0.53
+```
+
+Things worth knowing:
+
+- **It exists because iOS knows the network and the guest does not.** The
+  nameservers change as the device moves between Wi-Fi and cellular; the relay
+  always asks the current ones.
+- **A missing name is answered at once.** `NXDOMAIN` and empty answers come back
+  as such, so glibc on Devuan moves on immediately instead of sitting out a
+  five-second timeout per nameserver.
+- **Port 53 on `127.0.0.1` is yours.** The relay listens on an ephemeral host
+  port and the guest reaches it through the loopback NAT at `127.0.0.53:53`, so a
+  guest resolver such as `dnsmasq` or `unbound` can bind `127.0.0.1:53` without
+  colliding with it.
+
 ## Letting the guest own `/etc/resolv.conf`
 
 By default iSH-AOK rewrites the guest's `/etc/resolv.conf` on every DNS
@@ -99,8 +125,7 @@ service like `dhclient` or `resolvconf` — **Settings → Custom DNS Servers**
 has a **Don't Manage** choice, alongside the usual field for a list of
 nameserver IPs. Choosing it shows "Off (guest manages)" and the periodic
 refresh returns without touching the file at all from then on; it also stops
-holding `127.0.0.1:53`, which the app otherwise binds on the host so the
-guest's own resolver can use it. Setting a custom server list and choosing
+the DNS relay described below. Setting a custom server list and choosing
 Don't Manage are mutually exclusive — saving one clears the other.
 
 Both are also reachable from inside the guest through
