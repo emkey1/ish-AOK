@@ -41,8 +41,8 @@ jobs:
       # an ssh that says "not built into this iSH-AOK" and a stub vi. Just
       # those two: meson uses none of smallclue's other submodules (dvtm,
       # libgit2, openrsync).
-      - name: Check out smallclue's openssh and nextvi
-        run: git -C deps/smallclue submodule update --init third-party/openssh third-party/nextvi
+      - name: Check out smallclue's openssh, nextvi and libgit2
+        run: git -C deps/smallclue submodule update --init third-party/openssh third-party/nextvi third-party/libgit2
 
       - name: Select newest available Xcode
         run: |

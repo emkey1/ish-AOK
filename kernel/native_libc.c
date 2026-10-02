@@ -671,6 +671,14 @@ int nlibc_unlink(const char *path) {
     NLIBC_PATH(guest_path, path);
     return (int) nlibc_ret(native_syscall(NATIVE_SYS_unlinkat, AT_FDCWD_, guest_path, 0));
 }
+// remove(3): unlink, or rmdir for a directory -- on the GUEST. Unrouted it was
+// the host's, and libgit2 calls it (repository.c) on a path inside the repo.
+int nlibc_remove(const char *path) {
+    int r = nlibc_unlink(path);
+    if (r < 0 && (errno == EISDIR || errno == EPERM))
+        r = nlibc_rmdir(path);
+    return r;
+}
 int nlibc_rmdir(const char *path) {
     NATIVE_FRAME;
     NLIBC_PATH(guest_path, path);
@@ -5809,6 +5817,44 @@ static void nlibc_exec_reset_handlers(void) {
         if (h != NULL && h != SIG_DFL && h != SIG_IGN)
             nlibc_signal(host_sig, SIG_DFL);
     }
+}
+
+// pthread_sigmask is the same request for one thread, and a native program's
+// thread is its task, so it is the task's guest mask -- never the host's, which
+// AOK holds as it does on purpose (the wake signal; see native_libc.h on
+// longjmp). Returns the error number rather than setting errno, as pthreads do.
+// libgit2's process spawner blocks SIGPIPE through it.
+int nlibc_pthread_sigmask(int how, const sigset_t *set, sigset_t *oldset) {
+    int saved = errno;
+    int r = nlibc_sigprocmask(how, set, oldset);
+    int err = r < 0 ? errno : 0;
+    errno = saved;
+    return err;
+}
+
+// getloadavg(3): the guest's load, from its /proc/loadavg, rather than the
+// host's. libgit2 seeds its random state with it.
+int nlibc_getloadavg(double loadavg[], int nelem) {
+    int fd = nlibc_open("/proc/loadavg", O_RDONLY);
+    if (fd < 0)
+        return -1;
+    char buf[128];
+    ssize_t n = nlibc_read(fd, buf, sizeof(buf) - 1);
+    nlibc_close(fd);
+    if (n <= 0)
+        return -1;
+    buf[n] = '\0';
+    int got = 0;
+    char *p = buf;
+    while (got < nelem && got < 3) {
+        char *end = NULL;
+        double v = strtod(p, &end);
+        if (end == p)
+            break;
+        loadavg[got++] = v;
+        p = end;
+    }
+    return got > 0 ? got : -1;
 }
 
 int nlibc_sigprocmask(int how, const sigset_t *set, sigset_t *oldset) {

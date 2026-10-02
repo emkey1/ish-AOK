@@ -38,8 +38,8 @@ jobs:
 
       # See build-dev-ipa.yml: without these two, the release IPA shipped an
       # ssh that says "not built into this iSH-AOK" and a stub vi.
-      - name: Check out smallclue's openssh and nextvi
-        run: git -C deps/smallclue submodule update --init third-party/openssh third-party/nextvi
+      - name: Check out smallclue's openssh, nextvi and libgit2
+        run: git -C deps/smallclue submodule update --init third-party/openssh third-party/nextvi third-party/libgit2
 
       - name: Select newest available Xcode
         run: |

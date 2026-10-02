@@ -123,10 +123,12 @@ failure, then adjust the steps below before starting them.
   - SmallCLUE `curl` takes only `-o -O -X -H -d -u -k`. `curl -s`, `-S`, `-L`,
     `-I`, `-f` and `-w` are what install snippets and scripts use, and on a root
     with no other HTTP client this matters. Added to step 5.
-  - **`git` is a stub in every AOK build** ("libgit2 support is not enabled"):
-    AOK links neither libgit2 nor OpenSSL. That predates native mode, but in
-    native mode there is no distro git to fall back on. Bringing libgit2 in is
-    its own project, so it is **queued in docs/TODO.md, not in 558**.
+  - **`git` was a stub in every AOK build** ("libgit2 support is not
+    enabled"): AOK linked neither libgit2 nor OpenSSL. **Done for 558**
+    (maintainer, 2026-10-02): libgit2 1.9 is built in on Apple platforms with
+    SecureTransport for HTTPS, so `git clone https://...`, commit, log, diff
+    and checkout work natively. Not yet: the ssh transport (`git@host:repo`),
+    which needs libgit2's exec-ssh spawner moved off fork().
   - Cosmetic: `ps` shows a dash relaunch as `script --aok-fork N`, and a zsh one
     as `zsh -f -c -- CMD /AOK/native/zsh`.
 

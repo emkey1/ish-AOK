@@ -185,6 +185,8 @@ PURE = {
     # own header and trailer).
     "deflate", "deflateEnd", "deflateInit2_",
     "inflate", "inflateEnd", "inflateInit2_", "inflateReset", "crc32",
+    # The same, as libgit2 spells them: default-window init, and reset.
+    "deflateInit_", "deflateReset", "inflateInit_",
     # termios helpers that only edit a struct in memory. Not tcgetattr or
     # tcsetattr, which talk to a terminal and are redirected: these set or read
     # fields, and the redirected calls translate the result on its way to the
@@ -247,7 +249,25 @@ PURE = {
     "pthread_detach", "pthread_self", "pthread_equal", "pthread_attr_init",
     "pthread_attr_destroy", "pthread_attr_setstacksize",
     "pthread_attr_setdetachstate", "pthread_once", "pthread_key_create",
-    "pthread_getspecific", "pthread_setspecific",
+    "pthread_getspecific", "pthread_setspecific", "pthread_key_delete",
+    "pthread_rwlock_init", "pthread_rwlock_destroy", "pthread_rwlock_rdlock",
+    "pthread_rwlock_wrlock", "pthread_rwlock_unlock",
+    # A monotonic tick count for timing (libgit2's git_time_monotonic and its
+    # random seed). Host time IS the guest's time source; nothing to route.
+    "mach_absolute_time",
+    # libgit2's HTTPS (streams/stransport.c), deliberately the host's:
+    # SecureTransport is a TLS engine that never touches a descriptor itself --
+    # its I/O goes through the SSLSetIOFuncs callbacks, which libgit2 points at
+    # its own socket stream, and that stream is routed. Certificate trust is
+    # iOS's own store, the same choice curl and wget make through NSURLSession
+    # (deps/smallclue-shim). The CF calls only read what Security hands back.
+    "SSLCreateContext", "SSLSetIOFuncs", "SSLSetConnection",
+    "SSLSetPeerDomainName", "SSLSetProtocolVersionMin", "SSLSetSessionOption",
+    "SSLHandshake", "SSLRead", "SSLWrite", "SSLClose", "SSLCopyPeerTrust",
+    "SecTrustEvaluate", "SecTrustGetCertificateAtIndex",
+    "SecCertificateCopyData", "SecCopyErrorMessageString",
+    "CFRelease", "CFDataGetBytePtr", "CFDataGetLength", "CFStringGetLength",
+    "CFStringGetCString", "CFStringGetCStringPtr",
     # The calling HOST thread's own stack bounds, which is the only correct
     # answer for a stack-overflow guard: what is about to overflow is the host
     # stack the native program is running on, not anything the guest models.
@@ -543,7 +563,7 @@ HOST_THREAD_RUNTIME = {
     "madvise", "mlock", "munlock",
 }
 
-DEFAULT_TARGETS = ("build/libsmallclue.a", "build/libnextvi.a",
+DEFAULT_TARGETS = ("build/libsmallclue.a", "build/libnextvi.a", "build/libgit2.a",
                    "build/libbash.a", "build/libzsh.a", "build/libdash.a",
                    "build/libopenssh.a",
                    "build/libopenssh_scp.a", "build/libopenssh_stubs.a",

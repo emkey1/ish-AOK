@@ -41,6 +41,12 @@ note_problem() { problems="$problems
 # Every submodule URL is a public GitHub repo, verified, so this needs no
 # credentials.
 git submodule update --init || note_problem "git submodule update --init failed"
+# And the three of smallclue's own submodules the app is built from, which a
+# non-recursive update leaves out -- the same line the Actions jobs run:
+# openssh (ssh, scp, sftp), nextvi (vi) and libgit2 (git). Without them meson
+# swaps in stubs and the archive succeeds without them.
+git -C deps/smallclue submodule update --init third-party/openssh third-party/nextvi third-party/libgit2 \
+    || note_problem "smallclue's openssh/nextvi/libgit2 submodules failed"
 
 # --- generated sources the checkout does not carry -----------------------
 # The two steps the Actions macOS job runs between checkout and xcodebuild, and

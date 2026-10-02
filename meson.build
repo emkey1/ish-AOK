@@ -998,8 +998,67 @@ if have_openssh
     endif
 endif
 
+# libgit2, for SmallCLUE's git applet (src/git_app.c, ~13k lines of porcelain
+# over it). It used to be a stub in every AOK build -- "libgit2 support is not
+# enabled in this build" -- because SmallCLUE's own builds configure libgit2
+# with OpenSSL and AOK links none. On Apple platforms it needs none: HTTPS
+# through SecureTransport, SHA-1 through libgit2's bundled collision-detecting
+# implementation, SHA-256 through CommonCrypto, regcomp, and the zlib already
+# linked. deps/libgit2-shim holds the two headers libgit2's CMake generates
+# for exactly that configuration (git2_features.h, git2/experimental.h);
+# regenerate them with its cmake and these -D options if libgit2 is bumped:
+#   USE_HTTPS=SecureTransport USE_SHA1=CollisionDetection
+#   USE_SHA256=CommonCrypto USE_HTTP_PARSER=builtin USE_REGEX=regcomp
+#   USE_COMPRESSION=zlib USE_SSH=OFF USE_AUTH_NTLM=OFF USE_AUTH_NEGOTIATE=OFF
+#   USE_I18N=OFF USE_NSEC=ON
+#
+# Compiled as a native program's code: the native_libc.h force-include routes
+# its files, sockets and DNS to the guest, exactly as SmallCLUE's are, and
+# NO_MMAP keeps it from mapping a guest descriptor through the host. The
+# sources are the same globs libgit2's CMake compiles for that configuration
+# (checked equal, 177 files). A missing submodule, or a non-Apple host, keeps
+# the stub: `git -C deps/smallclue submodule update --init third-party/libgit2`.
+libgit2_dir = 'deps/smallclue/third-party/libgit2'
+have_libgit2 = host_machine.system() in ['darwin', 'ios'] and \
+    fs_mod.is_file(libgit2_dir / 'include' / 'git2.h')
+liblibgit2 = []
+libgit2_includes = []
+if have_libgit2
+    libgit2_src = []
+    foreach f : run_command(python, '-c',
+            'import glob, sys; r = sys.argv[1]; print(" ".join(sorted(p[len(r) + 1:] for d in ("src/libgit2", "src/libgit2/streams", "src/libgit2/transports", "src/util", "src/util/allocators", "src/util/unix", "deps/xdiff", "deps/llhttp", "src/util/hash/sha1dc") for p in glob.glob(r + "/" + d + "/*.c"))))',
+            meson.current_source_dir() / libgit2_dir, check: true).stdout().strip().split(' ')
+        if f != ''
+            libgit2_src += files(libgit2_dir / f)
+        endif
+    endforeach
+    libgit2_src += files(libgit2_dir / 'src/util/hash/collisiondetect.c',
+                         libgit2_dir / 'src/util/hash/common_crypto.c')
+    libgit2_includes = include_directories(libgit2_dir / 'include')
+    liblibgit2 = [static_library('git2', libgit2_src,
+        include_directories: [include_directories(
+            'deps/libgit2-shim',
+            libgit2_dir / 'include',
+            libgit2_dir / 'src/util',
+            libgit2_dir / 'src/libgit2',
+            libgit2_dir / 'deps/xdiff',
+            libgit2_dir / 'deps/llhttp'), includes],
+        c_args: [
+            '-include', meson.current_source_dir() / 'kernel/native_libc.h',
+            '-D_GNU_SOURCE', '-DNDEBUG', '-DNO_MMAP',
+            '-DSHA1DC_NO_STANDARD_INCLUDES=1',
+            '-DSHA1DC_CUSTOM_INCLUDE_SHA1_C="git2_util.h"',
+            '-DSHA1DC_CUSTOM_INCLUDE_UBC_CHECK_C="git2_util.h"',
+            '-w',  # vendored code, not ours to police
+        ])]
+    smallclue_c_args += '-DPSCAL_HAS_LIBGIT2'
+endif
+summary({'git (libgit2)': have_libgit2 ? 'yes -- SecureTransport, no SSH transport'
+                                       : 'stub (deps/smallclue/third-party/libgit2 missing, or not Apple)'},
+        section: 'Native programs')
+
 libsmallclue = static_library('smallclue', smallclue_src + smallclue_extra_src,
-    include_directories: [includes, smallclue_includes] + openssh_includes,
+    include_directories: [includes, smallclue_includes, libgit2_includes] + openssh_includes,
     c_args: smallclue_c_args)
 
 # NOT compiled with the native_libc.h force-include the rest of SmallCLUE
@@ -1924,11 +1983,14 @@ libktop = static_library('ktop', 'opt/AOK/tools/ktop/ktop.c',
 
 libish = library('ish', src,
     objects: librustnative,
-    link_whole: [libsmallclue, libnextvi, libbash, libzsh, libdash, libopenssh, libmotepad, libktop, libwlpresent] + libopenssh_special + libcurlshim + virgl_libs,
+    link_whole: [libsmallclue, libnextvi, libbash, libzsh, libdash, libopenssh, libmotepad, libktop, libwlpresent] + libopenssh_special + libcurlshim + liblibgit2 + virgl_libs,
     include_directories: includes, c_args: ish_c_args)
+# SecureTransport, for libgit2's HTTPS (the app links it in app/App.xcconfig).
+libgit2_deps = have_libgit2 and not meson.is_cross_build() ? \
+    [dependency('appleframeworks', modules: ['Security', 'CoreFoundation'])] : []
 ish = declare_dependency(
     link_with: [libish, libish_emu, libfakefs],
-    dependencies: dependencies + virgl_deps,
+    dependencies: dependencies + virgl_deps + libgit2_deps,
     include_directories: includes)
 
 if not meson.is_cross_build()

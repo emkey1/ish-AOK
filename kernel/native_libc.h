@@ -145,6 +145,7 @@ int nlibc_dirfd(DIR *dir);
 
 /* --- mutation ----------------------------------------------------------- */
 int nlibc_unlink(const char *path);
+int nlibc_remove(const char *path);
 int nlibc_rmdir(const char *path);
 int nlibc_mkdir(const char *path, mode_t mode);
 /* The *at forms. Rust's std and rustix prefer them -- they are the ones
@@ -269,6 +270,8 @@ char *nlibc_crypt(const char *key, const char *salt);
 int nlibc_sigaction(int sig, const struct sigaction *act, struct sigaction *oact);
 void (*nlibc_signal(int sig, void (*handler)(int)))(int);
 int nlibc_sigprocmask(int how, const sigset_t *set, sigset_t *oldset);
+int nlibc_pthread_sigmask(int how, const sigset_t *set, sigset_t *oldset);
+int nlibc_getloadavg(double loadavg[], int nelem);
 /* BSD sigsetmask/sigblock/siggetmask -- 4.2BSD's signal mask, as an int with
  * one bit per signal, still shipped by every libc and still used. dash's
  * sigclearmask() is `sigsetmask(0)` whenever configure finds it, which is
@@ -822,6 +825,8 @@ const char *nlibc_dlerror(void);
 #define dirfd       nlibc_dirfd
 
 #define unlink      nlibc_unlink
+/* Function-like: libgit2's diff_stats.c has a local variable called remove. */
+#define remove(p)   nlibc_remove(p)
 #define rmdir       nlibc_rmdir
 #define mkdir       nlibc_mkdir
 #define mkdirat     nlibc_mkdirat
@@ -1048,6 +1053,8 @@ char *nlibc_strchrnul(const char *s, int c);
 #define sigaction(a, b, c)       nlibc_sigaction((a), (b), (c))
 #define signal                   nlibc_signal
 #define sigprocmask              nlibc_sigprocmask
+#define pthread_sigmask          nlibc_pthread_sigmask
+#define getloadavg               nlibc_getloadavg
 #define sigsetmask               nlibc_sigsetmask
 #define sigblock                 nlibc_sigblock
 #define siggetmask               nlibc_siggetmask
