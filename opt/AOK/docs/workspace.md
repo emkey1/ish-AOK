@@ -34,6 +34,13 @@ Terminal lists your sessions and Utils lists every applet, in five groups:
   described in [roots.md](roots.md).
 - **Support** — Settings, Diagnostics.
 
+**Quick Actions** is a small panel of one-tap buttons for the things you reach
+for most: Layout Manager (save or restore this workspace), Desktops, Session
+Shell and System Console (each opens that window, or brings it forward),
+Sessions, Storage, Themes, Boot Images, Clock and, on iPad, New Workspace. From a
+guest shell, `ws-quickactions` opens it. It is not related to Apple's Shortcuts
+app, which is covered in [shortcuts.md](shortcuts.md).
+
 The menu **Utilities…** sits in — the ☰ button, the desktop long press, and
 each window's own ☰ all raise it — also has **Snippets…**, your library of
 saved command lines. In a plain terminal those hang off a long press on the
@@ -151,8 +158,10 @@ sh /AOK/tools/start-wayland.sh        # the applet runs this for you
 ```
 
 `labwc` is the default compositor and `foot` the first app; `sway` is installed
-as a `WAYLAND_COMPOSITOR_CMD=sway` alternative. `start-wayland.sh` also honours
-`WAYVNC_PORT` and `ISH_DISPLAY_READY_FILE`.
+as an alternative. Two fuller desktops can take labwc's place (see **Other
+desktops**, below). `start-wayland.sh` also honours `WAYVNC_PORT`,
+`ISH_DISPLAY_READY_FILE`, and `WAYLAND_COMPOSITOR_CMD`, which overrides the
+chosen desktop.
 
 One Wayland desktop runs at a time. While one is open, `start-wayland.sh`
 refuses to start another and exits 1 with "a Wayland session is already
@@ -235,6 +244,47 @@ Two caveats worth knowing before you start. It has been run on **amd64** and
 may well work, but nobody has run them. And it has been run on **Devuan** (apt)
 and **Alpine** (apk); **Arch** (pacman) installs the same stack under the same
 names, and its packages resolve, but no one has run a session on it.
+
+### Other desktops: Wayfire and Xfce
+
+Two fuller desktops install beside the default one, and either can be the one
+the Wayland window starts:
+
+```sh
+sudo sh /AOK/tools/setup-wayfire.sh   # Wayfire, composited on the GPU
+sudo sh /AOK/tools/setup-xfce.sh      # the Xfce 4.20 desktop
+sh /AOK/tools/select-desktop.sh       # which one starts, and what is installed
+sudo sh /AOK/tools/select-desktop.sh labwc   # back to the default
+```
+
+Each setup script installs the base desktop first if it is missing, and makes
+its desktop the one that starts; `--no-select` installs without choosing it.
+The choice is kept in `/etc/aok-desktop.conf` and takes effect the next time the
+Wayland window opens.
+
+- **Wayfire** is the desktop that puts the GPU to work: wobbly windows, a
+  desktop cube (hold Ctrl+Alt and drag), expo (Alt+Shift+W shows every
+  desktop at once), and animations, with wf-shell's panel and wallpaper and
+  `wcm`, a settings window for all of it. It draws with OpenGL ES, so it
+  needs the GPU ([The GPU](#the-gpu)): `setup-wayfire.sh` runs `setup-gpu.sh`
+  when the drivers are missing. Wayfire also refuses to run as root, as it
+  does on any Linux, so it needs **Open Everything as Default User** turned on
+  in Settings. A session without the GPU, or a root one, starts labwc instead
+  and says why. Devuan 6 and Arch carry it; Alpine does not, and
+  neither do riscv64 and i386 roots, which have no GPU driver.
+- **Xfce** is the complete desktop: its panel with the applications menu,
+  desktops and clock, desktop icons, the Thunar file manager and the settings
+  manager. The desktop's wallpaper does not draw yet, so it is black behind
+  the icons. It runs as Xfce 4.20's Wayland session, with labwc
+  drawing the windows (Xfce's own window manager is X11-only), so it needs no
+  GPU, and uses it when it is there. Devuan, Alpine and Arch all carry it.
+
+Both keep the labwc desktop's keys, since the app keeps the Command key for
+itself: Alt+Return opens a terminal, Alt+Shift+D the launcher (Xfce's app
+finder), Alt+Shift+Q closes a window and Ctrl+Alt+Left and Right change
+desktops. Their settings are in `~/.config/wayfire.ini` and in
+`~/.config/xfce4/labwc/` (Xfce's own settings are in its settings manager);
+each is written on the desktop's first session and never replaced after that.
 
 ### Programs that need root
 

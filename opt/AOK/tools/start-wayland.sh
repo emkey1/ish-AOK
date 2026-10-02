@@ -15,7 +15,10 @@
 #   WAYVNC_PORT       TCP port wayvnc listens on (default 5901; 5900 is
 #                      commonly taken by other VNC/screen-sharing services)
 #   WAYLAND_COMPOSITOR_CMD
-#                      compositor invocation (default: "labwc"). cage is
+#                      compositor invocation, overriding the desktop chosen
+#                      in /etc/aok-desktop.conf (select-desktop.sh: labwc,
+#                      the default; sway; wayfire, setup-wayfire.sh; xfce,
+#                      setup-xfce.sh -- Xfce's session with labwc). cage is
 #                      NOT supported here -- its virtual-keyboard keycodes
 #                      are off by evdev's +8 offset and foot silently drops
 #                      every key (see docs/historical/wayland_workspace_plan.md phase 0).
@@ -120,7 +123,26 @@ aok_font_awesome_package() {
 }
 
 WAYVNC_PORT="${WAYVNC_PORT:-5901}"
-COMPOSITOR_CMD="${WAYLAND_COMPOSITOR_CMD:-labwc}"
+# Which desktop: labwc, sway, wayfire or xfce, as /etc/aok-desktop.conf says
+# (select-desktop.sh writes it; setup-wayfire.sh and setup-xfce.sh choose
+# theirs). WAYLAND_COMPOSITOR_CMD, the older knob, still wins, and its first
+# word names the desktop. COMPOSITOR_BIN is the program that runs as the
+# compositor -- labwc, under Xfce -- and COMPOSITOR_CMD its whole command,
+# which for wayfire and xfce names files under $HOME and is completed once HOME
+# is settled (below).
+AOK_DESKTOP=labwc
+if [ -n "${WAYLAND_COMPOSITOR_CMD:-}" ]; then
+    AOK_DESKTOP=${WAYLAND_COMPOSITOR_CMD%% *}
+else
+    _wl_choice=$(sed -n 's/^AOK_DESKTOP=//p' /etc/aok-desktop.conf 2>/dev/null | tail -n 1)
+    case "$_wl_choice" in labwc|sway|wayfire|xfce) AOK_DESKTOP=$_wl_choice ;; esac
+fi
+case "$AOK_DESKTOP" in
+    xfce) COMPOSITOR_BIN=labwc DESKTOP_BINS="labwc xfce4-session" DESKTOP_SETUP=setup-xfce.sh ;;
+    wayfire) COMPOSITOR_BIN=wayfire DESKTOP_BINS=wayfire DESKTOP_SETUP=setup-wayfire.sh ;;
+    *) COMPOSITOR_BIN=$AOK_DESKTOP DESKTOP_BINS=$AOK_DESKTOP DESKTOP_SETUP=setup-wayland.sh ;;
+esac
+COMPOSITOR_CMD="${WAYLAND_COMPOSITOR_CMD:-$COMPOSITOR_BIN}"
 READY_FILE="${ISH_DISPLAY_READY_FILE:-/tmp/ish-display.ready}"
 ERROR_FILE="$READY_FILE.error"
 
@@ -170,7 +192,7 @@ AOK_CMDLINE_EOF
 aok_session_stale() {
     for _wl_c in /proc/[0-9]*; do
         [ "$(aok_ppid "${_wl_c#/proc/}")" = "$1" ] || continue
-        case "$(cat "$_wl_c/comm" 2>/dev/null)" in labwc|sway) return 1 ;; esac
+        case "$(cat "$_wl_c/comm" 2>/dev/null)" in labwc|sway|wayfire) return 1 ;; esac
     done
     _wl_hz=$(getconf CLK_TCK 2>/dev/null || echo 100)
     _wl_started=$(awk '{print $22}' "/proc/$1/stat" 2>/dev/null)
@@ -271,9 +293,9 @@ AOK_SH=/bin/sh
 
 rm -f "$READY_FILE" "$ERROR_FILE"
 
-for bin in $COMPOSITOR_CMD foot wayvnc; do
+for bin in $DESKTOP_BINS foot wayvnc; do
     command -v "$bin" >/dev/null 2>&1 \
-        || die "'$bin' not found -- run 'sudo sh /AOK/tools/setup-wayland.sh' first"
+        || die "'$bin' not found -- run 'sudo sh /AOK/tools/$DESKTOP_SETUP' first"
 done
 
 # Clean up any compositor/foot/wayvnc a dead session left behind. The
@@ -287,6 +309,12 @@ done
 # sessions and a stale instance of the *other* one is still around.
 pkill -x sway 2>/dev/null
 pkill -x labwc 2>/dev/null
+pkill -x wayfire 2>/dev/null
+# And what the other desktops start inside themselves: Wayfire's wf-shell, and
+# Xfce's session and its panel, desktop and settings daemon.
+for _wl_p in wf-panel wf-background wf-dock xfce4-session xfce4-panel xfdesktop xfsettingsd; do
+    pkill -x "$_wl_p" 2>/dev/null
+done
 pkill -x foot 2>/dev/null
 pkill -x wayvnc 2>/dev/null
 pkill -x wofi 2>/dev/null
@@ -335,6 +363,24 @@ elif [ -n "$PW_LINE" ]; then
     PW_SHELL="$(printf '%s' "$PW_LINE" | cut -d: -f7)"
     [ -n "$PW_SHELL" ] && export SHELL="$PW_SHELL"
 fi
+
+# The desktops whose command names files under $HOME, now that HOME is right.
+# Wayfire gets its config by path, since 0.9 and 0.11 look in different places
+# by default. Xfce is what `startxfce4 --wayland` runs: labwc with a config
+# directory of Xfce's own, so the plain labwc desktop's menu, panel and
+# autostart stay out of it, running xfce4-session for as long as the session
+# lasts. That uses the session bus this script starts below, as
+# dbus-run-session would.
+if [ -z "${WAYLAND_COMPOSITOR_CMD:-}" ]; then
+    case "$AOK_DESKTOP" in
+        wayfire) COMPOSITOR_CMD="wayfire -c $HOME/.config/wayfire.ini" ;;
+        xfce) COMPOSITOR_CMD="labwc --config-dir $HOME/.config/xfce4/labwc --session xfce4-session" ;;
+    esac
+fi
+case "$AOK_DESKTOP" in
+    xfce) export XDG_CURRENT_DESKTOP=XFCE XDG_SESSION_DESKTOP=xfce XDG_SESSION_TYPE=wayland ;;
+    wayfire) export XDG_CURRENT_DESKTOP=wayfire XDG_SESSION_DESKTOP=wayfire XDG_SESSION_TYPE=wayland ;;
+esac
 
 # A runtime dir scoped to this invocation (pid-suffixed) avoids colliding
 # with a leftover socket/lock from a prior run that didn't get torn down
@@ -428,6 +474,26 @@ wl_gpu_usable() {
 WL_GPU_COMPOSITOR=0
 if [ -z "${WLR_RENDERER:-}" ] && [ "${ISH_DISPLAY_GPU:-1}" != 0 ] && wl_gpu_usable; then
     WL_GPU_COMPOSITOR=1
+fi
+# Two things Wayfire cannot do, where the session is the plain labwc desktop
+# instead, and says why. It draws everything with OpenGL ES, so it cannot run
+# in software here: wlroots' GLES renderer needs a GPU device, and pixman has
+# no GL. And it will not run as root: after dropping privileges it checks that
+# setuid(0) fails, and refuses to start when it succeeds ("Unable to drop
+# root"), as on any Linux. The Wayland window is a root session unless
+# Settings > Open Everything as Default User is on.
+wl_wayfire_cannot=""
+if [ "$AOK_DESKTOP" = wayfire ] && [ -z "${WAYLAND_COMPOSITOR_CMD:-}" ]; then
+    if [ "$CURRENT_UID" = 0 ]; then
+        wl_wayfire_cannot="Wayfire does not run as root -- turn on Settings > Open Everything as Default User"
+    elif [ "$WL_GPU_COMPOSITOR" = 0 ]; then
+        wl_wayfire_cannot="Wayfire needs the GPU (setup-gpu.sh), which this session cannot use"
+    fi
+fi
+if [ -n "$wl_wayfire_cannot" ]; then
+    log "warning: $wl_wayfire_cannot; starting labwc instead"
+    AOK_DESKTOP=labwc COMPOSITOR_BIN=labwc COMPOSITOR_CMD=labwc
+    command -v labwc >/dev/null 2>&1 || die "$wl_wayfire_cannot, and labwc is not installed to fall back to"
 fi
 export WLR_RENDERER="${WLR_RENDERER:-pixman}"
 # There's no real GPU/DRM device here (matches labwc's own harmless
@@ -595,6 +661,8 @@ fi
 
 COMPOSITOR_PID=""
 FOOT_PID=""
+REPAIR_PID=""
+TEE_PIDS=""
 WAYVNC_PID=""
 PANEL_PID=""
 PRESENT_PID=""
@@ -603,13 +671,32 @@ cleanup() {
     trap - TERM INT HUP EXIT
     # Tells a session starting now that this one is going, not staying, so it
     # waits instead of refusing (see the one-session check near the top).
-    : > "/tmp/ish-display.closing.$$" 2>/dev/null
+    # `true`, not `:`: a failed redirection on a special builtin ends dash
+    # there and then, and a stale marker of another uid's (guest pids restart
+    # every boot, so a root session's can carry this pid) made every default-
+    # user session exit here, leaving its compositor, wayvnc and foot running.
+    { true > "/tmp/ish-display.closing.$$"; } 2>/dev/null
     rm -f "$READY_FILE"
     [ -n "$PANEL_PID" ] && kill "$PANEL_PID" 2>/dev/null
+    # The early-boot repair (below) polls for up to a minute or more, and the
+    # `wait` here waited for it: a session closed soon after boot sat in
+    # cleanup until it finished, and the next one said the previous was still
+    # shutting down. It has nothing left to repair once the session ends.
+    [ -n "$REPAIR_PID" ] && kill "$REPAIR_PID" 2>/dev/null
     [ -n "$PRESENT_PID" ] && kill "$PRESENT_PID" 2>/dev/null
     [ -n "$WAYVNC_PID" ] && kill "$WAYVNC_PID" 2>/dev/null
     [ -n "$FOOT_PID" ] && kill "$FOOT_PID" 2>/dev/null
     [ -n "$COMPOSITOR_PID" ] && kill "$COMPOSITOR_PID" 2>/dev/null
+    for pid in $PANEL_PID $PRESENT_PID $WAYVNC_PID $FOOT_PID $COMPOSITOR_PID $REPAIR_PID; do
+        wait "$pid" 2>/dev/null
+    done
+    # Each log's tee ends when the last process writing to it has gone, and a
+    # daemon the desktop started can keep the compositor's output open long
+    # after the desktop is gone: gpg-agent, which xfce4-session launches,
+    # held this cleanup indefinitely (1 run in 4), and every new session then
+    # waited for it and gave up. A moment to drain, then they are stopped.
+    sleep 0.5
+    [ -n "$TEE_PIDS" ] && kill $TEE_PIDS 2>/dev/null
     wait 2>/dev/null
     [ -n "$DBUS_DAEMON_PID" ] && kill "$DBUS_DAEMON_PID" 2>/dev/null
     rm -rf "$XDG_RUNTIME_DIR"
@@ -695,7 +782,7 @@ fi
 # $mod is Alt (Mod1): Control has to stay free for in-terminal Ctrl combos
 # (Ctrl+C etc.), so a window-manager modifier that also used Control would
 # collide with those.
-if [ "$COMPOSITOR_CMD" = "sway" ]; then
+if [ "$AOK_DESKTOP" = sway ]; then
     mkdir -p "$HOME/.config/sway"
     # Regenerated every session start, like list-apps.sh below -- it's a
     # generated helper, not something a user would hand-edit. Builds a
@@ -750,7 +837,7 @@ exec sh -c "$exec_line"
 APP_LAUNCHER_EOF
     chmod +x "$HOME/.config/sway/app-launcher.sh"
 fi
-if [ "$COMPOSITOR_CMD" = "sway" ] && [ ! -f "$HOME/.config/sway/config" ]; then
+if [ "$AOK_DESKTOP" = sway ] && [ ! -f "$HOME/.config/sway/config" ]; then
     cat > "$HOME/.config/sway/config" <<SWAY_CONFIG_EOF
 # Generated by start-wayland.sh (first run only -- hand edits are preserved
 # on later sessions since this file is only seeded when missing).
@@ -846,7 +933,7 @@ fi
 # group is read (a [Desktop Action] group has its own Name= and Exec=), and
 # entries that are not applications, or that OnlyShowIn/NotShowIn keep off this
 # desktop, are left out.
-if [ "$COMPOSITOR_CMD" = "labwc" ]; then
+if [ "$AOK_DESKTOP" = labwc ]; then
     mkdir -p "$HOME/.config/labwc"
     # Regenerated on every session start (not gated on "doesn't already
     # exist" like menu.xml below) -- it's a generated helper, not something
@@ -1102,7 +1189,7 @@ install_default_config() {
     mv -f "$config_new" "$config_target"
 }
 
-if [ "$COMPOSITOR_CMD" = "labwc" ]; then
+if [ "$AOK_DESKTOP" = labwc ]; then
     # The one earlier default menu.xml (6b57294a to 583ce462).
     install_default_config "$HOME/.config/labwc/menu.xml" "2481222110:490" <<MENU_EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -1138,7 +1225,7 @@ fi
 # name from rc.xml's <theme> below. Unrecognized/misspelled keys are just
 # ignored by labwc rather than failing to parse, so this is low-risk to
 # get slightly wrong.
-if [ "$COMPOSITOR_CMD" = "labwc" ] && [ ! -f "$HOME/.local/share/themes/iSH-Workspace/openbox-3/themerc" ]; then
+if [ "$AOK_DESKTOP" = labwc ] && [ ! -f "$HOME/.local/share/themes/iSH-Workspace/openbox-3/themerc" ]; then
     mkdir -p "$HOME/.local/share/themes/iSH-Workspace/openbox-3"
     cat > "$HOME/.local/share/themes/iSH-Workspace/openbox-3/themerc" <<'THEMERC_EOF'
 window.active.title.bg.color: #2C374C
@@ -1177,7 +1264,7 @@ fi
 # the window, and Alt+digit is readline's digit-argument in every terminal),
 # with Shift taking the focused window along, and Ctrl+Alt+1-4 goes straight
 # to one.
-if [ "$COMPOSITOR_CMD" = "labwc" ]; then
+if [ "$AOK_DESKTOP" = labwc ]; then
     # The earlier defaults: 2c7e6aa7 to 02cfc17f, 6fc49f06 (it maximized every
     # window), c862512d to 583ce462, and the one-desktop default before the
     # desktop keys.
@@ -1244,6 +1331,143 @@ if [ "$COMPOSITOR_CMD" = "labwc" ]; then
 RC_XML_EOF
 fi
 
+# Wayfire's config (setup-wayfire.sh), on its first session: the plugins that
+# make it worth running on the GPU -- wobbly windows, the desktop cube, expo,
+# animations -- and the same Alt keys as the labwc desktop above, since
+# Wayfire's own defaults are on the Super key, which the app keeps for itself.
+# wf-shell's panel and wallpaper start through the autostart plugin; the first
+# terminal is started below, as for every desktop. Written only when missing:
+# edit it freely, or with wcm (the Wayfire Config Manager).
+if [ "$AOK_DESKTOP" = wayfire ]; then
+    # Earlier defaults, from before the panel moved out of autostart.
+    install_default_config "$HOME/.config/wayfire.ini" "2333436050:1405 3256557696:1516" <<'WAYFIRE_INI_EOF'
+# Written by /AOK/tools/start-wayland.sh on the first Wayfire session. Edit
+# freely, or with wcm (the Wayfire Config Manager): it is only written when
+# there is none. Keys use Alt, as the labwc desktop does: the app keeps the
+# Command (Super) key for itself.
+[core]
+plugins = alpha animate autostart command cube decoration expo fast-switcher foreign-toplevel grid gtk-shell move oswitch place resize switcher vswitch wayfire-shell window-rules wm-actions wobbly zoom
+xwayland = true
+vwidth = 4
+vheight = 1
+close_top_view = <alt> <shift> KEY_Q
+
+[autostart]
+# wf-shell's wallpaper. Its panel is started by start-wayland.sh once the
+# desktop is up: one started this early was never drawn.
+autostart_wf_shell = false
+background = wf-background
+
+[command]
+binding_terminal = <alt> KEY_ENTER
+command_terminal = foot
+binding_launcher = <alt> <shift> KEY_D
+command_launcher = wofi --show drun
+binding_logout = <alt> <shift> KEY_E
+command_logout = wayland-logout
+
+[switcher]
+next_view = <alt> KEY_TAB
+prev_view = <alt> <shift> KEY_TAB
+
+[vswitch]
+binding_left = <ctrl> <alt> KEY_LEFT
+binding_right = <ctrl> <alt> KEY_RIGHT
+with_win_left = <ctrl> <alt> <shift> KEY_LEFT
+with_win_right = <ctrl> <alt> <shift> KEY_RIGHT
+
+[expo]
+# Every desktop at once; click one to go there.
+toggle = <alt> <shift> KEY_W
+
+[cube]
+# Hold Ctrl+Alt and drag to turn the desktops as a cube.
+activate = <ctrl> <alt> BTN_LEFT
+
+[move]
+activate = <alt> BTN_LEFT
+
+[resize]
+activate = <alt> BTN_RIGHT
+
+[wobbly]
+friction = 3.0
+spring_k = 8.0
+WAYFIRE_INI_EOF
+    # wf-shell's panel hides itself until the pointer reaches the top edge,
+    # once the wayfire-shell plugin gives it the means to; on a touch screen
+    # that is a panel nobody finds. Kept in view here.
+    install_default_config "$HOME/.config/wf-shell.ini" "" <<'WF_SHELL_INI_EOF'
+# Written by /AOK/tools/start-wayland.sh on the first Wayfire session; edit
+# freely. Options: wf-shell's own documentation, or wcm.
+[panel]
+autohide = false
+position = top
+WF_SHELL_INI_EOF
+fi
+
+# Xfce's labwc (setup-xfce.sh): its own config directory, as startxfce4 makes
+# one. Xfce's sample rc.xml binds the Super key, which the app keeps, so this
+# one carries the labwc desktop's Alt keys instead, with Xfce's terminal and
+# app finder. And its environment file: Xfce's sample sets the keyboard layout
+# to "en", which is no layout -- startxfce4 rewrites it from the console's, and
+# labwc otherwise logs a keymap failure and falls back to "us".
+if [ "$AOK_DESKTOP" = xfce ]; then
+    mkdir -p "$HOME/.config/xfce4/labwc"
+    xfce_term=xfce4-terminal
+    command -v "$xfce_term" >/dev/null 2>&1 || xfce_term=foot
+    install_default_config "$HOME/.config/xfce4/labwc/rc.xml" "" <<XFCE_RC_XML_EOF
+<?xml version="1.0"?>
+<!-- Written by /AOK/tools/start-wayland.sh on the first Xfce session; edit
+     freely. labwc is Xfce's compositor here; Xfce draws the panel and desktop. -->
+<labwc_config>
+  <theme>
+    <name>Adwaita</name>
+    <cornerRadius>8</cornerRadius>
+    <font name="sans" size="10"/>
+  </theme>
+  <desktops number="4" />
+  <keyboard>
+    <keybind key="A-Return">
+      <action name="Execute"><command>$xfce_term</command></action>
+    </keybind>
+    <keybind key="A-Tab">
+      <action name="NextWindow"/>
+    </keybind>
+    <keybind key="A-S-q">
+      <action name="Close"/>
+    </keybind>
+    <keybind key="A-S-d">
+      <action name="Execute"><command>xfce4-appfinder</command></action>
+    </keybind>
+    <keybind key="A-S-e">
+      <action name="Exit"/>
+    </keybind>
+    <keybind key="C-A-Left">
+      <action name="GoToDesktop" to="left" wrap="yes"/>
+    </keybind>
+    <keybind key="C-A-Right">
+      <action name="GoToDesktop" to="right" wrap="yes"/>
+    </keybind>
+    <keybind key="C-A-S-Left">
+      <action name="SendToDesktop" to="left" wrap="yes"/>
+    </keybind>
+    <keybind key="C-A-S-Right">
+      <action name="SendToDesktop" to="right" wrap="yes"/>
+    </keybind>
+  </keyboard>
+</labwc_config>
+XFCE_RC_XML_EOF
+    if [ ! -e "$HOME/.config/xfce4/labwc/environment" ]; then
+        if [ -r /usr/share/xfce4/labwc/labwc-environment ]; then
+            sed 's/^XKB_DEFAULT_LAYOUT=en$/XKB_DEFAULT_LAYOUT=us/' \
+                /usr/share/xfce4/labwc/labwc-environment > "$HOME/.config/xfce4/labwc/environment"
+        else
+            printf 'XKB_DEFAULT_LAYOUT=us\n' > "$HOME/.config/xfce4/labwc/environment"
+        fi
+    fi
+fi
+
 # waybar, when it is installed: a config for labwc on the first session that
 # has none (the user's own, config or config.jsonc, always wins). Debian's
 # default in /etc/xdg/waybar is written for sway. Under labwc its five sway
@@ -1255,7 +1479,7 @@ fi
 # are sitemap (U+F0E8) and bolt (U+F0E7), present in 4.7 and in the 7.x Alpine
 # and Arch ship. The icons need Font Awesome, which setup-wayland.sh installs
 # with waybar.
-if [ "$COMPOSITOR_CMD" = "labwc" ] && command -v waybar >/dev/null 2>&1 \
+if [ "$AOK_DESKTOP" = labwc ] && command -v waybar >/dev/null 2>&1 \
         && [ ! -e "$HOME/.config/waybar/config.jsonc" ] && [ ! -e "$HOME/.config/waybar/config" ]; then
     mkdir -p "$HOME/.config/waybar"
     cat > "$HOME/.config/waybar/config.jsonc" <<'WAYBAR_CONFIG_EOF'
@@ -1324,7 +1548,7 @@ fi
 # glyphs at their code points. Debian's Font Awesome 4.7 has no letters, so the
 # panel there looks the same either way. Written only when there is no user
 # style; the system style is imported, so it keeps up with the installed waybar.
-if [ "$COMPOSITOR_CMD" = "labwc" ] && command -v waybar >/dev/null 2>&1 \
+if [ "$AOK_DESKTOP" = labwc ] && command -v waybar >/dev/null 2>&1 \
         && [ ! -e "$HOME/.config/waybar/style.css" ] && [ -r /etc/xdg/waybar/style.css ]; then
     mkdir -p "$HOME/.config/waybar"
     cat > "$HOME/.config/waybar/style.css" <<'WAYBAR_STYLE_EOF'
@@ -1364,6 +1588,7 @@ spawn_logged() {
     rm -f "$fifo"
     mkfifo "$fifo"
     tee -a "$DEBUG_LOG" >&2 < "$fifo" &
+    TEE_PIDS="$TEE_PIDS $!"
     "$@" > "$fifo" 2>&1 &
     SPAWN_PID=$!
 }
@@ -1404,6 +1629,9 @@ wl_gpu_drirc() {
         <application name="sway" executable="sway">
             <option name="dri_driver" value="zink" />
         </application>
+        <application name="wayfire" executable="wayfire">
+            <option name="dri_driver" value="zink" />
+        </application>
         <application name="Xwayland" executable="Xwayland">
             <option name="dri_driver" value="zink" />
         </application>
@@ -1420,8 +1648,14 @@ start_compositor() {
     if [ "$WL_GPU_COMPOSITOR" = 1 ] && drirc_dir=$(wl_gpu_drirc); then
         log "starting $COMPOSITOR_CMD (headless, composited on the GPU)"
         log_mark=$(wc -c < "$DEBUG_LOG" 2>/dev/null || echo 0)
+        # wlroots' Vulkan renderer, except for Wayfire, which only has GLES:
+        # zink on the same Vulkan device, found by the render node's path
+        # because the headless backend has no DRM device to offer.
+        gpu_renderer="WLR_RENDERER=vulkan"
+        [ "$AOK_DESKTOP" = wayfire ] &&
+            gpu_renderer="WLR_RENDERER=gles2 WLR_RENDER_DRM_DEVICE=/dev/dri/renderD128"
         spawn_logged compositor "$AOK_ENV" -u LIBGL_ALWAYS_SOFTWARE \
-            WLR_RENDERER=vulkan DRIRC_CONFIGDIR="$drirc_dir" $COMPOSITOR_CMD
+            $gpu_renderer DRIRC_CONFIGDIR="$drirc_dir" $COMPOSITOR_CMD
         COMPOSITOR_PID=$SPAWN_PID
         # The output's first commit, where a failure shows, follows the
         # socket closely: wait for the socket, then a little longer.
@@ -1438,9 +1672,11 @@ start_compositor() {
              grep -qE 'failed test|Failed to commit frame|unable to create (allocator|renderer)|Failed to create (renderer|allocator)|Could not initialize'; then
             return 0
         fi
-        log "warning: $COMPOSITOR_CMD could not composite on the GPU -- falling back to software (see $DEBUG_LOG)"
         kill "$COMPOSITOR_PID" 2>/dev/null
         wait "$COMPOSITOR_PID" 2>/dev/null
+        [ "$AOK_DESKTOP" = wayfire ] \
+            && die "Wayfire could not composite on the GPU (see $DEBUG_LOG) -- 'sudo sh /AOK/tools/select-desktop.sh labwc' goes back to the default desktop"
+        log "warning: $COMPOSITOR_CMD could not composite on the GPU -- falling back to software (see $DEBUG_LOG)"
         rm -f "$XDG_RUNTIME_DIR"/wayland-*
         WL_GPU_COMPOSITOR=0
     fi
@@ -1755,7 +1991,7 @@ echo "READY $WAYVNC_PORT"
 # startup never delays the applet connecting. panel.sh leaves it off when the
 # user hid it (Applications > Hide Panel), and it is skipped when the user's own
 # labwc autostart starts waybar, which would make two.
-if [ "$COMPOSITOR_CMD" = "labwc" ] && command -v waybar >/dev/null 2>&1 \
+if [ "$AOK_DESKTOP" = labwc ] && command -v waybar >/dev/null 2>&1 \
         && [ -x "$HOME/.config/labwc/panel.sh" ] \
         && ! grep -qs waybar "$HOME/.config/labwc/autostart"; then
     if ! aok_font_awesome_present; then
@@ -1766,6 +2002,20 @@ if [ "$COMPOSITOR_CMD" = "labwc" ] && command -v waybar >/dev/null 2>&1 \
     fi
     log "starting the panel (waybar)"
     spawn_logged panel "$HOME/.config/labwc/panel.sh" start
+    PANEL_PID=$SPAWN_PID
+fi
+
+# Wayfire's panel, like waybar for labwc above: started late. Started by
+# Wayfire's own autostart, or straight after the UI scale is set, it was never
+# drawn (M4, 2026-10-02): Wayfire applies an output's new scale asynchronously,
+# and a panel that connects while the change is still arriving keeps a surface
+# that is never shown. Restarted later, the same panel in the same environment
+# is drawn. A wayfire.ini that starts wf-panel itself is left to do so.
+if [ "$AOK_DESKTOP" = wayfire ] && command -v wf-panel >/dev/null 2>&1 \
+        && ! grep -qs '^[^#]*wf-panel' "$HOME/.config/wayfire.ini" \
+        && ! grep -qs '^autostart_wf_shell *= *true' "$HOME/.config/wayfire.ini"; then
+    log "starting the panel (wf-panel)"
+    spawn_logged panel wf-panel
     PANEL_PID=$SPAWN_PID
 fi
 
@@ -1800,6 +2050,7 @@ aok_repair_after_early_boot() {
 }
 if [ "$UPTIME_AT_START" -lt 300 ] 2>/dev/null; then
     aok_repair_after_early_boot &
+    REPAIR_PID=$!
 fi
 
 # The session is over when the compositor is. This was `wait` on the

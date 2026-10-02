@@ -24,6 +24,9 @@ suspend.sh
 setup-wayland.sh
 setup-wayland-extras.sh
 setup-gpu.sh
+setup-wayfire.sh
+setup-xfce.sh
+select-desktop.sh
 setup-games.sh
 aok-sdl-game 0555
 start-wayland.sh
