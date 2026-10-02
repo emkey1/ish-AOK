@@ -1,0 +1,46 @@
+# The terminfo database a native-mode root uses, served read-only at
+# /AOK/native/libs/terminfo (and linked from /usr/share/terminfo by
+# kernel/native_root.c). Sources: opt/AOK/share/terminfo, copied from Alpine
+# 3.24's ncurses-terminfo-base (ncurses' MIT-style licence).
+# Regenerate this list with tools/gen-native-share-manifests.sh.
+a/alacritty
+a/ansi
+d/dumb
+g/gnome
+g/gnome-256color
+k/konsole
+k/konsole-256color
+k/konsole-linux
+l/linux
+p/putty
+p/putty-256color
+r/rxvt
+r/rxvt-256color
+s/screen
+s/screen-256color
+s/st-0.6
+s/st-0.7
+s/st-0.8
+s/st-0.8.5
+s/st-16color
+s/st-256color
+s/st-direct
+s/sun
+t/terminator
+t/terminology
+t/terminology-0.6.1
+t/terminology-1.0.0
+t/terminology-1.8.1
+t/tmux
+t/tmux-256color
+v/vt100
+v/vt102
+v/vt200
+v/vt220
+v/vt52
+v/vte
+v/vte-256color
+x/xterm
+x/xterm-256color
+x/xterm-color
+x/xterm-xfree86

@@ -398,6 +398,7 @@ static void setup_host_mounts(void) {
         if (nerr < 0)
             fprintf(stderr, "ISH_NATIVE_ROOT: cannot provision this root (%d)\n", nerr);
         native_root_adopt_abi(current);
+        native_root_mount_zoneinfo();
         const char *user = getenv("ISH_NATIVE_USER");
         if (nerr == 0 && user != NULL && user[0] != '\0' && !native_root_has_default_user()) {
             nerr = native_root_add_user(user, getenv("ISH_NATIVE_PASSWORD"));

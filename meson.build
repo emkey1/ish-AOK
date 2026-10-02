@@ -465,9 +465,9 @@ aok_generated_book = custom_target('aok_generated_book',
 # in fs/aok.c, which is what lets it serve a tree with a directory per
 # language.
 #
-# Only built when helix is; without it the manifest's files would be a
-# megabyte of queries and themes for an editor that is not in the binary. The
-# empty manifest keeps fs/aok.c compiling either way, with the counts at zero.
+# Helix's runtime is only built when helix is; without it the manifest's files
+# would be a megabyte of queries and themes for an editor that is not in the
+# binary, and the empty manifest stands in for it.
 aok_libs_manifest = have_helix ? 'fs/aok-libs.manifest' : 'fs/aok-libs-empty.manifest'
 aok_lib_srcs = []
 foreach line : fs_mod.read(aok_libs_manifest).strip().split('\n')
@@ -476,12 +476,35 @@ foreach line : fs_mod.read(aok_libs_manifest).strip().split('\n')
         aok_lib_srcs += files('deps/helix/runtime' / entry.split()[0])
     endif
 endforeach
+# The same table also serves what a shell with no distro under it would
+# otherwise find in /usr/share: the terminfo database (always -- native zsh,
+# hx and the applets all want a terminal description) and zsh's function tree
+# (with zsh). A native-mode root links /usr/share/terminfo here
+# (kernel/native_root.c), and kernel/zsh_glue.c puts the zsh tree on FPATH.
+# tools/gen-native-share-manifests.sh regenerates both manifests.
+aok_libs_groups = [['fs/aok-terminfo.manifest', 'opt/AOK/share/terminfo', '/native/libs/terminfo']]
+if have_zsh
+    aok_libs_groups += [['fs/aok-zsh-functions.manifest', 'deps/zsh', '/native/libs/zsh']]
+endif
+aok_libs_also = []
+aok_libs_manifests = []
+foreach g : aok_libs_groups
+    aok_libs_manifests += files(g[0])
+    aok_libs_also += ['--also', meson.current_source_dir() / g[0],
+                      meson.current_source_dir() / g[1], g[2]]
+    foreach line : fs_mod.read(g[0]).strip().split('\n')
+        entry = line.strip()
+        if entry != '' and not entry.startswith('#')
+            aok_lib_srcs += files(g[1] / entry.split()[0])
+        endif
+    endforeach
+endforeach
 aok_generated_libs = custom_target('aok_generated_libs',
     output: 'aok_generated_libs.inc',
-    input: [files('tools/gen-aokfs.py', aok_libs_manifest)] + aok_lib_srcs,
+    input: [files('tools/gen-aokfs.py', aok_libs_manifest)] + aok_libs_manifests + aok_lib_srcs,
     command: [python, '@INPUT0@', '@INPUT1@',
               meson.current_source_dir() / 'deps' / 'helix' / 'runtime', '@OUTPUT@',
-              '/native/libs/helix', '_libs'])
+              '/native/libs/helix', '_libs'] + aok_libs_also)
 
 # The syscall numbers a native program may issue, generated from calls.c's own
 # table so the two cannot drift. The hand-written list this replaces named 77

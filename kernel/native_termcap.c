@@ -990,7 +990,14 @@ static struct tc_entry *tc_load(const char *name) {
         if (e != NULL)
             return e;
     }
-    return NULL;
+
+    // And after everything the root has, the database the app carries
+    // (fs/aok-terminfo.manifest): common terminals, including the app's own
+    // screen-256color. A root with no terminfo -- a native-mode root before
+    // its /usr/share/terminfo link exists, or a minimal image -- used to give
+    // zsh "can't find terminal definition" and a line editor with no
+    // capabilities at all. Last, so a root's own entry always wins.
+    return tc_try_terminfo_dir("/AOK/native/libs/terminfo", name);
 }
 
 // --- the termcap API -----------------------------------------------------

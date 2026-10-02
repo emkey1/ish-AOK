@@ -33,6 +33,8 @@
 
 #include "fs/fd.h"
 #include "fs/path.h"
+#include "fs/real.h"
+#include "kernel/calls.h"
 #include "kernel/abi.h"
 #include "kernel/errno.h"
 #include "kernel/fs.h"
@@ -447,6 +449,11 @@ static void write_etc(void) {
                "    stop)  echo \"example: stopped\" ;;\n"
                "esac\n", 0644, true);
 
+    // The terminfo database the app carries, where ncurses-built programs and
+    // the shim both look. A real directory here (a user installed one) wins.
+    if (!path_exists("/usr/share/terminfo"))
+        generic_symlinkat(NATIVE_DIR "libs/terminfo", AT_PWD, "/usr/share/terminfo");
+
     // /etc/mtab, as distros have it.
     if (!path_exists("/etc/mtab"))
         generic_symlinkat("/proc/self/mounts", AT_PWD, "/etc/mtab");
@@ -478,6 +485,13 @@ int native_root_provision(void) {
     if (generic_statat(AT_PWD, NATIVE_DIR "smallclue", &stat, 0) < 0)
         return _ENOENT;   // /AOK is not mounted yet: nothing to link to
 
+    // An empty fakefs records its creator as the owner of /, which is the
+    // HOST user (501 on a Mac): a root nobody in /etc/passwd owns.
+    if (generic_statat(AT_PWD, "/", &stat, 0) == 0 && (stat.uid != 0 || stat.gid != 0)) {
+        generic_setattrat(AT_PWD, "/", make_attr(uid, 0), false);
+        generic_setattrat(AT_PWD, "/", make_attr(gid, 0), false);
+    }
+
     write_etc();
 
     char *previous = read_file(LINK_RECORD, NULL);
@@ -489,6 +503,18 @@ int native_root_provision(void) {
     link_set_free(&made);
     free(previous);
     return 0;
+}
+
+int native_root_mount_zoneinfo(void) {
+    // Already there: a mount from earlier in this boot, or zones the user
+    // installed. Either way nothing to add.
+    if (path_exists("/usr/share/zoneinfo/UTC"))
+        return 0;
+    char host[MAX_PATH];
+    if (realpath("/usr/share/zoneinfo", host) == NULL)
+        return _ENOENT;
+    ensure_dir("/usr/share/zoneinfo", 0755);
+    return do_mount(&realfs, host, "/usr/share/zoneinfo", "", MS_READONLY_);
 }
 
 // ------------------------------------------------------------- the account

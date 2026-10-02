@@ -22,6 +22,14 @@
 // fail are skipped rather than ending the boot.
 int native_root_provision(void);
 
+// Mount the host's own time zone database read-only at /usr/share/zoneinfo,
+// unless the root already has one there. The files are TZif on every Apple
+// platform, the same format a distro's tzdata installs, so /etc/localtime and
+// TZ work exactly as on a distro root -- and they follow the system's tzdata
+// updates instead of whatever a copy shipped with. Per boot: mounts are not
+// remembered across launches.
+int native_root_mount_zoneinfo(void);
+
 // Make TASK -- the first process -- an arm64 one before anything runs. A task
 // with no guest image is i386 by default (kernel/task.c), so a native root
 // reported `uname -m` as i686 and handed native programs 32-bit struct layouts

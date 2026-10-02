@@ -152,6 +152,14 @@ static void aok_zsh_set_fpath(void) {
         closedir(d);
     }
 
+    // Then the function tree the app carries (fs/aok-zsh-functions.manifest):
+    // zsh's own completion system and function libraries, from the same source
+    // as this binary. After the root's, so a distro zsh's functions keep
+    // winning where both have one; a root with none -- every native-mode root,
+    // and any distro without zsh installed -- gets completion at all.
+    if (stat("/AOK/native/libs/zsh", &st) == 0 && S_ISDIR(st.st_mode))
+        aok_fpath_add_tree(&b, "/AOK/native/libs/zsh", 3);
+
     // Nothing found means no zsh functions are installed in this guest. Leave
     // FPATH unset rather than empty: zsh then falls back to its compiled list,
     // which is no worse, and an empty FPATH would look deliberate.
