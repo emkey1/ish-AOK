@@ -951,6 +951,32 @@ static void bind_replicate_submounts(const char *norm_source, const char *point,
     free(subs);
 }
 
+// A directory bind made by the kernel itself, as `mount --bind SOURCE POINT`
+// would make it but with no capability check -- for kernel/foreign_exec.c,
+// which gives a root the /proc, /dev, ... a program run inside it needs. Both
+// must be directories; POINT is resolved from the current task's view.
+int mount_bind_dir(const char *source, const char *point) {
+    struct statbuf stat;
+    int err = generic_statat(AT_PWD, source, &stat, 0);
+    if (err < 0)
+        return err;
+    if (!S_ISDIR(stat.mode))
+        return _ENOTDIR;
+    if ((err = generic_statat(AT_PWD, point, &stat, 0)) < 0)
+        return err;
+    if (!S_ISDIR(stat.mode))
+        return _ENOTDIR;
+    char norm_source[MAX_PATH], norm_point[MAX_PATH];
+    if ((err = path_normalize(AT_PWD, source, norm_source, N_SYMLINK_FOLLOW)) < 0)
+        return err;
+    if ((err = path_normalize(AT_PWD, point, norm_point, N_SYMLINK_FOLLOW)) < 0)
+        return err;
+    err = do_bind_mount(norm_source, norm_point, "", 0);
+    if (err >= 0)
+        proc_mountinfo_notify_changed();
+    return err;
+}
+
 dword_t sys_mount_guest(guest_addr_t source_addr, guest_addr_t point_addr, guest_addr_t type_addr, dword_t flags, guest_addr_t data_addr) {
     // Linux requires CAP_SYS_ADMIN for every door into the mount table.
     // The app's own boot-time mounts go through do_mount() directly and are

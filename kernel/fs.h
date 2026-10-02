@@ -361,6 +361,12 @@ int mount_set_display_source(const char *point, const char *display_source);
 // root). Takes mounts_lock, so call it without the lock held.
 bool mount_exists_at_point(const char *point);
 
+// Bind directory SOURCE onto directory POINT, as the kernel's own act (no
+// capability check). Takes mounts_lock itself.
+int mount_bind_dir(const char *source, const char *point);
+// A directory, opened as chdir() and chroot() open one (search permission).
+struct fd *fs_open_dir(const char *path);
+
 // must hold mounts_lock while calling these, or traversing mounts
 int do_mount(const struct fs_ops *fs, const char *source, const char *point, const char *info, int flags);
 int do_umount(const char *point);

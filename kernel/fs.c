@@ -2335,6 +2335,12 @@ static dword_t sys_chroot_common(guest_addr_t path_addr) {
     unlock(&current->fs->lock);
     return 0;
 }
+// open_dir, for kernel code that sets a task's root or cwd itself
+// (kernel/foreign_exec.c): the same search-permission rule as chdir.
+struct fd *fs_open_dir(const char *path) {
+    return open_dir(path);
+}
+
 dword_t sys_chroot_guest(guest_addr_t path_addr) {
     return sys_chroot_common(path_addr);
 }

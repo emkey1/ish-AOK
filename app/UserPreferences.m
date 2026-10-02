@@ -71,6 +71,7 @@ NSString *const kPreferenceInitialWindowKey = @"Initial Window";
 static NSArray<NSString *> *ISHDefaultLaunchCommand(void);
 static NSArray<NSString *> *ISHDefaultBootCommand(void);
 static NSString *const kPreferenceLoginAsDefaultUserKey = @"Login As Default User";
+static NSString *const kPreferenceForeignExecModeKey = @"Programs From Other Roots";
 
 const int ISHDefaultUserAccountUID = 1000;
 const NSInteger ISHSwapMaxSizeMB = 16384;
@@ -326,6 +327,7 @@ void amd64_jit_preference_set(bool enabled) {
             kPreferenceWorkspaceLaunchCountKey: @(1),
             kPreferenceThemeKey: @"Solarized",
             kPreferenceLoginAsDefaultUserKey: @(NO),
+            kPreferenceForeignExecModeKey: @"root",
         }];
         // https://webkit.org/blog/10247/new-webkit-features-in-safari-13-1/
         if (@available(iOS 13.4, *)) {
@@ -388,6 +390,7 @@ void amd64_jit_preference_set(bool enabled) {
             @"launch_command": kPreferenceLaunchCommandKey,
             @"boot_command": kPreferenceBootCommandKey,
             @"login_as_default_user": kPreferenceLoginAsDefaultUserKey,
+            @"foreign_exec": kPreferenceForeignExecModeKey,
             @"cursor_style": kPreferenceCursorStyleKey,
             @"blink_cursor": kPreferenceBlinkCursorKey,
             @"hide_status_bar": kPreferenceHideStatusBarKey,
@@ -405,6 +408,7 @@ void amd64_jit_preference_set(bool enabled) {
         kvoProperties = @{
             kPreferenceEnableMulticoreKey: property(shouldEnableMulticore),
             kPreferenceEnableHLEKey: property(shouldEnableHLE),
+            kPreferenceForeignExecModeKey: property(foreignExecMode),
             kPreferenceEnableCryptoAccelKey: property(shouldEnableCryptoAccel),
             kPreferenceEnablePixAccelKey: property(shouldEnablePixAccel),
 	        kPreferenceEnableExtraLockingKey: property(shouldEnableExtraLocking),
@@ -1052,6 +1056,26 @@ void amd64_jit_preference_set(bool enabled) {
 
 - (BOOL)validateShouldEnableMulticore:(id *)value error:(NSError **)error {
     return [*value isKindOfClass:NSNumber.class];
+}
+
+// MARK: foreignExecMode
+- (NSString *)foreignExecMode {
+    NSString *mode = [_defaults stringForKey:kPreferenceForeignExecModeKey];
+    if ([mode isEqualToString:@"libs"] || [mode isEqualToString:@"off"])
+        return mode;
+    return @"root";
+}
+
+- (void)setForeignExecMode:(NSString *)mode {
+    if (![mode isEqualToString:@"libs"] && ![mode isEqualToString:@"off"])
+        mode = @"root";
+    [_defaults setObject:mode forKey:kPreferenceForeignExecModeKey];
+}
+
+- (BOOL)validateForeignExecMode:(id *)value error:(NSError **)error {
+    return [*value isKindOfClass:NSString.class] &&
+        ([*value isEqualToString:@"root"] || [*value isEqualToString:@"libs"] ||
+         [*value isEqualToString:@"off"]);
 }
 
 // MARK: ShouldEnableHLE

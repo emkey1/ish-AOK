@@ -53,6 +53,7 @@
 #import "WorkspaceTestHooks.h"
 #include "kernel/init.h"
 #include "kernel/native_root.h"
+#include "kernel/foreign_exec.h"
 #include "kernel/calls.h"
 #include "kernel/task.h"
 #include "fs/dyndev.h"
@@ -5370,6 +5371,15 @@ static UINavigationController *CreateAboutNavigationController(BOOL recoveryMode
         dispatch_async(dispatch_get_main_queue(), ^{
             doEnableMulticore = UserPreferences.shared.shouldEnableMulticore;
         });
+    }];
+    // Programs from other roots (kernel/foreign_exec.c): read by every exec,
+    // so a change applies to the next program started, nothing restarted.
+    [UserPreferences.shared observe:@[@"foreignExecMode"] options:NSKeyValueObservingOptionInitial
+                              owner:self usingBlock:^(typeof(self) self) {
+        NSString *mode = UserPreferences.shared.foreignExecMode;
+        int parsed = foreign_exec_parse_mode(mode.UTF8String, strlen(mode.UTF8String));
+        if (parsed >= 0)
+            foreign_exec_set_mode((enum foreign_exec_mode) parsed);
     }];
     [UserPreferences.shared observe:@[@"shouldEnableHLE"] options:NSKeyValueObservingOptionInitial
                               owner:self usingBlock:^(typeof(self) self) {

@@ -69,6 +69,11 @@ extern NSString *const kThemeBackgroundColor;
 @property BOOL shouldDisableDimming;
 @property BOOL shouldEnableMulticore;
 @property BOOL shouldEnableHLE;
+// What happens to a program from another installed root (/AOK/roots/<name>/...)
+// whose loader is not in the booted one: "root" runs it inside its root,
+// "libs" runs it here with that root's libraries, "off" fails as Linux does.
+// kernel/foreign_exec.c; applied the moment it changes.
+@property (nonatomic, copy) NSString *foreignExecMode;
 @property BOOL shouldEnableCryptoAccel;
 @property BOOL shouldEnablePixAccel;
 @property BOOL shouldEnableExtraLocking;

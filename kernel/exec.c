@@ -1,5 +1,6 @@
 #include "kernel/signal.h"
 #include "task.h"
+#include "kernel/foreign_exec.h"
 #define _GNU_SOURCE
 #include <unistd.h>
 #include <fcntl.h>
@@ -954,6 +955,10 @@ static intptr_t elf_exec(struct fd *fd, const char *file, struct exec_args argv,
     // look for an interpreter
     char *interp_name = NULL;
     struct fd *interp_fd = NULL;
+    // A program of another root's whose loader is not in this one
+    // (kernel/foreign_exec.c), and the environment that may need for it.
+    struct foreign_exec foreign = {0};
+    char *foreign_env = NULL;
     struct elf_info interp_header;
     struct elf_prg_info *interp_ph = NULL;
     for (unsigned i = 0; i < header.phent_count; i++) {
@@ -975,6 +980,8 @@ static intptr_t elf_exec(struct fd *fd, const char *file, struct exec_args argv,
             goto out_free_interp;
 
         interp_fd = generic_open(interp_name, O_RDONLY, 0);
+        if (IS_ERR(interp_fd) && PTR_ERR(interp_fd) == _ENOENT)
+            interp_fd = foreign_exec_interp(fd, interp_name, &foreign);
         if (IS_ERR(interp_fd)) {
             err = PTR_ERR(interp_fd);
             goto out_free_interp;
@@ -992,6 +999,17 @@ static intptr_t elf_exec(struct fd *fd, const char *file, struct exec_args argv,
             if (err == _ENOEXEC)
                 err = _ELIBBAD;
             goto out_free_interp;
+        }
+    }
+
+    // LD_LIBRARY_PATH for a program borrowing another root's libraries -- or
+    // that path taken back out again for any other program.
+    {
+        size_t envc = 0;
+        foreign_env = foreign_exec_env(&foreign, envp.args, envp.count, &envc);
+        if (foreign_env != NULL) {
+            envp.args = foreign_env;
+            envp.count = envc;
         }
     }
 
@@ -1537,6 +1555,10 @@ static intptr_t elf_exec(struct fd *fd, const char *file, struct exec_args argv,
 
     err = 0;
 out_free_interp:
+    if (err < 0)
+        foreign_exec_undo(&foreign);
+    foreign_exec_done(&foreign);
+    free(foreign_env);
     if (new_mm != NULL)
         mm_release(new_mm);
     if (interp_name != NULL)
@@ -1995,7 +2017,29 @@ static int shebang_exec(struct fd *fd, const char *file, struct exec_args argv, 
     // allowed to execute -- Linux answers EACCES.
     struct statbuf interpreter_stat;
     struct fd *interpreter_fd = open_exec(AT_PWD, interpreter, 0, &interpreter_stat);
+    // A script that belongs to another root names an interpreter in that root
+    // (#!/usr/bin/python3): look there too (kernel/foreign_exec.c). ROOT mode
+    // moves the task into the root, and takes that back if this exec fails.
+    struct foreign_exec foreign = {0};
+    char script_path[MAX_PATH], foreign_root[MAX_PATH];
+    const char *foreign_rest = NULL;
+    if (IS_ERR(interpreter_fd) && PTR_ERR(interpreter_fd) == _ENOENT && interpreter[0] == '/' &&
+            generic_getpath(fd, script_path) == 0 &&
+            foreign_exec_split(script_path, foreign_root, sizeof(foreign_root), &foreign_rest)) {
+        if (foreign_exec_get_mode() == FOREIGN_EXEC_ROOT) {
+            if (foreign_exec_enter_root(foreign_root, &foreign) == 0)
+                interpreter_fd = open_exec(AT_PWD, interpreter, 0, &interpreter_stat);
+        } else {
+            struct fd *old_root = foreign_exec_lookup_root_begin(foreign_root);
+            if (!IS_ERR(old_root)) {
+                interpreter_fd = open_exec(AT_PWD, interpreter, 0, &interpreter_stat);
+                foreign_exec_lookup_root_end(old_root);
+            }
+        }
+    }
     if (IS_ERR(interpreter_fd)) {
+        foreign_exec_undo(&foreign);
+        foreign_exec_done(&foreign);
         free(new_argv_buf);
         return (int)PTR_ERR(interpreter_fd);
     }
@@ -2006,6 +2050,9 @@ static int shebang_exec(struct fd *fd, const char *file, struct exec_args argv, 
     // new_argv points into it, so a chain holds one ARGV_MAX buffer per level;
     // EXEC_MAX_DEPTH is what bounds that.
     int err = exec_interpreter(interpreter_fd, &interpreter_stat, interpreter, new_argv, envp, depth + 1);
+    if (err < 0)
+        foreign_exec_undo(&foreign);
+    foreign_exec_done(&foreign);
     fd_close(interpreter_fd);
     free(new_argv_buf);
     return err;
@@ -2578,7 +2625,23 @@ static struct exec_file exec_file_named(const char *file) {
     return (struct exec_file) {.at = AT_PWD, .name = file, .filename = file};
 }
 
+static int __do_execve_body(const struct exec_file *exe, struct exec_args argv, struct exec_args envp,
+        struct foreign_exec *foreign);
+
+// The exec, with what a program from another root needed undone if it then
+// failed (kernel/foreign_exec.c): a ROOT-mode program's task was chrooted to
+// open it, and a failed exec must leave the caller where it was.
 static int __do_execve(const struct exec_file *exe, struct exec_args argv, struct exec_args envp) {
+    struct foreign_exec foreign = {0};
+    int err = __do_execve_body(exe, argv, envp, &foreign);
+    if (err < 0)
+        foreign_exec_undo(&foreign);
+    foreign_exec_done(&foreign);
+    return err;
+}
+
+static int __do_execve_body(const struct exec_file *exe, struct exec_args argv, struct exec_args envp,
+        struct foreign_exec *foreign) {
     const char *file = exe->filename;
     // PTRACE_EVENT_EXEC's message is the pid this task had BEFORE the exec. A
     // thread that is not the leader takes the leader's pid in exec_de_thread,
@@ -2602,6 +2665,26 @@ static int __do_execve(const struct exec_file *exe, struct exec_args argv, struc
     // root-owned 0744 binary was executable by every user on the system.
     struct statbuf stat;
     struct fd *fd = open_exec(exe->at, exe->name, exe->flags, &stat);
+    // A program inside another root that does not open from here: look again
+    // from inside that root (kernel/foreign_exec.c).
+    char foreign_root[MAX_PATH];
+    const char *foreign_rest = NULL;
+    if (IS_ERR(fd) && PTR_ERR(fd) == _ENOENT && exe->at == AT_PWD && exe->name[0] == '/' &&
+            foreign_exec_split(exe->name, foreign_root, sizeof(foreign_root), &foreign_rest)) {
+        if (foreign_exec_get_mode() == FOREIGN_EXEC_ROOT) {
+            if (foreign_exec_enter_root(foreign_root, foreign) == 0) {
+                fd = open_exec(AT_PWD, foreign_rest, exe->flags, &stat);
+                if (IS_ERR(fd))
+                    foreign_exec_undo(foreign);
+            }
+        } else {
+            struct fd *old_root = foreign_exec_lookup_root_begin(foreign_root);
+            if (!IS_ERR(old_root)) {
+                fd = open_exec(AT_PWD, foreign_rest, exe->flags, &stat);
+                foreign_exec_lookup_root_end(old_root);
+            }
+        }
+    }
     if (IS_ERR(fd))
         return (int) PTR_ERR(fd);
     int err;

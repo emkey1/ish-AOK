@@ -512,7 +512,8 @@ UIViewController *ISHCreateDiagnosticsNavigationController(void) {
 }
 
 // Appended sections live past the storyboard's static ones, in a fixed order:
-// user-account section, then LLM section, then Shortcuts section.
+// user-account section, then LLM section, then Shortcuts section, then Other
+// Filesystems.
 - (NSInteger)_userAccountSectionIndex {
     return [self _visibleStoryboardSectionCount];
 }
@@ -523,6 +524,45 @@ UIViewController *ISHCreateDiagnosticsNavigationController(void) {
 
 - (NSInteger)_shortcutsSectionIndex {
     return [self _visibleStoryboardSectionCount] + 2;
+}
+
+- (NSInteger)_foreignExecSectionIndex {
+    return [self _visibleStoryboardSectionCount] + 3;
+}
+
+static NSString *ISHForeignExecTitle(NSString *mode) {
+    if ([mode isEqualToString:@"libs"])
+        return @"Use Their Libraries Here";
+    if ([mode isEqualToString:@"off"])
+        return @"Off";
+    return @"Run Inside Their Root";
+}
+
+- (UITableViewCell *)_foreignExecCell {
+    UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1 reuseIdentifier:nil];
+    cell.textLabel.text = @"Programs From Other Roots";
+    cell.detailTextLabel.text = ISHForeignExecTitle(UserPreferences.shared.foreignExecMode);
+    cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+    return cell;
+}
+
+- (void)_showForeignExecPickerFromCell:(UITableViewCell *)cell {
+    ISHActionSheet *alert = [ISHActionSheet actionSheetWithTitle:@"Programs From Other Roots"
+                                                         message:@"How a program from another installed filesystem, such as /AOK/roots/Devuan6-arm64/usr/bin/tmux, runs when its libraries are not in this one. Applies to the next program started."];
+    NSString *current = UserPreferences.shared.foreignExecMode;
+    for (NSString *mode in @[@"root", @"libs", @"off"]) {
+        NSString *title = ISHForeignExecTitle(mode);
+        if ([mode isEqualToString:current])
+            title = [title stringByAppendingString:@"  Current"];
+        [alert addActionWithTitle:title
+                            style:UIAlertActionStyleDefault
+                          handler:^(__unused UIAlertAction *action) {
+            UserPreferences.shared.foreignExecMode = mode;
+            [self.tableView reloadData];
+        }];
+    }
+    [alert addActionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil];
+    [alert presentFromViewController:self sourceView:cell sourceRect:cell.bounds];
 }
 
 - (UITableViewCell *)_loginAsDefaultUserCell {
@@ -570,6 +610,11 @@ UIViewController *ISHCreateDiagnosticsNavigationController(void) {
 }
 
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+    if (indexPath.section == [self _foreignExecSectionIndex]) {
+        [self _showForeignExecPickerFromCell:[tableView cellForRowAtIndexPath:indexPath]];
+        [tableView deselectRowAtIndexPath:indexPath animated:YES];
+        return;
+    }
     if (indexPath.section == [self _llmSectionIndex]) {
         if (indexPath.row == 1) {
             UIViewController *settingsViewController = ISHCreateLLMSettingsViewController();
@@ -759,6 +804,10 @@ UIViewController *ISHCreateDiagnosticsNavigationController(void) {
             : @"Enable to show an OpenAI-compatible LLM client in terminal and Workspace menus.";
     if (section == [self _shortcutsSectionIndex])
         return @"When enabled, the Shortcuts app's \"Run Command\" action can run shell commands in the guest system without opening iSH-AOK.";
+    if (section == [self _foreignExecSectionIndex])
+        return @"Run Inside Their Root: the program sees that filesystem's own files, as if you had chrooted into it (mount-root.sh). "
+               @"Use Their Libraries Here: it sees this filesystem's files and your home, borrowing only its libraries; programs that need data files of their own may not work. "
+               @"Off: it fails, as on Linux.";
     if (section == 1) { // filesystems / upgrade
         if (!FsIsManaged()) {
             return @"The current filesystem is not managed by iSH.";
@@ -778,11 +827,13 @@ UIViewController *ISHCreateDiagnosticsNavigationController(void) {
         return @"LLM Client";
     if (section == [self _shortcutsSectionIndex])
         return @"Shortcuts";
+    if (section == [self _foreignExecSectionIndex])
+        return @"Other Filesystems";
     return [super tableView:tableView titleForHeaderInSection:section];
 }
 
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
-    return [self _visibleStoryboardSectionCount] + 3;
+    return [self _visibleStoryboardSectionCount] + 4;
 }
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
@@ -791,6 +842,8 @@ UIViewController *ISHCreateDiagnosticsNavigationController(void) {
     if (section == [self _llmSectionIndex])
         return UserPreferences.shared.shouldEnableLLMClient ? 2 : 1;
     if (section == [self _shortcutsSectionIndex])
+        return 1;
+    if (section == [self _foreignExecSectionIndex])
         return 1;
     return [super tableView:tableView numberOfRowsInSection:section];
 }
@@ -820,6 +873,8 @@ UIViewController *ISHCreateDiagnosticsNavigationController(void) {
     }
     if (indexPath.section == [self _shortcutsSectionIndex])
         return [self _shortcutsRunCommandsCell];
+    if (indexPath.section == [self _foreignExecSectionIndex])
+        return [self _foreignExecCell];
     return [super tableView:tableView cellForRowAtIndexPath:indexPath];
 }
 

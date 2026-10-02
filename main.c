@@ -23,6 +23,7 @@
 #include "kernel/fs.h"
 #include "kernel/task.h"
 #include "kernel/native_root.h"
+#include "kernel/foreign_exec.h"
 #include "kernel/swap.h"
 #include "kernel/checkpoint.h"
 #include "xX_main_Xx.h"
@@ -392,6 +393,15 @@ static void setup_host_mounts(void) {
     // init an arm64 task. ISH_NATIVE_USER=<name> (with ISH_NATIVE_PASSWORD, if
     // wanted) answers the first-start prompt for the everyday account, on a
     // root that does not have one yet.
+    // ISH_FOREIGN_EXEC=root|libs|off: /proc/ish/foreign_exec, from the start.
+    const char *foreign = getenv("ISH_FOREIGN_EXEC");
+    if (foreign != NULL) {
+        int mode = foreign_exec_parse_mode(foreign, strlen(foreign));
+        if (mode >= 0)
+            foreign_exec_set_mode((enum foreign_exec_mode) mode);
+        else
+            fprintf(stderr, "ISH_FOREIGN_EXEC: want root, libs or off, not %s\n", foreign);
+    }
     const char *native_root = getenv("ISH_NATIVE_ROOT");
     if (native_root != NULL && strcmp(native_root, "1") == 0) {
         int nerr = native_root_provision();

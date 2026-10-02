@@ -3,6 +3,7 @@
 #include "fs/proc/net.h"
 #include "jit/jit.h"
 #include "jit/arm64_mops.h"
+#include "kernel/foreign_exec.h"
 #include "kernel/errno.h"
 #include "kernel/fs.h"
 // For the Phase 1 gate prototype's swap_evict control: pid_get_task and
@@ -1465,6 +1466,25 @@ static int proc_ish_update_amd64_jit_fuse(struct proc_entry *UNUSED(e), struct p
     return proc_ish_update_jit_fuse(JIT_FUSE_ARCH_AMD64, d);
 }
 
+// /proc/ish/foreign_exec: what happens to a program from another installed
+// root (/AOK/roots/<name>/...) whose loader is not in this one
+// (kernel/foreign_exec.c). Reads "root", "libs" or "off" -- with the choices
+// on a second line -- and takes any of them written. The app's Settings write
+// it too. Takes effect at the next exec.
+static int proc_ish_show_foreign_exec(struct proc_entry *UNUSED(e), struct proc_data *buf) {
+    proc_printf(buf, "%s\n", foreign_exec_mode_name(foreign_exec_get_mode()));
+    proc_printf(buf, "# root: run it chrooted into its root; libs: run it here with its "
+                     "root's libraries; off: fail, as Linux does\n");
+    return 0;
+}
+static int proc_ish_update_foreign_exec(struct proc_entry *UNUSED(e), struct proc_data *d) {
+    int mode = foreign_exec_parse_mode(d->data, d->size);
+    if (mode < 0)
+        return _EINVAL;
+    foreign_exec_set_mode((enum foreign_exec_mode) mode);
+    return 0;
+}
+
 // /proc/ish/arm64_mops: 1 when arm64 programs are told about FEAT_MOPS
 // (jit/arm64_mops.c), and so glibc's memcpy/memmove/memset use it; write 0
 // or 1. Takes effect at the next exec.
@@ -2322,6 +2342,7 @@ struct proc_children proc_ish_children = PROC_CHILDREN({
     {"amd64_jit_fuse", S_IFREG | 0644, .show = proc_ish_show_amd64_jit_fuse, .update = proc_ish_update_amd64_jit_fuse},
     {"arm64_jit_fuse", S_IFREG | 0644, .show = proc_ish_show_arm64_jit_fuse, .update = proc_ish_update_arm64_jit_fuse},
     {"arm64_mops", S_IFREG | 0644, .show = proc_ish_show_arm64_mops, .update = proc_ish_update_arm64_mops},
+    {"foreign_exec", S_IFREG | 0644, .show = proc_ish_show_foreign_exec, .update = proc_ish_update_foreign_exec},
     {"hle", S_IFREG | 0644, .show = proc_ish_show_hle, .update = proc_ish_update_hle},
     {"jit_inherit", S_IFREG | 0644, .show = proc_ish_show_jit_inherit, .update = proc_ish_update_jit_inherit},
     {"jit_timing", S_IFREG | 0644, .show = proc_ish_show_jit_timing, .update = proc_ish_update_jit_timing},

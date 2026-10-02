@@ -54,6 +54,31 @@ case "${1:-}" in
     rm -f /tmp/nmdemo.starts /tmp/nm_rc.count /tmp/native_mode_init.log
     exit 0
     ;;
+--foreign-exec)
+    # Programs from another root (kernel/foreign_exec.c), in each mode. Run
+    # with ISH_FAKE_MNT2=<a glibc root> -- the gate's devuan-arm64-test -- which
+    # this places at /AOK/roots/Other the way the app exposes installed roots.
+    [ -x /fakemnt2/usr/bin/ls ] || { echo "native_mode_foreign_exec: SKIP no /fakemnt2 root"; exit 0; }
+    mount -t tmpfs nm /AOK/roots && mkdir /AOK/roots/Other &&
+        mount --bind /fakemnt2 /AOK/roots/Other || { fail foreign_setup "mounts"; exit 1; }
+    O=/AOK/roots/Other
+    saved=$(head -1 /proc/ish/foreign_exec)
+    echo off > /proc/ish/foreign_exec
+    if $O/usr/bin/true 2>/dev/null; then fail foreign_off "ran"; else pass foreign_off; fi
+    echo root > /proc/ish/foreign_exec
+    cd /tmp
+    got=$($O/bin/sh -c '. /etc/os-release; echo "$ID $(pwd)"' 2>&1)
+    check foreign_root_inside "devuan /" "$got"
+    check foreign_root_native_bound zsh "$($O/bin/sh -c '/AOK/native/zsh -fc "echo \$ZSH_NAME"' 2>&1)"
+    echo libs > /proc/ish/foreign_exec
+    got=$($O/bin/sh -c '. /etc/os-release; echo "$ID"' 2>&1)
+    check foreign_libs_here aok-native "$got"
+    case "$($O/bin/sh -c 'echo $LD_LIBRARY_PATH' 2>&1)" in
+        "$O/"*) pass foreign_libs_ldpath ;; *) fail foreign_libs_ldpath "$($O/bin/sh -c 'echo $LD_LIBRARY_PATH')" ;;
+    esac
+    echo "$saved" > /proc/ish/foreign_exec
+    exit 0
+    ;;
 --init-phase)
     sleep 2
     check init_is_pid1 init "$(ps -o pid,comm | awk '$1 == 1 { print $2 }')"
