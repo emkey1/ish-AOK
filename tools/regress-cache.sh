@@ -59,14 +59,17 @@ case $direction in
         # device's GNU tar prints a warning per file.
         COPYFILE_DISABLE=1 tar --no-xattrs --no-mac-metadata -cf - -C "$store" . | ssh "$@" "
             set -e
-            s=; [ -w $device_dir ] || [ -w /AOK/fakefs ] || s='sudo -n'
-            [ -d $device_dir ] && [ ! -w $device_dir ] && s='sudo -n'
+            # A function, not \$s: a login shell of zsh does not split
+            # \$s='sudo -n' and runs it as one command name.
+            s=; [ -w $device_dir ] || [ -w /AOK/fakefs ] || s=1
+            [ -d $device_dir ] && [ ! -w $device_dir ] && s=1
+            as() { if [ -n \"\$s\" ]; then sudo -n \"\$@\"; else \"\$@\"; fi; }
             t=\$(mktemp -d)
             tar xf - -C \"\$t\"
-            \$s mkdir -p $device_dir
+            as mkdir -p $device_dir
             n0=\$(ls $device_dir | wc -l)
-            \$s cp -pn \"\$t\"/* $device_dir/ 2>/dev/null || true
-            \$s chmod 1777 $device_dir 2>/dev/null || true
+            as cp -pn \"\$t\"/* $device_dir/ 2>/dev/null || true
+            as chmod 1777 $device_dir 2>/dev/null || true
             rm -rf \"\$t\"
             echo \"pushed: \$((\$(ls $device_dir | wc -l) - n0)) new on the device, \$(ls $device_dir | wc -l) there now\""
         ;;
