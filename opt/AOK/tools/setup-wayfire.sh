@@ -7,6 +7,8 @@
 #               desktop at once), animations
 #   wf-shell  - its panel (wf-panel), wallpaper (wf-background) and dock
 #   wcm       - the Wayfire Config Manager, a settings window for all of it
+#   kclock    - KDE's Clock (time zones, timers, stopwatch, alarms), in the
+#               panel's menu
 # and, when they are missing, the base desktop (setup-wayland.sh: foot,
 # wayvnc, wofi) and the GPU drivers (setup-gpu.sh).
 #
@@ -78,8 +80,15 @@ case "$gles_renderer" in
     *) die "Wayfire needs OpenGL ES on the GPU, and this root's Mesa cannot provide it (renderer: ${gles_renderer:-none}). Mesa 25.2 and later need a Vulkan feature iSH-AOK's GPU does not offer yet; Devuan 6 (Mesa 25.0) runs Wayfire. setup-xfce.sh works here." ;;
 esac
 
-PKGS="wayfire wf-shell wcm"
+PKGS="wayfire wf-shell wcm kclock"
+# kclock's QML modules. Debian's kclock does not depend on them -- Plasma
+# always has them -- and without org.kde.desktop it starts and opens no
+# window at all ("module org.kde.desktop is not installed", bip 2026-10-02).
+# Arch's packages depend on what they use, so it needs only the style.
+CLOCK_DEB="qml6-module-org-kde-desktop qml6-module-org-kde-coreaddons qml6-module-org-kde-kirigamiaddons-delegates qml6-module-org-kde-kirigamiaddons-formcard qml6-module-qtquick-dialogs qml6-module-qtquick-shapes qml6-module-qtquick-templates"
+CLOCK_ARCH="qqc2-desktop-style"
 if command -v apt-get >/dev/null 2>&1; then
+    PKGS="$PKGS $CLOCK_DEB"
     log "Devuan/Debian (apt) detected"
     SOURCES=/etc/apt/sources.list
     if [ -f "$SOURCES" ] && grep -q 'deb\.devuan\.org' "$SOURCES" 2>/dev/null; then
@@ -93,6 +102,7 @@ if command -v apt-get >/dev/null 2>&1; then
         -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold $PKGS \
         || die "apt-get install failed -- see output above"
 elif command -v pacman >/dev/null 2>&1; then
+    PKGS="$PKGS $CLOCK_ARCH"
     log "Arch (pacman) detected"
     log "pacman -Sy"
     pacman -Sy --noconfirm || die "pacman -Sy failed -- check network/DNS (guest /etc/resolv.conf)"
