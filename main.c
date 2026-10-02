@@ -22,6 +22,7 @@
 #include "fs/sockrestart.h"
 #include "kernel/fs.h"
 #include "kernel/task.h"
+#include "kernel/native_root.h"
 #include "kernel/swap.h"
 #include "kernel/checkpoint.h"
 #include "xX_main_Xx.h"
@@ -384,6 +385,26 @@ static void setup_host_mounts(void) {
     ignore_eexist(do_mount(&procfs, "proc", "/proc", "", 0));
     ignore_eexist(do_mount(&sysfs, "sysfs", "/sys", "", 0));
     ignore_eexist(do_mount(&devptsfs, "devpts", "/dev/pts", "", 0));
+
+    // Native mode (docs/native_mode_plan.md): ISH_NATIVE_ROOT=1 treats the root
+    // as a native-mode root and provisions it exactly as the app does at every
+    // boot of one -- links into /AOK/native, /etc, the rc scripts -- and makes
+    // init an arm64 task. ISH_NATIVE_USER=<name> (with ISH_NATIVE_PASSWORD, if
+    // wanted) answers the first-start prompt for the everyday account, on a
+    // root that does not have one yet.
+    const char *native_root = getenv("ISH_NATIVE_ROOT");
+    if (native_root != NULL && strcmp(native_root, "1") == 0) {
+        int nerr = native_root_provision();
+        if (nerr < 0)
+            fprintf(stderr, "ISH_NATIVE_ROOT: cannot provision this root (%d)\n", nerr);
+        native_root_adopt_abi(current);
+        const char *user = getenv("ISH_NATIVE_USER");
+        if (nerr == 0 && user != NULL && user[0] != '\0' && !native_root_has_default_user()) {
+            nerr = native_root_add_user(user, getenv("ISH_NATIVE_PASSWORD"));
+            if (nerr < 0)
+                fprintf(stderr, "ISH_NATIVE_USER: cannot add %s (%d)\n", user, nerr);
+        }
+    }
 
     // Dev-only: mount a host directory as realfs at /realmnt to reproduce
     // real-fs-backed behavior (e.g. /AOK/persist) against a local fakefs root.

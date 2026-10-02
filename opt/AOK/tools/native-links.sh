@@ -176,95 +176,19 @@ zsh_path_file() {
     fi
 }
 
-# Applets deliberately NOT linked. Linking a broken one is worse than leaving
-# it alone: the distro's working command gets shadowed by one that errors, and
-# the failure surfaces somewhere unrelated.
-#
-# THIS LIST WENT BADLY STALE ONCE. It was written when much of the native libc
-# shim was missing, and kept entries long after the shim grew spawn, signals,
-# wait and job control -- 52 entries where a measurement found a handful.
-#
-# tools/native-applet-audit.py, which walks SmallCLUE's sources for calls the
-# shim answers with ENOSYS, is NOT the authority here and has drifted further
-# from one: it flags find, rm, time, timeout, watch, xargs, init and runit, and
-# every one of those was then measured working. The reason is structural -- it
-# follows helpers transitively and cannot see #if defined(PSCAL_TARGET_IOS), so
-# the one fork() left in the tree (inside an iOS-only watch helper) taints
-# everything that can reach the applet table. It also cleared `env`, whose
-# inability to exec once took PSCAL's harness from 217 passing to zero. Treat
-# it as a hint about where to LOOK, never as an answer.
-#
-# So the entries below are what was MEASURED by running each applet, not what
-# the audit predicted. Re-measure rather than re-reason when this is revisited.
-#
-#   broken here      script needs the PSCAL app's terminal-capture hooks and
-#                    creates no pty of its own; mount, umount and passwd have
-#                    their real bodies inside #if defined(__linux__), and a
-#                    native program is compiled for the HOST; vproc-test says
-#                    it is iOS-only; version reports the embedding app's
-#                    marketing version, which AOK has none of
-#   loops or blocks  init, runit, watch all WORK -- init runs /etc/rc and reaps,
-#                    runit starts its services, watch repeats -- and that is
-#                    exactly why they are not linked: two are supervisors that
-#                    never return and the third repeats until interrupted
-#   misleading       halt, poweroff and reboot print "System halt requested"
-#                    and return 0, having halted nothing: their body is an
-#                    exit(0), and a native program's exit is a return into the
-#                    kernel, not the end of anything. Shadowing sysvinit's
-#                    halt with a no-op that reports success is the worst kind
-#                    of entry to link
-#   system state     mknod, mdev, chroot, su, sudo -- these work, and
-#                    shadowing them is still all risk: this sudo runs the
-#                    command with no authentication at all
-#   not commands     smallclue, smallclue-help, licenses
-#
-# Five entries left this list after being fixed rather than reclassified, which
-# is the outcome to aim for: ipaddr (the shim's getifaddrs is real now -- the
-# host's interfaces ARE the guest's, and /proc/net/dev was already built from
-# them), kill (which now takes -0, -s SIG and a signal by name or number), and
-# dmesg -- whose __linux__ test was answering the wrong question, since AOK's
-# guest IS Linux and now answers klogctl through the shim.
-#
-# less and more are the fourth and fifth, on 2026-08-22. They were excluded
-# because `apt search maria` wedged the app every time and removing the less
-# symlink cured it. The trigger was never SmallCLUE's: apt hands its pager a
-# close-on-exec pipe and reads four bytes from it to learn whether the exec
-# worked, and iSH-AOK's native dispatch was returning from execve without
-# applying close-on-exec at all. The write end survived in the pager, so apt's
-# read never saw EOF -- it sat on four bytes while the pager sat on the stdin
-# apt had not begun writing. Fixed in kernel/exec.c
-# (exec_apply_native_process_state), which is why a shell script or an explicit
-# PAGER between the two always "worked": a script IS a real exec, and it closed
-# the pipe on apt's behalf.
-#
-# The pager was fixed too, and independently: it read the WHOLE stream before
-# drawing a line, where real less paints the first screen as soon as it has
-# one. It now streams, and it takes real less's other rule with it -- output
-# that is not a tty is copied through rather than paged, so `less file | head`
-# in a session no longer waits for a keystroke nobody will type.
-#
-# Absent from this list on purpose, because they are handled by PROBED below
-# rather than hardcoded: everything whose availability depends on what this
-# particular build has compiled in.
-EXCLUDED="chroot halt init licenses mdev mknod mount passwd
-poweroff reboot runit script smallclue smallclue-help su sudo umount
-version vproc-test watch"
-
-# Availability-gated applets: present in every build, working only in some.
-# These are the ones that made the list stale, because whether they work is a
-# property of the BUILD rather than of the applet -- ssh needs the vendored
-# OpenSSH tree, tar and gzip need zlib, git needs libgit2, curl and wget need
-# libcurl, micro and vi need their embedded editors.
-#
-# So they are not guessed at: each is run once, and skipped only if it reports
-# that it is not in this build. A build that gains ssh starts linking ssh with
-# no edit here, which is the property this list was missing.
-#
-# md5sum/sha1sum/sha256sum are still probed although they now work everywhere
-# AOK builds: they are compiled only where CommonCrypto exists, which is the
-# same kind of build-time fact as the rest of this list.
-PROBED="ssh scp sftp ssh-keygen ssh-copy-id rsync git tar gzip gunzip zcat
-md5sum sha1sum sha256sum micro vi nextvi curl wget"
+# Applets deliberately NOT linked, and the ones whose availability is probed:
+# the lists and the measurements behind them live in native-applets.conf,
+# beside this script, because the native-mode root provisioner
+# (kernel/native_root.c) reads the same file. Sourced from where this script
+# is, falling back to /AOK/tools, so a copy run from elsewhere still finds it.
+NATIVE_APPLETS_CONF="${0%/*}/native-applets.conf"
+[ -r "$NATIVE_APPLETS_CONF" ] || NATIVE_APPLETS_CONF=/AOK/tools/native-applets.conf
+if [ ! -r "$NATIVE_APPLETS_CONF" ]; then
+    echo "native-links.sh: cannot read native-applets.conf" >&2
+    exit 1
+fi
+# shellcheck source=native-applets.conf
+. "$NATIVE_APPLETS_CONF"
 
 # What to run to make an applet own up. --version for almost everything, but
 # not for curl and wget: they parse it as an option, print usage, and look
