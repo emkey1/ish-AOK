@@ -31,6 +31,13 @@
 #   tools/run-guest-gate.sh --parallel      # run the local legs at once
 #   tools/run-guest-gate.sh --unpriv        # add an UNPRIVILEGED leg (see below)
 #   tools/run-guest-gate.sh --device m4pt   # also run it on a device over ssh
+#   tools/run-guest-gate.sh --only native   # just the native-mode leg
+#
+# The native leg (native mode, docs/native_mode_plan.md) runs in a root built
+# from NOTHING each time -- no distribution at all, only what the kernel
+# provisions -- so it needs no build/*-test root and always runs. It boots
+# that root several times, because what it checks includes what a boot does:
+# the provisioning, then SmallCLUE's init as pid 1 with /etc/rc and runit.
 #
 # --unpriv adds one leg that runs the suite as an ordinary user instead of
 # root. Every other leg runs the CLI as uid 0, where a parent directory is
@@ -204,6 +211,51 @@ leg_run_unpriv() {
     echo $? > "$LOGDIR/$1.rc"
 }
 
+# The native-mode leg: a fresh root, provisioned by the kernel
+# (ISH_NATIVE_ROOT=1), checked by tests/manual/native_mode.sh in its phases, and
+# then the native shell suites, which have nothing else to run on there. The
+# init boot is the one step that can hang -- init only returns when told to --
+# so it is given two minutes before it is killed and reported.
+leg_run_native() {
+    _nroot=$LOGDIR/native-root
+    rm -rf "$_nroot"
+    tar -cf "$LOGDIR/empty.tar" -T /dev/null
+    {
+        if ! "$REPO/build/tools/fakefsify" "$LOGDIR/empty.tar" "$_nroot"; then
+            echo "native_mode_root: FAIL fakefsify"
+        else
+            ISH_NATIVE_ROOT=1 ISH_NATIVE_USER=tester "$ISH" -f "$_nroot" \
+                /bin/sh /AOK/tests/native_mode.sh --setup-reprovision
+            ISH_NATIVE_ROOT=1 "$ISH" -f "$_nroot" /bin/sh /AOK/tests/native_mode.sh
+            ISH_NATIVE_ROOT=1 "$ISH" -f "$_nroot" /bin/sh /AOK/tests/native_mode.sh --install-init
+            ISH_NATIVE_ROOT=1 "$ISH" -f "$_nroot" /sbin/init > /dev/null 2>&1 &
+            _ipid=$!
+            _waited=0
+            while kill -0 "$_ipid" 2>/dev/null && [ "$_waited" -lt 120 ]; do
+                sleep 1
+                _waited=$((_waited + 1))
+            done
+            if kill -0 "$_ipid" 2>/dev/null; then
+                kill -9 "$_ipid" 2>/dev/null
+                echo "native_mode_poweroff: FAIL init still running after 120 s"
+            else
+                echo "native_mode_poweroff: PASS"
+            fi
+            wait "$_ipid" 2>/dev/null
+            ISH_NATIVE_ROOT=1 "$ISH" -f "$_nroot" /bin/sh -c 'cat /tmp/native_mode_init.log'
+            for _t in native_zsh_fork_state native_stdio_redirect; do
+                if ISH_NATIVE_ROOT=1 "$ISH" -f "$_nroot" /bin/sh "/AOK/tests/$_t.sh" \
+                        > "$LOGDIR/native-$_t.out" 2>&1; then
+                    echo "$_t: PASS"
+                else
+                    echo "$_t: FAIL (see $LOGDIR/native-$_t.out)"
+                fi
+            done
+        fi
+    } > "$LOGDIR/native.log" 2>&1
+    echo 0 > "$LOGDIR/native.rc"
+}
+
 # One leg, start to finish, the way it has always worked.
 run_leg() {
     leg_wanted "$1" "$2" || return 0
@@ -320,6 +372,18 @@ if [ "$UNPRIV" -eq 1 ] && [ -z "$ONLY" ]; then
         leg_report unpriv
     else
         echo "  unpriv: SKIPPED (no root to run it in)"
+    fi
+fi
+
+# Native mode: no root needed, so it runs unless another leg was asked for.
+if [ -z "$ONLY" ] || [ "$ONLY" = native ]; then
+    if [ -x "$REPO/build/tools/fakefsify" ]; then
+        printf '########## native ##########\n'
+        leg_run_native
+        leg_report native
+    else
+        echo "  native: NOT RUN (no build/tools/fakefsify -- run a bare 'ninja -C build')"
+        fail_total=$((fail_total + 1))
     fi
 fi
 
