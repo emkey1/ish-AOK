@@ -102,6 +102,34 @@ subshells, pipelines, `$(...)`, an ENOEXEC script, `ssh -G`, `git --version`,
 `curl https://...`, `sudo -l`, `su`, Ctrl-C and job control. Write down every
 failure, then adjust the steps below before starting them.
 
+**Results (2026-10-02, CLI, an empty fakefs and a hand-made skeleton):**
+
+- **Worked with no change:** native zsh/dash as the first image; `/bin/sh`
+  scripts, scripts with no shebang (ENOEXEC) and `#!/usr/bin/env zsh`;
+  `$(...)`, pipelines and `( )`; `su - mke` (id, HOME, cwd and SHELL right);
+  `sudo -n id` through `%sudo` in sudoers; `ssh -G`; `tar czf`/`tar tzf`; `ps`;
+  `df`; Ctrl-C, Ctrl-Z, `fg` and `jobs` in interactive zsh; SmallCLUE `init` as
+  pid 1 through a `/sbin/init` symlink, running `/etc/rc` and then, as
+  predicted, shutting down when rc ends.
+- **Confirmed gaps (already in the plan):** `uname -m` says `i686`; with no
+  terminfo, ZLE draws with no capabilities at all; there is no `reset`, `tput`,
+  `free` or `login`; `mount` says "not supported on this platform"; `date` is
+  UTC with no zoneinfo.
+- **Fixed during the trial:** `kill %1` and `kill PID` did nothing to a job
+  started from an *interactive* native zsh, on any root, because the shell's
+  own SIG_IGN of TERM and QUIT leaked into every job (zsh ae667d11b, AOK
+  7adaad37c, eight new cases in native_zsh_fork_state.sh).
+- **New gaps:**
+  - SmallCLUE `curl` takes only `-o -O -X -H -d -u -k`. `curl -s`, `-S`, `-L`,
+    `-I`, `-f` and `-w` are what install snippets and scripts use, and on a root
+    with no other HTTP client this matters. Added to step 5.
+  - **`git` is a stub in every AOK build** ("libgit2 support is not enabled"):
+    AOK links neither libgit2 nor OpenSSL. That predates native mode, but in
+    native mode there is no distro git to fall back on. Bringing libgit2 in is
+    its own project, so it is **queued in docs/TODO.md, not in 558**.
+  - Cosmetic: `ps` shows a dash relaunch as `script --aok-fork N`, and a zsh one
+    as `zsh -f -c -- CMD /AOK/native/zsh`.
+
 ### 2. `kernel/native_root.c`: the provisioner
 
 Add `int native_root_provision(const struct native_root_opts *)`, written
@@ -330,6 +358,10 @@ person hits them:
    `mount-root.sh <root>` must then work in native mode, so test it there too.
    Remove them from `native-links.sh`'s EXCLUDED list once they pass.
 5. `halt`/`reboot`/`poweroff` signalling pid 1, and `sv`: see step 4a.
+6. `curl`: `-s`, `-S`, `-L` (follow redirects), `-I`/`--head`, `-f`, `-w
+   '%{http_code}'`, `-A`, `-e` and `--fail-with-body`, with long spellings.
+   Install one-liners (`curl -fsSL URL | sh`) are the case to get right. The
+   oracle is curl from the Devuan root.
 
 Each gets golden cases in `/AOK/tests` the way `native_coreutils.c` does, and
 each lands on SmallCLUE upstream first.
