@@ -948,6 +948,11 @@ smallclue_c_args = [
     # whether the HOST is Linux -- which it never is on an app build -- and
     # ask whether the capability is present, which is what they meant.
     '-DSMALLCLUE_HAVE_SHADOW_AUTH',
+    # mount and umount, for the guest kernel, which is Linux whatever the host
+    # is (src/mount_app.c; kernel/smallclue_glue.c supplies the two calls).
+    # This is what lets a native-mode root reach a distro root beside it:
+    # mount-root.sh needs mount --bind and umount.
+    '-DSMALLCLUE_HOST_LINUX_MOUNT',
     # login's last resort when an account's shell does not exist, ahead of
     # /bin/sh -- which a native-mode root has only as a link into /AOK/native,
     # and which a user can break. The terminal's root prompt must survive a

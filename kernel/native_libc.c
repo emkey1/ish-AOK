@@ -671,6 +671,32 @@ int nlibc_unlink(const char *path) {
     NLIBC_PATH(guest_path, path);
     return (int) nlibc_ret(native_syscall(NATIVE_SYS_unlinkat, AT_FDCWD_, guest_path, 0));
 }
+// mount(2) and umount2(2) as Linux defines them -- arguments, flag values and
+// all -- for SmallCLUE's mount and umount (SMALLCLUE_HOST_LINUX_MOUNT, meson).
+// Darwin's mount() takes different arguments and its MNT_FORCE is another
+// number, so these are not the host names redirected: SmallCLUE calls them
+// through smallclueHostMount/smallclueHostUmount2 (kernel/smallclue_glue.c).
+// The source, type and data of a mount may each be NULL, as on Linux.
+int nlibc_linux_mount(const char *source, const char *target, const char *type,
+                      unsigned long flags, const void *data) {
+    NATIVE_FRAME;
+    guest_addr_t guest_source = 0, guest_type = 0, guest_data = 0;
+    if (source != NULL && (guest_source = native_scratch_str(source)) == 0)
+        return nlibc_fail(_ENOMEM);
+    NLIBC_PATH(guest_target, target);
+    if (type != NULL && (guest_type = native_scratch_str(type)) == 0)
+        return nlibc_fail(_ENOMEM);
+    if (data != NULL && (guest_data = native_scratch_str((const char *) data)) == 0)
+        return nlibc_fail(_ENOMEM);
+    return (int) nlibc_ret(native_syscall(NATIVE_SYS_mount, guest_source, guest_target,
+            guest_type, (dword_t) flags, guest_data));
+}
+int nlibc_linux_umount2(const char *target, int flags) {
+    NATIVE_FRAME;
+    NLIBC_PATH(guest_target, target);
+    return (int) nlibc_ret(native_syscall(NATIVE_SYS_umount2, guest_target, flags));
+}
+
 // remove(3): unlink, or rmdir for a directory -- on the GUEST. Unrouted it was
 // the host's, and libgit2 calls it (repository.c) on a path inside the repo.
 int nlibc_remove(const char *path) {

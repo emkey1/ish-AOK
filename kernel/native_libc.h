@@ -146,6 +146,9 @@ int nlibc_dirfd(DIR *dir);
 /* --- mutation ----------------------------------------------------------- */
 int nlibc_unlink(const char *path);
 int nlibc_remove(const char *path);
+int nlibc_linux_mount(const char *source, const char *target, const char *type,
+                      unsigned long flags, const void *data);
+int nlibc_linux_umount2(const char *target, int flags);
 int nlibc_rmdir(const char *path);
 int nlibc_mkdir(const char *path, mode_t mode);
 /* The *at forms. Rust's std and rustix prefer them -- they are the ones

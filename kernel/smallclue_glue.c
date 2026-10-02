@@ -35,6 +35,20 @@ bool pscalRuntimeStderrIsInteractive(void) {
     return false;
 }
 
+// SmallCLUE's mount and umount (src/mount_app.c, SMALLCLUE_HOST_LINUX_MOUNT):
+// Linux's mount(2) and umount2(2), which is the guest kernel's, through the
+// shim (kernel/native_libc.c).
+int nlibc_linux_mount(const char *source, const char *target, const char *type,
+                      unsigned long flags, const void *data);
+int nlibc_linux_umount2(const char *target, int flags);
+int smallclueHostMount(const char *source, const char *target, const char *type,
+                       unsigned long flags, const void *data) {
+    return nlibc_linux_mount(source, target, type, flags, data);
+}
+int smallclueHostUmount2(const char *target, int flags) {
+    return nlibc_linux_umount2(target, flags);
+}
+
 // SmallCLUE's weak hook for "was this run re-launched by a checkpoint
 // restore?" -- init and runit ask, so a restore does not start their children
 // a second time. See native_program_was_restored.
