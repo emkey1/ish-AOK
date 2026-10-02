@@ -6,7 +6,6 @@
 #
 #   Freedoom (Phase 1 and 2) on Chocolate Doom    freedoom1, freedoom2
 #   Beneath a Steel Sky (ScummVM, freeware)       sky
-#   Extreme Tux Racer                             etr
 #   Warzone 2100 (real-time strategy, Vulkan)     warzone2100
 #   Armagetron Advanced (light cycles)            armagetronad
 #   Chromium B.S.U. (scrolling shooter)           chromium-bsu
@@ -55,9 +54,9 @@ WRAPPER_SRC="$(dirname "$0")/aok-sdl-game"   # /AOK/tools, beside this script
 PKGS="chocolate-doom freedoom scummvm beneath-a-steel-sky"
 WRAPPED="chocolate-doom doom freedoom1 freedoom2 scummvm sky"
 GPU_GAMES="chocolate-doom doom freedoom1 freedoom2 scummvm sky"
-MORE_PKGS="extremetuxracer warzone2100 armagetronad chromium-bsu blobby neverball trigger-rally"
-MORE_WRAPPED="etr warzone2100 armagetronad chromium-bsu blobby neverball trigger-rally"
-MORE_GPU="etr armagetronad chromium-bsu blobby neverball trigger-rally"
+MORE_PKGS="warzone2100 armagetronad chromium-bsu blobby neverball trigger-rally"
+MORE_WRAPPED="warzone2100 armagetronad chromium-bsu blobby neverball trigger-rally"
+MORE_GPU="armagetronad chromium-bsu blobby neverball trigger-rally"
 
 usage() {
     sed -n '/^# Usage:/,/^# Devuan/p' "$0" | sed '$d; s/^# \{0,1\}//'
@@ -274,7 +273,7 @@ log "done"
 if [ "$CHECK_FAILED" = 0 ]; then
     note "Start them from the desktop's menu, or in a terminal there:"
     note "  freedoom1    freedoom2    sky"
-    [ "$MINIMAL" = 0 ] && note "  etr    warzone2100    armagetronad    chromium-bsu    blobby    neverball    trigger-rally"
+    [ "$MINIMAL" = 0 ] && note "  warzone2100    armagetronad    chromium-bsu    blobby    neverball    trigger-rally"
     note "Doom: arrow keys move and turn, Ctrl fires, Space opens doors, Shift runs,"
     note "      Alt+arrows strafe, 1-7 pick a weapon, Tab shows the map, Esc the menu."
     note "Beneath a Steel Sky: left-click walks and looks, right-click uses; F5 menu."

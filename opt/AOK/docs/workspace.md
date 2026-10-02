@@ -265,10 +265,9 @@ stay in software.
 
 One script installs a set of free games tested here -- Freedoom (the free
 Doom, on Chocolate Doom), Beneath a Steel Sky (the freeware ScummVM
-adventure), Extreme Tux Racer, Warzone 2100, Armagetron Advanced, Chromium
-B.S.U., Blobby Volley 2, Neverball and Trigger Rally -- and sets each up to
-play sound through the app and to draw on the GPU where the GPU can (Devuan
-roots):
+adventure), Warzone 2100, Armagetron Advanced, Chromium B.S.U., Blobby
+Volley 2, Neverball and Trigger Rally -- and sets each up to play sound
+through the app and to draw on the GPU where the GPU can (Devuan roots):
 
 ```
 sudo sh /AOK/tools/setup-games.sh          # --minimal: Freedoom and Beneath a Steel Sky only
