@@ -1927,10 +1927,20 @@ fi
 # told wayvnc to detach while wayvnc was still on its first capture, and
 # wayvnc 0.9.1 crashed (a NULL write in libwayland-client's object map, the
 # connection it had just dropped) -- 5th-generation iPad, 2026-10-01.
+#
+# Under Wayfire the first terminal opens maximized. Its panel starts later
+# (below), and Wayfire places a window by the work area at the moment it
+# opens and never moves a floating one when a panel later reserves the top:
+# foot's title bar sat under wf-panel (bip, 2026-10-02; Wayfire on Linux
+# does the same). A maximized window is fitted to the work area again when
+# the panel arrives. foot's default size is larger than an iPad's screen at
+# 2x scale anyway.
+foot_args=
+[ "$AOK_DESKTOP" = wayfire ] && foot_args=--maximized
 foot_attempt=1
 while true; do
     log "starting foot (attempt $foot_attempt)"
-    spawn_logged "foot-attempt$foot_attempt" foot
+    spawn_logged "foot-attempt$foot_attempt" foot $foot_args
     FOOT_PID=$SPAWN_PID
 
     i=0
