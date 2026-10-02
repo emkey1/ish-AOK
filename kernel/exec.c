@@ -1,7 +1,9 @@
 #include "kernel/signal.h"
 #include "task.h"
 #include "kernel/foreign_exec.h"
+#ifndef _GNU_SOURCE
 #define _GNU_SOURCE
+#endif
 #include <unistd.h>
 #include <fcntl.h>
 #include <pthread.h>

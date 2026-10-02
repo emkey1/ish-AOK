@@ -488,7 +488,6 @@ static int proc_ish_show_checkpoint(struct proc_entry *UNUSED(entry), struct pro
     // stack decides whether the checkpoint is deferred or refused outright.
     char native_names[8][16];
     unsigned native_named = 0;
-    unsigned pipes = 0, ttys = 0;
 
     struct task_snapshot snapshot = {0};
     if (task_snapshot_collect(&snapshot, true) < 0) {
@@ -553,12 +552,10 @@ static int proc_ish_show_checkpoint(struct proc_entry *UNUSED(entry), struct pro
             // the pipe was one of the ones counted easy.
             const char *family;
             if (S_ISFIFO(fd->type)) {
-                pipes++;
                 family = "pipe/fifo";
             } else if (S_ISSOCK(fd->type)) {
                 family = "socket";
             } else if (S_ISCHR(fd->type)) {
-                ttys++;
                 family = "chardev";
             } else if (fd->ops != NULL && fd->ops->name != NULL) {
                 family = fd->ops->name;

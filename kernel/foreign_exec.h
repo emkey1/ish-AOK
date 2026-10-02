@@ -28,6 +28,7 @@ struct foreign_exec {
     struct fd *old_root;   // FOREIGN_EXEC_ROOT: the root and cwd before
     struct fd *old_pwd;
     char *ldpath;          // FOREIGN_EXEC_LIBS: the LD_LIBRARY_PATH to give it
+    char *locpath;         // FOREIGN_EXEC_LIBS: its root's locales, for LOCPATH
 };
 
 // The program in EXE needs INTERP, which is not in this root. If it lives in
@@ -55,9 +56,9 @@ void foreign_exec_undo(struct foreign_exec *fx);
 // Release what FX holds, after success or failure.
 void foreign_exec_done(struct foreign_exec *fx);
 
-// The environment block for the new image: ENVP with LD_LIBRARY_PATH set for
-// a LIBS exec -- or, for any other ELF exec, with a path an earlier LIBS exec
-// set taken back out, so another root's libraries never reach a program that
+// The environment block for the new image: ENVP with LD_LIBRARY_PATH (and
+// LOCPATH) set for a LIBS exec -- or, for any other ELF exec, with values an
+// earlier LIBS exec set taken back out, so another root's libraries never reach a program that
 // did not ask for them. Returns a malloc'd block of NUL-terminated strings
 // (count in *count_out), or NULL when ENVP is fine as it is.
 char *foreign_exec_env(const struct foreign_exec *fx, const char *envp, size_t envc,

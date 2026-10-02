@@ -41,8 +41,6 @@
 #include "kernel/task.h"
 
 #define ROOTS_PREFIX "/AOK/roots/"
-#define LDPATH_VAR "LD_LIBRARY_PATH="
-#define MARKER_VAR "AOK_FOREIGN_LDPATH="
 
 static _Atomic int foreign_exec_mode = FOREIGN_EXEC_ROOT;
 
@@ -179,6 +177,13 @@ struct fd *foreign_exec_interp(struct fd *exe, const char *interp, struct foreig
         if (IS_ERR(fd))
             return fd;
         fx->ldpath = library_path(root);
+        // glibc reads its locales from /usr/lib/locale, which is THIS root's:
+        // without them tmux, for one, refuses to start ("invalid LC_ALL,
+        // LC_CTYPE or LANG"), even for C.UTF-8, which Debian ships as a file.
+        char locales[MAX_PATH];
+        if (snprintf(locales, sizeof(locales), "%s/usr/lib/locale", root) < (int) sizeof(locales) &&
+                is_dir(locales))
+            fx->locpath = strdup(locales);
         return fd;
     }
 
@@ -290,6 +295,7 @@ void foreign_exec_done(struct foreign_exec *fx) {
     if (fx->old_pwd != NULL)
         fd_close(fx->old_pwd);
     free(fx->ldpath);
+    free(fx->locpath);
     *fx = (struct foreign_exec) {0};
 }
 
@@ -299,77 +305,122 @@ static bool env_is(const char *entry, const char *var) {
     return strncmp(entry, var, strlen(var)) == 0;
 }
 
+// The variables a LIBS exec sets. Each has a marker beside it recording the
+// value the exec chose, so a later exec can tell its own setting from the
+// user's: ours is taken back out of a program that does not need it, the
+// user's is always kept. LD_LIBRARY_PATH puts ours in front of the user's;
+// for LOCPATH the user's own, if any, wins.
+struct env_rule {
+    const char *var, *marker;
+    bool join;
+};
+static const struct env_rule env_rules[] = {
+    {"LD_LIBRARY_PATH=", "AOK_FOREIGN_LDPATH=", true},
+    {"LOCPATH=", "AOK_FOREIGN_LOCPATH=", false},
+};
+#define ENV_RULES (sizeof(env_rules) / sizeof(env_rules[0]))
+
+static const char *rule_ours(const struct foreign_exec *fx, size_t i) {
+    const char *ours = i == 0 ? fx->ldpath : fx->locpath;
+    return ours != NULL && ours[0] != '\0' ? ours : NULL;
+}
+
 char *foreign_exec_env(const struct foreign_exec *fx, const char *envp, size_t envc,
                        size_t *count_out) {
-    // What is there: LD_LIBRARY_PATH, and the marker an earlier LIBS exec left
+    // What is there: each variable, and the marker an earlier LIBS exec left
     // to say which value was its own.
-    const char *ldpath = NULL, *marker = NULL;
+    const char *current[ENV_RULES] = {0}, *marker[ENV_RULES] = {0};
+    bool touched = false;
     const char *p = envp;
     for (size_t i = 0; i < envc; i++) {
-        if (env_is(p, LDPATH_VAR))
-            ldpath = p + strlen(LDPATH_VAR);
-        else if (env_is(p, MARKER_VAR))
-            marker = p + strlen(MARKER_VAR);
+        for (size_t r = 0; r < ENV_RULES; r++) {
+            if (env_is(p, env_rules[r].var))
+                current[r] = p + strlen(env_rules[r].var);
+            else if (env_is(p, env_rules[r].marker))
+                marker[r] = p + strlen(env_rules[r].marker);
+        }
         p += strlen(p) + 1;
     }
-    if (fx->ldpath == NULL && marker == NULL)
+    for (size_t r = 0; r < ENV_RULES; r++)
+        touched |= rule_ours(fx, r) != NULL || marker[r] != NULL;
+    if (!touched)
         return NULL;
 
-    // The value LD_LIBRARY_PATH should have, NULL for none: ours in front of
-    // whatever the user had. The marker holds exactly the prefix an earlier
-    // LIBS exec put there, so what follows it is the user's own.
-    const char *user = ldpath;
-    if (user != NULL && marker != NULL) {
-        size_t mlen = strlen(marker);
-        if (strncmp(user, marker, mlen) == 0 && (user[mlen] == '\0' || user[mlen] == ':'))
-            user = user[mlen] == ':' ? user + mlen + 1 : NULL;
-    }
-    if (user != NULL && user[0] == '\0')
-        user = NULL;
-    char *value = NULL;
-    if (fx->ldpath != NULL && fx->ldpath[0] != '\0') {
-        size_t n = strlen(fx->ldpath) + (user ? strlen(user) + 1 : 0) + 1;
-        value = malloc(n);
-        if (value == NULL)
-            return NULL;
-        snprintf(value, n, "%s%s%s", fx->ldpath, user ? ":" : "", user ? user : "");
-    } else if (user != NULL) {
-        value = strdup(user);
-        if (value == NULL)
-            return NULL;
-    }
-
+    // The value each should have, NULL for none, and whether it carries ours.
+    char *value[ENV_RULES] = {0};
+    bool marked[ENV_RULES] = {0};
     size_t size = (size_t) (p - envp) + 1;
-    if (value != NULL)
-        size += 2 * (strlen(value) + strlen(MARKER_VAR) + 2);
-    char *out = malloc(size);
-    if (out == NULL) {
-        free(value);
-        return NULL;
+    for (size_t r = 0; r < ENV_RULES; r++) {
+        const char *ours = rule_ours(fx, r);
+        // The user's part: for a joined path, what follows exactly the prefix
+        // the marker recorded; otherwise the whole value, unless it is ours.
+        const char *user = current[r];
+        if (user != NULL && marker[r] != NULL) {
+            size_t mlen = strlen(marker[r]);
+            if (env_rules[r].join) {
+                if (strncmp(user, marker[r], mlen) == 0 && (user[mlen] == '\0' || user[mlen] == ':'))
+                    user = user[mlen] == ':' ? user + mlen + 1 : NULL;
+            } else if (strcmp(user, marker[r]) == 0) {
+                user = NULL;
+            }
+        }
+        if (user != NULL && user[0] == '\0')
+            user = NULL;
+        if (ours != NULL && env_rules[r].join) {
+            size_t n = strlen(ours) + (user ? strlen(user) + 1 : 0) + 1;
+            value[r] = malloc(n);
+            if (value[r] != NULL)
+                snprintf(value[r], n, "%s%s%s", ours, user ? ":" : "", user ? user : "");
+            marked[r] = true;
+        } else if (user != NULL) {
+            value[r] = strdup(user);
+        } else if (ours != NULL) {
+            value[r] = strdup(ours);
+            marked[r] = true;
+        }
+        if ((ours != NULL || user != NULL) && value[r] == NULL)
+            goto fail;
+        if (value[r] != NULL)
+            size += strlen(env_rules[r].var) + strlen(value[r]) + 1 +
+                    (marked[r] ? strlen(env_rules[r].marker) + strlen(ours) + 1 : 0);
     }
+
+    char *out = malloc(size);
+    if (out == NULL)
+        goto fail;
     size_t at = 0, count = 0;
     p = envp;
     for (size_t i = 0; i < envc; i++) {
         size_t len = strlen(p) + 1;
-        if (!env_is(p, LDPATH_VAR) && !env_is(p, MARKER_VAR)) {
+        bool drop = false;
+        for (size_t r = 0; r < ENV_RULES; r++)
+            drop |= env_is(p, env_rules[r].var) || env_is(p, env_rules[r].marker);
+        if (!drop) {
             memcpy(out + at, p, len);
             at += len;
             count++;
         }
         p += len;
     }
-    if (value != NULL) {
-        at += (size_t) sprintf(out + at, "%s%s", LDPATH_VAR, value) + 1;
+    for (size_t r = 0; r < ENV_RULES; r++) {
+        if (value[r] == NULL)
+            continue;
+        at += (size_t) sprintf(out + at, "%s%s", env_rules[r].var, value[r]) + 1;
         count++;
-        // The marker only for a path this exec chose, and only its own part;
+        // The marker only for a value this exec chose, and only its own part;
         // a value that is purely the user's is theirs to keep.
-        if (fx->ldpath != NULL && fx->ldpath[0] != '\0') {
-            at += (size_t) sprintf(out + at, "%s%s", MARKER_VAR, fx->ldpath) + 1;
+        if (marked[r]) {
+            at += (size_t) sprintf(out + at, "%s%s", env_rules[r].marker, rule_ours(fx, r)) + 1;
             count++;
         }
+        free(value[r]);
     }
     out[at] = '\0';
-    free(value);
     *count_out = count;
     return out;
+
+fail:
+    for (size_t r = 0; r < ENV_RULES; r++)
+        free(value[r]);
+    return NULL;
 }

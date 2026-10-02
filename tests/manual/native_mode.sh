@@ -76,6 +76,11 @@ case "${1:-}" in
     case "$($O/bin/sh -c 'echo $LD_LIBRARY_PATH' 2>&1)" in
         "$O/"*) pass foreign_libs_ldpath ;; *) fail foreign_libs_ldpath "$($O/bin/sh -c 'echo $LD_LIBRARY_PATH')" ;;
     esac
+    # Its locales too: glibc reads /usr/lib/locale, which is this root's.
+    # Without LOCPATH the charmap falls back to ASCII and tmux will not start.
+    check foreign_libs_locpath "$O/usr/lib/locale" "$($O/bin/sh -c 'echo $LOCPATH' 2>&1)"
+    check foreign_libs_locale UTF-8 "$(LANG=C.UTF-8 $O/usr/bin/locale charmap 2>&1)"
+    check foreign_libs_user_locpath /mine "$(LOCPATH=/mine $O/bin/sh -c 'echo $LOCPATH' 2>&1)"
     echo "$saved" > /proc/ish/foreign_exec
     exit 0
     ;;

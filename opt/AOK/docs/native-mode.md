@@ -141,7 +141,9 @@ the services it was already running, so nothing starts twice.
 
 Native mode and a distribution live side by side. Install one in Filesystems
 (or `manage-roots.sh install`): every root you are not booted into appears
-under `/AOK/roots/<name>`.
+under `/AOK/roots/<name>`. They are mounted in the background as the app
+starts, a second or so after boot begins, so a boot script that uses one should
+wait for it (`while [ ! -d /AOK/roots/<name>/usr ]; do sleep 1; done`).
 
 **Running one of its programs by name.** `/AOK/roots/Devuan6-arm64/usr/bin/tmux`
 is a real program, but it was built against Devuan's libraries, and its first
@@ -155,7 +157,7 @@ sets it too):
 | | |
 |---|---|
 | **Run Inside Their Root** (the default) | The program runs chrooted into its own root, as if you had used `mount-root.sh`: iSH-AOK binds `/proc`, `/sys`, `/dev`, `/run` and `/AOK/native` into it first. It sees that root's `/etc`, its data files, its `/tmp` and its home directories, and everything it starts does too. |
-| **Use Their Libraries Here** | The program runs here, in the native root, borrowing only its loader and libraries (through `LD_LIBRARY_PATH`, which iSH-AOK removes again for programs that do not need it). It sees your files and your home. Programs that need data files of their own -- vim's runtime, Python's library, locales -- will not find them. |
+| **Use Their Libraries Here** | The program runs here, in the native root, borrowing only its loader, libraries and locales (through `LD_LIBRARY_PATH` and `LOCPATH`, which iSH-AOK removes again for programs that do not need them; a `LOCPATH` of your own wins). It sees your files and your home. Programs that need other data files of their own -- vim's runtime, Python's library -- will not find them. |
 | **Off** | The Linux behaviour: it fails. |
 
 It applies on any root, not only a native one, and only to programs that would
