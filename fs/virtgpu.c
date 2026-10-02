@@ -207,6 +207,12 @@ static _Atomic uint64_t blob_live_bytes, blob_live_mappable_bytes;
 static _Atomic uint32_t blob_live_count;
 static _Atomic uint64_t blob_reported_mark;   // in units of 256 MB
 
+void virtgpu_blob_stats(uint64_t *bytes, uint64_t *mappable, uint32_t *count) {
+    *bytes = atomic_load(&blob_live_bytes);
+    *mappable = atomic_load(&blob_live_mappable_bytes);
+    *count = atomic_load(&blob_live_count);
+}
+
 static void blob_account(struct vgpu_res *res, bool add) {
     if (add == res->counted)
         return;

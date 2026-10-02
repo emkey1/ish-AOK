@@ -2081,6 +2081,174 @@ static int proc_ish_show_host_ports(struct proc_entry *UNUSED(entry), struct pro
     return 0;
 }
 
+// /proc/ish/host_vm -- where the app's own memory is, by the host's region
+// tags: the footprint jetsam kills on, then each tag's resident, dirty and
+// compressed megabytes, largest first. Guest memory is untagged (0); Metal's is
+// IOAccelerator; malloc has several. Written when Tux Racer's race took the
+// M4 app from 1 GB to 3.9 GB and past its 6 GB limit with the guest's Vulkan
+// device memory, MoltenVK's textures and descriptor pools all small: nothing
+// short of asking the host could say where the rest was.
+#if defined(__APPLE__)
+static const char *host_vm_tag_name(unsigned tag) {
+    switch (tag) {
+    case 0: return "untagged (guest memory, plain mmap)";
+#ifdef VM_MEMORY_MALLOC
+    case VM_MEMORY_MALLOC: return "malloc";
+    case VM_MEMORY_MALLOC_SMALL: return "malloc small";
+    case VM_MEMORY_MALLOC_LARGE: return "malloc large";
+    case VM_MEMORY_MALLOC_HUGE: return "malloc huge";
+    case VM_MEMORY_MALLOC_TINY: return "malloc tiny";
+    case VM_MEMORY_MALLOC_LARGE_REUSABLE: return "malloc large (reusable)";
+    case VM_MEMORY_MALLOC_LARGE_REUSED: return "malloc large (reused)";
+    case VM_MEMORY_MALLOC_NANO: return "malloc nano";
+#endif
+#ifdef VM_MEMORY_MALLOC_MEDIUM
+    case VM_MEMORY_MALLOC_MEDIUM: return "malloc medium";
+#endif
+#ifdef VM_MEMORY_IOKIT
+    case VM_MEMORY_IOKIT: return "IOKit";
+#endif
+#ifdef VM_MEMORY_STACK
+    case VM_MEMORY_STACK: return "stacks";
+#endif
+#ifdef VM_MEMORY_DYLIB
+    case VM_MEMORY_DYLIB: return "dylib";
+#endif
+#ifdef VM_MEMORY_DYLD
+    case VM_MEMORY_DYLD: return "dyld";
+#endif
+#ifdef VM_MEMORY_SQLITE
+    case VM_MEMORY_SQLITE: return "SQLite";
+#endif
+#ifdef VM_MEMORY_JAVASCRIPT_CORE
+    case VM_MEMORY_JAVASCRIPT_CORE: return "JavaScriptCore";
+#endif
+#ifdef VM_MEMORY_LAYERKIT
+    case VM_MEMORY_LAYERKIT: return "Core Animation";
+#endif
+#ifdef VM_MEMORY_LIBDISPATCH
+    case VM_MEMORY_LIBDISPATCH: return "libdispatch";
+#endif
+#ifdef VM_MEMORY_IOSURFACE
+    case VM_MEMORY_IOSURFACE: return "IOSurface";
+#endif
+#ifdef VM_MEMORY_IOACCELERATOR
+    case VM_MEMORY_IOACCELERATOR: return "IOAccelerator (Metal)";
+#endif
+#ifdef VM_MEMORY_OS_ALLOC_ONCE
+    case VM_MEMORY_OS_ALLOC_ONCE: return "os_alloc_once";
+#endif
+    default: return NULL;
+    }
+}
+#endif
+
+// The GPU stack's own totals, where a build has it (weak: a build without
+// the renderer or MoltenVK leaves them NULL). They are what the graphics
+// figure above has to be made of, so a gap between them says the memory is
+// somewhere none of the layers counts.
+void mvkAOKMemStats(unsigned long long out[12]) __attribute__((weak));
+void vkr_aok_mem_stats(uint64_t *bytes, uint32_t *count) __attribute__((weak));
+void virtgpu_blob_stats(uint64_t *bytes, uint64_t *mappable, uint32_t *count) __attribute__((weak));
+
+static int proc_ish_show_host_vm(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
+#if defined(__APPLE__)
+    struct { uint64_t resident, dirty, swapped, virt; } tags[256];
+    memset(tags, 0, sizeof(tags));
+    task_vm_info_data_t vmi;
+    mach_msg_type_number_t vmi_count = TASK_VM_INFO_COUNT;
+    if (task_info(mach_task_self(), TASK_VM_INFO, (task_info_t) &vmi, &vmi_count) != KERN_SUCCESS)
+        return _EIO;
+    const uint64_t page = vm_page_size;
+    // vm_region_recurse_64, not mach_vm_region_recurse: the iOS SDK has no
+    // mach_vm.h. On a 64-bit host vm_address_t is 64 bits anyway.
+    vm_address_t addr = 0;
+    natural_t depth = 0;
+    for (;;) {
+        vm_size_t size = 0;
+        vm_region_submap_info_data_64_t info;
+        mach_msg_type_number_t count = VM_REGION_SUBMAP_INFO_COUNT_64;
+        if (vm_region_recurse_64(mach_task_self(), &addr, &size, &depth,
+                (vm_region_recurse_info_64_t) &info, &count) != KERN_SUCCESS)
+            break;
+        if (info.is_submap) {
+            depth++;
+            continue;
+        }
+        unsigned tag = info.user_tag & 0xff;
+        tags[tag].resident += (uint64_t) info.pages_resident * page;
+        tags[tag].dirty += (uint64_t) info.pages_dirtied * page;
+        tags[tag].swapped += (uint64_t) info.pages_swapped_out * page;
+        tags[tag].virt += size;
+        addr += size;
+    }
+    proc_printf(buf, "footprint %llu MB  (peak %llu MB, the jetsam ledger)\n",
+                (unsigned long long) (vmi.phys_footprint >> 20),
+                (unsigned long long) (vmi.ledger_phys_footprint_peak >> 20));
+    // The host's own split of that footprint. Graphics is GPU memory charged
+    // to the app that no region of its address space shows (a private Metal
+    // allocation); the tag table below cannot see it at all.
+    proc_printf(buf, "  internal %llu MB, compressed %llu MB, purgeable %llu MB\n",
+                (unsigned long long) (vmi.internal >> 20),
+                (unsigned long long) (vmi.compressed >> 20),
+                (unsigned long long) ((uint64_t) vmi.ledger_purgeable_nonvolatile >> 20));
+    proc_printf(buf, "  graphics %llu MB (+%llu MB compressed), neural %llu MB\n",
+                (unsigned long long) ((uint64_t) vmi.ledger_tag_graphics_footprint >> 20),
+                (unsigned long long) ((uint64_t) vmi.ledger_tag_graphics_footprint_compressed >> 20),
+                (unsigned long long) ((uint64_t) vmi.ledger_tag_neural_footprint >> 20));
+    if (virtgpu_blob_stats != NULL) {
+        uint64_t bytes, mappable;
+        uint32_t count;
+        virtgpu_blob_stats(&bytes, &mappable, &count);
+        proc_printf(buf, "  guest blobs: %u, %llu MB (%llu MB mappable)\n", count,
+                    (unsigned long long) (bytes >> 20), (unsigned long long) (mappable >> 20));
+    }
+    if (vkr_aok_mem_stats != NULL) {
+        uint64_t bytes;
+        uint32_t count;
+        vkr_aok_mem_stats(&bytes, &count);
+        proc_printf(buf, "  Vulkan device memory: %u allocations, %llu MB\n", count,
+                    (unsigned long long) (bytes >> 20));
+    }
+    if (mvkAOKMemStats != NULL) {
+        unsigned long long m[12];
+        mvkAOKMemStats(m);
+        proc_printf(buf, "  MoltenVK: textures %llu, %llu MB; descriptor pools %llu, %llu MB\n",
+                    m[3], m[2] >> 20, m[1], m[0] >> 20);
+        proc_printf(buf, "  MoltenVK: pipelines %llu live (%llu made), shader libraries %llu live (%llu made)\n",
+                    m[4], m[5], m[6], m[7]);
+        proc_printf(buf, "  MoltenVK: temp buffers private %llu, %llu MB; shared %llu, %llu MB\n",
+                    m[9], m[8] >> 20, m[11], m[10] >> 20);
+    }
+    proc_printf(buf, "%-38s %9s %9s %9s %9s\n", "tag", "dirty MB", "compr MB", "resid MB", "virt MB");
+    bool shown[256] = {false};
+    for (;;) {
+        int best = -1;
+        for (int t = 0; t < 256; t++)
+            if (!shown[t] && (tags[t].dirty + tags[t].swapped) >= (1u << 20) &&
+                    (best < 0 || tags[t].dirty + tags[t].swapped > tags[best].dirty + tags[best].swapped))
+                best = t;
+        if (best < 0)
+            break;
+        shown[best] = true;
+        const char *name = host_vm_tag_name(best);
+        char unnamed[24];
+        if (name == NULL) {
+            snprintf(unnamed, sizeof(unnamed), "tag %d", best);
+            name = unnamed;
+        }
+        proc_printf(buf, "%-38s %9llu %9llu %9llu %9llu\n", name,
+                    (unsigned long long) (tags[best].dirty >> 20),
+                    (unsigned long long) (tags[best].swapped >> 20),
+                    (unsigned long long) (tags[best].resident >> 20),
+                    (unsigned long long) (tags[best].virt >> 20));
+    }
+#else
+    proc_printf(buf, "unsupported (no Mach VM on this host)\n");
+#endif
+    return 0;
+}
+
 // /proc/ish/arch -- which architecture every process runs, readable by anyone.
 //
 // ktop's ARCH column read the ELF header behind /proc/<pid>/exe. Since 02c057cb
@@ -2168,6 +2336,7 @@ struct proc_children proc_ish_children = PROC_CHILDREN({
     {"documents", .show = proc_ish_show_documents},
     {"host_info", .show = proc_ish_show_host_info},  // Add host hardware related information
     {"host_ports", .show = proc_ish_show_host_ports},
+    {"host_vm", .show = proc_ish_show_host_vm},
     {"ips", .show = proc_ish_show_ips},
     {"mem_guard", .show = proc_ish_show_mem_guard},
     {"mem_release_probe", S_IFREG | 0644, .show = proc_ish_show_mem_release_probe, .update = proc_ish_update_mem_release_probe},
