@@ -1456,10 +1456,19 @@ static void nlibc_exec_reset_handlers(void);
 //
 // And the signal has to reach the program that replaced us, which nothing else
 // will ever signal: the sender aimed at this pid, and after a real exec this
-// pid would BE that program. So forward it, then checkpoint -- which, for a
-// default-fatal signal, does not return, and that is exactly right. The
-// stand-in dies of the same signal the job was killed with, so the parent's
-// wait status says "killed by SIGTERM" instead of "exited 127".
+// pid would BE that program. So forward it -- and then leave it to the
+// program. This used to checkpoint on it too, which for a default-fatal
+// signal killed the stand-in at once (its handlers are reset to SIG_DFL), and
+// that is only right when the program dies of it as well. A program that
+// TRAPS the signal lives on, on Linux, as this pid: `su -c 'exec sh script'`
+// whose script cleans up on SIGHUP. Here its parent saw the pid exit 129 at
+// once while the trap ran on, unseen, for seconds (bip, 2026-10-02 -- the
+// Wayland session reported ended while its cleanup still ran). So what was
+// forwarded is discarded here, and the stand-in ends when the program does,
+// with its status: "killed by SIGTERM" when it was, exit 0 when it trapped it.
+// SIGKILL still kills the stand-in at once, as it kills the pid on Linux, and
+// the job-control signals still stop and continue it, so the parent's wait
+// sees the stop.
 //
 // SIGCHLD is the one signal not forwarded: the only child this task has is the
 // exec'd program itself, so a SIGCHLD here is news ABOUT it, never news FOR it.
@@ -1481,6 +1490,7 @@ static void nlibc_exec_forward_signals(dword_t child) {
     sigset_t_ pending = __atomic_load_n(&current->pending, __ATOMIC_ACQUIRE) |
             __atomic_load_n(&current->sighand->pending, __ATOMIC_ACQUIRE);
     pending &= ~((sigset_t_) 1 << (SIGCHLD_ - 1));
+    sigset_t_ forwarded = pending;
     for (int sig = 1; sig < NUM_SIGS && pending != 0; sig++) {
         sigset_t_ bit = (sigset_t_) 1 << (sig - 1);
         if (!(pending & bit))
@@ -1488,6 +1498,12 @@ static void nlibc_exec_forward_signals(dword_t child) {
         pending &= ~bit;
         sys_kill((pid_t_) child, (dword_t) sig);
     }
+    // Kept for the stand-in itself: SIGKILL, and stop and continue.
+    forwarded &= ~(((sigset_t_) 1 << (SIGKILL_ - 1)) | ((sigset_t_) 1 << (SIGSTOP_ - 1)) |
+            ((sigset_t_) 1 << (SIGTSTP_ - 1)) | ((sigset_t_) 1 << (SIGTTIN_ - 1)) |
+            ((sigset_t_) 1 << (SIGTTOU_ - 1)) | ((sigset_t_) 1 << (SIGCONT_ - 1)));
+    if (forwarded != 0)
+        signal_discard_pending(current, forwarded);
 }
 
 // Exit as the exec'd program did. The guest's wait status word already encodes
@@ -1512,7 +1528,7 @@ static noreturn void nlibc_exec_standin(dword_t child) {
         if (res != _EINTR)
             nlibc_exit(127);        // the child really is unreachable
         nlibc_exec_forward_signals(child);
-        native_checkpoint();        // may not return, and that is the point
+        native_checkpoint();        // SIGKILL, a stop, a freeze
     }
 }
 

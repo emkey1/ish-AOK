@@ -619,6 +619,16 @@ static void signal_flush_queue_locked(struct list *queue, sigset_t_ *pending, si
     *pending &= ~mask;
 }
 
+// Drop `mask` from what is pending for `task`, its own and its process's.
+// For a native exec stand-in (kernel/native_libc.c), which has handed these
+// on to the program it stands in for and must not act on them itself.
+void signal_discard_pending(struct task *task, sigset_t_ mask) {
+    lock(&task->sighand->lock, 0);
+    signal_flush_queue_locked(&task->sighand->queue, &task->sighand->pending, mask);
+    signal_flush_queue_locked(&task->queue, &task->pending, mask);
+    unlock(&task->sighand->lock);
+}
+
 #define SIGNAL_STOP_MASK (sig_mask(SIGSTOP_) | sig_mask(SIGTSTP_) | \
         sig_mask(SIGTTIN_) | sig_mask(SIGTTOU_))
 

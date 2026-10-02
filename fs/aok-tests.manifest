@@ -335,6 +335,7 @@ arm64_mops.c
 time_clocks_ticks.c
 futex_robust_requeue.c
 futex_pi.c
+exec_standin_trap.c
 futex_shared_mapping.c
 inotify_mask_queue.c
 inotify_close_race.c

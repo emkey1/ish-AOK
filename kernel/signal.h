@@ -441,6 +441,8 @@ struct tgroup;
 void send_signal_to_process(struct task *task, int sig, struct siginfo_ info);
 // The same, for a caller that holds pids_lock.
 void send_signal_to_process_pids_locked(struct task *task, int sig, struct siginfo_ info);
+// Drops `mask` from what is pending for `task` and its process.
+void signal_discard_pending(struct task *task, sigset_t_ mask);
 // The same, sent to the group's leader, which is where Linux sends an interval
 // timer's signal (it_real_fn's leader_pid).
 void send_signal_to_group(struct tgroup *group, int sig, struct siginfo_ info);
