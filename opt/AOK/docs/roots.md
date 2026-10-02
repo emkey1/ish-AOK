@@ -98,6 +98,9 @@ Images** applet in Workspace — lists four groups:
   import from there. Alpine 3.23.3 is offered for those three only: the bundled
   `aarch64` Alpine is 3.24.2 since 557, and a 3.23.3 `aarch64` root you already
   have keeps working.
+  **iSH-AOK Native** is listed here too: no distribution at all, only the
+  programs built into the app, and nothing to download -- it is created on the
+  spot. See [native-mode.md](native-mode.md).
 - **Community Distributions** — PSCAL + SmallCLUE (arm64) and Arch Linux
   (`x86_64` and ARM `aarch64`). Contributed or experimental, without the same
   support guarantees as the official images.
@@ -125,6 +128,20 @@ skipped for that boot — it'll appear on the next one once the lock clears.
 like `/AOK/persist`, so it's the same location regardless of which root you
 booted into.
 
+## Running another root's programs by path
+
+A static program under `/AOK/roots/<name>` runs from anywhere. A dynamic one
+-- nearly everything -- needs its own root's loader and libraries, which a
+different root (or a [native-mode](native-mode.md) root) does not have, and on
+Linux such an exec fails with "no such file or directory". **Settings → Other
+Filesystems → Programs From Other Roots** decides what happens instead, from
+the next program on: run it **inside its root** (chrooted there, with `/proc`,
+`/dev` and `/AOK/native` bound in, as `mount-root.sh` would; the default), run
+it **here with its libraries**, or **off**. `/proc/ish/foreign_exec` reads and
+sets the same thing (`root`, `libs`, `off`); [native-mode.md](native-mode.md)
+has the trade-offs. A program that already works -- a static one, or a script
+whose interpreter exists here -- is never touched.
+
 ## `mount-root.sh`: turning a root into a real chroot target
 
 Being visible under `/AOK/roots/<name>` isn't enough to actually run
@@ -151,8 +168,10 @@ sh /AOK/tools/mount-root.sh --unmount Devuan6-x86_64
 sh /AOK/tools/mount-root.sh --unmount all
 ```
 
-The script also bind-mounts `/AOK/tools`, `/AOK/tests` and `/AOK/fakefs` into
-the chroot, so `mount-root.sh`, `ktop` and the guest regression suite stay
+The script also bind-mounts `/AOK/native`, `/AOK/docs`, `/AOK/tools`,
+`/AOK/tests` and `/AOK/fakefs` into the chroot -- `/AOK/native` so that a
+native login shell (`SHELL=/AOK/native/zsh`) and the native tools work inside
+it too -- so `mount-root.sh`, `ktop` and the guest regression suite stay
 reachable from inside it — `/AOK` is the booted root's aokfs mount and does not
 otherwise exist in another root, which is what makes
 `mount-root.sh <root> -- sh /AOK/tests/setup-regressions.sh --run`

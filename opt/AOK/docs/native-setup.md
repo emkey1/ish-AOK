@@ -4,6 +4,11 @@
 why it is fast. This page is the practical half: getting them onto your `PATH`,
 making one your login shell, and backing out again.
 
+**On a [native-mode](native-mode.md) root there is nothing to set up**: its
+`/bin` and `/usr/bin` already are these programs, linked by iSH-AOK at every
+boot, and `native-links.sh` says so and does nothing. This page is for
+distribution roots.
+
 There is a near neighbour with a different job. `/AOK/tools/persist-links.sh`
 has the same shape — same `--list`, `--remove`, `--force`, same per-root
 caveat — but it links **your own** programs out of `/AOK/persist/bin`, so it can

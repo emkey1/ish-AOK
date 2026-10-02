@@ -223,6 +223,7 @@ busybox does:
 | `/AOK/native/smallclue` | busybox-style multicall toolbox, applet chosen by `argv[0]`; the applets that stand in for distro tools are checked against GNU's (`awk` against mawk's) |
 | `ssh`, `scp`, `sftp`, `ssh-keygen`, `ssh-copy-id` | OpenSSH, applets of SmallCLUE (built without OpenSSL) |
 | `vi` | the Nextvi editor, an applet of SmallCLUE |
+| `git` | SmallCLUE's git on libgit2 (558+; HTTPS through SecureTransport, no OpenSSL) |
 | `/AOK/native/motepad` | a modeless terminal text editor, the counterpart to Workspace's MotePad applet |
 | `/AOK/native/bmm`, `/AOK/native/bmt` | the `/AOK/tools` benchmarks compiled in as host code, so the same workload can be timed with and without emulation (`kernel/native_bench.c`) |
 | `/AOK/native/hx` | [helix](https://helix-editor.com), a modal editor with syntax highlighting. MPL-2.0, so like bash it has a build switch (`-Dnative_helix`); its grammars live under `/AOK/native/libs` |
@@ -268,6 +269,11 @@ build.
 > automatically by `native-links.sh`, so nobody already using it was locked out
 > by the change.
 > See [docs/historical/shell_transition_plan.md](docs/historical/shell_transition_plan.md).
+
+**libgit2** (SmallCLUE's `git`, built in since 558) is GPLv2 *with a linking
+exception* (see its `COPYING`): its authors permit linking the compiled library
+into any program and distributing the result without the GPL's conditions
+applying to it. That is the permission bash lacks, so it ships.
 
 bash can be compiled into the app as a native program (`-Dnative_bash=enabled`),
 though the shipped build has not included it since 556. The win, when it is built in, is

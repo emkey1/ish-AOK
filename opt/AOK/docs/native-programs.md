@@ -119,6 +119,9 @@ diagnostic rather than a program.
 | `/AOK/native/smallclue` | a busybox-style toolbox; the applet is chosen by the name it is invoked under |
 | `ssh`, `scp`, `sftp`, `ssh-keygen`, `ssh-copy-id` | OpenSSH, as applets of SmallCLUE — note it is built **without OpenSSL**, so the [crypto accelerator](crypto-accel.md) does not apply to it |
 | `vi` | the Nextvi editor, an applet of SmallCLUE |
+| `git` | SmallCLUE's git, on libgit2 (built in since 558): init, clone and fetch over HTTPS, add, commit, status, diff, log, branch, checkout. Not yet `git@host:` (ssh) remotes |
+| `tput`, `reset`, `free`, `printenv`, `login`, `mount`, `umount` | applets added for [native mode](native-mode.md) (558): `tput` reads terminfo itself, `free` reports as procps does, `mount`/`umount` take util-linux's options and reach the guest kernel's mount(2) |
+| `init`, `runit`, `sv`, `halt`, `poweroff`, `reboot` | SmallCLUE's service system: pid 1 in a native-mode root, which runs `/etc/rc` and supervises `/etc/service`. On a distribution root its own init keeps the job |
 | `/AOK/native/bash` | bash 5.2, **not in the shipped app since build 556**. GPLv3, which is why it has a build switch at all; a build made with `-Dnative_bash=enabled` still has it. Your guest `/bin/bash` is unaffected |
 | `/AOK/native/zsh` | zsh, with fork-by-relaunch; `zsh --version` for the exact one. The only native program that can describe its own state, so the only one a [suspend](suspend.md) brings back where it was |
 | `/AOK/native/dash`, `/AOK/native/sh` | dash, the POSIX shell most scripts are written against. BSD-licensed. Its fork-by-relaunch hands the child the parse *tree* rather than the command text, so quoting cannot be lost on the way. Your `/bin/sh` is untouched — but see [native-setup.md](native-setup.md), since the link step is what makes a bare `sh` mean this shell |

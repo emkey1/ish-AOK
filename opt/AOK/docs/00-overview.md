@@ -151,6 +151,7 @@ six of them were not linked from anywhere at all.
 | file | what it covers |
 | --- | --- |
 | [native-programs.md](native-programs.md) | what a native program is and why one is not emulated |
+| [native-mode.md](native-mode.md) | a root with no distribution: only the native programs, init and services, reaching other roots |
 | [native-setup.md](native-setup.md) | putting the native programs on your `PATH` |
 | [binfmt-misc.md](binfmt-misc.md) | teaching the kernel to run other formats through an interpreter |
 | [crypto-accel.md](crypto-accel.md) | routing OpenSSL through the host's crypto instructions |

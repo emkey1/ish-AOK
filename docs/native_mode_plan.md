@@ -1,6 +1,14 @@
 # Native mode (build 558): an iSH-AOK session with no Linux distribution
 
-Status: **plan**, 2026-10-02. Nothing here is built yet.
+Status: **built**, 2026-10-02 (commits 7adaad37c through the docs commit
+that follows 4a42907af). Steps 1-7 are done; user documentation is
+opt/AOK/docs/native-mode.md. Added on the way, at the maintainer's request:
+git (libgit2, SecureTransport), and "Programs From Other Roots" --
+kernel/foreign_exec.c, a Settings choice of running another root's program
+inside its root, here with its libraries, or not at all. Still open: the
+device leg (a native root booted on the iPads), and tapping through the
+first-start account sheet (its logic is native_root_add_user, tested from the
+CLI; the sheet itself was seen in the simulator, not operated).
 
 Decided by the maintainer, 2026-10-02:
 - Native is **bundled** (an Official Distributions entry beside Alpine and
