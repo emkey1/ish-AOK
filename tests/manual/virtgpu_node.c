@@ -61,6 +61,13 @@ struct virtgpu_execbuffer_ { uint32_t flags, size; uint64_t command, bo_handles;
 #define VIRTGPU_CREATE_BLOB_ _IOWR('d', 0x4a, struct virtgpu_blob_)
 #define VIRTGPU_CONTEXT_INIT_ _IOWR('d', 0x4b, struct virtgpu_ctx_init_)
 
+struct dma_buf_sync_file_ { uint32_t flags; int32_t fd; };
+struct sync_file_info_ { char name[32]; int32_t status; uint32_t flags, num_fences, pad; uint64_t info; };
+struct sync_fence_info_ { char obj_name[32], driver_name[32]; int32_t status; uint32_t flags; uint64_t ts; };
+#define DMA_BUF_EXPORT_SYNC_FILE_ _IOWR('b', 2, struct dma_buf_sync_file_)
+#define DMA_BUF_IMPORT_SYNC_FILE_ _IOW('b', 3, struct dma_buf_sync_file_)
+#define SYNC_IOC_FILE_INFO_ _IOWR('>', 4, struct sync_file_info_)
+
 static void ck(const char *label, long got, long want) {
     if (got != want)
         failf(label, (uint64_t) got, 0, 0, (uint64_t) want, 0, 0);
@@ -70,6 +77,98 @@ static void ck(const char *label, long got, long want) {
 // 0, or -errno.
 static long io(int fd, unsigned long req, void *arg) {
     return ioctl(fd, req, arg) < 0 ? -errno : 0;
+}
+
+static int open_fd_count(void) {
+    int n = 0;
+    for (int f = 0; f < 4096; f++)
+        n += fcntl(f, F_GETFD) >= 0;
+    return n;
+}
+
+// A dma-buf's implicit fence as a sync file and back (EXPORT_SYNC_FILE,
+// IMPORT_SYNC_FILE), and SYNC_IOC_FILE_INFO, which Venus asks of every sync
+// file it imports. Values from Linux 6.12 on camd (amdgpu dumb buffer): an
+// idle buffer exports the stub fence, "stub-stub0-0", signaled. These were
+// ENOTTY, and Mesa's zink leaks the dma-buf descriptor it exports through
+// when that fails -- three a frame under Wayfire, until RLIMIT_NOFILE.
+static void check_sync_files(int dmabuf, int fence_fd) {
+    struct dma_buf_sync_file_ s = {.flags = 1, .fd = -1};
+    ck("EXPORT_SYNC_FILE (read) of an idle dma-buf", io(dmabuf, DMA_BUF_EXPORT_SYNC_FILE_, &s), 0);
+    ck("  returns a descriptor", s.fd >= 0, 1);
+    if (s.fd < 0)
+        return;
+    ck("  close-on-exec", fcntl(s.fd, F_GETFD), FD_CLOEXEC);
+    char path[64], link[64] = "";
+    snprintf(path, sizeof(path), "/proc/self/fd/%d", s.fd);
+    // Linux: "anon_inode:sync_file". AOK brackets every unbracketed class
+    // (docs/TODO.md, "anon_inode link names"), so either spelling passes.
+    ck("  an anon_inode sync_file", readlink(path, link, sizeof(link) - 1) > 0 &&
+       (strcmp(link, "anon_inode:sync_file") == 0 || strcmp(link, "anon_inode:[sync_file]") == 0), 1);
+    struct pollfd pfd = {.fd = s.fd, .events = POLLIN};
+    ck("  polls readable at once", poll(&pfd, 1, 0), 1);
+    struct sync_file_info_ info = {0};
+    ck("SYNC_IOC_FILE_INFO, no fence array", io(s.fd, SYNC_IOC_FILE_INFO_, &info), 0);
+    ck("  status 1 (signaled)", info.status, 1);
+    ck("  one fence", info.num_fences, 1);
+    ck("  named stub-stub0-0", strcmp(info.name, "stub-stub0-0"), 0);
+    struct sync_fence_info_ fi[2];
+    memset(fi, 0x55, sizeof(fi));
+    struct sync_file_info_ info2 = {.num_fences = 2, .info = (uintptr_t) fi};
+    ck("SYNC_IOC_FILE_INFO with room for two", io(s.fd, SYNC_IOC_FILE_INFO_, &info2), 0);
+    ck("  still one fence", info2.num_fences, 1);
+    ck("  its driver and timeline are stub", strcmp(fi[0].driver_name, "stub") == 0 &&
+       strcmp(fi[0].obj_name, "stub") == 0, 1);
+    ck("  signaled, flags 0", fi[0].status == 1 && fi[0].flags == 0, 1);
+    struct sync_file_info_ bad_info = {.flags = 1};
+    ck("SYNC_IOC_FILE_INFO with flags is EINVAL", io(s.fd, SYNC_IOC_FILE_INFO_, &bad_info), -EINVAL);
+    bad_info = (struct sync_file_info_) {.pad = 1};
+    ck("SYNC_IOC_FILE_INFO with pad is EINVAL", io(s.fd, SYNC_IOC_FILE_INFO_, &bad_info), -EINVAL);
+    ck("SYNC_IOC_FILE_INFO of a dma-buf is ENOTTY", io(dmabuf, SYNC_IOC_FILE_INFO_, &bad_info), -ENOTTY);
+    struct dma_buf_sync_file_ s2 = {.flags = 0};
+    ck("EXPORT_SYNC_FILE with no direction is EINVAL", io(dmabuf, DMA_BUF_EXPORT_SYNC_FILE_, &s2), -EINVAL);
+    s2.flags = 5;
+    ck("EXPORT_SYNC_FILE with SYNC_END is EINVAL", io(dmabuf, DMA_BUF_EXPORT_SYNC_FILE_, &s2), -EINVAL);
+    ck("EXPORT_SYNC_FILE of a sync file is ENOTTY", io(s.fd, DMA_BUF_EXPORT_SYNC_FILE_, &s2), -ENOTTY);
+
+    struct dma_buf_sync_file_ im = {.flags = 2, .fd = s.fd};
+    ck("IMPORT_SYNC_FILE (write) of a signaled fence", io(dmabuf, DMA_BUF_IMPORT_SYNC_FILE_, &im), 0);
+    im.flags = 0;
+    ck("IMPORT_SYNC_FILE with no direction is EINVAL", io(dmabuf, DMA_BUF_IMPORT_SYNC_FILE_, &im), -EINVAL);
+    int devnull = open("/dev/null", O_RDONLY);
+    im = (struct dma_buf_sync_file_) {.flags = 1, .fd = devnull};
+    ck("IMPORT_SYNC_FILE of another kind of fd is EINVAL", io(dmabuf, DMA_BUF_IMPORT_SYNC_FILE_, &im), -EINVAL);
+    close(devnull);
+    im.fd = 9999;
+    ck("IMPORT_SYNC_FILE of a bad fd is EINVAL", io(dmabuf, DMA_BUF_IMPORT_SYNC_FILE_, &im), -EINVAL);
+    close(s.fd);
+
+    // A device fence (an EXECBUFFER out-fence), imported as the buffer's
+    // writer, then exported again; once it retires both say so.
+    if (fence_fd >= 0) {
+        struct sync_file_info_ dinfo = {0};
+        ck("SYNC_IOC_FILE_INFO of an EXECBUFFER fence", io(fence_fd, SYNC_IOC_FILE_INFO_, &dinfo), 0);
+        ck("  a virtio_gpu fence", strncmp(dinfo.name, "virtio_gpu-controlq", 19), 0);
+        im = (struct dma_buf_sync_file_) {.flags = 2, .fd = fence_fd};
+        ck("IMPORT_SYNC_FILE of it", io(dmabuf, DMA_BUF_IMPORT_SYNC_FILE_, &im), 0);
+        struct dma_buf_sync_file_ ex = {.flags = 1, .fd = -1};
+        ck("EXPORT_SYNC_FILE after it", io(dmabuf, DMA_BUF_EXPORT_SYNC_FILE_, &ex), 0);
+        struct pollfd epfd = {.fd = ex.fd, .events = POLLIN};
+        ck("  polls readable once the work retires", poll(&epfd, 1, 5000), 1);
+        dinfo = (struct sync_file_info_) {0};
+        ck("  and SYNC_IOC_FILE_INFO says signaled",
+           io(ex.fd, SYNC_IOC_FILE_INFO_, &dinfo) == 0 && dinfo.status == 1, 1);
+        close(ex.fd);
+    }
+
+    // zink's export, as Wayfire runs it every frame, must leave nothing open.
+    int before = open_fd_count();
+    for (int i = 0; i < 2000; i++) {
+        struct dma_buf_sync_file_ ex = {.flags = 3, .fd = -1};
+        if (io(dmabuf, DMA_BUF_EXPORT_SYNC_FILE_, &ex) == 0)
+            close(ex.fd);
+    }
+    ck("2000 exports and closes leave the descriptor count unchanged", open_fd_count(), before);
 }
 
 static void check_link(const char *path, const char *want) {
@@ -226,6 +325,10 @@ int main(int argc, char **argv) {
     struct virtgpu_execbuffer_ eb = {.flags = 0x02 | 0x04, .ring_idx = 0, .fence_fd = -1};
     ck("EXECBUFFER with FENCE_FD_OUT", io(fd, VIRTGPU_EXECBUFFER_, &eb), 0);
     ck("  returns a fence descriptor", eb.fence_fd >= 0, 1);
+    struct drm_prime_handle_ ph3 = {.handle = blob.bo_handle, .flags = O_CLOEXEC | O_RDWR};
+    ck("PRIME_HANDLE_TO_FD for the sync-file checks", io(fd, DRM_IOCTL_PRIME_TO_FD_, &ph3), 0);
+    check_sync_files(ph3.fd, eb.fence_fd);
+    close(ph3.fd);
     if (eb.fence_fd >= 0) {
         struct pollfd pfd = {.fd = eb.fence_fd, .events = POLLIN};
         ck("  which polls readable", poll(&pfd, 1, 5000), 1);

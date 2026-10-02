@@ -167,6 +167,26 @@ struct drm_virtgpu_resource_create_blob_ {
 struct drm_virtgpu_context_init_ { uint32_t num_params, pad; uint64_t ctx_set_params; };
 struct drm_virtgpu_context_set_param_ { uint64_t param, value; };
 
+// A dma-buf's implicit fence as a sync file, and back (include/uapi/linux/
+// dma-buf.h), and what a sync file says about itself (linux/sync_file.h).
+#define DMA_BUF_IOCTL_EXPORT_SYNC_FILE_ 0xc0086202 // _IOWR('b', 2, 8)
+#define DMA_BUF_IOCTL_IMPORT_SYNC_FILE_ 0x40086203 // _IOW('b', 3, 8)
+#define DMA_BUF_SYNC_RW_ 0x3
+#define SYNC_IOC_FILE_INFO_ 0xc0383e04             // _IOWR('>', 4, 56)
+struct dma_buf_sync_file_ { uint32_t flags; int32_t fd; };
+struct sync_file_info_ {
+    char name[32];
+    int32_t status;
+    uint32_t flags, num_fences, pad;
+    uint64_t sync_fence_info;
+};
+struct sync_fence_info_ {
+    char obj_name[32], driver_name[32];
+    int32_t status;
+    uint32_t flags;
+    uint64_t timestamp_ns;
+};
+
 #define VIRTGPU_MAX_RINGS 64
 // A Venus command stream is a few KiB; a shader upload can be a few MiB.
 #define VIRTGPU_MAX_CMD_SIZE (64u << 20)
@@ -265,7 +285,7 @@ struct vgpu_ctx {
 };
 
 struct vgpu_fence {
-    struct vgpu_ctx *ctx;
+    struct vgpu_ctx *ctx;   // NULL: signaled from the start (an idle buffer's)
     uint32_t ring;
     uint64_t id;
     struct fd *fd;
@@ -310,7 +330,7 @@ static const struct fd_ops vgpu_prime_ops;
 // ---- fences ----------------------------------------------------------------
 
 static bool fence_signaled(struct vgpu_fence *fence) {
-    return atomic_load(&fence->ctx->retired[fence->ring]) >= fence->id;
+    return fence->ctx == NULL || atomic_load(&fence->ctx->retired[fence->ring]) >= fence->id;
 }
 
 // A pending fence found by the retire callback, retained for waking once the
@@ -418,15 +438,68 @@ static int fence_close(struct fd *fd) {
     if (fence->link.next != NULL)
         list_remove_safe(&fence->link);
     unlock(&vgpu_lock);
-    ctx_release(fence->ctx);
+    if (fence->ctx != NULL)
+        ctx_release(fence->ctx);
     free(fence);
     return 0;
+}
+
+// Who signals it, as Linux's sync_file_get_name and sync_fill_fence_info put
+// it: virtio_gpu's fences are on its "controlq" timeline; an idle buffer
+// exports the stub fence, which Linux makes for that.
+static void fence_names(struct vgpu_fence *fence, const char **driver, const char **timeline,
+        uint64_t *context, uint64_t *seqno) {
+    if (fence->ctx == NULL) {
+        *driver = *timeline = "stub";
+        *context = *seqno = 0;
+    } else {
+        *driver = "virtio_gpu";
+        *timeline = "controlq";
+        *context = (uint64_t) fence->ctx->ctx_id * VIRTGPU_MAX_RINGS + fence->ring;
+        *seqno = fence->id;
+    }
+}
+
+// SYNC_IOC_FILE_INFO, as sync_file_ioctl_fence_info answers it. Venus checks
+// every sync file it imports with this (libsync's sync_valid_fd), so without
+// it no fence could be imported into a semaphore.
+static int fence_file_info(struct vgpu_fence *fence, struct sync_file_info_ *info) {
+    if (info->flags != 0 || info->pad != 0)
+        return _EINVAL;
+    const char *driver, *timeline;
+    uint64_t context, seqno;
+    fence_names(fence, &driver, &timeline, &context, &seqno);
+    int32_t status = fence_signaled(fence) ? 1 : 0;
+    if (info->num_fences != 0) {
+        struct sync_fence_info_ one = {.status = status};
+        snprintf(one.obj_name, sizeof(one.obj_name), "%s", timeline);
+        snprintf(one.driver_name, sizeof(one.driver_name), "%s", driver);
+        if (user_write((guest_addr_t) info->sync_fence_info, &one, sizeof(one)))
+            return _EFAULT;
+    }
+    info->status = status;
+    snprintf(info->name, sizeof(info->name), "%s-%s%llu-%llu", driver, timeline,
+            (unsigned long long) context, (unsigned long long) seqno);
+    info->num_fences = 1;
+    return 0;
+}
+
+static ssize_t fence_ioctl_size(int cmd) {
+    return (unsigned) cmd == SYNC_IOC_FILE_INFO_ ? (ssize_t) sizeof(struct sync_file_info_) : -1;
+}
+
+static int fence_ioctl(struct fd *fd, int cmd, void *arg) {
+    if ((unsigned) cmd == SYNC_IOC_FILE_INFO_)
+        return fence_file_info(fd->data, arg);
+    return _ENOTTY;
 }
 
 static const struct fd_ops vgpu_fence_ops = {
     .name = "sync_file",
     .anon_inode_class = "sync_file",
     .poll = fence_poll,
+    .ioctl_size = fence_ioctl_size,
+    .ioctl = fence_ioctl,
     .close = fence_close,
 };
 
@@ -1008,12 +1081,113 @@ static off_t_ prime_lseek(struct fd *fd, off_t_ off, int whence) {
     return _EINVAL;
 }
 
+// DMA_BUF_IOCTL_EXPORT_SYNC_FILE: the buffer's implicit fence as a sync file,
+// already signaled when the buffer is idle. There is one implicit fence, its
+// last writer's, so a reader's export and a writer's are the same one.
+//
+// Mesa's zink asks for this on every frame it draws to or from a dma-buf, and
+// it leaks the dma-buf descriptor it asked through when the ioctl fails (Mesa
+// 25.0, zink_screen_export_dmabuf_semaphore: a failure it asserts cannot
+// happen). This was ENOTTY, so Wayfire -- which renders through zink -- lost
+// three descriptors a frame, about three a second, until it hit
+// RLIMIT_NOFILE: GTK clients then crashed and the app went down with it
+// (bip, 2026-10-02).
+static int prime_export_sync_file(struct vgpu_prime *p, struct dma_buf_sync_file_ *s) {
+    if ((s->flags & ~DMA_BUF_SYNC_RW_) || !(s->flags & DMA_BUF_SYNC_RW_))
+        return _EINVAL;
+    struct vgpu_fence *fence = calloc(1, sizeof(*fence));
+    struct fd *fd = fence != NULL ? adhoc_fd_create(&vgpu_fence_ops) : NULL;
+    if (fd == NULL) {
+        free(fence);
+        return _ENOMEM;
+    }
+    fence->fd = fd;
+    fd->data = fence;
+    struct vgpu_res *res = p->res;
+    lock(&vgpu_lock, 0);
+    if (!res_fence_signaled(res)) {
+        atomic_fetch_add(&res->wctx->refcount, 1);
+        fence->ctx = res->wctx;
+        fence->ring = res->wring;
+        fence->id = res->wid;
+        list_add_tail(&fence->ctx->fences, &fence->link);
+    }
+    unlock(&vgpu_lock);
+    fd_t f = f_install(fd, O_CLOEXEC_);
+    if (f < 0)
+        return f;
+    s->fd = f;
+    return 0;
+}
+
+// DMA_BUF_IOCTL_IMPORT_SYNC_FILE: a fence the buffer's next users must wait
+// for. Linux adds it beside the fences already there; a buffer here holds
+// one, so a later fence on the same timeline replaces it, and a fence on
+// another timeline -- while this one is still pending -- is waited for now,
+// which leaves only the buffer's own to wait for.
+static int prime_import_sync_file(struct vgpu_prime *p, struct dma_buf_sync_file_ *s) {
+    if ((s->flags & ~DMA_BUF_SYNC_RW_) || !(s->flags & DMA_BUF_SYNC_RW_))
+        return _EINVAL;
+    struct fd *fence_fd = f_get(s->fd);
+    if (fence_fd == NULL || fence_fd->ops != &vgpu_fence_ops)
+        return _EINVAL;
+    struct vgpu_fence *fence = fence_fd->data;
+    struct vgpu_res *res = p->res;
+    struct vgpu_ctx *old = NULL;
+    bool attached = true;
+    lock(&vgpu_lock, 0);
+    if (fence_signaled(fence)) {
+        // nothing left to wait for
+    } else if (res_fence_signaled(res)) {
+        old = res->wctx;
+        atomic_fetch_add(&fence->ctx->refcount, 1);
+        res->wctx = fence->ctx;
+        res->wring = fence->ring;
+        res->wid = fence->id;
+        res->woken = false;
+    } else if (res->wctx == fence->ctx && res->wring == fence->ring) {
+        if (fence->id > res->wid) {
+            res->wid = fence->id;
+            res->woken = false;
+        }
+    } else {
+        attached = false;
+    }
+    unlock(&vgpu_lock);
+    if (old != NULL)
+        ctx_release(old);
+    return attached ? 0 : fence_wait(s->fd);
+}
+
+static ssize_t prime_ioctl_size(int cmd) {
+    switch ((unsigned) cmd) {
+        case DMA_BUF_IOCTL_EXPORT_SYNC_FILE_:
+        case DMA_BUF_IOCTL_IMPORT_SYNC_FILE_:
+            return sizeof(struct dma_buf_sync_file_);
+        default:
+            return -1;
+    }
+}
+
+static int prime_ioctl(struct fd *fd, int cmd, void *arg) {
+    switch ((unsigned) cmd) {
+        case DMA_BUF_IOCTL_EXPORT_SYNC_FILE_:
+            return prime_export_sync_file(fd->data, arg);
+        case DMA_BUF_IOCTL_IMPORT_SYNC_FILE_:
+            return prime_import_sync_file(fd->data, arg);
+        default:
+            return _ENOTTY;
+    }
+}
+
 static const struct fd_ops vgpu_prime_ops = {
     .name = "dmabuf",
     .anon_inode_class = "dmabuf",
     .mmap = prime_mmap,
     .lseek = prime_lseek,
     .poll = prime_poll,
+    .ioctl_size = prime_ioctl_size,
+    .ioctl = prime_ioctl,
     .close = prime_close,
 };
 
