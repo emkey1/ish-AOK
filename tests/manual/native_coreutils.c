@@ -1240,6 +1240,41 @@ static void print_bytes(const char *label, const char *s, size_t n) {
     printf("\"\n");
 }
 
+// chmod -R and du -a walk a directory in readdir order, as GNU's fts does,
+// and that order is the filesystem's: the table has the order of the root it
+// was recorded on, and a 5th-gen iPad's root returned dir/f1 before dir/sub.
+// Those cases compare their lines as a set.
+static int cmp_line(const void *a, const void *b) {
+    return strcmp(*(char *const *) a, *(char *const *) b);
+}
+
+static char *sorted_lines(const char *text, size_t len) {
+    char *copy = strndup(text, len);
+    size_t n = 0, cap = 16;
+    char **v = malloc(cap * sizeof(*v));
+    for (char *save = NULL, *l = strtok_r(copy, "\n", &save); l; l = strtok_r(NULL, "\n", &save)) {
+        if (n == cap) v = realloc(v, (cap *= 2) * sizeof(*v));
+        v[n++] = l;
+    }
+    qsort(v, n, sizeof(*v), cmp_line);
+    char *out = malloc(len + 2);
+    size_t o = 0;
+    for (size_t i = 0; i < n; i++) {
+        size_t k = strlen(v[i]);
+        memcpy(out + o, v[i], k);
+        o += k;
+        out[o++] = '\n';
+    }
+    out[o] = 0;
+    free(v);
+    free(copy);
+    return out;
+}
+
+static int walk_order_free(const struct cu_case *c) {
+    return strcmp(c->applet, "du") == 0 || (strcmp(c->applet, "chmod") == 0 && strstr(c->args, "-R"));
+}
+
 // The table was recorded as root, so ls -l/-n name root and 0. Run as anyone
 // else (a device leg runs as uid 1000) the fixture belongs to the caller, and
 // GNU prints that owner instead: rewrite the expectation to data.txt's owner.
@@ -1303,6 +1338,12 @@ int main(int argc, char **argv) {
         const char *expect = strcmp(c->applet, "ls") == 0
             ? owner_expect(c->expect, &expect_len) : c->expect;
         int ok_out = len == expect_len && memcmp(out, expect, len) == 0;
+        if (!ok_out && walk_order_free(c) && len == expect_len) {
+            char *a = sorted_lines(out, len), *b = sorted_lines(expect, expect_len);
+            ok_out = strcmp(a, b) == 0;
+            free(a);
+            free(b);
+        }
         int ok_status = status == c->expect_status;
         int ok_tree = strcmp(after, want_tree) == 0;
         if (ok_out && ok_status && ok_tree) {
