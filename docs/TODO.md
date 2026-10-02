@@ -885,39 +885,34 @@ for both callers. Tests against camd: a background read from a group whose
 only way back is a zombie member (EIO on Linux), and the `pthread_exit`
 way back above.
 
-### PI futexes are ENOSYS
+### PI futexes: the requeue half, and no inheritance
 
-Measured 2026-09-01 alongside the futex argument-validation work
-(`tests/manual/futex_validation.c`, which closed alignment, the expired
-absolute deadline, and the WAKE_OP encoding). FUTEX_LOCK_PI, FUTEX_UNLOCK_PI,
-FUTEX_TRYLOCK_PI and FUTEX_WAIT_REQUEUE_PI all return ENOSYS, so a glibc
-PTHREAD_PRIO_INHERIT mutex fails at `pthread_mutex_lock`. (musl does not
-implement PI mutexes at all -- `pthread_mutexattr_setprotocol` returns ENOSYS
-in userspace -- so this is only reachable from a glibc guest: Debian, Arch.)
+FUTEX_LOCK_PI, LOCK_PI2, TRYLOCK_PI and UNLOCK_PI are implemented (kernel/
+futex.c, 2026-10-02; tests/manual/futex_pi.c, which Linux 6.12 passes on camd
+in 64- and 32-bit builds): the word protocol, direct hand-off to the first
+waiter, a dead owner's lock going to a waiter that was queued (marked
+FUTEX_OWNER_DIED and FUTEX_WAITERS, as Linux leaves it), ESRCH for an owner
+that is gone with nobody queued, the PI bit in robust-list links, and a signal
+restarting the lock (ERESTARTNOINTR: glibc takes an EINTR as having it).
+Before, glibc's probe -- `futex(&word, FUTEX_UNLOCK_PI_PRIVATE)`, EPERM on
+Linux -- got ENOSYS, so PTHREAD_PRIO_INHERIT mutexes were refused at init
+(PulseAudio's, in wf-panel, fell back to plain ones) and dmesg showed one
+`FIXME Unsupported futex FUTEX_UNLOCK_PI(..., 135, 0, ...)` per program.
 
-The locking half is implementable and is what programs actually depend on:
-the word holds the owner's TID with FUTEX_WAITERS and FUTEX_OWNER_DIED as the
-top two bits, TRYLOCK_PI is a compare-exchange from 0 to the caller's TID,
-LOCK_PI sets FUTEX_WAITERS and blocks, UNLOCK_PI checks ownership and hands
-off. That needs an owner field per futex and interacts with the robust-list
-FUTEX_OWNER_DIED path already implemented here.
+Left:
 
-FUTEX_CMP_REQUEUE_PI is not ENOSYS but is no more right (seen 2026-09-25,
-while keying shared futexes by memory): it compares `*uaddr1` against `val`,
-the wake count, where Linux compares `val3`, and it wakes no one where Linux
-takes the PI lock for one waiter. Its only real callers wait with
-WAIT_REQUEUE_PI, which is ENOSYS, so it is unreachable in practice; rewrite it
-with the locking half. Its waiters do now keep their futex's reference when
-moved (`futex_requeue_waiters`).
-
-glibc probes for PI support the first time a program asks for a PI mutex: `futex(&word, FUTEX_UNLOCK_PI_PRIVATE)`, which Linux answers EPERM (camd, glibc 2.41). Here it is ENOSYS, so `pthread_mutex_init` refuses PTHREAD_PRIO_INHERIT with ENOTSUP and PulseAudio's pa_mutex, among others, falls back to an ordinary mutex -- and every such program logs `FIXME Unsupported futex FUTEX_UNLOCK_PI(..., 135, 0, ...)` once in dmesg (wf-panel does, through libpulse). That line is the probe, not a failing lock.
-
-The INHERITANCE half is not implementable and would not be even if it were
-written: iSH has no scheduler priority to donate -- realtime scheduling
-classes are already refused with EPERM (kernel/resource.c). So the honest
-shape is working mutual exclusion with the priority boost documented as a
-no-op, which is strictly better than a lock that cannot be taken at all --
-but it should be written knowing that, not discovered later.
+- **FUTEX_WAIT_REQUEUE_PI is still ENOSYS, and FUTEX_CMP_REQUEUE_PI is wrong**
+  (seen 2026-09-25): it compares `*uaddr1` against `val`, the wake count,
+  where Linux compares `val3`, and it wakes no one where Linux takes the PI
+  lock for one waiter. Nothing current calls either -- glibc's condvars
+  stopped in 2.25, musl never did -- so rewrite them on futex_lock_pi's
+  waiter queue only when a caller turns up. Its waiters do keep their
+  futex's reference when moved (`futex_requeue_waiters`).
+- **No inheritance.** iSH has no scheduler priority to donate -- realtime
+  classes are refused with EPERM (kernel/resource.c) -- so the boost is a
+  no-op by design, not an omission.
+- A PI waiter re-checks its owner every 50 ms (and at once when the owner
+  exits, futex_exit_pi); Linux has the owner's task pin a pi_state instead.
 
 ### tmpfs size= is accepted and not enforced
 

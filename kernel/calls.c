@@ -2366,6 +2366,16 @@ static bool syscall_result_should_restart(dword_t *resultp) {
         *resultp = (dword_t) _ERESTART;
         return true;
     }
+    // ERESTARTNOINTR: restarted like a freeze, with no flag set, so no handler
+    // can cancel it.
+    if (r == _ERESTART_NOINTR) {
+        if (current != NULL) {
+            current->restart_nohand_pending = false;
+            current->restart_sys_pending = false;
+        }
+        *resultp = (dword_t) _ERESTART;
+        return true;
+    }
     if (r != _ERESTART && r != _ERESTART_NOHAND) {
         if (current != NULL) {
             current->restart_nohand_pending = false;
@@ -5435,7 +5445,8 @@ void handle_syscall_interrupt(struct cpu_state *cpu) {
             checkpoint_freeze_pending();
         bool restart_pending = freeze_restart ||
             (sqword_t) result == (sqword_t) (sdword_t) _ERESTART ||
-            (sqword_t) result == (sqword_t) (sdword_t) _ERESTART_NOHAND;
+            (sqword_t) result == (sqword_t) (sdword_t) _ERESTART_NOHAND ||
+            (sqword_t) result == (sqword_t) (sdword_t) _ERESTART_NOINTR;
         if (restart_pending) {
             if (current != NULL) {
                 current->restart_nohand_pending =

@@ -334,6 +334,7 @@ riscv64_ldst_pair.c
 arm64_mops.c
 time_clocks_ticks.c
 futex_robust_requeue.c
+futex_pi.c
 futex_shared_mapping.c
 inotify_mask_queue.c
 inotify_close_race.c

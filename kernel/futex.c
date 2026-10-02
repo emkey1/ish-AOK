@@ -24,7 +24,13 @@
 #define FUTEX_PRIVATE_FLAG_ 128
 #define FUTEX_CLOCK_REALTIME_    256
 
+#define FUTEX_LOCK_PI2_        13
 #define FUTEX_CMD_MASK_        ~(FUTEX_PRIVATE_FLAG_ | FUTEX_CLOCK_REALTIME_)
+
+// Bits userspace keeps in a robust or PI mutex's lock word (linux/futex.h).
+#define FUTEX_WAITERS_    0x80000000
+#define FUTEX_OWNER_DIED_ 0x40000000
+#define FUTEX_TID_MASK_   0x3fffffff
 
 // FUTEX_WAKE_OP's encoded op word (linux/futex.h): bits 28-31 are the
 // arithmetic op, 24-27 the comparison, 12-23 the (signed) operand, 0-11 the
@@ -76,6 +82,12 @@ struct futex {
     struct futex_key key;
     struct list queue;
     struct list chain; // locked by futex_hash_lock
+    // FUTEX_LOCK_PI waiters, kept apart from `queue` so that a FUTEX_WAKE on
+    // the same word neither wakes nor counts them, and the TID that held the
+    // lock when they queued: an owner that exits holding it hands it on
+    // (futex_exit_pi).
+    struct list pi_queue;
+    dword_t pi_owner;
     // Monotonic wake counter, bumped by every FUTEX_WAKE-like op on this futex
     // (under futex_lock). Used by the SA_RESTART lost-wake fix: a waiter that
     // dequeues for a signal restart snapshots this and, on restart re-entry,
@@ -103,6 +115,10 @@ struct futex_wait {
     dword_t bitset;      // Match mask for FUTEX_WAIT_BITSET / WAKE_BITSET
     bool interrupted;
     struct list queue;   // For linking in the futex's queue
+    // FUTEX_LOCK_PI only: who waits, and set (under futex_lock, as the waiter
+    // leaves pi_queue) once FUTEX_UNLOCK_PI has made it the owner.
+    dword_t tid;
+    bool pi_owned;
 };
 
 // 0 = off, 1 = put the waiter on the heap, 2 = DECOY: do the same allocation
@@ -229,6 +245,8 @@ static struct futex *futex_get_unlocked(const struct futex_key *key) {
     futex->key = *key;
     futex->wake_seq = 0;
     list_init(&futex->queue);
+    list_init(&futex->pi_queue);
+    futex->pi_owner = 0;
     list_add(bucket, &futex->chain);
     return futex;
 }
@@ -246,6 +264,7 @@ static struct futex *futex_get(const struct futex_key *key) {
 static void futex_put_unlocked(struct futex *futex) {
     if (--futex->refcount == 0) {
         assert(list_empty(&futex->queue));
+        assert(list_empty(&futex->pi_queue));
         list_remove(&futex->chain);
         free(futex);
     }
@@ -1087,6 +1106,292 @@ static int futex_cmp_requeue_pi(guest_addr_t uaddr1, dword_t op, dword_t val, gu
     return err;
 }
 
+// ---------------------------------------------------------------------------
+// PI futexes: FUTEX_LOCK_PI, LOCK_PI2, TRYLOCK_PI, UNLOCK_PI.
+//
+// The lock word is the owner's TID, with FUTEX_WAITERS when the kernel has to
+// be told of the unlock and FUTEX_OWNER_DIED when a robust owner died holding
+// it. Userspace takes a free lock (0 -> TID) and drops an uncontended one
+// (TID -> 0) itself; everything else comes here. These were ENOSYS, and glibc
+// assumes a kernel has them: its PRIO_INHERIT mutexes -- PulseAudio's, so
+// wf-panel's -- were refused at init, and a lock_pi that did fail would have
+// been taken as success.
+//
+// What is NOT here is the inheritance: iSH has no scheduler priority to
+// donate (realtime classes are refused, kernel/resource.c), so this is the
+// mutual exclusion and the ownership protocol, which is what programs depend
+// on. FUTEX_WAIT_REQUEUE_PI and FUTEX_CMP_REQUEUE_PI, which nothing current
+// calls (glibc's condvars stopped using them in 2.25, musl never did), are
+// left as they were.
+// ---------------------------------------------------------------------------
+
+struct futex_word_cas {
+    _Atomic uint32_t *word;
+    uint32_t seen, desired;
+    bool swapped;
+};
+
+static void futex_cas_word(void *arg) {
+    struct futex_word_cas *c = arg;
+    c->swapped = atomic_compare_exchange_strong_explicit(c->word, &c->seen, c->desired,
+            memory_order_acq_rel, memory_order_acquire);
+}
+
+// Compare-and-swap the futex word, atomically against the guest's own atomics:
+// 0 if it held `expected` and now holds `desired`, _EAGAIN if it held
+// something else (in *seen), _EFAULT if it cannot be written. Call with
+// futex_lock held, as futex_load is.
+static int futex_cas(guest_addr_t uaddr, dword_t expected, dword_t desired, dword_t *seen) {
+    mem_read_lock_quiesce_aware(current->mem);
+    bool may_fault;
+    dword_t *ptr = mem_ptr_may_fault(current->mem, uaddr, MEM_WRITE, &may_fault);
+    if (ptr == NULL) {
+        mem_read_unlock_quiesce_aware(current->mem);
+        return _EFAULT;
+    }
+    struct futex_word_cas c = {(_Atomic uint32_t *) ptr, expected, desired, false};
+    bool fault = false;
+    if (!may_fault)
+        futex_cas_word(&c);
+    else
+        fault = !host_call_guarded(futex_cas_word, &c, ptr, sizeof(*ptr), NULL, 0, NULL, 0);
+    mem_read_unlock_quiesce_aware(current->mem);
+    if (fault)
+        return _EFAULT;
+    if (seen != NULL)
+        *seen = c.seen;
+    return c.swapped ? 0 : _EAGAIN;
+}
+
+// How many FUTEX_LOCK_PI waits are queued, under futex_lock: an exit with
+// none (nearly every exit) skips futex_exit_pi's walk.
+static unsigned futex_pi_waiting;
+
+// Whether the TID that owns a lock word is a thread still running. Takes
+// pids_lock, so never under futex_lock.
+static bool futex_pi_owner_alive(dword_t tid) {
+    struct task *task = pid_get_task_ref(tid);
+    if (task == NULL)
+        return false;
+    bool alive = !task->exiting && !task->zombie;
+    task_ref_cnt_mod(task, -1);
+    return alive;
+}
+
+// The first PI waiter still in its wait, other than `self`; stale entries are
+// dropped on the way. Call with futex_lock held.
+static struct futex_wait *futex_pi_first_waiter(struct futex *futex, struct futex_wait *self) {
+    struct futex_wait *wait, *tmp;
+    list_for_each_entry_safe(&futex->pi_queue, wait, tmp, queue) {
+        if (!futex_wait_is_live(wait, "pi")) {
+            list_remove(&wait->queue);
+            continue;
+        }
+        if (wait != self)
+            return wait;
+    }
+    return NULL;
+}
+
+// FUTEX_LOCK_PI and LOCK_PI2 (`timeout` relative, from the absolute one the
+// caller passed; NULL waits for good), and TRYLOCK_PI. As Linux: a free word
+// is taken, keeping FUTEX_OWNER_DIED so a robust caller learns of the dead
+// owner; the caller's own TID is EDEADLK; otherwise FUTEX_WAITERS is set and
+// the caller waits until an unlock hands it the lock (0), or, for TRYLOCK_PI,
+// EAGAIN at once. An owner TID that is no thread is ESRCH -- unless that owner
+// died while this lock had waiters, which take it over, as Linux's exit path
+// does for a PI owner. A signal restarts the lock rather than failing it.
+static int futex_lock_pi(guest_addr_t uaddr, dword_t op, const struct timespec *timeout, bool trylock) {
+    struct futex_key key;
+    futex_key_of(uaddr, op, &key);
+    dword_t tid = current->pid;
+    struct timespec deadline = {};
+    if (timeout != NULL)
+        deadline = timespec_add(timespec_now(CLOCK_MONOTONIC), *timeout);
+    struct futex *futex = futex_get(&key);
+    if (futex == NULL)
+        return _ENOMEM;
+
+    struct futex_wait w = {.magic = FUTEX_WAIT_MAGIC, .cond = COND_INITIALIZER};
+    w.futex = futex;
+    w.thread = pthread_self();
+    w.bitset = ~0u;
+    w.tid = tid;
+    bool queued = false;
+    int err;
+    for (;;) {
+        if (w.pi_owned) {
+            err = 0;
+            break;
+        }
+        dword_t val;
+        if (futex_load(uaddr, &val)) {
+            err = _EFAULT;
+            break;
+        }
+        dword_t owner = val & FUTEX_TID_MASK_;
+        if (owner == 0) {
+            // Free -- or released by a robust owner's death, FUTEX_OWNER_DIED
+            // kept so the caller learns of it. A waiter that was queued keeps
+            // FUTEX_WAITERS, as Linux's hand-over does.
+            dword_t want = tid | (val & FUTEX_OWNER_DIED_);
+            if (queued || futex_pi_first_waiter(futex, &w) != NULL)
+                want |= FUTEX_WAITERS_;
+            err = futex_cas(uaddr, val, want, NULL);
+            if (err == _EAGAIN)
+                continue;
+            break;
+        }
+        if (owner == tid) {
+            err = _EDEADLK;
+            break;
+        }
+        if (!(val & FUTEX_WAITERS_)) {
+            err = futex_cas(uaddr, val, val | FUTEX_WAITERS_, NULL);
+            if (err == _EAGAIN)
+                continue;
+            if (err < 0)
+                break;
+            val |= FUTEX_WAITERS_;
+        }
+        if (trylock) {
+            err = _EAGAIN;
+            break;
+        }
+
+        unlock(&futex_lock);
+        bool alive = futex_pi_owner_alive(owner);
+        lock(&futex_lock, 0);
+        if (w.pi_owned)
+            continue;
+        if (!alive) {
+            dword_t now;
+            if (futex_load(uaddr, &now)) {
+                err = _EFAULT;
+                break;
+            }
+            if (now != val)
+                continue;   // it changed hands while we looked
+            if (!queued && futex->pi_owner != owner) {
+                err = _ESRCH;
+                break;
+            }
+            // Linux marks the inheritor FUTEX_OWNER_DIED whether or not the
+            // lock was robust (__fixup_pi_state_owner), and keeps
+            // FUTEX_WAITERS (camd, 6.12).
+            err = futex_cas(uaddr, val, tid | FUTEX_OWNER_DIED_ | FUTEX_WAITERS_, NULL);
+            if (err == _EAGAIN)
+                continue;
+            break;
+        }
+
+        futex->pi_owner = owner;
+        if (!queued) {
+            list_add_tail(&futex->pi_queue, &w.queue);
+            queued = true;
+            futex_pi_waiting++;
+        }
+        // Sliced as futex_wait_masked's wait is: a cap re-checks the owner,
+        // which also covers an exit this missed.
+        struct timespec remaining = {.tv_sec = 0, .tv_nsec = 50000000};
+        bool capped = true;
+        if (timeout != NULL) {
+            struct timespec left = timespec_subtract(deadline, timespec_now(CLOCK_MONOTONIC));
+            if (!timespec_positive(left)) {
+                err = _ETIMEDOUT;
+                break;
+            }
+            if (left.tv_sec == 0 && left.tv_nsec <= remaining.tv_nsec * 2) {
+                remaining = left;
+                capped = false;
+            }
+        }
+        int werr;
+        TASK_MAY_BLOCK {
+            lock(&current->waiting_cond_lock, 0);
+            current->waiting_interrupt_flag = &w.interrupted;
+            unlock(&current->waiting_cond_lock);
+            should_mark_wait_interrupted = true;
+            werr = capped ? wait_for_capped(&w.cond, &futex_lock, &remaining)
+                : wait_for(&w.cond, &futex_lock, &remaining);
+            should_mark_wait_interrupted = false;
+        }
+        if (w.pi_owned)
+            continue;
+        if (__atomic_load_n(&w.interrupted, __ATOMIC_ACQUIRE) || futex_wait_has_pending_signal()) {
+            err = _ERESTART_NOINTR;
+            break;
+        }
+        (void) werr;
+    }
+    if (queued) {
+        if (!w.pi_owned)
+            list_remove_safe(&w.queue);
+        futex_pi_waiting--;
+    }
+    w.magic = 0;
+    futex_put(futex);
+    return err;
+}
+
+// FUTEX_UNLOCK_PI: only the owner may (EPERM otherwise, which is also how
+// glibc's probe for PI support is answered); the lock goes straight to the
+// first waiter, with FUTEX_WAITERS set as Linux sets it, or the word goes
+// back to 0.
+static int futex_unlock_pi(guest_addr_t uaddr, dword_t op) {
+    struct futex_key key;
+    futex_key_of(uaddr, op, &key);
+    dword_t tid = current->pid;
+    struct futex *futex = futex_get(&key);
+    if (futex == NULL)
+        return _ENOMEM;
+    int err;
+    for (;;) {
+        dword_t val;
+        if (futex_load(uaddr, &val)) {
+            err = _EFAULT;
+            break;
+        }
+        if ((val & FUTEX_TID_MASK_) != tid) {
+            err = _EPERM;
+            break;
+        }
+        struct futex_wait *next = futex_pi_first_waiter(futex, NULL);
+        err = futex_cas(uaddr, val, next != NULL ? (next->tid | FUTEX_WAITERS_) : 0, NULL);
+        if (err == _EAGAIN)
+            continue;
+        if (err == 0 && next != NULL) {
+            list_remove(&next->queue);
+            next->pi_owned = true;
+            futex->pi_owner = next->tid;
+            notify(&next->cond);
+        }
+        break;
+    }
+    futex_put(futex);
+    return err;
+}
+
+// A thread is exiting: wake one waiter on each PI lock it owned, which finds
+// the owner gone and takes the lock (after the robust list has marked it
+// FUTEX_OWNER_DIED, if it was robust). Linux does this in
+// exit_pi_state_list. Without it the waiters would still find out, from
+// their 50ms re-checks, but not at once.
+void futex_exit_pi(struct task *task) {
+    lock(&futex_lock, 0);
+    for (int i = 0; futex_pi_waiting != 0 && i < FUTEX_HASH_SIZE; i++) {
+        struct futex *futex;
+        list_for_each_entry(&futex_hash[i], futex, chain) {
+            if (futex->pi_owner != (dword_t) task->pid)
+                continue;
+            struct futex_wait *next = futex_pi_first_waiter(futex, NULL);
+            if (next != NULL)
+                notify(&next->cond);
+        }
+    }
+    unlock(&futex_lock);
+}
+
 dword_t sys_futex_common(guest_addr_t uaddr, dword_t op, dword_t val, guest_addr_t timeout_or_val2,
         guest_addr_t uaddr2, dword_t val3, bool timeout_time64) {
     if (!(op & FUTEX_PRIVATE_FLAG_)) {
@@ -1107,7 +1412,31 @@ dword_t sys_futex_common(guest_addr_t uaddr, dword_t op, dword_t val, guest_addr
                 return _EINVAL;
             break;
     }
+    // FUTEX_CLOCK_REALTIME means something only to the waits that take an
+    // absolute deadline on a clock of their choosing; Linux refuses it on the
+    // PI locks with ENOSYS. FUTEX_LOCK_PI's deadline is CLOCK_REALTIME
+    // regardless, LOCK_PI2's CLOCK_MONOTONIC unless the flag says otherwise.
+    switch (op & FUTEX_CMD_MASK_) {
+        case FUTEX_LOCK_PI_:
+        case FUTEX_UNLOCK_PI_:
+        case FUTEX_TRYLOCK_PI_:
+            if (op & FUTEX_CLOCK_REALTIME_)
+                return _ENOSYS;
+            break;
+    }
     struct timespec timeout = {0};
+    if (((op & FUTEX_CMD_MASK_) == FUTEX_LOCK_PI_ || (op & FUTEX_CMD_MASK_) == FUTEX_LOCK_PI2_) &&
+            timeout_or_val2) {
+        int err = futex_read_timeout(timeout_or_val2, timeout_time64, &timeout);
+        if (err < 0)
+            return err;
+        bool realtime = (op & FUTEX_CMD_MASK_) == FUTEX_LOCK_PI_ || (op & FUTEX_CLOCK_REALTIME_);
+        timeout = timespec_subtract(timeout, realtime
+                ? guest_clock_now(CLOCK_REALTIME_, CLOCK_REALTIME)
+                : guest_clock_now(CLOCK_MONOTONIC_, CLOCK_MONOTONIC));
+        if (!timespec_positive(timeout))
+            timeout = (struct timespec) {0};
+    }
     if (((op & FUTEX_CMD_MASK_) == FUTEX_WAIT_ || (op & FUTEX_CMD_MASK_) == FUTEX_WAIT_BITSET_) && timeout_or_val2) {
         int err = futex_read_timeout(timeout_or_val2, timeout_time64, &timeout);
         if (err < 0)
@@ -1163,17 +1492,16 @@ dword_t sys_futex_common(guest_addr_t uaddr, dword_t op, dword_t val, guest_addr
             STRACE("futex(FUTEX_WAKE_OP, %#x, %d, %d, %#x, %#x)", uaddr, val, timeout_or_val2, uaddr2, val3);
             return futex_wake_op(uaddr, op, val, timeout_or_val2, uaddr2, val3);
         case FUTEX_LOCK_PI_:
-            STRACE("Unimplemented futex(FUTEX_LOCK_PI, %#x, %d, %#x)", uaddr, val, uaddr2);
-            FIXME("Unsupported futex FUTEX_LOCK_PI(%#x, %d, %d, timeout=%#x, %#x, %d) (FUTEX_LOCK_PI) from %s[%d]", uaddr, op, val, timeout_or_val2, uaddr2, val3, current->comm, current->pid);
-            return _ENOSYS;
+        case FUTEX_LOCK_PI2_:
+            STRACE("futex(FUTEX_LOCK_PI%s, %#x, timeout=%#x)",
+                    (op & FUTEX_CMD_MASK_) == FUTEX_LOCK_PI2_ ? "2" : "", uaddr, timeout_or_val2);
+            return futex_lock_pi(uaddr, op, timeout_or_val2 ? &timeout : NULL, false);
         case FUTEX_UNLOCK_PI_:
-            STRACE("Unimplemented futex(FUTEX_UNLOCK_PI, %#x, %d, %#x)", uaddr, val, uaddr2);
-            FIXME("Unsupported futex FUTEX_UNLOCK_PI(%#x, %d, %d, timeout=%#x, %#x, %d) (FUTEX_UNLOCK_PI) from %s[%d]", uaddr, op, val, timeout_or_val2, uaddr2, val3, current->comm, current->pid);
-            return _ENOSYS;
+            STRACE("futex(FUTEX_UNLOCK_PI, %#x)", uaddr);
+            return futex_unlock_pi(uaddr, op);
         case FUTEX_TRYLOCK_PI_:
-            STRACE("Unimplemented futex(FUTEX_TRYLOCK_PI, %#x, %d, %#x)", uaddr, val, uaddr2);
-            FIXME("Unsupported futex FUTEX_TRYLOCK_PI(%#x, %d, %d, timeout=%#x, %#x, %d) (FUTEX_TRYLOCK_PI) from %s[%d]", uaddr, op, val, timeout_or_val2, uaddr2, val3, current->comm, current->pid);
-            return _ENOSYS;
+            STRACE("futex(FUTEX_TRYLOCK_PI, %#x)", uaddr);
+            return futex_lock_pi(uaddr, op, NULL, true);
         case FUTEX_WAIT_BITSET_:
             STRACE("futex(FUTEX_WAIT_BITSET, %#x, %d, timeout=%#x, bitset=%#x)", uaddr, val, timeout_or_val2, val3);
             if (val3 == 0)
@@ -1213,10 +1541,6 @@ dword_t sys_futex_time64(addr_t uaddr, dword_t op, dword_t val, addr_t timeout_o
     return sys_futex_common(uaddr, op, val, timeout_or_val2, uaddr2, val3, true);
 }
 
-// Bits userspace keeps in a robust mutex's lock word (linux/futex.h).
-#define FUTEX_WAITERS_    0x80000000
-#define FUTEX_OWNER_DIED_ 0x40000000
-#define FUTEX_TID_MASK_   0x3fffffff
 // Linux's ROBUST_LIST_LIMIT: a corrupt or hostile list must not walk forever.
 #define ROBUST_LIST_LIMIT 2048
 
@@ -1255,7 +1579,7 @@ static bool robust_read(guest_addr_t addr, bool is64, uint64_t *out) {
 // the list at all, so a thread dying while holding a robust mutex left every
 // waiter blocked for good; the whole point of a robust mutex is that it does
 // not.
-static void robust_handle_death(guest_addr_t futex_addr, pid_t_ tid) {
+static void robust_handle_death(guest_addr_t futex_addr, pid_t_ tid, bool pi) {
     dword_t uval;
     if (user_get(futex_addr, uval))
         return;
@@ -1264,7 +1588,9 @@ static void robust_handle_death(guest_addr_t futex_addr, pid_t_ tid) {
     dword_t nval = (uval & FUTEX_WAITERS_) | FUTEX_OWNER_DIED_;
     if (user_put(futex_addr, nval))
         return;
-    if (nval & FUTEX_WAITERS_)
+    // A PI lock's waiters are not FUTEX_WAIT waiters; futex_exit_pi, after
+    // this, hands it on.
+    if (!pi && (nval & FUTEX_WAITERS_))
         futex_wake(futex_addr, 1);
 }
 
@@ -1299,6 +1625,14 @@ void futex_exit_robust_list(struct task *task) {
     int64_t futex_offset = is64 ? (int64_t) offset_raw
                                 : (int64_t) (int32_t) (uint32_t) offset_raw;
 
+    // Bit 0 of every link marks a PI mutex (glibc's ENQUEUE_MUTEX_PI); the
+    // entry is the link with it cleared, as Linux's fetch_robust_entry reads
+    // it. Taken as part of the address, a PI mutex's word was looked for one
+    // byte past where it is.
+    bool pi = entry & 1, pending_pi = pending & 1;
+    entry &= ~(uint64_t) 1;
+    pending &= ~(uint64_t) 1;
+
     // The list is circular through the head, so that is the terminator.
     for (unsigned limit = ROBUST_LIST_LIMIT; entry != head && limit > 0; limit--) {
         uint64_t next;
@@ -1306,13 +1640,14 @@ void futex_exit_robust_list(struct task *task) {
         // The pending entry is handled after the loop: it is mid-operation,
         // and Linux deliberately leaves it until last.
         if (entry != pending)
-            robust_handle_death(robust_futex_addr(entry, futex_offset, is64), task->pid);
+            robust_handle_death(robust_futex_addr(entry, futex_offset, is64), task->pid, pi);
         if (!have_next)
             return;
-        entry = next;
+        pi = next & 1;
+        entry = next & ~(uint64_t) 1;
     }
     if (pending != 0)
-        robust_handle_death(robust_futex_addr(pending, futex_offset, is64), task->pid);
+        robust_handle_death(robust_futex_addr(pending, futex_offset, is64), task->pid, pending_pi);
 }
 
 static dword_t robust_list_head_size(enum guest_abi abi) {

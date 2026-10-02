@@ -84,6 +84,11 @@
 // transparently across a job-control stop but not across a handler, from the
 // SA_RESTART interfaces, which resume across both.
 #define _ERESTART_NOHAND -512
+// Internal too: Linux's ERESTARTNOINTR. The syscall restarts whatever runs
+// in front of it, handler or not, SA_RESTART or not -- what FUTEX_LOCK_PI
+// answers a signal with, since glibc takes any EINTR from it to mean the lock
+// is held.
+#define _ERESTART_NOINTR -513
 #define _ESTRPIPE      -86 /* Streams pipe error */
 #define _EUSERS        -87 /* Too many users */
 #define _ENOTSOCK      -88 /* Socket operation on non-socket */

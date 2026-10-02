@@ -840,6 +840,8 @@ noreturn void do_exit(struct task *task, int status) {
     // the lock words live in guest memory, and a waiter needs FUTEX_OWNER_DIED
     // written into them or it blocks for good.
     futex_exit_robust_list(task);
+    // And the PI locks it held go to their waiters (futex_exit_pi).
+    futex_exit_pi(task);
 
     guest_addr_t clear_tid = task->clear_tid;
     if (clear_tid) {

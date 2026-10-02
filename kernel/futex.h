@@ -8,6 +8,7 @@ int futex_wake(guest_addr_t uaddr, dword_t val);
 // EOWNERDEAD rather than hanging. Called from do_exit while the task's address
 // space is still live.
 void futex_exit_robust_list(struct task *task);
+void futex_exit_pi(struct task *task);
 
 // Drop any futex pinned by the current task across an SA_RESTART restart (see
 // the futex_restart_* fields in struct task). Called when a FUTEX_WAIT returns

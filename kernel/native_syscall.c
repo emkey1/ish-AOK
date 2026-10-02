@@ -249,7 +249,7 @@ sqword_t native_syscall_args(unsigned num, const qword_t args[6]) {
         // issues the call again, which is the same thing one level up.
         // Both restart flavours mean "issue it again"; a native caller has no
         // PC to rewind, so the NOHAND cancellation has nothing to undo.
-        if (result != _ERESTART && result != _ERESTART_NOHAND)
+        if (result != _ERESTART && result != _ERESTART_NOHAND && result != _ERESTART_NOINTR)
             return result;
         // ...unless the handler that justifies the restart cannot run yet.
         // Inside a host stdio callback the checkpoint above deliberately
