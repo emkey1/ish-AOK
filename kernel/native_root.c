@@ -454,6 +454,11 @@ static void write_etc(void) {
     if (!path_exists("/usr/share/terminfo"))
         generic_symlinkat(NATIVE_DIR "libs/terminfo", AT_PWD, "/usr/share/terminfo");
 
+    // /var/run, as distros have it (the app's boot makes it too, but before
+    // a native root's /var exists on its first boot).
+    if (!path_exists("/var/run"))
+        generic_symlinkat("/run", AT_PWD, "/var/run");
+
     // /etc/mtab, as distros have it.
     if (!path_exists("/etc/mtab"))
         generic_symlinkat("/proc/self/mounts", AT_PWD, "/etc/mtab");
@@ -463,25 +468,34 @@ void native_root_adopt_abi(struct task *task) {
     task->abi = GUEST_ABI_ARM64;
 }
 
-int native_root_provision(void) {
-    static const struct {
-        const char *path;
-        mode_t_ mode;
-    } dirs[] = {
-        {"/bin", 0755}, {"/sbin", 0755}, {"/usr", 0755}, {"/usr/bin", 0755},
-        {"/usr/sbin", 0755}, {"/usr/local", 0755}, {"/usr/local/bin", 0755},
-        {"/usr/local/sbin", 0755}, {"/usr/share", 0755}, {"/etc", 0755},
-        {"/etc/profile.d", 0755}, {"/etc/rc.d", 0755}, {"/etc/service", 0755},
-        {"/etc/skel", 0755}, {"/root", 0700}, {"/home", 0755},
-        {"/tmp", 01777}, {"/var", 0755}, {"/var/tmp", 01777},
-        {"/var/log", 0755}, {"/run", 0755}, {"/dev", 0755}, {"/proc", 0555},
-        {"/sys", 0555}, {"/mnt", 0755},
-    };
+static const struct {
+    const char *path;
+    mode_t_ mode;
+} dirs[] = {
+    {"/bin", 0755}, {"/sbin", 0755}, {"/usr", 0755}, {"/usr/bin", 0755},
+    {"/usr/sbin", 0755}, {"/usr/local", 0755}, {"/usr/local/bin", 0755},
+    {"/usr/local/sbin", 0755}, {"/usr/share", 0755}, {"/etc", 0755},
+    {"/etc/profile.d", 0755}, {"/etc/rc.d", 0755}, {"/etc/service", 0755},
+    {"/etc/skel", 0755}, {"/root", 0700}, {"/home", 0755},
+    {"/tmp", 01777}, {"/var", 0755}, {"/var/tmp", 01777},
+    {"/var/log", 0755}, {"/run", 0755}, {"/dev", 0755}, {"/proc", 0555},
+    {"/sys", 0555}, {"/mnt", 0755},
+};
+
+int native_root_make_dirs(void) {
     struct statbuf stat;
     if (generic_statat(AT_PWD, "/", &stat, 0) < 0 || !S_ISDIR(stat.mode))
         return _ENOENT;
     for (size_t i = 0; i < sizeof(dirs) / sizeof(dirs[0]); i++)
         ensure_dir(dirs[i].path, dirs[i].mode);
+    return 0;
+}
+
+int native_root_provision(void) {
+    struct statbuf stat;
+    int err = native_root_make_dirs();
+    if (err < 0)
+        return err;
     if (generic_statat(AT_PWD, NATIVE_DIR "smallclue", &stat, 0) < 0)
         return _ENOENT;   // /AOK is not mounted yet: nothing to link to
 

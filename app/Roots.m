@@ -110,6 +110,14 @@ static NSString *const kBundledRootDownloadSizeKey = @"downloadSize";
 static NSString *const kRootsErrorDomain = @"iSH.Roots";
 static NSString *const kRootMetadataFileName = @"ish-root.plist";
 static NSString *const kRootMetadataGuestABIKey = @"guestABI";
+// What a root IS, beside its ABI: absent for a distribution unpacked from an
+// archive, "native" for a native-mode root (docs/native_mode_plan.md) -- one
+// with no distribution in it, created empty and provisioned by the kernel at
+// every boot (kernel/native_root.c). The catalogue entry that creates one
+// carries the same key and value.
+static NSString *const kRootMetadataKindKey = @"kind";
+static NSString *const kBundledRootKindKey = @"kind";
+static NSString *const kRootKindNative = @"native";
 
 NSNotificationName const RootsDidFinishInitialSelectionNotification = @"RootsDidFinishInitialSelectionNotification";
 
@@ -315,6 +323,22 @@ static NSArray<NSDictionary<NSString *, NSString *> *> *BuildRootChoices(void) {
                 kBundledRootFamilyDisplayNameKey: @"Alpine 3.23.3",
                 kBundledRootTierKey: kBundledRootTierOfficial,
                 kBundledRootLegacyKey: @"1",
+            },
+            @{
+                // Native mode: no distribution at all. Nothing to download or
+                // unpack -- importing it creates an empty filesystem, and the
+                // kernel links /bin and /usr/bin into /AOK/native at every
+                // boot. Bundled in the sense that matters (no download), and
+                // not the default: it cannot install packages.
+                kBundledRootIdentifierKey: @"aoknative",
+                kBundledRootDisplayNameKey: @"iSH-AOK Native (no distribution)",
+                kBundledRootImportNameKey: @"AOK-Native",
+                kBundledRootInitialWindowKey: @"session-shell",
+                kBundledRootGuestABIKey: @"arm64",
+                kBundledRootKindKey: kRootKindNative,
+                kBundledRootFamilyKey: @"aoknative",
+                kBundledRootFamilyDisplayNameKey: @"iSH-AOK Native",
+                kBundledRootTierKey: kBundledRootTierOfficial,
             },
             @{
                 kBundledRootIdentifierKey: @"devuan6arm64",
@@ -1240,6 +1264,9 @@ static BOOL ISHFileProviderUnavailableOnThisPlatform(void) {
         return NO;
     }
 
+    if ([selectedChoice[kBundledRootKindKey] isEqualToString:kRootKindNative])
+        return [self createNativeRootFromChoice:selectedChoice error:error];
+
     NSURL *archive = BundledRootArchiveURL(selectedChoice[kBundledRootArchiveNameKey]);
     if (archive == nil) {
         NSString *downloadURLString = selectedChoice[kBundledRootDownloadURLKey];
@@ -1294,6 +1321,66 @@ static BOOL ISHFileProviderUnavailableOnThisPlatform(void) {
         _wantsVersionFile = YES;
     }
     return ok;
+}
+
+// A native-mode root: an empty fakefs and a metadata file saying what it is.
+// Everything in it is the kernel's to provision at boot (kernel/native_root.c),
+// so there is no archive, no progress to report and nothing to cancel.
+- (BOOL)createNativeRootFromChoice:(NSDictionary<NSString *, NSString *> *)choice error:(NSError **)error {
+    NSString *baseName = choice[kBundledRootImportNameKey];
+    NSString *name = baseName;
+    unsigned suffix = 2;
+    while ([self.roots containsObject:name])
+        name = [NSString stringWithFormat:@"%@_%u", baseName, suffix++];
+    if (!RootNameIsValid(name, error))
+        return NO;
+    NSURL *destination = [self rootUrl:name];
+    if (destination == nil) {
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:@"iSH" code:0 userInfo:@{
+                NSLocalizedDescriptionKey: @"No filesystem storage available "
+                    @"(the app group container is missing -- check the App Group entitlement)"
+            }];
+        }
+        return NO;
+    }
+    NSURL *tempDestination = [NSFileManager.defaultManager.temporaryDirectory
+        URLByAppendingPathComponent:NSProcessInfo.processInfo.globallyUniqueString];
+    struct fakefsify_error fs_err = {};
+    if (!fakefs_init_empty(tempDestination.fileSystemRepresentation, &fs_err)) {
+        if (error != NULL)
+            *error = FakefsImportNSError(fs_err);
+        [ISHDiagnosticsStore recordBreadcrumb:@"root.nativeCreateFailed"
+                                      details:@{@"name": name,
+                                                @"error": fs_err.message ? @(fs_err.message) : @"unknown"}];
+        free(fs_err.message);
+        [NSFileManager.defaultManager removeItemAtURL:tempDestination error:nil];
+        return NO;
+    }
+    WriteRootMetadata(tempDestination, @{
+        kRootMetadataGuestABIKey: choice[kBundledRootGuestABIKey] ?: @"arm64",
+        kRootMetadataKindKey: kRootKindNative,
+    });
+    if (![NSFileManager.defaultManager moveItemAtURL:tempDestination toURL:destination error:error]) {
+        [NSFileManager.defaultManager removeItemAtURL:tempDestination error:nil];
+        return NO;
+    }
+    [self mutateRoots:^(NSMutableOrderedSet<NSString *> *roots) {
+        [roots addObject:name];
+    }];
+    return YES;
+}
+
+- (BOOL)isNativeRootNamed:(NSString *)name {
+    if (name.length == 0)
+        return NO;
+    NSDictionary<NSString *, id> *metadata = ReadRootMetadata([self rootUrl:name]);
+    id kind = metadata[kRootMetadataKindKey];
+    return [kind isKindOfClass:NSString.class] && [kind isEqualToString:kRootKindNative];
+}
+
++ (BOOL)bundledRootChoiceIsNative:(NSDictionary<NSString *, NSString *> *)choice {
+    return [choice[kBundledRootKindKey] isEqualToString:kRootKindNative];
 }
 
 void root_progress_callback(void *cookie, double progress, const char *message, bool *should_cancel) {

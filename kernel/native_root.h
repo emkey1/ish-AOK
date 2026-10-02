@@ -22,6 +22,11 @@
 // fail are skipped rather than ending the boot.
 int native_root_provision(void);
 
+// Just the directories (/bin, /etc, /tmp, /var, /run, ...), for the part of a
+// boot that runs before /AOK is mounted and expects them: provisioning proper
+// needs /AOK/native to link to. native_root_provision() does this too.
+int native_root_make_dirs(void);
+
 // Mount the host's own time zone database read-only at /usr/share/zoneinfo,
 // unless the root already has one there. The files are TZif on every Apple
 // platform, the same format a distro's tzdata installs, so /etc/localtime and

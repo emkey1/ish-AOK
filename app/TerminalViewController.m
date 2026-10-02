@@ -159,6 +159,12 @@ static NSArray<NSString *> *ISHSessionCommandWithFallback(NSArray<NSString *> *c
         @[@"/usr/bin/bash", @"-l"],
         @[@"/bin/busybox", @"sh"],
         @[@"/usr/bin/busybox", @"sh"],
+        // Last, the shells that are part of the app rather than of the root:
+        // a root whose login and shells are all broken -- or a native-mode
+        // root whose /bin/sh link was removed -- still gives a root prompt
+        // to repair it from (docs/native_mode_plan.md 4b).
+        @[@"/AOK/native/zsh", @"-l"],
+        @[@"/AOK/native/sh", @"-l"],
     ];
     NSMutableArray<NSDictionary<NSString *, id> *> *attempts = [NSMutableArray arrayWithCapacity:candidates.count + 1];
     [attempts addObject:@{@"command": [command componentsJoinedByString:@" "],

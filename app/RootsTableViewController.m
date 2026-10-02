@@ -87,6 +87,9 @@ static void RootConfirmAndDelete(UIViewController *host, NSString *rootName,
 }
 
 - (NSString *)_bundledChoiceSubtitle:(NSDictionary<NSString *, NSString *> *)choice {
+    if ([Roots bundledRootChoiceIsNative:choice])
+        return @"Built-in programs only (zsh, SmallCLUE, ssh, editors). "
+               @"No download, no package manager.";
     NSString *subtitle;
     if ([self _bundledChoiceRequiresAMD64Bringup:choice]) {
         subtitle = @"x86_64 (amd64) guest rootfs.";
@@ -301,6 +304,8 @@ static void RootConfirmAndDelete(UIViewController *host, NSString *rootName,
 // under a distro-family row -- distinct from _bundledChoiceSubtitle, which is
 // a full sentence used under a single-variant family's own row.
 - (NSString *)_archChoiceActionTitle:(NSDictionary<NSString *, NSString *> *)choice {
+    if ([Roots bundledRootChoiceIsNative:choice])
+        return @"Native (Bundled)";
     NSString *abi = choice[@"guestABI"];
     NSString *label;
     if ([abi isEqualToString:@"amd64"]) {

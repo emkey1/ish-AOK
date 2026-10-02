@@ -52,6 +52,7 @@
 #import "WorkspaceViewController.h"
 #import "WorkspaceTestHooks.h"
 #include "kernel/init.h"
+#include "kernel/native_root.h"
 #include "kernel/calls.h"
 #include "kernel/task.h"
 #include "fs/dyndev.h"
@@ -700,6 +701,126 @@ static NSString *ISHGuestHaltDescription(int status) {
         return code == 0 ? @"init exited" : [NSString stringWithFormat:@"init exited with status %d", code];
     }
     return [NSString stringWithFormat:@"init was killed by signal %d", status & 0x7f];
+}
+
+// ---- native mode: the everyday account -------------------------------------
+//
+// A native-mode root starts with root alone. The first time it boots, the app
+// asks for the name of the account at ISHDefaultUserAccountUID -- the one "Open
+// Everything as Default User" switches Workspace terminals to -- or for Skip,
+// which leaves root only. Asked at boot, not at install, because a root can be
+// installed headlessly (manage-roots.sh); asked again at the next launch if it
+// was dismissed unanswered. Nothing waits for it: init and /etc/rc are already
+// running, and the Session Shell is root's whatever the answer.
+
+static BOOL ISHNativeRootGuestCall(void (^call)(void)) {
+    struct task *previous = NULL;
+    BOOL borrowed = [AppDelegate pushUsableInitTaskAsCurrent:&previous];
+    if (borrowed)
+        call();
+    [AppDelegate popCurrentTask:previous];
+    return borrowed;
+}
+
+static BOOL ISHNativeRootNeedsUserPrompt(void) {
+    __block BOOL needs = NO;
+    ISHNativeRootGuestCall(^{
+        needs = !native_root_has_default_user() && !native_root_default_user_skipped();
+    });
+    return needs;
+}
+
+static void ISHPresentNativeUserPrompt(int attempt, NSString *problem) {
+    if (ISHGuestHalted() || !ISHNativeRootNeedsUserPrompt())
+        return;
+    UIViewController *host = ISHActivePresentationViewController();
+    if (host == nil || host.presentedViewController != nil) {
+        // No scene yet, or something is up already (the resume picker, a boot
+        // alert). Wait for it rather than stack on top -- for a minute, and
+        // after that the next launch asks.
+        if (attempt < 120) {
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t) (0.5 * NSEC_PER_SEC)),
+                           dispatch_get_main_queue(), ^{
+                ISHPresentNativeUserPrompt(attempt + 1, problem);
+            });
+        }
+        return;
+    }
+    NSString *message =
+        @"This filesystem has no Linux distribution, only the programs built into iSH-AOK. "
+        @"It starts with a root account, which the Session Shell always uses.\n\n"
+        @"Choose a name for your everyday account. Workspace terminals open as this user "
+        @"when \"Open Everything as Default User\" is on. The password is optional; "
+        @"without one, sudo works only after you set one with passwd.";
+    if (problem.length != 0)
+        message = [NSString stringWithFormat:@"%@\n\n%@", problem, message];
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Create Your Account"
+                                                                   message:message
+                                                            preferredStyle:UIAlertControllerStyleAlert];
+    [alert addTextFieldWithConfigurationHandler:^(UITextField *field) {
+        field.placeholder = @"user name";
+        field.autocapitalizationType = UITextAutocapitalizationTypeNone;
+        field.autocorrectionType = UITextAutocorrectionTypeNo;
+        field.spellCheckingType = UITextSpellCheckingTypeNo;
+        field.textContentType = UITextContentTypeUsername;
+    }];
+    [alert addTextFieldWithConfigurationHandler:^(UITextField *field) {
+        field.placeholder = @"password (optional)";
+        field.secureTextEntry = YES;
+        field.textContentType = UITextContentTypeNewPassword;
+    }];
+    [alert addTextFieldWithConfigurationHandler:^(UITextField *field) {
+        field.placeholder = @"password again";
+        field.secureTextEntry = YES;
+        field.textContentType = UITextContentTypeNewPassword;
+    }];
+    __weak UIAlertController *weakAlert = alert;
+    [alert addAction:[UIAlertAction actionWithTitle:@"Skip (Root Only)"
+                                              style:UIAlertActionStyleCancel
+                                            handler:^(UIAlertAction *action) {
+        ISHNativeRootGuestCall(^{
+            native_root_skip_default_user();
+        });
+        [ISHDiagnosticsStore recordBreadcrumb:@"native.user.skipped"];
+    }]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Create"
+                                              style:UIAlertActionStyleDefault
+                                            handler:^(UIAlertAction *action) {
+        UIAlertController *shown = weakAlert;
+        NSString *name = [shown.textFields[0].text
+            stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet] ?: @"";
+        NSString *password = shown.textFields[1].text ?: @"";
+        NSString *again = shown.textFields[2].text ?: @"";
+        NSString *retry = nil;
+        if (![password isEqualToString:again]) {
+            retry = @"The two passwords were different.";
+        } else {
+            __block int err = 0;
+            __block BOOL valid = NO;
+            ISHNativeRootGuestCall(^{
+                valid = native_root_user_name_valid(name.UTF8String);
+                if (valid)
+                    err = native_root_add_user(name.UTF8String, password.UTF8String);
+            });
+            if (!valid) {
+                retry = [NSString stringWithFormat:
+                    @"\"%@\" can't be used. A name starts with a lower-case letter or _, "
+                    @"has at most 32 of a-z, 0-9, _ and -, and is not already taken.", name];
+            } else if (err < 0) {
+                retry = [NSString stringWithFormat:@"The account could not be created (%@).",
+                         [AppDelegate descriptionForISHErrno:err]];
+            } else {
+                [ISHDiagnosticsStore recordBreadcrumb:@"native.user.created"
+                                              details:@{@"password": @(password.length != 0)}];
+            }
+        }
+        if (retry != nil) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                ISHPresentNativeUserPrompt(0, retry);
+            });
+        }
+    }]];
+    [host presentViewController:alert animated:YES completion:nil];
 }
 
 static void ISHPresentGuestHaltedAlert(int status, int attempt) {
@@ -3659,6 +3780,11 @@ static TerminalViewController *CreateTerminalViewController(void) {
                                                                            @"errorDescription": ISHDescriptionForErrno(bootError)}];
         } else {
             [ISHDiagnosticsStore recordLaunchStage:@"boot.ensure.end"];
+            if ([Roots.instance isNativeRootNamed:Roots.instance.bootedRoot]) {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    ISHPresentNativeUserPrompt(0, nil);
+                });
+            }
         }
     });
     return bootError;
@@ -3796,6 +3922,19 @@ static TerminalViewController *CreateTerminalViewController(void) {
                                    @"guestABI": guestABI ?: @""});
     }
     [ISHDiagnosticsStore recordLaunchStage:@"boot.first_process.ready"];
+
+    // Native mode (docs/native_mode_plan.md): a root with no distribution in
+    // it. Its init is arm64 -- an image-less first task is i386 by default,
+    // and every native program is arm64 host code -- and its directories have
+    // to exist before the /dev, /run and /tmp repairs below assume them. The
+    // links into /AOK/native wait for /AOK, further down.
+    BOOL nativeRoot = [Roots.instance isNativeRootNamed:bootRoot];
+    if (nativeRoot) {
+        native_root_adopt_abi(current);
+        native_root_make_dirs();
+        [ISHDiagnosticsStore recordLaunchStage:@"boot.root.native"
+                                       details:@{@"root": bootRoot}];
+    }
 
     FsInitialize();
 
@@ -3973,6 +4112,19 @@ static TerminalViewController *CreateTerminalViewController(void) {
     EnsureSymlink("/dev/rtc", "/dev/rtc0");
 
     do_mount(&aokfs, NSBundle.mainBundle.resourcePath.UTF8String, "/AOK", "", MS_READONLY_);
+    // A native root is provisioned at every boot, now that /AOK/native is
+    // there to link to: the build's programs on PATH, the /etc files a root
+    // needs (only where missing), the rc scripts (kernel/native_root.c). And
+    // the host's time zone database at /usr/share/zoneinfo, before the zone
+    // is written to /etc/localtime (ProvisionGuestHostFiles, below).
+    if (nativeRoot) {
+        int nativeErr = native_root_provision();
+        int zoneErr = native_root_mount_zoneinfo();
+        [ISHDiagnosticsStore recordLaunchStage:@"boot.root.native.provisioned"
+                                       details:@{@"root": bootRoot,
+                                                 @"error": @(nativeErr),
+                                                 @"zoneinfoError": @(zoneErr)}];
+    }
     // Every /AOK mount's source is a host container path: long, mostly a UUID,
     // and useless to the guest, so each names itself instead -- the same thing
     // Linux's own virtual filesystems do, where proc reports "proc" and a tmpfs

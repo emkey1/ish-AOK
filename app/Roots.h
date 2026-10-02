@@ -61,6 +61,10 @@ FOUNDATION_EXPORT NSNotificationName const RootsCatalogDidChangeNotification;
 - (BOOL)bundledRootChoiceNeedsDownload:(NSDictionary<NSString *, NSString *> *)choice;
 - (NSURL *)rootUrl:(NSString *)name;
 - (nullable NSString *)guestABIForRootNamed:(NSString *)name;
+// A native-mode root (docs/native_mode_plan.md): no distribution, its /bin
+// and /usr/bin provisioned into /AOK/native by the kernel at boot.
+- (BOOL)isNativeRootNamed:(NSString *)name;
++ (BOOL)bundledRootChoiceIsNative:(NSDictionary<NSString *, NSString *> *)choice;
 // Archive files in the shared /AOK/persist/roots directory (the AppGroup
 // container's AOK/persist mount, common to all roots). Surfaced in the
 // Filesystems screen as the "Root Cached Filesystems" section.
