@@ -117,22 +117,32 @@ struct select_context {
     char *readfds;
     char *writefds;
     char *exceptfds;
+    // What was asked of each fd, since the sets above are cleared to take
+    // the answer.
+    char *want_read;
+    char *want_write;
+    char *want_except;
 };
 static int select_event_callback(void *context, int types, union poll_fd_info info) {
     struct select_context *c = context;
     // Linux's core_sys_select bumps the return count once per descriptor set
     // the fd is reported in, so an fd that is both readable and writable
     // contributes 2. Count the sets rather than the fd.
+    //
+    // And only in the sets the fd was passed in. POLL_ERR belongs to both
+    // SELECT_READ and SELECT_WRITE, so a pipe's write end whose reader had
+    // gone, asked about for writing only, came back in the read set too and
+    // counted twice.
     int count = 0;
-    if (types & SELECT_READ) {
+    if ((types & SELECT_READ) && bit_test(info.fd, c->want_read)) {
         bit_set(info.fd, c->readfds);
         count++;
     }
-    if (types & SELECT_WRITE) {
+    if ((types & SELECT_WRITE) && bit_test(info.fd, c->want_write)) {
         bit_set(info.fd, c->writefds);
         count++;
     }
-    if (types & SELECT_EX) {
+    if ((types & SELECT_EX) && bit_test(info.fd, c->want_except)) {
         bit_set(info.fd, c->exceptfds);
         count++;
     }
@@ -250,6 +260,12 @@ static dword_t sys_select_common(fd_t nfds, guest_addr_t readfds_addr, guest_add
     char exceptfds[fdset_size];
     if (user_read_or_zero(exceptfds_addr, exceptfds, fdset_size))
         return _EFAULT;
+    // What was asked, kept for select_event_callback: the sets themselves are
+    // cleared to take the answer.
+    char want_read[fdset_size], want_write[fdset_size], want_except[fdset_size];
+    memcpy(want_read, readfds, fdset_size);
+    memcpy(want_write, writefds, fdset_size);
+    memcpy(want_except, exceptfds, fdset_size);
     struct timespec timeout_ts = {};
     if (timeout_ts_ptr != NULL)
         timeout_ts = *timeout_ts_ptr;
@@ -341,7 +357,7 @@ static dword_t sys_select_common(fd_t nfds, guest_addr_t readfds_addr, guest_add
     memset(readfds, 0, fdset_size);
     memset(writefds, 0, fdset_size);
     memset(exceptfds, 0, fdset_size);
-    struct select_context context = {readfds, writefds, exceptfds};
+    struct select_context context = {readfds, writefds, exceptfds, want_read, want_write, want_except};
     int err = 0;
     TASK_MAY_BLOCK {
         err = poll_wait(poll, select_event_callback, &context, timeout_ts_ptr == NULL ? NULL : &timeout_ts);

@@ -16,6 +16,7 @@
 #include "kernel/errno.h"
 #include "kernel/fs.h"
 #include "fs/fd.h"
+#include "fs/host_fifo.h"
 #include "fs/poll.h"
 
 extern const struct fd_ops socket_fdops;
@@ -433,6 +434,15 @@ static int poll_sync_host_locked(struct poll *poll, struct fd *fd) {
         if (canonical == NULL)
             canonical = poll_fd;
         types |= poll_fd->types & ~(POLL_EDGETRIGGERED | POLL_ONESHOT);
+        // epoll reports EPOLLHUP and EPOLLERR whatever the mask, as poll()
+        // does (POLL_ALWAYS_LISTENING), so the host has to be watching for
+        // them: an epoll_ctl with events 0, or EPOLLIN alone on a pipe's
+        // write end, otherwise heard a reader leave only from the periodic
+        // rescan, a second late. HUP arms the hangup-only filters (EV_CLEAR,
+        // NOTE_LOWAT; see real_poll_update), which is where a widowed
+        // writer's POLL_ERR comes from too (rpe_events).
+        if (!poll_fd->disarmed)
+            types |= POLL_HUP;
         if (!(poll_fd->types & POLL_EDGETRIGGERED))
             all_edge_triggered = false;
     }
@@ -1711,9 +1721,20 @@ static int rpe_events(struct real_poll_event *rpe, struct poll_fd *pfd) {
     // asked sock_poll. Mapping EVFILT_READ's EOF to POLL_READ instead fixed
     // poll and broke epoll, which then woke with EPOLLIN alone (measured),
     // because that one event cannot know the write side is down too.
+    // A tracked named FIFO: kqueue knows its data but not its readers and
+    // writers, so whatever woke us, the answer is the fresh look's.
+    if (pfd != NULL && pfd->fd != NULL && host_fifo_tracked(pfd->fd) && pfd->fd->ops->poll != NULL)
+        return pfd->fd->ops->poll(pfd->fd);
     if (is_socket && (rpe->real.flags & EV_EOF) && pfd->fd->ops->poll != NULL &&
             (rpe->real.filter == EVFILT_READ || rpe->real.filter == EVFILT_WRITE))
         return pfd->fd->ops->poll(pfd->fd);
+    // A pipe or fifo's WRITE end, woken because every reader has gone:
+    // Linux's pipe_poll gives a writer EPOLLERR for that, never HUP (see
+    // realfs_poll, which answers the fresh look the same way). kqueue marks
+    // whichever filter it fired on with EV_EOF.
+    if (pfd != NULL && pfd->fd != NULL && S_ISFIFO(pfd->fd->type) &&
+            (pfd->fd->flags & O_ACCMODE_) == O_WRONLY_ && (rpe->real.flags & EV_EOF))
+        return rpe->real.filter == EVFILT_WRITE ? POLL_WRITE | POLL_ERR : POLL_ERR;
     if (rpe->real.filter == EVFILT_READ) {
         int events = 0;
         if (rpe->real.data > 0)

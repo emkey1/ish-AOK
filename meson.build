@@ -662,6 +662,7 @@ src = [
     'fs/sock.c',
     'fs/pipe.c',
     'fs/fifo.c',
+    'fs/host_fifo.c',
     'fs/sockrestart.c',
     'fs/lock.c',
 

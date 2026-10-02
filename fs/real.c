@@ -22,6 +22,7 @@
 #include "kernel/native.h"
 #include "fs/dev.h"
 #include "fs/real.h"
+#include "fs/host_fifo.h"
 #include "fs/mmap_cache.h"
 #include "fs/tty.h"
 #include "util/sync.h"
@@ -558,10 +559,15 @@ struct fd *realfs_open(struct mount *mount, const char *path, int flags, int mod
     struct fd *fd = fd_create(&realfs_fdops);
     fd->real_fd = fd_no;
     fd->dir = NULL;
+    // A FIFO is counted as a reader or writer (fs/host_fifo.c); fakefs opens
+    // through here too. One host fstat says whether it is one: nothing above
+    // knows yet (fakefs fills fd->stat only once the fd has its mount).
+    host_fifo_attach(fd, flags & O_ACCMODE_);
     return fd;
 }
 
 int realfs_close(struct fd *fd) {
+    host_fifo_detach(fd);
     if (fd->dir != NULL)
         closedir(fd->dir);
     int err = close(fd->real_fd);
@@ -1020,6 +1026,19 @@ int realfs_poll(struct fd *fd) {
     if (S_ISREG(fd->stat.mode) || S_ISDIR(fd->stat.mode))
         return POLLIN | POLLOUT;
 
+    // A named FIFO answers from AOK's own accounting, Darwin reporting
+    // neither end's departure (fs/host_fifo.h). Only "is there room" is the
+    // host's to say.
+    if (host_fifo_tracked(fd)) {
+        int room = 0;
+        if ((fd->host_fifo_accmode & O_ACCMODE_) != O_RDONLY_) {
+            struct pollfd w = {.fd = fd->real_fd, .events = POLLOUT};
+            if (poll(&w, 1, 0) > 0)
+                room = w.revents & POLLOUT;
+        }
+        return host_fifo_poll(fd, room);
+    }
+
     struct pollfd p = {.fd = fd->real_fd, .events = 0};
 #if defined(__APPLE__)
     // Anonymous pipes (adhoc fds) and named FIFOs (realfs-backed, e.g. a GNU
@@ -1052,9 +1071,26 @@ int realfs_poll(struct fd *fd) {
     // actual data: if POLLIN is set the readiness is real (e.g. a writer wrote
     // then closed, leaving unread bytes), and scrubbing it hid readable data
     // from poll/select -- a guest would see "not ready" with bytes waiting.
-    if (is_fifo && !fd->realfs_fifo_had_data &&
+    //
+    // A READ end only. On a write end POLLHUP is real: every reader has gone.
+    // Linux's pipe_poll says EPOLLERR for that (with EPOLLOUT while there is
+    // room) and never HUP for a writer, and scrubbing it here left such a
+    // pipe looking idle -- so `tail -f file | head -2` (GNU tail polls stdout
+    // for POLLERR to notice its reader leaving) followed forever.
+    bool write_end = (flags & O_ACCMODE) == O_WRONLY;
+    if (is_fifo && write_end && (p.revents & POLLHUP))
+        p.revents = (p.revents & ~POLLHUP) | POLLERR | POLLOUT;
+    if (is_fifo && !write_end && !fd->realfs_fifo_had_data &&
             (p.revents & POLLHUP) && !(p.revents & POLLIN))
         p.revents &= ~(POLLIN | POLLHUP | POLLOUT);
+    // And at end of file Darwin says POLLIN|POLLHUP, where Linux's pipe_poll
+    // says POLLIN only with bytes still to read (0x10 empty, 0x11 with data;
+    // measured on Linux 6.12).
+    if (is_fifo && !write_end && (p.revents & POLLHUP) && (p.revents & POLLIN)) {
+        int avail = 0;
+        if (ioctl(fd->real_fd, FIONREAD, &avail) == 0 && avail == 0)
+            p.revents &= ~POLLIN;
+    }
 
     // https://github.com/apple/darwin-xnu/blob/a449c6a3b8014d9406c2ddbdc81795da24aa7443/bsd/kern/sys_generic.c#L1856
     if (p.revents & POLLHUP)
@@ -1588,6 +1624,8 @@ static struct fd *realfs_reopen(struct fd *fd, int flags) {
     reopened->realfs_own_offset = true;
     reopened->fake_inode = fd->fake_inode;
     reopened->stat = fd->stat;
+    if (fd->host_fifo != NULL)
+        host_fifo_attach(reopened, flags & O_ACCMODE_);
     return reopened;
 }
 

@@ -493,6 +493,15 @@ struct fd {
     // and cleared under `lock`); see fd_pwrite_appends.
     enum fd_pwrite_append { FD_PWRITE_APPEND_DEFAULT, FD_PWRITE_APPEND_FORCE,
         FD_PWRITE_APPEND_NEVER } pwrite_append;
+    // realfs/fakefs: a host named FIFO's reader/writer accounting, which
+    // Darwin does not report (fs/host_fifo.c). NULL for anything else. At the
+    // end, for the same reason as mnt_id.
+    struct host_fifo *host_fifo;
+    // A FIFO read end: its FIFO's writer count (Linux's w_counter) at this
+    // open. Hung up only once that has moved. fs/host_fifo.c and fs/fifo.c.
+    unsigned fifo_version;
+    int host_fifo_accmode;        // O_ACCMODE_ bits this description counts as
+    struct list host_fifo_fds;    // on host_fifo->fds
 };
 
 // Whether a positioned write (an fd_ops pwrite) goes to end of file. Linux
