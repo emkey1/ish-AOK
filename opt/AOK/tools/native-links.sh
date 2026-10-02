@@ -391,6 +391,21 @@ if [ ! -x "$NATIVE" ]; then
     exit 1
 fi
 
+# A native-mode root (/AOK/docs/native-mode.md) has no distribution to put
+# these in front of: iSH-AOK links /usr/bin into /AOK/native itself, at every
+# boot, and keeps the links in step with the build. Linking again on top would
+# only make a second set to drift, and --remove would take away the root's own
+# commands. Builtins only, as everywhere in this script.
+if [ -r /etc/os-release ]; then
+    while IFS= read -r osline || [ -n "$osline" ]; do
+        if [ "$osline" = "ID=aok-native" ]; then
+            echo "$0: this is a native-mode root -- its commands are already the native"
+            echo "programs, linked by iSH-AOK at every boot. Nothing to do."
+            exit 0
+        fi
+    done < /etc/os-release
+fi
+
 # ---------------------------------------------------------------- login shell
 #
 # /etc/passwd is read and rewritten with shell builtins, for the same reason
