@@ -810,7 +810,7 @@ BOOL ISHLLMProviderRequiresAPIKey(void) {
 }
 
 NSString *ISHLLMMissingAPIKeyMessage(void) {
-    return @"This provider requires an API key. Add it in LLM Settings -> API Key. OpenRouter free, Groq, Gemini, and OpenAI all require API keys.";
+    return @"This provider requires an API key. Add it from the chat's model button: Edit, then API Key. OpenRouter free, Groq, Gemini, and OpenAI all require API keys.";
 }
 
 NSArray<NSString *> *ISHLLMModelIdentifiersFromResponseData(NSData *data) {
