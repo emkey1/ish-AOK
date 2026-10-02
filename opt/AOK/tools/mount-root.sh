@@ -51,7 +51,10 @@
 set -u
 
 ROOTS_DIR=${ROOTS_DIR:-/AOK/roots}
-BIND_DIRS="proc sys dev dev/pts run AOK/tools AOK/tests AOK/fakefs"
+# AOK/native too, so the native programs -- a native-mode login shell
+# (SHELL=/AOK/native/zsh), sudo, ssh -- work inside the root as outside it,
+# and AOK/docs for md.
+BIND_DIRS="proc sys dev dev/pts run AOK/native AOK/docs AOK/tools AOK/tests AOK/fakefs"
 
 log()  { printf '\n\033[1;36m==>\033[0m \033[1m%s\033[0m\n' "$*"; }
 note() { printf '    %s\n' "$*"; }
@@ -128,7 +131,7 @@ teardown_mounts() {
     root=$1
     log "Tearing down $root"
     # Reverse order: dev/pts before dev, etc.
-    for d in AOK/fakefs AOK/tests AOK/tools run dev/pts dev sys proc; do
+    for d in AOK/fakefs AOK/tests AOK/tools AOK/docs AOK/native run dev/pts dev sys proc; do
         umount_one_dir "$root/$d"
     done
 }
