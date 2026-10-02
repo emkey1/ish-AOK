@@ -2143,13 +2143,16 @@ static const char *host_vm_tag_name(unsigned tag) {
 }
 #endif
 
-// The GPU stack's own totals, where a build has it (weak: a build without
-// the renderer or MoltenVK leaves them NULL). They are what the graphics
+// The GPU stack's own totals, where a build has it. They are what the graphics
 // figure above has to be made of, so a gap between them says the memory is
-// somewhere none of the layers counts.
+// somewhere none of the layers counts. Only an ISH_VIRTGPU build (renderer and
+// MoltenVK both in) refers to them: ld64 will not leave a weak reference
+// unresolved, so a Mac build without the GPU failed to link on them.
+#ifdef ISH_VIRTGPU
 void mvkAOKMemStats(unsigned long long out[12]) __attribute__((weak));
 void vkr_aok_mem_stats(uint64_t *bytes, uint32_t *count) __attribute__((weak));
 void virtgpu_blob_stats(uint64_t *bytes, uint64_t *mappable, uint32_t *count) __attribute__((weak));
+#endif
 
 static int proc_ish_show_host_vm(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
 #if defined(__APPLE__)
@@ -2196,6 +2199,7 @@ static int proc_ish_show_host_vm(struct proc_entry *UNUSED(entry), struct proc_d
                 (unsigned long long) ((uint64_t) vmi.ledger_tag_graphics_footprint >> 20),
                 (unsigned long long) ((uint64_t) vmi.ledger_tag_graphics_footprint_compressed >> 20),
                 (unsigned long long) ((uint64_t) vmi.ledger_tag_neural_footprint >> 20));
+#ifdef ISH_VIRTGPU
     if (virtgpu_blob_stats != NULL) {
         uint64_t bytes, mappable;
         uint32_t count;
@@ -2220,6 +2224,7 @@ static int proc_ish_show_host_vm(struct proc_entry *UNUSED(entry), struct proc_d
         proc_printf(buf, "  MoltenVK: temp buffers private %llu, %llu MB; shared %llu, %llu MB\n",
                     m[9], m[8] >> 20, m[11], m[10] >> 20);
     }
+#endif
     proc_printf(buf, "%-38s %9s %9s %9s %9s\n", "tag", "dirty MB", "compr MB", "resid MB", "virt MB");
     bool shown[256] = {false};
     for (;;) {
