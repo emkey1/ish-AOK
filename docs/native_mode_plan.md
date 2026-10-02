@@ -195,53 +195,6 @@ Record each in `docs/CREDITS-aarch64.md` / the licences screen. None is GPL.
   through `ckpt_dump`, dash restarts, and `init` needs the restore rule in
   step 4a.
 
-### 4b. The first-start user prompt and "Open Everything as Default User"
-
-**The prompt.** The first time a native root boots, the app asks for the name
-of the everyday account. It asks at boot rather than at import, because a root
-can also be installed headlessly with `manage-roots.sh`. "First time" means
-`/etc/passwd` has no uid 1000 and there is no `/etc/aok-native-user-skipped`
-marker.
-
-- The sheet has a name field, validated as `[a-z_][a-z0-9_-]{0,31}` and not
-  an existing account, and an optional password with confirmation. It offers
-  **Create** and **Skip (root only)**.
-- **Create** calls `native_root_add_user(name, hash)`. That writes the
-  `/etc/passwd`, `/etc/group` and `/etc/shadow` lines (uid/gid 1000, groups
-  `users` and `sudo`, shell `/AOK/native/zsh`), creates `/home/<name>` 0700
-  owned by the user, and seeds it with `.zshrc` from `/etc/skel` if present. A
-  password is hashed `$6$` with kernel/sha_crypt.c. With no password the shadow
-  field is `!`: the account still opens through `login -f`, but `sudo` needs a
-  password set first (`passwd` from a root Session Shell).
-- **Skip** writes the marker. The root then has root only, exactly like a
-  distro root with no uid 1000, so the setting below simply has no one to
-  switch to.
-- Init and `/etc/rc` boot while the sheet is up. Only the terminal sessions
-  wait for it, so the sheet never holds the boot, and a slow answer cannot trip
-  the launch watchdog.
-- Headless: `manage-roots.sh install aoknative --user NAME`, carried to the
-  boot as a one-shot plist field, and `ISH_NATIVE_USER` in the CLI.
-
-**"Open Everything as Default User"** (`shouldLoginAsDefaultUser`, key
-"Login As Default User") needs no native-specific code once the account
-exists and `/bin/login` is SmallCLUE's:
-
-- Workspace terminals: `ISHCommandWithDefaultUserSubstitution`
-  (TerminalViewController.m:92) rewrites `/bin/login -f root` to
-  `/bin/login -f <name>`, using `+defaultUserAccountName`, which reads
-  `/etc/passwd`. Session Shell windows stay root (`alwaysLoginAsRoot`), as
-  they do on a distro root.
-- The other consumers already key off the same lookup and `/bin/su`, which
-  step 2 links to native su: AppDelegate.m:2899/2906, Display
-  (DisplayViewController.m:112), LLM tools (LLMChatTools.m:146), and
-  `run_guest_command_capture`'s `/bin/su - user`.
-- What must hold for this to work: SmallCLUE `login -f <name>`, run by root,
-  sets uid/gid/supplementary groups, `HOME`, `SHELL`, `USER`, `LOGNAME` and the
-  cwd from `/etc/passwd`, then runs the shell as a login shell (`-zsh`). Since
-  a native exec is spawn-then-wait, `login` stays as the session leader and the
-  shell must become the terminal's foreground process group. Ctrl-C, Ctrl-Z
-  and `fg` under `login` are spike items (step 1).
-
 ### 4a. `init` and `/etc/rc` (SmallCLUE)
 
 SmallCLUE already has most of this (deps/smallclue/src/core.c:22079). `init`
@@ -293,6 +246,53 @@ native dash.
 Check that the app learns when a terminal session ends while `init` reaps it:
 sessions are children of pid 1 (`become_new_init_child`), the same as under a
 distro's init, so this should already hold. Confirm it in the spike.
+
+### 4b. The first-start user prompt and "Open Everything as Default User"
+
+**The prompt.** The first time a native root boots, the app asks for the name
+of the everyday account. It asks at boot rather than at import, because a root
+can also be installed headlessly with `manage-roots.sh`. "First time" means
+`/etc/passwd` has no uid 1000 and there is no `/etc/aok-native-user-skipped`
+marker.
+
+- The sheet has a name field, validated as `[a-z_][a-z0-9_-]{0,31}` and not
+  an existing account, and an optional password with confirmation. It offers
+  **Create** and **Skip (root only)**.
+- **Create** calls `native_root_add_user(name, hash)`. That writes the
+  `/etc/passwd`, `/etc/group` and `/etc/shadow` lines (uid/gid 1000, groups
+  `users` and `sudo`, shell `/AOK/native/zsh`), creates `/home/<name>` 0700
+  owned by the user, and seeds it with `.zshrc` from `/etc/skel` if present. A
+  password is hashed `$6$` with kernel/sha_crypt.c. With no password the shadow
+  field is `!`: the account still opens through `login -f`, but `sudo` needs a
+  password set first (`passwd` from a root Session Shell).
+- **Skip** writes the marker. The root then has root only, exactly like a
+  distro root with no uid 1000, so the setting below simply has no one to
+  switch to.
+- Init and `/etc/rc` boot while the sheet is up. Only the terminal sessions
+  wait for it, so the sheet never holds the boot, and a slow answer cannot trip
+  the launch watchdog.
+- Headless: `manage-roots.sh install aoknative --user NAME`, carried to the
+  boot as a one-shot plist field, and `ISH_NATIVE_USER` in the CLI.
+
+**"Open Everything as Default User"** (`shouldLoginAsDefaultUser`, key
+"Login As Default User") needs no native-specific code once the account
+exists and `/bin/login` is SmallCLUE's:
+
+- Workspace terminals: `ISHCommandWithDefaultUserSubstitution`
+  (TerminalViewController.m:92) rewrites `/bin/login -f root` to
+  `/bin/login -f <name>`, using `+defaultUserAccountName`, which reads
+  `/etc/passwd`. Session Shell windows stay root (`alwaysLoginAsRoot`), as
+  they do on a distro root.
+- The other consumers already key off the same lookup and `/bin/su`, which
+  step 2 links to native su: AppDelegate.m:2899/2906, Display
+  (DisplayViewController.m:112), LLM tools (LLMChatTools.m:146), and
+  `run_guest_command_capture`'s `/bin/su - user`.
+- What must hold for this to work: SmallCLUE `login -f <name>`, run by root,
+  sets uid/gid/supplementary groups, `HOME`, `SHELL`, `USER`, `LOGNAME` and the
+  cwd from `/etc/passwd`, then runs the shell as a login shell (`-zsh`). Since
+  a native exec is spawn-then-wait, `login` stays as the session leader and the
+  shell must become the terminal's foreground process group. Ctrl-C, Ctrl-Z
+  and `fg` under `login` are spike items (step 1).
 
 ### 5. Applet gaps, all for 558 (SmallCLUE)
 
