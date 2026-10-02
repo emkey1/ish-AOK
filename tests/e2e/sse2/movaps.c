@@ -4,9 +4,9 @@
 #define printout() printf("%05.2f %05.2f %05.2f %05.2f\n", out[0], out[1], out[2], out[3])
 
 void main(void) {
-	float out[4] = { 0, 0, 0, 0 };
-	float buf1234[4] = { 11.11, 22.22, 33.33, 44.44 };
-	float buf5678[4] = { 55.55, 66.66, 77.77, 88.88 };
+	float out[4] __attribute__((aligned(16))) = { 0, 0, 0, 0 };
+	float buf1234[4] __attribute__((aligned(16))) = { 11.11, 22.22, 33.33, 44.44 };
+	float buf5678[4] __attribute__((aligned(16))) = { 55.55, 66.66, 77.77, 88.88 };
     float fa = 16.12;
 
 	// xmm1 Initially 1234

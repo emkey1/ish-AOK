@@ -6,9 +6,9 @@
 #define printout() printf("%05lld %05lld\n", (long long) out[0], (long long) out[1])
 
 void main(void) {
-    int64_t out[2] = { 0, 0 };
-    int64_t buf1234[2] = {  1234,  5678 };
-    int64_t buf1111[2] = { 11111, 11111 };
+    int64_t out[2] __attribute__((aligned(16))) = { 0, 0 };
+    int64_t buf1234[2] __attribute__((aligned(16))) = {  1234,  5678 };
+    int64_t buf1111[2] __attribute__((aligned(16))) = { 11111, 11111 };
 
     // xmm1 Initially 1234
     __m128i xmm1 = _mm_load_si128((__m128i*) buf1234);
