@@ -948,6 +948,13 @@ smallclue_c_args = [
     # whether the HOST is Linux -- which it never is on an app build -- and
     # ask whether the capability is present, which is what they meant.
     '-DSMALLCLUE_HAVE_SHADOW_AUTH',
+    # login's last resort when an account's shell does not exist, ahead of
+    # /bin/sh -- which a native-mode root has only as a link into /AOK/native,
+    # and which a user can break. The terminal's root prompt must survive a
+    # broken /etc/passwd (docs/native_mode_plan.md 4b), so it ends in a shell
+    # that is part of the app.
+    have_zsh ? '-DSMALLCLUE_FALLBACK_SHELL="/AOK/native/zsh"'
+             : '-DSMALLCLUE_FALLBACK_SHELL="/AOK/native/sh"',
     # `md` with no arguments lists the documents in this directory, and
     # `md native-programs` resolves a bare name against it. The default is
     # $HOME/Docs, which an AOK guest has no reason to have -- so md looked
