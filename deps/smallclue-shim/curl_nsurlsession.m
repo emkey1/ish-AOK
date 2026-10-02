@@ -61,6 +61,20 @@ struct aok_curl_handle {
     long ssl_verifypeer;
     curl_write_callback writefn;
     void *writedata;
+    // -I, -i, -D, -f.
+    long nobody;
+    long header;            // headers into the WRITE stream too (curl -i)
+    long failonerror;
+    curl_write_callback headerfn;
+    void *headerdata;
+    // The last transfer, for curl_easy_getinfo.
+    long info_code;
+    long info_redirects;
+    long info_http_version;
+    double info_total_time;
+    long long info_size;
+    char *info_url;
+    char *info_content_type;
 };
 
 // Shared between the calling thread and NSURLSession's delegate queue. Plain C
@@ -85,6 +99,15 @@ struct aok_curl_xfer {
     // What the framework actually said, for curl_easy_strerror to hand back.
     // A CURLcode is seventeen buckets; an NSError names the problem.
     char detail[256];
+    // The response, once it arrives (didReceiveResponse), for the header
+    // callback and curl_easy_getinfo. All malloc'd C, freed with x.
+    long failonerror;
+    int have_response;
+    long code;
+    char *headers;          // "Name: value\r\n"..., without the status line
+    char *url;
+    char *content_type;
+    char protocol[16];      // "h2", "http/1.1", ... from the task metrics
 };
 
 // ------------------------------------------------------------------ helpers
@@ -142,9 +165,59 @@ static int aok_xfer_append(struct aok_curl_xfer *x, const void *bytes, size_t n)
         return;
     self.xfer = NULL;
     free(x->buf);
+    free(x->headers);
+    free(x->url);
+    free(x->content_type);
     pthread_cond_destroy(&x->cv);
     pthread_mutex_destroy(&x->mu);
     free(x);
+}
+
+- (void)URLSession:(NSURLSession *)session
+          dataTask:(NSURLSessionDataTask *)dataTask
+didReceiveResponse:(NSURLResponse *)response
+ completionHandler:(void (^)(NSURLSessionResponseDisposition))completionHandler {
+    struct aok_curl_xfer *x = self.xfer;
+    NSHTTPURLResponse *http = [response isKindOfClass:NSHTTPURLResponse.class]
+        ? (NSHTTPURLResponse *) response : nil;
+    NSMutableString *block = [NSMutableString string];
+    for (NSString *name in http.allHeaderFields) {
+        [block appendFormat:@"%@: %@\r\n", name, http.allHeaderFields[name]];
+    }
+    const char *headers = block.UTF8String;
+    const char *url = response.URL.absoluteString.UTF8String;
+    const char *type = http ? [http valueForHTTPHeaderField:@"Content-Type"].UTF8String : NULL;
+    pthread_mutex_lock(&x->mu);
+    x->have_response = 1;
+    x->code = http ? (long) http.statusCode : 0;
+    x->headers = headers ? strdup(headers) : NULL;
+    x->url = url ? strdup(url) : NULL;
+    x->content_type = type ? strdup(type) : NULL;
+    BOOL refuse = x->failonerror && x->code >= 400;
+    if (refuse) {
+        // curl -f: an error status is a failed transfer, and its body is not
+        // output. Cancelled here rather than drained.
+        x->result = CURLE_HTTP_RETURNED_ERROR;
+        snprintf(x->detail, sizeof(x->detail),
+                 "The requested URL returned error: %ld", x->code);
+    }
+    pthread_cond_signal(&x->cv);
+    pthread_mutex_unlock(&x->mu);
+    completionHandler(refuse ? NSURLSessionResponseCancel : NSURLSessionResponseAllow);
+}
+
+- (void)URLSession:(NSURLSession *)session
+              task:(NSURLSessionTask *)task
+didFinishCollectingMetrics:(NSURLSessionTaskMetrics *)metrics {
+    // The protocol a response came over, which NSHTTPURLResponse does not
+    // say: "h2" or "http/1.1". Collected before didCompleteWithError, so a
+    // HEAD request (curl -I) always has it; a body may begin before it.
+    NSString *proto = metrics.transactionMetrics.lastObject.networkProtocolName;
+    struct aok_curl_xfer *x = self.xfer;
+    pthread_mutex_lock(&x->mu);
+    if (proto.UTF8String)
+        snprintf(x->protocol, sizeof(x->protocol), "%s", proto.UTF8String);
+    pthread_mutex_unlock(&x->mu);
 }
 
 - (void)URLSession:(NSURLSession *)session
@@ -317,6 +390,11 @@ CURLcode curl_easy_setopt(CURL *handle, CURLoption option, ...) {
         case CURLOPT_LOW_SPEED_LIMIT: h->low_speed_limit = va_arg(ap, long); break;
         case CURLOPT_LOW_SPEED_TIME:  h->low_speed_time = va_arg(ap, long); break;
         case CURLOPT_SSL_VERIFYPEER:  h->ssl_verifypeer = va_arg(ap, long); break;
+        case CURLOPT_NOBODY:          h->nobody = va_arg(ap, long); break;
+        case CURLOPT_HEADER:          h->header = va_arg(ap, long); break;
+        case CURLOPT_FAILONERROR:     h->failonerror = va_arg(ap, long); break;
+        case CURLOPT_HEADERFUNCTION:  h->headerfn = va_arg(ap, curl_write_callback); break;
+        case CURLOPT_HEADERDATA:      h->headerdata = va_arg(ap, void *); break;
         case CURLOPT_POSTFIELDS: {
             const void *data = va_arg(ap, const void *);
             free(h->postfields);
@@ -384,7 +462,70 @@ void curl_easy_cleanup(CURL *handle) {
     free(h->userpwd);
     free(h->accept_encoding);
     free(h->postfields);
+    free(h->info_url);
+    free(h->info_content_type);
     free(h);
+}
+
+CURLcode curl_easy_getinfo(CURL *handle, CURLINFO info, ...) {
+    struct aok_curl_handle *h = handle;
+    if (!h)
+        return CURLE_FAILED_INIT;
+    va_list ap;
+    va_start(ap, info);
+    CURLcode rc = CURLE_OK;
+    switch (info) {
+        case CURLINFO_RESPONSE_CODE:   *va_arg(ap, long *) = h->info_code; break;
+        case CURLINFO_REDIRECT_COUNT:  *va_arg(ap, long *) = h->info_redirects; break;
+        case CURLINFO_HTTP_VERSION:    *va_arg(ap, long *) = h->info_http_version; break;
+        case CURLINFO_TOTAL_TIME:      *va_arg(ap, double *) = h->info_total_time; break;
+        case CURLINFO_SIZE_DOWNLOAD_T: *va_arg(ap, curl_off_t *) = h->info_size; break;
+        case CURLINFO_EFFECTIVE_URL:   *va_arg(ap, char **) = h->info_url ? h->info_url : h->url; break;
+        case CURLINFO_CONTENT_TYPE:    *va_arg(ap, char **) = h->info_content_type; break;
+        default:                       rc = CURLE_UNKNOWN_OPTION; break;
+    }
+    va_end(ap);
+    return rc;
+}
+
+// The status line curl prints for a response: "HTTP/2 200 " for h2 and h3 --
+// with the space, and no reason -- and "HTTP/1.1 200 OK" for HTTP/1.1.
+static const char *aok_curl_reason(long code) {
+    switch (code) {
+        case 200: return "OK"; case 201: return "Created"; case 202: return "Accepted";
+        case 204: return "No Content"; case 206: return "Partial Content";
+        case 301: return "Moved Permanently"; case 302: return "Found";
+        case 303: return "See Other"; case 304: return "Not Modified";
+        case 307: return "Temporary Redirect"; case 308: return "Permanent Redirect";
+        case 400: return "Bad Request"; case 401: return "Unauthorized";
+        case 403: return "Forbidden"; case 404: return "Not Found";
+        case 405: return "Method Not Allowed"; case 409: return "Conflict";
+        case 429: return "Too Many Requests"; case 500: return "Internal Server Error";
+        case 502: return "Bad Gateway"; case 503: return "Service Unavailable";
+        case 504: return "Gateway Timeout";
+    }
+    return "";
+}
+
+static long aok_curl_http_version(const char *protocol) {
+    if (strcmp(protocol, "h2") == 0) return 3;
+    if (strcmp(protocol, "h3") == 0) return 30;
+    if (strcmp(protocol, "http/1.0") == 0) return 1;
+    return 2;
+}
+
+// The response's header block, status line first, as curl hands it to its
+// header callback (and with -i to the output). NULL until there is one.
+static char *aok_curl_header_block(struct aok_curl_xfer *x) {
+    long version = aok_curl_http_version(x->protocol);
+    const char *ver = version == 3 ? "2" : version == 30 ? "3" : version == 1 ? "1.0" : "1.1";
+    const char *reason = version >= 3 ? "" : aok_curl_reason(x->code);
+    size_t n = strlen(x->headers ? x->headers : "") + 64;
+    char *block = malloc(n);
+    if (block)
+        snprintf(block, n, "HTTP/%s %ld %s\r\n%s\r\n", ver, x->code,
+                 reason, x->headers ? x->headers : "");
+    return block;
 }
 
 // Set by curl_easy_perform from the transfer it just finished, and preferred
@@ -538,6 +679,20 @@ CURLcode curl_easy_perform(CURL *handle) {
         x->followlocation = h->followlocation;
         x->maxredirs = h->maxredirs;
         x->ssl_verifypeer = h->ssl_verifypeer;
+        x->failonerror = h->failonerror;
+        if (h->nobody)
+            req.HTTPMethod = @"HEAD";
+        h->info_code = 0;
+        h->info_redirects = 0;
+        h->info_size = 0;
+        h->info_http_version = 0;
+        free(h->info_url);
+        h->info_url = NULL;
+        free(h->info_content_type);
+        h->info_content_type = NULL;
+        struct timespec started;
+        clock_gettime(CLOCK_MONOTONIC, &started);
+        int headers_sent = 0;
 
         NSURLSessionConfiguration *config =
             [NSURLSessionConfiguration ephemeralSessionConfiguration];
@@ -570,7 +725,13 @@ CURLcode curl_easy_perform(CURL *handle) {
             int finished;
 
             pthread_mutex_lock(&x->mu);
-            if (x->len == 0 && !x->done) {
+            // Headers going out (-i, -D) wait for the protocol, which only
+            // the task metrics name and which arrive at the end: the body is
+            // held back until then -- or until the buffer is full, when the
+            // version is guessed rather than the transfer stalled.
+            int hold = (h->headerfn || h->header) && !headers_sent &&
+                       !x->protocol[0] && !x->done && !x->suspended;
+            if ((x->len == 0 || hold) && !x->done) {
                 struct timespec deadline;
                 clock_gettime(CLOCK_REALTIME, &deadline);
                 deadline.tv_nsec += AOK_CURL_WAIT_SLICE_NS;
@@ -580,7 +741,9 @@ CURLcode curl_easy_perform(CURL *handle) {
                 }
                 pthread_cond_timedwait(&x->cv, &x->mu, &deadline);
             }
-            if (x->len > 0) {
+            hold = (h->headerfn || h->header) && !headers_sent &&
+                   !x->protocol[0] && !x->done && !x->suspended;
+            if (x->len > 0 && !hold) {
                 chunk = x->buf;
                 chunklen = x->len;
                 x->buf = NULL;
@@ -592,9 +755,25 @@ CURLcode curl_easy_perform(CURL *handle) {
                 }
             }
             finished = x->done;
+            // The header block goes out before the first byte of body, or at
+            // the end when there is none (HEAD, -f refusing an error status).
+            char *header_block = NULL;
+            if (!headers_sent && x->have_response && (chunk || finished)) {
+                headers_sent = 1;
+                header_block = aok_curl_header_block(x);
+            }
             pthread_mutex_unlock(&x->mu);
 
+            if (header_block) {
+                size_t hlen = strlen(header_block);
+                if (h->headerfn)
+                    h->headerfn(header_block, 1, hlen, h->headerdata);
+                if (h->header && h->writefn)
+                    h->writefn(header_block, 1, hlen, h->writedata);
+                free(header_block);
+            }
             if (chunk) {
+                h->info_size += (long long) chunklen;
                 size_t wrote = chunklen;
                 if (h->writefn)
                     wrote = h->writefn((char *) chunk, 1, chunklen, h->writedata);
@@ -624,11 +803,19 @@ CURLcode curl_easy_perform(CURL *handle) {
             native_checkpoint();
         }
 
-        if (result != CURLE_OK) {
-            pthread_mutex_lock(&x->mu);
+        pthread_mutex_lock(&x->mu);
+        if (result != CURLE_OK)
             snprintf(aok_curl_last_detail, sizeof(aok_curl_last_detail), "%s", x->detail);
-            pthread_mutex_unlock(&x->mu);
-        }
+        h->info_code = x->code;
+        h->info_redirects = x->redirects;
+        h->info_http_version = x->have_response ? aok_curl_http_version(x->protocol) : 0;
+        h->info_url = x->url ? strdup(x->url) : NULL;
+        h->info_content_type = x->content_type ? strdup(x->content_type) : NULL;
+        pthread_mutex_unlock(&x->mu);
+        struct timespec ended;
+        clock_gettime(CLOCK_MONOTONIC, &ended);
+        h->info_total_time = (double) (ended.tv_sec - started.tv_sec) +
+                             (double) (ended.tv_nsec - started.tv_nsec) / 1e9;
         // No frees here: the delegate owns `x` now, and releasing the last
         // reference to it -- ours when this scope ends, or the session's when
         // invalidation completes, whichever is later -- is what frees it.

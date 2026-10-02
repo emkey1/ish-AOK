@@ -36,7 +36,8 @@
 // is host-side is the transport, deliberately, and it is the reason
 // tools/check-native-libc.py does not scan this archive -- see the note there.
 //
-// SCOPE. The seven functions and twenty-five options core.c uses. Not a libcurl
+// SCOPE. The eight functions, twenty-nine options and seven CURLINFOs core.c
+// uses. Not a libcurl
 // compatibility layer, and it must not grow into one: a consumer wanting FTP,
 // cookies, multipart or the multi interface should get a real library rather
 // than an ever-widening imitation of one. Anything missing is a compile error
@@ -107,7 +108,27 @@ typedef enum {
     CURLOPT_TCP_KEEPALIVE = 213,
     CURLOPT_PROTOCOLS_STR = 10318,
     CURLOPT_REDIR_PROTOCOLS_STR = 10319,
+    // curl's -I, -i, -D and -f (2026-10-02, native mode).
+    CURLOPT_HEADER = 42,
+    CURLOPT_NOBODY = 44,
+    CURLOPT_FAILONERROR = 45,
+    CURLOPT_HEADERDATA = 10029,
+    CURLOPT_HEADERFUNCTION = 20079,
 } CURLoption;
+
+// What a finished transfer can be asked: curl's -w variables. Numbered as
+// libcurl numbers them (type in the high bits), so the varargs type is the
+// one libcurl's own documentation gives for each.
+typedef long long curl_off_t;
+typedef enum {
+    CURLINFO_EFFECTIVE_URL = 0x100000 + 1,    // char **
+    CURLINFO_RESPONSE_CODE = 0x200000 + 2,    // long *
+    CURLINFO_TOTAL_TIME = 0x300000 + 3,       // double *
+    CURLINFO_CONTENT_TYPE = 0x100000 + 18,    // char **
+    CURLINFO_REDIRECT_COUNT = 0x200000 + 20,  // long *
+    CURLINFO_HTTP_VERSION = 0x200000 + 46,    // long *: 2 = 1.1, 3 = 2, 30 = 3
+    CURLINFO_SIZE_DOWNLOAD_T = 0x600000 + 8,  // curl_off_t *
+} CURLINFO;
 
 #define CURLPROTO_HTTP  (1 << 0)
 #define CURLPROTO_HTTPS (1 << 1)
@@ -126,6 +147,7 @@ typedef size_t (*curl_write_callback)(char *buffer, size_t size, size_t nitems,
 CURL *curl_easy_init(void);
 CURLcode curl_easy_setopt(CURL *handle, CURLoption option, ...);
 CURLcode curl_easy_perform(CURL *handle);
+CURLcode curl_easy_getinfo(CURL *handle, CURLINFO info, ...);
 void curl_easy_cleanup(CURL *handle);
 const char *curl_easy_strerror(CURLcode code);
 
