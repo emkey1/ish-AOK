@@ -17,6 +17,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <grp.h>
 #include <pwd.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -1239,6 +1240,36 @@ static void print_bytes(const char *label, const char *s, size_t n) {
     printf("\"\n");
 }
 
+// The table was recorded as root, so ls -l/-n name root and 0. Run as anyone
+// else (a device leg runs as uid 1000) the fixture belongs to the caller, and
+// GNU prints that owner instead: rewrite the expectation to data.txt's owner.
+static const char *owner_expect(const char *expect, size_t *len) {
+    static char buf[4096];
+    struct stat st;
+    if (stat("data.txt", &st) != 0 || (st.st_uid == 0 && st.st_gid == 0))
+        return expect;
+    struct passwd *pw = getpwuid(st.st_uid);
+    struct group *gr = getgrgid(st.st_gid);
+    char names[256], ids[64];
+    snprintf(names, sizeof(names), " %s %s ", pw ? pw->pw_name : "?", gr ? gr->gr_name : "?");
+    snprintf(ids, sizeof(ids), " %u %u ", (unsigned) st.st_uid, (unsigned) st.st_gid);
+    size_t o = 0;
+    for (const char *p = expect; *p && o < sizeof(buf) - 256;) {
+        if (strncmp(p, " root root ", 11) == 0) {
+            o += (size_t) snprintf(buf + o, sizeof(buf) - o, "%s", names);
+            p += 11;
+        } else if (strncmp(p, " 1 0 0 ", 7) == 0) {
+            o += (size_t) snprintf(buf + o, sizeof(buf) - o, " 1%s", ids);
+            p += 7;
+        } else {
+            buf[o++] = *p++;
+        }
+    }
+    buf[o] = 0;
+    *len = o;
+    return buf;
+}
+
 int main(int argc, char **argv) {
     test_init(argc, argv);
     if (access(SMALLCLUE, X_OK) != 0) {
@@ -1268,7 +1299,10 @@ int main(int argc, char **argv) {
         int status = run_case(c, out, sizeof(out), &len);
         char *after = tree();
         const char *want_tree = c->tree ? c->tree : fixture_tree;
-        int ok_out = len == c->expect_len && memcmp(out, c->expect, len) == 0;
+        size_t expect_len = c->expect_len;
+        const char *expect = strcmp(c->applet, "ls") == 0
+            ? owner_expect(c->expect, &expect_len) : c->expect;
+        int ok_out = len == expect_len && memcmp(out, expect, len) == 0;
         int ok_status = status == c->expect_status;
         int ok_tree = strcmp(after, want_tree) == 0;
         if (ok_out && ok_status && ok_tree) {
@@ -1276,7 +1310,7 @@ int main(int argc, char **argv) {
         } else {
             printf("FAIL %s %s\n", c->applet, c->args);
             if (!ok_out) {
-                print_bytes("want", c->expect, c->expect_len);
+                print_bytes("want", expect, expect_len);
                 print_bytes("got ", out, len);
             }
             if (!ok_status) printf("  status want %d got %d\n", c->expect_status, status);
