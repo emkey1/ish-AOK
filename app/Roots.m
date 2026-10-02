@@ -2025,7 +2025,9 @@ static NSString *ValidateInstalledRoot(NSString *name, NSString **abiOut) {
     NSString *abi = [roots guestABIForRootNamed:name];
     NSURL *data = [[roots rootUrl:name] URLByAppendingPathComponent:@"data"];
     NSFileManager *fm = NSFileManager.defaultManager;
-    BOOL executable = NO;
+    // A native root is empty until its first boot provisions it
+    // (kernel/native_root.c), so there is nothing to probe for yet.
+    BOOL executable = [roots isNativeRootNamed:name];
     for (NSString *probe in @[@"bin/sh", @"bin/busybox", @"sbin/init", @"usr/bin/sh"]) {
         if ([fm fileExistsAtPath:[data URLByAppendingPathComponent:probe].path]) {
             executable = YES;
