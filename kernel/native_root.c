@@ -563,7 +563,13 @@ int native_root_mount_zoneinfo(void) {
     if (realpath("/usr/share/zoneinfo", host) == NULL)
         return _ENOENT;
     ensure_dir("/usr/share/zoneinfo", 0755);
-    return do_mount(&realfs, host, "/usr/share/zoneinfo", "", MS_READONLY_);
+    int err = do_mount(&realfs, host, "/usr/share/zoneinfo", "", MS_READONLY_);
+    // Named, like every /AOK mount, rather than by the host path behind it
+    // (/private/var/db/timezone/tz/<version>/zoneinfo), which is long and
+    // means nothing to the guest. Display only.
+    if (err == 0)
+        mount_set_display_source("/usr/share/zoneinfo", "zoneinfo");
+    return err;
 }
 
 // ------------------------------------------------------------- the account

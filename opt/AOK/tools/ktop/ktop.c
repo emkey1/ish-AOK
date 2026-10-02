@@ -323,7 +323,7 @@ static const char *detect_arch(pid_t pid, bool kernel_thread) {
     if (arch_table_lookup(pid, &listed)) {
         if (listed != NULL)
             return listed;
-        return kernel_thread ? guest_arch() : arch_intern("?");
+        return kernel_thread ? native_label(host_arch()) : arch_intern("?");
     }
 
     char path[64];
@@ -353,13 +353,16 @@ static const char *detect_arch(pid_t pid, bool kernel_thread) {
     }
 
     // Nothing ELF-shaped behind the exe link. A native program is the one case
-    // with a real answer; a kernel thread has no exe at all and borrows the
-    // kernel's; anything else -- an exe outside this chroot, a process that
+    // with a real answer; a kernel thread has no exe at all, and is iSH-AOK's
+    // own kernel code -- host code, running natively, whichever root is
+    // booted, so it is labelled the way a native program is (it used to take
+    // the guest's architecture, and kthreadd alone had no "(n)" in a native
+    // root); anything else -- an exe outside this chroot, a process that
     // exited mid-scan -- is genuinely unknown.
     if (exe_is_native(pid))
         return native_label(host_arch());
     if (fd < 0 && kernel_thread)
-        return guest_arch();
+        return native_label(host_arch());
     return arch_intern("?");
 }
 
