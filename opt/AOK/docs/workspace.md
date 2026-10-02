@@ -270,8 +270,10 @@ Wayland window opens.
   when the drivers are missing. Wayfire also refuses to run as root, as it
   does on any Linux, so it needs **Open Everything as Default User** turned on
   in Settings. A session without the GPU, or a root one, starts labwc instead
-  and says why. Devuan 6 and Arch carry it; Alpine does not, and
-  neither do riscv64 and i386 roots, which have no GPU driver.
+  and says why. It runs on Devuan 6. Arch packages it, but Arch's Mesa is
+  too new for OpenGL ES on the GPU (see [The GPU](#the-gpu)), so
+  `setup-wayfire.sh` refuses there; Alpine does not package it, and riscv64
+  and i386 roots have no GPU driver.
 - **Xfce** is the complete desktop: its panel with the applications menu,
   desktops and clock, desktop icons, the Thunar file manager and the settings
   manager. The desktop's wallpaper does not draw yet, so it is black behind
@@ -303,7 +305,8 @@ The desktop draws on the device's GPU when the guest has what that takes: the
 GPU device (`/dev/dri/renderD128`) and Mesa's Vulkan driver for it, with zink.
 One script installs them, with vulkaninfo, vkcube and the Mesa demos, adds a
 `gpu-run` command, and checks the result (Devuan 6, Alpine 3.24 and Arch Linux
-ARM carry the packages; arm64 and amd64 roots):
+ARM carry the packages; arm64 and amd64 roots; Alpine 3.23 has no GPU driver,
+and the script says so):
 
 ```sh
 sudo sh /AOK/tools/setup-gpu.sh            # add --demos for glmark2
@@ -322,7 +325,14 @@ and window size the same way, so the VNC server has nothing to do and stops
 copying the screen. `ISH_DISPLAY_DIRECT=0` leaves all of that to VNC, as
 before.
 
-OpenGL programs still render in software by default: on this GPU zink offers
+**OpenGL on the GPU needs Mesa older than 25.2, which today means Devuan 6.**
+Mesa 25.2 and later -- Alpine 3.24's 26.1, and Arch's -- refuse to start zink
+without a Vulkan feature (robustness2's `nullDescriptor`) that iSH-AOK's GPU
+does not offer yet. On those roots Vulkan programs and the compositor still
+use the GPU, but every OpenGL program renders in software, and `setup-gpu.sh`
+says so rather than reporting a GL version from the software renderer.
+
+Where zink works, OpenGL programs still render in software by default: on this GPU zink offers
 only OpenGL 2.1 and OpenGL ES 2.0, where software rendering offers 4.5, so a
 program needing more would fail on the GPU instead of running slowly. Put one
 on the GPU with `gpu-run`, which suits older and simpler programs (glmark2

@@ -23,8 +23,9 @@
 #   sudo sh /AOK/tools/setup-wayfire.sh --no-select   install only
 #   sudo sh /AOK/tools/select-desktop.sh labwc        back to the default desktop
 #
-# Devuan 6 (Wayfire 0.9) and Arch Linux ARM (0.11) package it. Alpine does
-# not; setup-xfce.sh works there.
+# Devuan 6 (Wayfire 0.9) runs it. Arch Linux ARM packages it (0.11) but its
+# Mesa is too new for OpenGL ES on iSH-AOK's GPU (see below), and Alpine does
+# not package it; setup-xfce.sh works on both.
 # ---------------------------------------------------------------------------
 set -u
 
@@ -64,6 +65,18 @@ if ! sh /AOK/tools/setup-gpu.sh --check >/dev/null 2>&1; then
     log "the GPU drivers are not installed yet -- running setup-gpu.sh first"
     sh /AOK/tools/setup-gpu.sh || die "setup-gpu.sh failed, and Wayfire cannot run without the GPU -- see above"
 fi
+
+# Wayfire composites with OpenGL ES, which reaches the GPU only through zink,
+# and Mesa 25.2 and later refuse to start zink without robustness2's
+# nullDescriptor -- which iSH-AOK's GPU (Venus on MoltenVK) does not offer
+# yet. Such a root would install Wayfire and then only ever start labwc, so
+# find out first. Devuan 6 (Mesa 25.0) works; Arch and Alpine 3.24 ship newer.
+gles_renderer=$(LIBGL_ALWAYS_SOFTWARE=0 MESA_LOADER_DRIVER_OVERRIDE=zink \
+    eglinfo -B -p surfaceless 2>/dev/null | sed -n 's/^OpenGL ES profile renderer: //p' | head -1)
+case "$gles_renderer" in
+    *zink*) : ;;
+    *) die "Wayfire needs OpenGL ES on the GPU, and this root's Mesa cannot provide it (renderer: ${gles_renderer:-none}). Mesa 25.2 and later need a Vulkan feature iSH-AOK's GPU does not offer yet; Devuan 6 (Mesa 25.0) runs Wayfire. setup-xfce.sh works here." ;;
+esac
 
 PKGS="wayfire wf-shell wcm"
 if command -v apt-get >/dev/null 2>&1; then

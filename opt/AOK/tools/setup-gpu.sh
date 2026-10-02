@@ -26,7 +26,8 @@
 #   sudo sh /AOK/tools/setup-gpu.sh --gl-software  back to software OpenGL
 #   sh /AOK/tools/setup-gpu.sh --check           report only (no root needed)
 #
-# Devuan 6, Alpine 3.24 and Arch Linux ARM carry the packages; aarch64 and
+# Devuan 6, Alpine 3.24 and Arch Linux ARM carry the packages (Alpine 3.23
+# has no Venus driver at all); aarch64 and
 # x86_64 guests only -- Mesa has no Venus driver for riscv64 or i386 roots.
 # ---------------------------------------------------------------------------
 set -u
@@ -100,6 +101,10 @@ bounded() {
 }
 
 CHECK_FAILED=0
+GL_ON_GPU=0
+mesa_version() {
+    eglinfo -B -p surfaceless 2>/dev/null | sed -n 's/^OpenGL ES profile version: .*Mesa \([0-9][0-9.]*\).*/\1/p' | head -1
+}
 ok()   { printf '    \033[1;32mok\033[0m    %s\n' "$*"; }
 bad()  { printf '    \033[1;31mno\033[0m    %s\n' "$*"; CHECK_FAILED=1; }
 info() { printf '    --    %s\n' "$*"; }
@@ -133,11 +138,30 @@ check() {
         info "vulkaninfo is not installed; Vulkan not tried"
     fi
     if command -v eglinfo >/dev/null 2>&1; then
-        gl=$(LIBGL_ALWAYS_SOFTWARE=0 MESA_LOADER_DRIVER_OVERRIDE=zink bounded eglinfo -B -p surfaceless 2>/dev/null |
+        # The RENDERER says whether zink is drawing: when zink cannot start,
+        # Mesa quietly falls back to llvmpipe, whose context reported OpenGL
+        # 4.6 and passed this check as "OpenGL through zink".
+        egl_out=$(LIBGL_ALWAYS_SOFTWARE=0 MESA_LOADER_DRIVER_OVERRIDE=zink bounded eglinfo -B -p surfaceless 2>&1)
+        gl=$(printf '%s\n' "$egl_out" |
              sed -n 's/^OpenGL ES profile version: //p; s/^OpenGL compatibility profile version: //p' | head -2 | tr '\n' ';')
-        case "$gl" in
-            *Mesa*) ok "OpenGL through zink: ${gl%;}" ;;
-            *) bad "zink gave no OpenGL context (eglinfo -B -p surfaceless)" ;;
+        renderer=$(printf '%s\n' "$egl_out" | sed -n 's/^OpenGL ES profile renderer: //p' | head -1)
+        case "$renderer" in
+            *zink*)
+                GL_ON_GPU=1
+                ok "OpenGL through zink: ${gl%;}" ;;
+            *)
+                if printf '%s\n' "$egl_out" | grep -q 'nullDescriptor'; then
+                    # Not something this script can install: Mesa 25.2 and
+                    # later refuse to start zink without robustness2's
+                    # nullDescriptor, which the GPU path (Venus on MoltenVK,
+                    # on Metal) does not offer yet. Vulkan is unaffected.
+                    info "OpenGL cannot use the GPU with this Mesa ($(mesa_version)): its zink requires a"
+                    info "  Vulkan feature (nullDescriptor) iSH-AOK's GPU does not offer yet. OpenGL"
+                    info "  programs run in software; Vulkan programs use the GPU. Devuan 6's Mesa 25.0"
+                    info "  still runs OpenGL on the GPU."
+                else
+                    bad "zink gave no OpenGL context on the GPU (renderer: ${renderer:-none})"
+                fi ;;
         esac
     else
         info "eglinfo is not installed; OpenGL not tried"
@@ -150,7 +174,11 @@ check() {
     if [ -f "$CONF" ] && grep -q '^AOK_GL=gpu' "$CONF"; then
         info "OpenGL programs in the desktop use the GPU by default ($CONF)"
     else
-        info "OpenGL programs in the desktop use software by default; gpu-run PROGRAM uses the GPU"
+        if [ "$GL_ON_GPU" = 1 ]; then
+            info "OpenGL programs in the desktop use software by default; gpu-run PROGRAM uses the GPU"
+        else
+            info "OpenGL programs in the desktop use software"
+        fi
     fi
 }
 
@@ -194,7 +222,19 @@ elif command -v pacman >/dev/null 2>&1; then
     pacman -S --needed --noconfirm $PKGS || die "pacman -S failed -- see output above"
 elif command -v apk >/dev/null 2>&1; then
     log "Alpine (apk) detected"
-    PKGS="mesa-vulkan-virtio mesa-dri-gallium mesa-egl vulkan-tools mesa-utils"
+    # Alpine 3.23 and older build Mesa without Venus: there is no
+    # mesa-vulkan-virtio to install, in any repository, and apk said only
+    # that the package was not found (Discord, 2026-10-02). 3.24 has it.
+    alpine_release=$(cat /etc/alpine-release 2>/dev/null)
+    case "$alpine_release" in
+        3.[0-9].*|3.1[0-9].*|3.2[0-3].*)
+            die "Alpine $alpine_release has no GPU (Venus) driver: its Mesa is built without it. Alpine 3.24 and later, Devuan 6 and Arch have it -- install one of those in Settings > Filesystems." ;;
+    esac
+    # vulkan-loader by name: on Alpine neither the Venus driver nor
+    # vulkan-tools depends on it (Devuan's and Arch's packages pull theirs
+    # in), and without it vulkaninfo found no Vulkan at all and zink fell
+    # back to software -- reported on Discord from Alpine 3.24, 2026-10-02.
+    PKGS="mesa-vulkan-virtio vulkan-loader mesa-dri-gallium mesa-egl vulkan-tools mesa-utils"
     [ "$DEMOS" = 1 ] && note "Alpine packages no glmark2; es2gears_wayland (mesa-utils) is the demo here"
     log "installing $PKGS"
     apk_add $PKGS || die "apk add failed -- see output above"
@@ -242,9 +282,13 @@ check
 log "done"
 if [ "$CHECK_FAILED" = 0 ]; then
     note "Vulkan programs use the GPU as they are:   vkcube --wsi wayland"
-    note "OpenGL programs, one at a time:            gpu-run es2gears_wayland"
-    [ "$DEMOS" = 1 ] && command -v glmark2-wayland >/dev/null 2>&1 &&
-        note "benchmark (software, then the GPU):        glmark2-wayland; gpu-run glmark2-wayland"
+    if [ "$GL_ON_GPU" = 1 ]; then
+        note "OpenGL programs, one at a time:            gpu-run es2gears_wayland"
+        [ "$DEMOS" = 1 ] && command -v glmark2-wayland >/dev/null 2>&1 &&
+            note "benchmark (software, then the GPU):        glmark2-wayland; gpu-run glmark2-wayland"
+    else
+        note "OpenGL programs run in software here (see above); gpu-run changes nothing."
+    fi
     note "The Wayland desktop composites on the GPU by itself from its next session."
 else
     note "Something above is missing; see the lines marked 'no'."
