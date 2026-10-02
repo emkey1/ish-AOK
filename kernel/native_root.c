@@ -65,6 +65,20 @@ static void ensure_dir(const char *path, mode_t_ mode) {
         generic_setattrat(AT_PWD, path, make_attr(mode, mode), false);
 }
 
+// The /usr merge, as current Debian and Arch have it: /bin and /sbin are links
+// to usr/bin and usr/sbin, so a script's /bin/echo or /sbin/init finds the
+// same file as a PATH search does. Only made where nothing is there yet; a
+// root whose /bin is a real directory keeps it (see bin_dir below).
+static void ensure_merged(const char *dir, const char *target) {
+    if (!path_exists(dir))
+        generic_symlinkat(target, AT_PWD, dir);
+}
+
+static bool is_symlink(const char *path) {
+    char target[MAX_PATH];
+    return generic_readlinkat(AT_PWD, path, target, sizeof(target)) >= 0;
+}
+
 // Read a whole (small) guest file into a NUL-terminated heap buffer.
 static char *read_file(const char *path, size_t *len_out) {
     struct fd *fd = generic_open(path, O_RDONLY_, 0);
@@ -241,16 +255,26 @@ static void link_everything(struct link_set *made) {
     if (not_commands == NULL)
         not_commands = strdup("smallclue smallclue-help licenses");
 
+    // Where /bin and /sbin's names go: /usr/bin and /usr/sbin on a merged
+    // root, where /bin IS /usr/bin; a root with a real /bin directory gets the
+    // shells, login and su there as well as in /usr/bin.
+    bool merged = is_symlink("/bin");
+    bool sbin_merged = is_symlink("/sbin");
+
     // The shells, where scripts and the kernel's ENOEXEC fallback look.
-    const char *shell_links[][2] = {
-        {NATIVE_DIR "sh",   "/bin/sh"},
-        {NATIVE_DIR "dash", "/bin/dash"},
-        {NATIVE_DIR "zsh",  "/bin/zsh"},
-        {NATIVE_DIR "bash", "/bin/bash"},
-    };
-    for (size_t i = 0; i < sizeof(shell_links) / sizeof(shell_links[0]); i++)
-        if (native_program_built(shell_links[i][0] + strlen(NATIVE_DIR)))
-            place_link(made, shell_links[i][0], shell_links[i][1]);
+    static const char *const shells[] = {"sh", "dash", "zsh", "bash"};
+    for (size_t i = 0; i < sizeof(shells) / sizeof(shells[0]); i++) {
+        if (!native_program_built(shells[i]))
+            continue;
+        char target[MAX_PATH], link[MAX_PATH];
+        snprintf(target, sizeof(target), NATIVE_DIR "%s", shells[i]);
+        snprintf(link, sizeof(link), "/usr/bin/%s", shells[i]);
+        place_link(made, target, link);
+        if (!merged) {
+            snprintf(link, sizeof(link), "/bin/%s", shells[i]);
+            place_link(made, target, link);
+        }
+    }
 
     // The standalone programs, each to its own file. su, sudo and passwd are
     // the setuid-root ones, and these links are what make a bare `sudo` (and
@@ -267,7 +291,7 @@ static void link_everything(struct link_set *made) {
         snprintf(target, sizeof(target), NATIVE_DIR "%s", name);
         snprintf(link, sizeof(link), "/usr/bin/%s", name);
         place_link(made, target, link);
-        if (strcmp(name, "su") == 0)
+        if (strcmp(name, "su") == 0 && !merged)
             place_link(made, target, "/bin/su");
     }
 
@@ -288,15 +312,17 @@ static void link_everything(struct link_set *made) {
         if (native_program_built(name))
             continue;   // a standalone program of the same name won above
         char link[MAX_PATH];
-        if (strcmp(name, "init") == 0 || strcmp(name, "halt") == 0 ||
-            strcmp(name, "reboot") == 0 || strcmp(name, "poweroff") == 0 ||
-            strcmp(name, "runit") == 0 || strcmp(name, "mdev") == 0)
-            snprintf(link, sizeof(link), "/sbin/%s", name);
-        else if (strcmp(name, "login") == 0)
-            snprintf(link, sizeof(link), "/bin/%s", name);
-        else
-            snprintf(link, sizeof(link), "/usr/bin/%s", name);
+        bool system = strcmp(name, "init") == 0 || strcmp(name, "halt") == 0 ||
+                      strcmp(name, "reboot") == 0 || strcmp(name, "poweroff") == 0 ||
+                      strcmp(name, "runit") == 0 || strcmp(name, "mdev") == 0;
+        snprintf(link, sizeof(link), system ? "/usr/sbin/%s" : "/usr/bin/%s", name);
         place_link(made, NATIVE_DIR "smallclue", link);
+        if (system && !sbin_merged) {
+            snprintf(link, sizeof(link), "/sbin/%s", name);
+            place_link(made, NATIVE_DIR "smallclue", link);
+        } else if (strcmp(name, "login") == 0 && !merged) {
+            place_link(made, NATIVE_DIR "smallclue", "/bin/login");
+        }
     }
     free(broken);
     free(not_commands);
@@ -312,6 +338,13 @@ static void unlink_stale(const struct link_set *made, const char *previous) {
             char path[MAX_PATH], target[MAX_PATH];
             memcpy(path, line, len);
             path[len] = '\0';
+            // A name under a merged /bin or /sbin is the /usr one's other
+            // name, and removing it would remove that.
+            if ((strncmp(path, "/bin/", 5) == 0 && is_symlink("/bin")) ||
+                (strncmp(path, "/sbin/", 6) == 0 && is_symlink("/sbin"))) {
+                line = end != NULL ? end + 1 : NULL;
+                continue;
+            }
             if (!link_set_has(made, path) && is_our_link(path, target, sizeof(target)))
                 generic_unlinkat(AT_PWD, path);
         }
@@ -472,7 +505,7 @@ static const struct {
     const char *path;
     mode_t_ mode;
 } dirs[] = {
-    {"/bin", 0755}, {"/sbin", 0755}, {"/usr", 0755}, {"/usr/bin", 0755},
+    {"/usr", 0755}, {"/usr/bin", 0755},
     {"/usr/sbin", 0755}, {"/usr/local", 0755}, {"/usr/local/bin", 0755},
     {"/usr/local/sbin", 0755}, {"/usr/share", 0755}, {"/etc", 0755},
     {"/etc/profile.d", 0755}, {"/etc/rc.d", 0755}, {"/etc/service", 0755},
@@ -488,6 +521,8 @@ int native_root_make_dirs(void) {
         return _ENOENT;
     for (size_t i = 0; i < sizeof(dirs) / sizeof(dirs[0]); i++)
         ensure_dir(dirs[i].path, dirs[i].mode);
+    ensure_merged("/bin", "usr/bin");
+    ensure_merged("/sbin", "usr/sbin");
     return 0;
 }
 
