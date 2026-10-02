@@ -243,14 +243,19 @@ int main(int argc, char **argv) {
     ck("  and RESOURCE_INFO no longer knows it", io(fd, VIRTGPU_RESOURCE_INFO_, &info), -ENOENT);
 
     // Dumb buffers: linear host memory with no context behind it (GBM's
-    // fallback allocates these). Rows are 16-byte aligned, MoltenVK's pitch
-    // for a LINEAR image.
+    // fallback allocates these). Rows take MoltenVK's pitch for a LINEAR
+    // image: the GPU's linear row alignment, 16 bytes on M-series GPUs and 64
+    // on the A9 and A10X. Both buffers must round to the same power of two.
     struct drm_mode_create_dumb_ cd = {.width = 100, .height = 10, .bpp = 32};
     ck("MODE_CREATE_DUMB 100x10x32", io(fd, DRM_IOCTL_MODE_CREATE_DUMB_, &cd), 0);
-    ck("  pitch is width*4 rounded to 16", cd.pitch, 400);
     struct drm_mode_create_dumb_ cd2 = {.width = 7, .height = 1, .bpp = 32};
     ck("MODE_CREATE_DUMB 7x1x32", io(fd, DRM_IOCTL_MODE_CREATE_DUMB_, &cd2), 0);
-    ck("  pitch 28 rounds to 32", cd2.pitch, 32);
+    unsigned row_align = 0;
+    for (unsigned a = 16; a <= 256 && row_align == 0; a *= 2)
+        if (cd.pitch == (400 + a - 1) / a * a && cd2.pitch == (28 + a - 1) / a * a)
+            row_align = a;
+    test_logf("dumb pitches %u and %u: row alignment %u\n", cd.pitch, cd2.pitch, row_align);
+    ck("  pitches are 400 and 28 rounded to one row alignment (16..256)", row_align != 0, 1);
     struct drm_mode_map_dumb_ md = {.handle = cd.handle};
     ck("MODE_MAP_DUMB", io(fd, DRM_IOCTL_MODE_MAP_DUMB_, &md), 0);
     unsigned char *dm = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, fd, (off_t) md.offset);
