@@ -64,6 +64,9 @@ enum aokfs_node_kind {
     // /tools readdir below, or the files exist in the table but nothing can
     // reach them.
     aokfs_tools_crypto_dir,
+    // And /tools/wayland/ (the Wayland buffer release guard's source and its
+    // build script, tools/wayland/ in the manifest).
+    aokfs_tools_wayland_dir,
     // /docs is flat (no subdirectories) -- same generated-table pattern as
     // /tools, minus the ktop-style subdirectory case.
     aokfs_docs_dir,
@@ -204,6 +207,7 @@ static bool aokfs_node_is_dir(enum aokfs_node_kind node) {
         node == aokfs_tools_ktop_dir ||
         node == aokfs_tools_pixman_dir ||
         node == aokfs_tools_crypto_dir ||
+        node == aokfs_tools_wayland_dir ||
         node == aokfs_native_dir ||
         node == aokfs_docs_dir;
 }
@@ -308,6 +312,8 @@ static const char *aokfs_node_path(enum aokfs_node_kind node) {
             return "/tools/pixman";
         case aokfs_tools_crypto_dir:
             return "/tools/crypto";
+        case aokfs_tools_wayland_dir:
+            return "/tools/wayland";
         case aokfs_tests_audio_dir:
             return "/tests/audio";
         case aokfs_audio_raw:
@@ -364,6 +370,7 @@ static bool aokfs_lookup_node(const char *path, enum aokfs_node_kind *node_out) 
         aokfs_tools_ktop_dir,
         aokfs_tools_pixman_dir,
         aokfs_tools_crypto_dir,
+        aokfs_tools_wayland_dir,
         aokfs_tests_audio_dir,
         aokfs_audio_raw,
         aokfs_audio_wav,
@@ -1261,7 +1268,7 @@ static int aokfs_readdir(struct fd *fd, struct dir_entry *entry) {
             }
             break;
         case aokfs_tools_dir: {
-            // The two bundled tool entries and the ktop/pixman/crypto
+            // The two bundled tool entries and the ktop/pixman/crypto/wayland
             // subdirectories first, then generated /tools/* files that belong
             // directly to /tools (one path component past the prefix -- the
             // subdirectories' own files live under their /tools/<name>/ node
@@ -1272,6 +1279,7 @@ static int aokfs_readdir(struct fd *fd, struct dir_entry *entry) {
                 aokfs_tools_ktop_dir,
                 aokfs_tools_pixman_dir,
                 aokfs_tools_crypto_dir,
+                aokfs_tools_wayland_dir,
             };
             size_t nfixed = sizeof(tools_fixed) / sizeof(tools_fixed[0]);
             size_t want = (size_t) fd->offset++;
@@ -1300,7 +1308,8 @@ static int aokfs_readdir(struct fd *fd, struct dir_entry *entry) {
         }
         case aokfs_tools_ktop_dir:
         case aokfs_tools_pixman_dir:
-        case aokfs_tools_crypto_dir: {
+        case aokfs_tools_crypto_dir:
+        case aokfs_tools_wayland_dir: {
             // One /tools/<name>/ subdirectory: the same generated-table scan
             // /tools itself does, but rooted at this node's own path, so a new
             // subdirectory needs no code here beyond its case label.

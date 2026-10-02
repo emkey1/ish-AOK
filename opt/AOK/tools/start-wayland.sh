@@ -659,6 +659,28 @@ if [ "${ISH_WAYLAND_DISABLE_PIXMAN_SHIM:-0}" != "1" ] && [ -f "$ISH_PIXMAN_SHIM"
     export LD_PRELOAD="$ISH_PIXMAN_SHIM${LD_PRELOAD:+:$LD_PRELOAD}"
 fi
 
+# The wl_buffer release guard (tools/wayland/ish_wl_release_guard.c): wlroots
+# releases a shm buffer once per commit, and a GTK 3 program that committed
+# one twice -- wf-panel, opening its menu on a desktop whose frames came late
+# -- aborted on the second release (bip, 2026-10-02). setup-wayland.sh
+# installs it; a desktop set up before that gets it built here, once, into
+# the user's cache, when there is a compiler. Without either the session runs
+# as it always has. ISH_WAYLAND_DISABLE_RELEASE_GUARD=1 leaves it out.
+ISH_RELEASE_GUARD=/usr/local/lib/ish-wayland/libish-wl-release-guard.so
+if [ ! -f "$ISH_RELEASE_GUARD" ]; then
+    ISH_RELEASE_GUARD="$HOME/.cache/ish-wayland/libish-wl-release-guard.so"
+    if [ "${ISH_WAYLAND_DISABLE_RELEASE_GUARD:-0}" != "1" ] && command -v cc >/dev/null 2>&1 \
+            && { [ ! -f "$ISH_RELEASE_GUARD" ] \
+                 || [ /AOK/tools/wayland/ish_wl_release_guard.c -nt "$ISH_RELEASE_GUARD" ]; }; then
+        log "building the Wayland buffer release guard"
+        sh /AOK/tools/wayland/build-release-guard.sh "$HOME/.cache/ish-wayland" >/dev/null 2>&1 \
+            || log "warning: the release guard did not build; GTK programs may abort on a double buffer release"
+    fi
+fi
+if [ "${ISH_WAYLAND_DISABLE_RELEASE_GUARD:-0}" != "1" ] && [ -f "$ISH_RELEASE_GUARD" ]; then
+    export LD_PRELOAD="$ISH_RELEASE_GUARD${LD_PRELOAD:+:$LD_PRELOAD}"
+fi
+
 COMPOSITOR_PID=""
 FOOT_PID=""
 REPAIR_PID=""
