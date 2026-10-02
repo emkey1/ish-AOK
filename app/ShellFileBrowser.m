@@ -368,6 +368,7 @@ NSString *ISHShellQuoteArgument(NSString *argument) {
                                                    weight:isLast ? UIFontWeightSemibold : UIFontWeightRegular];
         [button setTitleColor:isLast ? UIColor.labelColor : UIColor.systemBlueColor
                      forState:UIControlStateNormal];
+        button.accessibilityLabel = [titles[i] isEqualToString:@"/"] ? @"Root Directory" : titles[i];
         button.accessibilityHint = isLast ? nil : @"Go to this folder";
         NSString *destination = paths[i];
         __weak typeof(self) weakSelf = self;
