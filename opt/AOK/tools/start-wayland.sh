@@ -1980,13 +1980,41 @@ if neatvnc_lacks_damage_clamp "$NEATVNC_VERSION" \
     log "neatvnc $NEATVNC_VERSION is older than 0.9.2: desktop resizing is off"
 fi
 
+# wayvnc 0.10 exits when it is detached, unless it was started detached
+# (--detached) and attached afterwards -- and the app detaches it whenever it
+# shows the compositor's frames itself (wl-present, below). 0.9.1 stays up on
+# a detach, when it does not die of it: see the comment at wl-present.
+WAYVNC_VERSION="$(wayvnc -V 2>/dev/null | awk -F': *' '$1 == "wayvnc" { print $2; exit }')"
+WAYVNC_DETACHED_ARG=""
+case "${WAYVNC_VERSION#v}" in
+    0.[0-9]|0.[0-9][.-]*|"") ;;
+    *) WAYVNC_DETACHED_ARG="--detached" ;;
+esac
+# start_wayvnc [stay-detached]: starts wayvnc; attached to the compositor
+# unless asked to stay detached (a wayvnc started again while the app shows
+# wl-present's frames). A 0.9 wayvnc cannot start detached, so it is started
+# attached and detached once it is listening.
+start_wayvnc() {
+    # $WAYVNC_*_ARG are empty or one word each, so they are left unquoted.
+    spawn_logged "wayvnc-attempt$wayvnc_attempt" wayvnc $WAYVNC_DETACHED_ARG $WAYVNC_RESIZE_ARG $WAYVNC_FPS_ARG 127.0.0.1 "$WAYVNC_PORT"
+    WAYVNC_PID=$SPAWN_PID
+    [ -n "$WAYVNC_DETACHED_ARG" ] || return 0
+    [ "${1:-}" = stay-detached ] && return 0
+    # Its control socket is up a moment after it starts.
+    _a=0
+    while [ "$_a" -lt 100 ] && kill -0 "$WAYVNC_PID" 2>/dev/null; do
+        wayvncctl attach "$WAYLAND_DISPLAY" >/dev/null 2>&1 && return 0
+        _a=$((_a + 1))
+        sleep 0.1
+    done
+    log "warning: wayvnc $WAYVNC_VERSION started detached and could not be attached"
+}
+
 hex_port=$(printf '%04X' "$WAYVNC_PORT")
 wayvnc_attempt=1
 while true; do
-    log "starting wayvnc on :$WAYVNC_PORT (attempt $wayvnc_attempt)"
-    # $WAYVNC_RESIZE_ARG is empty or one word, so it is left unquoted.
-    spawn_logged "wayvnc-attempt$wayvnc_attempt" wayvnc $WAYVNC_RESIZE_ARG $WAYVNC_FPS_ARG 127.0.0.1 "$WAYVNC_PORT"
-    WAYVNC_PID=$SPAWN_PID
+    log "starting wayvnc ${WAYVNC_VERSION:-(version unknown)} on :$WAYVNC_PORT (attempt $wayvnc_attempt)"
+    start_wayvnc
 
     # Confirm wayvnc is both still alive AND actually bound/listening before
     # declaring ready -- checking liveness alone races wayvnc's own startup:
@@ -2156,15 +2184,33 @@ done
 # attached again however it ends, so the app's VNC connection -- kept up
 # throughout -- can take over. Without it, or with a software compositor
 # (whose buffers the app cannot take), the app uses wayvnc as before.
+#
+# wayvnc 0.9.1 (Debian 13, Devuan 6) can die on that detach: it frees the
+# buffer pool while neatvnc still holds a frame from it, and the frame's
+# release later writes into the freed pool -- "malloc_consolidate(): unaligned
+# fastbin chunk detected", or a fault inside libwayland-client. A resize just
+# before the detach, which is how every session starts (wl-present sizes the
+# output to the app's view, then asks for the detach), makes it likely:
+# reproduced on the M4 by hand, 2026-10-03. wayvnc 0.10.0 fixed it (2897d15,
+# 5d7784d); `sudo sh /AOK/tools/fix-neatvnc --version 1.0.2` builds that. The
+# marker file records that wayvnc should be detached, for a wayvnc started
+# again after it died (see the main loop).
+WAYVNC_DETACHED_MARK="$XDG_RUNTIME_DIR/wayvnc-detached"
 if [ "$WL_GPU_COMPOSITOR" = 1 ] && [ "${ISH_DISPLAY_DIRECT:-1}" != 0 ] && [ -x /AOK/native/wl-present ]; then
     log "presenting the desktop to the app directly"
-    spawn_logged wl-present "$AOK_ENV" WAYVNC_PORT="$WAYVNC_PORT" "$AOK_SH" -c '
+    if [ -z "$WAYVNC_DETACHED_ARG" ]; then
+        log "note: wayvnc ${WAYVNC_VERSION:-(version unknown)} can die when the app takes the desktop over;"
+        log "      'sudo sh /AOK/tools/fix-neatvnc --version 1.0.2' installs wayvnc 0.10, which does not"
+    fi
+    spawn_logged wl-present "$AOK_ENV" WAYVNC_PORT="$WAYVNC_PORT" \
+        WAYVNC_DETACHED_MARK="$WAYVNC_DETACHED_MARK" "$AOK_SH" -c '
         /AOK/native/wl-present | while read -r cmd; do
             case "$cmd" in
-                detach) wayvncctl detach ;;
-                attach) wayvncctl attach "$WAYLAND_DISPLAY" ;;
+                detach) : > "$WAYVNC_DETACHED_MARK"; wayvncctl detach ;;
+                attach) rm -f "$WAYVNC_DETACHED_MARK"; wayvncctl attach "$WAYLAND_DISPLAY" ;;
             esac >/dev/null 2>&1
         done
+        rm -f "$WAYVNC_DETACHED_MARK"
         wayvncctl attach "$WAYLAND_DISPLAY" >/dev/null 2>&1'
     PRESENT_PID=$SPAWN_PID
 fi
@@ -2275,8 +2321,39 @@ fi
 # Polled, through a waited-for sleep rather than a plain one: `wait` lets the
 # HUP/TERM traps run at once, and it reaps the compositor, so `kill -0` stops
 # finding a zombie.
+#
+# wayvnc is started again if it dies. The app's VNC connection retries for a
+# minute and then gives up ("Timed out connecting to wayvnc"), and with no
+# wayvnc the desktop was lost for good: a wayvnc that died on its detach at
+# session start (above) left the M4 at "Connecting to compositor..." until
+# that timeout. A wayvnc that dies straight away every time is given up on
+# after a few restarts. One started while the app shows wl-present's frames
+# is detached again once it is listening.
+wayvnc_restarts=0
 while kill -0 "$COMPOSITOR_PID" 2>/dev/null; do
     sleep 2 &
     wait $! 2>/dev/null
+    if [ -n "$WAYVNC_PID" ] && ! kill -0 "$WAYVNC_PID" 2>/dev/null \
+            && [ "$wayvnc_restarts" -lt 5 ] && kill -0 "$COMPOSITOR_PID" 2>/dev/null; then
+        wait "$WAYVNC_PID" 2>/dev/null
+        wayvnc_status=$?
+        wayvnc_restarts=$((wayvnc_restarts + 1))
+        wayvnc_attempt=$((wayvnc_attempt + 1))
+        echo "start-wayland: wayvnc (pid $WAYVNC_PID) exited with status $wayvnc_status; starting it again ($wayvnc_restarts of 5)" >&2
+        if [ -e "$WAYVNC_DETACHED_MARK" ]; then
+            start_wayvnc stay-detached
+        else
+            start_wayvnc
+        fi
+        if [ -e "$WAYVNC_DETACHED_MARK" ] && [ -z "$WAYVNC_DETACHED_ARG" ]; then
+            (
+                i=0
+                while [ "$i" -lt 150 ] && ! wayvnc_is_listening; do
+                    sleep 0.1; i=$((i + 1))
+                done
+                [ -e "$WAYVNC_DETACHED_MARK" ] && wayvncctl detach >/dev/null 2>&1
+            ) &
+        fi
+    fi
 done
 echo "start-wayland: $COMPOSITOR_CMD (pid $COMPOSITOR_PID) exited; ending the session" >&2

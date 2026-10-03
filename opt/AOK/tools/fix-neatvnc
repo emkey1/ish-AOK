@@ -33,6 +33,17 @@
 # the same feature for a third of the risk. Ask for 1.0.1 with --version if you
 # want it anyway; the script will build the whole chain.
 #
+# WHEN 1.x IS WORTH IT: A GPU DESKTOP. On the GPU (Wayfire, or labwc/sway with
+# setup-gpu.sh) the app shows the compositor's frames itself and detaches
+# wayvnc. wayvnc 0.9.1, the packaged one, can die on that detach: it frees its
+# buffer pool while neatvnc still holds a frame from it, and the frame's
+# release writes into the freed pool ("malloc_consolidate(): unaligned fastbin
+# chunk detected"). A resize just before -- how every session starts -- makes
+# it likely; the app then waits at "Connecting to compositor..." while
+# start-wayland.sh starts wayvnc again. wayvnc 0.10.0 fixed it, and 0.10 needs
+# neatvnc 1.x, so --version 1.0.2 (aml 1.0.0, neatvnc 1.0.2, wayvnc 0.10.2) is
+# the cure there.
+#
 # Everything is installed under /usr/local, so the distro's own packages are
 # left alone and `apt remove` / `apk del` still describe reality. Removing what
 # this installs is rm under /usr/local/{lib,include,lib/pkgconfig} plus
@@ -40,7 +51,7 @@
 #
 # Run as root:
 #       sudo sh /AOK/tools/fix-neatvnc
-#       sudo sh /AOK/tools/fix-neatvnc --version 1.0.1
+#       sudo sh /AOK/tools/fix-neatvnc --version 1.0.2
 #
 # Then restart the desktop (close the Display applet and reopen it) so
 # start-wayland.sh re-reads the version and drops --disable-resizing.
@@ -133,7 +144,10 @@ if [ -n "$CURRENT" ] && version_ge "$CURRENT" "$TARGET" && [ "$FORCE" = 0 ]; the
     note "(pass --force to build it anyway)"
     exit 0
 fi
-if [ -n "$CURRENT" ] && version_ge "$CURRENT" 0.9.2 && [ "$FORCE" = 0 ]; then
+# Only for a 0.x target: a 1.x one is asked for to get wayvnc 0.10 as well,
+# which any 0.9.x already installed does not provide.
+if [ -n "$CURRENT" ] && version_ge "$CURRENT" 0.9.2 && [ "$FORCE" = 0 ] \
+        && [ "${TARGET%%.*}" = 0 ]; then
     note "$CURRENT already has the damage clamp, so resizing is not being"
     note "disabled on account of neatvnc. Building $TARGET anyway would change"
     note "nothing the applet can see; pass --force if you want it regardless."
@@ -143,7 +157,7 @@ fi
 # --- what the requested version drags in ------------------------------------
 case "$TARGET" in
     0.*) AML_TAG=v0.3.0;  AML_PC=aml;  BUILD_WAYVNC=0 ;;
-    1.*) AML_TAG=v1.0.0;  AML_PC=aml1; BUILD_WAYVNC=1; WAYVNC_TAG=v0.10.1 ;;
+    1.*) AML_TAG=v1.0.0;  AML_PC=aml1; BUILD_WAYVNC=1; WAYVNC_TAG=v0.10.2 ;;
     *)   die "unsupported target '$TARGET' -- this script knows the 0.x and 1.x lines" ;;
 esac
 if [ "$BUILD_WAYVNC" = 1 ]; then
@@ -165,17 +179,20 @@ if command -v apt-get >/dev/null 2>&1; then
         build-essential meson ninja-build pkg-config git ca-certificates \
         libdrm-dev libpixman-1-dev zlib1g-dev libgnutls28-dev nettle-dev \
         libgmp-dev libturbojpeg0-dev libgbm-dev libavcodec-dev \
-        libavfilter-dev libavutil-dev \
+        libavfilter-dev libavutil-dev libjansson-dev libxkbcommon-dev \
+        libwayland-dev wayland-protocols scdoc \
         || die "apt-get install failed -- see output above"
 elif command -v apk >/dev/null 2>&1; then
     apk add build-base meson ninja pkgconf git ca-certificates \
         libdrm-dev pixman-dev zlib-dev gnutls-dev nettle-dev gmp-dev \
-        libjpeg-turbo-dev mesa-dev ffmpeg-dev \
+        libjpeg-turbo-dev mesa-dev ffmpeg-dev jansson-dev libxkbcommon-dev \
+        wayland-dev wayland-protocols scdoc \
         || die "apk add failed -- see output above"
 elif command -v pacman >/dev/null 2>&1; then
     pacman -Sy --noconfirm || warn "pacman -Sy failed; trying the install anyway"
     pacman -S --needed --noconfirm base-devel meson ninja pkgconf git \
         libdrm pixman zlib gnutls nettle gmp libjpeg-turbo mesa ffmpeg \
+        jansson libxkbcommon wayland wayland-protocols scdoc \
         || die "pacman -S failed -- see output above"
 else
     die "no apt-get, apk or pacman here -- install meson, ninja, a C toolchain,
@@ -277,6 +294,15 @@ if command -v wayvnc >/dev/null 2>&1; then
         note "to be first on PATH."
         FAILED=1
     fi
+    if [ "$BUILD_WAYVNC" = 1 ]; then
+        WAYVNC_IS=$(wayvnc -V 2>/dev/null | awk -F': *' '$1 == "wayvnc" { print $2; exit }')
+        note "wayvnc reports: ${WAYVNC_IS:-<could not read>}"
+        if [ -z "$WAYVNC_IS" ] || ! version_ge "$WAYVNC_IS" 0.10.0; then
+            warn "the wayvnc found first on PATH ($WAYVNC_BIN) is not the 0.10 built here;"
+            note "put $PREFIX/bin ahead of /usr/bin, or the desktop keeps the old one."
+            FAILED=1
+        fi
+    fi
 else
     warn "no wayvnc installed, so there is nothing to link against it yet."
     note "Run /AOK/tools/setup-wayland.sh to install the desktop."
@@ -287,6 +313,9 @@ if [ "$FAILED" = 0 ]; then
     note "Close the Display applet and open it again: start-wayland.sh re-reads"
     note "the version at start and will leave --disable-resizing off, after"
     note "which the desktop follows the window it is shown in."
+    if [ "$BUILD_WAYVNC" = 1 ]; then
+        note "wayvnc 0.10 also survives the app taking a GPU desktop over."
+    fi
 else
     die "installed, but wayvnc is not using it yet -- see the notes above"
 fi
