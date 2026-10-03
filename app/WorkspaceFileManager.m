@@ -387,6 +387,9 @@ static NSString *ISHHomeDirectoryForUID(NSData *passwdData, uid_t targetUID) {
         button.titleLabel.font = [UIFont systemFontOfSize:[self workspaceScaledFontSize:13.0]
                                                    weight:(isLast ? UIFontWeightSemibold : UIFontWeightRegular)];
         [button setTitle:titles[i] forState:UIControlStateNormal];
+        if ([titles[i] isEqualToString:@"/"]) {
+            button.accessibilityLabel = @"Root Directory";
+        }
         [button setTitleColor:(isLast ? theme[@"primary"] : theme[@"accent"]) forState:UIControlStateNormal];
         button.enabled = !isLast;  // the current location isn't a link anywhere
         button.accessibilityHint = isLast ? nil : @"Go to this folder";
