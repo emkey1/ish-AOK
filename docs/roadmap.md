@@ -484,7 +484,10 @@ whatever this becomes, like any other program.
   (`virpipe`, `/tmp/.virgl_test`). Alpine 3.24 builds **no** virgl GL driver
   on any architecture (APKBUILD `_gallium_drivers`), but ships zink and, on
   aarch64 and x86_64, Mesa's Venus Vulkan driver (`libvulkan_virtio.so`, with
-  vtest). riscv64 and i386 have neither and stay on software rendering. So the
+  vtest). riscv64 and i386 have neither on Alpine and stay on software
+  rendering -- but Debian 13 / Devuan 6 build Venus for riscv64 and i386 too
+  (verified on riscv64, A10X, 2026-10-03), so on Devuan all four guests reach
+  the GPU. So the
   common path in stock Mesa is **Vulkan through Venus, and GL through zink on
   top of it**.
 - **Host side.** virglrenderer's Venus renderer replaying onto **MoltenVK**

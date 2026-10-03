@@ -27,8 +27,8 @@
 #   sh /AOK/tools/setup-gpu.sh --check           report only (no root needed)
 #
 # Devuan 6, Alpine 3.24 and Arch Linux ARM carry the packages (Alpine 3.23
-# has no Venus driver at all); aarch64 and
-# x86_64 guests only -- Mesa has no Venus driver for riscv64 or i386 roots.
+# has no Venus driver at all). Devuan on all four guest architectures; Alpine
+# on aarch64 and x86_64 only (its riscv64 and x86 Mesa has no Venus driver).
 # ---------------------------------------------------------------------------
 set -u
 
@@ -192,9 +192,16 @@ fi
 [ "$(id -u)" = 0 ] || die "must run as root:  sudo sh $0 $*"
 [ -c /dev/dri/renderD128 ] || die "no /dev/dri/renderD128: this iSH-AOK build has no GPU device -- update the app"
 
+# Debian builds Mesa's Venus driver for every architecture iSH-AOK runs
+# (riscv64 verified on the A10X, 2026-10-03: "Virtio-GPU Venus (Apple A10X
+# GPU)", and labwc composited on it); Alpine builds it for aarch64 and x86_64
+# only, and Arch Linux ARM is aarch64.
 ARCH="$(uname -m)"
 case "$ARCH" in
     x86_64|amd64|aarch64|arm64) : ;;
+    riscv64|i[3-6]86)
+        command -v apt-get >/dev/null 2>&1 \
+            || die "this distro's Mesa has no Venus (GPU) driver for $ARCH guests (Devuan's has); programs here render in software" ;;
     *) die "Mesa has no Venus (GPU) driver for $ARCH guests; programs here render in software" ;;
 esac
 

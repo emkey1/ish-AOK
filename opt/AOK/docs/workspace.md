@@ -366,8 +366,10 @@ gpu-run glmark2-wayland
 
 `sudo sh /AOK/tools/setup-gpu.sh --gl-default` makes the GPU the desktop's
 default for every OpenGL program from its next session, and `--gl-software`
-puts it back. riscv64 and i386 guests have no Vulkan driver for the device and
-stay in software.
+puts it back. On Devuan this works on all four guest architectures (riscv64
+is checked on an A10X iPad; i386 has the driver, not yet tried); Alpine's
+riscv64 and i386 builds have no Vulkan driver for the device and stay in
+software.
 
 ### Games
 
