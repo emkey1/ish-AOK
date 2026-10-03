@@ -153,6 +153,7 @@ native_stty.c
 native_ln.c
 native_coreutils.c
 devtmpfs_mount.c
+aokfs_mmap.c
 clone_error_cleanup.c
 uts_namespace.c
 setns_join.c

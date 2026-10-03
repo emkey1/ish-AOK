@@ -1025,6 +1025,16 @@ static intptr_t elf_exec(struct fd *fd, const char *file, struct exec_args argv,
         goto out_free_interp;
     }
 
+    // The segments are mapped from the files, so a file on a filesystem that
+    // cannot map is ENOEXEC, asked now while there is still a caller to tell
+    // (Linux's load_elf_binary: can_mmap_file). Past this point load_entry
+    // would call through the missing ->mmap -- a NULL call that took the whole
+    // app down for a program in /AOK/bundled before aokfs had one.
+    if (fd->ops->mmap == NULL || (interp_fd != NULL && interp_fd->ops->mmap == NULL)) {
+        err = _ENOEXEC;
+        goto out_free_interp;
+    }
+
     new_mm = mm_new(header.abi);
     if (new_mm == NULL) {
         err = _ENOMEM;

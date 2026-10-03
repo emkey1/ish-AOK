@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #include "kernel/calls.h"
@@ -12,6 +13,7 @@
 #include "kernel/fs.h"
 #include "kernel/hostinfo.h"
 #include "fs/fd.h"
+#include "fs/real.h"
 
 #define AOKFS_MAGIC 0x414f4b31
 
@@ -491,7 +493,13 @@ static const char *aokfs_inline_file_data(enum aokfs_node_kind node, size_t *siz
         "is the same speed on every guest architecture. Link to them from anywhere:\n"
         "  ln -s /AOK/native/smallclue /usr/local/bin/df\n"
         "The link name selects the applet, exactly as on Linux. Use a SYMlink: /AOK is\n"
-        "a separate filesystem, so a hard link across it fails with EXDEV.\n";
+        "a separate filesystem, so a hard link across it fails with EXDEV.\n"
+        "\n"
+        "/AOK/bundled holds guest programs and libraries built ahead of time, so the\n"
+        "setup scripts in /AOK/tools link them in instead of compiling on the device:\n"
+        "a directory per distro release and CPU (devuan6-aarch64) for what uses that\n"
+        "distro's libraries, and per libc and CPU (glibc-x86_64, musl-aarch64) for\n"
+        "what needs only libc.\n";
     // /AOK/version is the documented build identifier, so it carries exactly
     // what `uname -v` reports -- including the build timestamp, because the
     // hand-maintained version number is routinely not bumped between builds
@@ -1216,6 +1224,14 @@ static int aokfs_readdir(struct fd *fd, struct dir_entry *entry) {
                 case 7: child = aokfs_tools_dir; break;
                 case 8: child = aokfs_docs_dir; break;
                 case 9: child = aokfs_native_dir; break;
+                case 10: {
+                    // /bundled: programs and libraries built ahead of time
+                    // for guest roots (fs/aok-bundled.manifest), a directory
+                    // derived from the generated table like /native/libs's.
+                    if (!aokfs_lookup_node("/bundled", &child))
+                        return 0;
+                    break;
+                }
                 default: return 0;
             }
             break;
@@ -1417,6 +1433,45 @@ static int aokfs_close(struct fd *fd) {
     return 0;
 }
 
+// mmap: what ld.so does to every library, and the kernel's ELF loader to every
+// program, so without it nothing in /AOK/bundled could be used -- a preloaded
+// library was "failed to map segment" and exec called through a NULL ->mmap.
+// A file with a host descriptor behind it maps that, as realfs does. The rest
+// live in the app's own (read-only) memory, so the mapping is a private copy:
+// fresh host pages holding the bytes from the host page the offset falls in,
+// zero past EOF as on Linux. The files never change, so a MAP_SHARED reader
+// cannot tell a copy from the real thing; only a writable shared mapping has
+// to be refused, the descriptor being read-only (EACCES, as Linux).
+static int aokfs_mmap(struct fd *fd, struct mem *mem, page_t start, pages_t pages,
+        off_t offset, int prot, int flags) {
+    enum aokfs_node_kind node = aokfs_decode_node(fd->fs_data);
+    if (aokfs_node_is_dir(node))
+        return _ENODEV;
+    if (offset % PAGE_SIZE != 0)
+        return _EINVAL;
+    if ((flags & MMAP_SHARED) && (prot & P_WRITE))
+        return _EACCES;
+    if (fd->real_fd >= 0)
+        return host_fd_mmap(fd->real_fd, mem, start, pages, offset, prot, flags);
+
+    size_t size = 0;
+    const char *data = aokfs_inline_file_data(node, &size);
+    off_t real_offset = (offset / real_page_size) * real_page_size;
+    size_t correction = (size_t) (offset - real_offset);
+    size_t map_len = (size_t) pages * PAGE_SIZE + correction;
+    char *memory = mmap(NULL, map_len, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (memory == MAP_FAILED)
+        return _ENOMEM;
+    if ((size_t) real_offset < size) {
+        size_t n = size - (size_t) real_offset;
+        memcpy(memory, data + real_offset, n < map_len ? n : map_len);
+    }
+    int err = pt_map(mem, start, pages, memory, correction, prot);
+    if (err < 0)
+        munmap(memory, map_len);
+    return err;
+}
+
 static const struct fd_ops aokfs_fdops = {
     .name = "aokfs",
     .read = aokfs_read,
@@ -1425,6 +1480,7 @@ static const struct fd_ops aokfs_fdops = {
     .pwrite = aokfs_pwrite,
     .lseek = aokfs_lseek,
     .readdir = aokfs_readdir,
+    .mmap = aokfs_mmap,
     .close = aokfs_close,
 };
 
