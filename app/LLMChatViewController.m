@@ -466,6 +466,8 @@ static const CGFloat kISHLLMMaximumTextScale = 3.0;
     UIButton *_sendButton;
     ISHLLMAgent *_agent; // the chat on screen; it keeps working when another is shown
     BOOL _viewing;       // on screen, so its finished replies count as seen
+    BOOL _transcriptWasAtBottom; // sampled before each layout pass
+    CGFloat _transcriptLaidOutHeight;
 
     // Status panel.
     UILabel *_statusLabel;
@@ -625,7 +627,10 @@ static const CGFloat kISHLLMMaximumTextScale = 3.0;
 
         [inputBar.leadingAnchor constraintEqualToAnchor:safeArea.leadingAnchor constant:10.0],
         [inputBar.trailingAnchor constraintEqualToAnchor:safeArea.trailingAnchor constant:-10.0],
-        [inputBar.bottomAnchor constraintEqualToAnchor:safeArea.bottomAnchor constant:-8.0],
+        // The keyboard's top, not the safe area's bottom: on an iPhone the
+        // software keyboard otherwise covers the composer it was raised for.
+        // With no keyboard the guide's top is the safe area's bottom.
+        [inputBar.bottomAnchor constraintEqualToAnchor:self.view.keyboardLayoutGuide.topAnchor constant:-8.0],
         [inputBar.heightAnchor constraintGreaterThanOrEqualToConstant:44.0],
 
         [_promptField.leadingAnchor constraintEqualToAnchor:inputBar.leadingAnchor],
@@ -1843,6 +1848,28 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
     CGFloat maxOffset = MAX(-insets.top, table.contentSize.height + insets.bottom - CGRectGetHeight(table.bounds));
     CGFloat offset = MIN(maxOffset, MAX(-insets.top, rect.origin.y + anchorFraction * rect.size.height - insets.top));
     table.contentOffset = CGPointMake(table.contentOffset.x, offset);
+}
+
+// A transcript showing its newest message keeps showing it when the view
+// changes height -- the keyboard coming up shrinks the table from below, which
+// would otherwise push the latest reply out of sight.
+- (BOOL)transcriptIsAtBottom {
+    UITableView *table = _transcriptTable;
+    CGFloat visibleBottom = table.contentOffset.y + CGRectGetHeight(table.bounds) - table.adjustedContentInset.bottom;
+    return visibleBottom >= table.contentSize.height - 4.0;
+}
+
+- (void)viewWillLayoutSubviews {
+    [super viewWillLayoutSubviews];
+    _transcriptWasAtBottom = _transcriptTable != nil && [self transcriptIsAtBottom];
+}
+
+- (void)viewDidLayoutSubviews {
+    [super viewDidLayoutSubviews];
+    CGFloat height = CGRectGetHeight(_transcriptTable.bounds);
+    if (height != _transcriptLaidOutHeight && _transcriptWasAtBottom)
+        [self scrollTranscriptToBottomAnimated:NO];
+    _transcriptLaidOutHeight = height;
 }
 
 - (void)scrollTranscriptToBottomAnimated:(BOOL)animated {
