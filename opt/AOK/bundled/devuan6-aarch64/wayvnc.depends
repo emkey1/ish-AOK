@@ -1,0 +1,9 @@
+libc6
+libdrm2
+libgbm1
+libjansson4
+libpixman-1-0
+libturbojpeg0
+libwayland-client0
+libxkbcommon0
+zlib1g

@@ -13,6 +13,8 @@
 #
 # Targets, and the root each is built in (override with the variable):
 #   devuan6-aarch64   wf-panel            DEVUAN_ARM64_ROOT   (build/devuan-arm64-desk)
+#   wayvnc-aarch64    wayvnc 0.10, into devuan6-aarch64   DEVUAN_ARM64_ROOT
+#   wayvnc-x86_64     wayvnc 0.10, into devuan6-x86_64    DEVUAN_X86_64_ROOT (build/devuan-amd64-test)
 #   glibc-aarch64     the two shims       DEVUAN_ARM64_ROOT
 #   glibc-x86_64      the two shims       DEVUAN_X86_64_ROOT
 #   musl-aarch64      the two shims       ALPINE_ARM64_ROOT   (build/alpine-arm64-324)
@@ -89,10 +91,17 @@ for l in $(readelf -d /realmnt/wf-panel | sed -n "s/.*Shared library: \[\(.*\)\]
 done | awk "!seen[\$0]++" > /realmnt/wf-panel.depends
 echo librsvg2-common >> /realmnt/wf-panel.depends'
 
-targets=${*:-"devuan6-aarch64 glibc-aarch64 glibc-x86_64 glibc-i386 glibc-riscv64 musl-aarch64 musl-x86_64 musl-i386 musl-riscv64"}
+# wayvnc 0.10.2 with its own neatvnc and aml, for Devuan 6's 0.9.1 (see
+# opt/AOK/tools/wayland/build-wayvnc.sh), next to wf-panel in devuan6-<arch>.
+vnc='set -e
+sh /AOK/tools/wayland/build-wayvnc.sh --out /realmnt'
+
+targets=${*:-"devuan6-aarch64 wayvnc-aarch64 wayvnc-x86_64 glibc-aarch64 glibc-x86_64 glibc-i386 glibc-riscv64 musl-aarch64 musl-x86_64 musl-i386 musl-riscv64"}
 for t in $targets; do
     case "$t" in
         devuan6-aarch64) guest "$DEVUAN_ARM64_ROOT" "$t" "$panel" ;;
+        wayvnc-aarch64)  guest "$DEVUAN_ARM64_ROOT" devuan6-aarch64 "$vnc" ;;
+        wayvnc-x86_64)   guest "$DEVUAN_X86_64_ROOT" devuan6-x86_64 "$vnc" ;;
         glibc-aarch64)   guest "$DEVUAN_ARM64_ROOT" "$t" "$shims" ;;
         glibc-x86_64)    guest "$DEVUAN_X86_64_ROOT" "$t" "$shims" ;;
         musl-aarch64)    guest "$ALPINE_ARM64_ROOT" "$t" "$shims" ;;

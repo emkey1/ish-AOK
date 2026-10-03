@@ -147,6 +147,12 @@ if command -v apt-get >/dev/null 2>&1; then
             || die "could not add arm64 as a foreign architecture"
         PKGS="$(echo "$PKGS" | sed 's/wayfire wf-shell wcm //') wayfire:arm64 wf-shell:arm64 wcm:arm64"
         PKGS="$PKGS mesa-vulkan-drivers:arm64 libgl1-mesa-dri:arm64 libegl-mesa0:arm64 libvulkan1:arm64 librsvg2-common:arm64"
+        # A root with no wayvnc bundled for its own architecture (i386,
+        # riscv64) runs the arm64 one from /AOK/bundled: its libraries too.
+        if [ ! -r "/AOK/bundled/devuan6-$(uname -m)/wayvnc.depends" ] \
+                && [ -r /AOK/bundled/devuan6-aarch64/wayvnc.depends ]; then
+            PKGS="$PKGS $(sed -n 's/^\([a-z0-9][a-z0-9.+-]*\)$/\1:arm64/p' /AOK/bundled/devuan6-aarch64/wayvnc.depends | tr '\n' ' ')"
+        fi
     fi
     log "apt-get update"
     apt-get update || die "apt-get update failed -- check network/DNS (guest /etc/resolv.conf)"

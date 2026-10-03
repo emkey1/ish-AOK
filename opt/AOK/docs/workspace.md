@@ -342,13 +342,10 @@ and window size the same way, so the VNC server has nothing to do and stops
 copying the screen. `ISH_DISPLAY_DIRECT=0` leaves all of that to VNC, as
 before.
 
-**On Devuan 6, run `sudo sh /AOK/tools/fix-neatvnc --version 1.0.2` once
-for a GPU desktop.** The VNC server Devuan ships, wayvnc 0.9.1, can crash
-when the app takes the desktop over from it, most often right as the
-desktop opens; the app then waits at "Connecting to compositor..." while
-the session starts it again. The script builds wayvnc 0.10.2, which does
-not crash, under `/usr/local` (a few minutes; it leaves Devuan's packages
-alone).
+On Devuan the desktop runs the VNC server iSH-AOK carries in `/AOK/bundled`,
+wayvnc 0.10.2, rather than Devuan's 0.9.1, which can crash when the app takes
+the desktop over. `setup-wayland.sh` installs the libraries it needs; until
+it has, the desktop uses Devuan's, and starts it again if it crashes.
 
 **OpenGL on the GPU needs Mesa older than 25.2, which today means Devuan 6.**
 Mesa 25.2 and later -- Alpine 3.24's 26.1, and Arch's -- refuse to start zink

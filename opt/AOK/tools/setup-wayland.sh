@@ -108,6 +108,19 @@ if command -v apt-get >/dev/null 2>&1; then
         labwc sway wofi foot wayvnc wlr-randr \
         || die "apt-get install failed -- see output above"
 
+    # The desktop runs the wayvnc in /AOK/bundled (0.10.2; Devuan's 0.9.1 can
+    # die when the app takes a GPU desktop over -- see start-wayland.sh), and
+    # it needs these libraries. The packaged wayvnc above stays as the
+    # fallback for a root the bundle was not built for.
+    vnc_depends="/AOK/bundled/devuan6-$(uname -m)/wayvnc.depends"
+    if [ -r "$vnc_depends" ]; then
+        log "installing the libraries of the bundled wayvnc"
+        # shellcheck disable=SC2046 # one package name per line
+        DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            $(sed -n 's/^\([a-z0-9][a-z0-9.+-]*\)$/\1/p' "$vnc_depends") \
+            || note "could not install them; the desktop uses Devuan's wayvnc instead"
+    fi
+
 elif command -v pacman >/dev/null 2>&1; then
     log "Arch (pacman) detected"
     # All five packages carry the same names in the Arch repos as in Devuan.

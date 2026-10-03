@@ -41,8 +41,10 @@
 # chunk detected"). A resize just before -- how every session starts -- makes
 # it likely; the app then waits at "Connecting to compositor..." while
 # start-wayland.sh starts wayvnc again. wayvnc 0.10.0 fixed it, and 0.10 needs
-# neatvnc 1.x, so --version 1.0.2 (aml 1.0.0, neatvnc 1.0.2, wayvnc 0.10.2) is
-# the cure there.
+# neatvnc 1.x. iSH-AOK carries a wayvnc 0.10.2 for Devuan in /AOK/bundled
+# (aarch64 and x86_64), which start-wayland.sh prefers, so this is needed only
+# where that one cannot run; --version 1.0.2 (aml 1.0.0, neatvnc 1.0.2, wayvnc
+# 0.10.2) builds the same thing under /usr/local.
 #
 # Everything is installed under /usr/local, so the distro's own packages are
 # left alone and `apt remove` / `apk del` still describe reality. Removing what
