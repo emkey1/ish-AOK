@@ -137,6 +137,12 @@ else
     _wl_choice=$(sed -n 's/^AOK_DESKTOP=//p' /etc/aok-desktop.conf 2>/dev/null | tail -n 1)
     case "$_wl_choice" in labwc|sway|wayfire|xfce) AOK_DESKTOP=$_wl_choice ;; esac
 fi
+# Wayfire's panel: wf-shell's own wf-panel, or waybar with wofi as its launcher
+# (select-desktop.sh --panel; setup-wayfire.sh offers both).
+AOK_WAYFIRE_PANEL=wf-panel
+case "$(sed -n 's/^AOK_WAYFIRE_PANEL=//p' /etc/aok-desktop.conf 2>/dev/null | tail -n 1)" in
+    waybar) AOK_WAYFIRE_PANEL=waybar ;;
+esac
 case "$AOK_DESKTOP" in
     xfce) COMPOSITOR_BIN=labwc DESKTOP_BINS="labwc xfce4-session" DESKTOP_SETUP=setup-xfce.sh ;;
     wayfire) COMPOSITOR_BIN=wayfire DESKTOP_BINS=wayfire DESKTOP_SETUP=setup-wayfire.sh ;;
@@ -672,6 +678,22 @@ export PATH
 # unavailable (ISH_PIX_ACCEL off, or an emulator build without it) -- so
 # exporting this is always safe even if the host-side toggle is off; it
 # just makes acceleration possible when it's on, never required.
+#
+# /AOK/bundled carries both shims prebuilt for this root's libc and CPU
+# (tools/build-bundled.sh), and they come first: they need no compiler and
+# update with the app. A local build (setup-wayland.sh, or the release
+# guard's per-user one below) is the fallback for a root they do not cover.
+AOK_BUNDLED_LIBC=glibc
+ls /lib/ld-musl-*.so.1 >/dev/null 2>&1 && AOK_BUNDLED_LIBC=musl
+case "$(uname -m)" in
+    aarch64|arm64) AOK_BUNDLED_ARCH=aarch64 ;;
+    x86_64|amd64) AOK_BUNDLED_ARCH=x86_64 ;;
+    *) AOK_BUNDLED_ARCH=$(uname -m) ;;
+esac
+AOK_BUNDLED_LIBS=/AOK/bundled/$AOK_BUNDLED_LIBC-$AOK_BUNDLED_ARCH
+if [ -z "${ISH_PIXMAN_SHIM:-}" ] && [ -f "$AOK_BUNDLED_LIBS/libish-pixman.so" ]; then
+    ISH_PIXMAN_SHIM=$AOK_BUNDLED_LIBS/libish-pixman.so
+fi
 ISH_PIXMAN_SHIM="${ISH_PIXMAN_SHIM:-/usr/local/lib/ish-pixman/libish-pixman.so}"
 if [ "${ISH_WAYLAND_DISABLE_PIXMAN_SHIM:-0}" != "1" ] && [ -f "$ISH_PIXMAN_SHIM" ]; then
     export LD_PRELOAD="$ISH_PIXMAN_SHIM${LD_PRELOAD:+:$LD_PRELOAD}"
@@ -684,7 +706,8 @@ fi
 # installs it; a desktop set up before that gets it built here, once, into
 # the user's cache, when there is a compiler. Without either the session runs
 # as it always has. ISH_WAYLAND_DISABLE_RELEASE_GUARD=1 leaves it out.
-ISH_RELEASE_GUARD=/usr/local/lib/ish-wayland/libish-wl-release-guard.so
+ISH_RELEASE_GUARD=$AOK_BUNDLED_LIBS/libish-wl-release-guard.so
+[ -f "$ISH_RELEASE_GUARD" ] || ISH_RELEASE_GUARD=/usr/local/lib/ish-wayland/libish-wl-release-guard.so
 if [ ! -f "$ISH_RELEASE_GUARD" ]; then
     ISH_RELEASE_GUARD="$HOME/.cache/ish-wayland/libish-wl-release-guard.so"
     if [ "${ISH_WAYLAND_DISABLE_RELEASE_GUARD:-0}" != "1" ] && command -v cc >/dev/null 2>&1 \
@@ -1577,6 +1600,63 @@ if [ "$AOK_DESKTOP" = labwc ] && command -v waybar >/dev/null 2>&1 \
 }
 WAYBAR_CONFIG_EOF
 fi
+# waybar as Wayfire's panel (AOK_WAYFIRE_PANEL=waybar) has a config of its own,
+# so a labwc config beside it is left alone: the same modules, plus what labwc
+# has elsewhere -- an Apps button that opens wofi's application list, since
+# Wayfire's desktop has no menu of its own. Written when missing; edit freely.
+WAYFIRE_WAYBAR_CONFIG="$HOME/.config/waybar/wayfire.jsonc"
+if [ "$AOK_DESKTOP" = wayfire ] && [ "$AOK_WAYFIRE_PANEL" = waybar ] \
+        && command -v waybar >/dev/null 2>&1 && [ ! -e "$WAYFIRE_WAYBAR_CONFIG" ]; then
+    mkdir -p "$HOME/.config/waybar"
+    cat > "$WAYFIRE_WAYBAR_CONFIG" <<'WAYFIRE_WAYBAR_EOF'
+// -*- mode: jsonc -*-
+// Written by /AOK/tools/start-wayland.sh: waybar as Wayfire's panel
+// (select-desktop.sh --panel waybar). Edit freely: it is only written when
+// missing.
+{
+    "spacing": 4,
+    "modules-left": ["custom/apps", "wlr/taskbar"],
+    "modules-center": ["clock"],
+    "modules-right": ["cpu", "memory", "battery", "tray"],
+    "custom/apps": {
+        "format": " Apps",
+        "tooltip": false,
+        "on-click": "pkill -x wofi || wofi --show drun --term=foot"
+    },
+    "wlr/taskbar": {
+        "format": "{icon} {title:.24}",
+        "icon-size": 16,
+        "on-click": "activate",
+        "on-click-middle": "close"
+    },
+    "clock": {
+        "tooltip-format": "<big>{:%Y %B}</big>\n<tt><small>{calendar}</small></tt>",
+        "format-alt": "{:%Y-%m-%d}"
+    },
+    "cpu": {
+        "format": "{usage}% ",
+        "tooltip": false
+    },
+    "memory": {
+        "format": "{}% "
+    },
+    "battery": {
+        "states": {
+            "warning": 30,
+            "critical": 15
+        },
+        "format": "{capacity}% {icon}",
+        "format-full": "{capacity}% {icon}",
+        "format-charging": "{capacity}% ",
+        "format-plugged": "{capacity}% ",
+        "format-icons": ["", "", "", "", ""]
+    },
+    "tray": {
+        "spacing": 10
+    }
+}
+WAYFIRE_WAYBAR_EOF
+fi
 # And a style that puts the text font first. waybar's default style.css asks for
 # FontAwesome before any text font. Alpine and Arch ship Font Awesome 7 with a
 # fontconfig alias from that name, and Font Awesome 6 and later draw letters and
@@ -1588,7 +1668,8 @@ fi
 # glyphs at their code points. Debian's Font Awesome 4.7 has no letters, so the
 # panel there looks the same either way. Written only when there is no user
 # style; the system style is imported, so it keeps up with the installed waybar.
-if [ "$AOK_DESKTOP" = labwc ] && command -v waybar >/dev/null 2>&1 \
+if { [ "$AOK_DESKTOP" = labwc ] || { [ "$AOK_DESKTOP" = wayfire ] && [ "$AOK_WAYFIRE_PANEL" = waybar ]; }; } \
+        && command -v waybar >/dev/null 2>&1 \
         && [ ! -e "$HOME/.config/waybar/style.css" ] && [ -r /etc/xdg/waybar/style.css ]; then
     mkdir -p "$HOME/.config/waybar"
     cat > "$HOME/.config/waybar/style.css" <<'WAYBAR_STYLE_EOF'
@@ -2061,11 +2142,33 @@ fi
 # and a panel that connects while the change is still arriving keeps a surface
 # that is never shown. Restarted later, the same panel in the same environment
 # is drawn. A wayfire.ini that starts wf-panel itself is left to do so.
-if [ "$AOK_DESKTOP" = wayfire ] && command -v wf-panel >/dev/null 2>&1 \
+# Or waybar, when select-desktop.sh --panel waybar chose it (and it is there).
+if [ "$AOK_DESKTOP" = wayfire ] && [ "$AOK_WAYFIRE_PANEL" = waybar ] && ! command -v waybar >/dev/null 2>&1; then
+    log "warning: waybar was chosen as Wayfire's panel but is not installed; starting wf-panel"
+    log "         (sudo sh /AOK/tools/setup-wayfire.sh --panel waybar installs it)"
+    AOK_WAYFIRE_PANEL=wf-panel
+fi
+if [ "$AOK_DESKTOP" = wayfire ] && [ "$AOK_WAYFIRE_PANEL" = waybar ]; then
+    log "starting the panel (waybar)"
+    spawn_logged panel waybar -c "$WAYFIRE_WAYBAR_CONFIG"
+    PANEL_PID=$SPAWN_PID
+elif [ "$AOK_DESKTOP" = wayfire ] && command -v wf-panel >/dev/null 2>&1 \
         && ! grep -qs '^[^#]*wf-panel' "$HOME/.config/wayfire.ini" \
         && ! grep -qs '^autostart_wf_shell *= *true' "$HOME/.config/wayfire.ini"; then
+    # The faster wf-panel (setup-wayfire.sh --panel fast) is built against one
+    # wf-shell release, which wf-panel.source beside it names; after the
+    # distro moves on, the packaged one is the safe panel.
+    panel_bin=wf-panel
+    fast_panel=$(readlink -f /usr/local/bin/wf-panel 2>/dev/null)
+    if [ -n "$fast_panel" ] && [ -f "$fast_panel.source" ] && [ -x /usr/bin/wf-panel ] \
+            && [ "$(cat "$fast_panel.source")" != "$(dpkg-query -W -f '${Version}' wf-shell 2>/dev/null)" ]; then
+        log "warning: the faster wf-panel was built for wf-shell $(cat "$fast_panel.source"),"
+        log "         not the installed one; starting the packaged wf-panel"
+        log "         (sudo sh /AOK/tools/setup-wayfire.sh --panel fast updates it)"
+        panel_bin=/usr/bin/wf-panel
+    fi
     log "starting the panel (wf-panel)"
-    spawn_logged panel wf-panel
+    spawn_logged panel "$panel_bin"
     PANEL_PID=$SPAWN_PID
 fi
 

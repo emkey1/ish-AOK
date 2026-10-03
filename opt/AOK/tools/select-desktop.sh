@@ -15,6 +15,12 @@
 # Usage:
 #   sh /AOK/tools/select-desktop.sh            show the choice, and what is installed
 #   sudo sh /AOK/tools/select-desktop.sh NAME  start NAME from the next session
+#   sudo sh /AOK/tools/select-desktop.sh --panel wf-panel|waybar
+#                                              Wayfire's panel: wf-shell's own (with
+#                                              its menu), or waybar with a wofi launcher
+#
+# setup-wayfire.sh offers both panels, and a faster wf-panel built from source
+# (tools/wayland/build-wf-panel.sh), and sets the panel it installed.
 #
 # The choice applies the next time the Wayland window opens; a desktop that is
 # open now keeps running as it is. WAYLAND_COMPOSITOR_CMD, set in the
@@ -51,6 +57,20 @@ current() {
     v=$(sed -n 's/^AOK_DESKTOP=//p' "$CONF" 2>/dev/null | tail -n 1)
     needs "$v" >/dev/null 2>&1 && echo "$v" || echo labwc
 }
+current_panel() {
+    v=$(sed -n 's/^AOK_WAYFIRE_PANEL=//p' "$CONF" 2>/dev/null | tail -n 1)
+    case "$v" in waybar) echo waybar ;; *) echo wf-panel ;; esac
+}
+# Both settings, written together so that changing one keeps the other.
+write_conf() {
+    {
+        echo "# Written by /AOK/tools/select-desktop.sh; start-wayland.sh reads it."
+        echo "# One of: labwc sway wayfire xfce"
+        echo "AOK_DESKTOP=$1"
+        echo "# Wayfire's panel: wf-panel or waybar"
+        echo "AOK_WAYFIRE_PANEL=$2"
+    } > "$CONF" || die "cannot write $CONF"
+}
 
 if [ $# -eq 0 ]; then
     cur=$(current)
@@ -61,6 +81,11 @@ if [ $# -eq 0 ]; then
         [ "$d" = "$cur" ] && mark="*"
         printf '  %s %-8s %s\n' "$mark" "$d" "$state"
     done
+    panel=$(current_panel)
+    case "$panel" in
+        wf-panel) [ -x /usr/local/bin/wf-panel ] && panel="wf-panel (the faster build in /usr/local/bin)" ;;
+    esac
+    echo "Wayfire's panel: $panel"
     if [ -n "${WAYLAND_COMPOSITOR_CMD:-}" ]; then
         echo "WAYLAND_COMPOSITOR_CMD is set ($WAYLAND_COMPOSITOR_CMD), and wins where it is set."
     fi
@@ -71,15 +96,36 @@ case "$1" in
     -h|--help) sed -n '/^# Usage:/,/^# The choice/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 0 ;;
 esac
 
-name=$1
-needs "$name" >/dev/null 2>&1 || die "unknown desktop '$name' -- choose labwc, sway, wayfire or xfce"
-installed "$name" || die "$name is not installed -- run: sudo sh /AOK/tools/$(setup_script "$name")"
-[ "$(id -u)" = 0 ] || die "must run as root:  sudo sh $0 $name"
+name=
+panel=
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --panel)
+            [ $# -ge 2 ] || die "--panel needs wf-panel or waybar"
+            panel=$2
+            shift 2 ;;
+        --panel=*) panel=${1#--panel=}; shift ;;
+        -*) die "unknown option '$1' (try --help)" ;;
+        *) [ -z "$name" ] || die "one desktop at a time"; name=$1; shift ;;
+    esac
+done
+[ -n "$name$panel" ] || die "nothing to set (try --help)"
 
-{
-    echo "# Written by /AOK/tools/select-desktop.sh; start-wayland.sh reads it."
-    echo "# One of: labwc sway wayfire xfce"
-    echo "AOK_DESKTOP=$name"
-} > "$CONF" || die "cannot write $CONF"
-echo "The Wayland desktop will start $name from the next session."
+if [ -n "$name" ]; then
+    needs "$name" >/dev/null 2>&1 || die "unknown desktop '$name' -- choose labwc, sway, wayfire or xfce"
+    installed "$name" || die "$name is not installed -- run: sudo sh /AOK/tools/$(setup_script "$name")"
+fi
+case "$panel" in
+    "") ;;
+    wf-panel) command -v wf-panel >/dev/null 2>&1 || die "wf-panel is not installed -- run: sudo sh /AOK/tools/setup-wayfire.sh" ;;
+    waybar)
+        command -v waybar >/dev/null 2>&1 || die "waybar is not installed -- run: sudo sh /AOK/tools/setup-wayfire.sh --panel waybar"
+        command -v wofi >/dev/null 2>&1 || die "wofi (its launcher) is not installed -- run: sudo sh /AOK/tools/setup-wayland.sh" ;;
+    *) die "unknown panel '$panel' -- choose wf-panel or waybar" ;;
+esac
+[ "$(id -u)" = 0 ] || die "must run as root:  sudo sh $0 ${name}${panel:+ --panel $panel}"
+
+write_conf "${name:-$(current)}" "${panel:-$(current_panel)}"
+[ -n "$name" ] && echo "The Wayland desktop will start $name from the next session."
+[ -n "$panel" ] && echo "Wayfire's panel will be $panel from the next session."
 echo "Close the Wayland window and open it again to switch."

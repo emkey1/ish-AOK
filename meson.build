@@ -482,7 +482,11 @@ endforeach
 # (with zsh). A native-mode root links /usr/share/terminfo here
 # (kernel/native_root.c), and kernel/zsh_glue.c puts the zsh tree on FPATH.
 # tools/gen-native-share-manifests.sh regenerates both manifests.
-aok_libs_groups = [['fs/aok-terminfo.manifest', 'opt/AOK/share/terminfo', '/native/libs/terminfo']]
+aok_libs_groups = [['fs/aok-terminfo.manifest', 'opt/AOK/share/terminfo', '/native/libs/terminfo'],
+                   # /AOK/bundled: built ahead of time for guest roots, by
+                   # tools/build-bundled.sh, so setup scripts link instead of
+                   # compiling on the device.
+                   ['fs/aok-bundled.manifest', 'opt/AOK/bundled', '/bundled']]
 if have_zsh
     aok_libs_groups += [['fs/aok-zsh-functions.manifest', 'deps/zsh', '/native/libs/zsh']]
 endif

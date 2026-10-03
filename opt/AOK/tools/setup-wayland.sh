@@ -245,13 +245,23 @@ if command -v qv4l2 >/dev/null 2>&1 || command -v qvidcap >/dev/null 2>&1; then
     fi
 fi
 
+# Both shims below come prebuilt in /AOK/bundled for glibc and musl on aarch64
+# and x86_64 (tools/build-bundled.sh), and start-wayland.sh loads those first;
+# they are only built here for a root those do not cover.
+case "$(uname -m)" in
+    aarch64|arm64|x86_64|amd64) shims_bundled=1 ;;
+    *) shims_bundled=0 ;;
+esac
+
 # Best-effort too: the wl_buffer release guard (tools/wayland/
 # ish_wl_release_guard.c), which keeps GTK 3 programs -- wf-panel's menu
 # among them -- from aborting when a buffer they committed twice is released
 # twice. Nothing but a compiler is needed; without one, start-wayland.sh
 # tries again per user, and a session runs without it as it always has.
 log "building the Wayland buffer release guard (best-effort)"
-if command -v cc >/dev/null 2>&1; then
+if [ "$shims_bundled" = 1 ]; then
+    note "prebuilt in /AOK/bundled for this root; nothing to build"
+elif command -v cc >/dev/null 2>&1; then
     sh /AOK/tools/wayland/build-release-guard.sh 2>&1 \
         || note "warning: release guard build failed -- GTK programs may abort on a double buffer release"
 else
@@ -267,7 +277,9 @@ fi
 # actually got built here). The pixman development headers are NOT needed:
 # the shim falls back to a copy of pixman.h vendored beside it.
 log "building pixman accelerator shim (best-effort)"
-if command -v cc >/dev/null 2>&1 || command -v gcc >/dev/null 2>&1; then
+if [ "$shims_bundled" = 1 ]; then
+    note "prebuilt in /AOK/bundled for this root; nothing to build"
+elif command -v cc >/dev/null 2>&1 || command -v gcc >/dev/null 2>&1; then
     if sh /AOK/tools/pixman/build-shim.sh 2>&1; then
         :
     else

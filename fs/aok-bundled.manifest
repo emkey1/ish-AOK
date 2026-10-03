@@ -1,0 +1,26 @@
+# Files served read-only at /AOK/bundled, embedded into the kernel by
+# tools/gen-aokfs.py at build time (see meson.build's aok_libs_groups).
+#
+# Programs and libraries built AHEAD OF TIME for guest roots, so that a setup
+# script links them in rather than compiling on the device -- wf-panel's
+# build ran an A10X iPad out of memory, and the shims want a compiler most
+# roots do not have. tools/build-bundled.sh builds them on a Mac, in the CLI's
+# guest roots, with the same scripts a device would run; the results are
+# committed under opt/AOK/bundled/.
+#
+# One directory per target: a distro release and architecture for what links
+# against a distro's own libraries (devuan6-aarch64: wf-panel, good only for
+# the wf-shell version in wf-panel.source; arm64 only, the fastest guest), a libc and architecture for what
+# links only against libc (glibc-x86_64: the shims).
+#
+# Each line: <path> [mode]   read from opt/AOK/bundled/<path>.
+devuan6-aarch64/wf-panel 0555
+devuan6-aarch64/wf-panel.source
+glibc-aarch64/libish-wl-release-guard.so 0555
+glibc-aarch64/libish-pixman.so 0555
+glibc-x86_64/libish-wl-release-guard.so 0555
+glibc-x86_64/libish-pixman.so 0555
+musl-aarch64/libish-wl-release-guard.so 0555
+musl-aarch64/libish-pixman.so 0555
+musl-x86_64/libish-wl-release-guard.so 0555
+musl-x86_64/libish-pixman.so 0555

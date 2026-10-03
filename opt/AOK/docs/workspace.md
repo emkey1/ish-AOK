@@ -274,6 +274,14 @@ Wayland window opens.
   too new for OpenGL ES on the GPU (see [The GPU](#the-gpu)), so
   `setup-wayfire.sh` refuses there; Alpine does not package it, and riscv64
   and i386 roots have no GPU driver.
+  Wayfire's panel is your choice, and `setup-wayfire.sh` asks (or takes
+  `--panel fast|waybar|both|stock`): **fast** is wf-shell's panel with a
+  menu that reopens at once -- the packaged one rebuilds every entry each time
+  it opens, which takes seconds on older iPads -- and comes prebuilt in
+  `/AOK/bundled` for arm64 roots (others build it, which takes a while); **waybar** is the panel the labwc desktop has, with an
+  **Apps** button opening wofi's application list; **both** installs the two,
+  and `sudo sh /AOK/tools/select-desktop.sh --panel waybar` (or `wf-panel`)
+  swaps between them for the next session.
 - **Xfce** is the complete desktop: its panel with the applications menu,
   desktops and clock, desktop icons, the Thunar file manager and the settings
   manager. The desktop's wallpaper does not draw yet, so it is black behind

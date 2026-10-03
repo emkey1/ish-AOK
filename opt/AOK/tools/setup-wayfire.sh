@@ -23,6 +23,20 @@
 # Usage:
 #   sudo sh /AOK/tools/setup-wayfire.sh               install, and start Wayfire from the next session
 #   sudo sh /AOK/tools/setup-wayfire.sh --no-select   install only
+#   sudo sh /AOK/tools/setup-wayfire.sh --panel P     and the panel: P is one of
+#       fast    wf-panel with a menu that reopens instead of rebuilding itself
+#               (tools/wayland/build-wf-panel.sh). The packaged wf-panel
+#               takes 3-6 s to open its menu on an A10X iPad, this one
+#               0.7 s. Prebuilt in /AOK/bundled for Devuan 6 on arm64 (the
+#               fastest guest) and linked; built from source elsewhere, or
+#               for a wf-shell the bundled one does not match.
+#       waybar  waybar, with an Apps button that opens wofi's application
+#               list, as the labwc desktop's panel is. No build.
+#       both    the two, starting with fast; swap whenever you like with
+#               select-desktop.sh --panel wf-panel|waybar
+#       stock   the packaged wf-panel as it is
+#     Asked when run in a terminal without --panel; stock otherwise.
+#   sudo sh /AOK/tools/select-desktop.sh --panel waybar   change the panel later
 #   sudo sh /AOK/tools/select-desktop.sh labwc        back to the default desktop
 #
 # Devuan 6 (Wayfire 0.9) runs it. Arch Linux ARM packages it (0.11) but its
@@ -36,13 +50,21 @@ note() { printf '    %s\n' "$*"; }
 die()  { printf 'setup-wayfire.sh: %s\n' "$*" >&2; exit 1; }
 
 SELECT=1
-for arg in "$@"; do
-    case "$arg" in
+PANEL=
+while [ $# -gt 0 ]; do
+    case "$1" in
         --no-select) SELECT=0 ;;
+        --panel) [ $# -ge 2 ] || die "--panel needs fast, waybar, both or stock"; PANEL=$2; shift ;;
+        --panel=*) PANEL=${1#--panel=} ;;
         -h|--help) sed -n '/^# Usage:/,/^# Devuan/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 0 ;;
-        *) die "unknown option '$arg' (try --help)" ;;
+        *) die "unknown option '$1' (try --help)" ;;
     esac
+    shift
 done
+case "$PANEL" in
+    ""|fast|waybar|both|stock) ;;
+    *) die "unknown panel '$PANEL' -- choose fast, waybar, both or stock" ;;
+esac
 
 [ "$(id -u)" = 0 ] || die "must run as root:  sudo sh $0 $*"
 
@@ -116,13 +138,91 @@ for bin in wayfire wf-panel wf-background; do
     command -v "$bin" >/dev/null 2>&1 || die "install reported success but '$bin' is not on PATH"
 done
 
+# The panel. Asked in a terminal; without one, and without --panel, the
+# packaged wf-panel, as before.
+if [ -z "$PANEL" ]; then
+    PANEL=stock
+    if [ -t 0 ] && [ -t 1 ]; then
+        echo
+        echo "Which panel should Wayfire have?"
+        echo "  1) fast    wf-panel whose menu reopens at once (prebuilt; the packaged"
+        echo "             one takes seconds per open on older iPads)"
+        echo "  2) waybar  waybar with an Apps button opening wofi (no build)"
+        echo "  3) both    fast and waybar; swap any time with"
+        echo "             sudo sh /AOK/tools/select-desktop.sh --panel wf-panel|waybar"
+        echo "  4) stock   the packaged wf-panel as it is"
+        printf 'Choose 1-4 [4]: '
+        read -r answer || answer=
+        case "$answer" in
+            1|fast) PANEL=fast ;;
+            2|waybar) PANEL=waybar ;;
+            3|both) PANEL=both ;;
+            *) PANEL=stock ;;
+        esac
+    fi
+fi
+case "$PANEL" in
+    waybar|both)
+        if ! command -v waybar >/dev/null 2>&1 || ! command -v wofi >/dev/null 2>&1; then
+            log "installing waybar and wofi"
+            if command -v apt-get >/dev/null 2>&1; then
+                DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends waybar wofi fonts-font-awesome
+            else
+                pacman -S --needed --noconfirm waybar wofi otf-font-awesome
+            fi || die "could not install waybar -- see above"
+        fi ;;
+esac
+# The faster wf-panel comes prebuilt in /AOK/bundled for Devuan 6's wf-shell
+# on arm64 and is linked in; other architectures, and a wf-shell it was not
+# built for, compile it here (which needs a lot of memory -- an A10X iPad ran
+# out). x86_64 is not bundled: arm64 is the guest that runs fastest, and
+# Wayland on an x86_64 root is the exception.
+case "$(uname -m)" in
+    aarch64|arm64) bundled_panel=/AOK/bundled/devuan6-aarch64/wf-panel ;;
+    *) bundled_panel= ;;
+esac
+case "$PANEL" in
+    fast|both)
+        wf_shell_version=$(dpkg-query -W -f '${Version}' wf-shell 2>/dev/null) || wf_shell_version=
+        if [ -n "$bundled_panel" ] && [ -x "$bundled_panel" ] && [ -n "$wf_shell_version" ] \
+                && [ "$(cat "$bundled_panel.source" 2>/dev/null)" = "$wf_shell_version" ]; then
+            log "linking the faster wf-panel from /AOK/bundled"
+            rm -f /usr/local/lib/ish-wayland/wf-panel /usr/local/lib/ish-wayland/wf-panel.source
+            mkdir -p /usr/local/bin
+            ln -sf "$bundled_panel" /usr/local/bin/wf-panel || die "could not link /usr/local/bin/wf-panel"
+        elif command -v apt-get >/dev/null 2>&1; then
+            if [ -n "$bundled_panel" ]; then
+                note "the bundled faster wf-panel is for wf-shell $(cat "$bundled_panel.source" 2>/dev/null || echo '(none)'),"
+                note "this root has ${wf_shell_version:-none}: building one from source"
+            else
+                note "no faster wf-panel is bundled for $(uname -m): building one from source"
+            fi
+            log "building the faster wf-panel (tools/wayland/build-wf-panel.sh)"
+            sh /AOK/tools/wayland/build-wf-panel.sh \
+                || die "the faster wf-panel did not build -- see above; the packaged one still works"
+        else
+            note "the faster wf-panel is built from Debian/Devuan source; this root keeps the packaged one"
+        fi ;;
+esac
+case "$PANEL" in
+    waybar) PANEL_CHOICE=waybar ;;
+    *) PANEL_CHOICE=wf-panel ;;
+esac
+
 log "done"
 note "Wayfire $(wayfire --version 2>/dev/null | sed -n '1s/[- ].*//p') is installed."
 if [ "$SELECT" = 1 ]; then
-    sh /AOK/tools/select-desktop.sh wayfire >/dev/null || die "could not select it -- see select-desktop.sh"
+    sh /AOK/tools/select-desktop.sh wayfire --panel "$PANEL_CHOICE" >/dev/null \
+        || die "could not select it -- see select-desktop.sh"
     note "The Wayland window starts Wayfire from its next session: close it and open it again."
 else
+    sh /AOK/tools/select-desktop.sh --panel "$PANEL_CHOICE" >/dev/null \
+        || die "could not set the panel -- see select-desktop.sh"
     note "To start it from the next session:  sudo sh /AOK/tools/select-desktop.sh wayfire"
+fi
+note "Panel: $PANEL_CHOICE$( [ "$PANEL_CHOICE" = wf-panel ] && [ -x /usr/local/bin/wf-panel ] && echo ' (the faster build)')."
+if [ "$PANEL" = both ]; then
+    note "Swap panels: sudo sh /AOK/tools/select-desktop.sh --panel waybar (or wf-panel)"
 fi
 note "Wayfire will not run as root: the Wayland window needs Settings >"
 note "Open Everything as Default User turned on, or it opens labwc instead."
