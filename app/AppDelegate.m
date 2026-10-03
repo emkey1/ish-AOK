@@ -3504,6 +3504,53 @@ static NSString *ISHSessionSlotTitle(NSDictionary *slot, NSDateFormatter *when) 
             [slot[@"tasks"] unsignedLongValue] == 1 ? @"" : @"es", stamp, automatic];
 }
 
+// Remove one saved session: the image, its Workspace layout, and the pin that
+// would have aimed the next save at it.
+static void ISHSessionDeleteSlot(NSDictionary *slot) {
+    NSString *path = slot[@"path"];
+    NSError *removeError = nil;
+    BOOL removed = [NSFileManager.defaultManager removeItemAtPath:path error:&removeError];
+    ISHWorkspaceForgetLayoutForSessionImage(path);
+    // If the next save was aimed here, it no longer is: the name is free, and
+    // leaving it pinned would silently re-create the image the user just asked
+    // to be rid of.
+    if ([ISHSuspendSessionImagePath() isEqualToString:path])
+        ISHSessionSetCurrentSlot(nil);
+    [ISHDiagnosticsStore recordBreadcrumb:@"session.deleted"
+                                  details:@{@"removed": @(removed),
+                                            @"error": removeError.localizedDescription ?: @""}];
+}
+
+// The only saved session: confirm, delete it, and launch as if there had been
+// none. With one session a picker of one, then an empty one, was two screens
+// to get rid of something the user had already said they did not want.
+static void ISHSessionConfirmDeleteOnly(UIViewController *host, NSDictionary *slot,
+                                        void (^completion)(NSString *_Nullable)) {
+    NSDateFormatter *when = [[NSDateFormatter alloc] init];
+    when.dateStyle = NSDateFormatterShortStyle;
+    when.timeStyle = NSDateFormatterShortStyle;
+    ISHActionSheet *sheet = [ISHActionSheet
+        alertWithTitle:@"Delete this saved session?"
+               message:[NSString stringWithFormat:@"%@\n\nIt cannot be resumed afterwards. "
+                                                  @"iSH-AOK then starts a new session.",
+                                                  ISHSessionSlotTitle(slot, when)]];
+    [sheet addActionWithTitle:@"Delete and Start New"
+                        style:UIAlertActionStyleDestructive
+                      handler:^(__unused UIAlertAction *a) {
+        ISHSessionDeleteSlot(slot);
+        ISHSessionSetResumeChoice(nil);
+        completion(nil);
+    }];
+    [sheet addActionWithTitle:@"Cancel"
+                        style:UIAlertActionStyleCancel
+                      handler:^(__unused UIAlertAction *a) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            ISHSessionPresentResumePicker(host, completion);
+        });
+    }];
+    [sheet presentFromViewController:host source:nil];
+}
+
 // Remove saved sessions without resuming anything.
 //
 // The picker could only ever get rid of an image by resuming it first
@@ -3530,18 +3577,7 @@ static void ISHSessionPresentDeletePicker(UIViewController *host,
         [sheet addActionWithTitle:ISHSessionSlotTitle(slot, when)
                             style:UIAlertActionStyleDestructive
                           handler:^(__unused UIAlertAction *a) {
-            NSString *path = slot[@"path"];
-            NSError *removeError = nil;
-            BOOL removed = [NSFileManager.defaultManager removeItemAtPath:path error:&removeError];
-            ISHWorkspaceForgetLayoutForSessionImage(path);
-            // If the next save was aimed here, it no longer is: the name is
-            // free, and leaving it pinned would silently re-create the image
-            // the user just asked to be rid of.
-            if ([ISHSuspendSessionImagePath() isEqualToString:path])
-                ISHSessionSetCurrentSlot(nil);
-            [ISHDiagnosticsStore recordBreadcrumb:@"session.deleted"
-                                          details:@{@"removed": @(removed),
-                                                    @"error": removeError.localizedDescription ?: @""}];
+            ISHSessionDeleteSlot(slot);
             // Back to the list, so several can go in one visit.
             dispatch_async(dispatch_get_main_queue(), ^{
                 ISHSessionPresentDeletePicker(host, completion);
@@ -3636,11 +3672,18 @@ void ISHSessionPresentResumePicker(UIViewController *host,
         }];
     }
 
-    [sheet addActionWithTitle:@"Delete a Saved Session\u2026"
+    // One session: straight to "are you sure", then a regular launch. Several:
+    // the picker, to choose which.
+    NSDictionary *onlySlot = slots.count == 1 ? slots.firstObject : nil;
+    [sheet addActionWithTitle:onlySlot != nil ? @"Delete Saved Session\u2026"
+                                              : @"Delete a Saved Session\u2026"
                         style:UIAlertActionStyleDestructive
                       handler:^(__unused UIAlertAction *a) {
         dispatch_async(dispatch_get_main_queue(), ^{
-            ISHSessionPresentDeletePicker(host, completion);
+            if (onlySlot != nil)
+                ISHSessionConfirmDeleteOnly(host, onlySlot, completion);
+            else
+                ISHSessionPresentDeletePicker(host, completion);
         });
     }];
 
