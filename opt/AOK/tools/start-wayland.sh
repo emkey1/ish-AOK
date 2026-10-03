@@ -469,8 +469,35 @@ export WLR_SCENE_DISABLE_DIRECT_SCANOUT=1
 # ISH_DISPLAY_GPU=0 keeps it in software. On the GPU the app also takes the
 # frames directly (wl-present, below); ISH_DISPLAY_DIRECT=0 leaves that to
 # wayvnc.
-wl_gpu_usable() {
+#
+# Usable FOR WHICH PROGRAM: the driver a process loads is of its own
+# architecture, not the root's. setup-wayfire.sh installs Wayfire as arm64 on
+# a Devuan root of any architecture (multiarch), with arm64's Venus and zink,
+# so an arm64 Wayfire composites on the GPU in a riscv64 or i386 root -- whose
+# own Mesa has no Venus driver -- while a native labwc there cannot. So the
+# drivers are looked for in the multiarch directory of the program's ELF
+# machine; a root without those directories (Alpine, Arch) is looked at as
+# before.
+wl_elf_triplet() {
+    case "$(od -An -tu2 -j18 -N2 "$1" 2>/dev/null | tr -d ' ')" in
+        183) echo aarch64-linux-gnu ;;
+        62) echo x86_64-linux-gnu ;;
+        3) echo i386-linux-gnu ;;
+        243) echo riscv64-linux-gnu ;;
+    esac
+}
+wl_gpu_usable_for() {
     [ -c /dev/dri/renderD128 ] || return 1
+    _gp_bin=$(command -v "$1" 2>/dev/null)
+    _gp_triplet=$([ -n "$_gp_bin" ] && wl_elf_triplet "$(readlink -f "$_gp_bin")")
+    if [ -n "$_gp_triplet" ] && [ -d "/usr/lib/$_gp_triplet" ]; then
+        # The Venus driver library itself: Debian's ICD manifest is one
+        # virtio_icd.json for every architecture, naming the library without
+        # a path, so only the library says which architectures have it.
+        [ -e "/usr/lib/$_gp_triplet/libvulkan_virtio.so" ] || return 1
+        [ -e "/usr/lib/$_gp_triplet/dri/zink_dri.so" ]
+        return
+    fi
     ls /usr/share/vulkan/icd.d/virtio_icd*.json >/dev/null 2>&1 || return 1
     for zink in /usr/lib/*/dri/zink_dri.so /usr/lib/dri/zink_dri.so /usr/lib64/dri/zink_dri.so; do
         [ -e "$zink" ] && return 0
@@ -478,7 +505,7 @@ wl_gpu_usable() {
     return 1
 }
 WL_GPU_COMPOSITOR=0
-if [ -z "${WLR_RENDERER:-}" ] && [ "${ISH_DISPLAY_GPU:-1}" != 0 ] && wl_gpu_usable; then
+if [ -z "${WLR_RENDERER:-}" ] && [ "${ISH_DISPLAY_GPU:-1}" != 0 ] && wl_gpu_usable_for "$COMPOSITOR_BIN"; then
     WL_GPU_COMPOSITOR=1
 fi
 # Two things Wayfire cannot do, where the session is the plain labwc desktop
@@ -512,12 +539,14 @@ export WLR_RENDERER="${WLR_RENDERER:-pixman}"
 # session launches -- typically from a shell inside foot -- inherits them
 # without the user needing to know this environment has no GPU.
 export GSK_RENDERER=cairo
+# (Asked for /usr/bin/env, which is of the root's own architecture as the
+# programs started here are; `sh` can be iSH-AOK's native dash, no ELF at all.)
 # OpenGL programs render in software unless /etc/aok-gpu.conf (written by
 # /AOK/tools/setup-gpu.sh --gl-default) says AOK_GL=gpu: zink on this GPU is
 # OpenGL 2.1 / ES 2.0 against llvmpipe's 4.5, so the GPU cannot be everyone's
 # default. A caller's own LIBGL_ALWAYS_SOFTWARE wins either way.
 if [ -z "${LIBGL_ALWAYS_SOFTWARE+set}" ] && [ -f /etc/aok-gpu.conf ] &&
-   grep -q '^AOK_GL=gpu' /etc/aok-gpu.conf 2>/dev/null && wl_gpu_usable; then
+   grep -q '^AOK_GL=gpu' /etc/aok-gpu.conf 2>/dev/null && wl_gpu_usable_for /usr/bin/env; then
     export LIBGL_ALWAYS_SOFTWARE=0 MESA_LOADER_DRIVER_OVERRIDE=zink
 fi
 export LIBGL_ALWAYS_SOFTWARE="${LIBGL_ALWAYS_SOFTWARE-1}"

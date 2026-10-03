@@ -270,10 +270,14 @@ Wayland window opens.
   when the drivers are missing. Wayfire also refuses to run as root, as it
   does on any Linux, so it needs **Open Everything as Default User** turned on
   in Settings. A session without the GPU, or a root one, starts labwc instead
-  and says why. It runs on Devuan 6. Arch packages it, but Arch's Mesa is
-  too new for OpenGL ES on the GPU (see [The GPU](#the-gpu)), so
-  `setup-wayfire.sh` refuses there; Alpine does not package it, and riscv64
-  and i386 roots have no GPU driver.
+  and says why. It runs on Devuan 6 of **any** architecture: on a root that
+  is not arm64, `setup-wayfire.sh` installs Wayfire, its shell and its
+  settings window as arm64 through Debian multiarch, with arm64's GPU drivers,
+  and iSH-AOK runs that arm64 Wayfire on the GPU there -- in a riscv64 or i386
+  root, whose own Mesa has no GPU driver, as in an arm64 one. The terminal, the
+  VNC bridge and the X server stay the root's own. Arch packages Wayfire, but
+  Arch's Mesa is too new for OpenGL ES on the GPU (see [The GPU](#the-gpu)), so
+  `setup-wayfire.sh` refuses there; Alpine does not package it.
   Wayfire's panel is your choice, and `setup-wayfire.sh` asks (or takes
   `--panel fast|waybar|both|stock`): **fast** is wf-shell's panel with a
   menu that reopens at once -- the packaged one rebuilds every entry each time

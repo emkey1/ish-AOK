@@ -13,8 +13,15 @@
 # wayvnc, wofi) and the GPU drivers (setup-gpu.sh).
 #
 # Wayfire draws everything with OpenGL ES, so it needs the GPU: iSH-AOK's
-# render node, Mesa's Venus driver and zink, which means an aarch64 or x86_64
-# root. And it will not run as root, on any Linux, so the Wayland window must
+# render node, Mesa's Venus driver and zink. Mesa has Venus only for aarch64
+# and x86_64 -- but the driver a process loads is of the PROCESS's
+# architecture, not the root's, and iSH-AOK runs an arm64 program in a root
+# of any architecture. So on a Devuan root that is not arm64, Wayfire, its
+# shell and its settings window are installed as arm64 through multiarch,
+# with arm64's Mesa: an arm64 Wayfire composites on the GPU in a riscv64 or
+# i386 root as it does in an arm64 one, and runs as the fastest guest on an
+# x86_64 one. The terminal, VNC bridge and X server stay the root's own.
+# And it will not run as root, on any Linux, so the Wayland window must
 # open as your own account: Settings > Open Everything as Default User. A
 # session without either starts the labwc desktop instead, and says why.
 # Wayfire is like labwc in every way the app relies on (the app shows its
@@ -40,7 +47,8 @@
 #   sudo sh /AOK/tools/select-desktop.sh --panel waybar   change the panel later
 #   sudo sh /AOK/tools/select-desktop.sh labwc        back to the default desktop
 #
-# Devuan 6 (Wayfire 0.9) runs it. Arch Linux ARM packages it (0.11) but its
+# Devuan 6 (Wayfire 0.9) runs it, on any architecture (arm64 Wayfire through
+# multiarch where the root is not arm64). Arch Linux ARM packages it (0.11) but its
 # Mesa is too new for OpenGL ES on iSH-AOK's GPU (see below), and Alpine does
 # not package it; setup-xfce.sh works on both.
 # ---------------------------------------------------------------------------
@@ -72,10 +80,16 @@ esac
 if command -v apk >/dev/null 2>&1 && ! command -v apt-get >/dev/null 2>&1; then
     die "Alpine does not package Wayfire. The Xfce desktop works here: sudo sh /AOK/tools/setup-xfce.sh"
 fi
-case "$(uname -m)" in
-    x86_64|amd64|aarch64|arm64) : ;;
-    *) die "Wayfire needs the GPU, and Mesa has no GPU (Venus) driver for $(uname -m) roots. setup-xfce.sh works here." ;;
-esac
+# Wayfire as arm64 on a Devuan root of another architecture (see above).
+ARM64_MODE=0
+if command -v dpkg >/dev/null 2>&1; then
+    [ "$(dpkg --print-architecture)" = arm64 ] || ARM64_MODE=1
+else
+    case "$(uname -m)" in
+        x86_64|amd64|aarch64|arm64) : ;;
+        *) die "Wayfire needs the GPU, and Mesa has no GPU (Venus) driver for $(uname -m) roots. setup-xfce.sh works here." ;;
+    esac
+fi
 [ -c /dev/dri/renderD128 ] || die "no /dev/dri/renderD128: this iSH-AOK build has no GPU device, which Wayfire needs -- update the app"
 
 # The base desktop: the terminal, the VNC bridge and the launcher Wayfire's
@@ -85,8 +99,12 @@ if ! command -v foot >/dev/null 2>&1 || ! command -v wayvnc >/dev/null 2>&1; the
     sh /AOK/tools/setup-wayland.sh || die "setup-wayland.sh failed -- see above"
 fi
 
-# The GPU drivers. --check reports without installing.
-if ! sh /AOK/tools/setup-gpu.sh --check >/dev/null 2>&1; then
+# The GPU drivers. --check reports without installing. Not in arm64 mode:
+# setup-gpu.sh installs the root's own architecture's, and Wayfire's are
+# arm64's, installed with it below.
+if [ "$ARM64_MODE" = 1 ]; then
+    :
+elif ! sh /AOK/tools/setup-gpu.sh --check >/dev/null 2>&1; then
     log "the GPU drivers are not installed yet -- running setup-gpu.sh first"
     sh /AOK/tools/setup-gpu.sh || die "setup-gpu.sh failed, and Wayfire cannot run without the GPU -- see above"
 fi
@@ -96,7 +114,9 @@ fi
 # nullDescriptor -- which iSH-AOK's GPU (Venus on MoltenVK) does not offer
 # yet. Such a root would install Wayfire and then only ever start labwc, so
 # find out first. Devuan 6 (Mesa 25.0) works; Arch and Alpine 3.24 ship newer.
-gles_renderer=$(LIBGL_ALWAYS_SOFTWARE=0 MESA_LOADER_DRIVER_OVERRIDE=zink \
+# (In arm64 mode the arm64 Mesa's version is checked after it is installed.)
+gles_renderer=zink
+[ "$ARM64_MODE" = 1 ] || gles_renderer=$(LIBGL_ALWAYS_SOFTWARE=0 MESA_LOADER_DRIVER_OVERRIDE=zink \
     eglinfo -B -p surfaceless 2>/dev/null | sed -n 's/^OpenGL ES profile renderer: //p' | head -1)
 case "$gles_renderer" in
     *zink*) : ;;
@@ -118,12 +138,30 @@ if command -v apt-get >/dev/null 2>&1; then
         note "pinning pkgmaster.devuan.org (deb.devuan.org's round-robin can be very slow)"
         sed -i 's/deb\.devuan\.org/pkgmaster.devuan.org/g' "$SOURCES"
     fi
+    if [ "$ARM64_MODE" = 1 ]; then
+        # Wayfire's own packages and the drivers its process loads, as arm64;
+        # kclock and its modules stay the root's own (it is only a program the
+        # menu starts). A native wayfire from an earlier run is replaced.
+        log "this is a $(dpkg --print-architecture) root: Wayfire goes in as arm64 (Debian multiarch), with arm64's GPU drivers"
+        dpkg --print-foreign-architectures | grep -qx arm64 || dpkg --add-architecture arm64 \
+            || die "could not add arm64 as a foreign architecture"
+        PKGS="$(echo "$PKGS" | sed 's/wayfire wf-shell wcm //') wayfire:arm64 wf-shell:arm64 wcm:arm64"
+        PKGS="$PKGS mesa-vulkan-drivers:arm64 libgl1-mesa-dri:arm64 libegl-mesa0:arm64 libvulkan1:arm64 librsvg2-common:arm64"
+    fi
     log "apt-get update"
     apt-get update || die "apt-get update failed -- check network/DNS (guest /etc/resolv.conf)"
     log "installing $PKGS"
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold $PKGS \
         || die "apt-get install failed -- see output above"
+    if [ "$ARM64_MODE" = 1 ]; then
+        # The zink rule (above), for the Mesa Wayfire will load.
+        mesa_arm64=$(dpkg-query -W -f '${Version}' libegl-mesa0:arm64 2>/dev/null)
+        case "$mesa_arm64" in
+            2[0-4].*|25.[01].*|25.[01]) note "arm64 Mesa $mesa_arm64: OpenGL ES on the GPU" ;;
+            *) die "arm64 Mesa ${mesa_arm64:-(none)} is 25.2 or later, whose zink needs a Vulkan feature iSH-AOK's GPU does not offer yet; Wayfire cannot composite on it" ;;
+        esac
+    fi
 elif command -v pacman >/dev/null 2>&1; then
     PKGS="$PKGS $CLOCK_ARCH"
     log "Arch (pacman) detected"
