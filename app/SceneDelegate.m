@@ -637,6 +637,16 @@ BOOL ISHApplyShortcutActivityToConnectedScene(NSUserActivity *activity) {
     }
 }
 
+// A full-screen Wayland window that is closed ends its desktop: without this
+// it ended only when its view controller was freed, which nothing promises.
+- (void)sceneDidDisconnect:(UIScene *)scene {
+    [ISHDiagnosticsStore recordBreadcrumb:@"scene.didDisconnect"
+                                  details:@{@"session": scene.session.persistentIdentifier ?: @""}];
+    UIViewController *root = self.window.rootViewController;
+    if ([root isKindOfClass:DisplayViewController.class])
+        [(DisplayViewController *) root endSession];
+}
+
 - (void)sceneDidEnterBackground:(UIScene *)scene {
     [ISHDiagnosticsStore recordBreadcrumb:@"scene.didEnterBackground"
                                   details:@{@"session": scene.session.persistentIdentifier ?: @""}];

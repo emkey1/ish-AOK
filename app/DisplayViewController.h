@@ -29,6 +29,9 @@ NS_ASSUME_NONNULL_BEGIN
 // of ending it with this one: how the session moves between full screen and
 // the Workspace's window. A no-op without a session.
 - (void)parkSession;
+// Ends the running session, guest side included: what closing the window
+// means. A parked session is not this view's any more and is left alone.
+- (void)endSession;
 
 @end
 

@@ -11,6 +11,8 @@
 #import "SceneDelegate.h"
 #import "WorkspaceViewController.h"
 #import <GameController/GameController.h>
+#include "kernel/task.h"
+#include "kernel/signal.h"
 #include "kernel/init.h"
 #include "kernel/task.h"
 #include "kernel/calls.h"
@@ -121,9 +123,41 @@ static NSArray<NSString *> *DisplayGuestSessionCommand(void) {
     NSString *accountName = [AppDelegate defaultUserAccountName];
     if (accountName.length == 0)
         return DisplayRootCommand();
+    // `exec`, so that su's child IS the script, for DisplayHangUpSession to
+    // reach.
     return @[@"/bin/su", @"-", accountName, @"-c",
-             [NSString stringWithFormat:@"%@sh /AOK/tools/start-wayland.sh",
+             [NSString stringWithFormat:@"%@exec sh /AOK/tools/start-wayland.sh",
                  DisplayUIScaleEnvPrefix()]];
+}
+
+// Tells a session's start-wayland.sh to end, with the SIGHUP (and SIGCONT,
+// in case it is stopped) its trap ends it on. Closing the session's pty was
+// meant to do this, and does for a root session, whose script leads the pty's
+// session. A default-user session does not get it, on Linux or here: `su -c`
+// puts its child in a session of its own, without a terminal, and su itself
+// blocks SIGHUP while it waits, so a hangup reaches neither (measured on
+// camd, Linux 6.12, util-linux su). The Wayland window closed and Wayfire,
+// wayvnc, foot and wl-present ran on (bip, 2026-10-02). So the app sends the
+// signal itself: to the script, which is the session's process for root and
+// su's only child for an account.
+static void DisplayHangUpSession(int pid, BOOL throughSu) {
+    if (pid <= 0)
+        return;
+    complex_lockt(&pids_lock, 0);
+    struct task *task = pid_get_task(pid);
+    if (task != NULL) {
+        if (throughSu) {
+            struct task *child;
+            list_for_each_entry(&task->children, child, siblings) {
+                send_signal_to_process_pids_locked(child, SIGHUP_, SIGINFO_NIL);
+                send_signal_to_process_pids_locked(child, SIGCONT_, SIGINFO_NIL);
+            }
+        } else {
+            send_signal_to_process_pids_locked(task, SIGHUP_, SIGINFO_NIL);
+            send_signal_to_process_pids_locked(task, SIGCONT_, SIGINFO_NIL);
+        }
+    }
+    unlock(&pids_lock);
 }
 // Generous because the desktop starts together with the guest's boot, and on a
 // slow device under that load it takes most of a minute (5th-generation iPad:
@@ -950,6 +984,10 @@ static void DisplayParkSession(Terminal *terminal, int pid, NSString *_Nullable 
     [_rfbClient connectToGuestPort:guestPort];
 }
 
+- (void)endSession {
+    [self teardownSession];
+}
+
 - (void)teardownSession {
     [_displayView stopDirectFrames];
     [_rfbClient disconnect];
@@ -959,6 +997,7 @@ static void DisplayParkSession(Terminal *terminal, int pid, NSString *_Nullable 
     Terminal *terminal = _sessionTerminal;
     _sessionTerminal = nil;
     if (_sessionPid != 0) {
+        DisplayHangUpSession(_sessionPid, _sessionAccount != nil);
         _teardownPid = _sessionPid;
         _sessionPid = 0;
     }

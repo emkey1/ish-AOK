@@ -3952,6 +3952,11 @@ static UIView *ISHWorkspaceFindFirstResponder(UIView *view) {
         UIView *closingFirstResponder = ISHWorkspaceFindFirstResponder(strongWindowView);
         if (closingFirstResponder != nil)
             [closingFirstResponder resignFirstResponder];
+        // A closed Wayland window ends its desktop now, not whenever its view
+        // controller happens to be freed. (One handed to the full-screen view
+        // was parked first, and has no session left to end.)
+        if ([strongViewController isKindOfClass:DisplayViewController.class])
+            [(DisplayViewController *) strongViewController endSession];
         [strongViewController willMoveToParentViewController:nil];
         [strongViewController.view removeFromSuperview];
         [strongViewController removeFromParentViewController];
