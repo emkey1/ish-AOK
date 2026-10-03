@@ -703,16 +703,18 @@ export PATH
 # wayvnc from /AOK/bundled on Devuan and Debian. They ship wayvnc 0.9.1, which
 # can die when the app takes a GPU desktop over (see the comment at
 # wl-present); iSH-AOK carries 0.10.2, with its own neatvnc and aml
-# (opt/AOK/tools/wayland/build-wayvnc.sh), for aarch64 and x86_64. A root of
-# another architecture uses the aarch64 one when its arm64 libraries are there
-# (multiarch, as setup-wayfire.sh sets up for Wayfire). The bundled pair is
+# (opt/AOK/tools/wayland/build-wayvnc.sh), for aarch64, x86_64 and riscv64.
+# The aarch64 one is tried first on every root -- arm64 is the fastest guest,
+# and a root of another architecture runs it when its arm64 libraries are
+# there (multiarch, as setup-wayfire.sh sets up for Wayfire) -- then the
+# root's own. The bundled pair is
 # linked into the session's bin, first on PATH, so everything here and in
 # wl-present's loop runs it; when it cannot run -- its libraries are not
 # installed (setup-wayland.sh installs them) -- the distro's wayvnc is used.
 # ISH_DISPLAY_BUNDLED_WAYVNC=0 keeps the distro's.
 rm -f "$AOK_SESSION_BIN/wayvnc" "$AOK_SESSION_BIN/wayvncctl"
 if [ -r /etc/debian_version ] && [ "${ISH_DISPLAY_BUNDLED_WAYVNC:-1}" != 0 ]; then
-    for _vnc_dir in "/AOK/bundled/devuan6-$(uname -m)" /AOK/bundled/devuan6-aarch64; do
+    for _vnc_dir in /AOK/bundled/devuan6-aarch64 "/AOK/bundled/devuan6-$(uname -m)"; do
         [ -x "$_vnc_dir/wayvnc" ] && [ -x "$_vnc_dir/wayvncctl" ] || continue
         "$_vnc_dir/wayvnc" -V >/dev/null 2>&1 || continue
         ln -sf "$_vnc_dir/wayvnc" "$AOK_SESSION_BIN/wayvnc"
@@ -2020,9 +2022,24 @@ esac
 # unless asked to stay detached (a wayvnc started again while the app shows
 # wl-present's frames). A 0.9 wayvnc cannot start detached, so it is started
 # attached and detached once it is listening.
+# wl_preload_for BIN: this session's LD_PRELOAD with the bundled shims of BIN's
+# architecture. The shims preloaded above are the root's, and the aarch64
+# wayvnc a riscv64 or x86 root runs cannot load them: ld.so says so on every
+# start and the program goes without.
+wl_preload_for() {
+    case "$(wl_elf_triplet "$(readlink -f "$1" 2>/dev/null)")" in
+        aarch64-*) _pf_arch=aarch64 ;;
+        x86_64-*) _pf_arch=x86_64 ;;
+        i386-*) _pf_arch=i386 ;;
+        riscv64-*) _pf_arch=riscv64 ;;
+        *) printf '%s' "${LD_PRELOAD:-}"; return ;;
+    esac
+    printf '%s' "${LD_PRELOAD:-}" | sed "s#/AOK/bundled/\(glibc\|musl\)-[a-z0-9_]*/#/AOK/bundled/\1-$_pf_arch/#g"
+}
 start_wayvnc() {
     # $WAYVNC_*_ARG are empty or one word each, so they are left unquoted.
-    spawn_logged "wayvnc-attempt$wayvnc_attempt" wayvnc $WAYVNC_DETACHED_ARG $WAYVNC_RESIZE_ARG $WAYVNC_FPS_ARG 127.0.0.1 "$WAYVNC_PORT"
+    spawn_logged "wayvnc-attempt$wayvnc_attempt" env LD_PRELOAD="$(wl_preload_for "$(command -v wayvnc)")" \
+        wayvnc $WAYVNC_DETACHED_ARG $WAYVNC_RESIZE_ARG $WAYVNC_FPS_ARG 127.0.0.1 "$WAYVNC_PORT"
     WAYVNC_PID=$SPAWN_PID
     [ -n "$WAYVNC_DETACHED_ARG" ] || return 0
     [ "${1:-}" = stay-detached ] && return 0

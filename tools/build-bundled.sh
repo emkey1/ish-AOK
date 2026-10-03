@@ -15,6 +15,7 @@
 #   devuan6-aarch64   wf-panel            DEVUAN_ARM64_ROOT   (build/devuan-arm64-desk)
 #   wayvnc-aarch64    wayvnc 0.10, into devuan6-aarch64   DEVUAN_ARM64_ROOT
 #   wayvnc-x86_64     wayvnc 0.10, into devuan6-x86_64    DEVUAN_X86_64_ROOT (build/devuan-amd64-test)
+#   wayvnc-riscv64    wayvnc 0.10, into devuan6-riscv64   DEVUAN_RISCV64_ROOT (build/devuan-riscv64-desk)
 #   glibc-aarch64     the two shims       DEVUAN_ARM64_ROOT
 #   glibc-x86_64      the two shims       DEVUAN_X86_64_ROOT
 #   musl-aarch64      the two shims       ALPINE_ARM64_ROOT   (build/alpine-arm64-324)
@@ -44,6 +45,7 @@ top=$(cd "$(dirname "$0")/.." && pwd)
 ISH=${ISH:-$top/build/ish}
 DEVUAN_ARM64_ROOT=${DEVUAN_ARM64_ROOT:-$top/build/devuan-arm64-desk}
 DEVUAN_X86_64_ROOT=${DEVUAN_X86_64_ROOT:-$top/build/devuan-amd64-test}
+DEVUAN_RISCV64_ROOT=${DEVUAN_RISCV64_ROOT:-$top/build/devuan-riscv64-desk}
 ALPINE_ARM64_ROOT=${ALPINE_ARM64_ROOT:-$top/build/alpine-arm64-324}
 ALPINE_X86_64_ROOT=${ALPINE_X86_64_ROOT:-$top/build/alpine-amd64-test}
 ALPINE_I386_ROOT=${ALPINE_I386_ROOT:-$top/build/alpine-i386-test}
@@ -96,12 +98,13 @@ echo librsvg2-common >> /realmnt/wf-panel.depends'
 vnc='set -e
 sh /AOK/tools/wayland/build-wayvnc.sh --out /realmnt'
 
-targets=${*:-"devuan6-aarch64 wayvnc-aarch64 wayvnc-x86_64 glibc-aarch64 glibc-x86_64 glibc-i386 glibc-riscv64 musl-aarch64 musl-x86_64 musl-i386 musl-riscv64"}
+targets=${*:-"devuan6-aarch64 wayvnc-aarch64 wayvnc-x86_64 wayvnc-riscv64 glibc-aarch64 glibc-x86_64 glibc-i386 glibc-riscv64 musl-aarch64 musl-x86_64 musl-i386 musl-riscv64"}
 for t in $targets; do
     case "$t" in
         devuan6-aarch64) guest "$DEVUAN_ARM64_ROOT" "$t" "$panel" ;;
         wayvnc-aarch64)  guest "$DEVUAN_ARM64_ROOT" devuan6-aarch64 "$vnc" ;;
         wayvnc-x86_64)   guest "$DEVUAN_X86_64_ROOT" devuan6-x86_64 "$vnc" ;;
+        wayvnc-riscv64)  guest "$DEVUAN_RISCV64_ROOT" devuan6-riscv64 "$vnc" ;;
         glibc-aarch64)   guest "$DEVUAN_ARM64_ROOT" "$t" "$shims" ;;
         glibc-x86_64)    guest "$DEVUAN_X86_64_ROOT" "$t" "$shims" ;;
         musl-aarch64)    guest "$ALPINE_ARM64_ROOT" "$t" "$shims" ;;

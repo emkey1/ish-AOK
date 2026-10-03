@@ -9,7 +9,7 @@
 # committed under opt/AOK/bundled/.
 #
 # One directory per target: a distro release and architecture for what links
-# against a distro's own libraries (devuan6-aarch64 and devuan6-x86_64: wayvnc
+# against a distro's own libraries (devuan6-aarch64, devuan6-x86_64 and devuan6-riscv64: wayvnc
 # 0.10.2 with its own neatvnc and aml, in place of Devuan's 0.9.1, which
 # start-wayland.sh prefers; devuan6-aarch64: wf-panel, good only for
 # the wf-shell version in wf-panel.source; arm64 only, the fastest guest -- a
@@ -37,6 +37,13 @@ devuan6-x86_64/libaml.so.1 0555
 devuan6-x86_64/wayvnc.source
 devuan6-x86_64/wayvnc.depends
 devuan6-x86_64/wayvnc.COPYING
+devuan6-riscv64/wayvnc 0555
+devuan6-riscv64/wayvncctl 0555
+devuan6-riscv64/libneatvnc.so.1 0555
+devuan6-riscv64/libaml.so.1 0555
+devuan6-riscv64/wayvnc.source
+devuan6-riscv64/wayvnc.depends
+devuan6-riscv64/wayvnc.COPYING
 glibc-aarch64/libish-wl-release-guard.so 0555
 glibc-aarch64/libish-pixman.so 0555
 glibc-x86_64/libish-wl-release-guard.so 0555
