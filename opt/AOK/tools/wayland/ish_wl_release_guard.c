@@ -37,6 +37,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 // libwayland's ABI, declared here so this builds with nothing but a C
 // compiler (wayland-util.h and wayland-client-core.h have these, unchanged
@@ -99,14 +100,42 @@ static int (*real_add_listener)(struct wl_proxy *, void (**)(void), void *);
 static void *(*real_get_user_data)(struct wl_proxy *);
 static void (*real_set_user_data)(struct wl_proxy *, void *);
 
+// The real libwayland-client functions. RTLD_NEXT finds them when
+// libwayland-client is in the global scope, as it is for a program linked
+// against it (GTK). Qt loads its Wayland platform plugin with dlopen and
+// RTLD_LOCAL, so libwayland-client is NOT global there -- the plugin's calls
+// still bind to these definitions, preloaded, but RTLD_NEXT finds nothing,
+// and the first one jumped to address 0: kclock crashed at start (bip,
+// 2026-10-03). So it falls back to the library's own handle, which
+// RTLD_NOLOAD finds however it was loaded.
+static void *wl_sym(const char *name) {
+    void *sym = dlsym(RTLD_NEXT, name);
+    if (sym != NULL)
+        return sym;
+    void *lib = dlopen("libwayland-client.so.0", RTLD_LAZY | RTLD_NOLOAD);
+    if (lib == NULL)
+        lib = dlopen("libwayland-client.so.0", RTLD_LAZY);
+    return lib != NULL ? dlsym(lib, name) : NULL;
+}
+
+static void resolve_once(void) {
+    real_marshal_array = wl_sym("wl_proxy_marshal_array");
+    real_add_listener = wl_sym("wl_proxy_add_listener");
+    real_get_user_data = wl_sym("wl_proxy_get_user_data");
+    real_set_user_data = wl_sym("wl_proxy_set_user_data");
+    real_marshal_array_flags = wl_sym("wl_proxy_marshal_array_flags");
+    if (real_marshal_array == NULL || real_add_listener == NULL || real_get_user_data == NULL ||
+            real_set_user_data == NULL || real_marshal_array_flags == NULL) {
+        static const char msg[] = "ish_wl_release_guard: libwayland-client not found\n";
+        (void) !write(2, msg, sizeof(msg) - 1);
+        abort();
+    }
+}
+
+static pthread_once_t resolved = PTHREAD_ONCE_INIT;
+
 static void resolve(void) {
-    if (real_marshal_array_flags != NULL)
-        return;
-    real_marshal_array = dlsym(RTLD_NEXT, "wl_proxy_marshal_array");
-    real_add_listener = dlsym(RTLD_NEXT, "wl_proxy_add_listener");
-    real_get_user_data = dlsym(RTLD_NEXT, "wl_proxy_get_user_data");
-    real_set_user_data = dlsym(RTLD_NEXT, "wl_proxy_set_user_data");
-    real_marshal_array_flags = dlsym(RTLD_NEXT, "wl_proxy_marshal_array_flags");
+    pthread_once(&resolved, resolve_once);
 }
 
 // A proxy begins with its wl_object, which begins with its interface: part of

@@ -641,6 +641,24 @@ fi
 exit 0
 DETACH_EOF
 chmod 755 "$AOK_SESSION_BIN/pkexec" "$AOK_SESSION_BIN/aok-detach"
+# The terminal a desktop's launcher opens a terminal program in (Terminal=true:
+# btop, htop, mc). GLib's launcher -- wf-panel's menu, and anything else on
+# GIO -- asks for xdg-terminal-exec first and, without it, falls to
+# x-terminal-emulator, which Debian points at lxterm: an X11 terminal, which
+# needs Xwayland's DISPLAY, and btop from Wayfire's menu never appeared
+# ("xterm: Xt error: Can't open display:", bip 2026-10-02). foot is the
+# desktop's own terminal. A real xdg-terminal-exec, if installed, wins.
+rm -f "$AOK_SESSION_BIN/xdg-terminal-exec"
+if ! command -v xdg-terminal-exec >/dev/null 2>&1 && command -v foot >/dev/null 2>&1; then
+    cat > "$AOK_SESSION_BIN/xdg-terminal-exec" <<'TERMEXEC_EOF'
+#!/bin/sh
+# Written by /AOK/tools/start-wayland.sh: the desktop's terminal for
+# launchers (the xdg-terminal-exec convention: the command, if any, follows).
+[ "$1" = "-e" ] && shift
+exec foot "$@"
+TERMEXEC_EOF
+    chmod 755 "$AOK_SESSION_BIN/xdg-terminal-exec"
+fi
 case ":$PATH:" in
     *":$AOK_SESSION_BIN:"*) ;;
     *) PATH="$AOK_SESSION_BIN:$PATH" ;;
