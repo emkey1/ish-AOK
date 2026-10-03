@@ -169,9 +169,28 @@ typedef int (*get_width_fn)(pixman_image_t *);
 typedef int (*get_height_fn)(pixman_image_t *);
 typedef pixman_format_code_t (*get_format_fn)(pixman_image_t *);
 
+// The real function behind one of ours. dlsym(RTLD_NEXT) searches only the
+// global scope, and pixman is not always in it: SDL's Wayland backend loads
+// libdecor's GTK plugin with dlopen, RTLD_LOCAL, and the cairo it brings
+// brings libpixman with it, so cairo's pixman calls reached this shim and
+// RTLD_NEXT found nothing -- the call jumped to address 0 (Chocolate Doom
+// segfaulted on bip, 2026-10-03, the moment its window was decorated). The
+// library is then asked directly: RTLD_NOLOAD finds the copy already loaded,
+// and a lookup through its own handle searches its scope, which the preloaded
+// shim is not part of, so it cannot find ours again.
+static void *real_pixman_sym(const char *name) {
+    void *sym = dlsym(RTLD_NEXT, name);
+    if (sym != NULL)
+        return sym;
+    void *lib = dlopen("libpixman-1.so.0", RTLD_LAZY | RTLD_NOLOAD);
+    if (lib == NULL)
+        lib = dlopen("libpixman-1.so.0", RTLD_LAZY | RTLD_LOCAL);
+    return lib != NULL ? dlsym(lib, name) : NULL;
+}
+
 #define RESOLVE(var, type, name) \
     static type var; \
-    if (var == NULL) var = (type) dlsym(RTLD_NEXT, name)
+    if (var == NULL) var = (type) real_pixman_sym(name)
 
 // ---- per-image shadow state (properties pixman has no public getter for)
 // A chained hash table keyed by the pixman_image_t pointer. An image

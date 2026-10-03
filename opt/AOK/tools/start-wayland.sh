@@ -1461,12 +1461,21 @@ WAYFIRE_INI_EOF
     # wf-shell's panel hides itself until the pointer reaches the top edge,
     # once the wayfire-shell plugin gives it the means to; on a touch screen
     # that is a panel nobody finds. Kept in view here.
-    install_default_config "$HOME/.config/wf-shell.ini" "" <<'WF_SHELL_INI_EOF'
+    # The right-hand widgets are wf-shell's defaults less volume, network and
+    # battery: they ask PulseAudio, NetworkManager and UPower, which these
+    # roots do not run, so the network one always read "No connection" --
+    # the iPad's networking is not the guest's to manage.
+    # The one earlier default (before those widgets were dropped).
+    install_default_config "$HOME/.config/wf-shell.ini" "4207288995:173" <<'WF_SHELL_INI_EOF'
 # Written by /AOK/tools/start-wayland.sh on the first Wayfire session; edit
 # freely. Options: wf-shell's own documentation, or wcm.
 [panel]
 autohide = false
 position = top
+# wf-shell's default right side is "volume network battery clock"; those three
+# need PulseAudio, NetworkManager and UPower, which iSH-AOK roots do not run
+# (the network one only ever said "No connection").
+widgets_right = clock
 WF_SHELL_INI_EOF
 fi
 
