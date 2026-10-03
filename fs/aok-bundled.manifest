@@ -10,12 +10,17 @@
 #
 # One directory per target: a distro release and architecture for what links
 # against a distro's own libraries (devuan6-aarch64: wf-panel, good only for
-# the wf-shell version in wf-panel.source; arm64 only, the fastest guest), a libc and architecture for what
-# links only against libc (glibc-x86_64: the shims).
+# the wf-shell version in wf-panel.source; arm64 only, the fastest guest -- a
+# Devuan root of another architecture runs it with the arm64 builds of the
+# packages in wf-panel.depends, installed through multiarch), a libc and
+# architecture for what links only against libc (glibc-x86_64: the shims,
+# which are preloaded into every program and so are carried for all four
+# guest architectures, on glibc and on musl).
 #
 # Each line: <path> [mode]   read from opt/AOK/bundled/<path>.
 devuan6-aarch64/wf-panel 0555
 devuan6-aarch64/wf-panel.source
+devuan6-aarch64/wf-panel.depends
 glibc-aarch64/libish-wl-release-guard.so 0555
 glibc-aarch64/libish-pixman.so 0555
 glibc-x86_64/libish-wl-release-guard.so 0555
@@ -24,3 +29,11 @@ musl-aarch64/libish-wl-release-guard.so 0555
 musl-aarch64/libish-pixman.so 0555
 musl-x86_64/libish-wl-release-guard.so 0555
 musl-x86_64/libish-pixman.so 0555
+glibc-i386/libish-wl-release-guard.so 0555
+glibc-i386/libish-pixman.so 0555
+glibc-riscv64/libish-wl-release-guard.so 0555
+glibc-riscv64/libish-pixman.so 0555
+musl-i386/libish-wl-release-guard.so 0555
+musl-i386/libish-pixman.so 0555
+musl-riscv64/libish-wl-release-guard.so 0555
+musl-riscv64/libish-pixman.so 0555

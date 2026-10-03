@@ -278,7 +278,12 @@ Wayland window opens.
   `--panel fast|waybar|both|stock`): **fast** is wf-shell's panel with a
   menu that reopens at once -- the packaged one rebuilds every entry each time
   it opens, which takes seconds on older iPads -- and comes prebuilt in
-  `/AOK/bundled` for arm64 roots (others build it, which takes a while); **waybar** is the panel the labwc desktop has, with an
+  `/AOK/bundled`, built for arm64 and used on a Devuan root of any
+  architecture: on one that is not arm64, setup adds arm64 as a Debian
+  multiarch architecture and installs the panel's libraries for it, and
+  iSH-AOK runs the arm64 panel there as it would in an arm64 root (a
+  wf-shell it was not built for builds one instead, which takes a while);
+  **waybar** is the panel the labwc desktop has, with an
   **Apps** button opening wofi's application list; **both** installs the two,
   and `sudo sh /AOK/tools/select-desktop.sh --panel waybar` (or `wf-panel`)
   swaps between them for the next session.

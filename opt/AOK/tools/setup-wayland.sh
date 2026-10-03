@@ -245,11 +245,11 @@ if command -v qv4l2 >/dev/null 2>&1 || command -v qvidcap >/dev/null 2>&1; then
     fi
 fi
 
-# Both shims below come prebuilt in /AOK/bundled for glibc and musl on aarch64
-# and x86_64 (tools/build-bundled.sh), and start-wayland.sh loads those first;
-# they are only built here for a root those do not cover.
+# Both shims below come prebuilt in /AOK/bundled for glibc and musl on all four
+# guest architectures (tools/build-bundled.sh), and start-wayland.sh loads
+# those first; they are only built here for a root those do not cover.
 case "$(uname -m)" in
-    aarch64|arm64|x86_64|amd64) shims_bundled=1 ;;
+    aarch64|arm64|x86_64|amd64|i[3-6]86|riscv64) shims_bundled=1 ;;
     *) shims_bundled=0 ;;
 esac
 

@@ -27,9 +27,10 @@
 #       fast    wf-panel with a menu that reopens instead of rebuilding itself
 #               (tools/wayland/build-wf-panel.sh). The packaged wf-panel
 #               takes 3-6 s to open its menu on an A10X iPad, this one
-#               0.7 s. Prebuilt in /AOK/bundled for Devuan 6 on arm64 (the
-#               fastest guest) and linked; built from source elsewhere, or
-#               for a wf-shell the bundled one does not match.
+#               0.7 s. Prebuilt in /AOK/bundled for Devuan 6, as arm64 (the
+#               fastest guest), and linked on a root of any architecture --
+#               with arm64 libraries through multiarch on one that is not
+#               arm64; built from source for a wf-shell it does not match.
 #       waybar  waybar, with an Apps button that opens wofi's application
 #               list, as the labwc desktop's panel is. No build.
 #       both    the two, starting with fast; swap whenever you like with
@@ -172,30 +173,45 @@ case "$PANEL" in
             fi || die "could not install waybar -- see above"
         fi ;;
 esac
-# The faster wf-panel comes prebuilt in /AOK/bundled for Devuan 6's wf-shell
-# on arm64 and is linked in; other architectures, and a wf-shell it was not
-# built for, compile it here (which needs a lot of memory -- an A10X iPad ran
-# out). x86_64 is not bundled: arm64 is the guest that runs fastest, and
-# Wayland on an x86_64 root is the exception.
-case "$(uname -m)" in
-    aarch64|arm64) bundled_panel=/AOK/bundled/devuan6-aarch64/wf-panel ;;
-    *) bundled_panel= ;;
-esac
+# The faster wf-panel comes prebuilt in /AOK/bundled for Devuan 6's wf-shell,
+# built for arm64 -- the guest that runs fastest -- and is linked in on a root
+# of ANY architecture: iSH-AOK runs an arm64 program in an x86_64 or riscv64
+# root as readily as in an arm64 one, given arm64 libraries to load. On a
+# Devuan root that is not arm64 those come from Debian multiarch: arm64 is
+# added as a foreign architecture and the packages in wf-panel.depends are
+# installed for it (their arm64 loader included), beside the root's own. A
+# wf-shell it was not built for compiles one here instead (which needs a lot
+# of memory -- an A10X iPad ran out).
+bundled_panel=/AOK/bundled/devuan6-aarch64/wf-panel
+# The arm64 libraries the bundled panel needs, on a root of another
+# architecture. Returns nonzero when they could not be installed.
+bundled_panel_libs() {
+    root_arch=$(dpkg --print-architecture 2>/dev/null) || return 1
+    [ "$root_arch" = arm64 ] && return 0
+    [ -r "$bundled_panel.depends" ] || return 1
+    log "the bundled wf-panel is arm64: adding arm64 libraries to this $root_arch root (Debian multiarch)"
+    dpkg --print-foreign-architectures | grep -qx arm64 || dpkg --add-architecture arm64 || return 1
+    apt-get update || return 1
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold \
+        $(sed -n 's/^\([a-z0-9][a-z0-9.+-]*\)$/\1:arm64/p' "$bundled_panel.depends")
+}
 case "$PANEL" in
     fast|both)
         wf_shell_version=$(dpkg-query -W -f '${Version}' wf-shell 2>/dev/null) || wf_shell_version=
-        if [ -n "$bundled_panel" ] && [ -x "$bundled_panel" ] && [ -n "$wf_shell_version" ] \
-                && [ "$(cat "$bundled_panel.source" 2>/dev/null)" = "$wf_shell_version" ]; then
+        if [ -x "$bundled_panel" ] && [ -n "$wf_shell_version" ] \
+                && [ "$(cat "$bundled_panel.source" 2>/dev/null)" = "$wf_shell_version" ] \
+                && bundled_panel_libs; then
             log "linking the faster wf-panel from /AOK/bundled"
             rm -f /usr/local/lib/ish-wayland/wf-panel /usr/local/lib/ish-wayland/wf-panel.source
             mkdir -p /usr/local/bin
             ln -sf "$bundled_panel" /usr/local/bin/wf-panel || die "could not link /usr/local/bin/wf-panel"
         elif command -v apt-get >/dev/null 2>&1; then
-            if [ -n "$bundled_panel" ]; then
+            if [ "$(cat "$bundled_panel.source" 2>/dev/null)" != "$wf_shell_version" ]; then
                 note "the bundled faster wf-panel is for wf-shell $(cat "$bundled_panel.source" 2>/dev/null || echo '(none)'),"
                 note "this root has ${wf_shell_version:-none}: building one from source"
             else
-                note "no faster wf-panel is bundled for $(uname -m): building one from source"
+                note "the bundled faster wf-panel's arm64 libraries did not install: building one from source"
             fi
             log "building the faster wf-panel (tools/wayland/build-wf-panel.sh)"
             sh /AOK/tools/wayland/build-wf-panel.sh \

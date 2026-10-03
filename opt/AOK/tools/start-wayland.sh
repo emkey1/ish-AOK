@@ -688,6 +688,7 @@ ls /lib/ld-musl-*.so.1 >/dev/null 2>&1 && AOK_BUNDLED_LIBC=musl
 case "$(uname -m)" in
     aarch64|arm64) AOK_BUNDLED_ARCH=aarch64 ;;
     x86_64|amd64) AOK_BUNDLED_ARCH=x86_64 ;;
+    i[3-6]86) AOK_BUNDLED_ARCH=i386 ;;   # AOK's x86 guest says i686
     *) AOK_BUNDLED_ARCH=$(uname -m) ;;
 esac
 AOK_BUNDLED_LIBS=/AOK/bundled/$AOK_BUNDLED_LIBC-$AOK_BUNDLED_ARCH
@@ -2011,14 +2012,34 @@ for x_lock in /tmp/.X*-lock; do
     break
 done
 # The lock can already be gone when the session started before the guest's
-# boot cleaned /tmp. The compositor's listening X sockets survive that (the
-# abstract one is what clients connect to first), so the display is found
-# from them: the compositor's socket inodes against /proc/net/unix.
+# boot cleaned /tmp. The listening X sockets survive that (the abstract one is
+# what clients connect to first), so the display is found from them: socket
+# inodes against /proc/net/unix. Whose sockets: the compositor's, or its
+# Xwayland's -- Wayfire starts Xwayland at once and hands it the listening
+# sockets (-listenfd), so they are no longer in the compositor's table at all.
+# Looking only there left a Wayfire session on bip (whose boot cleaned /tmp
+# first) with no DISPLAY for foot or the panel, and every X program started
+# from the panel's menu -- Dillo -- said "Can't open display". wlroots
+# double-forks Xwayland, so it is init's child, not the compositor's: it is
+# found as this user's Xwayland that started after the compositor did (an
+# older one is a dead session's).
 if [ -z "${DISPLAY:-}" ] && [ -r /proc/net/unix ]; then
     _x_inodes=" "
-    for _fd in /proc/"$COMPOSITOR_PID"/fd/*; do
-        _t=$(readlink "$_fd" 2>/dev/null) || continue
-        case "$_t" in socket:\[*\]) _t=${_t#socket:[}; _x_inodes="$_x_inodes${_t%]} " ;; esac
+    _x_pids="$COMPOSITOR_PID"
+    _x_since=$(awk '{ print $22 }' "/proc/$COMPOSITOR_PID/stat" 2>/dev/null)
+    for _c in /proc/[0-9]*; do
+        [ "$(cat "$_c/comm" 2>/dev/null)" = Xwayland ] || continue
+        [ "$(awk '/^Uid:/ { print $2 }' "$_c/status" 2>/dev/null)" = "$CURRENT_UID" ] || continue
+        [ "$(awk '{ print $22 }' "$_c/stat" 2>/dev/null)" -ge "${_x_since:-0}" ] 2>/dev/null || continue
+        _x_pids="$_x_pids ${_c#/proc/}"
+    done
+    for _p in $_x_pids; do
+        for _fd in /proc/"$_p"/fd/*; do
+            _t=$(readlink "$_fd" 2>/dev/null) || continue
+            # [ escaped: unescaped, dash reads it as a bracket expression and
+            # strips nothing, so no inode ever matched and this never worked.
+            case "$_t" in socket:\[*\]) _t=${_t#socket:\[}; _x_inodes="$_x_inodes${_t%]} " ;; esac
+        done
     done
     _x_num=$(awk -v inodes="$_x_inodes" '$8 ~ /^@?\/tmp\/\.X11-unix\/X[0-9]+$/ && index(inodes, " " $7 " ") {
         sub(/.*X/, "", $8); print $8; exit }' /proc/net/unix 2>/dev/null)
