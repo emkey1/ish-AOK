@@ -6,7 +6,8 @@
 // gadgets' slow paths spill the cache before the segfault exit.
 //
 // Loads, stores, add and cmp reg,[mem] at 32 and 64 bits, through a cached
-// base (rcx = NULL), and through r9 with r10 as the data register.
+// base (rcx = NULL), and through r9 with r10 as the data register; indexed
+// addresses; 16-bit and byte moves and a byte compare.
 // Passes on real x86 and under the interpreter (echo 0 > /proc/ish/amd64_jit).
 #define _GNU_SOURCE
 #include <setjmp.h>
@@ -81,6 +82,14 @@ int main(void) {
     FAULTING("sub64 r10,[r9]", "xorl %%r9d, %%r9d\n subq 16(%%r9), %%r10");
     FAULTING("load64 r10,[r9] new block", "xorl %%r9d, %%r9d\n jmp 1f\n 1: movq 16(%%r9), %%r10");
     FAULTING("cmp64 r10,[r9] new block", "xorl %%r9d, %%r9d\n jmp 1f\n 1: cmpq 16(%%r9), %%r10");
+    // Indexed addresses (an amd64_ea gadget, then the access through x3),
+    // and the 16-bit and byte forms.
+    FAULTING("load32 [rcx+rdx*2]", "movl 16(%%rcx,%%rdx,2), %%ebx");
+    FAULTING("store16 [r9+r10]", "xorl %%r9d, %%r9d\n movl $8, %%r10d\n movw %%ax, 16(%%r9,%%r10)");
+    FAULTING("movzbl [rcx+rdi]", "movzbl 16(%%rcx,%%rdi), %%ebx");
+    FAULTING("cmpb dl,[rcx+rdi]", "cmpb 16(%%rcx,%%rdi), %%dl");
+    FAULTING("store8 [rcx]", "movb %%al, 16(%%rcx)");
+    FAULTING("movzwl [r9]", "xorl %%r9d, %%r9d\n movzwl 16(%%r9), %%r10d");
     printf("amd64_fault_regs: %s\n", failures ? "FAIL" : "PASS");
     return failures != 0;
 }

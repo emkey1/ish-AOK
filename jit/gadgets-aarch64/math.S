@@ -1774,721 +1774,6 @@
     .quad 0
 .popsection
 
-# ---- `lea r, [base + disp]` and `lea r, [rip + disp]`, specialised ----
-# amd64_cached_lea_reg_mem decodes base/index/scale from its meta word and
-# reads each register through a compare chain: 4.8% of amd64 7-Zip
-# (2026-10-04). With a cached destination and base, [base + disp] is one add
-# of the disp word (amd64_lea{32,64}_<dst>_<base>, table [size64][dst][base]);
-# [rip + disp] is a translation-time constant (amd64_movi{32,64}_<dst>). The
-# 32-bit forms zero-extend, as an x86 32-bit write does.
-.gadget amd64_lea32_0_0
-    ldr x8, [_ip]
-    add w20, w20, w8
-    gret 1
-.gadget amd64_lea32_0_1
-    ldr x8, [_ip]
-    add w20, w22, w8
-    gret 1
-.gadget amd64_lea32_0_2
-    ldr x8, [_ip]
-    add w20, w23, w8
-    gret 1
-.gadget amd64_lea32_0_3
-    ldr x8, [_ip]
-    add w20, w21, w8
-    gret 1
-.gadget amd64_lea32_0_4
-    ldr x8, [_ip]
-    add w20, w27, w8
-    gret 1
-.gadget amd64_lea32_0_5
-    ldr x8, [_ip]
-    add w20, w26, w8
-    gret 1
-.gadget amd64_lea32_0_6
-    ldr x8, [_ip]
-    add w20, w24, w8
-    gret 1
-.gadget amd64_lea32_0_7
-    ldr x8, [_ip]
-    add w20, w25, w8
-    gret 1
-.gadget amd64_movi32_0
-    ldr w20, [_ip]
-    gret 1
-.gadget amd64_lea32_1_0
-    ldr x8, [_ip]
-    add w22, w20, w8
-    gret 1
-.gadget amd64_lea32_1_1
-    ldr x8, [_ip]
-    add w22, w22, w8
-    gret 1
-.gadget amd64_lea32_1_2
-    ldr x8, [_ip]
-    add w22, w23, w8
-    gret 1
-.gadget amd64_lea32_1_3
-    ldr x8, [_ip]
-    add w22, w21, w8
-    gret 1
-.gadget amd64_lea32_1_4
-    ldr x8, [_ip]
-    add w22, w27, w8
-    gret 1
-.gadget amd64_lea32_1_5
-    ldr x8, [_ip]
-    add w22, w26, w8
-    gret 1
-.gadget amd64_lea32_1_6
-    ldr x8, [_ip]
-    add w22, w24, w8
-    gret 1
-.gadget amd64_lea32_1_7
-    ldr x8, [_ip]
-    add w22, w25, w8
-    gret 1
-.gadget amd64_movi32_1
-    ldr w22, [_ip]
-    gret 1
-.gadget amd64_lea32_2_0
-    ldr x8, [_ip]
-    add w23, w20, w8
-    gret 1
-.gadget amd64_lea32_2_1
-    ldr x8, [_ip]
-    add w23, w22, w8
-    gret 1
-.gadget amd64_lea32_2_2
-    ldr x8, [_ip]
-    add w23, w23, w8
-    gret 1
-.gadget amd64_lea32_2_3
-    ldr x8, [_ip]
-    add w23, w21, w8
-    gret 1
-.gadget amd64_lea32_2_4
-    ldr x8, [_ip]
-    add w23, w27, w8
-    gret 1
-.gadget amd64_lea32_2_5
-    ldr x8, [_ip]
-    add w23, w26, w8
-    gret 1
-.gadget amd64_lea32_2_6
-    ldr x8, [_ip]
-    add w23, w24, w8
-    gret 1
-.gadget amd64_lea32_2_7
-    ldr x8, [_ip]
-    add w23, w25, w8
-    gret 1
-.gadget amd64_movi32_2
-    ldr w23, [_ip]
-    gret 1
-.gadget amd64_lea32_3_0
-    ldr x8, [_ip]
-    add w21, w20, w8
-    gret 1
-.gadget amd64_lea32_3_1
-    ldr x8, [_ip]
-    add w21, w22, w8
-    gret 1
-.gadget amd64_lea32_3_2
-    ldr x8, [_ip]
-    add w21, w23, w8
-    gret 1
-.gadget amd64_lea32_3_3
-    ldr x8, [_ip]
-    add w21, w21, w8
-    gret 1
-.gadget amd64_lea32_3_4
-    ldr x8, [_ip]
-    add w21, w27, w8
-    gret 1
-.gadget amd64_lea32_3_5
-    ldr x8, [_ip]
-    add w21, w26, w8
-    gret 1
-.gadget amd64_lea32_3_6
-    ldr x8, [_ip]
-    add w21, w24, w8
-    gret 1
-.gadget amd64_lea32_3_7
-    ldr x8, [_ip]
-    add w21, w25, w8
-    gret 1
-.gadget amd64_movi32_3
-    ldr w21, [_ip]
-    gret 1
-.gadget amd64_lea32_4_0
-    ldr x8, [_ip]
-    add w27, w20, w8
-    gret 1
-.gadget amd64_lea32_4_1
-    ldr x8, [_ip]
-    add w27, w22, w8
-    gret 1
-.gadget amd64_lea32_4_2
-    ldr x8, [_ip]
-    add w27, w23, w8
-    gret 1
-.gadget amd64_lea32_4_3
-    ldr x8, [_ip]
-    add w27, w21, w8
-    gret 1
-.gadget amd64_lea32_4_4
-    ldr x8, [_ip]
-    add w27, w27, w8
-    gret 1
-.gadget amd64_lea32_4_5
-    ldr x8, [_ip]
-    add w27, w26, w8
-    gret 1
-.gadget amd64_lea32_4_6
-    ldr x8, [_ip]
-    add w27, w24, w8
-    gret 1
-.gadget amd64_lea32_4_7
-    ldr x8, [_ip]
-    add w27, w25, w8
-    gret 1
-.gadget amd64_movi32_4
-    ldr w27, [_ip]
-    gret 1
-.gadget amd64_lea32_5_0
-    ldr x8, [_ip]
-    add w26, w20, w8
-    gret 1
-.gadget amd64_lea32_5_1
-    ldr x8, [_ip]
-    add w26, w22, w8
-    gret 1
-.gadget amd64_lea32_5_2
-    ldr x8, [_ip]
-    add w26, w23, w8
-    gret 1
-.gadget amd64_lea32_5_3
-    ldr x8, [_ip]
-    add w26, w21, w8
-    gret 1
-.gadget amd64_lea32_5_4
-    ldr x8, [_ip]
-    add w26, w27, w8
-    gret 1
-.gadget amd64_lea32_5_5
-    ldr x8, [_ip]
-    add w26, w26, w8
-    gret 1
-.gadget amd64_lea32_5_6
-    ldr x8, [_ip]
-    add w26, w24, w8
-    gret 1
-.gadget amd64_lea32_5_7
-    ldr x8, [_ip]
-    add w26, w25, w8
-    gret 1
-.gadget amd64_movi32_5
-    ldr w26, [_ip]
-    gret 1
-.gadget amd64_lea32_6_0
-    ldr x8, [_ip]
-    add w24, w20, w8
-    gret 1
-.gadget amd64_lea32_6_1
-    ldr x8, [_ip]
-    add w24, w22, w8
-    gret 1
-.gadget amd64_lea32_6_2
-    ldr x8, [_ip]
-    add w24, w23, w8
-    gret 1
-.gadget amd64_lea32_6_3
-    ldr x8, [_ip]
-    add w24, w21, w8
-    gret 1
-.gadget amd64_lea32_6_4
-    ldr x8, [_ip]
-    add w24, w27, w8
-    gret 1
-.gadget amd64_lea32_6_5
-    ldr x8, [_ip]
-    add w24, w26, w8
-    gret 1
-.gadget amd64_lea32_6_6
-    ldr x8, [_ip]
-    add w24, w24, w8
-    gret 1
-.gadget amd64_lea32_6_7
-    ldr x8, [_ip]
-    add w24, w25, w8
-    gret 1
-.gadget amd64_movi32_6
-    ldr w24, [_ip]
-    gret 1
-.gadget amd64_lea32_7_0
-    ldr x8, [_ip]
-    add w25, w20, w8
-    gret 1
-.gadget amd64_lea32_7_1
-    ldr x8, [_ip]
-    add w25, w22, w8
-    gret 1
-.gadget amd64_lea32_7_2
-    ldr x8, [_ip]
-    add w25, w23, w8
-    gret 1
-.gadget amd64_lea32_7_3
-    ldr x8, [_ip]
-    add w25, w21, w8
-    gret 1
-.gadget amd64_lea32_7_4
-    ldr x8, [_ip]
-    add w25, w27, w8
-    gret 1
-.gadget amd64_lea32_7_5
-    ldr x8, [_ip]
-    add w25, w26, w8
-    gret 1
-.gadget amd64_lea32_7_6
-    ldr x8, [_ip]
-    add w25, w24, w8
-    gret 1
-.gadget amd64_lea32_7_7
-    ldr x8, [_ip]
-    add w25, w25, w8
-    gret 1
-.gadget amd64_movi32_7
-    ldr w25, [_ip]
-    gret 1
-.gadget amd64_lea64_0_0
-    ldr x8, [_ip]
-    add x20, x20, x8
-    gret 1
-.gadget amd64_lea64_0_1
-    ldr x8, [_ip]
-    add x20, x22, x8
-    gret 1
-.gadget amd64_lea64_0_2
-    ldr x8, [_ip]
-    add x20, x23, x8
-    gret 1
-.gadget amd64_lea64_0_3
-    ldr x8, [_ip]
-    add x20, x21, x8
-    gret 1
-.gadget amd64_lea64_0_4
-    ldr x8, [_ip]
-    add x20, x27, x8
-    gret 1
-.gadget amd64_lea64_0_5
-    ldr x8, [_ip]
-    add x20, x26, x8
-    gret 1
-.gadget amd64_lea64_0_6
-    ldr x8, [_ip]
-    add x20, x24, x8
-    gret 1
-.gadget amd64_lea64_0_7
-    ldr x8, [_ip]
-    add x20, x25, x8
-    gret 1
-.gadget amd64_movi64_0
-    ldr x20, [_ip]
-    gret 1
-.gadget amd64_lea64_1_0
-    ldr x8, [_ip]
-    add x22, x20, x8
-    gret 1
-.gadget amd64_lea64_1_1
-    ldr x8, [_ip]
-    add x22, x22, x8
-    gret 1
-.gadget amd64_lea64_1_2
-    ldr x8, [_ip]
-    add x22, x23, x8
-    gret 1
-.gadget amd64_lea64_1_3
-    ldr x8, [_ip]
-    add x22, x21, x8
-    gret 1
-.gadget amd64_lea64_1_4
-    ldr x8, [_ip]
-    add x22, x27, x8
-    gret 1
-.gadget amd64_lea64_1_5
-    ldr x8, [_ip]
-    add x22, x26, x8
-    gret 1
-.gadget amd64_lea64_1_6
-    ldr x8, [_ip]
-    add x22, x24, x8
-    gret 1
-.gadget amd64_lea64_1_7
-    ldr x8, [_ip]
-    add x22, x25, x8
-    gret 1
-.gadget amd64_movi64_1
-    ldr x22, [_ip]
-    gret 1
-.gadget amd64_lea64_2_0
-    ldr x8, [_ip]
-    add x23, x20, x8
-    gret 1
-.gadget amd64_lea64_2_1
-    ldr x8, [_ip]
-    add x23, x22, x8
-    gret 1
-.gadget amd64_lea64_2_2
-    ldr x8, [_ip]
-    add x23, x23, x8
-    gret 1
-.gadget amd64_lea64_2_3
-    ldr x8, [_ip]
-    add x23, x21, x8
-    gret 1
-.gadget amd64_lea64_2_4
-    ldr x8, [_ip]
-    add x23, x27, x8
-    gret 1
-.gadget amd64_lea64_2_5
-    ldr x8, [_ip]
-    add x23, x26, x8
-    gret 1
-.gadget amd64_lea64_2_6
-    ldr x8, [_ip]
-    add x23, x24, x8
-    gret 1
-.gadget amd64_lea64_2_7
-    ldr x8, [_ip]
-    add x23, x25, x8
-    gret 1
-.gadget amd64_movi64_2
-    ldr x23, [_ip]
-    gret 1
-.gadget amd64_lea64_3_0
-    ldr x8, [_ip]
-    add x21, x20, x8
-    gret 1
-.gadget amd64_lea64_3_1
-    ldr x8, [_ip]
-    add x21, x22, x8
-    gret 1
-.gadget amd64_lea64_3_2
-    ldr x8, [_ip]
-    add x21, x23, x8
-    gret 1
-.gadget amd64_lea64_3_3
-    ldr x8, [_ip]
-    add x21, x21, x8
-    gret 1
-.gadget amd64_lea64_3_4
-    ldr x8, [_ip]
-    add x21, x27, x8
-    gret 1
-.gadget amd64_lea64_3_5
-    ldr x8, [_ip]
-    add x21, x26, x8
-    gret 1
-.gadget amd64_lea64_3_6
-    ldr x8, [_ip]
-    add x21, x24, x8
-    gret 1
-.gadget amd64_lea64_3_7
-    ldr x8, [_ip]
-    add x21, x25, x8
-    gret 1
-.gadget amd64_movi64_3
-    ldr x21, [_ip]
-    gret 1
-.gadget amd64_lea64_4_0
-    ldr x8, [_ip]
-    add x27, x20, x8
-    gret 1
-.gadget amd64_lea64_4_1
-    ldr x8, [_ip]
-    add x27, x22, x8
-    gret 1
-.gadget amd64_lea64_4_2
-    ldr x8, [_ip]
-    add x27, x23, x8
-    gret 1
-.gadget amd64_lea64_4_3
-    ldr x8, [_ip]
-    add x27, x21, x8
-    gret 1
-.gadget amd64_lea64_4_4
-    ldr x8, [_ip]
-    add x27, x27, x8
-    gret 1
-.gadget amd64_lea64_4_5
-    ldr x8, [_ip]
-    add x27, x26, x8
-    gret 1
-.gadget amd64_lea64_4_6
-    ldr x8, [_ip]
-    add x27, x24, x8
-    gret 1
-.gadget amd64_lea64_4_7
-    ldr x8, [_ip]
-    add x27, x25, x8
-    gret 1
-.gadget amd64_movi64_4
-    ldr x27, [_ip]
-    gret 1
-.gadget amd64_lea64_5_0
-    ldr x8, [_ip]
-    add x26, x20, x8
-    gret 1
-.gadget amd64_lea64_5_1
-    ldr x8, [_ip]
-    add x26, x22, x8
-    gret 1
-.gadget amd64_lea64_5_2
-    ldr x8, [_ip]
-    add x26, x23, x8
-    gret 1
-.gadget amd64_lea64_5_3
-    ldr x8, [_ip]
-    add x26, x21, x8
-    gret 1
-.gadget amd64_lea64_5_4
-    ldr x8, [_ip]
-    add x26, x27, x8
-    gret 1
-.gadget amd64_lea64_5_5
-    ldr x8, [_ip]
-    add x26, x26, x8
-    gret 1
-.gadget amd64_lea64_5_6
-    ldr x8, [_ip]
-    add x26, x24, x8
-    gret 1
-.gadget amd64_lea64_5_7
-    ldr x8, [_ip]
-    add x26, x25, x8
-    gret 1
-.gadget amd64_movi64_5
-    ldr x26, [_ip]
-    gret 1
-.gadget amd64_lea64_6_0
-    ldr x8, [_ip]
-    add x24, x20, x8
-    gret 1
-.gadget amd64_lea64_6_1
-    ldr x8, [_ip]
-    add x24, x22, x8
-    gret 1
-.gadget amd64_lea64_6_2
-    ldr x8, [_ip]
-    add x24, x23, x8
-    gret 1
-.gadget amd64_lea64_6_3
-    ldr x8, [_ip]
-    add x24, x21, x8
-    gret 1
-.gadget amd64_lea64_6_4
-    ldr x8, [_ip]
-    add x24, x27, x8
-    gret 1
-.gadget amd64_lea64_6_5
-    ldr x8, [_ip]
-    add x24, x26, x8
-    gret 1
-.gadget amd64_lea64_6_6
-    ldr x8, [_ip]
-    add x24, x24, x8
-    gret 1
-.gadget amd64_lea64_6_7
-    ldr x8, [_ip]
-    add x24, x25, x8
-    gret 1
-.gadget amd64_movi64_6
-    ldr x24, [_ip]
-    gret 1
-.gadget amd64_lea64_7_0
-    ldr x8, [_ip]
-    add x25, x20, x8
-    gret 1
-.gadget amd64_lea64_7_1
-    ldr x8, [_ip]
-    add x25, x22, x8
-    gret 1
-.gadget amd64_lea64_7_2
-    ldr x8, [_ip]
-    add x25, x23, x8
-    gret 1
-.gadget amd64_lea64_7_3
-    ldr x8, [_ip]
-    add x25, x21, x8
-    gret 1
-.gadget amd64_lea64_7_4
-    ldr x8, [_ip]
-    add x25, x27, x8
-    gret 1
-.gadget amd64_lea64_7_5
-    ldr x8, [_ip]
-    add x25, x26, x8
-    gret 1
-.gadget amd64_lea64_7_6
-    ldr x8, [_ip]
-    add x25, x24, x8
-    gret 1
-.gadget amd64_lea64_7_7
-    ldr x8, [_ip]
-    add x25, x25, x8
-    gret 1
-.gadget amd64_movi64_7
-    ldr x25, [_ip]
-    gret 1
-.pushsection_rodata
-.global.name amd64_lea_bd_gadgets
-    .quad NAME(gadget_amd64_lea32_0_0)
-    .quad NAME(gadget_amd64_lea32_0_1)
-    .quad NAME(gadget_amd64_lea32_0_2)
-    .quad NAME(gadget_amd64_lea32_0_3)
-    .quad NAME(gadget_amd64_lea32_0_4)
-    .quad NAME(gadget_amd64_lea32_0_5)
-    .quad NAME(gadget_amd64_lea32_0_6)
-    .quad NAME(gadget_amd64_lea32_0_7)
-    .quad NAME(gadget_amd64_lea32_1_0)
-    .quad NAME(gadget_amd64_lea32_1_1)
-    .quad NAME(gadget_amd64_lea32_1_2)
-    .quad NAME(gadget_amd64_lea32_1_3)
-    .quad NAME(gadget_amd64_lea32_1_4)
-    .quad NAME(gadget_amd64_lea32_1_5)
-    .quad NAME(gadget_amd64_lea32_1_6)
-    .quad NAME(gadget_amd64_lea32_1_7)
-    .quad NAME(gadget_amd64_lea32_2_0)
-    .quad NAME(gadget_amd64_lea32_2_1)
-    .quad NAME(gadget_amd64_lea32_2_2)
-    .quad NAME(gadget_amd64_lea32_2_3)
-    .quad NAME(gadget_amd64_lea32_2_4)
-    .quad NAME(gadget_amd64_lea32_2_5)
-    .quad NAME(gadget_amd64_lea32_2_6)
-    .quad NAME(gadget_amd64_lea32_2_7)
-    .quad NAME(gadget_amd64_lea32_3_0)
-    .quad NAME(gadget_amd64_lea32_3_1)
-    .quad NAME(gadget_amd64_lea32_3_2)
-    .quad NAME(gadget_amd64_lea32_3_3)
-    .quad NAME(gadget_amd64_lea32_3_4)
-    .quad NAME(gadget_amd64_lea32_3_5)
-    .quad NAME(gadget_amd64_lea32_3_6)
-    .quad NAME(gadget_amd64_lea32_3_7)
-    .quad NAME(gadget_amd64_lea32_4_0)
-    .quad NAME(gadget_amd64_lea32_4_1)
-    .quad NAME(gadget_amd64_lea32_4_2)
-    .quad NAME(gadget_amd64_lea32_4_3)
-    .quad NAME(gadget_amd64_lea32_4_4)
-    .quad NAME(gadget_amd64_lea32_4_5)
-    .quad NAME(gadget_amd64_lea32_4_6)
-    .quad NAME(gadget_amd64_lea32_4_7)
-    .quad NAME(gadget_amd64_lea32_5_0)
-    .quad NAME(gadget_amd64_lea32_5_1)
-    .quad NAME(gadget_amd64_lea32_5_2)
-    .quad NAME(gadget_amd64_lea32_5_3)
-    .quad NAME(gadget_amd64_lea32_5_4)
-    .quad NAME(gadget_amd64_lea32_5_5)
-    .quad NAME(gadget_amd64_lea32_5_6)
-    .quad NAME(gadget_amd64_lea32_5_7)
-    .quad NAME(gadget_amd64_lea32_6_0)
-    .quad NAME(gadget_amd64_lea32_6_1)
-    .quad NAME(gadget_amd64_lea32_6_2)
-    .quad NAME(gadget_amd64_lea32_6_3)
-    .quad NAME(gadget_amd64_lea32_6_4)
-    .quad NAME(gadget_amd64_lea32_6_5)
-    .quad NAME(gadget_amd64_lea32_6_6)
-    .quad NAME(gadget_amd64_lea32_6_7)
-    .quad NAME(gadget_amd64_lea32_7_0)
-    .quad NAME(gadget_amd64_lea32_7_1)
-    .quad NAME(gadget_amd64_lea32_7_2)
-    .quad NAME(gadget_amd64_lea32_7_3)
-    .quad NAME(gadget_amd64_lea32_7_4)
-    .quad NAME(gadget_amd64_lea32_7_5)
-    .quad NAME(gadget_amd64_lea32_7_6)
-    .quad NAME(gadget_amd64_lea32_7_7)
-    .quad NAME(gadget_amd64_lea64_0_0)
-    .quad NAME(gadget_amd64_lea64_0_1)
-    .quad NAME(gadget_amd64_lea64_0_2)
-    .quad NAME(gadget_amd64_lea64_0_3)
-    .quad NAME(gadget_amd64_lea64_0_4)
-    .quad NAME(gadget_amd64_lea64_0_5)
-    .quad NAME(gadget_amd64_lea64_0_6)
-    .quad NAME(gadget_amd64_lea64_0_7)
-    .quad NAME(gadget_amd64_lea64_1_0)
-    .quad NAME(gadget_amd64_lea64_1_1)
-    .quad NAME(gadget_amd64_lea64_1_2)
-    .quad NAME(gadget_amd64_lea64_1_3)
-    .quad NAME(gadget_amd64_lea64_1_4)
-    .quad NAME(gadget_amd64_lea64_1_5)
-    .quad NAME(gadget_amd64_lea64_1_6)
-    .quad NAME(gadget_amd64_lea64_1_7)
-    .quad NAME(gadget_amd64_lea64_2_0)
-    .quad NAME(gadget_amd64_lea64_2_1)
-    .quad NAME(gadget_amd64_lea64_2_2)
-    .quad NAME(gadget_amd64_lea64_2_3)
-    .quad NAME(gadget_amd64_lea64_2_4)
-    .quad NAME(gadget_amd64_lea64_2_5)
-    .quad NAME(gadget_amd64_lea64_2_6)
-    .quad NAME(gadget_amd64_lea64_2_7)
-    .quad NAME(gadget_amd64_lea64_3_0)
-    .quad NAME(gadget_amd64_lea64_3_1)
-    .quad NAME(gadget_amd64_lea64_3_2)
-    .quad NAME(gadget_amd64_lea64_3_3)
-    .quad NAME(gadget_amd64_lea64_3_4)
-    .quad NAME(gadget_amd64_lea64_3_5)
-    .quad NAME(gadget_amd64_lea64_3_6)
-    .quad NAME(gadget_amd64_lea64_3_7)
-    .quad NAME(gadget_amd64_lea64_4_0)
-    .quad NAME(gadget_amd64_lea64_4_1)
-    .quad NAME(gadget_amd64_lea64_4_2)
-    .quad NAME(gadget_amd64_lea64_4_3)
-    .quad NAME(gadget_amd64_lea64_4_4)
-    .quad NAME(gadget_amd64_lea64_4_5)
-    .quad NAME(gadget_amd64_lea64_4_6)
-    .quad NAME(gadget_amd64_lea64_4_7)
-    .quad NAME(gadget_amd64_lea64_5_0)
-    .quad NAME(gadget_amd64_lea64_5_1)
-    .quad NAME(gadget_amd64_lea64_5_2)
-    .quad NAME(gadget_amd64_lea64_5_3)
-    .quad NAME(gadget_amd64_lea64_5_4)
-    .quad NAME(gadget_amd64_lea64_5_5)
-    .quad NAME(gadget_amd64_lea64_5_6)
-    .quad NAME(gadget_amd64_lea64_5_7)
-    .quad NAME(gadget_amd64_lea64_6_0)
-    .quad NAME(gadget_amd64_lea64_6_1)
-    .quad NAME(gadget_amd64_lea64_6_2)
-    .quad NAME(gadget_amd64_lea64_6_3)
-    .quad NAME(gadget_amd64_lea64_6_4)
-    .quad NAME(gadget_amd64_lea64_6_5)
-    .quad NAME(gadget_amd64_lea64_6_6)
-    .quad NAME(gadget_amd64_lea64_6_7)
-    .quad NAME(gadget_amd64_lea64_7_0)
-    .quad NAME(gadget_amd64_lea64_7_1)
-    .quad NAME(gadget_amd64_lea64_7_2)
-    .quad NAME(gadget_amd64_lea64_7_3)
-    .quad NAME(gadget_amd64_lea64_7_4)
-    .quad NAME(gadget_amd64_lea64_7_5)
-    .quad NAME(gadget_amd64_lea64_7_6)
-    .quad NAME(gadget_amd64_lea64_7_7)
-.global.name amd64_movi_gadgets
-    .quad NAME(gadget_amd64_movi32_0)
-    .quad NAME(gadget_amd64_movi32_1)
-    .quad NAME(gadget_amd64_movi32_2)
-    .quad NAME(gadget_amd64_movi32_3)
-    .quad NAME(gadget_amd64_movi32_4)
-    .quad NAME(gadget_amd64_movi32_5)
-    .quad NAME(gadget_amd64_movi32_6)
-    .quad NAME(gadget_amd64_movi32_7)
-    .quad NAME(gadget_amd64_movi64_0)
-    .quad NAME(gadget_amd64_movi64_1)
-    .quad NAME(gadget_amd64_movi64_2)
-    .quad NAME(gadget_amd64_movi64_3)
-    .quad NAME(gadget_amd64_movi64_4)
-    .quad NAME(gadget_amd64_movi64_5)
-    .quad NAME(gadget_amd64_movi64_6)
-    .quad NAME(gadget_amd64_movi64_7)
-.popsection
 
 .gadget amd64_store_low8_reg_cache
     add x8, _cpu, CPU_amd64_regs
@@ -10990,11 +10275,15 @@ NAME(amd64_specmem_start):
 # The memory gadgets take any of the sixteen registers as the data register
 # and as the base, like the arith families (r8-r15 in their CPU_amd64_regs
 # slot; an r8-r15 store source is read after the write prep, which can call
-# C), and base 16 = rip-relative, where the operand word is the absolute
-# address. Names: amd64_sld/sst<size>_<reg>_<base>, amd64_sldr/sstr<size>_<reg>
-# for rip; amd64_slo_<op><size>_<dst>_<base>, base r for rip.
+# C), base 16 = rip-relative, where the operand word is the absolute
+# address, and base 17 = an indexed address: x3 (from the amd64_ea gadget
+# emitted just before) + disp. Names: amd64_sld/sst<size>_<reg>_<base>,
+# amd64_sldr/sstr<size>_<reg> for rip, _x for indexed;
+# amd64_slo_<op><size>_<dst>_<base>, base r for rip, x for indexed.
 #
-# [base + disp] (or the absolute address for base 16) -> x9.
+# [base + disp] (or the absolute address for base 16, or x3 + disp for base
+# 17: x3 holds base + index * scale, left by an amd64_ea gadget just before)
+# -> x9.
 .macro amd64_m16_addr b, hb
     ldr x9, [_ip]
     .if \b < 8
@@ -11002,6 +10291,8 @@ NAME(amd64_specmem_start):
     .elseif \b < 16
     ldr x10, [_cpu, CPU_amd64_regs + 8 * \b]
     add x9, x9, x10
+    .elseif \b == 17
+    add x9, x9, x3
     .endif
 .endm
 # mov r32/r64, [base + disp] (op ld) and mov [base + disp], r32/r64 (op st).
@@ -11010,6 +10301,8 @@ NAME(amd64_specmem_start):
 .ifc \op, ld
     .if \b == 16
     .gadget amd64_sldr\s\()_\r
+    .elseif \b == 17
+    .gadget amd64_sld\s\()_\r\()_x
     .else
     .gadget amd64_sld\s\()_\r\()_\b
     .endif
@@ -11028,6 +10321,8 @@ NAME(amd64_specmem_start):
 .else
     .if \b == 16
     .gadget amd64_sstr\s\()_\r
+    .elseif \b == 17
+    .gadget amd64_sst\s\()_\r\()_x
     .else
     .gadget amd64_sst\s\()_\r\()_\b
     .endif
@@ -11055,12 +10350,16 @@ NAME(amd64_specmem_start):
 .if \nf
     .if \b == 16
     .gadget amd64_slo_\op\()\s\()_\d\()_r_nf
+    .elseif \b == 17
+    .gadget amd64_slo_\op\()\s\()_\d\()_x_nf
     .else
     .gadget amd64_slo_\op\()\s\()_\d\()_\b\()_nf
     .endif
 .else
     .if \b == 16
     .gadget amd64_slo_\op\()\s\()_\d\()_r
+    .elseif \b == 17
+    .gadget amd64_slo_\op\()\s\()_\d\()_x
     .else
     .gadget amd64_slo_\op\()\s\()_\d\()_\b
     .endif
@@ -11093,10 +10392,11 @@ NAME(amd64_specmem_start):
     amd64_svread_bullshit (\s / 8), slo_\op\()\s\()_\d\()_\b\()_\nf
 .endm
 
-# Sixteen registers x (sixteen bases + rip).
+# Sixteen registers x (sixteen bases + rip + indexed).
 .macro amd64_r16_srcs17 m, op, s, R, bits, nf, d, hd
     amd64_r16_srcs \m, \op, \s, \R, \bits, \nf, \d, \hd
     \m \op, \s, \R, \bits, \nf, \d, \hd, 16, 0
+    \m \op, \s, \R, \bits, \nf, \d, \hd, 17, 0
 .endm
 .macro amd64_r16_rr17 m, op, s, R, bits, nf
     amd64_r16_srcs17 \m, \op, \s, \R, \bits, \nf, 0, 20
@@ -11123,17 +10423,179 @@ amd64_r16_rr17 amd64_smem16, st, 64, x, 63, 0
 amd64_r16_family amd64_r16_rr17, amd64_slo16, add
 amd64_r16_family amd64_r16_rr17, amd64_slo16, sub
 amd64_r16_family amd64_r16_rr17, amd64_slo16, cmp
+
+# 16-bit and byte moves on the register cache, any of the sixteen registers
+# and the same 18 bases: amd64_smx_<kind>_<reg>_<base> (base r for rip, x
+# for indexed). Kinds: st16 (mov m16, r16), zx16 (movzx r32/r64, m16),
+# ld16 (mov r16, m16: the rest of the register kept), st8, zx8, ld8 -- the
+# byte forms only for the low byte of a register (gen.c leaves ah..bh to
+# the generic gadgets). Operands: [disp or address][insn rip]; gret 2.
+.macro amd64_smx16 op, s, R, bits, nf, r, hr, b, hb
+    .if \b == 16
+    .gadget amd64_smx_\op\()_\r\()_r
+    .elseif \b == 17
+    .gadget amd64_smx_\op\()_\r\()_x
+    .else
+    .gadget amd64_smx_\op\()_\r\()_\b
+    .endif
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    amd64_m16_addr \b, \hb
+    .ifc \op, st16
+    amd64_svwrite_prep 2, smx_\op\()_\r\()_\b
+    .if \r < 8
+    strh w\hr, [x9]
+    .else
+    ldr w10, [_cpu, CPU_amd64_regs + 8 * \r]
+    strh w10, [x9]
+    .endif
+    amd64_svwrite_done 2, smx_\op\()_\r\()_\b
+    gret 2
+    amd64_svwrite_bullshit 2, smx_\op\()_\r\()_\b
+    .exitm
+    .endif
+    .ifc \op, st8
+    amd64_svwrite_prep 1, smx_\op\()_\r\()_\b
+    .if \r < 8
+    strb w\hr, [x9]
+    .else
+    ldr w10, [_cpu, CPU_amd64_regs + 8 * \r]
+    strb w10, [x9]
+    .endif
+    amd64_svwrite_done 1, smx_\op\()_\r\()_\b
+    gret 2
+    amd64_svwrite_bullshit 1, smx_\op\()_\r\()_\b
+    .exitm
+    .endif
+    .ifc \op, zx16
+    amd64_vread_prep 2, smx_\op\()_\r\()_\b
+    .if \r < 8
+    ldrh w\hr, [x9]
+    .else
+    ldrh w10, [x9]
+    str x10, [_cpu, CPU_amd64_regs + 8 * \r]
+    .endif
+    gret 2
+    amd64_svread_bullshit 2, smx_\op\()_\r\()_\b
+    .exitm
+    .endif
+    .ifc \op, zx8
+    amd64_vread_prep 1, smx_\op\()_\r\()_\b
+    .if \r < 8
+    ldrb w\hr, [x9]
+    .else
+    ldrb w10, [x9]
+    str x10, [_cpu, CPU_amd64_regs + 8 * \r]
+    .endif
+    gret 2
+    amd64_svread_bullshit 1, smx_\op\()_\r\()_\b
+    .exitm
+    .endif
+    .ifc \op, ld16
+    amd64_vread_prep 2, smx_\op\()_\r\()_\b
+    ldrh w10, [x9]
+    .if \r < 8
+    bfi x\hr, x10, 0, 16
+    .else
+    ldr x13, [_cpu, CPU_amd64_regs + 8 * \r]
+    bfi x13, x10, 0, 16
+    str x13, [_cpu, CPU_amd64_regs + 8 * \r]
+    .endif
+    gret 2
+    amd64_svread_bullshit 2, smx_\op\()_\r\()_\b
+    .exitm
+    .endif
+    .ifc \op, ld8
+    amd64_vread_prep 1, smx_\op\()_\r\()_\b
+    ldrb w10, [x9]
+    .if \r < 8
+    bfi x\hr, x10, 0, 8
+    .else
+    ldr x13, [_cpu, CPU_amd64_regs + 8 * \r]
+    bfi x13, x10, 0, 8
+    str x13, [_cpu, CPU_amd64_regs + 8 * \r]
+    .endif
+    gret 2
+    amd64_svread_bullshit 1, smx_\op\()_\r\()_\b
+    .exitm
+    .endif
+    .error "amd64_smx16: unknown kind"
+.endm
+.irp kind, st16,zx16,ld16,st8,zx8,ld8
+    amd64_r16_rr17 amd64_smx16, \kind, 0, w, 0, 0
+.endr
+
+# Byte compare and test with memory, flags only: amd64_scb_<op>_<reg>_<base>,
+# op cmpmr (38: cmp m8, r8), cmprm (3A: cmp r8, m8), test (84). The flags
+# are the 8-bit ones: the operands are compared shifted to the top of a
+# 32-bit word, then the result is brought back down for ZF/SF/PF. Low byte
+# of a register only, as for amd64_smx. Operands: [disp or address][insn
+# rip]; gret 2.
+.macro amd64_scb16 op, s, R, bits, nf, r, hr, b, hb
+    .if \b == 16
+    .gadget amd64_scb_\op\()_\r\()_r
+    .elseif \b == 17
+    .gadget amd64_scb_\op\()_\r\()_x
+    .else
+    .gadget amd64_scb_\op\()_\r\()_\b
+    .endif
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    amd64_m16_addr \b, \hb
+    amd64_vread_prep 1, scb_\op\()_\r\()_\b
+    .ifc \op, cmprm
+    ldrb w10, [x9]
+    .if \r < 8
+    and w13, w\hr, 0xff
+    .else
+    ldrb w13, [_cpu, CPU_amd64_regs + 8 * \r]
+    .endif
+    .else
+    ldrb w13, [x9]
+    .if \r < 8
+    and w10, w\hr, 0xff
+    .else
+    ldrb w10, [_cpu, CPU_amd64_regs + 8 * \r]
+    .endif
+    .endif
+    .ifc \op, test
+    and w15, w13, w10
+    mov x11, 8
+    amd64_cached_set_logic_flags x15, x11
+    .else
+    lsl w11, w13, 24
+    lsl w12, w10, 24
+    subs w15, w11, w12
+    cset w14, cc
+    cset w16, vs
+    lsr w15, w15, 24
+    amd64_cached_set_addsub_flags 7
+    .endif
+    gret 2
+    amd64_svread_bullshit 1, scb_\op\()_\r\()_\b
+.endm
+.irp op, cmpmr,cmprm,test
+    amd64_r16_rr17 amd64_scb16, \op, 0, w, 0, 0
+.endr
 .global NAME(amd64_specmem_end)
 NAME(amd64_specmem_end):
-# Tables: amd64_smem_gadgets[((st * 2 + size64) * 16 + reg) * 17 + base]
-# (st 0 load, 1 store) and amd64_slo{,_nf}_gadgets[((op * 2 + size64) * 16
-# + dst) * 17 + base], base 16 = rip-relative.
+# Tables: amd64_smem_gadgets[((st * 2 + size64) * 16 + reg) * 18 + base]
+# (st 0 load, 1 store), amd64_slo{,_nf}_gadgets[((op * 2 + size64) * 16 +
+# dst) * 18 + base], amd64_smx_gadgets[(kind * 16 + reg) * 18 + base] (kinds
+# st16 zx16 ld16 st8 zx8 ld8) and amd64_scb_gadgets[(op * 16 + reg) * 18 +
+# base] (cmpmr cmprm test); base 16 = rip-relative, 17 = indexed.
 .macro amd64_slo_quad op, s, d, b, nf
     .if \b == 16
         .if \nf
         .quad NAME(gadget_amd64_slo_\op\()\s\()_\d\()_r_nf)
         .else
         .quad NAME(gadget_amd64_slo_\op\()\s\()_\d\()_r)
+        .endif
+    .elseif \b == 17
+        .if \nf
+        .quad NAME(gadget_amd64_slo_\op\()\s\()_\d\()_x_nf)
+        .else
+        .quad NAME(gadget_amd64_slo_\op\()\s\()_\d\()_x)
         .endif
     .else
         .if \nf
@@ -11144,7 +10606,7 @@ NAME(amd64_specmem_end):
     .endif
 .endm
 .macro amd64_smem_row st, s, d
-    .irp b, 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16
+    .irp b, 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17
         .ifc \st, ld
         amd64_smem_quad sld, \s, \d, \b
         .else
@@ -11155,12 +10617,14 @@ NAME(amd64_specmem_end):
 .macro amd64_smem_quad pre, s, d, b
     .if \b == 16
     .quad NAME(gadget_amd64_\pre\()r\()\s\()_\d)
+    .elseif \b == 17
+    .quad NAME(gadget_amd64_\pre\()\s\()_\d\()_x)
     .else
     .quad NAME(gadget_amd64_\pre\()\s\()_\d\()_\b)
     .endif
 .endm
 .macro amd64_slo_row op, s, d, nf
-    .irp b, 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16
+    .irp b, 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17
         amd64_slo_quad \op, \s, \d, \b, \nf
     .endr
 .endm
@@ -11178,7 +10642,34 @@ NAME(amd64_specmem_end):
         .endr
     .endr
 .endm
+.macro amd64_x16_quad fam, op, d, b
+    .if \b == 16
+    .quad NAME(gadget_amd64_\fam\()_\op\()_\d\()_r)
+    .elseif \b == 17
+    .quad NAME(gadget_amd64_\fam\()_\op\()_\d\()_x)
+    .else
+    .quad NAME(gadget_amd64_\fam\()_\op\()_\d\()_\b)
+    .endif
+.endm
+.macro amd64_x16_row fam, op, d
+    .irp b, 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17
+        amd64_x16_quad \fam, \op, \d, \b
+    .endr
+.endm
+.macro amd64_x16_ops fam, op
+    .irp d, 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
+        amd64_x16_row \fam, \op, \d
+    .endr
+.endm
 .pushsection_rodata
+.global.name amd64_smx_gadgets
+    .irp kind, st16,zx16,ld16,st8,zx8,ld8
+        amd64_x16_ops smx, \kind
+    .endr
+.global.name amd64_scb_gadgets
+    .irp op, cmpmr,cmprm,test
+        amd64_x16_ops scb, \op
+    .endr
 .global.name amd64_smem_gadgets
     amd64_smem_ops ld
     amd64_smem_ops st
@@ -11287,4 +10778,129 @@ amd64_r16_family amd64_r16_ri, amd64_shi16, sar
     amd64_r16_ri_ops shi, shl, 1
     amd64_r16_ri_ops shi, shr, 1
     amd64_r16_ri_ops shi, sar, 1
+.popsection
+
+# ---- indexed addresses, and lea, on the register cache ----
+#
+# amd64_ea_<base>_<index>_<scale>: x3 = base + (index << scale), base 16 =
+# none, for the memory gadget emitted right after it (base 17 of the memory
+# families adds the disp). No memory access, so outside the specmem range;
+# nothing runs between the two gadgets, so x3 survives. Any of the sixteen
+# registers for both (index 4, rsp, cannot be encoded; its slots exist only
+# to keep the table rectangular). gret 0. Table amd64_ea_gadgets[(base * 16 +
+# index) * 4 + scale].
+.macro amd64_ea1 b, hb, i, hi, sc
+.gadget amd64_ea_\b\()_\i\()_\sc
+    .if \i < 8
+    .if \b < 8
+    add x3, x\hb, x\hi, lsl \sc
+    .elseif \b < 16
+    ldr x3, [_cpu, CPU_amd64_regs + 8 * \b]
+    add x3, x3, x\hi, lsl \sc
+    .else
+    lsl x3, x\hi, \sc
+    .endif
+    .else
+    ldr x8, [_cpu, CPU_amd64_regs + 8 * \i]
+    .if \b < 8
+    add x3, x\hb, x8, lsl \sc
+    .elseif \b < 16
+    ldr x3, [_cpu, CPU_amd64_regs + 8 * \b]
+    add x3, x3, x8, lsl \sc
+    .else
+    lsl x3, x8, \sc
+    .endif
+    .endif
+    gret
+.endm
+.macro amd64_ea_scales op, s, R, bits, nf, b, hb, i, hi
+    amd64_ea1 \b, \hb, \i, \hi, 0
+    amd64_ea1 \b, \hb, \i, \hi, 1
+    amd64_ea1 \b, \hb, \i, \hi, 2
+    amd64_ea1 \b, \hb, \i, \hi, 3
+.endm
+amd64_r16_rr amd64_ea_scales, 0, 0, x, 0, 0
+amd64_r16_srcs amd64_ea_scales, 0, 0, x, 0, 0, 16, 0
+
+# lea r32/r64 per register: amd64_lea<size>_<dst>_<base>: dst = base + disp;
+# amd64_movi<size>_<dst>: dst = the operand (a rip-relative lea, worked out
+# at translation); amd64_leax<size>_<dst>: dst = x3 + disp (an indexed lea,
+# after its amd64_ea gadget). 32-bit forms zero-extend, as an x86 32-bit
+# write does. gret 1. Table amd64_lea_gadgets[(size64 * 16 + dst) * 18 +
+# base], base 16 = movi, 17 = leax.
+.macro amd64_lea16 op, s, R, bits, nf, d, hd, b, hb
+    .if \b == 16
+    .gadget amd64_movi\s\()_\d
+    .if \d < 8
+    ldr \R\hd, [_ip]
+    .else
+    ldr \R\()8, [_ip]
+    str x8, [_cpu, CPU_amd64_regs + 8 * \d]
+    .endif
+    gret 1
+    .exitm
+    .endif
+    .if \b == 17
+    .gadget amd64_leax\s\()_\d
+    .else
+    .gadget amd64_lea\s\()_\d\()_\b
+    .endif
+    ldr x8, [_ip]
+    .if \b < 8
+    .if \d < 8
+    add \R\hd, \R\hb, \R\()8
+    .else
+    add \R\()13, \R\hb, \R\()8
+    str x13, [_cpu, CPU_amd64_regs + 8 * \d]
+    .endif
+    .else
+    .if \b < 16
+    ldr \R\()10, [_cpu, CPU_amd64_regs + 8 * \b]
+    .else
+    mov x10, x3
+    .endif
+    .if \d < 8
+    add \R\hd, \R\()10, \R\()8
+    .else
+    add \R\()13, \R\()10, \R\()8
+    str x13, [_cpu, CPU_amd64_regs + 8 * \d]
+    .endif
+    .endif
+    gret 1
+.endm
+amd64_r16_rr17 amd64_lea16, 0, 32, w, 0, 0
+amd64_r16_rr17 amd64_lea16, 0, 64, x, 0, 0
+.macro amd64_ea_quad b, i, sc
+    .quad NAME(gadget_amd64_ea_\b\()_\i\()_\sc)
+.endm
+.macro amd64_ea_row b
+    .irp i, 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
+        amd64_ea_quad \b, \i, 0
+        amd64_ea_quad \b, \i, 1
+        amd64_ea_quad \b, \i, 2
+        amd64_ea_quad \b, \i, 3
+    .endr
+.endm
+.macro amd64_lea_quad s, d, b
+    .if \b == 16
+    .quad NAME(gadget_amd64_movi\s\()_\d)
+    .elseif \b == 17
+    .quad NAME(gadget_amd64_leax\s\()_\d)
+    .else
+    .quad NAME(gadget_amd64_lea\s\()_\d\()_\b)
+    .endif
+.endm
+.pushsection_rodata
+.global.name amd64_ea_gadgets
+    .irp b, 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16
+        amd64_ea_row \b
+    .endr
+.global.name amd64_lea_gadgets
+    .irp s, 32,64
+        .irp d, 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
+            .irp b, 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17
+                amd64_lea_quad \s, \d, \b
+            .endr
+        .endr
+    .endr
 .popsection

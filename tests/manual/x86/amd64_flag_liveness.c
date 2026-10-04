@@ -20,7 +20,8 @@
 #include <sys/mman.h>
 
 // Registers the sequences use: rax rcx rdx rbx rsi rdi r8 r9 r10 r11 r12 r13.
-// rsp/rbp stay out; r15 holds the state pointer, r14 is the pushfq scratch.
+// rsp/rbp stay out; r15 holds the state pointer, r14 is the pushfq scratch
+// and the index register of the indexed memory operands.
 static const int usable[] = {0, 1, 2, 3, 6, 7, 8, 9, 10, 11, 12, 13};
 #define NUSABLE 12
 
@@ -72,9 +73,51 @@ static void mem_any(int reg) {
     memcpy(p, &d, 4); p += 4;
 }
 
+// [base + r14 * scale + disp32], base r15 (+128) or rbp, r14 = 0..3 set just
+// before: the indexed forms (math.S amd64_ea + the memory families' base 17).
+// rex_x adds REX.X for r14; the offset into mem[] stays at or below 32.
+static void rex_sib(int w, int reg) {
+    b((uint8_t) (0x42 | (w ? 8 : 0) | ((reg & 8) ? 4 : 0) | (use_rbp ? 0 : 1)));
+}
+static int sib_k; // r14's value, from set_r14
+static void sib_operand(int reg) {
+    int sc = (int) (rnd() % 4);
+    uint32_t off = (uint32_t) (sib_k << sc), d = (uint32_t) (rnd() % (33 - off)) + (use_rbp ? 0 : 128);
+    b((uint8_t) (0x84 | (reg & 7) << 3));                        // mod=10, rm=100: SIB
+    b((uint8_t) (sc << 6 | (14 & 7) << 3 | (use_rbp ? 5 : 7)));    // index r14
+    memcpy(p, &d, 4); p += 4;
+}
+static void set_r14(void) { // mov $k, %r14d before an indexed operand
+    sib_k = (int) (rnd() % 4);
+    b(0x41); b((uint8_t) (0xb8 | (14 & 7))); uint32_t v = (uint32_t) sib_k; memcpy(p, &v, 4); p += 4;
+}
+
 static void emit_mem_one(void) {
     int a = pick(), w = (int) (rnd() & 1);
     use_rbp = (int) (rnd() & 1);
+    if (rnd() % 4 == 0) { // the indexed and the 16-bit / byte forms
+        int lowbyte_rex = (a & 8) || (rnd() & 1); // REX makes a's low byte addressable
+        switch (rnd() % 9) {
+            case 0: set_r14(); rex_sib(w, a); b(0x8b); sib_operand(a); break;             // mov a, [b+i*s+d]
+            case 1: set_r14(); rex_sib(w, a); b(0x89); sib_operand(a); break;             // mov [b+i*s+d], a
+            case 2: set_r14(); rex_sib(w, a); b(rnd() & 1 ? 0x03 : 0x3b); sib_operand(a); break; // add/cmp a, [..]
+            case 3: set_r14(); rex_sib(w, a); b(0x8d); sib_operand(a); break;             // lea a, [b+i*s+d]
+            case 4: b(0x66); rex_mem_any(0, a); b(rnd() & 1 ? 0x89 : 0x8b); mem_any(a); break; // mov m16 <-> a16
+            case 5: rex_mem_any(w, a); b(0x0f); b(0xb7); mem_any(a); break;               // movzx a, word [m]
+            case 6: // mov byte [m] <-> a8, low byte only (no REX: al..bl)
+                if (!lowbyte_rex && (a & 7) >= 4) a &= 3;
+                if (lowbyte_rex) rex_mem_any(0, a);
+                else if (!use_rbp) rex_mem(0, a);
+                b(rnd() & 1 ? 0x88 : 0x8a); mem_any(a); break;
+            case 7: // cmp a8, [b+i*s+d] or test [m], a8
+                if (!lowbyte_rex && (a & 7) >= 4) a &= 3;
+                if (rnd() & 1) { set_r14(); rex_sib(0, a); b(0x3a); sib_operand(a); }
+                else { rex_mem_any(0, a); b(0x84); mem_any(a); }
+                break;
+            default: set_r14(); rex_sib(0, a); b(0x0f); b(0xb6); sib_operand(a); break;   // movzx a, byte [b+i*s+d]
+        }
+        return;
+    }
     if (rnd() % 12 == 0) { // mov a, [rip + d]: reads back code bytes just emitted
         b((uint8_t) (0x40 | (w ? 8 : 0) | ((a & 8) ? 4 : 0))); b(0x8b); b((uint8_t) (0x05 | (a & 7) << 3));
         uint32_t d = (uint32_t) -(int32_t) (16 + rnd() % 32);
