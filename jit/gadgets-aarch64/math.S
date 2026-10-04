@@ -11192,6 +11192,47 @@ NAME(amd64_specmem_end):
     amd64_slo_ops cmp, 1
 .popsection
 
+# inc/dec r32/r64 per register, all sixteen: amd64_idr_<op><size>_<reg>,
+# full and _nf. INC/DEC leave CF alone: the full form feeds the current CF
+# byte through the flag macro as its "carry", which rewrites the byte and
+# eflags bit 0 with the values they already had. No operands, gret 0.
+# Tables amd64_idr{,_nf}_gadgets[(op * 2 + size64) * 16 + reg].
+.macro amd64_idr16 op, s, R, bits, nf, d, hd
+.if \nf
+.gadget amd64_idr_\op\()\s\()_\d\()_nf
+    .ifc \op, inc
+    amd64_r16_op_into add, \R, \d, \hd, #1
+    .else
+    amd64_r16_op_into sub, \R, \d, \hd, #1
+    .endif
+    gret
+.else
+.gadget amd64_idr_\op\()\s\()_\d
+    amd64_r16_get \R, 13, \d, \hd
+    .ifc \op, inc
+    adds \R\()15, \R\()13, #1
+    .else
+    subs \R\()15, \R\()13, #1
+    .endif
+    cset w16, vs
+    ldrb w14, [_cpu, CPU_cf]
+    mov x10, 1
+    amd64_cached_set_addsub_flags \bits
+    amd64_r16_put 15, \d, \hd
+    gret
+.endif
+.endm
+amd64_r16_family amd64_r16_ri, amd64_idr16, inc
+amd64_r16_family amd64_r16_ri, amd64_idr16, dec
+.pushsection_rodata
+.global.name amd64_idr_gadgets
+    amd64_r16_ri_ops idr, inc, 0
+    amd64_r16_ri_ops idr, dec, 0
+.global.name amd64_idr_nf_gadgets
+    amd64_r16_ri_ops idr, inc, 1
+    amd64_r16_ri_ops idr, dec, 1
+.popsection
+
 # shl/shr/sar r32/r64, imm8 (and the D1 by-one forms) per register, all
 # sixteen like the arith families above: amd64_shi_<op><size>_<reg>, full
 # and _nf, operand [count] with the count already masked and nonzero (gen.c
