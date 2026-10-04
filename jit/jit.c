@@ -908,7 +908,45 @@ static void *jit_uctx_pc(void *uctx) {
     return NULL;
 }
 
+// A host fault inside one of the amd64 register-cache memory gadgets (math.S,
+// between amd64_specmem_start and amd64_specmem_end): there the cache in
+// x20-x27 is authoritative for rax..rdi and CPU_amd64_regs may be behind it,
+// and the crash unwind restores x20-x27 from its jmpbuf -- so before it, put
+// the faulting thread's values where the unwind's cpu copy will find them.
+// x1 is the gadgets' _cpu. x is the faulting thread's x0..x28. Called from the
+// POSIX handler below and from the Mach handler (app/hook.c) -- the latter on
+// the exception-server thread while the faulting thread is suspended.
+void jit_amd64_fault_spill(uint64_t pc, const uint64_t *x) {
+#if defined(__aarch64__)
+    extern char amd64_specmem_start[], amd64_specmem_end[];
+    if (pc < (uint64_t) (uintptr_t) amd64_specmem_start || pc >= (uint64_t) (uintptr_t) amd64_specmem_end)
+        return;
+    struct cpu_state *cpu = (struct cpu_state *) (uintptr_t) x[1];
+    if (cpu == NULL)
+        return;
+    cpu->amd64_regs[0] = x[20];
+    cpu->amd64_regs[1] = x[22];
+    cpu->amd64_regs[2] = x[23];
+    cpu->amd64_regs[3] = x[21];
+    cpu->amd64_regs[4] = x[27];
+    cpu->amd64_regs[5] = x[26];
+    cpu->amd64_regs[6] = x[24];
+    cpu->amd64_regs[7] = x[25];
+#else
+    (void) pc; (void) x;
+#endif
+}
+
 static void jit_host_sigbus_handler(int sig, siginfo_t *info, void *uctx) {
+#if defined(__aarch64__) && defined(__APPLE__)
+    if (uctx != NULL && ((ucontext_t *) uctx)->uc_mcontext != NULL)
+        jit_amd64_fault_spill(((ucontext_t *) uctx)->uc_mcontext->__ss.__pc,
+                              ((ucontext_t *) uctx)->uc_mcontext->__ss.__x);
+#elif defined(__aarch64__) && defined(__linux__)
+    if (uctx != NULL)
+        jit_amd64_fault_spill(((ucontext_t *) uctx)->uc_mcontext.pc,
+                              (const uint64_t *) ((ucontext_t *) uctx)->uc_mcontext.regs);
+#endif
     // A guarded kernel access (emu/host_fault.h), as in jit_crash_bus_fn: out
     // of the handler to the guard, which, like the unwind below, was armed
     // with savemask 0 -- SA_NODEFER is what leaves SIGBUS unblocked after it.

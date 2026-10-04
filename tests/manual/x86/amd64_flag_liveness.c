@@ -57,12 +57,33 @@ static void mem_operand(int reg) {
 }
 // REX with B = 1 (r15 base) and R from reg
 static void rex_mem(int w, int reg) { b((uint8_t) (0x41 | (w ? 8 : 0) | ((reg & 8) ? 4 : 0))); }
+// Half the memory operands go through rbp, which points at mem[0] and is one
+// of the eight registers the amd64 JIT caches -- the register-cache memory
+// gadgets (math.S amd64_sld/sst) need a cached base. rex_mem_any/mem_any pick.
+static int use_rbp;
+static void rex_mem_any(int w, int reg) {
+    if (use_rbp) b((uint8_t) (0x40 | (w ? 8 : 0) | ((reg & 8) ? 4 : 0)));
+    else rex_mem(w, reg);
+}
+static void mem_any(int reg) {
+    if (!use_rbp) { mem_operand(reg); return; }
+    b((uint8_t) (0x85 | (reg & 7) << 3)); // mod=10 rm=rbp: [rbp + disp32]
+    uint32_t d = 8 * (uint32_t) (rnd() % 8) + (uint32_t) (rnd() % 4);
+    memcpy(p, &d, 4); p += 4;
+}
 
 static void emit_mem_one(void) {
     int a = pick(), w = (int) (rnd() & 1);
+    use_rbp = (int) (rnd() & 1);
+    if (rnd() % 12 == 0) { // mov a, [rip + d]: reads back code bytes just emitted
+        b((uint8_t) (0x40 | (w ? 8 : 0) | ((a & 8) ? 4 : 0))); b(0x8b); b((uint8_t) (0x05 | (a & 7) << 3));
+        uint32_t d = (uint32_t) -(int32_t) (16 + rnd() % 32);
+        memcpy(p, &d, 4); p += 4;
+        return;
+    }
     switch (rnd() % 10) {
-        case 0: rex_mem(w, a); b(0x8b); mem_operand(a); break;            // mov a, [m]
-        case 1: rex_mem(w, a); b(0x89); mem_operand(a); break;            // mov [m], a
+        case 0: rex_mem_any(w, a); b(0x8b); mem_any(a); break;            // mov a, [m]
+        case 1: rex_mem_any(w, a); b(0x89); mem_any(a); break;            // mov [m], a
         case 2: rex_mem(w, a); b(0x03); mem_operand(a); break;            // add a, [m]
         case 3: rex_mem(w, a); b(0x3b); mem_operand(a); break;            // cmp a, [m]
         case 4: rex_mem(w, a); b(rnd() & 1 ? 0x23 : 0x33); mem_operand(a); break; // and/xor a, [m]
@@ -70,7 +91,7 @@ static void emit_mem_one(void) {
         case 6: rex_mem(w, a); b(0x0f); b(0xb6); mem_operand(a); break;   // movzx a, byte [m]
         case 7: rex_mem(0, a); b(0x02); mem_operand(a); break;            // add a8, [m] (REX: no ah..bh)
         case 8: rex_mem(0, a); b(0x38); mem_operand(a); break;            // cmp [m], a8
-        default: rex_mem(1, a); b(0x8b); mem_operand(a); break;           // mov a64, [m]
+        default: rex_mem_any(1, a); b(0x8b); mem_any(a); break;           // mov a64, [m]
     }
 }
 
@@ -132,7 +153,9 @@ int main(void) {
     for (int s = 0; s < NSEQ; s++) {
         seqs[s] = (void (*)(struct state *)) p;
         b(0x41); b(0x57); b(0x41); b(0x56); b(0x41); b(0x55); b(0x41); b(0x54); b(0x53); // push r15 r14 r13 r12 rbx
+        b(0x55);                                       // push rbp
         b(0x49); b(0x89); b(0xff);                     // mov r15, rdi
+        b(0x49); b(0x8d); b(0xaf); { uint32_t d = 128; memcpy(p, &d, 4); p += 4; } // lea rbp, [r15 + 128]
         b(0x41); b(0xff); b(0x77); b(8 * 14);          // push qword [r15 + 112] (initial flags)
         b(0x9d);                                       // popfq
         for (int i = 0; i < NUSABLE; i++) load_reg(usable[i]);
@@ -142,6 +165,7 @@ int main(void) {
         b(0x41); b(0x5e);                              // pop r14
         b(0x4d); b(0x89); b(0x77); b(8 * 14);          // mov [r15 + 112], r14
         for (int i = 0; i < NUSABLE; i++) store_reg(usable[i]);
+        b(0x5d);                                       // pop rbp
         b(0x5b); b(0x41); b(0x5c); b(0x41); b(0x5d); b(0x41); b(0x5e); b(0x41); b(0x5f); // pop rbx r12 r13 r14 r15
         b(0xc3);
         for (int i = 0; i < 16; i++)

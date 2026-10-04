@@ -13622,6 +13622,38 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
         amd64_jit_debug("mov-mem ip=%llx op=%02x load=%d size=%u meta=%lx disp=%lx next=%llx",
                 (unsigned long long) insn.start_ip, insn.opcode, is_load, size,
                 meta, disp, (unsigned long long) next_ip);
+#if defined(__aarch64__)
+        // A cached register to or from [cached base + disp] or [rip + disp]:
+        // one gadget that keeps the register cache live (math.S amd64_sld/sst;
+        // see there for what saves the cache on a fault).
+        {
+            unsigned mreg = amd64_modrm_reg(insn.modrm) | (insn.rex.r ? 8 : 0);
+            unsigned mbase = (unsigned) ((meta >> AMD64_JIT_MEM_BASE_SHIFT) & 0xf);
+            bool has_base = (meta & AMD64_JIT_MEM_HAS_BASE) != 0;
+            bool rip_rel = (meta & AMD64_JIT_MEM_RIP_REL) != 0;
+            if ((size == 32 || size == 64) && (amd64_jit_fuse_mask() & JIT_FUSE_AMD64_MEMR) &&
+                    amd64_jit_low8_reg(mreg) && !(meta & AMD64_JIT_MEM_HAS_INDEX) &&
+                    !(meta & (AMD64_JIT_MEM_FS | AMD64_JIT_MEM_GS)) &&
+                    ((rip_rel && !has_base) || (has_base && !rip_rel && amd64_jit_low8_reg(mbase)))) {
+                extern void (*const amd64_smem_gadgets[])(void), (*const amd64_smem_rip_gadgets[])(void);
+                unsigned st = is_load ? 0 : 1, s64 = size == 64;
+                gen_amd64_ensure_reg_cache(state);
+                state->amd64_deferred_rip_valid = false; // the gadget publishes the rip
+                if (rip_rel) {
+                    gen(state, (unsigned long) amd64_smem_rip_gadgets[(st * 2 + s64) * 8 + mreg]);
+                    gen(state, (unsigned long) (next_ip + (int64_t) disp));
+                } else {
+                    gen(state, (unsigned long) amd64_smem_gadgets[((st * 2 + s64) * 8 + mreg) * 8 + mbase]);
+                    gen(state, disp);
+                }
+                gen(state, (unsigned long) insn.start_ip);
+                if (is_load)
+                    gen_amd64_mark_reg_cache_dirty(state);
+                gen_amd64_defer_rip(state, next_ip);
+                return true;
+            }
+        }
+#endif
         gen_amd64_flush_reg_cache(state);
         gen_amd64_flush_rip(state);
         extern void gadget_amd64_mov_load8(void), gadget_amd64_mov_load16(void),
@@ -14910,6 +14942,7 @@ static const struct jit_fuse_entry riscv64_fuse_names[] = {
 static const struct jit_fuse_entry amd64_fuse_names[] = {
     {"incdec_reg", JIT_FUSE_AMD64_INCDEC_REG}, {"deadflags", JIT_FUSE_AMD64_DEADFLAGS},
     {"movr", JIT_FUSE_AMD64_MOVR}, {"arithr", JIT_FUSE_AMD64_ARITHR},
+    {"memr", JIT_FUSE_AMD64_MEMR},
 };
 
 static const struct jit_fuse_domain jit_fuse_domains[] = {

@@ -37,6 +37,9 @@ extern __thread guest_addr_t jit_crash_addr;
 // delivering a guest SIGBUS for a genuine guest-memory fault or crashing for a
 // real bug.
 extern void jit_crash_bus_fn(void *host_addr, long kind, void *fault_pc);
+// jit/jit.c: saves the amd64 register cache when the fault is in one of the
+// gadgets that keep it live.
+extern void jit_amd64_fault_spill(uint64_t pc, const uint64_t *x);
 
 kern_return_t catch_mach_exception_raise(
     mach_port_t exception_port,
@@ -120,6 +123,7 @@ kern_return_t catch_mach_exception_raise_state(
     if (exception_port == jit_crash_port &&
         exception == EXC_BAD_ACCESS &&
         codeCnt > 1) {
+        jit_amd64_fault_spill((uint64_t) arm_thread_state64_get_pc(*old), old->__x);
         *new = *old;
         *new_stateCnt = old_stateCnt;
         // Everything the exception knew, into the argument registers. The PC

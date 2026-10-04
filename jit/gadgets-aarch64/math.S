@@ -19658,3 +19658,3099 @@ amd64_v_gen_i2f cvtsi2ss, 1
     .quad NAME(gadget_amd64_lri_xor64_6_nf)
     .quad NAME(gadget_amd64_lri_xor64_7_nf)
 .popsection
+
+# ---- `mov r32/r64, [base + disp]` and the store, specialised per register ----
+#
+# The generic amd64_mov_load*/store* decode a meta word at run time, read the
+# base from CPU_amd64_regs, and need the register cache written back and
+# dropped before them (and reloaded after) -- three dispatches around every
+# memory move in a block that also does register arithmetic. These read the
+# base from the cache and load into (or store from) the cache, with the
+# register cache left live: one dispatch, no meta decode. Shapes: a cached
+# destination/source and either a cached base + disp32 or rip-relative (the
+# address is then a translation-time constant). Each gadget publishes the
+# instruction's rip itself (CPU_amd64_rip), so no set_rip dispatch either.
+#
+# The cache is authoritative while these run, so two things must save it:
+#   - their slow paths (TLB miss, write revalidation, page-crossing access):
+#     each can end in amd64_vmem_segfault_* -> jit_exit, which only mirrors
+#     the cache to the i386 slots; amd64_spill_low8 stores rax..rdi first;
+#   - a host fault on the access itself (the stale-TLB race): the gadgets sit
+#     between amd64_specmem_start and amd64_specmem_end, and the fault
+#     handlers (jit/jit.c jit_amd64_fault_spill, app/hook.c) copy x20-x27 from
+#     the faulting thread's state into its CPU_amd64_regs before the unwind.
+# Stream: [gadget][disp or address][start rip].  gret 2.
+.macro amd64_spill_low8
+    add x8, _cpu, CPU_amd64_regs
+    str x20, [x8, 0]
+    str x22, [x8, 8]
+    str x23, [x8, 16]
+    str x21, [x8, 24]
+    str x27, [x8, 32]
+    str x26, [x8, 40]
+    str x24, [x8, 48]
+    str x25, [x8, 56]
+.endm
+.macro amd64_svread_bullshit size, id
+amd64_vmiss_\id:
+    amd64_spill_low8
+    bl amd64_vmem_read_miss
+    b amd64_vback_\id
+amd64_vxpage_\id:
+    amd64_spill_low8
+    mov x19, \size
+    bl amd64_vmem_crosspage_read
+    b amd64_vback_\id
+.endm
+.macro amd64_svwrite_prep size, id
+    and  x8, x9, 0xfff
+    cmp  x8, (0x1000-\size)
+    b.hi amd64_vwxpage_\id
+    ldr  x11, [_tlb, (-TLB_entries+TLB_mmu)]
+    ldr  x8,  [_tlb, (-TLB_entries+TLB_mem_changes)]
+    ldr  x12, [x11, MMU_changes]
+    cmp  x8, x12
+    b.ne amd64_vwslow_\id
+    ldrb w12, [x11, MMU_requires_write_revalidate]
+    cbz  w12, amd64_vwfast_\id
+amd64_vwslow_\id:
+    amd64_spill_low8
+    bl   amd64_vmem_write_resolve
+    b    amd64_vwback_\id
+amd64_vwfast_\id:
+    and  x8, x9, #0xfffffffffffff000
+    str  x8, [_tlb, (-TLB_entries+TLB_dirty_page)]
+    ubfx x11, x9, 12, TLB_BITS
+    eor  x11, x11, x9, lsr #(12 + TLB_BITS)
+    and  x11, x11, #(1 << TLB_BITS) - 1
+    mov  w12, TLB_ENTRY_SIZE
+    madd x11, x11, x12, _tlb
+    ldr  x13, [x11, TLB_ENTRY_page_if_writable]
+    cmp  x8, x13
+    b.ne amd64_vwmiss_\id
+    ldr  x13, [x11, TLB_ENTRY_data_minus_addr]
+    add  x9, x13, x9
+amd64_vwback_\id:
+.endm
+.macro amd64_svwrite_done size, id
+    mov x8, LOCAL_value
+    add x8, _cpu, x8
+    cmp  x8, x9
+    b.ne amd64_vwdone_\id
+    amd64_spill_low8
+    mov  x19, \size
+    bl   amd64_vmem_crosspage_write
+amd64_vwdone_\id:
+.endm
+.macro amd64_svwrite_bullshit size, id
+amd64_vwmiss_\id:
+    amd64_spill_low8
+    bl   amd64_vmem_write_miss
+    b    amd64_vwback_\id
+amd64_vwxpage_\id:
+    str  x9, [_cpu, LOCAL_value_addr]
+    mov x9, LOCAL_value
+    add x9, _cpu, x9
+    b    amd64_vwback_\id
+.endm
+.p2align 4
+.global NAME(amd64_specmem_start)
+NAME(amd64_specmem_start):
+.gadget amd64_sld32_0_0
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x20
+    amd64_vread_prep 4, sld32_0_0
+    ldr w20, [x9]
+    gret 2
+    amd64_svread_bullshit 4, sld32_0_0
+.gadget amd64_sst32_0_0
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x20
+    amd64_svwrite_prep 4, sst32_0_0
+    str w20, [x9]
+    amd64_svwrite_done 4, sst32_0_0
+    gret 2
+    amd64_svwrite_bullshit 4, sst32_0_0
+.gadget amd64_sld32_0_1
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x22
+    amd64_vread_prep 4, sld32_0_1
+    ldr w20, [x9]
+    gret 2
+    amd64_svread_bullshit 4, sld32_0_1
+.gadget amd64_sst32_0_1
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x22
+    amd64_svwrite_prep 4, sst32_0_1
+    str w20, [x9]
+    amd64_svwrite_done 4, sst32_0_1
+    gret 2
+    amd64_svwrite_bullshit 4, sst32_0_1
+.gadget amd64_sld32_0_2
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x23
+    amd64_vread_prep 4, sld32_0_2
+    ldr w20, [x9]
+    gret 2
+    amd64_svread_bullshit 4, sld32_0_2
+.gadget amd64_sst32_0_2
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x23
+    amd64_svwrite_prep 4, sst32_0_2
+    str w20, [x9]
+    amd64_svwrite_done 4, sst32_0_2
+    gret 2
+    amd64_svwrite_bullshit 4, sst32_0_2
+.gadget amd64_sld32_0_3
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x21
+    amd64_vread_prep 4, sld32_0_3
+    ldr w20, [x9]
+    gret 2
+    amd64_svread_bullshit 4, sld32_0_3
+.gadget amd64_sst32_0_3
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x21
+    amd64_svwrite_prep 4, sst32_0_3
+    str w20, [x9]
+    amd64_svwrite_done 4, sst32_0_3
+    gret 2
+    amd64_svwrite_bullshit 4, sst32_0_3
+.gadget amd64_sld32_0_4
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x27
+    amd64_vread_prep 4, sld32_0_4
+    ldr w20, [x9]
+    gret 2
+    amd64_svread_bullshit 4, sld32_0_4
+.gadget amd64_sst32_0_4
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x27
+    amd64_svwrite_prep 4, sst32_0_4
+    str w20, [x9]
+    amd64_svwrite_done 4, sst32_0_4
+    gret 2
+    amd64_svwrite_bullshit 4, sst32_0_4
+.gadget amd64_sld32_0_5
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x26
+    amd64_vread_prep 4, sld32_0_5
+    ldr w20, [x9]
+    gret 2
+    amd64_svread_bullshit 4, sld32_0_5
+.gadget amd64_sst32_0_5
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x26
+    amd64_svwrite_prep 4, sst32_0_5
+    str w20, [x9]
+    amd64_svwrite_done 4, sst32_0_5
+    gret 2
+    amd64_svwrite_bullshit 4, sst32_0_5
+.gadget amd64_sld32_0_6
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x24
+    amd64_vread_prep 4, sld32_0_6
+    ldr w20, [x9]
+    gret 2
+    amd64_svread_bullshit 4, sld32_0_6
+.gadget amd64_sst32_0_6
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x24
+    amd64_svwrite_prep 4, sst32_0_6
+    str w20, [x9]
+    amd64_svwrite_done 4, sst32_0_6
+    gret 2
+    amd64_svwrite_bullshit 4, sst32_0_6
+.gadget amd64_sld32_0_7
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x25
+    amd64_vread_prep 4, sld32_0_7
+    ldr w20, [x9]
+    gret 2
+    amd64_svread_bullshit 4, sld32_0_7
+.gadget amd64_sst32_0_7
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x25
+    amd64_svwrite_prep 4, sst32_0_7
+    str w20, [x9]
+    amd64_svwrite_done 4, sst32_0_7
+    gret 2
+    amd64_svwrite_bullshit 4, sst32_0_7
+.gadget amd64_sldr32_0
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    amd64_vread_prep 4, sldr32_0
+    ldr w20, [x9]
+    gret 2
+    amd64_svread_bullshit 4, sldr32_0
+.gadget amd64_sstr32_0
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    amd64_svwrite_prep 4, sstr32_0
+    str w20, [x9]
+    amd64_svwrite_done 4, sstr32_0
+    gret 2
+    amd64_svwrite_bullshit 4, sstr32_0
+.gadget amd64_sld32_1_0
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x20
+    amd64_vread_prep 4, sld32_1_0
+    ldr w22, [x9]
+    gret 2
+    amd64_svread_bullshit 4, sld32_1_0
+.gadget amd64_sst32_1_0
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x20
+    amd64_svwrite_prep 4, sst32_1_0
+    str w22, [x9]
+    amd64_svwrite_done 4, sst32_1_0
+    gret 2
+    amd64_svwrite_bullshit 4, sst32_1_0
+.gadget amd64_sld32_1_1
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x22
+    amd64_vread_prep 4, sld32_1_1
+    ldr w22, [x9]
+    gret 2
+    amd64_svread_bullshit 4, sld32_1_1
+.gadget amd64_sst32_1_1
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x22
+    amd64_svwrite_prep 4, sst32_1_1
+    str w22, [x9]
+    amd64_svwrite_done 4, sst32_1_1
+    gret 2
+    amd64_svwrite_bullshit 4, sst32_1_1
+.gadget amd64_sld32_1_2
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x23
+    amd64_vread_prep 4, sld32_1_2
+    ldr w22, [x9]
+    gret 2
+    amd64_svread_bullshit 4, sld32_1_2
+.gadget amd64_sst32_1_2
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x23
+    amd64_svwrite_prep 4, sst32_1_2
+    str w22, [x9]
+    amd64_svwrite_done 4, sst32_1_2
+    gret 2
+    amd64_svwrite_bullshit 4, sst32_1_2
+.gadget amd64_sld32_1_3
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x21
+    amd64_vread_prep 4, sld32_1_3
+    ldr w22, [x9]
+    gret 2
+    amd64_svread_bullshit 4, sld32_1_3
+.gadget amd64_sst32_1_3
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x21
+    amd64_svwrite_prep 4, sst32_1_3
+    str w22, [x9]
+    amd64_svwrite_done 4, sst32_1_3
+    gret 2
+    amd64_svwrite_bullshit 4, sst32_1_3
+.gadget amd64_sld32_1_4
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x27
+    amd64_vread_prep 4, sld32_1_4
+    ldr w22, [x9]
+    gret 2
+    amd64_svread_bullshit 4, sld32_1_4
+.gadget amd64_sst32_1_4
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x27
+    amd64_svwrite_prep 4, sst32_1_4
+    str w22, [x9]
+    amd64_svwrite_done 4, sst32_1_4
+    gret 2
+    amd64_svwrite_bullshit 4, sst32_1_4
+.gadget amd64_sld32_1_5
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x26
+    amd64_vread_prep 4, sld32_1_5
+    ldr w22, [x9]
+    gret 2
+    amd64_svread_bullshit 4, sld32_1_5
+.gadget amd64_sst32_1_5
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x26
+    amd64_svwrite_prep 4, sst32_1_5
+    str w22, [x9]
+    amd64_svwrite_done 4, sst32_1_5
+    gret 2
+    amd64_svwrite_bullshit 4, sst32_1_5
+.gadget amd64_sld32_1_6
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x24
+    amd64_vread_prep 4, sld32_1_6
+    ldr w22, [x9]
+    gret 2
+    amd64_svread_bullshit 4, sld32_1_6
+.gadget amd64_sst32_1_6
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x24
+    amd64_svwrite_prep 4, sst32_1_6
+    str w22, [x9]
+    amd64_svwrite_done 4, sst32_1_6
+    gret 2
+    amd64_svwrite_bullshit 4, sst32_1_6
+.gadget amd64_sld32_1_7
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x25
+    amd64_vread_prep 4, sld32_1_7
+    ldr w22, [x9]
+    gret 2
+    amd64_svread_bullshit 4, sld32_1_7
+.gadget amd64_sst32_1_7
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x25
+    amd64_svwrite_prep 4, sst32_1_7
+    str w22, [x9]
+    amd64_svwrite_done 4, sst32_1_7
+    gret 2
+    amd64_svwrite_bullshit 4, sst32_1_7
+.gadget amd64_sldr32_1
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    amd64_vread_prep 4, sldr32_1
+    ldr w22, [x9]
+    gret 2
+    amd64_svread_bullshit 4, sldr32_1
+.gadget amd64_sstr32_1
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    amd64_svwrite_prep 4, sstr32_1
+    str w22, [x9]
+    amd64_svwrite_done 4, sstr32_1
+    gret 2
+    amd64_svwrite_bullshit 4, sstr32_1
+.gadget amd64_sld32_2_0
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x20
+    amd64_vread_prep 4, sld32_2_0
+    ldr w23, [x9]
+    gret 2
+    amd64_svread_bullshit 4, sld32_2_0
+.gadget amd64_sst32_2_0
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x20
+    amd64_svwrite_prep 4, sst32_2_0
+    str w23, [x9]
+    amd64_svwrite_done 4, sst32_2_0
+    gret 2
+    amd64_svwrite_bullshit 4, sst32_2_0
+.gadget amd64_sld32_2_1
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x22
+    amd64_vread_prep 4, sld32_2_1
+    ldr w23, [x9]
+    gret 2
+    amd64_svread_bullshit 4, sld32_2_1
+.gadget amd64_sst32_2_1
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x22
+    amd64_svwrite_prep 4, sst32_2_1
+    str w23, [x9]
+    amd64_svwrite_done 4, sst32_2_1
+    gret 2
+    amd64_svwrite_bullshit 4, sst32_2_1
+.gadget amd64_sld32_2_2
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x23
+    amd64_vread_prep 4, sld32_2_2
+    ldr w23, [x9]
+    gret 2
+    amd64_svread_bullshit 4, sld32_2_2
+.gadget amd64_sst32_2_2
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x23
+    amd64_svwrite_prep 4, sst32_2_2
+    str w23, [x9]
+    amd64_svwrite_done 4, sst32_2_2
+    gret 2
+    amd64_svwrite_bullshit 4, sst32_2_2
+.gadget amd64_sld32_2_3
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x21
+    amd64_vread_prep 4, sld32_2_3
+    ldr w23, [x9]
+    gret 2
+    amd64_svread_bullshit 4, sld32_2_3
+.gadget amd64_sst32_2_3
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x21
+    amd64_svwrite_prep 4, sst32_2_3
+    str w23, [x9]
+    amd64_svwrite_done 4, sst32_2_3
+    gret 2
+    amd64_svwrite_bullshit 4, sst32_2_3
+.gadget amd64_sld32_2_4
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x27
+    amd64_vread_prep 4, sld32_2_4
+    ldr w23, [x9]
+    gret 2
+    amd64_svread_bullshit 4, sld32_2_4
+.gadget amd64_sst32_2_4
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x27
+    amd64_svwrite_prep 4, sst32_2_4
+    str w23, [x9]
+    amd64_svwrite_done 4, sst32_2_4
+    gret 2
+    amd64_svwrite_bullshit 4, sst32_2_4
+.gadget amd64_sld32_2_5
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x26
+    amd64_vread_prep 4, sld32_2_5
+    ldr w23, [x9]
+    gret 2
+    amd64_svread_bullshit 4, sld32_2_5
+.gadget amd64_sst32_2_5
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x26
+    amd64_svwrite_prep 4, sst32_2_5
+    str w23, [x9]
+    amd64_svwrite_done 4, sst32_2_5
+    gret 2
+    amd64_svwrite_bullshit 4, sst32_2_5
+.gadget amd64_sld32_2_6
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x24
+    amd64_vread_prep 4, sld32_2_6
+    ldr w23, [x9]
+    gret 2
+    amd64_svread_bullshit 4, sld32_2_6
+.gadget amd64_sst32_2_6
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x24
+    amd64_svwrite_prep 4, sst32_2_6
+    str w23, [x9]
+    amd64_svwrite_done 4, sst32_2_6
+    gret 2
+    amd64_svwrite_bullshit 4, sst32_2_6
+.gadget amd64_sld32_2_7
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x25
+    amd64_vread_prep 4, sld32_2_7
+    ldr w23, [x9]
+    gret 2
+    amd64_svread_bullshit 4, sld32_2_7
+.gadget amd64_sst32_2_7
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x25
+    amd64_svwrite_prep 4, sst32_2_7
+    str w23, [x9]
+    amd64_svwrite_done 4, sst32_2_7
+    gret 2
+    amd64_svwrite_bullshit 4, sst32_2_7
+.gadget amd64_sldr32_2
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    amd64_vread_prep 4, sldr32_2
+    ldr w23, [x9]
+    gret 2
+    amd64_svread_bullshit 4, sldr32_2
+.gadget amd64_sstr32_2
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    amd64_svwrite_prep 4, sstr32_2
+    str w23, [x9]
+    amd64_svwrite_done 4, sstr32_2
+    gret 2
+    amd64_svwrite_bullshit 4, sstr32_2
+.gadget amd64_sld32_3_0
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x20
+    amd64_vread_prep 4, sld32_3_0
+    ldr w21, [x9]
+    gret 2
+    amd64_svread_bullshit 4, sld32_3_0
+.gadget amd64_sst32_3_0
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x20
+    amd64_svwrite_prep 4, sst32_3_0
+    str w21, [x9]
+    amd64_svwrite_done 4, sst32_3_0
+    gret 2
+    amd64_svwrite_bullshit 4, sst32_3_0
+.gadget amd64_sld32_3_1
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x22
+    amd64_vread_prep 4, sld32_3_1
+    ldr w21, [x9]
+    gret 2
+    amd64_svread_bullshit 4, sld32_3_1
+.gadget amd64_sst32_3_1
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x22
+    amd64_svwrite_prep 4, sst32_3_1
+    str w21, [x9]
+    amd64_svwrite_done 4, sst32_3_1
+    gret 2
+    amd64_svwrite_bullshit 4, sst32_3_1
+.gadget amd64_sld32_3_2
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x23
+    amd64_vread_prep 4, sld32_3_2
+    ldr w21, [x9]
+    gret 2
+    amd64_svread_bullshit 4, sld32_3_2
+.gadget amd64_sst32_3_2
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x23
+    amd64_svwrite_prep 4, sst32_3_2
+    str w21, [x9]
+    amd64_svwrite_done 4, sst32_3_2
+    gret 2
+    amd64_svwrite_bullshit 4, sst32_3_2
+.gadget amd64_sld32_3_3
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x21
+    amd64_vread_prep 4, sld32_3_3
+    ldr w21, [x9]
+    gret 2
+    amd64_svread_bullshit 4, sld32_3_3
+.gadget amd64_sst32_3_3
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x21
+    amd64_svwrite_prep 4, sst32_3_3
+    str w21, [x9]
+    amd64_svwrite_done 4, sst32_3_3
+    gret 2
+    amd64_svwrite_bullshit 4, sst32_3_3
+.gadget amd64_sld32_3_4
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x27
+    amd64_vread_prep 4, sld32_3_4
+    ldr w21, [x9]
+    gret 2
+    amd64_svread_bullshit 4, sld32_3_4
+.gadget amd64_sst32_3_4
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x27
+    amd64_svwrite_prep 4, sst32_3_4
+    str w21, [x9]
+    amd64_svwrite_done 4, sst32_3_4
+    gret 2
+    amd64_svwrite_bullshit 4, sst32_3_4
+.gadget amd64_sld32_3_5
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x26
+    amd64_vread_prep 4, sld32_3_5
+    ldr w21, [x9]
+    gret 2
+    amd64_svread_bullshit 4, sld32_3_5
+.gadget amd64_sst32_3_5
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x26
+    amd64_svwrite_prep 4, sst32_3_5
+    str w21, [x9]
+    amd64_svwrite_done 4, sst32_3_5
+    gret 2
+    amd64_svwrite_bullshit 4, sst32_3_5
+.gadget amd64_sld32_3_6
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x24
+    amd64_vread_prep 4, sld32_3_6
+    ldr w21, [x9]
+    gret 2
+    amd64_svread_bullshit 4, sld32_3_6
+.gadget amd64_sst32_3_6
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x24
+    amd64_svwrite_prep 4, sst32_3_6
+    str w21, [x9]
+    amd64_svwrite_done 4, sst32_3_6
+    gret 2
+    amd64_svwrite_bullshit 4, sst32_3_6
+.gadget amd64_sld32_3_7
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x25
+    amd64_vread_prep 4, sld32_3_7
+    ldr w21, [x9]
+    gret 2
+    amd64_svread_bullshit 4, sld32_3_7
+.gadget amd64_sst32_3_7
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x25
+    amd64_svwrite_prep 4, sst32_3_7
+    str w21, [x9]
+    amd64_svwrite_done 4, sst32_3_7
+    gret 2
+    amd64_svwrite_bullshit 4, sst32_3_7
+.gadget amd64_sldr32_3
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    amd64_vread_prep 4, sldr32_3
+    ldr w21, [x9]
+    gret 2
+    amd64_svread_bullshit 4, sldr32_3
+.gadget amd64_sstr32_3
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    amd64_svwrite_prep 4, sstr32_3
+    str w21, [x9]
+    amd64_svwrite_done 4, sstr32_3
+    gret 2
+    amd64_svwrite_bullshit 4, sstr32_3
+.gadget amd64_sld32_4_0
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x20
+    amd64_vread_prep 4, sld32_4_0
+    ldr w27, [x9]
+    gret 2
+    amd64_svread_bullshit 4, sld32_4_0
+.gadget amd64_sst32_4_0
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x20
+    amd64_svwrite_prep 4, sst32_4_0
+    str w27, [x9]
+    amd64_svwrite_done 4, sst32_4_0
+    gret 2
+    amd64_svwrite_bullshit 4, sst32_4_0
+.gadget amd64_sld32_4_1
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x22
+    amd64_vread_prep 4, sld32_4_1
+    ldr w27, [x9]
+    gret 2
+    amd64_svread_bullshit 4, sld32_4_1
+.gadget amd64_sst32_4_1
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x22
+    amd64_svwrite_prep 4, sst32_4_1
+    str w27, [x9]
+    amd64_svwrite_done 4, sst32_4_1
+    gret 2
+    amd64_svwrite_bullshit 4, sst32_4_1
+.gadget amd64_sld32_4_2
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x23
+    amd64_vread_prep 4, sld32_4_2
+    ldr w27, [x9]
+    gret 2
+    amd64_svread_bullshit 4, sld32_4_2
+.gadget amd64_sst32_4_2
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x23
+    amd64_svwrite_prep 4, sst32_4_2
+    str w27, [x9]
+    amd64_svwrite_done 4, sst32_4_2
+    gret 2
+    amd64_svwrite_bullshit 4, sst32_4_2
+.gadget amd64_sld32_4_3
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x21
+    amd64_vread_prep 4, sld32_4_3
+    ldr w27, [x9]
+    gret 2
+    amd64_svread_bullshit 4, sld32_4_3
+.gadget amd64_sst32_4_3
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x21
+    amd64_svwrite_prep 4, sst32_4_3
+    str w27, [x9]
+    amd64_svwrite_done 4, sst32_4_3
+    gret 2
+    amd64_svwrite_bullshit 4, sst32_4_3
+.gadget amd64_sld32_4_4
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x27
+    amd64_vread_prep 4, sld32_4_4
+    ldr w27, [x9]
+    gret 2
+    amd64_svread_bullshit 4, sld32_4_4
+.gadget amd64_sst32_4_4
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x27
+    amd64_svwrite_prep 4, sst32_4_4
+    str w27, [x9]
+    amd64_svwrite_done 4, sst32_4_4
+    gret 2
+    amd64_svwrite_bullshit 4, sst32_4_4
+.gadget amd64_sld32_4_5
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x26
+    amd64_vread_prep 4, sld32_4_5
+    ldr w27, [x9]
+    gret 2
+    amd64_svread_bullshit 4, sld32_4_5
+.gadget amd64_sst32_4_5
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x26
+    amd64_svwrite_prep 4, sst32_4_5
+    str w27, [x9]
+    amd64_svwrite_done 4, sst32_4_5
+    gret 2
+    amd64_svwrite_bullshit 4, sst32_4_5
+.gadget amd64_sld32_4_6
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x24
+    amd64_vread_prep 4, sld32_4_6
+    ldr w27, [x9]
+    gret 2
+    amd64_svread_bullshit 4, sld32_4_6
+.gadget amd64_sst32_4_6
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x24
+    amd64_svwrite_prep 4, sst32_4_6
+    str w27, [x9]
+    amd64_svwrite_done 4, sst32_4_6
+    gret 2
+    amd64_svwrite_bullshit 4, sst32_4_6
+.gadget amd64_sld32_4_7
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x25
+    amd64_vread_prep 4, sld32_4_7
+    ldr w27, [x9]
+    gret 2
+    amd64_svread_bullshit 4, sld32_4_7
+.gadget amd64_sst32_4_7
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x25
+    amd64_svwrite_prep 4, sst32_4_7
+    str w27, [x9]
+    amd64_svwrite_done 4, sst32_4_7
+    gret 2
+    amd64_svwrite_bullshit 4, sst32_4_7
+.gadget amd64_sldr32_4
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    amd64_vread_prep 4, sldr32_4
+    ldr w27, [x9]
+    gret 2
+    amd64_svread_bullshit 4, sldr32_4
+.gadget amd64_sstr32_4
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    amd64_svwrite_prep 4, sstr32_4
+    str w27, [x9]
+    amd64_svwrite_done 4, sstr32_4
+    gret 2
+    amd64_svwrite_bullshit 4, sstr32_4
+.gadget amd64_sld32_5_0
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x20
+    amd64_vread_prep 4, sld32_5_0
+    ldr w26, [x9]
+    gret 2
+    amd64_svread_bullshit 4, sld32_5_0
+.gadget amd64_sst32_5_0
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x20
+    amd64_svwrite_prep 4, sst32_5_0
+    str w26, [x9]
+    amd64_svwrite_done 4, sst32_5_0
+    gret 2
+    amd64_svwrite_bullshit 4, sst32_5_0
+.gadget amd64_sld32_5_1
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x22
+    amd64_vread_prep 4, sld32_5_1
+    ldr w26, [x9]
+    gret 2
+    amd64_svread_bullshit 4, sld32_5_1
+.gadget amd64_sst32_5_1
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x22
+    amd64_svwrite_prep 4, sst32_5_1
+    str w26, [x9]
+    amd64_svwrite_done 4, sst32_5_1
+    gret 2
+    amd64_svwrite_bullshit 4, sst32_5_1
+.gadget amd64_sld32_5_2
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x23
+    amd64_vread_prep 4, sld32_5_2
+    ldr w26, [x9]
+    gret 2
+    amd64_svread_bullshit 4, sld32_5_2
+.gadget amd64_sst32_5_2
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x23
+    amd64_svwrite_prep 4, sst32_5_2
+    str w26, [x9]
+    amd64_svwrite_done 4, sst32_5_2
+    gret 2
+    amd64_svwrite_bullshit 4, sst32_5_2
+.gadget amd64_sld32_5_3
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x21
+    amd64_vread_prep 4, sld32_5_3
+    ldr w26, [x9]
+    gret 2
+    amd64_svread_bullshit 4, sld32_5_3
+.gadget amd64_sst32_5_3
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x21
+    amd64_svwrite_prep 4, sst32_5_3
+    str w26, [x9]
+    amd64_svwrite_done 4, sst32_5_3
+    gret 2
+    amd64_svwrite_bullshit 4, sst32_5_3
+.gadget amd64_sld32_5_4
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x27
+    amd64_vread_prep 4, sld32_5_4
+    ldr w26, [x9]
+    gret 2
+    amd64_svread_bullshit 4, sld32_5_4
+.gadget amd64_sst32_5_4
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x27
+    amd64_svwrite_prep 4, sst32_5_4
+    str w26, [x9]
+    amd64_svwrite_done 4, sst32_5_4
+    gret 2
+    amd64_svwrite_bullshit 4, sst32_5_4
+.gadget amd64_sld32_5_5
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x26
+    amd64_vread_prep 4, sld32_5_5
+    ldr w26, [x9]
+    gret 2
+    amd64_svread_bullshit 4, sld32_5_5
+.gadget amd64_sst32_5_5
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x26
+    amd64_svwrite_prep 4, sst32_5_5
+    str w26, [x9]
+    amd64_svwrite_done 4, sst32_5_5
+    gret 2
+    amd64_svwrite_bullshit 4, sst32_5_5
+.gadget amd64_sld32_5_6
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x24
+    amd64_vread_prep 4, sld32_5_6
+    ldr w26, [x9]
+    gret 2
+    amd64_svread_bullshit 4, sld32_5_6
+.gadget amd64_sst32_5_6
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x24
+    amd64_svwrite_prep 4, sst32_5_6
+    str w26, [x9]
+    amd64_svwrite_done 4, sst32_5_6
+    gret 2
+    amd64_svwrite_bullshit 4, sst32_5_6
+.gadget amd64_sld32_5_7
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x25
+    amd64_vread_prep 4, sld32_5_7
+    ldr w26, [x9]
+    gret 2
+    amd64_svread_bullshit 4, sld32_5_7
+.gadget amd64_sst32_5_7
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x25
+    amd64_svwrite_prep 4, sst32_5_7
+    str w26, [x9]
+    amd64_svwrite_done 4, sst32_5_7
+    gret 2
+    amd64_svwrite_bullshit 4, sst32_5_7
+.gadget amd64_sldr32_5
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    amd64_vread_prep 4, sldr32_5
+    ldr w26, [x9]
+    gret 2
+    amd64_svread_bullshit 4, sldr32_5
+.gadget amd64_sstr32_5
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    amd64_svwrite_prep 4, sstr32_5
+    str w26, [x9]
+    amd64_svwrite_done 4, sstr32_5
+    gret 2
+    amd64_svwrite_bullshit 4, sstr32_5
+.gadget amd64_sld32_6_0
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x20
+    amd64_vread_prep 4, sld32_6_0
+    ldr w24, [x9]
+    gret 2
+    amd64_svread_bullshit 4, sld32_6_0
+.gadget amd64_sst32_6_0
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x20
+    amd64_svwrite_prep 4, sst32_6_0
+    str w24, [x9]
+    amd64_svwrite_done 4, sst32_6_0
+    gret 2
+    amd64_svwrite_bullshit 4, sst32_6_0
+.gadget amd64_sld32_6_1
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x22
+    amd64_vread_prep 4, sld32_6_1
+    ldr w24, [x9]
+    gret 2
+    amd64_svread_bullshit 4, sld32_6_1
+.gadget amd64_sst32_6_1
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x22
+    amd64_svwrite_prep 4, sst32_6_1
+    str w24, [x9]
+    amd64_svwrite_done 4, sst32_6_1
+    gret 2
+    amd64_svwrite_bullshit 4, sst32_6_1
+.gadget amd64_sld32_6_2
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x23
+    amd64_vread_prep 4, sld32_6_2
+    ldr w24, [x9]
+    gret 2
+    amd64_svread_bullshit 4, sld32_6_2
+.gadget amd64_sst32_6_2
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x23
+    amd64_svwrite_prep 4, sst32_6_2
+    str w24, [x9]
+    amd64_svwrite_done 4, sst32_6_2
+    gret 2
+    amd64_svwrite_bullshit 4, sst32_6_2
+.gadget amd64_sld32_6_3
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x21
+    amd64_vread_prep 4, sld32_6_3
+    ldr w24, [x9]
+    gret 2
+    amd64_svread_bullshit 4, sld32_6_3
+.gadget amd64_sst32_6_3
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x21
+    amd64_svwrite_prep 4, sst32_6_3
+    str w24, [x9]
+    amd64_svwrite_done 4, sst32_6_3
+    gret 2
+    amd64_svwrite_bullshit 4, sst32_6_3
+.gadget amd64_sld32_6_4
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x27
+    amd64_vread_prep 4, sld32_6_4
+    ldr w24, [x9]
+    gret 2
+    amd64_svread_bullshit 4, sld32_6_4
+.gadget amd64_sst32_6_4
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x27
+    amd64_svwrite_prep 4, sst32_6_4
+    str w24, [x9]
+    amd64_svwrite_done 4, sst32_6_4
+    gret 2
+    amd64_svwrite_bullshit 4, sst32_6_4
+.gadget amd64_sld32_6_5
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x26
+    amd64_vread_prep 4, sld32_6_5
+    ldr w24, [x9]
+    gret 2
+    amd64_svread_bullshit 4, sld32_6_5
+.gadget amd64_sst32_6_5
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x26
+    amd64_svwrite_prep 4, sst32_6_5
+    str w24, [x9]
+    amd64_svwrite_done 4, sst32_6_5
+    gret 2
+    amd64_svwrite_bullshit 4, sst32_6_5
+.gadget amd64_sld32_6_6
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x24
+    amd64_vread_prep 4, sld32_6_6
+    ldr w24, [x9]
+    gret 2
+    amd64_svread_bullshit 4, sld32_6_6
+.gadget amd64_sst32_6_6
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x24
+    amd64_svwrite_prep 4, sst32_6_6
+    str w24, [x9]
+    amd64_svwrite_done 4, sst32_6_6
+    gret 2
+    amd64_svwrite_bullshit 4, sst32_6_6
+.gadget amd64_sld32_6_7
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x25
+    amd64_vread_prep 4, sld32_6_7
+    ldr w24, [x9]
+    gret 2
+    amd64_svread_bullshit 4, sld32_6_7
+.gadget amd64_sst32_6_7
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x25
+    amd64_svwrite_prep 4, sst32_6_7
+    str w24, [x9]
+    amd64_svwrite_done 4, sst32_6_7
+    gret 2
+    amd64_svwrite_bullshit 4, sst32_6_7
+.gadget amd64_sldr32_6
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    amd64_vread_prep 4, sldr32_6
+    ldr w24, [x9]
+    gret 2
+    amd64_svread_bullshit 4, sldr32_6
+.gadget amd64_sstr32_6
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    amd64_svwrite_prep 4, sstr32_6
+    str w24, [x9]
+    amd64_svwrite_done 4, sstr32_6
+    gret 2
+    amd64_svwrite_bullshit 4, sstr32_6
+.gadget amd64_sld32_7_0
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x20
+    amd64_vread_prep 4, sld32_7_0
+    ldr w25, [x9]
+    gret 2
+    amd64_svread_bullshit 4, sld32_7_0
+.gadget amd64_sst32_7_0
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x20
+    amd64_svwrite_prep 4, sst32_7_0
+    str w25, [x9]
+    amd64_svwrite_done 4, sst32_7_0
+    gret 2
+    amd64_svwrite_bullshit 4, sst32_7_0
+.gadget amd64_sld32_7_1
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x22
+    amd64_vread_prep 4, sld32_7_1
+    ldr w25, [x9]
+    gret 2
+    amd64_svread_bullshit 4, sld32_7_1
+.gadget amd64_sst32_7_1
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x22
+    amd64_svwrite_prep 4, sst32_7_1
+    str w25, [x9]
+    amd64_svwrite_done 4, sst32_7_1
+    gret 2
+    amd64_svwrite_bullshit 4, sst32_7_1
+.gadget amd64_sld32_7_2
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x23
+    amd64_vread_prep 4, sld32_7_2
+    ldr w25, [x9]
+    gret 2
+    amd64_svread_bullshit 4, sld32_7_2
+.gadget amd64_sst32_7_2
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x23
+    amd64_svwrite_prep 4, sst32_7_2
+    str w25, [x9]
+    amd64_svwrite_done 4, sst32_7_2
+    gret 2
+    amd64_svwrite_bullshit 4, sst32_7_2
+.gadget amd64_sld32_7_3
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x21
+    amd64_vread_prep 4, sld32_7_3
+    ldr w25, [x9]
+    gret 2
+    amd64_svread_bullshit 4, sld32_7_3
+.gadget amd64_sst32_7_3
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x21
+    amd64_svwrite_prep 4, sst32_7_3
+    str w25, [x9]
+    amd64_svwrite_done 4, sst32_7_3
+    gret 2
+    amd64_svwrite_bullshit 4, sst32_7_3
+.gadget amd64_sld32_7_4
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x27
+    amd64_vread_prep 4, sld32_7_4
+    ldr w25, [x9]
+    gret 2
+    amd64_svread_bullshit 4, sld32_7_4
+.gadget amd64_sst32_7_4
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x27
+    amd64_svwrite_prep 4, sst32_7_4
+    str w25, [x9]
+    amd64_svwrite_done 4, sst32_7_4
+    gret 2
+    amd64_svwrite_bullshit 4, sst32_7_4
+.gadget amd64_sld32_7_5
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x26
+    amd64_vread_prep 4, sld32_7_5
+    ldr w25, [x9]
+    gret 2
+    amd64_svread_bullshit 4, sld32_7_5
+.gadget amd64_sst32_7_5
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x26
+    amd64_svwrite_prep 4, sst32_7_5
+    str w25, [x9]
+    amd64_svwrite_done 4, sst32_7_5
+    gret 2
+    amd64_svwrite_bullshit 4, sst32_7_5
+.gadget amd64_sld32_7_6
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x24
+    amd64_vread_prep 4, sld32_7_6
+    ldr w25, [x9]
+    gret 2
+    amd64_svread_bullshit 4, sld32_7_6
+.gadget amd64_sst32_7_6
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x24
+    amd64_svwrite_prep 4, sst32_7_6
+    str w25, [x9]
+    amd64_svwrite_done 4, sst32_7_6
+    gret 2
+    amd64_svwrite_bullshit 4, sst32_7_6
+.gadget amd64_sld32_7_7
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x25
+    amd64_vread_prep 4, sld32_7_7
+    ldr w25, [x9]
+    gret 2
+    amd64_svread_bullshit 4, sld32_7_7
+.gadget amd64_sst32_7_7
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x25
+    amd64_svwrite_prep 4, sst32_7_7
+    str w25, [x9]
+    amd64_svwrite_done 4, sst32_7_7
+    gret 2
+    amd64_svwrite_bullshit 4, sst32_7_7
+.gadget amd64_sldr32_7
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    amd64_vread_prep 4, sldr32_7
+    ldr w25, [x9]
+    gret 2
+    amd64_svread_bullshit 4, sldr32_7
+.gadget amd64_sstr32_7
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    amd64_svwrite_prep 4, sstr32_7
+    str w25, [x9]
+    amd64_svwrite_done 4, sstr32_7
+    gret 2
+    amd64_svwrite_bullshit 4, sstr32_7
+.gadget amd64_sld64_0_0
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x20
+    amd64_vread_prep 8, sld64_0_0
+    ldr x20, [x9]
+    gret 2
+    amd64_svread_bullshit 8, sld64_0_0
+.gadget amd64_sst64_0_0
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x20
+    amd64_svwrite_prep 8, sst64_0_0
+    str x20, [x9]
+    amd64_svwrite_done 8, sst64_0_0
+    gret 2
+    amd64_svwrite_bullshit 8, sst64_0_0
+.gadget amd64_sld64_0_1
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x22
+    amd64_vread_prep 8, sld64_0_1
+    ldr x20, [x9]
+    gret 2
+    amd64_svread_bullshit 8, sld64_0_1
+.gadget amd64_sst64_0_1
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x22
+    amd64_svwrite_prep 8, sst64_0_1
+    str x20, [x9]
+    amd64_svwrite_done 8, sst64_0_1
+    gret 2
+    amd64_svwrite_bullshit 8, sst64_0_1
+.gadget amd64_sld64_0_2
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x23
+    amd64_vread_prep 8, sld64_0_2
+    ldr x20, [x9]
+    gret 2
+    amd64_svread_bullshit 8, sld64_0_2
+.gadget amd64_sst64_0_2
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x23
+    amd64_svwrite_prep 8, sst64_0_2
+    str x20, [x9]
+    amd64_svwrite_done 8, sst64_0_2
+    gret 2
+    amd64_svwrite_bullshit 8, sst64_0_2
+.gadget amd64_sld64_0_3
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x21
+    amd64_vread_prep 8, sld64_0_3
+    ldr x20, [x9]
+    gret 2
+    amd64_svread_bullshit 8, sld64_0_3
+.gadget amd64_sst64_0_3
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x21
+    amd64_svwrite_prep 8, sst64_0_3
+    str x20, [x9]
+    amd64_svwrite_done 8, sst64_0_3
+    gret 2
+    amd64_svwrite_bullshit 8, sst64_0_3
+.gadget amd64_sld64_0_4
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x27
+    amd64_vread_prep 8, sld64_0_4
+    ldr x20, [x9]
+    gret 2
+    amd64_svread_bullshit 8, sld64_0_4
+.gadget amd64_sst64_0_4
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x27
+    amd64_svwrite_prep 8, sst64_0_4
+    str x20, [x9]
+    amd64_svwrite_done 8, sst64_0_4
+    gret 2
+    amd64_svwrite_bullshit 8, sst64_0_4
+.gadget amd64_sld64_0_5
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x26
+    amd64_vread_prep 8, sld64_0_5
+    ldr x20, [x9]
+    gret 2
+    amd64_svread_bullshit 8, sld64_0_5
+.gadget amd64_sst64_0_5
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x26
+    amd64_svwrite_prep 8, sst64_0_5
+    str x20, [x9]
+    amd64_svwrite_done 8, sst64_0_5
+    gret 2
+    amd64_svwrite_bullshit 8, sst64_0_5
+.gadget amd64_sld64_0_6
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x24
+    amd64_vread_prep 8, sld64_0_6
+    ldr x20, [x9]
+    gret 2
+    amd64_svread_bullshit 8, sld64_0_6
+.gadget amd64_sst64_0_6
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x24
+    amd64_svwrite_prep 8, sst64_0_6
+    str x20, [x9]
+    amd64_svwrite_done 8, sst64_0_6
+    gret 2
+    amd64_svwrite_bullshit 8, sst64_0_6
+.gadget amd64_sld64_0_7
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x25
+    amd64_vread_prep 8, sld64_0_7
+    ldr x20, [x9]
+    gret 2
+    amd64_svread_bullshit 8, sld64_0_7
+.gadget amd64_sst64_0_7
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x25
+    amd64_svwrite_prep 8, sst64_0_7
+    str x20, [x9]
+    amd64_svwrite_done 8, sst64_0_7
+    gret 2
+    amd64_svwrite_bullshit 8, sst64_0_7
+.gadget amd64_sldr64_0
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    amd64_vread_prep 8, sldr64_0
+    ldr x20, [x9]
+    gret 2
+    amd64_svread_bullshit 8, sldr64_0
+.gadget amd64_sstr64_0
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    amd64_svwrite_prep 8, sstr64_0
+    str x20, [x9]
+    amd64_svwrite_done 8, sstr64_0
+    gret 2
+    amd64_svwrite_bullshit 8, sstr64_0
+.gadget amd64_sld64_1_0
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x20
+    amd64_vread_prep 8, sld64_1_0
+    ldr x22, [x9]
+    gret 2
+    amd64_svread_bullshit 8, sld64_1_0
+.gadget amd64_sst64_1_0
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x20
+    amd64_svwrite_prep 8, sst64_1_0
+    str x22, [x9]
+    amd64_svwrite_done 8, sst64_1_0
+    gret 2
+    amd64_svwrite_bullshit 8, sst64_1_0
+.gadget amd64_sld64_1_1
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x22
+    amd64_vread_prep 8, sld64_1_1
+    ldr x22, [x9]
+    gret 2
+    amd64_svread_bullshit 8, sld64_1_1
+.gadget amd64_sst64_1_1
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x22
+    amd64_svwrite_prep 8, sst64_1_1
+    str x22, [x9]
+    amd64_svwrite_done 8, sst64_1_1
+    gret 2
+    amd64_svwrite_bullshit 8, sst64_1_1
+.gadget amd64_sld64_1_2
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x23
+    amd64_vread_prep 8, sld64_1_2
+    ldr x22, [x9]
+    gret 2
+    amd64_svread_bullshit 8, sld64_1_2
+.gadget amd64_sst64_1_2
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x23
+    amd64_svwrite_prep 8, sst64_1_2
+    str x22, [x9]
+    amd64_svwrite_done 8, sst64_1_2
+    gret 2
+    amd64_svwrite_bullshit 8, sst64_1_2
+.gadget amd64_sld64_1_3
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x21
+    amd64_vread_prep 8, sld64_1_3
+    ldr x22, [x9]
+    gret 2
+    amd64_svread_bullshit 8, sld64_1_3
+.gadget amd64_sst64_1_3
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x21
+    amd64_svwrite_prep 8, sst64_1_3
+    str x22, [x9]
+    amd64_svwrite_done 8, sst64_1_3
+    gret 2
+    amd64_svwrite_bullshit 8, sst64_1_3
+.gadget amd64_sld64_1_4
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x27
+    amd64_vread_prep 8, sld64_1_4
+    ldr x22, [x9]
+    gret 2
+    amd64_svread_bullshit 8, sld64_1_4
+.gadget amd64_sst64_1_4
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x27
+    amd64_svwrite_prep 8, sst64_1_4
+    str x22, [x9]
+    amd64_svwrite_done 8, sst64_1_4
+    gret 2
+    amd64_svwrite_bullshit 8, sst64_1_4
+.gadget amd64_sld64_1_5
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x26
+    amd64_vread_prep 8, sld64_1_5
+    ldr x22, [x9]
+    gret 2
+    amd64_svread_bullshit 8, sld64_1_5
+.gadget amd64_sst64_1_5
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x26
+    amd64_svwrite_prep 8, sst64_1_5
+    str x22, [x9]
+    amd64_svwrite_done 8, sst64_1_5
+    gret 2
+    amd64_svwrite_bullshit 8, sst64_1_5
+.gadget amd64_sld64_1_6
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x24
+    amd64_vread_prep 8, sld64_1_6
+    ldr x22, [x9]
+    gret 2
+    amd64_svread_bullshit 8, sld64_1_6
+.gadget amd64_sst64_1_6
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x24
+    amd64_svwrite_prep 8, sst64_1_6
+    str x22, [x9]
+    amd64_svwrite_done 8, sst64_1_6
+    gret 2
+    amd64_svwrite_bullshit 8, sst64_1_6
+.gadget amd64_sld64_1_7
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x25
+    amd64_vread_prep 8, sld64_1_7
+    ldr x22, [x9]
+    gret 2
+    amd64_svread_bullshit 8, sld64_1_7
+.gadget amd64_sst64_1_7
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x25
+    amd64_svwrite_prep 8, sst64_1_7
+    str x22, [x9]
+    amd64_svwrite_done 8, sst64_1_7
+    gret 2
+    amd64_svwrite_bullshit 8, sst64_1_7
+.gadget amd64_sldr64_1
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    amd64_vread_prep 8, sldr64_1
+    ldr x22, [x9]
+    gret 2
+    amd64_svread_bullshit 8, sldr64_1
+.gadget amd64_sstr64_1
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    amd64_svwrite_prep 8, sstr64_1
+    str x22, [x9]
+    amd64_svwrite_done 8, sstr64_1
+    gret 2
+    amd64_svwrite_bullshit 8, sstr64_1
+.gadget amd64_sld64_2_0
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x20
+    amd64_vread_prep 8, sld64_2_0
+    ldr x23, [x9]
+    gret 2
+    amd64_svread_bullshit 8, sld64_2_0
+.gadget amd64_sst64_2_0
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x20
+    amd64_svwrite_prep 8, sst64_2_0
+    str x23, [x9]
+    amd64_svwrite_done 8, sst64_2_0
+    gret 2
+    amd64_svwrite_bullshit 8, sst64_2_0
+.gadget amd64_sld64_2_1
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x22
+    amd64_vread_prep 8, sld64_2_1
+    ldr x23, [x9]
+    gret 2
+    amd64_svread_bullshit 8, sld64_2_1
+.gadget amd64_sst64_2_1
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x22
+    amd64_svwrite_prep 8, sst64_2_1
+    str x23, [x9]
+    amd64_svwrite_done 8, sst64_2_1
+    gret 2
+    amd64_svwrite_bullshit 8, sst64_2_1
+.gadget amd64_sld64_2_2
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x23
+    amd64_vread_prep 8, sld64_2_2
+    ldr x23, [x9]
+    gret 2
+    amd64_svread_bullshit 8, sld64_2_2
+.gadget amd64_sst64_2_2
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x23
+    amd64_svwrite_prep 8, sst64_2_2
+    str x23, [x9]
+    amd64_svwrite_done 8, sst64_2_2
+    gret 2
+    amd64_svwrite_bullshit 8, sst64_2_2
+.gadget amd64_sld64_2_3
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x21
+    amd64_vread_prep 8, sld64_2_3
+    ldr x23, [x9]
+    gret 2
+    amd64_svread_bullshit 8, sld64_2_3
+.gadget amd64_sst64_2_3
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x21
+    amd64_svwrite_prep 8, sst64_2_3
+    str x23, [x9]
+    amd64_svwrite_done 8, sst64_2_3
+    gret 2
+    amd64_svwrite_bullshit 8, sst64_2_3
+.gadget amd64_sld64_2_4
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x27
+    amd64_vread_prep 8, sld64_2_4
+    ldr x23, [x9]
+    gret 2
+    amd64_svread_bullshit 8, sld64_2_4
+.gadget amd64_sst64_2_4
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x27
+    amd64_svwrite_prep 8, sst64_2_4
+    str x23, [x9]
+    amd64_svwrite_done 8, sst64_2_4
+    gret 2
+    amd64_svwrite_bullshit 8, sst64_2_4
+.gadget amd64_sld64_2_5
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x26
+    amd64_vread_prep 8, sld64_2_5
+    ldr x23, [x9]
+    gret 2
+    amd64_svread_bullshit 8, sld64_2_5
+.gadget amd64_sst64_2_5
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x26
+    amd64_svwrite_prep 8, sst64_2_5
+    str x23, [x9]
+    amd64_svwrite_done 8, sst64_2_5
+    gret 2
+    amd64_svwrite_bullshit 8, sst64_2_5
+.gadget amd64_sld64_2_6
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x24
+    amd64_vread_prep 8, sld64_2_6
+    ldr x23, [x9]
+    gret 2
+    amd64_svread_bullshit 8, sld64_2_6
+.gadget amd64_sst64_2_6
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x24
+    amd64_svwrite_prep 8, sst64_2_6
+    str x23, [x9]
+    amd64_svwrite_done 8, sst64_2_6
+    gret 2
+    amd64_svwrite_bullshit 8, sst64_2_6
+.gadget amd64_sld64_2_7
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x25
+    amd64_vread_prep 8, sld64_2_7
+    ldr x23, [x9]
+    gret 2
+    amd64_svread_bullshit 8, sld64_2_7
+.gadget amd64_sst64_2_7
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x25
+    amd64_svwrite_prep 8, sst64_2_7
+    str x23, [x9]
+    amd64_svwrite_done 8, sst64_2_7
+    gret 2
+    amd64_svwrite_bullshit 8, sst64_2_7
+.gadget amd64_sldr64_2
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    amd64_vread_prep 8, sldr64_2
+    ldr x23, [x9]
+    gret 2
+    amd64_svread_bullshit 8, sldr64_2
+.gadget amd64_sstr64_2
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    amd64_svwrite_prep 8, sstr64_2
+    str x23, [x9]
+    amd64_svwrite_done 8, sstr64_2
+    gret 2
+    amd64_svwrite_bullshit 8, sstr64_2
+.gadget amd64_sld64_3_0
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x20
+    amd64_vread_prep 8, sld64_3_0
+    ldr x21, [x9]
+    gret 2
+    amd64_svread_bullshit 8, sld64_3_0
+.gadget amd64_sst64_3_0
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x20
+    amd64_svwrite_prep 8, sst64_3_0
+    str x21, [x9]
+    amd64_svwrite_done 8, sst64_3_0
+    gret 2
+    amd64_svwrite_bullshit 8, sst64_3_0
+.gadget amd64_sld64_3_1
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x22
+    amd64_vread_prep 8, sld64_3_1
+    ldr x21, [x9]
+    gret 2
+    amd64_svread_bullshit 8, sld64_3_1
+.gadget amd64_sst64_3_1
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x22
+    amd64_svwrite_prep 8, sst64_3_1
+    str x21, [x9]
+    amd64_svwrite_done 8, sst64_3_1
+    gret 2
+    amd64_svwrite_bullshit 8, sst64_3_1
+.gadget amd64_sld64_3_2
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x23
+    amd64_vread_prep 8, sld64_3_2
+    ldr x21, [x9]
+    gret 2
+    amd64_svread_bullshit 8, sld64_3_2
+.gadget amd64_sst64_3_2
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x23
+    amd64_svwrite_prep 8, sst64_3_2
+    str x21, [x9]
+    amd64_svwrite_done 8, sst64_3_2
+    gret 2
+    amd64_svwrite_bullshit 8, sst64_3_2
+.gadget amd64_sld64_3_3
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x21
+    amd64_vread_prep 8, sld64_3_3
+    ldr x21, [x9]
+    gret 2
+    amd64_svread_bullshit 8, sld64_3_3
+.gadget amd64_sst64_3_3
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x21
+    amd64_svwrite_prep 8, sst64_3_3
+    str x21, [x9]
+    amd64_svwrite_done 8, sst64_3_3
+    gret 2
+    amd64_svwrite_bullshit 8, sst64_3_3
+.gadget amd64_sld64_3_4
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x27
+    amd64_vread_prep 8, sld64_3_4
+    ldr x21, [x9]
+    gret 2
+    amd64_svread_bullshit 8, sld64_3_4
+.gadget amd64_sst64_3_4
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x27
+    amd64_svwrite_prep 8, sst64_3_4
+    str x21, [x9]
+    amd64_svwrite_done 8, sst64_3_4
+    gret 2
+    amd64_svwrite_bullshit 8, sst64_3_4
+.gadget amd64_sld64_3_5
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x26
+    amd64_vread_prep 8, sld64_3_5
+    ldr x21, [x9]
+    gret 2
+    amd64_svread_bullshit 8, sld64_3_5
+.gadget amd64_sst64_3_5
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x26
+    amd64_svwrite_prep 8, sst64_3_5
+    str x21, [x9]
+    amd64_svwrite_done 8, sst64_3_5
+    gret 2
+    amd64_svwrite_bullshit 8, sst64_3_5
+.gadget amd64_sld64_3_6
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x24
+    amd64_vread_prep 8, sld64_3_6
+    ldr x21, [x9]
+    gret 2
+    amd64_svread_bullshit 8, sld64_3_6
+.gadget amd64_sst64_3_6
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x24
+    amd64_svwrite_prep 8, sst64_3_6
+    str x21, [x9]
+    amd64_svwrite_done 8, sst64_3_6
+    gret 2
+    amd64_svwrite_bullshit 8, sst64_3_6
+.gadget amd64_sld64_3_7
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x25
+    amd64_vread_prep 8, sld64_3_7
+    ldr x21, [x9]
+    gret 2
+    amd64_svread_bullshit 8, sld64_3_7
+.gadget amd64_sst64_3_7
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x25
+    amd64_svwrite_prep 8, sst64_3_7
+    str x21, [x9]
+    amd64_svwrite_done 8, sst64_3_7
+    gret 2
+    amd64_svwrite_bullshit 8, sst64_3_7
+.gadget amd64_sldr64_3
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    amd64_vread_prep 8, sldr64_3
+    ldr x21, [x9]
+    gret 2
+    amd64_svread_bullshit 8, sldr64_3
+.gadget amd64_sstr64_3
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    amd64_svwrite_prep 8, sstr64_3
+    str x21, [x9]
+    amd64_svwrite_done 8, sstr64_3
+    gret 2
+    amd64_svwrite_bullshit 8, sstr64_3
+.gadget amd64_sld64_4_0
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x20
+    amd64_vread_prep 8, sld64_4_0
+    ldr x27, [x9]
+    gret 2
+    amd64_svread_bullshit 8, sld64_4_0
+.gadget amd64_sst64_4_0
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x20
+    amd64_svwrite_prep 8, sst64_4_0
+    str x27, [x9]
+    amd64_svwrite_done 8, sst64_4_0
+    gret 2
+    amd64_svwrite_bullshit 8, sst64_4_0
+.gadget amd64_sld64_4_1
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x22
+    amd64_vread_prep 8, sld64_4_1
+    ldr x27, [x9]
+    gret 2
+    amd64_svread_bullshit 8, sld64_4_1
+.gadget amd64_sst64_4_1
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x22
+    amd64_svwrite_prep 8, sst64_4_1
+    str x27, [x9]
+    amd64_svwrite_done 8, sst64_4_1
+    gret 2
+    amd64_svwrite_bullshit 8, sst64_4_1
+.gadget amd64_sld64_4_2
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x23
+    amd64_vread_prep 8, sld64_4_2
+    ldr x27, [x9]
+    gret 2
+    amd64_svread_bullshit 8, sld64_4_2
+.gadget amd64_sst64_4_2
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x23
+    amd64_svwrite_prep 8, sst64_4_2
+    str x27, [x9]
+    amd64_svwrite_done 8, sst64_4_2
+    gret 2
+    amd64_svwrite_bullshit 8, sst64_4_2
+.gadget amd64_sld64_4_3
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x21
+    amd64_vread_prep 8, sld64_4_3
+    ldr x27, [x9]
+    gret 2
+    amd64_svread_bullshit 8, sld64_4_3
+.gadget amd64_sst64_4_3
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x21
+    amd64_svwrite_prep 8, sst64_4_3
+    str x27, [x9]
+    amd64_svwrite_done 8, sst64_4_3
+    gret 2
+    amd64_svwrite_bullshit 8, sst64_4_3
+.gadget amd64_sld64_4_4
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x27
+    amd64_vread_prep 8, sld64_4_4
+    ldr x27, [x9]
+    gret 2
+    amd64_svread_bullshit 8, sld64_4_4
+.gadget amd64_sst64_4_4
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x27
+    amd64_svwrite_prep 8, sst64_4_4
+    str x27, [x9]
+    amd64_svwrite_done 8, sst64_4_4
+    gret 2
+    amd64_svwrite_bullshit 8, sst64_4_4
+.gadget amd64_sld64_4_5
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x26
+    amd64_vread_prep 8, sld64_4_5
+    ldr x27, [x9]
+    gret 2
+    amd64_svread_bullshit 8, sld64_4_5
+.gadget amd64_sst64_4_5
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x26
+    amd64_svwrite_prep 8, sst64_4_5
+    str x27, [x9]
+    amd64_svwrite_done 8, sst64_4_5
+    gret 2
+    amd64_svwrite_bullshit 8, sst64_4_5
+.gadget amd64_sld64_4_6
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x24
+    amd64_vread_prep 8, sld64_4_6
+    ldr x27, [x9]
+    gret 2
+    amd64_svread_bullshit 8, sld64_4_6
+.gadget amd64_sst64_4_6
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x24
+    amd64_svwrite_prep 8, sst64_4_6
+    str x27, [x9]
+    amd64_svwrite_done 8, sst64_4_6
+    gret 2
+    amd64_svwrite_bullshit 8, sst64_4_6
+.gadget amd64_sld64_4_7
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x25
+    amd64_vread_prep 8, sld64_4_7
+    ldr x27, [x9]
+    gret 2
+    amd64_svread_bullshit 8, sld64_4_7
+.gadget amd64_sst64_4_7
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x25
+    amd64_svwrite_prep 8, sst64_4_7
+    str x27, [x9]
+    amd64_svwrite_done 8, sst64_4_7
+    gret 2
+    amd64_svwrite_bullshit 8, sst64_4_7
+.gadget amd64_sldr64_4
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    amd64_vread_prep 8, sldr64_4
+    ldr x27, [x9]
+    gret 2
+    amd64_svread_bullshit 8, sldr64_4
+.gadget amd64_sstr64_4
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    amd64_svwrite_prep 8, sstr64_4
+    str x27, [x9]
+    amd64_svwrite_done 8, sstr64_4
+    gret 2
+    amd64_svwrite_bullshit 8, sstr64_4
+.gadget amd64_sld64_5_0
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x20
+    amd64_vread_prep 8, sld64_5_0
+    ldr x26, [x9]
+    gret 2
+    amd64_svread_bullshit 8, sld64_5_0
+.gadget amd64_sst64_5_0
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x20
+    amd64_svwrite_prep 8, sst64_5_0
+    str x26, [x9]
+    amd64_svwrite_done 8, sst64_5_0
+    gret 2
+    amd64_svwrite_bullshit 8, sst64_5_0
+.gadget amd64_sld64_5_1
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x22
+    amd64_vread_prep 8, sld64_5_1
+    ldr x26, [x9]
+    gret 2
+    amd64_svread_bullshit 8, sld64_5_1
+.gadget amd64_sst64_5_1
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x22
+    amd64_svwrite_prep 8, sst64_5_1
+    str x26, [x9]
+    amd64_svwrite_done 8, sst64_5_1
+    gret 2
+    amd64_svwrite_bullshit 8, sst64_5_1
+.gadget amd64_sld64_5_2
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x23
+    amd64_vread_prep 8, sld64_5_2
+    ldr x26, [x9]
+    gret 2
+    amd64_svread_bullshit 8, sld64_5_2
+.gadget amd64_sst64_5_2
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x23
+    amd64_svwrite_prep 8, sst64_5_2
+    str x26, [x9]
+    amd64_svwrite_done 8, sst64_5_2
+    gret 2
+    amd64_svwrite_bullshit 8, sst64_5_2
+.gadget amd64_sld64_5_3
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x21
+    amd64_vread_prep 8, sld64_5_3
+    ldr x26, [x9]
+    gret 2
+    amd64_svread_bullshit 8, sld64_5_3
+.gadget amd64_sst64_5_3
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x21
+    amd64_svwrite_prep 8, sst64_5_3
+    str x26, [x9]
+    amd64_svwrite_done 8, sst64_5_3
+    gret 2
+    amd64_svwrite_bullshit 8, sst64_5_3
+.gadget amd64_sld64_5_4
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x27
+    amd64_vread_prep 8, sld64_5_4
+    ldr x26, [x9]
+    gret 2
+    amd64_svread_bullshit 8, sld64_5_4
+.gadget amd64_sst64_5_4
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x27
+    amd64_svwrite_prep 8, sst64_5_4
+    str x26, [x9]
+    amd64_svwrite_done 8, sst64_5_4
+    gret 2
+    amd64_svwrite_bullshit 8, sst64_5_4
+.gadget amd64_sld64_5_5
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x26
+    amd64_vread_prep 8, sld64_5_5
+    ldr x26, [x9]
+    gret 2
+    amd64_svread_bullshit 8, sld64_5_5
+.gadget amd64_sst64_5_5
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x26
+    amd64_svwrite_prep 8, sst64_5_5
+    str x26, [x9]
+    amd64_svwrite_done 8, sst64_5_5
+    gret 2
+    amd64_svwrite_bullshit 8, sst64_5_5
+.gadget amd64_sld64_5_6
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x24
+    amd64_vread_prep 8, sld64_5_6
+    ldr x26, [x9]
+    gret 2
+    amd64_svread_bullshit 8, sld64_5_6
+.gadget amd64_sst64_5_6
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x24
+    amd64_svwrite_prep 8, sst64_5_6
+    str x26, [x9]
+    amd64_svwrite_done 8, sst64_5_6
+    gret 2
+    amd64_svwrite_bullshit 8, sst64_5_6
+.gadget amd64_sld64_5_7
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x25
+    amd64_vread_prep 8, sld64_5_7
+    ldr x26, [x9]
+    gret 2
+    amd64_svread_bullshit 8, sld64_5_7
+.gadget amd64_sst64_5_7
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x25
+    amd64_svwrite_prep 8, sst64_5_7
+    str x26, [x9]
+    amd64_svwrite_done 8, sst64_5_7
+    gret 2
+    amd64_svwrite_bullshit 8, sst64_5_7
+.gadget amd64_sldr64_5
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    amd64_vread_prep 8, sldr64_5
+    ldr x26, [x9]
+    gret 2
+    amd64_svread_bullshit 8, sldr64_5
+.gadget amd64_sstr64_5
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    amd64_svwrite_prep 8, sstr64_5
+    str x26, [x9]
+    amd64_svwrite_done 8, sstr64_5
+    gret 2
+    amd64_svwrite_bullshit 8, sstr64_5
+.gadget amd64_sld64_6_0
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x20
+    amd64_vread_prep 8, sld64_6_0
+    ldr x24, [x9]
+    gret 2
+    amd64_svread_bullshit 8, sld64_6_0
+.gadget amd64_sst64_6_0
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x20
+    amd64_svwrite_prep 8, sst64_6_0
+    str x24, [x9]
+    amd64_svwrite_done 8, sst64_6_0
+    gret 2
+    amd64_svwrite_bullshit 8, sst64_6_0
+.gadget amd64_sld64_6_1
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x22
+    amd64_vread_prep 8, sld64_6_1
+    ldr x24, [x9]
+    gret 2
+    amd64_svread_bullshit 8, sld64_6_1
+.gadget amd64_sst64_6_1
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x22
+    amd64_svwrite_prep 8, sst64_6_1
+    str x24, [x9]
+    amd64_svwrite_done 8, sst64_6_1
+    gret 2
+    amd64_svwrite_bullshit 8, sst64_6_1
+.gadget amd64_sld64_6_2
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x23
+    amd64_vread_prep 8, sld64_6_2
+    ldr x24, [x9]
+    gret 2
+    amd64_svread_bullshit 8, sld64_6_2
+.gadget amd64_sst64_6_2
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x23
+    amd64_svwrite_prep 8, sst64_6_2
+    str x24, [x9]
+    amd64_svwrite_done 8, sst64_6_2
+    gret 2
+    amd64_svwrite_bullshit 8, sst64_6_2
+.gadget amd64_sld64_6_3
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x21
+    amd64_vread_prep 8, sld64_6_3
+    ldr x24, [x9]
+    gret 2
+    amd64_svread_bullshit 8, sld64_6_3
+.gadget amd64_sst64_6_3
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x21
+    amd64_svwrite_prep 8, sst64_6_3
+    str x24, [x9]
+    amd64_svwrite_done 8, sst64_6_3
+    gret 2
+    amd64_svwrite_bullshit 8, sst64_6_3
+.gadget amd64_sld64_6_4
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x27
+    amd64_vread_prep 8, sld64_6_4
+    ldr x24, [x9]
+    gret 2
+    amd64_svread_bullshit 8, sld64_6_4
+.gadget amd64_sst64_6_4
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x27
+    amd64_svwrite_prep 8, sst64_6_4
+    str x24, [x9]
+    amd64_svwrite_done 8, sst64_6_4
+    gret 2
+    amd64_svwrite_bullshit 8, sst64_6_4
+.gadget amd64_sld64_6_5
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x26
+    amd64_vread_prep 8, sld64_6_5
+    ldr x24, [x9]
+    gret 2
+    amd64_svread_bullshit 8, sld64_6_5
+.gadget amd64_sst64_6_5
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x26
+    amd64_svwrite_prep 8, sst64_6_5
+    str x24, [x9]
+    amd64_svwrite_done 8, sst64_6_5
+    gret 2
+    amd64_svwrite_bullshit 8, sst64_6_5
+.gadget amd64_sld64_6_6
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x24
+    amd64_vread_prep 8, sld64_6_6
+    ldr x24, [x9]
+    gret 2
+    amd64_svread_bullshit 8, sld64_6_6
+.gadget amd64_sst64_6_6
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x24
+    amd64_svwrite_prep 8, sst64_6_6
+    str x24, [x9]
+    amd64_svwrite_done 8, sst64_6_6
+    gret 2
+    amd64_svwrite_bullshit 8, sst64_6_6
+.gadget amd64_sld64_6_7
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x25
+    amd64_vread_prep 8, sld64_6_7
+    ldr x24, [x9]
+    gret 2
+    amd64_svread_bullshit 8, sld64_6_7
+.gadget amd64_sst64_6_7
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x25
+    amd64_svwrite_prep 8, sst64_6_7
+    str x24, [x9]
+    amd64_svwrite_done 8, sst64_6_7
+    gret 2
+    amd64_svwrite_bullshit 8, sst64_6_7
+.gadget amd64_sldr64_6
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    amd64_vread_prep 8, sldr64_6
+    ldr x24, [x9]
+    gret 2
+    amd64_svread_bullshit 8, sldr64_6
+.gadget amd64_sstr64_6
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    amd64_svwrite_prep 8, sstr64_6
+    str x24, [x9]
+    amd64_svwrite_done 8, sstr64_6
+    gret 2
+    amd64_svwrite_bullshit 8, sstr64_6
+.gadget amd64_sld64_7_0
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x20
+    amd64_vread_prep 8, sld64_7_0
+    ldr x25, [x9]
+    gret 2
+    amd64_svread_bullshit 8, sld64_7_0
+.gadget amd64_sst64_7_0
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x20
+    amd64_svwrite_prep 8, sst64_7_0
+    str x25, [x9]
+    amd64_svwrite_done 8, sst64_7_0
+    gret 2
+    amd64_svwrite_bullshit 8, sst64_7_0
+.gadget amd64_sld64_7_1
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x22
+    amd64_vread_prep 8, sld64_7_1
+    ldr x25, [x9]
+    gret 2
+    amd64_svread_bullshit 8, sld64_7_1
+.gadget amd64_sst64_7_1
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x22
+    amd64_svwrite_prep 8, sst64_7_1
+    str x25, [x9]
+    amd64_svwrite_done 8, sst64_7_1
+    gret 2
+    amd64_svwrite_bullshit 8, sst64_7_1
+.gadget amd64_sld64_7_2
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x23
+    amd64_vread_prep 8, sld64_7_2
+    ldr x25, [x9]
+    gret 2
+    amd64_svread_bullshit 8, sld64_7_2
+.gadget amd64_sst64_7_2
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x23
+    amd64_svwrite_prep 8, sst64_7_2
+    str x25, [x9]
+    amd64_svwrite_done 8, sst64_7_2
+    gret 2
+    amd64_svwrite_bullshit 8, sst64_7_2
+.gadget amd64_sld64_7_3
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x21
+    amd64_vread_prep 8, sld64_7_3
+    ldr x25, [x9]
+    gret 2
+    amd64_svread_bullshit 8, sld64_7_3
+.gadget amd64_sst64_7_3
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x21
+    amd64_svwrite_prep 8, sst64_7_3
+    str x25, [x9]
+    amd64_svwrite_done 8, sst64_7_3
+    gret 2
+    amd64_svwrite_bullshit 8, sst64_7_3
+.gadget amd64_sld64_7_4
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x27
+    amd64_vread_prep 8, sld64_7_4
+    ldr x25, [x9]
+    gret 2
+    amd64_svread_bullshit 8, sld64_7_4
+.gadget amd64_sst64_7_4
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x27
+    amd64_svwrite_prep 8, sst64_7_4
+    str x25, [x9]
+    amd64_svwrite_done 8, sst64_7_4
+    gret 2
+    amd64_svwrite_bullshit 8, sst64_7_4
+.gadget amd64_sld64_7_5
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x26
+    amd64_vread_prep 8, sld64_7_5
+    ldr x25, [x9]
+    gret 2
+    amd64_svread_bullshit 8, sld64_7_5
+.gadget amd64_sst64_7_5
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x26
+    amd64_svwrite_prep 8, sst64_7_5
+    str x25, [x9]
+    amd64_svwrite_done 8, sst64_7_5
+    gret 2
+    amd64_svwrite_bullshit 8, sst64_7_5
+.gadget amd64_sld64_7_6
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x24
+    amd64_vread_prep 8, sld64_7_6
+    ldr x25, [x9]
+    gret 2
+    amd64_svread_bullshit 8, sld64_7_6
+.gadget amd64_sst64_7_6
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x24
+    amd64_svwrite_prep 8, sst64_7_6
+    str x25, [x9]
+    amd64_svwrite_done 8, sst64_7_6
+    gret 2
+    amd64_svwrite_bullshit 8, sst64_7_6
+.gadget amd64_sld64_7_7
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x25
+    amd64_vread_prep 8, sld64_7_7
+    ldr x25, [x9]
+    gret 2
+    amd64_svread_bullshit 8, sld64_7_7
+.gadget amd64_sst64_7_7
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    add x9, x9, x25
+    amd64_svwrite_prep 8, sst64_7_7
+    str x25, [x9]
+    amd64_svwrite_done 8, sst64_7_7
+    gret 2
+    amd64_svwrite_bullshit 8, sst64_7_7
+.gadget amd64_sldr64_7
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    amd64_vread_prep 8, sldr64_7
+    ldr x25, [x9]
+    gret 2
+    amd64_svread_bullshit 8, sldr64_7
+.gadget amd64_sstr64_7
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    amd64_svwrite_prep 8, sstr64_7
+    str x25, [x9]
+    amd64_svwrite_done 8, sstr64_7
+    gret 2
+    amd64_svwrite_bullshit 8, sstr64_7
+.global NAME(amd64_specmem_end)
+NAME(amd64_specmem_end):
+.pushsection_rodata
+.global.name amd64_smem_gadgets
+    .quad NAME(gadget_amd64_sld32_0_0)
+    .quad NAME(gadget_amd64_sld32_0_1)
+    .quad NAME(gadget_amd64_sld32_0_2)
+    .quad NAME(gadget_amd64_sld32_0_3)
+    .quad NAME(gadget_amd64_sld32_0_4)
+    .quad NAME(gadget_amd64_sld32_0_5)
+    .quad NAME(gadget_amd64_sld32_0_6)
+    .quad NAME(gadget_amd64_sld32_0_7)
+    .quad NAME(gadget_amd64_sld32_1_0)
+    .quad NAME(gadget_amd64_sld32_1_1)
+    .quad NAME(gadget_amd64_sld32_1_2)
+    .quad NAME(gadget_amd64_sld32_1_3)
+    .quad NAME(gadget_amd64_sld32_1_4)
+    .quad NAME(gadget_amd64_sld32_1_5)
+    .quad NAME(gadget_amd64_sld32_1_6)
+    .quad NAME(gadget_amd64_sld32_1_7)
+    .quad NAME(gadget_amd64_sld32_2_0)
+    .quad NAME(gadget_amd64_sld32_2_1)
+    .quad NAME(gadget_amd64_sld32_2_2)
+    .quad NAME(gadget_amd64_sld32_2_3)
+    .quad NAME(gadget_amd64_sld32_2_4)
+    .quad NAME(gadget_amd64_sld32_2_5)
+    .quad NAME(gadget_amd64_sld32_2_6)
+    .quad NAME(gadget_amd64_sld32_2_7)
+    .quad NAME(gadget_amd64_sld32_3_0)
+    .quad NAME(gadget_amd64_sld32_3_1)
+    .quad NAME(gadget_amd64_sld32_3_2)
+    .quad NAME(gadget_amd64_sld32_3_3)
+    .quad NAME(gadget_amd64_sld32_3_4)
+    .quad NAME(gadget_amd64_sld32_3_5)
+    .quad NAME(gadget_amd64_sld32_3_6)
+    .quad NAME(gadget_amd64_sld32_3_7)
+    .quad NAME(gadget_amd64_sld32_4_0)
+    .quad NAME(gadget_amd64_sld32_4_1)
+    .quad NAME(gadget_amd64_sld32_4_2)
+    .quad NAME(gadget_amd64_sld32_4_3)
+    .quad NAME(gadget_amd64_sld32_4_4)
+    .quad NAME(gadget_amd64_sld32_4_5)
+    .quad NAME(gadget_amd64_sld32_4_6)
+    .quad NAME(gadget_amd64_sld32_4_7)
+    .quad NAME(gadget_amd64_sld32_5_0)
+    .quad NAME(gadget_amd64_sld32_5_1)
+    .quad NAME(gadget_amd64_sld32_5_2)
+    .quad NAME(gadget_amd64_sld32_5_3)
+    .quad NAME(gadget_amd64_sld32_5_4)
+    .quad NAME(gadget_amd64_sld32_5_5)
+    .quad NAME(gadget_amd64_sld32_5_6)
+    .quad NAME(gadget_amd64_sld32_5_7)
+    .quad NAME(gadget_amd64_sld32_6_0)
+    .quad NAME(gadget_amd64_sld32_6_1)
+    .quad NAME(gadget_amd64_sld32_6_2)
+    .quad NAME(gadget_amd64_sld32_6_3)
+    .quad NAME(gadget_amd64_sld32_6_4)
+    .quad NAME(gadget_amd64_sld32_6_5)
+    .quad NAME(gadget_amd64_sld32_6_6)
+    .quad NAME(gadget_amd64_sld32_6_7)
+    .quad NAME(gadget_amd64_sld32_7_0)
+    .quad NAME(gadget_amd64_sld32_7_1)
+    .quad NAME(gadget_amd64_sld32_7_2)
+    .quad NAME(gadget_amd64_sld32_7_3)
+    .quad NAME(gadget_amd64_sld32_7_4)
+    .quad NAME(gadget_amd64_sld32_7_5)
+    .quad NAME(gadget_amd64_sld32_7_6)
+    .quad NAME(gadget_amd64_sld32_7_7)
+    .quad NAME(gadget_amd64_sld64_0_0)
+    .quad NAME(gadget_amd64_sld64_0_1)
+    .quad NAME(gadget_amd64_sld64_0_2)
+    .quad NAME(gadget_amd64_sld64_0_3)
+    .quad NAME(gadget_amd64_sld64_0_4)
+    .quad NAME(gadget_amd64_sld64_0_5)
+    .quad NAME(gadget_amd64_sld64_0_6)
+    .quad NAME(gadget_amd64_sld64_0_7)
+    .quad NAME(gadget_amd64_sld64_1_0)
+    .quad NAME(gadget_amd64_sld64_1_1)
+    .quad NAME(gadget_amd64_sld64_1_2)
+    .quad NAME(gadget_amd64_sld64_1_3)
+    .quad NAME(gadget_amd64_sld64_1_4)
+    .quad NAME(gadget_amd64_sld64_1_5)
+    .quad NAME(gadget_amd64_sld64_1_6)
+    .quad NAME(gadget_amd64_sld64_1_7)
+    .quad NAME(gadget_amd64_sld64_2_0)
+    .quad NAME(gadget_amd64_sld64_2_1)
+    .quad NAME(gadget_amd64_sld64_2_2)
+    .quad NAME(gadget_amd64_sld64_2_3)
+    .quad NAME(gadget_amd64_sld64_2_4)
+    .quad NAME(gadget_amd64_sld64_2_5)
+    .quad NAME(gadget_amd64_sld64_2_6)
+    .quad NAME(gadget_amd64_sld64_2_7)
+    .quad NAME(gadget_amd64_sld64_3_0)
+    .quad NAME(gadget_amd64_sld64_3_1)
+    .quad NAME(gadget_amd64_sld64_3_2)
+    .quad NAME(gadget_amd64_sld64_3_3)
+    .quad NAME(gadget_amd64_sld64_3_4)
+    .quad NAME(gadget_amd64_sld64_3_5)
+    .quad NAME(gadget_amd64_sld64_3_6)
+    .quad NAME(gadget_amd64_sld64_3_7)
+    .quad NAME(gadget_amd64_sld64_4_0)
+    .quad NAME(gadget_amd64_sld64_4_1)
+    .quad NAME(gadget_amd64_sld64_4_2)
+    .quad NAME(gadget_amd64_sld64_4_3)
+    .quad NAME(gadget_amd64_sld64_4_4)
+    .quad NAME(gadget_amd64_sld64_4_5)
+    .quad NAME(gadget_amd64_sld64_4_6)
+    .quad NAME(gadget_amd64_sld64_4_7)
+    .quad NAME(gadget_amd64_sld64_5_0)
+    .quad NAME(gadget_amd64_sld64_5_1)
+    .quad NAME(gadget_amd64_sld64_5_2)
+    .quad NAME(gadget_amd64_sld64_5_3)
+    .quad NAME(gadget_amd64_sld64_5_4)
+    .quad NAME(gadget_amd64_sld64_5_5)
+    .quad NAME(gadget_amd64_sld64_5_6)
+    .quad NAME(gadget_amd64_sld64_5_7)
+    .quad NAME(gadget_amd64_sld64_6_0)
+    .quad NAME(gadget_amd64_sld64_6_1)
+    .quad NAME(gadget_amd64_sld64_6_2)
+    .quad NAME(gadget_amd64_sld64_6_3)
+    .quad NAME(gadget_amd64_sld64_6_4)
+    .quad NAME(gadget_amd64_sld64_6_5)
+    .quad NAME(gadget_amd64_sld64_6_6)
+    .quad NAME(gadget_amd64_sld64_6_7)
+    .quad NAME(gadget_amd64_sld64_7_0)
+    .quad NAME(gadget_amd64_sld64_7_1)
+    .quad NAME(gadget_amd64_sld64_7_2)
+    .quad NAME(gadget_amd64_sld64_7_3)
+    .quad NAME(gadget_amd64_sld64_7_4)
+    .quad NAME(gadget_amd64_sld64_7_5)
+    .quad NAME(gadget_amd64_sld64_7_6)
+    .quad NAME(gadget_amd64_sld64_7_7)
+    .quad NAME(gadget_amd64_sst32_0_0)
+    .quad NAME(gadget_amd64_sst32_0_1)
+    .quad NAME(gadget_amd64_sst32_0_2)
+    .quad NAME(gadget_amd64_sst32_0_3)
+    .quad NAME(gadget_amd64_sst32_0_4)
+    .quad NAME(gadget_amd64_sst32_0_5)
+    .quad NAME(gadget_amd64_sst32_0_6)
+    .quad NAME(gadget_amd64_sst32_0_7)
+    .quad NAME(gadget_amd64_sst32_1_0)
+    .quad NAME(gadget_amd64_sst32_1_1)
+    .quad NAME(gadget_amd64_sst32_1_2)
+    .quad NAME(gadget_amd64_sst32_1_3)
+    .quad NAME(gadget_amd64_sst32_1_4)
+    .quad NAME(gadget_amd64_sst32_1_5)
+    .quad NAME(gadget_amd64_sst32_1_6)
+    .quad NAME(gadget_amd64_sst32_1_7)
+    .quad NAME(gadget_amd64_sst32_2_0)
+    .quad NAME(gadget_amd64_sst32_2_1)
+    .quad NAME(gadget_amd64_sst32_2_2)
+    .quad NAME(gadget_amd64_sst32_2_3)
+    .quad NAME(gadget_amd64_sst32_2_4)
+    .quad NAME(gadget_amd64_sst32_2_5)
+    .quad NAME(gadget_amd64_sst32_2_6)
+    .quad NAME(gadget_amd64_sst32_2_7)
+    .quad NAME(gadget_amd64_sst32_3_0)
+    .quad NAME(gadget_amd64_sst32_3_1)
+    .quad NAME(gadget_amd64_sst32_3_2)
+    .quad NAME(gadget_amd64_sst32_3_3)
+    .quad NAME(gadget_amd64_sst32_3_4)
+    .quad NAME(gadget_amd64_sst32_3_5)
+    .quad NAME(gadget_amd64_sst32_3_6)
+    .quad NAME(gadget_amd64_sst32_3_7)
+    .quad NAME(gadget_amd64_sst32_4_0)
+    .quad NAME(gadget_amd64_sst32_4_1)
+    .quad NAME(gadget_amd64_sst32_4_2)
+    .quad NAME(gadget_amd64_sst32_4_3)
+    .quad NAME(gadget_amd64_sst32_4_4)
+    .quad NAME(gadget_amd64_sst32_4_5)
+    .quad NAME(gadget_amd64_sst32_4_6)
+    .quad NAME(gadget_amd64_sst32_4_7)
+    .quad NAME(gadget_amd64_sst32_5_0)
+    .quad NAME(gadget_amd64_sst32_5_1)
+    .quad NAME(gadget_amd64_sst32_5_2)
+    .quad NAME(gadget_amd64_sst32_5_3)
+    .quad NAME(gadget_amd64_sst32_5_4)
+    .quad NAME(gadget_amd64_sst32_5_5)
+    .quad NAME(gadget_amd64_sst32_5_6)
+    .quad NAME(gadget_amd64_sst32_5_7)
+    .quad NAME(gadget_amd64_sst32_6_0)
+    .quad NAME(gadget_amd64_sst32_6_1)
+    .quad NAME(gadget_amd64_sst32_6_2)
+    .quad NAME(gadget_amd64_sst32_6_3)
+    .quad NAME(gadget_amd64_sst32_6_4)
+    .quad NAME(gadget_amd64_sst32_6_5)
+    .quad NAME(gadget_amd64_sst32_6_6)
+    .quad NAME(gadget_amd64_sst32_6_7)
+    .quad NAME(gadget_amd64_sst32_7_0)
+    .quad NAME(gadget_amd64_sst32_7_1)
+    .quad NAME(gadget_amd64_sst32_7_2)
+    .quad NAME(gadget_amd64_sst32_7_3)
+    .quad NAME(gadget_amd64_sst32_7_4)
+    .quad NAME(gadget_amd64_sst32_7_5)
+    .quad NAME(gadget_amd64_sst32_7_6)
+    .quad NAME(gadget_amd64_sst32_7_7)
+    .quad NAME(gadget_amd64_sst64_0_0)
+    .quad NAME(gadget_amd64_sst64_0_1)
+    .quad NAME(gadget_amd64_sst64_0_2)
+    .quad NAME(gadget_amd64_sst64_0_3)
+    .quad NAME(gadget_amd64_sst64_0_4)
+    .quad NAME(gadget_amd64_sst64_0_5)
+    .quad NAME(gadget_amd64_sst64_0_6)
+    .quad NAME(gadget_amd64_sst64_0_7)
+    .quad NAME(gadget_amd64_sst64_1_0)
+    .quad NAME(gadget_amd64_sst64_1_1)
+    .quad NAME(gadget_amd64_sst64_1_2)
+    .quad NAME(gadget_amd64_sst64_1_3)
+    .quad NAME(gadget_amd64_sst64_1_4)
+    .quad NAME(gadget_amd64_sst64_1_5)
+    .quad NAME(gadget_amd64_sst64_1_6)
+    .quad NAME(gadget_amd64_sst64_1_7)
+    .quad NAME(gadget_amd64_sst64_2_0)
+    .quad NAME(gadget_amd64_sst64_2_1)
+    .quad NAME(gadget_amd64_sst64_2_2)
+    .quad NAME(gadget_amd64_sst64_2_3)
+    .quad NAME(gadget_amd64_sst64_2_4)
+    .quad NAME(gadget_amd64_sst64_2_5)
+    .quad NAME(gadget_amd64_sst64_2_6)
+    .quad NAME(gadget_amd64_sst64_2_7)
+    .quad NAME(gadget_amd64_sst64_3_0)
+    .quad NAME(gadget_amd64_sst64_3_1)
+    .quad NAME(gadget_amd64_sst64_3_2)
+    .quad NAME(gadget_amd64_sst64_3_3)
+    .quad NAME(gadget_amd64_sst64_3_4)
+    .quad NAME(gadget_amd64_sst64_3_5)
+    .quad NAME(gadget_amd64_sst64_3_6)
+    .quad NAME(gadget_amd64_sst64_3_7)
+    .quad NAME(gadget_amd64_sst64_4_0)
+    .quad NAME(gadget_amd64_sst64_4_1)
+    .quad NAME(gadget_amd64_sst64_4_2)
+    .quad NAME(gadget_amd64_sst64_4_3)
+    .quad NAME(gadget_amd64_sst64_4_4)
+    .quad NAME(gadget_amd64_sst64_4_5)
+    .quad NAME(gadget_amd64_sst64_4_6)
+    .quad NAME(gadget_amd64_sst64_4_7)
+    .quad NAME(gadget_amd64_sst64_5_0)
+    .quad NAME(gadget_amd64_sst64_5_1)
+    .quad NAME(gadget_amd64_sst64_5_2)
+    .quad NAME(gadget_amd64_sst64_5_3)
+    .quad NAME(gadget_amd64_sst64_5_4)
+    .quad NAME(gadget_amd64_sst64_5_5)
+    .quad NAME(gadget_amd64_sst64_5_6)
+    .quad NAME(gadget_amd64_sst64_5_7)
+    .quad NAME(gadget_amd64_sst64_6_0)
+    .quad NAME(gadget_amd64_sst64_6_1)
+    .quad NAME(gadget_amd64_sst64_6_2)
+    .quad NAME(gadget_amd64_sst64_6_3)
+    .quad NAME(gadget_amd64_sst64_6_4)
+    .quad NAME(gadget_amd64_sst64_6_5)
+    .quad NAME(gadget_amd64_sst64_6_6)
+    .quad NAME(gadget_amd64_sst64_6_7)
+    .quad NAME(gadget_amd64_sst64_7_0)
+    .quad NAME(gadget_amd64_sst64_7_1)
+    .quad NAME(gadget_amd64_sst64_7_2)
+    .quad NAME(gadget_amd64_sst64_7_3)
+    .quad NAME(gadget_amd64_sst64_7_4)
+    .quad NAME(gadget_amd64_sst64_7_5)
+    .quad NAME(gadget_amd64_sst64_7_6)
+    .quad NAME(gadget_amd64_sst64_7_7)
+.global.name amd64_smem_rip_gadgets
+    .quad NAME(gadget_amd64_sldr32_0)
+    .quad NAME(gadget_amd64_sldr32_1)
+    .quad NAME(gadget_amd64_sldr32_2)
+    .quad NAME(gadget_amd64_sldr32_3)
+    .quad NAME(gadget_amd64_sldr32_4)
+    .quad NAME(gadget_amd64_sldr32_5)
+    .quad NAME(gadget_amd64_sldr32_6)
+    .quad NAME(gadget_amd64_sldr32_7)
+    .quad NAME(gadget_amd64_sldr64_0)
+    .quad NAME(gadget_amd64_sldr64_1)
+    .quad NAME(gadget_amd64_sldr64_2)
+    .quad NAME(gadget_amd64_sldr64_3)
+    .quad NAME(gadget_amd64_sldr64_4)
+    .quad NAME(gadget_amd64_sldr64_5)
+    .quad NAME(gadget_amd64_sldr64_6)
+    .quad NAME(gadget_amd64_sldr64_7)
+    .quad NAME(gadget_amd64_sstr32_0)
+    .quad NAME(gadget_amd64_sstr32_1)
+    .quad NAME(gadget_amd64_sstr32_2)
+    .quad NAME(gadget_amd64_sstr32_3)
+    .quad NAME(gadget_amd64_sstr32_4)
+    .quad NAME(gadget_amd64_sstr32_5)
+    .quad NAME(gadget_amd64_sstr32_6)
+    .quad NAME(gadget_amd64_sstr32_7)
+    .quad NAME(gadget_amd64_sstr64_0)
+    .quad NAME(gadget_amd64_sstr64_1)
+    .quad NAME(gadget_amd64_sstr64_2)
+    .quad NAME(gadget_amd64_sstr64_3)
+    .quad NAME(gadget_amd64_sstr64_4)
+    .quad NAME(gadget_amd64_sstr64_5)
+    .quad NAME(gadget_amd64_sstr64_6)
+    .quad NAME(gadget_amd64_sstr64_7)
+.popsection
