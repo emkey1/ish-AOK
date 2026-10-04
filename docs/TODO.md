@@ -104,6 +104,7 @@ freeze (2026-09-25); their full text is in
   2. **App UI in Simplified (and maybe Traditional) Chinese.** No localisation infrastructure exists: knownRegions is en/Base, there are zero NSLocalizedString calls, and ~500 English strings are hard-coded across app/*.m plus 3 storyboards. Step one is a String Catalog (Localizable.xcstrings) and wrapping the strings; translation can come after, and the built-in docs (which compile into the app) stay English.
   3. **Guest locale.** Alpine's musl reads C.UTF-8 by default and needs nothing; Devuan roots need `locales` and a generated zh_CN.UTF-8 before Chinese program output or man pages appear. Could be a setup-tool option.
   Layer 1 is the cheapest and helps everyone typing CJK (Japanese and Korean IMEs use the same marked-text path).
+  Whatever lands, update **README_ZH.md** to match (it is the Chinese translation of README.md, 520 vs 581 lines, and says the English one wins on any difference) -- mention the new Chinese input/UI support there, and bring it level with README.md while at it.
 
 ## Diagnosed, not fixed
 
