@@ -22460,6 +22460,82 @@ NAME(amd64_specmem_start):
     amd64_svwrite_done 8, sstr64_7
     gret 2
     amd64_svwrite_bullshit 8, sstr64_7
+# add/sub/cmp r32/r64, [cached base + disp] or [rip + disp] on the register
+# cache: amd64_slo_<op><size>_<dst>_<base>, base r = rip-relative (the
+# operand word is then the absolute address), full and _nf like the arith
+# family above. The _nf CMP still performs the load: the access can fault
+# even when its flags are dead. Inside the amd64_specmem range, with the same
+# slow-path spill. Operands: [disp or address][insn rip]; gret 2. Tables
+# amd64_slo{,_nf}_gadgets[((op * 2 + size64) * 8 + dst) * 9 + base].
+.macro amd64_slo op, s, R, sz, bits, d, dr, b, br, nf
+.if \nf
+.gadget amd64_slo_\op\()\s\()_\d\()_\b\()_nf
+.else
+.gadget amd64_slo_\op\()\s\()_\d\()_\b
+.endif
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    ldr x9, [_ip]
+    .ifnc \br, rip
+    add x9, x9, x\br
+    .endif
+    amd64_vread_prep \sz, slo_\op\()\s\()_\d\()_\b\()_\nf
+    ldr \R\()10, [x9]
+    .if \nf == 0
+    mov \R\()13, \R\dr
+    .ifc \op, add
+    adds \R\()15, \R\()13, \R\()10
+    cset w14, cs
+    .else
+    subs \R\()15, \R\()13, \R\()10
+    cset w14, cc
+    .endif
+    cset w16, vs
+    amd64_cached_set_addsub_flags \bits
+    .ifnc \op, cmp
+    mov x\dr, x15
+    .endif
+    .else
+    .ifc \op, add
+    add \R\dr, \R\dr, \R\()10
+    .endif
+    .ifc \op, sub
+    sub \R\dr, \R\dr, \R\()10
+    .endif
+    .endif
+    gret 2
+    amd64_svread_bullshit \sz, slo_\op\()\s\()_\d\()_\b\()_\nf
+.endm
+.macro amd64_slo_bases op, s, R, sz, bits, d, dr, nf
+    amd64_slo \op, \s, \R, \sz, \bits, \d, \dr, 0, 20, \nf
+    amd64_slo \op, \s, \R, \sz, \bits, \d, \dr, 1, 22, \nf
+    amd64_slo \op, \s, \R, \sz, \bits, \d, \dr, 2, 23, \nf
+    amd64_slo \op, \s, \R, \sz, \bits, \d, \dr, 3, 21, \nf
+    amd64_slo \op, \s, \R, \sz, \bits, \d, \dr, 4, 27, \nf
+    amd64_slo \op, \s, \R, \sz, \bits, \d, \dr, 5, 26, \nf
+    amd64_slo \op, \s, \R, \sz, \bits, \d, \dr, 6, 24, \nf
+    amd64_slo \op, \s, \R, \sz, \bits, \d, \dr, 7, 25, \nf
+    amd64_slo \op, \s, \R, \sz, \bits, \d, \dr, r, rip, \nf
+.endm
+.macro amd64_slo_dsts op, s, R, sz, bits, nf
+    amd64_slo_bases \op, \s, \R, \sz, \bits, 0, 20, \nf
+    amd64_slo_bases \op, \s, \R, \sz, \bits, 1, 22, \nf
+    amd64_slo_bases \op, \s, \R, \sz, \bits, 2, 23, \nf
+    amd64_slo_bases \op, \s, \R, \sz, \bits, 3, 21, \nf
+    amd64_slo_bases \op, \s, \R, \sz, \bits, 4, 27, \nf
+    amd64_slo_bases \op, \s, \R, \sz, \bits, 5, 26, \nf
+    amd64_slo_bases \op, \s, \R, \sz, \bits, 6, 24, \nf
+    amd64_slo_bases \op, \s, \R, \sz, \bits, 7, 25, \nf
+.endm
+.irp op, add,sub,cmp
+    amd64_slo_dsts \op, 32, w, 4, 31, 0
+    amd64_slo_dsts \op, 32, w, 4, 31, 1
+    amd64_slo_dsts \op, 64, x, 8, 63, 0
+    amd64_slo_dsts \op, 64, x, 8, 63, 1
+.endr
+.purgem amd64_slo_dsts
+.purgem amd64_slo_bases
+.purgem amd64_slo
 .global NAME(amd64_specmem_end)
 NAME(amd64_specmem_end):
 .pushsection_rodata
@@ -22753,4 +22829,42 @@ NAME(amd64_specmem_end):
     .quad NAME(gadget_amd64_sstr64_5)
     .quad NAME(gadget_amd64_sstr64_6)
     .quad NAME(gadget_amd64_sstr64_7)
+.popsection
+.pushsection_rodata
+.macro amd64_slo_quad op, s, d, b, nf
+    .if \nf
+    .quad NAME(gadget_amd64_slo_\op\()\s\()_\d\()_\b\()_nf)
+    .else
+    .quad NAME(gadget_amd64_slo_\op\()\s\()_\d\()_\b)
+    .endif
+.endm
+.macro amd64_slo_quads op, s, d, nf
+    .irp b, 0,1,2,3,4,5,6,7,r
+        amd64_slo_quad \op, \s, \d, \b, \nf
+    .endr
+.endm
+.macro amd64_slo_table nf
+    .if \nf
+    .global.name amd64_slo_nf_gadgets
+    .else
+    .global.name amd64_slo_gadgets
+    .endif
+    .irp op, add,sub,cmp
+        .irp s, 32,64
+            amd64_slo_quads \op, \s, 0, \nf
+            amd64_slo_quads \op, \s, 1, \nf
+            amd64_slo_quads \op, \s, 2, \nf
+            amd64_slo_quads \op, \s, 3, \nf
+            amd64_slo_quads \op, \s, 4, \nf
+            amd64_slo_quads \op, \s, 5, \nf
+            amd64_slo_quads \op, \s, 6, \nf
+            amd64_slo_quads \op, \s, 7, \nf
+        .endr
+    .endr
+.endm
+amd64_slo_table 0
+amd64_slo_table 1
+.purgem amd64_slo_table
+.purgem amd64_slo_quad
+.purgem amd64_slo_quads
 .popsection

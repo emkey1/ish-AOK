@@ -536,7 +536,7 @@ static void amd64_flag_rw(const struct amd64_jit_insn *insn, unsigned *r, unsign
 }
 
 #if defined(__aarch64__)
-#define AMD64_SPEC_TWIN_SLOTS 2048 // power of two, > 2 x the 720 pairs
+#define AMD64_SPEC_TWIN_SLOTS 4096 // power of two, > 2 x the 1152 pairs
 static unsigned long amd64_spec_twin_full[AMD64_SPEC_TWIN_SLOTS];
 static unsigned long amd64_spec_twin_nf[AMD64_SPEC_TWIN_SLOTS];
 static pthread_once_t amd64_spec_twin_once = PTHREAD_ONCE_INIT;
@@ -550,11 +550,13 @@ static void amd64_spec_twin_init(void) {
     extern void (*const amd64_ari_gadgets[])(void), (*const amd64_ari_nf_gadgets[])(void);
     extern void (*const amd64_lrr_gadgets[])(void), (*const amd64_lrr_nf_gadgets[])(void);
     extern void (*const amd64_lri_gadgets[])(void), (*const amd64_lri_nf_gadgets[])(void);
+    extern void (*const amd64_slo_gadgets[])(void), (*const amd64_slo_nf_gadgets[])(void);
     static const struct { void (*const *full)(void); void (*const *nf)(void); unsigned n; } fams[] = {
         {amd64_arr_gadgets, amd64_arr_nf_gadgets, 2 * 2 * 64},
         {amd64_ari_gadgets, amd64_ari_nf_gadgets, 2 * 2 * 8},
         {amd64_lrr_gadgets, amd64_lrr_nf_gadgets, 3 * 2 * 64},
         {amd64_lri_gadgets, amd64_lri_nf_gadgets, 3 * 2 * 8},
+        {amd64_slo_gadgets, amd64_slo_nf_gadgets, 3 * 2 * 8 * 9},
     };
     for (unsigned f = 0; f < sizeof(fams) / sizeof(fams[0]); f++) {
         for (unsigned i = 0; i < fams[f].n; i++) {
@@ -612,7 +614,7 @@ static unsigned long amd64_flags_twin(unsigned long g, unsigned *writes) {
         }
     }
     // The register-specialised arith/logic gadgets (math.S amd64_arr/ari/lrr/
-    // lri), 720 pairs, through a hash table built once.
+    // lri/slo), 1152 pairs, through a hash table built once.
     unsigned long nf = amd64_spec_twin(g);
     if (nf != 0)
         *writes = AMD64_FL_ALL;
@@ -13698,6 +13700,32 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
         amd64_jit_debug("loadop-arith ip=%llx op=%02x size=%u meta=%lx disp=%lx next=%llx",
                 (unsigned long long) insn.start_ip, insn.opcode, size,
                 meta, disp, (unsigned long long) next_ip);
+#if defined(__aarch64__)
+        // A cached register op [cached base + disp] or [rip + disp]: one gadget
+        // on the live register cache (math.S amd64_slo_*).
+        {
+            unsigned lreg = amd64_modrm_reg(insn.modrm) | (insn.rex.r ? 8 : 0);
+            unsigned lbase = (unsigned) ((meta >> AMD64_JIT_MEM_BASE_SHIFT) & 0xf);
+            bool has_base = (meta & AMD64_JIT_MEM_HAS_BASE) != 0;
+            bool rip_rel = (meta & AMD64_JIT_MEM_RIP_REL) != 0;
+            if ((amd64_jit_fuse_mask() & JIT_FUSE_AMD64_MEMR) && amd64_jit_low8_reg(lreg) &&
+                    !(meta & AMD64_JIT_MEM_HAS_INDEX) && !(meta & (AMD64_JIT_MEM_FS | AMD64_JIT_MEM_GS)) &&
+                    ((rip_rel && !has_base) || (has_base && !rip_rel && amd64_jit_low8_reg(lbase)))) {
+                extern void (*const amd64_slo_gadgets[])(void);
+                unsigned op = insn.opcode == 0x03 ? 0 : insn.opcode == 0x2b ? 1 : 2;
+                gen_amd64_ensure_reg_cache(state);
+                state->amd64_deferred_rip_valid = false; // the gadget publishes the rip
+                gen(state, (unsigned long) amd64_slo_gadgets[((op * 2 + (size == 64)) * 8 + lreg) * 9 +
+                        (rip_rel ? 8 : lbase)]);
+                gen(state, rip_rel ? (unsigned long) (next_ip + (int64_t) disp) : disp);
+                gen(state, (unsigned long) insn.start_ip);
+                if (op != 2)
+                    gen_amd64_mark_reg_cache_dirty(state);
+                gen_amd64_defer_rip(state, next_ip);
+                return true;
+            }
+        }
+#endif
         gen_amd64_flush_reg_cache(state);
         gen_amd64_flush_rip(state);
         extern void gadget_amd64_loadop_arith32(void), gadget_amd64_loadop_arith64(void);

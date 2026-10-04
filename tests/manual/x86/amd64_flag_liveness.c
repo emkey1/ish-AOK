@@ -84,8 +84,8 @@ static void emit_mem_one(void) {
     switch (rnd() % 10) {
         case 0: rex_mem_any(w, a); b(0x8b); mem_any(a); break;            // mov a, [m]
         case 1: rex_mem_any(w, a); b(0x89); mem_any(a); break;            // mov [m], a
-        case 2: rex_mem(w, a); b(0x03); mem_operand(a); break;            // add a, [m]
-        case 3: rex_mem(w, a); b(0x3b); mem_operand(a); break;            // cmp a, [m]
+        case 2: rex_mem_any(w, a); b(rnd() & 1 ? 0x03 : 0x2b); mem_any(a); break; // add/sub a, [m]
+        case 3: rex_mem_any(w, a); b(0x3b); mem_any(a); break;            // cmp a, [m]
         case 4: rex_mem(w, a); b(rnd() & 1 ? 0x23 : 0x33); mem_operand(a); break; // and/xor a, [m]
         case 5: rex_mem(w, a); b(0x01); mem_operand(a); break;            // add [m], a
         case 6: rex_mem(w, a); b(0x0f); b(0xb6); mem_operand(a); break;   // movzx a, byte [m]

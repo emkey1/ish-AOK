@@ -5,7 +5,8 @@
 // just before the fault changed and the JIT has not written back. The
 // gadgets' slow paths spill the cache before the segfault exit.
 //
-// Loads and stores at 32 and 64 bits, through a cached base (rcx = NULL).
+// Loads, stores, add and cmp reg,[mem] at 32 and 64 bits, through a cached
+// base (rcx = NULL).
 // Passes on real x86 and under the interpreter (echo 0 > /proc/ish/amd64_jit).
 #define _GNU_SOURCE
 #include <setjmp.h>
@@ -69,6 +70,8 @@ int main(void) {
     FAULTING("load32", "movl 16(%%rcx), %%ebx");
     FAULTING("store64", "movq %%rax, 16(%%rcx)");
     FAULTING("store32", "movl %%eax, 16(%%rcx)");
+    FAULTING("add64 reg,mem", "addq 16(%%rcx), %%rbx");
+    FAULTING("cmp32 reg,mem", "cmpl 16(%%rcx), %%ebx");
     printf("amd64_fault_regs: %s\n", failures ? "FAIL" : "PASS");
     return failures != 0;
 }
