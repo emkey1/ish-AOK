@@ -556,7 +556,7 @@ static void amd64_flag_rw(const struct amd64_jit_insn *insn, unsigned *r, unsign
 }
 
 #if defined(__aarch64__)
-#define AMD64_SPEC_TWIN_BITS 14 // 16384 slots, > 2 x the 5184 pairs
+#define AMD64_SPEC_TWIN_BITS 14 // 16384 slots, > 2 x the 5256 pairs
 #define AMD64_SPEC_TWIN_SLOTS (1u << AMD64_SPEC_TWIN_BITS)
 static unsigned long amd64_spec_twin_full[AMD64_SPEC_TWIN_SLOTS];
 static unsigned long amd64_spec_twin_nf[AMD64_SPEC_TWIN_SLOTS];
@@ -575,6 +575,7 @@ static void amd64_spec_twin_init(void) {
     extern void (*const amd64_slo_gadgets[])(void), (*const amd64_slo_nf_gadgets[])(void);
     extern void (*const amd64_shi_gadgets[])(void), (*const amd64_shi_nf_gadgets[])(void);
     extern void (*const amd64_idr_gadgets[])(void), (*const amd64_idr_nf_gadgets[])(void);
+    extern void (*const amd64_sim_gadgets[])(void), (*const amd64_sim_nf_gadgets[])(void);
     static const struct {
         void (*const *full)(void); void (*const *nf)(void); unsigned n; unsigned writes;
     } fams[] = {
@@ -585,6 +586,7 @@ static void amd64_spec_twin_init(void) {
         {amd64_slo_gadgets, amd64_slo_nf_gadgets, 4 * 2 * 16 * 18, AMD64_FL_ALL},
         {amd64_shi_gadgets, amd64_shi_nf_gadgets, 3 * 2 * 16, AMD64_FL_ALL},
         {amd64_idr_gadgets, amd64_idr_nf_gadgets, 2 * 2 * 16, AMD64_FL_ALL & ~AMD64_FL_CF},
+        {amd64_sim_gadgets, amd64_sim_nf_gadgets, 2 * 2 * 18, AMD64_FL_ALL & ~AMD64_FL_CF},
     };
     for (unsigned f = 0; f < sizeof(fams) / sizeof(fams[0]); f++) {
         for (unsigned i = 0; i < fams[f].n; i++) {
@@ -645,7 +647,7 @@ static unsigned long amd64_flags_twin(unsigned long g, unsigned *writes) {
         }
     }
     // The register-specialised arith/logic/shift/inc-dec gadgets (math.S
-    // amd64_arr/ari/lrr/lri/slo/shi/idr), 5184 pairs, through a hash table
+    // amd64_arr/ari/lrr/lri/slo/shi/idr/sim), 5256 pairs, through a hash table
     // built once.
     return amd64_spec_twin(g, writes);
 }
@@ -12167,6 +12169,23 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
             amd64_jit_debug("incdec-mem ip=%llx grp=%u size=%u meta=%lx disp=%lx next=%llx",
                     (unsigned long long) insn.start_ip, group, size,
                     meta, disp, (unsigned long long) next_ip);
+#if defined(__aarch64__)
+            {
+                // On the register cache: amd64_sim_* (any base, indexed too).
+                unsigned slot;
+                unsigned long word;
+                if ((amd64_jit_fuse_mask() & JIT_FUSE_AMD64_MEMR) &&
+                        gen_amd64_m16_operand(state, &insn, meta, disp, next_ip, &slot, &word)) {
+                    extern void (*const amd64_sim_gadgets[])(void);
+                    state->amd64_deferred_rip_valid = false; // the gadget publishes the rip
+                    gen(state, (unsigned long) amd64_sim_gadgets[(group * 2 + (size == 64)) * 18 + slot]);
+                    gen(state, word);
+                    gen(state, (unsigned long) insn.start_ip);
+                    gen_amd64_defer_rip(state, next_ip);
+                    return true;
+                }
+            }
+#endif
             gen_amd64_flush_reg_cache(state);
             gen_amd64_flush_rip(state);
             extern void gadget_amd64_incdec_mem32(void), gadget_amd64_incdec_mem64(void);
@@ -12401,6 +12420,19 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
                 reg,
                 (unsigned long long) next_ip);
         state->amd64_ip = next_ip;
+#if defined(__aarch64__)
+        if (amd64_jit_fuse_mask() & JIT_FUSE_AMD64_MEMR) {
+            // On the register cache (rsp is x27): amd64_spush_<reg>.
+            extern void (*const amd64_spush_gadgets[])(void);
+            gen_amd64_ensure_reg_cache(state);
+            state->amd64_deferred_rip_valid = false; // the gadget publishes the rip
+            gen(state, (unsigned long) amd64_spush_gadgets[reg]);
+            gen(state, (unsigned long) insn.start_ip);
+            gen_amd64_mark_reg_cache_dirty(state);
+            gen_amd64_defer_rip(state, next_ip);
+            return true;
+        }
+#endif
         // Native 64-bit stack push. Flush the reg cache + rip so the gadget reads
         // guest registers from CPU_amd64_regs and a #PF re-executes this insn.
         gen_amd64_flush_reg_cache(state);
@@ -12423,6 +12455,19 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
                 reg,
                 (unsigned long long) next_ip);
         state->amd64_ip = next_ip;
+#if defined(__aarch64__)
+        if (amd64_jit_fuse_mask() & JIT_FUSE_AMD64_MEMR) {
+            // On the register cache (rsp is x27): amd64_spop_<reg>.
+            extern void (*const amd64_spop_gadgets[])(void);
+            gen_amd64_ensure_reg_cache(state);
+            state->amd64_deferred_rip_valid = false; // the gadget publishes the rip
+            gen(state, (unsigned long) amd64_spop_gadgets[reg]);
+            gen(state, (unsigned long) insn.start_ip);
+            gen_amd64_mark_reg_cache_dirty(state);
+            gen_amd64_defer_rip(state, next_ip);
+            return true;
+        }
+#endif
         // Native 64-bit stack pop. Same reg-cache/rip flush contract as push.
         gen_amd64_flush_reg_cache(state);
         gen_amd64_flush_rip(state);

@@ -97,7 +97,22 @@ static void emit_mem_one(void) {
     use_rbp = (int) (rnd() & 1);
     if (rnd() % 4 == 0) { // the indexed and the 16-bit / byte forms
         int lowbyte_rex = (a & 8) || (rnd() & 1); // REX makes a's low byte addressable
-        switch (rnd() % 9) {
+        switch (rnd() % 12) {
+            case 9: { // inc/dec [m] (FF /0, /1), plain or indexed
+                int ext = (int) (rnd() & 1);
+                if (rnd() & 1) { set_r14(); rex_sib(w, 0); b(0xff); sib_operand(ext); }
+                else { rex_mem_any(w, 0); b(0xff); mem_any(ext); }
+                break;
+            }
+            case 10: { // push a; pop c (net rsp change 0)
+                int c = pick();
+                if (a & 8) b(0x41);
+                b((uint8_t) (0x50 + (a & 7)));
+                if (c & 8) b(0x41);
+                b((uint8_t) (0x58 + (c & 7)));
+                break;
+            }
+            case 11: rex_mem_any(w, a); b(0x39); mem_any(a); break;                       // cmp [m], a
             case 0: set_r14(); rex_sib(w, a); b(0x8b); sib_operand(a); break;             // mov a, [b+i*s+d]
             case 1: set_r14(); rex_sib(w, a); b(0x89); sib_operand(a); break;             // mov [b+i*s+d], a
             case 2: set_r14(); rex_sib(w, a); b(rnd() & 1 ? 0x03 : 0x3b); sib_operand(a); break; // add/cmp a, [..]

@@ -10590,6 +10590,116 @@ amd64_r16_family amd64_r16_rr17, amd64_slo16, cmpm
 .irp op, cmpmr,cmprm,test
     amd64_r16_rr17 amd64_scb16, \op, 0, w, 0, 0
 .endr
+
+# push/pop r64 per register on the register cache (rsp is x27):
+# amd64_spush_<reg>, amd64_spop_<reg>. A push commits rsp -= 8 only after
+# its store, so a fault re-executes it unchanged; `push rsp` stores the old
+# rsp. `pop rsp` loads rsp from the stack (the increment is lost, as on
+# x86). Operand: [insn rip]; gret 1.
+.macro amd64_spp16 op, s, R, bits, nf, r, hr
+.ifc \op, push
+.gadget amd64_spush_\r
+    ldr x8, [_ip]
+    str x8, [_cpu, CPU_amd64_rip]
+    sub x9, x27, 8
+    amd64_svwrite_prep 8, spush_\r
+    .if \r < 8
+    str x\hr, [x9]
+    .else
+    ldr x10, [_cpu, CPU_amd64_regs + 8 * \r]
+    str x10, [x9]
+    .endif
+    amd64_svwrite_done 8, spush_\r
+    sub x27, x27, 8
+    gret 1
+    amd64_svwrite_bullshit 8, spush_\r
+.else
+.gadget amd64_spop_\r
+    ldr x8, [_ip]
+    str x8, [_cpu, CPU_amd64_rip]
+    mov x9, x27
+    amd64_vread_prep 8, spop_\r
+    .if \r == 4
+    ldr x27, [x9]
+    .else
+    .if \r < 8
+    ldr x\hr, [x9]
+    .else
+    ldr x10, [x9]
+    str x10, [_cpu, CPU_amd64_regs + 8 * \r]
+    .endif
+    add x27, x27, 8
+    .endif
+    gret 1
+    amd64_svread_bullshit 8, spop_\r
+.endif
+.endm
+amd64_r16_ri amd64_spp16, push, 64, x, 63, 0
+amd64_r16_ri amd64_spp16, pop, 64, x, 63, 0
+
+# inc/dec [mem] (FF /0, /1), 32/64-bit, read-modify-write on the register
+# cache: amd64_sim_<op><size>_<base>, full and _nf, the same 18 bases. The
+# guest address stays in x0 and the result goes to x10 across the two preps
+# (save_c keeps both); the full form feeds the CF byte through the flag
+# macro, as amd64_idr does, so CF is left as it was. A fault on the store
+# re-executes the instruction from the unchanged memory. Operands: [disp or
+# address][insn rip]; gret 2.
+.macro amd64_sim16 op, s, R, bits, nf, d, hd, b, hb
+.if \nf
+    .if \b == 16
+    .gadget amd64_sim_\op\()\s\()_r_nf
+    .elseif \b == 17
+    .gadget amd64_sim_\op\()\s\()_x_nf
+    .else
+    .gadget amd64_sim_\op\()\s\()_\b\()_nf
+    .endif
+.else
+    .if \b == 16
+    .gadget amd64_sim_\op\()\s\()_r
+    .elseif \b == 17
+    .gadget amd64_sim_\op\()\s\()_x
+    .else
+    .gadget amd64_sim_\op\()\s\()_\b
+    .endif
+.endif
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    amd64_m16_addr \b, \hb
+    mov x0, x9
+    amd64_vread_prep (\s / 8), sim_\op\()\s\()_\b\()_\nf\()r
+    ldr \R\()13, [x9]
+    .if \nf
+    .ifc \op, inc
+    add \R\()15, \R\()13, #1
+    .else
+    sub \R\()15, \R\()13, #1
+    .endif
+    .else
+    .ifc \op, inc
+    adds \R\()15, \R\()13, #1
+    .else
+    subs \R\()15, \R\()13, #1
+    .endif
+    cset w16, vs
+    ldrb w14, [_cpu, CPU_cf]
+    mov x10, 1
+    amd64_cached_set_addsub_flags \bits
+    .endif
+    mov x10, x15
+    mov x9, x0
+    amd64_svwrite_prep (\s / 8), sim_\op\()\s\()_\b\()_\nf\()w
+    str \R\()10, [x9]
+    amd64_svwrite_done (\s / 8), sim_\op\()\s\()_\b\()_\nf\()w
+    gret 2
+    amd64_svread_bullshit (\s / 8), sim_\op\()\s\()_\b\()_\nf\()r
+    amd64_svwrite_bullshit (\s / 8), sim_\op\()\s\()_\b\()_\nf\()w
+.endm
+.irp op, inc,dec
+    amd64_r16_srcs17 amd64_sim16, \op, 32, w, 31, 0, 0, 0
+    amd64_r16_srcs17 amd64_sim16, \op, 32, w, 31, 1, 0, 0
+    amd64_r16_srcs17 amd64_sim16, \op, 64, x, 63, 0, 0, 0
+    amd64_r16_srcs17 amd64_sim16, \op, 64, x, 63, 1, 0, 0
+.endr
 .global NAME(amd64_specmem_end)
 NAME(amd64_specmem_end):
 # Tables: amd64_smem_gadgets[((st * 2 + size64) * 16 + reg) * 18 + base]
@@ -10674,7 +10784,52 @@ NAME(amd64_specmem_end):
         amd64_x16_row \fam, \op, \d
     .endr
 .endm
+.macro amd64_sim_quad op, s, b, nf
+    .if \b == 16
+        .if \nf
+        .quad NAME(gadget_amd64_sim_\op\()\s\()_r_nf)
+        .else
+        .quad NAME(gadget_amd64_sim_\op\()\s\()_r)
+        .endif
+    .elseif \b == 17
+        .if \nf
+        .quad NAME(gadget_amd64_sim_\op\()\s\()_x_nf)
+        .else
+        .quad NAME(gadget_amd64_sim_\op\()\s\()_x)
+        .endif
+    .else
+        .if \nf
+        .quad NAME(gadget_amd64_sim_\op\()\s\()_\b\()_nf)
+        .else
+        .quad NAME(gadget_amd64_sim_\op\()\s\()_\b)
+        .endif
+    .endif
+.endm
+.macro amd64_sim_ops op, nf
+    .irp s, 32,64
+        .irp b, 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17
+            amd64_sim_quad \op, \s, \b, \nf
+        .endr
+    .endr
+.endm
+.macro amd64_spp_quad op, r
+    .quad NAME(gadget_amd64_s\op\()_\r)
+.endm
 .pushsection_rodata
+.global.name amd64_spush_gadgets
+    .irp r, 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
+        amd64_spp_quad push, \r
+    .endr
+.global.name amd64_spop_gadgets
+    .irp r, 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
+        amd64_spp_quad pop, \r
+    .endr
+.global.name amd64_sim_gadgets
+    amd64_sim_ops inc, 0
+    amd64_sim_ops dec, 0
+.global.name amd64_sim_nf_gadgets
+    amd64_sim_ops inc, 1
+    amd64_sim_ops dec, 1
 .global.name amd64_smx_gadgets
     .irp kind, st16,zx16,ld16,st8,zx8,ld8
         amd64_x16_ops smx, \kind
