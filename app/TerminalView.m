@@ -44,17 +44,56 @@ struct rowcol {
 @implementation AOKInputSlot
 @end
 
-@interface TerminalView ()
+// UITextInput's document, for the keyboard's purposes, is only the IME
+// composition: the guest's line editor owns everything already typed, so there
+// is nothing else the keyboard could usefully read or edit. Positions are UTF-16
+// offsets into the composition.
+@interface AOKTextPosition : UITextPosition
+@property (nonatomic, readonly) NSInteger offset;
++ (instancetype)positionWithOffset:(NSInteger)offset;
+@end
+@implementation AOKTextPosition
++ (instancetype)positionWithOffset:(NSInteger)offset {
+    AOKTextPosition *position = [self new];
+    position->_offset = offset;
+    return position;
+}
+@end
 
-@property (nonatomic) NSMutableArray<UIKeyCommand *> *keyCommands;
+@interface AOKTextRange : UITextRange
+@property (nonatomic, readonly) AOKTextPosition *startPosition;
+@property (nonatomic, readonly) AOKTextPosition *endPosition;
++ (instancetype)rangeFrom:(NSInteger)start to:(NSInteger)end;
+@end
+@implementation AOKTextRange
++ (instancetype)rangeFrom:(NSInteger)start to:(NSInteger)end {
+    AOKTextRange *range = [self new];
+    range->_startPosition = [AOKTextPosition positionWithOffset:MIN(start, end)];
+    range->_endPosition = [AOKTextPosition positionWithOffset:MAX(start, end)];
+    return range;
+}
+- (UITextPosition *)start { return self.startPosition; }
+- (UITextPosition *)end { return self.endPosition; }
+- (BOOL)isEmpty { return self.startPosition.offset == self.endPosition.offset; }
+@end
+
+@interface TerminalView () {
+    // Every key command the terminal claims; -keyCommands narrows it while an
+    // IME composition is open.
+    NSMutableArray<UIKeyCommand *> *_keyCommands;
+}
 @property (nonatomic) NSMutableArray *functionKeys;
 @property ScrollbarView *scrollbarView;
 @property (nonatomic) BOOL terminalFocused;
 
-@property (nullable) NSString *markedText;
-@property (nullable) NSString *selectedText;
-@property UITextRange *markedRange;
-@property UITextRange *selectedRange;
+// The IME composition (pinyin, kana, ...) not yet committed, and the
+// keyboard's selection inside it. Drawn over the cursor by term.js; only the
+// committed text is sent to the pty.
+@property (nonatomic, copy, nullable) NSString *composition;
+@property (nonatomic) NSRange compositionSelection;
+// The cell the composition starts in, in the web view's coordinates, as term.js
+// last reported it. It follows the cursor while nothing is being composed.
+@property (nonatomic) CGRect imeCellRect;
 
 @property struct rowcol floatingCursor;
 @property CGSize floatingCursorSensitivity;
@@ -100,8 +139,6 @@ struct rowcol {
         });
     }];
 
-    self.markedRange = [UITextRange new];
-    self.selectedRange = [UITextRange new];
 }
 
 - (void)dealloc {
@@ -121,7 +158,7 @@ struct rowcol {
     }
 }
 
-static NSString *const HANDLERS[] = {@"syncFocus", @"focus", @"newScrollHeight", @"newScrollTop", @"openLink", @"findCount"};
+static NSString *const HANDLERS[] = {@"syncFocus", @"focus", @"newScrollHeight", @"newScrollTop", @"openLink", @"findCount", @"imeRect"};
 
 static BOOL ISHTerminalViewEventLogEnabled(void) {
     const char *enabled = getenv("ISH_TRACE_TERMINAL_LIFECYCLE");
@@ -147,6 +184,14 @@ static void ISHRecordTerminalViewEvent(NSString *event, Terminal *terminal, NSDi
     if (_terminal) {
         ISHRecordTerminalViewEvent(@"terminalView.setTerminal.detach", _terminal,
                                    @{@"reason": @"replace-terminal"} );
+        // A composition was being typed into the terminal going away. Drop it
+        // (it was never sent), and tell the keyboard its document changed so
+        // it starts the next one fresh.
+        if (self.composition != nil) {
+            [self.inputDelegate textWillChange:self];
+            [self setComposition:nil selection:NSMakeRange(0, 0)];
+            [self.inputDelegate textDidChange:self];
+        }
         [_terminal removeObserver:self forKeyPath:@"loaded"];
         [self uninstallTerminalView];
     }
@@ -192,6 +237,9 @@ static void ISHRecordTerminalViewEvent(NSString *event, Terminal *terminal, NSDi
     self.scrollbarView.contentView = webView;
     [self.scrollbarView addSubview:webView];
     [self syncTerminalFocus];
+    self.imeCellRect = CGRectZero;
+    if (_terminal.loaded)
+        [webView evaluateJavaScript:@"exports.layoutComposition()" completionHandler:nil];
     [self.terminal requestRefresh];
     ISHRecordTerminalViewEvent(@"terminalView.install.end", _terminal, nil);
 }
@@ -343,6 +391,11 @@ static void ISHRecordTerminalViewEvent(NSString *event, Terminal *terminal, NSDi
         [self.scrollbarView setContentOffset:CGPointMake(0, newOffset) animated:NO];
     } else if ([message.name isEqualToString:@"openLink"]) {
         [UIApplication openURL:message.body];
+    } else if ([message.name isEqualToString:@"imeRect"]) {
+        NSArray *rect = message.body;
+        if ([rect isKindOfClass:NSArray.class] && rect.count == 4)
+            self.imeCellRect = CGRectMake([rect[0] doubleValue], [rect[1] doubleValue],
+                                          [rect[2] doubleValue], [rect[3] doubleValue]);
     } else if ([message.name isEqualToString:@"findCount"]) {
         NSArray *counts = message.body;
         if (self.findResultsDidChange != nil && [counts isKindOfClass:NSArray.class] && counts.count == 2) {
@@ -519,14 +572,19 @@ static const NSTimeInterval kPendingInputTimeout = 0.075;
 // implementing these makes a keyboard pop up when this view is first responder
 
 - (void)insertText:(NSString *)text {
-    self.markedText = nil;
+    if (self.composition != nil)
+        [self setComposition:nil selection:NSMakeRange(0, 0)];
+    if (text == nil)
+        return;
 
     if (self.controlKey.highlighted)
         self.controlKey.selected = YES;
     if (self.controlKey.selected) {
         if (!self.controlKey.highlighted)
             self.controlKey.selected = NO;
-        if (text.length == 1)
+        // ASCII only: insertControlChar: takes a char, and a committed 中
+        // (U+4E2D) truncated to one would arrive as Ctrl-M.
+        if (text.length == 1 && [text characterAtIndex:0] < 0x80)
             return [self insertControlChar:[text characterAtIndex:0]];
     }
 
@@ -578,32 +636,224 @@ static const NSTimeInterval kPendingInputTimeout = 0.075;
 
 #pragma mark IME Input and Selection
 
+- (void)setComposition:(nullable NSString *)composition selection:(NSRange)selection {
+    if (composition.length == 0)
+        composition = nil;
+    BOOL changed = !(composition == self.composition || [composition isEqualToString:self.composition]);
+    _composition = [composition copy];
+    _compositionSelection = composition == nil ? NSMakeRange(0, 0) : selection;
+    if (!changed || !self.terminal.loaded)
+        return;
+    NSData *json = [NSJSONSerialization dataWithJSONObject:composition ?: @""
+                                                   options:NSJSONWritingFragmentsAllowed error:nil];
+    if (json == nil)
+        return;
+    NSString *script = [NSString stringWithFormat:@"exports.setComposition(%@)",
+                        [[NSString alloc] initWithData:json encoding:NSUTF8StringEncoding]];
+    [self.terminal.webView evaluateJavaScript:script completionHandler:nil];
+}
+
 - (void)setMarkedText:(nullable NSString *)markedText selectedRange:(NSRange)selectedRange {
-    self.markedText = markedText;
+    [self setComposition:markedText selection:selectedRange];
 }
 
 - (void)unmarkText {
-    [self insertText:self.markedText];
+    NSString *text = self.composition;
+    [self setComposition:nil selection:NSMakeRange(0, 0)];
+    if (text != nil)
+        [self insertText:text];
+}
+
+- (NSInteger)documentLength {
+    return self.composition.length;
+}
+
+- (NSInteger)clampOffset:(NSInteger)offset {
+    return MAX(0, MIN(offset, self.documentLength));
 }
 
 - (UITextRange *)markedTextRange {
-    if (self.markedText != nil)
-        return self.markedRange;
-    return nil;
+    if (self.composition == nil)
+        return nil;
+    return [AOKTextRange rangeFrom:0 to:self.documentLength];
 }
 
-// The only reason to have this selected range is to prevent the "speak selection" context action from failing to get the current selection and falling back on calling copy:. It doesn't even have to work, it seems...
-
+// Besides the IME, this keeps "speak selection" from failing to get the current
+// selection and falling back on calling copy:.
 - (UITextRange *)selectedTextRange {
-    return self.selectedRange;
+    NSRange selection = self.compositionSelection;
+    return [AOKTextRange rangeFrom:[self clampOffset:selection.location]
+                                to:[self clampOffset:NSMaxRange(selection)]];
+}
+
+- (void)setSelectedTextRange:(UITextRange *)selectedTextRange {
+    if (self.composition == nil || ![selectedTextRange isKindOfClass:AOKTextRange.class])
+        return;
+    AOKTextRange *range = (AOKTextRange *) selectedTextRange;
+    NSInteger start = [self clampOffset:range.startPosition.offset];
+    NSInteger end = [self clampOffset:range.endPosition.offset];
+    _compositionSelection = NSMakeRange(start, end - start);
 }
 
 - (NSString *)textInRange:(UITextRange *)range {
-    if (range == self.markedRange)
-        return self.markedText;
-    if (range == self.selectedRange)
-        return @"";
+    if (![range isKindOfClass:AOKTextRange.class])
+        return nil;
+    AOKTextRange *r = (AOKTextRange *) range;
+    NSInteger start = [self clampOffset:r.startPosition.offset];
+    NSInteger end = [self clampOffset:r.endPosition.offset];
+    return [self.composition ?: @"" substringWithRange:NSMakeRange(start, end - start)];
+}
+
+- (void)replaceRange:(UITextRange *)range withText:(NSString *)text {
+    // The only text there is to replace is the composition, so replacing any of
+    // it commits the replacement, like choosing a candidate.
+    [self insertText:text];
+}
+
+- (UITextPosition *)beginningOfDocument {
+    return [AOKTextPosition positionWithOffset:0];
+}
+
+- (UITextPosition *)endOfDocument {
+    return [AOKTextPosition positionWithOffset:self.documentLength];
+}
+
+- (nullable UITextRange *)textRangeFromPosition:(UITextPosition *)fromPosition toPosition:(UITextPosition *)toPosition {
+    if (![fromPosition isKindOfClass:AOKTextPosition.class] || ![toPosition isKindOfClass:AOKTextPosition.class])
+        return nil;
+    return [AOKTextRange rangeFrom:((AOKTextPosition *) fromPosition).offset
+                                to:((AOKTextPosition *) toPosition).offset];
+}
+
+- (nullable UITextPosition *)positionFromPosition:(UITextPosition *)position offset:(NSInteger)offset {
+    if (![position isKindOfClass:AOKTextPosition.class])
+        return nil;
+    NSInteger result = ((AOKTextPosition *) position).offset + offset;
+    if (result < 0 || result > self.documentLength)
+        return nil;
+    return [AOKTextPosition positionWithOffset:result];
+}
+
+- (nullable UITextPosition *)positionFromPosition:(UITextPosition *)position inDirection:(UITextLayoutDirection)direction offset:(NSInteger)offset {
+    // One line, left to right.
+    switch (direction) {
+        case UITextLayoutDirectionRight: return [self positionFromPosition:position offset:offset];
+        case UITextLayoutDirectionLeft: return [self positionFromPosition:position offset:-offset];
+        default: return nil;
+    }
+}
+
+- (NSComparisonResult)comparePosition:(UITextPosition *)position toPosition:(UITextPosition *)other {
+    NSInteger a = [position isKindOfClass:AOKTextPosition.class] ? ((AOKTextPosition *) position).offset : 0;
+    NSInteger b = [other isKindOfClass:AOKTextPosition.class] ? ((AOKTextPosition *) other).offset : 0;
+    return a < b ? NSOrderedAscending : a > b ? NSOrderedDescending : NSOrderedSame;
+}
+
+- (NSInteger)offsetFromPosition:(UITextPosition *)from toPosition:(UITextPosition *)toPosition {
+    NSInteger a = [from isKindOfClass:AOKTextPosition.class] ? ((AOKTextPosition *) from).offset : 0;
+    NSInteger b = [toPosition isKindOfClass:AOKTextPosition.class] ? ((AOKTextPosition *) toPosition).offset : 0;
+    return b - a;
+}
+
+- (nullable UITextPosition *)positionWithinRange:(UITextRange *)range farthestInDirection:(UITextLayoutDirection)direction {
+    if (direction == UITextLayoutDirectionLeft || direction == UITextLayoutDirectionUp)
+        return range.start;
+    return range.end;
+}
+
+- (nullable UITextRange *)characterRangeByExtendingPosition:(UITextPosition *)position inDirection:(UITextLayoutDirection)direction {
+    if (![position isKindOfClass:AOKTextPosition.class])
+        return nil;
+    NSInteger offset = [self clampOffset:((AOKTextPosition *) position).offset];
+    if (direction == UITextLayoutDirectionLeft || direction == UITextLayoutDirectionUp)
+        return [AOKTextRange rangeFrom:0 to:offset];
+    return [AOKTextRange rangeFrom:offset to:self.documentLength];
+}
+
+- (NSWritingDirection)baseWritingDirectionForPosition:(UITextPosition *)position inDirection:(UITextStorageDirection)direction {
+    return NSWritingDirectionLeftToRight;
+}
+- (void)setBaseWritingDirection:(NSWritingDirection)writingDirection forRange:(UITextRange *)range {
+}
+
+#pragma mark IME Geometry
+
+// Terminal columns the composition takes up to offset, counted as hterm's
+// lib.wc lays it out in term.js: East Asian wide and fullwidth characters (and
+// anything astral, which is mostly emoji and CJK extensions) take two cells.
+- (NSInteger)compositionColumnsBefore:(NSInteger)offset {
+    NSString *text = self.composition;
+    if (text == nil || offset <= 0)
+        return 0;
+    __block NSInteger columns = 0;
+    [text enumerateSubstringsInRange:NSMakeRange(0, MIN(offset, (NSInteger) text.length))
+                             options:NSStringEnumerationByComposedCharacterSequences
+                          usingBlock:^(NSString *ch, NSRange range, NSRange enclosing, BOOL *stop) {
+        UTF32Char c = [ch characterAtIndex:0];
+        if (CFStringIsSurrogateHighCharacter(c) && ch.length > 1)
+            c = CFStringGetLongCharacterForSurrogatePair(c, [ch characterAtIndex:1]);
+        BOOL wide = (c >= 0x1100 && c <= 0x115f) || (c >= 0x2e80 && c <= 0xa4cf && c != 0x303f) ||
+            (c >= 0xac00 && c <= 0xd7a3) || (c >= 0xf900 && c <= 0xfaff) ||
+            (c >= 0xfe30 && c <= 0xfe4f) || (c >= 0xff00 && c <= 0xff60) ||
+            (c >= 0xffe0 && c <= 0xffe6) || c >= 0x10000;
+        columns += wide ? 2 : 1;
+    }];
+    return columns;
+}
+
+// The terminal cells from offset `from` to `to` of the composition, in this
+// view's coordinates. Without a composition both are 0 and this is the cursor.
+- (CGRect)rectFromOffset:(NSInteger)from toOffset:(NSInteger)to {
+    CGRect cell = self.imeCellRect;
+    WKWebView *webView = self.terminal.webView;
+    if (CGRectIsEmpty(cell) || webView == nil)
+        return CGRectZero;
+    NSInteger startCol = [self compositionColumnsBefore:from];
+    NSInteger endCol = [self compositionColumnsBefore:to];
+    CGRect rect = CGRectMake(cell.origin.x + cell.size.width * startCol, cell.origin.y,
+                             cell.size.width * MAX(endCol - startCol, 0), cell.size.height);
+    return [self convertRect:rect fromView:webView];
+}
+
+- (CGRect)caretRectForPosition:(UITextPosition *)position {
+    NSInteger offset = [position isKindOfClass:AOKTextPosition.class] ? [self clampOffset:((AOKTextPosition *) position).offset] : 0;
+    CGRect rect = [self rectFromOffset:offset toOffset:offset];
+    if (rect.size.height > 0)
+        rect.size.width = 2;
+    return rect;
+}
+
+- (CGRect)firstRectForRange:(UITextRange *)range {
+    if (![range isKindOfClass:AOKTextRange.class])
+        return [self rectFromOffset:0 toOffset:self.documentLength];
+    AOKTextRange *r = (AOKTextRange *) range;
+    CGRect rect = [self rectFromOffset:[self clampOffset:r.startPosition.offset]
+                              toOffset:[self clampOffset:r.endPosition.offset]];
+    if (rect.size.height > 0 && rect.size.width == 0)
+        rect.size.width = self.imeCellRect.size.width;
+    return rect;
+}
+
+- (NSArray<UITextSelectionRect *> *)selectionRectsForRange:(UITextRange *)range {
+    return @[];
+}
+
+- (nullable UITextPosition *)closestPositionToPoint:(CGPoint)point {
+    return self.endOfDocument;
+}
+- (nullable UITextPosition *)closestPositionToPoint:(CGPoint)point withinRange:(UITextRange *)range {
+    return range.end;
+}
+- (nullable UITextRange *)characterRangeAtPoint:(CGPoint)point {
     return nil;
+}
+
+// The composition is drawn by term.js in the terminal's own font and colours,
+// underlined, so UIKit's attributes for it are not used.
+- (NSDictionary<NSAttributedStringKey,id> *)markedTextStyle {
+    return nil;
+}
+- (void)setMarkedTextStyle:(NSDictionary<NSAttributedStringKey,id> *)markedTextStyle {
 }
 
 - (id)insertDictationResultPlaceholder {
@@ -814,6 +1064,22 @@ static const char *metaKeys = "abcdefghijklmnopqrstuvwxyz0123456789-=[]\\;',./";
 static const char *viRepeatKeys = "hjkl";
 
 - (NSArray<UIKeyCommand *> *)keyCommands {
+    NSArray<UIKeyCommand *> *commands = [self allKeyCommands];
+    // While a composition is open, the arrows, Return, Esc, Tab and the rest
+    // belong to the input method: they pick a candidate, commit the pinyin or
+    // cancel it. Claimed here (with priority over system behaviour) they would
+    // go to the guest as escape sequences instead and leave the composition
+    // stuck. Command and Control chords are never the IME's, so they stay.
+    if (self.composition != nil) {
+        NSPredicate *chords = [NSPredicate predicateWithBlock:^BOOL(UIKeyCommand *command, NSDictionary *bindings) {
+            return (command.modifierFlags & (UIKeyModifierCommand | UIKeyModifierControl)) != 0;
+        }];
+        return [commands filteredArrayUsingPredicate:chords];
+    }
+    return commands;
+}
+
+- (NSArray<UIKeyCommand *> *)allKeyCommands {
     if (_keyCommands != nil)
         return _keyCommands;
     _keyCommands = [NSMutableArray new];
@@ -1036,7 +1302,8 @@ static const NSTimeInterval kKeyRepeatInterval = 0.1;
     // Any new press ends the previous key's repeat, which is what a real
     // keyboard does when you roll from one key on to the next.
     [self stopKeyRepeat];
-    if (presses.count != 1)
+    // A key typed into a composition is the input method's, not hjkl.
+    if (presses.count != 1 || self.composition != nil)
         return;
     UIKey *key = presses.anyObject.key;
     if (key == nil || key.modifierFlags != 0)
@@ -1054,7 +1321,10 @@ static const NSTimeInterval kKeyRepeatInterval = 0.1;
     NSTimer *timer = [NSTimer timerWithTimeInterval:kKeyRepeatInterval repeats:YES block:^(NSTimer *t) {
         typeof(self) strongSelf = weakSelf;
         NSString *text = strongSelf.keyRepeatText;
-        if (strongSelf == nil || text == nil) {
+        // The press may have opened a composition after all (a Pinyin
+        // hardware keyboard turns a letter into pinyin); repeating it into the
+        // guest behind the IME's back would be wrong.
+        if (strongSelf == nil || text == nil || strongSelf.composition != nil) {
             [t invalidate];
             return;
         }
@@ -1083,6 +1353,10 @@ static const NSTimeInterval kKeyRepeatInterval = 0.1;
         for (UIPress *press in presses) {
             UIKey *key = press.key;
             if (key == nil || key.characters.length == 0)
+                continue;
+            // Typed into an open composition: the IME takes it, and nothing
+            // reaches the tty until a candidate is committed.
+            if (self.composition != nil)
                 continue;
             if (key.modifierFlags & UIKeyModifierCommand)
                 continue;
@@ -1146,36 +1420,6 @@ static const NSTimeInterval kKeyRepeatInterval = 0.1;
 - (void)pressesCancelled:(NSSet<UIPress *> *)presses withEvent:(UIPressesEvent *)event {
     [self stopKeyRepeat];
 }
-
-#pragma mark UITextInput stubs
-
-#if 0
-#define LogStub() NSLog(@"%s", __func__)
-#else
-#define LogStub()
-#endif
-
-- (NSWritingDirection)baseWritingDirectionForPosition:(nonnull UITextPosition *)position inDirection:(UITextStorageDirection)direction { LogStub(); return NSWritingDirectionLeftToRight; }
-- (void)setBaseWritingDirection:(NSWritingDirection)writingDirection forRange:(nonnull UITextRange *)range { LogStub(); }
-- (UITextPosition *)beginningOfDocument { LogStub(); return nil; }
-- (CGRect)caretRectForPosition:(nonnull UITextPosition *)position { LogStub(); return CGRectZero; }
-- (nullable UITextRange *)characterRangeAtPoint:(CGPoint)point { LogStub(); return nil; }
-- (nullable UITextRange *)characterRangeByExtendingPosition:(nonnull UITextPosition *)position inDirection:(UITextLayoutDirection)direction { LogStub(); return nil; }
-- (nullable UITextPosition *)closestPositionToPoint:(CGPoint)point { LogStub(); return nil; }
-- (nullable UITextPosition *)closestPositionToPoint:(CGPoint)point withinRange:(nonnull UITextRange *)range { LogStub(); return nil; }
-- (NSComparisonResult)comparePosition:(nonnull UITextPosition *)position toPosition:(nonnull UITextPosition *)other { LogStub(); return NSOrderedSame; }
-- (UITextPosition *)endOfDocument { LogStub(); return nil; }
-- (CGRect)firstRectForRange:(nonnull UITextRange *)range { LogStub(); return CGRectZero; }
-- (NSDictionary<NSAttributedStringKey,id> *)markedTextStyle { LogStub(); return nil; }
-- (void)setMarkedTextStyle:(NSDictionary<NSAttributedStringKey,id> *)markedTextStyle { LogStub(); }
-- (NSInteger)offsetFromPosition:(nonnull UITextPosition *)from toPosition:(nonnull UITextPosition *)toPosition { LogStub(); return 0; }
-- (nullable UITextPosition *)positionFromPosition:(nonnull UITextPosition *)position inDirection:(UITextLayoutDirection)direction offset:(NSInteger)offset { LogStub(); return nil; }
-- (nullable UITextPosition *)positionFromPosition:(nonnull UITextPosition *)position offset:(NSInteger)offset { LogStub(); return nil; }
-- (nullable UITextPosition *)positionWithinRange:(nonnull UITextRange *)range farthestInDirection:(UITextLayoutDirection)direction { LogStub(); return nil; }
-- (void)replaceRange:(nonnull UITextRange *)range withText:(nonnull NSString *)text { LogStub(); }
-- (void)setSelectedTextRange:(UITextRange *)selectedTextRange { LogStub(); }
-- (nonnull NSArray<UITextSelectionRect *> *)selectionRectsForRange:(nonnull UITextRange *)range { LogStub(); return @[]; }
-- (nullable UITextRange *)textRangeFromPosition:(nonnull UITextPosition *)fromPosition toPosition:(nonnull UITextPosition *)toPosition { LogStub(); return nil; }
 
 // conforming to UITextInput makes this view default to being an accessibility element, which blocks selecting anything in it
 - (BOOL)isAccessibilityElement { return NO; }

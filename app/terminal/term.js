@@ -89,6 +89,7 @@ function scheduleViewportRefresh() {
             term.scrollPort_.scheduleInvalidate();
         term.scrollPort_.scheduleRedraw();
         syncScroll();
+        layoutComposition();
     });
 }
 exports.write = (data) => {
@@ -106,8 +107,89 @@ term.io.sendString = term.io.onVTKeyStroke = (data) => {
     native.sendInput(data);
 };
 
+// IME composition: the pinyin (or kana, or jamo) being typed before a
+// candidate is chosen. It belongs to the keyboard, not the guest, so it is
+// never written into hterm's screen: it is drawn in a node of its own laid over
+// the cursor, and only the committed text reaches the pty (native sends it).
+// Native also needs to know where the cursor is on screen, so that a hardware
+// keyboard's candidate window can sit next to it rather than in the top-left
+// corner -- the node stays in place at the cursor while hidden, and its cell is
+// reported to native whenever it moves.
+const screenDoc = term.scrollPort_.getDocument();
+const imeNode = screenDoc.createElement('div');
+imeNode.id = 'aok-ime-composition';
+imeNode.style.cssText = `
+position: absolute;
+left: calc(var(--hterm-screen-padding-size) +
+    var(--hterm-charsize-width) * var(--hterm-ime-col, 0));
+top: calc(var(--hterm-screen-padding-size) +
+    var(--hterm-charsize-height) * var(--hterm-cursor-offset-row, 0));
+min-width: var(--hterm-charsize-width);
+height: var(--hterm-charsize-height);
+line-height: var(--hterm-charsize-height);
+white-space: pre;
+visibility: hidden;
+pointer-events: none;
+z-index: 1;
+color: rgb(var(--hterm-foreground-color));
+background-color: rgb(var(--hterm-background-color));
+box-shadow: inset 0 -2px 0 rgb(var(--hterm-foreground-color));`;
+term.scrollPort_.screen_.appendChild(imeNode);
+let imeText = '';
+let lastImeRect = '';
+function layoutComposition() {
+    // Columns as hterm will lay the text out once it is committed and echoed:
+    // a wide character in a .wc-node, two cells, exactly as hterm draws it.
+    const width = imeText ? lib.wc.strWidth(imeText) : 0;
+    const cols = term.screenSize.width;
+    let col = term.screen_.cursorPosition.column;
+    // Near the right edge, slide left so the whole composition stays visible.
+    if (col + width > cols)
+        col = Math.max(0, cols - width);
+    term.setCssVar('ime-col', col);
+    const frame = term.scrollPort_.iframe_.getBoundingClientRect();
+    const r = imeNode.getBoundingClientRect();
+    const cs = term.scrollPort_.characterSize;
+    // Where the composition starts, as one cell, in web view coordinates.
+    const rect = [frame.left + r.left, frame.top + r.top, cs.width, cs.height];
+    const key = rect.join(',');
+    // The handler exists only while a TerminalView shows this terminal, which
+    // asks again (exports.layoutComposition) when it installs it.
+    if (!window.webkit.messageHandlers.imeRect) {
+        lastImeRect = '';
+        return;
+    }
+    if (key !== lastImeRect) {
+        lastImeRect = key;
+        native.imeRect(rect);
+    }
+}
+exports.layoutComposition = () => {
+    lastImeRect = '';
+    layoutComposition();
+};
+exports.setComposition = (text) => {
+    imeText = text || '';
+    imeNode.textContent = '';
+    for (const ch of imeText) {
+        if (lib.wc.charWidth(ch.codePointAt(0)) == 2) {
+            const span = screenDoc.createElement('span');
+            span.className = 'wc-node';
+            span.textContent = ch;
+            imeNode.appendChild(span);
+        } else {
+            imeNode.appendChild(screenDoc.createTextNode(ch));
+        }
+    }
+    imeNode.style.visibility = imeText ? 'visible' : 'hidden';
+    layoutComposition();
+};
+
 // hterm size updates native size
-term.io.onTerminalResize = () => native.resize();
+term.io.onTerminalResize = () => {
+    native.resize();
+    requestAnimationFrame(layoutComposition);
+};
 
 // Re-measure against the webview's CURRENT size, whether or not a resize event
 // arrived. hterm learns its size from exactly one place -- a 'resize' listener on
@@ -250,6 +332,8 @@ exports.updateStyle = ({foregroundColor, backgroundColor, fontFamily, fontSize, 
     term.getPrefs().set('color-palette-overrides', colorPaletteOverrides);
     term.getPrefs().set('cursor-blink', blinkCursor);
     term.getPrefs().set('cursor-shape', cursorShape);
+    // A new font or size moves every cell; re-measure once it has laid out.
+    requestAnimationFrame(layoutComposition);
 };
 
 exports.getCharacterSize = () => {
@@ -393,5 +477,6 @@ for (const resetName of ['reset', 'softReset']) {
 
 native.load();
 native.syncFocus();
+layoutComposition();
 
 }
