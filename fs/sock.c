@@ -11061,18 +11061,15 @@ static ssize_t sock_write(struct fd *fd, const void *buf, size_t size) {
 
 static int sock_ioctl(struct fd *fd, int cmd, void *arg) {
     if (cmd == SIOCGSKNS_) {
-        // Which network namespace this socket lives in. There is exactly one
-        // here, so the answer is always the same fd the /proc/<pid>/ns/net
-        // link opens -- which is the truthful answer, not a stand-in.
-        //
-        // Worth having because it is how lsns learns that a socket belongs to
-        // a namespace at all. Refused, it falls back to opening every
-        // descriptor of every process and asking each one whether it is a
-        // namespace, which is noisy and much slower.
+        // Which network namespace this socket lives in. AOK presents no
+        // network namespaces at all, as a kernel built without CONFIG_NET_NS
+        // does (no /proc/<pid>/ns/net -- see fs/proc/pid.c for why systemd
+        // needs that), so proc_ns_open finds no "net" and this is EINVAL.
+        // lsns sees no ns/net either and does not ask.
         if (!superuser())
             return _EPERM;
         struct fd *ns = proc_ns_open(current->pid, "net");
-        if (ns == NULL)
+        if (ns == NULL || (IS_ERR(ns) && PTR_ERR(ns) == _ENOENT))
             return _EINVAL;
         if (IS_ERR(ns))
             return PTR_ERR(ns);

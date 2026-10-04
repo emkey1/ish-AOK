@@ -1271,8 +1271,11 @@ void vfork_notify(struct task *task) {
 // namespace to read the host name, and got ENOSYS from a stub here.
 dword_t sys_setns(fd_t fd_no, dword_t flags) {
     STRACE("setns(%d, %#x)", fd_no, flags);
+    // No CLONE_NEWNET: there is no network namespace to join, not even a
+    // descriptor for the one network (fs/proc/pid.c), and a kernel built
+    // without CONFIG_NET_NS refuses the flag with EINVAL.
     const dword_t all_kinds = CLONE_NEWNS_ | CLONE_NEWCGROUP_ | CLONE_NEWUTS_ | CLONE_NEWIPC_ |
-        CLONE_NEWUSER_ | CLONE_NEWPID_ | CLONE_NEWNET_ | CLONE_NEWTIME_;
+        CLONE_NEWUSER_ | CLONE_NEWPID_ | CLONE_NEWTIME_;
     struct fd *fd = f_get(fd_no);
     if (fd == NULL)
         return _EBADF;

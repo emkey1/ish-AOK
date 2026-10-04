@@ -26,6 +26,15 @@ its `/proc/<pid>/ns` file. Every other kind is `ENOSYS` to `unshare`, and
 namespace's join moves the caller's root and working directory to the real
 root, as Linux's does, and changes nothing else.
 
+Network is the one kind with no `/proc/<pid>/ns` file at all, as on a Linux
+kernel built without network namespaces. systemd decides whether a kind
+exists by checking for that file, and while `ns/net` was listed every unit
+with `PrivateNetwork=yes` went on to call `unshare(CLONE_NEWNET)`, got
+`ENOSYS`, and failed: on Arch that took `systemd-hostnamed`,
+`systemd-localed` and `shadow.service` with it, so `hostnamectl` and
+`localectl` could not start their daemons. With the file absent systemd says
+"proceeding without" and runs them.
+
 `clone` refuses the same flags (`CLONE_NEWNS`, `CLONE_NEWPID`, `CLONE_NEWNET`,
 `CLONE_NEWUSER`, `CLONE_NEWCGROUP`), but with `EINVAL`, the answer of a Linux
 kernel built without that namespace type. The two calls give different errnos

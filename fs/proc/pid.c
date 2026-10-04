@@ -1886,11 +1886,18 @@ struct proc_ns_type {
     unsigned nstype;
 };
 
+// No "net": AOK has one network, the host's, and cannot make another --
+// unshare(CLONE_NEWNET) is ENOSYS. A Linux kernel built without
+// CONFIG_NET_NS has no ns/net either, and that absence is how systemd's
+// ns_type_supported() tells: with ns/net listed, every unit with
+// PrivateNetwork=yes (systemd-hostnamed, -localed, shadow, coredump...) went
+// on to unshare, got ENOSYS, and failed at step NETWORK, so hostnamectl and
+// localectl could not activate their daemons. Without it systemd logs
+// "proceeding without" and runs them, as on such a kernel.
 static const struct proc_ns_type proc_ns_types[] = {
     {"cgroup", 4026531835, CLONE_NEWCGROUP_},
     {"ipc", 4026531839, CLONE_NEWIPC_},
     {"mnt", 4026531840, CLONE_NEWNS_},
-    {"net", 4026531956, CLONE_NEWNET_},
     {"pid", 4026531836, CLONE_NEWPID_},
     {"pid_for_children", 4026531836, CLONE_NEWPID_},
     {"time", 4026531834, CLONE_NEWTIME_},

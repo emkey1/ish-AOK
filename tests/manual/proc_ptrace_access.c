@@ -168,7 +168,7 @@ static void expect_denied(const char *who, pid_t v, int fdno) {
     e = open_errno(procp(v, fdpath));
     check(label, e == EACCES, e, EACCES);
 
-    static const char *links[] = {"cwd", "root", "exe", "ns/net"};
+    static const char *links[] = {"cwd", "root", "exe", "ns/mnt"};
     for (unsigned i = 0; i < sizeof links / sizeof *links; i++) {
         snprintf(label, sizeof label, "%s: readlink %s", who, links[i]);
         e = readlink_errno(procp(v, links[i]));

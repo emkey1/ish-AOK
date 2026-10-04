@@ -262,6 +262,10 @@ static void test_nsfs_ioctls(void) {
         char path[64], label[128];
         snprintf(path, sizeof(path), "/proc/self/ns/%s", expect[i].name);
         int fd = open(path, O_RDONLY);
+        // A kernel built without network namespaces has no ns/net (AOK is
+        // one: fs/proc/pid.c); every other kind here exists on both.
+        if (fd < 0 && errno == ENOENT && expect[i].nstype == CLONE_NEWNET_)
+            continue;
         snprintf(label, sizeof(label), "ns.%s_opens", expect[i].name);
         if (!check(label, fd >= 0))
             continue;
@@ -306,7 +310,13 @@ static void test_nsfs_ioctls(void) {
     int sock = socket(AF_INET, SOCK_DGRAM, 0);
     if (check("ns.socket_opens", sock >= 0)) {
         int ns = ioctl(sock, SIOCGSKNS_);
-        if (geteuid() == 0) {
+        int ns_errno = errno;
+        if (access("/proc/self/ns/net", F_OK) != 0) {
+            // No network namespaces at all (AOK; a kernel without
+            // CONFIG_NET_NS): there is no namespace file to hand back.
+            errno = ns_errno; // eq_errno reads errno; access() just set it
+            eq_errno("ns.siocgskns_without_netns", ns, geteuid() == 0 ? EINVAL : EPERM);
+        } else if (geteuid() == 0) {
             if (check("ns.siocgskns_as_root", ns >= 0)) {
                 check("ns.siocgskns_gives_a_net_ns",
                       ioctl(ns, NS_GET_NSTYPE_) == CLONE_NEWNET_);
@@ -439,8 +449,8 @@ static void test_sysfs_poll_event(void) {
 // eventfd/epoll family each their own internal filesystem with its own
 // anonymous device number.
 //
-// lsns is built on exactly that: it reads the device number off
-// /proc/self/ns/net and then examines every descriptor that matches it. With
+// lsns is built on exactly that: it reads the device number off a namespace
+// file (/proc/self/ns/net where there is one; mnt is used here) and then examines every descriptor that matches it. With
 // one device shared by everything anonymous, that filter selects everything,
 // and lsns interrogates every pipe and socket on the machine -- seventy lines
 // of "Unsupported ioctl NS_GET_NSTYPE" before its first row of output, on a
@@ -455,7 +465,7 @@ static dev_t dev_of_fd(int fd) {
 }
 
 static void test_anon_devices(void) {
-    int nsfd = open("/proc/self/ns/net", O_RDONLY);
+    int nsfd = open("/proc/self/ns/mnt", O_RDONLY);
     dev_t ns_dev = dev_of_fd(nsfd);
     if (nsfd >= 0)
         close(nsfd);

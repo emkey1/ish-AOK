@@ -14,12 +14,21 @@
 //            treats EINVAL as a failure.
 //
 // EPERM would satisfy both, but says "you may not" to a root caller who may,
-// so it is refused too. Each probe runs in its own child, so a namespace that
-// does get created (on Linux) never touches the test itself.
+// so it is refused too.
+//
+// And /proc/self/ns/net exists exactly when a network namespace can be made:
+// systemd's ns_type_supported() reads that file, and when it existed while
+// unshare(CLONE_NEWNET) failed, every PrivateNetwork=yes unit (hostnamed,
+// localed, shadow) failed at step NETWORK. A kernel built without network
+// namespaces has no ns/net, which is what AOK presents.
+//
+// Each probe runs in its own child, so a namespace that does get created (on
+// Linux) never touches the test itself.
 //
 // Root only: as anyone else both say EPERM, which proves nothing.
 #define _GNU_SOURCE
 #include <errno.h>
+#include <stdbool.h>
 #include <sched.h>
 #include <signal.h>
 #include <stdio.h>
@@ -82,6 +91,13 @@ int main(int argc, char **argv) {
             fails++;
         }
         test_logf("%s: clone %s, unshare %s\n", ns[i].name, describe(c), describe(u));
+    }
+    bool has_netns_file = access("/proc/self/ns/net", F_OK) == 0;
+    bool can_unshare_net = try_unshare(CLONE_NEWNET) == 0;
+    if (has_netns_file != can_unshare_net) {
+        printf("FAIL: /proc/self/ns/net %s, but unshare(CLONE_NEWNET) %s\n",
+               has_netns_file ? "exists" : "is absent", can_unshare_net ? "succeeds" : "fails");
+        fails++;
     }
     printf("namespace_errno: %s\n", fails ? "FAIL" : "PASS");
     return fails != 0;
