@@ -1172,8 +1172,11 @@ int get_emulated_per_cpu_usage(struct cpu_usage **cpus_usage);
 
 #define MAX_PID (1 << 15) // oughta be enough
 
-// The wrap point for pid allocation, settable through
-// /proc/sys/kernel/pid_max. Bounded by MAX_PID, which sizes the table.
+// Linux's PID_MAX_LIMIT on a 64-bit kernel: the most kernel.pid_max accepts.
+#define PID_MAX_LIMIT (4 * 1024 * 1024)
+
+// /proc/sys/kernel/pid_max, 301..PID_MAX_LIMIT. Pid allocation wraps at the
+// smaller of it and MAX_PID, which sizes the table (kernel/task.c).
 dword_t task_pid_max(void);
 int task_set_pid_max(dword_t value);
 

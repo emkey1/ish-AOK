@@ -5721,6 +5721,74 @@ static void fill_cred(struct ucred_ *cred) {
     cred->gid = current->egid;
 }
 
+// AF_UNIX stream/seqpacket listeners by host address, with the credentials of
+// the process that called listen(). On Linux a connecting client's
+// SO_PEERCRED is the LISTENER's credentials, recorded at listen() and
+// available the moment connect() returns. AOK only filled the client's peer
+// credentials when the server accept()ed and the cookie handshake linked the
+// two (unix_socket_finish_peer), so a client that asked straight after
+// connect() got pid 0, uid/gid -1. sd-bus asks exactly then and treats an
+// invalid pid as ENODATA: on an Arch guest `systemctl` failed with "Failed to
+// connect to system scope bus via local transport: No data available", and
+// journald could not identify its stdout clients.
+struct unix_listener_cred {
+    struct list link;
+    struct fd *sock;
+    char path[sizeof(((struct sockaddr_un *) 0)->sun_path)];
+    struct ucred_ cred;
+};
+static lock_t unix_listener_lock = LOCK_INITIALIZER;
+static struct list unix_listeners = LIST_INITIALIZER(unix_listeners);
+
+static void unix_listener_unregister(struct fd *sock) {
+    lock(&unix_listener_lock, 0);
+    struct unix_listener_cred *entry, *tmp;
+    list_for_each_entry_safe(&unix_listeners, entry, tmp, link) {
+        if (entry->sock == sock) {
+            list_remove(&entry->link);
+            free(entry);
+        }
+    }
+    unlock(&unix_listener_lock);
+}
+
+static void unix_listener_register(struct fd *sock) {
+    if (sock->socket.domain != AF_LOCAL_ || sock->socket.type == SOCK_DGRAM_)
+        return;
+    struct sockaddr_un addr = {};
+    socklen_t len = sizeof(addr);
+    if (getsockname(sock->real_fd, (struct sockaddr *) &addr, &len) < 0 ||
+            addr.sun_family != AF_UNIX || addr.sun_path[0] == '\0')
+        return;
+    unix_listener_unregister(sock); // a second listen() re-records the caller
+    struct unix_listener_cred *entry = calloc(1, sizeof(*entry));
+    if (entry == NULL)
+        return;
+    entry->sock = sock;
+    memcpy(entry->path, addr.sun_path, sizeof(entry->path) - 1);
+    fill_cred(&entry->cred);
+    lock(&unix_listener_lock, 0);
+    list_add(&unix_listeners, &entry->link);
+    unlock(&unix_listener_lock);
+}
+
+// The listener's credentials for a client that just connected to host path
+// `path`, if a guest listener is registered there.
+static bool unix_listener_cred_for(const char *path, struct ucred_ *cred) {
+    bool found = false;
+    lock(&unix_listener_lock, 0);
+    struct unix_listener_cred *entry;
+    list_for_each_entry(&unix_listeners, entry, link) {
+        if (strcmp(entry->path, path) == 0) {
+            *cred = entry->cred;
+            found = true;
+            break;
+        }
+    }
+    unlock(&unix_listener_lock);
+    return found;
+}
+
 // Whether the caller may send `cred` as SCM_CREDENTIALS: Linux's
 // scm_check_creds. The pid has to be the sender's process id, which any of its
 // threads may send, and the uid and gid its real, effective or saved ones.
@@ -6309,6 +6377,21 @@ static int_t sys_connect_common(fd_t sock_fd, guest_addr_t sockaddr_addr, uint_t
 
     if (sock->socket.domain == AF_LOCAL_) {
         fill_cred(&sock->socket.unix_cred);
+        // The listener's credentials are the client's SO_PEERCRED from now
+        // on, accepted or not (see unix_listener_register).
+        // `sockaddr` is the HOST address here (Darwin's starts with sun_len).
+        if (sock->socket.type != SOCK_DGRAM_ &&
+                ((struct sockaddr *) &sockaddr)->sa_family == AF_UNIX) {
+            struct ucred_ listener_cred;
+            if (unix_listener_cred_for(((struct sockaddr_un *) &sockaddr)->sun_path, &listener_cred)) {
+                lock(&peer_lock, 0);
+                if (!sock->socket.unix_peer_cred_valid) {
+                    sock->socket.unix_peer_cred = listener_cred;
+                    sock->socket.unix_peer_cred_valid = true;
+                }
+                unlock(&peer_lock);
+            }
+        }
         // Connected to a peer, or dissolved by AF_UNSPEC; see fs/fd.h.
         if (sock->socket.type == SOCK_DGRAM_)
             sock->socket.dgram_peer_set =
@@ -6396,6 +6479,7 @@ int_t sys_listen(fd_t sock_fd, int_t backlog) {
     sock->socket.listening = true;
     sock->sockrestart.backlog = backlog;
     sockrestart_begin_listen(sock);
+    unix_listener_register(sock);
     return err;
 }
 
@@ -11127,6 +11211,8 @@ static int sock_setflags(struct fd *fd, dword_t flags) {
 
 static int sock_close(struct fd *fd) {
     sockrestart_end_listen(fd);
+    if (fd->socket.domain == AF_LOCAL_ && fd->socket.listening)
+        unix_listener_unregister(fd);
     if (fd->socket.domain == AF_NETLINK_) {
         netlink_notify_unregister(fd);
         netlink_reply_reset(fd);

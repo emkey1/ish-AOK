@@ -1,4 +1,5 @@
 #include <sys/stat.h>
+#include <stdarg.h>
 #include <string.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -9,6 +10,7 @@
 #include "kernel/fs.h"
 #include "kernel/xattr.h"
 #include "fs/path.h"
+#include "kernel/inotify.h"
 #include "fs/fifo.h"
 #include "fs/poll.h"
 #include "fs/real.h"
@@ -1552,6 +1554,8 @@ static bool tmpfs_fd_writable(struct fd *fd) {
     return (fd->flags & O_ACCMODE_) != O_RDONLY_;
 }
 
+static void tmpfs_cgroup2_refresh(struct fd *fd, off_t off);
+
 static ssize_t tmpfs_read(struct fd *fd, void *buf, size_t bufsize) {
     ssize_t res;
     struct tmp_inode *inode = tmpfs_fd_inode(fd);
@@ -1559,6 +1563,7 @@ static ssize_t tmpfs_read(struct fd *fd, void *buf, size_t bufsize) {
         return fifo_file_read(inode->fifo, fd, buf, bufsize);
     if (!tmpfs_fd_readable(fd))
         return _EBADF;
+    tmpfs_cgroup2_refresh(fd, fd->offset);
     lock(&inode->lock, 0);
     res = _EISDIR;
     if (S_ISDIR(inode->stat.mode))
@@ -1623,6 +1628,7 @@ static ssize_t tmpfs_pread(struct fd *fd, void *buf, size_t bufsize, off_t off) 
         return _EBADF;
     if (off < 0)
         return _EINVAL;
+    tmpfs_cgroup2_refresh(fd, off);
     lock(&inode->lock, 0);
     res = _EISDIR;
     if (S_ISDIR(inode->stat.mode))
@@ -1732,14 +1738,184 @@ out:
     return res;
 }
 
+// ---- cgroup2: live membership ----
+//
+// The hierarchy is a tmpfs, but three of its interface files describe the
+// process table, not stored bytes, and are rendered from it on every read at
+// offset 0 (Linux's seq_file regenerates the same way): cgroup.procs (the
+// tgids of live processes in the cgroup), cgroup.threads (their live tids),
+// and cgroup.events ("populated" is 1 while a live process is in the cgroup
+// or a descendant). A process is live while it has a thread that has not
+// exited -- a zombie is out of its cgroup, as on Linux, whose cgroup_exit runs
+// in do_exit before the parent hears of it.
+//
+// All three were stored files. cgroup.events said "populated 1" forever and
+// cgroup.procs kept every pid ever written, so systemd never saw a unit's
+// cgroup empty: a failed oneshot (Arch's modprobe@*.service, systemd-sysctl)
+// sat in stop-sigterm until TimeoutStopSec, 90 s each, holding the boot, and
+// the SIGTERM sweep went to stale pids that could by then be anyone's.
+// systemd learns of emptiness through inotify IN_MODIFY on cgroup.events, so
+// every membership change also raises that event (cgroup2_note_membership_change).
+
+static bool cgroup2_is_live_file(const char *name) {
+    return strcmp(name, "cgroup.procs") == 0 || strcmp(name, "cgroup.threads") == 0 ||
+        strcmp(name, "cgroup.events") == 0;
+}
+
+// The cgroup directory of a cgroup2 interface file, hierarchy-relative ("/"
+// for the root). The mount root is the hierarchy root.
+static int cgroup2_dir_of(struct fd *fd, char *path) {
+    int err = tmpfs_getpath(fd, path);
+    if (err < 0)
+        return err;
+    char *slash = strrchr(path, '/');
+    if (slash == NULL)
+        return _EINVAL;
+    *slash = '\0';
+    if (path[0] == '\0')
+        strcpy(path, "/");
+    return 0;
+}
+
+static const char *cgroup2_group_path(struct tgroup *group) {
+    return group->cgroup_path != NULL ? group->cgroup_path : "/";
+}
+
+// True if `member` is `cg` or below it.
+static bool cgroup2_path_within(const char *member, const char *cg) {
+    if (strcmp(cg, "/") == 0)
+        return true;
+    size_t len = strlen(cg);
+    return strncmp(member, cg, len) == 0 && (member[len] == '\0' || member[len] == '/');
+}
+
+struct cgroup2_text {
+    char *buf;
+    size_t len, cap;
+};
+
+static void cgroup2_text_add(struct cgroup2_text *t, const char *fmt, ...) {
+    char item[64];
+    va_list args;
+    va_start(args, fmt);
+    int n = vsnprintf(item, sizeof(item), fmt, args);
+    va_end(args);
+    if (n <= 0)
+        return;
+    if (t->len + n > t->cap) {
+        size_t cap = t->cap ? t->cap * 2 : 256;
+        while (cap < t->len + n)
+            cap *= 2;
+        char *buf = realloc(t->buf, cap);
+        if (buf == NULL)
+            return;
+        t->buf = buf;
+        t->cap = cap;
+    }
+    memcpy(t->buf + t->len, item, n);
+    t->len += n;
+}
+
+// Renders one live interface file of cgroup `cg`. Caller frees t->buf.
+static void cgroup2_render(const char *cg, const char *name, struct cgroup2_text *t) {
+    bool procs = strcmp(name, "cgroup.procs") == 0;
+    bool threads = strcmp(name, "cgroup.threads") == 0;
+    bool populated = false;
+    complex_lockt(&pids_lock, 0);
+    struct pid *pid;
+    list_for_each_entry(&alive_pids_list, pid, alive) {
+        struct task *task = pid->task;
+        if (task == NULL || task->group == NULL || task->group->leader != task)
+            continue;
+        struct tgroup *group = task->group;
+        if (list_empty(&group->threads))
+            continue; // every thread has exited: a zombie, out of its cgroup
+        const char *path = cgroup2_group_path(group);
+        if (procs || threads) {
+            if (strcmp(path, cg) != 0)
+                continue;
+            if (procs) {
+                cgroup2_text_add(t, "%d\n", task->pid);
+            } else {
+                struct task *thread;
+                list_for_each_entry(&group->threads, thread, group_links)
+                    cgroup2_text_add(t, "%d\n", thread->pid);
+            }
+        } else if (cgroup2_path_within(path, cg)) {
+            populated = true;
+            break;
+        }
+    }
+    unlock(&pids_lock);
+    if (!procs && !threads)
+        cgroup2_text_add(t, "populated %d\nfrozen 0\n", populated ? 1 : 0);
+}
+
+// Called by tmpfs_read/tmpfs_pread before they take inode->lock (the render
+// takes pids_lock, which must not nest inside it).
+static void tmpfs_cgroup2_refresh(struct fd *fd, off_t off) {
+    if (off != 0 || !tmpfs_is_cgroup2_mount(fd->mount))
+        return;
+    if (!cgroup2_is_live_file(fd->tmpfs.dirent->name))
+        return;
+    char cg[MAX_PATH];
+    if (cgroup2_dir_of(fd, cg) < 0)
+        return;
+    struct cgroup2_text t = {};
+    cgroup2_render(cg, fd->tmpfs.dirent->name, &t);
+    struct tmp_inode *inode = tmpfs_fd_inode(fd);
+    lock(&inode->lock, 0);
+    if (inode->host_fd < 0) {
+        free(inode->file_data);
+        inode->file_data = t.buf;
+        inode->stat.size = t.len;
+        t.buf = NULL;
+    }
+    unlock(&inode->lock);
+    free(t.buf);
+}
+
+// IN_MODIFY on cgroup.events of `cg` and each of its ancestors, in every
+// cgroup2 mount. Takes mounts_lock and the inotify locks: call with nothing
+// held.
+void cgroup2_note_membership_change(const char *cg) {
+    if (cg == NULL || !inotify_has_instances())
+        return;
+    char *points[8];
+    int npoints = 0;
+    lock(&mounts_lock, 0);
+    struct mount *mount;
+    list_for_each_entry(&mounts, mount, mounts) {
+        if (mount->fs == &cgroup2fs && npoints < (int) array_size(points))
+            points[npoints++] = strdup(mount->point);
+    }
+    unlock(&mounts_lock);
+    for (int i = 0; i < npoints; i++) {
+        if (points[i] == NULL)
+            continue;
+        char dir[MAX_PATH];
+        snprintf(dir, sizeof(dir), "%s", strcmp(cg, "/") == 0 ? "" : cg);
+        for (;;) {
+            char path[MAX_PATH];
+            if (snprintf(path, sizeof(path), "%s%s/cgroup.events", points[i], dir) < (int) sizeof(path))
+                inotify_notify_modify(path);
+            if (dir[0] == '\0')
+                break;
+            *strrchr(dir, '/') = '\0';
+        }
+        free(points[i]);
+    }
+}
+
 // A pid written to a cgroup2 hierarchy's cgroup.procs moves that process
-// into the cgroup. The fake hierarchy stores the write like any tmpfs file;
-// this additionally records the membership on the process's tgroup so
-// /proc/<pid>/cgroup can report it. systemd --user depends on that: it
-// derives its own delegated subtree from /proc/self/cgroup, and the
-// previously hardcoded "0::/" made it try to create init.scope at the
-// hierarchy ROOT -- EACCES for a non-root user manager, so every user@
-// start died with "Failed to allocate manager object: Permission denied".
+// into the cgroup. The write is stored like any tmpfs write (reads render the
+// live list instead, above); this records the membership on the process's
+// tgroup, which is what the renderer and /proc/<pid>/cgroup read. systemd
+// --user depends on that: it derives its own delegated subtree from
+// /proc/self/cgroup, and the previously hardcoded "0::/" made it try to
+// create init.scope at the hierarchy ROOT -- EACCES for a non-root user
+// manager, so every user@ start died with "Failed to allocate manager
+// object: Permission denied". Pid 0 is the writer, as on Linux.
 static void tmpfs_cgroup2_note_procs_write(struct fd *fd, const void *buf, size_t bufsize) {
     if (!tmpfs_is_cgroup2_mount(fd->mount))
         return;
@@ -1750,31 +1926,31 @@ static void tmpfs_cgroup2_note_procs_write(struct fd *fd, const void *buf, size_
         return;
     memcpy(num, buf, bufsize);
     num[bufsize] = '\0';
-    pid_t_ pid = (pid_t_) atoi(num);
-    if (pid <= 0)
+    char *end;
+    long value = strtol(num, &end, 10);
+    if (end == num || value < 0)
         return;
-    // The cgroup is cgroup.procs's parent directory; its mount-relative path
-    // IS the hierarchy-relative path (the mount root is the cgroup root).
+    pid_t_ pid = value == 0 ? current->tgid : (pid_t_) value;
     char path[MAX_PATH];
-    if (tmpfs_getpath(fd, path) < 0)
+    if (cgroup2_dir_of(fd, path) < 0)
         return;
-    size_t plen = strlen(path);
-    const char suffix[] = "/cgroup.procs";
-    if (plen < sizeof(suffix) - 1)
-        return;
-    path[plen - (sizeof(suffix) - 1)] = '\0';
-    if (path[0] == '\0')
-        strcpy(path, "/");
 
+    char *old_path = NULL;
     complex_lockt(&pids_lock, 0);
     struct task *task = pid_get_task(pid);
     if (task != NULL && task->group != NULL) {
         lock(&task->group->lock, 0);
+        old_path = strdup(cgroup2_group_path(task->group));
         free(task->group->cgroup_path);
         task->group->cgroup_path = strdup(path);
         unlock(&task->group->lock);
     }
     unlock(&pids_lock);
+    if (old_path != NULL) {
+        cgroup2_note_membership_change(old_path);
+        cgroup2_note_membership_change(path);
+        free(old_path);
+    }
 }
 
 static ssize_t tmpfs_write(struct fd *fd, const void *buf, size_t bufsize) {

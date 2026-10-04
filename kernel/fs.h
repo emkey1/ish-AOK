@@ -584,6 +584,10 @@ extern const struct fs_ops devtmpfs;
 extern const struct fs_ops sysfs;
 extern const struct fs_ops cgroupfs;
 extern const struct fs_ops cgroup2fs;
+// IN_MODIFY on cgroup.events of a cgroup2 cgroup and its ancestors, in every
+// cgroup2 mount (fs/tmp.c). For membership changes: a process moved, or a
+// process in that cgroup exited. Call with no locks held.
+void cgroup2_note_membership_change(const char *cgroup_path);
 extern const struct fs_ops fusefs;
 extern const struct fs_ops mqueuefs;
 void fs_register(const struct fs_ops *fs);

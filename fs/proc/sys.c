@@ -675,10 +675,9 @@ static int sys_update_kernel_pid_max(struct proc_entry *UNUSED(entry), struct pr
     if (!superuser())
         return _EPERM;
     long value;
-    // The table is sized at compile time, so MAX_PID is a hard ceiling; Linux's
-    // own floor is 301. Out of range is EINVAL, which is what Linux answers too
-    // -- it is not silently clamped.
-    int err = proc_sys_scalar_parse(data, 301, MAX_PID, &value);
+    // Linux's range, 301..PID_MAX_LIMIT; out of it is EINVAL, as on Linux.
+    // Allocation still wraps at MAX_PID, the table size (task_set_pid_max).
+    int err = proc_sys_scalar_parse(data, 301, PID_MAX_LIMIT, &value);
     if (err < 0)
         return err;
     return task_set_pid_max((dword_t) value);

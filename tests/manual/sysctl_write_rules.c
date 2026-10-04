@@ -30,6 +30,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include "test_common.h"
@@ -153,6 +154,19 @@ int main(int argc, char **argv) {
         // Below Linux's floor of 301.
         ck("a write below the floor is EINVAL", sysctl_write(knob, "2\n"), -EINVAL);
         ck("  and it is still unchanged", sysctl_read(knob), original);
+        // systemd's /usr/lib/sysctl.d/50-pid-max.conf: PID_MAX_LIMIT on a 64-bit
+        // kernel. Refusing it failed systemd-sysctl.service on every Arch boot.
+        ck("systemd's kernel.pid_max = 4194304 is accepted", sysctl_write(knob, "4194304\n") > 0, 1);
+        ck("  and reads back", sysctl_read(knob), 4194304);
+        pid_t child = fork();
+        if (child == 0)
+            _exit(0);
+        int status = -1;
+        ck("  and fork still works under it", child > 0 && waitpid(child, &status, 0) == child &&
+           WIFEXITED(status), 1);
+        ck("one past PID_MAX_LIMIT is EINVAL", sysctl_write(knob, "4194305\n"), -EINVAL);
+        sysctl_write(knob, same);
+        ck("  restored", sysctl_read(knob), original);
     }
 
     // ---- binfmt_misc admits to not being mounted --------------------------

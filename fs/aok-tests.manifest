@@ -185,6 +185,8 @@ mount_stdev.c
 mount_cross_dev.c
 mount_fake_long_source.c
 cgroup2_rmdir.c
+cgroup2_live.c
+unix_peercred_before_accept.c
 mmap_truncate_sigbus.c
 null_page_fault.c
 signalfd_epoll_deadlock.c

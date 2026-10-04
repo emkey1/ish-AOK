@@ -1160,6 +1160,13 @@ noreturn void do_exit(struct task *task, int status) {
     }
 
     bool group_dead = exit_tgroup(task);
+    // A process leaving a cgroup other than the root changes that cgroup's
+    // "populated" (fs/tmp.c renders it from the live threads, which
+    // exit_tgroup just updated); the inotify event that tells systemd goes out
+    // below, once no lock is held.
+    char *cgroup_left = NULL;
+    if (group_dead && task->group->cgroup_path != NULL && strcmp(task->group->cgroup_path, "/") != 0)
+        cgroup_left = strdup(task->group->cgroup_path);
 
     // Process accounting is captured here, under the locks, and WRITTEN far
     // below once they are gone: the record has to be taken while the task is
@@ -1262,6 +1269,10 @@ noreturn void do_exit(struct task *task, int status) {
     // against anything do_exit was holding.
     if (acct_pending)
         acct_write(&acct_rec);
+    if (cgroup_left != NULL) {
+        cgroup2_note_membership_change(cgroup_left);
+        free(cgroup_left);
+    }
     if (taskstats_pending)
         netlink_taskstats_exit_broadcast();
 

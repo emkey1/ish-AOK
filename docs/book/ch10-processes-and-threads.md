@@ -325,8 +325,15 @@ much as its real one:
 > `init.scope` at the hierarchy root (EACCES for uid != 0), killing every
 > `user@` start with "Failed to allocate manager object".
 
-There is no cgroup implementation behind that string. What there is, is a
-correct answer to the question systemd asks.
+There is no cgroup implementation behind that string: no controllers, no
+limits, no accounting. What there is, is a correct answer to each question
+systemd asks. Membership is one of them, and its answers have to be live:
+`cgroup.procs`, `cgroup.threads` and `cgroup.events` are rendered from the
+process table on every read (`fs/tmp.c`), and a process that exits or moves
+raises `IN_MODIFY` on `cgroup.events` up its cgroup's ancestry. Until October
+2026 they were stored files. `cgroup.events` said `populated 1` forever, so
+systemd never saw a unit's cgroup empty, and every failed one-shot service on an
+Arch boot waited out its 90-second stop timeout.
 
 ## 10.10 Reporting faithfully what you do not implement
 
