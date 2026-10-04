@@ -297,8 +297,9 @@ void jit_note_shared_write(struct jit *jit, const struct pt_entry *entry);
 #define JIT_FUSE_AMD64_INCDEC_REG (1u << 0)  // FF /0,/1 mod==3: inc/dec of a register
 #define JIT_FUSE_AMD64_DEADFLAGS  (1u << 1)  // skip flags the next writer overwrites unread
 #define JIT_FUSE_AMD64_MOVR       (1u << 2)  // mov r32/r64,r32/r64 specialised per register pair
+#define JIT_FUSE_AMD64_ARITHR     (1u << 3)  // add/sub/or/and/xor reg,reg|imm specialised per register
 #define JIT_FUSE_AMD64_ALL (JIT_FUSE_AMD64_INCDEC_REG | JIT_FUSE_AMD64_DEADFLAGS | \
-                            JIT_FUSE_AMD64_MOVR)
+                            JIT_FUSE_AMD64_MOVR | JIT_FUSE_AMD64_ARITHR)
 
 // Live masks. Seeded on first use from the ISH_NO_*_FUSE / ISH_*_NO_FUSE
 // environment variables, whose existing semantics are unchanged (set to ANY value

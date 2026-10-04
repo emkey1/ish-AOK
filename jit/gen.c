@@ -1,3 +1,4 @@
+#include <pthread.h>
 #include <assert.h>
 #include <stdint.h>
 #include <stdarg.h>
@@ -535,6 +536,48 @@ static void amd64_flag_rw(const struct amd64_jit_insn *insn, unsigned *r, unsign
 }
 
 #if defined(__aarch64__)
+#define AMD64_SPEC_TWIN_SLOTS 2048 // power of two, > 2 x the 720 pairs
+static unsigned long amd64_spec_twin_full[AMD64_SPEC_TWIN_SLOTS];
+static unsigned long amd64_spec_twin_nf[AMD64_SPEC_TWIN_SLOTS];
+static pthread_once_t amd64_spec_twin_once = PTHREAD_ONCE_INIT;
+
+static unsigned amd64_spec_twin_slot(unsigned long g) {
+    return (unsigned) ((g >> 2) * 0x9e3779b97f4a7c15ull >> 53) & (AMD64_SPEC_TWIN_SLOTS - 1);
+}
+
+static void amd64_spec_twin_init(void) {
+    extern void (*const amd64_arr_gadgets[])(void), (*const amd64_arr_nf_gadgets[])(void);
+    extern void (*const amd64_ari_gadgets[])(void), (*const amd64_ari_nf_gadgets[])(void);
+    extern void (*const amd64_lrr_gadgets[])(void), (*const amd64_lrr_nf_gadgets[])(void);
+    extern void (*const amd64_lri_gadgets[])(void), (*const amd64_lri_nf_gadgets[])(void);
+    static const struct { void (*const *full)(void); void (*const *nf)(void); unsigned n; } fams[] = {
+        {amd64_arr_gadgets, amd64_arr_nf_gadgets, 2 * 2 * 64},
+        {amd64_ari_gadgets, amd64_ari_nf_gadgets, 2 * 2 * 8},
+        {amd64_lrr_gadgets, amd64_lrr_nf_gadgets, 3 * 2 * 64},
+        {amd64_lri_gadgets, amd64_lri_nf_gadgets, 3 * 2 * 8},
+    };
+    for (unsigned f = 0; f < sizeof(fams) / sizeof(fams[0]); f++) {
+        for (unsigned i = 0; i < fams[f].n; i++) {
+            unsigned long full = (unsigned long) fams[f].full[i];
+            unsigned slot = amd64_spec_twin_slot(full);
+            while (amd64_spec_twin_full[slot] != 0)
+                slot = (slot + 1) & (AMD64_SPEC_TWIN_SLOTS - 1);
+            amd64_spec_twin_full[slot] = full;
+            amd64_spec_twin_nf[slot] = (unsigned long) fams[f].nf[i];
+        }
+    }
+}
+
+static unsigned long amd64_spec_twin(unsigned long g) {
+    pthread_once(&amd64_spec_twin_once, amd64_spec_twin_init);
+    for (unsigned slot = amd64_spec_twin_slot(g); amd64_spec_twin_full[slot] != 0;
+            slot = (slot + 1) & (AMD64_SPEC_TWIN_SLOTS - 1)) {
+        if (amd64_spec_twin_full[slot] == g)
+            return amd64_spec_twin_nf[slot];
+    }
+    return 0;
+}
+
 // Full flag-producing gadget -> its no-flags twin, and the flags it writes.
 static unsigned long amd64_flags_twin(unsigned long g, unsigned *writes) {
 #define AMD64_NF_PAIR(name) \
@@ -568,7 +611,12 @@ static unsigned long amd64_flags_twin(unsigned long g, unsigned *writes) {
             return (unsigned long) twins[i].nf;
         }
     }
-    return 0;
+    // The register-specialised arith/logic gadgets (math.S amd64_arr/ari/lrr/
+    // lri), 720 pairs, through a hash table built once.
+    unsigned long nf = amd64_spec_twin(g);
+    if (nf != 0)
+        *writes = AMD64_FL_ALL;
+    return nf;
 }
 #endif
 
@@ -13003,6 +13051,16 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
                 (group == 0 || group == 5 || group == 7) &&
                 (size == 32 || size == 64)) {
 #if defined(__aarch64__)
+            if (amd64_jit_low8_reg(rm_id) && group != 7 &&
+                    (amd64_jit_fuse_mask() & JIT_FUSE_AMD64_ARITHR)) {
+                extern void (*const amd64_ari_gadgets[])(void);
+                gen_amd64_ensure_reg_cache(state);
+                gen(state, (unsigned long) amd64_ari_gadgets[((group == 0 ? 0 : 1) * 2 + (size == 64)) * 8 + rm_id]);
+                gen(state, value);
+                gen_amd64_mark_reg_cache_dirty(state);
+                gen_amd64_defer_rip(state, next_ip);
+                return true;
+            }
             if (amd64_jit_low8_reg(rm_id)) {
                 extern void gadget_amd64_cached_arith_reg_imm(void);
                 gen_amd64_ensure_reg_cache(state);
@@ -13153,6 +13211,17 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
                     (unsigned long long) value,
                     (unsigned long long) next_ip);
 #if defined(__aarch64__)
+            if (amd64_jit_low8_reg(rm_id) && (size == 32 || size == 64) &&
+                    (amd64_jit_fuse_mask() & JIT_FUSE_AMD64_ARITHR)) {
+                extern void (*const amd64_lri_gadgets[])(void);
+                unsigned op = group == 1 ? 0 : group == 4 ? 1 : 2;
+                gen_amd64_ensure_reg_cache(state);
+                gen(state, (unsigned long) amd64_lri_gadgets[(op * 2 + (size == 64)) * 8 + rm_id]);
+                gen(state, value);
+                gen_amd64_mark_reg_cache_dirty(state);
+                gen_amd64_defer_rip(state, next_ip);
+                return true;
+            }
             if (amd64_jit_low8_reg(rm_id)) {
                 extern void gadget_amd64_cached_logic_reg_imm(void);
                 gen_amd64_ensure_reg_cache(state);
@@ -13367,6 +13436,18 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
                         size,
                         (unsigned long long) next_ip);
 #if defined(__aarch64__)
+                if (amd64_jit_low8_reg(reg_id) && amd64_jit_low8_reg(rm_id) &&
+                        (size == 32 || size == 64) && (amd64_jit_fuse_mask() & JIT_FUSE_AMD64_ARITHR)) {
+                    extern void (*const amd64_lrr_gadgets[])(void);
+                    unsigned d = (insn.opcode & 2) ? reg_id : rm_id;
+                    unsigned sr = (insn.opcode & 2) ? rm_id : reg_id;
+                    unsigned op = insn.opcode < 0x20 ? 0 : insn.opcode < 0x30 ? 1 : 2;
+                    gen_amd64_ensure_reg_cache(state);
+                    gen(state, (unsigned long) amd64_lrr_gadgets[((op * 2 + (size == 64)) * 8 + d) * 8 + sr]);
+                    gen_amd64_mark_reg_cache_dirty(state);
+                    gen_amd64_defer_rip(state, next_ip);
+                    return true;
+                }
                 if (amd64_jit_low8_reg(reg_id) && amd64_jit_low8_reg(rm_id)) {
                     extern void gadget_amd64_cached_logic_reg_reg(void);
                     gen_amd64_ensure_reg_cache(state);
@@ -13429,6 +13510,20 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
                      (insn.opcode >= 0x38 && insn.opcode <= 0x3b)) &&
                     (size == 32 || size == 64)) {
 #if defined(__aarch64__)
+                if (amd64_jit_low8_reg(reg_id) && amd64_jit_low8_reg(rm_id) && insn.opcode < 0x38 &&
+                        (amd64_jit_fuse_mask() & JIT_FUSE_AMD64_ARITHR)) {
+                    // add/sub: one gadget per (op, size, dst, src). CMP stays
+                    // generic below -- the cmp+jcc fusion rewrites its words.
+                    extern void (*const amd64_arr_gadgets[])(void);
+                    unsigned d = (insn.opcode & 2) ? reg_id : rm_id;
+                    unsigned sr = (insn.opcode & 2) ? rm_id : reg_id;
+                    unsigned op = insn.opcode < 0x28 ? 0 : 1;
+                    gen_amd64_ensure_reg_cache(state);
+                    gen(state, (unsigned long) amd64_arr_gadgets[((op * 2 + (size == 64)) * 8 + d) * 8 + sr]);
+                    gen_amd64_mark_reg_cache_dirty(state);
+                    gen_amd64_defer_rip(state, next_ip);
+                    return true;
+                }
                 if (amd64_jit_low8_reg(reg_id) && amd64_jit_low8_reg(rm_id)) {
                     extern void gadget_amd64_cached_arith_reg_reg(void);
                     gen_amd64_ensure_reg_cache(state);
@@ -14814,7 +14909,7 @@ static const struct jit_fuse_entry riscv64_fuse_names[] = {
 };
 static const struct jit_fuse_entry amd64_fuse_names[] = {
     {"incdec_reg", JIT_FUSE_AMD64_INCDEC_REG}, {"deadflags", JIT_FUSE_AMD64_DEADFLAGS},
-    {"movr", JIT_FUSE_AMD64_MOVR},
+    {"movr", JIT_FUSE_AMD64_MOVR}, {"arithr", JIT_FUSE_AMD64_ARITHR},
 };
 
 static const struct jit_fuse_domain jit_fuse_domains[] = {
