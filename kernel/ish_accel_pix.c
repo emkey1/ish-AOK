@@ -121,8 +121,9 @@ void ish_accel_pix_init(void) {
 // predates it refuses the unknown op, where it would have silently ignored a
 // new flag and copied the padding byte.
 enum { ISH_PIX_OP_FILL = 0, ISH_PIX_OP_COPY = 1, ISH_PIX_OP_OVER = 2, ISH_PIX_OP_OVER_MASK = 3,
-       ISH_PIX_OP_COPY_SET_ALPHA = 4 };
-enum { ISH_PIX_FLAG_SRC_OPAQUE = 1u << 0, ISH_PIX_FLAG_DST_OPAQUE = 1u << 1, ISH_PIX_FLAG_SRC_SOLID = 1u << 2 };
+       ISH_PIX_OP_COPY_SET_ALPHA = 4, ISH_PIX_OP_SCALE_BILINEAR = 5 };
+enum { ISH_PIX_FLAG_SRC_OPAQUE = 1u << 0, ISH_PIX_FLAG_DST_OPAQUE = 1u << 1, ISH_PIX_FLAG_SRC_SOLID = 1u << 2,
+       ISH_PIX_FLAG_RAW_TAPS = 1u << 3 };
 
 // Guest ABI, fixed-layout (identical on arm64/riscv64): the two leading u32s,
 // then every 64-bit field together (matches struct ish_aead_req's
@@ -155,6 +156,42 @@ struct ish_pix_req {
     uint32_t width, height;
     uint32_t fill_pixel;  // FILL, and the source colour for SRC_SOLID
 };
+
+// SCALE_BILINEAR: a bilinear stretch of a bits source onto the destination
+// rectangle -- pixman_image_composite32 with a scale+translate transform,
+// PIXMAN_FILTER_BILINEAR and REPEAT_NONE on the source, SRC or OVER, no mask,
+// a8r8g8b8/x8r8g8b8 on both sides. What the Wayland compositor does to every
+// scale-1 client at an output scale of 2, and the shape that kept labwc at
+// 1.7 fps on an A10X (docs/TODO.md). Its own request layout, the same 80
+// bytes as struct ish_pix_req so a kernel that predates it reads the whole
+// thing and refuses the op. The shim does the fixed-point set-up (where the
+// first pixel samples, x0/y0, already less half a pixel, and the step per
+// pixel and per row) and declines anything pixman would not compute exactly
+// that way; the kernel steps, interpolates (ish_pix_bilinear_row) and
+// combines. ISH_PIX_FLAG_SRC_OPAQUE: the source is x8r8g8b8, whose taps
+// pixman forces opaque -- unless ISH_PIX_FLAG_RAW_TAPS, which is pixman's
+// NEON SRC x8->x8 path interpolating the raw padding byte. OVER blends onto
+// the destination's raw value, padding byte included, as pixman does.
+struct ish_pix_scale_req {
+    uint32_t op;
+    uint32_t flags;
+    uint64_t dst;
+    uint64_t src;
+    uint32_t dst_stride;
+    uint32_t src_stride;
+    uint32_t src_width, src_height;
+    int32_t dst_x, dst_y;
+    uint32_t width, height;
+    int32_t x0, y0;       // 16.16: the first pixel's sample point, less half a pixel
+    int32_t ux, uy;       // 16.16: the step per destination pixel and per row
+    uint32_t composite;   // 0 SRC, 1 OVER
+    uint32_t reserved;    // 0
+};
+_Static_assert(sizeof(struct ish_pix_scale_req) == 80, "scale request must stay 80 bytes");
+
+// Widest source span or destination row a stretch may use: a bound on the
+// host buffers it allocates, far beyond any real surface.
+#define ISH_PIX_SCALE_MAX_ROW 16384u
 
 // Bound width*height so a bogus/adversarial request can't tie up the host
 // thread on an absurd synthetic size -- real desktop surfaces at any
@@ -224,13 +261,125 @@ static bool pix_ranges_overlap(uint64_t dst, uint32_t dst_stride, int32_t dst_y,
     return dst_lo < src_hi && src_lo < dst_hi;
 }
 
+struct pix_scale_row_ctx {
+    const uint32_t *row;  // the interpolated destination row
+    uint32_t done;        // pixels of it already written
+    bool over;
+};
+static void pix_scale_store_span(void *dst_host, uint32_t pixels, void *ctx) {
+    struct pix_scale_row_ctx *c = (struct pix_scale_row_ctx *) ctx;
+    if (c->over)
+        ish_pix_over_row(c->row + c->done, dst_host, pixels, false, false);
+    else
+        memcpy(dst_host, c->row + c->done, (size_t) pixels * 4);
+    c->done += pixels;
+}
+
+// A source row of the stretch, read once: a 2x stretch samples each pair of
+// rows for two destination rows running.
+struct pix_scale_cached_row {
+    int32_t y;            // INT32_MIN when empty
+    uint32_t *pixels;
+};
+
+static dword_t pix_scale_bilinear(const struct ish_pix_scale_req *r) {
+    if (r->width == 0 || r->height == 0)
+        return 0;
+    if ((uint64_t) r->width * r->height > ISH_PIX_MAX_PIXELS || r->width > ISH_PIX_SCALE_MAX_ROW)
+        return _EMSGSIZE;
+    if (r->composite > 1 || r->reserved != 0 || r->ux <= 0 || r->uy <= 0)
+        return _EOPNOTSUPP;
+    if (r->dst_stride < r->width * 4 || (r->dst_stride % 4) != 0 || (r->dst % 4) != 0)
+        return _EOPNOTSUPP;
+    if (r->src_width == 0 || r->src_height == 0 || r->src_width > 0x7fff || r->src_height > 0x7fff ||
+            r->src_stride < r->src_width * 4 || (r->src_stride % 4) != 0 || (r->src % 4) != 0)
+        return _EOPNOTSUPP;
+    // The source is read while the destination is written: decline any
+    // chance they share memory, as the other ops do.
+    if (pix_ranges_overlap(r->dst, r->dst_stride, r->dst_y, r->height,
+                            r->src, r->src_stride, 0, r->src_height))
+        return _EOPNOTSUPP;
+    // The sample points must stay pixman_fixed_t (the shim checks this too;
+    // pixman steps them in 32 bits).
+    int64_t x_last = (int64_t) r->x0 + (int64_t) (r->width - 1) * r->ux;
+    int64_t y_last = (int64_t) r->y0 + (int64_t) (r->height - 1) * r->uy;
+    if (x_last > INT32_MAX || y_last > INT32_MAX)
+        return _EOPNOTSUPP;
+
+    // The columns any destination pixel can reach, the same on every row.
+    int32_t sw = (int32_t) r->src_width, sh = (int32_t) r->src_height;
+    int64_t col_lo = (int64_t) (r->x0 >> 16), col_hi = (x_last >> 16) + 1;
+    if (col_lo < 0) col_lo = 0;
+    if (col_hi > sw - 1) col_hi = sw - 1;
+    int32_t col0 = (int32_t) col_lo, cols = col_hi >= col_lo ? (int32_t) (col_hi - col_lo + 1) : 0;
+    if ((uint32_t) cols > ISH_PIX_SCALE_MAX_ROW)
+        return _EMSGSIZE;
+
+    uint32_t *out = malloc((size_t) r->width * 4);
+    struct pix_scale_cached_row cache[2] = {
+        { INT32_MIN, cols > 0 ? malloc((size_t) cols * 4) : NULL },
+        { INT32_MIN, cols > 0 ? malloc((size_t) cols * 4) : NULL },
+    };
+    dword_t err = 0;
+    if (out == NULL || (cols > 0 && (cache[0].pixels == NULL || cache[1].pixels == NULL))) {
+        err = _ENOMEM;
+        goto done;
+    }
+    uint32_t tap_or = (r->flags & ISH_PIX_FLAG_SRC_OPAQUE) && !(r->flags & ISH_PIX_FLAG_RAW_TAPS)
+            ? 0xff000000u : 0;
+
+    for (uint32_t j = 0; j < r->height; j++) {
+        int32_t y = (int32_t) ((int64_t) r->y0 + (int64_t) j * r->uy);
+        int32_t y1 = y >> 16;
+        int disty = (y >> 9) & 0x7f;
+        const uint32_t *rows[2] = { NULL, NULL };
+        for (int k = 0; k < 2; k++) {
+            int32_t sy = y1 + k;
+            if (cols == 0 || sy < 0 || sy >= sh)
+                continue;
+            struct pix_scale_cached_row *slot = &cache[sy & 1];
+            if (slot->y != sy) {
+                if (user_read(r->src + (uint64_t) sy * r->src_stride + (uint64_t) col0 * 4,
+                        slot->pixels, (size_t) cols * 4)) {
+                    err = _EFAULT;
+                    goto done;
+                }
+                slot->y = sy;
+            }
+            rows[k] = slot->pixels;
+        }
+        ish_pix_bilinear_row(rows[0], rows[1], col0, cols, sw, r->x0, r->ux, disty, tap_or,
+                out, r->width);
+        struct pix_scale_row_ctx ctx = { out, 0, r->composite == 1 };
+        if (user_transform_rect(r->dst, r->dst_stride, 4, r->dst_x, r->dst_y + (int32_t) j,
+                r->width, 1, MEM_WRITE, pix_scale_store_span, &ctx)) {
+            err = _EFAULT;
+            goto done;
+        }
+    }
+done:
+    free(out);
+    free(cache[0].pixels);
+    free(cache[1].pixels);
+    return err;
+}
+
 dword_t sys_ish_pixop_guest(guest_addr_t req_addr) {
     if (!doEnablePixAccel || !pix_accel_ready())
         return _ENOSYS;
 
-    struct ish_pix_req req;
-    if (user_read(req_addr, &req, sizeof(req)))
+    // Every request is 80 bytes; the op says which layout.
+    union {
+        struct ish_pix_req req;
+        struct ish_pix_scale_req scale;
+    } u;
+    _Static_assert(sizeof(struct ish_pix_req) == sizeof(struct ish_pix_scale_req),
+            "the two request layouts must be the same size");
+    if (user_read(req_addr, &u, sizeof(u)))
         return _EFAULT;
+    if (u.req.op == ISH_PIX_OP_SCALE_BILINEAR)
+        return pix_scale_bilinear(&u.scale);
+    struct ish_pix_req req = u.req;
 
     if (req.op != ISH_PIX_OP_FILL && req.op != ISH_PIX_OP_COPY &&
             req.op != ISH_PIX_OP_OVER && req.op != ISH_PIX_OP_OVER_MASK &&

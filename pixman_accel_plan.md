@@ -499,7 +499,48 @@ link-local address (the relay's copying is on both arms alike).
   the accelerator on it drew 1.5-1.7x as many cells in the same session, so
   its total pixman time is not a like-for-like comparison.
 
+## Bilinear stretches (SCALE_BILINEAR, 2026-10-04)
+A compositor at output scale 2 stretches every scale-1 client (and every
+Xwayland window) with a scale+translate transform and PIXMAN_FILTER_BILINEAR
+(wlroots 0.18 render/pixman/pass.c, REPEAT_NONE, SRC or OVER). On bip
+(A10X), Devuan riscv64, labwc in software, es2gears: 99% of labwc's pixman
+time was that shape -- first with a 10-bit source (fixed in start-wayland.sh
+with allow_rgb10_configs=false), then the 2x stretch itself in pixman's C
+(~0.18 us/px). Now ISH_PIX_OP_SCALE_BILINEAR (kernel/ish_accel_pix.c,
+ish_pix_bilinear_row) does it on the host: own 80-byte request; the shim does
+the fixed-point set-up (first sample point less half a pixel, step per pixel
+and row) and the kernel steps, interpolates through a two-row source cache,
+and combines (SRC copy, OVER via ish_pix_over_row on the raw destination).
+
+The semantics, proven by a reference model against real pixman (thousands of
+random cases, every byte) before the kernel was written:
+- sample point of destination pixel (x, y): M * (x+0.5, y+0.5) - 0.5, in
+  16.16; weights are bits 9-15 of the fraction; the interpolation is
+  floor(sum(c * w) / 65536) per channel with 8-bit weights (7-bit << 1) --
+  pixman's separable cover path and four-tap fetcher agree exactly;
+- REPEAT_NONE: a tap outside the image reads 0; an x8r8g8b8 tap inside has
+  alpha forced to 0xff (C), but NEON's SRC x8->x8 fast path interpolates the
+  raw padding byte (PIX_FLAG_RAW_TAPS on aarch64);
+- OVER blends onto the destination's raw value, padding byte included;
+- accepted only for scale+translate with even, positive 16.16 factors (then
+  transform_point never rounds and pixman's per-line and per-pixel stepping
+  agree), not a pure translation (pixman copies that raw), sample points
+  well inside 16.16 (analyze_extent), no mask;
+- per guest: riscv64 (C) every shape; aarch64 (NEON) all but OVER from
+  x8r8g8b8, which pixman switches between NEON and C by whole-call geometry;
+  x86 (SSE2) unchecked, declined.
+
+tests/manual/pixman_shim.c has stretch scenarios (validated scales, fractional
+offsets, edges, clips, a 300x300 client at 2x through two clip boxes, and
+declined shapes). Mac CLI: riscv64 1012 and arm64 758 stretches accelerated,
+every byte pixman's. bip, scale-2 software session, es2gears (8-bit): 8.7 ->
+19.8 fps, labwc 75 -> 10.7 ms of CPU per frame (from 1.6 fps / 580 ms before
+either fix); es2gears' own software rendering is now the limit.
+
 ## NEXT
+0. SCALE_BILINEAR on x86 guests: check pixman's SSE2/SSSE3 bilinear paths
+   against the reference model (as for NEON) before enabling; and OVER from
+   x8r8g8b8 on aarch64, which needs pixman's cover/opaque decision mirrored.
 1. wayvnc's capture/encode CPU: the drag-smoothness limiter on the A10X
    (above), and outside pixman entirely -- neatvnc's damage refinement and
    raw encoding of every frame.

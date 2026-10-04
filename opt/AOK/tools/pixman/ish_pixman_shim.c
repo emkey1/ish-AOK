@@ -71,8 +71,10 @@
 
 extern long syscall(long, ...);
 #define ISH_SYS_PIXOP 0xacc1
-enum { PIX_OP_FILL = 0, PIX_OP_COPY = 1, PIX_OP_OVER = 2, PIX_OP_OVER_MASK = 3, PIX_OP_COPY_SET_ALPHA = 4 };
-enum { PIX_FLAG_SRC_OPAQUE = 1u << 0, PIX_FLAG_DST_OPAQUE = 1u << 1, PIX_FLAG_SRC_SOLID = 1u << 2 };
+enum { PIX_OP_FILL = 0, PIX_OP_COPY = 1, PIX_OP_OVER = 2, PIX_OP_OVER_MASK = 3, PIX_OP_COPY_SET_ALPHA = 4,
+       PIX_OP_SCALE_BILINEAR = 5 };
+enum { PIX_FLAG_SRC_OPAQUE = 1u << 0, PIX_FLAG_DST_OPAQUE = 1u << 1, PIX_FLAG_SRC_SOLID = 1u << 2,
+       PIX_FLAG_RAW_TAPS = 1u << 3 };
 
 struct ish_pix_req {
     uint32_t op, flags;
@@ -216,6 +218,8 @@ struct image_state {
     int n_clip_boxes;
     int clip_known;        // clip_boxes/n_clip_boxes describe the region
     int nontrivial_filter; // filter set to anything other than NEAREST
+    pixman_filter_t filter;
+    pixman_transform_t transform; // valid while has_transform
     pixman_repeat_t repeat;
     struct image_state *next;
 };
@@ -304,7 +308,7 @@ static int image_kind(pixman_image_t *img) {
 
 // ---- ISH_PIXMAN_STATS accounting ------------------------------------------
 enum {
-    STAT_ACCEL_COMPOSITE, STAT_ACCEL_FILL, STAT_ACCEL_MASK,
+    STAT_ACCEL_COMPOSITE, STAT_ACCEL_FILL, STAT_ACCEL_MASK, STAT_ACCEL_SCALE,
     STAT_DECLINE_MASK_FORMAT, STAT_DECLINE_OP, STAT_DECLINE_FORMAT,
     STAT_DECLINE_TRANSFORM, STAT_DECLINE_REPEAT, STAT_DECLINE_FILTER,
     STAT_DECLINE_ALPHA_MAP, STAT_DECLINE_CLIP, STAT_DECLINE_COMPONENT_ALPHA,
@@ -314,7 +318,7 @@ enum {
     STAT_COUNT,
 };
 static const char *const stat_names[STAT_COUNT] = {
-    "accelerated-composite", "accelerated-fill", "accelerated-mask",
+    "accelerated-composite", "accelerated-fill", "accelerated-mask", "accelerated-scale",
     "decline-mask-format", "decline-op", "decline-format",
     "decline-transform", "decline-repeat", "decline-filter",
     "decline-alpha-map", "decline-clip", "decline-component-alpha",
@@ -635,8 +639,11 @@ pixman_bool_t pixman_image_set_transform(pixman_image_t *image, const pixman_tra
     pixman_bool_t ret = real(image, transform);
     STATE_WRITE();
     struct image_state *s = state_get_or_create(image);
-    if (s != NULL)
+    if (s != NULL) {
         s->has_transform = (transform != NULL);
+        if (transform != NULL)
+            s->transform = *transform;
+    }
     STATE_UNLOCK();
     return ret;
 }
@@ -657,8 +664,10 @@ pixman_bool_t pixman_image_set_filter(pixman_image_t *image, pixman_filter_t fil
     pixman_bool_t ret = real(image, filter, filter_params, n_filter_params);
     STATE_WRITE();
     struct image_state *s = state_get_or_create(image);
-    if (s != NULL)
+    if (s != NULL) {
         s->nontrivial_filter = (filter != PIXMAN_FILTER_NEAREST);
+        s->filter = filter;
+    }
     STATE_UNLOCK();
     return ret;
 }
@@ -1072,6 +1081,135 @@ static int plan_in_guest(const struct plan *p, pixman_box32_t b, int32_t src_dx,
     return 0;
 }
 
+// ---- bilinear stretches (SCALE_BILINEAR) ---------------------------------
+// A Wayland compositor at output scale 2 stretches every scale-1 client with
+// a scale+translate transform and PIXMAN_FILTER_BILINEAR (wlroots 0.18,
+// render/pixman/pass.c); pixman does that in plain C on a riscv64 guest, and
+// it was most of labwc's time on an A10X. These are the stretches the kernel
+// computes byte for byte as pixman does, checked against real pixman per
+// guest architecture: riscv64 runs pixman's C code, every shape here; aarch64
+// runs its NEON fast paths, which for SRC from x8r8g8b8 into x8r8g8b8
+// interpolate the source's raw padding byte (PIX_FLAG_RAW_TAPS), and for OVER
+// from x8r8g8b8 switch between that and the C path by the whole call's
+// geometry -- that one shape is left to pixman there. x86's SSE2 paths have
+// not been checked: declined. (tests/manual/pixman_shim.c's stretch cases.)
+#if defined(__riscv) && __riscv_xlen == 64
+#  define SCALE_ARCH_OK 1
+#  define SCALE_RAW_SRC_X8_X8 0
+#  define SCALE_OVER_FROM_X8_OK 1
+#elif defined(__aarch64__)
+#  define SCALE_ARCH_OK 1
+#  define SCALE_RAW_SRC_X8_X8 1
+#  define SCALE_OVER_FROM_X8_OK 0
+#else
+#  define SCALE_ARCH_OK 0
+#  define SCALE_RAW_SRC_X8_X8 0
+#  define SCALE_OVER_FROM_X8_OK 0
+#endif
+
+struct ish_pix_scale_req {
+    uint32_t op, flags;
+    uint64_t dst, src;
+    uint32_t dst_stride, src_stride;
+    uint32_t src_width, src_height;
+    int32_t dst_x, dst_y;
+    uint32_t width, height;
+    int32_t x0, y0;       // 16.16: the first pixel's sample point, less half a pixel
+    int32_t ux, uy;       // 16.16: the step per destination pixel and per row
+    uint32_t composite;   // 0 SRC, 1 OVER
+    uint32_t reserved;
+};
+
+// Sample points stay this far inside pixman_fixed_t: pixman's analyze_extent
+// skips a composite whose transformed extents, widened by a few pixels, leave
+// 16.16, and the kernel steps them in 32 bits.
+#define SCALE_FIXED_LIMIT ((int64_t) 0x7ff00000)
+
+// Composites one call as stretches, box by box. Returns 0 when it did (a box
+// the kernel refuses goes to pixman on its own, as composite32's boxes do;
+// *refused counts them), nonzero when the call is not a stretch the kernel
+// does, before anything is written.
+static int scale_composite(pixman_op_t op, pixman_image_t *src, pixman_image_t *mask, pixman_image_t *dest,
+        const struct dest_boxes *boxes, int32_t src_x, int32_t src_y, int32_t dest_x, int32_t dest_y,
+        int *refused) {
+    RESOLVE(real, composite32_fn, "pixman_image_composite32");
+    RESOLVE(get_format, get_format_fn, "pixman_image_get_format");
+    RESOLVE(get_data, get_data_fn, "pixman_image_get_data");
+    RESOLVE(get_stride, get_stride_fn, "pixman_image_get_stride");
+    RESOLVE(get_width, get_width_fn, "pixman_image_get_width");
+    RESOLVE(get_height, get_height_fn, "pixman_image_get_height");
+    *refused = 0;
+    if (!SCALE_ARCH_OK || mask != NULL || (op != PIXMAN_OP_SRC && op != PIXMAN_OP_OVER))
+        return 1;
+    int has_transform = 0, kind = KIND_BITS;
+    pixman_filter_t filter = PIXMAN_FILTER_NEAREST;
+    pixman_transform_t t;
+    STATE_READ();
+    struct image_state *st = state_find(src);
+    if (st != NULL) {
+        kind = st->kind;
+        has_transform = st->has_transform;
+        filter = st->filter;
+        t = st->transform;
+    }
+    STATE_UNLOCK();
+    if (kind != KIND_BITS || !has_transform || filter != PIXMAN_FILTER_BILINEAR)
+        return 1;
+    // Scale and translate only, by even 16.16 factors: then pixman's
+    // transform_point never rounds, and its per-line and per-pixel stepping
+    // and the kernel's arithmetic land on the same sample points.
+    int32_t m00 = t.matrix[0][0], m11 = t.matrix[1][1], m02 = t.matrix[0][2], m12 = t.matrix[1][2];
+    if (t.matrix[0][1] != 0 || t.matrix[1][0] != 0 || t.matrix[2][0] != 0 || t.matrix[2][1] != 0 ||
+            t.matrix[2][2] != pixman_fixed_1 || m00 <= 0 || m11 <= 0 || (m00 & 1) || (m11 & 1))
+        return 1;
+    // A pure translation is no stretch: pixman copies it raw.
+    if (m00 == pixman_fixed_1 && m11 == pixman_fixed_1)
+        return 1;
+    pixman_format_code_t sf = get_format(src), df = get_format(dest);
+    if (!is_32bpp_rgb(sf) || !is_32bpp_rgb(df))
+        return 1;
+    int src_x8 = sf == PIXMAN_x8r8g8b8, dst_x8 = df == PIXMAN_x8r8g8b8;
+    if (op == PIXMAN_OP_OVER && src_x8 && !SCALE_OVER_FROM_X8_OK)
+        return 1;
+    // Every box's sample points, before anything is written.
+    for (int i = 0; i < boxes->n; i++) {
+        pixman_box32_t b = boxes->box[i];
+        int64_t sx = (int64_t) src_x + (b.x1 - dest_x), sy = (int64_t) src_y + (b.y1 - dest_y);
+        int64_t x0 = (int64_t) m00 * sx + m00 / 2 + m02 - pixman_fixed_1 / 2;
+        int64_t y0 = (int64_t) m11 * sy + m11 / 2 + m12 - pixman_fixed_1 / 2;
+        int64_t x1 = x0 + (int64_t) (b.x2 - b.x1 - 1) * m00, y1 = y0 + (int64_t) (b.y2 - b.y1 - 1) * m11;
+        if (x0 < -SCALE_FIXED_LIMIT || y0 < -SCALE_FIXED_LIMIT ||
+                x1 > SCALE_FIXED_LIMIT || y1 > SCALE_FIXED_LIMIT)
+            return 1;
+    }
+    struct ish_pix_scale_req r = {
+        .op = PIX_OP_SCALE_BILINEAR,
+        .flags = (src_x8 ? PIX_FLAG_SRC_OPAQUE : 0) |
+                 (SCALE_RAW_SRC_X8_X8 && op == PIXMAN_OP_SRC && src_x8 && dst_x8 ? PIX_FLAG_RAW_TAPS : 0),
+        .dst = (uint64_t) (uintptr_t) get_data(dest), .src = (uint64_t) (uintptr_t) get_data(src),
+        .dst_stride = (uint32_t) get_stride(dest), .src_stride = (uint32_t) get_stride(src),
+        .src_width = (uint32_t) get_width(src), .src_height = (uint32_t) get_height(src),
+        .ux = m00, .uy = m11,
+        .composite = op == PIXMAN_OP_OVER ? 1 : 0,
+    };
+    for (int i = 0; i < boxes->n; i++) {
+        pixman_box32_t b = boxes->box[i];
+        int64_t sx = (int64_t) src_x + (b.x1 - dest_x), sy = (int64_t) src_y + (b.y1 - dest_y);
+        r.dst_x = b.x1;
+        r.dst_y = b.y1;
+        r.width = (uint32_t) (b.x2 - b.x1);
+        r.height = (uint32_t) (b.y2 - b.y1);
+        r.x0 = (int32_t) ((int64_t) m00 * sx + m00 / 2 + m02 - pixman_fixed_1 / 2);
+        r.y0 = (int32_t) ((int64_t) m11 * sy + m11 / 2 + m12 - pixman_fixed_1 / 2);
+        if (syscall(ISH_SYS_PIXOP, &r) != 0) {
+            (*refused)++;
+            real(op, src, mask, dest, b.x1 + (src_x - dest_x), b.y1 + (src_y - dest_y), 0, 0,
+                    b.x1, b.y1, b.x2 - b.x1, b.y2 - b.y1);
+        }
+    }
+    return 0;
+}
+
 // ---- interposed composite/fill entry points ------------------------------
 
 static void composite32(pixman_op_t op, pixman_image_t *src, pixman_image_t *mask, pixman_image_t *dest,
@@ -1106,6 +1244,24 @@ static void composite32(pixman_op_t op, pixman_image_t *src, pixman_image_t *mas
         }
         // Only the first rectangle can have refused (a shared buffer is a
         // property of the call, not of a rectangle), so nothing was written.
+    }
+    // Outside the plain shapes only by its source's transform and filter: a
+    // bilinear stretch, which the kernel may do.
+    unsigned stretch_only = (1u << STAT_DECLINE_TRANSFORM) | (1u << STAT_DECLINE_FILTER);
+    if ((reasons & (1u << STAT_DECLINE_TRANSFORM)) && (reasons & ~stretch_only) == 0 && accel_available()) {
+        int refused = 0;
+        if (scale_composite(op, src, mask, dest, &p.boxes, src_x, src_y, dest_x, dest_y, &refused) == 0) {
+            if (stats) {
+                if (refused != 0) {
+                    note(STAT_DECLINE_SYSCALL, pixels);
+                    note_shape(1u << STAT_DECLINE_SYSCALL, op, src, mask, dest, pixels, now_ns() - t0);
+                } else {
+                    note(STAT_ACCEL_SCALE, pixels);
+                    note_shape(0, op, src, mask, dest, pixels, now_ns() - t0);
+                }
+            }
+            return;
+        }
     }
     if (reasons != 0) {
         real(op, src, mask, dest, src_x, src_y, mask_x, mask_y, dest_x, dest_y, width, height);

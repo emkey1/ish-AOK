@@ -65,6 +65,8 @@ static struct {
     pixman_bool_t (*set_clip_region32)(pixman_image_t *, const pixman_region32_t *);
     void (*region32_init_rects)(pixman_region32_t *, const pixman_box32_t *, int);
     void (*region32_fini)(pixman_region32_t *);
+    pixman_bool_t (*set_transform)(pixman_image_t *, const pixman_transform_t *);
+    pixman_bool_t (*set_filter)(pixman_image_t *, pixman_filter_t, const pixman_fixed_t *, int);
 } real_px;
 
 static int load_pixman(void) {
@@ -83,11 +85,13 @@ static int load_pixman(void) {
     GET(set_clip_region32, "pixman_image_set_clip_region32");
     GET(region32_init_rects, "pixman_region32_init_rects");
     GET(region32_fini, "pixman_region32_fini");
+    GET(set_transform, "pixman_image_set_transform");
+    GET(set_filter, "pixman_image_set_filter");
 #undef GET
     return real_px.create_bits && real_px.create_solid_fill && real_px.unref &&
             real_px.composite32 && real_px.fill_boxes && real_px.fill_rectangles &&
             real_px.blt && real_px.fill && real_px.set_clip_region32 && real_px.region32_init_rects &&
-            real_px.region32_fini;
+            real_px.region32_fini && real_px.set_transform && real_px.set_filter;
 }
 
 // ---- helpers -------------------------------------------------------------
@@ -354,6 +358,90 @@ static void scenario_fill(int iter) {
     free(a_real.bits);
 }
 
+// A transformed, filtered source: what a Wayland compositor at output scale 2
+// does to every scale-1 client (wlroots: scale+translate, BILINEAR, REPEAT_NONE,
+// SRC or OVER, often through a clip). The shim hands the bilinear stretches it
+// can compute exactly to the kernel (SCALE_BILINEAR) and leaves the rest --
+// rotations, other filters, odd 16.16 factors, a pure translation, OVER from
+// x8r8g8b8 on aarch64, everything on x86 -- to pixman. Either way every byte
+// must be pixman's. `big` is the compositor's case at a realistic size.
+static void scenario_stretch(int iter, int big) {
+    static const pixman_fixed_t scales[] = { 0x8000, 0x8000, 0x4000, 0x5556, 0xc000, 0x2000,
+                                             0x18000, 0x6666, 0x10000 };
+    int sw = 1 + rand() % 48, sh = 1 + rand() % 48, dw = 8 + rand() % 120, dh = 8 + rand() % 90;
+    pixman_format_code_t dfmt = rgb_formats[rand() & 1], sfmt = rgb_formats[rand() & 1];
+    pixman_op_t op = rand() & 1 ? PIXMAN_OP_OVER : PIXMAN_OP_SRC;
+    pixman_fixed_t m00 = scales[rand() % 9], m11 = scales[rand() % 9];
+    pixman_fixed_t m02 = (rand() % 9 - 4) * pixman_fixed_1, m12 = (rand() % 9 - 4) * pixman_fixed_1;
+    if (rand() % 4 == 0) {
+        m02 += (pixman_fixed_t) (rnd() % 0x10000) & ~1;
+        m12 += (pixman_fixed_t) (rnd() % 0x10000) & ~1;
+    }
+    pixman_filter_t filter = PIXMAN_FILTER_BILINEAR;
+    pixman_fixed_t m01 = 0;
+    switch (rand() % 12) {
+    case 0: filter = PIXMAN_FILTER_NEAREST; break;    // left to pixman
+    case 1: filter = PIXMAN_FILTER_GOOD; break;       // left to pixman
+    case 2: m01 = 0x2000; break;                      // a shear: left to pixman
+    case 3: m00 |= 1; break;                          // an odd factor: left to pixman
+    default: break;
+    }
+    int use_clip = rand() % 3 == 0;
+    int x = rand() % (dw + 6) - 3, y = rand() % (dh + 6) - 3;
+    int w = 1 + rand() % dw, h = 1 + rand() % dh;
+    int sx = rand() % 16 - 6, sy = rand() % 16 - 6;
+    if (big) {
+        // A 300x300 client at scale 1 on a 2x output, through two clip boxes.
+        sw = sh = 300;
+        dw = 700;
+        dh = 660;
+        m00 = m11 = 0x8000;
+        m02 = m12 = 0;
+        m01 = 0;
+        filter = PIXMAN_FILTER_BILINEAR;
+        x = 40;
+        y = 20;
+        w = h = 600;
+        sx = sy = 0;
+        use_clip = 1;
+    }
+    struct buf d_shim = buf_new(dw, dh, 32), d_real = buf_clone(d_shim), s = buf_new(sw, sh, 32);
+    pixman_image_t *ds = real_px.create_bits(dfmt, dw, dh, d_shim.bits, d_shim.stride);
+    pixman_image_t *dr = real_px.create_bits(dfmt, dw, dh, d_real.bits, d_real.stride);
+    pixman_image_t *ss = real_px.create_bits(sfmt, sw, sh, s.bits, s.stride);
+    pixman_image_t *sr = real_px.create_bits(sfmt, sw, sh, s.bits, s.stride);
+    pixman_transform_t t = {{{ m00, m01, m02 }, { 0, m11, m12 }, { 0, 0, pixman_fixed_1 }}};
+    pixman_image_set_transform(ss, &t);              // through the shim: it records them
+    pixman_image_set_filter(ss, filter, NULL, 0);
+    real_px.set_transform(sr, &t);
+    real_px.set_filter(sr, filter, NULL, 0);
+    pixman_box32_t clip[8];
+    int nclip = rand_boxes(clip, dw, dh, 1);
+    if (big) {
+        clip[0] = (pixman_box32_t) { 0, 0, 400, dh };
+        clip[1] = (pixman_box32_t) { 410, 30, dw, 500 };
+        nclip = 2;
+    }
+    set_clip(ds, dr, clip, nclip, use_clip);
+
+    pixman_image_composite32(op, ss, NULL, ds, sx, sy, 0, 0, x, y, w, h);
+    real_px.composite32(op, sr, NULL, dr, sx, sy, 0, 0, x, y, w, h);
+
+    char label[240];
+    snprintf(label, sizeof label, "stretch #%d%s op=%s src=%s %dx%d dst=%s %dx%d m=%x,%x,%x/%x,%x filter=%d %dx%d @%d,%d src@%d,%d clip=%d",
+            iter, big ? " (2x client)" : "", op == PIXMAN_OP_SRC ? "SRC" : "OVER",
+            sfmt == PIXMAN_x8r8g8b8 ? "x8" : "a8", sw, sh, dfmt == PIXMAN_x8r8g8b8 ? "x8" : "a8", dw, dh,
+            m00, m01, m02, m11, m12, filter, w, h, x, y, sx, sy, use_clip ? nclip : 0);
+    check(buf_same(d_shim, d_real), label);
+    pixman_image_unref(ss);
+    real_px.unref(sr);
+    pixman_image_unref(ds);
+    real_px.unref(dr);
+    free(d_shim.bits);
+    free(d_real.bits);
+    free(s.bits);
+}
+
 static sigjmp_buf probe_jmp;
 static void probe_sigsys(int sig) {
     (void) sig;
@@ -396,6 +484,10 @@ int main(int argc, char **argv) {
         scenario_blt(i);
     for (int i = 0; i < 150; i++)
         scenario_fill(i);
+    for (int i = 0; i < 8; i++)
+        scenario_stretch(i, 1);
+    for (int i = 0; i < 1500; i++)
+        scenario_stretch(i, 0);
 
     // The positive control: each accelerated path was really taken.
     check(g_stats[STAT_ACCEL_COMPOSITE].calls > 0, "some composites and blits were accelerated");
@@ -407,8 +499,11 @@ int main(int argc, char **argv) {
             solid_shapes++;
     }
     check(solid_shapes > 0, "some solid-source composites were accelerated");
-    test_logf("accelerated: composite %lu, mask %lu, fill %lu; declined bounds %lu, small %lu, op %lu\n",
+    if (SCALE_ARCH_OK)
+        check(g_stats[STAT_ACCEL_SCALE].calls > 0, "some bilinear stretches were accelerated");
+    test_logf("accelerated: composite %lu, mask %lu, fill %lu, stretch %lu; declined bounds %lu, small %lu, op %lu\n",
             g_stats[STAT_ACCEL_COMPOSITE].calls, g_stats[STAT_ACCEL_MASK].calls, g_stats[STAT_ACCEL_FILL].calls,
+            g_stats[STAT_ACCEL_SCALE].calls,
             g_stats[STAT_DECLINE_BOUNDS].calls, g_stats[STAT_DECLINE_SMALL].calls, g_stats[STAT_DECLINE_OP].calls);
     // Keep the shim's exit-time statistics dump quiet: this is a test.
     memset(g_entry, 0, sizeof g_entry);
