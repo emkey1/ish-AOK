@@ -24,7 +24,8 @@ static const int usable[] = {0, 1, 2, 3, 6, 7, 8, 9, 10, 11, 12, 13};
 #define NUSABLE 12
 
 // r[14] carries the flags in and out (r14 itself is only the pushfq scratch).
-struct state { uint64_t r[16]; };
+struct state { uint64_t r[16]; uint64_t mem[8]; };
+// [r15 + 128 + 8*k], k = 0..7: the memory operands (disp32 addressing).
 
 static uint64_t rng = 0x9e3779b97f4a7c15ull;
 static uint64_t rnd(void) { rng ^= rng << 13; rng ^= rng >> 7; rng ^= rng << 17; return rng; }
@@ -47,8 +48,37 @@ static void modrm_rr(int reg, int rm) { b((uint8_t) (0xc0 | (reg & 7) << 3 | (rm
 static void load_reg(int reg) { b((uint8_t) (0x49 | ((reg & 8) ? 4 : 0))); b(0x8b); b((uint8_t) (0x47 | (reg & 7) << 3)); b((uint8_t) (8 * reg)); }
 static void store_reg(int reg) { b((uint8_t) (0x49 | ((reg & 8) ? 4 : 0))); b(0x89); b((uint8_t) (0x47 | (reg & 7) << 3)); b((uint8_t) (8 * reg)); }
 
+// modrm (mod=10, rm=r15) + disp32 into mem[], for register `reg`
+static void mem_operand(int reg) {
+    b((uint8_t) (0x87 | (reg & 7) << 3));
+    uint32_t d = 128 + 8 * (uint32_t) (rnd() % 8) + (uint32_t) (rnd() % 4);
+    memcpy(p, &d, 4); p += 4;
+}
+// REX with B = 1 (r15 base) and R from reg
+static void rex_mem(int w, int reg) { b((uint8_t) (0x41 | (w ? 8 : 0) | ((reg & 8) ? 4 : 0))); }
+
+static void emit_mem_one(void) {
+    int a = pick(), w = (int) (rnd() & 1);
+    switch (rnd() % 10) {
+        case 0: rex_mem(w, a); b(0x8b); mem_operand(a); break;            // mov a, [m]
+        case 1: rex_mem(w, a); b(0x89); mem_operand(a); break;            // mov [m], a
+        case 2: rex_mem(w, a); b(0x03); mem_operand(a); break;            // add a, [m]
+        case 3: rex_mem(w, a); b(0x3b); mem_operand(a); break;            // cmp a, [m]
+        case 4: rex_mem(w, a); b(rnd() & 1 ? 0x23 : 0x33); mem_operand(a); break; // and/xor a, [m]
+        case 5: rex_mem(w, a); b(0x01); mem_operand(a); break;            // add [m], a
+        case 6: rex_mem(w, a); b(0x0f); b(0xb6); mem_operand(a); break;   // movzx a, byte [m]
+        case 7: rex_mem(0, a); b(0x02); mem_operand(a); break;            // add a8, [m] (REX: no ah..bh)
+        case 8: rex_mem(0, a); b(0x38); mem_operand(a); break;            // cmp [m], a8
+        default: rex_mem(1, a); b(0x8b); mem_operand(a); break;           // mov a64, [m]
+    }
+}
+
 static void emit_one(void) {
     int a = pick(), c = pick(), w = (int) (rnd() & 1);
+    if (rnd() % 3 == 0) {
+        emit_mem_one();
+        return;
+    }
     switch (rnd() % 16) {
         case 0: case 1: case 2: case 3: { // alu reg,reg: add or adc sbb and sub xor cmp
             static const uint8_t ops[] = {0x01, 0x09, 0x11, 0x19, 0x21, 0x29, 0x31, 0x39};
@@ -110,6 +140,8 @@ int main(void) {
         for (int i = 0; i < 16; i++)
             inputs[s].r[i] = (rnd() & 3) == 0 ? (uint64_t) (int64_t) (int8_t) rnd() : rnd();
         inputs[s].r[14] = (rnd() & 0x8d5) | 0x202; // arithmetic flags only: never TF or DF
+        for (int i = 0; i < 8; i++)
+            inputs[s].mem[i] = rnd();
     }
     for (int s = 0; s < NSEQ; s++) {
         struct state st = inputs[s];
@@ -117,7 +149,10 @@ int main(void) {
         printf("%d", s);
         for (int i = 0; i < NUSABLE; i++)
             printf(" %016llx", (unsigned long long) st.r[usable[i]]);
-        printf(" fl %03llx\n", (unsigned long long) (st.r[14] & 0x8d5));
+        printf(" fl %03llx m", (unsigned long long) (st.r[14] & 0x8d5));
+        for (int i = 0; i < 8; i++)
+            printf(" %016llx", (unsigned long long) st.mem[i]);
+        printf("\n");
     }
     return 0;
 }
