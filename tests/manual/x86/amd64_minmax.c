@@ -2,12 +2,23 @@
 // memory sources, over every pair of special values: +-0, +-1, quiet and
 // signalling NaNs with payloads, +inf. x86's rule is `dst < src ? dst : src`
 // (MIN) and `dst > src ? dst : src` (MAX): a NaN on either side, or +0 vs -0,
-// gives the SOURCE unchanged. Prints every result; the oracle is the amd64
+// gives the SOURCE unchanged, and any NaN raises Invalid. Prints every result
+// and the MXCSR flags each instruction raised; the oracle is the amd64
 // interpreter (echo 0 > /proc/ish/amd64_jit). The JIT used arm64 fmin/fmax and
 // differed on 29 of 64 scalar-double pairs until 2026-10-04.
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+
+// MXCSR's six exception flags, cleared before each instruction and read after.
+static unsigned mx_take(void) {
+    unsigned m;
+    __asm__ volatile("stmxcsr %0" : "=m"(m));
+    unsigned flags = m & 0x3f;
+    m &= ~0x3fu;
+    __asm__ volatile("ldmxcsr %0" : : "m"(m));
+    return flags;
+}
 
 typedef struct { uint64_t lo, hi; } xmm_t;
 static const uint64_t dv[] = {0, 0x8000000000000000ull, 0x3ff0000000000000ull, 0xbff0000000000000ull,
@@ -15,16 +26,18 @@ static const uint64_t dv[] = {0, 0x8000000000000000ull, 0x3ff0000000000000ull, 0
 static const uint32_t sv[] = {0, 0x80000000u, 0x3f800000u, 0xbf800000u, 0x7fc00000u, 0x7fa00001u,
     0xffc00005u, 0x7f800000u};
 
-#define SCALAR(op, a, b, out) \
+static unsigned fl[16], nfl;
+#define SCALAR(op, a, b, out) do { mx_take(); \
     __asm__ volatile("movdqu %1, %%xmm0\n movdqu %2, %%xmm1\n " op " %%xmm1, %%xmm0\n movdqu %%xmm0, %0" \
-                     : "=m"(out) : "m"(a), "m"(b) : "xmm0", "xmm1")
-#define SCALAR_MEM(op, a, m, out) \
+                     : "=m"(out) : "m"(a), "m"(b) : "xmm0", "xmm1"); fl[nfl++] = mx_take(); } while (0)
+#define SCALAR_MEM(op, a, m, out) do { mx_take(); \
     __asm__ volatile("movdqu %1, %%xmm0\n " op " %2, %%xmm0\n movdqu %%xmm0, %0" \
-                     : "=m"(out) : "m"(a), "m"(m) : "xmm0")
+                     : "=m"(out) : "m"(a), "m"(m) : "xmm0"); fl[nfl++] = mx_take(); } while (0)
 
 int main(void) {
     for (int i = 0; i < 8; i++)
         for (int j = 0; j < 8; j++) {
+            nfl = 0;
             xmm_t a = {dv[i], 0x1111111111111111ull}, b = {dv[j], 0x2222222222222222ull}, r[4];
             SCALAR("minsd", a, b, r[0]); SCALAR("maxsd", a, b, r[1]);
             SCALAR_MEM("minsd", a, dv[j], r[2]); SCALAR_MEM("maxsd", a, dv[j], r[3]);
@@ -47,6 +60,9 @@ int main(void) {
                        (unsigned long long) q[k].hi, (unsigned long long) q[k].lo,
                        (unsigned long long) p[k].hi, (unsigned long long) p[k].lo,
                        (unsigned long long) f[k].hi, (unsigned long long) f[k].lo);
+            printf("  mxcsr");
+            for (unsigned k = 0; k < nfl; k++)
+                printf(" %02x", fl[k]);
             printf("\n");
         }
     return 0;

@@ -371,6 +371,9 @@ static void amd64_jit_debug(const char *fmt, ...) {
     va_end(args);
 }
 
+static bool gen_amd64_peek(struct gen_state *state, struct tlb *tlb, struct amd64_jit_insn *insn);
+static void amd64_flags_note(struct gen_state *state, const struct amd64_jit_insn *insn,
+        unsigned emitted_from);
 int gen_step(struct gen_state *state, struct tlb *tlb) {
     if (state->arm64) {
         if (state->jitprof == NULL)
@@ -396,7 +399,11 @@ int gen_step(struct gen_state *state, struct tlb *tlb) {
     guest_addr_t start = state->amd64 ? state->amd64_ip : state->ip;
     int ret;
     if (state->amd64) {
+        struct amd64_jit_insn flag_insn;
+        bool flag_insn_ok = gen_amd64_peek(state, tlb, &flag_insn);
+        unsigned emitted_from = state->size;
         ret = gen_step64(state, tlb);
+        amd64_flags_note(state, flag_insn_ok && ret ? &flag_insn : NULL, emitted_from);
     } else {
         state->x86_seg = X86_SEG_NONE;
         state->vec_noalign = false;
@@ -410,6 +417,220 @@ int gen_step(struct gen_state *state, struct tlb *tlb) {
             jitprof_note_bytes(state->jitprof, bytes, (unsigned) (end - start));
     }
     return ret;
+}
+
+static bool gen_decode_amd64(struct gen_state *state, struct tlb *tlb, struct amd64_jit_insn *insn);
+// Decode the next amd64 instruction without consuming it.
+static bool gen_amd64_peek(struct gen_state *state, struct tlb *tlb, struct amd64_jit_insn *insn) {
+    guest_addr_t ip = state->amd64_ip;
+    bool ok = gen_decode_amd64(state, tlb, insn);
+    state->amd64_ip = ip;
+    return ok;
+}
+
+// ---- amd64: flags nobody reads are not computed ----
+//
+// The amd64 gadgets deposit every arithmetic flag eagerly -- CF, OF, AF, ZF,
+// SF and PF, a branch apiece -- after every add, sub, logic op, shift and
+// inc/dec. In 7-Zip that was 28% of the amd64 guest's time (2026-10-04), and
+// almost all of it is thrown away: x86 code overwrites the flags with the next
+// arithmetic instruction long before anything branches on them.
+//
+// So translation tracks, within a block, the last flag-producing gadget whose
+// flags nothing has read yet. When a later instruction writes every flag that
+// producer computed (without reading any first), the producer's gadget word is
+// patched to its no-flags twin (the "_nf" gadgets, math.S AMD64_NF). Anything
+// that might read flags -- a jcc, setcc, cmov, adc, pushf, a string compare, a
+// syscall, any instruction this table does not know, a bridge to the
+// interpreter, and the end of the block -- leaves the producer as it was. The
+// classification only has to be right in one direction: calling a non-reader a
+// reader, or a writer a non-writer, costs speed, never correctness.
+//
+// What is given up: a SYNCHRONOUS fault taken between a skipped producer and
+// the instruction that overwrites its flags shows the handler (and a ptrace
+// stop) the flags as they were before the producer -- flags the program itself
+// never reads. Asynchronous signals and single-stepping only ever see a block
+// boundary, where every pending producer was left whole.
+#define AMD64_FL_CF 0x001u
+#define AMD64_FL_PF 0x004u
+#define AMD64_FL_AF 0x010u
+#define AMD64_FL_ZF 0x040u
+#define AMD64_FL_SF 0x080u
+#define AMD64_FL_OF 0x800u
+#define AMD64_FL_ALL (AMD64_FL_CF | AMD64_FL_PF | AMD64_FL_AF | AMD64_FL_ZF | AMD64_FL_SF | AMD64_FL_OF)
+
+// Which of the six flags an instruction reads, and which it DEFINITELY writes
+// (a write that depends on a run-time count, or leaves a flag undefined, is
+// not counted). Unknown instructions read everything.
+static void amd64_flag_rw(const struct amd64_jit_insn *insn, unsigned *r, unsigned *w) {
+    unsigned reg = insn->has_modrm ? ((insn->modrm >> 3) & 7) : 0;
+    *r = 0;
+    *w = 0;
+    if (!insn->two_byte_opcode) {
+        byte_t op = insn->opcode;
+        if (op <= 0x3d && (op & 7) <= 5 && op != 0x0f) {
+            unsigned group = op >> 3; // 0 add 1 or 2 adc 3 sbb 4 and 5 sub 6 xor 7 cmp
+            if (group == 2 || group == 3)
+                *r = AMD64_FL_CF;
+            *w = AMD64_FL_ALL;
+            return;
+        }
+        if ((op >= 0x50 && op <= 0x5f) || op == 0x63 || op == 0x68 || op == 0x6a ||
+                (op >= 0x86 && op <= 0x8b) || op == 0x8d || op == 0x8f ||
+                (op >= 0x90 && op <= 0x99) || (op >= 0xa0 && op <= 0xa5) ||
+                (op >= 0xaa && op <= 0xad) || (op >= 0xb0 && op <= 0xbf) ||
+                op == 0xc6 || op == 0xc7 || op == 0xc9 || op == 0xfc || op == 0xfd)
+            return; // moves, push/pop, lea, xchg, cwde/cdq, movs/stos/lods, cld/std
+        switch (op) {
+            case 0x69: case 0x6b: *w = AMD64_FL_CF | AMD64_FL_OF; return; // imul
+            case 0x80: case 0x81: case 0x83:
+                if (reg == 2 || reg == 3)
+                    *r = AMD64_FL_CF;
+                *w = AMD64_FL_ALL;
+                return;
+            case 0x84: case 0x85: case 0xa8: case 0xa9: *w = AMD64_FL_ALL; return; // test
+            case 0x9e: *w = AMD64_FL_ALL & ~AMD64_FL_OF; return; // sahf
+            case 0xc0: case 0xc1: case 0xd0: case 0xd1: case 0xd2: case 0xd3:
+                if (reg == 2 || reg == 3)
+                    break; // rcl/rcr read CF
+                return;    // count may be 0: writes nothing for sure
+            case 0xf5: *r = AMD64_FL_CF; *w = AMD64_FL_CF; return; // cmc
+            case 0xf6: case 0xf7:
+                if (reg <= 1 || reg == 3)
+                    *w = AMD64_FL_ALL; // test, neg
+                else if (reg == 4 || reg == 5)
+                    *w = AMD64_FL_CF | AMD64_FL_OF; // mul, imul
+                return; // not; div/idiv leave them undefined
+            case 0xf8: case 0xf9: *w = AMD64_FL_CF; return; // clc, stc
+            case 0xfe: case 0xff:
+                if (reg <= 1) {
+                    *w = AMD64_FL_ALL & ~AMD64_FL_CF; // inc/dec keep CF
+                    return;
+                }
+                if (op == 0xff && reg == 6)
+                    return; // push
+                break;
+        }
+        *r = AMD64_FL_ALL;
+        return;
+    }
+    byte_t op2 = insn->op2;
+    if (op2 == 0x2e || op2 == 0x2f || op2 == 0xb0 || op2 == 0xb1 || op2 == 0xc0 || op2 == 0xc1) {
+        *w = AMD64_FL_ALL; // (u)comis*, cmpxchg, xadd
+        return;
+    }
+    if (op2 == 0xaf) { *w = AMD64_FL_CF | AMD64_FL_OF; return; } // imul
+    if (op2 == 0xa3 || op2 == 0xab || op2 == 0xb3 || op2 == 0xbb ||
+            (op2 == 0xba && reg >= 4)) {
+        *w = AMD64_FL_CF; // bt/bts/btr/btc
+        return;
+    }
+    if (op2 == 0x0d || op2 == 0x18 || op2 == 0x1f || (op2 >= 0x10 && op2 <= 0x17) ||
+            (op2 >= 0x28 && op2 <= 0x2d) || (op2 >= 0x50 && op2 <= 0x7f) ||
+            op2 == 0xa2 || op2 == 0xa4 || op2 == 0xa5 || op2 == 0xac || op2 == 0xad ||
+            op2 == 0xb6 || op2 == 0xb7 || op2 == 0xbe || op2 == 0xbf ||
+            (op2 >= 0xc2 && op2 <= 0xc6) || (op2 >= 0xc8 && op2 <= 0xcf) || op2 >= 0xd0)
+        return; // SSE/MMX, nops, prefetch, cpuid, shld/shrd, movzx/movsx, bswap
+    *r = AMD64_FL_ALL; // jcc, setcc, cmov, syscall, 0F 38/3A (ptest...), anything else
+}
+
+#if defined(__aarch64__)
+// Full flag-producing gadget -> its no-flags twin, and the flags it writes.
+static unsigned long amd64_flags_twin(unsigned long g, unsigned *writes) {
+#define AMD64_NF_PAIR(name) \
+    extern void gadget_amd64_##name(void), gadget_amd64_##name##_nf(void);
+    AMD64_NF_PAIR(cached_arith_reg_reg) AMD64_NF_PAIR(arith_reg_reg)
+    AMD64_NF_PAIR(cached_arith_reg_imm) AMD64_NF_PAIR(arith_reg_imm)
+    AMD64_NF_PAIR(cached_logic_reg_imm) AMD64_NF_PAIR(cached_logic_reg_reg)
+    AMD64_NF_PAIR(cached_shift_reg_count)
+    AMD64_NF_PAIR(loadop_arith32) AMD64_NF_PAIR(loadop_arith64)
+    AMD64_NF_PAIR(opstore_arith32) AMD64_NF_PAIR(opstore_arith64)
+    AMD64_NF_PAIR(incdec_reg32) AMD64_NF_PAIR(incdec_reg64)
+#undef AMD64_NF_PAIR
+    static const struct { void (*full)(void), (*nf)(void); unsigned writes; } twins[] = {
+        {gadget_amd64_cached_arith_reg_reg, gadget_amd64_cached_arith_reg_reg_nf, AMD64_FL_ALL},
+        {gadget_amd64_arith_reg_reg, gadget_amd64_arith_reg_reg_nf, AMD64_FL_ALL},
+        {gadget_amd64_cached_arith_reg_imm, gadget_amd64_cached_arith_reg_imm_nf, AMD64_FL_ALL},
+        {gadget_amd64_arith_reg_imm, gadget_amd64_arith_reg_imm_nf, AMD64_FL_ALL},
+        {gadget_amd64_cached_logic_reg_imm, gadget_amd64_cached_logic_reg_imm_nf, AMD64_FL_ALL},
+        {gadget_amd64_cached_logic_reg_reg, gadget_amd64_cached_logic_reg_reg_nf, AMD64_FL_ALL},
+        {gadget_amd64_cached_shift_reg_count, gadget_amd64_cached_shift_reg_count_nf, AMD64_FL_ALL},
+        {gadget_amd64_loadop_arith32, gadget_amd64_loadop_arith32_nf, AMD64_FL_ALL},
+        {gadget_amd64_loadop_arith64, gadget_amd64_loadop_arith64_nf, AMD64_FL_ALL},
+        {gadget_amd64_opstore_arith32, gadget_amd64_opstore_arith32_nf, AMD64_FL_ALL},
+        {gadget_amd64_opstore_arith64, gadget_amd64_opstore_arith64_nf, AMD64_FL_ALL},
+        {gadget_amd64_incdec_reg32, gadget_amd64_incdec_reg32_nf, AMD64_FL_ALL & ~AMD64_FL_CF},
+        {gadget_amd64_incdec_reg64, gadget_amd64_incdec_reg64_nf, AMD64_FL_ALL & ~AMD64_FL_CF},
+    };
+    for (unsigned i = 0; i < sizeof(twins) / sizeof(twins[0]); i++) {
+        if ((unsigned long) twins[i].full == g) {
+            *writes = twins[i].writes;
+            return (unsigned long) twins[i].nf;
+        }
+    }
+    return 0;
+}
+#endif
+
+// After each amd64 instruction is translated: settle the pending producer
+// against this instruction's flag reads and writes, then make this
+// instruction the pending producer if it emitted a gadget that has a twin.
+// insn is NULL when the instruction did not translate (a bridge or fallback),
+// which counts as reading everything.
+static void amd64_flags_note(struct gen_state *state, const struct amd64_jit_insn *insn,
+        unsigned emitted_from) {
+#if defined(__aarch64__)
+    if (!(amd64_jit_fuse_mask() & JIT_FUSE_AMD64_DEADFLAGS)) {
+        state->amd64_flags_pending_slot = -1;
+        return;
+    }
+    unsigned r = AMD64_FL_ALL, w = 0;
+    if (insn != NULL)
+        amd64_flag_rw(insn, &r, &w);
+    int slot = state->amd64_flags_pending_slot;
+    if (slot >= 0) {
+        if (r & state->amd64_flags_pending_live) {
+            state->amd64_flags_pending_slot = -1; // read: the producer stays whole
+        } else {
+            state->amd64_flags_pending_live &= ~w;
+            if (state->amd64_flags_pending_live == 0) {
+                // Only if the word is still the producer: a later rewrite of
+                // the stream (a fusion truncating and re-emitting) must win.
+                if ((unsigned) slot < state->size &&
+                        state->block->code[slot] == state->amd64_flags_pending_full)
+                    state->block->code[slot] = state->amd64_flags_pending_nf;
+                state->amd64_flags_pending_slot = -1;
+            }
+        }
+    }
+    if (insn == NULL)
+        return;
+    // This instruction as a producer: exactly one twin-bearing gadget word in
+    // what it emitted (an operand word that happened to equal a gadget
+    // address would make two, and then nothing is risked).
+    int found = -1;
+    unsigned long nf = 0;
+    unsigned writes = 0;
+    for (unsigned i = emitted_from; i < state->size; i++) {
+        unsigned wr;
+        unsigned long twin = amd64_flags_twin(state->block->code[i], &wr);
+        if (twin == 0)
+            continue;
+        if (found >= 0)
+            return;
+        found = (int) i;
+        nf = twin;
+        writes = wr;
+    }
+    if (found >= 0 && (r & writes) == 0) {
+        state->amd64_flags_pending_slot = found;
+        state->amd64_flags_pending_full = state->block->code[found];
+        state->amd64_flags_pending_nf = nf;
+        state->amd64_flags_pending_live = writes;
+    }
+#else
+    (void) state; (void) insn; (void) emitted_from;
+#endif
 }
 
 static void gen(struct gen_state *state, unsigned long thing) {
@@ -664,6 +885,7 @@ bool gen_start(guest_addr_t addr, struct gen_state *state) {
     state->amd64_deferred_rip_valid = false;
     state->amd64_reg_cache_valid = false;
     state->amd64_reg_cache_dirty = false;
+    state->amd64_flags_pending_slot = -1;
     state->amd64_deferred_rip = addr;
     state->amd64_fallback_ip = addr;
     state->amd64_fallback_opcode = 0;
@@ -14553,7 +14775,7 @@ static const struct jit_fuse_entry riscv64_fuse_names[] = {
     {"rcache", JIT_FUSE_RV_RCACHE},
 };
 static const struct jit_fuse_entry amd64_fuse_names[] = {
-    {"incdec_reg", JIT_FUSE_AMD64_INCDEC_REG},
+    {"incdec_reg", JIT_FUSE_AMD64_INCDEC_REG}, {"deadflags", JIT_FUSE_AMD64_DEADFLAGS},
 };
 
 static const struct jit_fuse_domain jit_fuse_domains[] = {

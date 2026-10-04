@@ -1,4 +1,10 @@
 #include "gadgets.h"
+# AMD64_NF: set to 1 only while instantiating a gadget's no-flags twin (the
+# "_nf" gadgets), which skip the flag deposit -- the three
+# amd64_cached_set_*_flags macros expand to nothing under it. gen.c patches a
+# flag-setting gadget to its twin when the flags it computes are overwritten
+# before anything reads them (amd64_flags_note); see there for the rules.
+.set AMD64_NF, 0
 #include "math.h"
 #include "emu/interrupt.h"
 
@@ -241,6 +247,7 @@ amd64_x87_reg_gadget amd64_x87_reg_cached, 1
 .endm
 
 .macro amd64_cached_set_logic_flags result, size
+.if AMD64_NF == 0
     ldr w16, [_cpu, CPU_eflags]
     mov w17, (1 | PF_FLAG | AF_FLAG | ZF_FLAG | SF_FLAG | (1 << 11))
     bic w16, w16, w17
@@ -279,6 +286,7 @@ amd64_x87_reg_gadget amd64_x87_reg_cached, 1
     b .Lamd64_cached_flags_done_\@
 .Lamd64_cached_flags_set_sf_\@: orr w16, w16, SF_FLAG
 .Lamd64_cached_flags_done_\@: str w16, [_cpu, CPU_eflags]
+.endif
 .endm
 
 .gadget amd64_cached_mov_reg_reg
@@ -307,7 +315,8 @@ amd64_x87_reg_gadget amd64_x87_reg_cached, 1
     amd64_cached_write x10, x12, x11
     gret 2
 
-.gadget amd64_cached_logic_reg_imm
+.macro def_amd64_cached_logic_reg_imm sfx
+.gadget amd64_cached_logic_reg_imm\sfx
     ldr x8, [_ip]
     ldr x13, [_ip, 8]
     ubfx x9, x8, 8, 4
@@ -328,7 +337,14 @@ amd64_x87_reg_gadget amd64_x87_reg_cached, 1
     amd64_cached_set_logic_flags x15, x11
     gret 2
 
+.endm
+def_amd64_cached_logic_reg_imm
+.set AMD64_NF, 1
+def_amd64_cached_logic_reg_imm _nf
+.set AMD64_NF, 0
+.purgem def_amd64_cached_logic_reg_imm
 .macro amd64_cached_set_addsub_flags sign_bit
+.if AMD64_NF == 0
     strb w14, [_cpu, CPU_cf]
     strb w16, [_cpu, CPU_of]
     ldr w17, [_cpu, CPU_eflags]
@@ -360,9 +376,11 @@ amd64_x87_reg_gadget amd64_x87_reg_cached, 1
     bic w12, w12, (ZF_RES | SF_RES | PF_RES | AF_OPS)
     strb w12, [_cpu, CPU_flags_res]
     str w17, [_cpu, CPU_eflags]
+.endif
 .endm
 
-.gadget amd64_cached_arith_reg_imm
+.macro def_amd64_cached_arith_reg_imm sfx
+.gadget amd64_cached_arith_reg_imm\sfx
     ldr x8, [_ip]
     ldr x10, [_ip, 8]
     ubfx x9, x8, 8, 4
@@ -404,6 +422,12 @@ amd64_x87_reg_gadget amd64_x87_reg_cached, 1
     b.eq 7f
     amd64_cached_write x8, x15, x0
 7:  gret 2
+.endm
+def_amd64_cached_arith_reg_imm
+.set AMD64_NF, 1
+def_amd64_cached_arith_reg_imm _nf
+.set AMD64_NF, 0
+.purgem def_amd64_cached_arith_reg_imm
 
 # imul body: x13 = op1, x10 = op2, x9 = dst reg id, x12 = size (32/64).
 # result = low N bits of the signed product -> dst; CF=OF = (product was truncated),
@@ -461,7 +485,8 @@ amd64_x87_reg_gadget amd64_x87_reg_cached, 1
     amd64_imul_body
     gret 1
 
-.gadget amd64_cached_arith_reg_reg
+.macro def_amd64_cached_arith_reg_reg sfx
+.gadget amd64_cached_arith_reg_reg\sfx
     ldr x8, [_ip]
     and x9, x8, 0xff
     ubfx x10, x8, 8, 4
@@ -511,7 +536,14 @@ amd64_x87_reg_gadget amd64_x87_reg_cached, 1
     amd64_cached_write x8, x15, x0
 9:  gret 1
 
+.endm
+def_amd64_cached_arith_reg_reg
+.set AMD64_NF, 1
+def_amd64_cached_arith_reg_reg _nf
+.set AMD64_NF, 0
+.purgem def_amd64_cached_arith_reg_reg
 .macro amd64_cached_set_shift_flags sign_bit
+.if AMD64_NF == 0
     strb w14, [_cpu, CPU_cf]
     strb w16, [_cpu, CPU_of]
     ldr w17, [_cpu, CPU_eflags]
@@ -539,9 +571,11 @@ amd64_x87_reg_gadget amd64_x87_reg_cached, 1
     bic w12, w12, (ZF_RES | SF_RES | PF_RES | AF_OPS)
     strb w12, [_cpu, CPU_flags_res]
     str w17, [_cpu, CPU_eflags]
+.endif
 .endm
 
-.gadget amd64_cached_shift_reg_count
+.macro def_amd64_cached_shift_reg_count sfx
+.gadget amd64_cached_shift_reg_count\sfx
     ldr x8, [_ip]
     ldr x10, [_ip, 8]
     tbnz x10, 63, 16f
@@ -629,6 +663,12 @@ amd64_x87_reg_gadget amd64_x87_reg_cached, 1
 13: amd64_cached_write x8, x15, x0
     amd64_cached_set_shift_flags 63
 9:  gret 2
+.endm
+def_amd64_cached_shift_reg_count
+.set AMD64_NF, 1
+def_amd64_cached_shift_reg_count _nf
+.set AMD64_NF, 0
+.purgem def_amd64_cached_shift_reg_count
 
 # ROL/ROR reg, imm8 (0xc1 /0 rol, /1 ror), reg form, 32/64-bit. THE SHA-512 hot op
 # (Sigma/sigma are ror-chains) -- had no native gadget, bridged per-op through the
@@ -966,7 +1006,8 @@ amd64_gen_rotate_count rotate_count64, 8
 amd64_gen_shift_count shift_count32, 4
 amd64_gen_shift_count shift_count64, 8
 
-.gadget amd64_cached_logic_reg_reg
+.macro def_amd64_cached_logic_reg_reg sfx
+.gadget amd64_cached_logic_reg_reg\sfx
     ldr x8, [_ip]
     and x9, x8, 0xff
     ubfx x10, x8, 8, 4
@@ -995,6 +1036,12 @@ amd64_gen_shift_count shift_count64, 8
     amd64_cached_set_logic_flags x15, x0
     gret 1
 
+.endm
+def_amd64_cached_logic_reg_reg
+.set AMD64_NF, 1
+def_amd64_cached_logic_reg_reg _nf
+.set AMD64_NF, 0
+.purgem def_amd64_cached_logic_reg_reg
 .gadget amd64_hybrid_logic_reg_reg
     ldr x8, [_ip]
     and x9, x8, 0xff
@@ -1619,7 +1666,8 @@ amd64_gen_shift_count shift_count64, 8
 # cache, this reads/writes operands straight from CPU_amd64_regs. Same add/sub math +
 # eager addsub flags as cached_arith_reg_reg; CMP (>=0x38) sets flags but no write.
 # Operand: opcode bits 0-7, reg bits 8-11, rm bits 12-15, size bits 16-22.
-.gadget amd64_arith_reg_reg
+.macro def_amd64_arith_reg_reg sfx
+.gadget amd64_arith_reg_reg\sfx
     ldr  x8, [_ip]
     and  x9, x8, 0xff
     ubfx x10, x8, 8, 4
@@ -1671,12 +1719,19 @@ amd64_gen_shift_count shift_count64, 8
     add  x12, _cpu, CPU_amd64_regs
     str  x15, [x12, x8, lsl 3]
 9:  gret 1
+.endm
+def_amd64_arith_reg_reg
+.set AMD64_NF, 1
+def_amd64_arith_reg_reg _nf
+.set AMD64_NF, 0
+.purgem def_amd64_arith_reg_reg
 
 # Flush-style ADD/SUB/CMP reg,imm (0x81/0x83 /0,/5,/7), 32/64 -- high-reg sibling of
 # cached_arith_reg_imm (low-8 only); arith reg-imm had no flush fallback (logic does),
 # so r8-r15 bridged via amd64_jit_reg_imm_op. Operand: group bits 8-11 (0 add/5 sub/
 # 7 cmp), rm bits 12-15, size bits 16-22; imm = operand 1. CMP (/7) sets flags, no write.
-.gadget amd64_arith_reg_imm
+.macro def_amd64_arith_reg_imm sfx
+.gadget amd64_arith_reg_imm\sfx
     ldr  x8, [_ip]
     ldr  x10, [_ip, 8]
     ubfx x9, x8, 8, 4
@@ -1722,6 +1777,12 @@ amd64_gen_shift_count shift_count64, 8
     str  x15, [x12, x8, lsl 3]
 7:  gret 2
 
+.endm
+def_amd64_arith_reg_imm
+.set AMD64_NF, 1
+def_amd64_arith_reg_imm _nf
+.set AMD64_NF, 0
+.purgem def_amd64_arith_reg_imm
 .gadget amd64_logic_reg_imm
     ldr x8, [_ip]
     ldr x10, [_ip, 8]
@@ -3990,6 +4051,10 @@ amd64_gen_mov_store mov_store64, 8
 
 amd64_gen_loadop_arith loadop_arith32, 4, 31
 amd64_gen_loadop_arith loadop_arith64, 8, 63
+.set AMD64_NF, 1
+amd64_gen_loadop_arith loadop_arith32_nf, 4, 31
+amd64_gen_loadop_arith loadop_arith64_nf, 8, 63
+.set AMD64_NF, 0
 
 # amd64 load-op logic: reg <op>= [mem] (d=1 forms OR 0x0b / AND 0x23 / XOR 0x33),
 # mod!=3, sizes 32/64. reg is dst/lhs, [mem] is rhs. Like loadop_arith but with the
@@ -4112,6 +4177,10 @@ amd64_gen_loadop_logic loadop_logic64, 8, 64
 
 amd64_gen_opstore_arith opstore_arith32, 4, 31
 amd64_gen_opstore_arith opstore_arith64, 8, 63
+.set AMD64_NF, 1
+amd64_gen_opstore_arith opstore_arith32_nf, 4, 31
+amd64_gen_opstore_arith opstore_arith64_nf, 8, 63
+.set AMD64_NF, 0
 
 # amd64 op-store/RMW logic + TEST: [mem] <op>= reg for OR (0x09), AND (0x21), XOR
 # (0x31), and TEST (0x85 = [mem] AND reg, flags only, NO write), mod!=3, sizes 32/64.
@@ -4300,11 +4369,13 @@ amd64_gen_incdec_mem incdec_mem64, 8, 63
 .endif
     mov  x10, 1                      /* rhs = 1 (AF: lhs ^ 1 ^ result, bit 4) */
     amd64_cached_set_addsub_flags \sbit
+.if AMD64_NF == 0
     strb w11, [_cpu, CPU_cf]         /* restore CF byte: inc/dec preserve it */
     ldr  w17, [_cpu, CPU_eflags]
     bic  w17, w17, 1
     orr  w17, w17, w11               /* and restore eflags bit 0 (the pushfq image) */
     str  w17, [_cpu, CPU_eflags]
+.endif
     mov  x11, \size                  /* the hybrid write takes its size in a register */
     amd64_write_low_or_mem x9, x15, x11
     gret 1
@@ -4312,6 +4383,10 @@ amd64_gen_incdec_mem incdec_mem64, 8, 63
 
 amd64_gen_incdec_reg incdec_reg32, 31, 32
 amd64_gen_incdec_reg incdec_reg64, 63, 64
+.set AMD64_NF, 1
+amd64_gen_incdec_reg incdec_reg32_nf, 31, 32
+amd64_gen_incdec_reg incdec_reg64_nf, 63, 64
+.set AMD64_NF, 0
 
 # amd64 carry-flag ops: CLC (0xf8), STC (0xf9), CMC (0xf5). One byte, no operand, no
 # memory, no register -- they ONLY touch CF (interp 0xf8/f9/f5: cpu->cf + cpu->cf_bit).
@@ -5685,13 +5760,15 @@ amd64_gen_negnot negnot64, 8
 # source comes back unquieted. fmin/fmax quiet NaNs and order -0 below +0, and
 # 29 of 64 special-value pairs differed from the interpreter (2026-10-04).
 # fcmp sets mi/gt only for an ordered strict comparison, which is exactly the
-# rule. Scalar: \d = \a OP \b.
+# rule. Scalar: \d = \a OP \b. fcmpe, the signalling compare: MIN/MAX raise
+# Invalid for a NaN operand, quiet or signalling, and fcmp would raise it only
+# for a signalling one. (fcmgt, below, signals the same way.)
 .macro x86min d, a, b
-    fcmp \a, \b
+    fcmpe \a, \b
     fcsel \d, \a, \b, mi
 .endm
 .macro x86max d, a, b
-    fcmp \a, \b
+    fcmpe \a, \b
     fcsel \d, \a, \b, gt
 .endm
 
@@ -5878,12 +5955,15 @@ amd64_v_scalar_double maxsd, x86max
 # substitutes the x86 value; fcmp against 0.0 sets N only for an ordered
 # less-than, so -0 (sqrt is -0) and NaN inputs (quieted and propagated, the
 # same on both) go to fsqrt untouched. \ind is the indefinite's top 16 bits.
+# fsqrt runs in every case, the invalid one included: it is what raises the
+# host's Invalid Operation flag, which the guest's MXCSR.IE is made from
+# (sqrt(-1.0) has to report FE_INVALID -- fp_env checks it). Only the result's
+# value is then replaced.
 .macro amd64_sqrt_fix r, ldrr, ind, ind_shift
-    fcmp \r\()1, #0.0
-    b.mi 1f
     fsqrt \r\()0, \r\()1
-    b 2f
-1:  movz \ldrr\()12, \ind, lsl \ind_shift
+    fcmp \r\()1, #0.0
+    b.pl 2f
+    movz \ldrr\()12, \ind, lsl \ind_shift
     fmov \r\()0, \ldrr\()12
 2:
 .endm

@@ -48,6 +48,12 @@ struct gen_state {
     bool amd64_deferred_rip_valid;
     bool amd64_reg_cache_valid;
     bool amd64_reg_cache_dirty;
+    // amd64 dead-flag elimination (gen.c, amd64_flags_note): the stream slot of
+    // the last flag-producing gadget whose flags nothing has read yet, the
+    // flags of it still live, and the gadget's full and no-flags forms.
+    int amd64_flags_pending_slot;
+    unsigned amd64_flags_pending_live;
+    unsigned long amd64_flags_pending_full, amd64_flags_pending_nf;
     guest_addr_t amd64_deferred_rip;
     guest_addr_t amd64_fallback_ip;
     uint8_t amd64_fallback_opcode;

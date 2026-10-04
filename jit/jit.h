@@ -295,7 +295,8 @@ void jit_note_shared_write(struct jit *jit, const struct pt_entry *entry);
 // that re-derives operands the translator already knew. A native gadget
 // removes all three, which is why these are worth measuring separately.
 #define JIT_FUSE_AMD64_INCDEC_REG (1u << 0)  // FF /0,/1 mod==3: inc/dec of a register
-#define JIT_FUSE_AMD64_ALL (JIT_FUSE_AMD64_INCDEC_REG)
+#define JIT_FUSE_AMD64_DEADFLAGS  (1u << 1)  // skip flags the next writer overwrites unread
+#define JIT_FUSE_AMD64_ALL (JIT_FUSE_AMD64_INCDEC_REG | JIT_FUSE_AMD64_DEADFLAGS)
 
 // Live masks. Seeded on first use from the ISH_NO_*_FUSE / ISH_*_NO_FUSE
 // environment variables, whose existing semantics are unchanged (set to ANY value

@@ -1,0 +1,123 @@
+// Random straight-line x86-64 sequences mixing flag producers (add/sub/and/
+// or/xor/cmp/adc/sbb reg,reg and reg,imm8 at 64 and 32 bits, inc/dec, shl/
+// shr/sar by an immediate, test), flag-neutral instructions (mov, lea) and
+// flag readers in the MIDDLE of a sequence (setcc, cmovcc, adc/sbb, a short
+// jcc over a mov), ending in pushfq. Prints every register and the flags
+// after each sequence.
+//
+// The amd64 JIT skips flags that a later instruction overwrites before any
+// reader (jit/gen.c amd64_flags_note); a reader it fails to recognise shows as
+// a difference between
+//   echo deadflags=1 > /proc/ish/amd64_jit_fuse;  ./amd64_flag_liveness > on.txt
+//   echo deadflags=0 > /proc/ish/amd64_jit_fuse;  ./amd64_flag_liveness > off.txt
+//   echo 0 > /proc/ish/amd64_jit;                 ./amd64_flag_liveness > interp.txt
+// which must all be identical. Each sequence is generated into an executable
+// buffer before any runs, so no code is rewritten after translation.
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+#include <sys/mman.h>
+
+// Registers the sequences use: rax rcx rdx rbx rsi rdi r8 r9 r10 r11 r12 r13.
+// rsp/rbp stay out; r15 holds the state pointer, r14 is the pushfq scratch.
+static const int usable[] = {0, 1, 2, 3, 6, 7, 8, 9, 10, 11, 12, 13};
+#define NUSABLE 12
+
+// r[14] carries the flags in and out (r14 itself is only the pushfq scratch).
+struct state { uint64_t r[16]; };
+
+static uint64_t rng = 0x9e3779b97f4a7c15ull;
+static uint64_t rnd(void) { rng ^= rng << 13; rng ^= rng >> 7; rng ^= rng << 17; return rng; }
+static int pick(void) { return usable[rnd() % NUSABLE]; }
+
+static uint8_t *p;
+static void b(uint8_t v) { *p++ = v; }
+
+// REX for (reg field, rm field) with W
+static void rex(int w, int reg, int rm) {
+    uint8_t v = 0x40 | (w ? 8 : 0) | ((reg & 8) ? 4 : 0) | ((rm & 8) ? 1 : 0);
+    if (v != 0x40 || w)
+        b(v);
+    else if ((reg | rm) & 8)
+        b(v);
+}
+static void modrm_rr(int reg, int rm) { b((uint8_t) (0xc0 | (reg & 7) << 3 | (rm & 7))); }
+
+// mov reg64, [r15 + 8*i]  /  mov [r15 + 8*i], reg64
+static void load_reg(int reg) { b((uint8_t) (0x49 | ((reg & 8) ? 4 : 0))); b(0x8b); b((uint8_t) (0x47 | (reg & 7) << 3)); b((uint8_t) (8 * reg)); }
+static void store_reg(int reg) { b((uint8_t) (0x49 | ((reg & 8) ? 4 : 0))); b(0x89); b((uint8_t) (0x47 | (reg & 7) << 3)); b((uint8_t) (8 * reg)); }
+
+static void emit_one(void) {
+    int a = pick(), c = pick(), w = (int) (rnd() & 1);
+    switch (rnd() % 16) {
+        case 0: case 1: case 2: case 3: { // alu reg,reg: add or adc sbb and sub xor cmp
+            static const uint8_t ops[] = {0x01, 0x09, 0x11, 0x19, 0x21, 0x29, 0x31, 0x39};
+            rex(w, c, a); b(ops[rnd() % 8]); modrm_rr(c, a); break;
+        }
+        case 4: case 5: { // alu reg,imm8 (83 /n)
+            rex(w, 0, a); b(0x83); modrm_rr((int) (rnd() % 8), a); b((uint8_t) rnd()); break;
+        }
+        case 6: rex(w, 0, a); b(0xff); modrm_rr((int) (rnd() & 1), a); break; // inc/dec
+        case 7: { // shl/shr/sar imm8 (0 included)
+            static const int ext[] = {4, 5, 7};
+            rex(w, 0, a); b(0xc1); modrm_rr(ext[rnd() % 3], a); b((uint8_t) (rnd() % 40)); break;
+        }
+        case 8: rex(w, c, a); b(0x85); modrm_rr(c, a); break; // test
+        case 9: rex(1, c, a); b(0x89); modrm_rr(c, a); break; // mov
+        case 10: // lea a, [c + disp8]
+            rex(1, a, c); b(0x8d);
+            if ((c & 7) == 4) { b((uint8_t) (0x44 | (a & 7) << 3)); b(0x24); }
+            else b((uint8_t) (0x40 | (a & 7) << 3 | (c & 7)));
+            b((uint8_t) rnd()); break;
+        case 11: // setcc a8 (needs REX for sil/dil/r8b..)
+            b((uint8_t) (0x40 | ((a & 8) ? 1 : 0))); b(0x0f); b((uint8_t) (0x90 + rnd() % 16)); modrm_rr(0, a); break;
+        case 12: // cmovcc a, c (64)
+            rex(1, a, c); b(0x0f); b((uint8_t) (0x40 + rnd() % 16)); modrm_rr(a, c); break;
+        case 13: { // jcc over a 3-byte mov (rex.w 89 modrm)
+            b((uint8_t) (0x70 + rnd() % 16)); b(3);
+            rex(1, c, a); b(0x89); modrm_rr(c, a); break;
+        }
+        default: { // a second producer right away, to give the scan something to skip
+            static const uint8_t ops[] = {0x01, 0x29, 0x31};
+            rex(w, c, a); b(ops[rnd() % 3]); modrm_rr(c, a); break;
+        }
+    }
+}
+
+#define NSEQ 3000
+static void (*seqs[NSEQ])(struct state *);
+static struct state inputs[NSEQ];
+
+int main(void) {
+    uint8_t *code = mmap(NULL, 2 << 20, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (code == MAP_FAILED) { perror("mmap"); return 1; }
+    p = code;
+    for (int s = 0; s < NSEQ; s++) {
+        seqs[s] = (void (*)(struct state *)) p;
+        b(0x41); b(0x57); b(0x41); b(0x56); b(0x41); b(0x55); b(0x41); b(0x54); b(0x53); // push r15 r14 r13 r12 rbx
+        b(0x49); b(0x89); b(0xff);                     // mov r15, rdi
+        b(0x41); b(0xff); b(0x77); b(8 * 14);          // push qword [r15 + 112] (initial flags)
+        b(0x9d);                                       // popfq
+        for (int i = 0; i < NUSABLE; i++) load_reg(usable[i]);
+        int n = 3 + (int) (rnd() % 12);
+        for (int i = 0; i < n; i++) emit_one();
+        b(0x9c);                                       // pushfq
+        b(0x41); b(0x5e);                              // pop r14
+        b(0x4d); b(0x89); b(0x77); b(8 * 14);          // mov [r15 + 112], r14
+        for (int i = 0; i < NUSABLE; i++) store_reg(usable[i]);
+        b(0x5b); b(0x41); b(0x5c); b(0x41); b(0x5d); b(0x41); b(0x5e); b(0x41); b(0x5f); // pop rbx r12 r13 r14 r15
+        b(0xc3);
+        for (int i = 0; i < 16; i++)
+            inputs[s].r[i] = (rnd() & 3) == 0 ? (uint64_t) (int64_t) (int8_t) rnd() : rnd();
+        inputs[s].r[14] = (rnd() & 0x8d5) | 0x202; // arithmetic flags only: never TF or DF
+    }
+    for (int s = 0; s < NSEQ; s++) {
+        struct state st = inputs[s];
+        seqs[s](&st);
+        printf("%d", s);
+        for (int i = 0; i < NUSABLE; i++)
+            printf(" %016llx", (unsigned long long) st.r[usable[i]]);
+        printf(" fl %03llx\n", (unsigned long long) (st.r[14] & 0x8d5));
+    }
+    return 0;
+}
