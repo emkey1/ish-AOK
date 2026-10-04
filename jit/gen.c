@@ -556,7 +556,7 @@ static void amd64_flag_rw(const struct amd64_jit_insn *insn, unsigned *r, unsign
 }
 
 #if defined(__aarch64__)
-#define AMD64_SPEC_TWIN_BITS 13 // 8192 slots, > 2 x the 3248 pairs
+#define AMD64_SPEC_TWIN_BITS 14 // 16384 slots, > 2 x the 4448 pairs
 #define AMD64_SPEC_TWIN_SLOTS (1u << AMD64_SPEC_TWIN_BITS)
 static unsigned long amd64_spec_twin_full[AMD64_SPEC_TWIN_SLOTS];
 static unsigned long amd64_spec_twin_nf[AMD64_SPEC_TWIN_SLOTS];
@@ -578,7 +578,7 @@ static void amd64_spec_twin_init(void) {
         {amd64_ari_gadgets, amd64_ari_nf_gadgets, 2 * 2 * 16},
         {amd64_lrr_gadgets, amd64_lrr_nf_gadgets, 3 * 2 * 256},
         {amd64_lri_gadgets, amd64_lri_nf_gadgets, 3 * 2 * 16},
-        {amd64_slo_gadgets, amd64_slo_nf_gadgets, 3 * 2 * 8 * 9},
+        {amd64_slo_gadgets, amd64_slo_nf_gadgets, 3 * 2 * 16 * 17},
         {amd64_shi_gadgets, amd64_shi_nf_gadgets, 3 * 2 * 16},
     };
     for (unsigned f = 0; f < sizeof(fams) / sizeof(fams[0]); f++) {
@@ -637,7 +637,7 @@ static unsigned long amd64_flags_twin(unsigned long g, unsigned *writes) {
         }
     }
     // The register-specialised arith/logic/shift gadgets (math.S amd64_arr/
-    // ari/lrr/lri/slo/shi), 3248 pairs, through a hash table built once.
+    // ari/lrr/lri/slo/shi), 4448 pairs, through a hash table built once.
     unsigned long nf = amd64_spec_twin(g);
     if (nf != 0)
         *writes = AMD64_FL_ALL;
@@ -938,7 +938,9 @@ __attribute__((unused)) static bool amd64_jit_low8_reg(unsigned reg) {
 // any of the sixteen registers: rax..rdi in the cache, r8-r15 in their
 // CPU_amd64_regs slot. The cache only has to be loaded when one of the
 // operands is in it (pass the same id twice for one operand), and only
-// becomes dirty when the destination is.
+// becomes dirty when the destination is. Not for the memory families
+// (sld/sst/slo): their slow paths store x20-x27 unconditionally, so the
+// cache must be loaded before them whatever the operands.
 __attribute__((unused)) static void gen_amd64_r16_enter(struct gen_state *state, unsigned a, unsigned b) {
     if (amd64_jit_low8_reg(a) || amd64_jit_low8_reg(b))
         gen_amd64_ensure_reg_cache(state);
@@ -13681,32 +13683,30 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
                 (unsigned long long) insn.start_ip, insn.opcode, is_load, size,
                 meta, disp, (unsigned long long) next_ip);
 #if defined(__aarch64__)
-        // A cached register to or from [cached base + disp] or [rip + disp]:
-        // one gadget that keeps the register cache live (math.S amd64_sld/sst;
-        // see there for what saves the cache on a fault).
+        // Any register to or from [base + disp] or [rip + disp]: one gadget
+        // that keeps the register cache live (math.S amd64_sld/sst; see there
+        // for what saves the cache on a fault).
         {
             unsigned mreg = amd64_modrm_reg(insn.modrm) | (insn.rex.r ? 8 : 0);
             unsigned mbase = (unsigned) ((meta >> AMD64_JIT_MEM_BASE_SHIFT) & 0xf);
             bool has_base = (meta & AMD64_JIT_MEM_HAS_BASE) != 0;
             bool rip_rel = (meta & AMD64_JIT_MEM_RIP_REL) != 0;
             if ((size == 32 || size == 64) && (amd64_jit_fuse_mask() & JIT_FUSE_AMD64_MEMR) &&
-                    amd64_jit_low8_reg(mreg) && !(meta & AMD64_JIT_MEM_HAS_INDEX) &&
+                    !(meta & AMD64_JIT_MEM_HAS_INDEX) &&
                     !(meta & (AMD64_JIT_MEM_FS | AMD64_JIT_MEM_GS)) &&
-                    ((rip_rel && !has_base) || (has_base && !rip_rel && amd64_jit_low8_reg(mbase)))) {
-                extern void (*const amd64_smem_gadgets[])(void), (*const amd64_smem_rip_gadgets[])(void);
+                    ((rip_rel && !has_base) || (has_base && !rip_rel))) {
+                extern void (*const amd64_smem_gadgets[])(void);
                 unsigned st = is_load ? 0 : 1, s64 = size == 64;
+                unsigned b = rip_rel ? 16 : mbase;
+                // Always load the cache, even for r8-r15 operands: the slow
+                // paths and the host-fault spill store x20-x27 over rax..rdi.
                 gen_amd64_ensure_reg_cache(state);
                 state->amd64_deferred_rip_valid = false; // the gadget publishes the rip
-                if (rip_rel) {
-                    gen(state, (unsigned long) amd64_smem_rip_gadgets[(st * 2 + s64) * 8 + mreg]);
-                    gen(state, (unsigned long) (next_ip + (int64_t) disp));
-                } else {
-                    gen(state, (unsigned long) amd64_smem_gadgets[((st * 2 + s64) * 8 + mreg) * 8 + mbase]);
-                    gen(state, disp);
-                }
+                gen(state, (unsigned long) amd64_smem_gadgets[((st * 2 + s64) * 16 + mreg) * 17 + b]);
+                gen(state, rip_rel ? (unsigned long) (next_ip + (int64_t) disp) : disp);
                 gen(state, (unsigned long) insn.start_ip);
                 if (is_load)
-                    gen_amd64_mark_reg_cache_dirty(state);
+                    gen_amd64_r16_wrote(state, mreg);
                 gen_amd64_defer_rip(state, next_ip);
                 return true;
             }
@@ -13757,26 +13757,26 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
                 (unsigned long long) insn.start_ip, insn.opcode, size,
                 meta, disp, (unsigned long long) next_ip);
 #if defined(__aarch64__)
-        // A cached register op [cached base + disp] or [rip + disp]: one gadget
-        // on the live register cache (math.S amd64_slo_*).
+        // Any register op [base + disp] or [rip + disp]: one gadget on the
+        // live register cache (math.S amd64_slo_*).
         {
             unsigned lreg = amd64_modrm_reg(insn.modrm) | (insn.rex.r ? 8 : 0);
             unsigned lbase = (unsigned) ((meta >> AMD64_JIT_MEM_BASE_SHIFT) & 0xf);
             bool has_base = (meta & AMD64_JIT_MEM_HAS_BASE) != 0;
             bool rip_rel = (meta & AMD64_JIT_MEM_RIP_REL) != 0;
-            if ((amd64_jit_fuse_mask() & JIT_FUSE_AMD64_MEMR) && amd64_jit_low8_reg(lreg) &&
+            if ((amd64_jit_fuse_mask() & JIT_FUSE_AMD64_MEMR) &&
                     !(meta & AMD64_JIT_MEM_HAS_INDEX) && !(meta & (AMD64_JIT_MEM_FS | AMD64_JIT_MEM_GS)) &&
-                    ((rip_rel && !has_base) || (has_base && !rip_rel && amd64_jit_low8_reg(lbase)))) {
+                    ((rip_rel && !has_base) || (has_base && !rip_rel))) {
                 extern void (*const amd64_slo_gadgets[])(void);
                 unsigned op = insn.opcode == 0x03 ? 0 : insn.opcode == 0x2b ? 1 : 2;
-                gen_amd64_ensure_reg_cache(state);
+                gen_amd64_ensure_reg_cache(state); // the slow paths spill it (amd64_sld/sst above)
                 state->amd64_deferred_rip_valid = false; // the gadget publishes the rip
-                gen(state, (unsigned long) amd64_slo_gadgets[((op * 2 + (size == 64)) * 8 + lreg) * 9 +
-                        (rip_rel ? 8 : lbase)]);
+                gen(state, (unsigned long) amd64_slo_gadgets[((op * 2 + (size == 64)) * 16 + lreg) * 17 +
+                        (rip_rel ? 16 : lbase)]);
                 gen(state, rip_rel ? (unsigned long) (next_ip + (int64_t) disp) : disp);
                 gen(state, (unsigned long) insn.start_ip);
                 if (op != 2)
-                    gen_amd64_mark_reg_cache_dirty(state);
+                    gen_amd64_r16_wrote(state, lreg);
                 gen_amd64_defer_rip(state, next_ip);
                 return true;
             }

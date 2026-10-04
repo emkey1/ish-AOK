@@ -6,7 +6,7 @@
 // gadgets' slow paths spill the cache before the segfault exit.
 //
 // Loads, stores, add and cmp reg,[mem] at 32 and 64 bits, through a cached
-// base (rcx = NULL).
+// base (rcx = NULL), and through r9 with r10 as the data register.
 // Passes on real x86 and under the interpreter (echo 0 > /proc/ish/amd64_jit).
 #define _GNU_SOURCE
 #include <setjmp.h>
@@ -50,7 +50,7 @@ static void check(const char *what, uint64_t got, uint64_t want) {
             "movq %%rsi, %%rdi\n"             \
             "xorl %%ecx, %%ecx\n"             /* the cached base: NULL */ \
             insn "\n"                         \
-            ::: "rax", "rbx", "rcx", "rdx", "rsi", "rdi", "memory", "cc"); \
+            ::: "rax", "rbx", "rcx", "rdx", "rsi", "rdi", "r9", "r10", "memory", "cc"); \
         printf("FAIL: %s did not fault\n", name); failures++; \
     } else { \
         check(name " rax", seen_rax, 0x1111111111111112ull); \
@@ -72,6 +72,15 @@ int main(void) {
     FAULTING("store32", "movl %%eax, 16(%%rcx)");
     FAULTING("add64 reg,mem", "addq 16(%%rcx), %%rbx");
     FAULTING("cmp32 reg,mem", "cmpl 16(%%rcx), %%ebx");
+    // r8-r15 as the base and as the data register (they live in memory, not
+    // in the cache), and the same right after a jump: a fresh block, where
+    // nothing has loaded the cache yet -- the gadget's slow path still writes
+    // x20-x27 back, so the JIT must have loaded them first.
+    FAULTING("load64 r10,[r9]", "xorl %%r9d, %%r9d\n movq 16(%%r9), %%r10");
+    FAULTING("store32 [r9],r10d", "xorl %%r9d, %%r9d\n movl %%r10d, 16(%%r9)");
+    FAULTING("sub64 r10,[r9]", "xorl %%r9d, %%r9d\n subq 16(%%r9), %%r10");
+    FAULTING("load64 r10,[r9] new block", "xorl %%r9d, %%r9d\n jmp 1f\n 1: movq 16(%%r9), %%r10");
+    FAULTING("cmp64 r10,[r9] new block", "xorl %%r9d, %%r9d\n jmp 1f\n 1: cmpq 16(%%r9), %%r10");
     printf("amd64_fault_regs: %s\n", failures ? "FAIL" : "PASS");
     return failures != 0;
 }
