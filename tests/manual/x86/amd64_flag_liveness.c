@@ -11,7 +11,8 @@
 //   echo deadflags=1 > /proc/ish/amd64_jit_fuse;  ./amd64_flag_liveness > on.txt
 //   echo deadflags=0 > /proc/ish/amd64_jit_fuse;  ./amd64_flag_liveness > off.txt
 //   echo 0 > /proc/ish/amd64_jit;                 ./amd64_flag_liveness > interp.txt
-// which must all be identical. Each sequence is generated into an executable
+// which must all be identical (with ISH_RANDOMIZE_VA_SPACE=0: rip-relative
+// lea results are code addresses). Each sequence is generated into an executable
 // buffer before any runs, so no code is rewritten after translation.
 #include <stdint.h>
 #include <stdio.h>
@@ -93,9 +94,15 @@ static void emit_one(void) {
             rex(w, 0, a); b(0xc1); modrm_rr(ext[rnd() % 3], a); b((uint8_t) (rnd() % 40)); break;
         }
         case 8: rex(w, c, a); b(0x85); modrm_rr(c, a); break; // test
-        case 9: rex(1, c, a); b(0x89); modrm_rr(c, a); break; // mov
-        case 10: // lea a, [c + disp8]
-            rex(1, a, c); b(0x8d);
+        case 9: rex(w, c, a); b(rnd() & 1 ? 0x89 : 0x8b); modrm_rr(c, a); break; // mov r64/r32, both directions
+        case 10: // lea a, [c + disp8] (64 or 32), or 1 time in 4 lea a, [rip + disp32]
+            if ((rnd() & 3) == 0) {
+                rex(w, a, 0); b(0x8d); b((uint8_t) (0x05 | (a & 7) << 3));
+                uint32_t d = (uint32_t) rnd();
+                memcpy(p, &d, 4); p += 4;
+                break;
+            }
+            rex(w, a, c); b(0x8d);
             if ((c & 7) == 4) { b((uint8_t) (0x44 | (a & 7) << 3)); b(0x24); }
             else b((uint8_t) (0x40 | (a & 7) << 3 | (c & 7)));
             b((uint8_t) rnd()); break;

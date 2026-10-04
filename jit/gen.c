@@ -12472,6 +12472,32 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
                 disp,
                 (unsigned long long) next_ip);
 #if defined(__aarch64__)
+        // [base + disp] with a cached base, or [rip + disp], into a cached
+        // destination: one specialised gadget (math.S amd64_lea*, amd64_movi*).
+        {
+            unsigned lea_dst = (unsigned) ((meta >> AMD64_JIT_MEM_REG_SHIFT) & 0xf);
+            unsigned lea_base = (unsigned) ((meta >> AMD64_JIT_MEM_BASE_SHIFT) & 0xf);
+            bool has_base = (meta & AMD64_JIT_MEM_HAS_BASE) != 0;
+            bool has_index = (meta & AMD64_JIT_MEM_HAS_INDEX) != 0;
+            bool rip_rel = (meta & AMD64_JIT_MEM_RIP_REL) != 0;
+            if ((size == 32 || size == 64) && (amd64_jit_fuse_mask() & JIT_FUSE_AMD64_MOVR) &&
+                    amd64_jit_low8_reg(lea_dst) && !has_index &&
+                    !(meta & (AMD64_JIT_MEM_FS | AMD64_JIT_MEM_GS)) &&
+                    ((rip_rel && !has_base) || (has_base && !rip_rel && amd64_jit_low8_reg(lea_base)))) {
+                extern void (*const amd64_lea_bd_gadgets[])(void), (*const amd64_movi_gadgets[])(void);
+                gen_amd64_ensure_reg_cache(state);
+                if (rip_rel) {
+                    gen(state, (unsigned long) amd64_movi_gadgets[(size == 64 ? 8 : 0) + lea_dst]);
+                    gen(state, (unsigned long) (next_ip + (int64_t) disp));
+                } else {
+                    gen(state, (unsigned long) amd64_lea_bd_gadgets[(size == 64 ? 64 : 0) + lea_dst * 8 + lea_base]);
+                    gen(state, disp);
+                }
+                gen_amd64_mark_reg_cache_dirty(state);
+                gen_amd64_defer_rip(state, next_ip);
+                return true;
+            }
+        }
         extern void gadget_amd64_cached_lea_reg_mem(void);
         gen_amd64_ensure_reg_cache(state);
         gen(state, (unsigned long) gadget_amd64_cached_lea_reg_mem);
@@ -12748,6 +12774,18 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
                 dst_id,
                 (unsigned long long) next_ip);
 #if defined(__aarch64__)
+        // One gadget per (size, dst, src) with no operand word (math.S
+        // amd64_movr*): no run-time register selection at all.
+        if ((size == 32 || size == 64) && (amd64_jit_fuse_mask() & JIT_FUSE_AMD64_MOVR) &&
+                (amd64_jit_low8_reg(src_id) || amd64_jit_low8_reg(dst_id))) {
+            extern void (*const amd64_movr_gadgets[])(void);
+            gen_amd64_ensure_reg_cache(state);
+            gen(state, (unsigned long) amd64_movr_gadgets[(size == 64 ? 256 : 0) + dst_id * 16 + src_id]);
+            if (amd64_jit_low8_reg(dst_id))
+                gen_amd64_mark_reg_cache_dirty(state);
+            gen_amd64_defer_rip(state, next_ip);
+            return true;
+        }
         if (amd64_jit_low8_reg(src_id) && amd64_jit_low8_reg(dst_id)) {
             extern void gadget_amd64_cached_mov_reg_reg(void);
             gen_amd64_ensure_reg_cache(state);
@@ -14776,6 +14814,7 @@ static const struct jit_fuse_entry riscv64_fuse_names[] = {
 };
 static const struct jit_fuse_entry amd64_fuse_names[] = {
     {"incdec_reg", JIT_FUSE_AMD64_INCDEC_REG}, {"deadflags", JIT_FUSE_AMD64_DEADFLAGS},
+    {"movr", JIT_FUSE_AMD64_MOVR},
 };
 
 static const struct jit_fuse_domain jit_fuse_domains[] = {

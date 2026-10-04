@@ -30,6 +30,2466 @@
     ldr x25, [x8, 56]
     gret
 
+# ---- `mov r64/r32, r64/r32` specialised per register pair ----
+#
+# amd64_cached_mov_reg_reg and amd64_hybrid_mov_reg_reg pick both registers at
+# run time through compare chains (amd64_cached_read/_write, up to eight
+# cmp/b.ne each, plus a chain on the size): 7.6% of amd64 7-Zip together
+# (2026-10-04). Here each (size, dst, src) is its own gadget with no operand
+# word: low-8 to low-8 is one mov between cache registers; a pair with one of
+# r8-r15 (which live only in CPU_amd64_regs) is one ldr or str. A 32-bit move
+# zero-extends the destination, as x86 does. gen.c's table
+# amd64_movr_gadgets[size64][dst][src] has 0 for r8-r15 to r8-r15, which keeps
+# the generic gadget. Cache ids: 0 rax x20, 1 rcx x22, 2 rdx x23, 3 rbx x21,
+# 4 rsp x27, 5 rbp x26, 6 rsi x24, 7 rdi x25.
+.gadget amd64_movr32_0_0
+    mov w20, w20
+    gret
+.gadget amd64_movr32_0_1
+    mov w20, w22
+    gret
+.gadget amd64_movr32_0_2
+    mov w20, w23
+    gret
+.gadget amd64_movr32_0_3
+    mov w20, w21
+    gret
+.gadget amd64_movr32_0_4
+    mov w20, w27
+    gret
+.gadget amd64_movr32_0_5
+    mov w20, w26
+    gret
+.gadget amd64_movr32_0_6
+    mov w20, w24
+    gret
+.gadget amd64_movr32_0_7
+    mov w20, w25
+    gret
+.gadget amd64_movr32_0_8
+    ldr w20, [_cpu, CPU_amd64_regs + 64]
+    gret
+.gadget amd64_movr32_0_9
+    ldr w20, [_cpu, CPU_amd64_regs + 72]
+    gret
+.gadget amd64_movr32_0_10
+    ldr w20, [_cpu, CPU_amd64_regs + 80]
+    gret
+.gadget amd64_movr32_0_11
+    ldr w20, [_cpu, CPU_amd64_regs + 88]
+    gret
+.gadget amd64_movr32_0_12
+    ldr w20, [_cpu, CPU_amd64_regs + 96]
+    gret
+.gadget amd64_movr32_0_13
+    ldr w20, [_cpu, CPU_amd64_regs + 104]
+    gret
+.gadget amd64_movr32_0_14
+    ldr w20, [_cpu, CPU_amd64_regs + 112]
+    gret
+.gadget amd64_movr32_0_15
+    ldr w20, [_cpu, CPU_amd64_regs + 120]
+    gret
+.gadget amd64_movr32_1_0
+    mov w22, w20
+    gret
+.gadget amd64_movr32_1_1
+    mov w22, w22
+    gret
+.gadget amd64_movr32_1_2
+    mov w22, w23
+    gret
+.gadget amd64_movr32_1_3
+    mov w22, w21
+    gret
+.gadget amd64_movr32_1_4
+    mov w22, w27
+    gret
+.gadget amd64_movr32_1_5
+    mov w22, w26
+    gret
+.gadget amd64_movr32_1_6
+    mov w22, w24
+    gret
+.gadget amd64_movr32_1_7
+    mov w22, w25
+    gret
+.gadget amd64_movr32_1_8
+    ldr w22, [_cpu, CPU_amd64_regs + 64]
+    gret
+.gadget amd64_movr32_1_9
+    ldr w22, [_cpu, CPU_amd64_regs + 72]
+    gret
+.gadget amd64_movr32_1_10
+    ldr w22, [_cpu, CPU_amd64_regs + 80]
+    gret
+.gadget amd64_movr32_1_11
+    ldr w22, [_cpu, CPU_amd64_regs + 88]
+    gret
+.gadget amd64_movr32_1_12
+    ldr w22, [_cpu, CPU_amd64_regs + 96]
+    gret
+.gadget amd64_movr32_1_13
+    ldr w22, [_cpu, CPU_amd64_regs + 104]
+    gret
+.gadget amd64_movr32_1_14
+    ldr w22, [_cpu, CPU_amd64_regs + 112]
+    gret
+.gadget amd64_movr32_1_15
+    ldr w22, [_cpu, CPU_amd64_regs + 120]
+    gret
+.gadget amd64_movr32_2_0
+    mov w23, w20
+    gret
+.gadget amd64_movr32_2_1
+    mov w23, w22
+    gret
+.gadget amd64_movr32_2_2
+    mov w23, w23
+    gret
+.gadget amd64_movr32_2_3
+    mov w23, w21
+    gret
+.gadget amd64_movr32_2_4
+    mov w23, w27
+    gret
+.gadget amd64_movr32_2_5
+    mov w23, w26
+    gret
+.gadget amd64_movr32_2_6
+    mov w23, w24
+    gret
+.gadget amd64_movr32_2_7
+    mov w23, w25
+    gret
+.gadget amd64_movr32_2_8
+    ldr w23, [_cpu, CPU_amd64_regs + 64]
+    gret
+.gadget amd64_movr32_2_9
+    ldr w23, [_cpu, CPU_amd64_regs + 72]
+    gret
+.gadget amd64_movr32_2_10
+    ldr w23, [_cpu, CPU_amd64_regs + 80]
+    gret
+.gadget amd64_movr32_2_11
+    ldr w23, [_cpu, CPU_amd64_regs + 88]
+    gret
+.gadget amd64_movr32_2_12
+    ldr w23, [_cpu, CPU_amd64_regs + 96]
+    gret
+.gadget amd64_movr32_2_13
+    ldr w23, [_cpu, CPU_amd64_regs + 104]
+    gret
+.gadget amd64_movr32_2_14
+    ldr w23, [_cpu, CPU_amd64_regs + 112]
+    gret
+.gadget amd64_movr32_2_15
+    ldr w23, [_cpu, CPU_amd64_regs + 120]
+    gret
+.gadget amd64_movr32_3_0
+    mov w21, w20
+    gret
+.gadget amd64_movr32_3_1
+    mov w21, w22
+    gret
+.gadget amd64_movr32_3_2
+    mov w21, w23
+    gret
+.gadget amd64_movr32_3_3
+    mov w21, w21
+    gret
+.gadget amd64_movr32_3_4
+    mov w21, w27
+    gret
+.gadget amd64_movr32_3_5
+    mov w21, w26
+    gret
+.gadget amd64_movr32_3_6
+    mov w21, w24
+    gret
+.gadget amd64_movr32_3_7
+    mov w21, w25
+    gret
+.gadget amd64_movr32_3_8
+    ldr w21, [_cpu, CPU_amd64_regs + 64]
+    gret
+.gadget amd64_movr32_3_9
+    ldr w21, [_cpu, CPU_amd64_regs + 72]
+    gret
+.gadget amd64_movr32_3_10
+    ldr w21, [_cpu, CPU_amd64_regs + 80]
+    gret
+.gadget amd64_movr32_3_11
+    ldr w21, [_cpu, CPU_amd64_regs + 88]
+    gret
+.gadget amd64_movr32_3_12
+    ldr w21, [_cpu, CPU_amd64_regs + 96]
+    gret
+.gadget amd64_movr32_3_13
+    ldr w21, [_cpu, CPU_amd64_regs + 104]
+    gret
+.gadget amd64_movr32_3_14
+    ldr w21, [_cpu, CPU_amd64_regs + 112]
+    gret
+.gadget amd64_movr32_3_15
+    ldr w21, [_cpu, CPU_amd64_regs + 120]
+    gret
+.gadget amd64_movr32_4_0
+    mov w27, w20
+    gret
+.gadget amd64_movr32_4_1
+    mov w27, w22
+    gret
+.gadget amd64_movr32_4_2
+    mov w27, w23
+    gret
+.gadget amd64_movr32_4_3
+    mov w27, w21
+    gret
+.gadget amd64_movr32_4_4
+    mov w27, w27
+    gret
+.gadget amd64_movr32_4_5
+    mov w27, w26
+    gret
+.gadget amd64_movr32_4_6
+    mov w27, w24
+    gret
+.gadget amd64_movr32_4_7
+    mov w27, w25
+    gret
+.gadget amd64_movr32_4_8
+    ldr w27, [_cpu, CPU_amd64_regs + 64]
+    gret
+.gadget amd64_movr32_4_9
+    ldr w27, [_cpu, CPU_amd64_regs + 72]
+    gret
+.gadget amd64_movr32_4_10
+    ldr w27, [_cpu, CPU_amd64_regs + 80]
+    gret
+.gadget amd64_movr32_4_11
+    ldr w27, [_cpu, CPU_amd64_regs + 88]
+    gret
+.gadget amd64_movr32_4_12
+    ldr w27, [_cpu, CPU_amd64_regs + 96]
+    gret
+.gadget amd64_movr32_4_13
+    ldr w27, [_cpu, CPU_amd64_regs + 104]
+    gret
+.gadget amd64_movr32_4_14
+    ldr w27, [_cpu, CPU_amd64_regs + 112]
+    gret
+.gadget amd64_movr32_4_15
+    ldr w27, [_cpu, CPU_amd64_regs + 120]
+    gret
+.gadget amd64_movr32_5_0
+    mov w26, w20
+    gret
+.gadget amd64_movr32_5_1
+    mov w26, w22
+    gret
+.gadget amd64_movr32_5_2
+    mov w26, w23
+    gret
+.gadget amd64_movr32_5_3
+    mov w26, w21
+    gret
+.gadget amd64_movr32_5_4
+    mov w26, w27
+    gret
+.gadget amd64_movr32_5_5
+    mov w26, w26
+    gret
+.gadget amd64_movr32_5_6
+    mov w26, w24
+    gret
+.gadget amd64_movr32_5_7
+    mov w26, w25
+    gret
+.gadget amd64_movr32_5_8
+    ldr w26, [_cpu, CPU_amd64_regs + 64]
+    gret
+.gadget amd64_movr32_5_9
+    ldr w26, [_cpu, CPU_amd64_regs + 72]
+    gret
+.gadget amd64_movr32_5_10
+    ldr w26, [_cpu, CPU_amd64_regs + 80]
+    gret
+.gadget amd64_movr32_5_11
+    ldr w26, [_cpu, CPU_amd64_regs + 88]
+    gret
+.gadget amd64_movr32_5_12
+    ldr w26, [_cpu, CPU_amd64_regs + 96]
+    gret
+.gadget amd64_movr32_5_13
+    ldr w26, [_cpu, CPU_amd64_regs + 104]
+    gret
+.gadget amd64_movr32_5_14
+    ldr w26, [_cpu, CPU_amd64_regs + 112]
+    gret
+.gadget amd64_movr32_5_15
+    ldr w26, [_cpu, CPU_amd64_regs + 120]
+    gret
+.gadget amd64_movr32_6_0
+    mov w24, w20
+    gret
+.gadget amd64_movr32_6_1
+    mov w24, w22
+    gret
+.gadget amd64_movr32_6_2
+    mov w24, w23
+    gret
+.gadget amd64_movr32_6_3
+    mov w24, w21
+    gret
+.gadget amd64_movr32_6_4
+    mov w24, w27
+    gret
+.gadget amd64_movr32_6_5
+    mov w24, w26
+    gret
+.gadget amd64_movr32_6_6
+    mov w24, w24
+    gret
+.gadget amd64_movr32_6_7
+    mov w24, w25
+    gret
+.gadget amd64_movr32_6_8
+    ldr w24, [_cpu, CPU_amd64_regs + 64]
+    gret
+.gadget amd64_movr32_6_9
+    ldr w24, [_cpu, CPU_amd64_regs + 72]
+    gret
+.gadget amd64_movr32_6_10
+    ldr w24, [_cpu, CPU_amd64_regs + 80]
+    gret
+.gadget amd64_movr32_6_11
+    ldr w24, [_cpu, CPU_amd64_regs + 88]
+    gret
+.gadget amd64_movr32_6_12
+    ldr w24, [_cpu, CPU_amd64_regs + 96]
+    gret
+.gadget amd64_movr32_6_13
+    ldr w24, [_cpu, CPU_amd64_regs + 104]
+    gret
+.gadget amd64_movr32_6_14
+    ldr w24, [_cpu, CPU_amd64_regs + 112]
+    gret
+.gadget amd64_movr32_6_15
+    ldr w24, [_cpu, CPU_amd64_regs + 120]
+    gret
+.gadget amd64_movr32_7_0
+    mov w25, w20
+    gret
+.gadget amd64_movr32_7_1
+    mov w25, w22
+    gret
+.gadget amd64_movr32_7_2
+    mov w25, w23
+    gret
+.gadget amd64_movr32_7_3
+    mov w25, w21
+    gret
+.gadget amd64_movr32_7_4
+    mov w25, w27
+    gret
+.gadget amd64_movr32_7_5
+    mov w25, w26
+    gret
+.gadget amd64_movr32_7_6
+    mov w25, w24
+    gret
+.gadget amd64_movr32_7_7
+    mov w25, w25
+    gret
+.gadget amd64_movr32_7_8
+    ldr w25, [_cpu, CPU_amd64_regs + 64]
+    gret
+.gadget amd64_movr32_7_9
+    ldr w25, [_cpu, CPU_amd64_regs + 72]
+    gret
+.gadget amd64_movr32_7_10
+    ldr w25, [_cpu, CPU_amd64_regs + 80]
+    gret
+.gadget amd64_movr32_7_11
+    ldr w25, [_cpu, CPU_amd64_regs + 88]
+    gret
+.gadget amd64_movr32_7_12
+    ldr w25, [_cpu, CPU_amd64_regs + 96]
+    gret
+.gadget amd64_movr32_7_13
+    ldr w25, [_cpu, CPU_amd64_regs + 104]
+    gret
+.gadget amd64_movr32_7_14
+    ldr w25, [_cpu, CPU_amd64_regs + 112]
+    gret
+.gadget amd64_movr32_7_15
+    ldr w25, [_cpu, CPU_amd64_regs + 120]
+    gret
+.gadget amd64_movr32_8_0
+    mov w8, w20
+    str x8, [_cpu, CPU_amd64_regs + 64]
+    gret
+.gadget amd64_movr32_8_1
+    mov w8, w22
+    str x8, [_cpu, CPU_amd64_regs + 64]
+    gret
+.gadget amd64_movr32_8_2
+    mov w8, w23
+    str x8, [_cpu, CPU_amd64_regs + 64]
+    gret
+.gadget amd64_movr32_8_3
+    mov w8, w21
+    str x8, [_cpu, CPU_amd64_regs + 64]
+    gret
+.gadget amd64_movr32_8_4
+    mov w8, w27
+    str x8, [_cpu, CPU_amd64_regs + 64]
+    gret
+.gadget amd64_movr32_8_5
+    mov w8, w26
+    str x8, [_cpu, CPU_amd64_regs + 64]
+    gret
+.gadget amd64_movr32_8_6
+    mov w8, w24
+    str x8, [_cpu, CPU_amd64_regs + 64]
+    gret
+.gadget amd64_movr32_8_7
+    mov w8, w25
+    str x8, [_cpu, CPU_amd64_regs + 64]
+    gret
+.gadget amd64_movr32_9_0
+    mov w8, w20
+    str x8, [_cpu, CPU_amd64_regs + 72]
+    gret
+.gadget amd64_movr32_9_1
+    mov w8, w22
+    str x8, [_cpu, CPU_amd64_regs + 72]
+    gret
+.gadget amd64_movr32_9_2
+    mov w8, w23
+    str x8, [_cpu, CPU_amd64_regs + 72]
+    gret
+.gadget amd64_movr32_9_3
+    mov w8, w21
+    str x8, [_cpu, CPU_amd64_regs + 72]
+    gret
+.gadget amd64_movr32_9_4
+    mov w8, w27
+    str x8, [_cpu, CPU_amd64_regs + 72]
+    gret
+.gadget amd64_movr32_9_5
+    mov w8, w26
+    str x8, [_cpu, CPU_amd64_regs + 72]
+    gret
+.gadget amd64_movr32_9_6
+    mov w8, w24
+    str x8, [_cpu, CPU_amd64_regs + 72]
+    gret
+.gadget amd64_movr32_9_7
+    mov w8, w25
+    str x8, [_cpu, CPU_amd64_regs + 72]
+    gret
+.gadget amd64_movr32_10_0
+    mov w8, w20
+    str x8, [_cpu, CPU_amd64_regs + 80]
+    gret
+.gadget amd64_movr32_10_1
+    mov w8, w22
+    str x8, [_cpu, CPU_amd64_regs + 80]
+    gret
+.gadget amd64_movr32_10_2
+    mov w8, w23
+    str x8, [_cpu, CPU_amd64_regs + 80]
+    gret
+.gadget amd64_movr32_10_3
+    mov w8, w21
+    str x8, [_cpu, CPU_amd64_regs + 80]
+    gret
+.gadget amd64_movr32_10_4
+    mov w8, w27
+    str x8, [_cpu, CPU_amd64_regs + 80]
+    gret
+.gadget amd64_movr32_10_5
+    mov w8, w26
+    str x8, [_cpu, CPU_amd64_regs + 80]
+    gret
+.gadget amd64_movr32_10_6
+    mov w8, w24
+    str x8, [_cpu, CPU_amd64_regs + 80]
+    gret
+.gadget amd64_movr32_10_7
+    mov w8, w25
+    str x8, [_cpu, CPU_amd64_regs + 80]
+    gret
+.gadget amd64_movr32_11_0
+    mov w8, w20
+    str x8, [_cpu, CPU_amd64_regs + 88]
+    gret
+.gadget amd64_movr32_11_1
+    mov w8, w22
+    str x8, [_cpu, CPU_amd64_regs + 88]
+    gret
+.gadget amd64_movr32_11_2
+    mov w8, w23
+    str x8, [_cpu, CPU_amd64_regs + 88]
+    gret
+.gadget amd64_movr32_11_3
+    mov w8, w21
+    str x8, [_cpu, CPU_amd64_regs + 88]
+    gret
+.gadget amd64_movr32_11_4
+    mov w8, w27
+    str x8, [_cpu, CPU_amd64_regs + 88]
+    gret
+.gadget amd64_movr32_11_5
+    mov w8, w26
+    str x8, [_cpu, CPU_amd64_regs + 88]
+    gret
+.gadget amd64_movr32_11_6
+    mov w8, w24
+    str x8, [_cpu, CPU_amd64_regs + 88]
+    gret
+.gadget amd64_movr32_11_7
+    mov w8, w25
+    str x8, [_cpu, CPU_amd64_regs + 88]
+    gret
+.gadget amd64_movr32_12_0
+    mov w8, w20
+    str x8, [_cpu, CPU_amd64_regs + 96]
+    gret
+.gadget amd64_movr32_12_1
+    mov w8, w22
+    str x8, [_cpu, CPU_amd64_regs + 96]
+    gret
+.gadget amd64_movr32_12_2
+    mov w8, w23
+    str x8, [_cpu, CPU_amd64_regs + 96]
+    gret
+.gadget amd64_movr32_12_3
+    mov w8, w21
+    str x8, [_cpu, CPU_amd64_regs + 96]
+    gret
+.gadget amd64_movr32_12_4
+    mov w8, w27
+    str x8, [_cpu, CPU_amd64_regs + 96]
+    gret
+.gadget amd64_movr32_12_5
+    mov w8, w26
+    str x8, [_cpu, CPU_amd64_regs + 96]
+    gret
+.gadget amd64_movr32_12_6
+    mov w8, w24
+    str x8, [_cpu, CPU_amd64_regs + 96]
+    gret
+.gadget amd64_movr32_12_7
+    mov w8, w25
+    str x8, [_cpu, CPU_amd64_regs + 96]
+    gret
+.gadget amd64_movr32_13_0
+    mov w8, w20
+    str x8, [_cpu, CPU_amd64_regs + 104]
+    gret
+.gadget amd64_movr32_13_1
+    mov w8, w22
+    str x8, [_cpu, CPU_amd64_regs + 104]
+    gret
+.gadget amd64_movr32_13_2
+    mov w8, w23
+    str x8, [_cpu, CPU_amd64_regs + 104]
+    gret
+.gadget amd64_movr32_13_3
+    mov w8, w21
+    str x8, [_cpu, CPU_amd64_regs + 104]
+    gret
+.gadget amd64_movr32_13_4
+    mov w8, w27
+    str x8, [_cpu, CPU_amd64_regs + 104]
+    gret
+.gadget amd64_movr32_13_5
+    mov w8, w26
+    str x8, [_cpu, CPU_amd64_regs + 104]
+    gret
+.gadget amd64_movr32_13_6
+    mov w8, w24
+    str x8, [_cpu, CPU_amd64_regs + 104]
+    gret
+.gadget amd64_movr32_13_7
+    mov w8, w25
+    str x8, [_cpu, CPU_amd64_regs + 104]
+    gret
+.gadget amd64_movr32_14_0
+    mov w8, w20
+    str x8, [_cpu, CPU_amd64_regs + 112]
+    gret
+.gadget amd64_movr32_14_1
+    mov w8, w22
+    str x8, [_cpu, CPU_amd64_regs + 112]
+    gret
+.gadget amd64_movr32_14_2
+    mov w8, w23
+    str x8, [_cpu, CPU_amd64_regs + 112]
+    gret
+.gadget amd64_movr32_14_3
+    mov w8, w21
+    str x8, [_cpu, CPU_amd64_regs + 112]
+    gret
+.gadget amd64_movr32_14_4
+    mov w8, w27
+    str x8, [_cpu, CPU_amd64_regs + 112]
+    gret
+.gadget amd64_movr32_14_5
+    mov w8, w26
+    str x8, [_cpu, CPU_amd64_regs + 112]
+    gret
+.gadget amd64_movr32_14_6
+    mov w8, w24
+    str x8, [_cpu, CPU_amd64_regs + 112]
+    gret
+.gadget amd64_movr32_14_7
+    mov w8, w25
+    str x8, [_cpu, CPU_amd64_regs + 112]
+    gret
+.gadget amd64_movr32_15_0
+    mov w8, w20
+    str x8, [_cpu, CPU_amd64_regs + 120]
+    gret
+.gadget amd64_movr32_15_1
+    mov w8, w22
+    str x8, [_cpu, CPU_amd64_regs + 120]
+    gret
+.gadget amd64_movr32_15_2
+    mov w8, w23
+    str x8, [_cpu, CPU_amd64_regs + 120]
+    gret
+.gadget amd64_movr32_15_3
+    mov w8, w21
+    str x8, [_cpu, CPU_amd64_regs + 120]
+    gret
+.gadget amd64_movr32_15_4
+    mov w8, w27
+    str x8, [_cpu, CPU_amd64_regs + 120]
+    gret
+.gadget amd64_movr32_15_5
+    mov w8, w26
+    str x8, [_cpu, CPU_amd64_regs + 120]
+    gret
+.gadget amd64_movr32_15_6
+    mov w8, w24
+    str x8, [_cpu, CPU_amd64_regs + 120]
+    gret
+.gadget amd64_movr32_15_7
+    mov w8, w25
+    str x8, [_cpu, CPU_amd64_regs + 120]
+    gret
+.gadget amd64_movr64_0_0
+    mov x20, x20
+    gret
+.gadget amd64_movr64_0_1
+    mov x20, x22
+    gret
+.gadget amd64_movr64_0_2
+    mov x20, x23
+    gret
+.gadget amd64_movr64_0_3
+    mov x20, x21
+    gret
+.gadget amd64_movr64_0_4
+    mov x20, x27
+    gret
+.gadget amd64_movr64_0_5
+    mov x20, x26
+    gret
+.gadget amd64_movr64_0_6
+    mov x20, x24
+    gret
+.gadget amd64_movr64_0_7
+    mov x20, x25
+    gret
+.gadget amd64_movr64_0_8
+    ldr x20, [_cpu, CPU_amd64_regs + 64]
+    gret
+.gadget amd64_movr64_0_9
+    ldr x20, [_cpu, CPU_amd64_regs + 72]
+    gret
+.gadget amd64_movr64_0_10
+    ldr x20, [_cpu, CPU_amd64_regs + 80]
+    gret
+.gadget amd64_movr64_0_11
+    ldr x20, [_cpu, CPU_amd64_regs + 88]
+    gret
+.gadget amd64_movr64_0_12
+    ldr x20, [_cpu, CPU_amd64_regs + 96]
+    gret
+.gadget amd64_movr64_0_13
+    ldr x20, [_cpu, CPU_amd64_regs + 104]
+    gret
+.gadget amd64_movr64_0_14
+    ldr x20, [_cpu, CPU_amd64_regs + 112]
+    gret
+.gadget amd64_movr64_0_15
+    ldr x20, [_cpu, CPU_amd64_regs + 120]
+    gret
+.gadget amd64_movr64_1_0
+    mov x22, x20
+    gret
+.gadget amd64_movr64_1_1
+    mov x22, x22
+    gret
+.gadget amd64_movr64_1_2
+    mov x22, x23
+    gret
+.gadget amd64_movr64_1_3
+    mov x22, x21
+    gret
+.gadget amd64_movr64_1_4
+    mov x22, x27
+    gret
+.gadget amd64_movr64_1_5
+    mov x22, x26
+    gret
+.gadget amd64_movr64_1_6
+    mov x22, x24
+    gret
+.gadget amd64_movr64_1_7
+    mov x22, x25
+    gret
+.gadget amd64_movr64_1_8
+    ldr x22, [_cpu, CPU_amd64_regs + 64]
+    gret
+.gadget amd64_movr64_1_9
+    ldr x22, [_cpu, CPU_amd64_regs + 72]
+    gret
+.gadget amd64_movr64_1_10
+    ldr x22, [_cpu, CPU_amd64_regs + 80]
+    gret
+.gadget amd64_movr64_1_11
+    ldr x22, [_cpu, CPU_amd64_regs + 88]
+    gret
+.gadget amd64_movr64_1_12
+    ldr x22, [_cpu, CPU_amd64_regs + 96]
+    gret
+.gadget amd64_movr64_1_13
+    ldr x22, [_cpu, CPU_amd64_regs + 104]
+    gret
+.gadget amd64_movr64_1_14
+    ldr x22, [_cpu, CPU_amd64_regs + 112]
+    gret
+.gadget amd64_movr64_1_15
+    ldr x22, [_cpu, CPU_amd64_regs + 120]
+    gret
+.gadget amd64_movr64_2_0
+    mov x23, x20
+    gret
+.gadget amd64_movr64_2_1
+    mov x23, x22
+    gret
+.gadget amd64_movr64_2_2
+    mov x23, x23
+    gret
+.gadget amd64_movr64_2_3
+    mov x23, x21
+    gret
+.gadget amd64_movr64_2_4
+    mov x23, x27
+    gret
+.gadget amd64_movr64_2_5
+    mov x23, x26
+    gret
+.gadget amd64_movr64_2_6
+    mov x23, x24
+    gret
+.gadget amd64_movr64_2_7
+    mov x23, x25
+    gret
+.gadget amd64_movr64_2_8
+    ldr x23, [_cpu, CPU_amd64_regs + 64]
+    gret
+.gadget amd64_movr64_2_9
+    ldr x23, [_cpu, CPU_amd64_regs + 72]
+    gret
+.gadget amd64_movr64_2_10
+    ldr x23, [_cpu, CPU_amd64_regs + 80]
+    gret
+.gadget amd64_movr64_2_11
+    ldr x23, [_cpu, CPU_amd64_regs + 88]
+    gret
+.gadget amd64_movr64_2_12
+    ldr x23, [_cpu, CPU_amd64_regs + 96]
+    gret
+.gadget amd64_movr64_2_13
+    ldr x23, [_cpu, CPU_amd64_regs + 104]
+    gret
+.gadget amd64_movr64_2_14
+    ldr x23, [_cpu, CPU_amd64_regs + 112]
+    gret
+.gadget amd64_movr64_2_15
+    ldr x23, [_cpu, CPU_amd64_regs + 120]
+    gret
+.gadget amd64_movr64_3_0
+    mov x21, x20
+    gret
+.gadget amd64_movr64_3_1
+    mov x21, x22
+    gret
+.gadget amd64_movr64_3_2
+    mov x21, x23
+    gret
+.gadget amd64_movr64_3_3
+    mov x21, x21
+    gret
+.gadget amd64_movr64_3_4
+    mov x21, x27
+    gret
+.gadget amd64_movr64_3_5
+    mov x21, x26
+    gret
+.gadget amd64_movr64_3_6
+    mov x21, x24
+    gret
+.gadget amd64_movr64_3_7
+    mov x21, x25
+    gret
+.gadget amd64_movr64_3_8
+    ldr x21, [_cpu, CPU_amd64_regs + 64]
+    gret
+.gadget amd64_movr64_3_9
+    ldr x21, [_cpu, CPU_amd64_regs + 72]
+    gret
+.gadget amd64_movr64_3_10
+    ldr x21, [_cpu, CPU_amd64_regs + 80]
+    gret
+.gadget amd64_movr64_3_11
+    ldr x21, [_cpu, CPU_amd64_regs + 88]
+    gret
+.gadget amd64_movr64_3_12
+    ldr x21, [_cpu, CPU_amd64_regs + 96]
+    gret
+.gadget amd64_movr64_3_13
+    ldr x21, [_cpu, CPU_amd64_regs + 104]
+    gret
+.gadget amd64_movr64_3_14
+    ldr x21, [_cpu, CPU_amd64_regs + 112]
+    gret
+.gadget amd64_movr64_3_15
+    ldr x21, [_cpu, CPU_amd64_regs + 120]
+    gret
+.gadget amd64_movr64_4_0
+    mov x27, x20
+    gret
+.gadget amd64_movr64_4_1
+    mov x27, x22
+    gret
+.gadget amd64_movr64_4_2
+    mov x27, x23
+    gret
+.gadget amd64_movr64_4_3
+    mov x27, x21
+    gret
+.gadget amd64_movr64_4_4
+    mov x27, x27
+    gret
+.gadget amd64_movr64_4_5
+    mov x27, x26
+    gret
+.gadget amd64_movr64_4_6
+    mov x27, x24
+    gret
+.gadget amd64_movr64_4_7
+    mov x27, x25
+    gret
+.gadget amd64_movr64_4_8
+    ldr x27, [_cpu, CPU_amd64_regs + 64]
+    gret
+.gadget amd64_movr64_4_9
+    ldr x27, [_cpu, CPU_amd64_regs + 72]
+    gret
+.gadget amd64_movr64_4_10
+    ldr x27, [_cpu, CPU_amd64_regs + 80]
+    gret
+.gadget amd64_movr64_4_11
+    ldr x27, [_cpu, CPU_amd64_regs + 88]
+    gret
+.gadget amd64_movr64_4_12
+    ldr x27, [_cpu, CPU_amd64_regs + 96]
+    gret
+.gadget amd64_movr64_4_13
+    ldr x27, [_cpu, CPU_amd64_regs + 104]
+    gret
+.gadget amd64_movr64_4_14
+    ldr x27, [_cpu, CPU_amd64_regs + 112]
+    gret
+.gadget amd64_movr64_4_15
+    ldr x27, [_cpu, CPU_amd64_regs + 120]
+    gret
+.gadget amd64_movr64_5_0
+    mov x26, x20
+    gret
+.gadget amd64_movr64_5_1
+    mov x26, x22
+    gret
+.gadget amd64_movr64_5_2
+    mov x26, x23
+    gret
+.gadget amd64_movr64_5_3
+    mov x26, x21
+    gret
+.gadget amd64_movr64_5_4
+    mov x26, x27
+    gret
+.gadget amd64_movr64_5_5
+    mov x26, x26
+    gret
+.gadget amd64_movr64_5_6
+    mov x26, x24
+    gret
+.gadget amd64_movr64_5_7
+    mov x26, x25
+    gret
+.gadget amd64_movr64_5_8
+    ldr x26, [_cpu, CPU_amd64_regs + 64]
+    gret
+.gadget amd64_movr64_5_9
+    ldr x26, [_cpu, CPU_amd64_regs + 72]
+    gret
+.gadget amd64_movr64_5_10
+    ldr x26, [_cpu, CPU_amd64_regs + 80]
+    gret
+.gadget amd64_movr64_5_11
+    ldr x26, [_cpu, CPU_amd64_regs + 88]
+    gret
+.gadget amd64_movr64_5_12
+    ldr x26, [_cpu, CPU_amd64_regs + 96]
+    gret
+.gadget amd64_movr64_5_13
+    ldr x26, [_cpu, CPU_amd64_regs + 104]
+    gret
+.gadget amd64_movr64_5_14
+    ldr x26, [_cpu, CPU_amd64_regs + 112]
+    gret
+.gadget amd64_movr64_5_15
+    ldr x26, [_cpu, CPU_amd64_regs + 120]
+    gret
+.gadget amd64_movr64_6_0
+    mov x24, x20
+    gret
+.gadget amd64_movr64_6_1
+    mov x24, x22
+    gret
+.gadget amd64_movr64_6_2
+    mov x24, x23
+    gret
+.gadget amd64_movr64_6_3
+    mov x24, x21
+    gret
+.gadget amd64_movr64_6_4
+    mov x24, x27
+    gret
+.gadget amd64_movr64_6_5
+    mov x24, x26
+    gret
+.gadget amd64_movr64_6_6
+    mov x24, x24
+    gret
+.gadget amd64_movr64_6_7
+    mov x24, x25
+    gret
+.gadget amd64_movr64_6_8
+    ldr x24, [_cpu, CPU_amd64_regs + 64]
+    gret
+.gadget amd64_movr64_6_9
+    ldr x24, [_cpu, CPU_amd64_regs + 72]
+    gret
+.gadget amd64_movr64_6_10
+    ldr x24, [_cpu, CPU_amd64_regs + 80]
+    gret
+.gadget amd64_movr64_6_11
+    ldr x24, [_cpu, CPU_amd64_regs + 88]
+    gret
+.gadget amd64_movr64_6_12
+    ldr x24, [_cpu, CPU_amd64_regs + 96]
+    gret
+.gadget amd64_movr64_6_13
+    ldr x24, [_cpu, CPU_amd64_regs + 104]
+    gret
+.gadget amd64_movr64_6_14
+    ldr x24, [_cpu, CPU_amd64_regs + 112]
+    gret
+.gadget amd64_movr64_6_15
+    ldr x24, [_cpu, CPU_amd64_regs + 120]
+    gret
+.gadget amd64_movr64_7_0
+    mov x25, x20
+    gret
+.gadget amd64_movr64_7_1
+    mov x25, x22
+    gret
+.gadget amd64_movr64_7_2
+    mov x25, x23
+    gret
+.gadget amd64_movr64_7_3
+    mov x25, x21
+    gret
+.gadget amd64_movr64_7_4
+    mov x25, x27
+    gret
+.gadget amd64_movr64_7_5
+    mov x25, x26
+    gret
+.gadget amd64_movr64_7_6
+    mov x25, x24
+    gret
+.gadget amd64_movr64_7_7
+    mov x25, x25
+    gret
+.gadget amd64_movr64_7_8
+    ldr x25, [_cpu, CPU_amd64_regs + 64]
+    gret
+.gadget amd64_movr64_7_9
+    ldr x25, [_cpu, CPU_amd64_regs + 72]
+    gret
+.gadget amd64_movr64_7_10
+    ldr x25, [_cpu, CPU_amd64_regs + 80]
+    gret
+.gadget amd64_movr64_7_11
+    ldr x25, [_cpu, CPU_amd64_regs + 88]
+    gret
+.gadget amd64_movr64_7_12
+    ldr x25, [_cpu, CPU_amd64_regs + 96]
+    gret
+.gadget amd64_movr64_7_13
+    ldr x25, [_cpu, CPU_amd64_regs + 104]
+    gret
+.gadget amd64_movr64_7_14
+    ldr x25, [_cpu, CPU_amd64_regs + 112]
+    gret
+.gadget amd64_movr64_7_15
+    ldr x25, [_cpu, CPU_amd64_regs + 120]
+    gret
+.gadget amd64_movr64_8_0
+    str x20, [_cpu, CPU_amd64_regs + 64]
+    gret
+.gadget amd64_movr64_8_1
+    str x22, [_cpu, CPU_amd64_regs + 64]
+    gret
+.gadget amd64_movr64_8_2
+    str x23, [_cpu, CPU_amd64_regs + 64]
+    gret
+.gadget amd64_movr64_8_3
+    str x21, [_cpu, CPU_amd64_regs + 64]
+    gret
+.gadget amd64_movr64_8_4
+    str x27, [_cpu, CPU_amd64_regs + 64]
+    gret
+.gadget amd64_movr64_8_5
+    str x26, [_cpu, CPU_amd64_regs + 64]
+    gret
+.gadget amd64_movr64_8_6
+    str x24, [_cpu, CPU_amd64_regs + 64]
+    gret
+.gadget amd64_movr64_8_7
+    str x25, [_cpu, CPU_amd64_regs + 64]
+    gret
+.gadget amd64_movr64_9_0
+    str x20, [_cpu, CPU_amd64_regs + 72]
+    gret
+.gadget amd64_movr64_9_1
+    str x22, [_cpu, CPU_amd64_regs + 72]
+    gret
+.gadget amd64_movr64_9_2
+    str x23, [_cpu, CPU_amd64_regs + 72]
+    gret
+.gadget amd64_movr64_9_3
+    str x21, [_cpu, CPU_amd64_regs + 72]
+    gret
+.gadget amd64_movr64_9_4
+    str x27, [_cpu, CPU_amd64_regs + 72]
+    gret
+.gadget amd64_movr64_9_5
+    str x26, [_cpu, CPU_amd64_regs + 72]
+    gret
+.gadget amd64_movr64_9_6
+    str x24, [_cpu, CPU_amd64_regs + 72]
+    gret
+.gadget amd64_movr64_9_7
+    str x25, [_cpu, CPU_amd64_regs + 72]
+    gret
+.gadget amd64_movr64_10_0
+    str x20, [_cpu, CPU_amd64_regs + 80]
+    gret
+.gadget amd64_movr64_10_1
+    str x22, [_cpu, CPU_amd64_regs + 80]
+    gret
+.gadget amd64_movr64_10_2
+    str x23, [_cpu, CPU_amd64_regs + 80]
+    gret
+.gadget amd64_movr64_10_3
+    str x21, [_cpu, CPU_amd64_regs + 80]
+    gret
+.gadget amd64_movr64_10_4
+    str x27, [_cpu, CPU_amd64_regs + 80]
+    gret
+.gadget amd64_movr64_10_5
+    str x26, [_cpu, CPU_amd64_regs + 80]
+    gret
+.gadget amd64_movr64_10_6
+    str x24, [_cpu, CPU_amd64_regs + 80]
+    gret
+.gadget amd64_movr64_10_7
+    str x25, [_cpu, CPU_amd64_regs + 80]
+    gret
+.gadget amd64_movr64_11_0
+    str x20, [_cpu, CPU_amd64_regs + 88]
+    gret
+.gadget amd64_movr64_11_1
+    str x22, [_cpu, CPU_amd64_regs + 88]
+    gret
+.gadget amd64_movr64_11_2
+    str x23, [_cpu, CPU_amd64_regs + 88]
+    gret
+.gadget amd64_movr64_11_3
+    str x21, [_cpu, CPU_amd64_regs + 88]
+    gret
+.gadget amd64_movr64_11_4
+    str x27, [_cpu, CPU_amd64_regs + 88]
+    gret
+.gadget amd64_movr64_11_5
+    str x26, [_cpu, CPU_amd64_regs + 88]
+    gret
+.gadget amd64_movr64_11_6
+    str x24, [_cpu, CPU_amd64_regs + 88]
+    gret
+.gadget amd64_movr64_11_7
+    str x25, [_cpu, CPU_amd64_regs + 88]
+    gret
+.gadget amd64_movr64_12_0
+    str x20, [_cpu, CPU_amd64_regs + 96]
+    gret
+.gadget amd64_movr64_12_1
+    str x22, [_cpu, CPU_amd64_regs + 96]
+    gret
+.gadget amd64_movr64_12_2
+    str x23, [_cpu, CPU_amd64_regs + 96]
+    gret
+.gadget amd64_movr64_12_3
+    str x21, [_cpu, CPU_amd64_regs + 96]
+    gret
+.gadget amd64_movr64_12_4
+    str x27, [_cpu, CPU_amd64_regs + 96]
+    gret
+.gadget amd64_movr64_12_5
+    str x26, [_cpu, CPU_amd64_regs + 96]
+    gret
+.gadget amd64_movr64_12_6
+    str x24, [_cpu, CPU_amd64_regs + 96]
+    gret
+.gadget amd64_movr64_12_7
+    str x25, [_cpu, CPU_amd64_regs + 96]
+    gret
+.gadget amd64_movr64_13_0
+    str x20, [_cpu, CPU_amd64_regs + 104]
+    gret
+.gadget amd64_movr64_13_1
+    str x22, [_cpu, CPU_amd64_regs + 104]
+    gret
+.gadget amd64_movr64_13_2
+    str x23, [_cpu, CPU_amd64_regs + 104]
+    gret
+.gadget amd64_movr64_13_3
+    str x21, [_cpu, CPU_amd64_regs + 104]
+    gret
+.gadget amd64_movr64_13_4
+    str x27, [_cpu, CPU_amd64_regs + 104]
+    gret
+.gadget amd64_movr64_13_5
+    str x26, [_cpu, CPU_amd64_regs + 104]
+    gret
+.gadget amd64_movr64_13_6
+    str x24, [_cpu, CPU_amd64_regs + 104]
+    gret
+.gadget amd64_movr64_13_7
+    str x25, [_cpu, CPU_amd64_regs + 104]
+    gret
+.gadget amd64_movr64_14_0
+    str x20, [_cpu, CPU_amd64_regs + 112]
+    gret
+.gadget amd64_movr64_14_1
+    str x22, [_cpu, CPU_amd64_regs + 112]
+    gret
+.gadget amd64_movr64_14_2
+    str x23, [_cpu, CPU_amd64_regs + 112]
+    gret
+.gadget amd64_movr64_14_3
+    str x21, [_cpu, CPU_amd64_regs + 112]
+    gret
+.gadget amd64_movr64_14_4
+    str x27, [_cpu, CPU_amd64_regs + 112]
+    gret
+.gadget amd64_movr64_14_5
+    str x26, [_cpu, CPU_amd64_regs + 112]
+    gret
+.gadget amd64_movr64_14_6
+    str x24, [_cpu, CPU_amd64_regs + 112]
+    gret
+.gadget amd64_movr64_14_7
+    str x25, [_cpu, CPU_amd64_regs + 112]
+    gret
+.gadget amd64_movr64_15_0
+    str x20, [_cpu, CPU_amd64_regs + 120]
+    gret
+.gadget amd64_movr64_15_1
+    str x22, [_cpu, CPU_amd64_regs + 120]
+    gret
+.gadget amd64_movr64_15_2
+    str x23, [_cpu, CPU_amd64_regs + 120]
+    gret
+.gadget amd64_movr64_15_3
+    str x21, [_cpu, CPU_amd64_regs + 120]
+    gret
+.gadget amd64_movr64_15_4
+    str x27, [_cpu, CPU_amd64_regs + 120]
+    gret
+.gadget amd64_movr64_15_5
+    str x26, [_cpu, CPU_amd64_regs + 120]
+    gret
+.gadget amd64_movr64_15_6
+    str x24, [_cpu, CPU_amd64_regs + 120]
+    gret
+.gadget amd64_movr64_15_7
+    str x25, [_cpu, CPU_amd64_regs + 120]
+    gret
+.pushsection_rodata
+.global.name amd64_movr_gadgets
+    .quad NAME(gadget_amd64_movr32_0_0)
+    .quad NAME(gadget_amd64_movr32_0_1)
+    .quad NAME(gadget_amd64_movr32_0_2)
+    .quad NAME(gadget_amd64_movr32_0_3)
+    .quad NAME(gadget_amd64_movr32_0_4)
+    .quad NAME(gadget_amd64_movr32_0_5)
+    .quad NAME(gadget_amd64_movr32_0_6)
+    .quad NAME(gadget_amd64_movr32_0_7)
+    .quad NAME(gadget_amd64_movr32_0_8)
+    .quad NAME(gadget_amd64_movr32_0_9)
+    .quad NAME(gadget_amd64_movr32_0_10)
+    .quad NAME(gadget_amd64_movr32_0_11)
+    .quad NAME(gadget_amd64_movr32_0_12)
+    .quad NAME(gadget_amd64_movr32_0_13)
+    .quad NAME(gadget_amd64_movr32_0_14)
+    .quad NAME(gadget_amd64_movr32_0_15)
+    .quad NAME(gadget_amd64_movr32_1_0)
+    .quad NAME(gadget_amd64_movr32_1_1)
+    .quad NAME(gadget_amd64_movr32_1_2)
+    .quad NAME(gadget_amd64_movr32_1_3)
+    .quad NAME(gadget_amd64_movr32_1_4)
+    .quad NAME(gadget_amd64_movr32_1_5)
+    .quad NAME(gadget_amd64_movr32_1_6)
+    .quad NAME(gadget_amd64_movr32_1_7)
+    .quad NAME(gadget_amd64_movr32_1_8)
+    .quad NAME(gadget_amd64_movr32_1_9)
+    .quad NAME(gadget_amd64_movr32_1_10)
+    .quad NAME(gadget_amd64_movr32_1_11)
+    .quad NAME(gadget_amd64_movr32_1_12)
+    .quad NAME(gadget_amd64_movr32_1_13)
+    .quad NAME(gadget_amd64_movr32_1_14)
+    .quad NAME(gadget_amd64_movr32_1_15)
+    .quad NAME(gadget_amd64_movr32_2_0)
+    .quad NAME(gadget_amd64_movr32_2_1)
+    .quad NAME(gadget_amd64_movr32_2_2)
+    .quad NAME(gadget_amd64_movr32_2_3)
+    .quad NAME(gadget_amd64_movr32_2_4)
+    .quad NAME(gadget_amd64_movr32_2_5)
+    .quad NAME(gadget_amd64_movr32_2_6)
+    .quad NAME(gadget_amd64_movr32_2_7)
+    .quad NAME(gadget_amd64_movr32_2_8)
+    .quad NAME(gadget_amd64_movr32_2_9)
+    .quad NAME(gadget_amd64_movr32_2_10)
+    .quad NAME(gadget_amd64_movr32_2_11)
+    .quad NAME(gadget_amd64_movr32_2_12)
+    .quad NAME(gadget_amd64_movr32_2_13)
+    .quad NAME(gadget_amd64_movr32_2_14)
+    .quad NAME(gadget_amd64_movr32_2_15)
+    .quad NAME(gadget_amd64_movr32_3_0)
+    .quad NAME(gadget_amd64_movr32_3_1)
+    .quad NAME(gadget_amd64_movr32_3_2)
+    .quad NAME(gadget_amd64_movr32_3_3)
+    .quad NAME(gadget_amd64_movr32_3_4)
+    .quad NAME(gadget_amd64_movr32_3_5)
+    .quad NAME(gadget_amd64_movr32_3_6)
+    .quad NAME(gadget_amd64_movr32_3_7)
+    .quad NAME(gadget_amd64_movr32_3_8)
+    .quad NAME(gadget_amd64_movr32_3_9)
+    .quad NAME(gadget_amd64_movr32_3_10)
+    .quad NAME(gadget_amd64_movr32_3_11)
+    .quad NAME(gadget_amd64_movr32_3_12)
+    .quad NAME(gadget_amd64_movr32_3_13)
+    .quad NAME(gadget_amd64_movr32_3_14)
+    .quad NAME(gadget_amd64_movr32_3_15)
+    .quad NAME(gadget_amd64_movr32_4_0)
+    .quad NAME(gadget_amd64_movr32_4_1)
+    .quad NAME(gadget_amd64_movr32_4_2)
+    .quad NAME(gadget_amd64_movr32_4_3)
+    .quad NAME(gadget_amd64_movr32_4_4)
+    .quad NAME(gadget_amd64_movr32_4_5)
+    .quad NAME(gadget_amd64_movr32_4_6)
+    .quad NAME(gadget_amd64_movr32_4_7)
+    .quad NAME(gadget_amd64_movr32_4_8)
+    .quad NAME(gadget_amd64_movr32_4_9)
+    .quad NAME(gadget_amd64_movr32_4_10)
+    .quad NAME(gadget_amd64_movr32_4_11)
+    .quad NAME(gadget_amd64_movr32_4_12)
+    .quad NAME(gadget_amd64_movr32_4_13)
+    .quad NAME(gadget_amd64_movr32_4_14)
+    .quad NAME(gadget_amd64_movr32_4_15)
+    .quad NAME(gadget_amd64_movr32_5_0)
+    .quad NAME(gadget_amd64_movr32_5_1)
+    .quad NAME(gadget_amd64_movr32_5_2)
+    .quad NAME(gadget_amd64_movr32_5_3)
+    .quad NAME(gadget_amd64_movr32_5_4)
+    .quad NAME(gadget_amd64_movr32_5_5)
+    .quad NAME(gadget_amd64_movr32_5_6)
+    .quad NAME(gadget_amd64_movr32_5_7)
+    .quad NAME(gadget_amd64_movr32_5_8)
+    .quad NAME(gadget_amd64_movr32_5_9)
+    .quad NAME(gadget_amd64_movr32_5_10)
+    .quad NAME(gadget_amd64_movr32_5_11)
+    .quad NAME(gadget_amd64_movr32_5_12)
+    .quad NAME(gadget_amd64_movr32_5_13)
+    .quad NAME(gadget_amd64_movr32_5_14)
+    .quad NAME(gadget_amd64_movr32_5_15)
+    .quad NAME(gadget_amd64_movr32_6_0)
+    .quad NAME(gadget_amd64_movr32_6_1)
+    .quad NAME(gadget_amd64_movr32_6_2)
+    .quad NAME(gadget_amd64_movr32_6_3)
+    .quad NAME(gadget_amd64_movr32_6_4)
+    .quad NAME(gadget_amd64_movr32_6_5)
+    .quad NAME(gadget_amd64_movr32_6_6)
+    .quad NAME(gadget_amd64_movr32_6_7)
+    .quad NAME(gadget_amd64_movr32_6_8)
+    .quad NAME(gadget_amd64_movr32_6_9)
+    .quad NAME(gadget_amd64_movr32_6_10)
+    .quad NAME(gadget_amd64_movr32_6_11)
+    .quad NAME(gadget_amd64_movr32_6_12)
+    .quad NAME(gadget_amd64_movr32_6_13)
+    .quad NAME(gadget_amd64_movr32_6_14)
+    .quad NAME(gadget_amd64_movr32_6_15)
+    .quad NAME(gadget_amd64_movr32_7_0)
+    .quad NAME(gadget_amd64_movr32_7_1)
+    .quad NAME(gadget_amd64_movr32_7_2)
+    .quad NAME(gadget_amd64_movr32_7_3)
+    .quad NAME(gadget_amd64_movr32_7_4)
+    .quad NAME(gadget_amd64_movr32_7_5)
+    .quad NAME(gadget_amd64_movr32_7_6)
+    .quad NAME(gadget_amd64_movr32_7_7)
+    .quad NAME(gadget_amd64_movr32_7_8)
+    .quad NAME(gadget_amd64_movr32_7_9)
+    .quad NAME(gadget_amd64_movr32_7_10)
+    .quad NAME(gadget_amd64_movr32_7_11)
+    .quad NAME(gadget_amd64_movr32_7_12)
+    .quad NAME(gadget_amd64_movr32_7_13)
+    .quad NAME(gadget_amd64_movr32_7_14)
+    .quad NAME(gadget_amd64_movr32_7_15)
+    .quad NAME(gadget_amd64_movr32_8_0)
+    .quad NAME(gadget_amd64_movr32_8_1)
+    .quad NAME(gadget_amd64_movr32_8_2)
+    .quad NAME(gadget_amd64_movr32_8_3)
+    .quad NAME(gadget_amd64_movr32_8_4)
+    .quad NAME(gadget_amd64_movr32_8_5)
+    .quad NAME(gadget_amd64_movr32_8_6)
+    .quad NAME(gadget_amd64_movr32_8_7)
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad NAME(gadget_amd64_movr32_9_0)
+    .quad NAME(gadget_amd64_movr32_9_1)
+    .quad NAME(gadget_amd64_movr32_9_2)
+    .quad NAME(gadget_amd64_movr32_9_3)
+    .quad NAME(gadget_amd64_movr32_9_4)
+    .quad NAME(gadget_amd64_movr32_9_5)
+    .quad NAME(gadget_amd64_movr32_9_6)
+    .quad NAME(gadget_amd64_movr32_9_7)
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad NAME(gadget_amd64_movr32_10_0)
+    .quad NAME(gadget_amd64_movr32_10_1)
+    .quad NAME(gadget_amd64_movr32_10_2)
+    .quad NAME(gadget_amd64_movr32_10_3)
+    .quad NAME(gadget_amd64_movr32_10_4)
+    .quad NAME(gadget_amd64_movr32_10_5)
+    .quad NAME(gadget_amd64_movr32_10_6)
+    .quad NAME(gadget_amd64_movr32_10_7)
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad NAME(gadget_amd64_movr32_11_0)
+    .quad NAME(gadget_amd64_movr32_11_1)
+    .quad NAME(gadget_amd64_movr32_11_2)
+    .quad NAME(gadget_amd64_movr32_11_3)
+    .quad NAME(gadget_amd64_movr32_11_4)
+    .quad NAME(gadget_amd64_movr32_11_5)
+    .quad NAME(gadget_amd64_movr32_11_6)
+    .quad NAME(gadget_amd64_movr32_11_7)
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad NAME(gadget_amd64_movr32_12_0)
+    .quad NAME(gadget_amd64_movr32_12_1)
+    .quad NAME(gadget_amd64_movr32_12_2)
+    .quad NAME(gadget_amd64_movr32_12_3)
+    .quad NAME(gadget_amd64_movr32_12_4)
+    .quad NAME(gadget_amd64_movr32_12_5)
+    .quad NAME(gadget_amd64_movr32_12_6)
+    .quad NAME(gadget_amd64_movr32_12_7)
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad NAME(gadget_amd64_movr32_13_0)
+    .quad NAME(gadget_amd64_movr32_13_1)
+    .quad NAME(gadget_amd64_movr32_13_2)
+    .quad NAME(gadget_amd64_movr32_13_3)
+    .quad NAME(gadget_amd64_movr32_13_4)
+    .quad NAME(gadget_amd64_movr32_13_5)
+    .quad NAME(gadget_amd64_movr32_13_6)
+    .quad NAME(gadget_amd64_movr32_13_7)
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad NAME(gadget_amd64_movr32_14_0)
+    .quad NAME(gadget_amd64_movr32_14_1)
+    .quad NAME(gadget_amd64_movr32_14_2)
+    .quad NAME(gadget_amd64_movr32_14_3)
+    .quad NAME(gadget_amd64_movr32_14_4)
+    .quad NAME(gadget_amd64_movr32_14_5)
+    .quad NAME(gadget_amd64_movr32_14_6)
+    .quad NAME(gadget_amd64_movr32_14_7)
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad NAME(gadget_amd64_movr32_15_0)
+    .quad NAME(gadget_amd64_movr32_15_1)
+    .quad NAME(gadget_amd64_movr32_15_2)
+    .quad NAME(gadget_amd64_movr32_15_3)
+    .quad NAME(gadget_amd64_movr32_15_4)
+    .quad NAME(gadget_amd64_movr32_15_5)
+    .quad NAME(gadget_amd64_movr32_15_6)
+    .quad NAME(gadget_amd64_movr32_15_7)
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad NAME(gadget_amd64_movr64_0_0)
+    .quad NAME(gadget_amd64_movr64_0_1)
+    .quad NAME(gadget_amd64_movr64_0_2)
+    .quad NAME(gadget_amd64_movr64_0_3)
+    .quad NAME(gadget_amd64_movr64_0_4)
+    .quad NAME(gadget_amd64_movr64_0_5)
+    .quad NAME(gadget_amd64_movr64_0_6)
+    .quad NAME(gadget_amd64_movr64_0_7)
+    .quad NAME(gadget_amd64_movr64_0_8)
+    .quad NAME(gadget_amd64_movr64_0_9)
+    .quad NAME(gadget_amd64_movr64_0_10)
+    .quad NAME(gadget_amd64_movr64_0_11)
+    .quad NAME(gadget_amd64_movr64_0_12)
+    .quad NAME(gadget_amd64_movr64_0_13)
+    .quad NAME(gadget_amd64_movr64_0_14)
+    .quad NAME(gadget_amd64_movr64_0_15)
+    .quad NAME(gadget_amd64_movr64_1_0)
+    .quad NAME(gadget_amd64_movr64_1_1)
+    .quad NAME(gadget_amd64_movr64_1_2)
+    .quad NAME(gadget_amd64_movr64_1_3)
+    .quad NAME(gadget_amd64_movr64_1_4)
+    .quad NAME(gadget_amd64_movr64_1_5)
+    .quad NAME(gadget_amd64_movr64_1_6)
+    .quad NAME(gadget_amd64_movr64_1_7)
+    .quad NAME(gadget_amd64_movr64_1_8)
+    .quad NAME(gadget_amd64_movr64_1_9)
+    .quad NAME(gadget_amd64_movr64_1_10)
+    .quad NAME(gadget_amd64_movr64_1_11)
+    .quad NAME(gadget_amd64_movr64_1_12)
+    .quad NAME(gadget_amd64_movr64_1_13)
+    .quad NAME(gadget_amd64_movr64_1_14)
+    .quad NAME(gadget_amd64_movr64_1_15)
+    .quad NAME(gadget_amd64_movr64_2_0)
+    .quad NAME(gadget_amd64_movr64_2_1)
+    .quad NAME(gadget_amd64_movr64_2_2)
+    .quad NAME(gadget_amd64_movr64_2_3)
+    .quad NAME(gadget_amd64_movr64_2_4)
+    .quad NAME(gadget_amd64_movr64_2_5)
+    .quad NAME(gadget_amd64_movr64_2_6)
+    .quad NAME(gadget_amd64_movr64_2_7)
+    .quad NAME(gadget_amd64_movr64_2_8)
+    .quad NAME(gadget_amd64_movr64_2_9)
+    .quad NAME(gadget_amd64_movr64_2_10)
+    .quad NAME(gadget_amd64_movr64_2_11)
+    .quad NAME(gadget_amd64_movr64_2_12)
+    .quad NAME(gadget_amd64_movr64_2_13)
+    .quad NAME(gadget_amd64_movr64_2_14)
+    .quad NAME(gadget_amd64_movr64_2_15)
+    .quad NAME(gadget_amd64_movr64_3_0)
+    .quad NAME(gadget_amd64_movr64_3_1)
+    .quad NAME(gadget_amd64_movr64_3_2)
+    .quad NAME(gadget_amd64_movr64_3_3)
+    .quad NAME(gadget_amd64_movr64_3_4)
+    .quad NAME(gadget_amd64_movr64_3_5)
+    .quad NAME(gadget_amd64_movr64_3_6)
+    .quad NAME(gadget_amd64_movr64_3_7)
+    .quad NAME(gadget_amd64_movr64_3_8)
+    .quad NAME(gadget_amd64_movr64_3_9)
+    .quad NAME(gadget_amd64_movr64_3_10)
+    .quad NAME(gadget_amd64_movr64_3_11)
+    .quad NAME(gadget_amd64_movr64_3_12)
+    .quad NAME(gadget_amd64_movr64_3_13)
+    .quad NAME(gadget_amd64_movr64_3_14)
+    .quad NAME(gadget_amd64_movr64_3_15)
+    .quad NAME(gadget_amd64_movr64_4_0)
+    .quad NAME(gadget_amd64_movr64_4_1)
+    .quad NAME(gadget_amd64_movr64_4_2)
+    .quad NAME(gadget_amd64_movr64_4_3)
+    .quad NAME(gadget_amd64_movr64_4_4)
+    .quad NAME(gadget_amd64_movr64_4_5)
+    .quad NAME(gadget_amd64_movr64_4_6)
+    .quad NAME(gadget_amd64_movr64_4_7)
+    .quad NAME(gadget_amd64_movr64_4_8)
+    .quad NAME(gadget_amd64_movr64_4_9)
+    .quad NAME(gadget_amd64_movr64_4_10)
+    .quad NAME(gadget_amd64_movr64_4_11)
+    .quad NAME(gadget_amd64_movr64_4_12)
+    .quad NAME(gadget_amd64_movr64_4_13)
+    .quad NAME(gadget_amd64_movr64_4_14)
+    .quad NAME(gadget_amd64_movr64_4_15)
+    .quad NAME(gadget_amd64_movr64_5_0)
+    .quad NAME(gadget_amd64_movr64_5_1)
+    .quad NAME(gadget_amd64_movr64_5_2)
+    .quad NAME(gadget_amd64_movr64_5_3)
+    .quad NAME(gadget_amd64_movr64_5_4)
+    .quad NAME(gadget_amd64_movr64_5_5)
+    .quad NAME(gadget_amd64_movr64_5_6)
+    .quad NAME(gadget_amd64_movr64_5_7)
+    .quad NAME(gadget_amd64_movr64_5_8)
+    .quad NAME(gadget_amd64_movr64_5_9)
+    .quad NAME(gadget_amd64_movr64_5_10)
+    .quad NAME(gadget_amd64_movr64_5_11)
+    .quad NAME(gadget_amd64_movr64_5_12)
+    .quad NAME(gadget_amd64_movr64_5_13)
+    .quad NAME(gadget_amd64_movr64_5_14)
+    .quad NAME(gadget_amd64_movr64_5_15)
+    .quad NAME(gadget_amd64_movr64_6_0)
+    .quad NAME(gadget_amd64_movr64_6_1)
+    .quad NAME(gadget_amd64_movr64_6_2)
+    .quad NAME(gadget_amd64_movr64_6_3)
+    .quad NAME(gadget_amd64_movr64_6_4)
+    .quad NAME(gadget_amd64_movr64_6_5)
+    .quad NAME(gadget_amd64_movr64_6_6)
+    .quad NAME(gadget_amd64_movr64_6_7)
+    .quad NAME(gadget_amd64_movr64_6_8)
+    .quad NAME(gadget_amd64_movr64_6_9)
+    .quad NAME(gadget_amd64_movr64_6_10)
+    .quad NAME(gadget_amd64_movr64_6_11)
+    .quad NAME(gadget_amd64_movr64_6_12)
+    .quad NAME(gadget_amd64_movr64_6_13)
+    .quad NAME(gadget_amd64_movr64_6_14)
+    .quad NAME(gadget_amd64_movr64_6_15)
+    .quad NAME(gadget_amd64_movr64_7_0)
+    .quad NAME(gadget_amd64_movr64_7_1)
+    .quad NAME(gadget_amd64_movr64_7_2)
+    .quad NAME(gadget_amd64_movr64_7_3)
+    .quad NAME(gadget_amd64_movr64_7_4)
+    .quad NAME(gadget_amd64_movr64_7_5)
+    .quad NAME(gadget_amd64_movr64_7_6)
+    .quad NAME(gadget_amd64_movr64_7_7)
+    .quad NAME(gadget_amd64_movr64_7_8)
+    .quad NAME(gadget_amd64_movr64_7_9)
+    .quad NAME(gadget_amd64_movr64_7_10)
+    .quad NAME(gadget_amd64_movr64_7_11)
+    .quad NAME(gadget_amd64_movr64_7_12)
+    .quad NAME(gadget_amd64_movr64_7_13)
+    .quad NAME(gadget_amd64_movr64_7_14)
+    .quad NAME(gadget_amd64_movr64_7_15)
+    .quad NAME(gadget_amd64_movr64_8_0)
+    .quad NAME(gadget_amd64_movr64_8_1)
+    .quad NAME(gadget_amd64_movr64_8_2)
+    .quad NAME(gadget_amd64_movr64_8_3)
+    .quad NAME(gadget_amd64_movr64_8_4)
+    .quad NAME(gadget_amd64_movr64_8_5)
+    .quad NAME(gadget_amd64_movr64_8_6)
+    .quad NAME(gadget_amd64_movr64_8_7)
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad NAME(gadget_amd64_movr64_9_0)
+    .quad NAME(gadget_amd64_movr64_9_1)
+    .quad NAME(gadget_amd64_movr64_9_2)
+    .quad NAME(gadget_amd64_movr64_9_3)
+    .quad NAME(gadget_amd64_movr64_9_4)
+    .quad NAME(gadget_amd64_movr64_9_5)
+    .quad NAME(gadget_amd64_movr64_9_6)
+    .quad NAME(gadget_amd64_movr64_9_7)
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad NAME(gadget_amd64_movr64_10_0)
+    .quad NAME(gadget_amd64_movr64_10_1)
+    .quad NAME(gadget_amd64_movr64_10_2)
+    .quad NAME(gadget_amd64_movr64_10_3)
+    .quad NAME(gadget_amd64_movr64_10_4)
+    .quad NAME(gadget_amd64_movr64_10_5)
+    .quad NAME(gadget_amd64_movr64_10_6)
+    .quad NAME(gadget_amd64_movr64_10_7)
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad NAME(gadget_amd64_movr64_11_0)
+    .quad NAME(gadget_amd64_movr64_11_1)
+    .quad NAME(gadget_amd64_movr64_11_2)
+    .quad NAME(gadget_amd64_movr64_11_3)
+    .quad NAME(gadget_amd64_movr64_11_4)
+    .quad NAME(gadget_amd64_movr64_11_5)
+    .quad NAME(gadget_amd64_movr64_11_6)
+    .quad NAME(gadget_amd64_movr64_11_7)
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad NAME(gadget_amd64_movr64_12_0)
+    .quad NAME(gadget_amd64_movr64_12_1)
+    .quad NAME(gadget_amd64_movr64_12_2)
+    .quad NAME(gadget_amd64_movr64_12_3)
+    .quad NAME(gadget_amd64_movr64_12_4)
+    .quad NAME(gadget_amd64_movr64_12_5)
+    .quad NAME(gadget_amd64_movr64_12_6)
+    .quad NAME(gadget_amd64_movr64_12_7)
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad NAME(gadget_amd64_movr64_13_0)
+    .quad NAME(gadget_amd64_movr64_13_1)
+    .quad NAME(gadget_amd64_movr64_13_2)
+    .quad NAME(gadget_amd64_movr64_13_3)
+    .quad NAME(gadget_amd64_movr64_13_4)
+    .quad NAME(gadget_amd64_movr64_13_5)
+    .quad NAME(gadget_amd64_movr64_13_6)
+    .quad NAME(gadget_amd64_movr64_13_7)
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad NAME(gadget_amd64_movr64_14_0)
+    .quad NAME(gadget_amd64_movr64_14_1)
+    .quad NAME(gadget_amd64_movr64_14_2)
+    .quad NAME(gadget_amd64_movr64_14_3)
+    .quad NAME(gadget_amd64_movr64_14_4)
+    .quad NAME(gadget_amd64_movr64_14_5)
+    .quad NAME(gadget_amd64_movr64_14_6)
+    .quad NAME(gadget_amd64_movr64_14_7)
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad NAME(gadget_amd64_movr64_15_0)
+    .quad NAME(gadget_amd64_movr64_15_1)
+    .quad NAME(gadget_amd64_movr64_15_2)
+    .quad NAME(gadget_amd64_movr64_15_3)
+    .quad NAME(gadget_amd64_movr64_15_4)
+    .quad NAME(gadget_amd64_movr64_15_5)
+    .quad NAME(gadget_amd64_movr64_15_6)
+    .quad NAME(gadget_amd64_movr64_15_7)
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+    .quad 0
+.popsection
+
+# ---- `lea r, [base + disp]` and `lea r, [rip + disp]`, specialised ----
+# amd64_cached_lea_reg_mem decodes base/index/scale from its meta word and
+# reads each register through a compare chain: 4.8% of amd64 7-Zip
+# (2026-10-04). With a cached destination and base, [base + disp] is one add
+# of the disp word (amd64_lea{32,64}_<dst>_<base>, table [size64][dst][base]);
+# [rip + disp] is a translation-time constant (amd64_movi{32,64}_<dst>). The
+# 32-bit forms zero-extend, as an x86 32-bit write does.
+.gadget amd64_lea32_0_0
+    ldr x8, [_ip]
+    add w20, w20, w8
+    gret 1
+.gadget amd64_lea32_0_1
+    ldr x8, [_ip]
+    add w20, w22, w8
+    gret 1
+.gadget amd64_lea32_0_2
+    ldr x8, [_ip]
+    add w20, w23, w8
+    gret 1
+.gadget amd64_lea32_0_3
+    ldr x8, [_ip]
+    add w20, w21, w8
+    gret 1
+.gadget amd64_lea32_0_4
+    ldr x8, [_ip]
+    add w20, w27, w8
+    gret 1
+.gadget amd64_lea32_0_5
+    ldr x8, [_ip]
+    add w20, w26, w8
+    gret 1
+.gadget amd64_lea32_0_6
+    ldr x8, [_ip]
+    add w20, w24, w8
+    gret 1
+.gadget amd64_lea32_0_7
+    ldr x8, [_ip]
+    add w20, w25, w8
+    gret 1
+.gadget amd64_movi32_0
+    ldr w20, [_ip]
+    gret 1
+.gadget amd64_lea32_1_0
+    ldr x8, [_ip]
+    add w22, w20, w8
+    gret 1
+.gadget amd64_lea32_1_1
+    ldr x8, [_ip]
+    add w22, w22, w8
+    gret 1
+.gadget amd64_lea32_1_2
+    ldr x8, [_ip]
+    add w22, w23, w8
+    gret 1
+.gadget amd64_lea32_1_3
+    ldr x8, [_ip]
+    add w22, w21, w8
+    gret 1
+.gadget amd64_lea32_1_4
+    ldr x8, [_ip]
+    add w22, w27, w8
+    gret 1
+.gadget amd64_lea32_1_5
+    ldr x8, [_ip]
+    add w22, w26, w8
+    gret 1
+.gadget amd64_lea32_1_6
+    ldr x8, [_ip]
+    add w22, w24, w8
+    gret 1
+.gadget amd64_lea32_1_7
+    ldr x8, [_ip]
+    add w22, w25, w8
+    gret 1
+.gadget amd64_movi32_1
+    ldr w22, [_ip]
+    gret 1
+.gadget amd64_lea32_2_0
+    ldr x8, [_ip]
+    add w23, w20, w8
+    gret 1
+.gadget amd64_lea32_2_1
+    ldr x8, [_ip]
+    add w23, w22, w8
+    gret 1
+.gadget amd64_lea32_2_2
+    ldr x8, [_ip]
+    add w23, w23, w8
+    gret 1
+.gadget amd64_lea32_2_3
+    ldr x8, [_ip]
+    add w23, w21, w8
+    gret 1
+.gadget amd64_lea32_2_4
+    ldr x8, [_ip]
+    add w23, w27, w8
+    gret 1
+.gadget amd64_lea32_2_5
+    ldr x8, [_ip]
+    add w23, w26, w8
+    gret 1
+.gadget amd64_lea32_2_6
+    ldr x8, [_ip]
+    add w23, w24, w8
+    gret 1
+.gadget amd64_lea32_2_7
+    ldr x8, [_ip]
+    add w23, w25, w8
+    gret 1
+.gadget amd64_movi32_2
+    ldr w23, [_ip]
+    gret 1
+.gadget amd64_lea32_3_0
+    ldr x8, [_ip]
+    add w21, w20, w8
+    gret 1
+.gadget amd64_lea32_3_1
+    ldr x8, [_ip]
+    add w21, w22, w8
+    gret 1
+.gadget amd64_lea32_3_2
+    ldr x8, [_ip]
+    add w21, w23, w8
+    gret 1
+.gadget amd64_lea32_3_3
+    ldr x8, [_ip]
+    add w21, w21, w8
+    gret 1
+.gadget amd64_lea32_3_4
+    ldr x8, [_ip]
+    add w21, w27, w8
+    gret 1
+.gadget amd64_lea32_3_5
+    ldr x8, [_ip]
+    add w21, w26, w8
+    gret 1
+.gadget amd64_lea32_3_6
+    ldr x8, [_ip]
+    add w21, w24, w8
+    gret 1
+.gadget amd64_lea32_3_7
+    ldr x8, [_ip]
+    add w21, w25, w8
+    gret 1
+.gadget amd64_movi32_3
+    ldr w21, [_ip]
+    gret 1
+.gadget amd64_lea32_4_0
+    ldr x8, [_ip]
+    add w27, w20, w8
+    gret 1
+.gadget amd64_lea32_4_1
+    ldr x8, [_ip]
+    add w27, w22, w8
+    gret 1
+.gadget amd64_lea32_4_2
+    ldr x8, [_ip]
+    add w27, w23, w8
+    gret 1
+.gadget amd64_lea32_4_3
+    ldr x8, [_ip]
+    add w27, w21, w8
+    gret 1
+.gadget amd64_lea32_4_4
+    ldr x8, [_ip]
+    add w27, w27, w8
+    gret 1
+.gadget amd64_lea32_4_5
+    ldr x8, [_ip]
+    add w27, w26, w8
+    gret 1
+.gadget amd64_lea32_4_6
+    ldr x8, [_ip]
+    add w27, w24, w8
+    gret 1
+.gadget amd64_lea32_4_7
+    ldr x8, [_ip]
+    add w27, w25, w8
+    gret 1
+.gadget amd64_movi32_4
+    ldr w27, [_ip]
+    gret 1
+.gadget amd64_lea32_5_0
+    ldr x8, [_ip]
+    add w26, w20, w8
+    gret 1
+.gadget amd64_lea32_5_1
+    ldr x8, [_ip]
+    add w26, w22, w8
+    gret 1
+.gadget amd64_lea32_5_2
+    ldr x8, [_ip]
+    add w26, w23, w8
+    gret 1
+.gadget amd64_lea32_5_3
+    ldr x8, [_ip]
+    add w26, w21, w8
+    gret 1
+.gadget amd64_lea32_5_4
+    ldr x8, [_ip]
+    add w26, w27, w8
+    gret 1
+.gadget amd64_lea32_5_5
+    ldr x8, [_ip]
+    add w26, w26, w8
+    gret 1
+.gadget amd64_lea32_5_6
+    ldr x8, [_ip]
+    add w26, w24, w8
+    gret 1
+.gadget amd64_lea32_5_7
+    ldr x8, [_ip]
+    add w26, w25, w8
+    gret 1
+.gadget amd64_movi32_5
+    ldr w26, [_ip]
+    gret 1
+.gadget amd64_lea32_6_0
+    ldr x8, [_ip]
+    add w24, w20, w8
+    gret 1
+.gadget amd64_lea32_6_1
+    ldr x8, [_ip]
+    add w24, w22, w8
+    gret 1
+.gadget amd64_lea32_6_2
+    ldr x8, [_ip]
+    add w24, w23, w8
+    gret 1
+.gadget amd64_lea32_6_3
+    ldr x8, [_ip]
+    add w24, w21, w8
+    gret 1
+.gadget amd64_lea32_6_4
+    ldr x8, [_ip]
+    add w24, w27, w8
+    gret 1
+.gadget amd64_lea32_6_5
+    ldr x8, [_ip]
+    add w24, w26, w8
+    gret 1
+.gadget amd64_lea32_6_6
+    ldr x8, [_ip]
+    add w24, w24, w8
+    gret 1
+.gadget amd64_lea32_6_7
+    ldr x8, [_ip]
+    add w24, w25, w8
+    gret 1
+.gadget amd64_movi32_6
+    ldr w24, [_ip]
+    gret 1
+.gadget amd64_lea32_7_0
+    ldr x8, [_ip]
+    add w25, w20, w8
+    gret 1
+.gadget amd64_lea32_7_1
+    ldr x8, [_ip]
+    add w25, w22, w8
+    gret 1
+.gadget amd64_lea32_7_2
+    ldr x8, [_ip]
+    add w25, w23, w8
+    gret 1
+.gadget amd64_lea32_7_3
+    ldr x8, [_ip]
+    add w25, w21, w8
+    gret 1
+.gadget amd64_lea32_7_4
+    ldr x8, [_ip]
+    add w25, w27, w8
+    gret 1
+.gadget amd64_lea32_7_5
+    ldr x8, [_ip]
+    add w25, w26, w8
+    gret 1
+.gadget amd64_lea32_7_6
+    ldr x8, [_ip]
+    add w25, w24, w8
+    gret 1
+.gadget amd64_lea32_7_7
+    ldr x8, [_ip]
+    add w25, w25, w8
+    gret 1
+.gadget amd64_movi32_7
+    ldr w25, [_ip]
+    gret 1
+.gadget amd64_lea64_0_0
+    ldr x8, [_ip]
+    add x20, x20, x8
+    gret 1
+.gadget amd64_lea64_0_1
+    ldr x8, [_ip]
+    add x20, x22, x8
+    gret 1
+.gadget amd64_lea64_0_2
+    ldr x8, [_ip]
+    add x20, x23, x8
+    gret 1
+.gadget amd64_lea64_0_3
+    ldr x8, [_ip]
+    add x20, x21, x8
+    gret 1
+.gadget amd64_lea64_0_4
+    ldr x8, [_ip]
+    add x20, x27, x8
+    gret 1
+.gadget amd64_lea64_0_5
+    ldr x8, [_ip]
+    add x20, x26, x8
+    gret 1
+.gadget amd64_lea64_0_6
+    ldr x8, [_ip]
+    add x20, x24, x8
+    gret 1
+.gadget amd64_lea64_0_7
+    ldr x8, [_ip]
+    add x20, x25, x8
+    gret 1
+.gadget amd64_movi64_0
+    ldr x20, [_ip]
+    gret 1
+.gadget amd64_lea64_1_0
+    ldr x8, [_ip]
+    add x22, x20, x8
+    gret 1
+.gadget amd64_lea64_1_1
+    ldr x8, [_ip]
+    add x22, x22, x8
+    gret 1
+.gadget amd64_lea64_1_2
+    ldr x8, [_ip]
+    add x22, x23, x8
+    gret 1
+.gadget amd64_lea64_1_3
+    ldr x8, [_ip]
+    add x22, x21, x8
+    gret 1
+.gadget amd64_lea64_1_4
+    ldr x8, [_ip]
+    add x22, x27, x8
+    gret 1
+.gadget amd64_lea64_1_5
+    ldr x8, [_ip]
+    add x22, x26, x8
+    gret 1
+.gadget amd64_lea64_1_6
+    ldr x8, [_ip]
+    add x22, x24, x8
+    gret 1
+.gadget amd64_lea64_1_7
+    ldr x8, [_ip]
+    add x22, x25, x8
+    gret 1
+.gadget amd64_movi64_1
+    ldr x22, [_ip]
+    gret 1
+.gadget amd64_lea64_2_0
+    ldr x8, [_ip]
+    add x23, x20, x8
+    gret 1
+.gadget amd64_lea64_2_1
+    ldr x8, [_ip]
+    add x23, x22, x8
+    gret 1
+.gadget amd64_lea64_2_2
+    ldr x8, [_ip]
+    add x23, x23, x8
+    gret 1
+.gadget amd64_lea64_2_3
+    ldr x8, [_ip]
+    add x23, x21, x8
+    gret 1
+.gadget amd64_lea64_2_4
+    ldr x8, [_ip]
+    add x23, x27, x8
+    gret 1
+.gadget amd64_lea64_2_5
+    ldr x8, [_ip]
+    add x23, x26, x8
+    gret 1
+.gadget amd64_lea64_2_6
+    ldr x8, [_ip]
+    add x23, x24, x8
+    gret 1
+.gadget amd64_lea64_2_7
+    ldr x8, [_ip]
+    add x23, x25, x8
+    gret 1
+.gadget amd64_movi64_2
+    ldr x23, [_ip]
+    gret 1
+.gadget amd64_lea64_3_0
+    ldr x8, [_ip]
+    add x21, x20, x8
+    gret 1
+.gadget amd64_lea64_3_1
+    ldr x8, [_ip]
+    add x21, x22, x8
+    gret 1
+.gadget amd64_lea64_3_2
+    ldr x8, [_ip]
+    add x21, x23, x8
+    gret 1
+.gadget amd64_lea64_3_3
+    ldr x8, [_ip]
+    add x21, x21, x8
+    gret 1
+.gadget amd64_lea64_3_4
+    ldr x8, [_ip]
+    add x21, x27, x8
+    gret 1
+.gadget amd64_lea64_3_5
+    ldr x8, [_ip]
+    add x21, x26, x8
+    gret 1
+.gadget amd64_lea64_3_6
+    ldr x8, [_ip]
+    add x21, x24, x8
+    gret 1
+.gadget amd64_lea64_3_7
+    ldr x8, [_ip]
+    add x21, x25, x8
+    gret 1
+.gadget amd64_movi64_3
+    ldr x21, [_ip]
+    gret 1
+.gadget amd64_lea64_4_0
+    ldr x8, [_ip]
+    add x27, x20, x8
+    gret 1
+.gadget amd64_lea64_4_1
+    ldr x8, [_ip]
+    add x27, x22, x8
+    gret 1
+.gadget amd64_lea64_4_2
+    ldr x8, [_ip]
+    add x27, x23, x8
+    gret 1
+.gadget amd64_lea64_4_3
+    ldr x8, [_ip]
+    add x27, x21, x8
+    gret 1
+.gadget amd64_lea64_4_4
+    ldr x8, [_ip]
+    add x27, x27, x8
+    gret 1
+.gadget amd64_lea64_4_5
+    ldr x8, [_ip]
+    add x27, x26, x8
+    gret 1
+.gadget amd64_lea64_4_6
+    ldr x8, [_ip]
+    add x27, x24, x8
+    gret 1
+.gadget amd64_lea64_4_7
+    ldr x8, [_ip]
+    add x27, x25, x8
+    gret 1
+.gadget amd64_movi64_4
+    ldr x27, [_ip]
+    gret 1
+.gadget amd64_lea64_5_0
+    ldr x8, [_ip]
+    add x26, x20, x8
+    gret 1
+.gadget amd64_lea64_5_1
+    ldr x8, [_ip]
+    add x26, x22, x8
+    gret 1
+.gadget amd64_lea64_5_2
+    ldr x8, [_ip]
+    add x26, x23, x8
+    gret 1
+.gadget amd64_lea64_5_3
+    ldr x8, [_ip]
+    add x26, x21, x8
+    gret 1
+.gadget amd64_lea64_5_4
+    ldr x8, [_ip]
+    add x26, x27, x8
+    gret 1
+.gadget amd64_lea64_5_5
+    ldr x8, [_ip]
+    add x26, x26, x8
+    gret 1
+.gadget amd64_lea64_5_6
+    ldr x8, [_ip]
+    add x26, x24, x8
+    gret 1
+.gadget amd64_lea64_5_7
+    ldr x8, [_ip]
+    add x26, x25, x8
+    gret 1
+.gadget amd64_movi64_5
+    ldr x26, [_ip]
+    gret 1
+.gadget amd64_lea64_6_0
+    ldr x8, [_ip]
+    add x24, x20, x8
+    gret 1
+.gadget amd64_lea64_6_1
+    ldr x8, [_ip]
+    add x24, x22, x8
+    gret 1
+.gadget amd64_lea64_6_2
+    ldr x8, [_ip]
+    add x24, x23, x8
+    gret 1
+.gadget amd64_lea64_6_3
+    ldr x8, [_ip]
+    add x24, x21, x8
+    gret 1
+.gadget amd64_lea64_6_4
+    ldr x8, [_ip]
+    add x24, x27, x8
+    gret 1
+.gadget amd64_lea64_6_5
+    ldr x8, [_ip]
+    add x24, x26, x8
+    gret 1
+.gadget amd64_lea64_6_6
+    ldr x8, [_ip]
+    add x24, x24, x8
+    gret 1
+.gadget amd64_lea64_6_7
+    ldr x8, [_ip]
+    add x24, x25, x8
+    gret 1
+.gadget amd64_movi64_6
+    ldr x24, [_ip]
+    gret 1
+.gadget amd64_lea64_7_0
+    ldr x8, [_ip]
+    add x25, x20, x8
+    gret 1
+.gadget amd64_lea64_7_1
+    ldr x8, [_ip]
+    add x25, x22, x8
+    gret 1
+.gadget amd64_lea64_7_2
+    ldr x8, [_ip]
+    add x25, x23, x8
+    gret 1
+.gadget amd64_lea64_7_3
+    ldr x8, [_ip]
+    add x25, x21, x8
+    gret 1
+.gadget amd64_lea64_7_4
+    ldr x8, [_ip]
+    add x25, x27, x8
+    gret 1
+.gadget amd64_lea64_7_5
+    ldr x8, [_ip]
+    add x25, x26, x8
+    gret 1
+.gadget amd64_lea64_7_6
+    ldr x8, [_ip]
+    add x25, x24, x8
+    gret 1
+.gadget amd64_lea64_7_7
+    ldr x8, [_ip]
+    add x25, x25, x8
+    gret 1
+.gadget amd64_movi64_7
+    ldr x25, [_ip]
+    gret 1
+.pushsection_rodata
+.global.name amd64_lea_bd_gadgets
+    .quad NAME(gadget_amd64_lea32_0_0)
+    .quad NAME(gadget_amd64_lea32_0_1)
+    .quad NAME(gadget_amd64_lea32_0_2)
+    .quad NAME(gadget_amd64_lea32_0_3)
+    .quad NAME(gadget_amd64_lea32_0_4)
+    .quad NAME(gadget_amd64_lea32_0_5)
+    .quad NAME(gadget_amd64_lea32_0_6)
+    .quad NAME(gadget_amd64_lea32_0_7)
+    .quad NAME(gadget_amd64_lea32_1_0)
+    .quad NAME(gadget_amd64_lea32_1_1)
+    .quad NAME(gadget_amd64_lea32_1_2)
+    .quad NAME(gadget_amd64_lea32_1_3)
+    .quad NAME(gadget_amd64_lea32_1_4)
+    .quad NAME(gadget_amd64_lea32_1_5)
+    .quad NAME(gadget_amd64_lea32_1_6)
+    .quad NAME(gadget_amd64_lea32_1_7)
+    .quad NAME(gadget_amd64_lea32_2_0)
+    .quad NAME(gadget_amd64_lea32_2_1)
+    .quad NAME(gadget_amd64_lea32_2_2)
+    .quad NAME(gadget_amd64_lea32_2_3)
+    .quad NAME(gadget_amd64_lea32_2_4)
+    .quad NAME(gadget_amd64_lea32_2_5)
+    .quad NAME(gadget_amd64_lea32_2_6)
+    .quad NAME(gadget_amd64_lea32_2_7)
+    .quad NAME(gadget_amd64_lea32_3_0)
+    .quad NAME(gadget_amd64_lea32_3_1)
+    .quad NAME(gadget_amd64_lea32_3_2)
+    .quad NAME(gadget_amd64_lea32_3_3)
+    .quad NAME(gadget_amd64_lea32_3_4)
+    .quad NAME(gadget_amd64_lea32_3_5)
+    .quad NAME(gadget_amd64_lea32_3_6)
+    .quad NAME(gadget_amd64_lea32_3_7)
+    .quad NAME(gadget_amd64_lea32_4_0)
+    .quad NAME(gadget_amd64_lea32_4_1)
+    .quad NAME(gadget_amd64_lea32_4_2)
+    .quad NAME(gadget_amd64_lea32_4_3)
+    .quad NAME(gadget_amd64_lea32_4_4)
+    .quad NAME(gadget_amd64_lea32_4_5)
+    .quad NAME(gadget_amd64_lea32_4_6)
+    .quad NAME(gadget_amd64_lea32_4_7)
+    .quad NAME(gadget_amd64_lea32_5_0)
+    .quad NAME(gadget_amd64_lea32_5_1)
+    .quad NAME(gadget_amd64_lea32_5_2)
+    .quad NAME(gadget_amd64_lea32_5_3)
+    .quad NAME(gadget_amd64_lea32_5_4)
+    .quad NAME(gadget_amd64_lea32_5_5)
+    .quad NAME(gadget_amd64_lea32_5_6)
+    .quad NAME(gadget_amd64_lea32_5_7)
+    .quad NAME(gadget_amd64_lea32_6_0)
+    .quad NAME(gadget_amd64_lea32_6_1)
+    .quad NAME(gadget_amd64_lea32_6_2)
+    .quad NAME(gadget_amd64_lea32_6_3)
+    .quad NAME(gadget_amd64_lea32_6_4)
+    .quad NAME(gadget_amd64_lea32_6_5)
+    .quad NAME(gadget_amd64_lea32_6_6)
+    .quad NAME(gadget_amd64_lea32_6_7)
+    .quad NAME(gadget_amd64_lea32_7_0)
+    .quad NAME(gadget_amd64_lea32_7_1)
+    .quad NAME(gadget_amd64_lea32_7_2)
+    .quad NAME(gadget_amd64_lea32_7_3)
+    .quad NAME(gadget_amd64_lea32_7_4)
+    .quad NAME(gadget_amd64_lea32_7_5)
+    .quad NAME(gadget_amd64_lea32_7_6)
+    .quad NAME(gadget_amd64_lea32_7_7)
+    .quad NAME(gadget_amd64_lea64_0_0)
+    .quad NAME(gadget_amd64_lea64_0_1)
+    .quad NAME(gadget_amd64_lea64_0_2)
+    .quad NAME(gadget_amd64_lea64_0_3)
+    .quad NAME(gadget_amd64_lea64_0_4)
+    .quad NAME(gadget_amd64_lea64_0_5)
+    .quad NAME(gadget_amd64_lea64_0_6)
+    .quad NAME(gadget_amd64_lea64_0_7)
+    .quad NAME(gadget_amd64_lea64_1_0)
+    .quad NAME(gadget_amd64_lea64_1_1)
+    .quad NAME(gadget_amd64_lea64_1_2)
+    .quad NAME(gadget_amd64_lea64_1_3)
+    .quad NAME(gadget_amd64_lea64_1_4)
+    .quad NAME(gadget_amd64_lea64_1_5)
+    .quad NAME(gadget_amd64_lea64_1_6)
+    .quad NAME(gadget_amd64_lea64_1_7)
+    .quad NAME(gadget_amd64_lea64_2_0)
+    .quad NAME(gadget_amd64_lea64_2_1)
+    .quad NAME(gadget_amd64_lea64_2_2)
+    .quad NAME(gadget_amd64_lea64_2_3)
+    .quad NAME(gadget_amd64_lea64_2_4)
+    .quad NAME(gadget_amd64_lea64_2_5)
+    .quad NAME(gadget_amd64_lea64_2_6)
+    .quad NAME(gadget_amd64_lea64_2_7)
+    .quad NAME(gadget_amd64_lea64_3_0)
+    .quad NAME(gadget_amd64_lea64_3_1)
+    .quad NAME(gadget_amd64_lea64_3_2)
+    .quad NAME(gadget_amd64_lea64_3_3)
+    .quad NAME(gadget_amd64_lea64_3_4)
+    .quad NAME(gadget_amd64_lea64_3_5)
+    .quad NAME(gadget_amd64_lea64_3_6)
+    .quad NAME(gadget_amd64_lea64_3_7)
+    .quad NAME(gadget_amd64_lea64_4_0)
+    .quad NAME(gadget_amd64_lea64_4_1)
+    .quad NAME(gadget_amd64_lea64_4_2)
+    .quad NAME(gadget_amd64_lea64_4_3)
+    .quad NAME(gadget_amd64_lea64_4_4)
+    .quad NAME(gadget_amd64_lea64_4_5)
+    .quad NAME(gadget_amd64_lea64_4_6)
+    .quad NAME(gadget_amd64_lea64_4_7)
+    .quad NAME(gadget_amd64_lea64_5_0)
+    .quad NAME(gadget_amd64_lea64_5_1)
+    .quad NAME(gadget_amd64_lea64_5_2)
+    .quad NAME(gadget_amd64_lea64_5_3)
+    .quad NAME(gadget_amd64_lea64_5_4)
+    .quad NAME(gadget_amd64_lea64_5_5)
+    .quad NAME(gadget_amd64_lea64_5_6)
+    .quad NAME(gadget_amd64_lea64_5_7)
+    .quad NAME(gadget_amd64_lea64_6_0)
+    .quad NAME(gadget_amd64_lea64_6_1)
+    .quad NAME(gadget_amd64_lea64_6_2)
+    .quad NAME(gadget_amd64_lea64_6_3)
+    .quad NAME(gadget_amd64_lea64_6_4)
+    .quad NAME(gadget_amd64_lea64_6_5)
+    .quad NAME(gadget_amd64_lea64_6_6)
+    .quad NAME(gadget_amd64_lea64_6_7)
+    .quad NAME(gadget_amd64_lea64_7_0)
+    .quad NAME(gadget_amd64_lea64_7_1)
+    .quad NAME(gadget_amd64_lea64_7_2)
+    .quad NAME(gadget_amd64_lea64_7_3)
+    .quad NAME(gadget_amd64_lea64_7_4)
+    .quad NAME(gadget_amd64_lea64_7_5)
+    .quad NAME(gadget_amd64_lea64_7_6)
+    .quad NAME(gadget_amd64_lea64_7_7)
+.global.name amd64_movi_gadgets
+    .quad NAME(gadget_amd64_movi32_0)
+    .quad NAME(gadget_amd64_movi32_1)
+    .quad NAME(gadget_amd64_movi32_2)
+    .quad NAME(gadget_amd64_movi32_3)
+    .quad NAME(gadget_amd64_movi32_4)
+    .quad NAME(gadget_amd64_movi32_5)
+    .quad NAME(gadget_amd64_movi32_6)
+    .quad NAME(gadget_amd64_movi32_7)
+    .quad NAME(gadget_amd64_movi64_0)
+    .quad NAME(gadget_amd64_movi64_1)
+    .quad NAME(gadget_amd64_movi64_2)
+    .quad NAME(gadget_amd64_movi64_3)
+    .quad NAME(gadget_amd64_movi64_4)
+    .quad NAME(gadget_amd64_movi64_5)
+    .quad NAME(gadget_amd64_movi64_6)
+    .quad NAME(gadget_amd64_movi64_7)
+.popsection
+
 .gadget amd64_store_low8_reg_cache
     add x8, _cpu, CPU_amd64_regs
     str x20, [x8, 0]
