@@ -943,13 +943,26 @@ static void jit_host_sigbus_handler(int sig, siginfo_t *info, void *uctx) {
     signal(sig, SIG_DFL);
 }
 
-// Process-wide SIGBUS disposition, installed once.
+// Process-wide SIGBUS and SIGSEGV disposition, installed once.
+//
+// SIGSEGV too, because an access to host memory that is not mapped at all
+// raises SIGSEGV (KERN_INVALID_ADDRESS), not SIGBUS: that is the stale-TLB
+// race, a guest access through an entry whose page a munmap or an exec has
+// already released, which the handler's jit_unmapped_guest_fault branch heals
+// by flushing and re-executing (55afb69d1). With only SIGBUS routed here that
+// branch was unreachable on the CLI -- the device's Mach handler sees every
+// EXC_BAD_ACCESS -- and the race killed the whole emulator instead:
+// concurrent_exec_tlb took the CLI down about one run in ten, in fpu_ldm80
+// under fhelper_read80 (an x87 load in cc1's startup). A fault outside guest
+// execution is still reported, the default restored, and re-raised, so a real
+// emulator bug crashes as loudly as before.
 static void jit_install_host_fault_sigaction(void) {
     struct sigaction sa = {0};
     sa.sa_sigaction = jit_host_sigbus_handler;
     sa.sa_flags = SA_SIGINFO | SA_ONSTACK | SA_NODEFER;
     sigemptyset(&sa.sa_mask);
     sigaction(SIGBUS, &sa, NULL);
+    sigaction(SIGSEGV, &sa, NULL);
 }
 
 // Per-thread setup for the CLI POSIX host-fault handler: a dedicated altstack
