@@ -104,10 +104,10 @@ static void emit_mem_one(void) {
                 else { rex_mem_any(w, 0); b(0xff); mem_any(ext); }
                 break;
             }
-            case 10: { // push a; pop c (net rsp change 0)
+            case 10: { // push a (or push imm32); pop c (net rsp change 0)
                 int c = pick();
-                if (a & 8) b(0x41);
-                b((uint8_t) (0x50 + (a & 7)));
+                if (rnd() & 1) { b(0x68); uint32_t v = (uint32_t) rnd(); memcpy(p, &v, 4); p += 4; }
+                else { if (a & 8) b(0x41); b((uint8_t) (0x50 + (a & 7))); }
                 if (c & 8) b(0x41);
                 b((uint8_t) (0x58 + (c & 7)));
                 break;
@@ -190,8 +190,15 @@ static void emit_one(void) {
             b((uint8_t) (0x40 | ((a & 8) ? 1 : 0))); b(0x0f); b((uint8_t) (0x90 + rnd() % 16)); modrm_rr(0, a); break;
         case 12: // cmovcc a, c (64)
             rex(1, a, c); b(0x0f); b((uint8_t) (0x40 + rnd() % 16)); modrm_rr(a, c); break;
-        case 13: { // jcc over a 3-byte mov (rex.w 89 modrm)
-            b((uint8_t) (0x70 + rnd() % 16)); b(3);
+        case 13: { // jcc over a 3-byte mov (rex.w 89 modrm); 1 time in 4 jrcxz,
+            // after setting ecx to 0 or 1 (jrcxz reads rcx, not the flags)
+            if ((rnd() & 3) == 0) {
+                if (a == 1) a = 0;
+                b(0xb9); uint32_t v = (uint32_t) (rnd() & 1); memcpy(p, &v, 4); p += 4; // mov $v, %ecx
+                b(0xe3); b(3);
+            } else {
+                b((uint8_t) (0x70 + rnd() % 16)); b(3);
+            }
             rex(1, c, a); b(0x89); modrm_rr(c, a); break;
         }
         default: { // a second producer right away, to give the scan something to skip

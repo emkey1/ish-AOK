@@ -270,9 +270,24 @@
 # (The old forward-chaining experiment measured no win on a -O0 build,
 # where the C loop body dwarfed the round trip; at -O2 the round trip
 # dominated an amd64 gzip profile.)
+# The register cache is loaded at every chained branch and may be newer
+# than CPU_amd64_regs (gen.c gen_amd64_sync_reg_cache), so both ways out to
+# C from here write it back first.
+.macro amd64_chain_exit_spill
+    add x9, _cpu, CPU_amd64_regs
+    str x20, [x9, 0]
+    str x22, [x9, 8]
+    str x23, [x9, 16]
+    str x21, [x9, 24]
+    str x27, [x9, 32]
+    str x26, [x9, 40]
+    str x24, [x9, 48]
+    str x25, [x9, 56]
+.endm
 .global amd64_branch_dispatch
 amd64_branch_dispatch:
     tbz _ip, 63, amd64_chain
+    amd64_chain_exit_spill
     and x8, _ip, 0x7fffffffffffffff
     str x8, [_cpu, CPU_amd64_rip]
     str w8, [_cpu, CPU_eip]
@@ -306,6 +321,7 @@ amd64_chain:
     gret
 .global amd64_chain_poked
 amd64_chain_poked:
+    amd64_chain_exit_spill
     ldur x8, [_ip, (JIT_BLOCK_addr - JIT_BLOCK_code)]
     str x8, [_cpu, CPU_amd64_rip]
     str w8, [_cpu, CPU_eip]

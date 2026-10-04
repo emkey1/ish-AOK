@@ -37,10 +37,15 @@ static const char *suite = "amd64_singlestep";
 #include <sys/wait.h>
 #include <sys/user.h>
 
-// Nine instructions between the two markers retiring, chosen to cover the
+// Twelve instructions between the two markers retiring, chosen to cover the
 // shapes a one-instruction block has to terminate correctly: immediate moves,
-// a three-operand imul, a logical, two one-operand group-3 forms, a shift and
-// a register move.
+// a three-operand imul, a logical, two one-operand group-3 forms, a shift, a
+// register move, and a call, ret and jmp. The child runs victim() once before
+// it is traced, so the frontend has dispatched (and published to its return
+// cache) the block at the ret's target: a ret that entered that block from
+// the cache would run on past one instruction (math.S amd64_sret). Today the
+// single-step path cannot -- it runs on a fresh frame with an empty cache, and
+// its translation does not use amd64_sret -- and this keeps it that way.
 static void __attribute__((noinline)) victim(void) {
     __asm__ volatile(
         "movq $0x1111, %%rbx\n\t"
@@ -52,7 +57,10 @@ static void __attribute__((noinline)) victim(void) {
         "negq %%rax\n\t"
         "shlq $2, %%rax\n\t"
         "movq %%rax, %%rcx\n\t"
-        "movq $0x2222, %%rbx\n\t"
+        "call 1f\n\t"
+        "jmp 2f\n\t"
+        "1: ret\n\t"
+        "2: movq $0x2222, %%rbx\n\t"
         ::: "rax", "rbx", "rcx");
 }
 
@@ -66,6 +74,7 @@ int main(int argc, char **argv) {
         return 0;
     }
     if (child == 0) {
+        victim(); // warm the return cache (see victim)
         if (ptrace(PTRACE_TRACEME, 0, 0, 0) != 0)
             _exit(90);
         raise(SIGSTOP);
@@ -120,10 +129,10 @@ int main(int argc, char **argv) {
         return 0;
     }
 
-    // Exactly nine stops from the first marker retiring to the second.
-    if (steps_between != 9)
+    // Exactly twelve stops from the first marker retiring to the second.
+    if (steps_between != 12)
         failf("one instruction per single-step stop",
-              (uint64_t) steps_between, 0, 0, 9, 0, 0);
+              (uint64_t) steps_between, 0, 0, 12, 0, 0);
     // ((((1+2)*3) ^ 7) -> not -> neg) << 2, and the copy into rcx must agree.
     if (rax_out != 60)
         failf("stepped arithmetic result", rax_out, 0, 0, 60, 0, 0);

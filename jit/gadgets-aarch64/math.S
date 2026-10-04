@@ -10636,6 +10636,57 @@ amd64_r16_family amd64_r16_rr17, amd64_slo16, cmpm
 .endm
 amd64_r16_ri amd64_spp16, push, 64, x, 63, 0
 amd64_r16_ri amd64_spp16, pop, 64, x, 63, 0
+# ret on the register cache: pop the return address (rsp is x27) and, when
+# the frontend has published a block for it in jit_frame.ret_cache, enter it
+# directly -- keyed, and validated against block->addr and is_jetsam,
+# exactly as the arm64 guest's ret_cache_dispatch does -- through the same
+# chain path a jmp takes (poke check, chain budget). Otherwise write the
+# cache back and leave to C with rip = the target. A non-canonical target
+# is #GP with rsp unchanged. Operand: [insn rip]; ends the block.
+.gadget amd64_sret
+    ldr x8, [_ip]
+    str x8, [_cpu, CPU_amd64_rip]
+    mov x9, x27
+    amd64_vread_prep 8, sret
+    ldr x10, [x9]
+    sbfx x12, x10, 0, 48
+    cmp x12, x10
+    b.ne 7f
+    add x27, x27, 8
+    eor x12, x10, x10, lsr #12
+    ubfx x12, x12, #1, #12
+    mov x13, LOCAL_ret_cache
+    add x13, _cpu, x13
+    ldr x13, [x13, x12, lsl #3]
+    cbz x13, 8f
+    ldur x14, [x13, #(JIT_BLOCK_addr - JIT_BLOCK_code)]
+    cmp x14, x10
+    b.ne 8f
+    ldurb w14, [x13, #(JIT_BLOCK_is_jetsam - JIT_BLOCK_code)]
+    cbnz w14, 8f
+    mov _ip, x13
+    amd64_chain_ip
+7:  amd64_spill_low8
+    b amd64_branch_noncanonical
+8:  amd64_spill_low8
+    str x10, [_cpu, CPU_amd64_rip]
+    str w10, [_cpu, CPU_eip]
+    b jit_ret
+    amd64_svread_bullshit 8, sret
+
+# push imm (and a call's return address) on the register cache:
+# [value][insn rip], gret 2, rsp committed after the store as above.
+.gadget amd64_spushi
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    sub x9, x27, 8
+    amd64_svwrite_prep 8, spushi
+    ldr x10, [_ip]
+    str x10, [x9]
+    amd64_svwrite_done 8, spushi
+    sub x27, x27, 8
+    gret 2
+    amd64_svwrite_bullshit 8, spushi
 
 # inc/dec [mem] (FF /0, /1), 32/64-bit, read-modify-write on the register
 # cache: amd64_sim_<op><size>_<base>, full and _nf, the same 18 bases. The

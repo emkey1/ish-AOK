@@ -3938,6 +3938,11 @@ static int cpu_step_to_interrupt_amd64_frontend(struct cpu_state *cpu, struct tl
 
     jit_host_fault_thread_init();
 
+    // Read once per entry, as the arm64 frontend does: the gadget half
+    // (amd64_sret) is chosen at translation time.
+    const bool publish_ret_cache =
+        (amd64_jit_fuse_mask() & JIT_FUSE_AMD64_RETCACHE) != 0;
+
     jit_crash_frame = frame;
     jit_crash_cpu = cpu;
     jit_crash_interrupt = INT_GPF;
@@ -4203,6 +4208,13 @@ rearm_amd64:
         }
         frame->last_block = block;
         frame->chain_budget = 8192; // see jit_frame.chain_budget
+        // Publish this dispatch to the return cache, keyed by guest address
+        // as the arm64 frontend keys it: a later ret to this address enters
+        // the block directly (math.S amd64_sret), and the entry self-validates
+        // there (block->addr, is_jetsam). The cleanup_seq purge above and
+        // jit_entry_scratch_get clear the array whenever it could go stale.
+        if (publish_ret_cache)
+            frame->ret_cache[LINKREG_RET_CACHE_HASH(block->addr)] = (long) block->code;
 
         amd64_jit_debug("frontend exec block ip=%llx end=%llx",
                 (unsigned long long) ip,
@@ -4322,6 +4334,9 @@ static int cpu_single_step_amd64(struct cpu_state *cpu, struct tlb *tlb) {
     struct gen_state state;
     if (!gen_start_amd64(cpu->amd64_rip, &state))
         return INT_GPF; // OOM allocating the block
+    // One instruction: ret must not chain on (amd64_sret). The fresh frame
+    // below has an empty return cache anyway; this keeps it from mattering.
+    state.single_step = true;
     state.oom_active = true;
     if (_setjmp(state.oom_recovery) != 0) {
         free(state.block);

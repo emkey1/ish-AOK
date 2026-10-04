@@ -782,23 +782,29 @@ __attribute__((unused)) static void gen_amd64_mark_reg_cache_dirty(struct gen_st
 }
 
 // Before a branch that chains to another block (jmp, jcc, jrcxz, the fused
-// cmp+jcc): the next block starts with the cache loaded and equal to memory
-// (gen_start_amd64), so leave it that way -- written back if dirty, and
-// reloaded if a flush-style gadget since the last load may have changed the
-// registers in memory. Unlike a flush, the cache stays loaded.
-static void gen_amd64_sync_reg_cache(struct gen_state *state) {
+// cmp+jcc): the next block starts with the cache loaded (gen_start_amd64),
+// so leave it loaded -- reloaded if a flush-style gadget since the last load
+// may have changed the registers in memory. It need not be written back:
+// the next block starts dirty, and the chain's ways out to C write it back
+// (control.S amd64_chain_exit_spill). With the `resident` switch off it is
+// written back here as well, which is safe either way, so blocks
+// translated with the switch on and off can chain into each other.
+// write_back: the branch gadget reads a register from CPU_amd64_regs (jrcxz),
+// so memory must be current whatever the switch says.
+static void gen_amd64_sync_reg_cache(struct gen_state *state, bool write_back) {
 #if defined(__aarch64__)
     if (!state->amd64_reg_cache_valid) {
         gen_amd64_ensure_reg_cache(state);
         return;
     }
-    if (state->amd64_reg_cache_dirty) {
+    if (state->amd64_reg_cache_dirty &&
+            (write_back || !(amd64_jit_fuse_mask() & JIT_FUSE_AMD64_RESIDENT))) {
         extern void gadget_amd64_store_low8_reg_cache(void);
         gen(state, (unsigned long) gadget_amd64_store_low8_reg_cache);
         state->amd64_reg_cache_dirty = false;
     }
 #else
-    (void) state;
+    (void) state; (void) write_back;
 #endif
 }
 
@@ -813,7 +819,7 @@ static void gen_amd64_flush_rip(struct gen_state *state) {
 }
 
 static void gen_amd64_jmp_rel(struct gen_state *state, guest_addr_t target_ip) {
-    gen_amd64_sync_reg_cache(state);
+    gen_amd64_sync_reg_cache(state, false);
     state->amd64_deferred_rip_valid = false;
 #if defined(__aarch64__)
     extern void gadget_amd64_jmp(void);
@@ -869,7 +875,7 @@ static bool gen_amd64_try_fuse_jcc(struct gen_state *state, unsigned cc) {
     for (unsigned i = 0; i < nops; i++)
         saved[i] = state->block->code[slot + 1 + i];
     state->size = slot;
-    gen_amd64_sync_reg_cache(state);
+    gen_amd64_sync_reg_cache(state, false);
     gen(state, (unsigned long) fused);
     for (unsigned i = 0; i < nops; i++)
         gen(state, saved[i]);
@@ -909,7 +915,7 @@ static void gen_amd64_jcc(struct gen_state *state, unsigned cc,
         state->jump_ip[1] = state->size - 1;
         return;
     }
-    gen_amd64_sync_reg_cache(state);
+    gen_amd64_sync_reg_cache(state, false);
     state->amd64_deferred_rip_valid = false;
     gen(state, (unsigned long) gadgets[(cc >> 1) & 7]);
     gen(state, (unsigned long) ((swap ? next_ip : target_ip) | (1ull << 63)));   // taken
@@ -928,7 +934,7 @@ static void gen_amd64_jrcxz(struct gen_state *state,
         guest_addr_t target_ip, guest_addr_t next_ip) {
 #if defined(__aarch64__)
     extern void gadget_amd64_jrcxz(void);
-    gen_amd64_sync_reg_cache(state);
+    gen_amd64_sync_reg_cache(state, true); // the gadget reads RCX from memory
     state->amd64_deferred_rip_valid = false;
     gen(state, (unsigned long) gadget_amd64_jrcxz);
     gen(state, (unsigned long) (target_ip | (1ull << 63)));   // taken
@@ -1095,15 +1101,13 @@ bool gen_start_amd64(guest_addr_t addr, struct gen_state *state) {
         return false;
     state->amd64 = true;
 #if defined(__aarch64__)
-    // Every amd64 block is entered with the register cache loaded and equal
-    // to memory: from C by jit_enter_amd64, from a chained block end by
-    // gen_amd64_sync_reg_cache (which runs whatever this switch says, so
-    // blocks translated either way can chain into each other). So a block
-    // need not reload it up front.
-    if (amd64_jit_fuse_mask() & JIT_FUSE_AMD64_RESIDENT) {
-        state->amd64_reg_cache_valid = true;
-        state->amd64_reg_cache_dirty = false;
-    }
+    // Every amd64 block is entered with the register cache loaded: from C
+    // by jit_enter_amd64, from a chained block end by
+    // gen_amd64_sync_reg_cache. It may be newer than CPU_amd64_regs (a
+    // chained branch need not write it back), so it starts dirty: the
+    // block's first flush writes it back.
+    state->amd64_reg_cache_valid = true;
+    state->amd64_reg_cache_dirty = true;
 #endif
     gen_start_x86_profile(addr, state);
     return true;
@@ -8466,6 +8470,21 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
         // Native ret: pop the return address into rip and exit the block. The
         // gadget branches to jit_ret itself (indirect target -> no static link),
         // so no gen_exit. rip flushed so a #PF on the stack read re-executes.
+#if defined(__aarch64__)
+        if (!state->single_step &&
+                (amd64_jit_fuse_mask() & (JIT_FUSE_AMD64_RETCACHE | JIT_FUSE_AMD64_MEMR)) ==
+                (JIT_FUSE_AMD64_RETCACHE | JIT_FUSE_AMD64_MEMR)) {
+            // On the register cache, entering the return target directly when
+            // the frontend has published it (math.S amd64_sret). Chains like a
+            // jmp, so the cache is synced the same way.
+            extern void gadget_amd64_sret(void);
+            gen_amd64_sync_reg_cache(state, false);
+            state->amd64_deferred_rip_valid = false; // the gadget publishes the rip
+            gen(state, (unsigned long) gadget_amd64_sret);
+            gen(state, (unsigned long) insn.start_ip);
+            return false;
+        }
+#endif
         gen_amd64_flush_reg_cache(state);
         gen_amd64_flush_rip(state);
         extern void gadget_amd64_ret(void);
@@ -8549,6 +8568,21 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
         // gadget, which stores its operand verbatim), then statically link to
         // the target block exactly as jmp rel32 does. A page fault during the
         // push re-executes this instruction (rip flushed to the call's addr).
+#if defined(__aarch64__)
+        if (amd64_jit_fuse_mask() & JIT_FUSE_AMD64_MEMR) {
+            // On the register cache (math.S amd64_spushi), which then stays
+            // loaded into the jump.
+            extern void gadget_amd64_spushi(void);
+            gen_amd64_ensure_reg_cache(state);
+            state->amd64_deferred_rip_valid = false; // the gadget publishes the rip
+            gen(state, (unsigned long) gadget_amd64_spushi);
+            gen(state, (unsigned long) next_ip);
+            gen(state, (unsigned long) insn.start_ip);
+            gen_amd64_mark_reg_cache_dirty(state);
+            gen_amd64_jmp_rel(state, target_ip);
+            return false;
+        }
+#endif
         gen_amd64_flush_reg_cache(state);
         gen_amd64_flush_rip(state);
         extern void gadget_amd64_push_imm(void);
@@ -12555,6 +12589,19 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
                 (unsigned long long) value,
                 (unsigned long long) next_ip);
         // Native push of a sign-extended 64-bit immediate (value computed above).
+#if defined(__aarch64__)
+        if (amd64_jit_fuse_mask() & JIT_FUSE_AMD64_MEMR) {
+            extern void gadget_amd64_spushi(void);
+            gen_amd64_ensure_reg_cache(state);
+            state->amd64_deferred_rip_valid = false; // the gadget publishes the rip
+            gen(state, (unsigned long) gadget_amd64_spushi);
+            gen(state, value);
+            gen(state, (unsigned long) insn.start_ip);
+            gen_amd64_mark_reg_cache_dirty(state);
+            gen_amd64_defer_rip(state, next_ip);
+            return true;
+        }
+#endif
         gen_amd64_flush_reg_cache(state);
         gen_amd64_flush_rip(state);
         extern void gadget_amd64_push_imm(void);
@@ -15252,6 +15299,7 @@ static const struct jit_fuse_entry amd64_fuse_names[] = {
     {"movr", JIT_FUSE_AMD64_MOVR}, {"arithr", JIT_FUSE_AMD64_ARITHR},
     {"memr", JIT_FUSE_AMD64_MEMR}, {"shiftr", JIT_FUSE_AMD64_SHIFTR},
     {"incdecr", JIT_FUSE_AMD64_INCDECR}, {"resident", JIT_FUSE_AMD64_RESIDENT},
+    {"retcache", JIT_FUSE_AMD64_RETCACHE},
 };
 
 static const struct jit_fuse_domain jit_fuse_domains[] = {
