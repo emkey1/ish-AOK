@@ -700,6 +700,18 @@ case ":$PATH:" in
 esac
 export PATH
 
+# 8 bits per channel for OpenGL programs. Mesa's EGL and GLX offer 10-bit
+# configs as well, and EGL ranks deeper ones first, so a program asking for "at
+# least one bit of red" gets 10-bit buffers. Nothing here shows more than 8
+# bits -- VNC and wl-present are 8-bit -- and a software compositor pays dearly
+# for them: pixman has no fast path for x2r10g10b10 and converts it through its
+# floating-point pipeline. On bip (A10X), labwc in software at scale 2 spent
+# 99% of its compositing time converting es2gears' 10-bit frames: 1.6 fps,
+# 576 ms of compositor CPU per frame; with this, 9.3 fps and 72 ms
+# (2026-10-04). Mesa reads its driconf options from the environment by name; a
+# value already set is kept.
+export allow_rgb10_configs="${allow_rgb10_configs:-false}"
+
 # wayvnc from /AOK/bundled on Devuan and Debian. They ship wayvnc 0.9.1, which
 # can die when the app takes a GPU desktop over (see the comment at
 # wl-present); iSH-AOK carries 0.10.2, with its own neatvnc and aml
