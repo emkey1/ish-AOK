@@ -5678,6 +5678,65 @@ amd64_gen_negnot negnot64, 8
 # loaded fresh, and dead after gret.
 
 # Packed 128-bit arithmetic, reg-reg: dst = dst OP src, lane-wise.
+# x86 MIN/MAX (SSE minsd/maxsd/minss/maxss/minp*/maxp*) are not IEEE minNum
+# and not arm64's fmin/fmax: MIN is `dst < src ? dst : src` and MAX
+# `dst > src ? dst : src`, so when either operand is a NaN, or the two compare
+# equal (+0 and -0), the result is the SOURCE, bit for bit -- a signalling NaN
+# source comes back unquieted. fmin/fmax quiet NaNs and order -0 below +0, and
+# 29 of 64 special-value pairs differed from the interpreter (2026-10-04).
+# fcmp sets mi/gt only for an ordered strict comparison, which is exactly the
+# rule. Scalar: \d = \a OP \b.
+.macro x86min d, a, b
+    fcmp \a, \b
+    fcsel \d, \a, \b, mi
+.endm
+.macro x86max d, a, b
+    fcmp \a, \b
+    fcsel \d, \a, \b, gt
+.endm
+
+# Packed: per lane, the same rule through a compare mask (fcmgt is false for
+# an unordered lane, which then takes the source).
+.macro amd64_x86_minmax_v kind, arr
+    .ifc \kind,min
+        fcmgt v2.\arr, v1.\arr, v0.\arr
+    .else
+        fcmgt v2.\arr, v0.\arr, v1.\arr
+    .endif
+    bsl v2.16b, v0.16b, v1.16b
+    mov v0.16b, v2.16b
+.endm
+.macro amd64_v_packed_minmax name, kind, arr
+    .gadget amd64_v_\name\()_reg
+        ldr x8, [_ip]
+        and x9, x8, 0xf
+        ubfx x10, x8, 4, 4
+        add x11, _cpu, CPU_xmm
+        add x9, x11, x9, lsl 4
+        add x10, x11, x10, lsl 4
+        ldr q0, [x10]
+        ldr q1, [x9]
+        amd64_x86_minmax_v \kind, \arr
+        str q0, [x10]
+        gret 1
+    .gadget amd64_v_\name\()_mem
+        ldr  x8, [_ip]
+        ldr  x9, [_ip, 8]
+        ubfx x10, x8, 8, 4
+        amd64_vmem_addr
+        amd64_vread_prep 16, \name\()_mem
+        ldp  x12, x13, [x9]
+        fmov d1, x12
+        mov  v1.d[1], x13
+        add  x14, _cpu, CPU_xmm
+        add  x14, x14, x10, lsl 4
+        ldr  q0, [x14]
+        amd64_x86_minmax_v \kind, \arr
+        str  q0, [x14]
+        gret 3
+        amd64_vread_bullshit 16, \name\()_mem
+.endm
+
 .macro amd64_v_packed_arith name, fpop, arr
     .gadget amd64_v_\name\()_reg
         ldr x8, [_ip]
@@ -5697,14 +5756,14 @@ amd64_v_packed_arith addpd, fadd, 2d
 amd64_v_packed_arith subpd, fsub, 2d
 amd64_v_packed_arith mulpd, fmul, 2d
 amd64_v_packed_arith divpd, fdiv, 2d
-amd64_v_packed_arith minpd, fmin, 2d
-amd64_v_packed_arith maxpd, fmax, 2d
+amd64_v_packed_minmax minpd, min, 2d
+amd64_v_packed_minmax maxpd, max, 2d
 amd64_v_packed_arith addps, fadd, 4s
 amd64_v_packed_arith subps, fsub, 4s
 amd64_v_packed_arith mulps, fmul, 4s
 amd64_v_packed_arith divps, fdiv, 4s
-amd64_v_packed_arith minps, fmin, 4s
-amd64_v_packed_arith maxps, fmax, 4s
+amd64_v_packed_minmax minps, min, 4s
+amd64_v_packed_minmax maxps, max, 4s
 
 # Packed 128-bit arithmetic, mem source: dst = dst OP m128.
 .macro amd64_v_packed_arith_mem name, fpop, arr
@@ -5730,14 +5789,10 @@ amd64_v_packed_arith_mem addpd, fadd, 2d
 amd64_v_packed_arith_mem subpd, fsub, 2d
 amd64_v_packed_arith_mem mulpd, fmul, 2d
 amd64_v_packed_arith_mem divpd, fdiv, 2d
-amd64_v_packed_arith_mem minpd, fmin, 2d
-amd64_v_packed_arith_mem maxpd, fmax, 2d
 amd64_v_packed_arith_mem addps, fadd, 4s
 amd64_v_packed_arith_mem subps, fsub, 4s
 amd64_v_packed_arith_mem mulps, fmul, 4s
 amd64_v_packed_arith_mem divps, fdiv, 4s
-amd64_v_packed_arith_mem minps, fmin, 4s
-amd64_v_packed_arith_mem maxps, fmax, 4s
 
 # Scalar double, mem source: dst.f64[0] OP= m64, upper lane preserved.
 .macro amd64_v_scalar_double_mem name, fpop
@@ -5762,8 +5817,8 @@ amd64_v_scalar_double_mem addsd, fadd
 amd64_v_scalar_double_mem subsd, fsub
 amd64_v_scalar_double_mem mulsd, fmul
 amd64_v_scalar_double_mem divsd, fdiv
-amd64_v_scalar_double_mem minsd, fmin
-amd64_v_scalar_double_mem maxsd, fmax
+amd64_v_scalar_double_mem minsd, x86min
+amd64_v_scalar_double_mem maxsd, x86max
 
 # Scalar single, reg-reg and mem source (dst.f32[0], upper 96 preserved).
 .macro amd64_v_scalar_single name, fpop
@@ -5800,14 +5855,14 @@ amd64_v_scalar_single addss, fadd
 amd64_v_scalar_single subss, fsub
 amd64_v_scalar_single mulss, fmul
 amd64_v_scalar_single divss, fdiv
-amd64_v_scalar_single minss, fmin
-amd64_v_scalar_single maxss, fmax
+amd64_v_scalar_single minss, x86min
+amd64_v_scalar_single maxss, x86max
 
 # Scalar-double reg-reg stragglers for the existing macro.
 amd64_v_scalar_double subsd, fsub
 amd64_v_scalar_double divsd, fdiv
-amd64_v_scalar_double minsd, fmin
-amd64_v_scalar_double maxsd, fmax
+amd64_v_scalar_double minsd, x86min
+amd64_v_scalar_double maxsd, x86max
 
 # Scalar square root (F2 0F 51 sqrtsd, F3 0F 51 sqrtss): dst's low lane =
 # sqrt(src's low lane), the rest of dst preserved. fsqrt is IEEE correctly
