@@ -14452,6 +14452,7 @@ static unsigned amd64_fuse_seed(void) {
 static const struct jit_fuse_entry i386_fuse_names[] = {
     {"addr", JIT_FUSE_ADDR}, {"movmr", JIT_FUSE_MOVMR}, {"lea", JIT_FUSE_LEA},
     {"alu", JIT_FUSE_ALU}, {"pushpop", JIT_FUSE_PUSHPOP}, {"jcc8", JIT_FUSE_JCC8},
+    {"alurr", JIT_FUSE_ALURR}, {"shift", JIT_FUSE_SHIFT}, {"incdec", JIT_FUSE_INCDEC},
 };
 static const struct jit_fuse_entry arm64_fuse_names[] = {
     {"bcond", JIT_FUSE_A64_BCOND}, {"ldst", JIT_FUSE_A64_LDST},
@@ -14791,6 +14792,64 @@ static inline bool gen_alu_imm_fused(struct gen_state *state, gadget_t *fused,
 #endif
 }
 
+// ALU reg,reg in one dispatch: [fused_<op>32_rr_<dst>_<src>] for
+// load(dst) + op(src) + store(dst). 7-Zip's LZMA (2026-10-04) spent ~30% of its
+// i386 JIT time in the load32_reg_*/store32_reg_* staging gadgets around
+// register ALU ops -- register ALU is a third of its instructions, add/xor
+// pairs alone 11% -- where the gcc profile behind the reg,imm-only decision
+// (math.S) had reg,reg at ~21% of ALU trios. Same body as the unfused op (do_op
+// on the guest registers), so the flags are identical by construction.
+// 32-bit only, for the same reasons as the reg,imm family.
+static inline bool gen_alu_rr_fused(struct gen_state *state, gadget_t *fused,
+        enum arg src, enum arg dst, struct modrm *modrm, int size) {
+#if defined(__aarch64__)
+    if (!(i386_jit_fuse_mask() & JIT_FUSE_ALURR))
+        return false;
+    if (sz(size) != size_32)
+        return false;
+    enum arg src_reg = gen_reg_arg(src, modrm);
+    enum arg dst_reg = gen_reg_arg(dst, modrm);
+    if (src_reg == arg_invalid || dst_reg == arg_invalid)
+        return false;
+    gadget_t g = fused[(dst_reg - arg_reg_a) * 8 + (src_reg - arg_reg_a)];
+    if (g == NULL)
+        return false;
+    GEN(g);
+    return true;
+#else
+    (void) state; (void) fused; (void) src; (void) dst; (void) modrm; (void) size;
+    return false;
+#endif
+}
+
+// inc/dec reg and shl/shr/sar reg,imm in one dispatch: the _tmp-based body
+// with the guest register moved in and out inside the gadget, instead of the
+// load32_reg_*/store32_reg_* gadgets around it. `bit` is the fuse switch;
+// `with_imm` emits the immediate word the shift bodies read from [_ip].
+static inline bool gen_unary_fused(struct gen_state *state, gadget_t *fused, unsigned bit,
+        enum arg val, struct modrm *modrm, int size, bool with_imm, uint64_t imm) {
+#if defined(__aarch64__)
+    if (!(i386_jit_fuse_mask() & bit))
+        return false;
+    if (sz(size) != size_32)
+        return false;
+    enum arg reg = gen_reg_arg(val, modrm);
+    if (reg == arg_invalid)
+        return false;
+    gadget_t g = fused[reg - arg_reg_a];
+    if (g == NULL)
+        return false;
+    GEN(g);
+    if (with_imm)
+        GEN(imm);
+    return true;
+#else
+    (void) state; (void) fused; (void) bit; (void) val; (void) modrm;
+    (void) size; (void) with_imm; (void) imm;
+    return false;
+#endif
+}
+
 // `push <reg>` / `pop <reg>` in one dispatch instead of two.
 //
 // PUSH and POP move their value through _tmp, so each needs a staging gadget on
@@ -15102,7 +15161,9 @@ static void gen_sreg(struct gen_state *state, struct modrm *modrm, unsigned kind
 #if defined(__aarch64__)
 #define losf(o, src, dst, z) do { \
     extern gadget_t fused_##o##32_imm_gadgets[]; \
-    if (!gen_alu_imm_fused(state, fused_##o##32_imm_gadgets, arg_##src, arg_##dst, &modrm, &imm, z)) { \
+    extern gadget_t fused_##o##32_rr_gadgets[]; \
+    if (!gen_alu_imm_fused(state, fused_##o##32_imm_gadgets, arg_##src, arg_##dst, &modrm, &imm, z) && \
+            !gen_alu_rr_fused(state, fused_##o##32_rr_gadgets, arg_##src, arg_##dst, &modrm, z)) { \
         los(o, src, dst, z); \
     } \
 } while (0)
@@ -15151,8 +15212,16 @@ static void gen_sreg(struct gen_state *state, struct modrm *modrm, unsigned kind
 #define PUSHA(z) do { if (!gen_pusha(state, z)) return false; } while (0)
 #define POPA(z) do { if (!gen_popa(state, z)) return false; } while (0)
 
-#define INC(val,z) load(val, z); gz(inc, z); store(val, z)
-#define DEC(val,z) load(val, z); gz(dec, z); store(val, z)
+#if defined(__aarch64__)
+#define INCDEC_FUSED(o, val, z) ({ \
+    extern gadget_t fused_##o##32_gadgets[]; \
+    gen_unary_fused(state, fused_##o##32_gadgets, JIT_FUSE_INCDEC, arg_##val, &modrm, z, false, 0); \
+})
+#else
+#define INCDEC_FUSED(o, val, z) false
+#endif
+#define INC(val,z) do { if (!INCDEC_FUSED(inc, val, z)) { load(val, z); gz(inc, z); store(val, z); } } while (0)
+#define DEC(val,z) do { if (!INCDEC_FUSED(dec, val, z)) { load(val, z); gz(dec, z); store(val, z); } } while (0)
 
 #define fake_ip (state->ip | (1ul << 63))
 
@@ -15344,9 +15413,20 @@ void helper_aad(struct cpu_state *cpu, uint32_t base);
 #define ROR(count, val,z) los(ror, count, val, z)
 #define RCL(count, val,z) los(rcl, count, val, z)
 #define RCR(count, val,z) los(rcr, count, val, z)
-#define SHL(count, val,z) los(shl, count, val, z)
-#define SHR(count, val,z) los(shr, count, val, z)
-#define SAR(count, val,z) los(sar, count, val, z)
+// shl/shr/sar reg,imm: one fused gadget (JIT_FUSE_SHIFT); the count stays in
+// the stream word after it, where the shift body reads it.
+#if defined(__aarch64__)
+#define SHIFT_FUSED(o, count, val, z) ({ \
+    extern gadget_t fused_##o##32_imm_gadgets[]; \
+    arg_##count == arg_imm && \
+        gen_unary_fused(state, fused_##o##32_imm_gadgets, JIT_FUSE_SHIFT, arg_##val, &modrm, z, true, imm); \
+})
+#else
+#define SHIFT_FUSED(o, count, val, z) false
+#endif
+#define SHL(count, val,z) do { if (!SHIFT_FUSED(shl, count, val, z)) { los(shl, count, val, z); } } while (0)
+#define SHR(count, val,z) do { if (!SHIFT_FUSED(shr, count, val, z)) { los(shr, count, val, z); } } while (0)
+#define SAR(count, val,z) do { if (!SHIFT_FUSED(sar, count, val, z)) { los(sar, count, val, z); } } while (0)
 
 #define SHLD(count, extra, dst,z) \
     load(dst,z); \

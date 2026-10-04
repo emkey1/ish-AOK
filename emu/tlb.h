@@ -45,7 +45,9 @@ struct tlb_entry {
     page_t page_if_writable;
     uintptr_t data_minus_addr;
 };
+#ifndef TLB_BITS
 #define TLB_BITS 10
+#endif
 #define TLB_SIZE (1 << TLB_BITS)
 struct tlb {
     struct mmu *mmu;

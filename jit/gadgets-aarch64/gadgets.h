@@ -1,6 +1,10 @@
 #include "../gadgets-generic.h"
 #include "cpu-offsets.h"
 
+.if TLB_BITS < 10
+.error "the 32-bit TLB index assumes TLB_BITS >= 10"
+.endif
+
 # register assignments
 eax .req w20
 xax .req x20
@@ -174,8 +178,10 @@ fast_write_\id :
     .ifc \type,write
         str w8, [_tlb, (-TLB_entries+TLB_dirty_page)]
     .endif
-    ubfx x9, _xaddr, 12, 10
-    eor x9, x9, _xaddr, lsr 22
+    # TLB_INDEX (emu/tlb.h) for a 32-bit address: the high term has 20 -
+    # TLB_BITS bits, never more than TLB_BITS, so no mask is needed.
+    ubfx x9, _xaddr, 12, TLB_BITS
+    eor x9, x9, _xaddr, lsr #(12 + TLB_BITS)
     mov w10, TLB_ENTRY_SIZE
     madd x9, x9, x10, _tlb
     .ifc \type,read

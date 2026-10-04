@@ -2278,6 +2278,80 @@ amd64_gen_shift_count shift_count64, 8
 .gadget_list fused_sub32_imm, REG_LIST
 .gadget_list fused_xor32_imm, REG_LIST
 
+# ---- FUSED reg,reg ALU: load(dst) + op(src) + store(dst) in ONE gadget ----
+#
+# Emitted by gen_alu_rr_fused() in jit/gen.c: [fused_<op>32_rr_<dst>_<src>],
+# 1 word and 1 dispatch instead of 3 words and 3. The reg,imm note above priced
+# this family out on a gcc profile (reg,reg ~21% of ALU trios); 7-Zip's LZMA
+# loop is register ALU for a third of its instructions, and the staging
+# load32_reg_*/store32_reg_* gadgets were ~30% of its i386 JIT time
+# (2026-10-04). Same do_op body and the same 32-bit-only and no-CMP/TEST rules
+# as the reg,imm family. src == dst (xor eax,eax) is fine: setf_ops records both
+# operands before the op writes the destination.
+.macro xfrr op, armop, dst_name, dst, src_name, src
+    .gadget fused_\op\()32_rr_\dst_name\()_\src_name
+        do_op \armop, 32, \src, \dst
+        gret_nomem
+.endm
+.macro xfrr_ops dst_name, dst, src_name, src
+    xfrr add, add, \dst_name, \dst, \src_name, \src
+    xfrr or, orr, \dst_name, \dst, \src_name, \src
+    xfrr adc, adc, \dst_name, \dst, \src_name, \src
+    xfrr sbb, sbc, \dst_name, \dst, \src_name, \src
+    xfrr and, and, \dst_name, \dst, \src_name, \src
+    xfrr sub, sub, \dst_name, \dst, \src_name, \src
+    xfrr xor, eor, \dst_name, \dst, \src_name, \src
+.endm
+.macro xfrr_row dst_name, dst
+    .macro xfrr_col src_name, src
+        xfrr_ops \dst_name, \dst, \src_name, \src
+    .endm
+    .each_reg xfrr_col
+    .purgem xfrr_col
+.endm
+.each_reg xfrr_row
+.purgem xfrr_row
+.purgem xfrr_ops
+.purgem xfrr
+
+# [dst * 8 + src], both in REG_LIST order -- see the note above.
+# (The name pasting lives in macros: clang consumes a \() at the outermost
+# .irp, so a third nesting level would see "\dst_" instead of "\dst".)
+.macro xfrr_quad op, dst, src
+    .quad NAME(gadget_fused_\op\()32_rr_\dst\()_\src)
+.endm
+.macro xfrr_table op
+    .global.name fused_\op\()32_rr_gadgets
+.endm
+.pushsection_rodata
+.irp op, add,or,adc,sbb,and,sub,xor
+    xfrr_table \op
+    .irp dst, REG_LIST
+        .irp src, REG_LIST
+            xfrr_quad \op, \dst, \src
+        .endr
+    .endr
+.endr
+.popsection
+.purgem xfrr_quad
+.purgem xfrr_table
+
+# ---- FUSED inc/dec reg (32-bit): [fused_<op>32_<reg>], 1 dispatch instead of 3 ----
+# The do_inc/do_dec body on _tmp with the guest register moved in and out.
+.macro xfincdec op, name, reg
+    .gadget fused_\op\()32_\name
+        mov _tmp, \reg
+        do_\op 32,
+        mov \reg, _tmp
+        gret_nomem
+.endm
+.macro xfinc name, reg
+    xfincdec inc, \name, \reg
+.endm
+.macro xfdec name, reg
+    xfincdec dec, \name, \reg
+.endm
+
 # atomics. oof
 
 .macro do_op_size_atomic opname, op, size, s
@@ -2471,6 +2545,14 @@ amd64_gen_shift_count shift_count64, 8
     strb w8, [_cpu, CPU_of]
     setf_all_res \s
 .endm
+
+.each_reg xfinc
+.each_reg xfdec
+.purgem xfinc
+.purgem xfdec
+.purgem xfincdec
+.gadget_list fused_inc32, REG_LIST
+.gadget_list fused_dec32, REG_LIST
 
 .macro do_sign_extend size, s
     .if \size != 32
@@ -2993,9 +3075,9 @@ amd64_v_str3a_reg pcmpestri, amd64_jit_pcmpestri
     cmp  x8, (0x1000-\size)
     b.hi amd64_vxpage_\id
     and  x8, x9, #0xfffffffffffff000
-    ubfx x11, x9, 12, 10
-    eor  x11, x11, x9, lsr 22
-    and  x11, x11, 0x3ff
+    ubfx x11, x9, 12, TLB_BITS
+    eor  x11, x11, x9, lsr #(12 + TLB_BITS)
+    and  x11, x11, #(1 << TLB_BITS) - 1
     mov  w12, TLB_ENTRY_SIZE
     madd x11, x11, x12, _tlb
     ldr  x13, [x11, TLB_ENTRY_page]
@@ -3142,9 +3224,9 @@ amd64_vwslow_\id:
 amd64_vwfast_\id:
     and  x8, x9, #0xfffffffffffff000
     str  x8, [_tlb, (-TLB_entries+TLB_dirty_page)]
-    ubfx x11, x9, 12, 10
-    eor  x11, x11, x9, lsr 22
-    and  x11, x11, 0x3ff
+    ubfx x11, x9, 12, TLB_BITS
+    eor  x11, x11, x9, lsr #(12 + TLB_BITS)
+    and  x11, x11, #(1 << TLB_BITS) - 1
     mov  w12, TLB_ENTRY_SIZE
     madd x11, x11, x12, _tlb
     ldr  x13, [x11, TLB_ENTRY_page_if_writable]

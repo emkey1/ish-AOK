@@ -1,16 +1,8 @@
 #include "gadgets.h"
 
-.macro do_shift type, size, s
-    .irp arg, reg_c,imm
-        .gadget \type\size\()_\arg
-            .ifc \arg,imm
-                ldr w8, [_ip]
-                ands w8, w8, 31
-            .else
-                ands w8, ecx, 31
-            .endif
-            b.eq 1f
-
+# The shift/rotate itself, on _tmp, with the masked nonzero count in w8. Shared
+# by the ordinary gadgets and the fused per-register shl/shr/sar ones below.
+.macro shift_core type, size, s
             # shift by one less, then by one more
             # that way we can retrieve the last bit shifted out for calculating CF and OF
             .ifc \type,shl
@@ -126,6 +118,20 @@
                 setf_zsp \s
                 clearf_a
             .endifin
+.endm
+
+.macro do_shift type, size, s
+    .irp arg, reg_c,imm
+        .gadget \type\size\()_\arg
+            .ifc \arg,imm
+                ldr w8, [_ip]
+                ands w8, w8, 31
+            .else
+                ands w8, ecx, 31
+            .endif
+            b.eq 1f
+
+            shift_core \type, \size, \s
         1:
             .ifc \arg,imm
                 gret 1
@@ -141,6 +147,37 @@
     .endr
     .gadget_array \type
 .endr
+
+# ---- FUSED shl/shr/sar reg,imm: load(reg) + shift(imm) + store(reg) in ONE gadget ----
+#
+# Emitted by SHIFT_FUSED in jit/gen.c: [fused_<type>32_imm_<reg>][imm]. The body
+# is shift_core, the same one the unfused gadget runs, with the guest register
+# moved into _tmp and back inside the gadget. A zero count leaves _tmp equal to
+# the register, as the unfused store-back does. 32-bit only: at size 8 the
+# reg_sp..reg_di names mean ah..bh (see the reg,imm ALU family in math.S).
+.macro xfshift type, name, reg
+    .gadget fused_\type\()32_imm_\name
+        mov _tmp, \reg
+        ldr w8, [_ip]
+        ands w8, w8, 31
+        b.eq 1f
+        shift_core \type, 32,
+    1:
+        mov \reg, _tmp
+        gret 1
+.endm
+.irp type, shl,shr,sar
+    .macro xfshift_\type name, reg
+        xfshift \type, \name, \reg
+    .endm
+    .each_reg xfshift_\type
+    .purgem xfshift_\type
+.endr
+.purgem xfshift
+# REG_LIST order (enum arg), not .each_reg order -- see math.S.
+.gadget_list fused_shl32_imm, REG_LIST
+.gadget_list fused_shr32_imm, REG_LIST
+.gadget_list fused_sar32_imm, REG_LIST
 
 .macro do_shiftd op, arg
     .macro x name, reg

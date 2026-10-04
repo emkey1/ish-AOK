@@ -16,6 +16,7 @@ encoding class, and names pairs by class.
 
 import argparse
 import collections
+import re
 import os
 import shutil
 import subprocess
@@ -115,6 +116,41 @@ def x86_class(text):
     return "alu-mem" if "(" in ops else "alu-reg"
 
 
+X86_MEM = re.compile(r"(-?(?:0x[0-9a-f]+|\d+))?\((%\w+)?(?:,(%\w+),(\d))?\)")
+
+
+def x86_mem_form(text):
+    """(kind, form) of an instruction's memory operand, or None: kind is load,
+    store, alu, cmp, lea or other; form says how the address is made -- the
+    i386 JIT fuses some forms into one gadget and builds others from several."""
+    m = text.split()[0] if text else "?"
+    ops = text[len(m):].strip()
+    hit = X86_MEM.search(ops)
+    if hit is None:
+        return None
+    disp, base, index, scale = hit.groups()
+    if index is not None:
+        form = "base+index*s" if base else "index*s"
+    elif base is None:
+        form = "absolute"
+    else:
+        form = "base+disp" if disp else "base"
+    if form in ("base+index*s", "index*s") and disp:
+        form += "+disp"
+    if m.startswith("lea"):
+        kind = "lea"
+    elif m.startswith(("cmp", "test")):
+        kind = "cmp"
+    elif m.startswith("mov"):
+        # AT&T: source first. The memory operand last is a store.
+        kind = "store" if ops.rstrip().endswith(")") else "load"
+    elif m.startswith(("push", "pop", "call", "j", "ret")):
+        kind = "other"
+    else:
+        kind = "alu"
+    return kind, form
+
+
 def x86_disassemble(mc, abi, chunks):
     """{chunk hex: [instruction text, ...]} for the byte chunks llvm-mc can decode."""
     out = {}
@@ -173,6 +209,17 @@ def x86_report(abi, recs, mc, top):
         print("  %-12s %6.2f%%" % (c, 100.0 * n / total))
     fused = sum(n * (k - 1) for k, n in steps.items() if k > 1)
     print("\ninstructions folded into an earlier step by fusion: %.2f%%" % (100.0 * fused / total))
+    forms = collections.Counter()
+    for count, cs in recs:
+        for c in cs:
+            for t in dis.get(c) or []:
+                f = x86_mem_form(t)
+                if f is not None:
+                    forms[f] += count
+    if forms:
+        print("\nmemory operands by kind and address form (share of all instructions)")
+        for (kind, form), n in forms.most_common(16):
+            print("  %-6s %-18s %6.2f%%" % (kind, form, 100.0 * n / total))
     print("\ntop %d mnemonics" % top)
     for m, n in by_mnem.most_common(top):
         print("  %-14s %6.2f%%" % (m, 100.0 * n / total))
