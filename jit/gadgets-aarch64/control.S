@@ -101,10 +101,10 @@
     ldr _ip, [_ip]
     chain_ip
 .gadget amd64_jmp
-    # target word is bit-63 tagged; amd64_branch_dispatch (below, after
-    # the jcc family) handles tagged-exit vs patched-chain uniformly.
+    # target word is bit-63 tagged; amd64_chain_ip (gadgets.h) handles
+    # tagged-exit vs patched-chain uniformly.
     ldr _ip, [_ip]
-    b amd64_branch_dispatch
+    amd64_chain_ip
 .gadget jcxz
     cbnz ecx, 1f
     ldr _ip, [_ip]
@@ -304,6 +304,7 @@ amd64_chain:
     str x8, [_cpu, CPU_amd64_rip]
     str w8, [_cpu, CPU_eip]
     gret
+.global amd64_chain_poked
 amd64_chain_poked:
     ldur x8, [_ip, (JIT_BLOCK_addr - JIT_BLOCK_code)]
     str x8, [_cpu, CPU_amd64_rip]
@@ -312,15 +313,17 @@ amd64_chain_poked:
 
 # amd64 conditional jumps (0x70-0x7f, 0x0f 80-8f). gen.c emits operand 0 =
 # taken target, operand 1 = else (swapped for negated condition codes),
-# both bit-63 tagged for the chaining dispatch above. Uses only label 1.
+# both bit-63 tagged for the chaining dispatch above (inlined per gadget:
+# amd64_chain_ip). Uses labels 1 and 2.
 .irp cond, COND_LIST
     .gadget amd64_jcc_\cond
         amd64_do_jump \cond, 1f
         ldr _ip, [_ip, 8]
-        b amd64_branch_dispatch
+        b 2f
     1:
         ldr _ip, [_ip]
-        b amd64_branch_dispatch
+    2:
+        amd64_chain_ip
 .endr
 
 # amd64 LOOP (0xe2) / LOOPE/LOOPZ (0xe1) / LOOPNE/LOOPNZ (0xe0), no address-size prefix
@@ -498,10 +501,11 @@ amd64_gen_loop loopne, ne
     ldr x8, [_cpu, (CPU_amd64_regs + 8)]    /* RCX */
     cbz x8, 1f
     ldr _ip, [_ip, 8]                       /* RCX != 0 -> else / fall through */
-    b amd64_branch_dispatch
+    b 2f
 1:
     ldr _ip, [_ip]                          /* RCX == 0 -> taken */
-    b amd64_branch_dispatch
+2:
+    amd64_chain_ip
 
 # PUSHF/POPF, in both operand sizes. [gadget][orig_ip]: a fault reports the
 # instruction, so the stack-growth retry re-runs it.

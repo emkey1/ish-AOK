@@ -103,6 +103,33 @@ _xaddr .req x3
     b poke
 .endm
 
+# amd64_chain (control.S) inlined, for the same reason: each amd64 branch
+# gadget (jmp, jcc, jrcxz, the fused cmp/test+jcc tails) ends in its own
+# `br`. The shared copy put every chained amd64 transition through one
+# indirect branch. A tagged (unchained) word and the poked/out-of-budget
+# case leave through the shared code, which is out of reach of a
+# conditional branch from another object file -- hence the trampolines.
+.macro amd64_chain_ip
+    tbnz _ip, 63, 8711f
+    ldr x8, [_cpu, CPU_poked_ptr]
+    ldrb w8, [x8]
+    cbnz w8, 8712f
+    ldr x8, [_cpu, LOCAL_chain_budget]
+    subs x8, x8, 1
+    str x8, [_cpu, LOCAL_chain_budget]
+    b.le 8712f
+    sub x8, _ip, JIT_BLOCK_code
+    str x8, [_cpu, LOCAL_last_block]
+    ldr x8, [x8, JIT_BLOCK_addr]
+    str x8, [_cpu, CPU_amd64_rip]
+    str w8, [_cpu, CPU_eip]
+    gret
+8711:
+    b amd64_branch_dispatch
+8712:
+    b amd64_chain_poked
+.endm
+
 # A misaligned 16/32-bit LOCK operand: helper_atomic_unaligned (jit/helpers.c)
 # does it exactly in C, because the ldaxr/stlxr fast path faults the host on a
 # misaligned address. \code is the helper's UA_* number; _tmp goes in as the

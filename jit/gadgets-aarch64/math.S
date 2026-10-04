@@ -8895,7 +8895,7 @@ _gadget_array_start fused_test8
 # clobbers NZCV -- so the tail tests the still-live cf (w14), of (w16)
 # and result (x15, upper bits clean in the 32-bit path) instead of host
 # flags. Stream: [gadget][packed]([imm])[taken][else]; the gadget loads the
-# chosen word into _ip and hands off to amd64_branch_dispatch exactly like
+# chosen word into _ip and chains (amd64_chain_ip) exactly like
 # amd64_jcc_<cond>, so a fused tail chains (or exits) on the same terms as
 # an unfused one. Parity has no cheap live-register form and is never fused
 # (NULL table slot in gen.c).
@@ -8929,10 +8929,11 @@ _gadget_array_start fused_test8
         b.ne 8101f
     .endif
     ldr _ip, [_ip, \toff+8]
-    b amd64_branch_dispatch
+    b 8102f
 8101:
     ldr _ip, [_ip, \toff]
-    b amd64_branch_dispatch
+8102:
+    amd64_chain_ip
 .endm
 
 .macro amd64_fused_cmp_ri cond
