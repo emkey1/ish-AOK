@@ -748,30 +748,30 @@ static void ISHPresentNativeUserPrompt(int attempt, NSString *problem) {
         return;
     }
     NSString *message =
-        @"This filesystem has no Linux distribution, only the programs built into iSH-AOK. "
+        NSLocalizedString(@"This filesystem has no Linux distribution, only the programs built into iSH-AOK. "
         @"It starts with a root account, which the Session Shell always uses.\n\n"
         @"Choose a name for your everyday account. Workspace terminals open as this user "
         @"when \"Open Everything as Default User\" is on. The password is optional; "
-        @"without one, sudo works only after you set one with passwd.";
+        @"without one, sudo works only after you set one with passwd.", @"Create Your Account alert message");
     if (problem.length != 0)
         message = [NSString stringWithFormat:@"%@\n\n%@", problem, message];
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Create Your Account"
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:NSLocalizedString(@"Create Your Account", @"Alert title for creating the default user account")
                                                                    message:message
                                                             preferredStyle:UIAlertControllerStyleAlert];
     [alert addTextFieldWithConfigurationHandler:^(UITextField *field) {
-        field.placeholder = @"user name";
+        field.placeholder = NSLocalizedString(@"user name", @"Create Your Account field placeholder");
         field.autocapitalizationType = UITextAutocapitalizationTypeNone;
         field.autocorrectionType = UITextAutocorrectionTypeNo;
         field.spellCheckingType = UITextSpellCheckingTypeNo;
         field.textContentType = UITextContentTypeUsername;
     }];
     [alert addTextFieldWithConfigurationHandler:^(UITextField *field) {
-        field.placeholder = @"password (optional)";
+        field.placeholder = NSLocalizedString(@"password (optional)", @"Create Your Account field placeholder");
         field.secureTextEntry = YES;
         field.textContentType = UITextContentTypeNewPassword;
     }];
     [alert addTextFieldWithConfigurationHandler:^(UITextField *field) {
-        field.placeholder = @"password again";
+        field.placeholder = NSLocalizedString(@"password again", @"Create Your Account field placeholder");
         field.secureTextEntry = YES;
         field.textContentType = UITextContentTypeNewPassword;
     }];
@@ -781,7 +781,7 @@ static void ISHPresentNativeUserPrompt(int attempt, NSString *problem) {
     // makes on the user's behalf -- triggers, and this answer is remembered:
     // seen in the simulator, a Skip nobody chose meant the question never came
     // back.
-    [alert addAction:[UIAlertAction actionWithTitle:@"Skip (Root Only)"
+    [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Skip (Root Only)", @"Create Your Account button")
                                               style:UIAlertActionStyleDefault
                                             handler:^(UIAlertAction *action) {
         ISHNativeRootGuestCall(^{
@@ -789,7 +789,7 @@ static void ISHPresentNativeUserPrompt(int attempt, NSString *problem) {
         });
         [ISHDiagnosticsStore recordBreadcrumb:@"native.user.skipped"];
     }]];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Create"
+    [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Create", @"Create Your Account button")
                                               style:UIAlertActionStyleDefault
                                             handler:^(UIAlertAction *action) {
         UIAlertController *shown = weakAlert;
@@ -799,7 +799,7 @@ static void ISHPresentNativeUserPrompt(int attempt, NSString *problem) {
         NSString *again = shown.textFields[2].text ?: @"";
         NSString *retry = nil;
         if (![password isEqualToString:again]) {
-            retry = @"The two passwords were different.";
+            retry = NSLocalizedString(@"The two passwords were different.", @"Create Your Account error");
         } else {
             __block int err = 0;
             __block BOOL valid = NO;
@@ -810,10 +810,10 @@ static void ISHPresentNativeUserPrompt(int attempt, NSString *problem) {
             });
             if (!valid) {
                 retry = [NSString stringWithFormat:
-                    @"\"%@\" can't be used. A name starts with a lower-case letter or _, "
-                    @"has at most 32 of a-z, 0-9, _ and -, and is not already taken.", name];
+                    NSLocalizedString(@"\"%@\" can't be used. A name starts with a lower-case letter or _, "
+                    @"has at most 32 of a-z, 0-9, _ and -, and is not already taken.", @"Create Your Account error; %@ is the rejected name"), name];
             } else if (err < 0) {
-                retry = [NSString stringWithFormat:@"The account could not be created (%@).",
+                retry = [NSString stringWithFormat:NSLocalizedString(@"The account could not be created (%@).", @"Create Your Account error; %@ is an error description"),
                          [AppDelegate descriptionForISHErrno:err]];
             } else {
                 [ISHDiagnosticsStore recordBreadcrumb:@"native.user.created"
@@ -844,14 +844,14 @@ static void ISHPresentGuestHaltedAlert(int status, int attempt) {
         return;
     }
     NSString *message = [NSString stringWithFormat:
-        @"The Linux system has shut down (%@). That is what reboot, poweroff and halt do.\n\n"
-        @"iSH-AOK can't start it again while the app is running. Quit, then open iSH-AOK again to boot it.",
+        NSLocalizedString(@"The Linux system has shut down (%@). That is what reboot, poweroff and halt do.\n\n"
+        @"iSH-AOK can't start it again while the app is running. Quit, then open iSH-AOK again to boot it.", @"System Halted alert message; %@ says how init ended"),
         ISHGuestHaltDescription(status)];
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"System Halted"
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:NSLocalizedString(@"System Halted", @"Alert title after the guest shuts down")
                                                                    message:message
                                                             preferredStyle:UIAlertControllerStyleAlert];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Not Now" style:UIAlertActionStyleCancel handler:nil]];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Quit iSH-AOK"
+    [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Not Now", @"Alert button") style:UIAlertActionStyleCancel handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Quit iSH-AOK", @"System Halted alert button")
                                               style:UIAlertActionStyleDefault
                                             handler:^(__unused UIAlertAction *action) {
         [ISHDiagnosticsStore recordBreadcrumb:@"guest.halted.quit"];
@@ -1048,7 +1048,7 @@ static NSString *ISHDescriptionForErrno(intptr_t err) {
 
 static NSString *BootFailureSentence(NSString *text) {
     if (text.length == 0)
-        return @"Boot failed.";
+        return NSLocalizedString(@"Boot failed.", @"Terminal overlay when boot fails without a specific reason");
     unichar last = [text characterAtIndex:text.length - 1];
     if (last == '.' || last == '!' || last == '?')
         return text;
@@ -1067,14 +1067,14 @@ static NSString *BootFailureMessage(NSString *reason, intptr_t err, NSDictionary
     NSString *path = details[@"path"];
     NSString *command = details[@"command"];
     if (root.length != 0)
-        [lines addObject:[NSString stringWithFormat:@"Root: %@", root]];
+        [lines addObject:[NSString stringWithFormat:NSLocalizedString(@"Root: %@", @"Boot failure details line; %@ is a filesystem name"), root]];
     if (guestABI.length != 0)
-        [lines addObject:[NSString stringWithFormat:@"Guest ABI: %@", guestABI]];
+        [lines addObject:[NSString stringWithFormat:NSLocalizedString(@"Guest ABI: %@", @"Boot failure details line; %@ is an architecture"), guestABI]];
     if (path.length != 0)
-        [lines addObject:[NSString stringWithFormat:@"Path: %@", path]];
+        [lines addObject:[NSString stringWithFormat:NSLocalizedString(@"Path: %@", @"Boot failure details line; %@ is a path"), path]];
     if (command.length != 0)
-        [lines addObject:[NSString stringWithFormat:@"Command: %@", command]];
-    [lines addObject:[NSString stringWithFormat:@"Error: %@", ISHDescriptionForErrno(err)]];
+        [lines addObject:[NSString stringWithFormat:NSLocalizedString(@"Command: %@", @"Boot failure details line; %@ is a command"), command]];
+    [lines addObject:[NSString stringWithFormat:NSLocalizedString(@"Error: %@", @"Boot failure details line; %@ is an error description"), ISHDescriptionForErrno(err)]];
 
     if (recovery.length != 0) {
         [lines addObject:@""];
@@ -1112,7 +1112,7 @@ static intptr_t RecordBootFailure(intptr_t err,
     if (err > 0)
         err = -err;
     NSString *safeStage = stage.length != 0 ? stage : @"boot.failed";
-    NSString *safeTitle = title.length != 0 ? title : @"Boot failed";
+    NSString *safeTitle = title.length != 0 ? title : NSLocalizedString(@"Boot failed", @"Boot failure alert title");
     NSDictionary<NSString *, id> *safeDetails = BootFailureDetails(safeStage, err, safeTitle, reason, recovery, details);
     bootFailureTitle = safeTitle;
     bootFailureMessage = BootFailureMessage(reason, err, safeDetails, recovery);
@@ -1125,37 +1125,37 @@ static intptr_t RecordBootFailure(intptr_t err,
 
 static NSString *BootMountRecovery(intptr_t err) {
     if (err == _EINVAL) {
-        return @"The filesystem metadata database may be incompatible or corrupt. Choose another filesystem or reimport this one.";
+        return NSLocalizedString(@"The filesystem metadata database may be incompatible or corrupt. Choose another filesystem or reimport this one.", @"Boot failure recovery advice");
     }
     if (err == _EACCES || err == _EPERM) {
-        return @"iOS denied access to the filesystem files. Restart the app; if it still fails, choose another filesystem or reimport this one.";
+        return NSLocalizedString(@"iOS denied access to the filesystem files. Restart the app; if it still fails, choose another filesystem or reimport this one.", @"Boot failure recovery advice");
     }
     if (err == _ENOSPC) {
-        return @"Free storage space on the device, then restart iSH-AOK.";
+        return NSLocalizedString(@"Free storage space on the device, then restart iSH-AOK.", @"Boot failure recovery advice");
     }
-    return @"Choose another filesystem or reimport this one.";
+    return NSLocalizedString(@"Choose another filesystem or reimport this one.", @"Boot failure recovery advice");
 }
 
 static NSString *BootExecRecovery(intptr_t err, NSString *guestABI) {
     if (err == _ENOENT) {
-        return @"The configured boot command is missing inside the root. Check Settings -> Boot Command or reimport the filesystem.";
+        return NSLocalizedString(@"The configured boot command is missing inside the root. Check Settings -> Boot Command or reimport the filesystem.", @"Boot failure recovery advice");
     }
     if (err == _EACCES || err == _EPERM) {
-        return @"The configured boot command exists but is not executable. Fix its permissions or choose a different boot command.";
+        return NSLocalizedString(@"The configured boot command exists but is not executable. Fix its permissions or choose a different boot command.", @"Boot failure recovery advice");
     }
     if (err == _ENOEXEC) {
         if ([guestABI isEqualToString:@"amd64"]) {
-            return @"This root is marked x86_64/amd64, but the boot command is not a supported x86_64 executable or script. Check Settings -> Boot Command or reimport the filesystem.";
+            return NSLocalizedString(@"This root is marked x86_64/amd64, but the boot command is not a supported x86_64 executable or script. Check Settings -> Boot Command or reimport the filesystem.", @"Boot failure recovery advice");
         }
         if ([guestABI isEqualToString:@"riscv64"]) {
-            return @"This root is marked riscv64, but the boot command is not a supported riscv64 executable or script. Check Settings -> Boot Command or reimport the filesystem.";
+            return NSLocalizedString(@"This root is marked riscv64, but the boot command is not a supported riscv64 executable or script. Check Settings -> Boot Command or reimport the filesystem.", @"Boot failure recovery advice");
         }
-        return @"The configured boot command is not a supported Linux executable or script. Check Settings -> Boot Command.";
+        return NSLocalizedString(@"The configured boot command is not a supported Linux executable or script. Check Settings -> Boot Command.", @"Boot failure recovery advice");
     }
     if (err == _ENOMEM) {
-        return @"The device did not have enough memory to start init. Close other apps and restart iSH-AOK.";
+        return NSLocalizedString(@"The device did not have enough memory to start init. Close other apps and restart iSH-AOK.", @"Boot failure recovery advice");
     }
-    return @"Check Settings -> Boot Command, or choose/reimport the filesystem.";
+    return NSLocalizedString(@"Check Settings -> Boot Command, or choose/reimport the filesystem.", @"Boot failure recovery advice");
 }
 
 static BOOL BootCommandIsDefaultInit(NSArray<NSString *> *command) {
@@ -3432,12 +3432,12 @@ static void ISHSessionPresentResumeDisposition(UIViewController *host,
                                                void (^completion)(NSString *_Nullable)) {
     NSString *path = slot[@"path"];
     UIAlertController *sheet = [UIAlertController
-        alertControllerWithTitle:@"Resume this session"
-                         message:@"Keep the saved copy so it can be resumed again, "
-                                 @"or remove it once this session is running?"
+        alertControllerWithTitle:NSLocalizedString(@"Resume this session", @"Resume disposition alert title")
+                         message:NSLocalizedString(@"Keep the saved copy so it can be resumed again, "
+                                 @"or remove it once this session is running?", @"Resume disposition alert message")
                   preferredStyle:UIAlertControllerStyleAlert];
 
-    [sheet addAction:[UIAlertAction actionWithTitle:@"Resume and Save"
+    [sheet addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Resume and Save", @"Resume disposition button: keep the saved copy")
                                               style:UIAlertActionStyleDefault
                                             handler:^(__unused UIAlertAction *a) {
         ISHSessionSetResumeChoice(path);
@@ -3458,7 +3458,7 @@ static void ISHSessionPresentResumeDisposition(UIViewController *host,
         completion(nil);
     }]];
 
-    [sheet addAction:[UIAlertAction actionWithTitle:@"Resume and Delete"
+    [sheet addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Resume and Delete", @"Resume disposition button: delete the saved copy")
                                               style:UIAlertActionStyleDestructive
                                             handler:^(__unused UIAlertAction *a) {
         ISHSessionSetResumeChoice(path);
@@ -3470,7 +3470,7 @@ static void ISHSessionPresentResumeDisposition(UIViewController *host,
         completion(path);
     }]];
 
-    [sheet addAction:[UIAlertAction actionWithTitle:@"Back"
+    [sheet addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Back", @"Button that returns to the resume picker")
                                               style:UIAlertActionStyleCancel
                                             handler:^(__unused UIAlertAction *a) {
         // Nothing has been decided yet, so the picker can simply come back.
@@ -3492,16 +3492,18 @@ static void ISHSessionPresentResumeDisposition(UIViewController *host,
 static NSString *ISHSessionSlotTitle(NSDictionary *slot, NSDateFormatter *when) {
     NSString *stamp = [when stringFromDate:slot[@"date"]];
     if (![slot[@"loadable"] boolValue])
-        return [NSString stringWithFormat:@"%@ (saved by a different build; can't be restored)", stamp];
+        return [NSString stringWithFormat:NSLocalizedString(@"%@ (saved by a different build; can't be restored)", @"Saved session row; %@ is the date"), stamp];
     if ([slot[@"orphan"] boolValue])
-        return [NSString stringWithFormat:@"%@ (saved on %@, which is gone; can't be restored)", stamp,
-                [slot[@"rootName"] length] != 0 ? slot[@"rootName"] : @"a filesystem"];
+        return [NSString stringWithFormat:NSLocalizedString(@"%@ (saved on %@, which is gone; can't be restored)", @"Saved session row; date, then filesystem name"), stamp,
+                [slot[@"rootName"] length] != 0 ? slot[@"rootName"] : NSLocalizedString(@"a filesystem", @"Saved session row, when the filesystem name is unknown")];
     // An automatic save is named, because "which of these did I choose to keep"
     // is the question somebody deleting them is trying to answer.
-    NSString *automatic = [slot[@"name"] hasPrefix:@"session-auto"] ? @", auto-saved" : @"";
-    return [NSString stringWithFormat:@"%@ — %@ process%@, %@%@",
-            slot[@"hostname"], slot[@"tasks"],
-            [slot[@"tasks"] unsignedLongValue] == 1 ? @"" : @"es", stamp, automatic];
+    NSString *automatic = [slot[@"name"] hasPrefix:@"session-auto"] ? NSLocalizedString(@", auto-saved", @"Appended to a saved session row") : @"";
+    NSString *format = [slot[@"tasks"] unsignedLongValue] == 1
+        ? NSLocalizedString(@"%@ — %@ process, %@%@", @"Saved session row; hostname, process count (1), date, then an optional auto-saved note")
+        : NSLocalizedString(@"%@ — %@ processes, %@%@", @"Saved session row; hostname, process count, date, then an optional auto-saved note");
+    return [NSString stringWithFormat:format,
+            slot[@"hostname"], slot[@"tasks"], stamp, automatic];
 }
 
 // Remove one saved session: the image, its Workspace layout, and the pin that
@@ -3530,18 +3532,18 @@ static void ISHSessionConfirmDeleteOnly(UIViewController *host, NSDictionary *sl
     when.dateStyle = NSDateFormatterShortStyle;
     when.timeStyle = NSDateFormatterShortStyle;
     ISHActionSheet *sheet = [ISHActionSheet
-        alertWithTitle:@"Delete this saved session?"
-               message:[NSString stringWithFormat:@"%@\n\nIt cannot be resumed afterwards. "
-                                                  @"iSH-AOK then starts a new session.",
+        alertWithTitle:NSLocalizedString(@"Delete this saved session?", @"Alert title")
+               message:[NSString stringWithFormat:NSLocalizedString(@"%@\n\nIt cannot be resumed afterwards. "
+                                                  @"iSH-AOK then starts a new session.", @"Delete saved session message; %@ describes the session"),
                                                   ISHSessionSlotTitle(slot, when)]];
-    [sheet addActionWithTitle:@"Delete and Start New"
+    [sheet addActionWithTitle:NSLocalizedString(@"Delete and Start New", @"Delete saved session button")
                         style:UIAlertActionStyleDestructive
                       handler:^(__unused UIAlertAction *a) {
         ISHSessionDeleteSlot(slot);
         ISHSessionSetResumeChoice(nil);
         completion(nil);
     }];
-    [sheet addActionWithTitle:@"Cancel"
+    [sheet addActionWithTitle:NSLocalizedString(@"Cancel", @"Alert button")
                         style:UIAlertActionStyleCancel
                       handler:^(__unused UIAlertAction *a) {
         dispatch_async(dispatch_get_main_queue(), ^{
@@ -3566,9 +3568,9 @@ static void ISHSessionPresentDeletePicker(UIViewController *host,
         return;
     }
     ISHActionSheet *sheet = [ISHActionSheet
-        alertWithTitle:@"Delete a saved session"
-               message:@"This removes the saved copy from this device. The session it "
-                       @"holds cannot be resumed afterwards."];
+        alertWithTitle:NSLocalizedString(@"Delete a saved session", @"Delete saved session picker title")
+               message:NSLocalizedString(@"This removes the saved copy from this device. The session it "
+                       @"holds cannot be resumed afterwards.", @"Delete saved session picker message")];
     NSDateFormatter *when = [[NSDateFormatter alloc] init];
     when.dateStyle = NSDateFormatterShortStyle;
     when.timeStyle = NSDateFormatterShortStyle;
@@ -3584,7 +3586,7 @@ static void ISHSessionPresentDeletePicker(UIViewController *host,
             });
         }];
     }
-    [sheet addActionWithTitle:@"Back"
+    [sheet addActionWithTitle:NSLocalizedString(@"Back", @"Button that returns to the resume picker")
                         style:UIAlertActionStyleCancel
                       handler:^(__unused UIAlertAction *a) {
         dispatch_async(dispatch_get_main_queue(), ^{
@@ -3641,10 +3643,10 @@ void ISHSessionPresentResumePicker(UIViewController *host,
     // hostname, a process count and a date, would not fit in that row. So on
     // a Mac this becomes a list that has to be answered.
     ISHActionSheet *sheet = [ISHActionSheet
-        alertWithTitle:@"Resume a session?"
+        alertWithTitle:NSLocalizedString(@"Resume a session?", @"Resume picker title")
                message:slots.count == 1
-                       ? @"iSH-AOK saved this session. Pick it up, or start fresh."
-                       : @"iSH-AOK has saved sessions. Pick one up, or start fresh."];
+                       ? NSLocalizedString(@"iSH-AOK saved this session. Pick it up, or start fresh.", @"Resume picker message, one saved session")
+                       : NSLocalizedString(@"iSH-AOK has saved sessions. Pick one up, or start fresh.", @"Resume picker message, several saved sessions")];
 
     NSDateFormatter *when = [[NSDateFormatter alloc] init];
     when.dateStyle = NSDateFormatterShortStyle;
@@ -3675,8 +3677,8 @@ void ISHSessionPresentResumePicker(UIViewController *host,
     // One session: straight to "are you sure", then a regular launch. Several:
     // the picker, to choose which.
     NSDictionary *onlySlot = slots.count == 1 ? slots.firstObject : nil;
-    [sheet addActionWithTitle:onlySlot != nil ? @"Delete Saved Session\u2026"
-                                              : @"Delete a Saved Session\u2026"
+    [sheet addActionWithTitle:onlySlot != nil ? NSLocalizedString(@"Delete Saved Session\u2026", @"Resume picker action, one saved session")
+                                              : NSLocalizedString(@"Delete a Saved Session\u2026", @"Resume picker action, several saved sessions")
                         style:UIAlertActionStyleDestructive
                       handler:^(__unused UIAlertAction *a) {
         dispatch_async(dispatch_get_main_queue(), ^{
@@ -3687,7 +3689,7 @@ void ISHSessionPresentResumePicker(UIViewController *host,
         });
     }];
 
-    [sheet addActionWithTitle:@"Start a New Session"
+    [sheet addActionWithTitle:NSLocalizedString(@"Start a New Session", @"Resume picker action")
                         style:UIAlertActionStyleDefault
                       handler:^(__unused UIAlertAction *a) {
         // The images are KEPT. "New session" is about this launch, not about
@@ -3724,25 +3726,43 @@ void ISHSuspendSessionConfirmGPUThen(UIViewController *host, NSString *verb,
         proceed(NO);
         return;
     }
+    // verb is a token, "Suspend" or "Save" (the only two callers), not display
+    // text: each combination is a whole sentence so it can be translated.
     BOOL suspending = [verb isEqualToString:@"Suspend"];
-    NSString *message = [NSString stringWithFormat:
-        @"%s %@ the GPU, and what %@ there lives in the app, outside the session. "
-        @"%@ anyway and everything else is saved, but the Wayland desktop and "
-        @"every program in it %@ — any unsaved work in them is lost.",
-        names, holders == 1 ? @"is using" : @"are using", holders == 1 ? @"it holds" : @"they hold",
-        verb,
-        suspending ? @"will be gone when the session resumes"
-                   : @"keep running now, and will be missing from a resume of this save"];
+    NSString *format;
+    if (suspending) {
+        format = holders == 1
+            ? NSLocalizedString(@"%s is using the GPU, and what it holds there lives in the app, outside the session. "
+                                @"Suspend anyway and everything else is saved, but the Wayland desktop and "
+                                @"every program in it will be gone when the session resumes — any unsaved work in them is lost.",
+                                @"GPU warning before suspending; %s names one program")
+            : NSLocalizedString(@"%s are using the GPU, and what they hold there lives in the app, outside the session. "
+                                @"Suspend anyway and everything else is saved, but the Wayland desktop and "
+                                @"every program in it will be gone when the session resumes — any unsaved work in them is lost.",
+                                @"GPU warning before suspending; %s names several programs");
+    } else {
+        format = holders == 1
+            ? NSLocalizedString(@"%s is using the GPU, and what it holds there lives in the app, outside the session. "
+                                @"Save anyway and everything else is saved, but the Wayland desktop and "
+                                @"every program in it keep running now, and will be missing from a resume of this save — any unsaved work in them is lost.",
+                                @"GPU warning before saving; %s names one program")
+            : NSLocalizedString(@"%s are using the GPU, and what they hold there lives in the app, outside the session. "
+                                @"Save anyway and everything else is saved, but the Wayland desktop and "
+                                @"every program in it keep running now, and will be missing from a resume of this save — any unsaved work in them is lost.",
+                                @"GPU warning before saving; %s names several programs");
+    }
+    NSString *message = [NSString stringWithFormat:format, names];
     UIAlertController *alert =
-        [UIAlertController alertControllerWithTitle:@"The Wayland desktop can't be saved"
+        [UIAlertController alertControllerWithTitle:NSLocalizedString(@"The Wayland desktop can't be saved", @"GPU warning alert title")
                                             message:message
                                      preferredStyle:UIAlertControllerStyleAlert];
-    [alert addAction:[UIAlertAction actionWithTitle:[verb stringByAppendingString:@" Anyway"]
+    [alert addAction:[UIAlertAction actionWithTitle:suspending ? NSLocalizedString(@"Suspend Anyway", @"GPU warning button")
+                                                               : NSLocalizedString(@"Save Anyway", @"GPU warning button")
                                               style:UIAlertActionStyleDestructive
                                             handler:^(__unused UIAlertAction *a) {
         proceed(YES);
     }]];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel"
+    [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Cancel", @"Alert button")
                                               style:UIAlertActionStyleCancel
                                             handler:nil]];
     // Next turn: callers are inside another alert's handler, and presenting
@@ -3819,9 +3839,9 @@ static TerminalViewController *CreateTerminalViewController(void) {
         } else {
             bootError = RecordBootFailure(_ESRCH,
                                           @"boot.delegate.missing",
-                                          @"Boot failed before app setup",
-                                          @"The application delegate was not available when boot was requested.",
-                                          @"Restart iSH-AOK. If this repeats, open Diagnostics from recovery mode.",
+                                          NSLocalizedString(@"Boot failed before app setup", @"Boot failure alert title"),
+                                          NSLocalizedString(@"The application delegate was not available when boot was requested.", @"Boot failure reason"),
+                                          NSLocalizedString(@"Restart iSH-AOK. If this repeats, open Diagnostics from recovery mode.", @"Boot failure recovery advice"),
                                           nil);
         }
         if (bootError < 0) {
@@ -3853,9 +3873,9 @@ static TerminalViewController *CreateTerminalViewController(void) {
     if (bootRoot == nil) {
         return RecordBootFailure(_ENOENT,
                                  @"boot.root.none",
-                                 @"No boot filesystem is selected",
-                                 @"iSH-AOK cannot boot because no active filesystem is configured.",
-                                 @"Open Filesystems and choose or import a root filesystem.",
+                                 NSLocalizedString(@"No boot filesystem is selected", @"Boot failure alert title"),
+                                 NSLocalizedString(@"iSH-AOK cannot boot because no active filesystem is configured.", @"Boot failure reason"),
+                                 NSLocalizedString(@"Open Filesystems and choose or import a root filesystem.", @"Boot failure recovery advice"),
                                  @{@"rootCount": @(Roots.instance.roots.count)});
     }
     // ISH_BOOT_ROOT names the root outright, so a name with no root behind it
@@ -3865,9 +3885,9 @@ static TerminalViewController *CreateTerminalViewController(void) {
         if (![installed containsObject:bootRoot]) {
             return RecordBootFailure(_ENOENT,
                                      @"boot.root.override.missing",
-                                     @"The requested boot filesystem does not exist",
-                                     [NSString stringWithFormat:@"ISH_BOOT_ROOT asks for \"%@\", which is not an installed filesystem.", bootRoot],
-                                     [NSString stringWithFormat:@"Launch without ISH_BOOT_ROOT, or name one of: %@.",
+                                     NSLocalizedString(@"The requested boot filesystem does not exist", @"Boot failure alert title"),
+                                     [NSString stringWithFormat:NSLocalizedString(@"ISH_BOOT_ROOT asks for \"%@\", which is not an installed filesystem.", @"Boot failure reason"), bootRoot],
+                                     [NSString stringWithFormat:NSLocalizedString(@"Launch without ISH_BOOT_ROOT, or name one of: %@.", @"Boot failure recovery advice"),
                                       [installed componentsJoinedByString:@", "]],
                                      @{@"root": bootRoot,
                                        @"installed": installed});
@@ -3907,9 +3927,9 @@ static TerminalViewController *CreateTerminalViewController(void) {
     if (![NSFileManager.defaultManager fileExistsAtPath:root.path isDirectory:&isDirectory] || !isDirectory) {
         return RecordBootFailure(_ENOENT,
                                  @"boot.root.directory.missing",
-                                 @"Selected filesystem is missing",
-                                 @"The active filesystem points to a root directory that is not present on disk.",
-                                 @"Choose another filesystem or reimport this one.",
+                                 NSLocalizedString(@"Selected filesystem is missing", @"Boot failure alert title"),
+                                 NSLocalizedString(@"The active filesystem points to a root directory that is not present on disk.", @"Boot failure reason"),
+                                 NSLocalizedString(@"Choose another filesystem or reimport this one.", @"Boot failure recovery advice"),
                                  @{@"root": bootRoot,
                                    @"guestABI": guestABI ?: @"",
                                    @"path": root.path ?: @""});
@@ -3918,9 +3938,9 @@ static TerminalViewController *CreateTerminalViewController(void) {
     if (![NSFileManager.defaultManager fileExistsAtPath:rootData.path isDirectory:&isDirectory] || !isDirectory) {
         return RecordBootFailure(_ENOENT,
                                  @"boot.root.data.missing",
-                                 @"Selected filesystem is incomplete",
-                                 @"The active filesystem directory exists, but its data directory is missing.",
-                                 @"Choose another filesystem or reimport this one.",
+                                 NSLocalizedString(@"Selected filesystem is incomplete", @"Boot failure alert title"),
+                                 NSLocalizedString(@"The active filesystem directory exists, but its data directory is missing.", @"Boot failure reason"),
+                                 NSLocalizedString(@"Choose another filesystem or reimport this one.", @"Boot failure recovery advice"),
                                  @{@"root": bootRoot,
                                    @"guestABI": guestABI ?: @"",
                                    @"path": rootData.path ?: @""});
@@ -3929,9 +3949,9 @@ static TerminalViewController *CreateTerminalViewController(void) {
     if (![NSFileManager.defaultManager fileExistsAtPath:rootMetadata.path isDirectory:&isDirectory] || isDirectory) {
         return RecordBootFailure(_ENOENT,
                                  @"boot.root.metadata.missing",
-                                 @"Selected filesystem metadata is missing",
-                                 @"The active filesystem data exists, but its fakefs metadata database is missing.",
-                                 @"Choose another filesystem or reimport this one.",
+                                 NSLocalizedString(@"Selected filesystem metadata is missing", @"Boot failure alert title"),
+                                 NSLocalizedString(@"The active filesystem data exists, but its fakefs metadata database is missing.", @"Boot failure reason"),
+                                 NSLocalizedString(@"Choose another filesystem or reimport this one.", @"Boot failure recovery advice"),
                                  @{@"root": bootRoot,
                                    @"guestABI": guestABI ?: @"",
                                    @"path": rootMetadata.path ?: @""});
@@ -3945,8 +3965,8 @@ static TerminalViewController *CreateTerminalViewController(void) {
     if (err < 0) {
         return RecordBootFailure(err,
                                  @"boot.root.mount.failed",
-                                 @"Boot failed while mounting the filesystem",
-                                 @"iSH-AOK found the selected filesystem, but fakefs could not mount it.",
+                                 NSLocalizedString(@"Boot failed while mounting the filesystem", @"Boot failure alert title"),
+                                 NSLocalizedString(@"iSH-AOK found the selected filesystem, but fakefs could not mount it.", @"Boot failure reason"),
                                  BootMountRecovery(err),
                                  @{@"root": bootRoot,
                                    @"guestABI": guestABI ?: @"",
@@ -3963,11 +3983,11 @@ static TerminalViewController *CreateTerminalViewController(void) {
     if (err < 0) {
         return RecordBootFailure(err,
                                  @"boot.first_process.failed",
-                                 @"Boot failed while creating init",
-                                 @"The filesystem was mounted, but the emulator could not create the first guest process.",
+                                 NSLocalizedString(@"Boot failed while creating init", @"Boot failure alert title"),
+                                 NSLocalizedString(@"The filesystem was mounted, but the emulator could not create the first guest process.", @"Boot failure reason"),
                                  err == _ENOMEM
-                                     ? @"Close other apps and restart iSH-AOK."
-                                     : @"Restart iSH-AOK. If this repeats, open Diagnostics from recovery mode.",
+                                     ? NSLocalizedString(@"Close other apps and restart iSH-AOK.", @"Boot failure recovery advice")
+                                     : NSLocalizedString(@"Restart iSH-AOK. If this repeats, open Diagnostics from recovery mode.", @"Boot failure recovery advice"),
                                  @{@"root": bootRoot,
                                    @"guestABI": guestABI ?: @""});
     }
@@ -4095,9 +4115,9 @@ static TerminalViewController *CreateTerminalViewController(void) {
     if (err != 0) {
         return RecordBootFailure(err,
                                  @"boot.device.clipboard.failed",
-                                 @"Boot failed while registering clipboard device",
-                                 @"The filesystem was mounted, but iSH-AOK could not register /dev/clipboard.",
-                                 @"Restart iSH-AOK. If this repeats, open Diagnostics from recovery mode.",
+                                 NSLocalizedString(@"Boot failed while registering clipboard device", @"Boot failure alert title"),
+                                 NSLocalizedString(@"The filesystem was mounted, but iSH-AOK could not register /dev/clipboard.", @"Boot failure reason"),
+                                 NSLocalizedString(@"Restart iSH-AOK. If this repeats, open Diagnostics from recovery mode.", @"Boot failure recovery advice"),
                                  @{@"root": bootRoot,
                                    @"guestABI": guestABI ?: @"",
                                    @"path": @"/dev/clipboard"});
@@ -4108,9 +4128,9 @@ static TerminalViewController *CreateTerminalViewController(void) {
     if (err != 0) {
         return RecordBootFailure(err,
                                  @"boot.device.location.failed",
-                                 @"Boot failed while registering location device",
-                                 @"The filesystem was mounted, but iSH-AOK could not register /dev/location.",
-                                 @"Restart iSH-AOK. If this repeats, open Diagnostics from recovery mode.",
+                                 NSLocalizedString(@"Boot failed while registering location device", @"Boot failure alert title"),
+                                 NSLocalizedString(@"The filesystem was mounted, but iSH-AOK could not register /dev/location.", @"Boot failure reason"),
+                                 NSLocalizedString(@"Restart iSH-AOK. If this repeats, open Diagnostics from recovery mode.", @"Boot failure recovery advice"),
                                  @{@"root": bootRoot,
                                    @"guestABI": guestABI ?: @"",
                                    @"path": @"/dev/location"});
@@ -4124,9 +4144,9 @@ static TerminalViewController *CreateTerminalViewController(void) {
     if (err != 0) {
         return RecordBootFailure(err,
                                  @"boot.device.url.failed",
-                                 @"Boot failed while registering URL device",
-                                 @"The filesystem was mounted, but iSH-AOK could not register /dev/url.",
-                                 @"Restart iSH-AOK. If this repeats, open Diagnostics from recovery mode.",
+                                 NSLocalizedString(@"Boot failed while registering URL device", @"Boot failure alert title"),
+                                 NSLocalizedString(@"The filesystem was mounted, but iSH-AOK could not register /dev/url.", @"Boot failure reason"),
+                                 NSLocalizedString(@"Restart iSH-AOK. If this repeats, open Diagnostics from recovery mode.", @"Boot failure recovery advice"),
                                  @{@"root": bootRoot,
                                    @"guestABI": guestABI ?: @"",
                                    @"path": @"/dev/url"});
@@ -4137,9 +4157,9 @@ static TerminalViewController *CreateTerminalViewController(void) {
     if (err != 0) {
         return RecordBootFailure(err,
                                  @"boot.device.audio.failed",
-                                 @"Boot failed while registering audio device",
-                                 @"The filesystem was mounted, but iSH-AOK could not register /dev/dsp.",
-                                 @"Restart iSH-AOK. If this repeats, open Diagnostics from recovery mode.",
+                                 NSLocalizedString(@"Boot failed while registering audio device", @"Boot failure alert title"),
+                                 NSLocalizedString(@"The filesystem was mounted, but iSH-AOK could not register /dev/dsp.", @"Boot failure reason"),
+                                 NSLocalizedString(@"Restart iSH-AOK. If this repeats, open Diagnostics from recovery mode.", @"Boot failure recovery advice"),
                                  @{@"root": bootRoot,
                                    @"guestABI": guestABI ?: @"",
                                    @"path": @"/dev/dsp"});
@@ -4151,9 +4171,9 @@ static TerminalViewController *CreateTerminalViewController(void) {
     if (err != 0) {
         return RecordBootFailure(err,
                                  @"boot.device.rtc.failed",
-                                 @"Boot failed while registering clock device",
-                                 @"The filesystem was mounted, but iSH-AOK could not register /dev/rtc0.",
-                                 @"Restart iSH-AOK. If this repeats, open Diagnostics from recovery mode.",
+                                 NSLocalizedString(@"Boot failed while registering clock device", @"Boot failure alert title"),
+                                 NSLocalizedString(@"The filesystem was mounted, but iSH-AOK could not register /dev/rtc0.", @"Boot failure reason"),
+                                 NSLocalizedString(@"Restart iSH-AOK. If this repeats, open Diagnostics from recovery mode.", @"Boot failure recovery advice"),
                                  @{@"root": bootRoot,
                                    @"guestABI": guestABI ?: @"",
                                    @"path": @"/dev/rtc0"});
@@ -4608,9 +4628,9 @@ static TerminalViewController *CreateTerminalViewController(void) {
                     [ISHDiagnosticsStore recordLaunchStage:@"boot.suspend.resume.initThreadFailed"];
                     return RecordBootFailure(_EAGAIN,
                                              @"boot.suspend.resume.initThreadFailed",
-                                             @"Resume failed while starting init",
-                                             @"The suspended session was restored, but iSH-AOK could not create a thread to run it.",
-                                             @"Close other apps to free memory, then restart iSH-AOK.",
+                                             NSLocalizedString(@"Resume failed while starting init", @"Boot failure alert title"),
+                                             NSLocalizedString(@"The suspended session was restored, but iSH-AOK could not create a thread to run it.", @"Boot failure reason"),
+                                             NSLocalizedString(@"Close other apps to free memory, then restart iSH-AOK.", @"Boot failure recovery advice"),
                                              @{@"root": bootRoot});
                 }
                 // `current` is left pointing at init, exactly as the boot path
@@ -4636,9 +4656,9 @@ static TerminalViewController *CreateTerminalViewController(void) {
     if (err < 0) {
         return RecordBootFailure(err,
                                  @"boot.stdio.failed",
-                                 @"Boot failed while opening console",
-                                 @"The filesystem was mounted, but iSH-AOK could not attach init to /dev/console.",
-                                 @"The root's /dev entries may be damaged. Choose another filesystem or reimport this one.",
+                                 NSLocalizedString(@"Boot failed while opening console", @"Boot failure alert title"),
+                                 NSLocalizedString(@"The filesystem was mounted, but iSH-AOK could not attach init to /dev/console.", @"Boot failure reason"),
+                                 NSLocalizedString(@"The root's /dev entries may be damaged. Choose another filesystem or reimport this one.", @"Boot failure recovery advice"),
                                  @{@"root": bootRoot,
                                    @"guestABI": guestABI ?: @"",
                                    @"path": @"/dev/console"});
@@ -4649,9 +4669,9 @@ static TerminalViewController *CreateTerminalViewController(void) {
     if (command.count == 0 || command[0].length == 0) {
         return RecordBootFailure(_EINVAL,
                                  @"boot.command.empty",
-                                 @"Boot command is empty",
-                                 @"iSH-AOK cannot start init because the configured boot command is empty.",
-                                 @"Set a boot command in Settings. The default is /sbin/init.",
+                                 NSLocalizedString(@"Boot command is empty", @"Boot failure alert title"),
+                                 NSLocalizedString(@"iSH-AOK cannot start init because the configured boot command is empty.", @"Boot failure reason"),
+                                 NSLocalizedString(@"Set a boot command in Settings. The default is /sbin/init.", @"Boot failure recovery advice"),
                                  @{@"root": bootRoot,
                                    @"guestABI": guestABI ?: @""});
     }
@@ -4723,9 +4743,9 @@ static TerminalViewController *CreateTerminalViewController(void) {
         if (err < 0) {
             return RecordBootFailure(err,
                                      @"boot.init.supervisor.failed",
-                                     @"Boot failed while starting fallback console",
-                                     @"The filesystem was mounted, but iSH-AOK could not start its fallback console supervisor.",
-                                     @"Restart iSH-AOK. If this repeats, choose another filesystem or reimport this one.",
+                                     NSLocalizedString(@"Boot failed while starting fallback console", @"Boot failure alert title"),
+                                     NSLocalizedString(@"The filesystem was mounted, but iSH-AOK could not start its fallback console supervisor.", @"Boot failure reason"),
+                                     NSLocalizedString(@"Restart iSH-AOK. If this repeats, choose another filesystem or reimport this one.", @"Boot failure recovery advice"),
                                      @{@"root": bootRoot,
                                        @"guestABI": guestABI ?: @"",
                                        @"command": commandString ?: @""});
@@ -4741,8 +4761,8 @@ static TerminalViewController *CreateTerminalViewController(void) {
     if (err < 0) {
         return RecordBootFailure(err,
                                  @"boot.init.exec.failed",
-                                 @"Boot failed while starting init",
-                                 @"The filesystem was mounted, but the configured boot command could not be executed.",
+                                 NSLocalizedString(@"Boot failed while starting init", @"Boot failure alert title"),
+                                 NSLocalizedString(@"The filesystem was mounted, but the configured boot command could not be executed.", @"Boot failure reason"),
                                  BootExecRecovery(err, guestABI),
                                  @{@"root": bootRoot,
                                    @"guestABI": guestABI ?: @"",
@@ -4752,9 +4772,9 @@ static TerminalViewController *CreateTerminalViewController(void) {
     if (task_start(current) < 0) {
         return RecordBootFailure(_EAGAIN,
                                  @"boot.init.start.failed",
-                                 @"Boot failed while starting init",
-                                 @"The boot command was loaded, but iSH-AOK could not create a thread to run it.",
-                                 @"Close other apps to free memory, then restart iSH-AOK.",
+                                 NSLocalizedString(@"Boot failed while starting init", @"Boot failure alert title"),
+                                 NSLocalizedString(@"The boot command was loaded, but iSH-AOK could not create a thread to run it.", @"Boot failure reason"),
+                                 NSLocalizedString(@"Close other apps to free memory, then restart iSH-AOK.", @"Boot failure recovery advice"),
                                  @{@"root": bootRoot,
                                    @"guestABI": guestABI ?: @"",
                                    @"command": commandString ?: @""});

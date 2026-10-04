@@ -28,7 +28,7 @@ typedef NS_ENUM(NSInteger, ISHLLMAgentListSection) {
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.title = @"Agents";
+    self.title = NSLocalizedString(@"Agents", @"agent list screen title");
     [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(reload) name:ISHLLMAgentStateDidChangeNotification object:nil];
     [self reload];
 }
@@ -88,9 +88,9 @@ typedef NS_ENUM(NSInteger, ISHLLMAgentListSection) {
     if (_sections[(NSUInteger) section].count == 0)
         return nil;
     switch ((ISHLLMAgentListSection) section) {
-        case ISHLLMAgentListSectionApproval: return @"Needs your approval";
-        case ISHLLMAgentListSectionWorking: return @"Working";
-        case ISHLLMAgentListSectionFinished: return @"New answers";
+        case ISHLLMAgentListSectionApproval: return NSLocalizedString(@"Needs your approval", @"agent list section header");
+        case ISHLLMAgentListSectionWorking: return NSLocalizedString(@"Working", @"agent list section header");
+        case ISHLLMAgentListSectionFinished: return NSLocalizedString(@"New answers", @"agent list section header");
         case ISHLLMAgentListSectionCount: break;
     }
     return nil;
@@ -104,8 +104,8 @@ typedef NS_ENUM(NSInteger, ISHLLMAgentListSection) {
     for (NSArray *rows in _sections)
         empty = empty && rows.count == 0;
     return empty
-        ? @"No chat is working or waiting. A chat keeps working when you switch to another one or close the window; chats that need you show up here."
-        : @"Each chat works on its own, with its own destination. A chat that needs approval waits until you open it. Swipe to stop one.";
+        ? NSLocalizedString(@"No chat is working or waiting. A chat keeps working when you switch to another one or close the window; chats that need you show up here.", @"agent list footer")
+        : NSLocalizedString(@"Each chat works on its own, with its own destination. A chat that needs approval waits until you open it. Swipe to stop one.", @"agent list footer");
 }
 
 static NSString *ISHLLMAgentListElapsed(NSDate *since) {
@@ -118,7 +118,7 @@ static NSString *ISHLLMAgentListElapsed(NSDate *since) {
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
     UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:nil];
     ISHLLMAgent *agent = _sections[(NSUInteger) indexPath.section][(NSUInteger) indexPath.row];
-    cell.textLabel.text = agent.title.length > 0 ? agent.title : @"New Chat";
+    cell.textLabel.text = agent.title.length > 0 ? agent.title : NSLocalizedString(@"New Chat", @"title of a chat that has no name yet");
     NSMutableArray<NSString *> *parts = [NSMutableArray array];
     [parts addObject:[agent statusLine]];
     if (agent.phaseDetail.length > 0)
@@ -128,7 +128,7 @@ static NSString *ISHLLMAgentListElapsed(NSDate *since) {
     else if (agent.lastFinished != nil)
         [parts addObject:[NSDateFormatter localizedStringFromDate:agent.lastFinished dateStyle:NSDateFormatterNoStyle timeStyle:NSDateFormatterShortStyle]];
     if (agent.parent != nil)
-        [parts addObject:[@"sub-agent of " stringByAppendingString:agent.parent.title ?: @"a chat"]];
+        [parts addObject:[NSString stringWithFormat:NSLocalizedString(@"sub-agent of %@", @"agent list row detail; %@ is the parent chat"), agent.parent.title ?: NSLocalizedString(@"a chat", @"agent list row detail, parent chat with no name")]];
     cell.detailTextLabel.text = [parts componentsJoinedByString:@" · "];
     cell.detailTextLabel.textColor = agent.pendingApproval != nil ? UIColor.systemOrangeColor : UIColor.secondaryLabelColor;
     cell.accessoryType = [agent.sessionID isEqualToString:self.currentSessionID] ? UITableViewCellAccessoryCheckmark : UITableViewCellAccessoryDisclosureIndicator;
@@ -150,7 +150,7 @@ static NSString *ISHLLMAgentListElapsed(NSDate *since) {
     ISHLLMAgent *agent = _sections[(NSUInteger) indexPath.section][(NSUInteger) indexPath.row];
     if (!agent.busy)
         return nil;
-    UIContextualAction *stop = [UIContextualAction contextualActionWithStyle:UIContextualActionStyleDestructive title:@"Stop"
+    UIContextualAction *stop = [UIContextualAction contextualActionWithStyle:UIContextualActionStyleDestructive title:NSLocalizedString(@"Stop", @"swipe action, stop an agent")
                                                                       handler:^(__unused UIContextualAction *action, __unused UIView *sourceView, void (^completion)(BOOL)) {
         [agent stop];
         completion(YES);

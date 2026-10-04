@@ -132,14 +132,14 @@
 
     self.isAccessibilityElement = YES;
     self.accessibilityTraits |= UIAccessibilityTraitButton;
-    self.accessibilityCustomActions = @[[[UIAccessibilityCustomAction alloc] initWithName:@"Open link" target:self selector:@selector(openSource:)]];
+    self.accessibilityCustomActions = @[[[UIAccessibilityCustomAction alloc] initWithName:NSLocalizedString(@"Open link", @"Accessibility action on an alternate app icon credit") target:self selector:@selector(openSource:)]];
 }
 
 - (void)updateImage:(UIImage *)image description:(NSString *)description author:(NSString *)author link:(NSString *)url {
     self.imageView.image = image;
-    [self.authorButton setTitle:[NSString stringWithFormat:@"by %@", author] forState:UIControlStateNormal];
+    [self.authorButton setTitle:[NSString stringWithFormat:NSLocalizedString(@"by %@", @"Alternate app icon credit; %@ is the artist name"), author] forState:UIControlStateNormal];
     self.link = url;
-    self.accessibilityLabel = [NSString stringWithFormat:@"%@ by %@", description, author];
+    self.accessibilityLabel = [NSString stringWithFormat:NSLocalizedString(@"%@ by %@", @"Accessibility label for an alternate app icon; icon description, then artist name"), description, author];
 }
 
 - (IBAction)openSource:(id)sender {

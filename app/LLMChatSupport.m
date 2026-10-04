@@ -197,7 +197,7 @@ NSString *ISHLLMDestinationDisplayName(NSDictionary<NSString *, NSString *> *des
     if (name.length > 0)
         return name;
     NSString *provider = ISHLLMStringValue(destination, kISHLLMDestinationProvider);
-    return provider.length > 0 ? provider : @"Destination";
+    return provider.length > 0 ? provider : NSLocalizedString(@"Destination", @"fallback name of an LLM destination with no name or provider");
 }
 
 NSString *ISHLLMDestinationLabel(NSDictionary<NSString *, NSString *> *destination) {
@@ -213,13 +213,13 @@ NSString *ISHLLMDestinationSubtitle(NSDictionary<NSString *, NSString *> *destin
     NSString *model = ISHLLMStringValue(destination, kISHLLMDestinationModel);
     NSString *provider = ISHLLMStringValue(destination, kISHLLMDestinationProvider);
     if ([provider.lowercaseString containsString:@"foundation models"])
-        return model.length > 0 ? [@"On-device · " stringByAppendingString:model] : @"On-device";
+        return model.length > 0 ? [NSString stringWithFormat:NSLocalizedString(@"On-device · %@", @"destination subtitle; %@ is the model"), model] : NSLocalizedString(@"On-device", @"destination subtitle for the on-device model");
     NSString *host = [NSURL URLWithString:ISHLLMStringValue(destination, kISHLLMDestinationURL)].host ?: @"";
     if (model.length > 0 && host.length > 0)
         return [NSString stringWithFormat:@"%@ · %@", model, host];
     if (model.length > 0)
         return model;
-    return host.length > 0 ? host : @"Not configured";
+    return host.length > 0 ? host : NSLocalizedString(@"Not configured", @"destination subtitle with no model or server");
 }
 
 // The ONLY place a destination is written into the four scalars.

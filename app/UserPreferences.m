@@ -649,7 +649,7 @@ void amd64_jit_preference_set(bool enabled) {
 }
 
 - (NSString *)fontFamilyUserFacingName {
-    return [self.fontFamily isEqualToString:kSystemMonospacedFontName] ? @"System" : self.fontFamily;
+    return [self.fontFamily isEqualToString:kSystemMonospacedFontName] ? NSLocalizedString(@"System", @"Font name shown for the system monospaced font") : self.fontFamily;
 }
 
 - (UIFont *)approximateFont {
@@ -1519,16 +1519,16 @@ static NSArray<NSArray<NSString *> *> *ISHToolbarBuiltinCatalog(void) {
     static dispatch_once_t once;
     dispatch_once(&once, ^{
         catalog = @[
-            @[@"tab", @"\u21E5", @"Tab"],
-            @[@"ctrl", @"\u2303", @"Control"],
-            @[@"esc", @"\u238B", @"Escape"],
-            @[@"arrows", @"\u271C", @"Arrow keys"],
-            @[@"dash", @"-", @"Hyphen"],
-            @[@"dot", @".", @"Period"],
-            @[@"slash", @"/", @"Slash"],
-            @[@"colon", @":", @"Colon"],
-            @[@"bang", @"!", @"Exclamation mark"],
-            @[@"pipe", @"|", @"Vertical bar"],
+            @[@"tab", @"\u21E5", NSLocalizedString(@"Tab", @"Keyboard toolbar key name in Settings")],
+            @[@"ctrl", @"\u2303", NSLocalizedString(@"Control", @"Keyboard toolbar key name in Settings")],
+            @[@"esc", @"\u238B", NSLocalizedString(@"Escape", @"Keyboard toolbar key name in Settings")],
+            @[@"arrows", @"\u271C", NSLocalizedString(@"Arrow keys", @"Keyboard toolbar key name in Settings")],
+            @[@"dash", @"-", NSLocalizedString(@"Hyphen", @"Keyboard toolbar key name in Settings")],
+            @[@"dot", @".", NSLocalizedString(@"Period", @"Keyboard toolbar key name in Settings")],
+            @[@"slash", @"/", NSLocalizedString(@"Slash", @"Keyboard toolbar key name in Settings")],
+            @[@"colon", @":", NSLocalizedString(@"Colon", @"Keyboard toolbar key name in Settings")],
+            @[@"bang", @"!", NSLocalizedString(@"Exclamation mark", @"Keyboard toolbar key name in Settings")],
+            @[@"pipe", @"|", NSLocalizedString(@"Vertical bar", @"Keyboard toolbar key name in Settings")],
         ];
     });
     return catalog;

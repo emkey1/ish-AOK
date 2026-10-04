@@ -194,16 +194,16 @@ static NSArray<NSString *> *ISHSessionCommandWithFallback(NSArray<NSString *> *c
 
     NSString *configuredCommand = [command componentsJoinedByString:@" "];
     if (failureTitleOut != NULL)
-        *failureTitleOut = @"No usable login shell found";
+        *failureTitleOut = NSLocalizedString(@"No usable login shell found", @"Session start failure alert title");
     if (failureMessageOut != NULL) {
         *failureMessageOut = [NSString stringWithFormat:
-                              @"The root filesystem does not contain the default session command, and no fallback shell was found.\n\nCommand: %@\nError: %@\nFallbacks checked: %@\n\nInstall login or a shell such as /bin/sh, or change Settings -> Launch Command.",
+                              NSLocalizedString(@"The root filesystem does not contain the default session command, and no fallback shell was found.\n\nCommand: %@\nError: %@\nFallbacks checked: %@\n\nInstall login or a shell such as /bin/sh, or change Settings -> Launch Command.", @"Session start failure alert message; command, error, then the shells tried"),
                               configuredCommand,
                               [AppDelegate descriptionForISHErrno:configuredErr],
                               [ISHCommandDescriptions(candidates) componentsJoinedByString:@", "]];
     }
     if (failureOverlayOut != NULL)
-        *failureOverlayOut = @"No usable login shell found.";
+        *failureOverlayOut = NSLocalizedString(@"No usable login shell found.", @"Terminal overlay when no shell can start");
     [ISHDiagnosticsStore recordBreadcrumb:@"terminal.session.fallback.none"
                                   details:@{@"configuredCommand": configuredCommand ?: @"",
                                             @"missingLoginError": @(configuredErr),
@@ -330,10 +330,10 @@ static const NSInteger kMaximumTerminalFontSize = 72;
     int minor = 1;
     get_console_device(&major, &minor);
     if (major == TTY_CONSOLE_MAJOR)
-        return [NSString stringWithFormat:@"System Console (/dev/console -> tty%d)", minor];
+        return [NSString stringWithFormat:NSLocalizedString(@"System Console (/dev/console -> tty%d)", @"Terminal switcher entry; %d is a tty number"), minor];
     if (major == TTY_PSEUDO_SLAVE_MAJOR)
-        return [NSString stringWithFormat:@"System Console (/dev/console -> pts/%d)", minor];
-    return [NSString stringWithFormat:@"System Console (/dev/console -> %d:%d)", major, minor];
+        return [NSString stringWithFormat:NSLocalizedString(@"System Console (/dev/console -> pts/%d)", @"Terminal switcher entry; %d is a pts number"), minor];
+    return [NSString stringWithFormat:NSLocalizedString(@"System Console (/dev/console -> %d:%d)", @"Terminal switcher entry; device major:minor"), major, minor];
 }
 
 - (BOOL)shouldPreferConsoleForFreshSession {
@@ -401,7 +401,7 @@ static const NSInteger kMaximumTerminalFontSize = 72;
                                                 @"number": @(_terminal.number)}];
         self.termView.terminal = nil;
         NSLog(@"Skipping terminal attach for %@ because it is already installed elsewhere", _terminal.uuid.UUIDString);
-        [self _showTerminalStartupFailureOverlayWithText:@"Terminal already open in another window."];
+        [self _showTerminalStartupFailureOverlayWithText:NSLocalizedString(@"Terminal already open in another window.", @"Terminal overlay")];
         return;
     }
 
@@ -493,9 +493,9 @@ static const NSInteger kMaximumTerminalFontSize = 72;
 - (void)_bootAfterSessionChoice {
     intptr_t bootError = [AppDelegate ensureBooted];
     if (bootError < 0) {
-        NSString *message = [AppDelegate bootFailureTitle] ?: @"Could not boot iSH-AOK";
+        NSString *message = [AppDelegate bootFailureTitle] ?: NSLocalizedString(@"Could not boot iSH-AOK", @"Boot failure alert title");
         NSString *subtitle = [AppDelegate bootFailureMessage] ?: [AppDelegate descriptionForISHErrno:bootError];
-        NSString *overlayText = [AppDelegate bootFailureOverlayText] ?: @"Could not boot iSH-AOK.";
+        NSString *overlayText = [AppDelegate bootFailureOverlayText] ?: NSLocalizedString(@"Could not boot iSH-AOK.", @"Terminal overlay on boot failure");
         [self _showTerminalStartupFailureOverlayWithText:overlayText];
         [self showMessage:message subtitle:subtitle];
         NSLog(@"boot failed: %@", subtitle);
@@ -550,9 +550,9 @@ static const NSInteger kMaximumTerminalFontSize = 72;
     if (!Roots.instance.needsInitialRootSelection && !self.awaitingSessionChoice) {
         intptr_t bootError = [AppDelegate ensureBooted];
         if (bootError < 0) {
-            NSString *message = [AppDelegate bootFailureTitle] ?: @"Could not boot iSH-AOK";
+            NSString *message = [AppDelegate bootFailureTitle] ?: NSLocalizedString(@"Could not boot iSH-AOK", @"Boot failure alert title");
             NSString *subtitle = [AppDelegate bootFailureMessage] ?: [AppDelegate descriptionForISHErrno:bootError];
-            NSString *overlayText = [AppDelegate bootFailureOverlayText] ?: @"Could not boot iSH-AOK.";
+            NSString *overlayText = [AppDelegate bootFailureOverlayText] ?: NSLocalizedString(@"Could not boot iSH-AOK.", @"Terminal overlay on boot failure");
             [self _showTerminalStartupFailureOverlayWithText:overlayText];
             [self showMessage:message subtitle:subtitle];
             NSLog(@"boot failed: %@", subtitle);
@@ -648,18 +648,18 @@ static const NSInteger kMaximumTerminalFontSize = 72;
         [self.escapeKey setTitle:nil forState:UIControlStateNormal];
         [self.escapeKey setImage:[UIImage systemImageNamed:@"escape"] forState:UIControlStateNormal];
     }
-    self.infoButton.accessibilityLabel = @"Settings";
-    self.infoButton.accessibilityHint = @"Opens the application settings.";
-    self.pasteButton.accessibilityLabel = @"Paste";
-    self.pasteButton.accessibilityHint = @"Pastes text from the clipboard.";
-    self.hideKeyboardButton.accessibilityLabel = @"Hide Keyboard";
-    self.hideKeyboardButton.accessibilityHint = @"Dismisses the on-screen keyboard.";
-    self.tabKey.accessibilityLabel = @"Tab";
-    self.tabKey.accessibilityHint = @"Sends a tab character.";
-    self.controlKey.accessibilityLabel = @"Control";
-    self.controlKey.accessibilityHint = @"Toggles the control key modifier.";
-    self.escapeKey.accessibilityLabel = @"Escape";
-    self.escapeKey.accessibilityHint = @"Sends an escape character.";
+    self.infoButton.accessibilityLabel = NSLocalizedString(@"Settings", @"Accessibility label for the settings button");
+    self.infoButton.accessibilityHint = NSLocalizedString(@"Opens the application settings.", @"Accessibility hint for the settings button");
+    self.pasteButton.accessibilityLabel = NSLocalizedString(@"Paste", @"Accessibility label for the keyboard bar Paste button");
+    self.pasteButton.accessibilityHint = NSLocalizedString(@"Pastes text from the clipboard.", @"Accessibility hint for the keyboard bar Paste button");
+    self.hideKeyboardButton.accessibilityLabel = NSLocalizedString(@"Hide Keyboard", @"Accessibility label for the keyboard bar button");
+    self.hideKeyboardButton.accessibilityHint = NSLocalizedString(@"Dismisses the on-screen keyboard.", @"Accessibility hint for the hide keyboard button");
+    self.tabKey.accessibilityLabel = NSLocalizedString(@"Tab", @"Accessibility label for the keyboard bar Tab key");
+    self.tabKey.accessibilityHint = NSLocalizedString(@"Sends a tab character.", @"Accessibility hint for the Tab key");
+    self.controlKey.accessibilityLabel = NSLocalizedString(@"Control", @"Accessibility label for the keyboard bar Control key");
+    self.controlKey.accessibilityHint = NSLocalizedString(@"Toggles the control key modifier.", @"Accessibility hint for the Control key");
+    self.escapeKey.accessibilityLabel = NSLocalizedString(@"Escape", @"Accessibility label for the keyboard bar Escape key");
+    self.escapeKey.accessibilityHint = NSLocalizedString(@"Sends an escape character.", @"Accessibility hint for the Escape key");
 
     // Hold the arrow key in place (no directional drag) to switch Desktops without adding a
     // dedicated key to an already-tight accessory bar. Only wired up when this terminal is a
@@ -709,8 +709,8 @@ static const NSInteger kMaximumTerminalFontSize = 72;
     UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem];
     button.translatesAutoresizingMaskIntoConstraints = NO;
     button.hidden = YES;
-    button.accessibilityLabel = @"Settings";
-    button.accessibilityHint = @"Opens the application settings.";
+    button.accessibilityLabel = NSLocalizedString(@"Settings", @"Accessibility label for the settings button");
+    button.accessibilityHint = NSLocalizedString(@"Opens the application settings.", @"Accessibility hint for the settings button");
     button.backgroundColor = [UIColor colorWithWhite:0 alpha:0.35];
     button.layer.cornerRadius = 22;
     button.layer.masksToBounds = NO;
@@ -792,8 +792,8 @@ static const CGFloat kFindBarHeight = 44;
 
     UITextField *field = [[UITextField alloc] init];
     field.translatesAutoresizingMaskIntoConstraints = NO;
-    field.placeholder = @"Find in scrollback";
-    field.accessibilityLabel = @"Find in scrollback";
+    field.placeholder = NSLocalizedString(@"Find in scrollback", @"Find bar field placeholder");
+    field.accessibilityLabel = NSLocalizedString(@"Find in scrollback", @"Find bar field placeholder");
     field.borderStyle = UITextBorderStyleNone;
     field.clearButtonMode = UITextFieldViewModeWhileEditing;
     field.returnKeyType = UIReturnKeySearch;
@@ -822,13 +822,13 @@ static const CGFloat kFindBarHeight = 44;
 
     self.findPreviousButton = [self _findBarButtonWithSymbol:@"chevron.up" fallback:@"↑"
                                                       action:@selector(findPrevious:)
-                                          accessibilityLabel:@"Previous match"];
+                                          accessibilityLabel:NSLocalizedString(@"Previous match", @"Find bar button")];
     self.findNextButton = [self _findBarButtonWithSymbol:@"chevron.down" fallback:@"↓"
                                                   action:@selector(findNext:)
-                                      accessibilityLabel:@"Next match"];
+                                      accessibilityLabel:NSLocalizedString(@"Next match", @"Find bar button")];
     self.findCloseButton = [self _findBarButtonWithSymbol:@"xmark" fallback:@"✕"
                                                    action:@selector(hideFindBar:)
-                                       accessibilityLabel:@"Close find bar"];
+                                       accessibilityLabel:NSLocalizedString(@"Close find bar", @"Find bar button")];
     for (UIButton *button in @[self.findPreviousButton, self.findNextButton, self.findCloseButton]) {
         [bar.contentView addSubview:button];
     }
@@ -862,7 +862,7 @@ static const CGFloat kFindBarHeight = 44;
     if (self.findField.text.length == 0) {
         self.findCountLabel.text = @"";
     } else if (matches == 0) {
-        self.findCountLabel.text = @"No results";
+        self.findCountLabel.text = NSLocalizedString(@"No results", @"Find bar match count when nothing matches");
     } else if (ordinal < 0) {
         // Still batching, or nothing selected yet: report the running total.
         self.findCountLabel.text = [NSString stringWithFormat:@"%ld", (long) matches];
@@ -957,8 +957,8 @@ static const CGFloat kFindBarHeight = 44;
     UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem];
     button.translatesAutoresizingMaskIntoConstraints = NO;
     button.hidden = YES;
-    button.accessibilityLabel = @"Layout Manager";
-    button.accessibilityHint = @"Opens the workspace layout manager.";
+    button.accessibilityLabel = NSLocalizedString(@"Layout Manager", @"Accessibility label for the Workspace button");
+    button.accessibilityHint = NSLocalizedString(@"Opens the workspace layout manager.", @"Accessibility hint for the Workspace button");
     button.backgroundColor = [UIColor colorWithWhite:0 alpha:0.35];
     button.layer.cornerRadius = 22;
     button.layer.masksToBounds = NO;
@@ -990,8 +990,8 @@ static const CGFloat kFindBarHeight = 44;
     UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem];
     button.translatesAutoresizingMaskIntoConstraints = NO;
     button.hidden = YES;
-    button.accessibilityLabel = @"Switch Terminal";
-    button.accessibilityHint = @"Switches between the session shell and tty terminals.";
+    button.accessibilityLabel = NSLocalizedString(@"Switch Terminal", @"Accessibility label for the terminal switcher button");
+    button.accessibilityHint = NSLocalizedString(@"Switches between the session shell and tty terminals.", @"Accessibility hint for the terminal switcher button");
     button.backgroundColor = [UIColor colorWithWhite:0 alpha:0.35];
     button.layer.cornerRadius = 22;
     button.layer.masksToBounds = NO;
@@ -1023,8 +1023,8 @@ static const CGFloat kFindBarHeight = 44;
 - (void)_installWorkspaceButton {
     UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem];
     button.translatesAutoresizingMaskIntoConstraints = NO;
-    button.accessibilityLabel = @"Layout Manager";
-    button.accessibilityHint = @"Opens the workspace layout manager.";
+    button.accessibilityLabel = NSLocalizedString(@"Layout Manager", @"Accessibility label for the Workspace button");
+    button.accessibilityHint = NSLocalizedString(@"Opens the workspace layout manager.", @"Accessibility hint for the Workspace button");
     if (@available(iOS 13, *)) {
         [button setImage:[UIImage systemImageNamed:@"square.grid.2x2"] forState:UIControlStateNormal];
     } else {
@@ -1045,8 +1045,8 @@ static const CGFloat kFindBarHeight = 44;
 - (void)_installTerminalSwitcherButton {
     UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem];
     button.translatesAutoresizingMaskIntoConstraints = NO;
-    button.accessibilityLabel = @"Switch Terminal";
-    button.accessibilityHint = @"Switches between the session shell and tty terminals.";
+    button.accessibilityLabel = NSLocalizedString(@"Switch Terminal", @"Accessibility label for the terminal switcher button");
+    button.accessibilityHint = NSLocalizedString(@"Switches between the session shell and tty terminals.", @"Accessibility hint for the terminal switcher button");
     if (@available(iOS 13, *)) {
         [button setImage:[UIImage systemImageNamed:@"rectangle.3.group"] forState:UIControlStateNormal];
     } else {
@@ -1080,12 +1080,12 @@ static const CGFloat kFindBarHeight = 44;
 
     UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem];
     button.translatesAutoresizingMaskIntoConstraints = NO;
-    button.accessibilityLabel = @"Save Session";
-    button.accessibilityHint = @"Writes this session to disk so the next launch resumes it.";
+    button.accessibilityLabel = NSLocalizedString(@"Save Session", @"Accessibility label for the save session button");
+    button.accessibilityHint = NSLocalizedString(@"Writes this session to disk so the next launch resumes it.", @"Accessibility hint for the save session button");
     if (@available(iOS 13, *)) {
         [button setImage:[UIImage systemImageNamed:@"arrow.down.doc"] forState:UIControlStateNormal];
     } else {
-        [button setTitle:@"Save" forState:UIControlStateNormal];
+        [button setTitle:NSLocalizedString(@"Save", @"Save session button title (no SF Symbols)") forState:UIControlStateNormal];
     }
     [button addTarget:self
                action:@selector(saveSessionFromBar:)
@@ -1107,8 +1107,8 @@ static const CGFloat kFindBarHeight = 44;
                                                       action:@selector(showSessionMenu:)];
     hold.minimumPressDuration = 0.5;
     [button addGestureRecognizer:hold];
-    button.accessibilityHint = @"Writes this session to disk so the next launch resumes it. "
-                               @"Touch and hold for session options.";
+    button.accessibilityHint = NSLocalizedString(@"Writes this session to disk so the next launch resumes it. "
+                               @"Touch and hold for session options.", @"Accessibility hint for the save session button");
 
     // Follows the Settings switch live, so turning it on does not need a
     // relaunch to put the button there -- and turning it off takes it away.
@@ -1146,30 +1146,30 @@ static const CGFloat kFindBarHeight = 44;
 
     NSString *subtitle;
     if (!enabled) {
-        subtitle = @"Suspend to Disk is off, so nothing is being saved.";
+        subtitle = NSLocalizedString(@"Suspend to Disk is off, so nothing is being saved.", @"Session menu message");
     } else if (ck.last_refusal[0] != '\0') {
-        subtitle = @"The last attempt was refused.";
+        subtitle = NSLocalizedString(@"The last attempt was refused.", @"Session menu message");
     } else if (ck.saves > 0 && ck.natives_restarted != 0) {
         subtitle = [NSString stringWithFormat:
-                    @"%lu saved so far; %lu process(es) will start again rather than resume.",
+                    NSLocalizedString(@"%lu saved so far; %lu process(es) will start again rather than resume.", @"Session menu message; save count, then process count"),
                     ck.saves, ck.natives_restarted];
     } else if (ck.saves > 0) {
-        subtitle = [NSString stringWithFormat:@"%lu saved so far; the last held %lu processes.",
+        subtitle = [NSString stringWithFormat:NSLocalizedString(@"%lu saved so far; the last held %lu processes.", @"Session menu message; save count, then process count"),
                     ck.saves, ck.tasks];
     } else {
-        subtitle = @"Nothing saved yet this run.";
+        subtitle = NSLocalizedString(@"Nothing saved yet this run.", @"Session menu message");
     }
 
-    ISHActionSheet *sheet = [ISHActionSheet actionSheetWithTitle:@"Session" message:subtitle];
+    ISHActionSheet *sheet = [ISHActionSheet actionSheetWithTitle:NSLocalizedString(@"Session", @"Session menu title") message:subtitle];
 
     if (enabled) {
-        [sheet addActionWithTitle:@"Save Session Now"
+        [sheet addActionWithTitle:NSLocalizedString(@"Save Session Now", @"Session menu action")
                             style:UIAlertActionStyleDefault
                           handler:^(__unused UIAlertAction *a) {
             [self saveSessionFromBar:nil];
         }];
     } else {
-        [sheet addActionWithTitle:@"Turn On Suspend to Disk…"
+        [sheet addActionWithTitle:NSLocalizedString(@"Turn On Suspend to Disk…", @"Session menu action")
                             style:UIAlertActionStyleDefault
                           handler:^(__unused UIAlertAction *a) {
             [UIApplication openURL:UIApplicationOpenSettingsURLString];
@@ -1180,14 +1180,14 @@ static const CGFloat kFindBarHeight = 44;
     // because it implies something went wrong when nothing did.
     if (ck.last_refusal[0] != '\0') {
         NSString *why = [NSString stringWithUTF8String:ck.last_refusal];
-        [sheet addActionWithTitle:@"Why It Was Not Saved"
+        [sheet addActionWithTitle:NSLocalizedString(@"Why It Was Not Saved", @"Session menu action")
                             style:UIAlertActionStyleDefault
                           handler:^(__unused UIAlertAction *a) {
             UIAlertController *alert =
-                [UIAlertController alertControllerWithTitle:@"Session not saved"
+                [UIAlertController alertControllerWithTitle:NSLocalizedString(@"Session not saved", @"Alert title")
                                                     message:why
                                              preferredStyle:UIAlertControllerStyleAlert];
-            [alert addAction:[UIAlertAction actionWithTitle:@"OK"
+            [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"OK", @"Alert button")
                                                       style:UIAlertActionStyleCancel
                                                     handler:nil]];
             if (self.presentedViewController == nil)
@@ -1199,15 +1199,15 @@ static const CGFloat kFindBarHeight = 44;
     // way that matters: the app goes away. Confirmed rather than immediate --
     // the two entries sit next to each other and one of them quits.
     if (enabled) {
-        [sheet addActionWithTitle:@"Suspend and Exit"
+        [sheet addActionWithTitle:NSLocalizedString(@"Suspend and Exit", @"Session menu action")
                             style:UIAlertActionStyleDefault
                           handler:^(__unused UIAlertAction *a) {
             UIAlertController *confirm = [UIAlertController
-                alertControllerWithTitle:@"Suspend and exit?"
-                                 message:@"iSH-AOK writes this session to disk and quits. "
-                                         @"The next launch picks it up where you left it."
+                alertControllerWithTitle:NSLocalizedString(@"Suspend and exit?", @"Suspend and exit confirmation title")
+                                 message:NSLocalizedString(@"iSH-AOK writes this session to disk and quits. "
+                                         @"The next launch picks it up where you left it.", @"Suspend and exit confirmation message")
                           preferredStyle:UIAlertControllerStyleAlert];
-            [confirm addAction:[UIAlertAction actionWithTitle:@"Suspend and Exit"
+            [confirm addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Suspend and Exit", @"Suspend and exit confirmation button")
                                                         style:UIAlertActionStyleDefault
                                                       handler:^(__unused UIAlertAction *go) {
                 // The Wayland desktop and GPU programs cannot be saved: ask first.
@@ -1224,16 +1224,16 @@ static const CGFloat kFindBarHeight = 44;
                         dispatch_async(dispatch_get_main_queue(), ^{
                             self.saveSessionInProgress = NO;
                             [self _dismissSaveProgressHUDThen:^{
-                                [self showMessage:@"Session not suspended"
+                                [self showMessage:NSLocalizedString(@"Session not suspended", @"Alert title")
                                          subtitle:ck.last_refusal[0] != '\0'
                                                   ? @(ck.last_refusal)
-                                                  : @"iSH-AOK could not write the session."];
+                                                  : NSLocalizedString(@"iSH-AOK could not write the session.", @"Session save failure message")];
                             }];
                         });
                     });
                 });
             }]];
-            [confirm addAction:[UIAlertAction actionWithTitle:@"Cancel"
+            [confirm addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Cancel", @"Alert button")
                                                         style:UIAlertActionStyleCancel
                                                       handler:nil]];
             if (self.presentedViewController == nil)
@@ -1241,33 +1241,33 @@ static const CGFloat kFindBarHeight = 44;
         }];
     }
 
-    [sheet addActionWithTitle:@"What Would Be Saved"
+    [sheet addActionWithTitle:NSLocalizedString(@"What Would Be Saved", @"Session menu action")
                         style:UIAlertActionStyleDefault
                       handler:^(__unused UIAlertAction *a) {
         struct checkpoint_status now;
         checkpoint_get_status(&now);
         NSMutableString *body = [NSMutableString string];
-        [body appendFormat:@"Saves this run: %lu\n", now.saves];
+        [body appendFormat:NSLocalizedString(@"Saves this run: %lu\n", @"Session details line"), now.saves];
         if (now.saves > 0) {
-            [body appendFormat:@"Last image: %lu processes, %lu descriptors, %lu pages\n",
+            [body appendFormat:NSLocalizedString(@"Last image: %lu processes, %lu descriptors, %lu pages\n", @"Session details line"),
                                now.tasks, now.fds, now.pages];
         }
         if (now.natives_restarted != 0) {
-            [body appendFormat:@"Started again rather than resumed: %s\n", now.natives_note];
+            [body appendFormat:NSLocalizedString(@"Started again rather than resumed: %s\n", @"Session details line; %s lists programs"), now.natives_note];
         }
-        [body appendFormat:@"This launch resumed a saved session: %@", now.restored ? @"yes" : @"no"];
+        [body appendFormat:NSLocalizedString(@"This launch resumed a saved session: %@", @"Session details line; %@ is yes or no"), now.restored ? NSLocalizedString(@"yes", @"Session details answer") : NSLocalizedString(@"no", @"Session details answer")];
         UIAlertController *alert =
-            [UIAlertController alertControllerWithTitle:@"Session"
+            [UIAlertController alertControllerWithTitle:NSLocalizedString(@"Session", @"Session details alert title")
                                                 message:body
                                          preferredStyle:UIAlertControllerStyleAlert];
-        [alert addAction:[UIAlertAction actionWithTitle:@"OK"
+        [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"OK", @"Alert button")
                                                   style:UIAlertActionStyleCancel
                                                 handler:nil]];
         if (self.presentedViewController == nil)
             [self presentViewController:alert animated:YES completion:nil];
     }];
 
-    [sheet addActionWithTitle:@"Cancel"
+    [sheet addActionWithTitle:NSLocalizedString(@"Cancel", @"Action sheet button")
                         style:UIAlertActionStyleCancel
                       handler:nil];
 
@@ -1283,17 +1283,17 @@ static const CGFloat kFindBarHeight = 44;
 - (void)saveSessionFromKeyCommand:(__unused id)sender {
     if (!UserPreferences.shared.shouldSuspendToDisk) {
         UIAlertController *alert = [UIAlertController
-            alertControllerWithTitle:@"Suspend to Disk is off"
-                             message:@"Turn on Suspend to Disk in the iOS Settings app, under "
+            alertControllerWithTitle:NSLocalizedString(@"Suspend to Disk is off", @"Alert title")
+                             message:NSLocalizedString(@"Turn on Suspend to Disk in the iOS Settings app, under "
                                      @"iSH-AOK. This session is then saved whenever iSH-AOK goes "
-                                     @"to the background, and Command-S saves one on demand."
+                                     @"to the background, and Command-S saves one on demand.", @"Alert message when Command-S is pressed with Suspend to Disk off")
                       preferredStyle:UIAlertControllerStyleAlert];
-        [alert addAction:[UIAlertAction actionWithTitle:@"Open Settings"
+        [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Open Settings", @"Alert button that opens the iOS Settings app")
                                                   style:UIAlertActionStyleDefault
                                                 handler:^(__unused UIAlertAction *a) {
             [UIApplication openURL:UIApplicationOpenSettingsURLString];
         }]];
-        [alert addAction:[UIAlertAction actionWithTitle:@"Not Now"
+        [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Not Now", @"Alert button")
                                                   style:UIAlertActionStyleCancel
                                                 handler:nil]];
         if (self.presentedViewController == nil)
@@ -1320,7 +1320,7 @@ static const NSTimeInterval kSaveProgressDelay = 0.4;
         if (!self.saveSessionInProgress || self.presentedViewController != nil)
             return;
         UIAlertController *hud =
-            [UIAlertController alertControllerWithTitle:@"Saving session…"
+            [UIAlertController alertControllerWithTitle:NSLocalizedString(@"Saving session…", @"Progress alert title")
                                                 message:@"\n\n"
                                          preferredStyle:UIAlertControllerStyleAlert];
         UIActivityIndicatorView *spinner;
@@ -1383,10 +1383,10 @@ static const NSTimeInterval kSaveProgressDelay = 0.4;
                         [self flashSaveSessionConfirmation];
                         return;
                     }
-                    [self showMessage:@"Session not saved"
+                    [self showMessage:NSLocalizedString(@"Session not saved", @"Alert title")
                              subtitle:ck.last_refusal[0] != '\0'
                                       ? @(ck.last_refusal)
-                                      : @"iSH-AOK could not write the session."];
+                                      : NSLocalizedString(@"iSH-AOK could not write the session.", @"Session save failure message")];
                 }];
             });
         });
@@ -1407,14 +1407,14 @@ static const NSTimeInterval kSaveProgressDelay = 0.4;
         struct checkpoint_status ck;
         checkpoint_get_status(&ck);
         NSMutableString *detail = [NSMutableString stringWithFormat:
-            @"%lu processes written. The next launch resumes here.", ck.tasks];
+            NSLocalizedString(@"%lu processes written. The next launch resumes here.", @"Session saved message; %lu is a process count"), ck.tasks];
         // Named, because a restart is the one difference between what was
         // saved and what comes back.
         if (ck.natives_restarted != 0) {
-            [detail appendFormat:@" %lu will start again rather than resume: %s.",
+            [detail appendFormat:NSLocalizedString(@" %lu will start again rather than resume: %s.", @"Appended to the session saved message; count, then program names"),
                                  ck.natives_restarted, ck.natives_note];
         }
-        [self showMessage:@"Session saved" subtitle:detail];
+        [self showMessage:NSLocalizedString(@"Session saved", @"Alert title") subtitle:detail];
         return;
     }
     if (@available(iOS 13, *)) {
@@ -1422,10 +1422,10 @@ static const NSTimeInterval kSaveProgressDelay = 0.4;
     } else {
         [button setTitle:@"✓" forState:UIControlStateNormal];
     }
-    button.accessibilityLabel = @"Session saved";
+    button.accessibilityLabel = NSLocalizedString(@"Session saved", @"Accessibility label after a session save");
     // Announce it too: the icon swap is invisible to VoiceOver on its own.
     if (@available(iOS 11.0, *)) {
-        UIAccessibilityPostNotification(UIAccessibilityAnnouncementNotification, @"Session saved");
+        UIAccessibilityPostNotification(UIAccessibilityAnnouncementNotification, NSLocalizedString(@"Session saved", @"VoiceOver announcement after a session save"));
     }
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.6 * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{
@@ -1434,9 +1434,9 @@ static const NSTimeInterval kSaveProgressDelay = 0.4;
         if (@available(iOS 13, *)) {
             [button setImage:[UIImage systemImageNamed:@"arrow.down.doc"] forState:UIControlStateNormal];
         } else {
-            [button setTitle:@"Save" forState:UIControlStateNormal];
+            [button setTitle:NSLocalizedString(@"Save", @"Save session button title (no SF Symbols)") forState:UIControlStateNormal];
         }
-        button.accessibilityLabel = @"Save Session";
+        button.accessibilityLabel = NSLocalizedString(@"Save Session", @"Accessibility label for the save session button");
     });
 }
 
@@ -1494,7 +1494,7 @@ static UIButton *ISHBarButtonWithAction(UIView *root, SEL action) {
     UILongPressGestureRecognizer *longPress =
         [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(_pasteKeyLongPressed:)];
     [pasteKey addGestureRecognizer:longPress];
-    pasteKey.accessibilityHint = @"Double tap and hold for snippets";
+    pasteKey.accessibilityHint = NSLocalizedString(@"Double tap and hold for snippets", @"Accessibility hint for the Paste key");
 }
 
 - (void)_pasteKeyLongPressed:(UILongPressGestureRecognizer *)gesture {
@@ -1534,23 +1534,23 @@ static UIButton *ISHBarButtonWithAction(UIView *root, SEL action) {
         return;
 
     self.dashKey = [self _makeCenterKeyWithTitle:@"-" action:@selector(pressDash:)];
-    self.dashKey.accessibilityLabel = @"Hyphen";
-    self.dashKey.accessibilityHint = @"Sends a hyphen.";
+    self.dashKey.accessibilityLabel = NSLocalizedString(@"Hyphen", @"Accessibility label for a keyboard bar key");
+    self.dashKey.accessibilityHint = NSLocalizedString(@"Sends a hyphen.", @"Accessibility hint for a keyboard bar key");
     self.dotKey = [self _makeCenterKeyWithTitle:@"." action:@selector(pressPeriod:)];
-    self.dotKey.accessibilityLabel = @"Period";
-    self.dotKey.accessibilityHint = @"Sends a period.";
+    self.dotKey.accessibilityLabel = NSLocalizedString(@"Period", @"Accessibility label for a keyboard bar key");
+    self.dotKey.accessibilityHint = NSLocalizedString(@"Sends a period.", @"Accessibility hint for a keyboard bar key");
     self.slashKey = [self _makeCenterKeyWithTitle:@"/" action:@selector(pressSlash:)];
-    self.slashKey.accessibilityLabel = @"Slash";
-    self.slashKey.accessibilityHint = @"Sends a forward slash.";
+    self.slashKey.accessibilityLabel = NSLocalizedString(@"Slash", @"Accessibility label for a keyboard bar key");
+    self.slashKey.accessibilityHint = NSLocalizedString(@"Sends a forward slash.", @"Accessibility hint for a keyboard bar key");
     self.colonKey = [self _makeCenterKeyWithTitle:@":" action:@selector(pressColon:)];
-    self.colonKey.accessibilityLabel = @"Colon";
-    self.colonKey.accessibilityHint = @"Sends a colon.";
+    self.colonKey.accessibilityLabel = NSLocalizedString(@"Colon", @"Accessibility label for a keyboard bar key");
+    self.colonKey.accessibilityHint = NSLocalizedString(@"Sends a colon.", @"Accessibility hint for a keyboard bar key");
     self.bangKey = [self _makeCenterKeyWithTitle:@"!" action:@selector(pressBang:)];
-    self.bangKey.accessibilityLabel = @"Exclamation mark";
-    self.bangKey.accessibilityHint = @"Sends an exclamation mark.";
+    self.bangKey.accessibilityLabel = NSLocalizedString(@"Exclamation mark", @"Accessibility label for a keyboard bar key");
+    self.bangKey.accessibilityHint = NSLocalizedString(@"Sends an exclamation mark.", @"Accessibility hint for a keyboard bar key");
     self.pipeKey = [self _makeCenterKeyWithTitle:@"|" action:@selector(pressPipe:)];
-    self.pipeKey.accessibilityLabel = @"Vertical bar";
-    self.pipeKey.accessibilityHint = @"Sends a vertical bar.";
+    self.pipeKey.accessibilityLabel = NSLocalizedString(@"Vertical bar", @"Accessibility label for a keyboard bar key");
+    self.pipeKey.accessibilityHint = NSLocalizedString(@"Sends a vertical bar.", @"Accessibility hint for a keyboard bar key");
 
     NSMutableDictionary<NSString *, UIView *> *builtins = [NSMutableDictionary dictionary];
     if (self.tabKey != nil) builtins[@"tab"] = self.tabKey;
@@ -1625,7 +1625,7 @@ static const void *ISHToolbarCustomKeySendsKey = &ISHToolbarCustomKeySendsKey;
     button.titleLabel.minimumScaleFactor = 0.5;
     button.keyAppearance = UserPreferences.shared.keyboardAppearance;
     button.accessibilityLabel = title;
-    button.accessibilityHint = @"A custom key. Types the text set for it in Keyboard Toolbar settings.";
+    button.accessibilityHint = NSLocalizedString(@"A custom key. Types the text set for it in Keyboard Toolbar settings.", @"Accessibility hint for a custom keyboard bar key");
     objc_setAssociatedObject(button, ISHToolbarCustomKeySendsKey,
                              ISHToolbarKeyDecodeSends(item[ISHToolbarKeySends]),
                              OBJC_ASSOCIATION_COPY_NONATOMIC);
@@ -1705,7 +1705,7 @@ static const void *ISHToolbarCustomKeySendsKey = &ISHToolbarCustomKeySendsKey;
     // Advertise the gesture on the view that actually has it, rather than
     // hardcoding the clause at each call site -- infoButton carried it for
     // years without ever being handed the recognizer.
-    NSString *hint = @"Touch and hold to switch terminals.";
+    NSString *hint = NSLocalizedString(@"Touch and hold to switch terminals.", @"Accessibility hint appended to buttons with the terminal switcher gesture");
     NSString *existing = view.accessibilityHint;
     if (existing.length == 0)
         view.accessibilityHint = hint;
@@ -1736,7 +1736,7 @@ static const void *ISHToolbarCustomKeySendsKey = &ISHToolbarCustomKeySendsKey;
 
     UILabel *label = [[UILabel alloc] init];
     label.translatesAutoresizingMaskIntoConstraints = NO;
-    label.text = @"Starting terminal...";
+    label.text = NSLocalizedString(@"Starting terminal...", @"Terminal startup overlay");
     label.textAlignment = NSTextAlignmentCenter;
     label.numberOfLines = 0;
     label.font = [UIFont systemFontOfSize:17 weight:UIFontWeightSemibold];
@@ -1885,7 +1885,7 @@ static const void *ISHToolbarCustomKeySendsKey = &ISHToolbarCustomKeySendsKey;
     }
 
     self.sessionStartInProgress = YES;
-    [self _showTerminalStartupOverlayWithText:@"Starting terminal..."];
+    [self _showTerminalStartupOverlayWithText:NSLocalizedString(@"Starting terminal...", @"Terminal startup overlay")];
     intptr_t err = [self startSession];
     self.sessionStartInProgress = NO;
 	    if (err < 0) {
@@ -1893,9 +1893,9 @@ static const void *ISHToolbarCustomKeySendsKey = &ISHToolbarCustomKeySendsKey;
 	        self.sessionTerminal = nil;
 	        self.sessionPid = 0;
 	        [failedTerminal destroy];
-	        NSString *message = self.sessionFailureTitle ?: @"Could not start session";
+	        NSString *message = self.sessionFailureTitle ?: NSLocalizedString(@"Could not start session", @"Session start failure alert title");
 	        NSString *subtitle = self.sessionFailureMessage ?: [AppDelegate descriptionForISHErrno:err];
-	        NSString *overlayText = self.sessionFailureOverlayText ?: @"Could not start session.";
+	        NSString *overlayText = self.sessionFailureOverlayText ?: NSLocalizedString(@"Could not start session.", @"Terminal overlay on session start failure");
 	        if (err == [AppDelegate bootError] && [AppDelegate bootFailureMessage] != nil) {
 	            message = [AppDelegate bootFailureTitle] ?: message;
 	            subtitle = [AppDelegate bootFailureMessage];
@@ -2110,15 +2110,15 @@ static const void *ISHToolbarCustomKeySendsKey = &ISHToolbarCustomKeySendsKey;
     const char *envp = "TERM=screen-256color\0LANG=C.UTF-8\0";
 	    err = do_execve(command[0].UTF8String, command.count, argv, envp);
 	    if (err < 0) {
-	        NSString *failureTitle = @"Could not start session command";
+	        NSString *failureTitle = NSLocalizedString(@"Could not start session command", @"Session start failure alert title");
 	        NSString *failureMessage = [NSString stringWithFormat:
-	                                    @"The root filesystem was mounted, but the session command could not be executed.\n\nCommand: %@\nPath: %@\nError: %@\n\nInstall the missing program, choose a root filesystem with a shell, or change Settings -> Launch Command.",
+	                                    NSLocalizedString(@"The root filesystem was mounted, but the session command could not be executed.\n\nCommand: %@\nPath: %@\nError: %@\n\nInstall the missing program, choose a root filesystem with a shell, or change Settings -> Launch Command.", @"Session start failure alert message; command, path, then error"),
 	                                    commandString ?: @"",
 	                                    command.firstObject ?: @"",
 	                                    [AppDelegate descriptionForISHErrno:err]];
 	        self.sessionFailureTitle = failureTitle;
 	        self.sessionFailureMessage = failureMessage;
-	        self.sessionFailureOverlayText = @"Could not start session command.";
+	        self.sessionFailureOverlayText = NSLocalizedString(@"Could not start session command.", @"Terminal overlay on session start failure");
 	        os_log_error(ISHSuspendLog(),
 	                     "terminal session start: FAILED at do_execve (%{public}d)",
 	                     (int) err);
@@ -2209,7 +2209,7 @@ static const NSInteger kMaxConsecutiveQuickSessionExits = 3;
         // run (become_new_init_child refuses). Say so instead of retrying.
         self.consecutiveQuickSessionExits = 0;
         [ISHDiagnosticsStore recordBreadcrumb:@"terminal.session.notRestarted.guestHalted"];
-        [self _showTerminalStartupFailureOverlayWithText:@"System halted. Quit and reopen iSH-AOK to boot it again."];
+        [self _showTerminalStartupFailureOverlayWithText:NSLocalizedString(@"System halted. Quit and reopen iSH-AOK to boot it again.", @"Terminal overlay after the guest halts")];
         return;
     }
     if (crashLooping) {
@@ -2218,10 +2218,10 @@ static const NSInteger kMaxConsecutiveQuickSessionExits = 3;
         NSString *commandString = [command componentsJoinedByString:@" "];
         [ISHDiagnosticsStore recordBreadcrumb:@"terminal.session.crashLoop.stopped"
                                       details:@{@"command": commandString ?: @""}];
-        [self _showTerminalStartupFailureOverlayWithText:@"Session command keeps exiting immediately."];
-        [self showMessage:@"Session command keeps exiting immediately"
+        [self _showTerminalStartupFailureOverlayWithText:NSLocalizedString(@"Session command keeps exiting immediately.", @"Terminal overlay when the session command crash-loops")];
+        [self showMessage:NSLocalizedString(@"Session command keeps exiting immediately", @"Alert title when the session command crash-loops")
                   subtitle:[NSString stringWithFormat:
-                            @"\"%@\" exited right away several times in a row, so iSH stopped auto-restarting it to avoid a restart loop.\n\nThis usually means the root filesystem's login program isn't compatible with iSH (for example, it refuses root login on this pseudo-terminal). Try changing Settings -> Launch Command to something like \"/bin/sh\", or use a different root filesystem.",
+                            NSLocalizedString(@"\"%@\" exited right away several times in a row, so iSH-AOK stopped auto-restarting it to avoid a restart loop.\n\nThis usually means the root filesystem's login program isn't compatible with iSH-AOK (for example, it refuses root login on this pseudo-terminal). Try changing Settings -> Launch Command to something like \"/bin/sh\", or use a different root filesystem.", @"Crash-loop alert message; %@ is the command"),
                             commandString ?: @""]];
         return;
     }
@@ -2234,7 +2234,7 @@ static const NSInteger kMaxConsecutiveQuickSessionExits = 3;
         if (self.presentedViewController != nil)
             return;
         UIAlertController *alert = [UIAlertController alertControllerWithTitle:message message:subtitle preferredStyle:UIAlertControllerStyleAlert];
-        [alert addAction:[UIAlertAction actionWithTitle:@"OK"
+        [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"OK", @"Alert button")
                                                   style:UIAlertActionStyleDefault
                                                 handler:nil]];
         [self presentViewController:alert animated:YES completion:nil];
@@ -2323,15 +2323,15 @@ static const NSInteger kMaxConsecutiveQuickSessionExits = 3;
     if (notification.object != self.terminal)
         return;
     NSError *error = notification.userInfo[@"error"];
-    NSString *subtitle = error.localizedDescription ?: @"unknown error";
-    [self _showTerminalStartupFailureOverlayWithText:@"Terminal UI failed to load."];
+    NSString *subtitle = error.localizedDescription ?: NSLocalizedString(@"unknown error", @"Fallback error description");
+    [self _showTerminalStartupFailureOverlayWithText:NSLocalizedString(@"Terminal UI failed to load.", @"Terminal overlay when the terminal UI cannot load")];
     dispatch_async(dispatch_get_main_queue(), ^{
         if (self.presentedViewController != nil)
             return;
-        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"terminal UI failed to load"
+        UIAlertController *alert = [UIAlertController alertControllerWithTitle:NSLocalizedString(@"terminal UI failed to load", @"Alert title")
                                                                       message:subtitle
                                                                preferredStyle:UIAlertControllerStyleAlert];
-        [alert addAction:[UIAlertAction actionWithTitle:@"OK"
+        [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"OK", @"Alert button")
                                                   style:UIAlertActionStyleDefault
                                                 handler:nil]];
         self.loadFailureAlert = alert;
@@ -2432,7 +2432,7 @@ static const NSInteger kMaxConsecutiveQuickSessionExits = 3;
     BOOL showBadge = FsNeedsRepositoryUpdate();
     self.settingsBadge.hidden = !showBadge;
     self.floatingSettingsBadge.hidden = !showBadge;
-    NSString *badgeValue = showBadge ? @"Update available" : nil;
+    NSString *badgeValue = showBadge ? NSLocalizedString(@"Update available", @"Accessibility value on the settings button") : nil;
     self.infoButton.accessibilityValue = badgeValue;
     self.floatingSettingsButton.accessibilityValue = badgeValue;
 }
@@ -2784,16 +2784,16 @@ static const NSInteger kMaxConsecutiveQuickSessionExits = 3;
 
 - (NSString *)terminalDisplayName:(Terminal *)terminal {
     if (terminal == nil)
-        return @"Unknown Terminal";
+        return NSLocalizedString(@"Unknown Terminal", @"Terminal switcher entry");
     if (terminal == self.sessionTerminal)
-        return [NSString stringWithFormat:@"Session Shell (pts/%d)", terminal.number];
+        return [NSString stringWithFormat:NSLocalizedString(@"Session Shell (pts/%d)", @"Terminal switcher entry; %d is a pts number"), terminal.number];
     if ([self isConsoleTerminal:terminal])
         return [self consoleDisplayName];
     if (terminal.type == TTY_CONSOLE_MAJOR)
-        return [NSString stringWithFormat:@"Terminal (tty%d)", terminal.number];
+        return [NSString stringWithFormat:NSLocalizedString(@"Terminal (tty%d)", @"Terminal switcher entry; %d is a tty number"), terminal.number];
     if (terminal.type == TTY_PSEUDO_SLAVE_MAJOR)
-        return [NSString stringWithFormat:@"Pseudo Terminal (pts/%d)", terminal.number];
-    return [NSString stringWithFormat:@"Terminal (%d:%d)", terminal.type, terminal.number];
+        return [NSString stringWithFormat:NSLocalizedString(@"Pseudo Terminal (pts/%d)", @"Terminal switcher entry; %d is a pts number"), terminal.number];
+    return [NSString stringWithFormat:NSLocalizedString(@"Terminal (%d:%d)", @"Terminal switcher entry; device major:minor"), terminal.type, terminal.number];
 }
 
 - (IBAction)showTerminalSwitcherFromButton:(id)sender {
@@ -2812,13 +2812,13 @@ static const NSInteger kMaxConsecutiveQuickSessionExits = 3;
     if (sourceView == nil)
         sourceView = self.infoButton;
 
-    ISHActionSheet *alert = [ISHActionSheet actionSheetWithTitle:@"Switch Terminal"
-                                                         message:@"Boot via init creates both a session shell and system consoles."];
+    ISHActionSheet *alert = [ISHActionSheet actionSheetWithTitle:NSLocalizedString(@"Switch Terminal", @"Terminal switcher title")
+                                                         message:NSLocalizedString(@"Boot via init creates both a session shell and system consoles.", @"Terminal switcher message")];
 
     Terminal *sessionTerminal = self.sessionTerminal;
     if (sessionTerminal != nil) {
         NSString *title = (self.terminal == sessionTerminal)
-            ? [[self terminalDisplayName:sessionTerminal] stringByAppendingString:@" (Current)"]
+            ? [NSString stringWithFormat:NSLocalizedString(@"%@ (Current)", @"Terminal switcher entry for the terminal being shown; %@ is its name"), [self terminalDisplayName:sessionTerminal]]
             : [self terminalDisplayName:sessionTerminal];
         [alert addActionWithTitle:title
                             style:UIAlertActionStyleDefault
@@ -2830,7 +2830,7 @@ static const NSInteger kMaxConsecutiveQuickSessionExits = 3;
     Terminal *consoleTerminal = [self currentConsoleTerminal];
     if (consoleTerminal != nil && consoleTerminal.type != TTY_CONSOLE_MAJOR) {
         NSString *title = [self.terminal.uuid isEqual:consoleTerminal.uuid]
-            ? [[self terminalDisplayName:consoleTerminal] stringByAppendingString:@" (Current)"]
+            ? [NSString stringWithFormat:NSLocalizedString(@"%@ (Current)", @"Terminal switcher entry for the terminal being shown; %@ is its name"), [self terminalDisplayName:consoleTerminal]]
             : [self terminalDisplayName:consoleTerminal];
         [alert addActionWithTitle:title
                             style:UIAlertActionStyleDefault
@@ -2842,7 +2842,7 @@ static const NSInteger kMaxConsecutiveQuickSessionExits = 3;
     for (int i = 1; i <= 7; i++) {
         Terminal *console = [Terminal terminalWithType:TTY_CONSOLE_MAJOR number:i];
         NSString *title = [self.terminal.uuid isEqual:console.uuid]
-            ? [[self terminalDisplayName:console] stringByAppendingString:@" (Current)"]
+            ? [NSString stringWithFormat:NSLocalizedString(@"%@ (Current)", @"Terminal switcher entry for the terminal being shown; %@ is its name"), [self terminalDisplayName:console]]
             : [self terminalDisplayName:console];
         [alert addActionWithTitle:title
                             style:UIAlertActionStyleDefault
@@ -2856,33 +2856,33 @@ static const NSInteger kMaxConsecutiveQuickSessionExits = 3;
     // bar, which is exactly the case a hardware keyboard produces. Without an
     // entry here the library is unreachable by touch on the setup most likely
     // to want it, and inside Workspace there is no bar to long-press at all.
-    [alert addActionWithTitle:@"Snippets…"
+    [alert addActionWithTitle:NSLocalizedString(@"Snippets…", @"Terminal switcher action")
                         style:UIAlertActionStyleDefault
                       handler:^(__unused UIAlertAction *action) {
         [self showSnippets:nil];
     }];
-    [alert addActionWithTitle:@"Find in Scrollback…"
+    [alert addActionWithTitle:NSLocalizedString(@"Find in Scrollback…", @"Terminal switcher action")
                         style:UIAlertActionStyleDefault
                       handler:^(__unused UIAlertAction *action) {
         [self showFindBar:nil];
     }];
 
     if (ISHLLMClientEnabled()) {
-        [alert addActionWithTitle:@"LLM Chat"
+        [alert addActionWithTitle:NSLocalizedString(@"LLM Chat", @"Terminal switcher action")
                             style:UIAlertActionStyleDefault
                           handler:^(__unused UIAlertAction *action) {
             UINavigationController *navigationController = [[UINavigationController alloc] initWithRootViewController:ISHCreateLLMClientViewController()];
             [self presentViewController:navigationController animated:YES completion:nil];
         }];
         NSString *terminalContext = Terminal_debugReadRows(self.terminal.type, self.terminal.number, 80) ?: @"";
-        [alert addActionWithTitle:@"LLM: Explain Current Terminal"
+        [alert addActionWithTitle:NSLocalizedString(@"LLM: Explain Current Terminal", @"Terminal switcher action")
                             style:UIAlertActionStyleDefault
                           handler:^(__unused UIAlertAction *action) {
             NSString *prompt = [NSString stringWithFormat:@"Explain the important details in this terminal output. If there is an error, identify the likely cause.\n\nTerminal output:\n```text\n%@\n```", terminalContext];
             UINavigationController *navigationController = [[UINavigationController alloc] initWithRootViewController:ISHCreateLLMClientViewControllerWithInitialPrompt(prompt)];
             [self presentViewController:navigationController animated:YES completion:nil];
         }];
-        [alert addActionWithTitle:@"LLM: Suggest Fix"
+        [alert addActionWithTitle:NSLocalizedString(@"LLM: Suggest Fix", @"Terminal switcher action")
                             style:UIAlertActionStyleDefault
                           handler:^(__unused UIAlertAction *action) {
             NSString *prompt = [NSString stringWithFormat:@"Find the most likely error in this terminal output and suggest concrete commands or edits to fix it.\n\nTerminal output:\n```text\n%@\n```", terminalContext];
@@ -2891,7 +2891,7 @@ static const NSInteger kMaxConsecutiveQuickSessionExits = 3;
         }];
     }
 
-    [alert addActionWithTitle:@"Cancel"
+    [alert addActionWithTitle:NSLocalizedString(@"Cancel", @"Action sheet button")
                         style:UIAlertActionStyleCancel
                       handler:nil];
     [alert presentFromViewController:self sourceView:sourceView sourceRect:sourceView.bounds];
@@ -3046,8 +3046,8 @@ static const NSInteger kMaxConsecutiveQuickSessionExits = 3;
         commands = [NSMutableArray new];
         for (unsigned i = 1; i <= 7; i++) {
             NSString *title = i == 7
-                ? @"Switch to Session Shell"
-                : [NSString stringWithFormat:@"Switch to tty%u", i];
+                ? NSLocalizedString(@"Switch to Session Shell", @"Keyboard shortcut title")
+                : [NSString stringWithFormat:NSLocalizedString(@"Switch to tty%u", @"Keyboard shortcut title; %u is a tty number"), i];
             [commands addObject:
              [UIKeyCommand keyCommandWithInput:[NSString stringWithFormat:@"%d", i]
                                  modifierFlags:UIKeyModifierCommand|UIKeyModifierAlternate|UIKeyModifierShift
@@ -3058,7 +3058,7 @@ static const NSInteger kMaxConsecutiveQuickSessionExits = 3;
          [UIKeyCommand keyCommandWithInput:@"+"
                              modifierFlags:UIKeyModifierCommand
                                     action:@selector(increaseFontSize:)
-                      discoverabilityTitle:@"Increase Font Size"]];
+                      discoverabilityTitle:NSLocalizedString(@"Increase Font Size", @"Keyboard shortcut title")]];
         [commands addObject:
          [UIKeyCommand keyCommandWithInput:@"="
                              modifierFlags:UIKeyModifierCommand
@@ -3067,42 +3067,42 @@ static const NSInteger kMaxConsecutiveQuickSessionExits = 3;
          [UIKeyCommand keyCommandWithInput:@"-"
                              modifierFlags:UIKeyModifierCommand
                                     action:@selector(decreaseFontSize:)
-                      discoverabilityTitle:@"Decrease Font Size"]];
+                      discoverabilityTitle:NSLocalizedString(@"Decrease Font Size", @"Keyboard shortcut title")]];
         [commands addObject:
          [UIKeyCommand keyCommandWithInput:@"0"
                              modifierFlags:UIKeyModifierCommand
                                     action:@selector(resetFontSize:)
-                      discoverabilityTitle:@"Reset Font Size"]];
+                      discoverabilityTitle:NSLocalizedString(@"Reset Font Size", @"Keyboard shortcut title")]];
         [commands addObject:
          [UIKeyCommand keyCommandWithInput:@","
                              modifierFlags:UIKeyModifierCommand
                                     action:@selector(showAbout:)
-                      discoverabilityTitle:@"Settings"]];
+                      discoverabilityTitle:NSLocalizedString(@"Settings", @"Keyboard shortcut title")]];
         [commands addObject:
          [UIKeyCommand keyCommandWithInput:@"f"
                              modifierFlags:UIKeyModifierCommand
                                     action:@selector(showFindBar:)
-                      discoverabilityTitle:@"Find in Scrollback"]];
+                      discoverabilityTitle:NSLocalizedString(@"Find in Scrollback", @"Keyboard shortcut title")]];
         [commands addObject:
          [UIKeyCommand keyCommandWithInput:@"b"
                              modifierFlags:UIKeyModifierCommand
                                     action:@selector(showFileBrowser:)
-                      discoverabilityTitle:@"Browse Files"]];
+                      discoverabilityTitle:NSLocalizedString(@"Browse Files", @"Keyboard shortcut title")]];
         [commands addObject:
          [UIKeyCommand keyCommandWithInput:@"j"
                              modifierFlags:UIKeyModifierCommand
                                     action:@selector(showSnippets:)
-                      discoverabilityTitle:@"Snippets"]];
+                      discoverabilityTitle:NSLocalizedString(@"Snippets", @"Keyboard shortcut title")]];
         [commands addObject:
          [UIKeyCommand keyCommandWithInput:@"g"
                              modifierFlags:UIKeyModifierCommand
                                     action:@selector(findNext:)
-                      discoverabilityTitle:@"Find Next"]];
+                      discoverabilityTitle:NSLocalizedString(@"Find Next", @"Keyboard shortcut title")]];
         [commands addObject:
          [UIKeyCommand keyCommandWithInput:@"g"
                              modifierFlags:UIKeyModifierCommand|UIKeyModifierShift
                                     action:@selector(findPrevious:)
-                      discoverabilityTitle:@"Find Previous"]];
+                      discoverabilityTitle:NSLocalizedString(@"Find Previous", @"Keyboard shortcut title")]];
     }
     if (!self.findBarVisible)
         return commands;
@@ -3129,13 +3129,13 @@ static const NSInteger kMaxConsecutiveQuickSessionExits = 3;
     [self _applyCurrentTerminalToViewIfPossible];
     BOOL installedElsewhere = [self _isTerminalInstalledElsewhere:_terminal];
     if (installedElsewhere) {
-        [self _showTerminalStartupFailureOverlayWithText:@"Terminal already open in another window."];
+        [self _showTerminalStartupFailureOverlayWithText:NSLocalizedString(@"Terminal already open in another window.", @"Terminal overlay")];
     } else if (_terminal != nil && _terminal.loaded) {
         [self _hideTerminalStartupOverlay];
     } else if (_terminal != nil) {
-        [self _showTerminalStartupOverlayWithText:@"Loading terminal UI..."];
+        [self _showTerminalStartupOverlayWithText:NSLocalizedString(@"Loading terminal UI...", @"Terminal startup overlay")];
     } else {
-        [self _showTerminalStartupOverlayWithText:@"Starting terminal..."];
+        [self _showTerminalStartupOverlayWithText:NSLocalizedString(@"Starting terminal...", @"Terminal startup overlay")];
     }
 }
 

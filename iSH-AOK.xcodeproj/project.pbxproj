@@ -269,6 +269,12 @@
 		E02D963E8F2A7D5D58954A0D /* MarkdownRenderer.m in Sources */ = {isa = PBXBuildFile; fileRef = 57D6250B1A93D2423FF389EB /* MarkdownRenderer.m */; };
 		F8AF2E023A182D2DF0E331A0 /* DisplayRFBShaders.metal in Sources */ = {isa = PBXBuildFile; fileRef = C64EFBFD4819B3516B73356F /* DisplayRFBShaders.metal */; };
 		FF0F1FAE84EA95701F222D85 /* WorkspaceVideoPlayer.m in Sources */ = {isa = PBXBuildFile; fileRef = 01BF35C50FE269DF759E5D59 /* WorkspaceVideoPlayer.m */; };
+		AA10C0DE2E9A000000000002 /* Localizable.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = AA10C0DE2E9A000000000001 /* Localizable.xcstrings */; };
+		AA10C0DE2E9A000000000004 /* About.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = AA10C0DE2E9A000000000003 /* About.xcstrings */; };
+		AA10C0DE2E9A000000000006 /* Terminal.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = AA10C0DE2E9A000000000005 /* Terminal.xcstrings */; };
+		AA10C0DE2E9A000000000008 /* Roots.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = AA10C0DE2E9A000000000007 /* Roots.xcstrings */; };
+		AA10C0DE2E9A00000000000A /* InfoPlist.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = AA10C0DE2E9A000000000009 /* InfoPlist.xcstrings */; };
+		AA10C0DE2E9A00000000000B /* Localizable.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = AA10C0DE2E9A000000000001 /* Localizable.xcstrings */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXBuildRule section */
@@ -675,7 +681,6 @@
 		BB10E5C2248DBA7B009C7A74 /* fakefs.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = fakefs.c; path = tools/fakefs.c; sourceTree = SOURCE_ROOT; };
 		BB10E5CC248DBE66009C7A74 /* Roots.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = Roots.h; sourceTree = "<group>"; };
 		BB10E5CD248DBE66009C7A74 /* Roots.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = Roots.m; sourceTree = "<group>"; };
-		BB10E5CF248DC21D009C7A74 /* Roots.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = Roots.storyboard; sourceTree = "<group>"; };
 		BB10E5D1248DCFEA009C7A74 /* RootsTableViewController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = RootsTableViewController.h; sourceTree = "<group>"; };
 		BB10E5D2248DCFEA009C7A74 /* RootsTableViewController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = RootsTableViewController.m; sourceTree = "<group>"; };
 		BB13F4DC21C5770000343E17 /* NSError+ISHErrno.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "NSError+ISHErrno.h"; sourceTree = "<group>"; };
@@ -819,6 +824,12 @@
 		F6CFEC30BC981057316A8873 /* GuestFileBridge.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; path = GuestFileBridge.h; sourceTree = "<group>"; };
 		F849D89896B2C39F45F1E7E5 /* DisplayRFBView.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = DisplayRFBView.m; sourceTree = "<group>"; };
 		F9B4AFAD2A89EB3E27D10A36 /* AudioLibrary.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = AudioLibrary.m; sourceTree = "<group>"; };
+		AA10C0DE2E9A000000000001 /* Localizable.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = Localizable.xcstrings; sourceTree = "<group>"; };
+		AA10C0DE2E9A000000000003 /* About.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = About.xcstrings; sourceTree = "<group>"; };
+		AA10C0DE2E9A000000000005 /* Terminal.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = Terminal.xcstrings; sourceTree = "<group>"; };
+		AA10C0DE2E9A000000000007 /* Roots.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = Roots.xcstrings; sourceTree = "<group>"; };
+		AA10C0DE2E9A000000000009 /* InfoPlist.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = InfoPlist.xcstrings; sourceTree = "<group>"; };
+		AA10C0DE2E9A00000000000C /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/Roots.storyboard; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -1162,6 +1173,11 @@
 				BB1B9A4123A5E92A00414052 /* Icons */,
 				BB792B5E1F96D90D00FFB7A4 /* LaunchScreen.storyboard */,
 				BB792B611F96D90D00FFB7A4 /* Info.plist */,
+				AA10C0DE2E9A000000000001 /* Localizable.xcstrings */,
+				AA10C0DE2E9A000000000003 /* About.xcstrings */,
+				AA10C0DE2E9A000000000005 /* Terminal.xcstrings */,
+				AA10C0DE2E9A000000000007 /* Roots.xcstrings */,
+				AA10C0DE2E9A000000000009 /* InfoPlist.xcstrings */,
 				BB792B621F96D90D00FFB7A4 /* main.m */,
 				BB0B848D2586A4B100208600 /* Configs */,
 				BB88F4A4215476BA00A341FD /* iSH.entitlements */,
@@ -1800,6 +1816,15 @@
 			knownRegions = (
 				en,
 				Base,
+				"zh-Hans",
+				"zh-Hant",
+				ja,
+				ko,
+				es,
+				fr,
+				de,
+				"pt-BR",
+				ru,
 			);
 			mainGroup = BB792B451F96D8E000FFB7A4;
 			productRefGroup = BB792B511F96D90D00FFB7A4 /* Products */;
@@ -1914,6 +1939,11 @@
 				C0A000022E00000200000004 /* tests/audio/test-tone-48k-s16le-stereo.wav in Resources */,
 				C0A000042E00000400000001 /* tools/iSH_benchmark.tgz in Resources */,
 				1A4DC4F2374508A4B1CEC666 /* manifest.json in Resources */,
+				AA10C0DE2E9A000000000002 /* Localizable.xcstrings in Resources */,
+				AA10C0DE2E9A000000000004 /* About.xcstrings in Resources */,
+				AA10C0DE2E9A000000000006 /* Terminal.xcstrings in Resources */,
+				AA10C0DE2E9A000000000008 /* Roots.xcstrings in Resources */,
+				AA10C0DE2E9A00000000000A /* InfoPlist.xcstrings in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1921,6 +1951,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				AA10C0DE2E9A00000000000B /* Localizable.xcstrings in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -2433,6 +2464,14 @@
 				BBBCE7E421D2F02200CA00B3 /* Base */,
 			);
 			name = About.storyboard;
+			sourceTree = "<group>";
+		};
+		BB10E5CF248DC21D009C7A74 /* Roots.storyboard */ = {
+			isa = PBXVariantGroup;
+			children = (
+				AA10C0DE2E9A00000000000C /* Base */,
+			);
+			name = Roots.storyboard;
 			sourceTree = "<group>";
 		};
 /* End PBXVariantGroup section */

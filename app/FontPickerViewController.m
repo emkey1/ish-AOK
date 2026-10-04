@@ -113,8 +113,8 @@ enum {
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.title = @"Font";
-    self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:@"Reset" style:UIBarButtonItemStylePlain target:self action:@selector(resetFont:)];
+    self.title = NSLocalizedString(@"Font", @"Font picker navigation title");
+    self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:NSLocalizedString(@"Reset", @"Font picker button that restores the default font") style:UIBarButtonItemStylePlain target:self action:@selector(resetFont:)];
     [self.tableView registerClass:UITableViewCell.class forCellReuseIdentifier:@"Font"];
     [self.tableView registerClass:UITableViewCell.class forCellReuseIdentifier:@"Filter"];
 
@@ -123,7 +123,7 @@ enum {
     _search = [[UISearchController alloc] initWithSearchResultsController:nil];
     _search.searchResultsUpdater = self;
     _search.obscuresBackgroundDuringPresentation = NO;
-    _search.searchBar.placeholder = @"Search";
+    _search.searchBar.placeholder = NSLocalizedString(@"Search", @"Font picker search field placeholder");
     self.navigationItem.searchController = _search;
     self.navigationItem.hidesSearchBarWhenScrolling = NO;
     self.definesPresentationContext = YES;
@@ -184,14 +184,14 @@ enum {
 
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
     if (section == FilterSection && !self.isSearching)
-        return @"Some installed fonts, several Nerd Fonts among them, never report themselves as monospaced. Turn this on to choose from every font on the device.";
+        return NSLocalizedString(@"Some installed fonts, several Nerd Fonts among them, never report themselves as monospaced. Turn this on to choose from every font on the device.", @"Font picker footer under the Show All Fonts switch");
     return nil;
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
     if (indexPath.section == FilterSection) {
         UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"Filter" forIndexPath:indexPath];
-        cell.textLabel.text = @"Show All Fonts";
+        cell.textLabel.text = NSLocalizedString(@"Show All Fonts", @"Font picker switch label");
         cell.selectionStyle = UITableViewCellSelectionStyleNone;
         UISwitch *toggle = [UISwitch new];
         toggle.on = _showsAllFonts;

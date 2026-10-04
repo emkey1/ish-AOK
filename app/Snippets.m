@@ -300,7 +300,7 @@ static void ISHSnippetConfigureAsShellInput(id<UITextInputTraits> input) {
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.view.backgroundColor = UIColor.systemGroupedBackgroundColor;
-    self.title = _original == nil ? @"New Snippet" : @"Edit Snippet";
+    self.title = _original == nil ? NSLocalizedString(@"New Snippet", @"Snippet editor title") : NSLocalizedString(@"Edit Snippet", @"Snippet editor title");
     self.navigationItem.leftBarButtonItem =
         [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemCancel
                                                       target:self
@@ -311,7 +311,7 @@ static void ISHSnippetConfigureAsShellInput(id<UITextInputTraits> input) {
                                                       action:@selector(save:)];
 
     _nameField = [UITextField new];
-    _nameField.placeholder = @"Name";
+    _nameField.placeholder = NSLocalizedString(@"Name", @"Snippet editor name field placeholder");
     _nameField.borderStyle = UITextBorderStyleRoundedRect;
     _nameField.font = [UIFont preferredFontForTextStyle:UIFontTextStyleBody];
     _nameField.adjustsFontForContentSizeCategory = YES;
@@ -326,7 +326,7 @@ static void ISHSnippetConfigureAsShellInput(id<UITextInputTraits> input) {
     ISHSnippetConfigureAsShellInput(_nameField);
 
     UILabel *runLabel = [UILabel new];
-    runLabel.text = @"Run on tap";
+    runLabel.text = NSLocalizedString(@"Run on tap", @"Snippet editor switch label");
     runLabel.font = [UIFont preferredFontForTextStyle:UIFontTextStyleBody];
     runLabel.adjustsFontForContentSizeCategory = YES;
 
@@ -338,8 +338,8 @@ static void ISHSnippetConfigureAsShellInput(id<UITextInputTraits> input) {
     runRow.alignment = UIStackViewAlignmentCenter;
 
     UILabel *hint = [UILabel new];
-    hint.text = @"Off, tapping the snippet puts it on the command line and stops there. "
-                 "On, it runs immediately.";
+    hint.text = NSLocalizedString(@"Off, tapping the snippet puts it on the command line and stops there. "
+                 "On, it runs immediately.", @"Snippet editor hint under Run on tap");
     hint.numberOfLines = 0;
     hint.textColor = UIColor.secondaryLabelColor;
     hint.font = [UIFont preferredFontForTextStyle:UIFontTextStyleFootnote];
@@ -460,11 +460,11 @@ static void ISHSnippetConfigureAsShellInput(id<UITextInputTraits> input) {
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.title = @"Snippets";
+    self.title = NSLocalizedString(@"Snippets", @"Snippets list title");
     // A sheet with no delegate cannot insert (see -useSnippet:). Say so rather
     // than let the first tap be the explanation.
     if (self.delegate == nil)
-        self.navigationItem.prompt = @"No terminal window open — tap a snippet to read or edit it.";
+        self.navigationItem.prompt = NSLocalizedString(@"No terminal window open — tap a snippet to read or edit it.", @"Snippets list prompt when no terminal can receive a snippet");
     self.navigationItem.leftBarButtonItem =
         [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemDone
                                                       target:self
@@ -485,9 +485,9 @@ static void ISHSnippetConfigureAsShellInput(id<UITextInputTraits> input) {
     empty.adjustsFontForContentSizeCategory = YES;
     empty.translatesAutoresizingMaskIntoConstraints = NO;
     empty.text = [NSString stringWithFormat:
-        @"No snippets yet.\n\nSave the commands you retype constantly, then tap one to put it "
+        NSLocalizedString(@"No snippets yet.\n\nSave the commands you retype constantly, then tap one to put it "
          "on the command line.\n\nThey live in %@ inside the guest, so you can edit them with "
-         "vi and keep them in git.", kISHSnippetsGuestPath];
+         "vi and keep them in git.", @"Snippets list empty state; %@ is a file path"), kISHSnippetsGuestPath];
     // A bare label as backgroundView runs edge to edge, which reads as a bug at
     // phone width. Centre it in a container with real margins instead.
     _emptyView = [UIView new];
@@ -604,7 +604,7 @@ static void ISHSnippetConfigureAsShellInput(id<UITextInputTraits> input) {
     content.imageProperties.tintColor = runs ? UIColor.systemOrangeColor : UIColor.secondaryLabelColor;
     cell.contentConfiguration = content;
     cell.accessoryType = UITableViewCellAccessoryDetailButton;
-    cell.accessibilityHint = runs ? @"Runs this command" : @"Puts this command on the command line";
+    cell.accessibilityHint = runs ? NSLocalizedString(@"Runs this command", @"Accessibility hint for a snippet that runs on tap") : NSLocalizedString(@"Puts this command on the command line", @"Accessibility hint for a snippet that inserts on tap");
     return cell;
 }
 
@@ -631,7 +631,7 @@ static void ISHSnippetConfigureAsShellInput(id<UITextInputTraits> input) {
     __weak typeof(self) weakSelf = self;
     UIContextualAction *deleteAction =
         [UIContextualAction contextualActionWithStyle:UIContextualActionStyleDestructive
-                                                title:@"Delete"
+                                                title:NSLocalizedString(@"Delete", @"Swipe action that deletes a snippet")
                                               handler:^(UIContextualAction *action, UIView *view, void (^done)(BOOL)) {
         [weakSelf deleteSnippetAtIndexPath:indexPath];
         done(YES);
@@ -652,35 +652,35 @@ static void ISHSnippetConfigureAsShellInput(id<UITextInputTraits> input) {
         // Both verbs, always, whichever way the snippet is set: the menu is how
         // you run a snippet you normally insert, and how you insert one you
         // normally run so you can look at it first.
-        UIAction *insert = [UIAction actionWithTitle:@"Insert"
+        UIAction *insert = [UIAction actionWithTitle:NSLocalizedString(@"Insert", @"Snippet context menu: put on the command line")
                                                 image:[UIImage systemImageNamed:@"text.cursor"]
                                            identifier:nil
                                               handler:^(UIAction *a) { [weakSelf useSnippet:snippet execute:NO]; }];
-        UIAction *run = [UIAction actionWithTitle:@"Run"
+        UIAction *run = [UIAction actionWithTitle:NSLocalizedString(@"Run", @"Snippet context menu: run the command")
                                              image:[UIImage systemImageNamed:@"play.circle.fill"]
                                         identifier:nil
                                            handler:^(UIAction *a) { [weakSelf useSnippet:snippet execute:YES]; }];
-        UIAction *edit = [UIAction actionWithTitle:@"Edit"
+        UIAction *edit = [UIAction actionWithTitle:NSLocalizedString(@"Edit", @"Snippet context menu")
                                               image:[UIImage systemImageNamed:@"pencil"]
                                          identifier:nil
                                             handler:^(UIAction *a) { [weakSelf editSnippet:snippet]; }];
-        UIAction *duplicate = [UIAction actionWithTitle:@"Duplicate"
+        UIAction *duplicate = [UIAction actionWithTitle:NSLocalizedString(@"Duplicate", @"Snippet context menu")
                                                    image:[UIImage systemImageNamed:@"plus.square.on.square"]
                                               identifier:nil
                                                  handler:^(UIAction *a) {
-            NSString *name = [ISHSnippetString(snippet, kISHSnippetName) stringByAppendingString:@" copy"];
+            NSString *name = [NSString stringWithFormat:NSLocalizedString(@"%@ copy", @"Name of a duplicated snippet; %@ is the original name"), ISHSnippetString(snippet, kISHSnippetName)];
             [ISHSnippetStore saveSnippet:[ISHSnippetStore snippetWithName:name
                                                                      text:ISHSnippetString(snippet, kISHSnippetText)
                                                                       run:ISHSnippetRuns(snippet)]];
             [weakSelf reload];
         }];
-        UIAction *copy = [UIAction actionWithTitle:@"Copy"
+        UIAction *copy = [UIAction actionWithTitle:NSLocalizedString(@"Copy", @"Snippet context menu: copy the text")
                                               image:[UIImage systemImageNamed:@"doc.on.doc"]
                                          identifier:nil
                                             handler:^(UIAction *a) {
             UIPasteboard.generalPasteboard.string = ISHSnippetString(snippet, kISHSnippetText);
         }];
-        UIAction *deleteAction = [UIAction actionWithTitle:@"Delete"
+        UIAction *deleteAction = [UIAction actionWithTitle:NSLocalizedString(@"Delete", @"Snippet context menu")
                                                 image:[UIImage systemImageNamed:@"trash"]
                                            identifier:nil
                                               handler:^(UIAction *a) { [weakSelf deleteSnippetAtIndexPath:indexPath]; }];

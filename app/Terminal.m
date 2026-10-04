@@ -395,7 +395,7 @@ static void NotifyTerminalRegistryChanged(void) {
             [self reportTerminalLoadFailure:error ?:
                 [NSError errorWithDomain:WKErrorDomain
                                     code:WKErrorWebContentProcessTerminated
-                                userInfo:@{NSLocalizedDescriptionKey: @"the terminal's web view did not come back"}]];
+                                userInfo:@{NSLocalizedDescriptionKey: NSLocalizedString(@"the terminal's web view did not come back", @"Terminal UI failure alert message")}]];
         });
     });
 }
@@ -431,9 +431,9 @@ static void NotifyTerminalRegistryChanged(void) {
         if (xtermHtmlFile == nil) {
             NSError *error = [NSError errorWithDomain:NSCocoaErrorDomain
                                                  code:NSFileNoSuchFileError
-                                             userInfo:@{NSLocalizedDescriptionKey: @"missing bundled terminal UI"}];
+                                             userInfo:@{NSLocalizedDescriptionKey: NSLocalizedString(@"missing bundled terminal UI", @"Terminal UI failure alert message")}];
             [self reportTerminalLoadFailure:error];
-            [_webView loadHTMLString:@"<html><body style='background:black;color:white;font-family:-apple-system;padding:1rem'>Terminal UI failed to load.</body></html>"
+            [_webView loadHTMLString:[NSString stringWithFormat:@"<html><body style='background:black;color:white;font-family:-apple-system;padding:1rem'>%@</body></html>", NSLocalizedString(@"Terminal UI failed to load.", @"Shown in place of the terminal when its UI cannot load")]
                              baseURL:nil];
             return _webView;
         }
@@ -532,8 +532,8 @@ struct tty *ISHOpenTerminalForRestoredSession(void) {
                                  @"terminationsInWindow": @(self.webContentTerminationCount)}];
 
     NSString *description = repeating ?
-        @"the system keeps stopping the terminal's web view, most likely to reclaim memory" :
-        @"terminal web content process terminated";
+        NSLocalizedString(@"the system keeps stopping the terminal's web view, most likely to reclaim memory", @"Terminal UI failure alert message") :
+        NSLocalizedString(@"terminal web content process terminated", @"Terminal UI failure alert message");
     NSError *error = [NSError errorWithDomain:WKErrorDomain
                                          code:WKErrorWebContentProcessTerminated
                                      userInfo:@{NSLocalizedDescriptionKey: description}];

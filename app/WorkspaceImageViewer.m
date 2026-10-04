@@ -59,14 +59,14 @@ static NSSet<NSString *> *ISHImageViewerSupportedExtensions(void) {
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.title = @"Image";
+    self.title = NSLocalizedString(@"Image", @"Window title of the image viewer");
 
     [self buildToolbar];
     [self buildImageArea];
     [self buildStatusLabel];
     [self activateRegionConstraints];
 
-    _statusMessage = @"Open an image from the File Manager.";
+    _statusMessage = NSLocalizedString(@"Open an image from the File Manager.", @"Image viewer empty-state text");
     [self updateStatusLabel];
 }
 
@@ -99,9 +99,9 @@ static NSSet<NSString *> *ISHImageViewerSupportedExtensions(void) {
 
 - (NSArray<UIKeyCommand *> *)keyCommands {
     UIKeyCommand *prev = [UIKeyCommand keyCommandWithInput:UIKeyInputLeftArrow modifierFlags:0 action:@selector(navigatePrev)];
-    prev.discoverabilityTitle = @"Previous Image";
+    prev.discoverabilityTitle = NSLocalizedString(@"Previous Image", @"Keyboard shortcut title");
     UIKeyCommand *next = [UIKeyCommand keyCommandWithInput:UIKeyInputRightArrow modifierFlags:0 action:@selector(navigateNext)];
-    next.discoverabilityTitle = @"Next Image";
+    next.discoverabilityTitle = NSLocalizedString(@"Next Image", @"Keyboard shortcut title");
     // Without this the iOS 15+ focus engine consumes unmodified arrows before
     // they reach key commands, so prev/next would silently never fire.
     prev.wantsPriorityOverSystemBehavior = YES;
@@ -117,11 +117,11 @@ static NSSet<NSString *> *ISHImageViewerSupportedExtensions(void) {
     [self.toolContentView addSubview:_toolbarView];
 
     _prevButton = [self toolbarIconButtonNamed:@"chevron.left" action:@selector(navigatePrev)];
-    _prevButton.accessibilityLabel = @"Previous Image";
-    _prevButton.accessibilityHint = @"Displays the previous image in the folder.";
+    _prevButton.accessibilityLabel = NSLocalizedString(@"Previous Image", @"Accessibility label for the previous-image button");
+    _prevButton.accessibilityHint = NSLocalizedString(@"Displays the previous image in the folder.", @"Accessibility hint for the previous-image button");
     _nextButton = [self toolbarIconButtonNamed:@"chevron.right" action:@selector(navigateNext)];
-    _nextButton.accessibilityLabel = @"Next Image";
-    _nextButton.accessibilityHint = @"Displays the next image in the folder.";
+    _nextButton.accessibilityLabel = NSLocalizedString(@"Next Image", @"Accessibility label for the next-image button");
+    _nextButton.accessibilityHint = NSLocalizedString(@"Displays the next image in the folder.", @"Accessibility hint for the next-image button");
     _prevButton.enabled = NO;
     _nextButton.enabled = NO;
 
@@ -130,7 +130,7 @@ static NSSet<NSString *> *ISHImageViewerSupportedExtensions(void) {
     _titleLabel.font = [UIFont systemFontOfSize:13.0 weight:UIFontWeightMedium];
     _titleLabel.lineBreakMode = NSLineBreakByTruncatingTail;
     _titleLabel.textAlignment = NSTextAlignmentCenter;
-    _titleLabel.text = @"Image";
+    _titleLabel.text = NSLocalizedString(@"Image", @"Image viewer title label before an image is loaded");
     [_titleLabel setContentCompressionResistancePriority:UILayoutPriorityDefaultLow forAxis:UILayoutConstraintAxisHorizontal];
 
     _zoomToggleButton = [UIButton buttonWithType:UIButtonTypeSystem];
@@ -141,12 +141,12 @@ static NSSet<NSString *> *ISHImageViewerSupportedExtensions(void) {
     [self updateZoomToggleTitle];
 
     _shareButton = [self toolbarIconButtonNamed:@"square.and.arrow.up" action:@selector(shareCurrentImage)];
-    _shareButton.accessibilityLabel = @"Share";
-    _shareButton.accessibilityHint = @"Opens the share sheet for the current image.";
+    _shareButton.accessibilityLabel = NSLocalizedString(@"Share", @"Accessibility label for the share button");
+    _shareButton.accessibilityHint = NSLocalizedString(@"Opens the share sheet for the current image.", @"Accessibility hint for the share button");
     _shareButton.enabled = NO;
     _reloadButton = [self toolbarIconButtonNamed:@"arrow.clockwise" action:@selector(reload)];
-    _reloadButton.accessibilityLabel = @"Reload";
-    _reloadButton.accessibilityHint = @"Reloads the current image.";
+    _reloadButton.accessibilityLabel = NSLocalizedString(@"Reload", @"Accessibility label for the reload button");
+    _reloadButton.accessibilityHint = NSLocalizedString(@"Reloads the current image.", @"Accessibility hint for the reload button");
     _reloadButton.enabled = NO;
 
     UIStackView *stack = [[UIStackView alloc] initWithArrangedSubviews:@[
@@ -365,7 +365,7 @@ static NSSet<NSString *> *ISHImageViewerSupportedExtensions(void) {
     _zoomToggleButton.enabled = NO;
     _imageView.image = nil;
     _originalPixelSize = CGSizeZero;
-    _statusMessage = @"Loading…";
+    _statusMessage = NSLocalizedString(@"Loading…", @"Image viewer status text");
     [self updateStatusLabel];
 
     NSInteger generation = ++_loadGeneration;
@@ -404,8 +404,8 @@ static NSSet<NSString *> *ISHImageViewerSupportedExtensions(void) {
 
 - (NSString *)messageForReadError:(NSError *)error {
     if ([error.domain isEqualToString:ISHGuestFileErrorDomain] && error.code == ISHGuestFileBridgeErrorTooLarge)
-        return @"This file is larger than 64 MB and can’t be displayed here.";
-    return error.localizedDescription.length ? error.localizedDescription : @"Couldn’t open this file.";
+        return NSLocalizedString(@"This file is larger than 64 MB and can’t be displayed here.", @"Image viewer error text");
+    return error.localizedDescription.length ? error.localizedDescription : NSLocalizedString(@"Couldn’t open this file.", @"Image viewer error text");
 }
 
 // Runs on a background queue. Decodes at the caller-captured pixel budget so
@@ -420,7 +420,7 @@ static NSSet<NSString *> *ISHImageViewerSupportedExtensions(void) {
     CGImageSourceRef source = CGImageSourceCreateWithData((__bridge CFDataRef)data, NULL);
     if (source == NULL) {
         [self finishDecodeOnMainQueueWithImage:nil pixelSize:CGSizeZero generation:generation
-                                   errorMessage:@"This doesn’t look like an image iSH-AOK can display."];
+                                   errorMessage:NSLocalizedString(@"This doesn’t look like an image iSH-AOK can display.", @"Image viewer error text")];
         return;
     }
 
@@ -438,7 +438,7 @@ static NSSet<NSString *> *ISHImageViewerSupportedExtensions(void) {
     CFRelease(source);
     if (thumbnail == NULL) {
         [self finishDecodeOnMainQueueWithImage:nil pixelSize:CGSizeZero generation:generation
-                                   errorMessage:@"Couldn’t decode this image."];
+                                   errorMessage:NSLocalizedString(@"Couldn’t decode this image.", @"Image viewer error text")];
         return;
     }
     UIImage *image = [UIImage imageWithCGImage:thumbnail];
@@ -499,9 +499,9 @@ static NSSet<NSString *> *ISHImageViewerSupportedExtensions(void) {
 }
 
 - (void)updateZoomToggleTitle {
-    [_zoomToggleButton setTitle:(_showingActualSize ? @"Fit" : @"100%") forState:UIControlStateNormal];
-    _zoomToggleButton.accessibilityLabel = _showingActualSize ? @"Fit to screen" : @"View actual size";
-    _zoomToggleButton.accessibilityHint = @"Toggles the image zoom between fitting to the screen and displaying at actual size.";
+    [_zoomToggleButton setTitle:(_showingActualSize ? NSLocalizedString(@"Fit", @"Image viewer zoom button: fit the image to the screen") : @"100%") forState:UIControlStateNormal];
+    _zoomToggleButton.accessibilityLabel = _showingActualSize ? NSLocalizedString(@"Fit to screen", @"Accessibility label for the zoom button") : NSLocalizedString(@"View actual size", @"Accessibility label for the zoom button");
+    _zoomToggleButton.accessibilityHint = NSLocalizedString(@"Toggles the image zoom between fitting to the screen and displaying at actual size.", @"Accessibility hint for the zoom button");
 }
 
 - (void)applyZoomMode {
@@ -555,7 +555,7 @@ static NSSet<NSString *> *ISHImageViewerSupportedExtensions(void) {
         typeof(self) strongSelf = weakSelf;
         if (strongSelf == nil) return;
         if (fileURL == nil) {
-            [strongSelf presentSimpleAlertWithTitle:@"Can’t Share" message:error.localizedDescription];
+            [strongSelf presentSimpleAlertWithTitle:NSLocalizedString(@"Can’t Share", @"Alert title") message:error.localizedDescription];
             return;
         }
         UIActivityViewController *activity = [[UIActivityViewController alloc] initWithActivityItems:@[fileURL] applicationActivities:nil];
@@ -571,7 +571,7 @@ static NSSet<NSString *> *ISHImageViewerSupportedExtensions(void) {
 - (void)presentSimpleAlertWithTitle:(NSString *)title message:(nullable NSString *)message {
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:title message:message
                                                               preferredStyle:UIAlertControllerStyleAlert];
-    [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"OK", @"Alert button") style:UIAlertActionStyleDefault handler:nil]];
     [self presentViewController:alert animated:YES completion:nil];
 }
 

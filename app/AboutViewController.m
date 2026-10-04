@@ -120,7 +120,7 @@ static const CGFloat kDiagnosticsBottomSlack = 16;
 - (void)viewDidLoad {
     [super viewDidLoad];
     if (!self.embeddedInWorkspaceWindow)
-        self.title = @"Diagnostics";
+        self.title = NSLocalizedString(@"Diagnostics", @"Diagnostics screen title");
     if (@available(iOS 13.0, *)) {
         self.view.backgroundColor = UIColor.systemBackgroundColor;
     } else {
@@ -325,7 +325,7 @@ static const CGFloat kDiagnosticsBottomSlack = 16;
     NSError *error = nil;
     NSURL *bundleURL = [ISHDiagnosticsStore prepareExportBundle:&error];
     if (bundleURL == nil) {
-        [self presentError:error title:@"Export failed"];
+        [self presentError:error title:NSLocalizedString(@"Export failed", @"Diagnostics export error alert title")];
         return;
     }
 
@@ -377,22 +377,22 @@ UIViewController *ISHCreateDiagnosticsNavigationController(void) {
     // Title and destination depend on which mode the window is currently in, and
     // the window isn't known until the view is in the hierarchy, so the title is
     // filled in by -_updateModeButton from -viewWillAppear: (GH #546).
-    UIBarButtonItem *workspaceButton = [[UIBarButtonItem alloc] initWithTitle:@"Workspace"
+    UIBarButtonItem *workspaceButton = [[UIBarButtonItem alloc] initWithTitle:NSLocalizedString(@"Workspace", @"Settings button that switches to the Workspace")
                                                                         style:UIBarButtonItemStylePlain
                                                                        target:self
                                                                        action:@selector(toggleWorkspaceMode:)];
     _modeButton = workspaceButton;
     if (self.recoveryMode) {
-        self.navigationItem.title = @"Recovery Mode";
+        self.navigationItem.title = NSLocalizedString(@"Recovery Mode", @"Settings title when launched in recovery mode");
         self.navigationItem.leftBarButtonItem = workspaceButton;
-        self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:@"Exit"
+        self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:NSLocalizedString(@"Exit", @"Button that leaves recovery mode")
                                                                                   style:UIBarButtonItemStyleDone
                                                                                  target:self
                                                                                  action:@selector(exitRecovery:)];
     } else {
         self.navigationItem.rightBarButtonItem = workspaceButton;
     }
-    _versionLabel.text = [NSString stringWithFormat:@"iSH-AOK %@ (Build %@)",
+    _versionLabel.text = [NSString stringWithFormat:NSLocalizedString(@"iSH-AOK %@ (Build %@)", @"Settings version label; version, then build number"),
                           [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleShortVersionString"],
                           [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleVersion"]];
 
@@ -426,7 +426,7 @@ UIViewController *ISHCreateDiagnosticsNavigationController(void) {
     // back to the app's own window so an early call still resolves the mode
     // rather than silently guessing "shell".
     UIWindow *window = self.view.window ?: ISHActivePresentationViewController().view.window;
-    modeButton.title = ISHWindowIsShowingWorkspace(window) ? @"Shell" : @"Workspace";
+    modeButton.title = ISHWindowIsShowingWorkspace(window) ? NSLocalizedString(@"Shell", @"Settings button that switches to the shell") : NSLocalizedString(@"Workspace", @"Settings button that switches to the Workspace");
 }
 
 - (void)viewDidAppear:(BOOL)animated {
@@ -489,21 +489,21 @@ UIViewController *ISHCreateDiagnosticsNavigationController(void) {
     self.enableCryptoAccelSwitch.on = UserPreferences.shared.shouldEnableCryptoAccel;
     self.enablePixAccelSwitch.on = UserPreferences.shared.shouldEnablePixAccel;
     self.enableExtraLockingSwitch.on = UserPreferences.shared.shouldEnableExtraLocking;
-    self.initialWindowCell.textLabel.text = @"Startup Mode";
+    self.initialWindowCell.textLabel.text = NSLocalizedString(@"Startup Mode", @"Settings row label");
     self.initialWindowCell.detailTextLabel.text = [self _initialWindowTitle];
     self.launchCommandField.text = [UserPreferences.shared.launchCommand componentsJoinedByString:@" "];
     self.bootCommandField.text = [UserPreferences.shared.bootCommand componentsJoinedByString:@" "];
-    self.customDnsCell.textLabel.text = @"Custom DNS Servers";
+    self.customDnsCell.textLabel.text = NSLocalizedString(@"Custom DNS Servers", @"Settings row label");
     NSString *customDnsServers = [UserPreferences.shared.customDnsServers stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
     if (UserPreferences.shared.shouldDisableResolvConfRewrite)
-        self.customDnsCell.detailTextLabel.text = @"Off (guest manages)";
+        self.customDnsCell.detailTextLabel.text = NSLocalizedString(@"Off (guest manages)", @"Custom DNS Servers value when resolv.conf is left alone");
     else
-        self.customDnsCell.detailTextLabel.text = customDnsServers.length > 0 ? customDnsServers : @"Automatic";
+        self.customDnsCell.detailTextLabel.text = customDnsServers.length > 0 ? customDnsServers : NSLocalizedString(@"Automatic", @"Custom DNS Servers value when none are set");
 
     self.upgradeApkCell.userInteractionEnabled = FsNeedsRepositoryUpdate();
     self.upgradeApkLabel.enabled = FsNeedsRepositoryUpdate();
     self.upgradeApkBadge.hidden = !FsNeedsRepositoryUpdate();
-    self.upgradeApkCell.accessibilityValue = FsNeedsRepositoryUpdate() ? @"Update available" : nil;
+    self.upgradeApkCell.accessibilityValue = FsNeedsRepositoryUpdate() ? NSLocalizedString(@"Update available", @"Accessibility value on the filesystem upgrade row") : nil;
     [self.tableView reloadData];
 }
 
@@ -532,28 +532,28 @@ UIViewController *ISHCreateDiagnosticsNavigationController(void) {
 
 static NSString *ISHForeignExecTitle(NSString *mode) {
     if ([mode isEqualToString:@"libs"])
-        return @"Use Their Libraries Here";
+        return NSLocalizedString(@"Use Their Libraries Here", @"Programs From Other Roots option");
     if ([mode isEqualToString:@"off"])
-        return @"Off";
-    return @"Run Inside Their Root";
+        return NSLocalizedString(@"Off", @"Programs From Other Roots option");
+    return NSLocalizedString(@"Run Inside Their Root", @"Programs From Other Roots option");
 }
 
 - (UITableViewCell *)_foreignExecCell {
     UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1 reuseIdentifier:nil];
-    cell.textLabel.text = @"Programs From Other Roots";
+    cell.textLabel.text = NSLocalizedString(@"Programs From Other Roots", @"Settings row label");
     cell.detailTextLabel.text = ISHForeignExecTitle(UserPreferences.shared.foreignExecMode);
     cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
     return cell;
 }
 
 - (void)_showForeignExecPickerFromCell:(UITableViewCell *)cell {
-    ISHActionSheet *alert = [ISHActionSheet actionSheetWithTitle:@"Programs From Other Roots"
-                                                         message:@"How a program from another installed filesystem, such as /AOK/roots/Devuan6-arm64/usr/bin/tmux, runs when its libraries are not in this one. Applies to the next program started."];
+    ISHActionSheet *alert = [ISHActionSheet actionSheetWithTitle:NSLocalizedString(@"Programs From Other Roots", @"Action sheet title")
+                                                         message:NSLocalizedString(@"How a program from another installed filesystem, such as /AOK/roots/Devuan6-arm64/usr/bin/tmux, runs when its libraries are not in this one. Applies to the next program started.", @"Programs From Other Roots action sheet message")];
     NSString *current = UserPreferences.shared.foreignExecMode;
     for (NSString *mode in @[@"root", @"libs", @"off"]) {
         NSString *title = ISHForeignExecTitle(mode);
         if ([mode isEqualToString:current])
-            title = [title stringByAppendingString:@"  Current"];
+            title = [NSString stringWithFormat:NSLocalizedString(@"%@  Current", @"Action sheet option marked as the current choice; %@ is the option name"), title];
         [alert addActionWithTitle:title
                             style:UIAlertActionStyleDefault
                           handler:^(__unused UIAlertAction *action) {
@@ -561,14 +561,14 @@ static NSString *ISHForeignExecTitle(NSString *mode) {
             [self.tableView reloadData];
         }];
     }
-    [alert addActionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil];
+    [alert addActionWithTitle:NSLocalizedString(@"Cancel", @"Action sheet button") style:UIAlertActionStyleCancel handler:nil];
     [alert presentFromViewController:self sourceView:cell sourceRect:cell.bounds];
 }
 
 - (UITableViewCell *)_loginAsDefaultUserCell {
     UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:nil];
     cell.selectionStyle = UITableViewCellSelectionStyleNone;
-    cell.textLabel.text = @"Open Everything as Default User";
+    cell.textLabel.text = NSLocalizedString(@"Open Everything as Default User", @"Settings switch label");
     UISwitch *enabledSwitch = [UISwitch new];
     enabledSwitch.on = UserPreferences.shared.shouldLoginAsDefaultUser;
     [enabledSwitch addTarget:self action:@selector(loginAsDefaultUserChanged:) forControlEvents:UIControlEventValueChanged];
@@ -580,7 +580,7 @@ static NSString *ISHForeignExecTitle(NSString *mode) {
 - (UITableViewCell *)_llmEnabledCell {
     UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:nil];
     cell.selectionStyle = UITableViewCellSelectionStyleNone;
-    cell.textLabel.text = @"LLM Client";
+    cell.textLabel.text = NSLocalizedString(@"LLM Client", @"Settings switch label");
     UISwitch *enabledSwitch = [UISwitch new];
     enabledSwitch.on = UserPreferences.shared.shouldEnableLLMClient;
     [enabledSwitch addTarget:self action:@selector(llmClientEnabledChanged:) forControlEvents:UIControlEventValueChanged];
@@ -591,7 +591,7 @@ static NSString *ISHForeignExecTitle(NSString *mode) {
 
 - (UITableViewCell *)_llmSettingsCell {
     UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1 reuseIdentifier:nil];
-    cell.textLabel.text = @"LLM Settings";
+    cell.textLabel.text = NSLocalizedString(@"LLM Settings", @"Settings row label");
     cell.detailTextLabel.text = UserPreferences.shared.llmModel;
     cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
     return cell;
@@ -600,7 +600,7 @@ static NSString *ISHForeignExecTitle(NSString *mode) {
 - (UITableViewCell *)_shortcutsRunCommandsCell {
     UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:nil];
     cell.selectionStyle = UITableViewCellSelectionStyleNone;
-    cell.textLabel.text = @"Allow Shortcuts to Run Commands";
+    cell.textLabel.text = NSLocalizedString(@"Allow Shortcuts to Run Commands", @"Settings switch label");
     UISwitch *enabledSwitch = [UISwitch new];
     enabledSwitch.on = UserPreferences.shared.shortcutsRunCommandsEnabled;
     [enabledSwitch addTarget:self action:@selector(shortcutsRunCommandsChanged:) forControlEvents:UIControlEventValueChanged];
@@ -669,20 +669,20 @@ static NSString *ISHForeignExecTitle(NSString *mode) {
 - (void)_showCustomDnsServersEditorFromCell:(UITableViewCell *)cell {
     (void) cell;
     UIAlertController *alert =
-        [UIAlertController alertControllerWithTitle:@"Custom DNS Servers"
-                                            message:@"Space- or comma-separated nameserver IPs written into the guest's /etc/resolv.conf on every refresh. Leave blank to follow this device's network-provided DNS automatically, or pick Don't Manage to leave the file alone entirely, for a root that runs its own resolver."
+        [UIAlertController alertControllerWithTitle:NSLocalizedString(@"Custom DNS Servers", @"Alert title")
+                                            message:NSLocalizedString(@"Space- or comma-separated nameserver IPs written into the guest's /etc/resolv.conf on every refresh. Leave blank to follow this device's network-provided DNS automatically, or pick Don't Manage to leave the file alone entirely, for a root that runs its own resolver.", @"Custom DNS Servers alert message")
                                      preferredStyle:UIAlertControllerStyleAlert];
     [alert addTextFieldWithConfigurationHandler:^(UITextField *textField) {
         textField.text = UserPreferences.shared.customDnsServers;
-        textField.placeholder = @"e.g. 1.1.1.1 1.0.0.1";
+        textField.placeholder = NSLocalizedString(@"e.g. 1.1.1.1 1.0.0.1", @"Custom DNS Servers field placeholder");
         textField.clearButtonMode = UITextFieldViewModeWhileEditing;
         textField.autocapitalizationType = UITextAutocapitalizationTypeNone;
         textField.autocorrectionType = UITextAutocorrectionTypeNo;
         textField.spellCheckingType = UITextSpellCheckingTypeNo;
         textField.keyboardType = UIKeyboardTypeURL;
     }];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Don't Manage" style:UIAlertActionStyleDestructive handler:^(__unused UIAlertAction *action) {
+    [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Cancel", @"Alert button") style:UIAlertActionStyleCancel handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Don't Manage", @"Custom DNS Servers button that leaves resolv.conf alone") style:UIAlertActionStyleDestructive handler:^(__unused UIAlertAction *action) {
         // Mutually exclusive from here: picking this drops any pinned list, so
         // the cell never shows servers it is no longer writing.
         UserPreferences.shared.customDnsServers = @"";
@@ -693,7 +693,7 @@ static NSString *ISHForeignExecTitle(NSString *mode) {
             [dnsOffDelegate refreshDnsConfiguration];
         }
     }]];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Save" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
+    [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Save", @"Alert button") style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
         NSString *value = [alert.textFields.firstObject.text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet] ?: @"";
         UserPreferences.shared.customDnsServers = value;
         UserPreferences.shared.shouldDisableResolvConfRewrite = NO;
@@ -721,14 +721,14 @@ static NSString *ISHForeignExecTitle(NSString *mode) {
 
 - (NSString *)_initialWindowTitle {
     if ([[self _initialWindowPreferenceValue] isEqualToString:ISHInitialWindowWorkspaceValue])
-        return @"Workspace";
+        return NSLocalizedString(@"Workspace", @"Startup Mode option");
     if ([[self _initialWindowPreferenceValue] isEqualToString:ISHInitialWindowChooseFilesystemValue])
-        return @"Choose Filesystem";
+        return NSLocalizedString(@"Choose Filesystem", @"Startup Mode option");
     if ([[self _initialWindowPreferenceValue] isEqualToString:ISHInitialWindowWaylandValue])
-        return @"Wayland Display";
+        return NSLocalizedString(@"Wayland Display", @"Startup Mode option");
     if ([[self _initialWindowPreferenceValue] isEqualToString:@"session-shell"])
-        return @"Session Shell (pts/1)";
-    return @"Plain Terminal";
+        return NSLocalizedString(@"Session Shell (pts/1)", @"Startup Mode option");
+    return NSLocalizedString(@"Plain Terminal", @"Startup Mode option");
 }
 
 - (void)_setInitialWindowPreferenceValue:(NSString *)value {
@@ -737,25 +737,25 @@ static NSString *ISHForeignExecTitle(NSString *mode) {
 }
 
 - (void)_showInitialWindowPickerFromCell:(UITableViewCell *)cell {
-    ISHActionSheet *alert = [ISHActionSheet actionSheetWithTitle:@"Startup Mode"
-                                                         message:@"Choose whether new app launches open the Workspace, the Wayland Display, show a filesystem chooser, or open a terminal."];
+    ISHActionSheet *alert = [ISHActionSheet actionSheetWithTitle:NSLocalizedString(@"Startup Mode", @"Action sheet title")
+                                                         message:NSLocalizedString(@"Choose whether new app launches open the Workspace, the Wayland Display, show a filesystem chooser, or open a terminal.", @"Startup Mode action sheet message")];
 
     NSString *currentValue = [self _initialWindowPreferenceValue];
     NSString *workspaceTitle = [currentValue isEqualToString:ISHInitialWindowWorkspaceValue]
-        ? @"Workspace  Current"
-        : @"Workspace";
+        ? NSLocalizedString(@"Workspace  Current", @"Startup Mode option, marked current")
+        : NSLocalizedString(@"Workspace", @"Startup Mode option");
     NSString *chooseFilesystemTitle = [currentValue isEqualToString:ISHInitialWindowChooseFilesystemValue]
-        ? @"Choose Filesystem  Current"
-        : @"Choose Filesystem";
+        ? NSLocalizedString(@"Choose Filesystem  Current", @"Startup Mode option, marked current")
+        : NSLocalizedString(@"Choose Filesystem", @"Startup Mode option");
     NSString *waylandTitle = [currentValue isEqualToString:ISHInitialWindowWaylandValue]
-        ? @"Wayland Display  Current"
-        : @"Wayland Display";
+        ? NSLocalizedString(@"Wayland Display  Current", @"Startup Mode option, marked current")
+        : NSLocalizedString(@"Wayland Display", @"Startup Mode option");
     NSString *terminalTitle = [currentValue isEqualToString:@"terminal"]
-        ? @"Plain Terminal  Current"
-        : @"Plain Terminal";
+        ? NSLocalizedString(@"Plain Terminal  Current", @"Startup Mode option, marked current")
+        : NSLocalizedString(@"Plain Terminal", @"Startup Mode option");
     NSString *sessionTitle = [currentValue isEqualToString:@"session-shell"]
-        ? @"Session Shell (pts/1)  Current"
-        : @"Session Shell (pts/1)";
+        ? NSLocalizedString(@"Session Shell (pts/1)  Current", @"Startup Mode option, marked current")
+        : NSLocalizedString(@"Session Shell (pts/1)", @"Startup Mode option");
 
     [alert addActionWithTitle:workspaceTitle
                         style:UIAlertActionStyleDefault
@@ -782,7 +782,7 @@ static NSString *ISHForeignExecTitle(NSString *mode) {
                       handler:^(__unused UIAlertAction *action) {
         [self _setInitialWindowPreferenceValue:@"session-shell"];
     }];
-    [alert addActionWithTitle:@"Cancel"
+    [alert addActionWithTitle:NSLocalizedString(@"Cancel", @"Action sheet button")
                         style:UIAlertActionStyleCancel
                       handler:nil];
 
@@ -793,28 +793,28 @@ static NSString *ISHForeignExecTitle(NSString *mode) {
     if (section == [self _userAccountSectionIndex]) {
         NSString *accountName = [AppDelegate defaultUserAccountName];
         return accountName.length != 0
-            ? [NSString stringWithFormat:@"When enabled, new Workspace terminals, app sessions, and headless commands (LLM Chat's shell tool, Shortcuts' Run Command) run as \"%@\" (UID %d) instead of root. The Session Shell always signs in as root.",
+            ? [NSString stringWithFormat:NSLocalizedString(@"When enabled, new Workspace terminals, app sessions, and headless commands (LLM Chat's shell tool, Shortcuts' Run Command) run as \"%@\" (UID %d) instead of root. The Session Shell always signs in as root.", @"Default User section footer; %@ is an account name, %d its UID"),
                accountName, ISHDefaultUserAccountUID]
-            : [NSString stringWithFormat:@"When enabled, new Workspace terminals, app sessions, and headless commands (LLM Chat's shell tool, Shortcuts' Run Command) run as the UID %d account instead of root -- but this filesystem doesn't have one yet. The Session Shell always signs in as root.",
+            : [NSString stringWithFormat:NSLocalizedString(@"When enabled, new Workspace terminals, app sessions, and headless commands (LLM Chat's shell tool, Shortcuts' Run Command) run as the UID %d account instead of root -- but this filesystem doesn't have one yet. The Session Shell always signs in as root.", @"Default User section footer; %d is a UID"),
                ISHDefaultUserAccountUID];
     }
     if (section == [self _llmSectionIndex])
         return UserPreferences.shared.shouldEnableLLMClient
-            ? @"When enabled, LLM Chat appears in Switch Terminal and Workspace menus."
-            : @"Enable to show an OpenAI-compatible LLM client in terminal and Workspace menus.";
+            ? NSLocalizedString(@"When enabled, LLM Chat appears in Switch Terminal and Workspace menus.", @"LLM Client section footer")
+            : NSLocalizedString(@"Enable to show an OpenAI-compatible LLM client in terminal and Workspace menus.", @"LLM Client section footer");
     if (section == [self _shortcutsSectionIndex])
-        return @"When enabled, the Shortcuts app's \"Run Command\" action can run shell commands in the guest system without opening iSH-AOK.";
+        return NSLocalizedString(@"When enabled, the Shortcuts app's \"Run Command\" action can run shell commands in the guest system without opening iSH-AOK.", @"Shortcuts section footer");
     if (section == [self _foreignExecSectionIndex])
-        return @"Run Inside Their Root: the program sees that filesystem's own files, as if you had chrooted into it (mount-root.sh). "
+        return NSLocalizedString(@"Run Inside Their Root: the program sees that filesystem's own files, as if you had chrooted into it (mount-root.sh). "
                @"Use Their Libraries Here: it sees this filesystem's files and your home, borrowing only its libraries; programs that need data files of their own may not work. "
-               @"Off: it fails, as on Linux.";
+               @"Off: it fails, as on Linux.", @"Other Filesystems section footer; option names must match their translations");
     if (section == 1) { // filesystems / upgrade
         if (!FsIsManaged()) {
-            return @"The current filesystem is not managed by iSH.";
+            return NSLocalizedString(@"The current filesystem is not managed by iSH-AOK.", @"Filesystem section footer");
         } else if (!FsNeedsRepositoryUpdate()) {
-            return [NSString stringWithFormat:@"The current filesystem is using %s, which is the latest version.", NEWEST_APK_VERSION];
+            return [NSString stringWithFormat:NSLocalizedString(@"The current filesystem is using %s, which is the latest version.", @"Filesystem section footer; %s is a version"), NEWEST_APK_VERSION];
         } else {
-            return [NSString stringWithFormat:@"An upgrade to %s is available.", NEWEST_APK_VERSION];
+            return [NSString stringWithFormat:NSLocalizedString(@"An upgrade to %s is available.", @"Filesystem section footer; %s is a version"), NEWEST_APK_VERSION];
         }
     }
     return [super tableView:tableView titleForFooterInSection:section];
@@ -822,13 +822,13 @@ static NSString *ISHForeignExecTitle(NSString *mode) {
 
 - (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section {
     if (section == [self _userAccountSectionIndex])
-        return @"Default User";
+        return NSLocalizedString(@"Default User", @"Settings section header");
     if (section == [self _llmSectionIndex])
-        return @"LLM Client";
+        return NSLocalizedString(@"LLM Client", @"Settings section header");
     if (section == [self _shortcutsSectionIndex])
-        return @"Shortcuts";
+        return NSLocalizedString(@"Shortcuts", @"Settings section header");
     if (section == [self _foreignExecSectionIndex])
-        return @"Other Filesystems";
+        return NSLocalizedString(@"Other Filesystems", @"Settings section header");
     return [super tableView:tableView titleForHeaderInSection:section];
 }
 
@@ -1052,7 +1052,7 @@ static const NSInteger ISHToolbarKeysActionsSection = 2;
 - (instancetype)init {
     self = [super initWithStyle:UITableViewStyleInsetGrouped];
     if (self != nil)
-        self.title = @"Keyboard Toolbar";
+        self.title = NSLocalizedString(@"Keyboard Toolbar", @"Keyboard toolbar settings title");
     return self;
 }
 
@@ -1092,21 +1092,21 @@ static const NSInteger ISHToolbarKeysActionsSection = 2;
 
 - (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section {
     if (section == 0)
-        return @"Left";
+        return NSLocalizedString(@"Left", @"Keyboard toolbar settings section header");
     if (section == 1)
-        return @"Center";
+        return NSLocalizedString(@"Center", @"Keyboard toolbar settings section header");
     return nil;
 }
 
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
     if (section == 0)
-        return @"From the bar's left edge.";
+        return NSLocalizedString(@"From the bar's left edge.", @"Keyboard toolbar Left section footer");
     if (section == 1)
-        return @"Centered on the bar. On an iPhone held upright, a key set to hide on a narrow bar is left off.";
-    return @"A custom key types its text as written. \\e is Escape, \\t Tab, \\n Return, and \\xHH any "
+        return NSLocalizedString(@"Centered on the bar. On an iPhone held upright, a key set to hide on a narrow bar is left off.", @"Keyboard toolbar Center section footer");
+    return NSLocalizedString(@"A custom key types its text as written. \\e is Escape, \\t Tab, \\n Return, and \\xHH any "
            @"character up to 7F -- \\x03 is Control-C. \\\\ is a backslash. With Control on, a key of one "
            @"character sends that character's control code.\n\n"
-           @"Settings, Files, Paste and the other buttons at the bar's right end stay where they are.";
+           @"Settings, Files, Paste and the other buttons at the bar's right end stay where they are.", @"Keyboard toolbar settings footer; keep the escape sequences unchanged");
 }
 
 - (NSString *)_symbolForItem:(NSDictionary *)item {
@@ -1117,7 +1117,7 @@ static const NSInteger ISHToolbarKeysActionsSection = 2;
 - (NSString *)_nameForItem:(NSDictionary *)item {
     NSString *builtin = item[ISHToolbarKeyBuiltin];
     return builtin != nil ? ISHToolbarBuiltinKeyName(builtin)
-                          : [NSString stringWithFormat:@"Types %@", item[ISHToolbarKeySends]];
+                          : [NSString stringWithFormat:NSLocalizedString(@"Types %@", @"Keyboard toolbar custom key description; %@ is the text it sends"), item[ISHToolbarKeySends]];
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
@@ -1132,22 +1132,22 @@ static const NSInteger ISHToolbarKeysActionsSection = 2;
         if (item[ISHToolbarKeyBuiltin] == nil)
             [detail addObject:[self _nameForItem:item]];
         if (!narrow)
-            [detail addObject:@"Hidden on a narrow bar"];
+            [detail addObject:NSLocalizedString(@"Hidden on a narrow bar", @"Keyboard toolbar key detail")];
         cell.detailTextLabel.text = [detail componentsJoinedByString:@" \u00b7 "];
         cell.detailTextLabel.textColor = UIColor.secondaryLabelColor;
         cell.editingAccessoryType = UITableViewCellAccessoryDetailButton;
-        cell.accessibilityLabel = [NSString stringWithFormat:@"%@%@",
-            item[ISHToolbarKeyBuiltin] != nil ? [self _nameForItem:item]
+        NSString *spokenName = item[ISHToolbarKeyBuiltin] != nil ? [self _nameForItem:item]
                                               : [NSString stringWithFormat:@"%@, %@", item[ISHToolbarKeyTitle],
-                                                 [self _nameForItem:item]],
-            narrow ? @"" : @", hidden on a narrow bar"];
+                                                 [self _nameForItem:item]];
+        cell.accessibilityLabel = narrow ? spokenName
+            : [NSString stringWithFormat:NSLocalizedString(@"%@, hidden on a narrow bar", @"Keyboard toolbar key accessibility label; %@ is the key name"), spokenName];
     } else {
         cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:nil];
         if (indexPath.row == 0) {
-            cell.textLabel.text = @"Add Key\u2026";
+            cell.textLabel.text = NSLocalizedString(@"Add Key\u2026", @"Keyboard toolbar settings row");
             cell.textLabel.textColor = self.view.tintColor;
         } else {
-            cell.textLabel.text = @"Reset to Default";
+            cell.textLabel.text = NSLocalizedString(@"Reset to Default", @"Keyboard toolbar settings row");
             cell.textLabel.textColor = UIColor.systemRedColor;
         }
         cell.accessibilityTraits |= UIAccessibilityTraitButton;
@@ -1226,7 +1226,7 @@ static const NSInteger ISHToolbarKeysActionsSection = 2;
                                             message:[self _nameForItem:item]
                                      preferredStyle:UIAlertControllerStyleActionSheet];
     if (item[ISHToolbarKeyBuiltin] == nil) {
-        [sheet addAction:[UIAlertAction actionWithTitle:@"Edit\u2026" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        [sheet addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Edit\u2026", @"Keyboard toolbar key action") style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
             [self _editCustomKey:item completion:^(NSDictionary *edited) {
                 self->_groups[indexPath.section][indexPath.row] = edited;
                 [self _save];
@@ -1234,7 +1234,7 @@ static const NSInteger ISHToolbarKeysActionsSection = 2;
             }];
         }]];
     }
-    NSString *toggle = narrow ? @"Hide on a Narrow Bar" : @"Show on a Narrow Bar";
+    NSString *toggle = narrow ? NSLocalizedString(@"Hide on a Narrow Bar", @"Keyboard toolbar key action") : NSLocalizedString(@"Show on a Narrow Bar", @"Keyboard toolbar key action");
     [sheet addAction:[UIAlertAction actionWithTitle:toggle style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
         NSMutableDictionary *changed = [item mutableCopy];
         changed[ISHToolbarKeyNarrow] = @(!narrow);
@@ -1242,7 +1242,7 @@ static const NSInteger ISHToolbarKeysActionsSection = 2;
         [self _save];
         [self.tableView reloadRowsAtIndexPaths:@[indexPath] withRowAnimation:UITableViewRowAnimationNone];
     }]];
-    [sheet addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    [sheet addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Cancel", @"Action sheet button") style:UIAlertActionStyleCancel handler:nil]];
     [self anchorPopoverForAlertController:sheet toSource:source];
     [self presentViewController:sheet animated:YES completion:nil];
 }
@@ -1257,7 +1257,7 @@ static const NSInteger ISHToolbarKeysActionsSection = 2;
             if (item[ISHToolbarKeyBuiltin] != nil)
                 [present addObject:item[ISHToolbarKeyBuiltin]];
     NSSet *leftKeys = [NSSet setWithArray:@[@"tab", @"ctrl", @"esc", @"arrows"]];
-    UIAlertController *sheet = [UIAlertController alertControllerWithTitle:@"Add Key"
+    UIAlertController *sheet = [UIAlertController alertControllerWithTitle:NSLocalizedString(@"Add Key", @"Keyboard toolbar Add Key sheet title")
                                                                    message:nil
                                                             preferredStyle:UIAlertControllerStyleActionSheet];
     for (NSString *key in ISHToolbarBuiltinKeyIDs()) {
@@ -1269,12 +1269,12 @@ static const NSInteger ISHToolbarKeysActionsSection = 2;
             [self _appendItem:@{ISHToolbarKeyBuiltin: key, ISHToolbarKeyNarrow: @YES} toSection:section];
         }]];
     }
-    [sheet addAction:[UIAlertAction actionWithTitle:@"Custom Key\u2026" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+    [sheet addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Custom Key\u2026", @"Keyboard toolbar Add Key option") style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
         [self _editCustomKey:nil completion:^(NSDictionary *created) {
             [self _appendItem:created toSection:1];
         }];
     }]];
-    [sheet addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    [sheet addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Cancel", @"Action sheet button") style:UIAlertActionStyleCancel handler:nil]];
     [self anchorPopoverForAlertController:sheet toSource:source];
     [self presentViewController:sheet animated:YES completion:nil];
 }
@@ -1288,9 +1288,9 @@ static const NSInteger ISHToolbarKeysActionsSection = 2;
 
 - (void)_editCustomKey:(NSDictionary *)item completion:(void (^)(NSDictionary *))completion {
     UIAlertController *alert =
-        [UIAlertController alertControllerWithTitle:item == nil ? @"Custom Key" : @"Edit Key"
-                                            message:@"What the key shows, and the text it types. "
-                                                    @"\\e Escape, \\t Tab, \\n Return, \\xHH a character."
+        [UIAlertController alertControllerWithTitle:item == nil ? NSLocalizedString(@"Custom Key", @"Custom key editor title") : NSLocalizedString(@"Edit Key", @"Custom key editor title")
+                                            message:NSLocalizedString(@"What the key shows, and the text it types. "
+                                                    @"\\e Escape, \\t Tab, \\n Return, \\xHH a character.", @"Custom key editor message; keep the escape sequences unchanged")
                                      preferredStyle:UIAlertControllerStyleAlert];
     for (int i = 0; i < 2; i++) {
         [alert addTextFieldWithConfigurationHandler:^(UITextField *field) {
@@ -1301,18 +1301,18 @@ static const NSInteger ISHToolbarKeysActionsSection = 2;
             field.smartDashesType = UITextSmartDashesTypeNo;
             field.clearButtonMode = UITextFieldViewModeWhileEditing;
             if (i == 0) {
-                field.placeholder = @"Shows, e.g. ~";
+                field.placeholder = NSLocalizedString(@"Shows, e.g. ~", @"Custom key editor: label field placeholder");
                 field.text = item[ISHToolbarKeyTitle];
-                field.accessibilityLabel = @"What the key shows";
+                field.accessibilityLabel = NSLocalizedString(@"What the key shows", @"Custom key editor: label field");
             } else {
-                field.placeholder = @"Types, e.g. ls -la\\n";
+                field.placeholder = NSLocalizedString(@"Types, e.g. ls -la\\n", @"Custom key editor: text field placeholder");
                 field.text = item[ISHToolbarKeySends];
-                field.accessibilityLabel = @"What the key types";
+                field.accessibilityLabel = NSLocalizedString(@"What the key types", @"Custom key editor: text field");
             }
         }];
     }
-    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Save" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+    [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Cancel", @"Alert button") style:UIAlertActionStyleCancel handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Save", @"Alert button") style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
         NSString *title = [alert.textFields[0].text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
         NSString *sends = alert.textFields[1].text ?: @"";
         if (title.length == 0 || sends.length == 0)
@@ -1325,12 +1325,12 @@ static const NSInteger ISHToolbarKeysActionsSection = 2;
 
 - (void)_confirmResetFrom:(UIView *)source {
     UIAlertController *alert =
-        [UIAlertController alertControllerWithTitle:@"Reset the Toolbar?"
-                                            message:@"Tab, Control, Escape and the arrows at the left, and - . / : ! | "
-                                                    @"in the center, as the toolbar came. Custom keys are removed."
+        [UIAlertController alertControllerWithTitle:NSLocalizedString(@"Reset the Toolbar?", @"Reset keyboard toolbar alert title")
+                                            message:NSLocalizedString(@"Tab, Control, Escape and the arrows at the left, and - . / : ! | "
+                                                    @"in the center, as the toolbar came. Custom keys are removed.", @"Reset keyboard toolbar alert message")
                                      preferredStyle:UIAlertControllerStyleAlert];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Reset" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
+    [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Cancel", @"Alert button") style:UIAlertActionStyleCancel handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Reset", @"Reset keyboard toolbar alert button") style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
         UserPreferences.shared.toolbarKeys = nil;
         [self _load];
         [self.tableView reloadData];

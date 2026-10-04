@@ -956,21 +956,21 @@ static const uint32_t kKeysymRight = 0xFF53;
 // to. Fix properly by tracking modifier keys per-stack if this is ever
 // visibly hit.
 - (UIStackView *)_buildAccessoryKeyStack {
-    BarButton *ctrlKey = [self accessoryModifierKeyWithTitle:@"ctrl" label:@"Control" keysym:kKeysymControlL];
-    BarButton *altKey = [self accessoryModifierKeyWithTitle:@"alt" label:@"Alt" keysym:kKeysymAltL];
-    BarButton *superKey = [self accessoryModifierKeyWithTitle:@"❖" label:@"Super" keysym:kKeysymSuperL];
+    BarButton *ctrlKey = [self accessoryModifierKeyWithTitle:@"ctrl" label:NSLocalizedString(@"Control", @"Accessibility label for the Control key on the Wayland keyboard bar") keysym:kKeysymControlL];
+    BarButton *altKey = [self accessoryModifierKeyWithTitle:@"alt" label:NSLocalizedString(@"Alt", @"Accessibility label for the Alt key on the Wayland keyboard bar") keysym:kKeysymAltL];
+    BarButton *superKey = [self accessoryModifierKeyWithTitle:@"❖" label:NSLocalizedString(@"Super", @"Accessibility label for the Super (Windows/logo) key on the Wayland keyboard bar") keysym:kKeysymSuperL];
     _accessoryModifierKeys = @[ctrlKey, altKey, superKey];
 
     UIStackView *stack = [[UIStackView alloc] initWithArrangedSubviews:@[
-        [self accessoryKeyWithTitle:@"esc" label:@"Escape" keysym:kKeysymEscape],
-        [self accessoryKeyWithTitle:@"⇥" label:@"Tab" keysym:kKeysymTab],
+        [self accessoryKeyWithTitle:@"esc" label:NSLocalizedString(@"Escape", @"Accessibility label for the Escape key") keysym:kKeysymEscape],
+        [self accessoryKeyWithTitle:@"⇥" label:NSLocalizedString(@"Tab", @"Accessibility label for the Tab key") keysym:kKeysymTab],
         ctrlKey,
         altKey,
         superKey,
-        [self accessoryKeyWithTitle:@"←" label:@"Left arrow" keysym:kKeysymLeft],
-        [self accessoryKeyWithTitle:@"↑" label:@"Up arrow" keysym:kKeysymUp],
-        [self accessoryKeyWithTitle:@"↓" label:@"Down arrow" keysym:kKeysymDown],
-        [self accessoryKeyWithTitle:@"→" label:@"Right arrow" keysym:kKeysymRight],
+        [self accessoryKeyWithTitle:@"←" label:NSLocalizedString(@"Left arrow", @"Accessibility label for an arrow key") keysym:kKeysymLeft],
+        [self accessoryKeyWithTitle:@"↑" label:NSLocalizedString(@"Up arrow", @"Accessibility label for an arrow key") keysym:kKeysymUp],
+        [self accessoryKeyWithTitle:@"↓" label:NSLocalizedString(@"Down arrow", @"Accessibility label for an arrow key") keysym:kKeysymDown],
+        [self accessoryKeyWithTitle:@"→" label:NSLocalizedString(@"Right arrow", @"Accessibility label for an arrow key") keysym:kKeysymRight],
     ]];
     stack.translatesAutoresizingMaskIntoConstraints = NO;
     stack.axis = UILayoutConstraintAxisHorizontal;

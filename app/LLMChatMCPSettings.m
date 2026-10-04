@@ -30,7 +30,7 @@ static BOOL ISHLLMMCPIsGuest(NSDictionary *server) {
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.title = @"MCP Servers";
+    self.title = NSLocalizedString(@"MCP Servers", @"MCP servers screen title");
 }
 
 - (void)viewWillAppear:(BOOL)animated {
@@ -63,10 +63,10 @@ static BOOL ISHLLMMCPIsGuest(NSDictionary *server) {
     (void) tableView;
     if (section == ISHLLMMCPSectionServers)
         return ISHLLMMCPServers().count == 0
-            ? @"No servers yet. A server's tools are offered to the model alongside the built-in ones, and each call asks first unless MCP Tools is set to Allow in Tool Permissions."
-            : @"Tap a server to check, edit, turn off or delete it. Its tools are offered to the model alongside the built-in ones; each call follows the MCP Tools setting in Tool Permissions.";
+            ? NSLocalizedString(@"No servers yet. A server's tools are offered to the model alongside the built-in ones, and each call asks first unless MCP Tools is set to Allow in Tool Permissions.", @"MCP servers footer")
+            : NSLocalizedString(@"Tap a server to check, edit, turn off or delete it. Its tools are offered to the model alongside the built-in ones; each call follows the MCP Tools setting in Tool Permissions.", @"MCP servers footer");
     if (section == ISHLLMMCPSectionAdd)
-        return @"A remote server is a Streamable HTTP endpoint (https://…/mcp); its token is kept in the Keychain. A guest server is a command run inside iSH-AOK as the chat's tool account, speaking MCP on its stdin and stdout -- for example \"npx -y @modelcontextprotocol/server-filesystem /root\" or \"python3 server.py\". It needs that program installed in the guest, and it is started with the first message that uses tools.";
+        return NSLocalizedString(@"A remote server is a Streamable HTTP endpoint (https://…/mcp); its token is kept in the Keychain. A guest server is a command run inside iSH-AOK as the chat's tool account, speaking MCP on its stdin and stdout -- for example \"npx -y @modelcontextprotocol/server-filesystem /root\" or \"python3 server.py\". It needs that program installed in the guest, and it is started with the first message that uses tools.", @"MCP servers footer");
     return nil;
 }
 
@@ -77,13 +77,13 @@ static BOOL ISHLLMMCPIsGuest(NSDictionary *server) {
         BOOL enabled = [server[@"enabled"] boolValue];
         cell.textLabel.text = server[@"name"];
         NSString *target = ISHLLMMCPIsGuest(server) ? server[@"command"] : server[@"url"];
-        cell.detailTextLabel.text = [NSString stringWithFormat:@"%@%@ · %@", ISHLLMMCPIsGuest(server) ? @"Guest" : @"Remote",
-                                     enabled ? @"" : @" (off)", target ?: @""];
+        cell.detailTextLabel.text = [NSString stringWithFormat:@"%@%@ · %@", ISHLLMMCPIsGuest(server) ? NSLocalizedString(@"Guest", @"MCP server kind") : NSLocalizedString(@"Remote", @"MCP server kind"),
+                                     enabled ? @"" : NSLocalizedString(@" (off)", @"MCP server row, server turned off"), target ?: @""];
         cell.detailTextLabel.textColor = UIColor.secondaryLabelColor;
         cell.textLabel.textColor = enabled ? UIColor.labelColor : UIColor.secondaryLabelColor;
         cell.accessoryType = enabled ? UITableViewCellAccessoryCheckmark : UITableViewCellAccessoryNone;
     } else {
-        cell.textLabel.text = indexPath.row == 0 ? @"Add Remote Server…" : @"Add Guest Server…";
+        cell.textLabel.text = indexPath.row == 0 ? NSLocalizedString(@"Add Remote Server…", @"MCP servers row") : NSLocalizedString(@"Add Guest Server…", @"MCP servers row");
         cell.textLabel.textColor = self.view.tintColor;
     }
     ISHWorkspaceScaleTableViewCell(cell, ISHWorkspaceTextScaleForViewController(self));
@@ -121,13 +121,13 @@ static BOOL ISHLLMMCPIsGuest(NSDictionary *server) {
     NSDictionary *server = ISHLLMMCPServers()[index];
     BOOL enabled = [server[@"enabled"] boolValue];
     ISHActionSheet *sheet = [ISHActionSheet actionSheetWithTitle:server[@"name"] message:nil];
-    [sheet addActionWithTitle:@"Check" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
+    [sheet addActionWithTitle:NSLocalizedString(@"Check", @"MCP server action") style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
         [self checkServer:server];
     }];
-    [sheet addActionWithTitle:@"Edit…" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
+    [sheet addActionWithTitle:NSLocalizedString(@"Edit…", @"MCP server action") style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
         [self editServerAtIndex:index kind:server[@"kind"]];
     }];
-    [sheet addActionWithTitle:enabled ? @"Turn Off" : @"Turn On" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
+    [sheet addActionWithTitle:enabled ? NSLocalizedString(@"Turn Off", @"MCP server action") : NSLocalizedString(@"Turn On", @"MCP server action") style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
         NSMutableArray *servers = [ISHLLMMCPServers() mutableCopy];
         if (index >= servers.count)
             return;
@@ -136,31 +136,31 @@ static BOOL ISHLLMMCPIsGuest(NSDictionary *server) {
         servers[index] = changed;
         [self saveServers:servers];
     }];
-    [sheet addActionWithTitle:@"Delete" style:UIAlertActionStyleDestructive handler:^(__unused UIAlertAction *action) {
+    [sheet addActionWithTitle:NSLocalizedString(@"Delete", @"MCP server action") style:UIAlertActionStyleDestructive handler:^(__unused UIAlertAction *action) {
         NSMutableArray *servers = [ISHLLMMCPServers() mutableCopy];
         if (index < servers.count) {
             [servers removeObjectAtIndex:index];
             [self saveServers:servers];
         }
     }];
-    [sheet addActionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil];
+    [sheet addActionWithTitle:NSLocalizedString(@"Cancel", @"action sheet button") style:UIAlertActionStyleCancel handler:nil];
     [sheet presentFromViewController:self sourceView:cell sourceRect:cell.bounds];
 }
 
 - (void)checkServer:(NSDictionary *)server {
-    UIAlertController *progress = [UIAlertController alertControllerWithTitle:[NSString stringWithFormat:@"Checking %@…", server[@"name"]]
-        message:ISHLLMMCPIsGuest(server) ? @"Starting the server in the guest. The first start of an npx or uvx server downloads it, which can take a minute." : nil
+    UIAlertController *progress = [UIAlertController alertControllerWithTitle:[NSString stringWithFormat:NSLocalizedString(@"Checking %@…", @"alert title; %@ is an MCP server name"), server[@"name"]]
+        message:ISHLLMMCPIsGuest(server) ? NSLocalizedString(@"Starting the server in the guest. The first start of an npx or uvx server downloads it, which can take a minute.", @"MCP check alert message") : nil
         preferredStyle:UIAlertControllerStyleAlert];
     [self presentViewController:progress animated:YES completion:nil];
     [ISHLLMMCPManager.shared checkServer:server completion:^(NSArray<NSString *> *toolNames, NSString *error) {
-        NSString *title = toolNames != nil ? @"Connected" : @"Could not connect";
+        NSString *title = toolNames != nil ? NSLocalizedString(@"Connected", @"MCP check result alert title") : NSLocalizedString(@"Could not connect", @"MCP check result alert title");
         NSString *message = toolNames != nil
-            ? (toolNames.count == 0 ? @"The server offers no tools." :
-               [NSString stringWithFormat:@"%lu tool%@: %@", (unsigned long) toolNames.count, toolNames.count == 1 ? @"" : @"s", [toolNames componentsJoinedByString:@", "]])
+            ? (toolNames.count == 0 ? NSLocalizedString(@"The server offers no tools.", @"MCP check result message") :
+               [NSString stringWithFormat:toolNames.count == 1 ? NSLocalizedString(@"%lu tool: %@", @"MCP check result, singular; %@ lists tool names") : NSLocalizedString(@"%lu tools: %@", @"MCP check result, plural; %@ lists tool names"), (unsigned long) toolNames.count, [toolNames componentsJoinedByString:@", "]])
             : error;
         [progress dismissViewControllerAnimated:YES completion:^{
             UIAlertController *result = [UIAlertController alertControllerWithTitle:title message:message preferredStyle:UIAlertControllerStyleAlert];
-            [result addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleCancel handler:nil]];
+            [result addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"OK", @"alert button") style:UIAlertActionStyleCancel handler:nil]];
             [self presentViewController:result animated:YES completion:nil];
         }];
     }];
@@ -172,14 +172,14 @@ static BOOL ISHLLMMCPIsGuest(NSDictionary *server) {
     NSArray<NSDictionary *> *servers = ISHLLMMCPServers();
     NSDictionary *existing = index < servers.count ? servers[index] : nil;
     BOOL guest = [kind isEqual:kISHLLMMCPKindGuest];
-    NSString *title = existing != nil ? @"Edit MCP Server" : (guest ? @"Add Guest Server" : @"Add Remote Server");
+    NSString *title = existing != nil ? NSLocalizedString(@"Edit MCP Server", @"alert title") : (guest ? NSLocalizedString(@"Add Guest Server", @"alert title") : NSLocalizedString(@"Add Remote Server", @"alert title"));
     NSString *message = guest
-        ? @"The command runs in the guest through the tool account's shell."
-        : @"The server's Streamable HTTP URL. The token, if any, is sent as a bearer token.";
+        ? NSLocalizedString(@"The command runs in the guest through the tool account's shell.", @"add guest MCP server alert message")
+        : NSLocalizedString(@"The server's Streamable HTTP URL. The token, if any, is sent as a bearer token.", @"add remote MCP server alert message");
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:title message:message preferredStyle:UIAlertControllerStyleAlert];
     NSString *existingToken = existing != nil ? ISHLLMMCPServerToken(existing[@"id"]) : nil;
     [alert addTextFieldWithConfigurationHandler:^(UITextField *textField) {
-        textField.placeholder = @"Name";
+        textField.placeholder = NSLocalizedString(@"Name", @"MCP server name text field placeholder");
         textField.text = existing[@"name"];
         textField.autocapitalizationType = UITextAutocapitalizationTypeNone;
         textField.autocorrectionType = UITextAutocorrectionTypeNo;
@@ -194,7 +194,7 @@ static BOOL ISHLLMMCPIsGuest(NSDictionary *server) {
     }];
     if (!guest) {
         [alert addTextFieldWithConfigurationHandler:^(UITextField *textField) {
-            textField.placeholder = @"Token (optional)";
+            textField.placeholder = NSLocalizedString(@"Token (optional)", @"MCP server token text field placeholder");
             textField.text = existingToken;
             textField.secureTextEntry = YES;
             // Beside a name and a URL, a secure field reads to iOS as a login
@@ -204,8 +204,8 @@ static BOOL ISHLLMMCPIsGuest(NSDictionary *server) {
             textField.autocorrectionType = UITextAutocorrectionTypeNo;
         }];
     }
-    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Save" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
+    [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Cancel", @"alert button") style:UIAlertActionStyleCancel handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Save", @"alert button") style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
         NSCharacterSet *space = NSCharacterSet.whitespaceAndNewlineCharacterSet;
         NSString *name = [alert.textFields[0].text stringByTrimmingCharactersInSet:space];
         NSString *target = [alert.textFields[1].text stringByTrimmingCharactersInSet:space];
@@ -214,9 +214,9 @@ static BOOL ISHLLMMCPIsGuest(NSDictionary *server) {
         if (!guest) {
             NSURL *url = [NSURL URLWithString:target];
             if (url.host.length == 0 || !([url.scheme isEqualToString:@"https"] || [url.scheme isEqualToString:@"http"])) {
-                UIAlertController *bad = [UIAlertController alertControllerWithTitle:@"Not a server URL"
-                    message:@"Enter an http:// or https:// URL." preferredStyle:UIAlertControllerStyleAlert];
-                [bad addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleCancel handler:nil]];
+                UIAlertController *bad = [UIAlertController alertControllerWithTitle:NSLocalizedString(@"Not a server URL", @"alert title")
+                    message:NSLocalizedString(@"Enter an http:// or https:// URL.", @"alert message") preferredStyle:UIAlertControllerStyleAlert];
+                [bad addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"OK", @"alert button") style:UIAlertActionStyleCancel handler:nil]];
                 [self presentViewController:bad animated:YES completion:nil];
                 return;
             }

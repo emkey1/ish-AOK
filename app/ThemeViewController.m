@@ -12,24 +12,27 @@
 
 #define COLORS 16
 
-static NSString *colorNames[] = {
-    @"Black",
-    @"Red",
-    @"Green",
-    @"Yellow",
-    @"Blue",
-    @"Magenta",
-    @"Cyan",
-    @"White",
-    @"Bright Black",
-    @"Bright Red",
-    @"Bright Green",
-    @"Bright Yellow",
-    @"Bright Blue",
-    @"Bright Magenta",
-    @"Bright Cyan",
-    @"Bright White",
-};
+static NSString *ColorName(NSInteger index) {
+    NSString *colorNames[] = {
+        NSLocalizedString(@"Black", @"Terminal palette color name"),
+        NSLocalizedString(@"Red", @"Terminal palette color name"),
+        NSLocalizedString(@"Green", @"Terminal palette color name"),
+        NSLocalizedString(@"Yellow", @"Terminal palette color name"),
+        NSLocalizedString(@"Blue", @"Terminal palette color name"),
+        NSLocalizedString(@"Magenta", @"Terminal palette color name"),
+        NSLocalizedString(@"Cyan", @"Terminal palette color name"),
+        NSLocalizedString(@"White", @"Terminal palette color name"),
+        NSLocalizedString(@"Bright Black", @"Terminal palette color name"),
+        NSLocalizedString(@"Bright Red", @"Terminal palette color name"),
+        NSLocalizedString(@"Bright Green", @"Terminal palette color name"),
+        NSLocalizedString(@"Bright Yellow", @"Terminal palette color name"),
+        NSLocalizedString(@"Bright Blue", @"Terminal palette color name"),
+        NSLocalizedString(@"Bright Magenta", @"Terminal palette color name"),
+        NSLocalizedString(@"Bright Cyan", @"Terminal palette color name"),
+        NSLocalizedString(@"Bright White", @"Terminal palette color name"),
+    };
+    return colorNames[index];
+}
 
 struct PaletteTextFields {
     UITextField *foregroundTextField;
@@ -72,7 +75,7 @@ struct PaletteTextFields {
     self.navigationItem.title = self.theme.name;
     
     _nameTextField = [self detailTextFieldWithText:_theme.name monospaced: NO];
-    _nameTextField.accessibilityLabel = @"Theme Name";
+    _nameTextField.accessibilityLabel = NSLocalizedString(@"Theme Name", @"Theme editor accessibility label for the name field");
     _singlePaletteSwitch = [UISwitch new];
     _singlePaletteSwitch.on = self.theme.lightPalette == self.theme.darkPalette;
     [_singlePaletteSwitch addTarget:self action:@selector(singlePaletteChanged:) forControlEvents:UIControlEventValueChanged];
@@ -80,15 +83,15 @@ struct PaletteTextFields {
     for (int i = 0; i < sizeof(_paletteTextFields) / sizeof(*_paletteTextFields); ++i) {
         Palette *palette = i ? self.theme.darkPalette : self.theme.lightPalette;
         _paletteTextFields[i].foregroundTextField = [self detailTextFieldWithText:palette.foregroundColor monospaced:YES];
-        _paletteTextFields[i].foregroundTextField.accessibilityLabel = @"Foreground Color";
+        _paletteTextFields[i].foregroundTextField.accessibilityLabel = NSLocalizedString(@"Foreground Color", @"Theme editor palette field");
         _paletteTextFields[i].backgroundTextField = [self detailTextFieldWithText:palette.backgroundColor monospaced:YES];
-        _paletteTextFields[i].backgroundTextField.accessibilityLabel = @"Background Color";
+        _paletteTextFields[i].backgroundTextField.accessibilityLabel = NSLocalizedString(@"Background Color", @"Theme editor palette field");
         _paletteTextFields[i].cursorTextField = [self detailTextFieldWithText:palette.cursorColor monospaced:YES];
-        _paletteTextFields[i].cursorTextField.accessibilityLabel = @"Cursor Color";
+        _paletteTextFields[i].cursorTextField.accessibilityLabel = NSLocalizedString(@"Cursor Color", @"Theme editor palette field");
         NSMutableArray<UITextField *> *textFields = [NSMutableArray new];
         for (int j = 0; j < COLORS; ++j) {
             UITextField *textField = [self detailTextFieldWithText:palette.colorPaletteOverrides ? palette.colorPaletteOverrides[j] : nil monospaced: YES];
-            textField.accessibilityLabel = [NSString stringWithFormat:@"Color %d", j];
+            textField.accessibilityLabel = [NSString stringWithFormat:NSLocalizedString(@"Color %d", @"Theme editor accessibility label for palette entry number %d"), j];
             textField.autocorrectionType = UITextAutocorrectionTypeNo;
             textField.autocapitalizationType = UITextAutocapitalizationTypeNone;
             [textFields addObject:textField];
@@ -107,7 +110,7 @@ struct PaletteTextFields {
     _darkOverrideSwitch.on = self.theme.appearance.darkOverride;
     [_darkOverrideSwitch addTarget:self action:@selector(touchedOverrideSwitch:) forControlEvents:UIControlEventValueChanged];
     
-    self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:@"Duplicate" style:UIBarButtonItemStylePlain target:self action:@selector(duplicate:)];
+    self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:NSLocalizedString(@"Duplicate", @"Theme editor button that copies the theme") style:UIBarButtonItemStylePlain target:self action:@selector(duplicate:)];
 }
 
 - (void)duplicate:(UIBarButtonItem *)sender {
@@ -194,11 +197,11 @@ enum {
     }
     switch (section) {
         case PaletteSection:
-            return _singlePaletteSwitch.on ? @"Palette" : @"Light Palette";
+            return _singlePaletteSwitch.on ? NSLocalizedString(@"Palette", @"Theme editor section header") : NSLocalizedString(@"Light Palette", @"Theme editor section header");
         case PaletteSection2:
-            return @"Dark Palette";
+            return NSLocalizedString(@"Dark Palette", @"Theme editor section header");
         case UIOverrideSection:
-            return @"UI Overrides";
+            return NSLocalizedString(@"UI Overrides", @"Theme editor section header");
         default:
             return nil;
     }
@@ -210,11 +213,11 @@ enum {
     }
     switch (section) {
         case NameSection:
-            return ![_nameTextField.text isEqualToString:self.theme.name] && [Theme themeForName:_nameTextField.text includingDefaultThemes:NO] ? @"A user theme with this name already exists." : nil;
+            return ![_nameTextField.text isEqualToString:self.theme.name] && [Theme themeForName:_nameTextField.text includingDefaultThemes:NO] ? NSLocalizedString(@"A user theme with this name already exists.", @"Theme editor footer when the name is taken") : nil;
         case SinglePaletteSection:
-            return @"When this is enabled, light and dark color schemes will share a single palette.";
+            return NSLocalizedString(@"When this is enabled, light and dark color schemes will share a single palette.", @"Theme editor footer under Single Palette");
         case UIOverrideSection:
-            return @"Use a customized color scheme for user interface elements (keyboard, status bar) rather than one that matches the current palette.";
+            return NSLocalizedString(@"Use a customized color scheme for user interface elements (keyboard, status bar) rather than one that matches the current palette.", @"Theme editor footer under UI Overrides");
         default:
             return nil;
     }
@@ -254,7 +257,7 @@ enum {
     cell.accessoryView = nil;
     switch (indexPath.section) {
         case NameSection:
-            cell.textLabel.text = @"Name";
+            cell.textLabel.text = NSLocalizedString(@"Name", @"Theme editor row label for the theme name");
             if (self.isEditable) {
                 [cell.contentView addSubview:_nameTextField];
                 [NSLayoutConstraint activateConstraints:@[
@@ -272,7 +275,7 @@ enum {
             }
             break;
         case SinglePaletteSection:
-            cell.textLabel.text = @"Single Palette";
+            cell.textLabel.text = NSLocalizedString(@"Single Palette", @"Theme editor switch label");
             cell.detailTextLabel.hidden = YES;
             cell.accessoryView = _singlePaletteSwitch;
             break;
@@ -281,19 +284,19 @@ enum {
             UITextField *detailTextField;
             switch (indexPath.row) {
                 case ForegroundRow:
-                    cell.textLabel.text = @"Foreground Color";
+                    cell.textLabel.text = NSLocalizedString(@"Foreground Color", @"Theme editor palette row");
                     detailTextField = _paletteTextFields[indexPath.section - PaletteSection].foregroundTextField;
                     break;
                 case BackgroundRow:
-                    cell.textLabel.text = @"Background Color";
+                    cell.textLabel.text = NSLocalizedString(@"Background Color", @"Theme editor palette row");
                     detailTextField = _paletteTextFields[indexPath.section - PaletteSection].backgroundTextField;
                     break;
                 case CursorRow:
-                    cell.textLabel.text = @"Cursor Color";
+                    cell.textLabel.text = NSLocalizedString(@"Cursor Color", @"Theme editor palette row");
                     detailTextField = _paletteTextFields[indexPath.section - PaletteSection].cursorTextField;
                     break;
                 default:
-                    cell.textLabel.text = colorNames[indexPath.row - CursorRow - 1];
+                    cell.textLabel.text = ColorName(indexPath.row - CursorRow - 1);
                     detailTextField = _paletteTextFields[indexPath.section - PaletteSection].colorTextFields[indexPath.row - CursorRow - 1];
                     break;
             }
@@ -318,11 +321,11 @@ enum {
             cell.detailTextLabel.hidden = YES;
             switch (indexPath.row) {
                 case 0:
-                    cell.textLabel.text = @"Use Dark UI for Light Color Scheme";
+                    cell.textLabel.text = NSLocalizedString(@"Use Dark UI for Light Color Scheme", @"Theme editor UI override switch");
                     cell.accessoryView = self->_lightOverrideSwitch;
                     break;
                 case 1:
-                    cell.textLabel.text = @"Use Light UI for Dark Color Scheme";
+                    cell.textLabel.text = NSLocalizedString(@"Use Light UI for Dark Color Scheme", @"Theme editor UI override switch");
                     cell.accessoryView = self->_darkOverrideSwitch;
                     break;
                 default:

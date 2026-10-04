@@ -83,8 +83,8 @@ NSInteger ISHLLMToolMaxRounds(void) {
 
 NSString *ISHLLMToolTimeoutTitle(NSInteger seconds) {
     if (seconds % 60 == 0 && seconds >= 60)
-        return [NSString stringWithFormat:@"%ld min", (long) (seconds / 60)];
-    return [NSString stringWithFormat:@"%lds", (long) seconds];
+        return [NSString stringWithFormat:NSLocalizedString(@"%ld min", @"command timeout setting value in minutes"), (long) (seconds / 60)];
+    return [NSString stringWithFormat:NSLocalizedString(@"%lds", @"command timeout setting value in seconds"), (long) seconds];
 }
 
 static NSDictionary *ISHLLMFunctionTool(NSString *name, NSString *description,
@@ -651,7 +651,7 @@ static NSString *ISHLLMPreviewLines(NSString *text, NSUInteger maxLines, NSStrin
         [shown addObject:[prefix stringByAppendingString:line]];
     }
     if (lines.count > maxLines)
-        [shown addObject:[NSString stringWithFormat:@"%@… %lu more lines", prefix, (unsigned long) (lines.count - maxLines)]];
+        [shown addObject:[NSString stringWithFormat:NSLocalizedString(@"%@… %lu more lines", @"approval alert preview; %@ is a line prefix, %lu lines not shown"), prefix, (unsigned long) (lines.count - maxLines)]];
     return [shown componentsJoinedByString:@"\n"];
 }
 
@@ -768,18 +768,18 @@ static NSUInteger ISHLLMLineCount(NSString *text) {
 
 - (NSString *)confirmationTitle {
     if (_category == ISHLLMToolCategoryMCP)
-        return @"Use MCP tool?";
+        return NSLocalizedString(@"Use MCP tool?", @"approval alert title");
     if ([_name isEqualToString:@"run_shell"])
-        return @"Run shell command?";
+        return NSLocalizedString(@"Run shell command?", @"approval alert title");
     if ([_name isEqualToString:@"write_file"])
-        return @"Write file?";
+        return NSLocalizedString(@"Write file?", @"approval alert title");
     if ([_name isEqualToString:@"edit_file"])
-        return @"Edit file?";
+        return NSLocalizedString(@"Edit file?", @"approval alert title");
     if ([_name isEqualToString:@"read_file"])
-        return @"Read file?";
+        return NSLocalizedString(@"Read file?", @"approval alert title");
     if ([_name isEqualToString:@"list_directory"])
-        return @"List directory?";
-    return @"Search files?";
+        return NSLocalizedString(@"List directory?", @"approval alert title");
+    return NSLocalizedString(@"Search files?", @"approval alert title");
 }
 
 - (NSString *)confirmationMessage {
@@ -791,10 +791,10 @@ static NSUInteger ISHLLMLineCount(NSString *text) {
         return [NSString stringWithFormat:@"%@\n\n%@", [ISHLLMMCPManager.shared describeTool:_name], ISHLLMPreviewLines(text ?: @"{}", 16, @"")];
     }
     if ([_name isEqualToString:@"run_shell"])
-        return [NSString stringWithFormat:@"The model wants to run this in the iSH-AOK shell, in %@:\n\n%@", _workingDirectory, _command];
+        return [NSString stringWithFormat:NSLocalizedString(@"The model wants to run this in the iSH-AOK shell, in %@:\n\n%@", @"approval alert message; first %@ is a directory, second the command"), _workingDirectory, _command];
     if ([_name isEqualToString:@"write_file"]) {
         NSString *content = ISHLLMStringArgument(_arguments, @"content") ?: @"";
-        return [NSString stringWithFormat:@"%@\n%lu lines, %lu bytes\n\n%@", _path,
+        return [NSString stringWithFormat:NSLocalizedString(@"%@\n%lu lines, %lu bytes\n\n%@", @"approval alert message for writing a file; %@ path, then preview"), _path,
                 (unsigned long) ISHLLMLineCount(content), (unsigned long) [content lengthOfBytesUsingEncoding:NSUTF8StringEncoding],
                 ISHLLMPreviewLines(content, 12, @"")];
     }
@@ -802,11 +802,11 @@ static NSUInteger ISHLLMLineCount(NSString *text) {
         NSString *oldText = ISHLLMStringArgument(_arguments, @"old_string") ?: @"";
         NSString *newText = ISHLLMStringArgument(_arguments, @"new_string") ?: @"";
         return [NSString stringWithFormat:@"%@%@\n\n%@\n%@", _path,
-                ISHLLMBoolArgument(_arguments, @"replace_all") ? @" (every occurrence)" : @"",
+                ISHLLMBoolArgument(_arguments, @"replace_all") ? NSLocalizedString(@" (every occurrence)", @"approval alert, edit replaces every occurrence") : @"",
                 ISHLLMPreviewLines(oldText, 8, @"− "), ISHLLMPreviewLines(newText, 8, @"+ ")];
     }
     NSString *pattern = ISHLLMStringArgument(_arguments, @"pattern");
-    return pattern.length > 0 ? [NSString stringWithFormat:@"%@ in %@", pattern, _path] : _path;
+    return pattern.length > 0 ? [NSString stringWithFormat:NSLocalizedString(@"%@ in %@", @"approval alert message; search pattern in path"), pattern, _path] : _path;
 }
 
 @end
@@ -824,17 +824,17 @@ NSArray<NSString *> *ISHLLMToolCallDescriptions(NSArray *toolCalls) {
             NSUInteger done = 0;
             for (NSDictionary *todo in todos)
                 done += [todo isKindOfClass:NSDictionary.class] && [todo[@"status"] isEqual:@"completed"];
-            [lines addObject:[NSString stringWithFormat:@"todo: %lu of %lu done", (unsigned long) done, (unsigned long) todos.count]];
+            [lines addObject:[NSString stringWithFormat:NSLocalizedString(@"todo: %lu of %lu done", @"tool call caption in the chat"), (unsigned long) done, (unsigned long) todos.count]];
             continue;
         }
         if ([name isEqualToString:kISHLLMSpawnAgentTool]) {
             NSString *description = ISHLLMStringArgument(arguments, @"description") ?: @"";
-            [lines addObject:[@"start agent: " stringByAppendingString:description.length > 0 ? description : @"sub-task"]];
+            [lines addObject:[NSString stringWithFormat:NSLocalizedString(@"start agent: %@", @"tool call caption; %@ is the task name"), description.length > 0 ? description : NSLocalizedString(@"sub-task", @"tool call caption, unnamed sub-agent task")]];
             continue;
         }
         if ([name isEqualToString:kISHLLMAgentResultTool]) {
-            [lines addObject:[ISHLLMBoolArgument(arguments, @"wait") || arguments[@"wait"] == nil ? @"wait for agent " : @"check agent "
-                              stringByAppendingString:ISHLLMStringArgument(arguments, @"id") ?: @""]];
+            [lines addObject:[NSString stringWithFormat:ISHLLMBoolArgument(arguments, @"wait") || arguments[@"wait"] == nil ? NSLocalizedString(@"wait for agent %@", @"tool call caption; %@ is a sub-agent id") : NSLocalizedString(@"check agent %@", @"tool call caption; %@ is a sub-agent id"),
+                              ISHLLMStringArgument(arguments, @"id") ?: @""]];
             continue;
         }
         if ([name hasPrefix:kISHLLMMCPToolPrefix]) {
@@ -848,13 +848,13 @@ NSArray<NSString *> *ISHLLMToolCallDescriptions(NSArray *toolCalls) {
                 firstLine = [[firstLine substringToIndex:MIN(firstLine.length, (NSUInteger) 100)] stringByAppendingString:@" …"];
             line = [@"$ " stringByAppendingString:firstLine];
         } else {
-            NSDictionary<NSString *, NSString *> *verbs = @{@"read_file": @"read", @"write_file": @"write", @"edit_file": @"edit",
-                                                            @"list_directory": @"list", @"glob": @"glob", @"grep": @"grep"};
+            NSDictionary<NSString *, NSString *> *verbs = @{@"read_file": NSLocalizedString(@"read", @"tool call caption verb"), @"write_file": NSLocalizedString(@"write", @"tool call caption verb"), @"edit_file": NSLocalizedString(@"edit", @"tool call caption verb"),
+                                                            @"list_directory": NSLocalizedString(@"list", @"tool call caption verb"), @"glob": @"glob", @"grep": @"grep"};
             NSString *verb = verbs[name] ?: name;
             NSString *pattern = ISHLLMStringArgument(arguments, @"pattern");
             NSString *path = ISHLLMStringArgument(arguments, @"path") ?: ISHLLMStringArgument(arguments, @"file_path");
             if (pattern.length > 0)
-                line = path.length > 0 ? [NSString stringWithFormat:@"%@ %@ in %@", verb, pattern, path] : [NSString stringWithFormat:@"%@ %@", verb, pattern];
+                line = path.length > 0 ? [NSString stringWithFormat:NSLocalizedString(@"%@ %@ in %@", @"tool call caption: verb, pattern, path"), verb, pattern, path] : [NSString stringWithFormat:@"%@ %@", verb, pattern];
             else
                 line = path.length > 0 ? [NSString stringWithFormat:@"%@ %@", verb, path] : verb;
         }

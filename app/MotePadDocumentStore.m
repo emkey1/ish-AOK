@@ -290,7 +290,7 @@ static NSString *const kPersistGuestPrefix = @"/AOK/persist/";
         data = [self readGuestFileViaVFS:guestPath error:&localError];
     }];
     if (!hadContext) {
-        if (error) *error = [self errorWithCode:0 message:@"Guest filesystem not ready"];
+        if (error) *error = [self errorWithCode:0 message:NSLocalizedString(@"Guest filesystem not ready", @"File error shown in MotePad")];
         return nil;
     }
     if (data == nil) {
@@ -308,13 +308,13 @@ static NSString *const kPersistGuestPrefix = @"/AOK/persist/";
     int fd = open(hostURL.fileSystemRepresentation, O_RDONLY | O_NONBLOCK);
     if (fd < 0) {
         if (error) *error = [NSError errorWithDomain:NSPOSIXErrorDomain code:errno
-                                            userInfo:@{NSLocalizedDescriptionKey: @"Cannot open file"}];
+                                            userInfo:@{NSLocalizedDescriptionKey: NSLocalizedString(@"Cannot open file", @"File error shown in MotePad")}];
         return nil;
     }
     struct stat st;
     if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode)) {
         close(fd);
-        if (error) *error = [self errorWithCode:0 message:@"That path is not a regular file"];
+        if (error) *error = [self errorWithCode:0 message:NSLocalizedString(@"That path is not a regular file", @"File error shown in MotePad")];
         return nil;
     }
     NSMutableData *data = [NSMutableData data];
@@ -326,7 +326,7 @@ static NSString *const kPersistGuestPrefix = @"/AOK/persist/";
     close(fd);
     if (n < 0) {
         if (error) *error = [NSError errorWithDomain:NSPOSIXErrorDomain code:readErrno
-                                            userInfo:@{NSLocalizedDescriptionKey: @"Failed reading file"}];
+                                            userInfo:@{NSLocalizedDescriptionKey: NSLocalizedString(@"Failed reading file", @"File error shown in MotePad")}];
         return nil;
     }
     return data;
@@ -339,17 +339,17 @@ static NSString *const kPersistGuestPrefix = @"/AOK/persist/";
     // then rejects it (and every other non-regular file) cleanly.
     struct fd *fd = generic_open(guestPath.fileSystemRepresentation, O_RDONLY_ | O_NONBLOCK_, 0);
     if (IS_ERR(fd)) {
-        if (error) *error = [self errorWithCode:(int)PTR_ERR(fd) message:@"Cannot open file"];
+        if (error) *error = [self errorWithCode:(int)PTR_ERR(fd) message:NSLocalizedString(@"Cannot open file", @"File error shown in MotePad")];
         return nil;
     }
     if (S_ISDIR(fd->type)) {
         fd_close(fd);
-        if (error) *error = [self errorWithCode:0 message:@"That path is a directory"];
+        if (error) *error = [self errorWithCode:0 message:NSLocalizedString(@"That path is a directory", @"File error shown in MotePad")];
         return nil;
     }
     if (!S_ISREG(fd->type)) {
         fd_close(fd);
-        if (error) *error = [self errorWithCode:0 message:@"That path is not a regular file"];
+        if (error) *error = [self errorWithCode:0 message:NSLocalizedString(@"That path is not a regular file", @"File error shown in MotePad")];
         return nil;
     }
     NSMutableData *data = [NSMutableData data];
@@ -359,7 +359,7 @@ static NSString *const kPersistGuestPrefix = @"/AOK/persist/";
         [data appendBytes:buffer length:(NSUInteger)n];
     fd_close(fd);
     if (n < 0) {
-        if (error) *error = [self errorWithCode:(int)n message:@"Failed reading file"];
+        if (error) *error = [self errorWithCode:(int)n message:NSLocalizedString(@"Failed reading file", @"File error shown in MotePad")];
         return nil;
     }
     return data;
@@ -388,17 +388,17 @@ static NSString *const kPersistGuestPrefix = @"/AOK/persist/";
             if (S_ISLNK(lst.st_mode)) {
                 char resolved[PATH_MAX];
                 if (realpath(hostURL.fileSystemRepresentation, resolved) == NULL) {
-                    if (error) *error = [self errorWithCode:0 message:@"Cannot save through a broken symbolic link"];
+                    if (error) *error = [self errorWithCode:0 message:NSLocalizedString(@"Cannot save through a broken symbolic link", @"File error shown in MotePad")];
                     return NO;
                 }
                 struct stat rst;
                 if (stat(resolved, &rst) != 0 || !S_ISREG(rst.st_mode)) {
-                    if (error) *error = [self errorWithCode:0 message:@"That path is not a regular file"];
+                    if (error) *error = [self errorWithCode:0 message:NSLocalizedString(@"That path is not a regular file", @"File error shown in MotePad")];
                     return NO;
                 }
                 hostURL = [NSURL fileURLWithPath:[NSString stringWithUTF8String:resolved] isDirectory:NO];
             } else if (!S_ISREG(lst.st_mode)) {
-                if (error) *error = [self errorWithCode:0 message:@"That path is not a regular file"];
+                if (error) *error = [self errorWithCode:0 message:NSLocalizedString(@"That path is not a regular file", @"File error shown in MotePad")];
                 return NO;
             }
         }
@@ -413,7 +413,7 @@ static NSString *const kPersistGuestPrefix = @"/AOK/persist/";
         ok = [self writeData:data toGuestPathViaVFS:guestPath error:&localError];
     }];
     if (!hadContext) {
-        if (error) *error = [self errorWithCode:0 message:@"Guest filesystem not ready"];
+        if (error) *error = [self errorWithCode:0 message:NSLocalizedString(@"Guest filesystem not ready", @"File error shown in MotePad")];
         return NO;
     }
     if (!ok && error) *error = localError;
@@ -483,7 +483,7 @@ static void MotePadApplyDefaultOwnerForCreation(NSString *path) {
     memset(&st, 0, sizeof(st));
     if (generic_statat(AT_PWD, target.fileSystemRepresentation, &st, AT_SYMLINK_NOFOLLOW_) >= 0) {
         if (!S_ISREG(st.mode)) {
-            if (error) *error = [self errorWithCode:0 message:@"That path is not a regular file"];
+            if (error) *error = [self errorWithCode:0 message:NSLocalizedString(@"That path is not a regular file", @"File error shown in MotePad")];
             return NO;
         }
         mode = (int)(st.mode & 07777);
@@ -500,7 +500,7 @@ static void MotePadApplyDefaultOwnerForCreation(NSString *path) {
 
     struct fd *fd = generic_open(tmpPath.fileSystemRepresentation, O_WRONLY_ | O_CREAT_ | O_TRUNC_, mode);
     if (IS_ERR(fd)) {
-        if (error) *error = [self errorWithCode:(int)PTR_ERR(fd) message:@"Cannot create file"];
+        if (error) *error = [self errorWithCode:(int)PTR_ERR(fd) message:NSLocalizedString(@"Cannot create file", @"File error shown in MotePad")];
         return NO;
     }
     const char *bytes = data.bytes;
@@ -517,7 +517,7 @@ static void MotePadApplyDefaultOwnerForCreation(NSString *path) {
     fd_close(fd);
     if (!ok) {
         generic_unlinkat(AT_PWD, tmpPath.fileSystemRepresentation);
-        if (error) *error = [self errorWithCode:0 message:@"Failed writing file"];
+        if (error) *error = [self errorWithCode:0 message:NSLocalizedString(@"Failed writing file", @"File error shown in MotePad")];
         return NO;
     }
 
@@ -557,7 +557,7 @@ static void MotePadApplyDefaultOwnerForCreation(NSString *path) {
     memset(&st, 0, sizeof(st));
     if (generic_statat(AT_PWD, guestPath.fileSystemRepresentation, &st, 0) >= 0) {
         if (!S_ISREG(st.mode)) {
-            if (error) *error = [self errorWithCode:0 message:@"That path is not a regular file"];
+            if (error) *error = [self errorWithCode:0 message:NSLocalizedString(@"That path is not a regular file", @"File error shown in MotePad")];
             return NO;
         }
         existed = YES;
@@ -566,7 +566,7 @@ static void MotePadApplyDefaultOwnerForCreation(NSString *path) {
 
     struct fd *fd = generic_open(guestPath.fileSystemRepresentation, O_WRONLY_ | O_CREAT_ | O_TRUNC_, mode);
     if (IS_ERR(fd)) {
-        if (error) *error = [self errorWithCode:(int)PTR_ERR(fd) message:@"Cannot create file"];
+        if (error) *error = [self errorWithCode:(int)PTR_ERR(fd) message:NSLocalizedString(@"Cannot create file", @"File error shown in MotePad")];
         return NO;
     }
     BOOL ok = [self writeAllData:data toOpenFd:fd];
@@ -591,8 +591,8 @@ static void MotePadApplyDefaultOwnerForCreation(NSString *path) {
     }
     if (error) {
         NSString *message = restored
-            ? @"Failed writing file (the previous contents were restored)"
-            : @"Failed writing file, and the previous contents could not be restored";
+            ? NSLocalizedString(@"Failed writing file (the previous contents were restored)", @"File error shown in MotePad")
+            : NSLocalizedString(@"Failed writing file, and the previous contents could not be restored", @"File error shown in MotePad");
         *error = [self errorWithCode:0 message:message];
     }
     return NO;

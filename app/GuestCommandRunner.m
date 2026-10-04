@@ -95,7 +95,7 @@ static dispatch_queue_t ISHShortcutCommandQueue(void) {
 
     intptr_t bootErr = [AppDelegate ensureBooted];
     if (bootErr < 0) {
-        outcome.failureReason = [NSString stringWithFormat:@"The guest system could not boot (error %ld). Open iSH-AOK once to finish setup.", (long) bootErr];
+        outcome.failureReason = [NSString stringWithFormat:NSLocalizedString(@"The guest system could not boot (error %ld). Open iSH-AOK once to finish setup.", @"Shortcuts Run Command failure; %ld is an error number"), (long) bootErr];
         return outcome;
     }
 
@@ -122,9 +122,9 @@ static dispatch_queue_t ISHShortcutCommandQueue(void) {
                                             (size_t) kISHShortcutOutputLimitKB * 1024, &result);
         if (rc < 0) {
             outcome.failureReason = [NSString stringWithFormat:
-                @"Could not start the command as user \"%@\" (error %d). The \"Open Everything as "
+                NSLocalizedString(@"Could not start the command as user \"%@\" (error %d). The \"Open Everything as "
                 @"Default User\" setting runs commands via /bin/su -- if su is missing or that "
-                @"account cannot log in, disable the setting or fix the account.", account, rc];
+                @"account cannot log in, disable the setting or fix the account.", @"Shortcuts Run Command failure; %@ is a user name, %d an error number"), account, rc];
             return outcome;
         }
     } else {
@@ -140,7 +140,7 @@ static dispatch_queue_t ISHShortcutCommandQueue(void) {
                                                  (size_t) kISHShortcutOutputLimitKB * 1024, &result);
         }
         if (rc < 0) {
-            outcome.failureReason = [NSString stringWithFormat:@"Could not start the command (error %d). Is the guest system booted?", rc];
+            outcome.failureReason = [NSString stringWithFormat:NSLocalizedString(@"Could not start the command (error %d). Is the guest system booted?", @"Shortcuts Run Command failure; %d is an error number"), rc];
             return outcome;
         }
     }
@@ -158,7 +158,7 @@ static dispatch_queue_t ISHShortcutCommandQueue(void) {
     }
     free(result.output);
     if (!outcome.launched && outcome.failureReason == nil)
-        outcome.failureReason = @"The command could not be started.";
+        outcome.failureReason = NSLocalizedString(@"The command could not be started.", @"Shortcuts Run Command failure");
     return outcome;
 }
 

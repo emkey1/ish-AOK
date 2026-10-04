@@ -210,16 +210,16 @@ NSString *ISHShellQuoteArgument(NSString *argument) {
     // Titles, not icons: "cd" and "insert the path" are verbs no glyph conveys.
     // (initWithTitle:image:target:action:menu: would give both, but it is iOS
     // 16+ and this app still supports 15.)
-    UIBarButtonItem *cd = [[UIBarButtonItem alloc] initWithTitle:@"cd Here"
+    UIBarButtonItem *cd = [[UIBarButtonItem alloc] initWithTitle:NSLocalizedString(@"cd Here", @"File browser toolbar button: change the shell directory to this folder (cd is a shell command)")
                                                             style:UIBarButtonItemStylePlain
                                                            target:self
                                                            action:@selector(changeDirectoryHere:)];
-    cd.accessibilityHint = @"Changes the shell's current directory to this folder.";
-    UIBarButtonItem *insert = [[UIBarButtonItem alloc] initWithTitle:@"Insert Path"
+    cd.accessibilityHint = NSLocalizedString(@"Changes the shell's current directory to this folder.", @"Accessibility hint for the cd Here button");
+    UIBarButtonItem *insert = [[UIBarButtonItem alloc] initWithTitle:NSLocalizedString(@"Insert Path", @"File browser button: paste the path into the terminal")
                                                                 style:UIBarButtonItemStylePlain
                                                                target:self
                                                                action:@selector(insertCurrentDirectoryPath:)];
-    insert.accessibilityHint = @"Pastes this folder's path into the shell terminal.";
+    insert.accessibilityHint = NSLocalizedString(@"Pastes this folder's path into the shell terminal.", @"Accessibility hint for the Insert Path button");
     UIBarButtonItem *flex = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace
                                                                           target:nil
                                                                           action:nil];
@@ -304,14 +304,14 @@ NSString *ISHShellQuoteArgument(NSString *argument) {
     if (error != nil) {
         _items = @[];
         [_tableView reloadData];
-        _statusLabel.text = [NSString stringWithFormat:@"Can't open %@\n%@", _path, error.localizedDescription];
+        _statusLabel.text = [NSString stringWithFormat:NSLocalizedString(@"Can't open %@\n%@", @"File browser status: folder path, then error description"), _path, error.localizedDescription];
         _statusLabel.hidden = NO;
         return;
     }
     _items = [self sortedVisibleItems:items ?: @[]];
     [_tableView reloadData];
     if (_items.count == 0) {
-        _statusLabel.text = _showsHiddenFiles ? @"Empty folder" : @"Empty folder\n(hidden files are not shown)";
+        _statusLabel.text = _showsHiddenFiles ? NSLocalizedString(@"Empty folder", @"File browser empty-state text") : NSLocalizedString(@"Empty folder\n(hidden files are not shown)", @"File browser empty-state text when hidden files are filtered");
         _statusLabel.hidden = NO;
     } else {
         _statusLabel.hidden = YES;
@@ -368,7 +368,7 @@ NSString *ISHShellQuoteArgument(NSString *argument) {
                                                    weight:isLast ? UIFontWeightSemibold : UIFontWeightRegular];
         [button setTitleColor:isLast ? UIColor.labelColor : UIColor.systemBlueColor
                      forState:UIControlStateNormal];
-        button.accessibilityHint = isLast ? nil : @"Go to this folder";
+        button.accessibilityHint = isLast ? nil : NSLocalizedString(@"Go to this folder", @"Accessibility hint for a breadcrumb path button");
         NSString *destination = paths[i];
         __weak typeof(self) weakSelf = self;
         [button addAction:[UIAction actionWithHandler:^(UIAction *action) {
@@ -387,16 +387,16 @@ NSString *ISHShellQuoteArgument(NSString *argument) {
 
 - (void)updateOverflowMenu {
     __weak typeof(self) weakSelf = self;
-    UIAction *newFolder = [UIAction actionWithTitle:@"New Folder"
+    UIAction *newFolder = [UIAction actionWithTitle:NSLocalizedString(@"New Folder", @"File browser menu action")
                                               image:[UIImage systemImageNamed:@"folder.badge.plus"]
                                          identifier:nil
                                             handler:^(UIAction *action) { [weakSelf promptNewFolder]; }];
-    UIAction *hidden = [UIAction actionWithTitle:@"Show Hidden Files"
+    UIAction *hidden = [UIAction actionWithTitle:NSLocalizedString(@"Show Hidden Files", @"File browser menu action")
                                            image:[UIImage systemImageNamed:@"eye"]
                                       identifier:nil
                                          handler:^(UIAction *action) { [weakSelf toggleShowsHiddenFiles]; }];
     hidden.state = _showsHiddenFiles ? UIMenuElementStateOn : UIMenuElementStateOff;
-    UIAction *refresh = [UIAction actionWithTitle:@"Refresh"
+    UIAction *refresh = [UIAction actionWithTitle:NSLocalizedString(@"Refresh", @"File browser menu action")
                                             image:[UIImage systemImageNamed:@"arrow.clockwise"]
                                        identifier:nil
                                           handler:^(UIAction *action) { [weakSelf reload]; }];
@@ -404,8 +404,8 @@ NSString *ISHShellQuoteArgument(NSString *argument) {
     UIBarButtonItem *overflow = [[UIBarButtonItem alloc] initWithImage:[UIImage systemImageNamed:@"ellipsis.circle"]
                                                                   menu:menu];
     // The same name as the workspace File Manager's identical menu.
-    overflow.accessibilityLabel = @"More Actions";
-    overflow.accessibilityHint = @"Shows a menu with options to create a folder, show hidden files, or refresh.";
+    overflow.accessibilityLabel = NSLocalizedString(@"More Actions", @"Accessibility label for the file browser overflow menu button");
+    overflow.accessibilityHint = NSLocalizedString(@"Shows a menu with options to create a folder, show hidden files, or refresh.", @"Accessibility hint for the file browser overflow menu button");
     self.navigationItem.rightBarButtonItem = overflow;
 }
 
@@ -446,10 +446,10 @@ NSString *ISHShellQuoteArgument(NSString *argument) {
 
 - (void)promptNewFolder {
     __weak typeof(self) weakSelf = self;
-    [self promptForName:@"New Folder"
-                message:[NSString stringWithFormat:@"Create a folder in %@", _path]
-            initialText:@"untitled folder"
-             actionName:@"Create"
+    [self promptForName:NSLocalizedString(@"New Folder", @"Alert title when creating a folder")
+                message:[NSString stringWithFormat:NSLocalizedString(@"Create a folder in %@", @"Alert message when creating a folder; %@ is the parent path"), _path]
+            initialText:NSLocalizedString(@"untitled folder", @"Default name for a new folder")
+             actionName:NSLocalizedString(@"Create", @"Alert button that creates a new folder")
              completion:^(NSString *name) {
         typeof(self) self_ = weakSelf;
         if (self_ == nil)
@@ -457,7 +457,7 @@ NSString *ISHShellQuoteArgument(NSString *argument) {
         NSString *destination = [self_->_path stringByAppendingPathComponent:name];
         [[ISHGuestFileBridge sharedBridge] createDirectoryAtGuestPath:destination completion:^(BOOL ok, NSError *error) {
             if (!ok)
-                [weakSelf presentError:error title:@"Couldn't Create Folder"];
+                [weakSelf presentError:error title:NSLocalizedString(@"Couldn't Create Folder", @"Error alert title")];
             else
                 [weakSelf reload];
         }];
@@ -474,13 +474,13 @@ NSString *ISHShellQuoteArgument(NSString *argument) {
     for (ISHGuestFileItem *sibling in _items)
         [taken addObject:sibling.name];
     for (NSUInteger n = 1; n < 1000; n++) {
-        NSString *stem = (n == 1) ? [base stringByAppendingString:@" copy"]
-                                  : [NSString stringWithFormat:@"%@ copy %lu", base, (unsigned long) n];
+        NSString *stem = (n == 1) ? [NSString stringWithFormat:NSLocalizedString(@"%@ copy", @"Name of a duplicated file; %@ is the original name"), base]
+                                  : [NSString stringWithFormat:NSLocalizedString(@"%@ copy %lu", @"Name of a duplicated file; %@ is the original name, %lu the copy number"), base, (unsigned long) n];
         NSString *candidate = ext.length > 0 ? [stem stringByAppendingPathExtension:ext] : stem;
         if (![taken containsObject:candidate])
             return candidate;
     }
-    return [base stringByAppendingFormat:@" copy %@", [NSUUID UUID].UUIDString];
+    return [NSString stringWithFormat:NSLocalizedString(@"%@ copy %@", @"Name of a duplicated file; first %@ is the original name, second a unique ID"), base, [NSUUID UUID].UUIDString];
 }
 
 - (void)duplicateItem:(ISHGuestFileItem *)item {
@@ -491,7 +491,7 @@ NSString *ISHShellQuoteArgument(NSString *argument) {
                                               toGuestPath:destination
                                                completion:^(BOOL ok, NSError *error) {
         if (!ok)
-            [weakSelf presentError:error title:@"Couldn't Duplicate"];
+            [weakSelf presentError:error title:NSLocalizedString(@"Couldn't Duplicate", @"Error alert title")];
         else
             [weakSelf reload];
     }];
@@ -499,10 +499,10 @@ NSString *ISHShellQuoteArgument(NSString *argument) {
 
 - (void)promptRenameItem:(ISHGuestFileItem *)item {
     __weak typeof(self) weakSelf = self;
-    [self promptForName:@"Rename"
+    [self promptForName:NSLocalizedString(@"Rename", @"Alert title when renaming a file")
                 message:item.name
             initialText:item.name
-             actionName:@"Rename"
+             actionName:NSLocalizedString(@"Rename", @"Alert button that renames a file")
              completion:^(NSString *name) {
         typeof(self) self_ = weakSelf;
         if (self_ == nil || [name isEqualToString:item.name])
@@ -512,7 +512,7 @@ NSString *ISHShellQuoteArgument(NSString *argument) {
                                                     toGuestPath:destination
                                                      completion:^(BOOL ok, NSError *error) {
             if (!ok)
-                [weakSelf presentError:error title:@"Couldn't Rename"];
+                [weakSelf presentError:error title:NSLocalizedString(@"Couldn't Rename", @"Error alert title")];
             else
                 [weakSelf reload];
         }];
@@ -522,19 +522,19 @@ NSString *ISHShellQuoteArgument(NSString *argument) {
 - (void)confirmDeleteItem:(ISHGuestFileItem *)item {
     BOOL isDirectory = item.kind == ISHGuestFileKindDirectory && !item.isSymlink;
     NSString *message = isDirectory
-        ? [NSString stringWithFormat:@"Delete “%@” and everything in it? This can't be undone.", item.name]
-        : [NSString stringWithFormat:@"Delete “%@”? This can't be undone.", item.name];
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Delete"
+        ? [NSString stringWithFormat:NSLocalizedString(@"Delete “%@” and everything in it? This can't be undone.", @"Delete confirmation for a folder; %@ is the folder name"), item.name]
+        : [NSString stringWithFormat:NSLocalizedString(@"Delete “%@”? This can't be undone.", @"Delete confirmation for a file; %@ is the file name"), item.name];
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:NSLocalizedString(@"Delete", @"Delete confirmation alert title")
                                                                    message:message
                                                             preferredStyle:UIAlertControllerStyleAlert];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Cancel", @"Alert button") style:UIAlertActionStyleCancel handler:nil]];
     __weak typeof(self) weakSelf = self;
-    [alert addAction:[UIAlertAction actionWithTitle:@"Delete" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
+    [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Delete", @"Alert button that deletes a file") style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
         [[ISHGuestFileBridge sharedBridge] removeItemAtGuestPath:item.guestPath
                                                         recursive:isDirectory
                                                        completion:^(BOOL ok, NSError *error) {
             if (!ok)
-                [weakSelf presentError:error title:@"Couldn't Delete"];
+                [weakSelf presentError:error title:NSLocalizedString(@"Couldn't Delete", @"Error alert title")];
             else
                 [weakSelf reload];
         }];
@@ -545,27 +545,27 @@ NSString *ISHShellQuoteArgument(NSString *argument) {
 - (void)showInfoForItem:(ISHGuestFileItem *)item {
     NSMutableString *body = [NSMutableString string];
     [body appendFormat:@"%@\n\n", item.guestPath];
-    [body appendFormat:@"Kind: %@\n", [self kindDescriptionForItem:item]];
+    [body appendFormat:NSLocalizedString(@"Kind: %@\n", @"Get Info line: file kind"), [self kindDescriptionForItem:item]];
     if (item.kind != ISHGuestFileKindDirectory)
-        [body appendFormat:@"Size: %@\n", [self formattedSize:item.size]];
-    [body appendFormat:@"Permissions: %@\n", [self modeStringForItem:item]];
-    [body appendFormat:@"Owner: %u:%u\n", (unsigned)item.uid, (unsigned)item.gid];
+        [body appendFormat:NSLocalizedString(@"Size: %@\n", @"Get Info line: file size"), [self formattedSize:item.size]];
+    [body appendFormat:NSLocalizedString(@"Permissions: %@\n", @"Get Info line: Unix permissions"), [self modeStringForItem:item]];
+    [body appendFormat:NSLocalizedString(@"Owner: %u:%u\n", @"Get Info line: numeric user and group id"), (unsigned)item.uid, (unsigned)item.gid];
     if (item.modificationDate != nil)
-        [body appendFormat:@"Modified: %@\n", [NSDateFormatter localizedStringFromDate:item.modificationDate
+        [body appendFormat:NSLocalizedString(@"Modified: %@\n", @"Get Info line: modification date"), [NSDateFormatter localizedStringFromDate:item.modificationDate
                                                                               dateStyle:NSDateFormatterMediumStyle
                                                                               timeStyle:NSDateFormatterShortStyle]];
     if (item.symlinkTarget != nil)
-        [body appendFormat:@"Symlink to: %@\n", item.symlinkTarget];
+        [body appendFormat:NSLocalizedString(@"Symlink to: %@\n", @"Get Info line: symbolic link target"), item.symlinkTarget];
     if (item.realfsURL != nil)
-        [body appendString:@"Stored outside the rootfs (persists across reinstalls)\n"];
+        [body appendString:NSLocalizedString(@"Stored outside the rootfs (persists across reinstalls)\n", @"Get Info line for a file in persistent storage")];
 
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:item.name
                                                                    message:body
                                                             preferredStyle:UIAlertControllerStyleAlert];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Copy Path" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+    [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Copy Path", @"Get Info alert button") style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
         UIPasteboard.generalPasteboard.string = item.guestPath;
     }]];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Done" style:UIAlertActionStyleCancel handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Done", @"Get Info alert button") style:UIAlertActionStyleCancel handler:nil]];
     [self presentViewController:alert animated:YES completion:nil];
 }
 
@@ -589,7 +589,7 @@ NSString *ISHShellQuoteArgument(NSString *argument) {
         field.clearButtonMode = UITextFieldViewModeWhileEditing;
         nameField = field;
     }];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Cancel", @"Alert button") style:UIAlertActionStyleCancel handler:nil]];
     __weak typeof(self) weakSelf = self;
     [alert addAction:[UIAlertAction actionWithTitle:actionName style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
         NSString *name = nameField.text ?: @"";
@@ -598,7 +598,7 @@ NSString *ISHShellQuoteArgument(NSString *argument) {
         // than sanitise: a name the user did not type is worse than an error.
         if (name.length == 0 || [name containsString:@"/"] ||
                 [name isEqualToString:@"."] || [name isEqualToString:@".."]) {
-            [weakSelf presentMessage:@"That name can't be used. Names can't be empty or contain “/”."
+            [weakSelf presentMessage:NSLocalizedString(@"That name can't be used. Names can't be empty or contain “/”.", @"Error message for an invalid file name")
                                title:title];
             return;
         }
@@ -608,14 +608,14 @@ NSString *ISHShellQuoteArgument(NSString *argument) {
 }
 
 - (void)presentError:(nullable NSError *)error title:(NSString *)title {
-    [self presentMessage:error.localizedDescription ?: @"The operation failed." title:title];
+    [self presentMessage:error.localizedDescription ?: NSLocalizedString(@"The operation failed.", @"Fallback error message") title:title];
 }
 
 - (void)presentMessage:(NSString *)message title:(NSString *)title {
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:title
                                                                    message:message
                                                             preferredStyle:UIAlertControllerStyleAlert];
-    [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"OK", @"Alert button") style:UIAlertActionStyleDefault handler:nil]];
     [self presentViewController:alert animated:YES completion:nil];
 }
 
@@ -640,14 +640,14 @@ NSString *ISHShellQuoteArgument(NSString *argument) {
 
 - (NSString *)kindDescriptionForItem:(ISHGuestFileItem *)item {
     switch (item.kind) {
-        case ISHGuestFileKindDirectory: return item.isSymlink ? @"Folder alias" : @"Folder";
-        case ISHGuestFileKindRegular: return (item.posixMode & 0111) != 0 ? @"Executable" : @"File";
-        case ISHGuestFileKindSymlink: return @"Broken alias";
-        case ISHGuestFileKindFIFO: return @"Named pipe";
-        case ISHGuestFileKindSocket: return @"Socket";
-        case ISHGuestFileKindCharDevice: return @"Character device";
-        case ISHGuestFileKindBlockDevice: return @"Block device";
-        default: return @"Other";
+        case ISHGuestFileKindDirectory: return item.isSymlink ? NSLocalizedString(@"Folder alias", @"File kind: symbolic link to a folder") : NSLocalizedString(@"Folder", @"File kind");
+        case ISHGuestFileKindRegular: return (item.posixMode & 0111) != 0 ? NSLocalizedString(@"Executable", @"File kind: executable file") : NSLocalizedString(@"File", @"File kind: regular file");
+        case ISHGuestFileKindSymlink: return NSLocalizedString(@"Broken alias", @"File kind: symbolic link whose target is missing");
+        case ISHGuestFileKindFIFO: return NSLocalizedString(@"Named pipe", @"File kind: FIFO");
+        case ISHGuestFileKindSocket: return NSLocalizedString(@"Socket", @"File kind: Unix socket");
+        case ISHGuestFileKindCharDevice: return NSLocalizedString(@"Character device", @"File kind");
+        case ISHGuestFileKindBlockDevice: return NSLocalizedString(@"Block device", @"File kind");
+        default: return NSLocalizedString(@"Other", @"File kind: unknown type");
     }
 }
 
@@ -667,7 +667,7 @@ NSString *ISHShellQuoteArgument(NSString *argument) {
 
 - (nullable NSString *)subtitleForItem:(ISHGuestFileItem *)item {
     if (item.isBrokenSymlink)
-        return [NSString stringWithFormat:@"Broken alias → %@", item.symlinkTarget];
+        return [NSString stringWithFormat:NSLocalizedString(@"Broken alias → %@", @"File list subtitle; %@ is the missing link target"), item.symlinkTarget];
     if (item.isSymlink)
         return [NSString stringWithFormat:@"→ %@", item.symlinkTarget];
     if (item.kind == ISHGuestFileKindDirectory)
@@ -730,12 +730,12 @@ NSString *ISHShellQuoteArgument(NSString *argument) {
                                                    previewProvider:nil
                                                     actionProvider:^UIMenu *(NSArray<UIMenuElement *> *suggested) {
         NSMutableArray<UIMenuElement *> *actions = [NSMutableArray array];
-        [actions addObject:[UIAction actionWithTitle:@"Insert Path"
+        [actions addObject:[UIAction actionWithTitle:NSLocalizedString(@"Insert Path", @"File context menu action: paste the path into the terminal")
                                                image:[UIImage systemImageNamed:@"text.cursor"]
                                           identifier:nil
                                              handler:^(UIAction *action) { [weakSelf insertPathOfItem:item]; }]];
         if (item.kind == ISHGuestFileKindDirectory) {
-            [actions addObject:[UIAction actionWithTitle:@"cd Here"
+            [actions addObject:[UIAction actionWithTitle:NSLocalizedString(@"cd Here", @"File context menu action: change the shell directory to this folder (cd is a shell command)")
                                                    image:[UIImage systemImageNamed:@"arrow.turn.down.right"]
                                               identifier:nil
                                                  handler:^(UIAction *action) {
@@ -743,29 +743,29 @@ NSString *ISHShellQuoteArgument(NSString *argument) {
                                  dismiss:YES];
             }]];
         }
-        [actions addObject:[UIAction actionWithTitle:@"Copy Path"
+        [actions addObject:[UIAction actionWithTitle:NSLocalizedString(@"Copy Path", @"File context menu action")
                                                image:[UIImage systemImageNamed:@"doc.on.doc"]
                                           identifier:nil
                                              handler:^(UIAction *action) {
             UIPasteboard.generalPasteboard.string = item.guestPath;
         }]];
-        [actions addObject:[UIAction actionWithTitle:@"Rename…"
+        [actions addObject:[UIAction actionWithTitle:NSLocalizedString(@"Rename…", @"File context menu action")
                                                image:[UIImage systemImageNamed:@"pencil"]
                                           identifier:nil
                                              handler:^(UIAction *action) { [weakSelf promptRenameItem:item]; }]];
         if (item.kind == ISHGuestFileKindRegular && !item.isSymlink) {
             // Regular files only: the bridge's copy does not do directories,
             // and offering a verb that fails is worse than not offering it.
-            [actions addObject:[UIAction actionWithTitle:@"Duplicate"
+            [actions addObject:[UIAction actionWithTitle:NSLocalizedString(@"Duplicate", @"File context menu action")
                                                    image:[UIImage systemImageNamed:@"plus.square.on.square"]
                                               identifier:nil
                                                  handler:^(UIAction *action) { [weakSelf duplicateItem:item]; }]];
         }
-        [actions addObject:[UIAction actionWithTitle:@"Get Info"
+        [actions addObject:[UIAction actionWithTitle:NSLocalizedString(@"Get Info", @"File context menu action")
                                                image:[UIImage systemImageNamed:@"info.circle"]
                                           identifier:nil
                                              handler:^(UIAction *action) { [weakSelf showInfoForItem:item]; }]];
-        UIAction *delete = [UIAction actionWithTitle:@"Delete"
+        UIAction *delete = [UIAction actionWithTitle:NSLocalizedString(@"Delete", @"File context menu action")
                                                image:[UIImage systemImageNamed:@"trash"]
                                           identifier:nil
                                              handler:^(UIAction *action) { [weakSelf confirmDeleteItem:item]; }];

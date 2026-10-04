@@ -342,12 +342,12 @@ static ISHGuestFileKind ISHGuestFileKindFromMode(mode_t mode) {
 }
 
 - (NSError *)notReadyError {
-    return [self errorWithCode:ISHGuestFileBridgeErrorNotReady message:@"The guest filesystem isn't ready yet"];
+    return [self errorWithCode:ISHGuestFileBridgeErrorNotReady message:NSLocalizedString(@"The guest filesystem isn't ready yet", @"File operation error shown in the file manager")];
 }
 
 - (NSError *)hostErrnoError {
     return [NSError errorWithDomain:NSPOSIXErrorDomain code:errno
-                           userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithUTF8String:strerror(errno)] ?: @"Unknown error"}];
+                           userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithUTF8String:strerror(errno)] ?: NSLocalizedString(@"Unknown error", @"Fallback file operation error")}];
 }
 
 #pragma mark Borrowed task context
@@ -581,9 +581,9 @@ static ISHGuestFileKind ISHGuestFileKindFromMode(mode_t mode) {
             items = [self listHostDirectory:hostDir guestBasePath:path token:token];
             if (items == nil) error = [self cancelledError];
         } else if (hostExists) {
-            error = [self errorWithCode:ISHGuestFileBridgeErrorNotDirectory message:@"That path is not a directory"];
+            error = [self errorWithCode:ISHGuestFileBridgeErrorNotDirectory message:NSLocalizedString(@"That path is not a directory", @"File operation error shown in the file manager")];
         } else if (hostDir != nil) {
-            error = [self errorWithGuestErrno:_ENOENT message:@"No such file or directory"];
+            error = [self errorWithGuestErrno:_ENOENT message:NSLocalizedString(@"No such file or directory", @"File operation error shown in the file manager")];
         } else {
             __block NSArray<ISHGuestFileItem *> *vfsItems = nil;
             __block NSError *vfsError = nil;
@@ -596,7 +596,7 @@ static ISHGuestFileKind ISHGuestFileKindFromMode(mode_t mode) {
         }
         [self finishOperation:token];
         NSArray<ISHGuestFileItem *> *result = items;
-        NSError *finalError = error ?: (result == nil ? [self errorWithCode:ISHGuestFileBridgeErrorUnknown message:@"Unknown error"] : nil);
+        NSError *finalError = error ?: (result == nil ? [self errorWithCode:ISHGuestFileBridgeErrorUnknown message:NSLocalizedString(@"Unknown error", @"File operation error shown in the file manager")] : nil);
         dispatch_async(dispatch_get_main_queue(), ^{ if (completion) completion(result, finalError); });
     }];
 
@@ -633,12 +633,12 @@ static ISHGuestFileKind ISHGuestFileKindFromMode(mode_t mode) {
                                                              error:(NSError **)error {
     struct fd *fd = generic_open(guestPath.fileSystemRepresentation, O_RDONLY_ | O_NONBLOCK_, 0);
     if (IS_ERR(fd)) {
-        if (error) *error = [self errorWithGuestErrno:(long)PTR_ERR(fd) message:@"Cannot open directory"];
+        if (error) *error = [self errorWithGuestErrno:(long)PTR_ERR(fd) message:NSLocalizedString(@"Cannot open directory", @"File operation error shown in the file manager")];
         return nil;
     }
     if (!S_ISDIR(fd->type) || fd->ops->readdir == NULL) {
         fd_close(fd);
-        if (error) *error = [self errorWithCode:ISHGuestFileBridgeErrorNotDirectory message:@"That path is not a directory"];
+        if (error) *error = [self errorWithCode:ISHGuestFileBridgeErrorNotDirectory message:NSLocalizedString(@"That path is not a directory", @"File operation error shown in the file manager")];
         return nil;
     }
 
@@ -711,7 +711,7 @@ static ISHGuestFileKind ISHGuestFileKindFromMode(mode_t mode) {
     NSURL *hostURL = [self hostURLForRealfsGuestPath:guestPath];
     if (hostURL != nil) {
         ISHGuestFileItem *item = [self itemForHostURL:hostURL guestPath:guestPath];
-        if (item == nil && error) *error = [self errorWithGuestErrno:_ENOENT message:@"No such file or directory"];
+        if (item == nil && error) *error = [self errorWithGuestErrno:_ENOENT message:NSLocalizedString(@"No such file or directory", @"File operation error shown in the file manager")];
         return item;
     }
 
@@ -721,7 +721,7 @@ static ISHGuestFileKind ISHGuestFileKindFromMode(mode_t mode) {
         struct statbuf st;
         memset(&st, 0, sizeof(st));
         int err = generic_statat(AT_PWD, guestPath.fileSystemRepresentation, &st, 0);
-        if (err < 0) { vfsError = [self errorWithGuestErrno:err message:@"Cannot stat path"]; return; }
+        if (err < 0) { vfsError = [self errorWithGuestErrno:err message:NSLocalizedString(@"Cannot stat path", @"File operation error shown in the file manager")]; return; }
         item = [ISHGuestFileItem new];
         item.name = guestPath.lastPathComponent;
         item.guestPath = guestPath;
@@ -773,14 +773,14 @@ static ISHGuestFileKind ISHGuestFileKindFromMode(mode_t mode) {
             // devpts) just leave the buffer zeroed -- reported as 0/0.
             char normalized[MAX_PATH];
             int err = path_normalize(AT_PWD, path.fileSystemRepresentation, normalized, N_SYMLINK_NOFOLLOW);
-            if (err < 0) { vfsError = [self errorWithGuestErrno:err message:@"Cannot resolve path"]; return; }
+            if (err < 0) { vfsError = [self errorWithGuestErrno:err message:NSLocalizedString(@"Cannot resolve path", @"File operation error shown in the file manager")]; return; }
             struct mount *mount = mount_find(normalized);
-            if (mount == NULL) { vfsError = [self errorWithGuestErrno:_ENOENT message:@"No such mount"]; return; }
+            if (mount == NULL) { vfsError = [self errorWithGuestErrno:_ENOENT message:NSLocalizedString(@"No such mount", @"File operation error shown in the file manager")]; return; }
             struct statfsbuf buf;
             memset(&buf, 0, sizeof(buf));
             err = mount_statfs(mount, &buf);
             mount_release(mount);
-            if (err < 0) { vfsError = [self errorWithGuestErrno:err message:@"Cannot stat filesystem"]; return; }
+            if (err < 0) { vfsError = [self errorWithGuestErrno:err message:NSLocalizedString(@"Cannot stat filesystem", @"File operation error shown in the file manager")]; return; }
             long blockSize = buf.frsize > 0 ? buf.frsize : buf.bsize;
             if (blockSize > 0) {
                 available = (int64_t)buf.bavail * blockSize;
@@ -849,12 +849,12 @@ static ISHGuestFileKind ISHGuestFileKindFromMode(mode_t mode) {
     struct stat st;
     if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode)) {
         close(fd);
-        if (error) *error = [self errorWithCode:ISHGuestFileBridgeErrorNotRegularFile message:@"That path is not a regular file"];
+        if (error) *error = [self errorWithCode:ISHGuestFileBridgeErrorNotRegularFile message:NSLocalizedString(@"That path is not a regular file", @"File operation error shown in the file manager")];
         return nil;
     }
     if ((unsigned long long)st.st_size > maxBytes) {
         close(fd);
-        if (error) *error = [self errorWithCode:ISHGuestFileBridgeErrorTooLarge message:@"File is larger than the allowed read size"];
+        if (error) *error = [self errorWithCode:ISHGuestFileBridgeErrorTooLarge message:NSLocalizedString(@"File is larger than the allowed read size", @"File operation error shown in the file manager")];
         return nil;
     }
     NSMutableData *data = [NSMutableData data];
@@ -873,7 +873,7 @@ static ISHGuestFileKind ISHGuestFileKindFromMode(mode_t mode) {
     }
     if (n < 0) {
         if (error) *error = [NSError errorWithDomain:NSPOSIXErrorDomain code:readErrno
-                                            userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithUTF8String:strerror(readErrno)] ?: @"Unknown error"}];
+                                            userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithUTF8String:strerror(readErrno)] ?: NSLocalizedString(@"Unknown error", @"Fallback file operation error")}];
         return nil;
     }
     return data;
@@ -887,23 +887,23 @@ static ISHGuestFileKind ISHGuestFileKindFromMode(mode_t mode) {
     struct statbuf precheck;
     memset(&precheck, 0, sizeof(precheck));
     if (generic_statat(AT_PWD, guestPath.fileSystemRepresentation, &precheck, 0) >= 0 && precheck.size > maxBytes) {
-        if (error) *error = [self errorWithCode:ISHGuestFileBridgeErrorTooLarge message:@"File is larger than the allowed read size"];
+        if (error) *error = [self errorWithCode:ISHGuestFileBridgeErrorTooLarge message:NSLocalizedString(@"File is larger than the allowed read size", @"File operation error shown in the file manager")];
         return nil;
     }
 
     struct fd *fd = generic_open(guestPath.fileSystemRepresentation, O_RDONLY_ | O_NONBLOCK_, 0);
     if (IS_ERR(fd)) {
-        if (error) *error = [self errorWithGuestErrno:(long)PTR_ERR(fd) message:@"Cannot open file"];
+        if (error) *error = [self errorWithGuestErrno:(long)PTR_ERR(fd) message:NSLocalizedString(@"Cannot open file", @"File operation error shown in the file manager")];
         return nil;
     }
     if (S_ISDIR(fd->type)) {
         fd_close(fd);
-        if (error) *error = [self errorWithCode:ISHGuestFileBridgeErrorIsDirectory message:@"That path is a directory"];
+        if (error) *error = [self errorWithCode:ISHGuestFileBridgeErrorIsDirectory message:NSLocalizedString(@"That path is a directory", @"File operation error shown in the file manager")];
         return nil;
     }
     if (!S_ISREG(fd->type)) {
         fd_close(fd);
-        if (error) *error = [self errorWithCode:ISHGuestFileBridgeErrorNotRegularFile message:@"That path is not a regular file"];
+        if (error) *error = [self errorWithCode:ISHGuestFileBridgeErrorNotRegularFile message:NSLocalizedString(@"That path is not a regular file", @"File operation error shown in the file manager")];
         return nil;
     }
 
@@ -923,11 +923,11 @@ static ISHGuestFileKind ISHGuestFileKindFromMode(mode_t mode) {
         return nil;
     }
     if (tooLarge) {
-        if (error) *error = [self errorWithCode:ISHGuestFileBridgeErrorTooLarge message:@"File is larger than the allowed read size"];
+        if (error) *error = [self errorWithCode:ISHGuestFileBridgeErrorTooLarge message:NSLocalizedString(@"File is larger than the allowed read size", @"File operation error shown in the file manager")];
         return nil;
     }
     if (lastErr < 0) {
-        if (error) *error = [self errorWithGuestErrno:lastErr message:@"Failed reading file"];
+        if (error) *error = [self errorWithGuestErrno:lastErr message:NSLocalizedString(@"Failed reading file", @"File operation error shown in the file manager")];
         return nil;
     }
     return data;
@@ -1013,7 +1013,7 @@ static ISHGuestFileKind ISHGuestFileKindFromMode(mode_t mode) {
 }
 
 - (NSError *)cancelledError {
-    return [self errorWithCode:ISHGuestFileBridgeErrorCancelled message:@"Cancelled"];
+    return [self errorWithCode:ISHGuestFileBridgeErrorCancelled message:NSLocalizedString(@"Cancelled", @"File operation error shown in the file manager")];
 }
 
 - (ISHGuestFileExtractionToken)extractToTempFileAtGuestPath:(NSString *)guestPath
@@ -1052,7 +1052,7 @@ static ISHGuestFileKind ISHGuestFileKindFromMode(mode_t mode) {
         if (info.kind == ISHGuestFileKindDirectory) {
             [self finishOperation:token];
             dispatch_async(dispatch_get_main_queue(), ^{
-                if (completion) completion(nil, [self errorWithCode:ISHGuestFileBridgeErrorIsDirectory message:@"That path is a directory"]);
+                if (completion) completion(nil, [self errorWithCode:ISHGuestFileBridgeErrorIsDirectory message:NSLocalizedString(@"That path is a directory", @"File operation error shown in the file manager")]);
             });
             return;
         }
@@ -1105,17 +1105,17 @@ static ISHGuestFileKind ISHGuestFileKindFromMode(mode_t mode) {
                                        error:(NSError **)error {
     struct fd *fd = generic_open(guestPath.fileSystemRepresentation, O_RDONLY_ | O_NONBLOCK_, 0);
     if (IS_ERR(fd)) {
-        if (error) *error = [self errorWithGuestErrno:(long)PTR_ERR(fd) message:@"Cannot open guest file"];
+        if (error) *error = [self errorWithGuestErrno:(long)PTR_ERR(fd) message:NSLocalizedString(@"Cannot open guest file", @"File operation error shown in the file manager")];
         return nil;
     }
     if (S_ISDIR(fd->type)) {
         fd_close(fd);
-        if (error) *error = [self errorWithCode:ISHGuestFileBridgeErrorIsDirectory message:@"That path is a directory"];
+        if (error) *error = [self errorWithCode:ISHGuestFileBridgeErrorIsDirectory message:NSLocalizedString(@"That path is a directory", @"File operation error shown in the file manager")];
         return nil;
     }
     if (!S_ISREG(fd->type)) {
         fd_close(fd);
-        if (error) *error = [self errorWithCode:ISHGuestFileBridgeErrorNotRegularFile message:@"That path is not a regular file"];
+        if (error) *error = [self errorWithCode:ISHGuestFileBridgeErrorNotRegularFile message:NSLocalizedString(@"That path is not a regular file", @"File operation error shown in the file manager")];
         return nil;
     }
 
@@ -1126,7 +1126,7 @@ static ISHGuestFileKind ISHGuestFileKindFromMode(mode_t mode) {
     FILE *out = fopen(tempURL.fileSystemRepresentation, "wb");
     if (out == NULL) {
         fd_close(fd);
-        if (error) *error = [self errorWithCode:ISHGuestFileBridgeErrorUnknown message:@"Cannot create temp file"];
+        if (error) *error = [self errorWithCode:ISHGuestFileBridgeErrorUnknown message:NSLocalizedString(@"Cannot create temp file", @"File operation error shown in the file manager")];
         return nil;
     }
 
@@ -1134,7 +1134,7 @@ static ISHGuestFileKind ISHGuestFileKindFromMode(mode_t mode) {
     if (buffer == NULL) {
         fclose(out);
         fd_close(fd);
-        if (error) *error = [self errorWithCode:ISHGuestFileBridgeErrorUnknown message:@"Out of memory"];
+        if (error) *error = [self errorWithCode:ISHGuestFileBridgeErrorUnknown message:NSLocalizedString(@"Out of memory", @"File operation error shown in the file manager")];
         return nil;
     }
 
@@ -1161,7 +1161,7 @@ static ISHGuestFileKind ISHGuestFileKindFromMode(mode_t mode) {
     }
     if (!ok) {
         [NSFileManager.defaultManager removeItemAtURL:tempURL error:NULL];
-        if (error) *error = [self errorWithCode:ISHGuestFileBridgeErrorUnknown message:@"Failed reading guest file"];
+        if (error) *error = [self errorWithCode:ISHGuestFileBridgeErrorUnknown message:NSLocalizedString(@"Failed reading guest file", @"File operation error shown in the file manager")];
         return nil;
     }
     return tempURL;
@@ -1195,7 +1195,7 @@ static ISHGuestFileKind ISHGuestFileKindFromMode(mode_t mode) {
             if (S_ISLNK(lst.st_mode)) {
                 char resolved[PATH_MAX];
                 if (realpath(hostURL.fileSystemRepresentation, resolved) == NULL) {
-                    if (error) *error = [self errorWithCode:ISHGuestFileBridgeErrorNotRegularFile message:@"Cannot save through a broken symbolic link"];
+                    if (error) *error = [self errorWithCode:ISHGuestFileBridgeErrorNotRegularFile message:NSLocalizedString(@"Cannot save through a broken symbolic link", @"File operation error shown in the file manager")];
                     return NO;
                 }
                 // A link whose target leaves the persist area names a guest
@@ -1205,17 +1205,17 @@ static ISHGuestFileKind ISHGuestFileKindFromMode(mode_t mode) {
                 NSString *resolvedPath = [NSString stringWithUTF8String:resolved] ?: @"";
                 NSString *basePrefix = [self resolvedPersistBasePrefix];
                 if (basePrefix == nil || ![resolvedPath hasPrefix:basePrefix]) {
-                    if (error) *error = [self errorWithCode:ISHGuestFileBridgeErrorNotRegularFile message:@"That link points outside the persist area"];
+                    if (error) *error = [self errorWithCode:ISHGuestFileBridgeErrorNotRegularFile message:NSLocalizedString(@"That link points outside the persist area", @"File operation error shown in the file manager")];
                     return NO;
                 }
                 struct stat rst;
                 if (stat(resolved, &rst) != 0 || !S_ISREG(rst.st_mode)) {
-                    if (error) *error = [self errorWithCode:ISHGuestFileBridgeErrorNotRegularFile message:@"That path is not a regular file"];
+                    if (error) *error = [self errorWithCode:ISHGuestFileBridgeErrorNotRegularFile message:NSLocalizedString(@"That path is not a regular file", @"File operation error shown in the file manager")];
                     return NO;
                 }
                 hostURL = [NSURL fileURLWithPath:resolvedPath isDirectory:NO];
             } else if (!S_ISREG(lst.st_mode)) {
-                if (error) *error = [self errorWithCode:ISHGuestFileBridgeErrorNotRegularFile message:@"That path is not a regular file"];
+                if (error) *error = [self errorWithCode:ISHGuestFileBridgeErrorNotRegularFile message:NSLocalizedString(@"That path is not a regular file", @"File operation error shown in the file manager")];
                 return NO;
             }
         }
@@ -1310,7 +1310,7 @@ static void ISHApplyDefaultOwnerForCreation(NSString *path) {
     memset(&st, 0, sizeof(st));
     if (generic_statat(AT_PWD, target.fileSystemRepresentation, &st, AT_SYMLINK_NOFOLLOW_) >= 0) {
         if (!S_ISREG(st.mode)) {
-            if (error) *error = [self errorWithCode:ISHGuestFileBridgeErrorNotRegularFile message:@"That path is not a regular file"];
+            if (error) *error = [self errorWithCode:ISHGuestFileBridgeErrorNotRegularFile message:NSLocalizedString(@"That path is not a regular file", @"File operation error shown in the file manager")];
             return NO;
         }
         mode = (int)(st.mode & 07777);
@@ -1323,7 +1323,7 @@ static void ISHApplyDefaultOwnerForCreation(NSString *path) {
 
     struct fd *fd = generic_open(tmpPath.fileSystemRepresentation, O_WRONLY_ | O_CREAT_ | O_TRUNC_, mode);
     if (IS_ERR(fd)) {
-        if (error) *error = [self errorWithGuestErrno:(long)PTR_ERR(fd) message:@"Cannot create file"];
+        if (error) *error = [self errorWithGuestErrno:(long)PTR_ERR(fd) message:NSLocalizedString(@"Cannot create file", @"File operation error shown in the file manager")];
         return NO;
     }
     BOOL ok = [self writeAllData:data toOpenFd:fd];
@@ -1332,7 +1332,7 @@ static void ISHApplyDefaultOwnerForCreation(NSString *path) {
     fd_close(fd);
     if (!ok) {
         generic_unlinkat(AT_PWD, tmpPath.fileSystemRepresentation);
-        if (error) *error = [self errorWithCode:ISHGuestFileBridgeErrorUnknown message:@"Failed writing file"];
+        if (error) *error = [self errorWithCode:ISHGuestFileBridgeErrorUnknown message:NSLocalizedString(@"Failed writing file", @"File operation error shown in the file manager")];
         return NO;
     }
 
@@ -1366,7 +1366,7 @@ static void ISHApplyDefaultOwnerForCreation(NSString *path) {
     memset(&st, 0, sizeof(st));
     if (generic_statat(AT_PWD, guestPath.fileSystemRepresentation, &st, 0) >= 0) {
         if (!S_ISREG(st.mode)) {
-            if (error) *error = [self errorWithCode:ISHGuestFileBridgeErrorNotRegularFile message:@"That path is not a regular file"];
+            if (error) *error = [self errorWithCode:ISHGuestFileBridgeErrorNotRegularFile message:NSLocalizedString(@"That path is not a regular file", @"File operation error shown in the file manager")];
             return NO;
         }
         existed = YES;
@@ -1377,7 +1377,7 @@ static void ISHApplyDefaultOwnerForCreation(NSString *path) {
 
     struct fd *fd = generic_open(guestPath.fileSystemRepresentation, O_WRONLY_ | O_CREAT_ | O_TRUNC_, mode);
     if (IS_ERR(fd)) {
-        if (error) *error = [self errorWithGuestErrno:(long)PTR_ERR(fd) message:@"Cannot create file"];
+        if (error) *error = [self errorWithGuestErrno:(long)PTR_ERR(fd) message:NSLocalizedString(@"Cannot create file", @"File operation error shown in the file manager")];
         return NO;
     }
     BOOL ok = [self writeAllData:data toOpenFd:fd];
@@ -1400,8 +1400,8 @@ static void ISHApplyDefaultOwnerForCreation(NSString *path) {
     }
     if (error) {
         NSString *message = restored
-            ? @"Failed writing file (the previous contents were restored)"
-            : @"Failed writing file, and the previous contents could not be restored";
+            ? NSLocalizedString(@"Failed writing file (the previous contents were restored)", @"File operation error shown in the file manager")
+            : NSLocalizedString(@"Failed writing file, and the previous contents could not be restored", @"File operation error shown in the file manager");
         *error = [self errorWithCode:ISHGuestFileBridgeErrorUnknown message:message];
     }
     return NO;
@@ -1438,7 +1438,7 @@ static void ISHApplyDefaultOwnerForCreation(NSString *path) {
             __block NSError *vfsError = nil;
             BOOL hadContext = [self withGuestTaskContext:^{
                 int err = generic_mkdirat(AT_PWD, path.fileSystemRepresentation, 0755);
-                if (err < 0) vfsError = [self errorWithGuestErrno:err message:@"Cannot create directory"];
+                if (err < 0) vfsError = [self errorWithGuestErrno:err message:NSLocalizedString(@"Cannot create directory", @"File operation error shown in the file manager")];
                 else { vfsOk = YES; ISHApplyDefaultOwnerForCreation(path); }
             }];
             if (!hadContext) error = [self notReadyError];
@@ -1493,7 +1493,7 @@ static void ISHApplyDefaultOwnerForCreation(NSString *path) {
         __block NSError *vfsError = nil;
         BOOL hadContext = [self withGuestTaskContext:^{
             int err = generic_renameat(AT_PWD, sourcePath.fileSystemRepresentation, AT_PWD, destinationPath.fileSystemRepresentation, 0);
-            if (err < 0) vfsError = [self errorWithGuestErrno:err message:@"Cannot move item"];
+            if (err < 0) vfsError = [self errorWithGuestErrno:err message:NSLocalizedString(@"Cannot move item", @"File operation error shown in the file manager")];
             else ok = YES;
         }];
         if (!hadContext) { if (error) *error = [self notReadyError]; return NO; }
@@ -1506,7 +1506,7 @@ static void ISHApplyDefaultOwnerForCreation(NSString *path) {
     ISHGuestFileItem *sourceInfo = [self statSync:sourcePath error:error];
     if (sourceInfo == nil) return NO;
     if (sourceInfo.kind == ISHGuestFileKindDirectory) {
-        if (error) *error = [self errorWithCode:ISHGuestFileBridgeErrorUnsupported message:@"Moving a folder across filesystems isn't supported yet"];
+        if (error) *error = [self errorWithCode:ISHGuestFileBridgeErrorUnsupported message:NSLocalizedString(@"Moving a folder across filesystems isn't supported yet", @"File operation error shown in the file manager")];
         return NO;
     }
     if (![self copySync:sourcePath toGuestPath:destinationPath token:token error:error]) {
@@ -1514,7 +1514,7 @@ static void ISHApplyDefaultOwnerForCreation(NSString *path) {
         // user actually attempted.
         if (error && [(*error).domain isEqualToString:ISHGuestFileErrorDomain] && (*error).code == ISHGuestFileBridgeErrorTooLarge)
             *error = [self errorWithCode:ISHGuestFileBridgeErrorUnsupported
-                                  message:@"Moving files this large across filesystems isn't supported yet"];
+                                  message:NSLocalizedString(@"Moving files this large across filesystems isn't supported yet", @"File operation error shown in the file manager")];
         return NO;
     }
     return [self removeSync:sourcePath recursive:NO error:error];
@@ -1544,7 +1544,7 @@ static void ISHApplyDefaultOwnerForCreation(NSString *path) {
     if ([sourcePath isEqualToString:destinationPath]) {
         // The host branch below deletes the destination before copying; for
         // the same path that would destroy the only copy, then fail.
-        if (error) *error = [self errorWithGuestErrno:_EINVAL message:@"Source and destination are the same file"];
+        if (error) *error = [self errorWithGuestErrno:_EINVAL message:NSLocalizedString(@"Source and destination are the same file", @"File operation error shown in the file manager")];
         return NO;
     }
     NSURL *srcHost = [self hostURLForRealfsGuestPath:sourcePath];
@@ -1594,22 +1594,22 @@ static void ISHApplyDefaultOwnerForCreation(NSString *path) {
         if (srcHost != nil) {
             hostIn = fopen(srcHost.fileSystemRepresentation, "rb");
             if (hostIn == NULL) {
-                failure = [self errorWithCode:ISHGuestFileBridgeErrorUnknown message:@"Cannot open source file"];
+                failure = [self errorWithCode:ISHGuestFileBridgeErrorUnknown message:NSLocalizedString(@"Cannot open source file", @"File operation error shown in the file manager")];
                 goto done;
             }
         } else {
             guestIn = generic_open(sourcePath.fileSystemRepresentation, O_RDONLY_ | O_NONBLOCK_, 0);
             if (IS_ERR(guestIn)) {
-                failure = [self errorWithGuestErrno:(long)PTR_ERR(guestIn) message:@"Cannot open source file"];
+                failure = [self errorWithGuestErrno:(long)PTR_ERR(guestIn) message:NSLocalizedString(@"Cannot open source file", @"File operation error shown in the file manager")];
                 guestIn = NULL;
                 goto done;
             }
             if (S_ISDIR(guestIn->type)) {
-                failure = [self errorWithCode:ISHGuestFileBridgeErrorIsDirectory message:@"That path is a directory"];
+                failure = [self errorWithCode:ISHGuestFileBridgeErrorIsDirectory message:NSLocalizedString(@"That path is a directory", @"File operation error shown in the file manager")];
                 goto done;
             }
             if (!S_ISREG(guestIn->type)) {
-                failure = [self errorWithCode:ISHGuestFileBridgeErrorNotRegularFile message:@"That path is not a regular file"];
+                failure = [self errorWithCode:ISHGuestFileBridgeErrorNotRegularFile message:NSLocalizedString(@"That path is not a regular file", @"File operation error shown in the file manager")];
                 goto done;
             }
         }
@@ -1624,7 +1624,7 @@ static void ISHApplyDefaultOwnerForCreation(NSString *path) {
             [NSFileManager.defaultManager removeItemAtURL:hostTmpURL error:NULL];
             hostOut = fopen(hostTmpURL.fileSystemRepresentation, "wb");
             if (hostOut == NULL) {
-                failure = [self errorWithCode:ISHGuestFileBridgeErrorUnknown message:@"Cannot create destination file"];
+                failure = [self errorWithCode:ISHGuestFileBridgeErrorUnknown message:NSLocalizedString(@"Cannot create destination file", @"File operation error shown in the file manager")];
                 goto done;
             }
         } else {
@@ -1634,7 +1634,7 @@ static void ISHApplyDefaultOwnerForCreation(NSString *path) {
             int mode = 0644;
             if (generic_statat(AT_PWD, target.fileSystemRepresentation, &dstStat, AT_SYMLINK_NOFOLLOW_) >= 0) {
                 if (!S_ISREG(dstStat.mode)) {
-                    failure = [self errorWithCode:ISHGuestFileBridgeErrorNotRegularFile message:@"That path is not a regular file"];
+                    failure = [self errorWithCode:ISHGuestFileBridgeErrorNotRegularFile message:NSLocalizedString(@"That path is not a regular file", @"File operation error shown in the file manager")];
                     goto done;
                 }
                 mode = (int)(dstStat.mode & 07777);
@@ -1646,7 +1646,7 @@ static void ISHApplyDefaultOwnerForCreation(NSString *path) {
             guestOut = generic_open(guestTmpPath.fileSystemRepresentation,
                                     O_WRONLY_ | O_CREAT_ | O_TRUNC_, mode);
             if (IS_ERR(guestOut)) {
-                failure = [self errorWithGuestErrno:(long)PTR_ERR(guestOut) message:@"Cannot create destination file"];
+                failure = [self errorWithGuestErrno:(long)PTR_ERR(guestOut) message:NSLocalizedString(@"Cannot create destination file", @"File operation error shown in the file manager")];
                 guestOut = NULL;
                 goto done;
             }
@@ -1655,7 +1655,7 @@ static void ISHApplyDefaultOwnerForCreation(NSString *path) {
 
         buffer = malloc(kExtractionChunkSize);
         if (buffer == NULL) {
-            failure = [self errorWithCode:ISHGuestFileBridgeErrorUnknown message:@"Out of memory"];
+            failure = [self errorWithCode:ISHGuestFileBridgeErrorUnknown message:NSLocalizedString(@"Out of memory", @"File operation error shown in the file manager")];
             goto done;
         }
 
@@ -1665,7 +1665,7 @@ static void ISHApplyDefaultOwnerForCreation(NSString *path) {
                 size_t got = fread(buffer, 1, kExtractionChunkSize, hostIn);
                 if (got == 0) {
                     if (ferror(hostIn)) {
-                        failure = [self errorWithCode:ISHGuestFileBridgeErrorUnknown message:@"Failed reading source file"];
+                        failure = [self errorWithCode:ISHGuestFileBridgeErrorUnknown message:NSLocalizedString(@"Failed reading source file", @"File operation error shown in the file manager")];
                         goto done;
                     }
                     break;  // clean EOF
@@ -1674,7 +1674,7 @@ static void ISHApplyDefaultOwnerForCreation(NSString *path) {
             } else {
                 n = guestIn->ops->read(guestIn, buffer, kExtractionChunkSize);
                 if (n < 0) {
-                    failure = [self errorWithGuestErrno:(long)n message:@"Failed reading source file"];
+                    failure = [self errorWithGuestErrno:(long)n message:NSLocalizedString(@"Failed reading source file", @"File operation error shown in the file manager")];
                     goto done;
                 }
                 if (n == 0) break;
@@ -1682,7 +1682,7 @@ static void ISHApplyDefaultOwnerForCreation(NSString *path) {
 
             if (hostOut != NULL) {
                 if (fwrite(buffer, 1, (size_t)n, hostOut) != (size_t)n) {
-                    failure = [self errorWithCode:ISHGuestFileBridgeErrorUnknown message:@"Failed writing destination file"];
+                    failure = [self errorWithCode:ISHGuestFileBridgeErrorUnknown message:NSLocalizedString(@"Failed writing destination file", @"File operation error shown in the file manager")];
                     goto done;
                 }
             } else {
@@ -1691,7 +1691,7 @@ static void ISHApplyDefaultOwnerForCreation(NSString *path) {
                 while (off < n) {
                     ssize_t w = guestOut->ops->write(guestOut, buffer + off, (size_t)(n - off));
                     if (w <= 0) {
-                        failure = [self errorWithGuestErrno:(long)(w < 0 ? w : -_EIO) message:@"Failed writing destination file"];
+                        failure = [self errorWithGuestErrno:(long)(w < 0 ? w : -_EIO) message:NSLocalizedString(@"Failed writing destination file", @"File operation error shown in the file manager")];
                         goto done;
                     }
                     off += w;
@@ -1716,7 +1716,7 @@ static void ISHApplyDefaultOwnerForCreation(NSString *path) {
             [NSFileManager.defaultManager removeItemAtURL:dstHost error:NULL];
             NSError *moveError = nil;
             if (![NSFileManager.defaultManager moveItemAtURL:hostTmpURL toURL:dstHost error:&moveError]) {
-                failure = moveError ?: [self errorWithCode:ISHGuestFileBridgeErrorUnknown message:@"Cannot place destination file"];
+                failure = moveError ?: [self errorWithCode:ISHGuestFileBridgeErrorUnknown message:NSLocalizedString(@"Cannot place destination file", @"File operation error shown in the file manager")];
                 goto done;
             }
             hostTmpURL = nil;
@@ -1735,7 +1735,7 @@ static void ISHApplyDefaultOwnerForCreation(NSString *path) {
             int err = generic_renameat(AT_PWD, guestTmpPath.fileSystemRepresentation,
                                        AT_PWD, guestDestPath.fileSystemRepresentation, 0);
             if (err < 0) {
-                failure = [self errorWithGuestErrno:err message:@"Cannot place destination file"];
+                failure = [self errorWithGuestErrno:err message:NSLocalizedString(@"Cannot place destination file", @"File operation error shown in the file manager")];
                 goto done;
             }
             guestTmpPath = nil;
@@ -1756,7 +1756,7 @@ static void ISHApplyDefaultOwnerForCreation(NSString *path) {
         if (error) *error = [self notReadyError];
         return NO;
     }
-    if (!ok && error) *error = failure ?: [self errorWithCode:ISHGuestFileBridgeErrorUnknown message:@"Copy failed"];
+    if (!ok && error) *error = failure ?: [self errorWithCode:ISHGuestFileBridgeErrorUnknown message:NSLocalizedString(@"Copy failed", @"File operation error shown in the file manager")];
     return ok;
 }
 
@@ -1813,14 +1813,14 @@ static void ISHApplyDefaultOwnerForCreation(NSString *path) {
     struct statbuf lst;
     memset(&lst, 0, sizeof(lst));
     if (generic_statat(AT_PWD, guestPath.fileSystemRepresentation, &lst, AT_SYMLINK_NOFOLLOW_) < 0) {
-        if (error) *error = [self errorWithGuestErrno:_ENOENT message:@"No such file or directory"];
+        if (error) *error = [self errorWithGuestErrno:_ENOENT message:NSLocalizedString(@"No such file or directory", @"File operation error shown in the file manager")];
         return NO;
     }
     int err = S_ISDIR((mode_t)lst.mode)
         ? generic_rmdirat(AT_PWD, guestPath.fileSystemRepresentation)
         : generic_unlinkat(AT_PWD, guestPath.fileSystemRepresentation);
     if (err < 0) {
-        if (error) *error = [self errorWithGuestErrno:err message:@"Cannot delete item"];
+        if (error) *error = [self errorWithGuestErrno:err message:NSLocalizedString(@"Cannot delete item", @"File operation error shown in the file manager")];
         return NO;
     }
     return YES;
@@ -1837,7 +1837,7 @@ static void ISHApplyDefaultOwnerForCreation(NSString *path) {
     struct statbuf rootStat;
     memset(&rootStat, 0, sizeof(rootStat));
     if (generic_statat(AT_PWD, guestPath.fileSystemRepresentation, &rootStat, AT_SYMLINK_NOFOLLOW_) < 0) {
-        if (error) *error = [self errorWithGuestErrno:_ENOENT message:@"No such file or directory"];
+        if (error) *error = [self errorWithGuestErrno:_ENOENT message:NSLocalizedString(@"No such file or directory", @"File operation error shown in the file manager")];
         return NO;
     }
     if (!S_ISDIR((mode_t)rootStat.mode))
@@ -1871,7 +1871,7 @@ static void ISHApplyDefaultOwnerForCreation(NSString *path) {
         [expanded addObject:path];
         struct fd *fd = generic_open(path.fileSystemRepresentation, O_RDONLY_ | O_NONBLOCK_, 0);
         if (IS_ERR(fd)) {
-            if (error) *error = [self errorWithGuestErrno:(long)PTR_ERR(fd) message:@"Cannot open directory"];
+            if (error) *error = [self errorWithGuestErrno:(long)PTR_ERR(fd) message:NSLocalizedString(@"Cannot open directory", @"File operation error shown in the file manager")];
             return NO;
         }
         if (fd->ops->readdir_begin) fd->ops->readdir_begin(fd);

@@ -28,15 +28,15 @@ NSString *ISHLLMChangeSummary(ISHLLMFileChange *change) {
     NSArray<ISHLLMDiffLine *> *diff = ISHLLMChangeDiff(change);
     NSString *counts;
     if (diff == nil) {
-        counts = @"rewritten";
+        counts = NSLocalizedString(@"rewritten", @"file change summary: too large to diff");
     } else {
         NSUInteger removed = 0, added = 0;
         ISHLLMDiffCounts(diff, &removed, &added);
         counts = [NSString stringWithFormat:@"−%lu +%lu", (unsigned long) removed, (unsigned long) added];
     }
     NSString *when = [NSDateFormatter localizedStringFromDate:change.date dateStyle:NSDateFormatterNoStyle timeStyle:NSDateFormatterShortStyle];
-    NSString *what = change.created ? @"created" : ([change.toolName isEqualToString:@"edit_file"] ? @"edited" : @"overwritten");
-    return [NSString stringWithFormat:@"%@ · %@ · %@%@", what, counts, when, change.reverted ? @" · reverted" : @""];
+    NSString *what = change.created ? NSLocalizedString(@"created", @"file change summary") : ([change.toolName isEqualToString:@"edit_file"] ? NSLocalizedString(@"edited", @"file change summary") : NSLocalizedString(@"overwritten", @"file change summary"));
+    return [NSString stringWithFormat:@"%@ · %@ · %@%@", what, counts, when, change.reverted ? NSLocalizedString(@" · reverted", @"file change summary suffix") : @""];
 }
 
 #pragma mark - One change
@@ -85,10 +85,10 @@ NSString *ISHLLMChangeSummary(ISHLLMFileChange *change) {
     append(@"", mono, UIColor.labelColor, nil);
     NSArray<ISHLLMDiffLine *> *diff = ISHLLMChangeDiff(change);
     if (diff == nil) {
-        append(@"Too many lines changed to show as a diff. The new content:", mono, UIColor.secondaryLabelColor, nil);
+        append(NSLocalizedString(@"Too many lines changed to show as a diff. The new content:", @"file change diff view"), mono, UIColor.secondaryLabelColor, nil);
         append(ISHLLMChangeText(change.after), mono, UIColor.labelColor, nil);
     } else if (diff.count == 0) {
-        append(@"(No change to the content.)", mono, UIColor.secondaryLabelColor, nil);
+        append(NSLocalizedString(@"(No change to the content.)", @"file change diff view"), mono, UIColor.secondaryLabelColor, nil);
     }
     UIColor *removedBackground = [UIColor.systemRedColor colorWithAlphaComponent:0.16];
     UIColor *addedBackground = [UIColor.systemGreenColor colorWithAlphaComponent:0.18];
@@ -109,7 +109,7 @@ NSString *ISHLLMChangeSummary(ISHLLMFileChange *change) {
         }
     }
     _textView.attributedText = text;
-    UIBarButtonItem *revert = [[UIBarButtonItem alloc] initWithTitle:change.reverted ? @"Reverted" : @"Revert"
+    UIBarButtonItem *revert = [[UIBarButtonItem alloc] initWithTitle:change.reverted ? NSLocalizedString(@"Reverted", @"file change toolbar button, already reverted") : NSLocalizedString(@"Revert", @"file change toolbar button")
                                                                style:UIBarButtonItemStylePlain
                                                               target:self
                                                               action:@selector(revert:)];
@@ -139,7 +139,7 @@ NSString *ISHLLMChangeSummary(ISHLLMFileChange *change) {
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.title = @"Changes";
+    self.title = NSLocalizedString(@"Changes", @"file changes screen title");
     // Done comes from ISHConfigureLLMSettingsNavigationController, as for
     // every LLM Chat modal.
 }
@@ -162,14 +162,14 @@ NSString *ISHLLMChangeSummary(ISHLLMFileChange *change) {
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
     (void) tableView;
     (void) section;
-    return @"Every file the model wrote or edited in this chat, newest first. Reverting puts the file back as it was before that change, and tells the model. The copies are kept while this chat is open.";
+    return NSLocalizedString(@"Every file the model wrote or edited in this chat, newest first. Reverting puts the file back as it was before that change, and tells the model. The copies are kept while this chat is open.", @"file changes footer");
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
     UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:nil];
     NSArray<ISHLLMFileChange *> *changes = [self newestFirst];
     if (changes.count == 0) {
-        cell.textLabel.text = @"No file changes in this chat yet.";
+        cell.textLabel.text = NSLocalizedString(@"No file changes in this chat yet.", @"file changes empty state");
         cell.textLabel.textColor = UIColor.secondaryLabelColor;
         cell.selectionStyle = UITableViewCellSelectionStyleNone;
         return cell;

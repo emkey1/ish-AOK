@@ -1145,7 +1145,7 @@ static const char *viRepeatKeys = "hjkl";
     [_keyCommands addObject:[UIKeyCommand keyCommandWithInput:@"k"
                                                 modifierFlags:UIKeyModifierCommand|UIKeyModifierShift
                                                        action:@selector(clearScrollback:)
-                                         discoverabilityTitle:@"Clear Scrollback"]];
+                                         discoverabilityTitle:NSLocalizedString(@"Clear Scrollback", @"Hardware keyboard shortcut title")]];
     // Suspend to disk. Not implemented here: it goes up the responder chain to
     // TerminalViewController, which owns the save.
     //
@@ -1162,7 +1162,7 @@ static const char *viRepeatKeys = "hjkl";
     [_keyCommands addObject:[UIKeyCommand keyCommandWithInput:@"s"
                                                 modifierFlags:UIKeyModifierCommand
                                                        action:@selector(saveSessionFromKeyCommand:)
-                                         discoverabilityTitle:@"Save Session"]];
+                                         discoverabilityTitle:NSLocalizedString(@"Save Session", @"Hardware keyboard shortcut title")]];
 
     return _keyCommands;
 }

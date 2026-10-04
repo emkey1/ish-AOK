@@ -44,7 +44,7 @@
         self.upgradeButton.enabled = YES;
         [self printToTerminal:@"# /sbin/apk upgrade"];
     } else {
-        [self showAlertWithTitle:@"That Shouldn't Happen" message:@"No update needed. If you're seeing this message, there's a bug."];
+        [self showAlertWithTitle:NSLocalizedString(@"That Shouldn't Happen", @"Root upgrade alert title") message:NSLocalizedString(@"No update needed. If you're seeing this message, there's a bug.", @"Root upgrade alert message")];
     }
 }
 
@@ -60,7 +60,7 @@
     va_start(args, message);
     message = [[NSString alloc] initWithFormat:message arguments:args];
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:title message:message preferredStyle:UIAlertControllerStyleAlert];
-    [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"OK", @"Alert button") style:UIAlertActionStyleDefault handler:nil]];
     [self presentViewController:alert animated:YES completion:nil];
 }
 
@@ -72,14 +72,14 @@
     [self setDismissable:YES];
     int code = [notif.userInfo[@"code"] intValue];
     if (code != 0) {
-        [self showAlertWithTitle:@"Upgrade failed" message:@"exit status %d", code];
+        [self showAlertWithTitle:NSLocalizedString(@"Upgrade failed", @"Root upgrade alert title") message:NSLocalizedString(@"exit status %d", @"Root upgrade failure message; %d is the exit code"), code];
     } else {
         struct task *previousCurrent = NULL;
         if ([AppDelegate pushUsableInitTaskAsCurrent:&previousCurrent]) {
             FsUpdateRepositories();
             [AppDelegate popCurrentTask:previousCurrent];
         }
-        [self showAlertWithTitle:@"Upgrade succeeded" message:@""];
+        [self showAlertWithTitle:NSLocalizedString(@"Upgrade succeeded", @"Root upgrade alert title") message:@""];
     }
     [self.terminal destroy];
     self.terminal = nil;
@@ -120,7 +120,7 @@
     [self printToTerminal:@"\r\n"];
     intptr_t err = [self startUpgrade];
     if (err < 0) {
-        [self showAlertWithTitle:@"Failed to start upgrade" message:@"error %d", err];
+        [self showAlertWithTitle:NSLocalizedString(@"Failed to start upgrade", @"Root upgrade alert title") message:NSLocalizedString(@"error %d", @"Root upgrade start failure message; %d is the error number"), err];
     }
 }
 

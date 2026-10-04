@@ -597,11 +597,11 @@ static const NSUInteger kISHLLMMaxRunningSubagents = 4;
     if (path.length == 0) {
         _toolContext.workingDirectory = [self homeDirectory];
         ISHLLMUpdateSessionEntry(_sessionID, @{@"workingDirectory": @""});
-        [self appendLocalRole:@"assistant" content:[NSString stringWithFormat:@"Working directory: %@ (the home directory).", [self homeDirectory] ?: @"the home directory"]];
+        [self appendLocalRole:@"assistant" content:[NSString stringWithFormat:NSLocalizedString(@"Working directory: %@ (the home directory).", @"chat note; %@ is a path"), [self homeDirectory] ?: NSLocalizedString(@"the home directory", @"chat note, used when the home directory path is unknown")]];
     } else {
         _toolContext.workingDirectory = path;
         ISHLLMUpdateSessionEntry(_sessionID, @{@"workingDirectory": path});
-        [self appendLocalRole:@"assistant" content:[NSString stringWithFormat:@"Working directory: %@", path]];
+        [self appendLocalRole:@"assistant" content:[NSString stringWithFormat:NSLocalizedString(@"Working directory: %@", @"chat note; %@ is a path"), path]];
     }
     [self notifyMetadata];
 }
@@ -741,29 +741,29 @@ static const NSUInteger kISHLLMMaxRunningSubagents = 4;
     __block NSString *text = nil;
     [self scoped:^{
         if (!UserPreferences.shared.llmToolsEnabled) {
-            text = @"Tools are off: the model can only talk. Turn on Tools in LLM Settings to let it read, search and edit files and run commands.";
+            text = NSLocalizedString(@"Tools are off: the model can only talk. Turn on Tools in LLM Settings to let it read, search and edit files and run commands.", @"empty chat tools summary");
             return;
         }
         if (ISHLLMCurrentBackend() == AOKLLMBackendAppleFoundationModels) {
-            text = @"Tools: shell commands only (the on-device model's context is too small for the file tools).";
+            text = NSLocalizedString(@"Tools: shell commands only (the on-device model's context is too small for the file tools).", @"empty chat tools summary");
             return;
         }
         if (ISHLLMUsesGeminiAPI()) {
-            text = @"Tools are not available with the Gemini API.";
+            text = NSLocalizedString(@"Tools are not available with the Gemini API.", @"empty chat tools summary");
             return;
         }
-        NSString *where = self->_toolContext.workingDirectory.length > 0 ? self->_toolContext.workingDirectory : @"your home directory";
+        NSString *where = self->_toolContext.workingDirectory.length > 0 ? self->_toolContext.workingDirectory : NSLocalizedString(@"your home directory", @"empty chat tools summary, working directory");
         NSUInteger mcpServers = 0;
         for (NSDictionary *server in ISHLLMMCPServers())
             mcpServers += [server[@"enabled"] boolValue];
-        NSString *mcp = mcpServers == 0 ? @"" : [NSString stringWithFormat:@" · MCP (%lu server%@): %@", (unsigned long) mcpServers,
-                                                 mcpServers == 1 ? @"" : @"s", ISHLLMPermissionActionTitle(ISHLLMCategoryAction(ISHLLMToolCategoryMCP))];
-        text = [NSString stringWithFormat:@"Tools: files and shell, working in %@.\nReading: %@ · Edits: %@ · Commands: %@%@\n%@/new starts a chat and /chats lists them; /agents shows the ones working; /compact summarizes; /undo reverts the last file change; /mcp lists MCP servers.",
+        NSString *mcp = mcpServers == 0 ? @"" : [NSString stringWithFormat:mcpServers == 1 ? NSLocalizedString(@" · MCP (%lu server): %@", @"tools summary, singular; %@ is the permission setting") : NSLocalizedString(@" · MCP (%lu servers): %@", @"tools summary, plural; %@ is the permission setting"), (unsigned long) mcpServers,
+                                                 ISHLLMPermissionActionTitle(ISHLLMCategoryAction(ISHLLMToolCategoryMCP))];
+        text = [NSString stringWithFormat:NSLocalizedString(@"Tools: files and shell, working in %@.\nReading: %@ · Edits: %@ · Commands: %@%@\n%@/new starts a chat and /chats lists them; /agents shows the ones working; /compact summarizes; /undo reverts the last file change; /mcp lists MCP servers.", @"empty chat tools summary; %@s: directory, three permission settings, MCP part, sub-agent note"),
                 where,
                 ISHLLMPermissionActionTitle(ISHLLMCategoryAction(ISHLLMToolCategoryRead)),
                 ISHLLMPermissionActionTitle(ISHLLMCategoryAction(ISHLLMToolCategoryEdit)),
                 ISHLLMPermissionActionTitle(ISHLLMCategoryAction(ISHLLMToolCategoryShell)), mcp,
-                self->_parentSessionID.length == 0 ? @"The model can start sub-agents for independent tasks; they run in the background.\n" : @""];
+                self->_parentSessionID.length == 0 ? NSLocalizedString(@"The model can start sub-agents for independent tasks; they run in the background.\n", @"empty chat tools summary") : @""];
     }];
     return text;
 }
@@ -859,7 +859,7 @@ static const NSUInteger kISHLLMMaxRunningSubagents = 4;
         [self setPhase:ISHLLMAgentPhasePreparing detail:nil];
         [self prepareGuestEnvironmentNoteThen:^{
             if (ISHLLMMCPServers().count > 0)
-                [self setPhase:ISHLLMAgentPhasePreparing detail:@"connecting MCP servers"];
+                [self setPhase:ISHLLMAgentPhasePreparing detail:NSLocalizedString(@"connecting MCP servers", @"chat status detail")];
             // MCP servers' tools join the built-in ones; a server that could
             // not connect is named in the chat and left out.
             [ISHLLMMCPManager.shared prepareWithCompletion:^(NSArray<NSString *> *problems) {
@@ -1020,7 +1020,7 @@ static const NSUInteger kISHLLMMaxRunningSubagents = 4;
     }
     body[@"stream"] = @NO;
     request.HTTPBody = [NSJSONSerialization dataWithJSONObject:body options:0 error:nil];
-    [self setPhase:ISHLLMAgentPhaseContacting detail:@"retrying without streaming"];
+    [self setPhase:ISHLLMAgentPhaseContacting detail:NSLocalizedString(@"retrying without streaming", @"chat status detail")];
     _activeTask = [NSURLSession.sharedSession dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
         [self onMain:^{
             [self handleLLMResponseData:data response:response error:error];
@@ -1113,12 +1113,12 @@ static const NSUInteger kISHLLMMaxRunningSubagents = 4;
     [self runEntryPoint:^{
         if (ISHLLMCurrentBackend() == AOKLLMBackendAppleFoundationModels) {
             NSString *model = [self modelName];
-            [self appendLocalRole:@"assistant" content:[NSString stringWithFormat:@"Current on-device model: %@\n%@", model.length > 0 ? model : @"system-language-model", ISHLLMAppleFoundationModelsUnavailableMessage()]];
+            [self appendLocalRole:@"assistant" content:[NSString stringWithFormat:NSLocalizedString(@"Current on-device model: %@\n%@", @"chat note after /models; second %@ is an availability message"), model.length > 0 ? model : @"system-language-model", ISHLLMAppleFoundationModelsUnavailableMessage()]];
             return;
         }
         NSURL *url = [NSURL URLWithString:ISHLLMModelsEndpoint()];
         if (url == nil) {
-            [self appendLocalRole:@"assistant" content:@"Invalid models URL."];
+            [self appendLocalRole:@"assistant" content:NSLocalizedString(@"Invalid models URL.", @"chat note after /models")];
             return;
         }
         NSString *apiKey = [self apiKey];
@@ -1156,24 +1156,24 @@ static const NSUInteger kISHLLMMaxRunningSubagents = 4;
     _lastOutcome = @"Ready";
     [self setSending:NO];
     if (error != nil) {
-        [self appendLocalRole:@"assistant" content:[NSString stringWithFormat:@"Model query failed: %@", error.localizedDescription]];
+        [self appendLocalRole:@"assistant" content:[NSString stringWithFormat:NSLocalizedString(@"Model query failed: %@", @"chat note after /models; %@ is the error"), error.localizedDescription]];
         return;
     }
     NSArray<NSString *> *models = ISHLLMModelIdentifiersFromResponseData(data);
     if (models.count == 0) {
         NSString *raw = data.length > 0 ? ([[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] ?: @"") : @"";
-        NSString *message = statusCode > 0 ? [NSString stringWithFormat:@"No models found. HTTP %ld", (long) statusCode] : @"No models found.";
+        NSString *message = statusCode > 0 ? [NSString stringWithFormat:NSLocalizedString(@"No models found. HTTP %ld", @"chat note after /models"), (long) statusCode] : NSLocalizedString(@"No models found.", @"chat note after /models");
         if (raw.length > 0)
             message = [message stringByAppendingFormat:@"\n%@", raw.length > 480 ? [raw substringToIndex:480] : raw];
         [self appendLocalRole:@"assistant" content:message];
         return;
     }
     NSUInteger limit = MIN(models.count, (NSUInteger) 80);
-    NSMutableString *message = [NSMutableString stringWithFormat:@"%lu models returned by %@:", (unsigned long) models.count, endpoint];
+    NSMutableString *message = [NSMutableString stringWithFormat:NSLocalizedString(@"%lu models returned by %@:", @"chat note after /models; %@ is the server endpoint"), (unsigned long) models.count, endpoint];
     for (NSUInteger i = 0; i < limit; i++)
         [message appendFormat:@"\n- %@", models[i]];
     if (models.count > limit)
-        [message appendFormat:@"\nShowing first %lu of %lu.", (unsigned long) limit, (unsigned long) models.count];
+        [message appendFormat:NSLocalizedString(@"\nShowing first %lu of %lu.", @"chat note after /models"), (unsigned long) limit, (unsigned long) models.count];
     [self appendLocalRole:@"assistant" content:message];
 }
 
@@ -1182,8 +1182,8 @@ static const NSUInteger kISHLLMMaxRunningSubagents = 4;
 - (void)setAndLoadModelFromCommand:(NSString *)command {
     NSString *model = [[command substringFromIndex:@"/model".length] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
     if (model.length == 0) {
-        NSString *current = [self modelName].length > 0 ? [self modelName] : @"not set";
-        [self appendLocalRole:@"assistant" content:[NSString stringWithFormat:@"Current model: %@\nUsage: /model <model-name>", current]];
+        NSString *current = [self modelName].length > 0 ? [self modelName] : NSLocalizedString(@"not set", @"chat note: no model is set");
+        [self appendLocalRole:@"assistant" content:[NSString stringWithFormat:NSLocalizedString(@"Current model: %@\nUsage: /model <model-name>", @"chat note after /model"), current]];
         return;
     }
     NSMutableDictionary<NSString *, NSString *> *destination = [[self destination] mutableCopy];
@@ -1193,17 +1193,17 @@ static const NSUInteger kISHLLMMaxRunningSubagents = 4;
     [self notifyMetadata];
     [self scoped:^{
         if (ISHLLMCurrentBackend() == AOKLLMBackendAppleFoundationModels) {
-            [self appendLocalRole:@"assistant" content:[NSString stringWithFormat:@"Model set to %@. Apple Foundation Models uses the system on-device model when available. %@", model, ISHLLMAppleFoundationModelsUnavailableMessage()]];
+            [self appendLocalRole:@"assistant" content:[NSString stringWithFormat:NSLocalizedString(@"Model set to %@. Apple Foundation Models uses the system on-device model when available. %@", @"chat note after /model"), model, ISHLLMAppleFoundationModelsUnavailableMessage()]];
             return;
         }
         NSString *apiKey = [self apiKey];
         if (ISHLLMProviderRequiresAPIKey() && apiKey.length == 0) {
-            [self appendLocalRole:@"assistant" content:[NSString stringWithFormat:@"Model set to %@. %@", model, ISHLLMMissingAPIKeyMessage()]];
+            [self appendLocalRole:@"assistant" content:[NSString stringWithFormat:NSLocalizedString(@"Model set to %@. %@", @"chat note after /model; second %@ says an API key is missing"), model, ISHLLMMissingAPIKeyMessage()]];
             return;
         }
         NSURL *url = ISHLLMProbeURL();
         if (url == nil) {
-            [self appendLocalRole:@"assistant" content:[NSString stringWithFormat:@"Model set to %@, but the provider URL is invalid.", model]];
+            [self appendLocalRole:@"assistant" content:[NSString stringWithFormat:NSLocalizedString(@"Model set to %@, but the provider URL is invalid.", @"chat note after /model"), model]];
             return;
         }
         NSData *bodyData = [NSJSONSerialization dataWithJSONObject:ISHLLMProbeBody(model, @"Reply with ok.", 1) options:0 error:nil];
@@ -1239,15 +1239,15 @@ static const NSUInteger kISHLLMMaxRunningSubagents = 4;
     _lastOutcome = @"Ready";
     [self setSending:NO];
     if (error != nil) {
-        [self appendLocalRole:@"assistant" content:[NSString stringWithFormat:@"Model set to %@, but load failed: %@", model, error.localizedDescription]];
+        [self appendLocalRole:@"assistant" content:[NSString stringWithFormat:NSLocalizedString(@"Model set to %@, but load failed: %@", @"chat note after /model"), model, error.localizedDescription]];
         return;
     }
     if (statusCode >= 200 && statusCode < 300) {
-        [self appendLocalRole:@"assistant" content:[NSString stringWithFormat:@"Model set to %@. Provider accepted a warm-up request.", model]];
+        [self appendLocalRole:@"assistant" content:[NSString stringWithFormat:NSLocalizedString(@"Model set to %@. Provider accepted a warm-up request.", @"chat note after /model"), model]];
         return;
     }
     NSString *raw = data.length > 0 ? ([[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] ?: @"") : @"";
-    NSString *message = [NSString stringWithFormat:@"Model set to %@, but provider returned HTTP %ld.", model, (long) statusCode];
+    NSString *message = [NSString stringWithFormat:NSLocalizedString(@"Model set to %@, but provider returned HTTP %ld.", @"chat note after /model"), model, (long) statusCode];
     if (raw.length > 0)
         message = [message stringByAppendingFormat:@"\n%@", raw.length > 480 ? [raw substringToIndex:480] : raw];
     [self appendLocalRole:@"assistant" content:message];
@@ -1935,7 +1935,7 @@ static const NSUInteger kISHLLMMaxRunningSubagents = 4;
         return;
     [self runEntryPoint:^{
         if (ISHLLMUsesGeminiAPI() || ISHLLMCurrentBackend() == AOKLLMBackendAppleFoundationModels) {
-            [self appendLocalRole:@"assistant" content:@"Summarizing needs an OpenAI-compatible or Anthropic destination."];
+            [self appendLocalRole:@"assistant" content:NSLocalizedString(@"Summarizing needs an OpenAI-compatible or Anthropic destination.", @"chat note")];
             return;
         }
         [self setSending:YES];
@@ -1961,7 +1961,7 @@ static const NSUInteger kISHLLMMaxRunningSubagents = 4;
         conversational += ![message[@"role"] isEqual:@"system"];
     if (conversational < 2) {
         if (keepTrailing == 0)
-            [self appendLocalRole:@"assistant" content:@"Nothing to summarize yet."];
+            [self appendLocalRole:@"assistant" content:NSLocalizedString(@"Nothing to summarize yet.", @"chat note")];
         continuation(NO);
         return;
     }
@@ -1976,7 +1976,7 @@ static const NSUInteger kISHLLMMaxRunningSubagents = 4;
     NSDictionary *anthropicBody = anthropic ? ISHLLMAnthropicRequestBody(model ?: @"", 16000, history, nil, nil, nil) : nil;
     NSData *body = [NSJSONSerialization dataWithJSONObject:@{@"model": model ?: @"", @"messages": history, @"stream": @NO} options:0 error:nil];
     if (url == nil || body == nil) {
-        [self appendLocalRole:@"assistant" content:@"Could not summarize: invalid server URL or request."];
+        [self appendLocalRole:@"assistant" content:NSLocalizedString(@"Could not summarize: invalid server URL or request.", @"chat note")];
         continuation(NO);
         return;
     }
@@ -2001,8 +2001,8 @@ static const NSUInteger kISHLLMMaxRunningSubagents = 4;
         NSString *summary = [ISHLLMSanitizedAssistantContent(content ?: @"") stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
         [self onMain:^{
             if (summary.length == 0) {
-                NSString *why = error.localizedDescription ?: (statusCode > 0 ? [NSString stringWithFormat:@"HTTP %ld", (long) statusCode] : @"empty reply");
-                [self appendLocalRole:@"assistant" content:[NSString stringWithFormat:@"Could not summarize the conversation (%@); the full history is still sent.", why]];
+                NSString *why = error.localizedDescription ?: (statusCode > 0 ? [NSString stringWithFormat:@"HTTP %ld", (long) statusCode] : NSLocalizedString(@"empty reply", @"reason summarizing failed"));
+                [self appendLocalRole:@"assistant" content:[NSString stringWithFormat:NSLocalizedString(@"Could not summarize the conversation (%@); the full history is still sent.", @"chat note; %@ is the reason"), why]];
                 continuation(NO);
                 return;
             }

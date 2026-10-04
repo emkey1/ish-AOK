@@ -1,0 +1,25 @@
+/* iOS Settings app page for iSH-AOK. Generated with the app's string catalogs. */
+
+"Opens the app straight to the settings menu. Useful if you changed anything there and need to change it back but the app won't start." = "直接打开 App 的设置菜单。如果你更改了其中的某些设置而导致 App 无法启动，需要改回时会很有用。";
+"Recovery Mode" = "恢复模式";
+"Open Diagnostics On Next Launch" = "下次启动时打开诊断";
+"Initial Window" = "初始窗口";
+"Workspace" = "工作区";
+"Choose Filesystem" = "选择文件系统";
+"Terminal (tty1)" = "终端（tty1）";
+"Session Shell (pts/1)" = "会话 Shell（pts/1）";
+"Simulated Swap" = "模拟交换空间";
+"Lets iSH-AOK move cold guest memory out to storage, so a large mostly-idle heap or a background process tree stops counting against the memory iOS allows the app. It will not make a working set that is genuinely too big run well.\n\nOff unless you turn it on: swapping writes to the device's flash, and the swap area takes up that much space in the app's container while it exists. Both settings take effect the next time iSH-AOK starts, and swap stays off until you have chosen a size as well as switched it on.\n\nThe sizes offered here do not know how much room this device actually has. If there is not enough free space for the size you pick, iSH-AOK leaves swap off rather than quietly making a smaller area than you asked for; \"cat /proc/ish/swap\" in the guest says which of those happened." = "允许 iSH-AOK 将不常用的客户机内存移到存储空间，使大量基本空闲的堆或后台进程树不再占用 iOS 允许 App 使用的内存。但对于确实过大的工作集，它并不能让其运行良好。\n\n除非你打开，否则此功能处于关闭状态：交换会写入设备的闪存，且交换区存在期间会在 App 容器中占用相应的空间。两项设置都在 iSH-AOK 下次启动时生效，且在你选择大小并打开开关之前，交换空间会保持关闭。\n\n此处提供的大小并不知道此设备实际有多少空间。如果可用空间不足以容纳你选择的大小，iSH-AOK 会保持交换空间关闭，而不是悄悄创建一个比你要求的更小的交换区；在客户机中运行“cat /proc/ish/swap”可查看实际发生的情况。";
+"Enable Swap" = "启用交换空间";
+"Suspend to Disk" = "挂起到磁盘";
+"Save the whole session when iSH-AOK goes to the background, and bring it back on the next launch. iOS ends this app routinely -- memory pressure, or a swipe away -- and without this that always loses the session.\n\nOff by default, because it spends storage and is not free of limits. A session running something iSH-AOK cannot describe is not saved: it says so, and the next launch starts normally. \"cat /proc/ish/checkpoint\" in the guest reports what the last attempt did and, if it refused, why." = "在 iSH-AOK 进入后台时保存整个会话，并在下次启动时恢复。iOS 会经常结束此 App（内存压力或被轻扫关闭），没有此功能时会话总会丢失。\n\n默认关闭，因为它会占用存储空间，并且有一定限制。正在运行 iSH-AOK 无法描述的内容的会话不会被保存：它会告知你，下次启动将正常开始。在客户机中运行“cat /proc/ish/checkpoint”可查看上次尝试的结果，以及被拒绝时的原因。";
+"Swap Size" = "交换空间大小";
+"Not chosen (swap stays off)" = "未选择（交换空间保持关闭）";
+"External USB Swap" = "外接 USB 交换空间";
+"Swap to a USB drive instead of the app's container. Writes go to a .aok-swap file on the drive, keeping internal flash wear-free. Turn this on, return to iSH-AOK and pick a folder on the drive; it is used from the next launch. If the drive is not attached at launch, swap stays off. To use a different folder, switch this off, return to iSH-AOK, then switch it on again.\n\nThe file holds guest memory unencrypted, passwords and keys included. It is emptied when swap stops, but if iSH-AOK is killed it keeps its contents until the next launch empties it.\n\nexFAT drives (most USB sticks) cannot guarantee preallocated space. If the drive fills up while swap is active, affected guest processes will crash. Use a drive with plenty of free space.\n\nPulling the drive while swap is active crashes any process whose memory was on it. Quit iSH-AOK before removing the drive." = "将交换空间放在 USB 驱动器而非 App 容器中。写入会进入驱动器上的 .aok-swap 文件，从而避免内部闪存磨损。打开此项，返回 iSH-AOK 并在驱动器上选择一个文件夹；它将从下次启动起使用。如果启动时未连接驱动器，交换空间将保持关闭。若要使用其他文件夹，请关闭此项，返回 iSH-AOK，然后再次打开。\n\n该文件以未加密方式保存客户机内存，包括密码和密钥。交换停止时会清空该文件，但如果 iSH-AOK 被强制终止，其内容会保留到下次启动时清空。\n\nexFAT 驱动器（大多数 U 盘）无法保证预分配空间。如果在交换活动期间驱动器已满，受影响的客户机进程将崩溃。请使用有充足可用空间的驱动器。\n\n在交换活动期间拔出驱动器，会使内存位于其上的所有进程崩溃。移除驱动器前请先退出 iSH-AOK。";
+"Swap to External Drive" = "交换到外接驱动器";
+"Compressed Memory" = "压缩内存";
+"Holds cold memory compressed in RAM instead of writing it to storage. Measured 2.2–2.8x on real workloads, so a 128 MB pool holds roughly 300 MB of guest memory, and a page comes back about two orders of magnitude faster than a read from flash.\n\nWorks on its own — Swap is NOT required, and with Swap off nothing is ever written to storage at all. If Swap is also on, this sits in front of it and only what does not compress reaches the file.\n\nUses the RAM you give it, and it counts against the same memory limit the guest does — so a pool bigger than the device can spare makes things worse, not better. Anything above a quarter of this device's memory is reduced to that." = "在 RAM 中以压缩形式保存不常用的内存，而不是写入存储空间。在实际工作负载中测得的压缩比为 2.2–2.8 倍，因此 128 MB 的内存池大约可容纳 300 MB 客户机内存，且页面取回速度比从闪存读取快约两个数量级。\n\n可独立工作——不需要交换空间；关闭交换空间时不会向存储空间写入任何内容。如果同时打开交换空间，压缩内存位于其前面，只有无法压缩的内容才会写入文件。\n\n它使用你分配的 RAM，并与客户机共用同一内存限制——因此内存池大于设备可提供的量会适得其反。超过此设备内存四分之一的部分将被缩减到该值。";
+"Enable Compressed Memory" = "启用压缩内存";
+"Compressed Memory Size" = "压缩内存大小";
+"Off" = "关闭";

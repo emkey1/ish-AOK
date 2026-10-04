@@ -66,12 +66,12 @@ static CGPoint anchors[] = {
     return [super accessibilityTraits] | UIAccessibilityTraitAdjustable;
 }
 - (NSString *)accessibilityLabel {
-    return self.accessibilityUpDown ? @"Arrow Keys Up or Down" : @"Arrow Keys Left or Right";
+    return self.accessibilityUpDown ? NSLocalizedString(@"Arrow Keys Up or Down", @"Accessibility label for the keyboard bar arrow button") : NSLocalizedString(@"Arrow Keys Left or Right", @"Accessibility label for the keyboard bar arrow button");
 }
 - (NSString *)accessibilityHint {
     if (self.longPressHandler != nil)
-        return @"Double tap to toggle direction. Touch and hold to switch Desktops.";
-    return @"Double tap to toggle direction";
+        return NSLocalizedString(@"Double tap to toggle direction. Touch and hold to switch Desktops.", @"Accessibility hint for the keyboard bar arrow button");
+    return NSLocalizedString(@"Double tap to toggle direction", @"Accessibility hint for the keyboard bar arrow button");
 }
 
 - (BOOL)accessibilityActivate {

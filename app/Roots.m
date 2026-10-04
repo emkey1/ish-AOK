@@ -559,12 +559,12 @@ static NSError *FakefsImportNSError(struct fakefsify_error fs_err) {
         domain = @"SQLite";
 
     if (fs_err.type == ERR_POSIX && fs_err.code == ENOSPC) {
-        description = @"Not enough free space to extract the filesystem.";
-        recoverySuggestion = @"Free up storage space and try again.";
+        description = NSLocalizedString(@"Not enough free space to extract the filesystem.", @"Filesystem import error");
+        recoverySuggestion = NSLocalizedString(@"Free up storage space and try again.", @"Filesystem import error recovery suggestion");
     } else if (fs_err.type == ERR_ARCHIVE) {
-        description = @"The filesystem archive could not be read.";
+        description = NSLocalizedString(@"The filesystem archive could not be read.", @"Filesystem import error");
     } else if (fs_err.type == ERR_SQLITE) {
-        description = @"The filesystem metadata database could not be created.";
+        description = NSLocalizedString(@"The filesystem metadata database could not be created.", @"Filesystem import error");
     } else {
         description = [NSString stringWithUTF8String:fs_err.message];
     }
@@ -586,7 +586,7 @@ static BOOL EstimateArchiveExtractionRequirement(NSURL *archiveURL, long long *r
         if (error != NULL) {
             *error = [NSError errorWithDomain:@"libarchive"
                                          code:ENOMEM
-                                     userInfo:@{NSLocalizedDescriptionKey: @"Could not allocate archive reader."}];
+                                     userInfo:@{NSLocalizedDescriptionKey: NSLocalizedString(@"Could not allocate archive reader.", @"Filesystem import error")}];
         }
         return NO;
     }
@@ -597,7 +597,7 @@ static BOOL EstimateArchiveExtractionRequirement(NSURL *archiveURL, long long *r
             *error = [NSError errorWithDomain:@"libarchive"
                                          code:archive_errno(archive)
                                      userInfo:@{NSLocalizedDescriptionKey:
-                                                    @"The filesystem archive could not be read."}];
+                                                    NSLocalizedString(@"The filesystem archive could not be read.", @"Filesystem import error")}];
         }
         archive_read_free(archive);
         return NO;
@@ -618,7 +618,7 @@ static BOOL EstimateArchiveExtractionRequirement(NSURL *archiveURL, long long *r
                 *error = [NSError errorWithDomain:@"libarchive"
                                              code:archive_errno(archive)
                                          userInfo:@{NSLocalizedDescriptionKey:
-                                                        @"The filesystem archive could not be read."}];
+                                                        NSLocalizedString(@"The filesystem archive could not be read.", @"Filesystem import error")}];
             }
             archive_read_free(archive);
             return NO;
@@ -671,9 +671,9 @@ static BOOL RootsCheckAvailableSpaceForArchive(NSURL *archiveURL, NSURL *destina
     if (availableBytes.longLongValue < requiredBytes) {
         if (error != NULL) {
             *error = RootsStorageError([NSString stringWithFormat:
-                                        @"Not enough free space to extract the filesystem. About %@ is needed, but only %@ is available.",
+                                        NSLocalizedString(@"Not enough free space to extract the filesystem. About %@ is needed, but only %@ is available.", @"Filesystem import error; first %@ is the needed size, second the free space"),
                                         FormatByteCount(requiredBytes), FormatByteCount(availableBytes.longLongValue)],
-                                       @"Free up storage space and try again.");
+                                       NSLocalizedString(@"Free up storage space and try again.", @"Filesystem import error recovery suggestion"));
         }
         return NO;
     }
@@ -703,9 +703,9 @@ totalBytesExpectedToWrite:(int64_t)totalBytesExpectedToWrite {
     double fraction = totalBytesExpectedToWrite > 0
         ? (double) totalBytesWritten / (double) totalBytesExpectedToWrite : 0;
     NSString *message = totalBytesExpectedToWrite > 0
-        ? [NSString stringWithFormat:@"Downloading… %@ of %@",
+        ? [NSString stringWithFormat:NSLocalizedString(@"Downloading… %@ of %@", @"Filesystem download progress; byte counts so far and in total"),
            FormatByteCount(totalBytesWritten), FormatByteCount(totalBytesExpectedToWrite)]
-        : [NSString stringWithFormat:@"Downloading… %@", FormatByteCount(totalBytesWritten)];
+        : [NSString stringWithFormat:NSLocalizedString(@"Downloading… %@", @"Filesystem download progress; byte count so far"), FormatByteCount(totalBytesWritten)];
     [self.progress updateProgress:fraction message:message];
     if ([self.progress shouldCancel]) {
         self.cancelled = YES;
@@ -719,7 +719,7 @@ didFinishDownloadingToURL:(NSURL *)location {
     NSHTTPURLResponse *response = (NSHTTPURLResponse *) downloadTask.response;
     if ([response isKindOfClass:NSHTTPURLResponse.class] && response.statusCode != 200) {
         self.error = [NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorBadServerResponse userInfo:@{
-            NSLocalizedDescriptionKey: [NSString stringWithFormat:@"Server returned status %ld", (long) response.statusCode],
+            NSLocalizedDescriptionKey: [NSString stringWithFormat:NSLocalizedString(@"Server returned status %ld", @"Filesystem download error; %ld is an HTTP status code"), (long) response.statusCode],
         }];
         return;
     }
@@ -763,7 +763,7 @@ static BOOL DownloadBundledArchive(NSURL *url, NSURL *destination, id<ProgressRe
     NSURLSessionConfiguration *config = NSURLSessionConfiguration.ephemeralSessionConfiguration;
     NSURLSession *session = [NSURLSession sessionWithConfiguration:config delegate:delegate delegateQueue:nil];
     NSURLSessionDownloadTask *task = [session downloadTaskWithURL:url];
-    [progress updateProgress:0 message:@"Downloading…"];
+    [progress updateProgress:0 message:NSLocalizedString(@"Downloading…", @"Filesystem download progress")];
     [task resume];
     dispatch_semaphore_wait(delegate.semaphore, DISPATCH_TIME_FOREVER);
     [session finishTasksAndInvalidate];
@@ -776,8 +776,8 @@ static BOOL DownloadBundledArchive(NSURL *url, NSURL *destination, id<ProgressRe
     if (delegate.error != nil) {
         if (error != NULL) {
             *error = [NSError errorWithDomain:@"iSH" code:0 userInfo:@{
-                NSLocalizedDescriptionKey: @"Couldn't download the filesystem image.",
-                NSLocalizedRecoverySuggestionErrorKey: @"Check your internet connection and try again.",
+                NSLocalizedDescriptionKey: NSLocalizedString(@"Couldn't download the filesystem image.", @"Filesystem download error"),
+                NSLocalizedRecoverySuggestionErrorKey: NSLocalizedString(@"Check your internet connection and try again.", @"Filesystem download error recovery suggestion"),
                 NSUnderlyingErrorKey: delegate.error,
             }];
         }
@@ -819,9 +819,9 @@ static void EnableCaseSensitiveFilesystemLookupsIfPossible(void) {
 static BOOL RootNameIsValid(NSString *name, NSError **error) {
     NSString *reason = nil;
     if (name.length == 0) {
-        reason = @"Filesystem name can't be empty";
+        reason = NSLocalizedString(@"Filesystem name can't be empty", @"Filesystem name validation error");
     } else if ([name hasPrefix:@"."]) {
-        reason = @"Filesystem name can't start with '.'";
+        reason = NSLocalizedString(@"Filesystem name can't start with '.'", @"Filesystem name validation error");
     } else {
         static NSCharacterSet *disallowed;
         static dispatch_once_t onceToken;
@@ -830,7 +830,7 @@ static BOOL RootNameIsValid(NSString *name, NSError **error) {
                 @"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-"] invertedSet];
         });
         if ([name rangeOfCharacterFromSet:disallowed].location != NSNotFound)
-            reason = @"Filesystem name can only contain letters, numbers, '.', '-', and '_' (no spaces)";
+            reason = NSLocalizedString(@"Filesystem name can only contain letters, numbers, '.', '-', and '_' (no spaces)", @"Filesystem name validation error");
     }
     if (reason != nil) {
         if (error != NULL)
@@ -1258,7 +1258,7 @@ static BOOL ISHFileProviderUnavailableOnThisPlatform(void) {
     if (selectedChoice == nil) {
         if (error != NULL) {
             *error = [NSError errorWithDomain:@"iSH" code:0 userInfo:@{
-                NSLocalizedDescriptionKey: @"Unknown bundled root choice"
+                NSLocalizedDescriptionKey: NSLocalizedString(@"Unknown bundled root choice", @"Filesystem import error")
             }];
         }
         return NO;
@@ -1293,7 +1293,7 @@ static BOOL ISHFileProviderUnavailableOnThisPlatform(void) {
     if (archive == nil) {
         if (error != NULL) {
             *error = [NSError errorWithDomain:@"iSH" code:0 userInfo:@{
-                NSLocalizedDescriptionKey: @"Bundled root archive is missing"
+                NSLocalizedDescriptionKey: NSLocalizedString(@"Bundled root archive is missing", @"Filesystem import error")
             }];
         }
         return NO;
@@ -1338,8 +1338,7 @@ static BOOL ISHFileProviderUnavailableOnThisPlatform(void) {
     if (destination == nil) {
         if (error != NULL) {
             *error = [NSError errorWithDomain:@"iSH" code:0 userInfo:@{
-                NSLocalizedDescriptionKey: @"No filesystem storage available "
-                    @"(the app group container is missing -- check the App Group entitlement)"
+                NSLocalizedDescriptionKey: NSLocalizedString(@"No filesystem storage available (the app group container is missing -- check the App Group entitlement)", @"Filesystem import error")
             }];
         }
         return NO;
@@ -1407,8 +1406,7 @@ void root_progress_callback(void *cookie, double progress, const char *message, 
     if (destination == nil) {
         if (error != NULL) {
             *error = [NSError errorWithDomain:@"iSH" code:0 userInfo:@{
-                NSLocalizedDescriptionKey: @"No filesystem storage available "
-                    @"(the app group container is missing -- check the App Group entitlement)"
+                NSLocalizedDescriptionKey: NSLocalizedString(@"No filesystem storage available (the app group container is missing -- check the App Group entitlement)", @"Filesystem import error")
             }];
         }
         return NO;
@@ -1530,7 +1528,7 @@ void root_progress_callback(void *cookie, double progress, const char *message, 
     if (mount_detach_tree(base.UTF8String) == _EBUSY) {
         if (error != NULL) {
             *error = [NSError errorWithDomain:@"iSH" code:0 userInfo:@{NSLocalizedDescriptionKey:
-                @"This filesystem is currently mounted or in use (e.g. via mount-root.sh) -- exit any active session into it first"}];
+                NSLocalizedString(@"This filesystem is currently mounted or in use (e.g. via mount-root.sh) -- exit any active session into it first", @"Filesystem delete or rename error")}];
         }
         return NO;
     }
@@ -1631,10 +1629,15 @@ void root_progress_callback(void *cookie, double progress, const char *message, 
 // live guest.
 - (BOOL)rejectIfBootedOrDefault:(NSString *)name verb:(NSString *)verb error:(NSError **)error {
     NSString *reason = nil;
+    BOOL deleting = [verb isEqualToString:@"delete"];
     if ([name isEqualToString:self.bootedRoot])
-        reason = [NSString stringWithFormat:@"Cannot %@ the filesystem this session is booted from", verb];
+        reason = deleting
+            ? NSLocalizedString(@"Cannot delete the filesystem this session is booted from", @"Filesystem delete error")
+            : NSLocalizedString(@"Cannot rename the filesystem this session is booted from", @"Filesystem rename error");
     else if ([name isEqualToString:self.defaultRoot])
-        reason = [NSString stringWithFormat:@"Cannot %@ the default filesystem", verb];
+        reason = deleting
+            ? NSLocalizedString(@"Cannot delete the default filesystem", @"Filesystem delete error")
+            : NSLocalizedString(@"Cannot rename the default filesystem", @"Filesystem rename error");
     if (reason == nil)
         return NO;
     if (error != NULL)
@@ -1651,7 +1654,7 @@ static BOOL RootIsInstalled(Roots *roots, NSString *name, NSError **error) {
         return YES;
     if (error != NULL) {
         *error = [NSError errorWithDomain:@"iSH" code:0 userInfo:@{NSLocalizedDescriptionKey:
-            [NSString stringWithFormat:@"There is no filesystem named %@", name ?: @""]}];
+            [NSString stringWithFormat:NSLocalizedString(@"There is no filesystem named %@", @"Filesystem error; %@ is a filesystem name"), name ?: @""]}];
     }
     return NO;
 }
@@ -1682,7 +1685,7 @@ static BOOL RootIsInstalled(Roots *roots, NSString *name, NSError **error) {
 - (BOOL)renameRoot:(NSString *)name toName:(NSString *)newName error:(NSError **)error {
     if (name.length == 0) {
         if (error != NULL)
-            *error = [NSError errorWithDomain:@"iSH" code:0 userInfo:@{NSLocalizedDescriptionKey: @"Filesystem name can't be empty"}];
+            *error = [NSError errorWithDomain:@"iSH" code:0 userInfo:@{NSLocalizedDescriptionKey: NSLocalizedString(@"Filesystem name can't be empty", @"Filesystem name validation error")}];
         return NO;
     }
     if ([self rejectIfBootedOrDefault:name verb:@"rename" error:error])
@@ -1700,7 +1703,7 @@ static BOOL RootIsInstalled(Roots *roots, NSString *name, NSError **error) {
     if ([self.roots containsObject:newName]) {
         if (error != NULL) {
             *error = [NSError errorWithDomain:@"iSH" code:0 userInfo:@{NSLocalizedDescriptionKey:
-                [NSString stringWithFormat:@"There is already a filesystem named %@", newName]}];
+                [NSString stringWithFormat:NSLocalizedString(@"There is already a filesystem named %@", @"Filesystem rename error; %@ is a filesystem name"), newName]}];
         }
         return NO;
     }

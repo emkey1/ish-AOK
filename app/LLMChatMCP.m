@@ -445,9 +445,9 @@ static const NSTimeInterval kISHLLMMCPRetryInterval = 300;
             NSString *error = nil;
             if (![connection connect:&error]) {
                 [connection disconnect];
-                NSString *reason = error ?: @"could not connect";
+                NSString *reason = error ?: NSLocalizedString(@"could not connect", @"chat note, MCP server failed to connect");
                 @synchronized (problems) {
-                    [problems addObject:[NSString stringWithFormat:@"MCP server \"%@\": %@", connection.name, reason]];
+                    [problems addObject:[NSString stringWithFormat:NSLocalizedString(@"MCP server \"%@\": %@", @"chat note; first %@ is the MCP server name, second the reason"), connection.name, reason]];
                 }
                 dispatch_async(dispatch_get_main_queue(), ^{
                     self->_failures[identifier] = @{@"config": server, @"date": [NSDate date], @"error": reason};

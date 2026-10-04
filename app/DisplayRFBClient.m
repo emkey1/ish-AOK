@@ -260,7 +260,7 @@ static inline void rfb_write_u32(uint8_t *p, uint32_t hostValue) {
     // connection even after reporting ready, so this needs real headroom
     // rather than the tight window tuned for a healthy system.
     if (attempt >= 120) {
-        [self _failWithMessage:@"Timed out connecting to wayvnc"];
+        [self _failWithMessage:NSLocalizedString(@"Timed out connecting to wayvnc", @"Wayland display error (wayvnc is a program name)")];
         return;
     }
     nw_connection_cancel(connection);
@@ -309,11 +309,11 @@ static inline void rfb_write_u32(uint8_t *p, uint32_t hostValue) {
         if (self->_connection != connection)
             return;
         if (error != NULL) {
-            [self _failWithMessage:@"Connection error while reading from wayvnc"];
+            [self _failWithMessage:NSLocalizedString(@"Connection error while reading from wayvnc", @"Wayland display error (wayvnc is a program name)")];
             return;
         }
         if (content == nil || dispatch_data_get_size(content) < length) {
-            [self _failWithMessage:is_complete ? @"wayvnc closed the connection" : @"Short read from wayvnc"];
+            [self _failWithMessage:is_complete ? NSLocalizedString(@"wayvnc closed the connection", @"Wayland display error (wayvnc is a program name)") : NSLocalizedString(@"Short read from wayvnc", @"Wayland display error (wayvnc is a program name)")];
             return;
         }
         const void *bytes = NULL;
@@ -337,7 +337,7 @@ static inline void rfb_write_u32(uint8_t *p, uint32_t hostValue) {
                                                   DISPATCH_DATA_DESTRUCTOR_DEFAULT),
                             NW_CONNECTION_DEFAULT_STREAM_CONTEXT, false, ^(nw_error_t _Nullable error) {
             if (error != NULL) {
-                [self _failWithMessage:@"Failed to send protocol version"];
+                [self _failWithMessage:NSLocalizedString(@"Failed to send protocol version", @"Wayland display connection error")];
                 return;
             }
             [self _readSecurityTypes];
@@ -355,7 +355,7 @@ static inline void rfb_write_u32(uint8_t *p, uint32_t hostValue) {
                 uint32_t reasonLength = rfb_read_u32(lenBytes);
                 [self _readExactly:reasonLength completion:^(const uint8_t *reasonBytes) {
                     NSString *reason = [[NSString alloc] initWithBytes:reasonBytes length:reasonLength encoding:NSUTF8StringEncoding];
-                    [self _failWithMessage:[NSString stringWithFormat:@"wayvnc refused the connection: %@", reason ?: @"unknown reason"]];
+                    [self _failWithMessage:[NSString stringWithFormat:NSLocalizedString(@"wayvnc refused the connection: %@", @"Wayland display error; %@ is the server's reason"), reason ?: NSLocalizedString(@"unknown reason", @"Fallback when the server gives no reason")]];
                 }];
             }];
             return;
@@ -369,7 +369,7 @@ static inline void rfb_write_u32(uint8_t *p, uint32_t hostValue) {
                 }
             }
             if (!offersNone) {
-                [self _failWithMessage:@"wayvnc did not offer security type None (no-auth)"];
+                [self _failWithMessage:NSLocalizedString(@"wayvnc did not offer security type None (no-auth)", @"Wayland display connection error")];
                 return;
             }
             static const uint8_t chooseNone[1] = {1};
@@ -378,7 +378,7 @@ static inline void rfb_write_u32(uint8_t *p, uint32_t hostValue) {
                                                       DISPATCH_DATA_DESTRUCTOR_DEFAULT),
                                 NW_CONNECTION_DEFAULT_STREAM_CONTEXT, false, ^(nw_error_t _Nullable error) {
                 if (error != NULL) {
-                    [self _failWithMessage:@"Failed to select security type"];
+                    [self _failWithMessage:NSLocalizedString(@"Failed to select security type", @"Wayland display connection error")];
                     return;
                 }
                 [self _readSecurityResult];
@@ -395,7 +395,7 @@ static inline void rfb_write_u32(uint8_t *p, uint32_t hostValue) {
                 uint32_t reasonLength = rfb_read_u32(lenBytes);
                 [self _readExactly:reasonLength completion:^(const uint8_t *reasonBytes) {
                     NSString *reason = [[NSString alloc] initWithBytes:reasonBytes length:reasonLength encoding:NSUTF8StringEncoding];
-                    [self _failWithMessage:[NSString stringWithFormat:@"wayvnc security handshake failed: %@", reason ?: @"unknown reason"]];
+                    [self _failWithMessage:[NSString stringWithFormat:NSLocalizedString(@"wayvnc security handshake failed: %@", @"Wayland display error; %@ is the server's reason"), reason ?: NSLocalizedString(@"unknown reason", @"Fallback when the server gives no reason")]];
                 }];
             }];
             return;
@@ -439,13 +439,13 @@ static inline void rfb_write_u32(uint8_t *p, uint32_t hostValue) {
 
 - (void)_finishConnectWithWidth:(uint16_t)width height:(uint16_t)height name:(NSString *_Nullable)name {
     if (width == 0 || height == 0) {
-        [self _failWithMessage:@"wayvnc reported an empty desktop size"];
+        [self _failWithMessage:NSLocalizedString(@"wayvnc reported an empty desktop size", @"Wayland display connection error")];
         return;
     }
     free(_framebuffer);
     _framebuffer = calloc((size_t) width * height, 4);
     if (_framebuffer == NULL) {
-        [self _failWithMessage:@"Failed to allocate framebuffer"];
+        [self _failWithMessage:NSLocalizedString(@"Failed to allocate framebuffer", @"Wayland display error")];
         return;
     }
     _framebufferWidth = width;
@@ -835,7 +835,7 @@ static inline void rfb_write_u32(uint8_t *p, uint32_t hostValue) {
         return YES; // layout announcement with no size change (e.g. the initial ExtendedDesktopSize)
     uint8_t *newFramebuffer = calloc((size_t) width * height, 4);
     if (newFramebuffer == NULL) {
-        [self _failWithMessage:@"Failed to allocate resized framebuffer"];
+        [self _failWithMessage:NSLocalizedString(@"Failed to allocate resized framebuffer", @"Wayland display error")];
         return NO;
     }
     free(_framebuffer);

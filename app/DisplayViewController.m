@@ -294,18 +294,18 @@ typedef NS_ENUM(NSInteger, DisplayConnectionState) {
     [self.toolContentView addSubview:_toolbarCard];
 
     _statusLabel = [self workspaceThemeSecondaryLabelWithTextStyle:UIFontTextStyleFootnote monospaced:NO];
-    _statusLabel.text = @"Starting…";
+    _statusLabel.text = NSLocalizedString(@"Starting…", @"Wayland display status text");
     _statusLabel.numberOfLines = 1;
     _statusLabel.font = [UIFont systemFontOfSize:11.0];
     [_toolbarCard addSubview:_statusLabel];
 
-    _ctrlAltDelButton = [self displayButtonWithTitle:@"Ctrl+Alt+Del" action:@selector(sendCtrlAltDel:)];
+    _ctrlAltDelButton = [self displayButtonWithTitle:NSLocalizedString(@"Ctrl+Alt+Del", @"Wayland display toolbar button that sends the key combination") action:@selector(sendCtrlAltDel:)];
     [_toolbarCard addSubview:_ctrlAltDelButton];
 
-    _pasteButton = [self displayButtonWithTitle:@"Paste" action:@selector(pasteToGuest:)];
+    _pasteButton = [self displayButtonWithTitle:NSLocalizedString(@"Paste", @"Wayland display toolbar button") action:@selector(pasteToGuest:)];
     [_toolbarCard addSubview:_pasteButton];
 
-    _reconnectButton = [self displayButtonWithTitle:@"Reconnect" action:@selector(reconnect:)];
+    _reconnectButton = [self displayButtonWithTitle:NSLocalizedString(@"Reconnect", @"Wayland display toolbar button") action:@selector(reconnect:)];
     _reconnectButton.hidden = YES;
     [_toolbarCard addSubview:_reconnectButton];
 
@@ -317,8 +317,8 @@ typedef NS_ENUM(NSInteger, DisplayConnectionState) {
     // is normally run. Titled with an ellipsis rather than a word because the
     // pill already carries three buttons and a status line on a phone.
     _menuButton = [self displayButtonWithTitle:@"\u22ef" action:@selector(menuPipTapped:)];
-    _menuButton.accessibilityLabel = @"Display menu";
-    _menuButton.accessibilityHint = @"Opens the display menu for resolution, keyboard and input options.";
+    _menuButton.accessibilityLabel = NSLocalizedString(@"Display menu", @"Accessibility label for the Wayland display menu button");
+    _menuButton.accessibilityHint = NSLocalizedString(@"Opens the display menu for resolution, keyboard and input options.", @"Accessibility hint for the Wayland display menu button");
     [_toolbarCard addSubview:_menuButton];
 
     CGFloat inset = 8.0;
@@ -384,10 +384,10 @@ typedef NS_ENUM(NSInteger, DisplayConnectionState) {
         pip.layer.shadowOpacity = 0.35;
         pip.layer.shadowRadius = 6.0;
         pip.layer.shadowOffset = CGSizeMake(0.0, 2.0);
-        pip.accessibilityLabel = @"Display menu";
+        pip.accessibilityLabel = NSLocalizedString(@"Display menu", @"Accessibility label for the Wayland display menu button");
         // The pip is icon-only, so the label names it but nothing says what
         // tapping it does. From #582.
-        pip.accessibilityHint = @"Opens the display menu for keyboard and input options.";
+        pip.accessibilityHint = NSLocalizedString(@"Opens the display menu for keyboard and input options.", @"Accessibility hint for the Wayland display menu button");
         [pip addTarget:self action:@selector(menuPipTapped:) forControlEvents:UIControlEventTouchUpInside];
         _menuPip = pip;
         [self.view addSubview:pip];
@@ -408,7 +408,7 @@ typedef NS_ENUM(NSInteger, DisplayConnectionState) {
                                                 name:ProcessExitedNotification
                                               object:nil];
 
-    // "Login As Default User" changed while a session runs as the other user:
+    // "Open Everything as Default User" changed while a session runs as the other user:
     // everything started in the desktop inherits the session's user, so offer
     // to restart it as the right one.
     [UserPreferences.shared observe:@[@"shouldLoginAsDefaultUser"]
@@ -803,7 +803,7 @@ static void DisplayParkSession(Terminal *terminal, int pid, NSString *_Nullable 
         DisplayClearParkedSession();
         _reconnectButton.hidden = YES;
         _state = DisplayConnectionStateWaitingForReady;
-        _statusLabel.text = @"Reattaching to the Wayland session…";
+        _statusLabel.text = NSLocalizedString(@"Reattaching to the Wayland session…", @"Wayland display status text");
         _readyPollDeadline = nil;
         [self pollForReadyFile];
         return;
@@ -820,7 +820,7 @@ static void DisplayParkSession(Terminal *terminal, int pid, NSString *_Nullable 
         if (_didAskSessionResumeChoice)
             return;
         _didAskSessionResumeChoice = YES;
-        _statusLabel.text = @"Waiting for a session choice…";
+        _statusLabel.text = NSLocalizedString(@"Waiting for a session choice…", @"Wayland display status text");
         __weak typeof(self) weakSelf = self;
         ISHSessionPresentResumePicker(self, ^(NSString *imageToConsume) {
             __strong typeof(weakSelf) strongSelf = weakSelf;
@@ -833,12 +833,12 @@ static void DisplayParkSession(Terminal *terminal, int pid, NSString *_Nullable 
     }
     _reconnectButton.hidden = YES;
     _state = DisplayConnectionStateStartingGuestSession;
-    _statusLabel.text = @"Starting Wayland session…";
+    _statusLabel.text = NSLocalizedString(@"Starting Wayland session…", @"Wayland display status text");
     _readyPollDeadline = nil;
 
     intptr_t err = [AppDelegate ensureBooted];
     if (err < 0) {
-        [self failWithMessage:[NSString stringWithFormat:@"Boot failed: %@", [AppDelegate descriptionForISHErrno:err]]];
+        [self failWithMessage:[NSString stringWithFormat:NSLocalizedString(@"Boot failed: %@", @"Wayland display error; %@ is the error description"), [AppDelegate descriptionForISHErrno:err]]];
         return;
     }
     // Only now: the restore runs inside ensureBooted, and deleting the image
@@ -849,7 +849,7 @@ static void DisplayParkSession(Terminal *terminal, int pid, NSString *_Nullable 
 
     err = become_new_init_child();
     if (err < 0) {
-        [self failWithMessage:[NSString stringWithFormat:@"Could not create guest session: %@",
+        [self failWithMessage:[NSString stringWithFormat:NSLocalizedString(@"Could not create guest session: %@", @"Wayland display error; %@ is the error description"),
                                 [AppDelegate descriptionForISHErrno:err]]];
         return;
     }
@@ -867,14 +867,14 @@ static void DisplayParkSession(Terminal *terminal, int pid, NSString *_Nullable 
     struct tty *tty;
     Terminal *terminal = [Terminal createPseudoTerminal:&tty];
     if (terminal == nil) {
-        [self failWithMessage:@"Could not allocate a pseudo-terminal for the Wayland session"];
+        [self failWithMessage:NSLocalizedString(@"Could not allocate a pseudo-terminal for the Wayland session", @"Wayland display error")];
         return;
     }
     _sessionTerminal = terminal;
     NSString *stdioFile = [NSString stringWithFormat:@"/dev/pts/%d", tty->num];
     err = create_stdio(stdioFile.fileSystemRepresentation, TTY_PSEUDO_SLAVE_MAJOR, tty->num);
     if (err < 0) {
-        [self failWithMessage:[NSString stringWithFormat:@"Could not attach session I/O: %@",
+        [self failWithMessage:[NSString stringWithFormat:NSLocalizedString(@"Could not attach session I/O: %@", @"Wayland display error; %@ is the error description"),
                                 [AppDelegate descriptionForISHErrno:err]]];
         return;
     }
@@ -903,8 +903,7 @@ static void DisplayParkSession(Terminal *terminal, int pid, NSString *_Nullable 
     }
     if (err < 0) {
         [self failWithMessage:[NSString stringWithFormat:
-            @"Could not start /AOK/tools/start-wayland.sh: %@\n\nIf labwc/foot/wayvnc aren't "
-            @"installed yet, run 'sudo sh /AOK/tools/setup-wayland.sh' in a terminal first.",
+            NSLocalizedString(@"Could not start /AOK/tools/start-wayland.sh: %@\n\nIf labwc/foot/wayvnc aren't installed yet, run 'sudo sh /AOK/tools/setup-wayland.sh' in a terminal first.", @"Wayland display error; %@ is the error description"),
             [AppDelegate descriptionForISHErrno:err]]];
         return;
     }
@@ -914,12 +913,12 @@ static void DisplayParkSession(Terminal *terminal, int pid, NSString *_Nullable 
         current = NULL;
         _sessionPid = 0;
         task_never_ran_destroy(failed);
-        [self failWithMessage:@"Could not start the Wayland session task"];
+        [self failWithMessage:NSLocalizedString(@"Could not start the Wayland session task", @"Wayland display error")];
         return;
     }
 
     _state = DisplayConnectionStateWaitingForReady;
-    _statusLabel.text = @"Waiting for compositor…";
+    _statusLabel.text = NSLocalizedString(@"Waiting for compositor…", @"Wayland display status text");
     [self pollForReadyFile];
 }
 
@@ -929,9 +928,7 @@ static void DisplayParkSession(Terminal *terminal, int pid, NSString *_Nullable 
     if (_readyPollDeadline == nil)
         _readyPollDeadline = [NSDate dateWithTimeIntervalSinceNow:DisplayReadyTimeout];
     if (_readyPollDeadline.timeIntervalSinceNow < 0) {
-        [self failWithMessage:@"Timed out waiting for the Wayland compositor to start.\n\n"
-                                "If labwc/foot/wayvnc aren't installed, run "
-                                "'sudo sh /AOK/tools/setup-wayland.sh' in a terminal, then Reconnect."];
+        [self failWithMessage:NSLocalizedString(@"Timed out waiting for the Wayland compositor to start.\n\nIf labwc/foot/wayvnc aren't installed, run 'sudo sh /AOK/tools/setup-wayland.sh' in a terminal, then Reconnect.", @"Wayland display error")];
         return;
     }
     __weak typeof(self) weakSelf = self;
@@ -962,7 +959,7 @@ static void DisplayParkSession(Terminal *terminal, int pid, NSString *_Nullable 
                 return;
             if (errorData.length > 0) {
                 NSString *reason = [[NSString alloc] initWithData:errorData encoding:NSUTF8StringEncoding];
-                [innerSelf failWithMessage:[NSString stringWithFormat:@"start-wayland.sh failed:\n\n%@", reason]];
+                [innerSelf failWithMessage:[NSString stringWithFormat:NSLocalizedString(@"start-wayland.sh failed:\n\n%@", @"Wayland display error; %@ is the script's error output"), reason]];
                 return;
             }
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t) (DisplayReadyPollInterval * NSEC_PER_SEC)),
@@ -975,7 +972,7 @@ static void DisplayParkSession(Terminal *terminal, int pid, NSString *_Nullable 
 
 - (void)connectRFBToGuestPort:(uint16_t)guestPort {
     _state = DisplayConnectionStateConnected; // optimistic; refined by DisplayRFBClientDelegate callbacks
-    _statusLabel.text = @"Connecting to compositor…";
+    _statusLabel.text = NSLocalizedString(@"Connecting to compositor…", @"Wayland display status text");
     _rfbClientConnected = NO;
     _requestedDesktopSize = CGSizeZero;
     _rfbGuestPort = guestPort;
@@ -1037,7 +1034,7 @@ static void DisplayParkSession(Terminal *terminal, int pid, NSString *_Nullable 
         BOOL diedDuringStartup = strongSelf->_state == DisplayConnectionStateStartingGuestSession
             || strongSelf->_state == DisplayConnectionStateWaitingForReady;
         strongSelf->_state = DisplayConnectionStateFailed;
-        strongSelf->_statusLabel.text = @"Wayland session ended";
+        strongSelf->_statusLabel.text = NSLocalizedString(@"Wayland session ended", @"Wayland display status text");
         strongSelf->_reconnectButton.hidden = NO;
         // A session that exits before ever reaching Connected means
         // start-wayland.sh die()d (or never ran) -- and this exit
@@ -1060,21 +1057,19 @@ static void DisplayParkSession(Terminal *terminal, int pid, NSString *_Nullable 
         return;
     _askedAboutSessionAccount = YES;
     NSString *message = [NSString stringWithFormat:
-        @"The Wayland session is running as %@, so programs started in it run as %@ too. "
-        @"\u201cLogin As Default User\u201d now asks for %@. Restarting the session closes "
-        @"everything open in it.",
+        NSLocalizedString(@"The Wayland session is running as %@, so programs started in it run as %@ too. \u201cOpen Everything as Default User\u201d now asks for %@. Restarting the session closes everything open in it.", @"Alert message; %@ are user account names (running, running, wanted)"),
         running ?: @"root", running ?: @"root", wanted ?: @"root"];
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Restart the Wayland Session?"
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:NSLocalizedString(@"Restart the Wayland Session?", @"Alert title")
                                                                    message:message
                                                             preferredStyle:UIAlertControllerStyleAlert];
     __weak typeof(self) weakSelf = self;
-    [alert addAction:[UIAlertAction actionWithTitle:@"Not Now" style:UIAlertActionStyleCancel
+    [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Not Now", @"Alert button") style:UIAlertActionStyleCancel
                                             handler:^(__unused UIAlertAction *action) {
         typeof(self) strongSelf = weakSelf;
         if (strongSelf != nil)
             strongSelf->_askedAboutSessionAccount = NO;
     }]];
-    [alert addAction:[UIAlertAction actionWithTitle:[NSString stringWithFormat:@"Restart as %@", wanted ?: @"root"]
+    [alert addAction:[UIAlertAction actionWithTitle:[NSString stringWithFormat:NSLocalizedString(@"Restart as %@", @"Alert button; %@ is a user account name"), wanted ?: @"root"]
                                               style:UIAlertActionStyleDefault
                                             handler:^(__unused UIAlertAction *action) {
         typeof(self) strongSelf = weakSelf;
@@ -1096,7 +1091,7 @@ static void DisplayParkSession(Terminal *terminal, int pid, NSString *_Nullable 
             return;
         if (errorData.length > 0) {
             NSString *reason = [[NSString alloc] initWithData:errorData encoding:NSUTF8StringEncoding];
-            [strongSelf failWithMessage:[NSString stringWithFormat:@"Wayland session ended:\n\n%@", reason]];
+            [strongSelf failWithMessage:[NSString stringWithFormat:NSLocalizedString(@"Wayland session ended:\n\n%@", @"Wayland display error; %@ is the script's error output"), reason]];
             return;
         }
         // No error file: the script never got far enough to write one (or the
@@ -1105,12 +1100,9 @@ static void DisplayParkSession(Terminal *terminal, int pid, NSString *_Nullable 
         // default-user preference launches the script via `su - <user> -c`,
         // whose runtime failures (e.g. a nologin shell) exit before the
         // script ever runs.
-        NSMutableString *message = [@"Wayland session ended before the compositor came up.\n\n"
-                                    @"Check /tmp/ish-wayland-debug.log in a terminal, or run "
-                                    @"'sh /AOK/tools/start-wayland.sh' there to see the failure directly." mutableCopy];
+        NSMutableString *message = [NSLocalizedString(@"Wayland session ended before the compositor came up.\n\nCheck /tmp/ish-wayland-debug.log in a terminal, or run 'sh /AOK/tools/start-wayland.sh' there to see the failure directly.", @"Wayland display error") mutableCopy];
         if (UserPreferences.shared.shouldLoginAsDefaultUser)
-            [message appendString:@"\n\nIf that works, the failure is in the \"Open Everything as "
-                                  @"Default User\" su path -- try disabling that setting."];
+            [message appendString:NSLocalizedString(@"\n\nIf that works, the failure is in the \"Open Everything as Default User\" su path -- try disabling that setting.", @"Appended to a Wayland display error; names a setting")];
         [strongSelf failWithMessage:message];
     }];
 }
@@ -1144,7 +1136,7 @@ static void DisplayParkSession(Terminal *terminal, int pid, NSString *_Nullable 
 
     // Deferred until -guestProcessExited: confirms the old session's guest
     // processes actually exited -- see the _teardownPid doc above for why.
-    _statusLabel.text = @"Disconnecting…";
+    _statusLabel.text = NSLocalizedString(@"Disconnecting…", @"Wayland display status text");
     _reconnectPendingAfterTeardown = YES;
     __weak typeof(self) weakSelf = self;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t) (5.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
@@ -1175,13 +1167,13 @@ static void DisplayParkSession(Terminal *terminal, int pid, NSString *_Nullable 
 // "Native" for the resolution, "Match Resolution" for the appearance.
 static NSString *DisplayDesktopScaleName(NSInteger pref) {
     if (pref <= 0)
-        return [NSString stringWithFormat:@"Native (%gx)", (double) UIScreen.mainScreen.nativeScale];
+        return [NSString stringWithFormat:NSLocalizedString(@"Native (%gx)", @"Desktop resolution choice; %g is the screen's native scale factor"), (double) UIScreen.mainScreen.nativeScale];
     return [NSString stringWithFormat:@"%ldx", (long) pref];
 }
 
 static NSString *DisplayUIScaleName(NSInteger pref) {
     if (pref <= 0)
-        return @"Match Resolution";
+        return NSLocalizedString(@"Match Resolution", @"Desktop appearance choice");
     return [NSString stringWithFormat:@"%ldx", (long) pref];
 }
 
@@ -1192,11 +1184,9 @@ static NSString *DisplayScaleChoiceTitle(NSString *name, NSInteger value, NSInte
 
 - (void)_presentDesktopResolutionMenuFromView:(UIView *)sender {
     CGSize now = DisplayDesktopSizeForViewSize(_displayView.bounds.size, DisplayResolvedDesktopScale());
-    ISHActionSheet *sheet = [ISHActionSheet actionSheetWithTitle:@"Desktop Resolution"
+    ISHActionSheet *sheet = [ISHActionSheet actionSheetWithTitle:NSLocalizedString(@"Desktop Resolution", @"Action sheet title")
         message:[NSString stringWithFormat:
-            @"How many pixels the desktop has, per point of the view showing it. "
-            @"Currently %g x %g. More pixels are sharper but cost more to draw and "
-            @"send \u2014 every frame is encoded in software inside the guest.",
+            NSLocalizedString(@"How many pixels the desktop has, per point of the view showing it. Currently %g x %g. More pixels are sharper but cost more to draw and send \u2014 every frame is encoded in software inside the guest.", @"Desktop Resolution action sheet message; %g x %g is the current size"),
             (double) now.width, (double) now.height]];
     NSInteger current = UserPreferences.shared.displayDesktopScale;
     __weak typeof(self) weakSelf = self;
@@ -1215,16 +1205,13 @@ static NSString *DisplayScaleChoiceTitle(NSString *name, NSInteger value, NSInte
             [strongSelf _requestDesktopSizeForDisplay];
         }];
     }
-    [sheet addActionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil];
+    [sheet addActionWithTitle:NSLocalizedString(@"Cancel", @"Action sheet button") style:UIAlertActionStyleCancel handler:nil];
     [sheet presentFromViewController:self sourceView:sender sourceRect:sender.bounds];
 }
 
 - (void)_presentDesktopAppearanceMenuFromView:(UIView *)sender {
-    ISHActionSheet *sheet = [ISHActionSheet actionSheetWithTitle:@"Desktop Appearance"
-        message:@"How big things look. Matching the resolution keeps text and windows "
-                @"the size they are now and only makes them sharper; 1x with a raised "
-                @"resolution fits more on screen at a smaller size. Takes effect on the "
-                @"next Reconnect, and needs wlr-randr in the guest."];
+    ISHActionSheet *sheet = [ISHActionSheet actionSheetWithTitle:NSLocalizedString(@"Desktop Appearance", @"Action sheet title")
+        message:NSLocalizedString(@"How big things look. Matching the resolution keeps text and windows the size they are now and only makes them sharper; 1x with a raised resolution fits more on screen at a smaller size. Takes effect on the next Reconnect, and needs wlr-randr in the guest.", @"Desktop Appearance action sheet message")];
     NSInteger current = UserPreferences.shared.displayUIScale;
     for (NSNumber *choice in @[@0, @1, @2, @3]) {
         NSInteger value = choice.integerValue;
@@ -1234,19 +1221,19 @@ static NSString *DisplayScaleChoiceTitle(NSString *name, NSInteger value, NSInte
             UserPreferences.shared.displayUIScale = value;
         }];
     }
-    [sheet addActionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil];
+    [sheet addActionWithTitle:NSLocalizedString(@"Cancel", @"Action sheet button") style:UIAlertActionStyleCancel handler:nil];
     [sheet presentFromViewController:self sourceView:sender sourceRect:sender.bounds];
 }
 
 - (void)menuPipTapped:(UIButton *)sender {
-    ISHActionSheet *sheet = [ISHActionSheet actionSheetWithTitle:@"Wayland Display" message:nil];
+    ISHActionSheet *sheet = [ISHActionSheet actionSheetWithTitle:NSLocalizedString(@"Wayland Display", @"Action sheet title for the Wayland display menu") message:nil];
     __weak typeof(self) weakSelf = self;
-    [sheet addActionWithTitle:@"Send Ctrl+Alt+Del"
+    [sheet addActionWithTitle:NSLocalizedString(@"Send Ctrl+Alt+Del", @"Wayland display menu action")
                         style:UIAlertActionStyleDefault
                       handler:^(__unused UIAlertAction *action) {
         [weakSelf sendCtrlAltDel:sender];
     }];
-    [sheet addActionWithTitle:@"Paste"
+    [sheet addActionWithTitle:NSLocalizedString(@"Paste", @"Wayland display menu action")
                         style:UIAlertActionStyleDefault
                       handler:^(__unused UIAlertAction *action) {
         [weakSelf pasteToGuest:sender];
@@ -1257,7 +1244,7 @@ static NSString *DisplayScaleChoiceTitle(NSString *name, NSInteger value, NSInte
     // here a user who turned it off in Workspace has no way back to auto-
     // focus in Wayland mode short of switching back to Workspace to flip it.
     BOOL autoShowKeyboard = UserPreferences.shared.autoShowKeyboard;
-    [sheet addActionWithTitle:[NSString stringWithFormat:@"Auto-Show Keyboard: %@", autoShowKeyboard ? @"On" : @"Off"]
+    [sheet addActionWithTitle:[NSString stringWithFormat:NSLocalizedString(@"Auto-Show Keyboard: %@", @"Wayland display menu toggle; %@ is On or Off"), autoShowKeyboard ? NSLocalizedString(@"On", @"Toggle state") : NSLocalizedString(@"Off", @"Toggle state")]
                         style:UIAlertActionStyleDefault
                       handler:^(__unused UIAlertAction *action) {
         UserPreferences.shared.autoShowKeyboard = !autoShowKeyboard;
@@ -1280,38 +1267,38 @@ static NSString *DisplayScaleChoiceTitle(NSString *name, NSInteger value, NSInte
     // (DisplayRFBView's keyboardPutAway), which on an iPad with no keyboard
     // it did on every click. Show Keyboard is the way back.
     if (self.displayView.isFirstResponder) {
-        [sheet addActionWithTitle:@"Hide Keyboard"
+        [sheet addActionWithTitle:NSLocalizedString(@"Hide Keyboard", @"Wayland display menu action")
                             style:UIAlertActionStyleDefault
                           handler:^(__unused UIAlertAction *action) {
             weakSelf.displayView.keyboardPutAway = YES;
             [weakSelf.displayView resignFirstResponder];
         }];
     } else {
-        [sheet addActionWithTitle:@"Show Keyboard"
+        [sheet addActionWithTitle:NSLocalizedString(@"Show Keyboard", @"Wayland display menu action")
                             style:UIAlertActionStyleDefault
                           handler:^(__unused UIAlertAction *action) {
             weakSelf.displayView.keyboardPutAway = NO;
             [weakSelf.displayView becomeFirstResponder];
         }];
     }
-    [sheet addActionWithTitle:[NSString stringWithFormat:@"Resolution: %@…",
+    [sheet addActionWithTitle:[NSString stringWithFormat:NSLocalizedString(@"Resolution: %@…", @"Wayland display menu action; %@ is the current resolution"),
                                   DisplayDesktopScaleName(UserPreferences.shared.displayDesktopScale)]
                         style:UIAlertActionStyleDefault
                       handler:^(__unused UIAlertAction *action) {
         [weakSelf _presentDesktopResolutionMenuFromView:sender];
     }];
-    [sheet addActionWithTitle:[NSString stringWithFormat:@"Appearance: %@…",
+    [sheet addActionWithTitle:[NSString stringWithFormat:NSLocalizedString(@"Appearance: %@…", @"Wayland display menu action; %@ is the current appearance"),
                                   DisplayUIScaleName(UserPreferences.shared.displayUIScale)]
                         style:UIAlertActionStyleDefault
                       handler:^(__unused UIAlertAction *action) {
         [weakSelf _presentDesktopAppearanceMenuFromView:sender];
     }];
-    [sheet addActionWithTitle:@"Open Workspace…"
+    [sheet addActionWithTitle:NSLocalizedString(@"Open Workspace…", @"Wayland display menu action")
                         style:UIAlertActionStyleDefault
                       handler:^(__unused UIAlertAction *action) {
         [weakSelf switchToWorkspace:sender];
     }];
-    [sheet addActionWithTitle:@"Settings"
+    [sheet addActionWithTitle:NSLocalizedString(@"Settings", @"Wayland display menu action")
                         style:UIAlertActionStyleDefault
                       handler:^(__unused UIAlertAction *action) {
         // Form sheet: dismissable by swipe-down, so Settings can't strand the
@@ -1321,12 +1308,12 @@ static NSString *DisplayScaleChoiceTitle(NSString *name, NSInteger value, NSInte
         settings.modalPresentationStyle = UIModalPresentationFormSheet;
         [weakSelf presentViewController:settings animated:YES completion:nil];
     }];
-    [sheet addActionWithTitle:@"Reconnect"
+    [sheet addActionWithTitle:NSLocalizedString(@"Reconnect", @"Wayland display menu action")
                         style:UIAlertActionStyleDefault
                       handler:^(__unused UIAlertAction *action) {
         [weakSelf reconnect:sender];
     }];
-    [sheet addActionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil];
+    [sheet addActionWithTitle:NSLocalizedString(@"Cancel", @"Action sheet button") style:UIAlertActionStyleCancel handler:nil];
     [sheet presentFromViewController:self sourceView:sender sourceRect:sender.bounds];
 }
 
@@ -1368,17 +1355,15 @@ static NSString *const DisplayWorkspaceAttachNoticeHiddenKey = @"DisplayWorkspac
         if (workspace.view.window == nil || workspace.presentedViewController != nil)
             return;
         UIAlertController *notice =
-            [UIAlertController alertControllerWithTitle:@"Your Wayland Session Came Along"
-                                                message:@"It is running in the Workspace's Wayland window. The Wayland applet "
-                                                        @"attaches to a running Wayland session whenever you open it, and "
-                                                        @"the \u2630 menu's Wayland Full Screen takes it back to full screen."
+            [UIAlertController alertControllerWithTitle:NSLocalizedString(@"Your Wayland Session Came Along", @"Alert title after switching from full-screen Wayland to the Workspace")
+                                                message:NSLocalizedString(@"It is running in the Workspace's Wayland window. The Wayland applet attaches to a running Wayland session whenever you open it, and the \u2630 menu's Wayland Full Screen takes it back to full screen.", @"Alert message after switching from full-screen Wayland to the Workspace")
                                          preferredStyle:UIAlertControllerStyleAlert];
-        [notice addAction:[UIAlertAction actionWithTitle:@"Don't Show Again"
+        [notice addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Don't Show Again", @"Alert button")
                                                    style:UIAlertActionStyleDefault
                                                  handler:^(__unused UIAlertAction *action) {
             [NSUserDefaults.standardUserDefaults setBool:YES forKey:DisplayWorkspaceAttachNoticeHiddenKey];
         }]];
-        [notice addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleCancel handler:nil]];
+        [notice addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"OK", @"Alert button") style:UIAlertActionStyleCancel handler:nil]];
         [workspace presentViewController:notice animated:YES completion:nil];
     });
 }
@@ -1448,7 +1433,7 @@ static NSString *const DisplayWorkspaceAttachNoticeHiddenKey = @"DisplayWorkspac
     if (client.desktopName.length > 0)
         self.title = client.desktopName;
     _state = DisplayConnectionStateConnected;
-    _statusLabel.text = @"Connected";
+    _statusLabel.text = NSLocalizedString(@"Connected", @"Wayland display status text");
     _statusLabel.numberOfLines = 1;
     _reconnectButton.hidden = YES;
     // The session always starts at the compositor's 1280x720 headless

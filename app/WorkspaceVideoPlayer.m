@@ -97,14 +97,14 @@ static BOOL ISHVideoURLLooksLikePlaylist(NSURL *url) {
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.title = [NSString stringWithFormat:@"Channels (%lu)", (unsigned long) self.entries.count];
+    self.title = [NSString stringWithFormat:NSLocalizedString(@"Channels (%lu)", @"Playlist screen title; %lu is the number of entries"), (unsigned long) self.entries.count];
     self.navigationItem.rightBarButtonItem =
         [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemClose
                                                       target:self action:@selector(close)];
     _search = [[UISearchController alloc] initWithSearchResultsController:nil];
     _search.searchResultsUpdater = self;
     _search.obscuresBackgroundDuringPresentation = NO;
-    _search.searchBar.placeholder = @"Search";
+    _search.searchBar.placeholder = NSLocalizedString(@"Search", @"Search field placeholder in the playlist screen");
     self.navigationItem.searchController = _search;
     self.navigationItem.hidesSearchBarWhenScrolling = NO;
     self.definesPresentationContext = YES;
@@ -183,7 +183,7 @@ static BOOL ISHVideoURLLooksLikePlaylist(NSURL *url) {
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.title = @"Video";
+    self.title = NSLocalizedString(@"Video", @"Window title of the video player");
 
     _playlistIndex = -1;
     [self buildBar];
@@ -191,7 +191,7 @@ static BOOL ISHVideoURLLooksLikePlaylist(NSURL *url) {
     [self buildStatusLabel];
     [self buildProgressCard];
 
-    _statusLabel.text = @"Open a video from the File Manager, or a stream with Open URL.";
+    _statusLabel.text = NSLocalizedString(@"Open a video from the File Manager, or a stream with Open URL.", @"Video player empty-state text");
 }
 
 - (void)dealloc {
@@ -208,10 +208,10 @@ static BOOL ISHVideoURLLooksLikePlaylist(NSURL *url) {
 // The window's own menu is the Workspace menu, so the player's actions live
 // here, above the picture, where they stay reachable while it plays.
 - (void)buildBar {
-    _openURLButton = [self barButtonWithTitle:@"Open URL" symbol:@"link" action:@selector(openURLTapped)];
-    _openURLButton.accessibilityHint = @"Plays a video stream or an .m3u playlist from a web address.";
-    _channelsButton = [self barButtonWithTitle:@"Channels" symbol:@"list.bullet" action:@selector(channelsTapped)];
-    _channelsButton.accessibilityHint = @"Lists the entries of the loaded playlist.";
+    _openURLButton = [self barButtonWithTitle:NSLocalizedString(@"Open URL", @"Video player toolbar button") symbol:@"link" action:@selector(openURLTapped)];
+    _openURLButton.accessibilityHint = NSLocalizedString(@"Plays a video stream or an .m3u playlist from a web address.", @"Accessibility hint for the Open URL button");
+    _channelsButton = [self barButtonWithTitle:NSLocalizedString(@"Channels", @"Video player toolbar button: list playlist entries") symbol:@"list.bullet" action:@selector(channelsTapped)];
+    _channelsButton.accessibilityHint = NSLocalizedString(@"Lists the entries of the loaded playlist.", @"Accessibility hint for the Channels button");
     _channelsButton.hidden = YES;
     UIView *spacer = [UIView new];
     _bar = [[UIStackView alloc] initWithArrangedSubviews:@[_openURLButton, _channelsButton, spacer]];
@@ -273,14 +273,14 @@ static BOOL ISHVideoURLLooksLikePlaylist(NSURL *url) {
 
     _progressLabel = [self workspaceThemeSecondaryLabelWithTextStyle:UIFontTextStyleFootnote monospaced:NO];
     _progressLabel.textAlignment = NSTextAlignmentCenter;
-    _progressLabel.text = @"Preparing video…";
+    _progressLabel.text = NSLocalizedString(@"Preparing video…", @"Video player progress text");
 
     _progressView = [self workspaceThemeProgressView];
 
     _cancelButton = [UIButton buttonWithType:UIButtonTypeSystem];
     _cancelButton.translatesAutoresizingMaskIntoConstraints = NO;
-    [_cancelButton setTitle:@"Cancel" forState:UIControlStateNormal];
-    _cancelButton.accessibilityHint = @"Cancels the video extraction process.";
+    [_cancelButton setTitle:NSLocalizedString(@"Cancel", @"Button that cancels preparing a video") forState:UIControlStateNormal];
+    _cancelButton.accessibilityHint = NSLocalizedString(@"Cancels the video extraction process.", @"Accessibility hint for the Cancel button");
     [_cancelButton addTarget:self action:@selector(cancelButtonTapped) forControlEvents:UIControlEventTouchUpInside];
 
     UIStackView *stack = [[UIStackView alloc] initWithArrangedSubviews:@[_progressLabel, _progressView, _cancelButton]];
@@ -410,7 +410,7 @@ static BOOL ISHVideoURLLooksLikePlaylist(NSURL *url) {
     _playerViewController.view.hidden = YES;
     _progressCard.hidden = YES;
     _statusLabel.hidden = NO;
-    _statusLabel.text = @"Loading…";
+    _statusLabel.text = NSLocalizedString(@"Loading…", @"Video player status text");
 
     NSInteger generation = ++_loadGeneration;
     __weak typeof(self) weakSelf = self;
@@ -453,15 +453,15 @@ static BOOL ISHVideoURLLooksLikePlaylist(NSURL *url) {
     static dispatch_once_t once;
     dispatch_once(&once, ^{ formatter = [NSByteCountFormatter new]; });
     _progressLabel.text = (total > 0)
-        ? [NSString stringWithFormat:@"Preparing video… %@ of %@", [formatter stringFromByteCount:written], [formatter stringFromByteCount:total]]
-        : @"Preparing video…";
+        ? [NSString stringWithFormat:NSLocalizedString(@"Preparing video… %@ of %@", @"Video player progress text; byte counts so far and in total"), [formatter stringFromByteCount:written], [formatter stringFromByteCount:total]]
+        : NSLocalizedString(@"Preparing video…", @"Video player progress text");
 }
 
 - (void)cancelButtonTapped {
     [self cancelExtraction];
     _progressCard.hidden = YES;
     _statusLabel.hidden = NO;
-    _statusLabel.text = @"Cancelled.";
+    _statusLabel.text = NSLocalizedString(@"Cancelled.", @"Video player status text");
 }
 
 - (void)cancelExtraction {
@@ -473,8 +473,8 @@ static BOOL ISHVideoURLLooksLikePlaylist(NSURL *url) {
 
 - (NSString *)messageForLoadError:(NSError *)error {
     if ([error.domain isEqualToString:ISHGuestFileErrorDomain] && error.code == ISHGuestFileBridgeErrorCancelled)
-        return @"Cancelled.";
-    return error.localizedDescription.length ? error.localizedDescription : @"Couldn’t open this video.";
+        return NSLocalizedString(@"Cancelled.", @"Video player status text");
+    return error.localizedDescription.length ? error.localizedDescription : NSLocalizedString(@"Couldn’t open this video.", @"Video player error text");
 }
 
 // Rather than pre-filtering by extension, this hands anything to AVPlayer and
@@ -502,8 +502,8 @@ static BOOL ISHVideoURLLooksLikePlaylist(NSURL *url) {
 #pragma mark Streams and playlists
 
 - (void)openURLTapped {
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Open URL"
-        message:@"A video, an HLS stream (.m3u8), or an .m3u playlist."
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:NSLocalizedString(@"Open URL", @"Alert title")
+        message:NSLocalizedString(@"A video, an HLS stream (.m3u8), or an .m3u playlist.", @"Open URL alert message")
         preferredStyle:UIAlertControllerStyleAlert];
     NSString *clip = UIPasteboard.generalPasteboard.hasStrings ? UIPasteboard.generalPasteboard.string : nil;
     [alert addTextFieldWithConfigurationHandler:^(UITextField *field) {
@@ -516,8 +516,8 @@ static BOOL ISHVideoURLLooksLikePlaylist(NSURL *url) {
             field.text = [clip stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
     }];
     __weak typeof(alert) weakAlert = alert;
-    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Open" style:UIAlertActionStyleDefault
+    [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Cancel", @"Alert button") style:UIAlertActionStyleCancel handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Open", @"Alert button that opens the URL") style:UIAlertActionStyleDefault
                                             handler:^(__unused UIAlertAction *action) {
         NSString *text = [weakAlert.textFields.firstObject.text
             stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
@@ -530,7 +530,7 @@ static BOOL ISHVideoURLLooksLikePlaylist(NSURL *url) {
 - (void)openURLString:(NSString *)text {
     NSURL *url = [NSURL URLWithString:text];
     if (url == nil || !ISHVideoIsRemoteLocation(text)) {
-        [self resetToStatus:@"That is not an http:// or https:// address."];
+        [self resetToStatus:NSLocalizedString(@"That is not an http:// or https:// address.", @"Video player error text")];
         return;
     }
     if (ISHVideoURLLooksLikePlaylist(url)) {
@@ -542,7 +542,7 @@ static BOOL ISHVideoURLLooksLikePlaylist(NSURL *url) {
 }
 
 - (void)playRemoteURL:(NSURL *)url {
-    [self resetToStatus:@"Loading…"];
+    [self resetToStatus:NSLocalizedString(@"Loading…", @"Video player status text")];
     _currentPath = nil;
     _currentURL = url;
     [self playMediaAtURL:url];
@@ -553,7 +553,7 @@ static BOOL ISHVideoURLLooksLikePlaylist(NSURL *url) {
 // that, and a longer list is offered as channels (and entry `play`, if one is
 // given, starts).
 - (void)loadPlaylistFrom:(NSString *)source playEntry:(NSInteger)play {
-    [self resetToStatus:@"Reading playlist…"];
+    [self resetToStatus:NSLocalizedString(@"Reading playlist…", @"Video player status text")];
     [self forgetPlaylist];
     NSInteger generation = _loadGeneration;
     __weak typeof(self) weakSelf = self;
@@ -576,7 +576,7 @@ static BOOL ISHVideoURLLooksLikePlaylist(NSURL *url) {
             if (error == nil && (status < 200 || status >= 300))
                 error = [NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorBadServerResponse
                     userInfo:@{NSLocalizedDescriptionKey:
-                        [NSString stringWithFormat:@"The server answered %ld.", (long) status]}];
+                        [NSString stringWithFormat:NSLocalizedString(@"The server answered %ld.", @"Video player error; %ld is an HTTP status code"), (long) status]}];
             done(data != nil ? [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding]
                                    ?: [[NSString alloc] initWithData:data encoding:NSISOLatin1StringEncoding]
                              : nil,
@@ -602,7 +602,7 @@ static BOOL ISHVideoURLLooksLikePlaylist(NSURL *url) {
     BOOL remote = ISHVideoIsRemoteLocation(source);
     if (text == nil) {
         [self resetToStatus:error.localizedDescription.length > 0 ? error.localizedDescription
-                                                                   : @"Couldn’t read the playlist."];
+                                                                   : NSLocalizedString(@"Couldn’t read the playlist.", @"Video player error text")];
         return;
     }
     BOOL hls = NO;
@@ -614,7 +614,7 @@ static BOOL ISHVideoURLLooksLikePlaylist(NSURL *url) {
         if (remote)
             [self playRemoteURL:[NSURL URLWithString:source]];
         else
-            [self resetToStatus:@"This is an HLS stream. Open its web address with Open URL."];
+            [self resetToStatus:NSLocalizedString(@"This is an HLS stream. Open its web address with Open URL.", @"Video player status text")];
         return;
     }
     // Where each entry is: a URL as written or resolved against a remote
@@ -637,7 +637,7 @@ static BOOL ISHVideoURLLooksLikePlaylist(NSURL *url) {
         if (remote)
             [self playRemoteURL:[NSURL URLWithString:source]];
         else
-            [self resetToStatus:@"This playlist lists nothing to play."];
+            [self resetToStatus:NSLocalizedString(@"This playlist lists nothing to play.", @"Video player status text")];
         return;
     }
     _playlistSource = source;
@@ -648,7 +648,7 @@ static BOOL ISHVideoURLLooksLikePlaylist(NSURL *url) {
     } else if (entries.count == 1) {
         [self playEntry:0];
     } else {
-        _statusLabel.text = [NSString stringWithFormat:@"%lu entries. Choose one with Channels.",
+        _statusLabel.text = [NSString stringWithFormat:NSLocalizedString(@"%lu entries. Choose one with Channels.", @"Video player status text; %lu is the number of playlist entries"),
                                                        (unsigned long) entries.count];
         [self channelsTapped];
     }
@@ -664,7 +664,7 @@ static BOOL ISHVideoURLLooksLikePlaylist(NSURL *url) {
         if (url != nil)
             [self playRemoteURL:url];
         else
-            [self resetToStatus:@"This entry’s address is not valid."];
+            [self resetToStatus:NSLocalizedString(@"This entry’s address is not valid.", @"Video player error text")];
     } else {
         [self loadMediaAtGuestPath:entry.location];
     }
@@ -710,7 +710,7 @@ static BOOL ISHVideoURLLooksLikePlaylist(NSURL *url) {
         strongSelf->_statusLabel.hidden = NO;
         strongSelf->_statusLabel.text = item.error.localizedDescription.length
             ? item.error.localizedDescription
-            : @"This video or stream can’t be played.";
+            : NSLocalizedString(@"This video or stream can’t be played.", @"Video player error text");
     });
 }
 

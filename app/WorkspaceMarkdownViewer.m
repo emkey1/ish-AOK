@@ -40,7 +40,7 @@ static const NSUInteger kMarkdownViewerMaxBytes = 4 * 1024 * 1024;  // 4 MiB; re
     [self buildTextView];
     [self activateRegionConstraints];
 
-    _statusMessage = @"Open a Markdown file from the File Manager.";
+    _statusMessage = NSLocalizedString(@"Open a Markdown file from the File Manager.", @"Markdown viewer empty-state text");
     [self updateContent];
 }
 
@@ -52,8 +52,8 @@ static const NSUInteger kMarkdownViewerMaxBytes = 4 * 1024 * 1024;  // 4 MiB; re
     [self.toolContentView addSubview:_toolbarView];
 
     _backButton = [self toolbarIconButtonNamed:@"chevron.left" action:@selector(navigateBack)];
-    _backButton.accessibilityLabel = @"Back";
-    _backButton.accessibilityHint = @"Navigates back to the previous document.";
+    _backButton.accessibilityLabel = NSLocalizedString(@"Back", @"Accessibility label for the back button");
+    _backButton.accessibilityHint = NSLocalizedString(@"Navigates back to the previous document.", @"Accessibility hint for the back button");
     _backButton.enabled = NO;
 
     _titleLabel = [UILabel new];
@@ -65,12 +65,12 @@ static const NSUInteger kMarkdownViewerMaxBytes = 4 * 1024 * 1024;  // 4 MiB; re
     [_titleLabel setContentCompressionResistancePriority:UILayoutPriorityDefaultLow forAxis:UILayoutConstraintAxisHorizontal];
 
     _editButton = [self toolbarIconButtonNamed:@"pencil" action:@selector(openInMotePad)];
-    _editButton.accessibilityLabel = @"Edit";
-    _editButton.accessibilityHint = @"Opens the current document in the text editor.";
+    _editButton.accessibilityLabel = NSLocalizedString(@"Edit", @"Accessibility label for the edit button");
+    _editButton.accessibilityHint = NSLocalizedString(@"Opens the current document in the text editor.", @"Accessibility hint for the edit button");
     _editButton.enabled = NO;
     _reloadButton = [self toolbarIconButtonNamed:@"arrow.clockwise" action:@selector(reload)];
-    _reloadButton.accessibilityLabel = @"Reload";
-    _reloadButton.accessibilityHint = @"Reloads the current document.";
+    _reloadButton.accessibilityLabel = NSLocalizedString(@"Reload", @"Accessibility label for the reload button");
+    _reloadButton.accessibilityHint = NSLocalizedString(@"Reloads the current document.", @"Accessibility hint for the reload button");
     _reloadButton.enabled = NO;
 
     UIStackView *stack = [[UIStackView alloc] initWithArrangedSubviews:@[_backButton, _titleLabel, _editButton, _reloadButton]];
@@ -229,7 +229,7 @@ static const NSUInteger kMarkdownViewerMaxBytes = 4 * 1024 * 1024;  // 4 MiB; re
     _editButton.enabled = YES;
     _reloadButton.enabled = YES;
     _rawMarkdown = nil;
-    _statusMessage = @"Loading…";
+    _statusMessage = NSLocalizedString(@"Loading…", @"Markdown viewer status text");
     [self updateContent];
 
     NSInteger generation = ++_loadGeneration;
@@ -271,8 +271,8 @@ static const NSUInteger kMarkdownViewerMaxBytes = 4 * 1024 * 1024;  // 4 MiB; re
 
 - (NSString *)messageForReadError:(NSError *)error {
     if ([error.domain isEqualToString:ISHGuestFileErrorDomain] && error.code == ISHGuestFileBridgeErrorTooLarge)
-        return @"This file is larger than 4 MB and can’t be displayed here.";
-    return error.localizedDescription.length ? error.localizedDescription : @"Couldn’t open this file.";
+        return NSLocalizedString(@"This file is larger than 4 MB and can’t be displayed here.", @"Markdown viewer error text");
+    return error.localizedDescription.length ? error.localizedDescription : NSLocalizedString(@"Couldn’t open this file.", @"Markdown viewer error text");
 }
 
 - (void)updateContent {
@@ -330,8 +330,8 @@ static const NSUInteger kMarkdownViewerMaxBytes = 4 * 1024 * 1024;  // 4 MiB; re
     if (ext.length == 0 || [ext isEqualToString:@"md"] || [ext isEqualToString:@"markdown"]) {
         [self navigateToRelativePath:relativePath];
     } else {
-        [self presentSimpleAlertWithTitle:@"Can’t Open"
-                                   message:[NSString stringWithFormat:@"“%@” can’t be opened from here yet.", relativePath]];
+        [self presentSimpleAlertWithTitle:NSLocalizedString(@"Can’t Open", @"Alert title")
+                                   message:[NSString stringWithFormat:NSLocalizedString(@"“%@” can’t be opened from here yet.", @"Alert message; %@ is a linked file path"), relativePath]];
     }
     return NO;
 }
@@ -339,7 +339,7 @@ static const NSUInteger kMarkdownViewerMaxBytes = 4 * 1024 * 1024;  // 4 MiB; re
 - (void)presentSimpleAlertWithTitle:(NSString *)title message:(NSString *)message {
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:title message:message
                                                               preferredStyle:UIAlertControllerStyleAlert];
-    [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"OK", @"Alert button") style:UIAlertActionStyleDefault handler:nil]];
     [self presentViewController:alert animated:YES completion:nil];
 }
 

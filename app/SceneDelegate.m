@@ -50,7 +50,7 @@ static UIViewController *CreateRootSelectionViewController(BOOL choosesRootOnSel
         rootsTableViewController.choosesRootOnSelection = choosesRootOnSelection;
         rootsTableViewController.rootSelectionHandler = rootSelectionHandler;
         if (choosesRootOnSelection)
-            rootsTableViewController.title = @"Choose Filesystem";
+            rootsTableViewController.title = NSLocalizedString(@"Choose Filesystem", @"Root picker navigation title");
     }
     return navigationController;
 }

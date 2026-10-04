@@ -178,11 +178,11 @@ static UIFont *ISHLLMMonospaceFont(CGFloat size) {
     UIButton *toggle = [UIButton buttonWithType:UIButtonTypeSystem];
     toggle.translatesAutoresizingMaskIntoConstraints = NO;
     NSString *disclosure = canExpand ? (expanded ? @"▾ " : @"▸ ") : @"";
-    [toggle setTitle:[disclosure stringByAppendingString:(inProgress ? @"Thinking…" : @"Thinking")] forState:UIControlStateNormal];
+    [toggle setTitle:[disclosure stringByAppendingString:(inProgress ? NSLocalizedString(@"Thinking…", @"chat thinking toggle while the model is thinking") : NSLocalizedString(@"Thinking", @"chat thinking toggle title"))] forState:UIControlStateNormal];
     [toggle setTitleColor:color forState:UIControlStateNormal];
     toggle.titleLabel.font = ISHMarkdownFontWithTraits(labelFont, UIFontDescriptorTraitItalic);
     toggle.enabled = canExpand;
-    toggle.accessibilityLabel = expanded ? @"Hide the model's thinking" : @"Show the model's thinking";
+    toggle.accessibilityLabel = expanded ? NSLocalizedString(@"Hide the model's thinking", @"accessibility label, thinking toggle") : NSLocalizedString(@"Show the model's thinking", @"accessibility label, thinking toggle");
     [toggle addTarget:self action:@selector(thinkingToggleTapped:) forControlEvents:UIControlEventTouchUpInside];
     [toggle setContentHuggingPriority:UILayoutPriorityDefaultHigh forAxis:UILayoutConstraintAxisHorizontal];
 
@@ -377,7 +377,7 @@ static UIFont *ISHLLMMonospaceFont(CGFloat size) {
     ISHLLMCopyButton *copyButton = [ISHLLMCopyButton buttonWithType:UIButtonTypeSystem];
     copyButton.translatesAutoresizingMaskIntoConstraints = NO;
     copyButton.payload = payload;
-    [copyButton setTitle:@"Copy" forState:UIControlStateNormal];
+    [copyButton setTitle:NSLocalizedString(@"Copy", @"button on a code block in the chat") forState:UIControlStateNormal];
     copyButton.titleLabel.font = [UIFont preferredFontForTextStyle:UIFontTextStyleCaption2];
     copyButton.backgroundColor = [UIColor colorWithWhite:0.5 alpha:0.18];
     copyButton.layer.cornerRadius = 5.0;
@@ -398,7 +398,7 @@ static UIFont *ISHLLMMonospaceFont(CGFloat size) {
         return;
     UIPasteboard.generalPasteboard.string = sender.payload;
     NSString *original = [sender titleForState:UIControlStateNormal];
-    [sender setTitle:@"Copied" forState:UIControlStateNormal];
+    [sender setTitle:NSLocalizedString(@"Copied", @"code block copy button after copying") forState:UIControlStateNormal];
     sender.enabled = NO;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         [sender setTitle:original forState:UIControlStateNormal];
@@ -495,7 +495,7 @@ static const CGFloat kISHLLMMaximumTextScale = 3.0;
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.title = @"LLM Chat";
+    self.title = NSLocalizedString(@"LLM Chat", @"chat screen title");
     if (@available(iOS 13.0, *)) {
         self.view.backgroundColor = UIColor.systemBackgroundColor;
     } else {
@@ -542,7 +542,7 @@ static const CGFloat kISHLLMMaximumTextScale = 3.0;
     _promptField.layer.cornerRadius = 8.0;
     _promptField.autocorrectionType = UITextAutocorrectionTypeDefault;
     _promptField.delegate = self;
-    _promptField.accessibilityLabel = @"Prompt input";
+    _promptField.accessibilityLabel = NSLocalizedString(@"Prompt input", @"accessibility label, chat prompt field");
     if (@available(iOS 13.0, *)) {
         _promptField.backgroundColor = UIColor.tertiarySystemFillColor;
     } else {
@@ -552,7 +552,7 @@ static const CGFloat kISHLLMMaximumTextScale = 3.0;
 
     _promptPlaceholderLabel = [UILabel new];
     _promptPlaceholderLabel.translatesAutoresizingMaskIntoConstraints = NO;
-    _promptPlaceholderLabel.text = @"Ask the configured model";
+    _promptPlaceholderLabel.text = NSLocalizedString(@"Ask the configured model", @"chat prompt field placeholder");
     _promptPlaceholderLabel.font = _promptField.font;
     _promptPlaceholderLabel.isAccessibilityElement = NO;
     _promptPlaceholderLabel.userInteractionEnabled = NO;
@@ -565,7 +565,7 @@ static const CGFloat kISHLLMMaximumTextScale = 3.0;
 
     _sendButton = [UIButton buttonWithType:UIButtonTypeSystem];
     _sendButton.translatesAutoresizingMaskIntoConstraints = NO;
-    [_sendButton setTitle:@"Send" forState:UIControlStateNormal];
+    [_sendButton setTitle:NSLocalizedString(@"Send", @"chat send button") forState:UIControlStateNormal];
     [_sendButton addTarget:self action:@selector(sendPrompt:) forControlEvents:UIControlEventTouchUpInside];
     [inputBar addSubview:_sendButton];
 
@@ -581,16 +581,16 @@ static const CGFloat kISHLLMMaximumTextScale = 3.0;
     // in one tap, which is the whole point of the row. Saving extracts moved
     // under Actions and clearing under Chats to keep the count at four; a
     // fifth crushes the labels on a narrow iPhone.
-    _chatsButton = [self toolbarButtonWithTitle:@"Chats" action:NULL];
-    _destinationButton = [self toolbarButtonWithTitle:@"Model" action:NULL];
-    [self toolbarButtonWithTitle:@"Actions" action:@selector(showPromptActions:)];
-    [self toolbarButtonWithTitle:@"Settings" action:@selector(showLLMSettings:)];
+    _chatsButton = [self toolbarButtonWithTitle:NSLocalizedString(@"Chats", @"chat toolbar button") action:NULL];
+    _destinationButton = [self toolbarButtonWithTitle:NSLocalizedString(@"Model", @"chat toolbar button") action:NULL];
+    [self toolbarButtonWithTitle:NSLocalizedString(@"Actions", @"chat toolbar button") action:@selector(showPromptActions:)];
+    [self toolbarButtonWithTitle:NSLocalizedString(@"Settings", @"chat toolbar button") action:@selector(showLLMSettings:)];
 
-    _chatsBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:@"Chats" style:UIBarButtonItemStylePlain target:nil action:NULL];
-    _destinationBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:@"Model" style:UIBarButtonItemStylePlain target:nil action:NULL];
+    _chatsBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:NSLocalizedString(@"Chats", @"chat toolbar button") style:UIBarButtonItemStylePlain target:nil action:NULL];
+    _destinationBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:NSLocalizedString(@"Model", @"chat toolbar button") style:UIBarButtonItemStylePlain target:nil action:NULL];
     self.navigationItem.rightBarButtonItems = @[
-        [[UIBarButtonItem alloc] initWithTitle:@"Settings" style:UIBarButtonItemStylePlain target:self action:@selector(showLLMSettings:)],
-        [[UIBarButtonItem alloc] initWithTitle:@"Actions" style:UIBarButtonItemStylePlain target:self action:@selector(showPromptActions:)],
+        [[UIBarButtonItem alloc] initWithTitle:NSLocalizedString(@"Settings", @"chat toolbar button") style:UIBarButtonItemStylePlain target:self action:@selector(showLLMSettings:)],
+        [[UIBarButtonItem alloc] initWithTitle:NSLocalizedString(@"Actions", @"chat toolbar button") style:UIBarButtonItemStylePlain target:self action:@selector(showPromptActions:)],
         _destinationBarButtonItem,
         _chatsBarButtonItem,
     ];
@@ -784,14 +784,14 @@ static const CGFloat kISHLLMMaximumTextScale = 3.0;
 }
 
 - (void)renameCurrentChat {
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Rename Chat" message:nil preferredStyle:UIAlertControllerStyleAlert];
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:NSLocalizedString(@"Rename Chat", @"alert title") message:nil preferredStyle:UIAlertControllerStyleAlert];
     [alert addTextFieldWithConfigurationHandler:^(UITextField *textField) {
         textField.text = self->_agent.title;
-        textField.placeholder = @"Chat name";
+        textField.placeholder = NSLocalizedString(@"Chat name", @"rename chat text field placeholder");
         textField.clearButtonMode = UITextFieldViewModeWhileEditing;
     }];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Rename" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
+    [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Cancel", @"alert button") style:UIAlertActionStyleCancel handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Rename", @"alert button, rename chat") style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
         // Clearing the name hands the chat back to automatic titling.
         [self->_agent setCustomTitle:alert.textFields.firstObject.text ?: @""];
     }]];
@@ -801,17 +801,17 @@ static const CGFloat kISHLLMMaximumTextScale = 3.0;
 // A per-chat system message: the persona/standing instructions for this
 // conversation only, prepended to what every backend is sent.
 - (void)editSystemPromptForCurrentChat {
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"System Prompt"
-                                                                  message:@"Standing instructions sent with every message in this chat. Leave empty for none."
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:NSLocalizedString(@"System Prompt", @"alert title, per-chat system prompt")
+                                                                  message:NSLocalizedString(@"Standing instructions sent with every message in this chat. Leave empty for none.", @"system prompt alert message")
                                                            preferredStyle:UIAlertControllerStyleAlert];
     [alert addTextFieldWithConfigurationHandler:^(UITextField *textField) {
         textField.text = self->_agent.systemPrompt;
-        textField.placeholder = @"You are a concise assistant…";
+        textField.placeholder = NSLocalizedString(@"You are a concise assistant…", @"system prompt text field placeholder");
         textField.clearButtonMode = UITextFieldViewModeWhileEditing;
         textField.autocapitalizationType = UITextAutocapitalizationTypeSentences;
     }];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Save" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
+    [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Cancel", @"alert button") style:UIAlertActionStyleCancel handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Save", @"alert button") style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
         [self->_agent setSystemPrompt:alert.textFields.firstObject.text ?: @""];
     }]];
     [[self ish_presentationViewController] presentViewController:alert animated:YES completion:nil];
@@ -819,13 +819,13 @@ static const CGFloat kISHLLMMaximumTextScale = 3.0;
 
 - (void)deleteCurrentChat {
     ISHLLMAgent *agent = _agent;
-    NSString *title = agent.title.length > 0 ? agent.title : @"New Chat";
+    NSString *title = agent.title.length > 0 ? agent.title : NSLocalizedString(@"New Chat", @"title of a chat that has no name yet");
     NSString *message = agent.busy
-        ? [NSString stringWithFormat:@"“%@” is still working. Stop it and delete the chat and its saved messages? This can't be undone.", title]
-        : [NSString stringWithFormat:@"Delete “%@” and its saved messages? This can't be undone.", title];
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Delete Chat" message:message preferredStyle:UIAlertControllerStyleAlert];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Delete" style:UIAlertActionStyleDestructive handler:^(__unused UIAlertAction *action) {
+        ? [NSString stringWithFormat:NSLocalizedString(@"“%@” is still working. Stop it and delete the chat and its saved messages? This can't be undone.", @"delete chat alert message; %@ is the chat name"), title]
+        : [NSString stringWithFormat:NSLocalizedString(@"Delete “%@” and its saved messages? This can't be undone.", @"delete chat alert message; %@ is the chat name"), title];
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:NSLocalizedString(@"Delete Chat", @"alert title") message:message preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Cancel", @"alert button") style:UIAlertActionStyleCancel handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Delete", @"alert button, delete chat") style:UIAlertActionStyleDestructive handler:^(__unused UIAlertAction *action) {
         NSString *nextSessionID = ISHLLMDeleteSession(agent.sessionID);
         [ISHLLMAgentManager.shared forgetSessionID:agent.sessionID];
         if (agent == self->_agent)
@@ -858,11 +858,11 @@ static const CGFloat kISHLLMMaximumTextScale = 3.0;
         [agent clearMessages];
         return;
     }
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Still working"
-                                                                  message:@"This chat is still working. Stop it and clear the chat?"
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:NSLocalizedString(@"Still working", @"alert title, clearing a chat that is running")
+                                                                  message:NSLocalizedString(@"This chat is still working. Stop it and clear the chat?", @"alert message")
                                                            preferredStyle:UIAlertControllerStyleAlert];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Stop and Clear" style:UIAlertActionStyleDestructive handler:^(__unused UIAlertAction *action) {
+    [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Cancel", @"alert button") style:UIAlertActionStyleCancel handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Stop and Clear", @"alert button") style:UIAlertActionStyleDestructive handler:^(__unused UIAlertAction *action) {
         [agent stopThen:^{
             [agent clearMessages];
         }];
@@ -926,8 +926,8 @@ static const CGFloat kISHLLMMaximumTextScale = 3.0;
 - (void)updateSendButton {
     BOOL stop = _agent.busy && _promptField.text.length == 0;
     _sendButton.enabled = YES;
-    [_sendButton setTitle:(stop ? @"Stop" : @"Send") forState:UIControlStateNormal];
-    _sendButton.accessibilityLabel = stop ? @"Stop generating" : @"Send";
+    [_sendButton setTitle:(stop ? NSLocalizedString(@"Stop", @"chat send button while a reply runs") : NSLocalizedString(@"Send", @"chat send button")) forState:UIControlStateNormal];
+    _sendButton.accessibilityLabel = stop ? NSLocalizedString(@"Stop generating", @"accessibility label, chat stop button") : NSLocalizedString(@"Send", @"accessibility label, chat send button");
     [_sendButton removeTarget:self action:NULL forControlEvents:UIControlEventTouchUpInside];
     [_sendButton addTarget:self action:(stop ? @selector(stopGenerating:) : @selector(sendPrompt:)) forControlEvents:UIControlEventTouchUpInside];
 }
@@ -998,11 +998,11 @@ static const CGFloat kISHLLMMaximumTextScale = 3.0;
 static NSString *ISHLLMAgoText(NSDate *when) {
     NSTimeInterval ago = -when.timeIntervalSinceNow;
     if (ago < 10)
-        return @"just now";
+        return NSLocalizedString(@"just now", @"chat status: finished moments ago");
     if (ago < 60)
-        return [NSString stringWithFormat:@"%lds ago", (long) ago];
+        return [NSString stringWithFormat:NSLocalizedString(@"%lds ago", @"chat status: seconds since finishing"), (long) ago];
     if (ago < 3600)
-        return [NSString stringWithFormat:@"%ld min ago", (long) (ago / 60)];
+        return [NSString stringWithFormat:NSLocalizedString(@"%ld min ago", @"chat status: minutes since finishing"), (long) (ago / 60)];
     return [NSDateFormatter localizedStringFromDate:when dateStyle:NSDateFormatterNoStyle timeStyle:NSDateFormatterShortStyle];
 }
 
@@ -1028,11 +1028,11 @@ static NSString *ISHLLMElapsedText(NSDate *since) {
     NSMutableString *phase = [[agent statusLine] mutableCopy];
     if (busy) {
         if (agent.round > 0)
-            [phase appendFormat:@" · round %ld", (long) agent.round + 1];
+            [phase appendFormat:@" · %@", [NSString stringWithFormat:NSLocalizedString(@"round %ld", @"chat status: agent round number"), (long) agent.round + 1]];
         if (agent.toolCallsThisReply > 0)
-            [phase appendFormat:@" · %ld tool call%@", (long) agent.toolCallsThisReply, agent.toolCallsThisReply == 1 ? @"" : @"s"];
+            [phase appendFormat:@" · %@", [NSString stringWithFormat:agent.toolCallsThisReply == 1 ? NSLocalizedString(@"%ld tool call", @"chat status, singular") : NSLocalizedString(@"%ld tool calls", @"chat status, plural"), (long) agent.toolCallsThisReply]];
         if (agent.queuedPrompts.count > 0)
-            [phase appendFormat:@" · %lu queued", (unsigned long) agent.queuedPrompts.count];
+            [phase appendFormat:@" · %@", [NSString stringWithFormat:NSLocalizedString(@"%lu queued", @"chat status: prompts waiting to be sent"), (unsigned long) agent.queuedPrompts.count]];
         [_activityIndicator startAnimating];
     } else {
         [_activityIndicator stopAnimating];
@@ -1047,7 +1047,7 @@ static NSString *ISHLLMElapsedText(NSDate *since) {
     // Line 2: what it is doing right now.
     NSString *detail = agent.phaseDetail;
     if (approval != nil && approval.agent != agent)
-        detail = [NSString stringWithFormat:@"sub-agent %@ asks: %@", approval.agent.title ?: @"", detail ?: @""];
+        detail = [NSString stringWithFormat:NSLocalizedString(@"sub-agent %@ asks: %@", @"chat status; first %@ is a sub-agent name, second what it asks"), approval.agent.title ?: @"", detail ?: @""];
     if (detail.length > 0 && busy && agent.phaseStarted != nil && -agent.phaseStarted.timeIntervalSinceNow >= 5)
         detail = [detail stringByAppendingFormat:@"  (%@)", ISHLLMElapsedText(agent.phaseStarted)];
     _detailLabel.text = detail;
@@ -1059,7 +1059,7 @@ static NSString *ISHLLMElapsedText(NSDate *since) {
     NSInteger used = [agent estimatedContextTokens];
     NSInteger window = [agent effectiveContextWindowTokens];
     if (used > 0) {
-        [parts addObject:[NSString stringWithFormat:@"~%@/%@%@ ctx", ISHLLMFormattedTokenCount(used), ISHLLMFormattedTokenCountShort(window),
+        [parts addObject:[NSString stringWithFormat:NSLocalizedString(@"~%@/%@%@ ctx", @"chat status: estimated context tokens used/window"), ISHLLMFormattedTokenCount(used), ISHLLMFormattedTokenCountShort(window),
                           [agent contextWindowTokens] > 0 ? @"" : @"?"]];
     }
     float fraction = window > 0 ? (float) MIN(1.0, (double) used / (double) window) : 0.0f;
@@ -1071,21 +1071,21 @@ static NSString *ISHLLMElapsedText(NSDate *since) {
         NSUInteger done = 0;
         for (NSDictionary *todo in todos)
             done += [todo[@"status"] isEqual:@"completed"];
-        [parts addObject:[NSString stringWithFormat:@"tasks %lu/%lu", (unsigned long) done, (unsigned long) todos.count]];
+        [parts addObject:[NSString stringWithFormat:NSLocalizedString(@"tasks %lu/%lu", @"chat status: tasks done/total"), (unsigned long) done, (unsigned long) todos.count]];
     }
     NSUInteger changes = 0;
     for (ISHLLMFileChange *change in agent.toolContext.changes)
         changes += !change.reverted;
     if (changes > 0)
-        [parts addObject:[NSString stringWithFormat:@"%lu file change%@", (unsigned long) changes, changes == 1 ? @"" : @"s"]];
+        [parts addObject:[NSString stringWithFormat:changes == 1 ? NSLocalizedString(@"%lu file change", @"chat status, singular") : NSLocalizedString(@"%lu file changes", @"chat status, plural"), (unsigned long) changes]];
     NSUInteger subRunning = 0;
     for (ISHLLMAgent *subagent in agent.subagents)
         subRunning += subagent.busy;
     if (agent.subagents.count > 0)
-        [parts addObject:[NSString stringWithFormat:@"%lu sub-agent%@%@", (unsigned long) agent.subagents.count, agent.subagents.count == 1 ? @"" : @"s",
-                          subRunning > 0 ? [NSString stringWithFormat:@" (%lu working)", (unsigned long) subRunning] : @""]];
+        [parts addObject:[NSString stringWithFormat:agent.subagents.count == 1 ? NSLocalizedString(@"%lu sub-agent%@", @"chat status, singular; %@ is an optional (N working) suffix") : NSLocalizedString(@"%lu sub-agents%@", @"chat status, plural; %@ is an optional (N working) suffix"), (unsigned long) agent.subagents.count,
+                          subRunning > 0 ? [NSString stringWithFormat:NSLocalizedString(@" (%lu working)", @"chat status suffix: sub-agents still running"), (unsigned long) subRunning] : @""]];
     if (agent.systemPrompt.length > 0)
-        [parts addObject:@"system prompt"];
+        [parts addObject:NSLocalizedString(@"system prompt", @"chat status: this chat has a system prompt")];
     _infoLabel.text = [parts componentsJoinedByString:@" · "];
 
     // Line 4: every other agent that wants attention.
@@ -1102,14 +1102,14 @@ static NSString *ISHLLMElapsedText(NSDate *since) {
     }
     NSMutableArray<NSString *> *others = [NSMutableArray array];
     if (waiting > 0)
-        [others addObject:[NSString stringWithFormat:@"%lu need%@ approval", (unsigned long) waiting, waiting == 1 ? @"s" : @""]];
+        [others addObject:[NSString stringWithFormat:waiting == 1 ? NSLocalizedString(@"%lu needs approval", @"other chats status, singular") : NSLocalizedString(@"%lu need approval", @"other chats status, plural"), (unsigned long) waiting]];
     if (running > 0)
-        [others addObject:[NSString stringWithFormat:@"%lu working", (unsigned long) running]];
+        [others addObject:[NSString stringWithFormat:NSLocalizedString(@"%lu working", @"other chats status: chats running"), (unsigned long) running]];
     if (finished > 0)
-        [others addObject:[NSString stringWithFormat:@"%lu new answer%@", (unsigned long) finished, finished == 1 ? @"" : @"s"]];
+        [others addObject:[NSString stringWithFormat:finished == 1 ? NSLocalizedString(@"%lu new answer", @"other chats status, singular") : NSLocalizedString(@"%lu new answers", @"other chats status, plural"), (unsigned long) finished]];
     _agentsButton.hidden = others.count == 0;
     if (others.count > 0) {
-        NSString *title = [NSString stringWithFormat:@"Other chats: %@ ›", [others componentsJoinedByString:@" · "]];
+        NSString *title = [NSString stringWithFormat:NSLocalizedString(@"Other chats: %@ ›", @"button listing other chats wanting attention"), [others componentsJoinedByString:@" · "]];
         [_agentsButton setTitle:title forState:UIControlStateNormal];
         [_agentsButton setTitleColor:waiting > 0 ? UIColor.systemOrangeColor : nil forState:UIControlStateNormal];
     }
@@ -1195,10 +1195,10 @@ static NSString *ISHLLMElapsedText(NSDate *since) {
     BOOL shell = invocation.category == ISHLLMToolCategoryShell;
     NSString *message = invocation.confirmationMessage;
     if (reason.length > 0)
-        message = [message stringByAppendingFormat:@"\n\nAsking because of %@.", reason];
+        message = [message stringByAppendingFormat:NSLocalizedString(@"\n\nAsking because of %@.", @"approval alert message suffix; %@ is the reason"), reason];
     NSString *title = invocation.confirmationTitle;
     if (approval.agent != _agent)
-        title = [NSString stringWithFormat:@"Sub-agent “%@”: %@", approval.agent.title ?: @"", title];
+        title = [NSString stringWithFormat:NSLocalizedString(@"Sub-agent “%@”: %@", @"approval alert title; first %@ is the sub-agent name"), approval.agent.title ?: @"", title];
     __weak typeof(self) weakSelf = self;
     void (^finish)(ISHLLMToolRunDecision) = ^(ISHLLMToolRunDecision decision) {
         typeof(self) self = weakSelf;
@@ -1214,15 +1214,15 @@ static NSString *ISHLLMElapsedText(NSDate *since) {
         });
     };
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:title message:message preferredStyle:UIAlertControllerStyleAlert];
-    [alert addAction:[UIAlertAction actionWithTitle:shell ? @"Run" : @"Allow" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
+    [alert addAction:[UIAlertAction actionWithTitle:shell ? NSLocalizedString(@"Run", @"approval alert button, shell command") : NSLocalizedString(@"Allow", @"approval alert button, tool call") style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
         finish(ISHLLMToolRunOnce);
     }]];
-    [alert addAction:[UIAlertAction actionWithTitle:shell ? @"Run, don't ask again this reply" : @"Allow, don't ask again this reply" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
+    [alert addAction:[UIAlertAction actionWithTitle:shell ? NSLocalizedString(@"Run, don't ask again this reply", @"approval alert button") : NSLocalizedString(@"Allow, don't ask again this reply", @"approval alert button") style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
         finish(ISHLLMToolRunAllowReply);
     }]];
     NSString *rule = shell ? ISHLLMSuggestedShellRule(invocation.command ?: @"") : nil;
     if (rule != nil) {
-        [alert addAction:[UIAlertAction actionWithTitle:[NSString stringWithFormat:@"Always allow “%@”", rule] style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
+        [alert addAction:[UIAlertAction actionWithTitle:[NSString stringWithFormat:NSLocalizedString(@"Always allow “%@”", @"approval alert button; %@ is a shell rule"), rule] style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
             ISHLLMAddShellRule(rule, ISHLLMPermissionAllow);
             finish(ISHLLMToolRunOnce);
         }]];
@@ -1230,14 +1230,14 @@ static NSString *ISHLLMElapsedText(NSDate *since) {
         // Only when the category setting is what asked: an edit outside the
         // working directory asks whatever the setting says.
         ISHLLMToolCategory category = invocation.category;
-        NSString *always = category == ISHLLMToolCategoryEdit ? @"Always allow file edits"
-            : category == ISHLLMToolCategoryMCP ? @"Always allow MCP tools" : @"Always allow reading files";
+        NSString *always = category == ISHLLMToolCategoryEdit ? NSLocalizedString(@"Always allow file edits", @"approval alert button")
+            : category == ISHLLMToolCategoryMCP ? NSLocalizedString(@"Always allow MCP tools", @"approval alert button") : NSLocalizedString(@"Always allow reading files", @"approval alert button");
         [alert addAction:[UIAlertAction actionWithTitle:always style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
             ISHLLMSetCategoryAction(category, ISHLLMPermissionAllow);
             finish(ISHLLMToolRunOnce);
         }]];
     }
-    [alert addAction:[UIAlertAction actionWithTitle:shell ? @"Run, allow all this chat" : @"Allow all tools this chat" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
+    [alert addAction:[UIAlertAction actionWithTitle:shell ? NSLocalizedString(@"Run, allow all this chat", @"approval alert button") : NSLocalizedString(@"Allow all tools this chat", @"approval alert button") style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
         typeof(self) self = weakSelf;
         if (self == nil) {
             finish(ISHLLMToolRunOnce);
@@ -1245,7 +1245,7 @@ static NSString *ISHLLMElapsedText(NSDate *since) {
         }
         [self confirmAutoRunAllForChatWithCompletion:finish];
     }]];
-    [alert addAction:[UIAlertAction actionWithTitle:shell ? @"Don't Run" : @"Don't Allow" style:UIAlertActionStyleCancel handler:^(__unused UIAlertAction *action) {
+    [alert addAction:[UIAlertAction actionWithTitle:shell ? NSLocalizedString(@"Don't Run", @"approval alert button, shell command") : NSLocalizedString(@"Don't Allow", @"approval alert button, tool call") style:UIAlertActionStyleCancel handler:^(__unused UIAlertAction *action) {
         finish(ISHLLMToolRunDecline);
     }]];
     return alert;
@@ -1290,7 +1290,7 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
 }
 
 - (void)updateChatHeaderTitles {
-    NSString *sessionTitle = _agent.title.length > 0 ? _agent.title : @"New Chat";
+    NSString *sessionTitle = _agent.title.length > 0 ? _agent.title : NSLocalizedString(@"New Chat", @"title of a chat that has no name yet");
     NSString *destinationName = ISHLLMDestinationDisplayName([_agent destination] ?: ISHLLMActiveDestination());
     self.title = sessionTitle;
 
@@ -1306,16 +1306,16 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
     }];
 
     [_chatsButton setTitle:ISHLLMShortenedButtonTitle(sessionTitle, 14) forState:UIControlStateNormal];
-    _chatsButton.accessibilityLabel = [NSString stringWithFormat:@"Chats. Current chat: %@", sessionTitle];
+    _chatsButton.accessibilityLabel = [NSString stringWithFormat:NSLocalizedString(@"Chats. Current chat: %@", @"accessibility label, chats button"), sessionTitle];
     _chatsButton.menu = chatMenu;
     [_destinationButton setTitle:ISHLLMShortenedButtonTitle(destinationName, 14) forState:UIControlStateNormal];
-    _destinationButton.accessibilityLabel = [NSString stringWithFormat:@"Chat destination: %@", destinationName];
+    _destinationButton.accessibilityLabel = [NSString stringWithFormat:NSLocalizedString(@"Chat destination: %@", @"accessibility label, destination button"), destinationName];
     _destinationButton.menu = destinationMenu;
 
     // The navigation bar shows the chat name as the title, so its button says
     // what it does instead of repeating the name; the in-view row has no title
     // above it and carries the name itself.
-    _chatsBarButtonItem.title = @"Chats";
+    _chatsBarButtonItem.title = NSLocalizedString(@"Chats", @"chat navigation bar button");
     _chatsBarButtonItem.menu = chatMenu;
     _destinationBarButtonItem.title = ISHLLMShortenedButtonTitle(destinationName, 14);
     _destinationBarButtonItem.menu = destinationMenu;
@@ -1334,16 +1334,16 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
 }
 
 - (NSArray<UIMenuElement *> *)chatMenuElements {
-    UIAction *newChat = [UIAction actionWithTitle:@"New Chat"
+    UIAction *newChat = [UIAction actionWithTitle:NSLocalizedString(@"New Chat", @"chat menu item")
                                             image:[UIImage systemImageNamed:@"square.and.pencil"]
                                        identifier:nil
                                           handler:^(__unused UIAction *action) { [self startNewChat]; }];
-    UIAction *agents = [UIAction actionWithTitle:@"Agents…"
+    UIAction *agents = [UIAction actionWithTitle:NSLocalizedString(@"Agents…", @"chat menu item")
                                            image:[UIImage systemImageNamed:@"person.2"]
                                       identifier:nil
                                          handler:^(__unused UIAction *action) { [self showAgentList]; }];
-    agents.subtitle = @"Chats working or waiting (also /agents)";
-    UIAction *browse = [UIAction actionWithTitle:@"All Chats…"
+    agents.subtitle = NSLocalizedString(@"Chats working or waiting (also /agents)", @"chat menu item subtitle");
+    UIAction *browse = [UIAction actionWithTitle:NSLocalizedString(@"All Chats…", @"chat menu item")
                                            image:[UIImage systemImageNamed:@"list.bullet"]
                                       identifier:nil
                                          handler:^(__unused UIAction *action) { [self showChatList]; }];
@@ -1357,7 +1357,7 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
             break;
         NSString *entryID = ISHLLMStringValue(entry, @"id");
         NSString *title = ISHLLMStringValue(entry, @"title");
-        UIAction *item = [UIAction actionWithTitle:title.length > 0 ? title : @"New Chat"
+        UIAction *item = [UIAction actionWithTitle:title.length > 0 ? title : NSLocalizedString(@"New Chat", @"title of a chat that has no name yet")
                                              image:nil
                                         identifier:nil
                                            handler:^(__unused UIAction *action) { [self switchToSessionWithID:entryID]; }];
@@ -1365,41 +1365,41 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
         [recent addObject:item];
     }
 
-    UIAction *rename = [UIAction actionWithTitle:@"Rename Chat…"
+    UIAction *rename = [UIAction actionWithTitle:NSLocalizedString(@"Rename Chat…", @"chat menu item")
                                            image:[UIImage systemImageNamed:@"pencil"]
                                       identifier:nil
                                          handler:^(__unused UIAction *action) { [self renameCurrentChat]; }];
-    UIAction *systemPrompt = [UIAction actionWithTitle:_agent.systemPrompt.length > 0 ? @"System Prompt (set)…" : @"System Prompt…"
+    UIAction *systemPrompt = [UIAction actionWithTitle:_agent.systemPrompt.length > 0 ? NSLocalizedString(@"System Prompt (set)…", @"chat menu item when a system prompt is set") : NSLocalizedString(@"System Prompt…", @"chat menu item")
                                                  image:[UIImage systemImageNamed:@"text.badge.star"]
                                             identifier:nil
                                                handler:^(__unused UIAction *action) { [self editSystemPromptForCurrentChat]; }];
-    UIAction *clear = [UIAction actionWithTitle:@"Clear Messages"
+    UIAction *clear = [UIAction actionWithTitle:NSLocalizedString(@"Clear Messages", @"chat menu item")
                                           image:[UIImage systemImageNamed:@"eraser"]
                                      identifier:nil
                                         handler:^(__unused UIAction *action) { [self clearTranscript:nil]; }];
-    UIAction *delete = [UIAction actionWithTitle:@"Delete Chat"
+    UIAction *delete = [UIAction actionWithTitle:NSLocalizedString(@"Delete Chat", @"chat menu item")
                                            image:[UIImage systemImageNamed:@"trash"]
                                       identifier:nil
                                          handler:^(__unused UIAction *action) { [self deleteCurrentChat]; }];
     delete.attributes = UIMenuElementAttributesDestructive;
 
     UIMenu *switchSection = [UIMenu menuWithTitle:@"" image:nil identifier:nil options:UIMenuOptionsDisplayInline children:recent];
-    UIAction *workingDirectory = [UIAction actionWithTitle:@"Working Directory…"
+    UIAction *workingDirectory = [UIAction actionWithTitle:NSLocalizedString(@"Working Directory…", @"chat menu item")
                                                      image:[UIImage systemImageNamed:@"folder"]
                                                 identifier:nil
                                                    handler:^(__unused UIAction *action) { [self editWorkingDirectoryForCurrentChat]; }];
     workingDirectory.subtitle = _agent.toolContext.workingDirectory;
-    UIAction *summarize = [UIAction actionWithTitle:@"Summarize Chat"
+    UIAction *summarize = [UIAction actionWithTitle:NSLocalizedString(@"Summarize Chat", @"chat menu item")
                                               image:[UIImage systemImageNamed:@"text.redaction"]
                                          identifier:nil
                                             handler:^(__unused UIAction *action) { [self compactConversation]; }];
-    summarize.subtitle = @"Send the model a summary instead of the history";
-    UIAction *changes = [UIAction actionWithTitle:@"Changes…"
+    summarize.subtitle = NSLocalizedString(@"Send the model a summary instead of the history", @"chat menu item subtitle");
+    UIAction *changes = [UIAction actionWithTitle:NSLocalizedString(@"Changes…", @"chat menu item")
                                             image:[UIImage systemImageNamed:@"plusminus"]
                                        identifier:nil
                                           handler:^(__unused UIAction *action) { [self showChanges]; }];
     NSUInteger changeCount = _agent.toolContext.changes.count;
-    changes.subtitle = changeCount == 0 ? @"No file changes yet (also /changes)" : [NSString stringWithFormat:@"%lu file change%@ · /undo reverts the last", (unsigned long) changeCount, changeCount == 1 ? @"" : @"s"];
+    changes.subtitle = changeCount == 0 ? NSLocalizedString(@"No file changes yet (also /changes)", @"chat menu item subtitle") : [NSString stringWithFormat:changeCount == 1 ? NSLocalizedString(@"%lu file change · /undo reverts the last", @"chat menu item subtitle, singular") : NSLocalizedString(@"%lu file changes · /undo reverts the last", @"chat menu item subtitle, plural"), (unsigned long) changeCount];
     UIMenu *currentSection = [UIMenu menuWithTitle:@"" image:nil identifier:nil options:UIMenuOptionsDisplayInline children:@[rename, systemPrompt, workingDirectory, changes, summarize, clear, delete]];
     return @[newChat, browse, agents, switchSection, currentSection];
 }
@@ -1448,20 +1448,20 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
     }
 
     NSDictionary<NSString *, NSString *> *current = [_agent destination];
-    UIAction *chooseModel = [UIAction actionWithTitle:[NSString stringWithFormat:@"Edit “%@”…", ISHLLMDestinationDisplayName(current)]
+    UIAction *chooseModel = [UIAction actionWithTitle:[NSString stringWithFormat:NSLocalizedString(@"Edit “%@”…", @"destination menu item; %@ is the destination name"), ISHLLMDestinationDisplayName(current)]
                                                 image:[UIImage systemImageNamed:@"slider.horizontal.3"]
                                            identifier:nil
                                               handler:^(__unused UIAction *action) { [self editDestination:current]; }];
-    chooseModel.subtitle = @"Model, server, key; choose from the server's models";
-    UIAction *addDestination = [UIAction actionWithTitle:@"Add Destination…"
+    chooseModel.subtitle = NSLocalizedString(@"Model, server, key; choose from the server's models", @"destination menu item subtitle");
+    UIAction *addDestination = [UIAction actionWithTitle:NSLocalizedString(@"Add Destination…", @"destination menu item")
                                                    image:[UIImage systemImageNamed:@"plus"]
                                               identifier:nil
                                                  handler:^(__unused UIAction *action) { [self addDestinationFromPreset]; }];
-    UIAction *manage = [UIAction actionWithTitle:@"Manage Destinations…"
+    UIAction *manage = [UIAction actionWithTitle:NSLocalizedString(@"Manage Destinations…", @"destination menu item")
                                            image:[UIImage systemImageNamed:@"list.bullet"]
                                       identifier:nil
                                          handler:^(__unused UIAction *action) { [self showDestinationList]; }];
-    UIMenu *switchSection = [UIMenu menuWithTitle:@"Chat With" image:nil identifier:nil options:UIMenuOptionsDisplayInline children:items];
+    UIMenu *switchSection = [UIMenu menuWithTitle:NSLocalizedString(@"Chat With", @"destination menu section title") image:nil identifier:nil options:UIMenuOptionsDisplayInline children:items];
     UIMenu *manageSection = [UIMenu menuWithTitle:@"" image:nil identifier:nil options:UIMenuOptionsDisplayInline children:@[chooseModel, addDestination, manage]];
     return @[switchSection, manageSection];
 }
@@ -1471,8 +1471,8 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
 // URL and model are filled in; an API key, if the provider needs one, is
 // prompted for right here so nothing has to go through Settings.
 - (void)addDestinationFromPreset {
-    ISHActionSheet *alert = [ISHActionSheet actionSheetWithTitle:@"Add Destination"
-                                                         message:@"Pick a provider preset. Server URL, model and key stay editable in Settings."];
+    ISHActionSheet *alert = [ISHActionSheet actionSheetWithTitle:NSLocalizedString(@"Add Destination", @"action sheet title")
+                                                         message:NSLocalizedString(@"Pick a provider preset. Server URL, model and key stay editable in Settings.", @"add destination action sheet message")];
     for (NSDictionary<NSString *, NSString *> *preset in ISHLLMProviderPresets()) {
         [alert addActionWithTitle:preset[@"name"] style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
             NSDictionary<NSString *, NSString *> *destination = @{
@@ -1490,22 +1490,22 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
                 [self promptForAPIKeyForNewDestination:destination];
         }];
     }
-    [alert addActionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil];
+    [alert addActionWithTitle:NSLocalizedString(@"Cancel", @"action sheet button") style:UIAlertActionStyleCancel handler:nil];
     [alert presentFromViewController:[self ish_presentationViewController] source:_destinationButton];
 }
 
 - (void)promptForAPIKeyForNewDestination:(NSDictionary<NSString *, NSString *> *)destination {
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:[NSString stringWithFormat:@"%@ API Key", ISHLLMDestinationDisplayName(destination)]
-                                                                  message:@"This provider needs a key. It is stored with the destination and can be changed in Settings."
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:[NSString stringWithFormat:NSLocalizedString(@"%@ API Key", @"alert title; %@ is the destination name"), ISHLLMDestinationDisplayName(destination)]
+                                                                  message:NSLocalizedString(@"This provider needs a key. It is stored with the destination and can be changed in Settings.", @"API key alert message")
                                                            preferredStyle:UIAlertControllerStyleAlert];
     [alert addTextFieldWithConfigurationHandler:^(UITextField *textField) {
         textField.secureTextEntry = YES;
         textField.autocapitalizationType = UITextAutocapitalizationTypeNone;
         textField.autocorrectionType = UITextAutocorrectionTypeNo;
-        textField.placeholder = @"API key";
+        textField.placeholder = NSLocalizedString(@"API key", @"API key text field placeholder");
     }];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Later" style:UIAlertActionStyleCancel handler:nil]];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Save" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
+    [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Later", @"alert button, skip entering an API key") style:UIAlertActionStyleCancel handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Save", @"alert button") style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
         NSString *key = alert.textFields.firstObject.text ?: @"";
         if (key.length == 0)
             return;
@@ -1611,23 +1611,23 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
 - (void)showExtractActions:(id)sender {
     NSArray<NSDictionary<NSString *, NSString *> *> *blocks = [self extractCodeBlocksFromText:self.latestAssistantMessage];
     NSString *savePath = @"/AOK/persist/llm-extracts";
-    ISHActionSheet *alert = [ISHActionSheet actionSheetWithTitle:@"Save From Chat"
-                                                         message:blocks.count > 0 ? [@"Save destination: " stringByAppendingString:savePath] : [@"No fenced code blocks found in the last reply. Text in the transcript can be highlighted and copied directly, and each code block has its own Copy button. Save destination: " stringByAppendingString:savePath]];
+    ISHActionSheet *alert = [ISHActionSheet actionSheetWithTitle:NSLocalizedString(@"Save From Chat", @"action sheet title")
+                                                         message:blocks.count > 0 ? [NSString stringWithFormat:NSLocalizedString(@"Save destination: %@", @"save from chat message; %@ is a folder path"), savePath] : [NSString stringWithFormat:NSLocalizedString(@"No fenced code blocks found in the last reply. Text in the transcript can be highlighted and copied directly, and each code block has its own Copy button. Save destination: %@", @"save from chat message; %@ is a folder path"), savePath]];
     for (NSUInteger i = 0; i < blocks.count; i++) {
         NSDictionary<NSString *, NSString *> *block = blocks[i];
         NSString *language = block[@"language"].length > 0 ? block[@"language"] : @"text";
-        NSString *title = [NSString stringWithFormat:@"Save block %lu (%@)", (unsigned long) i + 1, language];
+        NSString *title = [NSString stringWithFormat:NSLocalizedString(@"Save block %lu (%@)", @"action sheet button; %lu block number, %@ its language"), (unsigned long) i + 1, language];
         [alert addActionWithTitle:title style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
             [self saveCodeBlock:block index:i + 1];
         }];
     }
     if (blocks.count > 1) {
-        [alert addActionWithTitle:@"Save All Blocks" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
+        [alert addActionWithTitle:NSLocalizedString(@"Save All Blocks", @"action sheet button") style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
             for (NSUInteger i = 0; i < blocks.count; i++)
                 [self saveCodeBlock:blocks[i] index:i + 1];
         }];
     }
-    [alert addActionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil];
+    [alert addActionWithTitle:NSLocalizedString(@"Cancel", @"action sheet button") style:UIAlertActionStyleCancel handler:nil];
     [alert presentFromViewController:self source:sender];
 }
 
@@ -1647,7 +1647,7 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
     NSError *error = nil;
     BOOL ok = [text writeToURL:url atomically:YES encoding:NSUTF8StringEncoding error:&error];
     NSString *ishPath = [@"/AOK/persist/llm-extracts" stringByAppendingPathComponent:url.lastPathComponent];
-    NSString *message = ok ? [NSString stringWithFormat:@"Saved %@", ishPath] : (error.localizedDescription ?: @"Save failed");
+    NSString *message = ok ? [NSString stringWithFormat:NSLocalizedString(@"Saved %@", @"chat note after saving a file; %@ is its path"), ishPath] : (error.localizedDescription ?: NSLocalizedString(@"Save failed", @"chat note when saving a file failed"));
     [_agent appendLocalRole:@"assistant" content:message];
 }
 
@@ -1660,27 +1660,27 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
 }
 
 - (void)showPromptActions:(id)sender {
-    ISHActionSheet *alert = [ISHActionSheet actionSheetWithTitle:@"Prompt Actions" message:@"Use terminal context or saved prompt templates."];
+    ISHActionSheet *alert = [ISHActionSheet actionSheetWithTitle:NSLocalizedString(@"Prompt Actions", @"action sheet title") message:NSLocalizedString(@"Use terminal context or saved prompt templates.", @"prompt actions action sheet message")];
     NSArray<NSDictionary<NSString *, NSString *> *> *actions = @[
-        @{@"title": @"Explain terminal output", @"instruction": @"Explain the important details in this terminal output. If there is an error, identify the likely cause."},
-        @{@"title": @"Suggest fix for error", @"instruction": @"Find the most likely error in this terminal output and suggest concrete commands or edits to fix it."},
-        @{@"title": @"Draft shell command", @"instruction": @"Based on this terminal context, draft the next safe shell command. Explain briefly before the command."},
+        @{@"title": NSLocalizedString(@"Explain terminal output", @"prompt action"), @"instruction": @"Explain the important details in this terminal output. If there is an error, identify the likely cause."},
+        @{@"title": NSLocalizedString(@"Suggest fix for error", @"prompt action"), @"instruction": @"Find the most likely error in this terminal output and suggest concrete commands or edits to fix it."},
+        @{@"title": NSLocalizedString(@"Draft shell command", @"prompt action"), @"instruction": @"Based on this terminal context, draft the next safe shell command. Explain briefly before the command."},
     ];
     for (NSDictionary<NSString *, NSString *> *descriptor in actions) {
         [alert addActionWithTitle:descriptor[@"title"] style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
             [self setPromptFieldText:[self terminalContextPromptWithInstruction:descriptor[@"instruction"]]];
         }];
     }
-    [alert addActionWithTitle:@"Load Prompt Template" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
+    [alert addActionWithTitle:NSLocalizedString(@"Load Prompt Template", @"prompt actions button") style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
         [self showPromptTemplatePickerFromSender:sender];
     }];
     // Saving code out of the last reply used to have its own toolbar button;
     // the toolbar now spends two of its four slots on the chat and the
     // destination, so it lives here.
-    [alert addActionWithTitle:@"Save From Chat…" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
+    [alert addActionWithTitle:NSLocalizedString(@"Save From Chat…", @"prompt actions button") style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
         [self showExtractActions:sender];
     }];
-    [alert addActionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil];
+    [alert addActionWithTitle:NSLocalizedString(@"Cancel", @"action sheet button") style:UIAlertActionStyleCancel handler:nil];
     [alert presentFromViewController:self source:sender];
 }
 
@@ -1688,7 +1688,7 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
     NSURL *templatesURL = [ISHLLMPersistDirectoryURL() URLByAppendingPathComponent:@"llm-prompts" isDirectory:YES];
     [NSFileManager.defaultManager createDirectoryAtURL:templatesURL withIntermediateDirectories:YES attributes:nil error:nil];
     NSArray<NSURL *> *files = [NSFileManager.defaultManager contentsOfDirectoryAtURL:templatesURL includingPropertiesForKeys:nil options:0 error:nil];
-    ISHActionSheet *alert = [ISHActionSheet actionSheetWithTitle:@"Prompt Templates" message:@"Templates are text files in /AOK/persist/llm-prompts."];
+    ISHActionSheet *alert = [ISHActionSheet actionSheetWithTitle:NSLocalizedString(@"Prompt Templates", @"action sheet title") message:NSLocalizedString(@"Templates are text files in /AOK/persist/llm-prompts.", @"prompt templates action sheet message")];
     for (NSURL *fileURL in files) {
         if (fileURL.lastPathComponent.length == 0)
             continue;
@@ -1698,12 +1698,12 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
                 [self setPromptFieldText:template];
         }];
     }
-    [alert addActionWithTitle:@"Create Examples" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
+    [alert addActionWithTitle:NSLocalizedString(@"Create Examples", @"prompt templates button") style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
         [@"Review this code for correctness, portability, and security.\n\n```\nPASTE_CODE_HERE\n```\n" writeToURL:[templatesURL URLByAppendingPathComponent:@"code-review.txt"] atomically:YES encoding:NSUTF8StringEncoding error:nil];
         [@"Turn this into a robust shell script with error handling:\n\n" writeToURL:[templatesURL URLByAppendingPathComponent:@"make-script.txt"] atomically:YES encoding:NSUTF8StringEncoding error:nil];
-        [self->_agent appendLocalRole:@"assistant" content:@"Created example prompt templates in /AOK/persist/llm-prompts."];
+        [self->_agent appendLocalRole:@"assistant" content:NSLocalizedString(@"Created example prompt templates in /AOK/persist/llm-prompts.", @"chat note")];
     }];
-    [alert addActionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil];
+    [alert addActionWithTitle:NSLocalizedString(@"Cancel", @"action sheet button") style:UIAlertActionStyleCancel handler:nil];
     [alert presentFromViewController:self source:sender];
 }
 
@@ -1746,11 +1746,11 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
             // Intentionally omit the server URL here -- it shows after Clear and
             // may contain a private host/IP the user doesn't want on screen.
             NSString *model = [_agent modelName];
-            _emptyStateLabel.text = [NSString stringWithFormat:@"%@\n\nModel: %@%@%@\n\n%@",
-                                      [self messages].count > 0 ? @"Nothing to show yet." : @"Send a prompt to start this chat.",
+            _emptyStateLabel.text = [NSString stringWithFormat:NSLocalizedString(@"%@\n\nModel: %@%@%@\n\n%@", @"empty chat text; %@s: status line, destination, notes, tools summary"),
+                                      [self messages].count > 0 ? NSLocalizedString(@"Nothing to show yet.", @"empty chat text") : NSLocalizedString(@"Send a prompt to start this chat.", @"empty chat text"),
                                       ISHLLMDestinationLabel([_agent destination]),
-                                      model.length > 0 ? @"" : @"\nNo model set: choose one with the model button.",
-                                      _agent.systemPrompt.length > 0 ? @"\nSystem prompt set for this chat." : @"",
+                                      model.length > 0 ? @"" : NSLocalizedString(@"\nNo model set: choose one with the model button.", @"empty chat note"),
+                                      _agent.systemPrompt.length > 0 ? NSLocalizedString(@"\nSystem prompt set for this chat.", @"empty chat note") : @"",
                                       [_agent toolsSummaryText] ?: @""];
         }
     }
@@ -2069,13 +2069,13 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
         completion(ISHLLMToolRunAllowChat);
         return;
     }
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Allow every tool call this chat?"
-        message:@"Every command and file change the model requests for the rest of this chat will happen without confirmation. Content the model reads (a web page, a file) can instruct it to run destructive commands, overwrite files or read private data, and nothing will stop that but the model itself. Permissions set to Deny still apply. Confirmation comes back when you clear the chat."
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:NSLocalizedString(@"Allow every tool call this chat?", @"alert title")
+        message:NSLocalizedString(@"Every command and file change the model requests for the rest of this chat will happen without confirmation. Content the model reads (a web page, a file) can instruct it to run destructive commands, overwrite files or read private data, and nothing will stop that but the model itself. Permissions set to Deny still apply. Confirmation comes back when you clear the chat.", @"allow-all warning alert message")
         preferredStyle:UIAlertControllerStyleAlert];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Allow Once Instead" style:UIAlertActionStyleCancel handler:^(UIAlertAction *action) {
+    [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Allow Once Instead", @"alert button") style:UIAlertActionStyleCancel handler:^(UIAlertAction *action) {
         completion(ISHLLMToolRunOnce);
     }]];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Allow All" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
+    [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Allow All", @"alert button") style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
         [NSUserDefaults.standardUserDefaults setBool:YES forKey:kAutoRunWarningShownKey];
         completion(ISHLLMToolRunAllowChat);
     }]];
@@ -2085,8 +2085,8 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
 #pragma mark - Working directory
 
 - (void)editWorkingDirectoryForCurrentChat {
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Working Directory"
-        message:@"Where this chat's commands start and its relative file paths point, and where AGENTS.md is looked for. File edits outside it always ask. Leave empty for the home directory."
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:NSLocalizedString(@"Working Directory", @"alert title")
+        message:NSLocalizedString(@"Where this chat's commands start and its relative file paths point, and where AGENTS.md is looked for. File edits outside it always ask. Leave empty for the home directory.", @"working directory alert message")
         preferredStyle:UIAlertControllerStyleAlert];
     [alert addTextFieldWithConfigurationHandler:^(UITextField *textField) {
         textField.text = self->_agent.toolContext.workingDirectory;
@@ -2096,8 +2096,8 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
         textField.autocorrectionType = UITextAutocorrectionTypeNo;
         textField.spellCheckingType = UITextSpellCheckingTypeNo;
     }];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Save" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
+    [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Cancel", @"alert button") style:UIAlertActionStyleCancel handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Save", @"alert button") style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
         NSString *raw = [alert.textFields.firstObject.text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet] ?: @"";
         [self setWorkingDirectoryFromInput:raw];
     }]];
@@ -2117,10 +2117,10 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
         if (item == nil || item.kind != ISHGuestFileKindDirectory) {
             if (self == nil)
                 return;
-            UIAlertController *failure = [UIAlertController alertControllerWithTitle:@"Not a directory"
-                message:[NSString stringWithFormat:@"%@: %@", path, item == nil ? (error.localizedDescription ?: @"not found") : @"not a directory"]
+            UIAlertController *failure = [UIAlertController alertControllerWithTitle:NSLocalizedString(@"Not a directory", @"alert title")
+                message:[NSString stringWithFormat:@"%@: %@", path, item == nil ? (error.localizedDescription ?: NSLocalizedString(@"not found", @"working directory error detail")) : NSLocalizedString(@"not a directory", @"working directory error detail")]
                 preferredStyle:UIAlertControllerStyleAlert];
-            [failure addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleCancel handler:nil]];
+            [failure addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"OK", @"alert button") style:UIAlertActionStyleCancel handler:nil]];
             [[self ish_presentationViewController] presentViewController:failure animated:YES completion:nil];
             return;
         }
@@ -2145,7 +2145,7 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
 
 - (void)undoLastChange {
     if (_agent.busy) {
-        [_agent appendLocalRole:@"assistant" content:@"Wait for the reply to finish before undoing a change."];
+        [_agent appendLocalRole:@"assistant" content:NSLocalizedString(@"Wait for the reply to finish before undoing a change.", @"chat note")];
         return;
     }
     for (ISHLLMFileChange *change in _agent.toolContext.changes.reverseObjectEnumerator) {
@@ -2154,7 +2154,7 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
             return;
         }
     }
-    [_agent appendLocalRole:@"assistant" content:@"No file change in this chat to undo."];
+    [_agent appendLocalRole:@"assistant" content:NSLocalizedString(@"No file change in this chat to undo.", @"chat note")];
 }
 
 // A file edited again since the change asks first: reverting would throw the
@@ -2164,22 +2164,22 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
     __weak typeof(self) weakSelf = self;
     [agent revertChange:change force:force completion:^(BOOL reverted, BOOL changedSince, NSString *message) {
         if (changedSince) {
-            UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Changed since"
+            UIAlertController *alert = [UIAlertController alertControllerWithTitle:NSLocalizedString(@"Changed since", @"alert title, file edited again since the change")
                 message:message preferredStyle:UIAlertControllerStyleAlert];
-            [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:^(__unused UIAlertAction *action) {
+            [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Cancel", @"alert button") style:UIAlertActionStyleCancel handler:^(__unused UIAlertAction *action) {
                 if (completion != nil)
                     completion();
             }]];
-            [alert addAction:[UIAlertAction actionWithTitle:@"Revert Anyway" style:UIAlertActionStyleDestructive handler:^(__unused UIAlertAction *action) {
+            [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Revert Anyway", @"alert button") style:UIAlertActionStyleDestructive handler:^(__unused UIAlertAction *action) {
                 [weakSelf revertChange:change ofAgent:agent presenter:presenter force:YES completion:completion];
             }]];
             [presenter presentViewController:alert animated:YES completion:nil];
             return;
         }
         if (!reverted) {
-            UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Could not revert"
+            UIAlertController *alert = [UIAlertController alertControllerWithTitle:NSLocalizedString(@"Could not revert", @"alert title")
                 message:message preferredStyle:UIAlertControllerStyleAlert];
-            [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleCancel handler:nil]];
+            [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"OK", @"alert button") style:UIAlertActionStyleCancel handler:nil]];
             [presenter presentViewController:alert animated:YES completion:nil];
         }
         if (completion != nil)

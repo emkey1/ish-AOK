@@ -141,23 +141,23 @@ enum {
 
 - (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section {
     switch (section) {
-        case PreviewSection: return @"Preview";
-        case ColorSchemeSection: return @"Color Scheme";
-        case WorkspaceStyleSection: return @"Workspace Style";
-        case CursorSection: return @"Cursor";
-        case StatusBarSection: return @"Status Bar";
-        case TerminalButtonsSection: return @"Terminal Buttons";
-        case WorkspaceLaunchSection: return [self supportsWorkspaceLaunchCount] ? @"Desktops at Launch" : nil;
+        case PreviewSection: return NSLocalizedString(@"Preview", @"Appearance settings section header");
+        case ColorSchemeSection: return NSLocalizedString(@"Color Scheme", @"Appearance settings section header");
+        case WorkspaceStyleSection: return NSLocalizedString(@"Workspace Style", @"Appearance settings section header");
+        case CursorSection: return NSLocalizedString(@"Cursor", @"Appearance settings section header");
+        case StatusBarSection: return NSLocalizedString(@"Status Bar", @"Appearance settings section header");
+        case TerminalButtonsSection: return NSLocalizedString(@"Terminal Buttons", @"Appearance settings section header");
+        case WorkspaceLaunchSection: return [self supportsWorkspaceLaunchCount] ? NSLocalizedString(@"Desktops at Launch", @"Appearance settings section header") : nil;
         default: return nil;
     }
 }
 
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
     switch (section) {
-        case PreviewSection: return @"Change the color scheme used for the preview.";
-        case WorkspaceStyleSection: return @"Modern is a flat, redesigned desktop; Classic keeps the original look. Both stay available and only restyle the Workspace.";
-        case TerminalButtonsSection: return @"Show the settings (gear) and terminal-switcher buttons on the terminal. Turn this off for a cleaner terminal.";
-        case WorkspaceLaunchSection: return [self supportsWorkspaceLaunchCount] ? @"How many in-app Desktops to open automatically at launch." : nil;
+        case PreviewSection: return NSLocalizedString(@"Change the color scheme used for the preview.", @"Appearance settings section footer");
+        case WorkspaceStyleSection: return NSLocalizedString(@"Modern is a flat, redesigned desktop; Classic keeps the original look. Both stay available and only restyle the Workspace.", @"Appearance settings section footer");
+        case TerminalButtonsSection: return NSLocalizedString(@"Show the settings (gear) and terminal-switcher buttons on the terminal. Turn this off for a cleaner terminal.", @"Appearance settings section footer");
+        case WorkspaceLaunchSection: return [self supportsWorkspaceLaunchCount] ? NSLocalizedString(@"How many in-app Desktops to open automatically at launch.", @"Appearance settings section footer") : nil;
         default: return nil;
     }
 }
@@ -253,7 +253,7 @@ enum {
                     // including the action it wired, which belongs to Font Size.
                     [stepper removeTarget:nil action:NULL forControlEvents:UIControlEventValueChanged];
                     if (indexPath.row == 2) {
-                        title.text = @"Font Size";
+                        title.text = NSLocalizedString(@"Font Size", @"Appearance settings row label");
                         stepper.minimumValue = 1;
                         stepper.maximumValue = 72;
                         stepper.stepValue = 1;
@@ -262,7 +262,7 @@ enum {
                         [stepper addTarget:self action:@selector(fontSizeChanged:)
                           forControlEvents:UIControlEventValueChanged];
                     } else {
-                        title.text = @"Line Height";
+                        title.text = NSLocalizedString(@"Line Height", @"Appearance settings row label");
                         // Inside the bounds UserPreferences and hterm both enforce, and
                         // narrower: this closes a one-or-two-pixel band, so the useful
                         // range is just below 1. 0.05 is a visible step at every font
@@ -284,13 +284,13 @@ enum {
         case ColorSchemeSection:
             switch (indexPath.row) {
                 case 0:
-                    cell.textLabel.text = @"Match System";
+                    cell.textLabel.text = NSLocalizedString(@"Match System", @"Color scheme option");
                     break;
                 case 1:
-                    cell.textLabel.text = @"Light";
+                    cell.textLabel.text = NSLocalizedString(@"Light", @"Color scheme option");
                     break;
                 case 2:
-                    cell.textLabel.text = @"Dark";
+                    cell.textLabel.text = NSLocalizedString(@"Dark", @"Color scheme option");
                     break;
             }
             if (indexPath.row == UserPreferences.shared.colorScheme) {
@@ -305,10 +305,10 @@ enum {
         case WorkspaceStyleSection:
             switch (indexPath.row) {
                 case 0:
-                    cell.textLabel.text = @"Classic";
+                    cell.textLabel.text = NSLocalizedString(@"Classic", @"Workspace style option");
                     break;
                 case 1:
-                    cell.textLabel.text = @"Modern";
+                    cell.textLabel.text = NSLocalizedString(@"Modern", @"Workspace style option");
                     break;
             }
             if (indexPath.row == UserPreferences.shared.workspaceStyle) {
@@ -321,7 +321,7 @@ enum {
             break;
 
         case TerminalButtonsSection:
-            cell.textLabel.text = @"Show Settings & Switcher";
+            cell.textLabel.text = NSLocalizedString(@"Show Settings & Switcher", @"Appearance settings toggle for the terminal quick buttons");
             if (UserPreferences.shared.showTerminalQuickButtons) {
                 cell.accessoryType = UITableViewCellAccessoryCheckmark;
                 cell.accessibilityTraits |= UIAccessibilityTraitSelected;
@@ -333,7 +333,7 @@ enum {
 
         case WorkspaceLaunchSection: {
             NSInteger count = indexPath.row + 1;
-            cell.textLabel.text = count == 1 ? @"1 desktop" : [NSString stringWithFormat:@"%ld desktops", (long)count];
+            cell.textLabel.text = count == 1 ? NSLocalizedString(@"1 desktop", @"Desktops at Launch option") : [NSString stringWithFormat:NSLocalizedString(@"%ld desktops", @"Desktops at Launch option; %ld is 2 or more"), (long)count];
             if (count == UserPreferences.shared.workspaceLaunchCount) {
                 cell.accessoryType = UITableViewCellAccessoryCheckmark;
                 cell.accessibilityTraits |= UIAccessibilityTraitSelected;
