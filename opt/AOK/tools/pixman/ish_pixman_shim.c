@@ -1088,16 +1088,20 @@ static int plan_in_guest(const struct plan *p, pixman_box32_t b, int32_t src_dx,
 // it was most of labwc's time on an A10X. These are the stretches the kernel
 // computes byte for byte as pixman does, checked against real pixman per
 // guest architecture: riscv64 runs pixman's C code, every shape here; aarch64
-// runs its NEON fast paths, which for SRC from x8r8g8b8 into x8r8g8b8
-// interpolate the source's raw padding byte (PIX_FLAG_RAW_TAPS), and for OVER
-// from x8r8g8b8 switch between that and the C path by the whole call's
-// geometry -- that one shape is left to pixman there. x86's SSE2 paths have
-// not been checked: declined. (tests/manual/pixman_shim.c's stretch cases.)
+// runs its NEON fast paths and x86 (x86_64 and i386, which AOK gives SSE2,
+// SSSE3 and SSE4.1) its SSE2/SSSE3 ones, and both behave alike: for SRC from
+// x8r8g8b8 into x8r8g8b8 they interpolate the source's raw padding byte
+// (PIX_FLAG_RAW_TAPS), and for OVER from x8r8g8b8 they switch between that
+// and the C path by the whole call's geometry -- that one shape is left to
+// pixman there. Checked with a reference model against pixman 0.44 (Devuan)
+// and 0.46 (Alpine) on each, every byte, and by tests/manual/pixman_shim.c's
+// stretch cases. PIXMAN_DISABLE can turn the SIMD paths off, which changes
+// the padding-byte rule, so with it set nothing is stretched here.
 #if defined(__riscv) && __riscv_xlen == 64
 #  define SCALE_ARCH_OK 1
 #  define SCALE_RAW_SRC_X8_X8 0
 #  define SCALE_OVER_FROM_X8_OK 1
-#elif defined(__aarch64__)
+#elif defined(__aarch64__) || defined(__x86_64__) || defined(__i386__)
 #  define SCALE_ARCH_OK 1
 #  define SCALE_RAW_SRC_X8_X8 1
 #  define SCALE_OVER_FROM_X8_OK 0
@@ -1140,6 +1144,13 @@ static int scale_composite(pixman_op_t op, pixman_image_t *src, pixman_image_t *
     RESOLVE(get_height, get_height_fn, "pixman_image_get_height");
     *refused = 0;
     if (!SCALE_ARCH_OK || mask != NULL || (op != PIXMAN_OP_SRC && op != PIXMAN_OP_OVER))
+        return 1;
+    static int simd_disabled = -1;
+    if (simd_disabled < 0) {
+        const char *v = getenv("PIXMAN_DISABLE");
+        simd_disabled = v != NULL && v[0] != '\0';
+    }
+    if (simd_disabled)
         return 1;
     int has_transform = 0, kind = KIND_BITS;
     pixman_filter_t filter = PIXMAN_FILTER_NEAREST;

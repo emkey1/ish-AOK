@@ -526,9 +526,13 @@ random cases, every byte) before the kernel was written:
   transform_point never rounds and pixman's per-line and per-pixel stepping
   agree), not a pure translation (pixman copies that raw), sample points
   well inside 16.16 (analyze_extent), no mask;
-- per guest: riscv64 (C) every shape; aarch64 (NEON) all but OVER from
-  x8r8g8b8, which pixman switches between NEON and C by whole-call geometry;
-  x86 (SSE2) unchecked, declined.
+- per guest: riscv64 (C) every shape; aarch64 (NEON) and x86_64/i386
+  (SSE2/SSSE3, which AOK advertises) all but OVER from x8r8g8b8, which
+  pixman switches between SIMD and C by whole-call geometry -- x86's SIMD
+  paths turned out to follow NEON's rule exactly (raw padding taps for SRC
+  x8->x8; model vs pixman 0.44 glibc x86_64 and 0.46 musl x86_64/i386,
+  8000 cases each, 0 mismatches). PIXMAN_DISABLE switches pixman's SIMD off
+  and so the rule: with it set, the shim stretches nothing.
 
 tests/manual/pixman_shim.c has stretch scenarios (validated scales, fractional
 offsets, edges, clips, a 300x300 client at 2x through two clip boxes, and
@@ -538,9 +542,9 @@ every byte pixman's. bip, scale-2 software session, es2gears (8-bit): 8.7 ->
 either fix); es2gears' own software rendering is now the limit.
 
 ## NEXT
-0. SCALE_BILINEAR on x86 guests: check pixman's SSE2/SSSE3 bilinear paths
-   against the reference model (as for NEON) before enabling; and OVER from
-   x8r8g8b8 on aarch64, which needs pixman's cover/opaque decision mirrored.
+0. SCALE_BILINEAR for OVER from x8r8g8b8 on aarch64 and x86: needs pixman's
+   cover/opaque decision (analyze_extent's SAMPLES_COVER_CLIP_BILINEAR over
+   the composite region's extents, then OVER -> SRC) mirrored in the shim.
 1. wayvnc's capture/encode CPU: the drag-smoothness limiter on the A10X
    (above), and outside pixman entirely -- neatvnc's damage refinement and
    raw encoding of every frame.
