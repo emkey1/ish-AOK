@@ -82,6 +82,22 @@ them.
 The key row above the on-screen keyboard is configurable too: see
 [keyboard-toolbar.md](keyboard-toolbar.md).
 
+### Input methods: Chinese, Japanese, Korean
+
+The terminal takes typing through an input method — Pinyin and the other
+Chinese keyboards, Japanese — on the on-screen keyboard and on a hardware
+keyboard. The text being composed is drawn underlined at the cursor,
+in the terminal's font, and nothing reaches Linux until a candidate is chosen
+(or Return commits the letters as typed); with a hardware keyboard the
+candidate window opens next to it. While something is being composed, the
+arrows, Tab, Esc and Return belong to the input method; ⌘ and ⌃ chords still
+reach the app and the terminal. The Korean keyboard composes differently: it
+types each jamo and then replaces it (Backspace, then the combined syllable),
+so the line editor sees the syllable being built; shells and editors end up
+with the right text. Wide characters take two cells, as in every Linux
+terminal. To have programs answer in your language too, see
+[roots.md](roots.md#your-own-language-setup-localesh).
+
 ## MotePad (the Workspace editor)
 
 | Keys | Action |

@@ -22,6 +22,7 @@ Testflight: https://testflight.apple.com/join/X1flyiqE
 - **Wayland 데스크톱**(labwc, foot, waybar; 자체 데스크톱 네 개): GPU 에서 합성되고, `/AOK/native/wl-present` 를 통해 앱에 전달됩니다 — 한쪽으로는 프레임이, 다른 쪽으로는 키보드, 포인터, 클립보드, 크기 변경이 오가며, VNC 는 대체 경로입니다. `/AOK/tools/setup-games.sh` 는 검증된 게임 묶음을 설치합니다. `/AOK/docs/workspace.md` 참고.
 - **LLM Chat**: 앱 내장 채팅 클라이언트(OpenAI 호환 서버, Anthropic, Gemini, Apple 온디바이스 모델). 허용/확인/거부 권한 아래에서 게스트의 파일을 읽고 고치고 명령을 실행할 수 있으며, MCP 서버를 쓰고, 여러 채팅을 백그라운드 에이전트로 동시에 돌립니다. API 키는 키체인에 보관됩니다. `/AOK/docs/llm-chat.md` 참고.
 - **디스크로 서스펜드**: 프로세스, 열린 파일, 터미널까지 세션 전체를 저장했다가 앱이 종료된 뒤에도 이어서 재개합니다. 기본값은 꺼짐. `/AOK/docs/suspend.md` 참고.
+- **한국어와 다른 언어**: 앱 인터페이스가 기기 언어를 따르며, 영어 외에 한국어, 간체·번체 중국어, 일본어, 스페인어, 프랑스어, 독일어, 브라질 포르투갈어, 러시아어를 지원합니다. 터미널은 입력기 입력을 받습니다. 한글은 음절을 그 자리에서 조합해 입력하고, 중국어 병음과 일본어는 조합 중인 글자를 커서 위치에 표시하며 후보 창을 그 옆에 띄웁니다. 화상 키보드와 하드웨어 키보드 모두 해당됩니다. `/AOK/tools/setup-locale.sh` 는 루트 파일시스템에도 기기 언어를 설정합니다(프로그램 번역은 Devuan 에 들어 있습니다). `/AOK/docs/roots.md` 참고.
 - iOS를 통해 게스트 파일을 노출하는 File Provider 지원.
 - **FUSE**: `/dev/fuse` 와 `fuse` 파일시스템 타입(프로토콜 7.31)을 제공하므로, 게스트의 `libfuse2`/`libfuse3` 데몬이 수정 없이 파일시스템을 마운트하고 제공합니다. 게스트가 이미 fake-root 이므로 setuid `fusermount` 는 쓰이지 않고, libfuse 가 `mount(2)` 를 직접 호출합니다. `/AOK/docs/fuse.md` 참고.
 - **Apple 단축어(Shortcuts) 액션** (iOS 16+): 앱을 열지 않고도 네이티브 zsh로 게스트에서 명령을 실행하고 그 출력을 단축어로 돌려주는 "Run Command" 액션과, Siri 문구가 지원되는 "Open iSH-AOK" 대상들. `/AOK/docs/shortcuts.md` 참고.
