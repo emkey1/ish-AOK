@@ -16,11 +16,22 @@
 
 void real_tty_reset_term(void);
 
+// real_tty_cleanup stops this thread with pthread_cancel, and deferred
+// cancellation acts at ANY cancellation point -- printk's writev to fd 555
+// among them, reached holding log_lock. A console closed while this thread
+// was logging its hang-up left log_lock owned by a dead thread, and every
+// later printk in the kernel blocked forever: systemd as PID 1 on the CLI
+// went silent, and each service it started froze at its first log line.
+// So the thread is cancellable only where it holds nothing: blocked in
+// read(), and parked in pause().
 static void *real_tty_read_thread(void *_tty) {
     struct tty *tty = _tty;
     char ch;
+    pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
     for (;;) {
+        pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
         ssize_t err = read(STDIN_FILENO, &ch, 1);
+        pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
         if (err != 1) {
             if (err < 0 && errno == EINTR)
                 continue;
@@ -46,6 +57,7 @@ static void *real_tty_read_thread(void *_tty) {
             // to still exist) reclaims it -- pause() is a cancellation
             // point. Can't join in cleanup instead: tty_release calls it
             // holding tty->lock, which this thread takes just above.
+            pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
             for (;;)
                 pause();
         }

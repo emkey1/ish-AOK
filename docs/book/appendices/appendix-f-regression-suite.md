@@ -68,7 +68,7 @@ does not say what it is for.
 | `chroot_mountinfo.c` | yes | /proc/{self,<pid>}/mountinfo and /proc/mounts are relative to the task's root (Linux semantics). |
 | `clock_boot_origin.c` | yes | clock_boot_origin -- the guest's boot-relative clocks measure time since the GUEST booted, and absolute deadlines on them still mean what they say. |
 | `clone_error_cleanup.c` | yes | clone_error_cleanup.c — regression for the clone() error-path session/pgroup corruption (issue #423 Tier 2). |
-| `clone_unshare_agree.c` | yes | clone() and unshare() answer the same for each namespace flag. |
+| `namespace_errno.c` | yes | clone() says EINVAL and unshare() ENOSYS for a namespace AOK lacks -- the errnos systemd treats as "no sandbox here". |
 | `concurrent_dir_futex.c` | yes | Two read-modify-writes that were not atomic against other threads. |
 | `concurrent_exec_tlb.c` | yes | concurrent_exec_tlb.c — regression for the stale-TLB use-after-free on execve (issue #469: arm64 cargo/rustc SIGILL at pc 0, host SIGSEGV). |
 | `copy_file_range.c` | yes | copy_file_range(): real data-copy behavior, including offset semantics. |

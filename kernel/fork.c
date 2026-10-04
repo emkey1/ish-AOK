@@ -532,15 +532,21 @@ static dword_t sys_clone_common_wrap(dword_t flags, guest_addr_t stack, guest_ad
 static dword_t sys_clone_common_(dword_t flags, guest_addr_t stack, guest_addr_t ptid,
         guest_addr_t tls, guest_addr_t ctid, bool clear_sighand) {
     STRACE("clone(0x%x, 0x%x, 0x%x, 0x%x, 0x%x)", flags, stack, ptid, tls, ctid);
-    // A namespace this kernel does not have: ENOSYS, as unshare says for the
-    // same flags (sys_unshare). This was EPERM, which reads as "you may not"
-    // to a root caller who may; Linux itself says EINVAL for a namespace type
-    // it was built without, but unshare chose ENOSYS so `unshare -n` reports
-    // "Function not implemented" rather than "Invalid argument", and the two
-    // entry points now agree. (CLONE_NEWTIME is clone3/unshare-only: in clone
-    // its bit is part of the exit signal.)
+    // A namespace this kernel does not have: EINVAL, Linux's own answer for a
+    // namespace type it was built without. NOT ENOSYS, although unshare says
+    // ENOSYS for the same flags (sys_unshare): each entry point's errno is the
+    // one its consumers read as "no sandbox here, carry on". systemd forks its
+    // generator sandbox with raw_clone(SIGCHLD|CLONE_NEWNS) and falls back to
+    // running the generators directly on EPERM/EACCES/EINVAL -- anything else
+    // is fatal, and PID 1 froze at "Failed to start up manager" when 557 made
+    // this ENOSYS (81e0abdb7). Its unshare(CLONE_NEWNS) path instead accepts
+    // EPERM/EACCES/EOPNOTSUPP/ENOSYS and not EINVAL, which is why unshare
+    // keeps ENOSYS. EPERM, the pre-557 answer, read as "you may not" to a root
+    // caller who may. tests/manual/namespace_errno.c holds both rules.
+    // (CLONE_NEWTIME is clone3/unshare-only: in clone its bit is part of the
+    // exit signal.)
     if (flags & CLONE_NEW_FLAGS_)
-        return _ENOSYS;
+        return _EINVAL;
     // Creating any namespace needs CAP_SYS_ADMIN in real Linux.
     if ((flags & (CLONE_NEWUTS_ | CLONE_NEWIPC_)) && !current_capable(CAP_SYS_ADMIN_))
         return _EPERM;
@@ -1053,7 +1059,9 @@ dword_t sys_unshare(dword_t flags) {
     //   unshare: unshare failed: Invalid argument
     //
     // Six of those eight namespaces already answered ENOSYS; the odd one out
-    // decided the message. (CLONE_IO is not a namespace, and Linux's unshare
+    // decided the message. ENOSYS, not clone's EINVAL: systemd's
+    // unshare(CLONE_NEWNS) treats ENOSYS as "not supported here" and EINVAL as
+    // a failure (see sys_clone_common_). (CLONE_IO is not a namespace, and Linux's unshare
     // refuses it as malformed, so it is not listed here.)
     const dword_t known_unsupported = CLONE_NEWNS_ | CLONE_NEWCGROUP_ | CLONE_NEWTIME_ |
         CLONE_NEWUSER_ | CLONE_NEWPID_ | CLONE_NEWNET_;

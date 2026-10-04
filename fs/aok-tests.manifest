@@ -142,7 +142,7 @@ chroot_mountinfo.c
 time64_nsec_padding.c
 pwritev2_flags.c
 jit_fork_inherit.c
-clone_unshare_agree.c
+namespace_errno.c
 fcntl_getfl_flags.c
 fuse_basic.c
 fuse_threaded_daemon.c

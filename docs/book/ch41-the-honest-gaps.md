@@ -26,13 +26,17 @@ its `/proc/<pid>/ns` file. Every other kind is `ENOSYS` to `unshare`, and
 namespace's join moves the caller's root and working directory to the real
 root, as Linux's does, and changes nothing else.
 
-`clone` says the same: with `CLONE_NEWNS`, `CLONE_NEWPID`, `CLONE_NEWNET` or
-`CLONE_NEWUSER` it fails `ENOSYS`, as `unshare` does for those flags — "this
-kernel has none", which is the truth. (Until October 2026 `clone` answered
-`EPERM`, which reads as "you may not" to a caller who is root and may.) A Linux
-kernel built without a namespace type says `EINVAL` for it; AOK's `ENOSYS` is
-deliberate, so `unshare -n` reports "Function not implemented" rather than
-"Invalid argument".
+`clone` refuses the same flags (`CLONE_NEWNS`, `CLONE_NEWPID`, `CLONE_NEWNET`,
+`CLONE_NEWUSER`, `CLONE_NEWCGROUP`), but with `EINVAL`, the answer of a Linux
+kernel built without that namespace type. The two calls give different errnos
+on purpose: each is the one its callers read as "no sandbox here, carry on".
+systemd forks its generator sandbox with `clone(CLONE_NEWNS)` and runs the
+generators unsandboxed on `EPERM` or `EINVAL`, while its `unshare(CLONE_NEWNS)`
+for a service's mount namespace accepts `ENOSYS` and treats `EINVAL` as a
+failure. Build 557 briefly made `clone` say `ENOSYS` too, and systemd as PID 1
+stopped at "Failed to start up manager." (Before that `clone` answered `EPERM`,
+which reads as "you may not" to a caller who is root and may.)
+`tests/manual/namespace_errno.c` holds both rules.
 
 So nothing container-shaped runs. No Docker, no `unshare -m` or `-n`, no
 rootless podman, no per-service filesystem views. There is one process table,
