@@ -2726,26 +2726,12 @@ amd64_x87_reg_gadget amd64_x87_reg_cached, 1
     mvn w17, w17
     and w17, w17, 1
     orr w16, w16, w17, lsl 2
-    cmp \size, 64
-    b.eq .Lamd64_cached_flags_64_\@
-    cmp \size, 32
-    b.eq .Lamd64_cached_flags_32_\@
-    cmp \size, 16
-    b.eq .Lamd64_cached_flags_16_\@
-    tst \result, 0x80
-    b.eq .Lamd64_cached_flags_done_\@
-    orr w16, w16, SF_FLAG
-    b .Lamd64_cached_flags_done_\@
-.Lamd64_cached_flags_16_\@: tst \result, 0x8000
-    b.eq .Lamd64_cached_flags_done_\@
-    orr w16, w16, SF_FLAG
-    b .Lamd64_cached_flags_done_\@
-.Lamd64_cached_flags_32_\@: tbnz \result, 31, .Lamd64_cached_flags_set_sf_\@
-    b .Lamd64_cached_flags_done_\@
-.Lamd64_cached_flags_64_\@: tbnz \result, 63, .Lamd64_cached_flags_set_sf_\@
-    b .Lamd64_cached_flags_done_\@
-.Lamd64_cached_flags_set_sf_\@: orr w16, w16, SF_FLAG
-.Lamd64_cached_flags_done_\@: str w16, [_cpu, CPU_eflags]
+    /* SF = bit (size - 1), without branching on the size */
+    sub x17, \size, 1
+    lsr x17, \result, x17
+    and w17, w17, 1
+    orr w16, w16, w17, lsl 7
+    str w16, [_cpu, CPU_eflags]
 .endif
 .endm
 
@@ -2805,34 +2791,37 @@ def_amd64_cached_logic_reg_imm _nf
 .purgem def_amd64_cached_logic_reg_imm
 .macro amd64_cached_set_addsub_flags sign_bit
 .if AMD64_NF == 0
+    /* Branch-free: every flag is data, and the old per-flag branches
+       mispredicted on it (24% of amd64 7-Zip samples, 2026-10-04). CF/OF test
+       nonzero like the cbz they replace (some OF producers leave more than
+       bit 0). PF: bit 0 of the folded low byte is the parity of bits 0-7. */
     strb w14, [_cpu, CPU_cf]
     strb w16, [_cpu, CPU_of]
     ldr w17, [_cpu, CPU_eflags]
     mov x12, (1 | PF_FLAG | AF_FLAG | ZF_FLAG | SF_FLAG | (1 << 11))
     bic w17, w17, w12
-    cbz w14, .Lamd64_addsub_no_cf_\@
-    orr w17, w17, 1
-.Lamd64_addsub_no_cf_\@: cbz w16, .Lamd64_addsub_no_of_\@
-    orr w17, w17, (1 << 11)
-.Lamd64_addsub_no_of_\@: eor x12, x13, x10
+    cmp w14, 0
+    cset w12, ne
+    orr w17, w17, w12
+    cmp w16, 0
+    cset w12, ne
+    orr w17, w17, w12, lsl 11
+    eor x12, x13, x10
     eor x12, x12, x15
-    tbz x12, 4, .Lamd64_addsub_no_af_\@
-    orr w17, w17, AF_FLAG
-.Lamd64_addsub_no_af_\@: cmp x15, 0
-    b.ne .Lamd64_addsub_no_zf_\@
-    orr w17, w17, ZF_FLAG
-.Lamd64_addsub_no_zf_\@: tbnz x15, \sign_bit, .Lamd64_addsub_set_sf_\@
-    b .Lamd64_addsub_after_sf_\@
-.Lamd64_addsub_set_sf_\@: orr w17, w17, SF_FLAG
-.Lamd64_addsub_after_sf_\@: and w12, w15, 0xff
-    eor w12, w12, w12, lsr 4
+    and w12, w12, AF_FLAG
+    orr w17, w17, w12
+    cmp x15, 0
+    cset w12, eq
+    orr w17, w17, w12, lsl 6
+    ubfx x12, x15, \sign_bit, 1
+    orr w17, w17, w12, lsl 7
+    eor w12, w15, w15, lsr 4
     eor w12, w12, w12, lsr 2
     eor w12, w12, w12, lsr 1
-    mvn w12, w12
-    and w12, w12, 1
-    cbz w12, .Lamd64_addsub_no_pf_\@
-    orr w17, w17, PF_FLAG
-.Lamd64_addsub_no_pf_\@: ldrb w12, [_cpu, CPU_flags_res]
+    mvn w12, w12, lsl 2
+    and w12, w12, PF_FLAG
+    orr w17, w17, w12
+    ldrb w12, [_cpu, CPU_flags_res]
     bic w12, w12, (ZF_RES | SF_RES | PF_RES | AF_OPS)
     strb w12, [_cpu, CPU_flags_res]
     str w17, [_cpu, CPU_eflags]
@@ -3004,30 +2993,30 @@ def_amd64_cached_arith_reg_reg _nf
 .purgem def_amd64_cached_arith_reg_reg
 .macro amd64_cached_set_shift_flags sign_bit
 .if AMD64_NF == 0
+    /* Branch-free like amd64_cached_set_addsub_flags; AF is left clear. */
     strb w14, [_cpu, CPU_cf]
     strb w16, [_cpu, CPU_of]
     ldr w17, [_cpu, CPU_eflags]
     mov x12, (1 | PF_FLAG | AF_FLAG | ZF_FLAG | SF_FLAG | (1 << 11))
     bic w17, w17, w12
-    cbz w14, .Lamd64_shift_no_cf_\@
-    orr w17, w17, 1
-.Lamd64_shift_no_cf_\@: cbz w16, .Lamd64_shift_no_of_\@
-    orr w17, w17, (1 << 11)
-.Lamd64_shift_no_of_\@: cmp x15, 0
-    b.ne .Lamd64_shift_no_zf_\@
-    orr w17, w17, ZF_FLAG
-.Lamd64_shift_no_zf_\@: tbnz x15, \sign_bit, .Lamd64_shift_set_sf_\@
-    b .Lamd64_shift_after_sf_\@
-.Lamd64_shift_set_sf_\@: orr w17, w17, SF_FLAG
-.Lamd64_shift_after_sf_\@: and w12, w15, 0xff
-    eor w12, w12, w12, lsr 4
+    cmp w14, 0
+    cset w12, ne
+    orr w17, w17, w12
+    cmp w16, 0
+    cset w12, ne
+    orr w17, w17, w12, lsl 11
+    cmp x15, 0
+    cset w12, eq
+    orr w17, w17, w12, lsl 6
+    ubfx x12, x15, \sign_bit, 1
+    orr w17, w17, w12, lsl 7
+    eor w12, w15, w15, lsr 4
     eor w12, w12, w12, lsr 2
     eor w12, w12, w12, lsr 1
-    mvn w12, w12
-    and w12, w12, 1
-    cbz w12, .Lamd64_shift_no_pf_\@
-    orr w17, w17, PF_FLAG
-.Lamd64_shift_no_pf_\@: ldrb w12, [_cpu, CPU_flags_res]
+    mvn w12, w12, lsl 2
+    and w12, w12, PF_FLAG
+    orr w17, w17, w12
+    ldrb w12, [_cpu, CPU_flags_res]
     bic w12, w12, (ZF_RES | SF_RES | PF_RES | AF_OPS)
     strb w12, [_cpu, CPU_flags_res]
     str w17, [_cpu, CPU_eflags]
