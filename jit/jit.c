@@ -2556,6 +2556,15 @@ static void jit_entry_scratch_refresh(struct jit_entry_scratch *scratch,
 }
 
 int jit_enter(struct jit_block *block, struct jit_frame *frame, struct tlb *tlb);
+// The amd64 blocks' entry (gadgets-aarch64/entry.S): also loads the x20-x27
+// register cache, which every amd64 block assumes is loaded on entry. An
+// x86_64 host has no amd64 gadgets (its amd64 blocks are bridges), so there
+// it is plain jit_enter.
+#if defined(__aarch64__)
+int jit_enter_amd64(struct jit_block *block, struct jit_frame *frame, struct tlb *tlb);
+#else
+#define jit_enter_amd64 jit_enter
+#endif
 
 static inline size_t jit_cache_hash(guest_addr_t ip) {
     // Same mixing rationale as jit_hash_bucket: ip ^ (ip >> 12) preserved the
@@ -4212,7 +4221,7 @@ rearm_amd64:
             struct cpu_state before_block_cpu;
             if (cc1_trace)
                 before_block_cpu = frame->cpu;
-        interrupt = jit_enter(block, frame, tlb);
+        interrupt = jit_enter_amd64(block, frame, tlb);
             if (cc1_trace)
                 amd64_cc1_jit_trace_record(block->addr, tlb, &before_block_cpu, &frame->cpu, interrupt);
         }
@@ -4359,7 +4368,7 @@ static int cpu_single_step_amd64(struct cpu_state *cpu, struct tlb *tlb) {
     }
     jit_crash_unwind_active = true;
 
-    int interrupt = jit_enter(state.block, frame, tlb);
+    int interrupt = jit_enter_amd64(state.block, frame, tlb);
 
     jit_crash_lock = NULL;
     pthread_rwlock_unlock(&jit->jetsam_lock.l);

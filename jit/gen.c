@@ -781,6 +781,27 @@ __attribute__((unused)) static void gen_amd64_mark_reg_cache_dirty(struct gen_st
 #endif
 }
 
+// Before a branch that chains to another block (jmp, jcc, jrcxz, the fused
+// cmp+jcc): the next block starts with the cache loaded and equal to memory
+// (gen_start_amd64), so leave it that way -- written back if dirty, and
+// reloaded if a flush-style gadget since the last load may have changed the
+// registers in memory. Unlike a flush, the cache stays loaded.
+static void gen_amd64_sync_reg_cache(struct gen_state *state) {
+#if defined(__aarch64__)
+    if (!state->amd64_reg_cache_valid) {
+        gen_amd64_ensure_reg_cache(state);
+        return;
+    }
+    if (state->amd64_reg_cache_dirty) {
+        extern void gadget_amd64_store_low8_reg_cache(void);
+        gen(state, (unsigned long) gadget_amd64_store_low8_reg_cache);
+        state->amd64_reg_cache_dirty = false;
+    }
+#else
+    (void) state;
+#endif
+}
+
 static void gen_amd64_defer_rip(struct gen_state *state, guest_addr_t rip) {
     state->amd64_deferred_rip = rip;
     state->amd64_deferred_rip_valid = true;
@@ -792,7 +813,7 @@ static void gen_amd64_flush_rip(struct gen_state *state) {
 }
 
 static void gen_amd64_jmp_rel(struct gen_state *state, guest_addr_t target_ip) {
-    gen_amd64_flush_reg_cache(state);
+    gen_amd64_sync_reg_cache(state);
     state->amd64_deferred_rip_valid = false;
 #if defined(__aarch64__)
     extern void gadget_amd64_jmp(void);
@@ -848,7 +869,7 @@ static bool gen_amd64_try_fuse_jcc(struct gen_state *state, unsigned cc) {
     for (unsigned i = 0; i < nops; i++)
         saved[i] = state->block->code[slot + 1 + i];
     state->size = slot;
-    gen_amd64_flush_reg_cache(state);
+    gen_amd64_sync_reg_cache(state);
     gen(state, (unsigned long) fused);
     for (unsigned i = 0; i < nops; i++)
         gen(state, saved[i]);
@@ -888,7 +909,7 @@ static void gen_amd64_jcc(struct gen_state *state, unsigned cc,
         state->jump_ip[1] = state->size - 1;
         return;
     }
-    gen_amd64_flush_reg_cache(state);
+    gen_amd64_sync_reg_cache(state);
     state->amd64_deferred_rip_valid = false;
     gen(state, (unsigned long) gadgets[(cc >> 1) & 7]);
     gen(state, (unsigned long) ((swap ? next_ip : target_ip) | (1ull << 63)));   // taken
@@ -907,7 +928,7 @@ static void gen_amd64_jrcxz(struct gen_state *state,
         guest_addr_t target_ip, guest_addr_t next_ip) {
 #if defined(__aarch64__)
     extern void gadget_amd64_jrcxz(void);
-    gen_amd64_flush_reg_cache(state);
+    gen_amd64_sync_reg_cache(state);
     state->amd64_deferred_rip_valid = false;
     gen(state, (unsigned long) gadget_amd64_jrcxz);
     gen(state, (unsigned long) (target_ip | (1ull << 63)));   // taken
@@ -1073,6 +1094,17 @@ bool gen_start_amd64(guest_addr_t addr, struct gen_state *state) {
     if (!gen_start(addr, state))
         return false;
     state->amd64 = true;
+#if defined(__aarch64__)
+    // Every amd64 block is entered with the register cache loaded and equal
+    // to memory: from C by jit_enter_amd64, from a chained block end by
+    // gen_amd64_sync_reg_cache (which runs whatever this switch says, so
+    // blocks translated either way can chain into each other). So a block
+    // need not reload it up front.
+    if (amd64_jit_fuse_mask() & JIT_FUSE_AMD64_RESIDENT) {
+        state->amd64_reg_cache_valid = true;
+        state->amd64_reg_cache_dirty = false;
+    }
+#endif
     gen_start_x86_profile(addr, state);
     return true;
 }
@@ -15219,7 +15251,7 @@ static const struct jit_fuse_entry amd64_fuse_names[] = {
     {"incdec_reg", JIT_FUSE_AMD64_INCDEC_REG}, {"deadflags", JIT_FUSE_AMD64_DEADFLAGS},
     {"movr", JIT_FUSE_AMD64_MOVR}, {"arithr", JIT_FUSE_AMD64_ARITHR},
     {"memr", JIT_FUSE_AMD64_MEMR}, {"shiftr", JIT_FUSE_AMD64_SHIFTR},
-    {"incdecr", JIT_FUSE_AMD64_INCDECR},
+    {"incdecr", JIT_FUSE_AMD64_INCDECR}, {"resident", JIT_FUSE_AMD64_RESIDENT},
 };
 
 static const struct jit_fuse_domain jit_fuse_domains[] = {

@@ -17,6 +17,35 @@ NAME(jit_enter):
     load_regs
     gret
 
+# The amd64 engine's entry: as jit_enter, but loads the x20-x27 register
+# cache (rax..rdi) from CPU_amd64_regs instead of the i386 registers. Every
+# amd64 block starts with the cache loaded and equal to memory -- this entry
+# makes it so from C, and a chained block end makes it so for the next block
+# (jit/gen.c gen_amd64_sync_reg_cache) -- so blocks do not reload it.
+.global NAME(jit_enter_amd64)
+.type_compat jit_enter_amd64,function
+NAME(jit_enter_amd64):
+    stp x18, x19, [sp, -0x70]!
+    stp x20, x21, [sp, 0x10]
+    stp x22, x23, [sp, 0x20]
+    stp x24, x25, [sp, 0x30]
+    stp x26, x27, [sp, 0x40]
+    stp x28, x29, [sp, 0x50]
+    str lr, [sp, 0x60]
+    add _ip, x0, JIT_BLOCK_code
+    # cpu is already x1
+    add _tlb, x2, TLB_entries
+    add x8, _cpu, CPU_amd64_regs
+    ldr x20, [x8, 0]
+    ldr x22, [x8, 8]
+    ldr x23, [x8, 16]
+    ldr x21, [x8, 24]
+    ldr x27, [x8, 32]
+    ldr x26, [x8, 40]
+    ldr x24, [x8, 48]
+    ldr x25, [x8, 56]
+    gret
+
 .global jit_ret_chain
 jit_ret_chain:
     cmp _ip, 0
