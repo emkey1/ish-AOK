@@ -127,6 +127,10 @@ static bool amd64_opcode_needs_modrm(const struct amd64_jit_insn *insn) {
         case 0x2b:
         case 0xc3:
         case 0x50:
+        // 0x51 SQRT{PS,PD,SS,SD}: the scalar forms have gadgets
+        // (amd64_v_scalar_sqrt); without a ModRM byte here no arm could claim
+        // them and every sqrtsd ran on the interpreter.
+        case 0x51:
         case 0x54:
         case 0x55:
         case 0x56:
@@ -10219,6 +10223,47 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
                 (unsigned long long) next_ip);
         gen(state, (unsigned long) gadget_amd64_v_pxor_reg);
         gen(state, (unsigned long) (rm_id | (reg_id << 4)));
+        gen_amd64_defer_rip(state, next_ip);
+        return true;
+    }
+
+    // Scalar square root: F2 0F 51 sqrtsd, F3 0F 51 sqrtss, reg or mem
+    // source (math.S amd64_v_scalar_sqrt). Same operand words as the scalar
+    // arithmetic below. The packed forms (none/66) stay on the bridge.
+    if (!insn.address_size_prefix && insn.two_byte_opcode && insn.has_modrm &&
+            !insn.seg_prefix && !insn.lock_prefix && insn.op2 == 0x51 &&
+            !insn.operand_size_prefix &&
+            (insn.rep_mode == amd64_jit_repz || insn.rep_mode == amd64_jit_repnz)) {
+        extern void gadget_amd64_v_sqrtsd_reg(void), gadget_amd64_v_sqrtsd_mem(void);
+        extern void gadget_amd64_v_sqrtss_reg(void), gadget_amd64_v_sqrtss_mem(void);
+        bool dbl = insn.rep_mode == amd64_jit_repnz;
+        unsigned reg_id = amd64_modrm_reg(insn.modrm) | (insn.rex.r ? 8 : 0);
+        if (amd64_modrm_mod(insn.modrm) == 3) {
+            unsigned rm_id = amd64_modrm_rm(insn.modrm) | (insn.rex.b ? 8 : 0);
+            if (!gen_amd64_decode_rm_extent(state, tlb, &insn, &next_ip)) {
+                state->amd64_ip = state->amd64_orig_ip;
+                state->amd64_fallback_to_interp = true;
+                return false;
+            }
+            state->amd64_ip = next_ip;
+            gen(state, (unsigned long) (dbl ? gadget_amd64_v_sqrtsd_reg : gadget_amd64_v_sqrtss_reg));
+            gen(state, (unsigned long) (rm_id | (reg_id << 4)));
+            gen_amd64_defer_rip(state, next_ip);
+            return true;
+        }
+        unsigned long meta, disp;
+        if (!gen_amd64_decode_mem_meta(state, tlb, &insn, dbl ? 64 : 32, &meta, &disp, &next_ip)) {
+            state->amd64_ip = state->amd64_orig_ip;
+            state->amd64_fallback_to_interp = true;
+            return false;
+        }
+        state->amd64_ip = next_ip;
+        gen_amd64_flush_reg_cache(state);
+        gen_amd64_flush_rip(state);
+        gen(state, (unsigned long) (dbl ? gadget_amd64_v_sqrtsd_mem : gadget_amd64_v_sqrtss_mem));
+        gen(state, meta);
+        gen(state, disp);
+        gen(state, (unsigned long) next_ip);
         gen_amd64_defer_rip(state, next_ip);
         return true;
     }

@@ -5809,6 +5809,59 @@ amd64_v_scalar_double divsd, fdiv
 amd64_v_scalar_double minsd, fmin
 amd64_v_scalar_double maxsd, fmax
 
+# Scalar square root (F2 0F 51 sqrtsd, F3 0F 51 sqrtss): dst's low lane =
+# sqrt(src's low lane), the rest of dst preserved. fsqrt is IEEE correctly
+# rounded, as SSE's sqrt is, so results match the interpreter bit for bit
+# (checked by tests/manual/x86/amd64_sqrt_scalar.c). The path it replaces
+# was the interpreter: sqrtsd had no translation, so a hot loop with one in
+# it left the JIT, failed a compile at it and was interpreted every
+# iteration (2026-10-04: an n-body double loop ran 52x slower on the amd64
+# guest than on arm64, all of it amd64_step_to_interrupt).
+# The one place fsqrt and SSE differ is the invalid case, a negative non-zero
+# input: SSE returns its "indefinite" QNaN, sign bit SET (fff8000000000000 /
+# ffc00000), arm64 its default NaN with the sign clear. amd64_sqrt_fix
+# substitutes the x86 value; fcmp against 0.0 sets N only for an ordered
+# less-than, so -0 (sqrt is -0) and NaN inputs (quieted and propagated, the
+# same on both) go to fsqrt untouched. \ind is the indefinite's top 16 bits.
+.macro amd64_sqrt_fix r, ldrr, ind, ind_shift
+    fcmp \r\()1, #0.0
+    b.mi 1f
+    fsqrt \r\()0, \r\()1
+    b 2f
+1:  movz \ldrr\()12, \ind, lsl \ind_shift
+    fmov \r\()0, \ldrr\()12
+2:
+.endm
+.macro amd64_v_scalar_sqrt name, r, bytes, ldrr, ind, ind_shift
+    .gadget amd64_v_\name\()_reg
+        ldr x8, [_ip]
+        and x9, x8, 0xf
+        ubfx x10, x8, 4, 4
+        add x11, _cpu, CPU_xmm
+        add x9, x11, x9, lsl 4
+        add x10, x11, x10, lsl 4
+        ldr \r\()1, [x9]
+        amd64_sqrt_fix \r, \ldrr, \ind, \ind_shift
+        str \r\()0, [x10]
+        gret 1
+    .gadget amd64_v_\name\()_mem
+        ldr  x8, [_ip]
+        ldr  x9, [_ip, 8]
+        ubfx x10, x8, 8, 4
+        amd64_vmem_addr
+        amd64_vread_prep \bytes, \name\()_mem
+        ldr  \ldrr\()12, [x9]
+        fmov \r\()1, \ldrr\()12
+        amd64_sqrt_fix \r, \ldrr, \ind, \ind_shift
+        add  x14, _cpu, CPU_xmm
+        add  x14, x14, x10, lsl 4
+        str  \r\()0, [x14]
+        gret 3
+        amd64_vread_bullshit \bytes, \name\()_mem
+.endm
+amd64_v_scalar_sqrt sqrtsd, d, 8, x, 0xfff8, 48
+amd64_v_scalar_sqrt sqrtss, s, 4, w, 0xffc0, 16
+
 # movsd xmm, m64 (F2 0F 10, mod!=3): low lane = m64, upper 64 CLEARED
 # (the load form zeroes; only the reg-reg form merges).
 .gadget amd64_v_movsd_load
