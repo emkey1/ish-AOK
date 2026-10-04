@@ -352,6 +352,92 @@
 .endr
 .popsection
 
+# ---- `movzx <reg32>, byte/word [<base>+disp]` in ONE gadget ----
+#
+#     [fused_load16_mem_<base>][disp][orig_ip][zero_extend_16][store32_reg_<dst>]
+#     [fused_movzx16_<dst>_<base>][disp][orig_ip]
+#
+# ldrb/ldrh write all 32 bits of the guest register, zero-extended, which is
+# movzx's whole definition. Same slow-path reasoning as fmr32 above. movzwl was
+# 2.1% and movzbl 1.0% of 7-Zip's i386 instructions (2026-10-04), almost all
+# base+disp.
+.macro fmrz size, s, dst_name, dst, base_name, base
+    .gadget fused_movzx\size\()_\dst_name\()_\base_name
+        ldr _addr, [_ip]
+        add _addr, _addr, \base
+        add _ip, _ip, 8
+        read_prep \size, fmrz\size\()_\dst_name\()_\base_name
+        ldr\s \dst, [_xaddr]
+        gret 1
+        read_bullshit \size, fmrz\size\()_\dst_name\()_\base_name
+.endm
+.macro fmrz8_row dst_name, dst
+    .macro fmrz8_col base_name, base
+        fmrz 8, b, \dst_name, \dst, \base_name, \base
+    .endm
+    .each_reg fmrz8_col
+    .purgem fmrz8_col
+.endm
+.each_reg fmrz8_row
+.purgem fmrz8_row
+.macro fmrz16_row dst_name, dst
+    .macro fmrz16_col base_name, base
+        fmrz 16, h, \dst_name, \dst, \base_name, \base
+    .endm
+    .each_reg fmrz16_col
+    .purgem fmrz16_col
+.endm
+.each_reg fmrz16_row
+.purgem fmrz16_row
+.purgem fmrz
+
+# ---- `mov word [<base>+disp], <reg16>` in ONE gadget ----
+#
+# fmw32's 16-bit twin: strh stores the register's low half. write_done stays,
+# for the page-straddling store (a 2-byte store at offset 0xfff). movw stores
+# were 1.9% of 7-Zip's i386 instructions (2026-10-04).
+.macro fmw16 src_name, src, base_name, base
+    .gadget fused_movrm16_\src_name\()_\base_name
+        ldr _addr, [_ip]
+        add _addr, _addr, \base
+        add _ip, _ip, 8
+        write_prep 16, fmw16_\src_name\()_\base_name
+        strh \src, [_xaddr]
+        write_done 16, fmw16_\src_name\()_\base_name
+        gret 1
+        write_bullshit 16, fmw16_\src_name\()_\base_name
+.endm
+.macro fmw16_row src_name, src
+    .macro fmw16_col base_name, base
+        fmw16 \src_name, \src, \base_name, \base
+    .endm
+    .each_reg fmw16_col
+    .purgem fmw16_col
+.endm
+.each_reg fmw16_row
+.purgem fmw16_row
+.purgem fmw16
+
+# [reg * 8 + base], REG_LIST order. Name pasting in macros: see math.S xfrr_quad.
+.macro fmx_quad kind, reg, base
+    .quad NAME(gadget_fused_\kind\()_\reg\()_\base)
+.endm
+.macro fmx_table kind
+    .global.name fused_\kind\()_gadgets
+.endm
+.pushsection_rodata
+.irp kind, movzx8,movzx16,movrm16
+    fmx_table \kind
+    .irp reg, REG_LIST
+        .irp base, REG_LIST
+            fmx_quad \kind, \reg, \base
+        .endr
+    .endr
+.endr
+.popsection
+.purgem fmx_quad
+.purgem fmx_table
+
 # ---- `lea <reg>, [<base>+disp]` in ONE gadget ----
 #
 # LEA is 18.4% of the instructions that reach gen_mov in this repo's own i386

@@ -14453,6 +14453,7 @@ static const struct jit_fuse_entry i386_fuse_names[] = {
     {"addr", JIT_FUSE_ADDR}, {"movmr", JIT_FUSE_MOVMR}, {"lea", JIT_FUSE_LEA},
     {"alu", JIT_FUSE_ALU}, {"pushpop", JIT_FUSE_PUSHPOP}, {"jcc8", JIT_FUSE_JCC8},
     {"alurr", JIT_FUSE_ALURR}, {"shift", JIT_FUSE_SHIFT}, {"incdec", JIT_FUSE_INCDEC},
+    {"movimm", JIT_FUSE_MOVI}, {"movx", JIT_FUSE_MOVX}, {"imul", JIT_FUSE_IMUL},
 };
 static const struct jit_fuse_entry arm64_fuse_names[] = {
     {"bcond", JIT_FUSE_A64_BCOND}, {"ldst", JIT_FUSE_A64_LDST},
@@ -14734,12 +14735,80 @@ static inline bool gen_mov(struct gen_state *state, enum arg src, enum arg dst, 
             return true;
         }
     }
+
+    // `mov <reg>, imm32`: one gadget instead of load32_imm + store32_reg.
+    if ((i386_jit_fuse_mask() & JIT_FUSE_MOVI) && sz(size) == size_32 &&
+            src == arg_imm && dst_reg != arg_invalid) {
+        extern gadget_t fused_movi32_gadgets[];
+        GEN(fused_movi32_gadgets[dst_reg - arg_reg_a]);
+        GEN(*imm);
+        return true;
+    }
+
+    // `mov word [<base>+disp], <reg16>`: fused_movrm32's 16-bit twin. At 16
+    // bits the register names are ax..di (only size 8 turns sp..di into
+    // ah..bh), so the 32-bit register index serves.
+    if ((i386_jit_fuse_mask() & JIT_FUSE_MOVX) && sz(size) == size_16 && src_reg != arg_invalid &&
+            dst == arg_modrm_val && modrm->type == modrm_mem && !seg_tls &&
+            modrm->base != reg_none && modrm->base < reg_count) {
+        extern gadget_t fused_movrm16_gadgets[];
+        GEN(fused_movrm16_gadgets[(src_reg - arg_reg_a) * 8 + modrm->base]);
+        GEN(modrm->offset);
+        GEN(state->orig_ip | state->orig_ip_extra);
+        return true;
+    }
 #endif
 
     extern gadget_t load_gadgets[];
     extern gadget_t store_gadgets[];
     return gen_op(state, load_gadgets, src, modrm, imm, size, seg_tls, addr_offset) &&
            gen_op(state, store_gadgets, dst, modrm, imm, size, seg_tls, addr_offset);
+}
+
+// `movzx <reg32>, byte/word [<base>+disp]` in one gadget instead of the
+// load/zero_extend/store chain (jit/gadgets-aarch64/memory.S, fmrz). Same
+// address shape as fused_movmr32: base+disp, no index, no TLS segment.
+static inline bool gen_movzx_fused(struct gen_state *state, enum arg src, enum arg dst,
+        struct modrm *modrm, int zs, int zd, bool seg_tls) {
+#if defined(__aarch64__)
+    if (!(i386_jit_fuse_mask() & JIT_FUSE_MOVX) || sz(zd) != size_32)
+        return false;
+    if (sz(zs) != size_8 && sz(zs) != size_16)
+        return false;
+    enum arg dst_reg = gen_reg_arg(dst, modrm);
+    if (dst_reg == arg_invalid || src != arg_modrm_val || modrm->type != modrm_mem || seg_tls ||
+            modrm->base == reg_none || modrm->base >= reg_count)
+        return false;
+    extern gadget_t fused_movzx8_gadgets[], fused_movzx16_gadgets[];
+    gadget_t *table = sz(zs) == size_8 ? fused_movzx8_gadgets : fused_movzx16_gadgets;
+    GEN(table[(dst_reg - arg_reg_a) * 8 + modrm->base]);
+    GEN(modrm->offset);
+    GEN(state->orig_ip | state->orig_ip_extra);
+    return true;
+#else
+    (void) state; (void) src; (void) dst; (void) modrm; (void) zs; (void) zd; (void) seg_tls;
+    return false;
+#endif
+}
+
+// `imul <reg32>, <reg32>` in one gadget instead of load/imul/store
+// (jit/gadgets-aarch64/math.S, fused_imul32_rr).
+static inline bool gen_imul_rr_fused(struct gen_state *state, enum arg src, enum arg dst,
+        struct modrm *modrm, int size) {
+#if defined(__aarch64__)
+    if (!(i386_jit_fuse_mask() & JIT_FUSE_IMUL) || sz(size) != size_32)
+        return false;
+    enum arg src_reg = gen_reg_arg(src, modrm);
+    enum arg dst_reg = gen_reg_arg(dst, modrm);
+    if (src_reg == arg_invalid || dst_reg == arg_invalid)
+        return false;
+    extern gadget_t fused_imul32_rr_gadgets[];
+    GEN(fused_imul32_rr_gadgets[(dst_reg - arg_reg_a) * 8 + (src_reg - arg_reg_a)]);
+    return true;
+#else
+    (void) state; (void) src; (void) dst; (void) modrm; (void) size;
+    return false;
+#endif
 }
 
 // Collapse load(dst_reg) + op(imm) + store(dst_reg) into one fused gadget. See
@@ -15145,7 +15214,11 @@ static void gen_sreg(struct gen_state *state, struct modrm *modrm, unsigned kind
 }
 #define SREG_RM(kind) gen_sreg(state, &modrm, I386_SREG_OP_##kind, modrm.reg, OP_SIZE, seg_tls)
 #define SREG_STACK(kind, sreg) gen_sreg(state, NULL, I386_SREG_OP_##kind, AMD64_SREG_##sreg, OP_SIZE, seg_tls)
-#define MOVZX(src, dst,zs,zd) load(src, zs); gz(zero_extend, zs); store(dst, zd)
+#define MOVZX(src, dst,zs,zd) do { \
+    if (!gen_movzx_fused(state, arg_##src, arg_##dst, &modrm, zs, zd, seg_tls)) { \
+        load(src, zs); gz(zero_extend, zs); store(dst, zd); \
+    } \
+} while (0)
 #define MOVSX(src, dst,zs,zd) load(src, zs); gz(sign_extend, zs); store(dst, zd)
 // xchg must generate in this order to be atomic
 #define XCHG(src, dst,z) load(src, z); op(xchg, dst, z); store(src, z)
@@ -15404,7 +15477,11 @@ void helper_aad(struct cpu_state *cpu, uint32_t base);
 #define IDIV(val, z) load(val, z); gz(idiv, z)
 #endif
 #define IMUL3(times, src, dst,z) load(src, z); op(imul, times, z); store(dst, z)
-#define IMUL2(val, reg,z) IMUL3(val, reg, reg, z)
+#define IMUL2(val, reg,z) do { \
+    if (!gen_imul_rr_fused(state, arg_##val, arg_##reg, &modrm, z)) { \
+        IMUL3(val, reg, reg, z); \
+    } \
+} while (0)
 
 #define CVT ga(cvt, sz(oz))
 #define CVTE ga(cvte, sz(oz))

@@ -2336,6 +2336,49 @@ amd64_gen_shift_count shift_count64, 8
 .purgem xfrr_quad
 .purgem xfrr_table
 
+# ---- FUSED `mov <reg>, imm32`: [fused_movi32_<reg>][imm], 1 dispatch instead of 2 ----
+# load32_imm + store32_reg_<reg> loaded the immediate into _tmp and moved it out.
+# 1.6% of 7-Zip's i386 instructions (2026-10-04). No flags, no memory.
+.macro xfmovi name, reg
+    .gadget fused_movi32_\name
+        ldr \reg, [_ip]
+        gret_nomem 1
+.endm
+.each_reg xfmovi
+.purgem xfmovi
+.gadget_list fused_movi32, REG_LIST
+
+# ---- FUSED `imul <dst>, <src>` (32-bit registers): 1 dispatch instead of 3 ----
+# [fused_imul32_rr_<dst>_<src>], table [dst * 8 + src]. The imul body works on
+# _tmp (see _do_op), so the destination is moved through it inside the gadget,
+# exactly as load32_reg/store32_reg did around it. 1.85% of 7-Zip's i386
+# instructions (2026-10-04).
+.macro xfimul dst_name, dst, src_name, src
+    .gadget fused_imul32_rr_\dst_name\()_\src_name
+        mov _tmp, \dst
+        do_op imul, 32, \src
+        mov \dst, _tmp
+        gret_nomem
+.endm
+.macro xfimul_row dst_name, dst
+    .macro xfimul_col src_name, src
+        xfimul \dst_name, \dst, \src_name, \src
+    .endm
+    .each_reg xfimul_col
+    .purgem xfimul_col
+.endm
+.each_reg xfimul_row
+.purgem xfimul_row
+.purgem xfimul
+.pushsection_rodata
+.global.name fused_imul32_rr_gadgets
+.irp dst, REG_LIST
+    .irp src, REG_LIST
+        .quad NAME(gadget_fused_imul32_rr_\dst\()_\src)
+    .endr
+.endr
+.popsection
+
 # ---- FUSED inc/dec reg (32-bit): [fused_<op>32_<reg>], 1 dispatch instead of 3 ----
 # The do_inc/do_dec body on _tmp with the guest register moved in and out.
 .macro xfincdec op, name, reg

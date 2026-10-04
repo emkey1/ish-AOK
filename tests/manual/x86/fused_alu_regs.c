@@ -1,13 +1,15 @@
-// Every register pairing of the 32-bit ALU reg,reg ops, inc/dec reg and
-// shl/shr/sar reg,imm, with the full register file and the arithmetic flags
-// printed after each. The i386 JIT emits these as one fused gadget per
-// register (JIT_FUSE_ALURR / INCDEC / SHIFT); the oracle is the same binary
-// with those fusions switched off, which runs the long-standing
-// load/op/store gadget sequence:
+// Every register pairing of the 32-bit ALU reg,reg ops, imul reg,reg, inc/dec
+// reg, shl/shr/sar reg,imm and mov reg,imm32, and every (register, base)
+// pairing of movzx reg32,byte/word [base+disp] and mov word [base+disp],reg16
+// -- including a word that straddles a page boundary -- with the full register
+// file, the arithmetic flags and the touched memory printed after each. The
+// i386 JIT emits these as one fused gadget each (JIT_FUSE_ALURR / IMUL /
+// INCDEC / SHIFT / MOVI / MOVX); the oracle is the same binary with those
+// fusions switched off, which runs the long-standing load/op/store sequence:
 //
 //   gcc -O1 -o /tmp/far fused_alu_regs.c
 //   /tmp/far > on.txt
-//   echo "alurr=0 shift=0 incdec=0" > /proc/ish/i386_jit_fuse   (fresh ish)
+//   echo "alurr=0 shift=0 incdec=0 movimm=0 movx=0 imul=0" > /proc/ish/i386_jit_fuse
 //   /tmp/far > off.txt; cmp on.txt off.txt
 //
 // Each case is generated as raw machine code so the register choice is
@@ -37,8 +39,11 @@ struct test_case {
     void (*fn)(void);
     const char *name;
     int dst, src, imm;
+    int mem_off; // offset into mem[] of the access, or -1
     uint32_t regs[8];
 };
+// Two pages; a word at offset 4095 straddles them.
+static uint8_t *mem;
 static struct test_case cases[8192];
 static int ncases;
 
@@ -48,7 +53,7 @@ static const char *const reg_names[8] = {"eax", "ecx", "edx", "ebx", "esp", "ebp
 static void emit_case(const char *name, int dst, int src, int imm, const uint8_t *insn, int len, uint32_t entry_flags) {
     struct test_case *c = &cases[ncases++];
     c->fn = (void (*)(void)) p;
-    c->name = name; c->dst = dst; c->src = src; c->imm = imm;
+    c->name = name; c->dst = dst; c->src = src; c->imm = imm; c->mem_off = -1;
     static const uint32_t special[] = {0, 1, 0x7fffffff, 0x80000000, 0xffffffff, 0x80000001, 0x0000ffff, 0xfffffffe};
     for (int r = 0; r < 8; r++)
         c->regs[r] = (rnd() & 3) == 0 ? special[rnd() & 7] : rnd();
@@ -67,13 +72,24 @@ static void emit_case(const char *name, int dst, int src, int imm, const uint8_t
     b(0x5d); b(0x5f); b(0x5e); b(0x5b); b(0xc3);               // pop ebp/edi/esi/ebx; ret
 }
 
+// A case whose instruction addresses mem[off] through register `base` with a
+// 32-bit displacement `disp`: the base register's value is chosen to make it so.
+static void emit_mem_case(const char *name, int reg, int base, int off, uint32_t disp,
+        const uint8_t *insn, int len, uint32_t entry_flags) {
+    emit_case(name, reg, base, (int) disp, insn, len, entry_flags);
+    struct test_case *c = &cases[ncases - 1];
+    c->mem_off = off;
+    c->regs[base] = (uint32_t) (uintptr_t) (mem + off) - disp;
+}
+
 static uint32_t random_flags(void) {
     return (rnd() & FLAGS_MASK) | 0x2;
 }
 
 int main(void) {
     uint8_t *code = mmap(NULL, 4 << 20, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (code == MAP_FAILED) { perror("mmap"); return 1; }
+    mem = mmap(NULL, 8192, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (code == MAP_FAILED || mem == MAP_FAILED) { perror("mmap"); return 1; }
     p = code;
 
     static const struct { const char *name; uint8_t opcode; } alu[] = {
@@ -101,6 +117,44 @@ int main(void) {
                 emit_case(shifts[s].name, r, -1, count, insn, 3, random_flags());
             }
 
+    for (int r = 0; r < 8; r++)
+        for (int rep = 0; rep < 4; rep++) {
+            uint8_t insn[] = {(uint8_t) (0xb8 + r), 0, 0, 0, 0};
+            uint32_t v = rnd();
+            memcpy(insn + 1, &v, 4);
+            emit_case("movi", r, -1, (int) v, insn, 5, random_flags());
+        }
+    for (int dst = 0; dst < 8; dst++)
+        for (int src = 0; src < 8; src++)
+            for (int rep = 0; rep < 4; rep++) {
+                uint8_t insn[] = {0x0f, 0xaf, (uint8_t) (0xc0 | dst << 3 | src)};
+                emit_case("imul", dst, src, 0, insn, 3, random_flags());
+            }
+    // [base+disp32]: modrm mod=10, rm=base; esp as a base needs a SIB byte.
+    static const int offs[] = {64, 1000, 4094, 4095};
+    static const struct { const char *name; uint8_t pre, op1, op2; } memops[] = {
+        {"movzx8", 0, 0x0f, 0xb6}, {"movzx16", 0, 0x0f, 0xb7}, {"movw_store", 0x66, 0x89, 0},
+    };
+    for (unsigned m = 0; m < 3; m++)
+        for (int reg = 0; reg < 8; reg++)
+            for (int base = 0; base < 8; base++)
+                for (unsigned o = 0; o < 4; o++) {
+                    if (memops[m].op1 == 0x0f && o == 3 && memops[m].op2 == 0xb6)
+                        continue; // a byte cannot straddle
+                    uint8_t insn[12];
+                    int n = 0;
+                    if (memops[m].pre) insn[n++] = memops[m].pre;
+                    insn[n++] = memops[m].op1;
+                    if (memops[m].op2) insn[n++] = memops[m].op2;
+                    insn[n++] = (uint8_t) (0x80 | reg << 3 | (base == 4 ? 4 : base));
+                    if (base == 4) insn[n++] = 0x24;
+                    uint32_t disp = (rnd() & 0xfff) - 0x800;
+                    memcpy(insn + n, &disp, 4); n += 4;
+                    emit_mem_case(memops[m].name, reg, base, offs[o], disp, insn, n, random_flags());
+                }
+
+    for (int i = 0; i < 8192; i++)
+        mem[i] = (uint8_t) (i * 7 + 3);
     for (int i = 0; i < ncases; i++) {
         struct test_case *c = &cases[i];
         memcpy(in_regs, c->regs, sizeof(in_regs));
@@ -116,7 +170,14 @@ int main(void) {
         printf(" out");
         for (int r = 0; r < 8; r++)
             printf(" %08x", out_regs[r]);
-        printf(" fl %03x\n", out_flags & FLAGS_MASK);
+        printf(" fl %03x", out_flags & FLAGS_MASK);
+        if (c->mem_off >= 0) {
+            int o = c->mem_off;
+            printf(" mem %02x%02x%02x%02x", mem[o - 1], mem[o], mem[o + 1], mem[o + 2]);
+            for (int k = -1; k <= 2; k++) // restore for the next case
+                mem[o + k] = (uint8_t) ((o + k) * 7 + 3);
+        }
+        printf("\n");
     }
     fprintf(stderr, "%d cases\n", ncases);
     return 0;
