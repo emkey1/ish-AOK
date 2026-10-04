@@ -668,6 +668,7 @@ bool gen_start(guest_addr_t addr, struct gen_state *state) {
     state->x86_fuse_end = 0; // same uninitialized-flag bug class as arm64 above
     state->x86_seg = X86_SEG_NONE;
     state->x86_fuse_op = 0;
+    state->x86_fuse_start = 0;
     state->capacity = JIT_BLOCK_INITIAL_CAPACITY;
     state->size = 0;
     state->ip = addr;
@@ -14342,6 +14343,28 @@ static inline bool gen_try_fuse_jcc(struct gen_state *state, int cond) {
             gadget_t f = fused[cond * arg_count + arg];
             if (f == NULL)
                 return false; // no fused form (parity, test+jb, ...)
+            // Register against register, and the word before the op is this
+            // instruction's own load32_reg_<dst>: both become one gadget
+            // (fused_cmp32rr, math.S) when one is stamped for the condition.
+            if (!byte && trailing == 0 && arg >= arg_reg_a && arg < arg_reg_a + 8 &&
+                    (i386_jit_fuse_mask() & JIT_FUSE_CMPRR) &&
+                    slot == state->x86_fuse_start + 1) {
+                extern gadget_t load_gadgets[];
+                extern gadget_t fused_cmp32rr_gadgets[], fused_test32rr_gadgets[];
+                unsigned long load = state->block->code[slot - 1];
+                for (int dst = 0; dst < 8; dst++) {
+                    if ((unsigned long) load_gadgets[size_32 * arg_count + arg_reg_a + dst] != load)
+                        continue;
+                    gadget_t *rr = is_cmp ? fused_cmp32rr_gadgets : fused_test32rr_gadgets;
+                    gadget_t g = rr[cond * 64 + dst * 8 + (arg - arg_reg_a)];
+                    if (g != NULL) {
+                        state->block->code[slot - 1] = (unsigned long) g;
+                        state->size = slot;
+                        return true;
+                    }
+                    break;
+                }
+            }
             state->block->code[slot] = (unsigned long) f;
             return true;
         }
@@ -14353,6 +14376,22 @@ static inline bool gen_try_fuse_jcc(struct gen_state *state, int cond) {
 }
 
 bool gen_addr(struct gen_state *state, struct modrm *modrm, bool seg_tls) {
+#if defined(__aarch64__)
+    // base + index*scale + disp in one gadget instead of addr_<base> + si_<index>
+    // (jit/gadgets-aarch64/memory.S, fused_addr_si). The segment gadgets below
+    // still follow it, so TLS operands are covered too.
+    if ((i386_jit_fuse_mask() & JIT_FUSE_ADDRSI) && modrm->type == modrm_mem_si &&
+            modrm->base != reg_none && modrm->base < reg_count && modrm->index < reg_count) {
+        extern gadget_t fused_addr_si_gadgets[];
+        GEN(fused_addr_si_gadgets[((unsigned) modrm->base * 8 + modrm->index) * 4 + modrm->shift]);
+        GEN(modrm->offset);
+        if (seg_tls && state->x86_seg == X86_SEG_FS)
+            g(seg_fs);
+        else if (seg_tls)
+            g(seg_gs);
+        return true;
+    }
+#endif
     if (modrm->base == reg_none)
         gg(addr_none, modrm->offset);
     else
@@ -14454,6 +14493,7 @@ static const struct jit_fuse_entry i386_fuse_names[] = {
     {"alu", JIT_FUSE_ALU}, {"pushpop", JIT_FUSE_PUSHPOP}, {"jcc8", JIT_FUSE_JCC8},
     {"alurr", JIT_FUSE_ALURR}, {"shift", JIT_FUSE_SHIFT}, {"incdec", JIT_FUSE_INCDEC},
     {"movimm", JIT_FUSE_MOVI}, {"movx", JIT_FUSE_MOVX}, {"imul", JIT_FUSE_IMUL},
+    {"addrsi", JIT_FUSE_ADDRSI}, {"cmprr", JIT_FUSE_CMPRR},
 };
 static const struct jit_fuse_entry arm64_fuse_names[] = {
     {"bcond", JIT_FUSE_A64_BCOND}, {"ldst", JIT_FUSE_A64_LDST},
@@ -15260,8 +15300,16 @@ static void gen_sreg(struct gen_state *state, struct modrm *modrm, unsigned kind
 #define AND(src, dst,z) losf(and, src, dst, z)
 #define SUB(src, dst,z) losf(sub, src, dst, z)
 #define XOR(src, dst,z) losf(xor, src, dst, z)
-#define CMP(src, dst,z) lo(sub, src, dst, z); gen_note_flag_op_fuse(state, z, 1)
-#define TEST(src, dst,z) lo(and, src, dst, z); gen_note_flag_op_fuse(state, z, 2)
+#define CMP(src, dst,z) do { \
+    unsigned fuse_start_ = state->size; \
+    lo(sub, src, dst, z); gen_note_flag_op_fuse(state, z, 1); \
+    state->x86_fuse_start = fuse_start_; \
+} while (0)
+#define TEST(src, dst,z) do { \
+    unsigned fuse_start_ = state->size; \
+    lo(and, src, dst, z); gen_note_flag_op_fuse(state, z, 2); \
+    state->x86_fuse_start = fuse_start_; \
+} while (0)
 #define NOT(val,z) load(val,z); gz(not, z); store(val,z)
 #define NEG(val,z) imm = 0; load(imm,z); op(sub, val,z); store(val,z)
 

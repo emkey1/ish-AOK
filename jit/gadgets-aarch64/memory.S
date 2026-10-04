@@ -516,6 +516,55 @@ NAME(si_gadgets):
 .endr
 .popsection
 
+# ---- `[<base> + <index>*<scale> + disp]` in ONE address gadget ----
+#
+#     [addr_<base>][disp][si_<index>_<scale>]   3 words, 2 dispatches
+#     [fused_addr_si_<base>_<index>_<scale>][disp]   2 words, 1
+#
+# Emitted by gen_addr() for every scaled-index operand with a base (the
+# address fusion into the memory op declines this form, so it always paid
+# both). Same result in _addr as the pair, so whatever consumes the address
+# -- a load, store, ALU op, x87 or SSE operand -- is unchanged. Scale is
+# baked in (4 per pair) so the gadget is two instructions and needs no
+# stream word for it. In 7-Zip ~3% of i386 instructions (byte loads and
+# compares through an index, mostly) take this form.
+.macro fasi base_name, base, index_name, index, times, shift
+    .gadget fused_addr_si_\base_name\()_\index_name\()_\times
+        ldr _addr, [_ip]
+        add _addr, _addr, \base
+        add _addr, _addr, \index, lsl \shift
+        gret_nomem 1
+.endm
+.macro fasi_row base_name, base
+    .macro fasi_col index_name, index
+        fasi \base_name, \base, \index_name, \index, 1, 0
+        fasi \base_name, \base, \index_name, \index, 2, 1
+        fasi \base_name, \base, \index_name, \index, 4, 2
+        fasi \base_name, \base, \index_name, \index, 8, 3
+    .endm
+    .each_reg fasi_col
+    .purgem fasi_col
+.endm
+.each_reg fasi_row
+.purgem fasi_row
+.purgem fasi
+
+# [(base * 8 + index) * 4 + log2(scale)], REG_LIST order for both registers.
+.macro fasi_quad base, index, times
+    .quad NAME(gadget_fused_addr_si_\base\()_\index\()_\times)
+.endm
+.pushsection_rodata
+.global.name fused_addr_si_gadgets
+.irp base, REG_LIST
+    .irp index, REG_LIST
+        .irp times, 1,2,4,8
+            fasi_quad \base, \index, \times
+        .endr
+    .endr
+.endr
+.popsection
+.purgem fasi_quad
+
 .gadget seg_gs
     ldr w8, [_cpu, CPU_tls_ptr]
     add _addr, _addr, w8

@@ -61,6 +61,9 @@ struct gen_state {
     // gen_start's comment).
     unsigned x86_fuse_end;
     int x86_fuse_op; // 0 = none, 1 = sub (cmp), 2 = and (test)
+    // Stream size when that CMP/TEST began, so the fusion can tell its own
+    // load32_reg_<dst> from whatever came before (the reg,reg form).
+    unsigned x86_fuse_start;
     // The segment override of the i386 instruction being decoded, whose base
     // gen_addr adds. Here rather than in the decoder's locals because an
     // operand-size prefix re-enters the decoder, and assemblers put it after

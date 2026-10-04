@@ -6102,6 +6102,76 @@ _gadget_array_start fused_test32
     .endr
     .popsection
 
+# ---- 32-bit cmp/test reg,reg + jcc in ONE gadget ----------------------------
+#
+#     [load32_reg_<dst>][fused_cmp32_<cond>_reg_<src>][to][else]   2 dispatches
+#     [fused_cmp32rr_<cond>_<dst>_<src>][to][else]                 1
+#
+# gen_try_fuse_jcc rewrites the pair when the cmp/test was register against
+# register (it knows the load is that instruction's own: gen.c records where
+# the CMP/TEST began). The body is the fused_flagop_reg one with the
+# destination moved into _tmp first, as load32_reg did, so the lazy flags and
+# the branch are identical. Stamped only for the conditions that occur after
+# a register compare in practice: cmp with c/z/cz/s/sxo/sxoz (unsigned and
+# signed loops), test with z (test r,r + je/jne). 7-Zip: cmp reg,reg is 2.6%
+# of i386 instructions, 1.6% of them cmp+jae alone (2026-10-04). A missing
+# combination is a 0 slot, and gen.c keeps the two-gadget form.
+.macro fused_flagop_rr name, armop, cond, bcond, retest, dst_name, dst, src_name, src
+    .gadget fused_\name\()32rr_\cond\()_\dst_name\()_\src_name
+        mov _tmp, \dst
+        do_op \armop, 32, \src
+        .ifnb \retest
+            tst _tmp, _tmp
+        .endif
+        fused_jcc_tail \bcond, 0
+.endm
+.macro fused_flagop_rr_family name, armop, cond, bcond, retest
+    .macro ffrr_row dst_name, dst
+        .macro ffrr_col src_name, src
+            fused_flagop_rr \name, \armop, \cond, \bcond, \retest, \dst_name, \dst, \src_name, \src
+        .endm
+        .each_reg ffrr_col
+        .purgem ffrr_col
+    .endm
+    .each_reg ffrr_row
+    .purgem ffrr_row
+.endm
+fused_flagop_rr_family cmp, sub, c, cc
+fused_flagop_rr_family cmp, sub, z, eq
+fused_flagop_rr_family cmp, sub, cz, ls
+fused_flagop_rr_family cmp, sub, s, mi
+fused_flagop_rr_family cmp, sub, sxo, lt
+fused_flagop_rr_family cmp, sub, sxoz, le
+fused_flagop_rr_family test, and, z, eq, retest
+.purgem fused_flagop_rr_family
+.purgem fused_flagop_rr
+
+# [cond][dst * 8 + src], COND_LIST order (o,c,z,cz,s,p,sxo,sxoz), REG_LIST order
+# for both registers; an unstamped combination is 0.
+.macro ffrr_quad name, cond, dst, src
+    .ifndef NAME(gadget_fused_\name\()32rr_\cond\()_\dst\()_\src)
+        .set NAME(gadget_fused_\name\()32rr_\cond\()_\dst\()_\src), 0
+    .endif
+    .quad NAME(gadget_fused_\name\()32rr_\cond\()_\dst\()_\src)
+.endm
+.macro ffrr_table name
+    .global.name fused_\name\()32rr_gadgets
+.endm
+.pushsection_rodata
+.irp name, cmp,test
+    ffrr_table \name
+    .irp cond, COND_LIST
+        .irp dst, REG_LIST
+            .irp src, REG_LIST
+                ffrr_quad \name, \cond, \dst, \src
+            .endr
+        .endr
+    .endr
+.endr
+.popsection
+.purgem ffrr_quad
+.purgem ffrr_table
+
 # ---- 8-bit cmp/test + jcc -------------------------------------------------
 #
 # The same fusion for byte compares (gzip's match loop is 4% `cmpb reg,mem`

@@ -210,10 +210,13 @@ void jit_note_shared_write(struct jit *jit, const struct pt_entry *entry);
 #define JIT_FUSE_MOVI    (1u << 9)  // mov reg, imm32 in one gadget
 #define JIT_FUSE_MOVX    (1u << 10) // movzx reg32, [base+disp] and mov word [base+disp], reg
 #define JIT_FUSE_IMUL    (1u << 11) // imul reg32, reg32 in one gadget
+#define JIT_FUSE_ADDRSI  (1u << 12) // [base+index*scale+disp] address in one gadget
+#define JIT_FUSE_CMPRR   (1u << 13) // cmp/test reg,reg + jcc in one gadget
 #define JIT_FUSE_ALL (JIT_FUSE_ADDR | JIT_FUSE_MOVMR | JIT_FUSE_LEA | \
                       JIT_FUSE_ALU | JIT_FUSE_PUSHPOP | JIT_FUSE_JCC8 | \
                       JIT_FUSE_ALURR | JIT_FUSE_SHIFT | JIT_FUSE_INCDEC | \
-                      JIT_FUSE_MOVI | JIT_FUSE_MOVX | JIT_FUSE_IMUL)
+                      JIT_FUSE_MOVI | JIT_FUSE_MOVX | JIT_FUSE_IMUL | \
+                      JIT_FUSE_ADDRSI | JIT_FUSE_CMPRR)
 
 // The arm64 and riscv64 guests get the same treatment, with their own bit
 // namespaces (the values overlap; the arch selects which table applies).

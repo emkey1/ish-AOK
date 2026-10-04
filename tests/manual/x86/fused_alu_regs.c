@@ -2,14 +2,16 @@
 // reg, shl/shr/sar reg,imm and mov reg,imm32, and every (register, base)
 // pairing of movzx reg32,byte/word [base+disp] and mov word [base+disp],reg16
 // -- including a word that straddles a page boundary -- with the full register
-// file, the arithmetic flags and the touched memory printed after each. The
+// file, the arithmetic flags and the touched memory printed after each, and
+// add/mov byte/cmp byte through every [base+index*scale+disp] combination,
+// and cmp/test of every register pair followed by each of the 16 jcc. The
 // i386 JIT emits these as one fused gadget each (JIT_FUSE_ALURR / IMUL /
 // INCDEC / SHIFT / MOVI / MOVX); the oracle is the same binary with those
 // fusions switched off, which runs the long-standing load/op/store sequence:
 //
 //   gcc -O1 -o /tmp/far fused_alu_regs.c
 //   /tmp/far > on.txt
-//   echo "alurr=0 shift=0 incdec=0 movimm=0 movx=0 imul=0" > /proc/ish/i386_jit_fuse
+//   echo "alurr=0 shift=0 incdec=0 movimm=0 movx=0 imul=0 addrsi=0 cmprr=0" > /proc/ish/i386_jit_fuse
 //   /tmp/far > off.txt; cmp on.txt off.txt
 //
 // Each case is generated as raw machine code so the register choice is
@@ -27,7 +29,7 @@
 
 #define FLAGS_MASK 0x8d5 // OF SF ZF AF PF CF
 
-static uint32_t in_regs[8], out_regs[8], out_flags, saved_esp;
+static uint32_t in_regs[8], out_regs[8], out_flags, saved_esp, taken;
 static uint64_t rng = 0x9e3779b97f4a7c15ull;
 static uint32_t rnd(void) { rng ^= rng << 13; rng ^= rng >> 7; rng ^= rng << 17; return (uint32_t) rng; }
 
@@ -40,11 +42,12 @@ struct test_case {
     const char *name;
     int dst, src, imm;
     int mem_off; // offset into mem[] of the access, or -1
+    int branchy; // ends in a jcc whose outcome lands in `taken`
     uint32_t regs[8];
 };
 // Two pages; a word at offset 4095 straddles them.
 static uint8_t *mem;
-static struct test_case cases[8192];
+static struct test_case cases[12288];
 static int ncases;
 
 static const char *const reg_names[8] = {"eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi"};
@@ -80,6 +83,39 @@ static void emit_mem_case(const char *name, int reg, int base, int off, uint32_t
     struct test_case *c = &cases[ncases - 1];
     c->mem_off = off;
     c->regs[base] = (uint32_t) (uintptr_t) (mem + off) - disp;
+}
+
+// [base + index*scale + disp32]: index gets a small value, base whatever makes
+// the sum land on mem[off].
+static void emit_sib_case(const char *name, int reg, int base, int index, int shift, int off,
+        uint32_t disp, const uint8_t *insn, int len, uint32_t entry_flags) {
+    emit_case(name, reg, base, (int) disp, insn, len, entry_flags);
+    struct test_case *c = &cases[ncases - 1];
+    c->mem_off = off;
+    c->regs[index] = rnd() & 15;
+    c->regs[base] = (uint32_t) (uintptr_t) (mem + off) - disp - (c->regs[index] << shift);
+}
+
+// cmp/test reg,reg then jcc: the taken path stores 1 to `taken`, the other 2
+// (mov to memory touches no flags and no register).
+static void emit_branch_case(const char *name, uint8_t op, int dst, int src, int cc) {
+    uint8_t insn[32];
+    int n = 0;
+    insn[n++] = op;
+    insn[n++] = (uint8_t) (0xc0 | src << 3 | dst);
+    insn[n++] = (uint8_t) (0x70 + cc);
+    insn[n++] = 12;                                   // jcc over the next 12 bytes
+    insn[n++] = 0xc7; insn[n++] = 0x05;               // mov dword [taken], 2
+    uint32_t a = (uint32_t) (uintptr_t) &taken, two = 2, one = 1;
+    memcpy(insn + n, &a, 4); n += 4; memcpy(insn + n, &two, 4); n += 4;
+    insn[n++] = 0xeb; insn[n++] = 10;                 // jmp over the next 10
+    insn[n++] = 0xc7; insn[n++] = 0x05;               // mov dword [taken], 1
+    memcpy(insn + n, &a, 4); n += 4; memcpy(insn + n, &one, 4); n += 4;
+    emit_case(name, dst, src, cc, insn, n, (rnd() & FLAGS_MASK) | 0x2);
+    struct test_case *c = &cases[ncases - 1];
+    c->branchy = 1;
+    if (rnd() & 1) // equal operands half the time, so z/c/cz go both ways
+        c->regs[src] = c->regs[dst];
 }
 
 static uint32_t random_flags(void) {
@@ -153,6 +189,35 @@ int main(void) {
                     emit_mem_case(memops[m].name, reg, base, offs[o], disp, insn, n, random_flags());
                 }
 
+    // add r32 / mov r8 / cmp r8 through a SIB operand: every base, index
+    // (esp cannot be one) and scale. base == index has no exact solution here
+    // and is skipped.
+    static const struct { const char *name; uint8_t op; } sibops[] = {
+        {"add_sib", 0x03}, {"movb_sib", 0x8a}, {"cmpb_sib", 0x3a},
+    };
+    for (unsigned m = 0; m < 3; m++)
+        for (int base = 0; base < 8; base++)
+            for (int index = 0; index < 8; index++)
+                for (int shift = 0; shift < 4; shift++) {
+                    if (index == 4 || index == base)
+                        continue;
+                    int reg = (int) (rnd() & 7);
+                    uint32_t disp = (rnd() & 0xfff) - 0x800;
+                    uint8_t insn[8] = {sibops[m].op, (uint8_t) (0x84 | reg << 3),
+                                       (uint8_t) (shift << 6 | index << 3 | base)};
+                    memcpy(insn + 3, &disp, 4);
+                    emit_sib_case(sibops[m].name, reg, base, index, shift, 100 + (int) (rnd() & 1023),
+                                  disp, insn, 7, random_flags());
+                }
+
+    for (int cc = 0; cc < 16; cc++)
+        for (int dst = 0; dst < 8; dst++)
+            for (int src = 0; src < 8; src++) {
+                emit_branch_case("cmp_jcc", 0x39, dst, src, cc);
+                if ((dst + src + cc) % 2 == 0)
+                    emit_branch_case("test_jcc", 0x85, dst, src, cc);
+            }
+
     for (int i = 0; i < 8192; i++)
         mem[i] = (uint8_t) (i * 7 + 3);
     for (int i = 0; i < ncases; i++) {
@@ -171,6 +236,8 @@ int main(void) {
         for (int r = 0; r < 8; r++)
             printf(" %08x", out_regs[r]);
         printf(" fl %03x", out_flags & FLAGS_MASK);
+        if (c->branchy)
+            printf(" taken %u", taken);
         if (c->mem_off >= 0) {
             int o = c->mem_off;
             printf(" mem %02x%02x%02x%02x", mem[o - 1], mem[o], mem[o + 1], mem[o + 2]);
