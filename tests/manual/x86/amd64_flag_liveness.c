@@ -1,6 +1,6 @@
 // Random straight-line x86-64 sequences mixing flag producers (add/sub/and/
 // or/xor/cmp/adc/sbb reg,reg and reg,imm8 at 64 and 32 bits, inc/dec, shl/
-// shr/sar by an immediate, test), flag-neutral instructions (mov, lea) and
+// shr/sar by an immediate or by one, test), flag-neutral instructions (mov, lea) and
 // flag readers in the MIDDLE of a sequence (setcc, cmovcc, adc/sbb, a short
 // jcc over a mov), ending in pushfq. Prints every register and the flags
 // after each sequence.
@@ -110,8 +110,9 @@ static void emit_one(void) {
             rex(w, 0, a); b(0x83); modrm_rr((int) (rnd() % 8), a); b((uint8_t) rnd()); break;
         }
         case 6: rex(w, 0, a); b(0xff); modrm_rr((int) (rnd() & 1), a); break; // inc/dec
-        case 7: { // shl/shr/sar imm8 (0 included)
+        case 7: { // shl/shr/sar imm8 (0 included), or 1 time in 4 by one (D1)
             static const int ext[] = {4, 5, 7};
+            if ((rnd() & 3) == 0) { rex(w, 0, a); b(0xd1); modrm_rr(ext[rnd() % 3], a); break; }
             rex(w, 0, a); b(0xc1); modrm_rr(ext[rnd() % 3], a); b((uint8_t) (rnd() % 40)); break;
         }
         case 8: rex(w, c, a); b(0x85); modrm_rr(c, a); break; // test
