@@ -130,7 +130,7 @@ static void emit_mem_one(void) {
         case 2: rex_mem_any(w, a); b(rnd() & 1 ? 0x03 : 0x2b); mem_any(a); break; // add/sub a, [m]
         case 3: rex_mem_any(w, a); b(0x3b); mem_any(a); break;            // cmp a, [m]
         case 4: rex_mem(w, a); b(rnd() & 1 ? 0x23 : 0x33); mem_operand(a); break; // and/xor a, [m]
-        case 5: rex_mem(w, a); b(0x01); mem_operand(a); break;            // add [m], a
+        case 5: rex_mem_any(w, a); b(rnd() & 1 ? 0x01 : 0x39); mem_any(a); break; // add/cmp [m], a
         case 6: rex_mem(w, a); b(0x0f); b(0xb6); mem_operand(a); break;   // movzx a, byte [m]
         case 7: rex_mem(0, a); b(0x02); mem_operand(a); break;            // add a8, [m] (REX: no ah..bh)
         case 8: rex_mem(0, a); b(0x38); mem_operand(a); break;            // cmp [m], a8

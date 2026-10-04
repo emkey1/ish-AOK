@@ -10342,10 +10342,11 @@ NAME(amd64_specmem_start):
 .endif
 .endm
 
-# add/sub/cmp r32/r64, [base + disp] or [rip + disp]: amd64_slo_*, full and
-# _nf like the arith families. The _nf CMP still performs the load: the
-# access can fault even when its flags are dead. Operands: [disp or
-# address][insn rip]; gret 2.
+# add/sub/cmp r32/r64, [base + disp] or [rip + disp], and cmp [mem], r32/r64
+# (op cmpm, the memory operand on the left): amd64_slo_*, full and _nf like
+# the arith families. The _nf CMPs still perform the load: the access can
+# fault even when its flags are dead. Operands: [disp or address][insn
+# rip]; gret 2.
 .macro amd64_slo16 op, s, R, bits, nf, d, hd, b, hb
 .if \nf
     .if \b == 16
@@ -10368,6 +10369,16 @@ NAME(amd64_specmem_start):
     str x8, [_cpu, CPU_amd64_rip]
     amd64_m16_addr \b, \hb
     amd64_vread_prep (\s / 8), slo_\op\()\s\()_\d\()_\b\()_\nf
+    .ifc \op, cmpm
+    ldr \R\()13, [x9]
+    .if \nf == 0
+    amd64_r16_get \R, 10, \d, \hd
+    subs \R\()15, \R\()13, \R\()10
+    cset w14, cc
+    cset w16, vs
+    amd64_cached_set_addsub_flags \bits
+    .endif
+    .else
     ldr \R\()10, [x9]
     .if \nf == 0
     amd64_r16_get \R, 13, \d, \hd
@@ -10386,6 +10397,7 @@ NAME(amd64_specmem_start):
     .else
     .ifnc \op, cmp
     amd64_r16_op_into \op, \R, \d, \hd, \R\()10
+    .endif
     .endif
     .endif
     gret 2
@@ -10423,6 +10435,7 @@ amd64_r16_rr17 amd64_smem16, st, 64, x, 63, 0
 amd64_r16_family amd64_r16_rr17, amd64_slo16, add
 amd64_r16_family amd64_r16_rr17, amd64_slo16, sub
 amd64_r16_family amd64_r16_rr17, amd64_slo16, cmp
+amd64_r16_family amd64_r16_rr17, amd64_slo16, cmpm
 
 # 16-bit and byte moves on the register cache, any of the sixteen registers
 # and the same 18 bases: amd64_smx_<kind>_<reg>_<base> (base r for rip, x
@@ -10677,10 +10690,12 @@ NAME(amd64_specmem_end):
     amd64_slo_ops add, 0
     amd64_slo_ops sub, 0
     amd64_slo_ops cmp, 0
+    amd64_slo_ops cmpm, 0
 .global.name amd64_slo_nf_gadgets
     amd64_slo_ops add, 1
     amd64_slo_ops sub, 1
     amd64_slo_ops cmp, 1
+    amd64_slo_ops cmpm, 1
 .popsection
 
 # inc/dec r32/r64 per register, all sixteen: amd64_idr_<op><size>_<reg>,
@@ -10901,6 +10916,62 @@ amd64_r16_rr17 amd64_lea16, 0, 64, x, 0, 0
             .irp b, 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17
                 amd64_lea_quad \s, \d, \b
             .endr
+        .endr
+    .endr
+.popsection
+
+# cmp r32/r64, r32/r64 and cmp r32/r64, imm per register: amd64_crr<size>_<lhs>_<rhs>
+# and amd64_cri<size>_<reg> (imm in the stream word). gen.c uses them for
+# pairs that involve r8-r15; a pair of rax..rdi keeps the generic gadget,
+# which the cmp+jcc fusion rewrites. Flags only, so no _nf twin. Tables
+# amd64_crr_gadgets[(size64 * 16 + lhs) * 16 + rhs], amd64_cri_gadgets[size64
+# * 16 + reg].
+.macro amd64_crr16 op, s, R, bits, nf, d, hd, sr, hs
+.gadget amd64_crr\s\()_\d\()_\sr
+    amd64_r16_get \R, 13, \d, \hd
+    amd64_r16_get \R, 10, \sr, \hs
+    subs \R\()15, \R\()13, \R\()10
+    cset w14, cc
+    cset w16, vs
+    amd64_cached_set_addsub_flags \bits
+    gret
+.endm
+.macro amd64_cri16 op, s, R, bits, nf, d, hd
+.gadget amd64_cri\s\()_\d
+    amd64_r16_get \R, 13, \d, \hd
+    ldr x10, [_ip]
+    .if \s == 32
+    mov w10, w10
+    .endif
+    subs \R\()15, \R\()13, \R\()10
+    cset w14, cc
+    cset w16, vs
+    amd64_cached_set_addsub_flags \bits
+    gret 1
+.endm
+amd64_r16_rr amd64_crr16, cmp, 32, w, 31, 0
+amd64_r16_rr amd64_crr16, cmp, 64, x, 63, 0
+amd64_r16_ri amd64_cri16, cmp, 32, w, 31, 0
+amd64_r16_ri amd64_cri16, cmp, 64, x, 63, 0
+.macro amd64_crr_quad s, d, sr
+    .quad NAME(gadget_amd64_crr\s\()_\d\()_\sr)
+.endm
+.macro amd64_cri_quad s, d
+    .quad NAME(gadget_amd64_cri\s\()_\d)
+.endm
+.pushsection_rodata
+.global.name amd64_crr_gadgets
+    .irp s, 32,64
+        .irp d, 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
+            .irp sr, 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
+                amd64_crr_quad \s, \d, \sr
+            .endr
+        .endr
+    .endr
+.global.name amd64_cri_gadgets
+    .irp s, 32,64
+        .irp d, 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
+            amd64_cri_quad \s, \d
         .endr
     .endr
 .popsection

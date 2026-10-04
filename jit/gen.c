@@ -556,7 +556,7 @@ static void amd64_flag_rw(const struct amd64_jit_insn *insn, unsigned *r, unsign
 }
 
 #if defined(__aarch64__)
-#define AMD64_SPEC_TWIN_BITS 14 // 16384 slots, > 2 x the 4608 pairs
+#define AMD64_SPEC_TWIN_BITS 14 // 16384 slots, > 2 x the 5184 pairs
 #define AMD64_SPEC_TWIN_SLOTS (1u << AMD64_SPEC_TWIN_BITS)
 static unsigned long amd64_spec_twin_full[AMD64_SPEC_TWIN_SLOTS];
 static unsigned long amd64_spec_twin_nf[AMD64_SPEC_TWIN_SLOTS];
@@ -582,7 +582,7 @@ static void amd64_spec_twin_init(void) {
         {amd64_ari_gadgets, amd64_ari_nf_gadgets, 2 * 2 * 16, AMD64_FL_ALL},
         {amd64_lrr_gadgets, amd64_lrr_nf_gadgets, 3 * 2 * 256, AMD64_FL_ALL},
         {amd64_lri_gadgets, amd64_lri_nf_gadgets, 3 * 2 * 16, AMD64_FL_ALL},
-        {amd64_slo_gadgets, amd64_slo_nf_gadgets, 3 * 2 * 16 * 18, AMD64_FL_ALL},
+        {amd64_slo_gadgets, amd64_slo_nf_gadgets, 4 * 2 * 16 * 18, AMD64_FL_ALL},
         {amd64_shi_gadgets, amd64_shi_nf_gadgets, 3 * 2 * 16, AMD64_FL_ALL},
         {amd64_idr_gadgets, amd64_idr_nf_gadgets, 2 * 2 * 16, AMD64_FL_ALL & ~AMD64_FL_CF},
     };
@@ -645,7 +645,7 @@ static unsigned long amd64_flags_twin(unsigned long g, unsigned *writes) {
         }
     }
     // The register-specialised arith/logic/shift/inc-dec gadgets (math.S
-    // amd64_arr/ari/lrr/lri/slo/shi/idr), 4608 pairs, through a hash table
+    // amd64_arr/ari/lrr/lri/slo/shi/idr), 5184 pairs, through a hash table
     // built once.
     return amd64_spec_twin(g, writes);
 }
@@ -13210,6 +13210,15 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
                 gen_amd64_defer_rip(state, next_ip);
                 return true;
             }
+            if (group == 7 && (amd64_jit_fuse_mask() & JIT_FUSE_AMD64_ARITHR)) {
+                // cmp r8-r15, imm (add/sub took the ari gadgets above):
+                // amd64_cri, no flush. Not fused with a jcc.
+                extern void (*const amd64_cri_gadgets[])(void);
+                gen(state, (unsigned long) amd64_cri_gadgets[(size == 64) * 16 + rm_id]);
+                gen(state, value);
+                gen_amd64_defer_rip(state, next_ip);
+                return true;
+            }
             // Any operand in r8-r15: flush-style native arith reg-imm (cached is
             // low-8 only; arith had no flush fallback, unlike logic_reg_imm).
             gen_amd64_flush_reg_cache(state);
@@ -13681,6 +13690,17 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
                     gen_amd64_defer_rip(state, next_ip);
                     return true;
                 }
+                if (amd64_jit_fuse_mask() & JIT_FUSE_AMD64_ARITHR) {
+                    // cmp with r8-r15 on either side (add/sub took the arr
+                    // gadgets above): amd64_crr, no flush. Not fused with a jcc.
+                    extern void (*const amd64_crr_gadgets[])(void);
+                    unsigned l = (insn.opcode & 2) ? reg_id : rm_id;
+                    unsigned r = (insn.opcode & 2) ? rm_id : reg_id;
+                    gen_amd64_r16_enter(state, l, r);
+                    gen(state, (unsigned long) amd64_crr_gadgets[((size == 64) * 16 + l) * 16 + r]);
+                    gen_amd64_defer_rip(state, next_ip);
+                    return true;
+                }
                 // Any operand in r8-r15: flush-style native arith (cached_arith is
                 // low-8 only). SHA-512's `add r8,r9` was the top reg-reg C bridge.
                 gen_amd64_flush_reg_cache(state);
@@ -13934,6 +13954,25 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
         amd64_jit_debug("opstore-arith ip=%llx op=%02x size=%u meta=%lx disp=%lx next=%llx",
                 (unsigned long long) insn.start_ip, insn.opcode, size,
                 meta, disp, (unsigned long long) next_ip);
+#if defined(__aarch64__)
+        if (insn.opcode == 0x39) {
+            // cmp [mem], reg reads its memory without writing it: the load-op
+            // family's cmpm (math.S amd64_slo_*), on the register cache.
+            unsigned creg = amd64_modrm_reg(insn.modrm) | (insn.rex.r ? 8 : 0);
+            unsigned slot;
+            unsigned long word;
+            if ((amd64_jit_fuse_mask() & JIT_FUSE_AMD64_MEMR) &&
+                    gen_amd64_m16_operand(state, &insn, meta, disp, next_ip, &slot, &word)) {
+                extern void (*const amd64_slo_gadgets[])(void);
+                state->amd64_deferred_rip_valid = false; // the gadget publishes the rip
+                gen(state, (unsigned long) amd64_slo_gadgets[((3 * 2 + (size == 64)) * 16 + creg) * 18 + slot]);
+                gen(state, word);
+                gen(state, (unsigned long) insn.start_ip);
+                gen_amd64_defer_rip(state, next_ip);
+                return true;
+            }
+        }
+#endif
         gen_amd64_flush_reg_cache(state);
         gen_amd64_flush_rip(state);
         extern void gadget_amd64_opstore_arith32(void), gadget_amd64_opstore_arith64(void);
