@@ -219,6 +219,32 @@ static bool zone_name_from_path(const char *path, char *buf, size_t size) {
 // tzdata write, and all macOS has. /etc/timezone is only a fallback, for a Linux
 // host whose /etc/localtime is a copy rather than a link -- Debian 13 stopped
 // creating that file and keeps it updated only where it already exists.
+// The command-line build has no language list, only the locale it was started
+// in: "zh_CN.UTF-8" becomes "zh-CN". C and POSIX name no language.
+bool hostPreferredLanguages(char *buf, size_t size) {
+    if (buf == NULL || size == 0)
+        return false;
+    buf[0] = '\0';
+    const char *names[] = {"LC_ALL", "LC_MESSAGES", "LANG"};
+    const char *locale = NULL;
+    for (size_t i = 0; i < sizeof(names) / sizeof(names[0]) && locale == NULL; i++) {
+        const char *value = getenv(names[i]);
+        if (value != NULL && value[0] != '\0')
+            locale = value;
+    }
+    if (locale == NULL || strncmp(locale, "C.", 2) == 0 || strcmp(locale, "C") == 0 ||
+        strcmp(locale, "POSIX") == 0)
+        return false;
+    size_t len = strcspn(locale, ".@");
+    if (len == 0 || len + 2 > size)
+        return false;
+    for (size_t i = 0; i < len; i++)
+        buf[i] = locale[i] == '_' ? '-' : locale[i];
+    buf[len] = '\n';
+    buf[len + 1] = '\0';
+    return true;
+}
+
 bool hostTimeZoneName(char *buf, size_t size) {
     if (buf == NULL || size == 0)
         return false;

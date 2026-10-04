@@ -31,7 +31,8 @@ Everything else under `/AOK` is baked into the app at build time:
 /AOK/docs/                this documentation set, and book/ -- the whole book
 /AOK/tools/               scripts and utilities (native-links.sh, persist-links.sh,
                           manage-roots.sh, mount-root.sh, ktop, benchmarks,
-                          provisioning, Wayland, setup-gpu.sh, setup-games.sh)
+                          provisioning, Wayland, setup-gpu.sh, setup-games.sh,
+                          setup-locale.sh)
 /AOK/tests/               the guest-side regression suite
 /AOK/fixes/               canned fixes for known upstream problems (Devuan, Arch, Codex)
 /AOK/native/              programs compiled into the app -- exec'ing one runs host

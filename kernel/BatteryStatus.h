@@ -61,6 +61,11 @@ enum host_thermal_state hostThermalState(void);
 // Returns false, with buf empty, when there is no name to give.
 bool hostTimeZoneName(char *buf, size_t size);
 
+// The device's preferred languages as BCP 47 tags ("zh-Hans-CN", "en-GB"),
+// most preferred first, one per line, copied into buf. Returns false, with buf
+// empty, when there are none to give.
+bool hostPreferredLanguages(char *buf, size_t size);
+
 // App only: start keeping the cache the functions above read. Call it on the
 // main thread before the guest boots; a second call does nothing.
 void ISHHostStatusStart(void);

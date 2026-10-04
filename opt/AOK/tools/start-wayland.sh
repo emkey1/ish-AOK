@@ -352,6 +352,13 @@ export HOME="${HOME:-/root}"
 if [ -z "${LANG:-}${LC_ALL:-}" ]; then
     export LANG=C.UTF-8
 fi
+# The language /AOK/tools/setup-locale.sh set up, in place of that default (or
+# the app's own LANG=C.UTF-8, which every session started from the app has).
+if [ -z "${LC_ALL:-}" ] && [ -r /etc/aok-locale ]; then
+    case "${LANG:-}" in
+        ""|C|POSIX|C.UTF-8|C.utf8) read -r LANG < /etc/aok-locale && export LANG ;;
+    esac
+fi
 # SHELL: prefer bash outright rather than trusting the passwd entry's shell
 # field, which is often stale or minimal -- the "Open Everything as Default
 # User" account this su targets (AppDelegate.m's ProvisionDefaultUserAccount)

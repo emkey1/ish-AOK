@@ -1962,6 +1962,16 @@ static int proc_ish_show_timezone(struct proc_entry *UNUSED(entry), struct proc_
     return 0;
 }
 
+// /proc/ish/languages -- the device's preferred languages, most preferred
+// first, one BCP 47 tag per line ("zh-Hans-CN"). What a guest needs to pick a
+// matching locale: /AOK/tools/setup-locale.sh reads it.
+static int proc_ish_show_languages(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
+    char languages[1024];
+    if (hostPreferredLanguages(languages, sizeof(languages)))
+        proc_printf(buf, "%s", languages);
+    return 0;
+}
+
 extern char* printUIDevice(void);
 
 static int proc_ish_show_uidevice(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
@@ -2361,6 +2371,7 @@ struct proc_children proc_ish_children = PROC_CHILDREN({
     {"host_ports", .show = proc_ish_show_host_ports},
     {"host_vm", .show = proc_ish_show_host_vm},
     {"ips", .show = proc_ish_show_ips},
+    {"languages", .show = proc_ish_show_languages},
     {"mem_guard", .show = proc_ish_show_mem_guard},
     {"mem_release_probe", S_IFREG | 0644, .show = proc_ish_show_mem_release_probe, .update = proc_ish_update_mem_release_probe},
     {"roots", S_IFREG | 0644, .show = proc_ish_show_roots, .update = proc_ish_update_roots},

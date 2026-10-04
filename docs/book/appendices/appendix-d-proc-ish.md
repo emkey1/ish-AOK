@@ -31,6 +31,7 @@ inventory, generated from `fs/proc/ish.c`.
 - `/proc/ish/ips` (file)
 - `/proc/ish/jit_inherit` (file)
 - `/proc/ish/jit_timing` (file)
+- `/proc/ish/languages` (file)
 - `/proc/ish/mem_compress` (file)
 - `/proc/ish/mem_guard` (file)
 - `/proc/ish/mem_release_probe` (file)

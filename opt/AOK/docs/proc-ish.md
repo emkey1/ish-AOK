@@ -14,6 +14,7 @@ cat /proc/ish/BAT0_status    # Charging / Discharging / Full
 cat /proc/ish/BAT0           # both of those plus low-power mode, one per line
 cat /proc/ish/thermal_state  # nominal / fair / serious / critical
 cat /proc/ish/timezone       # the device's time zone, e.g. Europe/London
+cat /proc/ish/languages      # the device's languages, most preferred first
 cat /proc/ish/UIDevice       # the UIDevice the app sees: model, OS, orientation
 cat /proc/ish/applets        # the Workspace applets that are open
 cat /proc/ish/arch           # every process's guest architecture, one line each
@@ -96,6 +97,14 @@ is none here. The command-line build has nothing to ask and says `unknown`.
 [roots.md](roots.md#the-time-zone-following-the-device). The command-line build
 reports the host's zone, read from its `/etc/localtime`, and an empty line if
 it cannot tell.
+
+`languages` is the device's preferred languages (Settings > General > Language
+& Region), one BCP 47 tag per line, most preferred first: `zh-Hans-CN`, then
+`en-GB`, and so on. It is read fresh each time, so a change in Settings shows at
+once. `/AOK/tools/setup-locale.sh` turns the first one into the guest's default
+locale (zh_CN.UTF-8 for `zh-Hans-CN`, generating it on glibc roots). The
+command-line build has no such list and reports the language of its own
+`LANG`, or nothing for C and POSIX.
 
 ## Your settings, from the guest
 

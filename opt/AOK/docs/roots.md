@@ -267,6 +267,30 @@ locale you choose or forward over ssh wins. `C.UTF-8` is built into glibc and
 needs nothing under musl. Programs that refuse to start without a UTF-8 locale,
 such as `btop`, now start.
 
+### Your own language: `setup-locale.sh`
+
+`C.UTF-8` shows Chinese, Japanese or any other text correctly, but programs
+still talk in English. To switch a root to the device's language:
+
+```
+sudo sh /AOK/tools/setup-locale.sh            # the device's first language
+sudo sh /AOK/tools/setup-locale.sh zh_TW      # or one you name (ja, zh-Hant, pt-BR work too)
+sudo sh /AOK/tools/setup-locale.sh --fonts    # also CJK fonts for the Wayland desktop
+sudo sh /AOK/tools/setup-locale.sh --reset    # back to C.UTF-8
+```
+
+It reads [`/proc/ish/languages`](proc-ish.md), generates the locale on glibc
+roots (installing Devuan's `locales` package first), and records it in
+`/etc/aok-locale`, which `/etc/profile.d/01-aok-lang.sh`, the zsh global
+`zshenv`, `/etc/default/locale` and `start-wayland.sh` all read. It replaces
+only the `C.UTF-8` default: a `LANG` forwarded over ssh still wins. New logins
+and new desktop sessions pick it up.
+
+Devuan carries the translations in its packages, so `ls`, `date` and the rest
+answer in Chinese straight away. Alpine mostly does not: busybox has none,
+few packages ship a `-lang` subpackage, and `musl-locales` covers European
+languages only. For a Chinese-speaking system, use a Devuan root.
+
 ## Provisioning scripts: turning a bare rootfs into a full terminal environment
 
 A freshly-imported root is intentionally minimal. Scripts under `/AOK/tools`

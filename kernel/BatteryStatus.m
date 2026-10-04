@@ -208,6 +208,33 @@ enum host_thermal_state hostThermalState(void) {
     return thermal;
 }
 
+bool hostPreferredLanguages(char *buf, size_t size) {
+    if (buf == NULL || size == 0)
+        return false;
+    buf[0] = '\0';
+    // Read fresh each time: the user can change the language list in Settings
+    // while the app runs, and this is only asked for when a guest reads it.
+    CFArrayRef languages = CFLocaleCopyPreferredLanguages();
+    if (languages == NULL)
+        return false;
+    size_t used = 0;
+    for (CFIndex i = 0; i < CFArrayGetCount(languages); i++) {
+        char tag[64];
+        CFStringRef language = CFArrayGetValueAtIndex(languages, i);
+        if (!CFStringGetCString(language, tag, sizeof(tag), kCFStringEncodingUTF8))
+            continue;
+        size_t len = strlen(tag);
+        if (len == 0 || used + len + 2 > size)
+            break;
+        memcpy(buf + used, tag, len);
+        used += len;
+        buf[used++] = '\n';
+        buf[used] = '\0';
+    }
+    CFRelease(languages);
+    return used > 0;
+}
+
 bool hostTimeZoneName(char *buf, size_t size) {
     if (buf == NULL || size == 0)
         return false;
