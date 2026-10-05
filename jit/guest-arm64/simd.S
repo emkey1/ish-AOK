@@ -25,6 +25,301 @@
 
 .text
 
+// ---- AdvSIMD structure loads and stores, in the gadget ----
+// a64_vldst: x7 = the guest address, x20 = rt, x11 = spec:
+//   [3:0] count  [5:4] esize_log2  [6] q  [11:8] lane
+//   [13:12] kind: 0 LD1/ST1 multiple contiguous registers, 1 LD2-4/ST2-4
+//   interleaved, 2 one lane (LD1-4/ST1-4 single structure), 3 LD1R-4R
+//   [14] is_load
+// x19 = the instruction's pc (orig_ip). -> x27 = 0, or INT_PF with the
+// fault recorded. The transfer goes a page at a time through the TLB (the
+// scalar gadgets' checks; a miss takes tlb_handle_miss or
+// tlb_write_ptr_slow) via a stack buffer, so a load that faults has changed
+// no register. Preserves x12, x13, x19-x26. Write revalidation (a debug
+// watch turns it on) sends every LD1/ST1 store here too, and a store with
+// it on also goes through arm64_watch_scan_value (emu/tlb.c).
+
+// x7 -> its host address for a load / a store, or 0. Clobbers x9-x11, x27.
+a64_xlate_r:
+    and x9, x7, #0xfffffffffffff000
+    ubfx x10, x7, #12, #10
+    eor x10, x10, x7, lsr #22
+    and x10, x10, #(1 << TLB_BITS) - 1
+    mov w11, #TLB_ENTRY_SIZE
+    madd x10, x10, x11, _tlb
+    ldr x11, [x10, #TLB_ENTRY_page]
+    cmp x9, x11
+    b.ne 1f
+    ldr x11, [x10, #TLB_ENTRY_data_minus_addr]
+    add x7, x11, x7
+    ret
+1:  save_c
+    sub x0, _tlb, #TLB_entries
+    mov x1, x7
+    mov x2, #MEM_READ
+    bl NAME(tlb_handle_miss)
+    mov x27, x0
+    restore_c
+    mov x7, x27
+    ret
+a64_xlate_w:
+    ldr x10, [_tlb, #(-TLB_entries+TLB_mmu)]
+    ldr x9, [_tlb, #(-TLB_entries+TLB_mem_changes)]
+    ldr x11, [x10, #MMU_changes]
+    cmp x9, x11
+    b.ne 1f
+    ldrb w10, [x10, #MMU_requires_write_revalidate]
+    cbnz w10, 1f
+    and x9, x7, #0xfffffffffffff000
+    ubfx x10, x7, #12, #10
+    eor x10, x10, x7, lsr #22
+    and x10, x10, #(1 << TLB_BITS) - 1
+    mov w11, #TLB_ENTRY_SIZE
+    madd x10, x10, x11, _tlb
+    ldr x11, [x10, #TLB_ENTRY_page_if_writable]
+    cmp x9, x11
+    b.ne 1f
+    str x9, [_tlb, #(-TLB_entries+TLB_dirty_page)]
+    ldr x11, [x10, #TLB_ENTRY_data_minus_addr]
+    add x7, x11, x7
+    ret
+1:  save_c
+    sub x0, _tlb, #TLB_entries
+    mov x1, x7
+    bl NAME(tlb_write_ptr_slow)
+    mov x27, x0
+    restore_c
+    mov x7, x27
+    ret
+
+// copy x4 bytes (1 2 4 8, a power of two) from [\src] to [\dst]
+.macro ecopy dst, src
+    tbnz x4, #3, 81f
+    tbnz x4, #2, 82f
+    tbnz x4, #1, 83f
+    ldrb w9, [\src]
+    strb w9, [\dst]
+    b 84f
+81: ldr x9, [\src]
+    str x9, [\dst]
+    b 84f
+82: ldr w9, [\src]
+    str w9, [\dst]
+    b 84f
+83: ldrh w9, [\src]
+    strh w9, [\dst]
+84:
+.endm
+
+// the frame: [sp, 0..63] the memory image, [64..79] a register being
+// built, [80] lr, [88] the guest address, [96] spec
+a64_vldst:
+    sub sp, sp, #112
+    str lr, [sp, #80]
+    str x7, [sp, #88]
+    str x11, [sp, #96]
+    and x3, x11, #0xf              // count
+    ubfx x4, x11, #4, #2
+    mov x9, #1
+    lsl x4, x9, x4                 // esize
+    ubfx x6, x11, #12, #2          // kind
+    tst x11, #(1 << 6)
+    mov x5, #8
+    mov x9, #16
+    csel x5, x9, x5, ne            // regbytes
+    cmp x6, #2
+    b.hs 1f
+    mul x14, x3, x5                // memory bytes: kinds 0, 1
+    b 2f
+1:  mul x14, x3, x4                // kinds 2, 3
+2:  ubfx x15, x11, #8, #4          // lane
+    tbz x11, #14, 50f
+
+    // ---- load: memory -> the image ----
+    mov w8, #0
+    bl a64_vcopy_mem
+    cbnz x27, 49f
+    ldr x11, [sp, #96]
+    and x3, x11, #0xf
+    ubfx x4, x11, #4, #2
+    mov x9, #1
+    lsl x4, x9, x4
+    ubfx x6, x11, #12, #2
+    tst x11, #(1 << 6)
+    mov x5, #8
+    mov x9, #16
+    csel x5, x9, x5, ne
+    ubfx x15, x11, #8, #4
+    mov x16, #0                    // r
+10: cmp x16, x3
+    b.hs 48f
+    add x17, x20, x16
+    and x17, x17, #31
+    add x17, _cpu, x17, lsl #4
+    add x17, x17, #CPU_v0          // the register
+    cmp x6, #1
+    b.lo 20f
+    b.eq 30f
+    cmp x6, #2
+    b.eq 40f
+    // kind 3: replicate image[r * esize] over the register
+    stp xzr, xzr, [sp, #64]
+    mul x9, x16, x4
+    add x10, sp, x9                // the element
+    mov x0, #0                     // byte offset in the register
+11: add x11, sp, #64
+    add x11, x11, x0
+    ecopy x11, x10
+    add x0, x0, x4
+    cmp x0, x5
+    b.lo 11b
+    ldp x9, x10, [sp, #64]
+    stp x9, x10, [x17]
+    b 19f
+20: // kind 0: image[r * regbytes ...] -> the register, upper half 0 if Q=0
+    mul x9, x16, x5
+    add x10, sp, x9
+    ldr x9, [x10]
+    str x9, [x17]
+    mov x9, #0
+    cmp x5, #16
+    b.ne 21f
+    ldr x9, [x10, #8]
+21: str x9, [x17, #8]
+    b 19f
+30: // kind 1: element e = image[(e * count + r) * esize]
+    stp xzr, xzr, [sp, #64]
+    mov x0, #0                     // e * esize
+31: udiv x9, x0, x4                // e
+    mul x9, x9, x3
+    add x9, x9, x16
+    mul x9, x9, x4
+    add x10, sp, x9
+    add x11, sp, #64
+    add x11, x11, x0
+    ecopy x11, x10
+    add x0, x0, x4
+    cmp x0, x5
+    b.lo 31b
+    ldp x9, x10, [sp, #64]
+    stp x9, x10, [x17]
+    b 19f
+40: // kind 2: image[r * esize] -> lane, the rest kept
+    mul x9, x16, x4
+    add x10, sp, x9
+    mul x11, x15, x4
+    add x11, x17, x11
+    ecopy x11, x10
+19: add x16, x16, #1
+    b 10b
+
+    // ---- store: the registers -> the image -> memory ----
+50: mov x16, #0
+51: cmp x16, x3
+    b.hs 58f
+    add x17, x20, x16
+    and x17, x17, #31
+    add x17, _cpu, x17, lsl #4
+    add x17, x17, #CPU_v0
+    cmp x6, #1
+    b.lo 52f
+    b.eq 53f
+    // kind 2: lane -> image[r * esize]
+    mul x9, x16, x4
+    add x10, sp, x9
+    mul x11, x15, x4
+    add x11, x17, x11
+    ecopy x10, x11
+    b 57f
+52: mul x9, x16, x5                // kind 0: the register -> image[r * regbytes]
+    add x10, sp, x9
+    ldr x9, [x17]
+    str x9, [x10]
+    cmp x5, #16
+    b.ne 57f
+    ldr x9, [x17, #8]
+    str x9, [x10, #8]
+    b 57f
+53: mov x0, #0                     // kind 1: element e -> image[(e * count + r) * esize]
+54: udiv x9, x0, x4
+    mul x9, x9, x3
+    add x9, x9, x16
+    mul x9, x9, x4
+    add x10, sp, x9
+    add x11, x17, x0
+    ecopy x10, x11
+    add x0, x0, x4
+    cmp x0, x5
+    b.lo 54b
+57: add x16, x16, #1
+    b 51b
+58: str x19, [_tlb, #(-TLB_entries+TLB_watch_ip)]   // orig_ip, for the watch
+    mov w8, #1
+    bl a64_vcopy_mem
+    cbnz x27, 49f
+    ldr x9, [_tlb, #(-TLB_entries+TLB_mmu)]
+    ldrb w9, [x9, #MMU_requires_write_revalidate]
+    cbz w9, 49f
+    save_c                         // x1, x2 are _cpu, _tlb: args after it
+    ldr x0, [sp, #(0xa0 + 88)]
+    add x1, sp, #0xa0
+    mov x2, x14
+    bl NAME(arm64_watch_scan_value)
+    restore_c
+    b 48f
+48: mov x27, #0
+49: ldr lr, [sp, #80]
+    add sp, sp, #112
+    ret
+
+// copy the x14-byte image at the caller's [sp] to or from guest memory at
+// the caller's [sp, #88]: w8 = 0 load, 1 store. -> x27.
+a64_vcopy_mem:
+    sub sp, sp, #32
+    str lr, [sp]
+    add x0, sp, #32                // the image
+    ldr x16, [sp, #(32 + 88)]      // the guest address
+    mov x17, x14                   // left
+1:  cbz x17, 8f
+    and x9, x16, #0xfff
+    mov x10, #0x1000
+    sub x10, x10, x9
+    cmp x10, x17
+    csel x15, x10, x17, lo         // this page's part
+    mov x7, x16
+    str w8, [sp, #8]
+    cbnz w8, 2f
+    bl a64_xlate_r
+    b 3f
+2:  bl a64_xlate_w
+3:  ldr w8, [sp, #8]
+    cbz x7, 9f
+    mov x9, #0
+4:  cbnz w8, 5f
+    ldrb w10, [x7, x9]
+    strb w10, [x0, x9]
+    b 6f
+5:  ldrb w10, [x0, x9]
+    strb w10, [x7, x9]
+6:  add x9, x9, #1
+    cmp x9, x15
+    b.lo 4b
+    add x0, x0, x15
+    add x16, x16, x15
+    sub x17, x17, x15
+    b 1b
+8:  mov x27, #0
+    ldr lr, [sp]
+    add sp, sp, #32
+    ret
+9:  ldr x9, [_tlb, #(-TLB_entries+TLB_segfault_addr)]
+    str x9, [_cpu, #CPU_segfault_addr]
+    strb w8, [_cpu, #CPU_segfault_was_write]
+    mov x27, #INT_PF
+    ldr lr, [sp]
+    add sp, sp, #32
+    ret
+
 // ---- Single vector/FP register load/store -------------------------------
 // Same code-stream format and addressing families as memory.S's integer
 // single-register gadgets (the shared ldst_single_setup/-writeback
@@ -762,16 +1057,15 @@ vshll_gadget vshll_u2_4s,  uxtl2, .4s, .2d, x9
 // ---- AdvSIMD LD1/ST1 (load/store multiple, contiguous) ------------------
 // The interleaving LD2/3/4 forms are NOT handled here (different
 // semantics); gen only routes the contiguous LD1/ST1 opcodes (1-4 regs)
-// to this gadget. All the page-crossing work is in the C helper
-// arm64_vldst_multi (emu/tlb.c); this gadget just marshals args, handles
-// the fault return, and does the post-index writeback.
+// to this gadget. A transfer off the inline fast path goes through
+// a64_vldst; this gadget marshals args, handles the fault return, and
+// does the post-index writeback.
 //
 // Code stream: [gadget][packed][orig_ip]
 //   packed: rt(0:4) | rn(5:9) | count(10:12) | q(13) | is_load(14) |
 //           mode(15:16) | rm(17:21)
 //   mode: 0 = no writeback, 1 = post-index by total bytes (imm form),
 //         2 = post-index by Xrm (register form)
-.extern arm64_vldst_multi
 
 .gadget ld1st1_multi
     ldr x8, [_ip]
@@ -807,7 +1101,7 @@ vshll_gadget vshll_u2_4s,  uxtl2, .4s, .2d, x9
     // call and a tlb_read per register for it: a frame copy in the Wayland
     // desktop spent 60% of its CPU here. Anything else -- a page crossing,
     // a miss, a fault, a debug watch (it sets requires_write_revalidate) --
-    // still takes the helper. Scratch: x3-x6, x12-x17 (x11, regbytes, and
+    // still takes a64_vldst. Scratch: x3-x6, x12-x17 (x11, regbytes, and
     // the x19-x26 parameters are live into the writeback below).
     mul x12, x22, x11          // total bytes
     and x9, x7, #0xfff
@@ -874,22 +1168,13 @@ ld1st1_fast_store_loop:
     b ld1st1_writeback
 
 ld1st1_slow:
-    save_c                     // saves x0-x18+lr; x7/x11 spill+restore too
-    // AAPCS64 args. Set the non-conflicting ones first (from callee-saved
-    // sources), then chain x0<-x1(cpu), x1<-x2(tlb), x2<-x7(addr): x1 and
-    // x2 are both source and destination, so this exact order is the only
-    // safe one (same hazard as the crosspage helpers).
-    mov x3, x20                // rt
-    mov x4, x22                // count
-    mov x5, x11                // regbytes
-    mov x6, x24                // is_load
-    mov x0, x1                 // cpu  (x1 still intact)
-    sub x1, x2, #TLB_entries   // real `struct tlb *` (_tlb points at tlb->entries)
-    mov x2, x7                 // addr
-    bl NAME(arm64_vldst_multi)
-    mov x27, x0                // stash result (INT_NONE=0 / INT_PF) in callee-saved
-    restore_c
-
+    // a page crossing, a miss, a fault, a debug watch: a64_vldst, kind 0
+    stp x11, x12, [sp, #-16]!      // regbytes is live into the writeback
+    lsl x11, x23, #6               // q
+    orr x11, x11, x22              // count
+    orr x11, x11, x24, lsl #14     // is_load
+    bl a64_vldst
+    ldp x11, x12, [sp], #16
     cbnz x27, ld1st1_fault
 
 ld1st1_writeback:
@@ -926,9 +1211,8 @@ ld1st1_fault:
     b jit_exit
 
 // AdvSIMD structured load/store: interleaved LD2-4/ST2-4 (multiple),
-// single-lane LD1-4/ST1-4, and LD1R-LD4R replicate — all through the
-// crosspage-safe arm64_vldst_struct C helper (emu/tlb.c). Same shape as
-// ld1st1_multi above. Code stream:
+// single-lane LD1-4/ST1-4, and LD1R-LD4R replicate -- a64_vldst. Same
+// shape as ld1st1_multi above. Code stream:
 //   [gadget][rt | rn<<5 | count<<10 | q<<13 | is_load<<14 | mode<<15 |
 //            rm<<17 | kind<<22 | esize_log2<<24 | lane<<26][orig_ip]
 .gadget ldst_struct
@@ -961,16 +1245,7 @@ ld1st1_fault:
     orr x11, x11, x14, lsl #8
     orr x11, x11, x12, lsl #12
     orr x11, x11, x24, lsl #14
-    save_c
-    mov x3, x20                // rt
-    mov x4, x11                // spec
-    mov x0, x1                 // cpu
-    sub x1, x2, #TLB_entries   // struct tlb *
-    mov x2, x7                 // addr
-    bl NAME(arm64_vldst_struct)
-    mov x27, x0                // result (0 / INT_PF), callee-saved
-    restore_c
-
+    bl a64_vldst
     cbnz x27, ldst_struct_fault
 
     // writeback

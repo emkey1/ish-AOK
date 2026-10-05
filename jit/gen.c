@@ -3850,9 +3850,8 @@ int gen_step_arm64(struct gen_state *state, struct tlb *tlb) {
             return 1;
         }
         // Interleaved LD2/ST2 (opcode 8), LD3/ST3 (4), LD4/ST4 (0):
-        // element-interleaving via the arm64_vldst_struct helper (ported
-        // functionality from OpenMinis' interleaved branch, buffered
-        // instead of per-element micro-gadgets).
+        // element-interleaving in the ldst_struct gadget (a64_vldst,
+        // buffered so a faulting load changes no register).
         extern void gadget_arm64_ldst_struct(void);
         unsigned size = (insn >> 10) & 3;
         count = opcode == 0x8 ? 2 : opcode == 0x4 ? 3 : opcode == 0x0 ? 4 : 0;

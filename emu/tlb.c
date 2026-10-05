@@ -7,143 +7,7 @@
 #include "kernel/task.h"
 #include "jit/jit.h"
 
-static void arm64_watch_scan_value(guest_addr_t addr, const void *value, unsigned size);
-
-// AdvSIMD LD1/ST1 (load/store multiple single-element structures,
-// contiguous form): transfer `count` consecutive V registers (wrapping
-// mod 32) of `regbytes` (8 for the .8b/.4h/.2s arrangements, 16 for the
-// .16b/... Q=1 arrangements) each, starting at `addr`. Done in C because
-// the whole transfer can span page boundaries per register — reusing the
-// crosspage-capable tlb_read/tlb_write is far simpler and safer than
-// hand-rolling the multi-register crosspage assembly. Returns INT_NONE on
-// success, or INT_PF (with cpu->segfault_addr/was_write set from the tlb)
-// on the first faulting access; the calling gadget rewinds PC and exits.
-// The scalar-write zero-extension (Q=0 clears the upper 64 bits) falls out
-// of copying through a zero-initialized union.
-//
-// Success returns 0, NOT INT_NONE (which is -1) — the gadget branches to
-// its fault path on a nonzero result, so INT_NONE would take the fault
-// path on every success. (Real bug: it did exactly that — every
-// successful ld1 exited INT_PF and the block re-ran forever.)
-int arm64_vldst_multi(struct cpu_state *cpu, struct tlb *tlb, guest_addr_t addr,
-                      unsigned rt, unsigned count, unsigned regbytes, int is_load) {
-    for (unsigned r = 0; r < count; r++) {
-        unsigned v = (rt + r) & 31;
-        if (is_load) {
-            union xmm_reg tmp = {};
-            if (!tlb_read(tlb, addr, &tmp, regbytes)) {
-                cpu->segfault_addr = tlb->segfault_addr;
-                cpu->segfault_was_write = false;
-                return INT_PF;
-            }
-            cpu->arm64_v[v] = tmp;
-        } else {
-            if (!tlb_write(tlb, addr, &cpu->arm64_v[v], regbytes)) {
-                cpu->segfault_addr = tlb->segfault_addr;
-                cpu->segfault_was_write = true;
-                return INT_PF;
-            }
-            arm64_watch_scan_value(addr, &cpu->arm64_v[v], regbytes);
-        }
-        addr += regbytes;
-    }
-    return 0;
-}
-
-// AdvSIMD structured load/store forms beyond the contiguous LD1/ST1
-// above (same crosspage-safety reasoning; OpenMinis splits these across
-// per-element micro-gadgets instead). spec packs the shape:
-//   [3:0] count  [5:4] esize_log2  [6] q  [11:8] lane
-//   [13:12] kind (1=interleaved multiple, 2=single lane, 3=replicate)
-//   [14] is_load
-// Returns 0 on success (see the INT_NONE note above), INT_PF on fault.
-int arm64_vldst_struct(struct cpu_state *cpu, struct tlb *tlb, guest_addr_t addr,
-                       unsigned rt, unsigned spec) {
-    unsigned count = spec & 0xf;
-    unsigned esize = 1u << ((spec >> 4) & 3);
-    unsigned q = (spec >> 6) & 1;
-    unsigned lane = (spec >> 8) & 0xf;
-    unsigned kind = (spec >> 12) & 3;
-    int is_load = (spec >> 14) & 1;
-    unsigned regbytes = q ? 16 : 8;
-
-    if (kind == 1) {
-        // LD2/LD3/LD4 (multiple structures): de-interleave count registers'
-        // worth of elements; ST2-4 interleave. Whole transfer buffered so a
-        // fault mid-way never leaves half-updated guest registers.
-        unsigned lanes = regbytes / esize;
-        unsigned total = count * regbytes;
-        uint8_t buf[64];
-        if (is_load) {
-            if (!tlb_read(tlb, addr, buf, total)) {
-                cpu->segfault_addr = tlb->segfault_addr;
-                cpu->segfault_was_write = false;
-                return INT_PF;
-            }
-            for (unsigned r = 0; r < count; r++) {
-                union xmm_reg tmp = {};
-                for (unsigned e = 0; e < lanes; e++)
-                    memcpy(&tmp.u8[e * esize], &buf[(e * count + r) * esize], esize);
-                cpu->arm64_v[(rt + r) & 31] = tmp;
-            }
-        } else {
-            for (unsigned r = 0; r < count; r++)
-                for (unsigned e = 0; e < lanes; e++)
-                    memcpy(&buf[(e * count + r) * esize],
-                           &cpu->arm64_v[(rt + r) & 31].u8[e * esize], esize);
-            if (!tlb_write(tlb, addr, buf, total)) {
-                cpu->segfault_addr = tlb->segfault_addr;
-                cpu->segfault_was_write = true;
-                return INT_PF;
-            }
-            arm64_watch_scan_value(addr, buf, total);
-        }
-        return 0;
-    }
-
-    if (kind == 2) {
-        // LD1-4/ST1-4 (single structure): one element per register at a
-        // fixed lane; loads leave the register's other lanes intact.
-        for (unsigned r = 0; r < count; r++) {
-            unsigned v = (rt + r) & 31;
-            if (is_load) {
-                uint8_t tmp[8];
-                if (!tlb_read(tlb, addr, tmp, esize)) {
-                    cpu->segfault_addr = tlb->segfault_addr;
-                    cpu->segfault_was_write = false;
-                    return INT_PF;
-                }
-                memcpy(&cpu->arm64_v[v].u8[lane * esize], tmp, esize);
-            } else {
-                if (!tlb_write(tlb, addr, &cpu->arm64_v[v].u8[lane * esize], esize)) {
-                    cpu->segfault_addr = tlb->segfault_addr;
-                    cpu->segfault_was_write = true;
-                    return INT_PF;
-                }
-            }
-            addr += esize;
-        }
-        return 0;
-    }
-
-    // kind == 3: LD1R-LD4R — load one element per register and replicate
-    // it across the register's arrangement (upper 64 bits zero if Q=0).
-    for (unsigned r = 0; r < count; r++) {
-        unsigned v = (rt + r) & 31;
-        uint8_t tmp[8];
-        if (!tlb_read(tlb, addr, tmp, esize)) {
-            cpu->segfault_addr = tlb->segfault_addr;
-            cpu->segfault_was_write = false;
-            return INT_PF;
-        }
-        union xmm_reg rep = {};
-        for (unsigned e = 0; e < regbytes / esize; e++)
-            memcpy(&rep.u8[e * esize], tmp, esize);
-        cpu->arm64_v[v] = rep;
-        addr += esize;
-    }
-    return 0;
-}
+void arm64_watch_scan_value(guest_addr_t addr, const void *value, unsigned size);
 
 // The pair atomics below are the arm64 interpreter's (emu/arm64_interp.c);
 // the JIT's atomics are gadgets (jit/guest-arm64/atomics.S).
@@ -985,9 +849,10 @@ static __no_instrument void arm64_watch_record(struct tlb *tlb, guest_addr_t add
     }
 }
 
-// Direct value check for C-side bulk stores that see the data (the ld1/st1
-// helper and the crosspage flush): record any poison value in the buffer.
-static __no_instrument void arm64_watch_scan_value(guest_addr_t addr, const void *value, unsigned size) {
+// Direct value check for bulk stores that see the data (the crosspage
+// flush, and a64_vldst's stores while a watch is on): record any poison
+// value in the buffer.
+__no_instrument void arm64_watch_scan_value(guest_addr_t addr, const void *value, unsigned size) {
     if (arm64_watch_state != 2 || !arm64_watch_val_on)
         return;
     for (unsigned off = 0; off + 8 <= size; off += 4) {
