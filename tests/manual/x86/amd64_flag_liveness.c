@@ -97,7 +97,7 @@ static void emit_mem_one(void) {
     use_rbp = (int) (rnd() & 1);
     if (rnd() % 4 == 0) { // the indexed and the 16-bit / byte forms
         int lowbyte_rex = (a & 8) || (rnd() & 1); // REX makes a's low byte addressable
-        switch (rnd() % 15) {
+        switch (rnd() % 16) {
             case 9: { // inc/dec [m] (FF /0, /1), plain or indexed
                 int ext = (int) (rnd() & 1);
                 if (rnd() & 1) { set_r14(); rex_sib(w, 0); b(0xff); sib_operand(ext); }
@@ -110,6 +110,13 @@ static void emit_mem_one(void) {
                 else { if (a & 8) b(0x41); b((uint8_t) (0x50 + (a & 7))); }
                 if (c & 8) b(0x41);
                 b((uint8_t) (0x58 + (c & 7)));
+                break;
+            }
+            case 15: { // mov/add/sub/cmp/xor a, %fs:0 (the thread pointer; fixed with ASLR off)
+                static const uint8_t fo[] = {0x8b, 0x03, 0x2b, 0x3b, 0x33};
+                b(0x64); b((uint8_t) (0x48 | ((a & 8) ? 4 : 0))); b(fo[rnd() % 5]);
+                b((uint8_t) (0x04 | (a & 7) << 3)); b(0x25); // SIB: no base, no index
+                uint32_t z = 0; memcpy(p, &z, 4); p += 4;
                 break;
             }
             case 13: { // mov [m], imm (C7 /0 imm32, or C6 /0 imm8), plain or indexed

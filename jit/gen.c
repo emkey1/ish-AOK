@@ -1046,8 +1046,9 @@ __attribute__((unused)) static void gen_amd64_r16_wrote(struct gen_state *state,
 // registers as the base (slot 0-15, word = disp), [rip + disp] (slot 16,
 // word = the address), or an indexed [base + index * scale + disp] (slot 17,
 // word = disp, after an amd64_ea gadget that leaves base + index * scale in
-// x3; the base may be absent). False for what the families do not take: an
-// FS/GS override, a 32-bit address (0x67), and a bare [disp32]. Loads the
+// x3; the base may be absent; or %fs:disp / %gs:disp, after amd64_ea_fs/gs).
+// False for what the families do not take: a segment override with a base or
+// index register, a 32-bit address (0x67), and a bare [disp32]. Loads the
 // register cache, which every memory gadget needs (their slow paths and the
 // host-fault spill store x20-x27), so callers must not emit anything that
 // clobbers x3 between this and their gadget.
@@ -1058,8 +1059,20 @@ __attribute__((unused)) static bool gen_amd64_m16_operand(struct gen_state *stat
     bool has_base = (meta & AMD64_JIT_MEM_HAS_BASE) != 0;
     bool has_index = (meta & AMD64_JIT_MEM_HAS_INDEX) != 0;
     bool rip_rel = (meta & AMD64_JIT_MEM_RIP_REL) != 0;
-    if (insn->address_size_prefix || (meta & (AMD64_JIT_MEM_FS | AMD64_JIT_MEM_GS)))
+    if (insn->address_size_prefix)
         return false;
+    if (meta & (AMD64_JIT_MEM_FS | AMD64_JIT_MEM_GS)) {
+        // %fs:disp / %gs:disp alone: x3 = the segment base, then base 17.
+        // A segment with a base or index register stays generic.
+        extern void gadget_amd64_ea_fs(void), gadget_amd64_ea_gs(void);
+        if (rip_rel || has_base || has_index)
+            return false;
+        gen_amd64_ensure_reg_cache(state);
+        gen(state, (unsigned long) ((meta & AMD64_JIT_MEM_FS) ? gadget_amd64_ea_fs : gadget_amd64_ea_gs));
+        *slot = 17;
+        *word = disp;
+        return true;
+    }
     if (rip_rel) {
         if (has_base || has_index)
             return false;
@@ -14176,8 +14189,11 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
     // flags are set eagerly. Mirrors the cached_arith_reg_reg coverage (ADC/SBB and
     // byte forms 0x02/2a/3a keep bridging; 16-bit bridges). Same flush+#PF-reexec
     // discipline as MOV; FS-prefix and address-size forms bridge.
+    // An %fs/%gs operand is fine here: the meta word carries it, which both
+    // the register-cache gadgets (gen_amd64_m16_operand) and amd64_vmem_addr
+    // add the segment base for (the stack protector's %fs:0x28 is the usual one).
     if (!insn.two_byte_opcode && !insn.address_size_prefix &&
-            !insn.seg_prefix && !insn.lock_prefix && !insn.operand_size_prefix &&
+            !insn.lock_prefix && !insn.operand_size_prefix &&
             insn.rep_mode == amd64_jit_rep_none && insn.has_modrm &&
             amd64_modrm_mod(insn.modrm) != 3 &&
             (insn.opcode == 0x03 || insn.opcode == 0x2b || insn.opcode == 0x3b)) {
@@ -14233,8 +14249,11 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
     // Native load-op logic: reg <op>= [mem] for OR (0x0b), AND (0x23), XOR (0x33),
     // mod!=3, 32/64-bit (no 0x66). Same as load-op arith but the logic flag rule
     // (CF=OF=0, ZF/SF/PF from result). Byte forms (0x0a/22/32), TEST, 16-bit bridge.
+    // An %fs/%gs operand is fine here: the meta word carries it, which both
+    // the register-cache gadgets (gen_amd64_m16_operand) and amd64_vmem_addr
+    // add the segment base for (the stack protector's %fs:0x28 is the usual one).
     if (!insn.two_byte_opcode && !insn.address_size_prefix &&
-            !insn.seg_prefix && !insn.lock_prefix && !insn.operand_size_prefix &&
+            !insn.lock_prefix && !insn.operand_size_prefix &&
             insn.rep_mode == amd64_jit_rep_none && insn.has_modrm &&
             amd64_modrm_mod(insn.modrm) != 3 &&
             (insn.opcode == 0x0b || insn.opcode == 0x23 || insn.opcode == 0x33)) {

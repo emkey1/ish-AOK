@@ -11341,6 +11341,15 @@ amd64_r16_family amd64_r16_ri, amd64_shi16, sar
 .endm
 amd64_r16_rr amd64_ea_scales, 0, 0, x, 0, 0
 amd64_r16_srcs amd64_ea_scales, 0, 0, x, 0, 0, 16, 0
+# x3 = the %fs / %gs base, for an operand that is just %fs:disp or %gs:disp
+# (the stack-protector canary at %fs:0x28, __thread variables): the memory
+# gadget after it adds the disp as for an indexed operand (base 17).
+.gadget amd64_ea_fs
+    ldr x3, [_cpu, CPU_tls_ptr]
+    gret_nomem
+.gadget amd64_ea_gs
+    ldr x3, [_cpu, CPU_amd64_gs_base]
+    gret_nomem
 
 # lea r32/r64 per register: amd64_lea<size>_<dst>_<base>: dst = base + disp;
 # amd64_movi<size>_<dst>: dst = the operand (a rip-relative lea, worked out
