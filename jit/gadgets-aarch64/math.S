@@ -10342,11 +10342,30 @@ NAME(amd64_specmem_start):
 .endif
 .endm
 
-# add/sub/cmp r32/r64, [base + disp] or [rip + disp], and cmp [mem], r32/r64
-# (op cmpm, the memory operand on the left): amd64_slo_*, full and _nf like
+# add/sub/cmp/or/and/xor r32/r64, [base + disp] or [rip + disp], and cmp
+# [mem], r32/r64 (op cmpm, the memory operand on the left): amd64_slo_*
+# (ops in table order add sub cmp cmpm or and xor), full and _nf like
 # the arith families. The _nf CMPs still perform the load: the access can
 # fault even when its flags are dead. Operands: [disp or address][insn
 # rip]; gret 2.
+# The or/and/xor r, [mem] body of amd64_slo16: the loaded operand is in
+# \R\()10, the result goes to the register with logic flags (full) or none.
+.macro amd64_slo_logic op, s, R, nf, d, hd
+    ldr \R\()10, [x9]
+    .if \nf
+    amd64_r16_op_into \op, \R, \d, \hd, \R\()10
+    .else
+    .if \d < 8
+    amd64_r16_op \op, 0, \R\()15, \R\hd, \R\()10
+    .else
+    ldr \R\()13, [_cpu, CPU_amd64_regs + 8 * \d]
+    amd64_r16_op \op, 0, \R\()15, \R\()13, \R\()10
+    .endif
+    amd64_r16_put 15, \d, \hd
+    mov x11, \s
+    amd64_cached_set_logic_flags x15, x11
+    .endif
+.endm
 .macro amd64_slo16 op, s, R, bits, nf, d, hd, b, hb
 .if \nf
     .if \b == 16
@@ -10379,6 +10398,15 @@ NAME(amd64_specmem_start):
     amd64_cached_set_addsub_flags \bits
     .endif
     .else
+    .ifc \op, or
+    amd64_slo_logic \op, \s, \R, \nf, \d, \hd
+    .else
+    .ifc \op, and
+    amd64_slo_logic \op, \s, \R, \nf, \d, \hd
+    .else
+    .ifc \op, xor
+    amd64_slo_logic \op, \s, \R, \nf, \d, \hd
+    .else
     ldr \R\()10, [x9]
     .if \nf == 0
     amd64_r16_get \R, 13, \d, \hd
@@ -10397,6 +10425,9 @@ NAME(amd64_specmem_start):
     .else
     .ifnc \op, cmp
     amd64_r16_op_into \op, \R, \d, \hd, \R\()10
+    .endif
+    .endif
+    .endif
     .endif
     .endif
     .endif
@@ -10436,6 +10467,9 @@ amd64_r16_family amd64_r16_rr17, amd64_slo16, add
 amd64_r16_family amd64_r16_rr17, amd64_slo16, sub
 amd64_r16_family amd64_r16_rr17, amd64_slo16, cmp
 amd64_r16_family amd64_r16_rr17, amd64_slo16, cmpm
+amd64_r16_family amd64_r16_rr17, amd64_slo16, or
+amd64_r16_family amd64_r16_rr17, amd64_slo16, and
+amd64_r16_family amd64_r16_rr17, amd64_slo16, xor
 
 # 16-bit and byte moves on the register cache, any of the sixteen registers
 # and the same 18 bases: amd64_smx_<kind>_<reg>_<base> (base r for rip, x
@@ -10636,6 +10670,32 @@ amd64_r16_family amd64_r16_rr17, amd64_slo16, cmpm
 .endm
 amd64_r16_ri amd64_spp16, push, 64, x, 63, 0
 amd64_r16_ri amd64_spp16, pop, 64, x, 63, 0
+# Enter the block for the guest address in x10 through jit_frame.ret_cache,
+# which the frontend fills with the blocks it dispatches -- keyed, and
+# validated against block->addr and is_jetsam, exactly as the arm64 guest's
+# ret_cache_dispatch does -- by the same chain path a jmp takes (poke check,
+# chain budget). On a miss, write the register cache back and leave to C with
+# rip = x10. Ends the gadget; uses label 8.
+.macro amd64_rc_dispatch
+    eor x12, x10, x10, lsr #12
+    ubfx x12, x12, #1, #12
+    mov x13, LOCAL_ret_cache
+    add x13, _cpu, x13
+    ldr x13, [x13, x12, lsl #3]
+    cbz x13, 8f
+    ldur x14, [x13, #(JIT_BLOCK_addr - JIT_BLOCK_code)]
+    cmp x14, x10
+    b.ne 8f
+    ldurb w14, [x13, #(JIT_BLOCK_is_jetsam - JIT_BLOCK_code)]
+    cbnz w14, 8f
+    mov _ip, x13
+    amd64_chain_ip
+8:  amd64_spill_low8
+    str x10, [_cpu, CPU_amd64_rip]
+    str w10, [_cpu, CPU_eip]
+    b jit_ret
+.endm
+
 # ret on the register cache: pop the return address (rsp is x27) and, when
 # the frontend has published a block for it in jit_frame.ret_cache, enter it
 # directly -- keyed, and validated against block->addr and is_jetsam,
@@ -10653,25 +10713,9 @@ amd64_r16_ri amd64_spp16, pop, 64, x, 63, 0
     cmp x12, x10
     b.ne 7f
     add x27, x27, 8
-    eor x12, x10, x10, lsr #12
-    ubfx x12, x12, #1, #12
-    mov x13, LOCAL_ret_cache
-    add x13, _cpu, x13
-    ldr x13, [x13, x12, lsl #3]
-    cbz x13, 8f
-    ldur x14, [x13, #(JIT_BLOCK_addr - JIT_BLOCK_code)]
-    cmp x14, x10
-    b.ne 8f
-    ldurb w14, [x13, #(JIT_BLOCK_is_jetsam - JIT_BLOCK_code)]
-    cbnz w14, 8f
-    mov _ip, x13
-    amd64_chain_ip
+    amd64_rc_dispatch
 7:  amd64_spill_low8
     b amd64_branch_noncanonical
-8:  amd64_spill_low8
-    str x10, [_cpu, CPU_amd64_rip]
-    str w10, [_cpu, CPU_eip]
-    b jit_ret
     amd64_svread_bullshit 8, sret
 
 # push imm (and a call's return address) on the register cache:
@@ -10751,6 +10795,94 @@ amd64_r16_ri amd64_spp16, pop, 64, x, 63, 0
     amd64_r16_srcs17 amd64_sim16, \op, 64, x, 63, 0, 0, 0
     amd64_r16_srcs17 amd64_sim16, \op, 64, x, 63, 1, 0, 0
 .endr
+
+# Indirect jmp/call on the register cache, entering the target through the
+# return cache like amd64_sret: amd64_sjmpr_<reg> / amd64_scallr_<reg> (target
+# in a register, any of the sixteen) and amd64_sjmpm_<base> /
+# amd64_scallm_<base> (target loaded from [base + disp], the 18 bases --
+# PLT `jmp *x(%rip)`, vtables). x86 order: the target is read first, then a
+# call pushes the return address (rsp committed after the store). A
+# non-canonical target is #GP at the instruction, rsp unchanged. Operands:
+# jmpr [insn rip]; callr [return address][insn rip]; jmpm [disp or
+# address][insn rip]; callm [disp or address][insn rip][return address].
+.macro amd64_sjr16 op, s, R, bits, nf, r, hr
+.ifc \op, jmp
+.gadget amd64_sjmpr_\r
+    ldr x8, [_ip]
+.else
+.gadget amd64_scallr_\r
+    ldr x8, [_ip, 8]
+.endif
+    str x8, [_cpu, CPU_amd64_rip]
+    .if \r < 8
+    mov x10, x\hr
+    .else
+    ldr x10, [_cpu, CPU_amd64_regs + 8 * \r]
+    .endif
+    sbfx x12, x10, 0, 48
+    cmp x12, x10
+    b.ne 7f
+.ifc \op, call
+    sub x9, x27, 8
+    amd64_svwrite_prep 8, scallr_\r
+    ldr x11, [_ip]
+    str x11, [x9]
+    amd64_svwrite_done 8, scallr_\r
+    sub x27, x27, 8
+.endif
+    amd64_rc_dispatch
+7:  amd64_spill_low8
+    b amd64_branch_noncanonical
+.ifc \op, call
+    amd64_svwrite_bullshit 8, scallr_\r
+.endif
+.endm
+amd64_r16_ri amd64_sjr16, jmp, 64, x, 63, 0
+amd64_r16_ri amd64_sjr16, call, 64, x, 63, 0
+.macro amd64_sjm16 op, s, R, bits, nf, d, hd, b, hb
+.ifc \op, jmp
+    .if \b == 16
+    .gadget amd64_sjmpm_r
+    .elseif \b == 17
+    .gadget amd64_sjmpm_x
+    .else
+    .gadget amd64_sjmpm_\b
+    .endif
+.else
+    .if \b == 16
+    .gadget amd64_scallm_r
+    .elseif \b == 17
+    .gadget amd64_scallm_x
+    .else
+    .gadget amd64_scallm_\b
+    .endif
+.endif
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    amd64_m16_addr \b, \hb
+    amd64_vread_prep 8, s\op\()m_\b\()_r
+    ldr x10, [x9]
+    sbfx x12, x10, 0, 48
+    cmp x12, x10
+    b.ne 7f
+.ifc \op, call
+    sub x9, x27, 8
+    amd64_svwrite_prep 8, s\op\()m_\b\()_w
+    ldr x11, [_ip, 16]
+    str x11, [x9]
+    amd64_svwrite_done 8, s\op\()m_\b\()_w
+    sub x27, x27, 8
+.endif
+    amd64_rc_dispatch
+7:  amd64_spill_low8
+    b amd64_branch_noncanonical
+    amd64_svread_bullshit 8, s\op\()m_\b\()_r
+.ifc \op, call
+    amd64_svwrite_bullshit 8, s\op\()m_\b\()_w
+.endif
+.endm
+amd64_r16_srcs17 amd64_sjm16, jmp, 64, x, 63, 0, 0, 0
+amd64_r16_srcs17 amd64_sjm16, call, 64, x, 63, 0, 0, 0
 .global NAME(amd64_specmem_end)
 NAME(amd64_specmem_end):
 # Tables: amd64_smem_gadgets[((st * 2 + size64) * 16 + reg) * 18 + base]
@@ -10866,7 +10998,35 @@ NAME(amd64_specmem_end):
 .macro amd64_spp_quad op, r
     .quad NAME(gadget_amd64_s\op\()_\r)
 .endm
+.macro amd64_sjr_quad op, r
+    .quad NAME(gadget_amd64_s\op\()r_\r)
+.endm
+.macro amd64_sjm_quad op, b
+    .if \b == 16
+    .quad NAME(gadget_amd64_s\op\()m_r)
+    .elseif \b == 17
+    .quad NAME(gadget_amd64_s\op\()m_x)
+    .else
+    .quad NAME(gadget_amd64_s\op\()m_\b)
+    .endif
+.endm
 .pushsection_rodata
+.global.name amd64_sjmpr_gadgets
+    .irp r, 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
+        amd64_sjr_quad jmp, \r
+    .endr
+.global.name amd64_scallr_gadgets
+    .irp r, 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
+        amd64_sjr_quad call, \r
+    .endr
+.global.name amd64_sjmpm_gadgets
+    .irp b, 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17
+        amd64_sjm_quad jmp, \b
+    .endr
+.global.name amd64_scallm_gadgets
+    .irp b, 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17
+        amd64_sjm_quad call, \b
+    .endr
 .global.name amd64_spush_gadgets
     .irp r, 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
         amd64_spp_quad push, \r
@@ -10897,11 +11057,17 @@ NAME(amd64_specmem_end):
     amd64_slo_ops sub, 0
     amd64_slo_ops cmp, 0
     amd64_slo_ops cmpm, 0
+    amd64_slo_ops or, 0
+    amd64_slo_ops and, 0
+    amd64_slo_ops xor, 0
 .global.name amd64_slo_nf_gadgets
     amd64_slo_ops add, 1
     amd64_slo_ops sub, 1
     amd64_slo_ops cmp, 1
     amd64_slo_ops cmpm, 1
+    amd64_slo_ops or, 1
+    amd64_slo_ops and, 1
+    amd64_slo_ops xor, 1
 .popsection
 
 # inc/dec r32/r64 per register, all sixteen: amd64_idr_<op><size>_<reg>,

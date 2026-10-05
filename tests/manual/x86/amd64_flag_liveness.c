@@ -97,7 +97,7 @@ static void emit_mem_one(void) {
     use_rbp = (int) (rnd() & 1);
     if (rnd() % 4 == 0) { // the indexed and the 16-bit / byte forms
         int lowbyte_rex = (a & 8) || (rnd() & 1); // REX makes a's low byte addressable
-        switch (rnd() % 12) {
+        switch (rnd() % 13) {
             case 9: { // inc/dec [m] (FF /0, /1), plain or indexed
                 int ext = (int) (rnd() & 1);
                 if (rnd() & 1) { set_r14(); rex_sib(w, 0); b(0xff); sib_operand(ext); }
@@ -113,6 +113,18 @@ static void emit_mem_one(void) {
                 break;
             }
             case 11: rex_mem_any(w, a); b(0x39); mem_any(a); break;                       // cmp [m], a
+            case 12: { // jmp *a / call *a to the next instruction (a = lea [rip + len])
+                int is_call = (int) (rnd() & 1), len = (a & 8) ? 3 : 2;
+                b((uint8_t) (0x48 | ((a & 8) ? 4 : 0))); b(0x8d); b((uint8_t) (0x05 | (a & 7) << 3));
+                uint32_t d = (uint32_t) len; memcpy(p, &d, 4); p += 4;
+                if (a & 8) b(0x41);
+                b(0xff); b((uint8_t) (0xc0 | (is_call ? 2 : 4) << 3 | (a & 7)));
+                if (is_call) { // the pushed return address is the target: pop it into a
+                    if (a & 8) b(0x41);
+                    b((uint8_t) (0x58 + (a & 7)));
+                }
+                break;
+            }
             case 0: set_r14(); rex_sib(w, a); b(0x8b); sib_operand(a); break;             // mov a, [b+i*s+d]
             case 1: set_r14(); rex_sib(w, a); b(0x89); sib_operand(a); break;             // mov [b+i*s+d], a
             case 2: set_r14(); rex_sib(w, a); b(rnd() & 1 ? 0x03 : 0x3b); sib_operand(a); break; // add/cmp a, [..]
@@ -144,7 +156,8 @@ static void emit_mem_one(void) {
         case 1: rex_mem_any(w, a); b(0x89); mem_any(a); break;            // mov [m], a
         case 2: rex_mem_any(w, a); b(rnd() & 1 ? 0x03 : 0x2b); mem_any(a); break; // add/sub a, [m]
         case 3: rex_mem_any(w, a); b(0x3b); mem_any(a); break;            // cmp a, [m]
-        case 4: rex_mem(w, a); b(rnd() & 1 ? 0x23 : 0x33); mem_operand(a); break; // and/xor a, [m]
+        case 4: { static const uint8_t lo[] = {0x0b, 0x23, 0x33};                 // or/and/xor a, [m]
+            rex_mem_any(w, a); b(lo[rnd() % 3]); mem_any(a); break; }
         case 5: rex_mem_any(w, a); b(rnd() & 1 ? 0x01 : 0x39); mem_any(a); break; // add/cmp [m], a
         case 6: rex_mem(w, a); b(0x0f); b(0xb6); mem_operand(a); break;   // movzx a, byte [m]
         case 7: rex_mem(0, a); b(0x02); mem_operand(a); break;            // add a8, [m] (REX: no ah..bh)
