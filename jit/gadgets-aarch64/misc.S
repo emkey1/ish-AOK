@@ -558,6 +558,62 @@ do_helper_tlb_retint 2
     str q0, [x9]
     gret_nomem 1
 
+# A few register-form integer ops the same way (all of cpu->xmm, no C call):
+#   vec_pshufd: dst.d[i] = src.d[(imm >> 2i) & 3]       [gadget][src | dst << 16 | imm << 32]
+#   vec_pxor / vec_paddq: dst ^= src / dst.q[i] += src.q[i]  [gadget][src | dst << 16]
+#   vec_psrlq_imm / vec_psllq_imm: each qword shifted, 0 past 63  [gadget][xmm | count << 16]
+.gadget vec_pshufd
+    ldrh w8, [_ip]
+    ldrh w9, [_ip, 2]
+    ldrb w10, [_ip, 4]
+    add x8, _cpu, x8
+    add x9, _cpu, x9
+    and w11, w10, 3
+    ldr w12, [x8, x11, lsl 2]
+    ubfx w11, w10, 2, 2
+    ldr w13, [x8, x11, lsl 2]
+    ubfx w11, w10, 4, 2
+    ldr w14, [x8, x11, lsl 2]
+    ubfx w11, w10, 6, 2
+    ldr w15, [x8, x11, lsl 2]
+    stp w12, w13, [x9]
+    stp w14, w15, [x9, 8]
+    gret_nomem 1
+.irp op, pxor,paddq
+.gadget vec_\op
+    ldrh w8, [_ip]
+    ldrh w9, [_ip, 2]
+    add x8, _cpu, x8
+    add x9, _cpu, x9
+    ldr q0, [x8]
+    ldr q1, [x9]
+    .ifc \op, pxor
+    eor v1.16b, v1.16b, v0.16b
+    .else
+    add v1.2d, v1.2d, v0.2d
+    .endif
+    str q1, [x9]
+    gret_nomem 1
+.endr
+.irp dir, r,l
+.gadget vec_ps\dir\()lq_imm
+    ldrh w8, [_ip]
+    ldrb w9, [_ip, 2]
+    add x8, _cpu, x8
+    ldr q0, [x8]
+    mov w10, 64
+    cmp w9, 64
+    csel w9, w9, w10, lo   // a count past 63 clears: ushl by +-64 gives 0
+    .ifc \dir, r
+    neg w9, w9
+    .endif
+    sxtw x9, w9
+    dup v1.2d, x9
+    ushl v0.2d, v0.2d, v1.2d
+    str q0, [x8]
+    gret_nomem 1
+.endr
+
 .gadget fstsw_ax
     ldrh w10, [_cpu, CPU_fsw]
     movs eax, w10, h

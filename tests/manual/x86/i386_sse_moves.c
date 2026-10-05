@@ -1,6 +1,7 @@
 // i386_sse_moves.c -- random runs of the SSE moves AOK's i386 JIT does
 // natively (jit/gen.c gen_vec: movd between xmm and a general register or
-// memory, movq/movsd/movss loads and stores, movq xmm to xmm, punpckldq)
+// memory, movq/movsd/movss loads and stores, movq xmm to xmm, punpckldq,
+// pshufd, pxor, paddq, psrlq/psllq by an immediate)
 // mixed with plain register moves, then every general register, xmm0-7 and
 // the memory they touched, printed. Run it under two builds (or on Linux)
 // and diff the output; the memory operands include unaligned ones and ones
@@ -36,7 +37,14 @@ static void mem_operand(int reg) { // [abs32] near the page boundary: modrm mod=
 
 static void emit_one(void) {
     int x = (int) (rnd() % 8), y = (int) (rnd() % 8), g = gprs[rnd() % 6];
-    switch (rnd() % 12) {
+    switch (rnd() % 16) {
+        case 12: b(0x66); b(0x0f); b(0x70); b((uint8_t) (0xc0 | x << 3 | y)); b((uint8_t) rnd()); break; // pshufd
+        case 13: b(0x66); b(0x0f); b(rnd() & 1 ? 0xef : 0xd4); b((uint8_t) (0xc0 | x << 3 | y)); break; // pxor/paddq
+        case 14: case 15: { // psrlq/psllq xmm, imm8: counts 0, 1, 63, 64 and past
+            static const uint8_t cnt[] = {0, 1, 7, 32, 63, 64, 65, 127, 128, 200, 255};
+            b(0x66); b(0x0f); b(0x73); b((uint8_t) (0xc0 | (rnd() & 1 ? 2 : 6) << 3 | x));
+            b(cnt[rnd() % 11]); break;
+        }
         case 0: b(0x66); b(0x0f); b(0x6e); b((uint8_t) (0xc0 | x << 3 | g)); break;   // movd xmm, r32
         case 1: b(0x66); b(0x0f); b(0x7e); b((uint8_t) (0xc0 | x << 3 | g)); break;   // movd r32, xmm
         case 2: b(0x66); b(0x0f); b(0x6e); mem_operand(x); break;                      // movd xmm, m32

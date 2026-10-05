@@ -17190,6 +17190,14 @@ static inline bool gen_vec(enum arg src, enum arg dst, void (*helper)(), gadget_
     // vec_ld*/vec_st*, vec_copy64z, vec_punpckldq): movd between an xmm and
     // a general register or memory, movq/movsd/movss loads and stores, movq
     // xmm to xmm, punpckldq -- what i386 gcc moves 64-bit values with.
+    if (has_imm && helper == (void (*)()) vec_shuffle_d128 && rm_is_src &&
+            src == arg_xmm_modrm_val && dst == arg_xmm_modrm_reg && modrm->type == modrm_reg) {
+        extern void gadget_vec_pshufd(void); // pshufd xmm, xmm, imm8
+        GEN(gadget_vec_pshufd);
+        GEN(CPU_OFFSET(xmm[modrm->rm_opcode & 7]) | ((uint64_t) CPU_OFFSET(xmm[modrm->opcode & 7]) << 16) |
+                ((uint64_t) imm << 32));
+        return true;
+    }
     if (!has_imm) {
         extern void gadget_vec_movd_to_reg_a(void), gadget_vec_movd_to_reg_c(void),
                 gadget_vec_movd_to_reg_d(void), gadget_vec_movd_to_reg_b(void),
@@ -17242,6 +17250,21 @@ static inline bool gen_vec(enum arg src, enum arg dst, void (*helper)(), gadget_
             GEN(helper == (void (*)()) vec_merge32 ? gadget_vec_st32 : gadget_vec_st64);
             GEN(state->orig_ip);
             GEN(xoff);
+            return true;
+        }
+        if (rm == arg_xmm_modrm_val && rm_reg && xmm_reg && rm_is_src &&
+                (helper == (void (*)()) vec_xor_dq128 || helper == (void (*)()) vec_add_q128)) {
+            extern void gadget_vec_pxor(void), gadget_vec_paddq(void);
+            GEN(helper == (void (*)()) vec_xor_dq128 ? gadget_vec_pxor : gadget_vec_paddq);
+            GEN(CPU_OFFSET(xmm[modrm->rm_opcode & 7]) | ((uint64_t) xoff << 16));
+            return true;
+        }
+        if (rm == arg_imm && (helper == (void (*)()) vec_imm_shiftr_q128 ||
+                helper == (void (*)()) vec_imm_shiftl_q128) && reg == arg_xmm_modrm_reg) {
+            // psrlq/psllq xmm, imm8: the register is in the rm field
+            extern void gadget_vec_psrlq_imm(void), gadget_vec_psllq_imm(void);
+            GEN(helper == (void (*)()) vec_imm_shiftr_q128 ? gadget_vec_psrlq_imm : gadget_vec_psllq_imm);
+            GEN(CPU_OFFSET(xmm[modrm->rm_opcode & 7]) | ((uint64_t) imm << 16));
             return true;
         }
         if (rm == arg_xmm_modrm_val && rm_reg && xmm_reg &&
