@@ -46,12 +46,36 @@
 .macro fpop_div o, a, b
     fdiv \o, \a, \b
 .endm
-// RISC-V fmin/fmax return the non-NaN operand = AArch64 fminnm/fmaxnm
-.macro fpop_min o, a, b
-    fminnm \o, \a, \b
+// RISC-V fmin/fmax (minimumNumber) return the non-NaN operand -- which is
+// AArch64 fminnm/fmaxnm, except against a signalling NaN, where those give
+// the default NaN: put the other operand back then (NV is raised either
+// way). Operands in \r16/\r17, the result in \r16, \r18 scratch.
+.macro fp_minmax insn, r
+    \insn \r\()18, \r\()16, \r\()17
+    fcmp \r\()16, \r\()16
+    b.vc 1f
+    fcmp \r\()17, \r\()17
+    b.vs 2f
+    fmov \r\()18, \r\()17
+    b 2f
+1:  fcmp \r\()17, \r\()17
+    b.vc 2f
+    fmov \r\()18, \r\()16
+2:  fmov \r\()16, \r\()18
+.endm
+.macro fpop_min o, a, b             // (o, a, b) = (d16|s16, \o, 17)
+.ifc \o, d16
+    fp_minmax fminnm, d
+.else
+    fp_minmax fminnm, s
+.endif
 .endm
 .macro fpop_max o, a, b
-    fmaxnm \o, \a, \b
+.ifc \o, d16
+    fp_minmax fmaxnm, d
+.else
+    fp_minmax fmaxnm, s
+.endif
 .endm
 
 .macro fp_d_gadget op
@@ -199,19 +223,46 @@ cvt_i2f_gadget fcvt_s_l,  scvtf, x12, s16, 1
 cvt_i2f_gadget fcvt_s_lu, ucvtf, x12, s16, 1
 
 // fp -> int: gen picks the variant by rm -- n/z/m/p/a for RNE, RTZ, RDN,
-// RUP and RMM (fcvta is ties-away, exactly RMM), and x for DYN: frintx
-// rounds by the host FPCR, which is frm, raising NX as needed, and the
-// fcvtz after it is exact. A NaN converts to the largest value of the
+// RUP and RMM (fcvta is ties-away, exactly RMM), and x for DYN: frinti
+// rounds by the host FPCR, which is frm, and the fcvtz after it is exact
+// (see the gadget for the flags). A NaN converts to the largest value of the
 // destination on RISC-V (aarch64 gives 0), and the invalid flag either way.
 // W results sign-extend into rd per RV64, which also makes .wu's all-ones.
 .macro cvt_f2i_gadget name, round, insn, src, dst, sext, nanval
 .gadget \name
     fp_head
     ldr \src, [x10]
+.ifc \round, frintx
+    // DYN: frinti rounds by the FPCR (frm) and raises nothing; the convert's
+    // IOC then says whether the value was in range. RISC-V raises NV alone
+    // out of range, and NX only for an inexact result in range.
+    mrs x13, fpsr
+    bic x14, x13, #1
+    msr fpsr, x14
+.ifc \src, d16
+    frinti d18, d16
+    \insn \dst, d18
+.else
+    frinti s18, s16
+    \insn \dst, s18
+.endif
+    mrs x14, fpsr
+    tbnz x14, #0, 3f
+.ifc \src, d16
+    fcmp d18, d16
+.else
+    fcmp s18, s16
+.endif
+    b.eq 3f
+    orr x14, x14, #16
+3:  orr x14, x14, x13
+    msr fpsr, x14
+.else
 .ifnb \round
     \round \src, \src
 .endif
     \insn \dst, \src
+.endif
     fcmp \src, \src
     b.vc 1f
     mov x12, #\nanval
