@@ -193,8 +193,24 @@ static inline uint32_t riscv64_expand_rvc(uint16_t c) {
             uint32_t imm = (((c >> 10) & 7) << 3) | (((c >> 5) & 3) << 6);
             return riscv64_enc_s(RISCV64_OP_STORE, 3, rs1p, rdp, imm);
         }
+        case 4: { // Zcb byte/halfword loads and stores (RV128's c.lq slot)
+            unsigned u1 = (c >> 5) & 1, u0 = (c >> 6) & 1;
+            switch ((c >> 10) & 7) {
+            case 0: // c.lbu -> lbu rd', uimm(rs1'), uimm[1:0] = c[5|6]
+                return riscv64_enc_i(RISCV64_OP_LOAD, rdp, 4, rs1p, u1 << 1 | u0);
+            case 1: // c.lhu / c.lh (c[6]) -> lhu / lh rd', uimm(rs1'), uimm[1] = c[5]
+                return riscv64_enc_i(RISCV64_OP_LOAD, rdp, u0 ? 1 : 5, rs1p, u1 << 1);
+            case 2: // c.sb -> sb rs2', uimm(rs1')
+                return riscv64_enc_s(RISCV64_OP_STORE, 0, rs1p, rdp, u1 << 1 | u0);
+            case 3: // c.sh -> sh rs2', uimm(rs1'); c[6] = 1 reserved
+                if (u0)
+                    return 0;
+                return riscv64_enc_s(RISCV64_OP_STORE, 1, rs1p, rdp, u1 << 1);
+            }
+            return 0; // reserved
+        }
         default:
-            return 0; // funct3=4 reserved (c.lq is RV128)
+            return 0; // reserved
         }
 
     case 1: {
@@ -221,8 +237,13 @@ static inline uint32_t riscv64_expand_rvc(uint16_t c) {
             } else { // c.lui -> lui rd, nzimm (rd=0: HINT, expand anyway)
                 int64_t imm = riscv64_sext((((uint64_t) (c >> 12) & 1) << 17)
                                          | (((c >> 2) & 0x1f) << 12), 18);
-                if (imm == 0)
+                if (imm == 0) {
+                    // Zcmop: c.mop.n is c.lui x1/x3/.../x15, 0 and writes
+                    // nothing -> a nop (addi x0, x0, 0)
+                    if ((rd & 1) && rd < 16 && ((c >> 2) & 0x1f) == 0 && ((c >> 12) & 1) == 0)
+                        return riscv64_enc_i(RISCV64_OP_OP_IMM, 0, 0, 0, 0);
                     return 0; // reserved
+                }
                 return riscv64_enc_u(RISCV64_OP_LUI, rd, imm);
             }
         case 4: { // misc-alu on rs1'/rd'
@@ -251,6 +272,23 @@ static inline uint32_t riscv64_expand_rvc(uint16_t c) {
                         return riscv64_enc_r(RISCV64_OP_OP_32, rs1p, 0, rs1p, rdp, 0x20);
                     if (op3 == 1) // c.addw -> addw
                         return riscv64_enc_r(RISCV64_OP_OP_32, rs1p, 0, rs1p, rdp, 0);
+                    if (op3 == 2) // Zcb c.mul -> mul rd', rd', rs2'
+                        return riscv64_enc_r(RISCV64_OP_OP, rs1p, 0, rs1p, rdp, 0x01);
+                    // Zcb unary ops on rd', chosen by c[4:2]
+                    switch ((c >> 2) & 7) {
+                    case 0: // c.zext.b -> andi rd', rd', 255
+                        return riscv64_enc_i(RISCV64_OP_OP_IMM, rs1p, 7, rs1p, 0xff);
+                    case 1: // c.sext.b -> sext.b (Zbb)
+                        return riscv64_enc_i(RISCV64_OP_OP_IMM, rs1p, 1, rs1p, 0x604);
+                    case 2: // c.zext.h -> zext.h (Zbb)
+                        return riscv64_enc_r(RISCV64_OP_OP_32, rs1p, 4, rs1p, 0, 0x04);
+                    case 3: // c.sext.h -> sext.h (Zbb)
+                        return riscv64_enc_i(RISCV64_OP_OP_IMM, rs1p, 1, rs1p, 0x605);
+                    case 4: // c.zext.w -> add.uw rd', rd', x0 (Zba)
+                        return riscv64_enc_r(RISCV64_OP_OP_32, rs1p, 0, rs1p, 0, 0x04);
+                    case 5: // c.not -> xori rd', rd', -1
+                        return riscv64_enc_i(RISCV64_OP_OP_IMM, rs1p, 4, rs1p, -1);
+                    }
                     return 0; // reserved
                 }
             }

@@ -431,3 +431,175 @@ andi_branch bnez, ne, eq
     add x14, x14, x10
     str x14, [_cpu, x12]
     gret 5
+
+// ---- Zba, Zbb, Zbs, Zicond (RVA23U64's scalar bit-manipulation) -----------
+// Same streams as above: reg-reg [gadget][rd_off][rs1_off][rs2_off], reg-imm
+// and unary [gadget][rd_off][rs1_off][imm] (unary ops ignore the imm).
+// x10 = rs1, x11 = rs2 or imm on entry; the result goes back in x10.
+.macro rv_rr name, insn:vararg
+.gadget \name\()_rr
+    alu_rr_head
+    \insn
+    alu_tail
+.endm
+.macro rv_ri name, insn:vararg
+.gadget \name\()_ri
+    alu_head
+    \insn
+    alu_tail
+.endm
+
+// Zba: shNadd rd = rs2 + (rs1 << N); the .uw forms take rs1's low word,
+// zero-extended; slli.uw shifts that word left by the immediate.
+rv_rr sh1add, add x10, x11, x10, lsl #1
+rv_rr sh2add, add x10, x11, x10, lsl #2
+rv_rr sh3add, add x10, x11, x10, lsl #3
+rv_rr add_uw, add x10, x11, w10, uxtw
+rv_rr sh1add_uw, add x10, x11, w10, uxtw #1
+rv_rr sh2add_uw, add x10, x11, w10, uxtw #2
+rv_rr sh3add_uw, add x10, x11, w10, uxtw #3
+.gadget slli_uw_ri
+    alu_head
+    mov w10, w10
+    lsl x10, x10, x11
+    alu_tail
+
+// Zbb
+rv_rr andn, bic x10, x10, x11
+rv_rr orn, orn x10, x10, x11
+rv_rr xnor, eon x10, x10, x11
+rv_ri clz, clz x10, x10
+rv_ri clzw, clz w10, w10
+.gadget ctz_ri
+    alu_head
+    rbit x10, x10
+    clz x10, x10
+    alu_tail
+.gadget ctzw_ri
+    alu_head
+    rbit w10, w10
+    clz w10, w10
+    alu_tail
+.gadget cpop_ri
+    alu_head
+    fmov d0, x10
+    cnt v0.8b, v0.8b
+    addv b0, v0.8b
+    fmov w10, s0
+    alu_tail
+.gadget cpopw_ri
+    alu_head
+    mov w10, w10
+    fmov d0, x10
+    cnt v0.8b, v0.8b
+    addv b0, v0.8b
+    fmov w10, s0
+    alu_tail
+rv_ri sext_b, sxtb x10, w10
+rv_ri sext_h, sxth x10, w10
+rv_ri zext_h, uxth w10, w10
+rv_ri rev8, rev x10, x10
+.gadget orc_b_ri
+    alu_head
+    fmov d0, x10
+    cmtst v0.8b, v0.8b, v0.8b
+    fmov x10, d0
+    alu_tail
+.irp op, max,maxu,min,minu
+.gadget \op\()_rr
+    alu_rr_head
+    cmp x10, x11
+    .ifc \op, max
+    csel x10, x10, x11, gt
+    .endif
+    .ifc \op, maxu
+    csel x10, x10, x11, hi
+    .endif
+    .ifc \op, min
+    csel x10, x10, x11, lt
+    .endif
+    .ifc \op, minu
+    csel x10, x10, x11, lo
+    .endif
+    alu_tail
+.endr
+// rotates: AArch64 has only ror (by register, mod the width); rol by n is
+// ror by -n.
+.gadget rol_rr
+    alu_rr_head
+    neg x11, x11
+    ror x10, x10, x11
+    alu_tail
+rv_rr ror, ror x10, x10, x11
+rv_ri ror, ror x10, x10, x11
+.gadget rolw_rr
+    alu_rr_head
+    neg w11, w11
+    ror w10, w10, w11
+    sxtw x10, w10
+    alu_tail
+.gadget rorw_rr
+    alu_rr_head
+    ror w10, w10, w11
+    sxtw x10, w10
+    alu_tail
+.gadget rorw_ri
+    alu_head
+    ror w10, w10, w11
+    sxtw x10, w10
+    alu_tail
+
+// Zbs: the bit index is rs2 (or the immediate) mod 64.
+.irp form, rr,ri
+.gadget bclr_\form
+    .ifc \form, rr
+    alu_rr_head
+    .else
+    alu_head
+    .endif
+    mov x12, #1
+    lsl x12, x12, x11
+    bic x10, x10, x12
+    alu_tail
+.gadget bset_\form
+    .ifc \form, rr
+    alu_rr_head
+    .else
+    alu_head
+    .endif
+    mov x12, #1
+    lsl x12, x12, x11
+    orr x10, x10, x12
+    alu_tail
+.gadget binv_\form
+    .ifc \form, rr
+    alu_rr_head
+    .else
+    alu_head
+    .endif
+    mov x12, #1
+    lsl x12, x12, x11
+    eor x10, x10, x12
+    alu_tail
+.gadget bext_\form
+    .ifc \form, rr
+    alu_rr_head
+    .else
+    alu_head
+    .endif
+    lsr x10, x10, x11
+    and x10, x10, #1
+    alu_tail
+.endr
+
+// Zicond: czero.eqz rd = rs2 == 0 ? 0 : rs1; czero.nez rd = rs2 != 0 ? 0 : rs1.
+.gadget czero_eqz_rr
+    alu_rr_head
+    cmp x11, #0
+    csel x10, xzr, x10, eq
+    alu_tail
+.gadget czero_nez_rr
+    alu_rr_head
+    cmp x11, #0
+    csel x10, xzr, x10, ne
+    alu_tail

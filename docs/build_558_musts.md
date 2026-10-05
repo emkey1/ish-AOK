@@ -11,7 +11,7 @@ Started 2026-10-05, after `builds/iSH-AOK_557`. Supersedes
 
 | § | item | state |
 |---|---|---|
-| 1 | RVA23 on the riscv64 guest | **OPEN** (the maintainer put it on this list on 2026-10-05) |
+| 1 | RVA23 on the riscv64 guest | **PARTIAL**: the scalar extensions are in (2026-10-05); V (with Zvfhmin/Zvbb/Zvkt) and Supm are open |
 
 ---
 
@@ -50,7 +50,40 @@ instruction count"), so this is a speed item as well as a reach one.
   extensions, not only AT_HWCAP; the `isa` string in /proc/cpuinfo needs the
   same list.
 
-**Next step:** confirm the Ubuntu 25.10+ baseline and pull an Ubuntu riscv64
+**Done 2026-10-05 -- the scalar part, advertised as it landed:**
+- Zba, Zbb, Zbs, Zicond: gadgets in jit/guest-riscv64/alu.S, decoded by
+  gen_riscv64_bitmanip (jit/gen.c) ahead of the base OP/OP-IMM tables (the
+  register-cache classifier and the peephole fusions already reject the new
+  funct7/imm bits, so they fall through to it).
+- Zcb: c.lbu/lhu/lh/sb/sh and c.zext.b/h/w, c.sext.b/h, c.not, c.mul in
+  riscv64_expand_rvc (emu/arch/riscv64/decode.h), with llvm-mc vectors in
+  tests/riscv64/decode_vectors.h.
+- Zimop/Zcmop (rd <- 0 / nop), Zawrs (nop), Zihintpause/Zihintntl (already
+  a fence and x0 writes), Zicbop (ori x0), Zicbom (nop over coherent host
+  memory), Zicboz (cbo.zero: a gadget zeroing the 64-byte block, Zic64b).
+- Zfa (fli, fminm/fmaxm, fround/froundnx, fltq/fleq, fcvtmod.w.d -- a C
+  helper, since FJCVTZS is not on the A10X) and Zfhmin (flh/fsh,
+  fmv.x.h/fmv.h.x, fcvt between half and single/double).
+- riscv_hwprobe (syscall 258) answers for all of it (kernel/calls.c), and
+  /proc/cpuinfo's isa line lists it; AT_HWCAP keeps the single letters,
+  as Linux does.
+- Checked by tests/manual/riscv64/riscv64_rva23_scalar.c and
+  riscv64_rva23_fp.c (in the guest suite): every instruction against C
+  references built for rv64gc, a positive control per family.
+- Zkt, Za64rs, Zic64b and the Zicc* attributes need nothing here; Zihpm's
+  hpmcounters trap as on a default Linux (scounteren clear).
+
+**Left:** V (VLEN 128; with Zvfhmin, Zvbb, Zvkt), and Supm (pointer
+masking: PR_SET_TAGGED_ADDR_CTRL with a PMLEN, and the JIT masking
+addresses). An RVA23 Ubuntu is built with V as its baseline, so its
+compiled code vectorizes freely: V is what stands between AOK and booting
+one. Plan: a correct V first -- a vector state in cpu_state (32 x 128-bit,
+vtype/vl/vstart, saved in signal frames, the NT_RISCV_VECTOR regset and
+checkpoints), each V instruction a C-helper call driven by vtype -- then
+gadgets for what profiles show is hot. hwprobe/cpuinfo get V only when it is
+complete enough for glibc's ifuncs.
+
+**Next step (originally):** confirm the Ubuntu 25.10+ baseline and pull an Ubuntu riscv64
 rootfs, run it with ISH_TRACE on undefined instructions to get the order
 real code hits them in; implement the scalar extensions first (they are
 cheap and also speed up rv64gc-plus distros that use them through hwprobe),

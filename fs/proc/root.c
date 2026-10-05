@@ -176,9 +176,10 @@ static int proc_show_cpuinfo(struct proc_entry *UNUSED(entry), struct proc_data 
     }
 
     // riscv64 guests get the riscv cpuinfo format. Parsers key on the
-    // "isa" line; keep it in lockstep with kernel/exec.c's AT_HWCAP
-    // (rv64imafdc = exactly what the JIT implements; no V, no bitmanip)
-    // and the Sv39 layout from guest_abi_vm_layout.
+    // "isa" line; keep it in lockstep with what the JIT implements, with
+    // kernel/exec.c's AT_HWCAP (the single letters) and kernel/calls.c's
+    // riscv_hwprobe (the same extensions as bits), and with the Sv39 layout
+    // from guest_abi_vm_layout. Multi-letter extensions in Linux's order.
     if (abi == GUEST_ABI_RISCV64) {
         char *rv_host_architecture = copyHostArchitecture();
         char *rv_host_machine_identifier = copyHostMachineIdentifier();
@@ -188,7 +189,7 @@ static int proc_show_cpuinfo(struct proc_entry *UNUSED(entry), struct proc_data 
         for (int cpu = 0; cpu < rv_cpu_count; cpu++) {
             proc_printf(buf, "processor       : %d\n", cpu);
             proc_printf(buf, "hart            : %d\n", cpu);
-            proc_printf(buf, "isa             : rv64imafdc\n");
+            proc_printf(buf, "isa             : rv64imafdc_zicbom_zicbop_zicboz_zicntr_zicond_zicsr_zifencei_zihintntl_zihintpause_zimop_zawrs_zfa_zfhmin_zca_zcb_zcd_zcmop_zba_zbb_zbs\n");
             proc_printf(buf, "mmu             : sv39\n");
             proc_printf(buf, "uarch           : ish-aok,jit\n");
             proc_printf(buf, "host arch       : %s\n", rv_host_architecture);

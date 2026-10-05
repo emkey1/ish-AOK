@@ -6858,6 +6858,46 @@ void riscv64_csr_helper(struct cpu_state *cpu, unsigned long arg) {
 // fclass.{s,d}: classify into the 10 RISC-V class bits. Rare enough that a
 // C helper through call_helper beats eight branches of assembly.
 // arg: rd | rs1<<5 | is_d<<10
+// Zfa fcvtmod.w.d rd, rs1, rtz: the double truncated toward zero, taken
+// modulo 2^32, sign-extended -- JavaScript's ToInt32. NaN and infinity give
+// 0. NV if the value is not a 32-bit integer's (NaN, infinity, out of
+// range), else NX if it had a fraction.
+void riscv64_fcvtmod_helper(struct cpu_state *cpu, unsigned long arg) {
+    unsigned rd = arg & 31, rs1 = (arg >> 5) & 31;
+    qword_t bits = cpu->riscv64_f[rs1];
+    bool sign = bits >> 63;
+    int exp = (int) ((bits >> 52) & 0x7ff);
+    qword_t mant = (bits & 0xfffffffffffffULL) | (exp ? 1ULL << 52 : 0);
+    uint32_t low = 0;
+    dword_t flags = 0;
+    if (exp == 0x7ff) {
+        flags = 0x10; // NV
+    } else {
+        int shift = exp - 1075; // value = mant * 2^shift
+        bool frac = false;
+        if (shift >= 0) {
+            low = shift >= 32 ? 0 : (uint32_t) (mant << shift);
+        } else if (shift > -64) {
+            low = (uint32_t) (mant >> -shift);
+            frac = (mant & ((1ULL << -shift) - 1)) != 0;
+        } else {
+            frac = mant != 0;
+        }
+        // in range: |trunc| < 2^31, or exactly -2^31
+        bool in_range = exp < 1023 + 31 ||
+                (sign && exp == 1023 + 31 && (mant >> 21) == (1ULL << 31) && (mant & ((1ULL << 21) - 1)) == 0);
+        if (!in_range)
+            flags = 0x10;
+        else if (frac)
+            flags = 0x01; // NX
+        if (sign)
+            low = 0u - low;
+    }
+    cpu->riscv64_fcsr |= flags;
+    if (rd != 0)
+        cpu->riscv64_regs[rd] = (qword_t) (int64_t) (int32_t) low;
+}
+
 void riscv64_fclass_helper(struct cpu_state *cpu, unsigned long arg) {
     unsigned rd = arg & 31, rs1 = (arg >> 5) & 31;
     bool is_d = arg & (1 << 10);
@@ -7203,6 +7243,117 @@ static bool gen_riscv64_try_rcache_run(struct gen_state *state, struct tlb *tlb,
     return true;
 }
 
+// Zba, Zbb, Zbs and Zicond (RVA23U64's scalar bit-manipulation; alu.S):
+// the gadget for `insn` and its third stream word -- rs2's offset for a
+// register form, the immediate (or 0 for a unary op) otherwise -- or NULL
+// if `insn` is none of them. Encodings from the ratified spec (Zb* 1.0.0,
+// Zicond 1.0.0).
+static void (*gen_riscv64_bitmanip(uint32_t insn, uint64_t *word))(void) {
+    extern void gadget_riscv64_sh1add_rr(void), gadget_riscv64_sh2add_rr(void),
+            gadget_riscv64_sh3add_rr(void), gadget_riscv64_add_uw_rr(void),
+            gadget_riscv64_sh1add_uw_rr(void), gadget_riscv64_sh2add_uw_rr(void),
+            gadget_riscv64_sh3add_uw_rr(void), gadget_riscv64_slli_uw_ri(void),
+            gadget_riscv64_andn_rr(void), gadget_riscv64_orn_rr(void),
+            gadget_riscv64_xnor_rr(void), gadget_riscv64_clz_ri(void),
+            gadget_riscv64_clzw_ri(void), gadget_riscv64_ctz_ri(void),
+            gadget_riscv64_ctzw_ri(void), gadget_riscv64_cpop_ri(void),
+            gadget_riscv64_cpopw_ri(void), gadget_riscv64_sext_b_ri(void),
+            gadget_riscv64_sext_h_ri(void), gadget_riscv64_zext_h_ri(void),
+            gadget_riscv64_rev8_ri(void), gadget_riscv64_orc_b_ri(void),
+            gadget_riscv64_max_rr(void), gadget_riscv64_maxu_rr(void),
+            gadget_riscv64_min_rr(void), gadget_riscv64_minu_rr(void),
+            gadget_riscv64_rol_rr(void), gadget_riscv64_ror_rr(void),
+            gadget_riscv64_ror_ri(void), gadget_riscv64_rolw_rr(void),
+            gadget_riscv64_rorw_rr(void), gadget_riscv64_rorw_ri(void),
+            gadget_riscv64_bclr_rr(void), gadget_riscv64_bset_rr(void),
+            gadget_riscv64_binv_rr(void), gadget_riscv64_bext_rr(void),
+            gadget_riscv64_bclr_ri(void), gadget_riscv64_bset_ri(void),
+            gadget_riscv64_binv_ri(void), gadget_riscv64_bext_ri(void),
+            gadget_riscv64_czero_eqz_rr(void), gadget_riscv64_czero_nez_rr(void);
+    unsigned op = riscv64_opcode(insn), f3 = riscv64_funct3(insn), f7 = riscv64_funct7(insn);
+    unsigned rs2 = riscv64_rs2(insn), f12 = insn >> 20, f6 = insn >> 26;
+    unsigned shamt6 = (insn >> 20) & 0x3f, shamt5 = (insn >> 20) & 0x1f;
+    *word = riscv64_rs_off(rs2);
+    switch (op) {
+    case RISCV64_OP_OP:
+        switch (f7 << 3 | f3) {
+        case 0x10 << 3 | 2: return gadget_riscv64_sh1add_rr;
+        case 0x10 << 3 | 4: return gadget_riscv64_sh2add_rr;
+        case 0x10 << 3 | 6: return gadget_riscv64_sh3add_rr;
+        case 0x20 << 3 | 4: return gadget_riscv64_xnor_rr;
+        case 0x20 << 3 | 6: return gadget_riscv64_orn_rr;
+        case 0x20 << 3 | 7: return gadget_riscv64_andn_rr;
+        case 0x05 << 3 | 4: return gadget_riscv64_min_rr;
+        case 0x05 << 3 | 5: return gadget_riscv64_minu_rr;
+        case 0x05 << 3 | 6: return gadget_riscv64_max_rr;
+        case 0x05 << 3 | 7: return gadget_riscv64_maxu_rr;
+        case 0x30 << 3 | 1: return gadget_riscv64_rol_rr;
+        case 0x30 << 3 | 5: return gadget_riscv64_ror_rr;
+        case 0x24 << 3 | 1: return gadget_riscv64_bclr_rr;
+        case 0x24 << 3 | 5: return gadget_riscv64_bext_rr;
+        case 0x14 << 3 | 1: return gadget_riscv64_bset_rr;
+        case 0x34 << 3 | 1: return gadget_riscv64_binv_rr;
+        case 0x07 << 3 | 5: return gadget_riscv64_czero_eqz_rr;
+        case 0x07 << 3 | 7: return gadget_riscv64_czero_nez_rr;
+        }
+        return NULL;
+    case RISCV64_OP_OP_32:
+        switch (f7 << 3 | f3) {
+        case 0x04 << 3 | 0: return gadget_riscv64_add_uw_rr;
+        case 0x10 << 3 | 2: return gadget_riscv64_sh1add_uw_rr;
+        case 0x10 << 3 | 4: return gadget_riscv64_sh2add_uw_rr;
+        case 0x10 << 3 | 6: return gadget_riscv64_sh3add_uw_rr;
+        case 0x30 << 3 | 1: return gadget_riscv64_rolw_rr;
+        case 0x30 << 3 | 5: return gadget_riscv64_rorw_rr;
+        case 0x04 << 3 | 4: // zext.h (RV64: OP-32, rs2 = 0)
+            if (rs2 != 0)
+                return NULL;
+            *word = 0;
+            return gadget_riscv64_zext_h_ri;
+        }
+        return NULL;
+    case RISCV64_OP_OP_IMM:
+        if (f3 == 1) {
+            switch (f12) {
+            case 0x600: *word = 0; return gadget_riscv64_clz_ri;
+            case 0x601: *word = 0; return gadget_riscv64_ctz_ri;
+            case 0x602: *word = 0; return gadget_riscv64_cpop_ri;
+            case 0x604: *word = 0; return gadget_riscv64_sext_b_ri;
+            case 0x605: *word = 0; return gadget_riscv64_sext_h_ri;
+            }
+            *word = shamt6;
+            switch (f6) {
+            case 0x12: return gadget_riscv64_bclr_ri;
+            case 0x0a: return gadget_riscv64_bset_ri;
+            case 0x1a: return gadget_riscv64_binv_ri;
+            }
+        } else if (f3 == 5) {
+            if (f12 == 0x287) { *word = 0; return gadget_riscv64_orc_b_ri; }
+            if (f12 == 0x6b8) { *word = 0; return gadget_riscv64_rev8_ri; }
+            *word = shamt6;
+            switch (f6) {
+            case 0x18: return gadget_riscv64_ror_ri;
+            case 0x12: return gadget_riscv64_bext_ri;
+            }
+        }
+        return NULL;
+    case RISCV64_OP_OP_IMM_32:
+        if (f3 == 1) {
+            switch (f12) {
+            case 0x600: *word = 0; return gadget_riscv64_clzw_ri;
+            case 0x601: *word = 0; return gadget_riscv64_ctzw_ri;
+            case 0x602: *word = 0; return gadget_riscv64_cpopw_ri;
+            }
+            if (f6 == 0x02) { *word = shamt6; return gadget_riscv64_slli_uw_ri; }
+        } else if (f3 == 5 && (insn >> 25) == 0x30) {
+            *word = shamt5;
+            return gadget_riscv64_rorw_ri;
+        }
+        return NULL;
+    }
+    return NULL;
+}
+
 int gen_step_riscv64(struct gen_state *state, struct tlb *tlb) {
     extern void gadget_riscv64_addi(void);
     extern void gadget_riscv64_add_rr(void);
@@ -7343,6 +7494,16 @@ int gen_step_riscv64(struct gen_state *state, struct tlb *tlb) {
     extern void gadget_riscv64_rm_restore(void);
     extern void gadget_riscv64_fmv_x_w(void);
     extern void gadget_riscv64_fmv_w_x(void);
+    extern void gadget_riscv64_fminm_d(void), gadget_riscv64_fminm_s(void),
+            gadget_riscv64_fmaxm_d(void), gadget_riscv64_fmaxm_s(void),
+            gadget_riscv64_froundi_d(void), gadget_riscv64_froundi_s(void),
+            gadget_riscv64_froundx_d(void), gadget_riscv64_froundx_s(void),
+            gadget_riscv64_fleq_d(void), gadget_riscv64_fleq_s(void),
+            gadget_riscv64_fltq_d(void), gadget_riscv64_fltq_s(void),
+            gadget_riscv64_fcvt_s_h(void), gadget_riscv64_fcvt_d_h(void),
+            gadget_riscv64_fcvt_h_s(void), gadget_riscv64_fcvt_h_d(void),
+            gadget_riscv64_fmv_x_h(void), gadget_riscv64_fmv_h_x(void),
+            gadget_riscv64_flh(void);
     extern void gadget_riscv64_flw(void);
     extern void gadget_riscv64_lr_w(void);
     extern void gadget_riscv64_lr_d(void);
@@ -7419,6 +7580,18 @@ int gen_step_riscv64(struct gen_state *state, struct tlb *tlb) {
     unsigned rd = riscv64_rd(insn);
     unsigned rs1 = riscv64_rs1(insn);
     unsigned funct3 = riscv64_funct3(insn);
+
+    {
+        uint64_t word;
+        void (*bm)(void) = gen_riscv64_bitmanip(insn, &word);
+        if (bm != NULL) {
+            gen(state, (unsigned long) bm);
+            gen(state, riscv64_rd_off(rd));
+            gen(state, riscv64_rs_off(rs1));
+            gen(state, word);
+            return 1;
+        }
+    }
 
     switch (riscv64_opcode(insn)) {
     case RISCV64_OP_LUI:
@@ -7657,15 +7830,15 @@ int gen_step_riscv64(struct gen_state *state, struct tlb *tlb) {
         // F/D loads/stores. fld/fsd/fsw reuse the integer gadgets with the
         // f-register slot offset (same byte semantics); flw NaN-boxes.
         bool is_load = riscv64_opcode(insn) == RISCV64_OP_LOAD_FP;
-        if (funct3 != 2 && funct3 != 3)
+        if (funct3 != 1 && funct3 != 2 && funct3 != 3) // 1: Zfhmin flh/fsh
             return gen_riscv64_undefined(state, insn);
         unsigned long freg_off = offsetof(struct cpu_state, riscv64_f)
             + (is_load ? rd : riscv64_rs2(insn)) * sizeof(qword_t);
         void (*gadget)(void);
         if (is_load)
-            gadget = funct3 == 3 ? gadget_riscv64_ld : gadget_riscv64_flw;
+            gadget = funct3 == 3 ? gadget_riscv64_ld : funct3 == 2 ? gadget_riscv64_flw : gadget_riscv64_flh;
         else
-            gadget = funct3 == 3 ? gadget_riscv64_sd : gadget_riscv64_sw;
+            gadget = funct3 == 3 ? gadget_riscv64_sd : funct3 == 2 ? gadget_riscv64_sw : gadget_riscv64_sh;
         if (funct3 == 3 && gen_riscv64_try_pair(state, tlb, is_load, freg_off, -1, rs1,
                 is_load ? riscv64_imm_i(insn) : riscv64_imm_s(insn)))
             return 1;
@@ -7690,6 +7863,19 @@ int gen_step_riscv64(struct gen_state *state, struct tlb *tlb) {
         } else if (funct3 == 1) {
             extern void gadget_riscv64_fence_i(void);
             gen(state, (unsigned long) gadget_riscv64_fence_i);
+        } else if (funct3 == 2) {
+            // Zicbom/Zicboz: cbo.inval/clean/flush (imm 0/1/2) have nothing
+            // to do over coherent host memory; cbo.zero (imm 4) zeroes the
+            // 64-byte block (Zic64b) holding rs1.
+            unsigned op = insn >> 20;
+            if (rd != 0 || op > 4 || op == 3)
+                return gen_riscv64_undefined(state, insn);
+            if (op == 4) {
+                extern void gadget_riscv64_cbo_zero(void);
+                gen(state, (unsigned long) gadget_riscv64_cbo_zero);
+                gen(state, riscv64_rs_off(rs1));
+                gen(state, state->riscv64_orig_ip); // fault-restart pc, last
+            }
         }
         return 1;
 
@@ -7805,6 +7991,8 @@ int gen_step_riscv64(struct gen_state *state, struct tlb *tlb) {
         case 0x14:
             if (funct3 == 0) gadget = is_d ? gadget_riscv64_fmin_d : gadget_riscv64_fmin_s;
             else if (funct3 == 1) gadget = is_d ? gadget_riscv64_fmax_d : gadget_riscv64_fmax_s;
+            else if (funct3 == 2) gadget = is_d ? gadget_riscv64_fminm_d : gadget_riscv64_fminm_s; // Zfa
+            else if (funct3 == 3) gadget = is_d ? gadget_riscv64_fmaxm_d : gadget_riscv64_fmaxm_s; // Zfa
             break;
         case 0x50: // fle/flt/feq -> integer rd
             a = riscv64_rd_off(rd);
@@ -7812,6 +8000,8 @@ int gen_step_riscv64(struct gen_state *state, struct tlb *tlb) {
             case 0: gadget = is_d ? gadget_riscv64_fle_d : gadget_riscv64_fle_s; break;
             case 1: gadget = is_d ? gadget_riscv64_flt_d : gadget_riscv64_flt_s; break;
             case 2: gadget = is_d ? gadget_riscv64_feq_d : gadget_riscv64_feq_s; break;
+            case 4: gadget = is_d ? gadget_riscv64_fleq_d : gadget_riscv64_fleq_s; break; // Zfa
+            case 5: gadget = is_d ? gadget_riscv64_fltq_d : gadget_riscv64_fltq_s; break; // Zfa
             }
             break;
         case 0x60: { // fcvt.{w,wu,l,lu}.{s,d}: one variant per rounding mode
@@ -7831,6 +8021,14 @@ int gen_step_riscv64(struct gen_state *state, struct tlb *tlb) {
             unsigned mode = funct3 < 5 ? funct3 : funct3 == 7 ? 5 : 6;
             if (rs2 < 4 && mode < 6)
                 gadget = f2i[mode][is_d][rs2];
+            if (is_d && rs2 == 8 && funct3 == 1) { // Zfa fcvtmod.w.d rd, rs1, rtz
+                extern void gadget_riscv64_call_helper(void);
+                extern void riscv64_fcvtmod_helper(struct cpu_state *cpu, unsigned long arg);
+                gen(state, (unsigned long) gadget_riscv64_call_helper);
+                gen(state, (unsigned long) riscv64_fcvtmod_helper);
+                gen(state, rd | (rs1 << 5));
+                return 1;
+            }
             break;
         }
         case 0x68: { // fcvt.{s,d}.{w,wu,l,lu}
@@ -7849,8 +8047,33 @@ int gen_step_riscv64(struct gen_state *state, struct tlb *tlb) {
         case 0x20: // fcvt.s.d (0x20, rs2=1) / fcvt.d.s (0x21, rs2=0, exact)
             if (!is_d && rs2 == 1) { gadget = gadget_riscv64_fcvt_s_d; rounds = true; }
             else if (is_d && rs2 == 0) gadget = gadget_riscv64_fcvt_d_s;
+            // Zfhmin fcvt.s.h / fcvt.d.h (exact)
+            else if (rs2 == 2) gadget = is_d ? gadget_riscv64_fcvt_d_h : gadget_riscv64_fcvt_s_h;
+            // Zfa fround / froundnx
+            else if (rs2 == 4) { gadget = is_d ? gadget_riscv64_froundi_d : gadget_riscv64_froundi_s; rounds = true; }
+            else if (rs2 == 5) { gadget = is_d ? gadget_riscv64_froundx_d : gadget_riscv64_froundx_s; rounds = true; }
+            break;
+        case 0x22: // Zfhmin fcvt.h.s (rs2=0) / fcvt.h.d (rs2=1)
+            if (is_d)
+                break;
+            if (rs2 == 0) { gadget = gadget_riscv64_fcvt_h_s; rounds = true; }
+            else if (rs2 == 1) { gadget = gadget_riscv64_fcvt_h_d; rounds = true; }
+            break;
+        case 0x72: // Zfhmin fmv.x.h
+            if (!is_d && funct3 == 0 && rs2 == 0) {
+                a = riscv64_rd_off(rd);
+                gadget = gadget_riscv64_fmv_x_h;
+            }
+            break;
+        case 0x7a: // Zfhmin fmv.h.x
+            if (!is_d && funct3 == 0 && rs2 == 0) {
+                b = riscv64_rs_off(rs1);
+                gadget = gadget_riscv64_fmv_h_x;
+            }
             break;
         case 0x70: // fmv.x.w/.d (rm=0) or fclass (rm=1)
+            if (rs2 != 0)
+                break;
             if (funct3 == 1) {
                 extern void gadget_riscv64_call_helper(void);
                 extern void riscv64_fclass_helper(struct cpu_state *cpu, unsigned long arg);
@@ -7873,7 +8096,39 @@ int gen_step_riscv64(struct gen_state *state, struct tlb *tlb) {
                 }
             }
             break;
-        case 0x78: // fmv.w.x (S) / fmv.d.x (D)
+        case 0x78: // fmv.w.x (S) / fmv.d.x (D); Zfa fli.s / fli.d (rs2 = 1)
+            if (funct3 == 0 && rs2 == 1) {
+                // rs1 indexes the Zfa constant table (llvm-mc's, entry for entry)
+                static const double fli[32] = {
+                    -1.0, 0 /* min normal */, 0x1p-16, 0x1p-15, 0x1p-8, 0x1p-7, 0.0625, 0.125,
+                    0.25, 0.3125, 0.375, 0.4375, 0.5, 0.625, 0.75, 0.875,
+                    1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0, 4.0,
+                    8.0, 16.0, 128.0, 256.0, 32768.0, 65536.0, 0 /* inf */, 0 /* nan */,
+                };
+                uint64_t v;
+                if (is_d) {
+                    double d = fli[rs1];
+                    memcpy(&v, &d, 8);
+                    if (rs1 == 1) v = 0x0010000000000000ull;
+                    if (rs1 == 30) v = 0x7ff0000000000000ull;
+                    if (rs1 == 31) v = 0x7ff8000000000000ull;
+                } else {
+                    float f = (float) fli[rs1];
+                    uint32_t w;
+                    memcpy(&w, &f, 4);
+                    if (rs1 == 1) w = 0x00800000u;
+                    if (rs1 == 30) w = 0x7f800000u;
+                    if (rs1 == 31) w = 0x7fc00000u;
+                    v = 0xffffffff00000000ull | w;
+                }
+                extern void gadget_riscv64_mov_const(void);
+                gen(state, (unsigned long) gadget_riscv64_mov_const);
+                gen(state, fd);
+                gen(state, v);
+                return 1;
+            }
+            if (rs2 != 0)
+                break;
             if (funct3 == 0) {
                 if (!is_d) {
                     b = riscv64_rs_off(rs1);
@@ -7934,6 +8189,15 @@ int gen_step_riscv64(struct gen_state *state, struct tlb *tlb) {
         if (insn == 0x00100073) // ebreak
             return gen_riscv64_interrupt_at(state, INT_BREAKPOINT,
                     state->riscv64_orig_ip, state->riscv64_orig_ip);
+        // Zawrs: wrs.nto / wrs.sto may complete at once, so they are nops.
+        if (insn == 0x00d00073 || insn == 0x01d00073)
+            return 1;
+        // Zimop: mop.r.n rd, rs1 and mop.rr.n rd, rs1, rs2 write 0 to rd
+        // until something gives them a meaning.
+        if ((insn & 0xb3c0707f) == 0x81c04073 || (insn & 0xb200707f) == 0x82004073) {
+            gen_riscv64_mov_const(state, rd, 0);
+            return 1;
+        }
         if (funct3 >= 1 && funct3 <= 7 && funct3 != 4) { // csrrw/s/c[i]
             unsigned csr = insn >> 20;
             bool is_counter = csr == 0xc00 || csr == 0xc01 || csr == 0xc02; // cycle/time/instret

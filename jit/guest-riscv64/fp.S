@@ -342,3 +342,89 @@ fma_gadget fmadd_s,  fmadd,  s, 1
 fma_gadget fmsub_s,  fnmsub, s, 1
 fma_gadget fnmsub_s, fmsub,  s, 1
 fma_gadget fnmadd_s, fnmadd, s, 1
+
+// ---- Zfa (RVA23) -----------------------------------------------------------
+// fminm/fmaxm: min/max that return the canonical NaN when either input is a
+// NaN = AArch64 fmin/fmax under FPCR.DN. fround/froundnx: round to an
+// integer in the current rounding mode (gen brackets a static rm), without
+// and with the inexact flag = frinti/frintx. fleq/fltq: fle/flt that are
+// quiet (NV only for a signalling NaN) = fcmp rather than fcmpe.
+.macro fpop_minm o, a, b
+    fmin \o, \a, \b
+.endm
+.macro fpop_maxm o, a, b
+    fmax \o, \a, \b
+.endm
+.irp op, minm,maxm
+    fp_d_gadget \op
+    fp_s_gadget \op
+.endr
+.irp op, i,x
+.gadget fround\op\()_d
+    fp_head
+    ldr d16, [x10]
+    frint\op d16, d16
+    str d16, [_cpu, x9]
+    gret 3
+.gadget fround\op\()_s
+    fp_head
+    ldr s16, [x10]
+    frint\op s16, s16
+    fmov w10, s16
+    orr x10, x10, #0xffffffff00000000
+    str x10, [_cpu, x9]
+    gret 3
+.endr
+fcmp_gadget fltq_d, d, mi, fcmp
+fcmp_gadget fleq_d, d, ls, fcmp
+fcmp_gadget fltq_s, s, mi, fcmp
+fcmp_gadget fleq_s, s, ls, fcmp
+
+// ---- Zfhmin (RVA23): half-precision moves and conversions ------------------
+// H values are NaN-boxed in the 64-bit f-register (high 48 bits all ones);
+// FPCR.AHP is 0, so the host's half format is IEEE binary16.
+.macro box_h reg
+    orr \reg, \reg, #0xffffffffffff0000
+.endm
+.gadget fcvt_s_h
+    fp_head
+    ldr h16, [x10]
+    fcvt s16, h16
+    fmov w10, s16
+    orr x10, x10, #0xffffffff00000000
+    str x10, [_cpu, x9]
+    gret 3
+.gadget fcvt_d_h
+    fp_head
+    ldr h16, [x10]
+    fcvt d16, h16
+    str d16, [_cpu, x9]
+    gret 3
+.gadget fcvt_h_s
+    fp_head
+    ldr s16, [x10]
+    fcvt h16, s16
+    umov w10, v16.h[0]
+    box_h x10
+    str x10, [_cpu, x9]
+    gret 3
+.gadget fcvt_h_d
+    fp_head
+    ldr d16, [x10]
+    fcvt h16, d16
+    umov w10, v16.h[0]
+    box_h x10
+    str x10, [_cpu, x9]
+    gret 3
+// fmv.x.h: the low 16 bits, sign-extended; fmv.h.x boxes.
+.gadget fmv_x_h
+    fp_head
+    ldrsh x12, [x10]
+    str x12, [_cpu, x9]
+    gret 3
+.gadget fmv_h_x
+    fp_head
+    ldrh w12, [x10]
+    box_h x12
+    str x12, [_cpu, x9]
+    gret 3

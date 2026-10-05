@@ -1809,6 +1809,89 @@ static syscall_t amd64_syscall_table[470] = {
 static dword_t sys_riscv_hwprobe(void) {
     return _ENOSYS; // probe fails cleanly; callers use fallback paths
 }
+
+// riscv_hwprobe(pairs, pair_count, cpusetsize, cpus, flags) for the riscv64
+// guest, reached with full-width arguments through
+// handle_asm_generic_native_syscall. It answers for exactly what the JIT
+// implements (jit/gen.c gen_step_riscv64): glibc's ifuncs and compilers'
+// runtimes pick code paths from these bits, so a bit set here is a promise
+// that those instructions run. Constants from the Linux uapi
+// asm/hwprobe.h. Every CPU is the same, so the cpu set is not consulted; a
+// key this does not know comes back as -1, as on a kernel that predates it.
+#define RISCV_HWPROBE_KEY_MVENDORID 0
+#define RISCV_HWPROBE_KEY_MARCHID 1
+#define RISCV_HWPROBE_KEY_MIMPID 2
+#define RISCV_HWPROBE_KEY_BASE_BEHAVIOR 3
+#define RISCV_HWPROBE_KEY_IMA_EXT_0 4
+#define RISCV_HWPROBE_KEY_CPUPERF_0 5
+#define RISCV_HWPROBE_KEY_ZICBOZ_BLOCK_SIZE 6
+#define RISCV_HWPROBE_KEY_MISALIGNED_SCALAR_PERF 9
+#define RISCV_HWPROBE_BASE_BEHAVIOR_IMA (1ull << 0)
+#define RISCV_HWPROBE_IMA_FD (1ull << 0)
+#define RISCV_HWPROBE_IMA_C (1ull << 1)
+#define RISCV_HWPROBE_EXT_ZBA (1ull << 3)
+#define RISCV_HWPROBE_EXT_ZBB (1ull << 4)
+#define RISCV_HWPROBE_EXT_ZBS (1ull << 5)
+#define RISCV_HWPROBE_EXT_ZICOND (1ull << 35)
+#define RISCV_HWPROBE_EXT_ZCA (1ull << 43)
+#define RISCV_HWPROBE_EXT_ZCB (1ull << 44)
+#define RISCV_HWPROBE_EXT_ZCD (1ull << 45)
+#define RISCV_HWPROBE_EXT_ZICBOZ (1ull << 6)
+#define RISCV_HWPROBE_EXT_ZFHMIN (1ull << 28)
+#define RISCV_HWPROBE_EXT_ZFA (1ull << 32)
+#define RISCV_HWPROBE_EXT_ZIHINTNTL (1ull << 29)
+#define RISCV_HWPROBE_EXT_ZIHINTPAUSE (1ull << 36)
+#define RISCV_HWPROBE_EXT_ZIMOP (1ull << 42)
+#define RISCV_HWPROBE_EXT_ZCMOP (1ull << 47)
+#define RISCV_HWPROBE_EXT_ZAWRS (1ull << 48)
+#define RISCV_HWPROBE_EXT_ZICNTR (1ull << 50)
+#define RISCV_HWPROBE_EXT_ZICBOM (1ull << 55)
+#define RISCV_HWPROBE_EXT_ZICBOP (1ull << 60)
+#define RISCV_HWPROBE_KEY_ZICBOM_BLOCK_SIZE 12
+#define RISCV_HWPROBE_KEY_ZICBOP_BLOCK_SIZE 15
+static dword_t sys_riscv_hwprobe_guest(guest_addr_t pairs, qword_t pair_count,
+        qword_t UNUSED(cpusetsize), guest_addr_t UNUSED(cpus), dword_t flags) {
+    if (flags != 0)
+        return _EINVAL; // RISCV_HWPROBE_WHICH_CPUS is not offered
+    for (qword_t i = 0; i < pair_count; i++) {
+        struct { sqword_t key; qword_t value; } pair;
+        guest_addr_t addr = pairs + i * sizeof(pair);
+        if (user_get(addr, pair))
+            return _EFAULT;
+        pair.value = 0;
+        switch (pair.key) {
+        case RISCV_HWPROBE_KEY_MVENDORID:
+        case RISCV_HWPROBE_KEY_MARCHID:
+        case RISCV_HWPROBE_KEY_MIMPID:
+        case RISCV_HWPROBE_KEY_CPUPERF_0:            // MISALIGNED_UNKNOWN
+        case RISCV_HWPROBE_KEY_MISALIGNED_SCALAR_PERF: // ..._SCALAR_UNKNOWN
+            break;
+        case RISCV_HWPROBE_KEY_ZICBOZ_BLOCK_SIZE:    // cbo.zero's block (Zic64b)
+        case RISCV_HWPROBE_KEY_ZICBOM_BLOCK_SIZE:
+        case RISCV_HWPROBE_KEY_ZICBOP_BLOCK_SIZE:
+            pair.value = 64;
+            break;
+        case RISCV_HWPROBE_KEY_BASE_BEHAVIOR:
+            pair.value = RISCV_HWPROBE_BASE_BEHAVIOR_IMA;
+            break;
+        case RISCV_HWPROBE_KEY_IMA_EXT_0:
+            pair.value = RISCV_HWPROBE_IMA_FD | RISCV_HWPROBE_IMA_C | RISCV_HWPROBE_EXT_ZBA |
+                    RISCV_HWPROBE_EXT_ZBB | RISCV_HWPROBE_EXT_ZBS | RISCV_HWPROBE_EXT_ZICOND |
+                    RISCV_HWPROBE_EXT_ZCA | RISCV_HWPROBE_EXT_ZCB | RISCV_HWPROBE_EXT_ZCD |
+                    RISCV_HWPROBE_EXT_ZICBOZ | RISCV_HWPROBE_EXT_ZICBOM | RISCV_HWPROBE_EXT_ZICBOP |
+                    RISCV_HWPROBE_EXT_ZIHINTNTL | RISCV_HWPROBE_EXT_ZIHINTPAUSE |
+                    RISCV_HWPROBE_EXT_ZIMOP | RISCV_HWPROBE_EXT_ZCMOP | RISCV_HWPROBE_EXT_ZAWRS |
+                    RISCV_HWPROBE_EXT_ZICNTR | RISCV_HWPROBE_EXT_ZFA | RISCV_HWPROBE_EXT_ZFHMIN;
+            break;
+        default:
+            pair.key = -1;
+            break;
+        }
+        if (user_put(addr, pair))
+            return _EFAULT;
+    }
+    return 0;
+}
 static dword_t sys_riscv_flush_icache(void) {
     return 0; // translated blocks are invalidated on guest code writes
 }
@@ -2850,6 +2933,12 @@ static bool handle_asm_generic_native_syscall(struct cpu_state *cpu, qword_t sys
     case 233: result = sys_madvise_guest(raw_args[0], raw_args[1], (dword_t) raw_args[2]); break;
     case 260: result = sys_wait4_guest((pid_t_) raw_args[0], raw_args[1], (dword_t) raw_args[2], raw_args[3]); break;
     case 278: result = sys_getrandom_guest(raw_args[0], (dword_t) raw_args[1], (dword_t) raw_args[2]); break;
+    case 258: // riscv_hwprobe: riscv-only (an unused arch-specific number on arm64)
+        result = current->abi == GUEST_ABI_RISCV64
+            ? sys_riscv_hwprobe_guest(raw_args[0], raw_args[1], raw_args[2], raw_args[3],
+                    (dword_t) raw_args[4])
+            : (dword_t) _ENOSYS;
+        break;
     case 291: result = sys_statx_amd64_guest((fd_t) raw_args[0], raw_args[1], (dword_t) raw_args[2], (dword_t) raw_args[3], raw_args[4]); break;
     // Socket family: all pointer-bearing (sockaddr/msghdr/optval), so the
     // legacy dword marshalling truncates the 64-bit guest pointers — which
@@ -4555,9 +4644,9 @@ static unsigned amd64_syscall_legacy_arg_count(qword_t syscall_num) {
 // instead of silently truncating (how dmesg broke).
 static unsigned arm64_syscall_legacy_arg_count(qword_t syscall_num) {
     switch (syscall_num) {
-    case 258: // riscv_hwprobe: ENOSYS stub ignores its 5 args, one of which
-              // is a full-width pointer — classify 0-arg so it can't SIGSYS
-              // (the pidfd_open/seccomp precedent; apk probes at startup)
+    case 258: // riscv_hwprobe on riscv64 is handled natively (full-width
+              // args); here only arm64's unused 258 arrives, ENOSYS, args
+              // unread -- classify 0-arg so it can't SIGSYS
     case 259: // riscv_flush_icache: no-op stub; start/end args are 64-bit
     case 124: // sched_yield
     case 157: // setsid
@@ -4775,7 +4864,7 @@ static bool syscall_legacy_args_are_scalars(enum guest_abi abi, qword_t syscall_
         case 219: // keyctl (sys_keyctl only switches on cmd; arg2-arg5 unread)
         case 230: // mlockall
         case 231: // munlockall
-        case 258: // riscv_hwprobe (ENOSYS stub; args unread)
+        case 258: // arm64's unused 258 (ENOSYS; riscv_hwprobe is native)
         case 259: // riscv_flush_icache (no-op stub; args unread)
         case 267: // syncfs
         case 424: // pidfd_send_signal (the siginfo pointer is never dereferenced)

@@ -341,3 +341,36 @@ store_gadget sd, 64, rvsd, str,  x19
     add x9, x9, #1
     str x9, [x8]
     gret
+
+// ---- Zicboz: cbo.zero, zero the 64-byte cache block holding rs1 ----------
+// [gadget][rs1_off][pc]; an aligned block never crosses a page, so one
+// write_prep covers it (its size only sizes the page-crossing check).
+.gadget cbo_zero
+    ldr x10, [_ip]            // rs1_off
+    add _ip, _ip, #16
+    ldr x7, [_cpu, x10]
+    and x7, x7, #~63
+    write_prep 512, rvcboz
+    stp xzr, xzr, [x7]
+    stp xzr, xzr, [x7, #16]
+    stp xzr, xzr, [x7, #32]
+    stp xzr, xzr, [x7, #48]
+    write_done 512, rvcboz
+    gret
+    write_bullshit 512, rvcboz
+
+// ---- Zfhmin: flh, a 16-bit load NaN-boxed into an f-register (fsh is the
+// integer sh with the f-register's slot). Stream as flw.
+.gadget flh
+    ldr x19, [_ip]            // fd_off
+    ldr x9, [_ip, #8]         // rs1_off
+    ldr x10, [_ip, #16]       // imm
+    add _ip, _ip, #32
+    ldr x7, [_cpu, x9]
+    add x7, x7, x10
+    read_prep 16, rvflh
+    ldrh w11, [x7]
+    orr x11, x11, #0xffffffffffff0000  // NaN-box
+    str x11, [_cpu, x19]
+    gret
+    read_bullshit 16, rvflh
