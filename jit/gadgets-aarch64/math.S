@@ -12061,6 +12061,76 @@ amd64_r16_rr amd64_csel16, csel, 64, x, 63, 0
     .endr
 .popsection
 
+# cbw/cwde/cdqe (98) and cwd/cdq/cqo (99) on the register cache (rax x20,
+# rdx x23): amd64_sx_<kind>, table amd64_sx_gadgets[(opcode - 0x98) * 3 +
+# size_idx] (16, 32, 64). No flags, no operands.
+.gadget amd64_sx_cbw
+    sxtb w8, w20
+    bfi x20, x8, 0, 16
+    gret
+.gadget amd64_sx_cwde
+    sxth w20, w20
+    gret
+.gadget amd64_sx_cdqe
+    sxtw x20, w20
+    gret
+.gadget amd64_sx_cwd
+    sxth w8, w20
+    asr w8, w8, 15
+    bfi x23, x8, 0, 16
+    gret
+.gadget amd64_sx_cdq
+    asr w23, w20, 31
+    gret
+.gadget amd64_sx_cqo
+    asr x23, x20, 63
+    gret
+.pushsection_rodata
+.global.name amd64_sx_gadgets
+    .quad NAME(gadget_amd64_sx_cbw), NAME(gadget_amd64_sx_cwde), NAME(gadget_amd64_sx_cdqe)
+    .quad NAME(gadget_amd64_sx_cwd), NAME(gadget_amd64_sx_cdq), NAME(gadget_amd64_sx_cqo)
+.popsection
+
+# xchg rax, reg (90+r) and bswap reg (0F C8+r), 32/64-bit, per register on
+# the cache: amd64_xchg<size>_<reg>, amd64_bsw<size>_<reg>. 32-bit forms
+# zero-extend what they write (both registers, for xchg). No flags, no
+# operands. Tables amd64_{xchg,bsw}_gadgets[size64 * 16 + reg].
+.macro amd64_xb16 op, s, R, bits, nf, d, hd
+.ifc \op, xchg
+.gadget amd64_xchg\s\()_\d
+    mov \R\()8, \R\()20
+    .if \d < 8
+    mov \R\()20, \R\hd
+    mov \R\hd, \R\()8
+    .else
+    ldr \R\()10, [_cpu, CPU_amd64_regs + 8 * \d]
+    mov \R\()20, \R\()10
+    str x8, [_cpu, CPU_amd64_regs + 8 * \d]
+    .endif
+    gret
+.else
+.gadget amd64_bsw\s\()_\d
+    .if \d < 8
+    rev \R\hd, \R\hd
+    .else
+    ldr \R\()10, [_cpu, CPU_amd64_regs + 8 * \d]
+    rev \R\()10, \R\()10
+    str x10, [_cpu, CPU_amd64_regs + 8 * \d]
+    .endif
+    gret
+.endif
+.endm
+amd64_r16_ri amd64_xb16, xchg, 32, w, 31, 0
+amd64_r16_ri amd64_xb16, xchg, 64, x, 63, 0
+amd64_r16_ri amd64_xb16, bsw, 32, w, 31, 0
+amd64_r16_ri amd64_xb16, bsw, 64, x, 63, 0
+.pushsection_rodata
+.global.name amd64_xchg_gadgets
+    amd64_nn_table xchg, 0
+.global.name amd64_bsw_gadgets
+    amd64_nn_table bsw, 0
+.popsection
+
 # setcc r8 per condition and register, on the register cache:
 # amd64_scc_<n><cond>_<reg> for the low byte of any of the sixteen, and
 # amd64_scc_<n><cond>_h<reg> for ah..bh (reg 0-3). n is empty or n (the

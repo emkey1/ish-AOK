@@ -784,6 +784,22 @@ __attribute__((unused)) static void gen_amd64_ensure_reg_cache(struct gen_state 
 #endif
 }
 
+// Before a gadget that reads guest registers from CPU_amd64_regs but writes
+// none (an address base or index, a value to store): memory must be current,
+// but the cache stays loaded and right, so it is written back if dirty and
+// not reloaded after.
+__attribute__((unused)) static void gen_amd64_writeback_reg_cache(struct gen_state *state) {
+#if defined(__aarch64__)
+    if (state->amd64_reg_cache_valid && state->amd64_reg_cache_dirty) {
+        extern void gadget_amd64_store_low8_reg_cache(void);
+        gen(state, (unsigned long) gadget_amd64_store_low8_reg_cache);
+        state->amd64_reg_cache_dirty = false;
+    }
+#else
+    gen_amd64_flush_reg_cache(state);
+#endif
+}
+
 __attribute__((unused)) static void gen_amd64_mark_reg_cache_dirty(struct gen_state *state) {
 #if defined(__aarch64__)
     state->amd64_reg_cache_dirty = true;
@@ -9053,6 +9069,16 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
                 reg,
                 size,
                 (unsigned long long) next_ip);
+#if defined(__aarch64__)
+        if (amd64_jit_fuse_mask() & JIT_FUSE_AMD64_MOVR) {
+            extern void (*const amd64_bsw_gadgets[])(void);
+            gen_amd64_r16_enter(state, (unsigned) reg, (unsigned) reg);
+            gen(state, (unsigned long) amd64_bsw_gadgets[(size == 64) * 16 + reg]);
+            gen_amd64_r16_wrote(state, (unsigned) reg);
+            gen_amd64_defer_rip(state, next_ip);
+            return true;
+        }
+#endif
         gen_amd64_flush_reg_cache(state);
         extern void gadget_amd64_bswap_reg(void);
         gen(state, (unsigned long) gadget_amd64_bswap_reg);
@@ -9073,6 +9099,17 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
                 insn.opcode,
                 size,
                 (unsigned long long) next_ip);
+#if defined(__aarch64__)
+        if (amd64_jit_fuse_mask() & JIT_FUSE_AMD64_MOVR) {
+            extern void (*const amd64_sx_gadgets[])(void);
+            gen_amd64_ensure_reg_cache(state);
+            gen(state, (unsigned long) amd64_sx_gadgets[(insn.opcode - 0x98) * 3 +
+                    (size == 16 ? 0 : size == 32 ? 1 : 2)]);
+            gen_amd64_mark_reg_cache_dirty(state);
+            gen_amd64_defer_rip(state, next_ip);
+            return true;
+        }
+#endif
         gen_amd64_flush_reg_cache(state);
         extern void gadget_amd64_sign_extend(void);
         gen(state, (unsigned long) gadget_amd64_sign_extend);
@@ -10339,7 +10376,10 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
             amd64_jit_debug("bt-reg ip=%llx op2=%02x bop=%u rm=%u idx=%u imm=%lu size=%u next=%llx",
                     (unsigned long long) insn.start_ip, insn.op2, bop, rm_id, idx_reg, imm,
                     size, (unsigned long long) next_ip);
-            gen_amd64_flush_reg_cache(state);
+            if (bop == 0) // bt: reads the registers, writes only CF
+                gen_amd64_writeback_reg_cache(state);
+            else
+                gen_amd64_flush_reg_cache(state);
             extern void gadget_amd64_bt_reg(void);
             gen(state, (unsigned long) gadget_amd64_bt_reg);
             gen(state, packed);
@@ -11552,7 +11592,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
         amd64_jit_debug("v-movq-load ip=%llx xmm=%u meta=%lx disp=%lx next=%llx",
                 (unsigned long long) insn.start_ip, reg_id, meta, disp,
                 (unsigned long long) next_ip);
-        gen_amd64_flush_reg_cache(state);
+        gen_amd64_writeback_reg_cache(state);
         gen_amd64_flush_rip(state);
         extern void gadget_amd64_v_load64_mem(void);
         gen(state, (unsigned long) gadget_amd64_v_load64_mem);
@@ -11600,7 +11640,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
         amd64_jit_debug("v-movd-store-mem ip=%llx xmm=%u w=%d meta=%lx disp=%lx next=%llx",
                 (unsigned long long) insn.start_ip, reg_id, insn.rex.w, meta, disp,
                 (unsigned long long) next_ip);
-        gen_amd64_flush_reg_cache(state);
+        gen_amd64_writeback_reg_cache(state);
         gen_amd64_flush_rip(state);
         extern void gadget_amd64_v_store64_mem(void);
         extern void gadget_amd64_v_store32_mem(void);
@@ -11633,7 +11673,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
         amd64_jit_debug("v-movd-load-mem ip=%llx xmm=%u w=%d meta=%lx disp=%lx next=%llx",
                 (unsigned long long) insn.start_ip, reg_id, insn.rex.w, meta, disp,
                 (unsigned long long) next_ip);
-        gen_amd64_flush_reg_cache(state);
+        gen_amd64_writeback_reg_cache(state);
         gen_amd64_flush_rip(state);
         extern void gadget_amd64_v_load64_mem(void);
         extern void gadget_amd64_v_load32_mem(void);
@@ -11683,7 +11723,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
         amd64_jit_debug("v-movq-store-mem ip=%llx xmm=%u meta=%lx disp=%lx next=%llx",
                 (unsigned long long) insn.start_ip, reg_id, meta, disp,
                 (unsigned long long) next_ip);
-        gen_amd64_flush_reg_cache(state);
+        gen_amd64_writeback_reg_cache(state);
         gen_amd64_flush_rip(state);
         extern void gadget_amd64_v_store64_mem(void);
         gen(state, (unsigned long) gadget_amd64_v_store64_mem);
@@ -11853,7 +11893,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
         amd64_jit_debug("v-load128-mem ip=%llx op2=%02x meta=%lx disp=%lx next=%llx",
                 (unsigned long long) insn.start_ip, insn.op2, meta, disp,
                 (unsigned long long) next_ip);
-        gen_amd64_flush_reg_cache(state);
+        gen_amd64_writeback_reg_cache(state);
         gen_amd64_flush_rip(state);
         extern void gadget_amd64_v_load128_mem(void);
         gen(state, (unsigned long) gadget_amd64_v_load128_mem);
@@ -11885,7 +11925,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
         amd64_jit_debug("v-store128-mem ip=%llx op2=%02x meta=%lx disp=%lx next=%llx",
                 (unsigned long long) insn.start_ip, insn.op2, meta, disp,
                 (unsigned long long) next_ip);
-        gen_amd64_flush_reg_cache(state);
+        gen_amd64_writeback_reg_cache(state);
         gen_amd64_flush_rip(state);
         extern void gadget_amd64_v_store128_mem(void);
         gen(state, (unsigned long) gadget_amd64_v_store128_mem);
@@ -11943,7 +11983,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
         amd64_jit_debug("v-movdq-mem ip=%llx op2=%02x store=%d meta=%lx disp=%lx next=%llx",
                 (unsigned long long) insn.start_ip, insn.op2, is_store, meta, disp,
                 (unsigned long long) next_ip);
-        gen_amd64_flush_reg_cache(state);
+        gen_amd64_writeback_reg_cache(state); // xmm <-> memory: no guest register written
         gen_amd64_flush_rip(state);
         extern void gadget_amd64_v_load128_mem(void);
         extern void gadget_amd64_v_store128_mem(void);
@@ -13061,6 +13101,18 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
                 reg,
                 size,
                 (unsigned long long) next_ip);
+#if defined(__aarch64__)
+        // reg 0 (90 without REX.B) is nop, not xchg eax, eax: left to the gadget below.
+        if (reg != 0 && (size == 32 || size == 64) &&
+                (amd64_jit_fuse_mask() & JIT_FUSE_AMD64_MOVR)) {
+            extern void (*const amd64_xchg_gadgets[])(void);
+            gen_amd64_ensure_reg_cache(state);
+            gen(state, (unsigned long) amd64_xchg_gadgets[(size == 64) * 16 + reg]);
+            gen_amd64_mark_reg_cache_dirty(state);
+            gen_amd64_defer_rip(state, next_ip);
+            return true;
+        }
+#endif
         gen_amd64_flush_reg_cache(state);
         extern void gadget_amd64_xchg_rax_reg(void);
         gen(state, (unsigned long) gadget_amd64_xchg_rax_reg);
@@ -14544,7 +14596,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
         amd64_jit_debug("opstore-logic ip=%llx op=%02x size=%u meta=%lx disp=%lx next=%llx",
                 (unsigned long long) insn.start_ip, insn.opcode, size,
                 meta, disp, (unsigned long long) next_ip);
-        gen_amd64_flush_reg_cache(state);
+        gen_amd64_writeback_reg_cache(state);
         gen_amd64_flush_rip(state);
         extern void gadget_amd64_opstore_logic32(void), gadget_amd64_opstore_logic64(void);
         gen(state, (unsigned long) (size == 64
@@ -15118,7 +15170,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
         amd64_jit_debug("byte-imm-mem ip=%llx grp=%u imm=%lx meta=%lx disp=%lx next=%llx",
                 (unsigned long long) insn.start_ip, group, (unsigned long) imm,
                 meta, disp, (unsigned long long) next_ip);
-        gen_amd64_flush_reg_cache(state);
+        gen_amd64_writeback_reg_cache(state);
         gen_amd64_flush_rip(state);
         extern void gadget_amd64_byte_imm_mem(void);
         gen(state, (unsigned long) gadget_amd64_byte_imm_mem);

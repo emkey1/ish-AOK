@@ -218,7 +218,7 @@ static void emit_one(void) {
         emit_mem_one();
         return;
     }
-    switch (rnd() % 24) {
+    switch (rnd() % 26) {
         case 0: case 1: case 2: case 3: { // alu reg,reg: add or adc sbb and sub xor cmp
             static const uint8_t ops[] = {0x01, 0x09, 0x11, 0x19, 0x21, 0x29, 0x31, 0x39};
             rex(w, c, a); b(ops[rnd() % 8]); modrm_rr(c, a); break;
@@ -314,6 +314,33 @@ static void emit_one(void) {
             b((uint8_t) ((rnd() & 1) ? cnt[rnd() % 10] : rnd() % 70)); break;
         }
         case 21: rex(w, a, a); b(rnd() & 1 ? 0x31 : 0x33); modrm_rr(a, a); break; // xor a, a
+        case 22: { // cbw/cwde/cdqe, cwd/cdq/cqo; xchg rax, a (90+r); bswap a
+            int k = (int) (rnd() % 4);
+            if (k == 0) { if (rnd() % 3 == 0) b(0x66); else if (w) b(0x48); b((uint8_t) (0x98 + (rnd() & 1))); }
+            else if (k == 1) { if (a == 0) a = 1; if (w || (a & 8)) b((uint8_t) (0x40 | (w ? 8 : 0) | ((a & 8) ? 1 : 0))); b((uint8_t) (0x90 + (a & 7))); }
+            else if (k == 2) { if (w || (a & 8)) b((uint8_t) (0x40 | (w ? 8 : 0) | ((a & 8) ? 1 : 0))); b(0x0f); b((uint8_t) (0xc8 + (a & 7))); }
+            else { // bt a, c (0F A3) or bt a, imm8 (0F BA /4)
+                if (rnd() & 1) { rex(w, c, a); b(0x0f); b(0xa3); modrm_rr(c, a); }
+                else { rex(w, 0, a); b(0x0f); b(0xba); modrm_rr(4, a); b((uint8_t) rnd()); }
+            }
+            break;
+        }
+        case 23: // byte op [m], imm8 (80 /0,1,4,5,6), or movups/movdqu xmm0 <-> [m]
+            use_rbp = (int) (rnd() & 1);
+            if (rnd() & 1) {
+                static const int ext[] = {0, 1, 4, 5, 6};
+                if (!use_rbp) rex_mem(0, 0);
+                b(0x80); mem_any(ext[rnd() % 5]); b((uint8_t) rnd());
+            } else {
+                int k = (int) (rnd() % 3);
+                if (k == 2) b(0xf3); // movdqu (F3 0F 6F/7F)
+                if (!use_rbp) rex_mem(0, 0);
+                b(0x0f); b(k == 2 ? (rnd() & 1 ? 0x6f : 0x7f) : (rnd() & 1 ? 0x10 : 0x11));
+                b(use_rbp ? 0x85 : 0x87); // xmm0, [rbp or r15 + disp32]: 16 bytes inside mem[]
+                uint32_t d = 8 * (uint32_t) (rnd() % 7) + (use_rbp ? 0 : 128);
+                memcpy(p, &d, 4); p += 4;
+            }
+            break;
         case 20: // setcc without REX: al..bl (rm 0-3) or ah..bh (rm 4-7)
             b(0x0f); b((uint8_t) (0x90 + rnd() % 16)); b((uint8_t) (0xc0 | (rnd() % 8))); break;
         default: { // a second producer right away, to give the scan something to skip
