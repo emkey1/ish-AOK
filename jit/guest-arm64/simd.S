@@ -40,6 +40,9 @@
 // it on also goes through arm64_watch_scan_value (emu/tlb.c).
 
 // x7 -> its host address for a load / a store, or 0. Clobbers x9-x11, x27.
+// Shared with the MOPS gadget (control.S).
+.global a64_xlate_r
+.global a64_xlate_w
 a64_xlate_r:
     and x9, x7, #0xfffffffffffff000
     ubfx x10, x7, #12, #10

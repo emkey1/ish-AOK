@@ -1,5 +1,7 @@
 // FEAT_MOPS (ARMv8.8): the CPY/CPYF memcpy/memmove and SET memset
-// instructions, for the arm64 JIT's mops gadget (jit/guest-arm64/control.S).
+// instructions. The arm64 JIT's mops gadget (jit/guest-arm64/control.S)
+// runs them; this file keeps the model it follows and the switch that
+// decides whether guests are told about them.
 //
 // Each operation is a prologue/main/epilogue triple, e.g.
 //     cpyfp [x0]!, [x1]!, x2!
@@ -25,128 +27,13 @@
 // from the end, so it shrinks Xn only, and what is left is the prefix, whose
 // source the tail copy did not touch.
 //
-// Memory is reached through the TLB one page span at a time, like the HLE
-// copies (jit/hle.c). A host fault on a file page past EOF is taken by the
-// JIT's host fault handlers as for any guest access (jit_translate_host_fault).
+// Memory is reached through the TLB one page span at a time. A host fault on
+// a file page past EOF is taken by the JIT's host fault handlers as for any
+// guest access (jit_translate_host_fault).
 
 #include <stdatomic.h>
 #include <stdlib.h>
-#include <string.h>
-#include "emu/cpu.h"
-#include "emu/tlb.h"
-#include "emu/interrupt.h"
 #include "jit/arm64_mops.h"
-
-static inline uint64_t mops_to_page_end(guest_addr_t addr) {
-    return PAGE_SIZE - (addr & (PAGE_SIZE - 1));
-}
-
-static int mops_fault(struct cpu_state *cpu, struct tlb *tlb, bool was_write) {
-    cpu->segfault_addr = tlb->segfault_addr;
-    cpu->segfault_was_write = was_write;
-    return INT_PF;
-}
-
-// Forward copy of regs[n] bytes from regs[s] to regs[d], advancing all three
-// per span.
-static int mops_copy_forward(struct cpu_state *cpu, struct tlb *tlb,
-        unsigned d, unsigned s, unsigned n) {
-    uint64_t *r = cpu->arm64_regs;
-    while (r[n] != 0) {
-        guest_addr_t dst = r[d], src = r[s];
-        uint64_t span = r[n];
-        uint64_t sp = mops_to_page_end(src), dp = mops_to_page_end(dst);
-        if (span > sp) span = sp;
-        if (span > dp) span = dp;
-        void *sh = __tlb_read_ptr(tlb, src);
-        if (sh == NULL)
-            return mops_fault(cpu, tlb, false);
-        void *dh = __tlb_write_ptr(tlb, dst);
-        if (dh == NULL)
-            return mops_fault(cpu, tlb, true);
-        // memmove: the spans may overlap (a forward copy is correct for any
-        // dst below src, overlapping or not).
-        memmove(dh, sh, span);
-        r[d] = dst + span;
-        r[s] = src + span;
-        r[n] -= span;
-    }
-    return 0;
-}
-
-// Backward copy, for CPY with dst above an overlapping src: from the end,
-// shrinking Xn only; Xd and Xs advance once everything is done.
-static int mops_copy_backward(struct cpu_state *cpu, struct tlb *tlb,
-        unsigned d, unsigned s, unsigned n) {
-    uint64_t *r = cpu->arm64_regs;
-    uint64_t total = r[n];
-    while (r[n] != 0) {
-        guest_addr_t se = r[s] + r[n], de = r[d] + r[n];
-        uint64_t so = se & (PAGE_SIZE - 1), doff = de & (PAGE_SIZE - 1);
-        if (so == 0) so = PAGE_SIZE;
-        if (doff == 0) doff = PAGE_SIZE;
-        uint64_t span = r[n];
-        if (span > so) span = so;
-        if (span > doff) span = doff;
-        void *sh = __tlb_read_ptr(tlb, se - span);
-        if (sh == NULL)
-            return mops_fault(cpu, tlb, false);
-        void *dh = __tlb_write_ptr(tlb, de - span);
-        if (dh == NULL)
-            return mops_fault(cpu, tlb, true);
-        memmove(dh, sh, span);
-        r[n] -= span;
-    }
-    r[d] += total;
-    r[s] += total;
-    return 0;
-}
-
-static int mops_set(struct cpu_state *cpu, struct tlb *tlb,
-        unsigned d, unsigned n, uint8_t c) {
-    uint64_t *r = cpu->arm64_regs;
-    while (r[n] != 0) {
-        guest_addr_t dst = r[d];
-        uint64_t span = r[n], dp = mops_to_page_end(dst);
-        if (span > dp) span = dp;
-        void *dh = __tlb_write_ptr(tlb, dst);
-        if (dh == NULL)
-            return mops_fault(cpu, tlb, true);
-        memset(dh, c, span);
-        r[d] = dst + span;
-        r[n] -= span;
-    }
-    return 0;
-}
-
-int arm64_mops(struct cpu_state *cpu, struct tlb *tlb, uint32_t insn) {
-    unsigned d = insn & 0x1f, n = (insn >> 5) & 0x1f, s = (insn >> 16) & 0x1f;
-    unsigned op1 = (insn >> 22) & 3;
-    bool is_set = op1 == 3;
-    // Xn is the byte count; the architecture takes it as signed and caps it,
-    // so a "negative" count means nothing to do. (Option B's negative
-    // intermediate counts never exist here: the prologue finishes.)
-    if ((int64_t) cpu->arm64_regs[n] <= 0) {
-        cpu->arm64_regs[n] = 0;
-    } else if (is_set) {
-        uint8_t c = s == 31 ? 0 : (uint8_t) cpu->arm64_regs[s];
-        int err = mops_set(cpu, tlb, d, n, c);
-        if (err)
-            return err;
-    } else {
-        bool forward_only = !((insn >> 26) & 1); // CPYF*
-        guest_addr_t dst = cpu->arm64_regs[d], src = cpu->arm64_regs[s];
-        int err;
-        if (forward_only || dst <= src || dst - src >= cpu->arm64_regs[n])
-            err = mops_copy_forward(cpu, tlb, d, s, n);
-        else
-            err = mops_copy_backward(cpu, tlb, d, s, n);
-        if (err)
-            return err;
-    }
-    cpu->arm64_nzcv = 0;
-    return 0;
-}
 
 // ISH_MOPS=0 (or `echo 0 > /proc/ish/arm64_mops`) hides MOPS from AT_HWCAP2,
 // ID_AA64ISAR2 and /proc/cpuinfo for programs started afterwards, so glibc

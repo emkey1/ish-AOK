@@ -2199,7 +2199,7 @@ int gen_step_arm64(struct gen_state *state, struct tlb *tlb) {
     // Rn Rd. Any op2 hint (unprivileged, non-temporal) is the same thing
     // for user code. SETG* (o0=1, op1=3) needs MTE: undefined. The
     // register overlaps and 31s the architecture calls CONSTRAINED
-    // UNPREDICTABLE are undefined here. jit/arm64_mops.c does the work.
+    // UNPREDICTABLE are undefined here. The mops gadget (control.S) does the work.
     if ((insn & 0xfb200c00) == 0x19000400) {
         extern void gadget_arm64_mops(void);
         unsigned rd = insn & 0x1f, rn = (insn >> 5) & 0x1f, rs = (insn >> 16) & 0x1f;

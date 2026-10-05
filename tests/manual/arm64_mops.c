@@ -1,4 +1,4 @@
-// FEAT_MOPS on the arm64 JIT (jit/arm64_mops.c): the CPYF/CPY memcpy and
+// FEAT_MOPS on the arm64 JIT (the mops gadget, jit/guest-arm64/control.S): the CPYF/CPY memcpy and
 // memmove triples and the SET memset triple, which glibc 2.41 picks for
 // memcpy/memmove/memset when AT_HWCAP2 has MOPS. What must hold:
 //   - HWCAP2_MOPS, ID_AA64ISAR2.MOPS and /proc/cpuinfo's "mops" agree;
@@ -8,7 +8,10 @@
 //   - a zero count touches nothing;
 //   - a fault part way reports one of the triple's instructions, and once
 //     the handler maps the page, returning restarts it and the whole copy
-//     (or set) comes out right -- the progress-in-registers design.
+//     (or set) comes out right -- the progress-in-registers design --
+//     including a backward CPY, and a fault on the destination side;
+//   - a "negative" count does nothing; SET from XZR stores zeros;
+//   - 600 random lengths, alignments and overlaps against memmove/memset.
 // The instructions are .inst words, so any assembler builds this. SKIPs
 // unless arm64 with HWCAP2_MOPS.
 #define _GNU_SOURCE
@@ -37,6 +40,10 @@
 #define SETP ".inst 0x19c904e5\n"
 #define SETM ".inst 0x19c944e5\n"
 #define SETE ".inst 0x19c984e5\n"
+// SET with Rs = XZR: the value 0.
+#define SETPZ ".inst 0x19df04e5\n"
+#define SETMZ ".inst 0x19df44e5\n"
+#define SETEZ ".inst 0x19df84e5\n"
 
 struct regs { uint64_t d, s, n; };
 
@@ -62,6 +69,19 @@ static struct regs run_set(void *dst, uint64_t n, uint64_t v) {
     register uint64_t x9 __asm__("x9") = v;
     __asm__ volatile(SETP SETM SETE : "+r"(x5), "+r"(x7) : "r"(x9) : "memory", "cc");
     return (struct regs) { x5, 0, x7 };
+}
+
+static struct regs run_setz(void *dst, uint64_t n) {
+    register uint64_t x5 __asm__("x5") = (uint64_t) dst;
+    register uint64_t x7 __asm__("x7") = n;
+    __asm__ volatile(SETPZ SETMZ SETEZ : "+r"(x5), "+r"(x7) :: "memory", "cc");
+    return (struct regs) { x5, 0, x7 };
+}
+
+static uint64_t rs = 0x2545f4914f6cdd1dull;
+static uint64_t rnd(void) {
+    rs ^= rs << 13; rs ^= rs >> 7; rs ^= rs << 17;
+    return rs;
 }
 
 static void ck(const char *label, uint64_t got, uint64_t want) {
@@ -287,6 +307,88 @@ int main(int argc, char **argv) {
     ck("set fault: restarted set is whole", first_diff(b + start, want, n), n);
     ck("set fault: end Xd", r.d, (uint64_t) (b + start + n));
     ck("set fault: end Xn", r.n, 0);
+
+    // A backward CPY (destination above an overlapping source) faulting part
+    // way: what it leaves is the untouched prefix, and the restart finishes
+    // it. The hole is in both ranges, so either side may fault first.
+    hole = a + 2 * pg;
+    munmap(hole, pg);
+    fill(a, 2 * pg, 11);
+    fill(a + 3 * pg, pg, 11);
+    memcpy(want, a, 2 * pg);
+    fill(want + 2 * pg, pg, 7);     // what the handler maps in
+    memcpy(want + 3 * pg, a + 3 * pg, pg);
+    {
+        uint8_t *src = a + start, *dst = a + start + 100;
+        memmove(want + (dst - a), want + (src - a), n);
+        faults = 0;
+        register uint64_t x5 __asm__("x5") = (uint64_t) dst;
+        register uint64_t x6 __asm__("x6") = (uint64_t) src;
+        register uint64_t x7 __asm__("x7") = n;
+        __asm__ volatile(CPYP CPYM CPYE : "+r"(x5), "+r"(x6), "+r"(x7) :: "memory", "cc");
+        r = (struct regs) { x5, x6, x7 };
+        ck("cpy backward fault: one fault", faults, 1);
+        ck("cpy backward fault: address is the hole", fault_addr >= (uintptr_t) hole &&
+           fault_addr < (uintptr_t) hole + pg, 1);
+        ck("cpy backward fault: restarted memmove is whole", first_diff(a, want, area), area);
+        ck("cpy backward fault: end Xd", r.d, (uint64_t) (dst + n));
+        ck("cpy backward fault: end Xs", r.s, (uint64_t) (src + n));
+        ck("cpy backward fault: end Xn", r.n, 0);
+    }
+
+    // CPYF whose destination faults: a write fault at the hole.
+    hole = b + 2 * pg;
+    munmap(hole, pg);
+    fill(a, area, 12);
+    faults = 0;
+    r = run_cpyf(b + start, a + start, n);
+    ck("cpyf write fault: one fault", faults, 1);
+    ck("cpyf write fault: address is the hole", fault_addr, (uintptr_t) hole);
+    ck("cpyf write fault: restarted copy is whole", first_diff(b + start, a + start, n), n);
+    ck("cpyf write fault: end Xn", r.n, 0);
+
+    // A "negative" count does nothing and leaves Xn 0; SET from XZR stores 0.
+    fill(b, area, 13);
+    memcpy(want, b, area);
+    r = run_cpyf(b + 10, a, (uint64_t) -5);
+    ck("cpyf n<0: nothing written", first_diff(b, want, area), area);
+    ck("cpyf n<0: Xd unchanged", r.d, (uint64_t) (b + 10));
+    ck("cpyf n<0: Xn", r.n, 0);
+    r = run_set(b + 10, (uint64_t) INT64_MIN, 0x77);
+    ck("set n=INT64_MIN: nothing written", first_diff(b, want, area), area);
+    memset(want + 3000, 0, 5000);
+    r = run_setz(b + 3000, 5000);
+    ck("set xzr: zeros across a page", first_diff(b, want, area), area);
+    ck("set xzr: end Xd", r.d, (uint64_t) (b + 8000));
+
+    // Random cases against memmove/memset: lengths to three pages, any
+    // alignment, CPY overlapping either way, CPYF without overlap.
+    bad = 0;
+    for (int i = 0; i < 600; i++) {
+        size_t len = (size_t) (rnd() % 4 == 0 ? rnd() % (3 * pg) : rnd() % 300);
+        size_t so = (size_t) (rnd() % (area - len)), dof = (size_t) (rnd() % (area - len));
+        int op = (int) (rnd() % 3);
+        fill(a, area, (unsigned) i);
+        memcpy(want, a, area);
+        if (op == 1 && (so < dof + len && dof < so + len))
+            op = 0;                  // CPYF overlapping is not a memmove
+        if (op == 2) {
+            uint64_t v = rnd();
+            memset(want + dof, (int) (v & 0xff), len);
+            r = run_set(a + dof, len, v);
+            if (first_diff(a, want, area) != area || r.d != (uint64_t) (a + dof + len) || r.n != 0)
+                bad++;
+            continue;
+        }
+        memmove(want + dof, want + so, len);
+        r = op ? run_cpyf(a + dof, a + so, len) : run_cpy(a + dof, a + so, len);
+        if (first_diff(a, want, area) != area || r.d != (uint64_t) (a + dof + len) ||
+                r.s != (uint64_t) (a + so + len) || r.n != 0) {
+            test_logf("  random op=%d len=%zu src+%zu dst+%zu wrong\n", op, len, so, dof);
+            bad++;
+        }
+    }
+    ck("600 random cpy/cpyf/set cases", bad, 0);
 
     return finish_suite("arm64_mops");
 }

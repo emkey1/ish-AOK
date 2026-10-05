@@ -186,18 +186,16 @@ arm64_chain_poked:
 
 .extern hle_call
 
-// FEAT_MOPS CPY*/CPYF*/SET* (jit/arm64_mops.c): the C routine does the whole
-// operation against cpu's registers. 0 -> next instruction; INT_PF -> exit
-// with pc at this instruction and the registers describing what is left, so
-// the instruction restarts where it stopped.
-//
-// Two cases stay out of C. The prologue does everything, so the main and
-// epilogue find Xn = 0: nothing to do. And most memcpy/memset calls are
-// small: up to 64 bytes, each side inside one page and a TLB hit, is done
-// here, every load before any store (glibc's small-copy shape), which is a
-// memmove whichever way the ranges overlap. NZCV is left as the C routine
-// leaves it (0). Anything else -- a miss, a page crossing, a TLB that needs
-// flushing or revalidating -- goes to C, which handles it all.
+// FEAT_MOPS CPY*/CPYF*/SET* (see jit/arm64_mops.c for the model): the
+// prologue does the whole operation, so the main and epilogue find Xn = 0
+// and do nothing. Up to 64 bytes, each side inside one page and a TLB hit
+// -- most memcpy/memset calls -- is done first thing, every load before any
+// store (glibc's small-copy shape), which is a memmove whichever way the
+// ranges overlap. Anything else goes a page span at a time through the TLB
+// (a miss takes tlb_handle_miss / tlb_write_ptr_slow), with the registers
+// brought up to date after each span: a fault exits INT_PF with pc at this
+// instruction and the registers describing what is left, so it restarts
+// where it stopped. NZCV ends 0000, as option A leaves it.
 // Code stream: [insn][orig_ip].
 
 // \out = host pointer for guest \addr if the TLB entry's \field holds its
@@ -337,20 +335,224 @@ arm64_chain_poked:
 
 9:  ldr x19, [_ip, #8]         // orig_ip (fault restart), callee-saved
     add _ip, _ip, #16
-    save_c
-    mov x0, x1                 // cpu   (x1 = _cpu; read before x1 is written)
-    sub x1, x2, #TLB_entries   // tlb   (consumes x2 before x2 is written)
-    mov w2, w8                 // insn
-    bl NAME(arm64_mops)
-    mov x27, x0
-    restore_c
-    cbnz w27, 1f
+    str x19, [_tlb, #(-TLB_entries+TLB_watch_ip)]  // for the store watch
+    mov x26, x10               // &regs
+    and x20, x8, #0x1f         // Rd
+    ubfx x21, x8, #16, #5      // Rs
+    mov x22, x9                // Rn
+    // Xn is the byte count; the architecture takes it as signed and caps
+    // it, so a "negative" count means nothing to do. (Option B's negative
+    // intermediate counts never exist here: the prologue finishes.)
+    cmp x14, #0
+    b.gt 10f
+    str xzr, [x26, x22, lsl #3]
+    b 89f
+10: ubfx x11, x8, #22, #2      // op1: 3 = SET
+    cmp x11, #3
+    b.ne 20f
+
+    // SET: a page span at a time, Xd and Xn kept current for a restart
+    mov x25, #0
+    cmp x21, #31
+    b.eq 11f
+    ldr x25, [x26, x21, lsl #3]
+11: dup v0.16b, w25
+    fmov x25, d0               // the byte, 8 times
+12: ldr x14, [x26, x22, lsl #3] // left
+    cbz x14, 89f
+    ldr x7, [x26, x20, lsl #3]  // dst
+    and x11, x7, #0xfff
+    mov x5, #0x1000
+    sub x5, x5, x11
+    cmp x5, x14
+    csel x5, x5, x14, lo        // this span
+    mov x24, x5
+    bl a64_xlate_w
+    cbz x7, 92f
+    mov x3, x7
+    bl mops_fill
+    ldr x11, [x26, x20, lsl #3]
+    add x11, x11, x24
+    str x11, [x26, x20, lsl #3]
+    ldr x11, [x26, x22, lsl #3]
+    sub x11, x11, x24
+    str x11, [x26, x22, lsl #3]
+    b 12b
+
+    // CPY/CPYF. CPYF* is forward-only; CPY copies backward when the
+    // destination is above an overlapping source.
+20: ldr x15, [x26, x20, lsl #3] // dst
+    ldr x16, [x26, x21, lsl #3] // src
+    tbz x8, #26, 30f            // CPYF*
+    cmp x15, x16
+    b.ls 30f
+    sub x11, x15, x16
+    cmp x11, x14
+    b.hs 30f
+
+    // backward: from the end, shrinking Xn only; Xd and Xs advance once
+    // everything is done, so what a fault leaves is the untouched prefix
+    mov x23, x14                // total
+21: ldr x14, [x26, x22, lsl #3]
+    cbz x14, 28f
+    ldr x16, [x26, x21, lsl #3]
+    add x16, x16, x14           // source end
+    ldr x15, [x26, x20, lsl #3]
+    add x15, x15, x14           // destination end
+    ands x11, x16, #0xfff
+    mov x12, #0x1000
+    csel x11, x11, x12, ne      // bytes of the source's page below its end
+    ands x13, x15, #0xfff
+    csel x13, x13, x12, ne
+    cmp x11, x13
+    csel x11, x11, x13, lo
+    cmp x11, x14
+    csel x24, x11, x14, lo      // this span
+    sub x7, x16, x24
+    bl a64_xlate_r
+    cbz x7, 91f
+    mov x4, x7
+    ldr x15, [x26, x20, lsl #3]
+    ldr x11, [x26, x22, lsl #3]
+    add x15, x15, x11
+    sub x7, x15, x24
+    bl a64_xlate_w
+    cbz x7, 92f
+    mov x3, x7
+    mov x5, x24
+    bl mops_copy_back
+    ldr x11, [x26, x22, lsl #3]
+    sub x11, x11, x24
+    str x11, [x26, x22, lsl #3]
+    b 21b
+28: ldr x11, [x26, x20, lsl #3]
+    add x11, x11, x23
+    str x11, [x26, x20, lsl #3]
+    ldr x11, [x26, x21, lsl #3]
+    add x11, x11, x23
+    str x11, [x26, x21, lsl #3]
+    b 89f
+
+    // forward, a span at a time, all three registers kept current
+30: ldr x14, [x26, x22, lsl #3]
+    cbz x14, 89f
+    ldr x16, [x26, x21, lsl #3]
+    ldr x15, [x26, x20, lsl #3]
+    and x11, x16, #0xfff
+    and x13, x15, #0xfff
+    cmp x11, x13
+    csel x11, x11, x13, hi      // the further into its page
+    mov x12, #0x1000
+    sub x11, x12, x11
+    cmp x11, x14
+    csel x24, x11, x14, lo      // this span
+    mov x7, x16
+    bl a64_xlate_r
+    cbz x7, 91f
+    mov x4, x7
+    ldr x7, [x26, x20, lsl #3]
+    bl a64_xlate_w
+    cbz x7, 92f
+    mov x3, x7
+    mov x5, x24
+    bl mops_copy_fwd
+    ldr x11, [x26, x20, lsl #3]
+    add x11, x11, x24
+    str x11, [x26, x20, lsl #3]
+    ldr x11, [x26, x21, lsl #3]
+    add x11, x11, x24
+    str x11, [x26, x21, lsl #3]
+    ldr x11, [x26, x22, lsl #3]
+    sub x11, x11, x24
+    str x11, [x26, x22, lsl #3]
+    b 30b
+
+89: str wzr, [_cpu, #CPU_nzcv]
     gret
-1:  str x19, [_cpu, #CPU_pc]
-    mov w0, w27
+
+91: mov w12, #0                 // a read fault
+    b 93f
+92: mov w12, #1
+93: ldr x11, [_tlb, #(-TLB_entries+TLB_segfault_addr)]
+    str x11, [_cpu, #CPU_segfault_addr]
+    strb w12, [_cpu, #CPU_segfault_was_write]
+    str x19, [_cpu, #CPU_pc]
+    mov w0, #INT_PF
     b jit_exit
 
-.extern arm64_mops
+// x5 bytes from host x4 to host x3, lowest first: right for any overlap
+// with the destination below the source (each 64 or 8 bytes is loaded
+// before the stores that could reach it). Clobbers x3-x5, x11, q0-q3.
+mops_copy_fwd:
+1:  cmp x5, #64
+    b.lo 2f
+    ldp q0, q1, [x4]
+    ldp q2, q3, [x4, #32]
+    add x4, x4, #64
+    stp q0, q1, [x3]
+    stp q2, q3, [x3, #32]
+    add x3, x3, #64
+    sub x5, x5, #64
+    b 1b
+2:  cmp x5, #8
+    b.lo 3f
+    ldr x11, [x4], #8
+    str x11, [x3], #8
+    sub x5, x5, #8
+    b 2b
+3:  cbz x5, 4f
+    ldrb w11, [x4], #1
+    strb w11, [x3], #1
+    sub x5, x5, #1
+    b 3b
+4:  ret
+
+// The same, highest first, for a destination above an overlapping source.
+mops_copy_back:
+    add x3, x3, x5
+    add x4, x4, x5
+1:  cmp x5, #64
+    b.lo 2f
+    ldp q2, q3, [x4, #-32]
+    ldp q0, q1, [x4, #-64]
+    sub x4, x4, #64
+    stp q2, q3, [x3, #-32]
+    stp q0, q1, [x3, #-64]
+    sub x3, x3, #64
+    sub x5, x5, #64
+    b 1b
+2:  cmp x5, #8
+    b.lo 3f
+    ldr x11, [x4, #-8]!
+    str x11, [x3, #-8]!
+    sub x5, x5, #8
+    b 2b
+3:  cbz x5, 4f
+    ldrb w11, [x4, #-1]!
+    strb w11, [x3, #-1]!
+    sub x5, x5, #1
+    b 3b
+4:  ret
+
+// x5 bytes at host x3 set to the byte in v0 (all lanes) and x25 (all 8).
+mops_fill:
+1:  cmp x5, #64
+    b.lo 2f
+    stp q0, q0, [x3]
+    stp q0, q0, [x3, #32]
+    add x3, x3, #64
+    sub x5, x5, #64
+    b 1b
+2:  cmp x5, #8
+    b.lo 3f
+    str x25, [x3], #8
+    sub x5, x5, #8
+    b 2b
+3:  cbz x5, 4f
+    strb w25, [x3], #1
+    sub x5, x5, #1
+    b 3b
+4:  ret
 
 // RET has identical semantics to BR (branch to register value) -- same
 // gadget body, just invoked for a different guest mnemonic/encoding.
