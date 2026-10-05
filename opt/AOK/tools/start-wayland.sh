@@ -1942,6 +1942,29 @@ fi
 # any more precisely.
 sleep 0.3
 
+# ISH_DISPLAY_SIZE: the desktop size the applet asks for over RFB once it
+# connects (WIDTHxHEIGHT, pixels), passed at launch so the headless output has
+# it before the first terminal opens. Without it foot opened on wlroots'
+# default 1280x720 -- 640x360 at a UI scale of 2 -- which a terminal of any
+# ordinary size fills; Wayfire places a window by the work area at the moment
+# it opens, so it stayed that way when the desktop grew a moment later.
+# Applied before the scale and before wayvnc, like the scale; the applet's own
+# request then asks for the size the output already has.
+display_sized=0
+case "${ISH_DISPLAY_SIZE:-}" in
+    [1-9]*x[1-9]*)
+        if command -v wlr-randr >/dev/null 2>&1; then
+            size_output=$(wlr-randr 2>/dev/null | awk 'NF && $1 !~ /^ / { print $1; exit }')
+            if [ -n "$size_output" ] && \
+                    wlr-randr --output "$size_output" --custom-mode "$ISH_DISPLAY_SIZE" >/dev/null 2>&1; then
+                log "output $size_output sized to $ISH_DISPLAY_SIZE"
+                display_sized=1
+            else
+                log "warning: could not size the output to $ISH_DISPLAY_SIZE; the desktop starts at the default size"
+            fi
+        fi ;;
+esac
+
 # ISH_DISPLAY_UI_SCALE: how big things should LOOK, which is a separate question
 # from how many pixels the desktop has. The applet asks for the pixel count over
 # RFB (SetDesktopSize); this sets the scale the compositor reports to its
@@ -2198,15 +2221,31 @@ fi
 # wayvnc 0.9.1 crashed (a NULL write in libwayland-client's object map, the
 # connection it had just dropped) -- 5th-generation iPad, 2026-10-01.
 #
-# Under Wayfire the first terminal opens maximized. Its panel starts later
-# (below), and Wayfire places a window by the work area at the moment it
-# opens and never moves a floating one when a panel later reserves the top:
-# foot's title bar sat under wf-panel (bip, 2026-10-02; Wayfire on Linux
-# does the same). A maximized window is fitted to the work area again when
-# the panel arrives. foot's default size is larger than an iPad's screen at
-# 2x scale anyway.
+# The first terminal's size. With the output already at the applet's size
+# (ISH_DISPLAY_SIZE above), foot opens as a normal window: its default
+# 700x500, but no more than 70% of the logical screen's width and 60% of its
+# height (pixels / UI scale), leaving room for the top panel and foot's title
+# bar. A small desktop is common -- an M4 Workspace window at a UI scale of 2
+# is 680x418 logical -- and 80% there ran off the bottom under the panel.
+# Centred -- Wayfire's and labwc's placement -- it stays clear of the panel
+# that starts later.
+#
+# Without a size from the applet (an older app), the desktop is still
+# 1280x720 here. Then Wayfire opens it maximized, as before: Wayfire places a
+# window by the work area at the moment it opens and never moves a floating
+# one when a panel later reserves the top, so foot's title bar sat under
+# wf-panel (bip, 2026-10-02; Wayfire on Linux does the same), and a maximized
+# window is fitted to the work area again when the panel arrives.
 foot_args=
-[ "$AOK_DESKTOP" = wayfire ] && foot_args=--maximized
+if [ "$display_sized" = 1 ]; then
+    foot_args=$(printf '%s %s\n' "$ISH_DISPLAY_SIZE" "${ISH_DISPLAY_UI_SCALE:-1}" | awk '{
+        split($1, d, "x"); s = $2 + 0; if (s <= 0) s = 1
+        w = int(d[1] / s * 0.7); h = int(d[2] / s * 0.6)
+        if (w > 700) w = 700; if (h > 500) h = 500
+        if (w >= 200 && h >= 120) printf "--window-size-pixels=%dx%d", w, h }')
+elif [ "$AOK_DESKTOP" = wayfire ]; then
+    foot_args=--maximized
+fi
 foot_attempt=1
 while true; do
     log "starting foot (attempt $foot_attempt)"

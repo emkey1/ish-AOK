@@ -85,10 +85,18 @@ static int DisplayMaxFPSForScale(CGFloat scale) {
 
 // Carried INSIDE the command string, not in envp: the default-user path runs
 // through `su -`, a login shell, which discards the environment it was handed.
-// Empty at scale 1, so the command keeps exactly the shape it had and nothing
-// changes for anyone who has not touched the settings.
-static NSString *DisplayUIScaleEnvPrefix(void) {
+//
+// ISH_DISPLAY_SIZE is the desktop size this view will ask for once its RFB
+// client connects (DisplayDesktopSizeForViewSize). start-wayland.sh gives the
+// headless output that size before it opens the first terminal: otherwise foot
+// opened on wlroots' default 1280x720 -- 640x360 at a UI scale of 2 -- which a
+// terminal of any ordinary size fills, and Wayfire, placing windows by the
+// work area at the moment they open, kept it that way once the desktop grew.
+// Left out when the view has no size yet; the RFB request still follows.
+static NSString *DisplayUIScaleEnvPrefix(CGSize desktopSize) {
     NSMutableString *prefix = [NSMutableString string];
+    if (desktopSize.width >= 1.0 && desktopSize.height >= 1.0)
+        [prefix appendFormat:@"ISH_DISPLAY_SIZE=%dx%d ", (int) desktopSize.width, (int) desktopSize.height];
     CGFloat uiScale = DisplayResolvedUIScale();
     if (uiScale > 1.0)
         [prefix appendFormat:@"ISH_DISPLAY_UI_SCALE=%g ", (double) uiScale];
@@ -100,8 +108,8 @@ static NSString *DisplayUIScaleEnvPrefix(void) {
     return prefix;
 }
 
-static NSArray<NSString *> *DisplayRootCommand(void) {
-    NSString *prefix = DisplayUIScaleEnvPrefix();
+static NSArray<NSString *> *DisplayRootCommand(CGSize desktopSize) {
+    NSString *prefix = DisplayUIScaleEnvPrefix(desktopSize);
     if (prefix.length == 0)
         return DisplayPlainRootCommand;
     return @[@"/bin/sh", @"-c",
@@ -117,17 +125,17 @@ static NSString *_Nullable DisplayWantedSessionAccount(void) {
     return accountName.length > 0 ? accountName : nil;
 }
 
-static NSArray<NSString *> *DisplayGuestSessionCommand(void) {
+static NSArray<NSString *> *DisplayGuestSessionCommand(CGSize desktopSize) {
     if (!UserPreferences.shared.shouldLoginAsDefaultUser)
-        return DisplayRootCommand();
+        return DisplayRootCommand(desktopSize);
     NSString *accountName = [AppDelegate defaultUserAccountName];
     if (accountName.length == 0)
-        return DisplayRootCommand();
+        return DisplayRootCommand(desktopSize);
     // `exec`, so that su's child IS the script, for DisplayHangUpSession to
     // reach.
     return @[@"/bin/su", @"-", accountName, @"-c",
              [NSString stringWithFormat:@"%@exec sh /AOK/tools/start-wayland.sh",
-                 DisplayUIScaleEnvPrefix()]];
+                 DisplayUIScaleEnvPrefix(desktopSize)]];
 }
 
 // Tells a session's start-wayland.sh to end, with the SIGHUP (and SIGCONT,
@@ -880,7 +888,22 @@ static void DisplayParkSession(Terminal *terminal, int pid, NSString *_Nullable 
     }
     tty_release(tty);
 
-    NSArray<NSString *> *command = DisplayGuestSessionCommand();
+    // The size the RFB client will ask for (see DisplayUIScaleEnvPrefix). The
+    // display view exists this early only in standalone mode; elsewhere it is
+    // created at connect, filling the tool content area below the toolbar card
+    // (-displayView's constraints), so that is measured instead. The client's
+    // own request corrects any difference.
+    [self.view layoutIfNeeded];
+    CGSize launchViewSize;
+    if (_displayView != nil && _displayView.bounds.size.height >= 1.0) {
+        launchViewSize = _displayView.bounds.size;
+    } else {
+        CGRect content = self.toolContentView.bounds;
+        CGFloat top = _toolbarCard != nil ? CGRectGetMaxY(_toolbarCard.frame) + 8.0 : 0.0;
+        launchViewSize = CGSizeMake(content.size.width, MAX(content.size.height - top, 0.0));
+    }
+    CGSize launchDesktopSize = DisplayDesktopSizeForViewSize(launchViewSize, DisplayResolvedDesktopScale());
+    NSArray<NSString *> *command = DisplayGuestSessionCommand(launchDesktopSize);
     _sessionAccount = DisplayWantedSessionAccount();
     char argv[4096];
     [Terminal convertCommand:command toArgs:argv limitSize:sizeof(argv)];
@@ -892,11 +915,11 @@ static void DisplayParkSession(Terminal *terminal, int pid, NSString *_Nullable 
                         // refused to start with no UTF-8 (#620).
                         "LANG=C.UTF-8\0";
     err = do_execve(command[0].UTF8String, command.count, argv, envp);
-    if (err < 0 && ![command isEqualToArray:DisplayRootCommand()]) {
+    if (err < 0 && ![command isEqualToArray:DisplayRootCommand(launchDesktopSize)]) {
         // "su" missing (or otherwise failed) on this root -- fall back to
         // running as root rather than failing the whole session over a
         // preference that's a nice-to-have, not a hard requirement.
-        command = DisplayRootCommand();
+        command = DisplayRootCommand(launchDesktopSize);
         _sessionAccount = nil;
         [Terminal convertCommand:command toArgs:argv limitSize:sizeof(argv)];
         err = do_execve(command[0].UTF8String, command.count, argv, envp);
