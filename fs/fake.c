@@ -221,6 +221,8 @@ static int fakefs_close(struct fd *fd) {
         fd->fs_data = NULL;
         return 0;
     }
+    free(fd->fake_open_path);
+    fd->fake_open_path = NULL;
     return realfs_close(fd);
 }
 
@@ -232,6 +234,15 @@ static int fakefs_getpath(struct fd *fd, char *buf) {
     if (fd->mount != NULL && fd->fake_inode != 0) {
         struct fakefs_db *fs = fakefs_db_thread(&fd->mount->fakefs);
         FAKEFS_LOCK_READ(fs);
+        // The path it was opened by, while that still names this inode (not
+        // after a rename or unlink of it): of a file's hard links, that is
+        // the one Linux reports.
+        if (fd->fake_open_path != NULL && strlen(fd->fake_open_path) <= MAX_PATH &&
+                path_get_inode(fs, fd->fake_open_path) == (inode_t) fd->fake_inode) {
+            strcpy(buf, fd->fake_open_path);
+            FAKEFS_UNLOCK_READ(fs);
+            return 0;
+        }
         sqlite3_stmt *stmt = fs->stmt.path_from_inode;
         sqlite3_bind_int64(stmt, 1, fd->fake_inode);
         bool found = db_exec(fs, stmt);
@@ -425,6 +436,7 @@ retry:
         return ERR_PTR(_ENOENT);
     }
     fakefs_snapshot_fd_stat(fd);
+    fd->fake_open_path = strdup(path);
     fd->ops = &fakefs_fdops;
     return fd;
 }

@@ -335,6 +335,7 @@ accept_emfile.c
 unix_listen_nonblock.c
 riscv64_ldst_pair.c
 arm64_mops.c
+hardlink_proc_path.c
 time_clocks_ticks.c
 futex_robust_requeue.c
 futex_pi.c

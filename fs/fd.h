@@ -502,6 +502,15 @@ struct fd {
     unsigned fifo_version;
     int host_fifo_accmode;        // O_ACCMODE_ bits this description counts as
     struct list host_fifo_fds;    // on host_fifo->fds
+    // fakefs: the mount-relative path this description was opened by (owned,
+    // freed by fakefs_close), or NULL. A file with several hard links has one
+    // inode and so no one path the metadata can name; Linux names the one it
+    // was opened by -- /proc/<pid>/exe above all, which uutils' multicall
+    // coreutils checks against argv[0] (Ubuntu 25.10's coreutils are 115 hard
+    // links of one binary, and every one refused to run). fakefs_getpath uses
+    // it while it still names the same inode. At the end, for the same reason
+    // as mnt_id.
+    char *fake_open_path;
 };
 
 // Whether a positioned write (an fd_ops pwrite) goes to end of file. Linux
