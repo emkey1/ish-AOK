@@ -12,6 +12,8 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/mman.h>
+#include <unistd.h>
 
 // fp-contract=off on both: a fused multiply-add in one and not the other
 // would differ in the last bit by design
@@ -125,6 +127,91 @@ REF static int find32_r(const int32_t *a, int n, int32_t x) { for (int i = 0; i 
 VEC static uint64_t xor64_v(const int64_t *a, int n) { uint64_t s = 0; for (int i = 0; i < n; i++) s ^= (uint64_t) a[i] * 3; return s; }
 REF static uint64_t xor64_r(const int64_t *a, int n) { uint64_t s = 0; for (int i = 0; i < n; i++) s ^= (uint64_t) a[i] * 3; return s; }
 
+// vfrec7 / vfrsqrt7: the spec's worked examples, the special cases, and the
+// 7-bit accuracy over random normal inputs.
+static uint64_t est(uint64_t x, int rec, int sew) {
+    uint64_t r;
+    if (sew == 32 && rec)
+        __asm__ volatile(".option push\n.option arch,+v\nvsetivli zero,1,e32,m1,ta,ma\nvmv.s.x v1,%1\nvfrec7.v v2,v1\nvmv.x.s %0,v2\n.option pop" : "=r"(r) : "r"(x));
+    else if (sew == 32)
+        __asm__ volatile(".option push\n.option arch,+v\nvsetivli zero,1,e32,m1,ta,ma\nvmv.s.x v1,%1\nvfrsqrt7.v v2,v1\nvmv.x.s %0,v2\n.option pop" : "=r"(r) : "r"(x));
+    else if (rec)
+        __asm__ volatile(".option push\n.option arch,+v\nvsetivli zero,1,e64,m1,ta,ma\nvmv.s.x v1,%1\nvfrec7.v v2,v1\nvmv.x.s %0,v2\n.option pop" : "=r"(r) : "r"(x));
+    else
+        __asm__ volatile(".option push\n.option arch,+v\nvsetivli zero,1,e64,m1,ta,ma\nvmv.s.x v1,%1\nvfrsqrt7.v v2,v1\nvmv.x.s %0,v2\n.option pop" : "=r"(r) : "r"(x));
+    return sew == 32 ? (uint32_t) r : r;
+}
+static void check_estimates(void) {
+    report("vfrsqrt7 spec example 1", 0, 0, est(0x00718abc, 0, 32), 0x5f080000);
+    report("vfrsqrt7 spec example 2", 0, 0, est(0x7f765432, 0, 32), 0x1f820000);
+    report("vfrec7 spec example 1", 0, 0, est(0x00718abc, 1, 32), 0x7e900000);
+    report("vfrec7 spec example 2", 0, 0, est(0x7f765432, 1, 32), 0x00214000);
+    report("vfrec7 +0", 0, 0, est(0, 1, 32), 0x7f800000);
+    report("vfrec7 -inf", 0, 0, est(0xff800000, 1, 32), 0x80000000);
+    report("vfrsqrt7 -1", 0, 0, est(0xbf800000, 0, 32), 0x7fc00000);
+    report("vfrsqrt7 +inf", 0, 0, est(0x7ff0000000000000ull, 0, 64), 0);
+    for (int i = 0; i < 2000; i++) {
+        double x = ldexp(1.0 + (double) (rnd() % 1000000) / 1e6, (int) (rnd() % 200) - 100);
+        uint64_t b; memcpy(&b, &x, 8);
+        double r, q; uint64_t rb = est(b, 1, 64), qb = est(b, 0, 64);
+        memcpy(&r, &rb, 8); memcpy(&q, &qb, 8);
+        report("vfrec7.v e64 within 2^-7", i, 0, fabs(r * x - 1) < 1.0 / 128, 1);
+        report("vfrsqrt7.v e64 within 2^-7", i, 0, fabs(q * sqrt(x) - 1) < 1.0 / 128, 1);
+    }
+}
+
+// vle8ff.v running into an unmapped page trims vl instead of faulting, and
+// a unit-stride load crossing into a mapped page reads both pages (the
+// gadget's one-page fast path must hand both to the general path).
+static void check_ff_crosspage(void) {
+    long pg = sysconf(_SC_PAGESIZE);
+    char *p = mmap(0, 2 * pg, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    munmap(p + pg, pg);
+    char *s = p + pg - 5;
+    memcpy(s, "abcd", 5);
+    unsigned long vl;
+    unsigned char out[16] = {0};
+    __asm__ volatile(".option push\n.option arch,+v\nvsetivli zero, 16, e8, m1, ta, ma\nvle8ff.v v1, (%1)\n"
+                     "csrr %0, vl\nvse8.v v1, (%2)\n.option pop" : "=r"(vl) : "r"(s), "r"(out) : "memory");
+    report("vle8ff.v vl trimmed at an unmapped page", 0, 0, vl, 5);
+    report("vle8ff.v data", 0, 0, (uint64_t) memcmp(out, "abcd", 5), 0);
+    char *q = mmap(0, 2 * pg, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    for (int i = 0; i < 32; i++)
+        q[pg - 8 + i] = (char) i;
+    unsigned char o2[16];
+    __asm__ volatile(".option push\n.option arch,+v\nvsetivli zero, 16, e8, m1, ta, ma\nvle8.v v2, (%0)\n"
+                     "vse8.v v2, (%1)\n.option pop" : : "r"(q + pg - 8), "r"(o2) : "memory");
+    for (int i = 0; i < 16; i++)
+        report("vle8.v across a page", 0, i, o2[i], (uint64_t) i);
+    munmap(p, pg);
+    munmap(q, 2 * pg);
+}
+
+// string searches: gcc vectorizes these early-exit loops with vle8ff.v,
+// vmseq/vmsne and vfirst.m, as Ubuntu's RVA23 libc does
+VEC static long slen_v(const char *p) { long n = 0; while (p[n]) n++; return n; }
+REF static long slen_r(const char *p) { long n = 0; while (p[n]) n++; return n; }
+VEC static long schr_v(const char *p, long n, char c) { for (long i = 0; i < n; i++) if (p[i] == c) return i; return -1; }
+REF static long schr_r(const char *p, long n, char c) { for (long i = 0; i < n; i++) if (p[i] == c) return i; return -1; }
+VEC static long sdiff_v(const char *a, const char *b, long n) { for (long i = 0; i < n; i++) if (a[i] != b[i]) return i; return -1; }
+REF static long sdiff_r(const char *a, const char *b, long n) { for (long i = 0; i < n; i++) if (a[i] != b[i]) return i; return -1; }
+static void check_strings(void) {
+    static char buf[512], buf2[512];
+    for (int round = 0; round < 3000; round++) {
+        int len = (int) (rnd() % 300), off = (int) (rnd() % 64);
+        for (int i = 0; i < 512; i++)
+            buf[i] = (char) (1 + rnd() % 255);
+        buf[off + len] = 0;
+        memcpy(buf2, buf, sizeof(buf));
+        if (len > 0 && (rnd() & 1))
+            buf2[off + (int) (rnd() % (unsigned) len)] ^= 0x20;
+        char c = buf[off + (len > 0 ? (int) (rnd() % (unsigned) len) : 0)];
+        report("strlen-like", len, 0, (uint64_t) slen_v(buf + off), (uint64_t) slen_r(buf + off));
+        report("memchr-like", len, 0, (uint64_t) schr_v(buf + off, len, c), (uint64_t) schr_r(buf + off, len, c));
+        report("memcmp-like", len, 0, (uint64_t) sdiff_v(buf + off, buf2 + off, len), (uint64_t) sdiff_r(buf + off, buf2 + off, len));
+    }
+}
+
 static void fill(void) {
     for (int i = 0; i < N + PAD; i++) {
         uint64_t r = rnd();
@@ -157,6 +244,9 @@ static void fill(void) {
     CMP(#name, DT, dv, dr, N + PAD); } while (0)
 
 int main(void) {
+    check_estimates();
+    check_ff_crosspage();
+    check_strings();
     for (int round = 0; round < 300; round++) {
         fill();
         int n = (int) (rnd() % 100), off = (int) (rnd() % 4);

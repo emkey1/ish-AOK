@@ -69,6 +69,13 @@ static struct vcfg vcfg_of(uint64_t vtype) {
     return c;
 }
 
+// For the translator (gen_riscv64_vector's vsetvli gadgets): VLMAX of a
+// vtype, or 0 if the vtype is illegal (vill).
+uint64_t riscv64_vtype_vlmax(uint64_t vtype) {
+    struct vcfg c = vcfg_of(vtype);
+    return c.vill ? 0 : c.vlmax;
+}
+
 // ---- the register file, as elements ----
 static inline uint8_t *vreg(struct cpu_state *cpu) { return (uint8_t *) cpu->riscv64_v; }
 
@@ -1003,6 +1010,87 @@ static uint64_t fto_rod(double d, unsigned sew) {
 
 static bool fp_sew_ok(unsigned sew) { return sew == 32 || sew == 64; }
 
+// vfrsqrt7 / vfrec7: 7-bit estimates from the spec's two tables (RVV 1.0
+// section 13.9/13.10, copied from its vfrsqrt7.adoc and vfrec7.adoc), with
+// its exponent rules. `m` mantissa bits, `e` exponent bits.
+static const uint8_t rsqrt7_table[128] = {52, 51, 50, 48, 47, 46, 44, 43, 42, 41, 40, 39, 38, 36, 35, 34, 33, 32, 31, 30, 30, 29, 28, 27, 26, 25, 24, 23, 23, 22, 21, 20, 19, 19, 18, 17, 16, 16, 15, 14, 14, 13, 12, 12, 11, 10, 10, 9, 9, 8, 7, 7, 6, 6, 5, 4, 4, 3, 3, 2, 2, 1, 1, 0, 127, 125, 123, 121, 119, 118, 116, 114, 113, 111, 109, 108, 106, 105, 103, 102, 100, 99, 97, 96, 95, 93, 92, 91, 90, 88, 87, 86, 85, 84, 83, 82, 80, 79, 78, 77, 76, 75, 74, 73, 72, 71, 70, 70, 69, 68, 67, 66, 65, 64, 63, 63, 62, 61, 60, 59, 59, 58, 57, 56, 56, 55, 54, 53};
+static const uint8_t rec7_table[128] = {127, 125, 123, 121, 119, 117, 116, 114, 112, 110, 109, 107, 105, 104, 102, 100, 99, 97, 96, 94, 93, 91, 90, 88, 87, 85, 84, 83, 81, 80, 79, 77, 76, 75, 74, 72, 71, 70, 69, 68, 66, 65, 64, 63, 62, 61, 60, 59, 58, 57, 56, 55, 54, 53, 52, 51, 50, 49, 48, 47, 46, 45, 44, 43, 42, 41, 40, 40, 39, 38, 37, 36, 35, 35, 34, 33, 32, 31, 31, 30, 29, 28, 28, 27, 26, 25, 25, 24, 23, 23, 22, 21, 21, 20, 19, 19, 18, 17, 17, 16, 15, 15, 14, 14, 13, 12, 12, 11, 11, 10, 9, 9, 8, 8, 7, 7, 6, 5, 5, 4, 4, 3, 3, 2, 2, 1, 1, 0};
+
+static uint64_t frsqrt7(uint64_t x, unsigned m, unsigned e) {
+    uint64_t mmask = (1ull << m) - 1, emax = (1ull << e) - 1, bias = emax >> 1;
+    bool sign = (x >> (m + e)) & 1;
+    uint64_t exp = (x >> m) & emax, sig = x & mmask;
+    uint64_t canon = (emax << m) | (1ull << (m - 1));
+    if (exp == emax && sig != 0) { // NaN
+        if (!(sig >> (m - 1)))
+            feraiseexcept(FE_INVALID);
+        return canon;
+    }
+    if (exp == 0 && sig == 0) { // +-0: +-inf
+        feraiseexcept(FE_DIVBYZERO);
+        return (uint64_t) sign << (m + e) | emax << m;
+    }
+    if (sign) { // negative, -inf included
+        feraiseexcept(FE_INVALID);
+        return canon;
+    }
+    if (exp == emax)
+        return 0; // +inf: +0
+    int64_t nexp = (int64_t) exp;
+    if (exp == 0) { // normalize a subnormal
+        while (!(sig & (1ull << (m - 1)))) {
+            nexp--;
+            sig <<= 1;
+        }
+        sig = (sig << 1) & mmask;
+    }
+    unsigned idx = (unsigned) ((nexp & 1) << 6 | (int64_t) (sig >> (m - 6)));
+    uint64_t out_sig = (uint64_t) rsqrt7_table[idx] << (m - 7);
+    uint64_t out_exp = (uint64_t) ((int64_t) (3 * bias - 1) - nexp) / 2;
+    return out_exp << m | out_sig;
+}
+
+static uint64_t frec7(uint64_t x, unsigned m, unsigned e) {
+    uint64_t mmask = (1ull << m) - 1, emax = (1ull << e) - 1, bias = emax >> 1;
+    bool sign = (x >> (m + e)) & 1;
+    uint64_t exp = (x >> m) & emax, sig = x & mmask;
+    uint64_t sbit = (uint64_t) sign << (m + e);
+    if (exp == emax && sig != 0) { // NaN
+        if (!(sig >> (m - 1)))
+            feraiseexcept(FE_INVALID);
+        return (emax << m) | (1ull << (m - 1));
+    }
+    if (exp == emax)
+        return sbit; // +-inf: +-0
+    if (exp == 0 && sig == 0) {
+        feraiseexcept(FE_DIVBYZERO);
+        return sbit | emax << m;
+    }
+    int64_t nexp = (int64_t) exp;
+    if (exp == 0) {
+        while (!(sig & (1ull << (m - 1)))) {
+            nexp--;
+            sig <<= 1;
+        }
+        sig = (sig << 1) & mmask;
+    }
+    int64_t out_exp = (int64_t) (2 * bias - 1) - nexp;
+    if (out_exp < -1 || out_exp > (int64_t) (2 * bias)) {
+        // a tiny subnormal: overflow, rounded by frm
+        feraiseexcept(FE_INEXACT | FE_OVERFLOW);
+        int rm = fegetround();
+        bool to_inf = sign ? (rm == FE_DOWNWARD || rm == FE_TONEAREST)
+                           : (rm == FE_UPWARD || rm == FE_TONEAREST);
+        return to_inf ? sbit | emax << m : sbit | (emax - 1) << m | mmask;
+    }
+    uint64_t out_sig = (uint64_t) rec7_table[sig >> (m - 7)] << (m - 7);
+    if (out_exp == 0 || out_exp == -1) { // subnormal result
+        out_sig = (out_sig | (1ull << m)) >> (1 - out_exp);
+        out_exp = 0;
+    }
+    return sbit | (uint64_t) out_exp << m | out_sig;
+}
+
 // single-width FP op on raw SEW-bit operands; a = vs2[i], b = vs1[i]/f[rs1],
 // d = vd[i]
 static bool fp_op(unsigned f6, bool vf, unsigned sew, uint64_t a, uint64_t b, uint64_t d, uint64_t *out) {
@@ -1149,8 +1237,8 @@ static int vfp(struct cpu_state *cpu, uint32_t insn, const uint8_t *snap, struct
     if (!fp_sew_ok(sew))
         return INT_UNDEFINED; // no Zvfh: half-precision arithmetic is reserved
 
-    if (!vf && f6 == 0x13) { // VFUNARY1: vfsqrt vfclass (vfrsqrt7/vfrec7: not yet)
-        if (vs1 != 0 && vs1 != 0x10)
+    if (!vf && f6 == 0x13) { // VFUNARY1: vfsqrt vfrsqrt7 vfrec7 vfclass
+        if (vs1 != 0 && vs1 != 4 && vs1 != 5 && vs1 != 0x10)
             return INT_UNDEFINED;
         for (uint64_t i = vstart; i < vl; i++) {
             if (!ACTIVE(i))
@@ -1158,6 +1246,10 @@ static int vfp(struct cpu_state *cpu, uint32_t insn, const uint8_t *snap, struct
             uint64_t a = eget(snap, vs2, (unsigned) i, eb), r;
             if (vs1 == 0x10)
                 r = fclass_bits(a, sew);
+            else if (vs1 == 4)
+                r = sew == 32 ? frsqrt7(a, 23, 8) : frsqrt7(a, 52, 11);
+            else if (vs1 == 5)
+                r = sew == 32 ? frec7(a, 23, 8) : frec7(a, 52, 11);
             else
                 r = sew == 32 ? (isnan(sqrtf(f32_of(a))) ? CANON32 : bits_f32(sqrtf(f32_of(a))))
                               : (isnan(sqrt(f64_of(a))) ? CANON64 : bits_f64(sqrt(f64_of(a))));

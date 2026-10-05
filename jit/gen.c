@@ -7247,6 +7247,79 @@ static bool gen_riscv64_try_rcache_run(struct gen_state *state, struct tlb *tlb,
 // (jit/riscv64_vector.c), with its pc for a trap.
 static int gen_riscv64_vector(struct gen_state *state, uint32_t insn) {
     extern void gadget_riscv64_vop(void);
+    unsigned opcode = insn & 0x7f, f3 = (insn >> 12) & 7;
+    unsigned rd = (insn >> 7) & 31, rs1 = (insn >> 15) & 31;
+    // vsetvli / vsetivli with a legal immediate vtype: a gadget of its own
+    // (guest-riscv64/vector.S), VLMAX worked out here
+    if (opcode == 0x57 && f3 == 7 && ((insn >> 31) == 0 || (insn >> 30) == 3) && (rs1 != 0 || rd != 0)) {
+        extern uint64_t riscv64_vtype_vlmax(uint64_t vtype);
+        extern void gadget_riscv64_vsetvl_reg(void), gadget_riscv64_vsetvl_imm(void);
+        bool imm = (insn >> 30) == 3;
+        uint64_t vtype = (insn >> 20) & (imm ? 0x3ff : 0x7ff);
+        uint64_t vlmax = riscv64_vtype_vlmax(vtype);
+        if (vlmax != 0) {
+            bool from_reg = !imm && rs1 != 0;
+            gen(state, (unsigned long) (from_reg ? gadget_riscv64_vsetvl_reg : gadget_riscv64_vsetvl_imm));
+            gen(state, vtype);
+            gen(state, vlmax);
+            gen(state, riscv64_rd_off(rd));
+            gen(state, from_reg ? riscv64_rs_off(rs1) : imm ? rs1 : UINT64_MAX);
+            return 1;
+        }
+    }
+    // csrr rd, vl / vtype / vlenb (csrrs rd, csr, x0)
+    if (opcode == 0x73 && f3 == 2 && rs1 == 0) {
+        unsigned csr = insn >> 20;
+        if (csr == 0xc22) { // vlenb
+            gen_riscv64_mov_const(state, rd, 16);
+            return 1;
+        }
+        if (csr == 0xc20 || csr == 0xc21) {
+            extern void gadget_riscv64_vcsr_read(void);
+            gen(state, (unsigned long) gadget_riscv64_vcsr_read);
+            gen(state, csr == 0xc20 ? offsetof(struct cpu_state, riscv64_vl)
+                                    : offsetof(struct cpu_state, riscv64_vtype));
+            gen(state, riscv64_rd_off(rd));
+            return 1;
+        }
+    }
+    if (opcode == 0x57 && (insn >> 25 & 1)) { // unmasked OP-V
+        unsigned f6 = insn >> 26, vs2 = (insn >> 20) & 31;
+        unsigned long voff = offsetof(struct cpu_state, riscv64_v);
+        if (f3 == 3 && (f6 == 0x18 || f6 == 0x19)) { // vmseq.vi / vmsne.vi
+            extern void gadget_riscv64_vmseq_vi8(void), gadget_riscv64_vmsne_vi8(void);
+            gen(state, (unsigned long) (f6 == 0x18 ? gadget_riscv64_vmseq_vi8 : gadget_riscv64_vmsne_vi8));
+            gen(state, voff + rd * 16);
+            gen(state, voff + vs2 * 16);
+            gen(state, (uint64_t) (((int64_t) (rs1 << 27)) >> 27) & 0xff);
+            gen(state, insn);
+            gen(state, state->riscv64_orig_ip);
+            return 1;
+        }
+        if (f3 == 2 && f6 == 0x10 && rs1 == 0x11) { // vfirst.m
+            extern void gadget_riscv64_vfirst_m(void);
+            gen(state, (unsigned long) gadget_riscv64_vfirst_m);
+            gen(state, riscv64_rd_off(rd));
+            gen(state, voff + vs2 * 16);
+            gen(state, insn);
+            gen(state, state->riscv64_orig_ip);
+            return 1;
+        }
+    }
+    // unmasked unit-stride loads (plain and fault-only-first) and stores,
+    // one field: the fast-path gadgets, which fall back to C themselves
+    if ((opcode == 0x07 || opcode == 0x27) && (f3 == 0 || f3 >= 5) && (insn >> 25) == 1 &&
+            (((insn >> 20) & 31) == 0 || (opcode == 0x07 && ((insn >> 20) & 31) == 0x10))) {
+        extern void gadget_riscv64_vle_fast(void), gadget_riscv64_vse_fast(void);
+        unsigned eewb = f3 == 0 ? 1 : f3 == 5 ? 2 : f3 == 6 ? 4 : 8;
+        gen(state, (unsigned long) (opcode == 0x07 ? gadget_riscv64_vle_fast : gadget_riscv64_vse_fast));
+        gen(state, eewb);
+        gen(state, offsetof(struct cpu_state, riscv64_v) + rd * 16);
+        gen(state, riscv64_rs_off(rs1));
+        gen(state, insn);
+        gen(state, state->riscv64_orig_ip);
+        return 1;
+    }
     gen(state, (unsigned long) gadget_riscv64_vop);
     gen(state, insn);
     gen(state, state->riscv64_orig_ip);

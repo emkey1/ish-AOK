@@ -11,7 +11,7 @@ Started 2026-10-05, after `builds/iSH-AOK_557`. Supersedes
 
 | § | item | state |
 |---|---|---|
-| 1 | RVA23 on the riscv64 guest | **PARTIAL**: the scalar extensions and V are in (2026-10-05); V is not advertised yet; vfrec7/vfrsqrt7 and Supm are open |
+| 1 | RVA23 on the riscv64 guest | **DONE for 558** (2026-10-05): the scalar extensions and V are in, and Ubuntu 25.10 (RVA23) runs apt/python3/gcc on the Mac and the M4; V stays unadvertised until its gadgets are faster; Supm deliberately not |
 
 ---
 
@@ -97,8 +97,10 @@ on the Mac and the M4.
 - The NT_RISCV_VECTOR ptrace regset reads and writes it
   (tests/manual/riscv64/riscv64_rvv_ptrace.c). PR_RISCV_V_GET/SET_CONTROL
   answer EINVAL, as a kernel without V does, while V is unadvertised.
-- **Open:** vfrec7/vfrsqrt7 (need the spec's two 128-entry tables, not
-  written from memory; illegal for now), and the vector-register gadgets.
+- vfrec7/vfrsqrt7 since: the spec's two 128-entry tables, taken from its
+  vfrsqrt7.adoc/vfrec7.adoc, and its exponent rules; its four worked
+  examples and the 2^-7 accuracy are checked in riscv64_rvv.c.
+- **Open:** gadgets for the rest of the hot vector instructions.
 
 **Supm, decided against for now:** user pointer masking exists only for a
 program that asks for it, prctl(PR_SET_TAGGED_ADDR_CTRL) with a PMLEN
@@ -107,9 +109,32 @@ callers handle. AOK refuses it too (EINVAL, measured), so nothing breaks;
 honouring it would mean masking every guest address in every memory
 gadget for one sanitizer.
 
-**Left:** the V items above, and the proof below: an RVA23 Ubuntu root (its
-archive is built with V as the baseline) -- pulling one is a download the
-maintainer should approve.
+**Proved 2026-10-05 (Mac CLI): Ubuntu 25.10 riscv64 runs.** ubuntu-base-
+25.10-base-riscv64.tar.gz (cdimage.ubuntu.com, SHA256 e6dcaa68...) as a
+fakefs root (build/ubuntu-riscv64-rva23): apt-get update and install of
+python3 3.13 and gcc 15 (90.9 MB, dpkg and every maintainer script), then
+python3 (hashlib/json/sqlite3/ssl/zlib; the same hash as on Alpine and
+Devuan) and gcc compiling and running a program. Its gcc's default target
+is the RVA23 set, V included. One AOK bug found on the way: a hard-linked
+file named by the wrong link in /proc/self/exe, which stopped every one of
+Ubuntu's (uutils) coreutils -- fixed, 59575749a. Its Python spends ~3% of
+its time in vector instructions (libc's string functions), so V's speed is
+not what limits it; the rest is the scalar riscv64 JIT, as on Alpine.
+apt printed ~2000 "Tried to start delayed item" warnings for the one
+package whose first fetch failed (Ign) and was retried successfully: apt
+repeating itself once per pass of its fetch loop over a slow (118 kB/s)
+12-minute download, not seen to be an AOK fault.
+
+**And on the M4** (installed with manage-roots.sh from the same URL, run
+by chroot with /proc mounted): apt-get update/install of python3 and gcc
+(no warnings this time -- the Mac's came with its flaky fetch), the same
+python hash, gcc building and running, and the Python microbench at
+99/535/448/387 ms (fib/method/dict/str) -- level with the Alpine 3.24.2
+riscv64 root on the same device (95/562/428/413). dmesg clean.
+
+**Left:** the V items above, and vector gadgets for the string-function instructions
+(vsetvli, unit-stride vle/vse/vle-ff, vmseq/vmsne.vi, vfirst.m and csrr vl
+have them now), before V is advertised.
 
 **Next step (originally):** confirm the Ubuntu 25.10+ baseline and pull an Ubuntu riscv64
 rootfs, run it with ISH_TRACE on undefined instructions to get the order
