@@ -112,7 +112,10 @@ static void emit_mem_one(void) {
                 b((uint8_t) (0x58 + (c & 7)));
                 break;
             }
-            case 11: rex_mem_any(w, a); b(0x39); mem_any(a); break;                       // cmp [m], a
+            case 11: // cmp [m], a or cmp [m], imm8 (83 /7)
+                if (rnd() & 1) { rex_mem_any(w, a); b(0x39); mem_any(a); }
+                else { rex_mem_any(w, 0); b(0x83); mem_any(7); b((uint8_t) rnd()); }
+                break;
             case 12: { // jmp *a / call *a to the next instruction (a = lea [rip + len])
                 int is_call = (int) (rnd() & 1), len = (a & 8) ? 3 : 2;
                 b((uint8_t) (0x48 | ((a & 8) ? 4 : 0))); b(0x8d); b((uint8_t) (0x05 | (a & 7) << 3));
@@ -172,7 +175,7 @@ static void emit_one(void) {
         emit_mem_one();
         return;
     }
-    switch (rnd() % 17) {
+    switch (rnd() % 18) {
         case 0: case 1: case 2: case 3: { // alu reg,reg: add or adc sbb and sub xor cmp
             static const uint8_t ops[] = {0x01, 0x09, 0x11, 0x19, 0x21, 0x29, 0x31, 0x39};
             rex(w, c, a); b(ops[rnd() % 8]); modrm_rr(c, a); break;
@@ -214,6 +217,8 @@ static void emit_one(void) {
             }
             rex(1, c, a); b(0x89); modrm_rr(c, a); break;
         }
+        case 15: // neg a / not a (F7 /3, /2)
+            rex(w, 0, a); b(0xf7); modrm_rr(rnd() & 1 ? 3 : 2, a); break;
         case 14: // imul a, c (0F AF) or imul a, c, imm8 (6B): CF/OF only
             if (rnd() & 1) { rex(w, a, c); b(0x0f); b(0xaf); modrm_rr(a, c); }
             else { rex(w, a, c); b(0x6b); modrm_rr(a, c); b((uint8_t) rnd()); }

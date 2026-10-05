@@ -10883,6 +10883,36 @@ amd64_r16_ri amd64_sjr16, call, 64, x, 63, 0
 .endm
 amd64_r16_srcs17 amd64_sjm16, jmp, 64, x, 63, 0, 0, 0
 amd64_r16_srcs17 amd64_sjm16, call, 64, x, 63, 0, 0, 0
+
+# cmp [mem], imm32 (81/83 /7), 32/64-bit, on the register cache:
+# amd64_scmi<size>_<base>, the 18 bases, flags only. Operands: [disp or
+# address][insn rip][imm]; gret 3.
+.macro amd64_scmi16 op, s, R, bits, nf, d, hd, b, hb
+    .if \b == 16
+    .gadget amd64_scmi\s\()_r
+    .elseif \b == 17
+    .gadget amd64_scmi\s\()_x
+    .else
+    .gadget amd64_scmi\s\()_\b
+    .endif
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    amd64_m16_addr \b, \hb
+    amd64_vread_prep (\s / 8), scmi\s\()_\b
+    ldr \R\()13, [x9]
+    ldr x10, [_ip, 16]
+    .if \s == 32
+    mov w10, w10
+    .endif
+    subs \R\()15, \R\()13, \R\()10
+    cset w14, cc
+    cset w16, vs
+    amd64_cached_set_addsub_flags \bits
+    gret 3
+    amd64_svread_bullshit (\s / 8), scmi\s\()_\b
+.endm
+amd64_r16_srcs17 amd64_scmi16, cmp, 32, w, 31, 0, 0, 0
+amd64_r16_srcs17 amd64_scmi16, cmp, 64, x, 63, 0, 0, 0
 .global NAME(amd64_specmem_end)
 NAME(amd64_specmem_end):
 # Tables: amd64_smem_gadgets[((st * 2 + size64) * 16 + reg) * 18 + base]
@@ -11527,5 +11557,122 @@ amd64_r16_family amd64_r16_rr, amd64_im16, ri
     .irp cond, o,c,z,cz,s,p,sxo,sxoz
         amd64_fci_rows \cond, 32
         amd64_fci_rows \cond, 64
+    .endr
+.popsection
+
+# neg/not r32/r64 per register, any of the sixteen: amd64_neg<size>_<reg>
+# (full and _nf; the flags of 0 - x) and amd64_not<size>_<reg> (no flags).
+# test r, r per register pair: amd64_tst<size>_<a>_<b>, logic flags, flags
+# only. No operands, gret 0. Tables amd64_neg{,_nf}_gadgets[size64 * 16 +
+# reg], amd64_not_gadgets[size64 * 16 + reg], amd64_tst_gadgets[(size64 *
+# 16 + a) * 16 + b].
+.macro amd64_nn16 op, s, R, bits, nf, d, hd
+.ifc \op, not
+.gadget amd64_not\s\()_\d
+    .if \d < 8
+    mvn \R\hd, \R\hd
+    .else
+    ldr \R\()13, [_cpu, CPU_amd64_regs + 8 * \d]
+    mvn \R\()13, \R\()13
+    str x13, [_cpu, CPU_amd64_regs + 8 * \d]
+    .endif
+    gret
+.else
+.if \nf
+.gadget amd64_neg\s\()_\d\()_nf
+    .if \d < 8
+    neg \R\hd, \R\hd
+    .else
+    ldr \R\()13, [_cpu, CPU_amd64_regs + 8 * \d]
+    neg \R\()13, \R\()13
+    str x13, [_cpu, CPU_amd64_regs + 8 * \d]
+    .endif
+    gret
+.else
+.gadget amd64_neg\s\()_\d
+    amd64_r16_get \R, 10, \d, \hd
+    mov x13, 0
+    subs \R\()15, \R\()zr, \R\()10
+    cset w14, cc
+    cset w16, vs
+    amd64_cached_set_addsub_flags \bits
+    amd64_r16_put 15, \d, \hd
+    gret
+.endif
+.endif
+.endm
+amd64_r16_ri amd64_nn16, not, 32, w, 31, 0
+amd64_r16_ri amd64_nn16, not, 64, x, 63, 0
+amd64_r16_family amd64_r16_ri, amd64_nn16, neg
+.macro amd64_tst16 op, s, R, bits, nf, d, hd, sr, hs
+.gadget amd64_tst\s\()_\d\()_\sr
+    .if \d < 8
+    .if \sr < 8
+    and \R\()15, \R\hd, \R\hs
+    .else
+    ldr \R\()10, [_cpu, CPU_amd64_regs + 8 * \sr]
+    and \R\()15, \R\hd, \R\()10
+    .endif
+    .else
+    ldr \R\()13, [_cpu, CPU_amd64_regs + 8 * \d]
+    .if \sr < 8
+    and \R\()15, \R\()13, \R\hs
+    .else
+    ldr \R\()10, [_cpu, CPU_amd64_regs + 8 * \sr]
+    and \R\()15, \R\()13, \R\()10
+    .endif
+    .endif
+    mov x11, \s
+    amd64_cached_set_logic_flags x15, x11
+    gret
+.endm
+amd64_r16_rr amd64_tst16, test, 32, w, 31, 0
+amd64_r16_rr amd64_tst16, test, 64, x, 63, 0
+.macro amd64_nn_quad op, s, d, nf
+    .if \nf
+    .quad NAME(gadget_amd64_\op\()\s\()_\d\()_nf)
+    .else
+    .quad NAME(gadget_amd64_\op\()\s\()_\d)
+    .endif
+.endm
+.macro amd64_nn_table op, nf
+    .irp s, 32,64
+        .irp d, 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
+            amd64_nn_quad \op, \s, \d, \nf
+        .endr
+    .endr
+.endm
+.macro amd64_tst_quad s, d, sr
+    .quad NAME(gadget_amd64_tst\s\()_\d\()_\sr)
+.endm
+.macro amd64_scmi_quad s, b
+    .if \b == 16
+    .quad NAME(gadget_amd64_scmi\s\()_r)
+    .elseif \b == 17
+    .quad NAME(gadget_amd64_scmi\s\()_x)
+    .else
+    .quad NAME(gadget_amd64_scmi\s\()_\b)
+    .endif
+.endm
+.pushsection_rodata
+.global.name amd64_neg_gadgets
+    amd64_nn_table neg, 0
+.global.name amd64_neg_nf_gadgets
+    amd64_nn_table neg, 1
+.global.name amd64_not_gadgets
+    amd64_nn_table not, 0
+.global.name amd64_tst_gadgets
+    .irp s, 32,64
+        .irp d, 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
+            .irp sr, 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
+                amd64_tst_quad \s, \d, \sr
+            .endr
+        .endr
+    .endr
+.global.name amd64_scmi_gadgets
+    .irp s, 32,64
+        .irp b, 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17
+            amd64_scmi_quad \s, \b
+        .endr
     .endr
 .popsection
