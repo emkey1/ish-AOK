@@ -56,6 +56,7 @@ void cpu() {
     OFFSET(LOCAL, jit_frame, last_block);
     OFFSET(LOCAL, jit_frame, chain_budget);
     OFFSET(LOCAL, jit_frame, ret_cache);
+    OFFSET(LOCAL, jit_frame, i386_cache);
     OFFSET(CPU, cpu_state, segfault_addr);
     OFFSET(CPU, cpu_state, segfault_was_write);
     OFFSET(CPU, cpu_state, segfault_reported);

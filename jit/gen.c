@@ -17185,6 +17185,77 @@ static inline bool gen_vec(enum arg src, enum arg dst, void (*helper)(), gadget_
     }
 #endif
 
+#if defined(__aarch64__)
+    // The commonest moves, natively (gadgets-aarch64/misc.S vec_movd_*,
+    // vec_ld*/vec_st*, vec_copy64z, vec_punpckldq): movd between an xmm and
+    // a general register or memory, movq/movsd/movss loads and stores, movq
+    // xmm to xmm, punpckldq -- what i386 gcc moves 64-bit values with.
+    if (!has_imm) {
+        extern void gadget_vec_movd_to_reg_a(void), gadget_vec_movd_to_reg_c(void),
+                gadget_vec_movd_to_reg_d(void), gadget_vec_movd_to_reg_b(void),
+                gadget_vec_movd_to_reg_sp(void), gadget_vec_movd_to_reg_bp(void),
+                gadget_vec_movd_to_reg_si(void), gadget_vec_movd_to_reg_di(void);
+        extern void gadget_vec_movd_from_reg_a(void), gadget_vec_movd_from_reg_c(void),
+                gadget_vec_movd_from_reg_d(void), gadget_vec_movd_from_reg_b(void),
+                gadget_vec_movd_from_reg_sp(void), gadget_vec_movd_from_reg_bp(void),
+                gadget_vec_movd_from_reg_si(void), gadget_vec_movd_from_reg_di(void);
+        extern void gadget_vec_ld32z(void), gadget_vec_ld64z(void),
+                gadget_vec_st32(void), gadget_vec_st64(void),
+                gadget_vec_copy64z(void), gadget_vec_punpckldq(void);
+        static void (*const movd_to[8])(void) = { // x86 register order
+            gadget_vec_movd_to_reg_a, gadget_vec_movd_to_reg_c, gadget_vec_movd_to_reg_d,
+            gadget_vec_movd_to_reg_b, gadget_vec_movd_to_reg_sp, gadget_vec_movd_to_reg_bp,
+            gadget_vec_movd_to_reg_si, gadget_vec_movd_to_reg_di,
+        };
+        static void (*const movd_from[8])(void) = {
+            gadget_vec_movd_from_reg_a, gadget_vec_movd_from_reg_c, gadget_vec_movd_from_reg_d,
+            gadget_vec_movd_from_reg_b, gadget_vec_movd_from_reg_sp, gadget_vec_movd_from_reg_bp,
+            gadget_vec_movd_from_reg_si, gadget_vec_movd_from_reg_di,
+        };
+        bool rm_reg = modrm->type == modrm_reg;
+        bool rm_mem = could_be_memory(rm) && !rm_reg;
+        bool xmm_reg = reg == arg_xmm_modrm_reg;
+        uint16_t xoff = CPU_OFFSET(xmm[modrm->opcode & 7]);
+        if (xmm_reg && rm_is_src && helper == (void (*)()) vec_zero128_copy32 &&
+                rm == arg_modrm_val && rm_reg) { // movd xmm, r32
+            GEN(movd_to[modrm->rm_opcode & 7]);
+            GEN(xoff);
+            return true;
+        }
+        if (xmm_reg && !rm_is_src && helper == (void (*)()) vec_zero32_copy32 &&
+                rm == arg_modrm_val && rm_reg) { // movd r32, xmm
+            GEN(movd_from[modrm->rm_opcode & 7]);
+            GEN(xoff);
+            return true;
+        }
+        if (xmm_reg && rm_is_src && rm_mem && (helper == (void (*)()) vec_zero128_copy32 ||
+                helper == (void (*)()) vec_zero128_copy64)) { // movd/movss/movq/movsd xmm, m
+            gen_addr(state, modrm, seg_tls);
+            GEN(helper == (void (*)()) vec_zero128_copy32 ? gadget_vec_ld32z : gadget_vec_ld64z);
+            GEN(state->orig_ip);
+            GEN(xoff);
+            return true;
+        }
+        if (xmm_reg && !rm_is_src && rm_mem && (helper == (void (*)()) vec_merge32 ||
+                helper == (void (*)()) vec_merge64)) { // movd/movss/movq/movsd m, xmm
+            gen_addr(state, modrm, seg_tls);
+            GEN(helper == (void (*)()) vec_merge32 ? gadget_vec_st32 : gadget_vec_st64);
+            GEN(state->orig_ip);
+            GEN(xoff);
+            return true;
+        }
+        if (rm == arg_xmm_modrm_val && rm_reg && xmm_reg &&
+                (helper == (void (*)()) vec_zero128_copy64 || helper == (void (*)()) vec_unpackl_dq128)) {
+            // movq xmm, xmm (zero-extending) and punpckldq xmm, xmm
+            uint16_t roff = CPU_OFFSET(xmm[modrm->rm_opcode & 7]);
+            uint16_t src = rm_is_src ? roff : xoff, dst = rm_is_src ? xoff : roff;
+            GEN(helper == (void (*)()) vec_unpackl_dq128 ? gadget_vec_punpckldq : gadget_vec_copy64z);
+            GEN(src | ((uint64_t) dst << 16));
+            return true;
+        }
+    }
+#endif
+
     uint16_t reg_offset = cpu_reg_offset(reg, modrm->opcode);
     uint16_t rm_reg_offset = cpu_reg_offset(rm, modrm->rm_opcode);
     assert(reg_offset != 0);

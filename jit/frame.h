@@ -95,4 +95,13 @@ struct jit_frame {
     // frees or invalidates blocks must clear this: jit_entry_scratch_get on a
     // jit switch or a block free, and the per-frontend cleanup_seq purge.
     long ret_cache[JIT_RETURN_CACHE_SIZE];
+    // i386 only: the dispatch loop's per-thread block cache (`cache` in
+    // cpu_step_to_interrupt, keyed by jit_cache_hash), so jmp_indir and
+    // call_indir can enter a block the loop has already looked up without
+    // going back to C (gadgets-aarch64/control.S i386_indir_chain). Set on
+    // every i386 entry. Its entries need no clearing of their own: the loop
+    // wipes the array whenever blocks may have been freed (cleanup_seq), always
+    // before it enters the JIT, and the gadget rejects an entry whose addr does
+    // not match or that is jetsam, as the loop does.
+    struct jit_block **i386_cache;
 };

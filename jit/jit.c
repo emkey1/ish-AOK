@@ -2566,6 +2566,9 @@ int jit_enter_amd64(struct jit_block *block, struct jit_frame *frame, struct tlb
 #define jit_enter_amd64 jit_enter
 #endif
 
+// i386_indir_chain (gadgets-aarch64/control.S) computes this too, as
+// mul + ubfx #32, #10: keep the constant and the 1024 in step with it.
+_Static_assert(JIT_CACHE_SIZE == 1024, "i386_indir_chain hashes into 1024 slots");
 static inline size_t jit_cache_hash(guest_addr_t ip) {
     // Same mixing rationale as jit_hash_bucket: ip ^ (ip >> 12) preserved the
     // low-bit clustering of block addresses, causing conflict evictions in
@@ -2632,6 +2635,7 @@ static int cpu_step_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
     // The old `= {}` zeroed it implicitly; now it is explicit.
     frame->last_block = NULL;
     frame->cpu = *cpu;
+    frame->i386_cache = cache;
     assert(jit->mmu == cpu->mmu);
 
     jit_crash_frame = frame;

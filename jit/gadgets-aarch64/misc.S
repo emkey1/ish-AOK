@@ -474,6 +474,90 @@ do_helper_tlb_retint 2
     .endr
 .endr
 
+# The commonest SSE moves without the C call (gen_vec): Alpine's i386 gcc
+# moves 64-bit values through xmm (movd r32 -> xmm, punpckldq, movq xmm ->
+# m64; movsd for doubles), ~7% of Python's instructions, and each was a
+# vec_helper call with every register saved and reloaded around it.
+# The xmm register is an offset from _cpu in the operand word.
+#   vec_movd_to_<reg>: xmm = zero-extended reg            [gadget][xmm]
+#   vec_movd_from_<reg>: reg = xmm's low dword            [gadget][xmm]
+#   vec_ld32z / vec_ld64z: xmm = [addr] zero-extended     [gadget][orig ip][xmm]
+#   vec_st32 / vec_st64: [addr] = xmm's low dword/qword   [gadget][orig ip][xmm]
+#   vec_copy64z: dst = src's low qword, zero-extended     [gadget][src | dst << 16]
+#   vec_punpckldq: dst = dst.d0 src.d0 dst.d1 src.d1      [gadget][src | dst << 16]
+# The 64-bit memory forms keep the helpers' dmb ish (before a store, after a
+# load): i386 C11 atomics do 64-bit loads and stores with movq.
+.macro vec_movd_pair name, reg
+.gadget vec_movd_to_\name
+    ldrh w8, [_ip]
+    add x8, _cpu, x8
+    str \reg, [x8]
+    str wzr, [x8, 4]
+    str xzr, [x8, 8]
+    gret_nomem 1
+.gadget vec_movd_from_\name
+    ldrh w8, [_ip]
+    ldr \reg, [_cpu, x8]
+    gret_nomem 1
+.endm
+.each_reg vec_movd_pair
+
+.gadget vec_ld32z
+    read_prep 32, vec_ld32z
+    ldr w9, [_xaddr]
+    ldrh w8, [_ip, 8]
+    add x8, _cpu, x8
+    str w9, [x8]
+    str wzr, [x8, 4]
+    str xzr, [x8, 8]
+    gret 2
+    read_bullshit 32, vec_ld32z
+.gadget vec_ld64z
+    read_prep 64, vec_ld64z
+    ldr x9, [_xaddr]
+    dmb ish
+    ldrh w8, [_ip, 8]
+    add x8, _cpu, x8
+    str x9, [x8]
+    str xzr, [x8, 8]
+    gret 2
+    read_bullshit 64, vec_ld64z
+.gadget vec_st32
+    write_prep 32, vec_st32
+    ldrh w8, [_ip, 8]
+    ldr w9, [_cpu, x8]
+    str w9, [_xaddr]
+    write_done 32, vec_st32
+    gret 2
+    write_bullshit 32, vec_st32
+.gadget vec_st64
+    write_prep 64, vec_st64
+    ldrh w8, [_ip, 8]
+    ldr x9, [_cpu, x8]
+    dmb ish
+    str x9, [_xaddr]
+    write_done 64, vec_st64
+    gret 2
+    write_bullshit 64, vec_st64
+.gadget vec_copy64z
+    ldrh w8, [_ip]
+    ldrh w9, [_ip, 2]
+    ldr x10, [_cpu, x8]
+    add x9, _cpu, x9
+    str x10, [x9]
+    str xzr, [x9, 8]
+    gret_nomem 1
+.gadget vec_punpckldq
+    ldrh w8, [_ip]
+    ldrh w9, [_ip, 2]
+    add x8, _cpu, x8
+    add x9, _cpu, x9
+    ldr q0, [x9]
+    ldr q1, [x8]
+    zip1 v0.4s, v0.4s, v1.4s
+    str q0, [x9]
+    gret_nomem 1
+
 .gadget fstsw_ax
     ldrh w10, [_cpu, CPU_fsw]
     movs eax, w10, h

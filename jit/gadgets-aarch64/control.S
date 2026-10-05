@@ -1,5 +1,37 @@
 #include "gadgets.h"
 
+# An indirect jmp or call to _tmp: enter the target's block straight from
+# the dispatch loop's block cache (jit_frame.i386_cache, jit_cache_hash's
+# slot: ip * 0x9E3779B97F4A7C15 >> 32, mod 1024) if it holds the block for
+# that address and the block is not jetsam, as the loop itself checks;
+# chain_ip then does the poke check, the chain budget and last_block. Else
+# out to C with eip = _tmp, as before. eip and _ip share x28, so eip is only
+# written on the way out.
+.macro i386_indir_chain
+    mov x8, LOCAL_i386_cache
+    ldr x8, [_cpu, x8]
+    cbz x8, 9f
+    movz x9, 0x7c15
+    movk x9, 0x7f4a, lsl 16
+    movk x9, 0x79b9, lsl 32
+    movk x9, 0x9e37, lsl 48
+    mov w10, _tmp
+    mul x10, x10, x9
+    ubfx x10, x10, 32, 10
+    ldr x8, [x8, x10, lsl 3]
+    cbz x8, 9f
+    ldr x9, [x8, JIT_BLOCK_addr]
+    cmp x9, _tmp, uxtw
+    b.ne 9f
+    ldrb w9, [x8, JIT_BLOCK_is_jetsam]
+    cbnz w9, 9f
+    add _ip, x8, JIT_BLOCK_code
+    chain_ip
+9:
+    mov eip, _tmp
+    b jit_ret
+.endm
+
 .gadget call
     // save return address
     sub _addr, esp, 4
@@ -34,8 +66,7 @@
     add x13, _cpu, x13
     str _ip, [x13, x12, lsl 3]
     // jump to target
-    mov eip, _tmp
-    b jit_ret
+    i386_indir_chain
     write_bullshit 32, call_indir
 
 .gadget ret
@@ -95,8 +126,7 @@
     read_bullshit 32, ret
 
 .gadget jmp_indir
-    mov eip, _tmp
-    b jit_ret
+    i386_indir_chain
 .gadget jmp
     ldr _ip, [_ip]
     chain_ip
