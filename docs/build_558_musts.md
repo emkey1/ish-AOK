@@ -118,21 +118,28 @@ on the Mac and the M4.
   ei16), vcompress, viota; vadc/vmadc/vsbc/vmsbc; the Zvbb unary ops
   (vbrev, vbrev8, vrev8, vclz, vctz, vcpop.v); the mask-register logical
   ops, vmsbf/vmsif/vmsof, vcpop, vfirst, vid, vzext/vsext, vmv.x.s/vmv.s.x,
-  vmv<nr>r. Checked by tests/manual/riscv64/riscv64_rvv_gadgets.c
+  vmv<nr>r; and all of FP at SEW 32/64: add, sub, rsub, mul, div, rdiv,
+  min/max (minimumNumber, the signalling-NaN case fixed up per lane),
+  sign injection, the eight FMAs, sqrt, the six compares, vfmerge/vfmv,
+  vfmv.f.s/s.f, vfclass, vfrsqrt7/vfrec7, every conversion (single,
+  widening, narrowing, rtz, rod, Zvfhmin's f16), the reductions and the
+  widening arithmetic and reductions -- NEON lanes for the element-wise
+  ones (masked-off and tail lanes get inputs that raise nothing), scalar FP
+  per element for the rest, under the host FPCR that carries frm, with
+  RISC-V's NaN and saturation rules. Checked by tests/manual/riscv64/riscv64_rvv_gadgets.c
   (tools/gen-rvv-gadget-test.py): each instruction under every SEW/LMUL,
   typed and re-dispatched, masked and not, at random and special-value
-  data, against a model written from the spec (not the C core), 148k
-  checks, plus SIGILL for misaligned groups and the widening limits; a
-  positive control fired for every gadget family. Vector kernels against
+  data and all four rounding modes, against a model written from the spec
+  (not the C core; fflags compared for FP), 131k checks, plus SIGILL for
+  misaligned groups and the widening limits; a positive control fired
+  for every gadget family. Vector kernels against
   the same loop built scalar, M4: add 3.0x, sum 2.2x, max 3.3x, count
   3.2x, select (vmul) 4.4x, shift 2.3x; gather 0.8x. OpenSSL ChaCha20 on
   its vector path: 108 MB/s against 52 scalar (M4).
 - **Open: the rest of V as gadgets, then delete the C core**
   (jit/riscv64_vector.c, still reached for everything not listed above and
-  for a nonzero vstart, page crossings and TLB misses): FP arithmetic,
-  FMAs, min/max, sign injection, compares, vfclass, vfsqrt,
-  vfrec7/vfrsqrt7, conversions (widening/narrowing, rod) and FP
-  reductions; memory: strided, segment, whole-register, mask loads/
+  for a nonzero vstart, page crossings and TLB misses): memory:
+  strided, segment, whole-register, mask loads/
   stores, indexed stores, masked unit-stride, fault-only-first faulting,
   page crossings and TLB misses inside the gadget, a nonzero vstart (the
   spec lets arithmetic trap on one; memory must resume); fixed point

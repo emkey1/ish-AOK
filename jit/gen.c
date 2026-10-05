@@ -7485,6 +7485,94 @@ static int gen_riscv64_vector(struct gen_state *state, uint32_t insn) {
             return 1;
         }
     }
+    // FP (OPFVV, OPFVF) at SEW 32 and 64; other SEWs re-dispatch to a trap
+    if (opcode == 0x57 && (f3 == 1 || f3 == 5)) {
+        unsigned si = (gvt >> 3) & 7, n = rv_regs(rv_lmul8(gvt)), m = !unmasked, kind = f3 == 1 ? 0 : 1;
+        bool fp_sew = si == 2 || si == 3;
+        unsigned sidx = fp_sew ? si : 2;
+        uint64_t src = kind == 0 ? VREG(rs1) : offsetof(struct cpu_state, riscv64_f) + rs1 * 8;
+        int op = -1;
+        static const signed char fbin[64] = {
+            [0x00] = 1, [0x02] = 2, [0x04] = 7, [0x06] = 8, [0x08] = 9, [0x09] = 10, [0x0a] = 11,
+            [0x20] = 5, [0x21] = 6, [0x24] = 4, [0x27] = 3, [0x28] = 18, [0x29] = 19, [0x2a] = 20,
+            [0x2b] = 21, [0x2c] = 14, [0x2d] = 15, [0x2e] = 16, [0x2f] = 17,
+        }; // op + 1: add sub rsub mul div rdiv min max sgnj sgnjn sgnjx mv sqrt macc nmacc msac nmsac madd nmadd msub nmsub merge
+        if (fbin[f6] != 0 && !(kind == 0 && (f6 == 0x21 || f6 == 0x27)))
+            op = fbin[f6] - 1;
+        else if (f6 == 0x17 && kind == 1)
+            op = unmasked ? (vs2 == 0 ? 11 : -1) : 21; // vfmv.v.f / vfmerge.vfm
+        else if (f6 == 0x13 && kind == 0 && rs1 == 0)
+            op = 12; // vfsqrt.v
+        if (op >= 0 && (unmasked || rd != 0 || op == 21)) {
+            extern const unsigned long riscv64_vfb_gadgets[22 * 2 * 2 * 4];
+            bool mm = op == 21 ? 0 : m; // vfmerge is unmasked-shaped
+            bool aligned = fp_sew && rd % n == 0 && vs2 % n == 0 && (kind != 0 || op == 12 || rs1 % n == 0) &&
+                    (op != 21 || rd != 0);
+            gen_rv_vgadget(state, riscv64_vfb_gadgets[((op * 2 + kind) * 2 + (op == 21 ? 1 : mm)) * 4 + sidx], 4,
+                    aligned ? gvt : RV_VT_NEVER, VREG(rd), VREG(vs2), src, insn);
+            return 1;
+        }
+        static const signed char fcmp[8] = {1, 4, 0, 3, 2, 5, 0, 6}; // 0x18-0x1f: eq le - lt ne gt - ge, + 1
+        if (f6 >= 0x18 && f6 <= 0x1f && fcmp[f6 - 0x18] && !(kind == 0 && (f6 == 0x1d || f6 == 0x1f))) {
+            extern const unsigned long riscv64_vfc_gadgets[6 * 2 * 2 * 4];
+            unsigned cop = (unsigned) fcmp[f6 - 0x18] - 1;
+            bool aligned = fp_sew && vs2 % n == 0 && (kind != 0 || rs1 % n == 0);
+            gen_rv_vgadget(state, riscv64_vfc_gadgets[((cop * 2 + kind) * 2 + m) * 4 + sidx], 4,
+                    aligned ? gvt : RV_VT_NEVER, VREG(rd), VREG(vs2), src, insn);
+            return 1;
+        }
+        // VFUNARY0 conversions, VFUNARY1 class/estimates, the reductions and
+        // the widening arithmetic: element by element
+        if (kind == 0 && f6 == 0x12 && rs1 < 24) {
+            extern const unsigned long riscv64_vfcvt_gadgets[24 * 2 * 4];
+            const unsigned long *row = &riscv64_vfcvt_gadgets[(rs1 * 2 + m) * 4];
+            unsigned w = rv_regs(rv_lmul8(gvt) * 2);
+            bool widen = rs1 >= 8 && rs1 < 16, narrow = rs1 >= 16;
+            unsigned long g = row[si];
+            bool ok = g != 0 && rv_lmul8(gvt) < (widen || narrow ? 64 : 128) &&
+                    rd % (widen ? w : n) == 0 && vs2 % (narrow ? w : n) == 0 && (unmasked || rd != 0);
+            for (unsigned k = 0; g == 0 && k < 4; k++)
+                g = row[k];
+            if (g != 0) {
+                gen_rv_vgadget(state, g, 4, ok ? gvt : RV_VT_NEVER, VREG(rd), VREG(vs2), 0, insn);
+                return 1;
+            }
+        }
+        if (kind == 0 && f6 == 0x13 && (rs1 == 16 || rs1 == 4 || rs1 == 5)) {
+            extern const unsigned long riscv64_vfun1_gadgets[3 * 2 * 4];
+            unsigned op = rs1 == 16 ? 0 : rs1 == 4 ? 1 : 2;
+            bool ok = fp_sew && rd % n == 0 && vs2 % n == 0 && (unmasked || rd != 0);
+            gen_rv_vgadget(state, riscv64_vfun1_gadgets[(op * 2 + m) * 4 + sidx], 4,
+                    ok ? gvt : RV_VT_NEVER, VREG(rd), VREG(vs2), 0, insn);
+            return 1;
+        }
+        if (kind == 0 && (f6 == 0x01 || f6 == 0x03 || f6 == 0x05 || f6 == 0x07 || f6 == 0x31 || f6 == 0x33)) {
+            extern const unsigned long riscv64_vfred_gadgets[4 * 2 * 4];
+            unsigned op = f6 >= 0x30 ? 3 : f6 <= 0x03 ? 0 : f6 == 0x05 ? 1 : 2;
+            bool ok = (op == 3 ? si == 2 : fp_sew) && vs2 % n == 0;
+            gen_rv_vgadget(state, riscv64_vfred_gadgets[(op * 2 + m) * 4 + (op == 3 ? 2 : sidx)], 4,
+                    ok ? gvt : RV_VT_NEVER, VREG(rd), VREG(vs2), VREG(rs1), insn);
+            return 1;
+        }
+        static const signed char fwop[16] = {1, 0, 2, 0, 3, 0, 4, 0, 5, 0, 0, 0, 6, 7, 8, 9}; // 0x30-0x3f, + 1
+        if (f6 >= 0x30 && fwop[f6 - 0x30] && (unmasked || rd != 0)) {
+            extern const unsigned long riscv64_vfw_gadgets[9 * 2 * 2 * 4];
+            unsigned op = (unsigned) fwop[f6 - 0x30] - 1, w = rv_regs(rv_lmul8(gvt) * 2);
+            bool aw = op == 2 || op == 3;
+            bool ok = si == 2 && rv_lmul8(gvt) < 64 && rd % w == 0 && vs2 % (aw ? w : n) == 0 &&
+                    (kind != 0 || rs1 % n == 0);
+            gen_rv_vgadget(state, riscv64_vfw_gadgets[((op * 2 + kind) * 2 + m) * 4 + 2], 4,
+                    ok ? gvt : RV_VT_NEVER, VREG(rd), VREG(vs2), src, insn);
+            return 1;
+        }
+        if (f6 == 0x10 && unmasked && ((kind == 0 && rs1 == 0) || (kind == 1 && vs2 == 0))) {
+            extern const unsigned long riscv64_vfmv_gadgets[2 * 4]; // vfmv.f.s / vfmv.s.f
+            uint64_t fd = offsetof(struct cpu_state, riscv64_f) + rd * 8;
+            gen_rv_vgadget(state, riscv64_vfmv_gadgets[kind * 4 + sidx], 3, fp_sew ? gvt : RV_VT_NEVER,
+                    kind == 0 ? fd : VREG(rd), kind == 0 ? VREG(vs2) : src, 0, insn);
+            return 1;
+        }
+    }
     // permutations, carries and the Zvbb unary ops, element by element
     if (opcode == 0x57) {
         unsigned si = (gvt >> 3) & 7, n = rv_regs(rv_lmul8(gvt)), m = !unmasked;

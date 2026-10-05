@@ -499,10 +499,10 @@ vtrap_ill_40:
 
 // v4 = the lanes of this chunk whose v0 mask bit is set (x3:x4 the mask
 // bits, x5 the chunk's first element, advanced; v6 the bit weights)
-.macro vlanemask sew
-    cmp x5, #64
-    csel x9, x3, x4, lo
-    lsr x9, x9, x5
+.macro vlanemask sew, lo=x3, hi=x4, pos=x5
+    cmp \pos, #64
+    csel x9, \lo, \hi, lo
+    lsr x9, x9, \pos
     dup v4.8b, w9
     lsr w10, w9, #8
     dup v5.8b, w10
@@ -517,7 +517,7 @@ vtrap_ill_40:
 .if \sew == 8
     sxtl v4.2d, v4.2s
 .endif
-    add x5, x5, #(16 / \sew)
+    add \pos, \pos, #(16 / \sew)
 .endm
 
 // vd = vs2 op src: [gadget][vtype][vd_off][vs2_off][vs1_off|rs1_off|imm][insn][pc]
@@ -1336,6 +1336,898 @@ vubody_\op\()_\masked\()_e\sew :
 .endr
 .endr
 
+// ---- floating point: SEW 32 and 64 (no Zvfh: SEW 8 and 16 trap) ----
+// The host FPCR carries frm and default-NaN while the guest runs and the
+// host's flags become fflags (emu/fpenv.c), so NEON lanes round and raise
+// as RISC-V does. Lanes that are masked off or past vl are given an input
+// that raises nothing (v21: 0, or 1 for the divisions) before the op and
+// get vd's old value back after it.
+
+// v1 = the f register in stream word 3, NaN-boxed at SEW 32
+.macro vf_scalar sew
+    ldr x15, [_cpu, x15]
+.if \sew == 4
+    lsr x9, x15, #32
+    cmn w9, #1
+    mov w9, #0x7fc00000
+    csel w15, w15, w9, eq
+    dup v1.4s, w15
+.else
+    dup v1.2d, x15
+.endif
+.endm
+// raise fflags bits in the host FPSR (IOC 1 = NV, DZC 2 = DZ, OFC 4 = OF,
+// UFC 8 = UF, IXC 16 = NX)
+.macro vraise bits
+    mrs x9, fpsr
+    orr x9, x9, #\bits
+    msr fpsr, x9
+.endm
+// RISC-V min/max (minimumNumber): the non-NaN operand, even against a
+// signalling NaN, where fminnm gives the default NaN (it still raises NV)
+.macro vf_minmax insn, T
+    \insn v24.\T, v0.\T, v23.\T
+    fcmeq v25.\T, v0.\T, v0.\T
+    fcmeq v26.\T, v23.\T, v23.\T
+    bic v27.16b, v26.16b, v25.16b
+    bit v24.16b, v23.16b, v27.16b
+    bic v27.16b, v25.16b, v26.16b
+    bit v24.16b, v0.16b, v27.16b
+    mov v0.16b, v24.16b
+.endm
+// ops: v0 = vs2, v23 = vs1 or the scalar, v22 = vd; result in v0
+.macro vfo_add T
+    fadd v0.\T, v0.\T, v23.\T
+.endm
+.macro vfo_sub T
+    fsub v0.\T, v0.\T, v23.\T
+.endm
+.macro vfo_rsub T
+    fsub v0.\T, v23.\T, v0.\T
+.endm
+.macro vfo_mul T
+    fmul v0.\T, v0.\T, v23.\T
+.endm
+.macro vfo_div T
+    fdiv v0.\T, v0.\T, v23.\T
+.endm
+.macro vfo_rdiv T
+    fdiv v0.\T, v23.\T, v0.\T
+.endm
+.macro vfo_min T
+    vf_minmax fminnm, \T
+.endm
+.macro vfo_max T
+    vf_minmax fmaxnm, \T
+.endm
+.macro vfo_sgnj T
+    movi v2.2d, #0
+    fneg v2.\T, v2.\T
+    bit v0.16b, v23.16b, v2.16b
+.endm
+.macro vfo_sgnjn T
+    movi v2.2d, #0
+    fneg v2.\T, v2.\T
+    mvn v3.16b, v23.16b
+    bit v0.16b, v3.16b, v2.16b
+.endm
+.macro vfo_sgnjx T
+    movi v2.2d, #0
+    fneg v2.\T, v2.\T
+    and v3.16b, v23.16b, v2.16b
+    eor v0.16b, v0.16b, v3.16b
+.endm
+.macro vfo_mv T
+    mov v0.16b, v23.16b
+.endm
+.macro vfo_sqrt T
+    fsqrt v0.\T, v0.\T
+.endm
+.macro vfo_macc T                  // +(vs1 * vs2) + vd
+    fmla v22.\T, v23.\T, v0.\T
+    mov v0.16b, v22.16b
+.endm
+.macro vfo_nmacc T                 // -(vs1 * vs2) - vd
+    fneg v22.\T, v22.\T
+    fmls v22.\T, v23.\T, v0.\T
+    mov v0.16b, v22.16b
+.endm
+.macro vfo_msac T                  // +(vs1 * vs2) - vd
+    fneg v22.\T, v22.\T
+    fmla v22.\T, v23.\T, v0.\T
+    mov v0.16b, v22.16b
+.endm
+.macro vfo_nmsac T                 // -(vs1 * vs2) + vd
+    fmls v22.\T, v23.\T, v0.\T
+    mov v0.16b, v22.16b
+.endm
+.macro vfo_madd T                  // +(vs1 * vd) + vs2
+    fmla v0.\T, v23.\T, v22.\T
+.endm
+.macro vfo_nmadd T                 // -(vs1 * vd) - vs2
+    fneg v0.\T, v0.\T
+    fmls v0.\T, v23.\T, v22.\T
+.endm
+.macro vfo_msub T                  // +(vs1 * vd) - vs2
+    fneg v0.\T, v0.\T
+    fmla v0.\T, v23.\T, v22.\T
+.endm
+.macro vfo_nmsub T                 // -(vs1 * vd) + vs2
+    fmls v0.\T, v23.\T, v22.\T
+.endm
+
+// vd = op(vs2, vs1 or f): [gadget][vtype][vd][vs2][vs1 | f reg][insn][pc].
+// merge (vfmerge.vfm) takes f where v0 is set and vs2 elsewhere.
+.macro vfb op, kind, sew, T, lg, masked
+.gadget vfb_\op\()_\kind\()_\masked\()_e\sew
+    vt_check
+vfbbody_\op\()_\kind\()_\masked\()_e\sew :
+    ldr x12, [_cpu, #CPU_riscv64_vl]
+    lsl x12, x12, #\lg
+    cbz x12, 8f
+    ldp x13, x14, [_ip, #8]
+    ldr x15, [_ip, #24]
+    add x13, _cpu, x13
+    add x14, _cpu, x14
+.ifc \kind, vv
+    add x15, _cpu, x15
+.else
+    vf_scalar \sew
+.endif
+.ifc \op, div
+    fmov v21.\T, #1.0
+.else
+.ifc \op, rdiv
+    fmov v21.\T, #1.0
+.else
+    movi v21.2d, #0
+.endif
+.endif
+    ldr x3, [_cpu, #CPU_riscv64_v]
+    ldr x4, [_cpu, #(CPU_riscv64_v + 8)]
+    mov x5, #0
+    adr x9, vmask_weights
+    ldr q6, [x9]
+    adr x9, vbyte_index
+    ldr q17, [x9]
+1:  ldr q0, [x14]
+.ifc \kind, vv
+    ldr q23, [x15]
+.else
+    mov v23.16b, v1.16b
+.endif
+    ldr q19, [x13]
+    movi v20.2d, #0xffffffffffffffff
+    vlanemask \sew
+.if \masked
+.ifnc \op, merge                  // vfmerge's v0 picks the source, not the lanes
+    mov v20.16b, v4.16b
+.endif
+.endif
+    cmp x12, #16
+    b.hs 3f
+    dup v18.16b, w12
+    cmhi v18.16b, v18.16b, v17.16b
+    and v20.16b, v20.16b, v18.16b
+3:
+.ifc \op, merge
+    bit v0.16b, v23.16b, v4.16b
+.else
+    bif v0.16b, v21.16b, v20.16b
+    bif v23.16b, v21.16b, v20.16b
+    mov v22.16b, v19.16b
+    bif v22.16b, v21.16b, v20.16b
+    vfo_\op \T
+.endif
+    bif v0.16b, v19.16b, v20.16b
+    str q0, [x13], #16
+    add x14, x14, #16
+.ifc \kind, vv
+    add x15, x15, #16
+.endif
+    subs x12, x12, #16
+    b.gt 1b
+8:  gret 6
+.ifc \kind, vv
+9:  vretype vfbbody_\op\()_\kind\()_\masked, 1, 1, 1, 40
+.else
+9:  vretype vfbbody_\op\()_\kind\()_\masked, 1, 1, 0, 40
+.endif
+5:  vcall_c 32, 40, 6
+.endm
+.macro vfb_sews op, kind, masked
+    vfb \op, \kind, 4, 4s, 2, \masked
+    vfb \op, \kind, 8, 2d, 3, \masked
+    vrowf vfbbody_\op\()_\kind\()_\masked
+.endm
+.irp op, add, sub, rsub, mul, div, rdiv, min, max, sgnj, sgnjn, sgnjx, mv, sqrt, macc, nmacc, msac, nmsac, madd, nmadd, msub, nmsub, merge
+.irp kind, vv, vf
+    vfb_sews \op, \kind, 0
+    vfb_sews \op, \kind, 1
+.endr
+.endr
+
+// compares: vd's low vl bits (active ones, if masked) = vs2 op vs1 or f
+.macro vfc_eq T
+    fcmeq v0.\T, v0.\T, v23.\T
+.endm
+.macro vfc_ne T
+    fcmeq v0.\T, v0.\T, v23.\T
+    mvn v0.16b, v0.16b
+.endm
+.macro vfc_lt T
+    fcmgt v0.\T, v23.\T, v0.\T
+.endm
+.macro vfc_le T
+    fcmge v0.\T, v23.\T, v0.\T
+.endm
+.macro vfc_gt T
+    fcmgt v0.\T, v0.\T, v23.\T
+.endm
+.macro vfc_ge T
+    fcmge v0.\T, v0.\T, v23.\T
+.endm
+.macro vfc op, kind, sew, T, lg, masked
+.gadget vfc_\op\()_\kind\()_\masked\()_e\sew
+    vt_check
+vfcbody_\op\()_\kind\()_\masked\()_e\sew :
+    ldr x12, [_cpu, #CPU_riscv64_vl]
+    cbz x12, 8f
+    ldp x13, x14, [_ip, #8]
+    ldr x15, [_ip, #24]
+    add x14, _cpu, x14
+.ifc \kind, vv
+    add x15, _cpu, x15
+.else
+    vf_scalar \sew
+.endif
+    lsl x6, x12, #\lg
+    movi v21.2d, #0
+    ldr x16, [_cpu, #CPU_riscv64_v]
+    ldr x17, [_cpu, #(CPU_riscv64_v + 8)]
+    mov x3, #0
+    mov x4, #0
+    mov x5, #0
+    mov x7, #0
+    adr x9, vmask_weights
+    ldr q6, [x9]
+    adr x9, vbyte_index
+    ldr q17, [x9]
+1:  ldr q0, [x14], #16
+.ifc \kind, vv
+    ldr q23, [x15], #16
+.else
+    mov v23.16b, v1.16b
+.endif
+    movi v20.2d, #0xffffffffffffffff
+.if \masked
+    vlanemask \sew, x16, x17, x7
+    mov v20.16b, v4.16b
+.endif
+    cmp x6, #16
+    b.hs 3f
+    dup v18.16b, w6
+    cmhi v18.16b, v18.16b, v17.16b
+    and v20.16b, v20.16b, v18.16b
+3:  bif v0.16b, v21.16b, v20.16b
+    bif v23.16b, v21.16b, v20.16b
+    vfc_\op \T
+.if \sew == 8
+    xtn v0.2s, v0.2d
+.endif
+    xtn v0.4h, v0.4s
+    xtn v0.8b, v0.8h
+    and v0.8b, v0.8b, v6.8b
+    addv b2, v0.8b
+    umov w9, v2.b[0]
+    lsl x10, x9, x5
+    cmp x5, #64
+    b.hs 4f
+    orr x3, x3, x10
+    b 6f
+4:  orr x4, x4, x10
+6:  add x5, x5, #(16 / \sew)
+    subs x6, x6, #16
+    b.gt 1b
+    vlmask x9, x10, x12, x11
+.if \masked
+    and x9, x9, x16
+    and x10, x10, x17
+.endif
+    add x13, _cpu, x13
+    vmask_store x13, x3, x4, x9, x10
+8:  gret 6
+.ifc \kind, vv
+9:  vretype vfcbody_\op\()_\kind\()_\masked, 0, 1, 1, 40
+.else
+9:  vretype vfcbody_\op\()_\kind\()_\masked, 0, 1, 0, 40
+.endif
+5:  vcall_c 32, 40, 6
+.endm
+.macro vfc_sews op, kind, masked
+    vfc \op, \kind, 4, 4s, 2, \masked
+    vfc \op, \kind, 8, 2d, 3, \masked
+    vrowf vfcbody_\op\()_\kind\()_\masked
+.endm
+.irp op, eq, ne, lt, le, gt, ge
+.irp kind, vv, vf
+    vfc_sews \op, \kind, 0
+    vfc_sews \op, \kind, 1
+.endr
+.endr
+
+// vfmv.f.s fd, vs2: [gadget][vtype][fd][vs2][insn][pc] (NaN-boxed at SEW 32)
+// vfmv.s.f vd, fs1: [gadget][vtype][vd][fs1][insn][pc]
+.macro vfscalar sew
+.gadget vfmv_f_s_e\sew
+    vt_check
+vfmvfsbody_e\sew :
+    ldp x13, x14, [_ip, #8]
+.if \sew == 4
+    ldr w9, [_cpu, x14]
+    orr x9, x9, #0xffffffff00000000
+.else
+    ldr x9, [_cpu, x14]
+.endif
+    str x9, [_cpu, x13]
+    gret 5
+9:  vretype vfmvfsbody, 0, 0, 0, 32
+5:  vcall_c 24, 32, 5
+.gadget vfmv_s_f_e\sew
+    vt_check
+vfmvsfbody_e\sew :
+    ldr x12, [_cpu, #CPU_riscv64_vl]
+    cbz x12, 8f
+    ldp x13, x15, [_ip, #8]
+    vf_scalar \sew
+.if \sew == 4
+    str s1, [_cpu, x13]
+.else
+    str d1, [_cpu, x13]
+.endif
+8:  gret 5
+9:  vretype vfmvsfbody, 0, 0, 0, 32
+5:  vcall_c 24, 32, 5
+.endm
+vfscalar 4
+vfscalar 8
+.macro vrowf5 name                  // vrowf for a 5-word stream
+\name :
+    .word vtrap_ill_32 - \name, vtrap_ill_32 - \name, \name\()_e4 - \name, \name\()_e8 - \name
+.endm
+vtrap_ill_32:
+    ldr x9, [_ip, #32]
+    str x9, [_cpu, #CPU_riscv64_pc]
+    mov w0, #INT_UNDEFINED
+    b jit_exit
+vrowf5 vfmvfsbody
+vrowf5 vfmvsfbody
+
+// ---- FP element by element: conversions, reductions, widening, class,
+// the 7-bit estimates. Scalar FP registers, so masked-off elements are
+// never computed and raise nothing.
+.macro vraise2 a, b
+    mrs x9, fpsr
+    orr x9, x9, #\a
+    orr x9, x9, #\b
+    msr fpsr, x9
+.endm
+// rows whose SEWs exist only where \x1..\x8 say (the rest trap)
+.macro vrowsel name, x1, x2, x4, x8
+\name :
+.if \x1
+    .word \name\()_e1 - \name
+.else
+    .word vtrap_ill_40 - \name
+.endif
+.if \x2
+    .word \name\()_e2 - \name
+.else
+    .word vtrap_ill_40 - \name
+.endif
+.if \x4
+    .word \name\()_e4 - \name
+.else
+    .word vtrap_ill_40 - \name
+.endif
+.if \x8
+    .word \name\()_e8 - \name
+.else
+    .word vtrap_ill_40 - \name
+.endif
+.endm
+
+// d16 (exact) -> an integer of \ibits in x10, as RISC-V converts: rounded
+// by frm (or toward zero), saturating, NaN to the largest; NV alone when
+// out of range, NX only for an inexact in-range result
+.macro vf2i ibits, sign, rtz
+    fcmp d16, d16
+    b.vs 76f
+.if \rtz
+    frintz d17, d16
+.else
+    frinti d17, d16
+.endif
+.if \sign
+    mov x9, #((1023 + \ibits - 1) << 52)
+.else
+    mov x9, #((1023 + \ibits) << 52)
+.endif
+    fmov d18, x9
+    fcmp d17, d18
+    b.ge 76f
+.if \sign
+    mov x9, #(((1023 + \ibits - 1) << 52) | (1 << 63))
+    fmov d18, x9
+    fcmp d17, d18
+    b.lt 77f
+    fcvtzs x10, d17
+.else
+    fcmp d17, #0.0
+    b.lt 77f
+    fcvtzu x10, d17
+.endif
+    fcmp d17, d16
+    b.eq 79f
+    vraise 16
+    b 79f
+76: vraise 1
+.if \sign
+    mov x10, #((1 << (\ibits - 1)) - 1)
+.else
+    mov x10, #-1
+.endif
+    b 79f
+77: vraise 1
+.if \sign
+    mov x10, #(1 << (\ibits - 1))
+.else
+    mov x10, #0
+.endif
+79:
+.endm
+// conversions on x10: float of \ssz bytes -> integer, integer -> float of
+// \dsz, float -> float
+.macro vcv_f2i ssz, dsz, sign, rtz
+.if \ssz == 4
+    fmov s16, w10
+    fcvt d16, s16
+.else
+    fmov d16, x10
+.endif
+    vf2i (\dsz * 8), \sign, \rtz
+.endm
+.macro vcv_i2f ssz, dsz, sign, unused=0
+.if \dsz == 4
+.if \sign
+    scvtf s16, x10
+.else
+    ucvtf s16, x10
+.endif
+    fmov w10, s16
+.else
+.if \sign
+    scvtf d16, x10
+.else
+    ucvtf d16, x10
+.endif
+    fmov x10, d16
+.endif
+.endm
+.macro vcv_f2f ssz, dsz, rod, unused=0
+.if \ssz == 2
+    fmov s16, w10
+    fcvt s16, h16
+    fmov w10, s16
+.elseif \ssz == 4 && \dsz == 8
+    fmov s16, w10
+    fcvt d16, s16
+    fmov x10, d16
+.elseif \ssz == 4
+    fmov s16, w10
+    fcvt h16, s16
+    fmov w10, s16
+.else
+    fmov d16, x10
+.if \rod
+    fcvtxn s16, d16
+.else
+    fcvt s16, d16
+.endif
+    fmov w10, s16
+.endif
+.endm
+// vfclass, vfrsqrt7, vfrec7 on x10, a float of \m fraction and \e exponent
+// bits
+.macro vf_class m, e
+    ubfx x7, x10, #\m, #\e
+    and x8, x10, #((1 << \m) - 1)
+    lsr x11, x10, #(\m + \e)
+    and x11, x11, #1
+    cmp x7, #((1 << \e) - 1)
+    b.ne 71f
+    cbnz x8, 72f
+    mov x10, #1                     // -inf 0, +inf 7
+    mov x9, #(1 << 7)
+    cmp x11, #0
+    csel x10, x9, x10, eq
+    b 79f
+72: tst x8, #(1 << (\m - 1))         // sNaN 8, qNaN 9
+    mov x10, #(1 << 8)
+    mov x9, #(1 << 9)
+    csel x10, x9, x10, ne
+    b 79f
+71: cbnz x7, 73f
+    cbnz x8, 74f
+    mov x10, #(1 << 4)              // -0 3, +0 4
+    mov x9, #(1 << 3)
+    cmp x11, #0
+    csel x10, x9, x10, ne
+    b 79f
+74: mov x10, #(1 << 5)              // -subnormal 2, +subnormal 5
+    mov x9, #(1 << 2)
+    cmp x11, #0
+    csel x10, x9, x10, ne
+    b 79f
+73: mov x10, #(1 << 6)              // -normal 1, +normal 6
+    mov x9, #(1 << 1)
+    cmp x11, #0
+    csel x10, x9, x10, ne
+79:
+.endm
+// a subnormal's fraction (x8) normalized: x7 = its exponent (0 - shift),
+// x8 the fraction below its leading 1
+.macro vf_normalize m
+    clz x9, x8
+    sub x9, x9, #(64 - \m)
+    neg x7, x9
+    add x9, x9, #1
+    lsl x8, x8, x9
+    and x8, x8, #((1 << \m) - 1)
+.endm
+.macro vf_rsqrt7 m, e
+    ubfx x7, x10, #\m, #\e
+    and x8, x10, #((1 << \m) - 1)
+    lsr x11, x10, #(\m + \e)
+    and x11, x11, #1
+    cmp x7, #((1 << \e) - 1)
+    b.ne 71f
+    cbz x8, 72f
+    tbnz x8, #(\m - 1), 70f         // NaN: NV if signalling
+    vraise 1
+70: mov x10, #((((1 << \e) - 1) << \m) | (1 << (\m - 1)))
+    b 79f
+72: cbnz x11, 73f                   // +inf: +0
+    mov x10, #0
+    b 79f
+71: cbnz x7, 74f
+    cbnz x8, 74f
+    vraise 2                        // +-0: +-inf, DZ
+    lsl x10, x11, #(\m + \e)
+    orr x10, x10, #(((1 << \e) - 1) << \m)
+    b 79f
+74: cbz x11, 75f
+73: vraise 1                        // negative: the canonical NaN, NV
+    mov x10, #((((1 << \e) - 1) << \m) | (1 << (\m - 1)))
+    b 79f
+75: cbnz x7, 76f
+    vf_normalize \m
+76: and x9, x7, #1
+    lsr x16, x8, #(\m - 6)
+    orr x9, x16, x9, lsl #6
+    adr x16, rsqrt7_table
+    ldrb w9, [x16, x9]
+    lsl x9, x9, #(\m - 7)
+    mov x16, #(3 * ((1 << (\e - 1)) - 1) - 1)
+    sub x16, x16, x7
+    lsr x16, x16, #1
+    orr x10, x9, x16, lsl #\m
+79:
+.endm
+.macro vf_rec7 m, e
+    ubfx x7, x10, #\m, #\e
+    and x8, x10, #((1 << \m) - 1)
+    lsr x11, x10, #(\m + \e)
+    and x11, x11, #1
+    lsl x5, x11, #(\m + \e)
+    cmp x7, #((1 << \e) - 1)
+    b.ne 71f
+    cbz x8, 72f
+    tbnz x8, #(\m - 1), 70f
+    vraise 1
+70: mov x10, #((((1 << \e) - 1) << \m) | (1 << (\m - 1)))
+    b 79f
+72: mov x10, x5                     // +-inf: +-0
+    b 79f
+71: cbnz x7, 74f
+    cbnz x8, 73f
+    vraise 2                        // +-0: +-inf, DZ
+    orr x10, x5, #(((1 << \e) - 1) << \m)
+    b 79f
+73: vf_normalize \m
+74: mov x16, #(2 * ((1 << (\e - 1)) - 1) - 1)
+    sub x16, x16, x7                // the result's exponent, signed
+    cmn x16, #1
+    b.lt 77f
+    cmp x16, #(2 * ((1 << (\e - 1)) - 1))
+    b.gt 77f
+    lsr x9, x8, #(\m - 7)
+    adr x17, rec7_table
+    ldrb w9, [x17, x9]
+    lsl x9, x9, #(\m - 7)
+    cmp x16, #0
+    b.gt 75f
+    orr x9, x9, #(1 << \m)           // a subnormal result
+    mov x17, #1
+    sub x17, x17, x16
+    lsr x9, x9, x17
+    mov x16, #0
+75: orr x10, x5, x9
+    orr x10, x10, x16, lsl #\m
+    b 79f
+77: vraise2 4, 16                   // a tiny input: overflow, rounded by frm
+    mrs x9, fpcr
+    ubfx x9, x9, #22, #2            // RMode: 0 RNE, 1 RUP, 2 RDN, 3 RTZ
+    cbz x9, 78f
+    cmp x11, #0
+    mov x17, #1
+    mov x16, #2
+    csel x17, x17, x16, eq          // the mode that rounds this sign to inf
+    cmp x9, x17
+    b.eq 78f
+    mov x9, #(((1 << \e) - 1) << \m)
+    sub x9, x9, #1
+    orr x10, x5, x9                 // the largest finite
+    b 79f
+78: orr x10, x5, #(((1 << \e) - 1) << \m)
+79:
+.endm
+.macro vfu_class sew, u1=0, u2=0, u3=0
+.if \sew == 4
+    vf_class 23, 8
+.else
+    vf_class 52, 11
+.endif
+.endm
+.macro vfu_rsqrt7 sew, u1=0, u2=0, u3=0
+.if \sew == 4
+    vf_rsqrt7 23, 8
+.else
+    vf_rsqrt7 52, 11
+.endif
+.endm
+.macro vfu_rec7 sew, u1=0, u2=0, u3=0
+.if \sew == 4
+    vf_rec7 23, 8
+.else
+    vf_rec7 52, 11
+.endif
+.endm
+
+// one element in, one out: [gadget][vtype][vd][vs2][-][insn][pc]; vs2's
+// elements \ssz bytes (signed if \ssign), vd's \dsz; \vdg/\vs2g 2 for a
+// group of twice LMUL
+.macro vfe name, sew, masked, ssz, ssign, dsz, vdg, vs2g, opm, a1, a2=0, a3=0, a4=0
+.gadget vfe_\name\()_\masked\()_e\sew
+    vt_check
+vfebody_\name\()_\masked\()_e\sew :
+    vloop_head vv, \sew
+    mov x6, #0
+1:  vact \masked, 2f
+    vel_ld \ssz, \ssign, 10, x14
+    \opm \a1, \a2, \a3, \a4
+    vel_st \dsz, 10, x13
+2:  add x6, x6, #1
+    cmp x6, x12
+    b.lo 1b
+    vloop_tail vfebody_\name\()_\masked, \vdg, \vs2g, 0
+.endm
+.macro vfe2 name, sew, ssz, ssign, dsz, vdg, vs2g, opm, a1, a2=0, a3=0, a4=0
+    vfe \name, \sew, 0, \ssz, \ssign, \dsz, \vdg, \vs2g, \opm, \a1, \a2, \a3, \a4
+    vfe \name, \sew, 1, \ssz, \ssign, \dsz, \vdg, \vs2g, \opm, \a1, \a2, \a3, \a4
+.endm
+.macro vferow name, x1, x2, x4, x8
+    vrowsel vfebody_\name\()_0, \x1, \x2, \x4, \x8
+    vrowsel vfebody_\name\()_1, \x1, \x2, \x4, \x8
+.endm
+// VFUNARY0, by vs1: 0 xu.f 1 x.f 2 f.xu 3 f.x 6 rtz.xu.f 7 rtz.x.f, the
+// widening 8-15 and the narrowing 16-23
+.irp sew, 4, 8
+vfe2 cvt0, \sew, \sew, 0, \sew, 1, 1, vcv_f2i, \sew, \sew, 0, 0
+vfe2 cvt1, \sew, \sew, 0, \sew, 1, 1, vcv_f2i, \sew, \sew, 1, 0
+vfe2 cvt2, \sew, \sew, 0, \sew, 1, 1, vcv_i2f, \sew, \sew, 0
+vfe2 cvt3, \sew, \sew, 1, \sew, 1, 1, vcv_i2f, \sew, \sew, 1
+vfe2 cvt6, \sew, \sew, 0, \sew, 1, 1, vcv_f2i, \sew, \sew, 0, 1
+vfe2 cvt7, \sew, \sew, 0, \sew, 1, 1, vcv_f2i, \sew, \sew, 1, 1
+.endr
+vfe2 cvt8, 4, 4, 0, 8, 2, 1, vcv_f2i, 4, 8, 0, 0
+vfe2 cvt9, 4, 4, 0, 8, 2, 1, vcv_f2i, 4, 8, 1, 0
+vfe2 cvt14, 4, 4, 0, 8, 2, 1, vcv_f2i, 4, 8, 0, 1
+vfe2 cvt15, 4, 4, 0, 8, 2, 1, vcv_f2i, 4, 8, 1, 1
+.irp sew, 2, 4
+vfe2 cvt10, \sew, \sew, 0, (2 * \sew), 2, 1, vcv_i2f, \sew, (2 * \sew), 0
+vfe2 cvt11, \sew, \sew, 1, (2 * \sew), 2, 1, vcv_i2f, \sew, (2 * \sew), 1
+vfe2 cvt12, \sew, \sew, 0, (2 * \sew), 2, 1, vcv_f2f, \sew, (2 * \sew), 0
+vfe2 cvt16, \sew, (2 * \sew), 0, \sew, 1, 2, vcv_f2i, (2 * \sew), \sew, 0, 0
+vfe2 cvt17, \sew, (2 * \sew), 0, \sew, 1, 2, vcv_f2i, (2 * \sew), \sew, 1, 0
+vfe2 cvt20, \sew, (2 * \sew), 0, \sew, 1, 2, vcv_f2f, (2 * \sew), \sew, 0
+vfe2 cvt22, \sew, (2 * \sew), 0, \sew, 1, 2, vcv_f2i, (2 * \sew), \sew, 0, 1
+vfe2 cvt23, \sew, (2 * \sew), 0, \sew, 1, 2, vcv_f2i, (2 * \sew), \sew, 1, 1
+.endr
+vfe2 cvt18, 4, 8, 0, 4, 1, 2, vcv_i2f, 8, 4, 0
+vfe2 cvt19, 4, 8, 1, 4, 1, 2, vcv_i2f, 8, 4, 1
+vfe2 cvt21, 4, 8, 0, 4, 1, 2, vcv_f2f, 8, 4, 1
+.irp sew, 4, 8
+vfe2 class, \sew, \sew, 0, \sew, 1, 1, vfu_class, \sew
+vfe2 rsqrt7, \sew, \sew, 0, \sew, 1, 1, vfu_rsqrt7, \sew
+vfe2 rec7, \sew, \sew, 0, \sew, 1, 1, vfu_rec7, \sew
+.endr
+.irp n, cvt0, cvt1, cvt2, cvt3, cvt6, cvt7, class, rsqrt7, rec7
+    vferow \n, 0, 0, 1, 1
+.endr
+.irp n, cvt8, cvt9, cvt14, cvt15, cvt18, cvt19, cvt21
+    vferow \n, 0, 0, 1, 0
+.endr
+.irp n, cvt10, cvt11, cvt12, cvt16, cvt17, cvt20, cvt22, cvt23
+    vferow \n, 0, 1, 1, 0
+.endr
+rsqrt7_table:
+    .byte 52, 51, 50, 48, 47, 46, 44, 43, 42, 41, 40, 39, 38, 36, 35, 34, 33, 32, 31, 30, 30, 29, 28, 27, 26, 25, 24, 23, 23, 22, 21, 20, 19, 19, 18, 17, 16, 16, 15, 14, 14, 13, 12, 12, 11, 10, 10, 9, 9, 8, 7, 7, 6, 6, 5, 4, 4, 3, 3, 2, 2, 1, 1, 0, 127, 125, 123, 121, 119, 118, 116, 114, 113, 111, 109, 108, 106, 105, 103, 102, 100, 99, 97, 96, 95, 93, 92, 91, 90, 88, 87, 86, 85, 84, 83, 82, 80, 79, 78, 77, 76, 75, 74, 73, 72, 71, 70, 70, 69, 68, 67, 66, 65, 64, 63, 63, 62, 61, 60, 59, 59, 58, 57, 56, 56, 55, 54, 53
+rec7_table:
+    .byte 127, 125, 123, 121, 119, 117, 116, 114, 112, 110, 109, 107, 105, 104, 102, 100, 99, 97, 96, 94, 93, 91, 90, 88, 87, 85, 84, 83, 81, 80, 79, 77, 76, 75, 74, 72, 71, 70, 69, 68, 66, 65, 64, 63, 62, 61, 60, 59, 58, 57, 56, 55, 54, 53, 52, 51, 50, 49, 48, 47, 46, 45, 44, 43, 42, 41, 40, 40, 39, 38, 37, 36, 35, 35, 34, 33, 32, 31, 31, 30, 29, 28, 28, 27, 26, 25, 25, 24, 23, 23, 22, 21, 21, 20, 19, 19, 18, 17, 17, 16, 15, 15, 14, 14, 13, 12, 12, 11, 11, 10, 9, 9, 8, 8, 7, 7, 6, 5, 5, 4, 4, 3, 3, 2, 2, 1, 1, 0
+
+// FP reductions: vd[0] = vs1[0] op the active vs2[i] in order (the
+// unordered sum is summed in order too); the widening ones (\wide) sum
+// SEW 32 elements into a 64-bit vs1[0]. [gadget][vtype][vd][vs2][vs1][insn][pc]
+.macro vfs_minmax insn, r
+    \insn \r\()18, \r\()16, \r\()17
+    fcmp \r\()16, \r\()16
+    b.vc 61f
+    fcmp \r\()17, \r\()17
+    b.vs 62f
+    fmov \r\()18, \r\()17
+    b 62f
+61: fcmp \r\()17, \r\()17
+    b.vc 62f
+    fmov \r\()18, \r\()16
+62: fmov \r\()16, \r\()18
+.endm
+.macro vfr name, sew, masked, wide, opm
+.gadget vfr_\name\()_\masked\()_e\sew
+    vt_check
+vfrbody_\name\()_\masked\()_e\sew :
+    vloop_head vv, \sew
+.if \sew == 8 || \wide
+    ldr d16, [x15]
+.else
+    ldr s16, [x15]
+.endif
+    mov x6, #0
+1:  vact \masked, 2f
+.if \sew == 4
+    ldr s17, [x14, x6, lsl #2]
+.if \wide
+    fcvt d17, s17
+.endif
+.else
+    ldr d17, [x14, x6, lsl #3]
+.endif
+.if \sew == 8 || \wide
+    \opm d
+.else
+    \opm s
+.endif
+2:  add x6, x6, #1
+    cmp x6, x12
+    b.lo 1b
+.if \sew == 8 || \wide
+    str d16, [x13]
+.else
+    str s16, [x13]
+.endif
+    vloop_tail vfrbody_\name\()_\masked, 0, 1, 0
+.endm
+.macro vfro_sum r
+    fadd \r\()16, \r\()16, \r\()17
+.endm
+.macro vfro_min r
+    vfs_minmax fminnm, \r
+.endm
+.macro vfro_max r
+    vfs_minmax fmaxnm, \r
+.endm
+.irp masked, 0, 1
+.irp sew, 4, 8
+    vfr sum, \sew, \masked, 0, vfro_sum
+    vfr min, \sew, \masked, 0, vfro_min
+    vfr max, \sew, \masked, 0, vfro_max
+.endr
+    vfr wsum, 4, \masked, 1, vfro_sum
+    vrowsel vfrbody_sum_\masked, 0, 0, 1, 1
+    vrowsel vfrbody_min_\masked, 0, 0, 1, 1
+    vrowsel vfrbody_max_\masked, 0, 0, 1, 1
+    vrowsel vfrbody_wsum_\masked, 0, 0, 1, 0
+.endr
+
+// widening FP arithmetic at SEW 32: vd (64-bit) = vs2 (32, or 64 if \aw)
+// op vs1 or f (32). [gadget][vtype][vd][vs2][vs1 | f][insn][pc]
+.macro vfwo_add
+    fadd d16, d16, d18
+.endm
+.macro vfwo_sub
+    fsub d16, d16, d18
+.endm
+.macro vfwo_mul
+    fmul d16, d16, d18
+.endm
+.macro vfwo_macc                   // vs1 * vs2 + vd
+    fmadd d16, d18, d16, d19
+.endm
+.macro vfwo_nmacc                  // -(vs1 * vs2) - vd
+    fnmadd d16, d18, d16, d19
+.endm
+.macro vfwo_msac                   // vs1 * vs2 - vd
+    fnmsub d16, d18, d16, d19
+.endm
+.macro vfwo_nmsac                  // -(vs1 * vs2) + vd
+    fmsub d16, d18, d16, d19
+.endm
+.macro vfw name, kind, masked, aw, opm, vd_in
+.gadget vfw_\name\()_\kind\()_\masked\()_e4
+    vt_check
+vfwbody_\name\()_\kind\()_\masked\()_e4 :
+    vloop_head \kind, 4
+.ifc \kind, vf
+    fmov s18, w15
+    fcvt d18, s18
+.endif
+    mov x6, #0
+1:  vact \masked, 2f
+.if \aw
+    ldr d16, [x14, x6, lsl #3]
+.else
+    ldr s16, [x14, x6, lsl #2]
+    fcvt d16, s16
+.endif
+.ifc \kind, vv
+    ldr s18, [x15, x6, lsl #2]
+    fcvt d18, s18
+.endif
+.if \vd_in
+    ldr d19, [x13, x6, lsl #3]
+.endif
+    \opm
+    str d16, [x13, x6, lsl #3]
+2:  add x6, x6, #1
+    cmp x6, x12
+    b.lo 1b
+.ifc \kind, vv
+    vloop_tail vfwbody_\name\()_\kind\()_\masked, 2, (1 + \aw), 1
+.else
+    vloop_tail vfwbody_\name\()_\kind\()_\masked, 2, (1 + \aw), 0
+.endif
+.endm
+.macro vfwrow name, kind, masked
+    vrowsel vfwbody_\name\()_\kind\()_\masked, 0, 0, 1, 0
+.endm
+.macro vfw_all name, aw, opm, vd_in
+.irp kind, vv, vf
+    vfw \name, \kind, 0, \aw, \opm, \vd_in
+    vfw \name, \kind, 1, \aw, \opm, \vd_in
+    vfwrow \name, \kind, 0
+    vfwrow \name, \kind, 1
+.endr
+.endm
+vfw_all add, 0, vfwo_add, 0
+vfw_all sub, 0, vfwo_sub, 0
+vfw_all addw, 1, vfwo_add, 0
+vfw_all subw, 1, vfwo_sub, 0
+vfw_all mul, 0, vfwo_mul, 0
+vfw_all macc, 0, vfwo_macc, 1
+vfw_all nmacc, 0, vfwo_nmacc, 1
+vfw_all msac, 0, vfwo_msac, 1
+vfw_all nmsac, 0, vfwo_nmsac, 1
+
 // compares: v0 lanes all ones where vs2 op src holds
 .macro vc_seq T
     cmeq v0.\T, v0.\T, v1.\T
@@ -1862,6 +2754,62 @@ vrbody_\op\()_e\sew :
 .irp op, brev8, rev8, brev, clz, ctz, cpop
     vutab \op, 0
     vutab \op, 1
+.endr
+.macro vfbtab op, kind, masked
+    gadgets riscv64_vfb_\op\()_\kind\()_\masked, e1, e2, e4, e8
+.endm
+.global.name riscv64_vfb_gadgets               // [op][kind vv vf][masked][sew]
+.irp op, add, sub, rsub, mul, div, rdiv, min, max, sgnj, sgnjn, sgnjx, mv, sqrt, macc, nmacc, msac, nmsac, madd, nmadd, msub, nmsub, merge
+.irp kind, vv, vf
+    vfbtab \op, \kind, 0
+    vfbtab \op, \kind, 1
+.endr
+.endr
+.macro vfctab op, kind, masked
+    gadgets riscv64_vfc_\op\()_\kind\()_\masked, e1, e2, e4, e8
+.endm
+.global.name riscv64_vfc_gadgets               // [op eq ne lt le gt ge][kind][masked][sew]
+.irp op, eq, ne, lt, le, gt, ge
+.irp kind, vv, vf
+    vfctab \op, \kind, 0
+    vfctab \op, \kind, 1
+.endr
+.endr
+.global.name riscv64_vfmv_gadgets              // vfmv.f.s, vfmv.s.f
+    gadgets riscv64_vfmv_f_s, e1, e2, e4, e8
+    gadgets riscv64_vfmv_s_f, e1, e2, e4, e8
+
+.macro vfetab name, masked
+    gadgets riscv64_vfe_\name\()_\masked, e1, e2, e4, e8
+.endm
+// [vs1 code 0-23][masked][sew]; holes are 0
+.global.name riscv64_vfcvt_gadgets
+.irp n, cvt0, cvt1, cvt2, cvt3, cvt4, cvt5, cvt6, cvt7, cvt8, cvt9, cvt10, cvt11, cvt12, cvt13, cvt14, cvt15, cvt16, cvt17, cvt18, cvt19, cvt20, cvt21, cvt22, cvt23
+    vfetab \n, 0
+    vfetab \n, 1
+.endr
+.global.name riscv64_vfun1_gadgets             // class, rsqrt7, rec7
+.irp n, class, rsqrt7, rec7
+    vfetab \n, 0
+    vfetab \n, 1
+.endr
+.macro vfrtab name, masked
+    gadgets riscv64_vfr_\name\()_\masked, e1, e2, e4, e8
+.endm
+.global.name riscv64_vfred_gadgets             // sum, min, max, wsum
+.irp n, sum, min, max, wsum
+    vfrtab \n, 0
+    vfrtab \n, 1
+.endr
+.macro vfwtab name, kind, masked
+    gadgets riscv64_vfw_\name\()_\kind\()_\masked, e1, e2, e4, e8
+.endm
+.global.name riscv64_vfw_gadgets               // [op][kind][masked][sew]
+.irp n, add, sub, addw, subw, mul, macc, nmacc, msac, nmsac
+.irp kind, vv, vf
+    vfwtab \n, \kind, 0
+    vfwtab \n, \kind, 1
+.endr
 .endr
 .global.name riscv64_vcmpm_gadgets
 .irp op, seq, sne, sltu, slt, sleu, sle, sgtu, sgt
