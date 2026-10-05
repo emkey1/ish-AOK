@@ -10,11 +10,11 @@
 // (LR ignores the rs2 slot; layout kept uniform). Fault-restart contract
 // as memory.S: orig_ip is ALWAYS the last word.
 //
-// Guest atomics are naturally aligned (misaligned AMOs trap on real
-// hardware), so the address never straddles a page; a misaligned guest
-// can still reach the crosspage path, where the exclusive pair operates
-// on the redirect buffer — non-atomic, but such a guest is already in
-// trap territory on real hardware.
+// A misaligned LR, SC or AMO is an address-misaligned trap, which Linux
+// does not emulate for atomics: SIGBUS/BUS_ADRALN at the address
+// (amo_align, INT_ALIGN). AOK does not claim Zama16b. So every access here
+// is naturally aligned and never straddles a page -- and the host's
+// exclusives, which need alignment on an ARMv8.0 host, always get it.
 //
 // LR stashes the GUEST address (pre-prep x7) in riscv64_res_addr and the
 // loaded value in riscv64_res_val; SC succeeds only if its guest address
@@ -38,9 +38,25 @@
     ldr x7, [_cpu, x9]
 .endm
 
+// A misaligned address: SIGBUS (BUS_ADRALN) at this instruction. \bits is
+// the access size, \write 1 for SC and the AMOs.
+.macro amo_align bits, write
+    tst x7, #(\bits / 8 - 1)
+    b.eq 1f
+    ldur x9, [_ip, #-8]
+    str x9, [_cpu, #CPU_riscv64_pc]
+    str x7, [_cpu, #CPU_segfault_addr]
+    mov w9, #\write
+    strb w9, [_cpu, #CPU_segfault_was_write]
+    mov w0, #INT_ALIGN
+    b jit_exit
+1:
+.endm
+
 // ---- LR ------------------------------------------------------------------
 .gadget lr_w
     amo_head
+    amo_align 32, 0
     str x7, [_cpu, #CPU_riscv64_res_addr]
     read_prep 32, rvlrw
     ldar w11, [x7]
@@ -52,6 +68,7 @@
 
 .gadget lr_d
     amo_head
+    amo_align 64, 0
     str x7, [_cpu, #CPU_riscv64_res_addr]
     read_prep 64, rvlrd
     ldar x11, [x7]
@@ -65,6 +82,7 @@
 .macro sc_gadget name, size, id, exp, old, new
 .gadget \name
     amo_head
+    amo_align \size, 1
     ldr x11, [_cpu, #CPU_riscv64_res_addr]
     cmp x7, x11
     b.ne 8f                   // no/other reservation: fail without prep
@@ -129,6 +147,7 @@ sc_gadget sc_d, 64, rvscd, x21, x12, x20
 .macro amo_w_gadget op
 .gadget amo\op\()_w
     amo_head
+    amo_align 32, 1
     write_prep 32, rva\op\()w
 1:  ldaxr w11, [x7]
     amo_op_\op w12, w11, w20
@@ -144,6 +163,7 @@ sc_gadget sc_d, 64, rvscd, x21, x12, x20
 .macro amo_d_gadget op
 .gadget amo\op\()_d
     amo_head
+    amo_align 64, 1
     write_prep 64, rva\op\()d
 1:  ldaxr x11, [x7]
     amo_op_\op x12, x11, x20
