@@ -1417,18 +1417,25 @@ static intptr_t elf_exec(struct fd *fd, const char *file, struct exec_args argv,
         // helpers. ASIMDDP is deliberately NOT set: nothing implements
         // SDOT/UDOT yet. amd64 keeps 0 (that path predates any x86 HWCAP
         // need). Kept in sync with the ID_AA64ISAR0 value.
+        // the V setting the new image gets (PR_RISCV_V_SET_CONTROL's next),
+        // before AT_HWCAP says whether it has V
+        riscv64_v_ctrl_exec(current);
         qword_t hwcap = 0;
         if (current->abi == GUEST_ABI_ARM64)
             hwcap = (1u << 0) | (1u << 1) | (1u << 3) | (1u << 4) |
                     (1u << 5) | (1u << 6) | (1u << 7) | (1u << 8) |
                     (1u << 17) | (1u << 21);
         // riscv64 COMPAT_HWCAP_ISA_*: one bit per ISA letter (bit = c-'a'):
-        // rv64imafdc. Linux has no bits here for the multi-letter extensions
-        // (Zba/Zbb/Zbs/Zicond); those are in riscv_hwprobe and /proc/cpuinfo.
-        if (current->abi == GUEST_ABI_RISCV64)
+        // rv64imafdcv. Linux has no bits here for the multi-letter extensions
+        // (Zba/Zbb/Zbs/Zicond, Zvbb ...); those are in riscv_hwprobe and
+        // /proc/cpuinfo. V goes when the process has it off (PR_RISCV_V_*).
+        if (current->abi == GUEST_ABI_RISCV64) {
             hwcap = (1u << ('i' - 'a')) | (1u << ('m' - 'a')) |
                     (1u << ('a' - 'a')) | (1u << ('f' - 'a')) |
                     (1u << ('d' - 'a')) | (1u << ('c' - 'a'));
+            if (riscv64_v_enabled(current))
+                hwcap |= 1u << ('v' - 'a');
+        }
         // AT_HWCAP2: MOPS(43) on aarch64, the CPY/CPYF/SET memcpy and memset
         // instructions (jit/arm64_mops.c); glibc then picks __memcpy_mops
         // and friends. Matches ID_AA64ISAR2.MOPS in gen.c. ISH_MOPS=0 hides it.

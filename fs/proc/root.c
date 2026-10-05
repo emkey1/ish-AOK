@@ -189,7 +189,7 @@ static int proc_show_cpuinfo(struct proc_entry *UNUSED(entry), struct proc_data 
         for (int cpu = 0; cpu < rv_cpu_count; cpu++) {
             proc_printf(buf, "processor       : %d\n", cpu);
             proc_printf(buf, "hart            : %d\n", cpu);
-            proc_printf(buf, "isa             : rv64imafdc_zicbom_zicbop_zicboz_zicntr_zicond_zicsr_zifencei_zihintntl_zihintpause_zimop_zawrs_zfa_zfhmin_zca_zcb_zcd_zcmop_zba_zbb_zbs\n");
+            proc_printf(buf, "isa             : rv64imafdcv_zicbom_zicbop_zicboz_zicntr_zicond_zicsr_zifencei_zihintntl_zihintpause_zimop_zawrs_zfa_zfhmin_zca_zcb_zcd_zcmop_zba_zbb_zbs_zve32f_zve32x_zve64d_zve64f_zve64x_zvbb_zvfhmin_zvkb_zvkt\n");
             proc_printf(buf, "mmu             : sv39\n");
             proc_printf(buf, "uarch           : ish-aok,jit\n");
             proc_printf(buf, "host arch       : %s\n", rv_host_architecture);

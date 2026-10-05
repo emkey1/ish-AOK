@@ -1829,6 +1829,12 @@ static dword_t sys_riscv_hwprobe(void) {
 #define RISCV_HWPROBE_BASE_BEHAVIOR_IMA (1ull << 0)
 #define RISCV_HWPROBE_IMA_FD (1ull << 0)
 #define RISCV_HWPROBE_IMA_C (1ull << 1)
+#define RISCV_HWPROBE_IMA_V (1ull << 2)
+#define RISCV_HWPROBE_EXT_ZVBB (1ull << 17)
+#define RISCV_HWPROBE_EXT_ZVKB (1ull << 19)
+#define RISCV_HWPROBE_EXT_ZVKT (1ull << 26)
+#define RISCV_HWPROBE_EXT_ZVFHMIN (1ull << 31)
+#define RISCV_HWPROBE_KEY_MISALIGNED_VECTOR_PERF 10
 #define RISCV_HWPROBE_EXT_ZBA (1ull << 3)
 #define RISCV_HWPROBE_EXT_ZBB (1ull << 4)
 #define RISCV_HWPROBE_EXT_ZBS (1ull << 5)
@@ -1865,6 +1871,7 @@ static dword_t sys_riscv_hwprobe_guest(guest_addr_t pairs, qword_t pair_count,
         case RISCV_HWPROBE_KEY_MIMPID:
         case RISCV_HWPROBE_KEY_CPUPERF_0:            // MISALIGNED_UNKNOWN
         case RISCV_HWPROBE_KEY_MISALIGNED_SCALAR_PERF: // ..._SCALAR_UNKNOWN
+        case RISCV_HWPROBE_KEY_MISALIGNED_VECTOR_PERF: // ..._VECTOR_UNKNOWN
             break;
         case RISCV_HWPROBE_KEY_ZICBOZ_BLOCK_SIZE:    // cbo.zero's block (Zic64b)
         case RISCV_HWPROBE_KEY_ZICBOM_BLOCK_SIZE:
@@ -1881,7 +1888,11 @@ static dword_t sys_riscv_hwprobe_guest(guest_addr_t pairs, qword_t pair_count,
                     RISCV_HWPROBE_EXT_ZICBOZ | RISCV_HWPROBE_EXT_ZICBOM | RISCV_HWPROBE_EXT_ZICBOP |
                     RISCV_HWPROBE_EXT_ZIHINTNTL | RISCV_HWPROBE_EXT_ZIHINTPAUSE |
                     RISCV_HWPROBE_EXT_ZIMOP | RISCV_HWPROBE_EXT_ZCMOP | RISCV_HWPROBE_EXT_ZAWRS |
-                    RISCV_HWPROBE_EXT_ZICNTR | RISCV_HWPROBE_EXT_ZFA | RISCV_HWPROBE_EXT_ZFHMIN;
+                    RISCV_HWPROBE_EXT_ZICNTR | RISCV_HWPROBE_EXT_ZFA | RISCV_HWPROBE_EXT_ZFHMIN |
+                    // V (jit/guest-riscv64/vector.S) with Zvbb, which includes Zvkb,
+                    // Zvfhmin and Zvkt
+                    RISCV_HWPROBE_IMA_V | RISCV_HWPROBE_EXT_ZVBB | RISCV_HWPROBE_EXT_ZVKB |
+                    RISCV_HWPROBE_EXT_ZVKT | RISCV_HWPROBE_EXT_ZVFHMIN;
             break;
         default:
             pair.key = -1;

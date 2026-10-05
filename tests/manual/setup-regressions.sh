@@ -198,6 +198,7 @@ if [ "$is_riscv64_guest" -eq 1 ]; then
     need_file riscv64/riscv64_rvv_signal.c
     need_file riscv64/riscv64_rvv_ptrace.c
     need_file riscv64/riscv64_rvv_gadgets.c
+    need_file riscv64/riscv64_rvv_ctrl.c
 fi
 need_file signal_core.c
 need_file singlestep_fused.c
@@ -1002,7 +1003,7 @@ if [ "$is_arm64_guest" -eq 1 ]; then
     all_tests="$all_tests atomics64 arm64_regress vector_smoke simd_elem_moves simd_three_same alu_ospec ldst_lspec vldst_lspec smc_stale_block ret_retcache stlr_ldar_publish ptrace_singlestep singlestep_fused ands_bcond_fusion cbz_tbz hle_loop dc_zva arm64_fp_env"
 fi
 if [ "$is_riscv64_guest" -eq 1 ]; then
-    all_tests="$all_tests ptrace_regset jalr_retcache alu_pair branch_pair rcache_run riscv64_singlestep singlestep_fused riscv64_fp_env riscv64_rva23_scalar riscv64_rva23_fp riscv64_rvv riscv64_rvv_signal riscv64_rvv_ptrace riscv64_rvv_gadgets"
+    all_tests="$all_tests ptrace_regset jalr_retcache alu_pair branch_pair rcache_run riscv64_singlestep singlestep_fused riscv64_fp_env riscv64_rva23_scalar riscv64_rva23_fp riscv64_rvv riscv64_rvv_signal riscv64_rvv_ptrace riscv64_rvv_gadgets riscv64_rvv_ctrl"
 fi
 
 test_selected() {

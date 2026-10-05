@@ -204,7 +204,8 @@ static void check_advertised(void) {
     const char *exts[] = {"rv64imafdc", "_zicbom", "_zicbop", "_zicboz", "_zicntr", "_zicond",
                           "_zihintntl", "_zihintpause", "_zimop", "_zawrs", "_zfa", "_zfhmin",
                           "_zca", "_zcb", "_zcd",
-                          "_zcmop", "_zba", "_zbb", "_zbs"};
+                          "_zcmop", "_zba", "_zbb", "_zbs", "rv64imafdcv", "_zve64d", "_zvbb",
+                          "_zvfhmin", "_zvkb", "_zvkt"};
     for (unsigned i = 0; i < sizeof(exts) / sizeof(exts[0]); i++)
         check(exts[i], 0, strstr(line, exts[i]) != NULL, 1);
 }

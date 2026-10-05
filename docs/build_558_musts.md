@@ -11,7 +11,7 @@ Started 2026-10-05, after `builds/iSH-AOK_557`. Supersedes
 
 | § | item | state |
 |---|---|---|
-| 1 | RVA23 on the riscv64 guest | **DONE for 558** (2026-10-05): the scalar extensions and V are in, and Ubuntu 25.10 (RVA23) runs apt/python3/gcc on the Mac and the M4; V stays unadvertised until its gadgets are faster; Supm deliberately not |
+| 1 | RVA23 on the riscv64 guest | **DONE for 558** (2026-10-05): the scalar extensions and V are in, and Ubuntu 25.10 (RVA23) runs apt/python3/gcc on the Mac and the M4; V is all gadgets and advertised (2x on OpenSSL ChaCha20); Supm deliberately not |
 
 ---
 
@@ -131,14 +131,21 @@ record after the ucontext, restored through its datap).
   3.0x, sum 2.2x, max 3.3x, count 3.2x, select (vmul) 4.4x, shift 2.3x;
   gather 0.8x. OpenSSL ChaCha20 on its vector path (forced): 108 MB/s
   against 52 scalar; it was 3.5x slower than scalar in the C core.
-- **Not advertised yet** (hwprobe IMA_V, AT_HWCAP 'v', the isa line).
-  Ubuntu 25.10's glibc has no vector ifuncs; its OpenSSL 3.5 picks
-  ChaCha20-with-Zvkb, now 2x faster. Code built with V as its baseline (an
-  RVA23 distribution) runs regardless. Advertising is the remaining
-  decision (and PR_RISCV_V_GET/SET_CONTROL with it).
+- **Advertised** (2026-10-05): riscv_hwprobe IMA_V with Zvbb, Zvkb,
+  Zvkt and Zvfhmin (and MISALIGNED_VECTOR_PERF, unknown), AT_HWCAP 'v',
+  and the isa line (rv64imafdcv ... _zve32f ... _zve64x_zvbb_zvfhmin_zvkb
+  _zvkt). Neither Ubuntu 25.10's glibc (2.42) nor Devuan's (2.41) has
+  vector ifuncs; their OpenSSL 3.5 now picks ChaCha20 with Zvkb by itself
+  (OPENSSL_riscvcap reads ZBA_ZBB_ZBS_V_ZVBB_ZVKB): 121 and 126 MB/s on
+  the Mac CLI.
+- PR_RISCV_V_SET/GET_CONTROL as Linux has them (kernel/misc.c): V reads as
+  on; a running program cannot turn it off (EPERM) but sets what the next
+  exec gets and whether that is inherited; an exec with V off has no
+  AT_HWCAP 'v' and every vector instruction is an illegal one (the JIT
+  translates them so; turning V back on drops the translations). Checked
+  by tests/manual/riscv64/riscv64_rvv_ctrl.c.
 - The NT_RISCV_VECTOR ptrace regset reads and writes it
-  (tests/manual/riscv64/riscv64_rvv_ptrace.c). PR_RISCV_V_GET/SET_CONTROL
-  answer EINVAL, as a kernel without V does, while V is unadvertised.
+  (tests/manual/riscv64/riscv64_rvv_ptrace.c).
 
 **Supm, decided against for now:** user pointer masking exists only for a
 program that asks for it, prctl(PR_SET_TAGGED_ADDR_CTRL) with a PMLEN

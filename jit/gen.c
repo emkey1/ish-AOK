@@ -6343,6 +6343,7 @@ bool gen_start_riscv64(guest_addr_t addr, struct gen_state *state) {
     state->riscv64_ip = addr;
     state->riscv64_orig_ip = addr;
     state->riscv64_vtype = UINT64_MAX;
+    state->riscv64_v_off = false;
     state->jitprof = jitprof_block_new(addr, JITPROF_RISCV64);
     if (unlikely(state->jitprof != NULL)) {
         extern void gadget_riscv64_block_count(void);
@@ -7367,6 +7368,8 @@ static int gen_riscv64_vector(struct gen_state *state, uint32_t insn) {
     // they re-dispatch from (see below)
     uint64_t gvt = vt != UINT64_MAX ? vt : 0; // e8, m1
 #define VREG(r) (offsetof(struct cpu_state, riscv64_v) + (r) * 16)
+    if (state->riscv64_v_off)
+        goto vop;
     if (opcode == 0x57 && f3 == 7) {
         state->riscv64_vtype = UINT64_MAX; // unless one of these sets it
         bool imm = (insn >> 30) == 3;
@@ -8859,6 +8862,7 @@ bool gen_start_riscv64(guest_addr_t addr, struct gen_state *state) {
     state->riscv64_ip = addr;
     state->riscv64_orig_ip = addr;
     state->riscv64_vtype = UINT64_MAX;
+    state->riscv64_v_off = false;
     return true;
 }
 

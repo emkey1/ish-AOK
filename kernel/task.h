@@ -746,7 +746,18 @@ struct task {
     // refused (kernel/ptrace.c ptrace_set_debugreg). Not inherited. At the
     // end for the reason given above native_standin_child.
     qword_t ptrace_debugreg[8];
+    // riscv64 PR_RISCV_V_SET/GET_CONTROL: the current setting in bits 0-1,
+    // the one the next exec takes in 2-3, and whether it is inherited past
+    // that exec in bit 4, as Linux keeps them (0 in bits 0-1 reads as on).
+    // Inherited by fork; exec applies it (riscv64_v_ctrl_exec). At the end
+    // for the reason given above native_standin_child.
+    dword_t riscv64_v_ctrl;
 };
+// whether the riscv64 V extension is on for this task (PR_RISCV_V_*)
+static inline bool riscv64_v_enabled(struct task *task) {
+    return (task->riscv64_v_ctrl & 3) != 1;
+}
+void riscv64_v_ctrl_exec(struct task *task);
 
 // current will always give the process that is currently executing
 // if I have to stop using __thread, current will become a macro

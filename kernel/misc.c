@@ -1,6 +1,7 @@
 #include <string.h>
 #include "kernel/calls.h"
 #include "kernel/seccomp.h"
+#include "jit/jit.h"
 
 #define PRCTL_SET_PDEATHSIG_ 1
 #define PRCTL_GET_PDEATHSIG_ 2
@@ -68,6 +69,45 @@ static bool prctl_cap_test(const dword_t caps[2], uint_t cap) {
     if (!prctl_cap_valid(cap))
         return false;
     return (caps[cap / 32] & (1u << (cap % 32))) != 0;
+}
+
+// riscv64 V control, as Linux's riscv_v_vstate_ctrl_*: off (1), on (2) or
+// the default (0, which is on: abi.riscv_v_default_allow's usual 1)
+#define RV_V_CTRL_OFF 1
+#define RV_V_CTRL_ON 2
+#define RV_V_CTRL_INHERIT (1 << 4)
+#define RV_V_CTRL_MASK 0x1f
+static dword_t riscv64_v_ctrl_get(struct task *task) {
+    dword_t c = task->riscv64_v_ctrl;
+    if ((c & 3) == 0)
+        c |= RV_V_CTRL_ON;
+    return c & RV_V_CTRL_MASK;
+}
+static int_t riscv64_v_ctrl_set(struct task *task, uint_t arg) {
+    if (arg & ~RV_V_CTRL_MASK)
+        return _EINVAL;
+    dword_t cur = riscv64_v_ctrl_get(task) & 3, want = arg & 3, next = (arg >> 2) & 3;
+    if (want == 3 || next == 3)
+        return _EINVAL;
+    if (want == RV_V_CTRL_OFF && cur != RV_V_CTRL_OFF)
+        return _EPERM; // Linux will not turn V off under a running program
+    if (want == RV_V_CTRL_ON && cur == RV_V_CTRL_OFF) {
+        // on again: blocks translated while it was off trap every vector
+        // instruction (gen_riscv64_vector), so drop them
+        struct jit *jit = task->mem != NULL ? task->mem->mmu.jit : NULL;
+        if (jit != NULL)
+            jit_invalidate_all(jit);
+        cur = RV_V_CTRL_ON;
+    }
+    task->riscv64_v_ctrl = cur | next << 2 | (arg & RV_V_CTRL_INHERIT);
+    return 0;
+}
+// at exec: the next setting (or the default) becomes the current one, and
+// is forgotten unless inherited
+void riscv64_v_ctrl_exec(struct task *task) {
+    dword_t c = task->riscv64_v_ctrl, next = (c >> 2) & 3, inherit = c & RV_V_CTRL_INHERIT;
+    dword_t cur = next == 0 ? RV_V_CTRL_ON : next;
+    task->riscv64_v_ctrl = cur | (inherit ? next << 2 : 0) | inherit;
 }
 
 int_t sys_prctl_guest(dword_t option, qword_t arg2, qword_t arg3, qword_t arg4, qword_t arg5) {
@@ -303,6 +343,11 @@ int_t sys_prctl_guest(dword_t option, qword_t arg2, qword_t arg3, qword_t arg4, 
                 default:
                     return _EINVAL;
             }
+        case 69: // PR_RISCV_V_SET_CONTROL
+        case 70: // PR_RISCV_V_GET_CONTROL
+            if (current->abi != GUEST_ABI_RISCV64)
+                return _EINVAL;
+            return option == 70 ? (int_t) riscv64_v_ctrl_get(current) : riscv64_v_ctrl_set(current, arg2);
         default:
             STRACE("prctl(%#x)", option);
             return _EINVAL;

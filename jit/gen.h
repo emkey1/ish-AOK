@@ -99,6 +99,9 @@ struct gen_state {
     // from the one in force at compile time. The typed vector gadgets check
     // it at run time, so a wrong guess only costs the C path.
     uint64_t riscv64_vtype;
+    // The process has V off (PR_RISCV_V_SET_CONTROL): every vector
+    // instruction is an illegal one.
+    bool riscv64_v_off;
 };
 
 bool gen_start(guest_addr_t addr, struct gen_state *state); // returns false on OOM

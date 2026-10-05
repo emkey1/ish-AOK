@@ -2024,6 +2024,8 @@ static struct jit_block *jit_block_compile_common(guest_addr_t ip, struct tlb *t
     // instructions (gen.c, gen_riscv64_vector)
     if (riscv64 && current != NULL && !(current->cpu.riscv64_vtype >> 63))
         state.riscv64_vtype = current->cpu.riscv64_vtype;
+    if (riscv64 && current != NULL && !riscv64_v_enabled(current))
+        state.riscv64_v_off = true;
     state.oom_active = true;
     // _setjmp, not setjmp: on Darwin (BSD semantics, unlike glibc) plain
     // setjmp/longjmp save and restore the signal mask, which is a real
