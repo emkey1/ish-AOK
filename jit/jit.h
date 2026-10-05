@@ -299,7 +299,7 @@ void jit_note_shared_write(struct jit *jit, const struct pt_entry *entry);
 #define JIT_FUSE_AMD64_MOVR       (1u << 2)  // mov r32/r64,r32/r64 specialised per register pair
 #define JIT_FUSE_AMD64_ARITHR     (1u << 3)  // add/sub/or/and/xor reg,reg|imm specialised per register
 #define JIT_FUSE_AMD64_MEMR       (1u << 4)  // mov r,[base+disp] / mov [base+disp],r on the register cache
-#define JIT_FUSE_AMD64_SHIFTR     (1u << 5)  // shl/shr/sar reg,imm (and by 1) specialised per register
+#define JIT_FUSE_AMD64_SHIFTR     (1u << 5)  // shl/shr/sar reg,imm (and by 1), rol/ror reg,imm, specialised per register
 #define JIT_FUSE_AMD64_INCDECR    (1u << 6)  // inc/dec reg specialised per register
 #define JIT_FUSE_AMD64_RESIDENT   (1u << 7)  // the register cache stays unwritten across chained branches
 #define JIT_FUSE_AMD64_RETCACHE   (1u << 8)  // ret enters the target block through jit_frame.ret_cache

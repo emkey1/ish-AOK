@@ -10034,6 +10034,47 @@ amd64_v_gen_i2f cvtsi2ss, 1
 .endif
 .endm
 
+# rol/ror r32/r64, imm8 per register: amd64_roi_<op><size>_<reg>, full and
+# _nf. The stream word is the right-rotate amount (gen.c turns a rol by n
+# into a ror by size - n), with bit 8 set for a rotate by one, the only
+# count that defines OF; gen.c leaves a zero count to the generic gadget.
+# CF and OF as amd64_gen_rotate_imm writes them, the rest untouched. Tables
+# amd64_roi{,_nf}_gadgets[(op * 2 + size64) * 16 + reg].
+.macro amd64_roi16 op, s, R, bits, nf, d, hd
+.if \nf
+.gadget amd64_roi_\op\()\s\()_\d\()_nf
+    ldr x10, [_ip]
+    amd64_r16_get \R, 13, \d, \hd
+    ror \R\()15, \R\()13, \R\()10
+    amd64_r16_put 15, \d, \hd
+    gret 1
+.else
+.gadget amd64_roi_\op\()\s\()_\d
+    ldr x10, [_ip]
+    amd64_r16_get \R, 13, \d, \hd
+    ror \R\()15, \R\()13, \R\()10
+    amd64_r16_put 15, \d, \hd
+    .ifc \op, rol
+    and w14, w15, 1
+    lsr \R\()16, \R\()15, \bits
+    eor w16, w16, w14
+    .else
+    lsr \R\()14, \R\()15, \bits
+    lsr \R\()16, \R\()15, \bits - 1
+    and w16, w16, 1
+    eor w16, w16, w14
+    .endif
+    strb w14, [_cpu, CPU_cf]
+    ldr w17, [_cpu, CPU_eflags]
+    bfi w17, w14, 0, 1
+    tbz x10, 8, 1f
+    strb w16, [_cpu, CPU_of]
+    bfi w17, w16, 11, 1
+1:  str w17, [_cpu, CPU_eflags]
+    gret 1
+.endif
+.endm
+
 # The register loops: \m is one of the families above. Ids 0-7 carry their
 # cache register number, 8-15 a placeholder (they live in memory).
 .macro amd64_r16_srcs m, op, s, R, bits, nf, d, hd
@@ -10107,6 +10148,8 @@ amd64_r16_family amd64_r16_ri, amd64_ari16, sub
 amd64_r16_family amd64_r16_ri, amd64_lri16, or
 amd64_r16_family amd64_r16_ri, amd64_lri16, and
 amd64_r16_family amd64_r16_ri, amd64_lri16, xor
+amd64_r16_family amd64_r16_ri, amd64_roi16, rol
+amd64_r16_family amd64_r16_ri, amd64_roi16, ror
 
 # Tables.
 .macro amd64_r16_quad fam, op, s, d, sr, nf
@@ -10171,6 +10214,12 @@ amd64_r16_family amd64_r16_ri, amd64_lri16, xor
     amd64_r16_ri_ops lri, or, 1
     amd64_r16_ri_ops lri, and, 1
     amd64_r16_ri_ops lri, xor, 1
+.global.name amd64_roi_gadgets
+    amd64_r16_ri_ops roi, rol, 0
+    amd64_r16_ri_ops roi, ror, 0
+.global.name amd64_roi_nf_gadgets
+    amd64_r16_ri_ops roi, rol, 1
+    amd64_r16_ri_ops roi, ror, 1
 .popsection
 
 # ---- `mov r32/r64, [base + disp]` and the store, specialised per register ----
@@ -10476,7 +10525,7 @@ amd64_r16_family amd64_r16_rr17, amd64_slo16, xor
 # for indexed). Kinds: st16 (mov m16, r16), zx16 (movzx r32/r64, m16),
 # ld16 (mov r16, m16: the rest of the register kept), st8, zx8, ld8 -- the
 # byte forms only for the low byte of a register (gen.c leaves ah..bh to
-# the generic gadgets). Operands: [disp or address][insn rip]; gret 2.
+# the generic gadgets) -- and sx32 (movsxd r64, m32). Operands: [disp or address][insn rip]; gret 2.
 .macro amd64_smx16 op, s, R, bits, nf, r, hr, b, hb
     .if \b == 16
     .gadget amd64_smx_\op\()_\r\()_r
@@ -10566,9 +10615,21 @@ amd64_r16_family amd64_r16_rr17, amd64_slo16, xor
     amd64_svread_bullshit 1, smx_\op\()_\r\()_\b
     .exitm
     .endif
+    .ifc \op, sx32
+    amd64_vread_prep 4, smx_\op\()_\r\()_\b
+    .if \r < 8
+    ldrsw x\hr, [x9]
+    .else
+    ldrsw x10, [x9]
+    str x10, [_cpu, CPU_amd64_regs + 8 * \r]
+    .endif
+    gret 2
+    amd64_svread_bullshit 4, smx_\op\()_\r\()_\b
+    .exitm
+    .endif
     .error "amd64_smx16: unknown kind"
 .endm
-.irp kind, st16,zx16,ld16,st8,zx8,ld8
+.irp kind, st16,zx16,ld16,st8,zx8,ld8,sx32
     amd64_r16_rr17 amd64_smx16, \kind, 0, w, 0, 0
 .endr
 
@@ -10914,6 +10975,44 @@ amd64_r16_srcs17 amd64_sjm16, call, 64, x, 63, 0, 0, 0
 amd64_r16_srcs17 amd64_scmi16, cmp, 32, w, 31, 0, 0, 0
 amd64_r16_srcs17 amd64_scmi16, cmp, 64, x, 63, 0, 0, 0
 
+# cmp m8, imm8 (80 /7) and test m8, imm8 (F6 /0), flags only, the 18 bases:
+# amd64_sbi_<op>_<base>. The 8-bit flags as amd64_scb computes them.
+# Operands: [disp or address][insn rip][imm]; gret 3. Table
+# amd64_sbi_gadgets[op * 18 + base], op 0 cmp, 1 test.
+.macro amd64_sbi16 op, s, R, bits, nf, d, hd, b, hb
+    .if \b == 16
+    .gadget amd64_sbi_\op\()_r
+    .elseif \b == 17
+    .gadget amd64_sbi_\op\()_x
+    .else
+    .gadget amd64_sbi_\op\()_\b
+    .endif
+    ldr x8, [_ip, 8]
+    str x8, [_cpu, CPU_amd64_rip]
+    amd64_m16_addr \b, \hb
+    amd64_vread_prep 1, sbi_\op\()_\b
+    ldrb w13, [x9]
+    ldr x10, [_ip, 16]
+    .ifc \op, test
+    and w15, w13, w10
+    and w15, w15, 0xff
+    mov x11, 8
+    amd64_cached_set_logic_flags x15, x11
+    .else
+    lsl w11, w13, 24
+    lsl w12, w10, 24
+    subs w15, w11, w12
+    cset w14, cc
+    cset w16, vs
+    lsr w15, w15, 24
+    amd64_cached_set_addsub_flags 7
+    .endif
+    gret 3
+    amd64_svread_bullshit 1, sbi_\op\()_\b
+.endm
+amd64_r16_srcs17 amd64_sbi16, cmp, 8, w, 7, 0, 0, 0
+amd64_r16_srcs17 amd64_sbi16, test, 8, w, 7, 0, 0, 0
+
 # mov [mem], imm (C6/C7 /0), 8/16/32/64-bit, on the register cache:
 # amd64_ssi<size>_<base>, the 18 bases. Operands: [disp or address][insn
 # rip][imm]; gret 3.
@@ -11020,7 +11119,7 @@ NAME(amd64_specmem_end):
 # Tables: amd64_smem_gadgets[((st * 2 + size64) * 16 + reg) * 18 + base]
 # (st 0 load, 1 store), amd64_slo{,_nf}_gadgets[((op * 2 + size64) * 16 +
 # dst) * 18 + base], amd64_smx_gadgets[(kind * 16 + reg) * 18 + base] (kinds
-# st16 zx16 ld16 st8 zx8 ld8) and amd64_scb_gadgets[(op * 16 + reg) * 18 +
+# st16 zx16 ld16 st8 zx8 ld8 sx32) and amd64_scb_gadgets[(op * 16 + reg) * 18 +
 # base] (cmpmr cmprm test); base 16 = rip-relative, 17 = indexed.
 .macro amd64_slo_quad op, s, d, b, nf
     .if \b == 16
@@ -11174,7 +11273,7 @@ NAME(amd64_specmem_end):
     amd64_sim_ops inc, 1
     amd64_sim_ops dec, 1
 .global.name amd64_smx_gadgets
-    .irp kind, st16,zx16,ld16,st8,zx8,ld8
+    .irp kind, st16,zx16,ld16,st8,zx8,ld8,sx32
         amd64_x16_ops smx, \kind
     .endr
 .global.name amd64_scb_gadgets
@@ -11671,6 +11770,91 @@ amd64_r16_family amd64_r16_rr, amd64_im16, ri
     .endr
 .popsection
 
+# test + jcc, fused, for rax..rdi: amd64_ftr_<cond><size>_<a>_<b> (test a, b)
+# and amd64_fti_<cond><size>_<reg> (test reg, imm; the imm in the first
+# stream word). The flags of the test, then the branch on its result as the
+# fused cmp gadgets do (CF = OF = 0). Tables amd64_ftr_gadgets[(cond * 2 +
+# size64) * 64 + a * 8 + b] and amd64_fti_gadgets[(cond * 2 + size64) * 8 +
+# reg], the same layout as amd64_fcr/fci, parity empty.
+.macro amd64_ftr8 cond, s, R, bits, d, hd, sr, hs
+.gadget amd64_ftr_\cond\()\s\()_\d\()_\sr
+    and \R\()15, \R\hd, \R\hs
+    mov x11, \s
+    amd64_cached_set_logic_flags x15, x11
+    mov w14, 0
+    mov w16, 0
+    amd64_fused_cc_tail \cond, \bits, 0
+.endm
+.macro amd64_fti8 cond, s, R, bits, d, hd
+.gadget amd64_fti_\cond\()\s\()_\d
+    ldr x10, [_ip]
+    and \R\()15, \R\hd, \R\()10
+    mov x11, \s
+    amd64_cached_set_logic_flags x15, x11
+    mov w14, 0
+    mov w16, 0
+    amd64_fused_cc_tail \cond, \bits, 8
+.endm
+.macro amd64_ft8_srcs cond, s, R, bits, d, hd
+    amd64_ftr8 \cond, \s, \R, \bits, \d, \hd, 0, 20
+    amd64_ftr8 \cond, \s, \R, \bits, \d, \hd, 1, 22
+    amd64_ftr8 \cond, \s, \R, \bits, \d, \hd, 2, 23
+    amd64_ftr8 \cond, \s, \R, \bits, \d, \hd, 3, 21
+    amd64_ftr8 \cond, \s, \R, \bits, \d, \hd, 4, 27
+    amd64_ftr8 \cond, \s, \R, \bits, \d, \hd, 5, 26
+    amd64_ftr8 \cond, \s, \R, \bits, \d, \hd, 6, 24
+    amd64_ftr8 \cond, \s, \R, \bits, \d, \hd, 7, 25
+    amd64_fti8 \cond, \s, \R, \bits, \d, \hd
+.endm
+.macro amd64_ft8_dsts cond, s, R, bits
+    amd64_ft8_srcs \cond, \s, \R, \bits, 0, 20
+    amd64_ft8_srcs \cond, \s, \R, \bits, 1, 22
+    amd64_ft8_srcs \cond, \s, \R, \bits, 2, 23
+    amd64_ft8_srcs \cond, \s, \R, \bits, 3, 21
+    amd64_ft8_srcs \cond, \s, \R, \bits, 4, 27
+    amd64_ft8_srcs \cond, \s, \R, \bits, 5, 26
+    amd64_ft8_srcs \cond, \s, \R, \bits, 6, 24
+    amd64_ft8_srcs \cond, \s, \R, \bits, 7, 25
+.endm
+.irp cond, o,c,z,cz,s,sxo,sxoz
+    amd64_ft8_dsts \cond, 32, w, 31
+    amd64_ft8_dsts \cond, 64, x, 63
+.endr
+.macro amd64_ftr_quad cond, s, d, sr
+    .ifc \cond, p
+    .quad 0
+    .else
+    .quad NAME(gadget_amd64_ftr_\cond\()\s\()_\d\()_\sr)
+    .endif
+.endm
+.macro amd64_fti_quad cond, s, d
+    .ifc \cond, p
+    .quad 0
+    .else
+    .quad NAME(gadget_amd64_fti_\cond\()\s\()_\d)
+    .endif
+.endm
+.pushsection_rodata
+.global.name amd64_ftr_gadgets
+    .irp cond, o,c,z,cz,s,p,sxo,sxoz
+        .irp s, 32,64
+            .irp d, 0,1,2,3,4,5,6,7
+                .irp sr, 0,1,2,3,4,5,6,7
+                    amd64_ftr_quad \cond, \s, \d, \sr
+                .endr
+            .endr
+        .endr
+    .endr
+.global.name amd64_fti_gadgets
+    .irp cond, o,c,z,cz,s,p,sxo,sxoz
+        .irp s, 32,64
+            .irp d, 0,1,2,3,4,5,6,7
+                amd64_fti_quad \cond, \s, \d
+            .endr
+        .endr
+    .endr
+.popsection
+
 # neg/not r32/r64 per register, any of the sixteen: amd64_neg<size>_<reg>
 # (full and _nf; the flags of 0 - x) and amd64_not<size>_<reg> (no flags).
 # test r, r per register pair: amd64_tst<size>_<a>_<b>, logic flags, flags
@@ -11756,6 +11940,15 @@ amd64_r16_rr amd64_tst16, test, 64, x, 63, 0
 .macro amd64_tst_quad s, d, sr
     .quad NAME(gadget_amd64_tst\s\()_\d\()_\sr)
 .endm
+.macro amd64_sbi_quad op, b
+    .if \b == 16
+    .quad NAME(gadget_amd64_sbi_\op\()_r)
+    .elseif \b == 17
+    .quad NAME(gadget_amd64_sbi_\op\()_x)
+    .else
+    .quad NAME(gadget_amd64_sbi_\op\()_\b)
+    .endif
+.endm
 .macro amd64_scmi_quad s, b
     .if \b == 16
     .quad NAME(gadget_amd64_scmi\s\()_r)
@@ -11780,6 +11973,12 @@ amd64_r16_rr amd64_tst16, test, 64, x, 63, 0
             .endr
         .endr
     .endr
+.global.name amd64_sbi_gadgets
+    .irp op, cmp,test
+        .irp b, 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17
+            amd64_sbi_quad \op, \b
+        .endr
+    .endr
 .global.name amd64_scmi_gadgets
     .irp s, 32,64
         .irp b, 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17
@@ -11788,12 +11987,84 @@ amd64_r16_rr amd64_tst16, test, 64, x, 63, 0
     .endr
 .popsection
 
+# setcc r8 per condition and register, on the register cache:
+# amd64_scc_<n><cond>_<reg> for the low byte of any of the sixteen, and
+# amd64_scc_<n><cond>_h<reg> for ah..bh (reg 0-3). n is empty or n (the
+# negated condition). No operand. Table amd64_scc_gadgets[cc * 20 + slot],
+# cc the x86 condition code (0-15), slot 0-15 low byte, 16-19 ah..bh.
+.macro amd64_scc1 cond, n, d, hd, high
+    .if \high
+    .gadget amd64_scc_\n\cond\()_h\d
+    .else
+    .gadget amd64_scc_\n\cond\()_\d
+    .endif
+    amd64_do_jump \cond, 1f
+    .ifc \n, n
+    mov w15, 1
+    .else
+    mov w15, 0
+    .endif
+    b 2f
+1:
+    .ifc \n, n
+    mov w15, 0
+    .else
+    mov w15, 1
+    .endif
+2:
+    .if \d < 8
+    bfi x\hd, x15, 8 * \high, 8
+    .else
+    ldr x13, [_cpu, CPU_amd64_regs + 8 * \d]
+    bfi x13, x15, 0, 8
+    str x13, [_cpu, CPU_amd64_regs + 8 * \d]
+    .endif
+    gret
+.endm
+.macro amd64_scc_regs cond, n
+    amd64_scc1 \cond, \n, 0, 20, 0
+    amd64_scc1 \cond, \n, 1, 22, 0
+    amd64_scc1 \cond, \n, 2, 23, 0
+    amd64_scc1 \cond, \n, 3, 21, 0
+    amd64_scc1 \cond, \n, 4, 27, 0
+    amd64_scc1 \cond, \n, 5, 26, 0
+    amd64_scc1 \cond, \n, 6, 24, 0
+    amd64_scc1 \cond, \n, 7, 25, 0
+    .irp d, 8,9,10,11,12,13,14,15
+    amd64_scc1 \cond, \n, \d, 0, 0
+    .endr
+    amd64_scc1 \cond, \n, 0, 20, 1
+    amd64_scc1 \cond, \n, 1, 22, 1
+    amd64_scc1 \cond, \n, 2, 23, 1
+    amd64_scc1 \cond, \n, 3, 21, 1
+.endm
+.irp cond, o,c,z,cz,s,p,sxo,sxoz
+    amd64_scc_regs \cond,
+    amd64_scc_regs \cond, n
+.endr
+.macro amd64_scc_row cond, n
+    .irp d, 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
+    .quad NAME(gadget_amd64_scc_\n\cond\()_\d)
+    .endr
+    .irp d, 0,1,2,3
+    .quad NAME(gadget_amd64_scc_\n\cond\()_h\d)
+    .endr
+.endm
+.pushsection_rodata
+.global.name amd64_scc_gadgets
+    .irp cond, o,c,z,cz,s,p,sxo,sxoz
+    amd64_scc_row \cond,
+    amd64_scc_row \cond, n
+    .endr
+.popsection
+
 # movzx/movsx r32/r64, r8/r16 (0F B6/B7/BE/BF, register forms) per register:
 # amd64_mx_<kind>_<dst>_<src>, any of the sixteen. Kinds: zb, zw (zero-extend
 # a byte/word; the 32- and 64-bit results are the same), sb32, sb64, sw32,
 # sw64 (sign-extend), and zbh, sbh32, sbh64 for ah..bh (bits 8-15 of rax..rbx,
-# src 0-3). No flags. Table amd64_mx_gadgets[(kind * 16 + dst) *
-# 16 + src] in that kind order, the high-byte kinds' src 4-15 empty.
+# src 0-3), and sd (movsxd r64, r32: 63 with REX.W). No flags. Table
+# amd64_mx_gadgets[(kind * 16 + dst) * 16 + src] in that kind order, the
+# high-byte kinds' src 4-15 empty.
 .macro amd64_mx_op kind, rd, wd, xs, ws
     .ifc \kind, zb
     uxtb \wd, \ws
@@ -11821,6 +12092,9 @@ amd64_r16_rr amd64_tst16, test, 64, x, 63, 0
     .endif
     .ifc \kind, sbh64
     sbfx \rd, \xs, 8, 8
+    .endif
+    .ifc \kind, sd
+    sxtw \rd, \ws
     .endif
 .endm
 .macro amd64_mx16 op, s, R, bits, nf, d, hd, sr, hs
@@ -11855,6 +12129,7 @@ amd64_r16_rr amd64_tst16, test, 64, x, 63, 0
 .irp kind, zbh,sbh32,sbh64
     amd64_r16_ri amd64_mxh_srcs, \kind, 0, x, 0, 0
 .endr
+amd64_r16_rr amd64_mx16, sd, 0, x, 0, 0
 .macro amd64_mx_quad kind, d, sr
     .quad NAME(gadget_amd64_mx_\kind\()_\d\()_\sr)
 .endm
@@ -11881,6 +12156,42 @@ amd64_r16_rr amd64_tst16, test, 64, x, 63, 0
     .irp kind, zbh,sbh32,sbh64
         .irp d, 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
             amd64_mxh_row \kind, \d
+        .endr
+    .endr
+    .irp d, 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
+        amd64_mx_row sd, \d
+    .endr
+.popsection
+
+# test r8/r32/r64, imm (F6 /0, F7 /0, A8, A9) per register:
+# amd64_tsi<size>_<reg>, the imm in the stream word (zero-extended for 8 and
+# 32, sign-extended for 64). Low byte only for 8 (ah..bh keep the byte
+# gadget). Logic flags, no write. Table amd64_tsi_gadgets[size_idx * 16 +
+# reg], size_idx 0 = 8, 1 = 32, 2 = 64.
+.macro amd64_tsi16 op, s, R, bits, nf, d, hd
+.gadget amd64_tsi\s\()_\d
+    ldr x13, [_ip]
+    .if \d < 8
+    and \R\()15, \R\hd, \R\()13
+    .else
+    ldr \R\()10, [_cpu, CPU_amd64_regs + 8 * \d]
+    and \R\()15, \R\()10, \R\()13
+    .endif
+    .if \s == 8
+    and w15, w15, 0xff
+    .endif
+    mov x11, \s
+    amd64_cached_set_logic_flags x15, x11
+    gret 1
+.endm
+amd64_r16_ri amd64_tsi16, test, 8, w, 7, 0
+amd64_r16_ri amd64_tsi16, test, 32, w, 31, 0
+amd64_r16_ri amd64_tsi16, test, 64, x, 63, 0
+.pushsection_rodata
+.global.name amd64_tsi_gadgets
+    .irp s, 8,32,64
+        .irp d, 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
+            amd64_nn_quad tsi, \s, \d, 0
         .endr
     .endr
 .popsection

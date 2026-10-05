@@ -93,6 +93,10 @@ int main(void) {
     FAULTING("inc32 [rcx]", "incl 16(%%rcx)");
     FAULTING("dec64 [rcx+rdx*8]", "decq 16(%%rcx,%%rdx,8)");
     FAULTING("cmp64 [rcx],rax", "cmpq %%rax, 16(%%rcx)");
+    FAULTING("cmpb [rcx],imm", "cmpb $7, 16(%%rcx)");
+    FAULTING("testb [rcx+rdi],imm", "testb $1, 16(%%rcx,%%rdi)");
+    FAULTING("movslq [rcx],rbx", "movslq 16(%%rcx), %%rbx");
+    FAULTING("movslq [r9],r10", "xorl %%r9d, %%r9d\n movslq 16(%%r9), %%r10");
     printf("amd64_fault_regs: %s\n", failures ? "FAIL" : "PASS");
     return failures != 0;
 }

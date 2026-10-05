@@ -97,7 +97,18 @@ static void emit_mem_one(void) {
     use_rbp = (int) (rnd() & 1);
     if (rnd() % 4 == 0) { // the indexed and the 16-bit / byte forms
         int lowbyte_rex = (a & 8) || (rnd() & 1); // REX makes a's low byte addressable
-        switch (rnd() % 16) {
+        switch (rnd() % 18) {
+            case 16: case 17: { // cmp m8, imm8 (80 /7) / test m8, imm8 (F6 /0): plain, indexed, %fs:0
+                int t = (int) (rnd() & 1), op = t ? 0xf6 : 0x80, ext = t ? 0 : 7;
+                switch (rnd() % 3) {
+                    case 0: if (!use_rbp) rex_mem(0, 0); b((uint8_t) op); mem_any(ext); break;
+                    case 1: set_r14(); rex_sib(0, 0); b((uint8_t) op); sib_operand(ext); break;
+                    default: b(0x64); b((uint8_t) op); b((uint8_t) (0x04 | ext << 3)); b(0x25);
+                        uint32_t z = (uint32_t) (rnd() % 8); memcpy(p, &z, 4); p += 4; break;
+                }
+                b((uint8_t) rnd());
+                break;
+            }
             case 9: { // inc/dec [m] (FF /0, /1), plain or indexed
                 int ext = (int) (rnd() & 1);
                 if (rnd() & 1) { set_r14(); rex_sib(w, 0); b(0xff); sib_operand(ext); }
@@ -167,6 +178,15 @@ static void emit_mem_one(void) {
                 if (rnd() & 1) { set_r14(); rex_sib(0, a); b(0x3a); sib_operand(a); }
                 else { rex_mem_any(0, a); b(0x84); mem_any(a); }
                 break;
+            case 8: // movsxd a, [m]: plain, indexed, or %fs:0
+                switch (rnd() % 3) {
+                    case 0: rex_mem_any(1, a); b(0x63); mem_any(a); break;
+                    case 1: set_r14(); rex_sib(1, a); b(0x63); sib_operand(a); break;
+                    default: b(0x64); b((uint8_t) (0x48 | ((a & 8) ? 4 : 0))); b(0x63);
+                        b((uint8_t) (0x04 | (a & 7) << 3)); b(0x25);
+                        uint32_t z = 0; memcpy(p, &z, 4); p += 4; break;
+                }
+                break;
             default: set_r14(); rex_sib(0, a); b(0x0f); b(0xb6); sib_operand(a); break;   // movzx a, byte [b+i*s+d]
         }
         return;
@@ -198,7 +218,7 @@ static void emit_one(void) {
         emit_mem_one();
         return;
     }
-    switch (rnd() % 19) {
+    switch (rnd() % 24) {
         case 0: case 1: case 2: case 3: { // alu reg,reg: add or adc sbb and sub xor cmp
             static const uint8_t ops[] = {0x01, 0x09, 0x11, 0x19, 0x21, 0x29, 0x31, 0x39};
             rex(w, c, a); b(ops[rnd() % 8]); modrm_rr(c, a); break;
@@ -236,6 +256,13 @@ static void emit_one(void) {
                 b(0xb9); uint32_t v = (uint32_t) (rnd() & 1); memcpy(p, &v, 4); p += 4; // mov $v, %ecx
                 b(0xe3); b(3);
             } else {
+                if (rnd() % 3 == 0) { // test a, c or test a, imm32 right before: fused with the jcc
+                    if (rnd() & 1) { rex(w, c, a); b(0x85); modrm_rr(c, a); }
+                    else {
+                        uint32_t v = (rnd() & 1) ? (uint32_t) rnd() : (uint32_t) (1u << (rnd() % 32));
+                        rex(w, 0, a); b(0xf7); modrm_rr(0, a); memcpy(p, &v, 4); p += 4;
+                    }
+                }
                 b((uint8_t) (0x70 + rnd() % 16)); b(3);
             }
             rex(1, c, a); b(0x89); modrm_rr(c, a); break;
@@ -258,6 +285,37 @@ static void emit_one(void) {
             if (rnd() & 1) { rex(w, a, c); b(0x0f); b(0xaf); modrm_rr(a, c); }
             else { rex(w, a, c); b(0x6b); modrm_rr(a, c); b((uint8_t) rnd()); }
             break;
+        case 17: { // test a, imm: F7 /0, F6 /0 on a low byte (REX, or al..bl), A9/A8
+            uint32_t v = (rnd() & 1) ? (uint32_t) rnd() : (uint32_t) (1u << (rnd() % 32));
+            switch (rnd() % 4) {
+                case 0: rex(w, 0, a); b(0xf7); modrm_rr(0, a); memcpy(p, &v, 4); p += 4; break;
+                case 1: b((uint8_t) (0x40 | ((a & 8) ? 1 : 0))); b(0xf6); modrm_rr(0, a); b((uint8_t) v); break;
+                case 2: b(0xf6); modrm_rr(0, a & 3); b((uint8_t) v); break;
+                default:
+                    if (rnd() & 1) { if (w) b(0x48); b(0xa9); memcpy(p, &v, 4); p += 4; }
+                    else { b(0xa8); b((uint8_t) v); }
+                    break;
+            }
+            break;
+        }
+        case 18: { // mov a, imm32 (B8+r), movabs (REX.W B8+r), C7 /0 imm32; movsxd a, c
+            uint64_t v = (rnd() & 1) ? rnd() : (uint64_t) (int64_t) (int8_t) rnd();
+            switch (rnd() % 4) {
+                case 0: if (a & 8) b(0x41); b((uint8_t) (0xb8 + (a & 7))); memcpy(p, &v, 4); p += 4; break;
+                case 1: b((uint8_t) (0x48 | ((a & 8) ? 1 : 0))); b((uint8_t) (0xb8 + (a & 7))); memcpy(p, &v, 8); p += 8; break;
+                case 2: rex(w, 0, a); b(0xc7); modrm_rr(0, a); memcpy(p, &v, 4); p += 4; break;
+                default: rex(1, a, c); b(0x63); modrm_rr(a, c); break;
+            }
+            break;
+        }
+        case 19: { // rol/ror a, imm8 (C1 /0, /1): counts 0 and 1 included, and past the size
+            static const uint8_t cnt[] = {0, 1, 1, 2, 31, 32, 33, 63, 64, 65};
+            rex(w, 0, a); b(0xc1); modrm_rr((int) (rnd() & 1), a);
+            b((uint8_t) ((rnd() & 1) ? cnt[rnd() % 10] : rnd() % 70)); break;
+        }
+        case 21: rex(w, a, a); b(rnd() & 1 ? 0x31 : 0x33); modrm_rr(a, a); break; // xor a, a
+        case 20: // setcc without REX: al..bl (rm 0-3) or ah..bh (rm 4-7)
+            b(0x0f); b((uint8_t) (0x90 + rnd() % 16)); b((uint8_t) (0xc0 | (rnd() % 8))); break;
         default: { // a second producer right away, to give the scan something to skip
             static const uint8_t ops[] = {0x01, 0x29, 0x31};
             rex(w, c, a); b(ops[rnd() % 3]); modrm_rr(c, a); break;
