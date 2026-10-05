@@ -7243,6 +7243,16 @@ static bool gen_riscv64_try_rcache_run(struct gen_state *state, struct tlb *tlb,
     return true;
 }
 
+// A V-extension instruction: the vop gadget runs it in C
+// (jit/riscv64_vector.c), with its pc for a trap.
+static int gen_riscv64_vector(struct gen_state *state, uint32_t insn) {
+    extern void gadget_riscv64_vop(void);
+    gen(state, (unsigned long) gadget_riscv64_vop);
+    gen(state, insn);
+    gen(state, state->riscv64_orig_ip);
+    return 1;
+}
+
 // Zba, Zbb, Zbs and Zicond (RVA23U64's scalar bit-manipulation; alu.S):
 // the gadget for `insn` and its third stream word -- rs2's offset for a
 // register form, the immediate (or 0 for a unary op) otherwise -- or NULL
@@ -7830,6 +7840,8 @@ int gen_step_riscv64(struct gen_state *state, struct tlb *tlb) {
         // F/D loads/stores. fld/fsd/fsw reuse the integer gadgets with the
         // f-register slot offset (same byte semantics); flw NaN-boxes.
         bool is_load = riscv64_opcode(insn) == RISCV64_OP_LOAD_FP;
+        if (funct3 == 0 || funct3 >= 5) // V loads/stores: EEW 8/16/32/64
+            return gen_riscv64_vector(state, insn);
         if (funct3 != 1 && funct3 != 2 && funct3 != 3) // 1: Zfhmin flh/fsh
             return gen_riscv64_undefined(state, insn);
         unsigned long freg_off = offsetof(struct cpu_state, riscv64_f)
@@ -8156,6 +8168,9 @@ int gen_step_riscv64(struct gen_state *state, struct tlb *tlb) {
         return 1;
     }
 
+    case 0x57: // OP-V: vsetvl* and the vector arithmetic
+        return gen_riscv64_vector(state, insn);
+
     case RISCV64_OP_CUSTOM0: case RISCV64_OP_CUSTOM1:
     case RISCV64_OP_CUSTOM2: case RISCV64_OP_CUSTOM3: {
         // Vendor/user extension hook (docs/historical/riscv64_guest_plan.md patch 5b,
@@ -8200,6 +8215,9 @@ int gen_step_riscv64(struct gen_state *state, struct tlb *tlb) {
         }
         if (funct3 >= 1 && funct3 <= 7 && funct3 != 4) { // csrrw/s/c[i]
             unsigned csr = insn >> 20;
+            extern bool riscv64_vector_csr(unsigned csr);
+            if (riscv64_vector_csr(csr))
+                return gen_riscv64_vector(state, insn);
             bool is_counter = csr == 0xc00 || csr == 0xc01 || csr == 0xc02; // cycle/time/instret
             // csrrs/c(i) with rs1/uimm == 0 is a pure read (this is what the
             // `rdtime`/`csrr` pseudo-ops assemble to); anything else would

@@ -601,6 +601,7 @@ static size_t ptrace_regset_slot(const struct task *child, qword_t note_type) {
         case GUEST_ABI_RISCV64:
             switch (note_type) {
                 case NT_PRSTATUS_: case NT_PRFPREG_: return 8;
+                case NT_RISCV_VECTOR_: return 4;
             }
             return 0;
         case GUEST_ABI_I386:
@@ -763,6 +764,12 @@ static qword_t ptrace_get_debugreg(struct task *task, unsigned n) {
     return n == 4 || n == 5 ? 0 : task->ptrace_debugreg[n];
 }
 
+// NT_RISCV_VECTOR: struct __riscv_v_regset_state, then the 32 registers.
+struct riscv64_v_regset_ {
+    qword_t vstart, vl, vtype, vcsr, vlenb;
+    uint8_t vreg[32 * 16];
+};
+
 static int ptrace_getregset(struct task *tracer, struct task *child, guest_addr_t iov_addr,
         qword_t note_type) {
     int check = ptrace_regset_check(tracer, child, iov_addr, note_type);
@@ -817,6 +824,17 @@ static int ptrace_getregset(struct task *tracer, struct task *child, guest_addr_
                 return _EINVAL;
             int syscall_no = child->ptrace.syscall;
             return ptrace_getregset_write(tracer, iov_addr, &syscall_no, sizeof(syscall_no));
+        }
+        case NT_RISCV_VECTOR_: {
+            if (child->abi != GUEST_ABI_RISCV64)
+                return _EINVAL;
+            struct riscv64_v_regset_ v = {
+                .vstart = child->cpu.riscv64_vstart, .vl = child->cpu.riscv64_vl,
+                .vtype = child->cpu.riscv64_vtype,
+                .vcsr = child->cpu.riscv64_vxrm << 1 | child->cpu.riscv64_vxsat, .vlenb = 16,
+            };
+            memcpy(v.vreg, child->cpu.riscv64_v, sizeof(v.vreg));
+            return ptrace_getregset_write(tracer, iov_addr, &v, sizeof(v));
         }
         // TPIDR_EL0, the thread pointer, then TPIDR2_EL0, which is zero
         // without SME -- Linux 6.12's tls_get, 16 bytes. How a debugger finds
@@ -972,6 +990,28 @@ static int ptrace_setregset(struct task *tracer, struct task *child, guest_addr_
             // resumes, so changing the syscall means rewriting x8 too.
             if (ptrace_in_syscall_entry_stop(child))
                 child->cpu.arm64_regs[arm64_x8] = (qword_t) (sqword_t) syscall_no;
+            return 0;
+        }
+        case NT_RISCV_VECTOR_: {
+            if (child->abi != GUEST_ABI_RISCV64)
+                return _EINVAL;
+            struct riscv64_v_regset_ v = {
+                .vstart = child->cpu.riscv64_vstart, .vl = child->cpu.riscv64_vl,
+                .vtype = child->cpu.riscv64_vtype,
+                .vcsr = child->cpu.riscv64_vxrm << 1 | child->cpu.riscv64_vxsat, .vlenb = 16,
+            };
+            memcpy(v.vreg, child->cpu.riscv64_v, sizeof(v.vreg));
+            int err = ptrace_setregset_read(tracer, iov_addr, &v, sizeof(v));
+            if (err < 0)
+                return err;
+            if (v.vlenb != 16)
+                return _EINVAL; // the register length is not the tracer's to change
+            child->cpu.riscv64_vstart = v.vstart;
+            child->cpu.riscv64_vl = v.vl;
+            child->cpu.riscv64_vtype = v.vtype;
+            child->cpu.riscv64_vxrm = (v.vcsr >> 1) & 3;
+            child->cpu.riscv64_vxsat = v.vcsr & 1;
+            memcpy(child->cpu.riscv64_v, v.vreg, sizeof(v.vreg));
             return 0;
         }
         default:

@@ -43,6 +43,7 @@ struct task;
 #define NT_ARM_HW_BREAK_ 0x402
 #define NT_ARM_HW_WATCH_ 0x403
 #define NT_ARM_SYSTEM_CALL_ 0x404
+#define NT_RISCV_VECTOR_ 0x901
 
 #define PTRACE_EVENT_FORK_ 1
 #define PTRACE_EVENT_VFORK_ 2

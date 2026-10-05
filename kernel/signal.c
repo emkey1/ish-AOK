@@ -283,15 +283,30 @@ struct riscv64_ucontext_ {
 };
 static_assert(sizeof(struct riscv64_ucontext_) == 960, "riscv64 ucontext size");
 
+// The V state record (arch/riscv signal.c save_v_state): its
+// __riscv_ctx_hdr is the last 8 bytes of the FP union (sc_extdesc.hdr, in
+// mcontext.fp_pad), and the record continues right after the ucontext --
+// struct __riscv_v_ext_state, the registers its datap points at, then an
+// END header.
+#define RISCV64_V_MAGIC 0x53465457
+struct riscv64_v_record_ {
+    qword_t vstart, vl, vtype, vcsr, vlenb, datap; // __sc_riscv_v_state, aligned(16)
+    uint8_t vregs[32 * 16];
+    dword_t end_magic, end_size; // END_MAGIC 0, END_HDR_SIZE 0
+};
+static_assert(sizeof(struct riscv64_v_record_) == 48 + 512 + 8, "riscv64 V record size");
+
 struct rt_sigframe_riscv64 {
     struct amd64_siginfo_ info; // generic 64-bit siginfo layout
     struct riscv64_ucontext_ uc;
+    struct riscv64_v_record_ v;
     // Not part of the kernel frame: the sigreturn trampoline. Real Linux
     // riscv64 always returns via the vDSO's __vdso_rt_sigreturn; this
     // port has no riscv vDSO, so it lives on the stack like arm64's.
     dword_t retcode[2]; // li a7, 139 ; ecall
 };
 static_assert(offsetof(struct rt_sigframe_riscv64, uc) == 128, "riscv64 frame uc offset");
+static_assert(offsetof(struct rt_sigframe_riscv64, v) == 128 + 960, "riscv64 V record follows the ucontext");
 
 static int sigaction_from_user(struct task *task, guest_addr_t user_addr, struct sigaction_ *action) {
     // arm64 shares the amd64 marshaling: aarch64's struct sigaction is the
@@ -3138,6 +3153,18 @@ static void setup_rt_sigframe_riscv64(struct siginfo_ *info, struct rt_sigframe_
         mc->f[i] = cpu->riscv64_f[i];
     mc->fcsr = cpu->riscv64_fcsr;
 
+    // V: the header in sc_extdesc.hdr (the FP union's last 8 bytes), the
+    // record after the ucontext (see struct riscv64_v_record_).
+    dword_t vhdr[2] = {RISCV64_V_MAGIC, 8 + 48 + 512};
+    memcpy(mc->fp_pad + sizeof(mc->fp_pad) - 8, vhdr, 8);
+    frame->v.vstart = cpu->riscv64_vstart;
+    frame->v.vl = cpu->riscv64_vl;
+    frame->v.vtype = cpu->riscv64_vtype;
+    frame->v.vcsr = cpu->riscv64_vxrm << 1 | cpu->riscv64_vxsat;
+    frame->v.vlenb = 16;
+    // v.datap is filled in once the frame's address is known
+    memcpy(frame->v.vregs, cpu->riscv64_v, sizeof(frame->v.vregs));
+
     // Trampoline: li a7, 139 (addi a7, x0, 139) ; ecall
     frame->retcode[0] = 0x08b00893u;
     frame->retcode[1] = 0x00000073u;
@@ -3151,6 +3178,21 @@ static void restore_riscv64_mcontext(struct rt_sigframe_riscv64 *frame, struct c
     for (int i = 0; i < 32; i++)
         cpu->riscv64_f[i] = mc->f[i];
     cpu->riscv64_fcsr = mc->fcsr;
+    // V, if the frame still carries its record; the registers come from
+    // where datap points, as Linux reads them.
+    dword_t vhdr[2];
+    memcpy(vhdr, mc->fp_pad + sizeof(mc->fp_pad) - 8, 8);
+    if (vhdr[0] == RISCV64_V_MAGIC && vhdr[1] == 8 + 48 + 512) {
+        uint8_t vregs[sizeof(frame->v.vregs)];
+        if (user_read(frame->v.datap, vregs, sizeof(vregs)) == 0) {
+            memcpy(cpu->riscv64_v, vregs, sizeof(vregs));
+            cpu->riscv64_vstart = frame->v.vstart;
+            cpu->riscv64_vl = frame->v.vl;
+            cpu->riscv64_vtype = frame->v.vtype;
+            cpu->riscv64_vxrm = (frame->v.vcsr >> 1) & 3;
+            cpu->riscv64_vxsat = frame->v.vcsr & 1;
+        }
+    }
 }
 
 qword_t sys_rt_sigreturn_riscv64(void) {
@@ -3344,6 +3386,7 @@ static void receive_signal(struct sighand *sighand, struct siginfo_ *info) {
         setup_rt_sigframe_riscv64(info, &frame);
         sp -= sizeof(frame);
         sp &= ~0xfull; // RISC-V psABI: SP 16-byte aligned
+        frame.v.datap = sp + offsetof(struct rt_sigframe_riscv64, v.vregs);
 
         current->cpu.riscv64_regs[riscv64_sp] = sp;
         current->cpu.riscv64_pc = action->handler;

@@ -11,7 +11,7 @@ Started 2026-10-05, after `builds/iSH-AOK_557`. Supersedes
 
 | § | item | state |
 |---|---|---|
-| 1 | RVA23 on the riscv64 guest | **PARTIAL**: the scalar extensions are in (2026-10-05); V (with Zvfhmin/Zvbb/Zvkt) and Supm are open |
+| 1 | RVA23 on the riscv64 guest | **PARTIAL**: the scalar extensions and V are in (2026-10-05); V is not advertised yet; vfrec7/vfrsqrt7 and Supm are open |
 
 ---
 
@@ -73,15 +73,43 @@ instruction count"), so this is a speed item as well as a reach one.
 - Zkt, Za64rs, Zic64b and the Zicc* attributes need nothing here; Zihpm's
   hpmcounters trap as on a default Linux (scounteren clear).
 
-**Left:** V (VLEN 128; with Zvfhmin, Zvbb, Zvkt), and Supm (pointer
-masking: PR_SET_TAGGED_ADDR_CTRL with a PMLEN, and the JIT masking
-addresses). An RVA23 Ubuntu is built with V as its baseline, so its
-compiled code vectorizes freely: V is what stands between AOK and booting
-one. Plan: a correct V first -- a vector state in cpu_state (32 x 128-bit,
-vtype/vl/vstart, saved in signal frames, the NT_RISCV_VECTOR regset and
-checkpoints), each V instruction a C-helper call driven by vtype -- then
-gadgets for what profiles show is hot. hwprobe/cpuinfo get V only when it is
-complete enough for glibc's ifuncs.
+**V, 2026-10-05:** RVV 1.0 with Zvbb, Zvfhmin and Zvkt at VLEN 128, in C
+(jit/riscv64_vector.c, one gadget per instruction: guest-riscv64/vector.S):
+vsetvl*, the vector CSRs, every load/store form (unit-stride, strided,
+indexed, segment, whole-register, mask, fault-only-first, with vstart left
+at a faulting element), integer, fixed-point (vxrm/vxsat), mask,
+permutation, reduction, widening/narrowing and FP arithmetic and
+conversions. The state is in cpu_state (so fork, exec -- vtype starts vill --
+and checkpoints carry it) and in signal frames as Linux lays it out (the
+RISCV_V_MAGIC record after the ucontext, restored through its datap).
+Checked by tests/manual/riscv64/riscv64_rvv.c (gcc -O3 auto-vectorized
+kernels against the same kernels built for rv64gc: 1.7M checks over ~95
+distinct vector instructions) and riscv64_rvv_signal.c (V state across an
+asynchronous signal whose handler clobbers it), positive controls firing,
+on the Mac and the M4.
+- **Not advertised yet** (hwprobe IMA_V, AT_HWCAP 'v', the isa line): code
+  that picks a path at run time (glibc ifuncs, OpenSSL) would choose the
+  vector one, and it is slower here for now -- an unmasked add loop costs
+  13.5 ns per element against 5.7 scalar on the M4 (unit-stride loads and
+  stores and the common integer ops have typed fast paths; the rest is the
+  per-instruction C call). Code built with V as its baseline (an RVA23
+  distribution) runs regardless. Advertise once the hot ops have gadgets.
+- The NT_RISCV_VECTOR ptrace regset reads and writes it
+  (tests/manual/riscv64/riscv64_rvv_ptrace.c). PR_RISCV_V_GET/SET_CONTROL
+  answer EINVAL, as a kernel without V does, while V is unadvertised.
+- **Open:** vfrec7/vfrsqrt7 (need the spec's two 128-entry tables, not
+  written from memory; illegal for now), and the vector-register gadgets.
+
+**Supm, decided against for now:** user pointer masking exists only for a
+program that asks for it, prctl(PR_SET_TAGGED_ADDR_CTRL) with a PMLEN
+(HWASan does), and Linux refuses that call on hardware without it, which
+callers handle. AOK refuses it too (EINVAL, measured), so nothing breaks;
+honouring it would mean masking every guest address in every memory
+gadget for one sanitizer.
+
+**Left:** the V items above, and the proof below: an RVA23 Ubuntu root (its
+archive is built with V as the baseline) -- pulling one is a download the
+maintainer should approve.
 
 **Next step (originally):** confirm the Ubuntu 25.10+ baseline and pull an Ubuntu riscv64
 rootfs, run it with ISH_TRACE on undefined instructions to get the order

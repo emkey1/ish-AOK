@@ -424,6 +424,9 @@ riscv64/rcache_run.c
 riscv64/riscv64_fp_env.c
 riscv64/riscv64_rva23_scalar.c
 riscv64/riscv64_rva23_fp.c
+riscv64/riscv64_rvv.c
+riscv64/riscv64_rvv_signal.c
+riscv64/riscv64_rvv_ptrace.c
 arm64/ret_retcache.c
 jit_fuse_ab.sh
 jit_bench.c

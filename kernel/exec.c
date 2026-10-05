@@ -1565,6 +1565,14 @@ static intptr_t elf_exec(struct fd *fd, const char *file, struct exec_args argv,
     save->cpu.riscv64_res_val = 0;
     memset(save->cpu.riscv64_f, 0, sizeof(save->cpu.riscv64_f));
     save->cpu.riscv64_fcsr = 0;
+    // V: zeroed registers, and vtype with vill set (no vsetvl yet), as
+    // after a reset.
+    memset(save->cpu.riscv64_v, 0, sizeof(save->cpu.riscv64_v));
+    save->cpu.riscv64_vl = 0;
+    save->cpu.riscv64_vtype = 1ull << 63;
+    save->cpu.riscv64_vstart = 0;
+    save->cpu.riscv64_vxrm = 0;
+    save->cpu.riscv64_vxsat = 0;
 
     err = 0;
 out_free_interp:
