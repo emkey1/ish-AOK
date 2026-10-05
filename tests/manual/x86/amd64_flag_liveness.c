@@ -247,8 +247,8 @@ static void emit_one(void) {
             b((uint8_t) rnd()); break;
         case 11: // setcc a8 (needs REX for sil/dil/r8b..)
             b((uint8_t) (0x40 | ((a & 8) ? 1 : 0))); b(0x0f); b((uint8_t) (0x90 + rnd() % 16)); modrm_rr(0, a); break;
-        case 12: // cmovcc a, c (64)
-            rex(1, a, c); b(0x0f); b((uint8_t) (0x40 + rnd() % 16)); modrm_rr(a, c); break;
+        case 12: // cmovcc a, c (32: written, zero-extended, even when not taken; or 64)
+            rex(w, a, c); b(0x0f); b((uint8_t) (0x40 + rnd() % 16)); modrm_rr(a, c); break;
         case 13: { // jcc over a 3-byte mov (rex.w 89 modrm); 1 time in 4 jrcxz,
             // after setting ecx to 0 or 1 (jrcxz reads rcx, not the flags)
             if ((rnd() & 3) == 0) {

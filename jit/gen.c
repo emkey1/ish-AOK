@@ -9984,6 +9984,19 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
         amd64_jit_debug("cmov ip=%llx cc=%u src=%u dst=%u size=%u next=%llx",
                 (unsigned long long) insn.start_ip, cc, src_id, dst_id, size,
                 (unsigned long long) next_ip);
+#if defined(__aarch64__)
+        if ((size == 32 || size == 64) && (amd64_jit_fuse_mask() & JIT_FUSE_AMD64_MOVR)) {
+            // On the register cache: the condition into x3, then a select
+            // per register pair (math.S amd64_cc, amd64_csel).
+            extern void (*const amd64_cc_gadgets[])(void), (*const amd64_csel_gadgets[])(void);
+            gen_amd64_r16_enter(state, dst_id, src_id);
+            gen(state, (unsigned long) amd64_cc_gadgets[cc]);
+            gen(state, (unsigned long) amd64_csel_gadgets[((size == 64) * 16 + dst_id) * 16 + src_id]);
+            gen_amd64_r16_wrote(state, dst_id);
+            gen_amd64_defer_rip(state, next_ip);
+            return true;
+        }
+#endif
         gen_amd64_flush_reg_cache(state);
         gen(state, (unsigned long) ((cc & 1) ? cmovng[(cc >> 1) & 7]
                                              : cmovg[(cc >> 1) & 7]));

@@ -11987,6 +11987,80 @@ amd64_r16_rr amd64_tst16, test, 64, x, 63, 0
     .endr
 .popsection
 
+# cmov r32/r64, r32/r64 on the register cache, in two gadgets:
+# amd64_cc_<n><cond> leaves the condition (0/1) in x3, then
+# amd64_csel<size>_<dst>_<src> moves src into dst if x3 is set -- any of the
+# sixteen. The 32-bit form writes dst either way (zero-extending it), as
+# x86 does. No operands. Tables amd64_cc_gadgets[cc] (the x86 condition
+# code) and amd64_csel_gadgets[(size64 * 16 + dst) * 16 + src].
+.macro amd64_cc1 cond, n
+.gadget amd64_cc_\n\cond
+    amd64_do_jump \cond, 1f
+    .ifc \n, n
+    mov x3, 1
+    .else
+    mov x3, 0
+    .endif
+    gret
+1:
+    .ifc \n, n
+    mov x3, 0
+    .else
+    mov x3, 1
+    .endif
+    gret
+.endm
+.irp cond, o,c,z,cz,s,p,sxo,sxoz
+    amd64_cc1 \cond,
+    amd64_cc1 \cond, n
+.endr
+.macro amd64_csel16 op, s, R, bits, nf, d, hd, sr, hs
+.gadget amd64_csel\s\()_\d\()_\sr
+    cmp x3, 0
+    .if \sr < 8
+    .if \d < 8
+    csel \R\hd, \R\hs, \R\hd, ne
+    .else
+    ldr \R\()13, [_cpu, CPU_amd64_regs + 8 * \d]
+    csel \R\()13, \R\hs, \R\()13, ne
+    str x13, [_cpu, CPU_amd64_regs + 8 * \d]
+    .endif
+    .else
+    ldr \R\()10, [_cpu, CPU_amd64_regs + 8 * \sr]
+    .if \d < 8
+    csel \R\hd, \R\()10, \R\hd, ne
+    .else
+    ldr \R\()13, [_cpu, CPU_amd64_regs + 8 * \d]
+    csel \R\()13, \R\()10, \R\()13, ne
+    str x13, [_cpu, CPU_amd64_regs + 8 * \d]
+    .endif
+    .endif
+    gret
+.endm
+amd64_r16_rr amd64_csel16, csel, 32, w, 31, 0
+amd64_r16_rr amd64_csel16, csel, 64, x, 63, 0
+.macro amd64_cc_quad cond, n
+    .quad NAME(gadget_amd64_cc_\n\cond)
+.endm
+.macro amd64_csel_quad s, d, sr
+    .quad NAME(gadget_amd64_csel\s\()_\d\()_\sr)
+.endm
+.pushsection_rodata
+.global.name amd64_cc_gadgets
+    .irp cond, o,c,z,cz,s,p,sxo,sxoz
+    amd64_cc_quad \cond,
+    amd64_cc_quad \cond, n
+    .endr
+.global.name amd64_csel_gadgets
+    .irp s, 32,64
+        .irp d, 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
+            .irp sr, 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
+                amd64_csel_quad \s, \d, \sr
+            .endr
+        .endr
+    .endr
+.popsection
+
 # setcc r8 per condition and register, on the register cache:
 # amd64_scc_<n><cond>_<reg> for the low byte of any of the sixteen, and
 # amd64_scc_<n><cond>_h<reg> for ah..bh (reg 0-3). n is empty or n (the
