@@ -290,6 +290,125 @@ cvt_f2i_family p, , fcvtp
 cvt_f2i_family a, , fcvta
 cvt_f2i_family x, frintx, fcvtz
 
+// fclass.{s,d}: rd = 1 << class -- 0 -inf, 1 -normal, 2 -subnormal, 3 -0,
+// 4 +0, 5 +subnormal, 6 +normal, 7 +inf, 8 signalling NaN, 9 quiet NaN. An
+// S value that is not NaN-boxed is the canonical NaN, as the spec reads it.
+// [gadget][rd_off][rs1_off][unused]
+.macro fclass_gadget name, is_d
+.gadget \name
+    fp_head
+    ldr x12, [x10]
+.if \is_d
+    lsr x13, x12, #63              // sign
+    ubfx x14, x12, #52, #11        // exponent
+    and x15, x12, #0xfffffffffffff // fraction
+    mov x16, #0x7ff
+    lsr x11, x15, #51              // the quiet bit
+.else
+    mov x17, #9
+    lsr x13, x12, #32
+    cmn w13, #1
+    b.ne 9f                        // not boxed: the canonical NaN
+    ubfx x13, x12, #31, #1
+    ubfx x14, x12, #23, #8
+    and x15, x12, #0x7fffff
+    mov x16, #0xff
+    lsr x11, x15, #22
+.endif
+    cmp x14, x16
+    b.eq 3f
+    cbz x14, 2f
+    mov x17, #6                    // normal
+    mov x16, #1
+    b 8f
+2:  mov x17, #4                    // zero
+    mov x16, #3
+    cbz x15, 8f
+    mov x17, #5                    // subnormal
+    mov x16, #2
+    b 8f
+3:  cbnz x15, 4f
+    mov x17, #7                    // infinity
+    mov x16, #0
+    b 8f
+4:  mov x17, #8                    // NaN, 9 if quiet
+    add x17, x17, x11
+    b 9f
+8:  cmp x13, #0
+    csel x17, x16, x17, ne         // the negative class
+9:  mov x12, #1
+    lsl x12, x12, x17
+    str x12, [_cpu, x9]
+    gret 3
+.endm
+fclass_gadget fclass_s, 0
+fclass_gadget fclass_d, 1
+
+// Zfa fcvtmod.w.d rd, rs1, rtz: the double truncated toward zero, modulo
+// 2^32, sign-extended -- JavaScript's ToInt32. NaN and infinity give 0. NV
+// if the value is not a 32-bit integer's (NaN, infinity, out of range),
+// else NX if it had a fraction. The flags go straight into fcsr (a read of
+// it folds the host's in on top).
+// [gadget][rd_off][rs1_off][unused]
+.gadget fcvtmod_w_d
+    fp_head
+    ldr x12, [x10]
+    lsr x13, x12, #63              // sign
+    ubfx x14, x12, #52, #11        // exponent
+    and x15, x12, #0xfffffffffffff
+    mov x16, #0x7ff
+    cmp x14, x16
+    b.ne 1f
+    mov x12, #0                    // NaN, infinity
+    mov w17, #0x10                 // NV
+    b 8f
+1:  cbz x14, 2f
+    orr x15, x15, #(1 << 52)       // the implicit bit: |value| = x15 * 2^shift
+2:  mov w17, #0                    // NX: a fraction was dropped
+    mov x16, #1075
+    subs x16, x14, x16             // shift
+    b.lt 3f
+    mov x12, #0
+    cmp x16, #32
+    b.hs 5f
+    lsl x12, x15, x16
+    b 5f
+3:  neg x16, x16                   // shift right by n
+    cmp x16, #64
+    b.lo 4f
+    mov x12, #0
+    cmp x15, #0
+    cset w17, ne
+    b 5f
+4:  lsr x12, x15, x16
+    mov x10, #64
+    sub x10, x10, x16
+    lsl x10, x15, x10              // the bits shifted out
+    cmp x10, #0
+    cset w17, ne
+5:  // in range: exponent < 1023 + 31, or the value truncates to -2^31
+    // (-2^31 - 0.5 does: x15 below 2^52 + 2^21, the integer part 2^31)
+    mov x10, #1054
+    cmp x14, x10
+    b.lo 6f
+    b.ne 7f
+    cbz x13, 7f
+    mov x10, #(1 << 52)
+    add x10, x10, #0x200, lsl #12
+    cmp x15, x10
+    b.lo 6f
+7:  mov w17, #0x10                 // out of range: NV, not NX
+6:  cmp x13, #0
+    cneg x12, x12, ne
+    sxtw x12, w12
+8:  add x10, _cpu, #CPU_riscv64_fcsr
+    ldr w11, [x10]
+    orr w11, w11, w17
+    str w11, [x10]
+    str x12, [_cpu, x9]
+    gret 3
+
+
 // A static rounding mode on an arithmetic instruction: [rm_set][rmode],
 // the op, then [rm_restore], which puts frm's mode back (RNE 0, RTZ 3,
 // RDN 2, RUP 1 in FPCR.RMode; RMM has none and runs as RNE).

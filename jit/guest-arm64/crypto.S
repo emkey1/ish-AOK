@@ -7,7 +7,7 @@
 // so: the SHA3 ops (RAX1/EOR3/BCAX/XAR) are synthesized from baseline
 // NEON here, and the native SHA512 gadgets are only handed out by gen.c
 // when the host has the instructions — otherwise gen.c emits sha512_soft,
-// which runs the op in C (arm64_sha512_soft, emu/tlb.c).
+// the same ops in 64-bit scalar instructions.
 //
 // Code streams:
 //   1-src:  [gadget][rd | rn<<8]
@@ -147,19 +147,84 @@ crypto_3acc sha512su1, "sha512su1 v0.2d, v1.2d, v2.2d"
 crypto_4reg eor3, "eor v0.16b, v1.16b, v2.16b", "eor v0.16b, v0.16b, v3.16b"
 crypto_4reg bcax, "bic v0.16b, v2.16b, v3.16b", "eor v0.16b, v0.16b, v1.16b"
 
-// Soft SHA512 fallback for hosts without FEAT_SHA512 (pre-A13): the whole
-// op runs in C (arm64_sha512_soft, emu/tlb.c), keeping the guest-visible
-// feature set (AT_HWCAP SHA512, ID_AA64ISAR0.SHA2=2) identical on every
-// device. op: 0=SHA512H 1=SHA512H2 2=SHA512SU1 3=SHA512SU0.
+// SHA512 for hosts without FEAT_SHA512 (pre-A13), in 64-bit scalar ops,
+// keeping the guest-visible feature set (AT_HWCAP SHA512,
+// ID_AA64ISAR0.SHA2=2) identical on every device. Every operand is read
+// before Vd is written (Vd may alias Vn or Vm).
+// op: 0=SHA512H 1=SHA512H2 2=SHA512SU1 3=SHA512SU0.
 // [gadget][rd | rn<<8 | rm<<16 | op<<24]
+// Sigma: \d = ror(\x, a) ^ ror(\x, b) ^ ror(\x, c) (or lsr for the last)
+.macro sha_sig d, x, a, b, c, last=ror
+    ror \d, \x, #\a
+    eor \d, \d, \x, ror #\b
+    eor \d, \d, \x, \last #\c
+.endm
 .gadget sha512_soft
     ldr x8, [_ip]
     add _ip, _ip, #8
-    save_c
-    mov x0, _cpu
-    mov x1, x8
-    bl NAME(arm64_sha512_soft)
-    restore_c
+    add x9, _cpu, #CPU_v0
+    and x10, x8, #0x1f
+    add x10, x9, x10, lsl #4    // &Vd
+    ubfx x11, x8, #8, #5
+    add x11, x9, x11, lsl #4
+    ubfx x12, x8, #16, #5
+    add x12, x9, x12, lsl #4
+    ldp x3, x4, [x10]           // d0, d1
+    ldp x5, x6, [x11]           // n0, n1
+    ldp x13, x14, [x12]         // m0, m1
+    ubfx x9, x8, #24, #2
+    cmp x9, #1
+    b.lo 1f
+    b.eq 2f
+    cmp x9, #2
+    b.eq 3f
+    // SHA512SU0: d0 += s0(d1), d1 += s0(n0); s0 = ror1 ^ ror8 ^ lsr7
+    sha_sig x15, x4, 1, 8, 7, lsr
+    sha_sig x16, x5, 1, 8, 7, lsr
+    add x3, x3, x15
+    add x4, x4, x16
+    b 9f
+1:  // SHA512H: d1 += S1(m1) + Ch(m1, n0, n1); t = d1 + m0;
+    // d0 += S1(t) + Ch(t, m1, n0); S1 = ror14 ^ ror18 ^ ror41
+    sha_sig x15, x14, 14, 18, 41
+    eor x16, x5, x6
+    and x16, x16, x14
+    eor x16, x16, x6            // Ch(x, y, z) = (x & (y ^ z)) ^ z
+    add x4, x4, x15
+    add x4, x4, x16
+    add x17, x4, x13            // t
+    sha_sig x15, x17, 14, 18, 41
+    eor x16, x14, x5
+    and x16, x16, x17
+    eor x16, x16, x5
+    add x3, x3, x15
+    add x3, x3, x16
+    b 9f
+2:  // SHA512H2: d1 += S0(m0) + Maj(m0, m1, n0);
+    // d0 += S0(d1) + Maj(d1, m0, m1); S0 = ror28 ^ ror34 ^ ror39
+    sha_sig x15, x13, 28, 34, 39
+    and x16, x13, x14
+    orr x17, x13, x14
+    and x17, x17, x5
+    orr x16, x16, x17           // Maj(x, y, z) = (x & y) | ((x | y) & z)
+    add x4, x4, x15
+    add x4, x4, x16
+    sha_sig x15, x4, 28, 34, 39
+    and x16, x4, x13
+    orr x17, x4, x13
+    and x17, x17, x14
+    orr x16, x16, x17
+    add x3, x3, x15
+    add x3, x3, x16
+    b 9f
+3:  // SHA512SU1: d += s1(n) + m per lane; s1 = ror19 ^ ror61 ^ lsr6
+    sha_sig x15, x5, 19, 61, 6, lsr
+    sha_sig x16, x6, 19, 61, 6, lsr
+    add x3, x3, x15
+    add x3, x3, x13
+    add x4, x4, x16
+    add x4, x4, x14
+9:  stp x3, x4, [x10]
     gret
 
 // XAR Vd.2d, Vn.2d, Vm.2d, #imm6: (Vn ^ Vm) rotated right by imm per

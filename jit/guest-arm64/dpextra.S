@@ -701,38 +701,46 @@ crc32_st:
     str x15, [x14, x9, lsl #3] // Wd zero-extends
 9:  gret
 
-// Soft CRC32 fallback for hosts without FEAT_CRC32 (pre-A10): computes
-// in C (arm64_crc32_soft, emu/tlb.c). Same code stream as crc32 above:
-// [gadget][rd | rn<<8 | rm<<16 | sz<<24 | c<<26]
+// CRC32 for hosts without FEAT_CRC32 (pre-A10), a bit at a time: the
+// reflected polynomial (CRC32 0xEDB88320, CRC32C 0x82F63B78) folded in for
+// each of the 8 << size bits of Rm, lowest first. Same code stream as crc32
+// above: [gadget][rd | rn<<8 | rm<<16 | sz<<24 | c<<26]
 .gadget crc32_soft
     ldr x8, [_ip]
     add _ip, _ip, #8
-    save_c
-    and x19, x8, #0x1f          // rd, callee-saved across the C call
-    ubfx x9, x8, #8, #5         // rn
-    ubfx x10, x8, #16, #5       // rm
-    add x11, _cpu, #CPU_x0
-    mov x0, #0
-    cmp x9, #31
-    b.eq 1f
-    // w-sized load can't use `lsl #3` addressing (see memory.S header,
-    // bug #2): compute the 8-byte-strided slot address separately.
-    add x12, x11, x9, lsl #3
-    ldr w0, [x12]               // Wn (acc)
-1:  mov x1, #0
+    and x9, x8, #0x1f
+    ubfx x10, x8, #8, #5
+    ubfx x11, x8, #16, #5
+    ubfx x12, x8, #24, #2      // size: 0=b 1=h 2=w 3=x
+    add x14, _cpu, #CPU_x0
+    mov x15, #0
     cmp x10, #31
+    b.eq 1f
+    add x17, x14, x10, lsl #3
+    ldr w15, [x17]             // Wn (acc)
+1:  mov x16, #0
+    cmp x11, #31
     b.eq 2f
-    ldr x1, [x11, x10, lsl #3]  // Rm (value)
-2:  ubfx x2, x8, #24, #2        // size: 0=b 1=h 2=w 3=x
-    ubfx x3, x8, #26, #1        // 1 = CRC32C
-    bl NAME(arm64_crc32_soft)
-    mov w20, w0                 // zero-extend: Wd write clears the top
-    restore_c
-    cmp x19, #31
-    b.eq 3f
-    add x10, _cpu, #CPU_x0
-    str x20, [x10, x19, lsl #3]
-3:  gret
+    ldr x16, [x14, x11, lsl #3] // Rm
+2:  mov w17, #0x8320
+    movk w17, #0xedb8, lsl #16
+    tbz x8, #26, 3f
+    mov w17, #0x3b78
+    movk w17, #0x82f6, lsl #16
+3:  mov x13, #8
+    lsl x13, x13, x12          // bits
+4:  eor w10, w15, w16
+    and w10, w10, #1
+    neg w10, w10
+    and w10, w10, w17
+    eor w15, w10, w15, lsr #1
+    lsr x16, x16, #1
+    subs x13, x13, #1
+    b.ne 4b
+    cmp x9, #31
+    b.eq 5f
+    str x15, [x14, x9, lsl #3] // Wd zero-extends
+5:  gret
 
 # vim: ft=gas
 

@@ -3,7 +3,10 @@
 // a signalling NaN (raising NV), where fminnm gives the default NaN; and a
 // float->int convert out of range raises NV alone, NX only for an inexact
 // result in range -- with the dynamic rounding mode too, which was rounded by
-// frintx and so also raised NX out of range.
+// frintx and so also raised NX out of range. And fclass.{s,d} on every class,
+// signs and NaN kinds, against fpclassify/signbit; an S value not NaN-boxed
+// classifies as the canonical (quiet) NaN.
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -87,9 +90,58 @@ static void converts(void) {
     check("fcvt.w.s dyn -2.5", (uint64_t) r32, (uint64_t) -2); check("fcvt.w.s dyn -2.5 flags", f32, NX);
 }
 
+// fclass: the class from libm's view of the value, the NaN kind from the
+// quiet bit -- an oracle that shares nothing with the gadget's bit tests.
+#define want_class(v, quiet) want_class_(fpclassify(v), signbit(v) != 0, quiet)
+static unsigned want_class_(int cls, int neg, int quiet) {
+    switch (cls) {
+    case FP_NAN: return quiet ? 9 : 8;
+    case FP_INFINITE: return neg ? 0 : 7;
+    case FP_ZERO: return neg ? 3 : 4;
+    case FP_SUBNORMAL: return neg ? 2 : 5;
+    default: return neg ? 1 : 6;
+    }
+}
+static void classes(void) {
+    static const uint64_t d[] = {
+        0, 0x8000000000000000ull, 1, 0x800fffffffffffffull, 0x0010000000000000ull,
+        0x3ff0000000000000ull, 0xbff8000000000000ull, 0x7fefffffffffffffull,
+        0x7ff0000000000000ull, 0xfff0000000000000ull, QNAN64, SNAN64,
+        0x7ff0000000000001ull, 0xfff8000000000001ull, 0x7fffffffffffffffull,
+        0x000fffffffffffffull, 0xffefffffffffffffull,
+    };
+    char what[64];
+    for (unsigned i = 0; i < sizeof(d) / sizeof(d[0]); i++) {
+        uint64_t r;
+        __asm__ volatile("fclass.d %0, %1" : "=r"(r) : "f"(b2d(d[i])));
+        snprintf(what, sizeof(what), "fclass.d %#llx", (unsigned long long) d[i]);
+        check(what, r, 1ull << want_class(b2d(d[i]), (d[i] >> 51) & 1));
+    }
+    static const uint32_t f[] = {
+        0, 0x80000000u, 1, 0x807fffffu, 0x00800000u, 0x3f800000u, 0xbfc00000u,
+        0x7f7fffffu, 0x7f800000u, 0xff800000u, 0x7fc00000u, SNAN32, 0x7f800001u,
+        0xffc00001u, 0x7fffffffu, 0x007fffffu, 0xff7fffffu,
+    };
+    for (unsigned i = 0; i < sizeof(f) / sizeof(f[0]); i++) {
+        uint64_t r;
+        float v;
+        memcpy(&v, &f[i], 4);
+        __asm__ volatile("fclass.s %0, %1" : "=r"(r) : "f"(v));
+        snprintf(what, sizeof(what), "fclass.s %#x", f[i]);
+        check(what, r, 1ull << want_class(v, (f[i] >> 22) & 1));
+        // the same bits not NaN-boxed (fmv.d.x leaves the upper half 0): the
+        // canonical NaN, class 9, whatever they say
+        uint64_t unboxed = f[i];
+        __asm__ volatile("fmv.d.x ft0, %1\n fclass.s %0, ft0" : "=r"(r) : "r"(unboxed) : "ft0");
+        snprintf(what, sizeof(what), "fclass.s unboxed %#x", f[i]);
+        check(what, r, 1u << 9);
+    }
+}
+
 int main(void) {
     minmax();
     converts();
+    classes();
     printf("riscv64_fp_rules: %s\n", failures ? "FAIL" : "PASS");
     return failures != 0;
 }

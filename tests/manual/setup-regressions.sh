@@ -166,6 +166,7 @@ if [ "$is_arm64_guest" -eq 1 ]; then
     need_file arm64/atomics64.c
     need_file arm64/arm64_lse_gadgets.c
     need_file arm64/arm64_vldst_gadgets.c
+    need_file arm64/arm64_sha512_crc32.c
     need_file arm64/arm64_regress.c
     need_file arm64/vector_smoke.c
     need_file arm64/simd_elem_moves.c
@@ -1003,7 +1004,7 @@ if [ "$is_amd64_guest" -eq 1 ]; then
     all_tests="$all_tests amd64_regress avx_regress amd64_incdec amd64_x87_cache amd64_singlestep amd64_segment_regs amd64_gs_base"
 fi
 if [ "$is_arm64_guest" -eq 1 ]; then
-    all_tests="$all_tests atomics64 arm64_lse_gadgets arm64_vldst_gadgets arm64_regress vector_smoke simd_elem_moves simd_three_same alu_ospec ldst_lspec vldst_lspec smc_stale_block ret_retcache stlr_ldar_publish ptrace_singlestep singlestep_fused ands_bcond_fusion cbz_tbz hle_loop dc_zva arm64_fp_env"
+    all_tests="$all_tests atomics64 arm64_lse_gadgets arm64_vldst_gadgets arm64_sha512_crc32 arm64_regress vector_smoke simd_elem_moves simd_three_same alu_ospec ldst_lspec vldst_lspec smc_stale_block ret_retcache stlr_ldar_publish ptrace_singlestep singlestep_fused ands_bcond_fusion cbz_tbz hle_loop dc_zva arm64_fp_env"
 fi
 if [ "$is_riscv64_guest" -eq 1 ]; then
     all_tests="$all_tests ptrace_regset jalr_retcache alu_pair branch_pair rcache_run riscv64_singlestep singlestep_fused riscv64_fp_env riscv64_rva23_scalar riscv64_rva23_fp riscv64_rvv riscv64_rvv_signal riscv64_rvv_ptrace riscv64_rvv_gadgets riscv64_rvv_ctrl riscv64_fp_rules"

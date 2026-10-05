@@ -5372,7 +5372,7 @@ int gen_step_arm64(struct gen_state *state, struct tlb *tlb) {
     if ((insn & 0xfffffc00) == 0xcec08000) { // SHA512SU0 (two-reg)
         extern void gadget_arm64_sha512su0(void), gadget_arm64_sha512_soft(void);
         unsigned rn = (insn >> 5) & 0x1f, rd = insn & 0x1f;
-        if (!arm64_host_has_sha512) { // pre-A13 host: run the op in C
+        if (!arm64_host_has_sha512) { // pre-A13 host: scalar-op gadget
             gen(state, (unsigned long) gadget_arm64_sha512_soft);
             gen(state, rd | ((uint64_t) rn << 8) | (3ULL << 24)); // op 3 = SU0
             return 1;
@@ -5388,7 +5388,7 @@ int gen_step_arm64(struct gen_state *state, struct tlb *tlb) {
         extern void gadget_arm64_sha512su1(void), gadget_arm64_sha512_soft(void);
         unsigned sel = (insn >> 10) & 3;
         unsigned rm = (insn >> 16) & 0x1f, rn = (insn >> 5) & 0x1f, rd = insn & 0x1f;
-        if (!arm64_host_has_sha512) { // pre-A13 host: run the op in C
+        if (!arm64_host_has_sha512) { // pre-A13 host: scalar-op gadget
             gen(state, (unsigned long) gadget_arm64_sha512_soft);
             gen(state, rd | ((uint64_t) rn << 8) | ((uint64_t) rm << 16)
                 | ((uint64_t) sel << 24)); // op: 0=H 1=H2 2=SU1
@@ -6855,89 +6855,6 @@ void riscv64_csr_helper(struct cpu_state *cpu, unsigned long arg) {
         cpu->riscv64_regs[rd] = old;
 }
 
-
-// fclass.{s,d}: classify into the 10 RISC-V class bits. Rare enough that a
-// C helper through call_helper beats eight branches of assembly.
-// arg: rd | rs1<<5 | is_d<<10
-// Zfa fcvtmod.w.d rd, rs1, rtz: the double truncated toward zero, taken
-// modulo 2^32, sign-extended -- JavaScript's ToInt32. NaN and infinity give
-// 0. NV if the value is not a 32-bit integer's (NaN, infinity, out of
-// range), else NX if it had a fraction.
-void riscv64_fcvtmod_helper(struct cpu_state *cpu, unsigned long arg) {
-    unsigned rd = arg & 31, rs1 = (arg >> 5) & 31;
-    qword_t bits = cpu->riscv64_f[rs1];
-    bool sign = bits >> 63;
-    int exp = (int) ((bits >> 52) & 0x7ff);
-    qword_t mant = (bits & 0xfffffffffffffULL) | (exp ? 1ULL << 52 : 0);
-    uint32_t low = 0;
-    dword_t flags = 0;
-    if (exp == 0x7ff) {
-        flags = 0x10; // NV
-    } else {
-        int shift = exp - 1075; // value = mant * 2^shift
-        bool frac = false;
-        if (shift >= 0) {
-            low = shift >= 32 ? 0 : (uint32_t) (mant << shift);
-        } else if (shift > -64) {
-            low = (uint32_t) (mant >> -shift);
-            frac = (mant & ((1ULL << -shift) - 1)) != 0;
-        } else {
-            frac = mant != 0;
-        }
-        // in range: |trunc| < 2^31, or exactly -2^31
-        bool in_range = exp < 1023 + 31 ||
-                (sign && exp == 1023 + 31 && (mant >> 21) == (1ULL << 31) && (mant & ((1ULL << 21) - 1)) == 0);
-        if (!in_range)
-            flags = 0x10;
-        else if (frac)
-            flags = 0x01; // NX
-        if (sign)
-            low = 0u - low;
-    }
-    cpu->riscv64_fcsr |= flags;
-    if (rd != 0)
-        cpu->riscv64_regs[rd] = (qword_t) (int64_t) (int32_t) low;
-}
-
-void riscv64_fclass_helper(struct cpu_state *cpu, unsigned long arg) {
-    unsigned rd = arg & 31, rs1 = (arg >> 5) & 31;
-    bool is_d = arg & (1 << 10);
-    qword_t bits = cpu->riscv64_f[rs1];
-    bool sign, is_inf, is_nan, is_sub, is_zero, is_quiet;
-    if (is_d) {
-        sign = bits >> 63;
-        unsigned exp = (bits >> 52) & 0x7ff;
-        qword_t frac = bits & 0xfffffffffffffULL;
-        is_inf = exp == 0x7ff && frac == 0;
-        is_nan = exp == 0x7ff && frac != 0;
-        is_sub = exp == 0 && frac != 0;
-        is_zero = exp == 0 && frac == 0;
-        is_quiet = frac >> 51;
-    } else {
-        dword_t b = (dword_t) bits;
-        sign = b >> 31;
-        unsigned exp = (b >> 23) & 0xff;
-        dword_t frac = b & 0x7fffff;
-        is_inf = exp == 0xff && frac == 0;
-        is_nan = exp == 0xff && frac != 0;
-        is_sub = exp == 0 && frac != 0;
-        is_zero = exp == 0 && frac == 0;
-        is_quiet = frac >> 22;
-    }
-    unsigned cls;
-    if (is_nan)
-        cls = is_quiet ? 9 : 8;
-    else if (is_inf)
-        cls = sign ? 0 : 7;
-    else if (is_zero)
-        cls = sign ? 3 : 4;
-    else if (is_sub)
-        cls = sign ? 2 : 5;
-    else
-        cls = sign ? 1 : 6;
-    if (rd != 0)
-        cpu->riscv64_regs[rd] = 1u << cls;
-}
 
 // ---- Register-cached runs (the "rcache" fuse bit) ------------------------
 // A straight run of register-only instructions -- RV64I/M ALU ops, lui/auipc,
@@ -8643,12 +8560,8 @@ int gen_step_riscv64(struct gen_state *state, struct tlb *tlb) {
             if (rs2 < 4 && mode < 6)
                 gadget = f2i[mode][is_d][rs2];
             if (is_d && rs2 == 8 && funct3 == 1) { // Zfa fcvtmod.w.d rd, rs1, rtz
-                extern void gadget_riscv64_call_helper(void);
-                extern void riscv64_fcvtmod_helper(struct cpu_state *cpu, unsigned long arg);
-                gen(state, (unsigned long) gadget_riscv64_call_helper);
-                gen(state, (unsigned long) riscv64_fcvtmod_helper);
-                gen(state, rd | (rs1 << 5));
-                return 1;
+                extern void gadget_riscv64_fcvtmod_w_d(void);
+                gadget = gadget_riscv64_fcvtmod_w_d;
             }
             break;
         }
@@ -8696,12 +8609,10 @@ int gen_step_riscv64(struct gen_state *state, struct tlb *tlb) {
             if (rs2 != 0)
                 break;
             if (funct3 == 1) {
-                extern void gadget_riscv64_call_helper(void);
-                extern void riscv64_fclass_helper(struct cpu_state *cpu, unsigned long arg);
-                gen(state, (unsigned long) gadget_riscv64_call_helper);
-                gen(state, (unsigned long) riscv64_fclass_helper);
-                gen(state, rd | (rs1 << 5) | ((unsigned long) is_d << 10));
-                return 1;
+                extern void gadget_riscv64_fclass_s(void), gadget_riscv64_fclass_d(void);
+                a = riscv64_rd_off(rd);
+                gadget = is_d ? gadget_riscv64_fclass_d : gadget_riscv64_fclass_s;
+                break;
             }
             if (funct3 == 0) {
                 if (!is_d) {

@@ -400,6 +400,7 @@ setup-regressions.sh
 arm64/atomics64.c
 arm64/arm64_lse_gadgets.c
 arm64/arm64_vldst_gadgets.c
+arm64/arm64_sha512_crc32.c
 arm64/arm64_regress.c
 arm64/vector_smoke.c
 arm64/simd_elem_moves.c

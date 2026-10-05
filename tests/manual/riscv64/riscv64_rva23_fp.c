@@ -181,10 +181,18 @@ REF static int64_t ref_toint32(double a, unsigned *flags) {
     return (int64_t) (int32_t) u;
 }
 static void check_fcvtmod(void) {
-    for (int i = 0; i < 20000; i++) {
+    static const double edge[] = {
+        2147483647.0, 2147483648.0, -2147483648.0, -2147483649.0, 2147483647.5,
+        -2147483648.5, -2147483647.5, 4294967296.0 + 5, -4294967296.0 - 5, 0x1p52, 0x1p52 + 1,
+        0x1p63, -0x1p63, 0x1p84 + 0x1p33, 0x1p1023, -0.0, 0.0, 0x1p-1074, -0x1p-1074, 0.5,
+        -0.5, 0.999999, 1.0, -1.0, 0x1p-64, 0x1.fffffffffffffp-1, 0x1p31 - 0x1p-21,
+    };
+    for (int i = 0; i < 20000 + (int) (sizeof(edge) / sizeof(edge[0])); i++) {
         double a = rnd_double();
         if (i % 3 == 0)
             a = ldexp((double) (int64_t) rnd(), (int) (rnd() % 80) - 64);
+        if (i >= 20000)
+            a = edge[i - 20000];
         long r;
         clear_fflags();
         __asm__ volatile(OPT "fcvtmod.w.d %0, %1, rtz\n.option pop" : "=r"(r) : "f"(a));
