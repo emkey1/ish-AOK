@@ -94,6 +94,11 @@ struct gen_state {
     // last window scanned, so instructions inside a rejected window are not
     // rescanned one gen_step at a time (quadratic translation cost).
     guest_addr_t rcache_scan_end;
+    // The riscv64 vtype the next vector instruction is expected to run
+    // under (UINT64_MAX: unknown): set by a vsetvli in the block, or guessed
+    // from the one in force at compile time. The typed vector gadgets check
+    // it at run time, so a wrong guess only costs the C path.
+    uint64_t riscv64_vtype;
 };
 
 bool gen_start(guest_addr_t addr, struct gen_state *state); // returns false on OOM

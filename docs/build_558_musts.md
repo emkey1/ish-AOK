@@ -88,19 +88,58 @@ distinct vector instructions) and riscv64_rvv_signal.c (V state across an
 asynchronous signal whose handler clobbers it), positive controls firing,
 on the Mac and the M4.
 - **Not advertised yet** (hwprobe IMA_V, AT_HWCAP 'v', the isa line): code
-  that picks a path at run time (glibc ifuncs, OpenSSL) would choose the
-  vector one, and it is slower here for now -- an unmasked add loop costs
-  13.5 ns per element against 5.7 scalar on the M4 (unit-stride loads and
-  stores and the common integer ops have typed fast paths; the rest is the
-  per-instruction C call). Code built with V as its baseline (an RVA23
-  distribution) runs regardless. Advertise once the hot ops have gadgets.
+  that picks a path at run time would choose the vector one. Ubuntu
+  25.10's glibc has no vector ifuncs; its OpenSSL 3.5 does (ChaCha20 with
+  Zvkb), and forcing it (OPENSSL_riscvcap) measured 3.5x SLOWER than
+  scalar with the C core, 2x FASTER (119 vs 59 MB/s, Mac CLI) with the
+  gadgets below. Code built with V as its baseline (an RVA23
+  distribution) runs regardless. Advertise once every instruction is a
+  gadget (below).
 - The NT_RISCV_VECTOR ptrace regset reads and writes it
   (tests/manual/riscv64/riscv64_rvv_ptrace.c). PR_RISCV_V_GET/SET_CONTROL
   answer EINVAL, as a kernel without V does, while V is unadvertised.
 - vfrec7/vfrsqrt7 since: the spec's two 128-entry tables, taken from its
   vfrsqrt7.adoc/vfrec7.adoc, and its exponent rules; its four worked
   examples and the 2^-7 accuracy are checked in riscv64_rvv.c.
-- **Open:** gadgets for the rest of the hot vector instructions.
+- **Gadgets, 2026-10-05** (guest-riscv64/vector.S; the maintainer's rule:
+  instructions are gadgets, never C). gen.c knows the vtype a vsetvli
+  earlier in the block set, or guesses the one in force at compile time,
+  and emits a gadget typed for its SEW; each checks the vtype at run time
+  and, if another is in force, re-dispatches to the body for that SEW
+  after checking the register groups against its LMUL (misaligned or vill:
+  SIGILL from the gadget). Covered: vsetvli/vsetivli (and x0,x0),
+  csrr vl/vtype/vlenb, unit-stride loads/stores, indexed loads; the
+  single-width integer ops (add, sub, rsub, and, or, xor, andn, min/max,
+  shifts, vror/vrol, vmv.v, vmerge; vv/vx/vi; masked and not), multiply,
+  the multiply-adds, mulh/mulhu/mulhsu, div/rem (RISC-V's x/0 and
+  overflow results), all eight compares, the integer reductions; widening
+  and narrowing (vwadd*, vwsub*, .w forms, vwmul*, vwmacc*, vnsrl, vnsra,
+  vwsll); slides (up, down, 1up, 1down, vfslide1*), vrgather (vv/vx/vi,
+  ei16), vcompress, viota; vadc/vmadc/vsbc/vmsbc; the Zvbb unary ops
+  (vbrev, vbrev8, vrev8, vclz, vctz, vcpop.v); the mask-register logical
+  ops, vmsbf/vmsif/vmsof, vcpop, vfirst, vid, vzext/vsext, vmv.x.s/vmv.s.x,
+  vmv<nr>r. Checked by tests/manual/riscv64/riscv64_rvv_gadgets.c
+  (tools/gen-rvv-gadget-test.py): each instruction under every SEW/LMUL,
+  typed and re-dispatched, masked and not, at random and special-value
+  data, against a model written from the spec (not the C core), 148k
+  checks, plus SIGILL for misaligned groups and the widening limits; a
+  positive control fired for every gadget family. Vector kernels against
+  the same loop built scalar, M4: add 3.0x, sum 2.2x, max 3.3x, count
+  3.2x, select (vmul) 4.4x, shift 2.3x; gather 0.8x. OpenSSL ChaCha20 on
+  its vector path: 108 MB/s against 52 scalar (M4).
+- **Open: the rest of V as gadgets, then delete the C core**
+  (jit/riscv64_vector.c, still reached for everything not listed above and
+  for a nonzero vstart, page crossings and TLB misses): FP arithmetic,
+  FMAs, min/max, sign injection, compares, vfclass, vfsqrt,
+  vfrec7/vfrsqrt7, conversions (widening/narrowing, rod) and FP
+  reductions; memory: strided, segment, whole-register, mask loads/
+  stores, indexed stores, masked unit-stride, fault-only-first faulting,
+  page crossings and TLB misses inside the gadget, a nonzero vstart (the
+  spec lets arithmetic trap on one; memory must resume); fixed point
+  (vsadd*, vssub*, vaadd*, vasub*, vsmul, vssrl/vssra, vnclip*, with
+  vxrm/vxsat); widening reductions; masked vzext/vsext and vmsbf;
+  vsetvl and the vector CSR writes. Each family into the model test with
+  a positive control.
 
 **Supm, decided against for now:** user pointer masking exists only for a
 program that asks for it, prctl(PR_SET_TAGGED_ADDR_CTRL) with a PMLEN

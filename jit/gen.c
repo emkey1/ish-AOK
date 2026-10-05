@@ -6342,6 +6342,7 @@ bool gen_start_riscv64(guest_addr_t addr, struct gen_state *state) {
     state->riscv64 = true;
     state->riscv64_ip = addr;
     state->riscv64_orig_ip = addr;
+    state->riscv64_vtype = UINT64_MAX;
     state->jitprof = jitprof_block_new(addr, JITPROF_RISCV64);
     if (unlikely(state->jitprof != NULL)) {
         extern void gadget_riscv64_block_count(void);
@@ -7243,29 +7244,141 @@ static bool gen_riscv64_try_rcache_run(struct gen_state *state, struct tlb *tlb,
     return true;
 }
 
-// A V-extension instruction: the vop gadget runs it in C
-// (jit/riscv64_vector.c), with its pc for a trap.
+// A V-extension instruction. vsetvli/vsetivli, csrr of the vector CSRs,
+// the unit-stride loads and stores, the mask ops, and -- with the vtype in
+// force known (gen_state.riscv64_vtype) -- the common unmasked integer ops
+// have gadgets of their own (guest-riscv64/vector.S). Everything else, and
+// any of those whose checks fail at run time, runs in C
+// (jit/riscv64_vector.c) through the vop gadget, with its pc for a trap.
+
+// LMUL in eighths, and the registers a group of EMUL (in eighths) spans
+static unsigned rv_lmul8(uint64_t vtype) {
+    unsigned l = vtype & 7;
+    return l >= 5 ? 8 >> (8 - l) : 8 << l;
+}
+static unsigned rv_regs(unsigned emul8) {
+    return emul8 < 8 ? 1 : emul8 / 8;
+}
+static bool rv_overlap(unsigned a, unsigned na, unsigned b, unsigned nb) {
+    return a < b + nb && b < a + na;
+}
+
+// The element-wise op of an OPIVV/OPIVX/OPIVI (kind 0/1/2) funct6, as the
+// riscv64_vbin*_gadgets tables index it, or -1
+static int riscv64_vbin_op(unsigned f6, unsigned kind, unsigned vs2) {
+    switch (f6) {
+    case 0x00: return 0;                        // vadd
+    case 0x02: return kind != 2 ? 1 : -1;       // vsub
+    case 0x03: return kind != 0 ? 2 : -1;       // vrsub
+    case 0x09: return 3;                        // vand
+    case 0x0a: return 4;                        // vor
+    case 0x0b: return 5;                        // vxor
+    case 0x01: return kind != 2 ? 6 : -1;       // vandn (Zvbb)
+    case 0x17: return vs2 == 0 ? 7 : -1;        // vmv.v.* (unmasked; masked is vmerge)
+    case 0x04: case 0x05: case 0x06: case 0x07: // vminu vmin vmaxu vmax
+        return kind != 2 ? 8 + (int) (f6 - 4) : -1;
+    case 0x25: return 12;                       // vsll
+    case 0x28: return 13;                       // vsrl
+    case 0x29: return 14;                       // vsra
+    case 0x14: return 15;                       // vror (Zvbb; .vi takes 0x15 too)
+    case 0x15: return kind != 2 ? 16 : 15;      // vrol, or vror.vi's imm[5]
+    }
+    return -1;
+}
+// the stream word for an op's second operand: vs1's offset, rs1's, or the
+// immediate (simm5; uimm5 for the shifts, and uimm6 for vror.vi)
+static uint64_t riscv64_vbin_src(int op, unsigned kind, unsigned f6, unsigned rs1) {
+    if (kind == 0)
+        return offsetof(struct cpu_state, riscv64_v) + rs1 * 16;
+    if (kind == 1)
+        return riscv64_rs_off(rs1);
+    if (op >= 12 && op <= 14)
+        return rs1;
+    if (op == 15)
+        return rs1 | (f6 & 1) << 5;
+    return (uint64_t) (((int64_t) rs1 << 59) >> 59);
+}
+// The NEON-lane op of an OPMVV/OPMVX funct6 (vmul and the multiply-adds),
+// continuing riscv64_vbin_op's numbering, or -1
+static int riscv64_vbin_mop(unsigned f6) {
+    switch (f6) {
+    case 0x25: return 17; // vmul
+    case 0x2d: return 18; // vmacc
+    case 0x2f: return 19; // vnmsac
+    case 0x29: return 20; // vmadd
+    case 0x2b: return 21; // vnmsub
+    }
+    return -1;
+}
+// the element-by-element op (riscv64_vel_gadgets) of one: vdivu vdiv vremu
+// vrem vmulhu vmulhsu vmulh, or -1
+static int riscv64_vel_op(unsigned f6) {
+    static const signed char ops[8] = {0, 1, 2, 3, 4, -1, 5, 6}; // 0x20-0x27, 0x25 is vmul
+    return f6 >= 0x20 && f6 <= 0x27 ? ops[f6 - 0x20] : -1;
+}
+// the compare (vmseq ... vmsgt) of one, or -1
+static int riscv64_vcmp_op(unsigned f6, unsigned kind) {
+    if (f6 < 0x18 || f6 > 0x1f)
+        return -1;
+    int cop = (int) f6 - 0x18;
+    if ((kind == 0 && cop >= 6) || (kind == 2 && (cop == 2 || cop == 3)))
+        return -1;
+    return cop;
+}
+
+// The expected vtype for a gadget whose register groups are misaligned for
+// the vtype it is emitted for: never in force (a vill vtype is exactly bit
+// 63), so it always re-dispatches, which checks them against the LMUL in
+// force and traps if they are misaligned there too.
+#define RV_VT_NEVER UINT64_MAX
+
+// [gadget][words...][insn][pc]
+static void gen_rv_vgadget(struct gen_state *state, unsigned long gadget, int n,
+        unsigned long w0, unsigned long w1, unsigned long w2, unsigned long w3, uint32_t insn) {
+    gen(state, gadget);
+    unsigned long w[4] = {w0, w1, w2, w3};
+    for (int i = 0; i < n; i++)
+        gen(state, w[i]);
+    gen(state, insn);
+    gen(state, state->riscv64_orig_ip);
+}
+
 static int gen_riscv64_vector(struct gen_state *state, uint32_t insn) {
     extern void gadget_riscv64_vop(void);
-    unsigned opcode = insn & 0x7f, f3 = (insn >> 12) & 7;
-    unsigned rd = (insn >> 7) & 31, rs1 = (insn >> 15) & 31;
-    // vsetvli / vsetivli with a legal immediate vtype: a gadget of its own
-    // (guest-riscv64/vector.S), VLMAX worked out here
-    if (opcode == 0x57 && f3 == 7 && ((insn >> 31) == 0 || (insn >> 30) == 3) && (rs1 != 0 || rd != 0)) {
-        extern uint64_t riscv64_vtype_vlmax(uint64_t vtype);
-        extern void gadget_riscv64_vsetvl_reg(void), gadget_riscv64_vsetvl_imm(void);
+    extern uint64_t riscv64_vtype_vlmax(uint64_t vtype);
+    unsigned opcode = insn & 0x7f, f3 = (insn >> 12) & 7, f6 = insn >> 26;
+    unsigned rd = (insn >> 7) & 31, rs1 = (insn >> 15) & 31, vs2 = (insn >> 20) & 31;
+    bool unmasked = (insn >> 25) & 1;
+    uint64_t vt = state->riscv64_vtype;
+#define VREG(r) (offsetof(struct cpu_state, riscv64_v) + (r) * 16)
+    if (opcode == 0x57 && f3 == 7) {
+        state->riscv64_vtype = UINT64_MAX; // unless one of these sets it
         bool imm = (insn >> 30) == 3;
-        uint64_t vtype = (insn >> 20) & (imm ? 0x3ff : 0x7ff);
-        uint64_t vlmax = riscv64_vtype_vlmax(vtype);
-        if (vlmax != 0) {
-            bool from_reg = !imm && rs1 != 0;
-            gen(state, (unsigned long) (from_reg ? gadget_riscv64_vsetvl_reg : gadget_riscv64_vsetvl_imm));
-            gen(state, vtype);
-            gen(state, vlmax);
-            gen(state, riscv64_rd_off(rd));
-            gen(state, from_reg ? riscv64_rs_off(rs1) : imm ? rs1 : UINT64_MAX);
-            return 1;
+        if ((insn >> 31) == 0 || imm) {
+            uint64_t vtype = (insn >> 20) & (imm ? 0x3ff : 0x7ff);
+            uint64_t vlmax = riscv64_vtype_vlmax(vtype);
+            // vsetvli / vsetivli with a legal immediate vtype, VLMAX worked
+            // out here
+            if (vlmax != 0 && (imm || rs1 != 0 || rd != 0)) {
+                extern void gadget_riscv64_vsetvl_reg(void), gadget_riscv64_vsetvl_imm(void);
+                bool from_reg = !imm && rs1 != 0;
+                gen(state, (unsigned long) (from_reg ? gadget_riscv64_vsetvl_reg : gadget_riscv64_vsetvl_imm));
+                gen(state, vtype);
+                gen(state, vlmax);
+                gen(state, riscv64_rd_off(rd));
+                gen(state, from_reg ? riscv64_rs_off(rs1) : imm ? rs1 : UINT64_MAX);
+                state->riscv64_vtype = vtype;
+                return 1;
+            }
+            // vsetvli x0, x0 keeps vl: legal from a vtype with the same VLMAX
+            if (vlmax != 0 && vt != UINT64_MAX && riscv64_vtype_vlmax(vt) == vlmax) {
+                extern void gadget_riscv64_vsetvl_keep(void);
+                gen_rv_vgadget(state, (unsigned long) gadget_riscv64_vsetvl_keep, 2, vtype, vt, 0, 0, insn);
+                state->riscv64_vtype = vtype;
+                return 1;
+            }
         }
+        goto vop;
     }
     // csrr rd, vl / vtype / vlenb (csrrs rd, csr, x0)
     if (opcode == 0x73 && f3 == 2 && rs1 == 0) {
@@ -7283,47 +7396,286 @@ static int gen_riscv64_vector(struct gen_state *state, uint32_t insn) {
             return 1;
         }
     }
-    if (opcode == 0x57 && (insn >> 25 & 1)) { // unmasked OP-V
-        unsigned f6 = insn >> 26, vs2 = (insn >> 20) & 31;
-        unsigned long voff = offsetof(struct cpu_state, riscv64_v);
-        if (f3 == 3 && (f6 == 0x18 || f6 == 0x19)) { // vmseq.vi / vmsne.vi
-            extern void gadget_riscv64_vmseq_vi8(void), gadget_riscv64_vmsne_vi8(void);
-            gen(state, (unsigned long) (f6 == 0x18 ? gadget_riscv64_vmseq_vi8 : gadget_riscv64_vmsne_vi8));
-            gen(state, voff + rd * 16);
-            gen(state, voff + vs2 * 16);
-            gen(state, (uint64_t) (((int64_t) (rs1 << 27)) >> 27) & 0xff);
-            gen(state, insn);
-            gen(state, state->riscv64_orig_ip);
-            return 1;
-        }
+    if (opcode == 0x57 && unmasked) {
+        // the ones that do not depend on SEW
         if (f3 == 2 && f6 == 0x10 && rs1 == 0x11) { // vfirst.m
             extern void gadget_riscv64_vfirst_m(void);
-            gen(state, (unsigned long) gadget_riscv64_vfirst_m);
-            gen(state, riscv64_rd_off(rd));
-            gen(state, voff + vs2 * 16);
-            gen(state, insn);
-            gen(state, state->riscv64_orig_ip);
+            gen_rv_vgadget(state, (unsigned long) gadget_riscv64_vfirst_m, 2,
+                    riscv64_rd_off(rd), VREG(vs2), 0, 0, insn);
+            return 1;
+        }
+        if (f3 == 2 && f6 == 0x10 && rs1 == 0x10) { // vcpop.m
+            extern void gadget_riscv64_vcpop_m(void);
+            gen_rv_vgadget(state, (unsigned long) gadget_riscv64_vcpop_m, 2,
+                    riscv64_rd_off(rd), VREG(vs2), 0, 0, insn);
+            return 1;
+        }
+        if (f3 == 2 && f6 >= 0x18 && f6 <= 0x1f) { // vmandn.mm ... vmxnor.mm
+            extern const unsigned long riscv64_vm_gadgets[8];
+            gen_rv_vgadget(state, riscv64_vm_gadgets[f6 - 0x18], 3,
+                    VREG(rd), VREG(vs2), VREG(rs1), 0, insn);
+            return 1;
+        }
+        if (f3 == 2 && f6 == 0x14 && rs1 >= 1 && rs1 <= 3 && rd != vs2) { // vmsbf/vmsof/vmsif.m
+            extern void gadget_riscv64_vmsbf_m(void), gadget_riscv64_vmsof_m(void),
+                    gadget_riscv64_vmsif_m(void);
+            unsigned long g = rs1 == 1 ? (unsigned long) gadget_riscv64_vmsbf_m
+                            : rs1 == 2 ? (unsigned long) gadget_riscv64_vmsof_m
+                                       : (unsigned long) gadget_riscv64_vmsif_m;
+            gen_rv_vgadget(state, g, 2, VREG(rd), VREG(vs2), 0, 0, insn);
+            return 1;
+        }
+        if (f3 == 3 && f6 == 0x27 && (rs1 == 0 || rs1 == 1 || rs1 == 3 || rs1 == 7) &&
+                rd % (rs1 + 1) == 0 && vs2 % (rs1 + 1) == 0) { // vmv<nr>r.v
+            extern void gadget_riscv64_vmvnr(void);
+            gen_rv_vgadget(state, (unsigned long) gadget_riscv64_vmvnr, 3,
+                    VREG(rd), VREG(vs2), (rs1 + 1) * 16, 0, insn);
+            return 1;
+        }
+    }
+    // The typed gadgets below re-dispatch on the SEW in force when it is not
+    // the one they were emitted for, so with no vtype known they can still be
+    // emitted for a guess -- except the extensions and indexed loads, whose
+    // legality depends on it (with vt still unknown those go to vop).
+    uint64_t gvt = vt != UINT64_MAX ? vt : 0; // e8, m1
+    // the multiplies, multiply-adds and divisions (OPMVV, OPMVX), masked
+    // and not
+    if (opcode == 0x57 && (f3 == 2 || f3 == 6) && (unmasked || rd != 0)) {
+        unsigned si = (gvt >> 3) & 7, n = rv_regs(rv_lmul8(gvt)), kind = f3 == 2 ? 0 : 1;
+        bool aligned = rd % n == 0 && vs2 % n == 0 && (kind != 0 || rs1 % n == 0);
+        uint64_t src = riscv64_vbin_src(0, kind, f6, rs1);
+        int op = riscv64_vbin_mop(f6);
+        if (op >= 0) {
+            extern const unsigned long riscv64_vbin_gadgets[22 * 3 * 4], riscv64_vbinm_gadgets[23 * 3 * 4];
+            const unsigned long *t = unmasked ? riscv64_vbin_gadgets : riscv64_vbinm_gadgets;
+            gen_rv_vgadget(state, t[(op * 3 + kind) * 4 + si], 4,
+                    aligned ? gvt : RV_VT_NEVER, VREG(rd), VREG(vs2), src, insn);
+            return 1;
+        }
+        int eop = riscv64_vel_op(f6);
+        if (eop >= 0) {
+            extern const unsigned long riscv64_vel_gadgets[7 * 2 * 2 * 4];
+            gen_rv_vgadget(state, riscv64_vel_gadgets[((eop * 2 + kind) * 2 + !unmasked) * 4 + si], 4,
+                    aligned ? gvt : RV_VT_NEVER, VREG(rd), VREG(vs2), src, insn);
+            return 1;
+        }
+    }
+    // widening and narrowing integer ops (riscv64_vw_gadgets): SEW 8-32,
+    // vd (and vs2 for the .w forms and the narrowing shifts) a group of
+    // twice LMUL
+    if (opcode == 0x57 && (unmasked || rd != 0)) {
+        int wop = -1;
+        if (f3 == 2 || f3 == 6) {
+            static const signed char ops[16] = {0, 1, 2, 3, 4, 5, 6, 7, 8, -1, 9, 10, 11, 12, 13, 14};
+            if (f6 >= 0x30 && (f6 != 0x3e || f3 == 6))  // vwmaccus is .vx only
+                wop = ops[f6 - 0x30];
+        } else if (f3 == 0 || f3 == 3 || f3 == 4) {
+            wop = f6 == 0x2c ? 15 : f6 == 0x2d ? 16 : f6 == 0x35 ? 17 : -1;
+        }
+        if (wop >= 0) {
+            extern const unsigned long riscv64_vw_gadgets[18 * 3 * 2 * 4];
+            unsigned kind = f3 == 2 || f3 == 0 ? 0 : f3 == 3 ? 2 : 1;
+            unsigned si = (gvt >> 3) & 7, lmul8 = rv_lmul8(gvt), n = rv_regs(lmul8), w = rv_regs(lmul8 * 2);
+            bool vs2_wide = (wop >= 4 && wop <= 7) || wop == 15 || wop == 16, vd_wide = wop < 15 || wop == 17;
+            bool ok = si < 3 && lmul8 < 64 && rd % (vd_wide ? w : n) == 0 &&
+                    vs2 % (vs2_wide ? w : n) == 0 && (kind != 0 || rs1 % n == 0);
+            uint64_t src = kind == 0 ? VREG(rs1) : kind == 1 ? riscv64_rs_off(rs1) : rs1; // uimm5
+            gen_rv_vgadget(state, riscv64_vw_gadgets[((wop * 3 + kind) * 2 + !unmasked) * 4 + (si < 3 ? si : 0)],
+                    4, ok ? gvt : RV_VT_NEVER, VREG(rd), VREG(vs2), src, insn);
+            return 1;
+        }
+    }
+    // permutations, carries and the Zvbb unary ops, element by element
+    if (opcode == 0x57) {
+        unsigned si = (gvt >> 3) & 7, n = rv_regs(rv_lmul8(gvt)), m = !unmasked;
+        bool vd_ok = rd % n == 0 && (unmasked || rd != 0), vs2_ok = vs2 % n == 0, vs1_ok = rs1 % n == 0;
+        unsigned long g = 0;
+        uint64_t src = 0;
+        bool ok = false;
+        if ((f3 == 3 || f3 == 4) && (f6 == 0x0e || f6 == 0x0f)) { // vslideup/vslidedown .vx/.vi
+            extern const unsigned long riscv64_vslide_gadgets[2 * 2 * 2 * 4];
+            unsigned kind = f3 == 4 ? 0 : 1;
+            g = riscv64_vslide_gadgets[(((f6 - 0x0e) * 2 + kind) * 2 + m) * 4 + si];
+            src = kind == 0 ? riscv64_rs_off(rs1) : rs1;
+            ok = vd_ok && vs2_ok;
+        } else if ((f3 == 6 || f3 == 5) && (f6 == 0x0e || f6 == 0x0f)) { // v(f)slide1up/down
+            extern const unsigned long riscv64_vslide1_gadgets[2 * 2 * 2 * 4];
+            unsigned kind = f3 == 6 ? 0 : 1;
+            g = riscv64_vslide1_gadgets[(((f6 - 0x0e) * 2 + kind) * 2 + m) * 4 + si];
+            src = kind == 0 ? riscv64_rs_off(rs1) : offsetof(struct cpu_state, riscv64_f) + rs1 * 8;
+            ok = vd_ok && vs2_ok && (kind == 0 || si >= 2);
+        } else if ((f3 == 0 || f3 == 3 || f3 == 4) && (f6 == 0x0c || (f6 == 0x0e && f3 == 0))) {
+            extern const unsigned long riscv64_vgather_gadgets[4 * 2 * 4]; // vrgather(ei16)
+            unsigned kind = f6 == 0x0e ? 3 : f3 == 0 ? 0 : f3 == 4 ? 1 : 2;
+            g = riscv64_vgather_gadgets[(kind * 2 + m) * 4 + si];
+            src = kind == 0 || kind == 3 ? VREG(rs1) : kind == 1 ? riscv64_rs_off(rs1) : rs1;
+            ok = vd_ok && vs2_ok && (kind != 0 || vs1_ok);
+        } else if (f3 == 2 && f6 == 0x17 && unmasked) { // vcompress.vm
+            extern const unsigned long riscv64_vmisc_gadgets[3 * 4];
+            g = riscv64_vmisc_gadgets[si];
+            src = VREG(rs1);
+            ok = vd_ok && vs2_ok;
+        } else if (f3 == 2 && f6 == 0x14 && rs1 == 0x10) { // viota.m
+            extern const unsigned long riscv64_vmisc_gadgets[3 * 4];
+            g = riscv64_vmisc_gadgets[(1 + m) * 4 + si];
+            ok = vd_ok;
+        } else if ((f3 == 0 || f3 == 3 || f3 == 4) && f6 >= 0x10 && f6 <= 0x13 &&
+                !(f3 == 3 && f6 >= 0x12) && (f6 & 1 || !unmasked)) {
+            // vadc vmadc vsbc vmsbc (v0 the carry in; vadc/vsbc always have it)
+            extern const unsigned long riscv64_vcarry_gadgets[2 * 3 * 3 * 4];
+            unsigned kind = f3 == 0 ? 0 : f3 == 4 ? 1 : 2, variant = !(f6 & 1) ? 0 : unmasked ? 1 : 2;
+            g = riscv64_vcarry_gadgets[((((f6 - 0x10) >> 1) * 3 + kind) * 3 + variant) * 4 + si];
+            src = kind == 0 ? VREG(rs1) : kind == 1 ? riscv64_rs_off(rs1)
+                : (uint64_t) (((int64_t) rs1 << 59) >> 59);
+            ok = (variant != 0 || (rd % n == 0 && rd != 0)) && vs2_ok && (kind != 0 || vs1_ok);
+        } else if (f3 == 2 && f6 == 0x12 && (rs1 == 8 || rs1 == 9 || rs1 == 10 || (rs1 >= 12 && rs1 <= 14))) {
+            extern const unsigned long riscv64_vunary_gadgets[6 * 2 * 4]; // Zvbb unary
+            unsigned op = rs1 <= 10 ? rs1 - 8 : rs1 - 9;
+            g = riscv64_vunary_gadgets[(op * 2 + m) * 4 + si];
+            ok = vd_ok && vs2_ok;
+        }
+        if (g != 0) {
+            gen_rv_vgadget(state, g, 4, ok ? gvt : RV_VT_NEVER, VREG(rd), VREG(vs2), src, insn);
+            return 1;
+        }
+    }
+    // masked element-wise ops and compares (a masked op's vd is clear of
+    // v0, except a mask), and vmerge
+    if (opcode == 0x57 && !unmasked && (f3 == 0 || f3 == 3 || f3 == 4)) {
+        uint64_t vt = gvt;
+        unsigned si = (vt >> 3) & 7, n = rv_regs(rv_lmul8(vt));
+        unsigned kind = f3 == 0 ? 0 : f3 == 4 ? 1 : 2;
+        int op = riscv64_vbin_op(f6, kind, vs2);
+        if (f6 == 0x17)
+            op = 22; // vmerge
+        uint64_t src = riscv64_vbin_src(op, kind, f6, rs1);
+        if (op >= 0 && rd != 0) {
+            extern const unsigned long riscv64_vbinm_gadgets[23 * 3 * 4];
+            bool aligned = rd % n == 0 && vs2 % n == 0 && (kind != 0 || rs1 % n == 0);
+            gen_rv_vgadget(state, riscv64_vbinm_gadgets[(op * 3 + kind) * 4 + si], 4,
+                    aligned ? vt : RV_VT_NEVER, VREG(rd), VREG(vs2), src, insn);
+            return 1;
+        }
+        int cop = riscv64_vcmp_op(f6, kind);
+        if (cop >= 0) {
+            extern const unsigned long riscv64_vcmpm_gadgets[8 * 3 * 4];
+            bool aligned = vs2 % n == 0 && (kind != 0 || rs1 % n == 0);
+            gen_rv_vgadget(state, riscv64_vcmpm_gadgets[(cop * 3 + kind) * 4 + si], 4,
+                    aligned ? vt : RV_VT_NEVER, VREG(rd), VREG(vs2), src, insn);
+            return 1;
+        }
+    }
+    if (opcode == 0x57 && unmasked) {
+        // typed by SEW; register groups must be aligned to LMUL
+        bool known = vt != UINT64_MAX;
+        uint64_t vt = gvt;
+        unsigned si = (vt >> 3) & 7, sew = 1 << si, lmul8 = rv_lmul8(vt), n = rv_regs(lmul8);
+        if (f3 == 0 || f3 == 3 || f3 == 4) { // OPIVV, OPIVI, OPIVX
+            unsigned kind = f3 == 0 ? 0 : f3 == 4 ? 1 : 2; // vv, vx, vi
+            uint64_t simm = (uint64_t) (((int64_t) rs1 << 59) >> 59);
+            int op = riscv64_vbin_op(f6, kind, vs2);
+            if (op >= 0) {
+                extern const unsigned long riscv64_vbin_gadgets[22 * 3 * 4];
+                uint64_t src = riscv64_vbin_src(op, kind, f6, rs1);
+                bool aligned = rd % n == 0 && vs2 % n == 0 && (kind != 0 || rs1 % n == 0);
+                gen_rv_vgadget(state, riscv64_vbin_gadgets[(op * 3 + kind) * 4 + si], 4,
+                        aligned ? vt : RV_VT_NEVER, VREG(rd), VREG(vs2), src, insn);
+                return 1;
+            }
+            int cop = riscv64_vcmp_op(f6, kind);
+            if (cop >= 0) { // vmseq ... vmsgt
+                extern const unsigned long riscv64_vcmp_gadgets[8 * 3 * 4];
+                uint64_t src = kind == 0 ? VREG(rs1) : kind == 1 ? riscv64_rs_off(rs1) : simm;
+                bool aligned = vs2 % n == 0 && (kind != 0 || rs1 % n == 0);
+                gen_rv_vgadget(state, riscv64_vcmp_gadgets[(cop * 3 + kind) * 4 + si], 4,
+                        aligned ? vt : RV_VT_NEVER, VREG(rd), VREG(vs2), src, insn);
+                return 1;
+            }
+        }
+        if (f3 == 2) { // OPMVV
+            extern const unsigned long riscv64_vscalar_gadgets[12];
+            if (f6 <= 0x07) { // vredsum ... vredmax
+                extern const unsigned long riscv64_vred_gadgets[8 * 4];
+                gen_rv_vgadget(state, riscv64_vred_gadgets[f6 * 4 + si], 4,
+                        vs2 % n == 0 ? vt : RV_VT_NEVER, VREG(rd), VREG(vs2), VREG(rs1), insn);
+                return 1;
+            }
+            if (f6 == 0x10 && rs1 == 0) { // vmv.x.s
+                gen_rv_vgadget(state, riscv64_vscalar_gadgets[si], 3,
+                        vt, riscv64_rd_off(rd), VREG(vs2), 0, insn);
+                return 1;
+            }
+            if (f6 == 0x14 && rs1 == 0x11 && vs2 == 0) { // vid.v
+                gen_rv_vgadget(state, riscv64_vscalar_gadgets[8 + si], 2,
+                        rd % n == 0 ? vt : RV_VT_NEVER, VREG(rd), 0, 0, insn);
+                return 1;
+            }
+            if (known && f6 == 0x12 && rs1 >= 2 && rs1 <= 7) { // vzext/vsext.vf8/4/2
+                unsigned f = rs1 <= 3 ? 8 : rs1 <= 5 ? 4 : 2;
+                bool sign = rs1 & 1;
+                unsigned sregs = rv_regs(lmul8 / f);
+                if (sew >= f && lmul8 >= f && rd % n == 0 && vs2 % sregs == 0 &&
+                        !rv_overlap(rd, n, vs2, sregs)) {
+                    extern void gadget_riscv64_vzext_vf2_e2(void), gadget_riscv64_vzext_vf2_e4(void),
+                            gadget_riscv64_vzext_vf2_e8(void), gadget_riscv64_vzext_vf4_e4(void),
+                            gadget_riscv64_vzext_vf4_e8(void), gadget_riscv64_vzext_vf8_e8(void),
+                            gadget_riscv64_vsext_vf2_e2(void), gadget_riscv64_vsext_vf2_e4(void),
+                            gadget_riscv64_vsext_vf2_e8(void), gadget_riscv64_vsext_vf4_e4(void),
+                            gadget_riscv64_vsext_vf4_e8(void), gadget_riscv64_vsext_vf8_e8(void);
+                    void (*g)(void) =
+                        f == 2 ? (sew == 2 ? (sign ? gadget_riscv64_vsext_vf2_e2 : gadget_riscv64_vzext_vf2_e2)
+                                : sew == 4 ? (sign ? gadget_riscv64_vsext_vf2_e4 : gadget_riscv64_vzext_vf2_e4)
+                                           : (sign ? gadget_riscv64_vsext_vf2_e8 : gadget_riscv64_vzext_vf2_e8))
+                      : f == 4 ? (sew == 4 ? (sign ? gadget_riscv64_vsext_vf4_e4 : gadget_riscv64_vzext_vf4_e4)
+                                           : (sign ? gadget_riscv64_vsext_vf4_e8 : gadget_riscv64_vzext_vf4_e8))
+                               : (sign ? gadget_riscv64_vsext_vf8_e8 : gadget_riscv64_vzext_vf8_e8);
+                    gen_rv_vgadget(state, (unsigned long) g, 3, vt, VREG(rd), VREG(vs2), 0, insn);
+                    return 1;
+                }
+            }
+        }
+        if (f3 == 6 && f6 == 0x10 && vs2 == 0) { // vmv.s.x
+            extern const unsigned long riscv64_vscalar_gadgets[12];
+            gen_rv_vgadget(state, riscv64_vscalar_gadgets[4 + si], 3,
+                    vt, VREG(rd), riscv64_rs_off(rs1), 0, insn);
             return 1;
         }
     }
     // unmasked unit-stride loads (plain and fault-only-first) and stores,
     // one field: the fast-path gadgets, which fall back to C themselves
     if ((opcode == 0x07 || opcode == 0x27) && (f3 == 0 || f3 >= 5) && (insn >> 25) == 1 &&
-            (((insn >> 20) & 31) == 0 || (opcode == 0x07 && ((insn >> 20) & 31) == 0x10))) {
+            (vs2 == 0 || (opcode == 0x07 && vs2 == 0x10))) {
         extern void gadget_riscv64_vle_fast(void), gadget_riscv64_vse_fast(void);
         unsigned eewb = f3 == 0 ? 1 : f3 == 5 ? 2 : f3 == 6 ? 4 : 8;
         gen(state, (unsigned long) (opcode == 0x07 ? gadget_riscv64_vle_fast : gadget_riscv64_vse_fast));
         gen(state, eewb);
-        gen(state, offsetof(struct cpu_state, riscv64_v) + rd * 16);
+        gen(state, VREG(rd));
         gen(state, riscv64_rs_off(rs1));
         gen(state, insn);
         gen(state, state->riscv64_orig_ip);
         return 1;
     }
+    // unmasked indexed loads, one field (vluxei / vloxei), into a vd clear
+    // of the index group or the index group itself at the same EEW
+    if (opcode == 0x07 && (f3 == 0 || f3 >= 5) && unmasked && (insn >> 28) == 0 &&
+            (f6 & 1) && vt != UINT64_MAX) {
+        unsigned si = (vt >> 3) & 7, sew = 1 << si, lmul8 = rv_lmul8(vt), n = rv_regs(lmul8);
+        unsigned ii = f3 == 0 ? 0 : f3 - 4, isz = 1 << ii;
+        unsigned emul8 = lmul8 * isz / sew, iregs = rv_regs(emul8);
+        if (lmul8 * isz >= sew && emul8 <= 64 && rd % n == 0 && vs2 % iregs == 0 &&
+                (!rv_overlap(rd, n, vs2, iregs) || (rd == vs2 && isz == sew))) {
+            extern const unsigned long riscv64_vlx_gadgets[16];
+            gen_rv_vgadget(state, riscv64_vlx_gadgets[ii * 4 + si], 4,
+                    vt, VREG(rd), VREG(vs2), riscv64_rs_off(rs1), insn);
+            return 1;
+        }
+    }
+vop:
     gen(state, (unsigned long) gadget_riscv64_vop);
     gen(state, insn);
     gen(state, state->riscv64_orig_ip);
     return 1;
+#undef VREG
 }
 
 // Zba, Zbb, Zbs and Zicond (RVA23U64's scalar bit-manipulation; alu.S):
@@ -8325,6 +8677,7 @@ bool gen_start_riscv64(guest_addr_t addr, struct gen_state *state) {
     state->riscv64 = true;
     state->riscv64_ip = addr;
     state->riscv64_orig_ip = addr;
+    state->riscv64_vtype = UINT64_MAX;
     return true;
 }
 
