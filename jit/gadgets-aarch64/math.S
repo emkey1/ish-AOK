@@ -11347,3 +11347,185 @@ amd64_r16_ri amd64_cri16, cmp, 64, x, 63, 0
         .endr
     .endr
 .popsection
+
+# imul r32/r64, r32/r64 (0F AF) and imul r, r/m, imm (69/6B), register forms,
+# per register, any of the sixteen: amd64_imr<size>_<dst>_<src> (dst *= src)
+# and amd64_imi<size>_<dst>_<src> (dst = src * imm, imm in the stream word),
+# full and _nf. Only CF and OF are written (both = the product did not fit),
+# the rest of the flags left as they were, like amd64_imul_body. Tables
+# amd64_im{r,i}{,_nf}_gadgets[(size64 * 16 + dst) * 16 + src].
+.macro amd64_im16 op, s, R, bits, nf, d, hd, sr, hs
+.ifc \op, rr
+    .if \nf
+    .gadget amd64_imr\s\()_\d\()_\sr\()_nf
+    .else
+    .gadget amd64_imr\s\()_\d\()_\sr
+    .endif
+    amd64_r16_get \R, 13, \d, \hd
+    amd64_r16_get \R, 10, \sr, \hs
+.else
+    .if \nf
+    .gadget amd64_imi\s\()_\d\()_\sr\()_nf
+    .else
+    .gadget amd64_imi\s\()_\d\()_\sr
+    .endif
+    amd64_r16_get \R, 13, \sr, \hs
+    ldr x10, [_ip]
+.endif
+    .if \nf
+    mul \R\()15, \R\()13, \R\()10
+    .else
+    .if \s == 32
+    smull x14, w13, w10
+    sxtw x15, w14
+    cmp x15, x14
+    cset w16, ne
+    mov w15, w14
+    .else
+    mul x15, x13, x10
+    smulh x14, x13, x10
+    asr x17, x15, 63
+    cmp x14, x17
+    cset w16, ne
+    .endif
+    .endif
+    amd64_r16_put 15, \d, \hd
+    .if \nf == 0
+    strb w16, [_cpu, CPU_cf]
+    strb w16, [_cpu, CPU_of]
+    ldr w17, [_cpu, CPU_eflags]
+    mov w14, (1 | (1 << 11))
+    bic w17, w17, w14
+    orr w17, w17, w16
+    orr w17, w17, w16, lsl 11
+    str w17, [_cpu, CPU_eflags]
+    .endif
+.ifc \op, rr
+    gret
+.else
+    gret 1
+.endif
+.endm
+amd64_r16_family amd64_r16_rr, amd64_im16, rr
+amd64_r16_family amd64_r16_rr, amd64_im16, ri
+.macro amd64_im_quad op, s, d, sr, nf
+    .if \nf
+    .quad NAME(gadget_amd64_im\op\()\s\()_\d\()_\sr\()_nf)
+    .else
+    .quad NAME(gadget_amd64_im\op\()\s\()_\d\()_\sr)
+    .endif
+.endm
+.macro amd64_im_table op, nf
+    .irp s, 32,64
+        .irp d, 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
+            .irp sr, 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
+                amd64_im_quad \op, \s, \d, \sr, \nf
+            .endr
+        .endr
+    .endr
+.endm
+.pushsection_rodata
+.global.name amd64_imr_gadgets
+    amd64_im_table r, 0
+.global.name amd64_imr_nf_gadgets
+    amd64_im_table r, 1
+.global.name amd64_imi_gadgets
+    amd64_im_table i, 0
+.global.name amd64_imi_nf_gadgets
+    amd64_im_table i, 1
+.popsection
+
+# cmp + jcc fused per register pair, rax..rdi (the cache; r8-r15 compares
+# take amd64_crr/cri, unfused): amd64_fcr_<cond><size>_<lhs>_<rhs> and
+# amd64_fci_<cond><size>_<reg> (imm in the stream word). The flags deposit
+# and the branch are amd64_fused_cmp_rr/ri's, without their run-time
+# register selection. Stream: [gadget]([imm])[taken][else]. Tables
+# amd64_fc{r,i}_gadgets[(cond * 2 + size64) * 64 + lhs * 8 + rhs] and
+# [(cond * 2 + size64) * 8 + reg], conditions in COND_LIST order with the
+# parity slots empty (parity is never fused).
+.macro amd64_fcr8 cond, s, R, bits, d, hd, sr, hs
+.gadget amd64_fcr_\cond\()\s\()_\d\()_\sr
+    mov \R\()13, \R\hd
+    mov \R\()10, \R\hs
+    subs \R\()15, \R\()13, \R\()10
+    cset w14, cc
+    cset w16, vs
+    amd64_cached_set_addsub_flags \bits
+    amd64_fused_cc_tail \cond, \bits, 0
+.endm
+.macro amd64_fci8 cond, s, R, bits, d, hd
+.gadget amd64_fci_\cond\()\s\()_\d
+    mov \R\()13, \R\hd
+    ldr x10, [_ip]
+    .if \s == 32
+    mov w10, w10
+    .endif
+    subs \R\()15, \R\()13, \R\()10
+    cset w14, cc
+    cset w16, vs
+    amd64_cached_set_addsub_flags \bits
+    amd64_fused_cc_tail \cond, \bits, 8
+.endm
+.macro amd64_fc8_srcs cond, s, R, bits, d, hd
+    amd64_fcr8 \cond, \s, \R, \bits, \d, \hd, 0, 20
+    amd64_fcr8 \cond, \s, \R, \bits, \d, \hd, 1, 22
+    amd64_fcr8 \cond, \s, \R, \bits, \d, \hd, 2, 23
+    amd64_fcr8 \cond, \s, \R, \bits, \d, \hd, 3, 21
+    amd64_fcr8 \cond, \s, \R, \bits, \d, \hd, 4, 27
+    amd64_fcr8 \cond, \s, \R, \bits, \d, \hd, 5, 26
+    amd64_fcr8 \cond, \s, \R, \bits, \d, \hd, 6, 24
+    amd64_fcr8 \cond, \s, \R, \bits, \d, \hd, 7, 25
+    amd64_fci8 \cond, \s, \R, \bits, \d, \hd
+.endm
+.macro amd64_fc8_dsts cond, s, R, bits
+    amd64_fc8_srcs \cond, \s, \R, \bits, 0, 20
+    amd64_fc8_srcs \cond, \s, \R, \bits, 1, 22
+    amd64_fc8_srcs \cond, \s, \R, \bits, 2, 23
+    amd64_fc8_srcs \cond, \s, \R, \bits, 3, 21
+    amd64_fc8_srcs \cond, \s, \R, \bits, 4, 27
+    amd64_fc8_srcs \cond, \s, \R, \bits, 5, 26
+    amd64_fc8_srcs \cond, \s, \R, \bits, 6, 24
+    amd64_fc8_srcs \cond, \s, \R, \bits, 7, 25
+.endm
+.irp cond, o,c,z,cz,s,sxo,sxoz
+    amd64_fc8_dsts \cond, 32, w, 31
+    amd64_fc8_dsts \cond, 64, x, 63
+.endr
+.macro amd64_fcr_quad cond, s, d, sr
+    .ifc \cond, p
+    .quad 0
+    .else
+    .quad NAME(gadget_amd64_fcr_\cond\()\s\()_\d\()_\sr)
+    .endif
+.endm
+.macro amd64_fci_quad cond, s, d
+    .ifc \cond, p
+    .quad 0
+    .else
+    .quad NAME(gadget_amd64_fci_\cond\()\s\()_\d)
+    .endif
+.endm
+.macro amd64_fcr_rows cond, s
+    .irp d, 0,1,2,3,4,5,6,7
+        .irp sr, 0,1,2,3,4,5,6,7
+            amd64_fcr_quad \cond, \s, \d, \sr
+        .endr
+    .endr
+.endm
+.macro amd64_fci_rows cond, s
+    .irp d, 0,1,2,3,4,5,6,7
+        amd64_fci_quad \cond, \s, \d
+    .endr
+.endm
+.pushsection_rodata
+.global.name amd64_fcr_gadgets
+    .irp cond, o,c,z,cz,s,p,sxo,sxoz
+        amd64_fcr_rows \cond, 32
+        amd64_fcr_rows \cond, 64
+    .endr
+.global.name amd64_fci_gadgets
+    .irp cond, o,c,z,cz,s,p,sxo,sxoz
+        amd64_fci_rows \cond, 32
+        amd64_fci_rows \cond, 64
+    .endr
+.popsection

@@ -556,7 +556,7 @@ static void amd64_flag_rw(const struct amd64_jit_insn *insn, unsigned *r, unsign
 }
 
 #if defined(__aarch64__)
-#define AMD64_SPEC_TWIN_BITS 14 // 16384 slots, > 2 x the 6984 pairs
+#define AMD64_SPEC_TWIN_BITS 15 // 32768 slots, > 2 x the 8008 pairs
 #define AMD64_SPEC_TWIN_SLOTS (1u << AMD64_SPEC_TWIN_BITS)
 static unsigned long amd64_spec_twin_full[AMD64_SPEC_TWIN_SLOTS];
 static unsigned long amd64_spec_twin_nf[AMD64_SPEC_TWIN_SLOTS];
@@ -576,6 +576,8 @@ static void amd64_spec_twin_init(void) {
     extern void (*const amd64_shi_gadgets[])(void), (*const amd64_shi_nf_gadgets[])(void);
     extern void (*const amd64_idr_gadgets[])(void), (*const amd64_idr_nf_gadgets[])(void);
     extern void (*const amd64_sim_gadgets[])(void), (*const amd64_sim_nf_gadgets[])(void);
+    extern void (*const amd64_imr_gadgets[])(void), (*const amd64_imr_nf_gadgets[])(void);
+    extern void (*const amd64_imi_gadgets[])(void), (*const amd64_imi_nf_gadgets[])(void);
     static const struct {
         void (*const *full)(void); void (*const *nf)(void); unsigned n; unsigned writes;
     } fams[] = {
@@ -587,6 +589,8 @@ static void amd64_spec_twin_init(void) {
         {amd64_shi_gadgets, amd64_shi_nf_gadgets, 3 * 2 * 16, AMD64_FL_ALL},
         {amd64_idr_gadgets, amd64_idr_nf_gadgets, 2 * 2 * 16, AMD64_FL_ALL & ~AMD64_FL_CF},
         {amd64_sim_gadgets, amd64_sim_nf_gadgets, 2 * 2 * 18, AMD64_FL_ALL & ~AMD64_FL_CF},
+        {amd64_imr_gadgets, amd64_imr_nf_gadgets, 2 * 256, AMD64_FL_CF | AMD64_FL_OF},
+        {amd64_imi_gadgets, amd64_imi_nf_gadgets, 2 * 256, AMD64_FL_CF | AMD64_FL_OF},
     };
     for (unsigned f = 0; f < sizeof(fams) / sizeof(fams[0]); f++) {
         for (unsigned i = 0; i < fams[f].n; i++) {
@@ -647,7 +651,7 @@ static unsigned long amd64_flags_twin(unsigned long g, unsigned *writes) {
         }
     }
     // The register-specialised arith/logic/shift/inc-dec gadgets (math.S
-    // amd64_arr/ari/lrr/lri/slo/shi/idr/sim), 6984 pairs, through a hash table
+    // amd64_arr/ari/lrr/lri/slo/shi/idr/sim/imr/imi), 8008 pairs, through a hash table
     // built once.
     return amd64_spec_twin(g, writes);
 }
@@ -876,6 +880,22 @@ static bool gen_amd64_try_fuse_jcc(struct gen_state *state, unsigned cc) {
         saved[i] = state->block->code[slot + 1 + i];
     state->size = slot;
     gen_amd64_sync_reg_cache(state, false);
+    if (amd64_jit_fuse_mask() & JIT_FUSE_AMD64_ARITHR) {
+        // The same compare and branch per register pair (math.S amd64_fcr/fci),
+        // from the packed word: opcode 0-7, reg 8-11, rm 12-15, size 16-22.
+        extern void (*const amd64_fcr_gadgets[])(void), (*const amd64_fci_gadgets[])(void);
+        unsigned long packed = saved[0];
+        unsigned reg = (unsigned) ((packed >> 8) & 0xf), rm = (unsigned) ((packed >> 12) & 0xf);
+        unsigned s64 = ((packed >> 16) & 0x7f) == 64, c = (cc >> 1) & 7;
+        if (state->x86_fuse_op == 3) {
+            gen(state, (unsigned long) amd64_fci_gadgets[(c * 2 + s64) * 8 + rm]);
+            gen(state, saved[1]);
+        } else {
+            unsigned l = (packed & 2) ? reg : rm, r = (packed & 2) ? rm : reg;
+            gen(state, (unsigned long) amd64_fcr_gadgets[(c * 2 + s64) * 64 + l * 8 + r]);
+        }
+        return true;
+    }
     gen(state, (unsigned long) fused);
     for (unsigned i = 0; i < nops; i++)
         gen(state, saved[i]);
@@ -9000,6 +9020,35 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
             unsigned size = insn.operand_size_prefix ? 16 : (insn.rex.w ? 64 : 32);
             unsigned reg_id = amd64_modrm_reg(insn.modrm) | (insn.rex.r ? 8 : 0);
             unsigned rm_id = amd64_modrm_rm(insn.modrm) | (insn.rex.b ? 8 : 0);
+            if ((size == 32 || size == 64) && (amd64_jit_fuse_mask() & JIT_FUSE_AMD64_ARITHR)) {
+                // Per register, any of the sixteen (math.S amd64_imi_*).
+                extern void (*const amd64_imi_gadgets[])(void);
+                long imm;
+                if (insn.opcode == 0x6b) {
+                    int8_t i;
+                    if (!tlb_read(tlb, imul_imm_ip, &i, sizeof(i))) {
+                        state->amd64_ip = state->amd64_orig_ip;
+                        state->amd64_fallback_to_interp = true;
+                        return false;
+                    }
+                    imm = i;
+                } else {
+                    int32_t i;
+                    if (!tlb_read(tlb, imul_imm_ip, &i, sizeof(i))) {
+                        state->amd64_ip = state->amd64_orig_ip;
+                        state->amd64_fallback_to_interp = true;
+                        return false;
+                    }
+                    imm = i;
+                }
+                state->amd64_ip = next_ip;
+                gen_amd64_r16_enter(state, reg_id, rm_id);
+                gen(state, (unsigned long) amd64_imi_gadgets[((size == 64) * 16 + reg_id) * 16 + rm_id]);
+                gen(state, (unsigned long) imm);
+                gen_amd64_r16_wrote(state, reg_id);
+                gen_amd64_defer_rip(state, next_ip);
+                return true;
+            }
             if ((size == 32 || size == 64) &&
                     amd64_jit_low8_reg(reg_id) && amd64_jit_low8_reg(rm_id)) {
                 unsigned long imm_val;
@@ -9614,6 +9663,17 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
         unsigned size = insn.rex.w ? 64 : 32;
         unsigned reg_id = amd64_modrm_reg(insn.modrm) | (insn.rex.r ? 8 : 0);
         unsigned rm_id = amd64_modrm_rm(insn.modrm) | (insn.rex.b ? 8 : 0);
+        if (amd64_jit_fuse_mask() & JIT_FUSE_AMD64_ARITHR) {
+            // Per register, any of the sixteen (math.S amd64_imr_*).
+            extern void (*const amd64_imr_gadgets[])(void);
+            next_ip = state->amd64_ip + 1;
+            state->amd64_ip = next_ip;
+            gen_amd64_r16_enter(state, reg_id, rm_id);
+            gen(state, (unsigned long) amd64_imr_gadgets[((size == 64) * 16 + reg_id) * 16 + rm_id]);
+            gen_amd64_r16_wrote(state, reg_id);
+            gen_amd64_defer_rip(state, next_ip);
+            return true;
+        }
         if (amd64_jit_low8_reg(reg_id) && amd64_jit_low8_reg(rm_id)) {
             unsigned long packed = ((unsigned long) reg_id << 8) |
                 ((unsigned long) rm_id << 12) |

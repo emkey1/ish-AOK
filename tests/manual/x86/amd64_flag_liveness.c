@@ -172,7 +172,7 @@ static void emit_one(void) {
         emit_mem_one();
         return;
     }
-    switch (rnd() % 16) {
+    switch (rnd() % 17) {
         case 0: case 1: case 2: case 3: { // alu reg,reg: add or adc sbb and sub xor cmp
             static const uint8_t ops[] = {0x01, 0x09, 0x11, 0x19, 0x21, 0x29, 0x31, 0x39};
             rex(w, c, a); b(ops[rnd() % 8]); modrm_rr(c, a); break;
@@ -214,6 +214,10 @@ static void emit_one(void) {
             }
             rex(1, c, a); b(0x89); modrm_rr(c, a); break;
         }
+        case 14: // imul a, c (0F AF) or imul a, c, imm8 (6B): CF/OF only
+            if (rnd() & 1) { rex(w, a, c); b(0x0f); b(0xaf); modrm_rr(a, c); }
+            else { rex(w, a, c); b(0x6b); modrm_rr(a, c); b((uint8_t) rnd()); }
+            break;
         default: { // a second producer right away, to give the scan something to skip
             static const uint8_t ops[] = {0x01, 0x29, 0x31};
             rex(w, c, a); b(ops[rnd() % 3]); modrm_rr(c, a); break;
