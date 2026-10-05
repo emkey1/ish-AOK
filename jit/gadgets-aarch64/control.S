@@ -104,7 +104,7 @@
     # target word is bit-63 tagged; amd64_chain_ip (gadgets.h) handles
     # tagged-exit vs patched-chain uniformly.
     ldr _ip, [_ip]
-    amd64_chain_ip 1
+    amd64_chain_ip
 .gadget jcxz
     cbnz ecx, 1f
     ldr _ip, [_ip]
@@ -339,7 +339,7 @@ amd64_chain_poked:
     1:
         ldr _ip, [_ip]
     2:
-        amd64_chain_ip 1
+        amd64_chain_ip
 .endr
 
 # amd64 LOOP (0xe2) / LOOPE/LOOPZ (0xe1) / LOOPNE/LOOPNZ (0xe0), no address-size prefix
@@ -521,7 +521,7 @@ amd64_gen_loop loopne, ne
 1:
     ldr _ip, [_ip]                          /* RCX == 0 -> taken */
 2:
-    amd64_chain_ip 1
+    amd64_chain_ip
 
 # PUSHF/POPF, in both operand sizes. [gadget][orig_ip]: a fault reports the
 # instruction, so the stack-growth retry re-runs it.

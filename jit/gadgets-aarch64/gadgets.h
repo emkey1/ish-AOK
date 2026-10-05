@@ -109,11 +109,7 @@ _xaddr .req x3
 # indirect branch. A tagged (unchained) word and the poked/out-of-budget
 # case leave through the shared code, which is out of reach of a
 # conditional branch from another object file -- hence the trampolines.
-# nomem=1 drops the dmb ishld from the entry: for branch gadgets that read
-# no guest memory themselves (every guest load is followed by its own
-# gadget's barrier, which is what x86's load ordering needs), as
-# gret_nomem does for the i386 gadgets.
-.macro amd64_chain_ip nomem=0
+.macro amd64_chain_ip
     tbnz _ip, 63, 8711f
     ldr x8, [_cpu, CPU_poked_ptr]
     ldrb w8, [x8]
@@ -127,11 +123,7 @@ _xaddr .req x3
     ldr x8, [x8, JIT_BLOCK_addr]
     str x8, [_cpu, CPU_amd64_rip]
     str w8, [_cpu, CPU_eip]
-    .if \nomem
-    gret_nomem
-    .else
     gret
-    .endif
 8711:
     b amd64_branch_dispatch
 8712:

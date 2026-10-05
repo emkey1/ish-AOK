@@ -16,7 +16,7 @@
     ldr x8, [_ip]
     str x8, [_cpu, CPU_amd64_rip]
     str w8, [_cpu, CPU_eip]
-    gret_nomem 1
+    gret 1
 
 .gadget amd64_load_low8_reg_cache
     add x8, _cpu, CPU_amd64_regs
@@ -28,7 +28,7 @@
     ldr x26, [x8, 40]
     ldr x24, [x8, 48]
     ldr x25, [x8, 56]
-    gret_nomem
+    gret
 
 # ---- `mov r64/r32, r64/r32` specialised per register pair ----
 #
@@ -44,1220 +44,1220 @@
 # 4 rsp x27, 5 rbp x26, 6 rsi x24, 7 rdi x25.
 .gadget amd64_movr32_0_0
     mov w20, w20
-    gret_nomem
+    gret
 .gadget amd64_movr32_0_1
     mov w20, w22
-    gret_nomem
+    gret
 .gadget amd64_movr32_0_2
     mov w20, w23
-    gret_nomem
+    gret
 .gadget amd64_movr32_0_3
     mov w20, w21
-    gret_nomem
+    gret
 .gadget amd64_movr32_0_4
     mov w20, w27
-    gret_nomem
+    gret
 .gadget amd64_movr32_0_5
     mov w20, w26
-    gret_nomem
+    gret
 .gadget amd64_movr32_0_6
     mov w20, w24
-    gret_nomem
+    gret
 .gadget amd64_movr32_0_7
     mov w20, w25
-    gret_nomem
+    gret
 .gadget amd64_movr32_0_8
     ldr w20, [_cpu, CPU_amd64_regs + 64]
-    gret_nomem
+    gret
 .gadget amd64_movr32_0_9
     ldr w20, [_cpu, CPU_amd64_regs + 72]
-    gret_nomem
+    gret
 .gadget amd64_movr32_0_10
     ldr w20, [_cpu, CPU_amd64_regs + 80]
-    gret_nomem
+    gret
 .gadget amd64_movr32_0_11
     ldr w20, [_cpu, CPU_amd64_regs + 88]
-    gret_nomem
+    gret
 .gadget amd64_movr32_0_12
     ldr w20, [_cpu, CPU_amd64_regs + 96]
-    gret_nomem
+    gret
 .gadget amd64_movr32_0_13
     ldr w20, [_cpu, CPU_amd64_regs + 104]
-    gret_nomem
+    gret
 .gadget amd64_movr32_0_14
     ldr w20, [_cpu, CPU_amd64_regs + 112]
-    gret_nomem
+    gret
 .gadget amd64_movr32_0_15
     ldr w20, [_cpu, CPU_amd64_regs + 120]
-    gret_nomem
+    gret
 .gadget amd64_movr32_1_0
     mov w22, w20
-    gret_nomem
+    gret
 .gadget amd64_movr32_1_1
     mov w22, w22
-    gret_nomem
+    gret
 .gadget amd64_movr32_1_2
     mov w22, w23
-    gret_nomem
+    gret
 .gadget amd64_movr32_1_3
     mov w22, w21
-    gret_nomem
+    gret
 .gadget amd64_movr32_1_4
     mov w22, w27
-    gret_nomem
+    gret
 .gadget amd64_movr32_1_5
     mov w22, w26
-    gret_nomem
+    gret
 .gadget amd64_movr32_1_6
     mov w22, w24
-    gret_nomem
+    gret
 .gadget amd64_movr32_1_7
     mov w22, w25
-    gret_nomem
+    gret
 .gadget amd64_movr32_1_8
     ldr w22, [_cpu, CPU_amd64_regs + 64]
-    gret_nomem
+    gret
 .gadget amd64_movr32_1_9
     ldr w22, [_cpu, CPU_amd64_regs + 72]
-    gret_nomem
+    gret
 .gadget amd64_movr32_1_10
     ldr w22, [_cpu, CPU_amd64_regs + 80]
-    gret_nomem
+    gret
 .gadget amd64_movr32_1_11
     ldr w22, [_cpu, CPU_amd64_regs + 88]
-    gret_nomem
+    gret
 .gadget amd64_movr32_1_12
     ldr w22, [_cpu, CPU_amd64_regs + 96]
-    gret_nomem
+    gret
 .gadget amd64_movr32_1_13
     ldr w22, [_cpu, CPU_amd64_regs + 104]
-    gret_nomem
+    gret
 .gadget amd64_movr32_1_14
     ldr w22, [_cpu, CPU_amd64_regs + 112]
-    gret_nomem
+    gret
 .gadget amd64_movr32_1_15
     ldr w22, [_cpu, CPU_amd64_regs + 120]
-    gret_nomem
+    gret
 .gadget amd64_movr32_2_0
     mov w23, w20
-    gret_nomem
+    gret
 .gadget amd64_movr32_2_1
     mov w23, w22
-    gret_nomem
+    gret
 .gadget amd64_movr32_2_2
     mov w23, w23
-    gret_nomem
+    gret
 .gadget amd64_movr32_2_3
     mov w23, w21
-    gret_nomem
+    gret
 .gadget amd64_movr32_2_4
     mov w23, w27
-    gret_nomem
+    gret
 .gadget amd64_movr32_2_5
     mov w23, w26
-    gret_nomem
+    gret
 .gadget amd64_movr32_2_6
     mov w23, w24
-    gret_nomem
+    gret
 .gadget amd64_movr32_2_7
     mov w23, w25
-    gret_nomem
+    gret
 .gadget amd64_movr32_2_8
     ldr w23, [_cpu, CPU_amd64_regs + 64]
-    gret_nomem
+    gret
 .gadget amd64_movr32_2_9
     ldr w23, [_cpu, CPU_amd64_regs + 72]
-    gret_nomem
+    gret
 .gadget amd64_movr32_2_10
     ldr w23, [_cpu, CPU_amd64_regs + 80]
-    gret_nomem
+    gret
 .gadget amd64_movr32_2_11
     ldr w23, [_cpu, CPU_amd64_regs + 88]
-    gret_nomem
+    gret
 .gadget amd64_movr32_2_12
     ldr w23, [_cpu, CPU_amd64_regs + 96]
-    gret_nomem
+    gret
 .gadget amd64_movr32_2_13
     ldr w23, [_cpu, CPU_amd64_regs + 104]
-    gret_nomem
+    gret
 .gadget amd64_movr32_2_14
     ldr w23, [_cpu, CPU_amd64_regs + 112]
-    gret_nomem
+    gret
 .gadget amd64_movr32_2_15
     ldr w23, [_cpu, CPU_amd64_regs + 120]
-    gret_nomem
+    gret
 .gadget amd64_movr32_3_0
     mov w21, w20
-    gret_nomem
+    gret
 .gadget amd64_movr32_3_1
     mov w21, w22
-    gret_nomem
+    gret
 .gadget amd64_movr32_3_2
     mov w21, w23
-    gret_nomem
+    gret
 .gadget amd64_movr32_3_3
     mov w21, w21
-    gret_nomem
+    gret
 .gadget amd64_movr32_3_4
     mov w21, w27
-    gret_nomem
+    gret
 .gadget amd64_movr32_3_5
     mov w21, w26
-    gret_nomem
+    gret
 .gadget amd64_movr32_3_6
     mov w21, w24
-    gret_nomem
+    gret
 .gadget amd64_movr32_3_7
     mov w21, w25
-    gret_nomem
+    gret
 .gadget amd64_movr32_3_8
     ldr w21, [_cpu, CPU_amd64_regs + 64]
-    gret_nomem
+    gret
 .gadget amd64_movr32_3_9
     ldr w21, [_cpu, CPU_amd64_regs + 72]
-    gret_nomem
+    gret
 .gadget amd64_movr32_3_10
     ldr w21, [_cpu, CPU_amd64_regs + 80]
-    gret_nomem
+    gret
 .gadget amd64_movr32_3_11
     ldr w21, [_cpu, CPU_amd64_regs + 88]
-    gret_nomem
+    gret
 .gadget amd64_movr32_3_12
     ldr w21, [_cpu, CPU_amd64_regs + 96]
-    gret_nomem
+    gret
 .gadget amd64_movr32_3_13
     ldr w21, [_cpu, CPU_amd64_regs + 104]
-    gret_nomem
+    gret
 .gadget amd64_movr32_3_14
     ldr w21, [_cpu, CPU_amd64_regs + 112]
-    gret_nomem
+    gret
 .gadget amd64_movr32_3_15
     ldr w21, [_cpu, CPU_amd64_regs + 120]
-    gret_nomem
+    gret
 .gadget amd64_movr32_4_0
     mov w27, w20
-    gret_nomem
+    gret
 .gadget amd64_movr32_4_1
     mov w27, w22
-    gret_nomem
+    gret
 .gadget amd64_movr32_4_2
     mov w27, w23
-    gret_nomem
+    gret
 .gadget amd64_movr32_4_3
     mov w27, w21
-    gret_nomem
+    gret
 .gadget amd64_movr32_4_4
     mov w27, w27
-    gret_nomem
+    gret
 .gadget amd64_movr32_4_5
     mov w27, w26
-    gret_nomem
+    gret
 .gadget amd64_movr32_4_6
     mov w27, w24
-    gret_nomem
+    gret
 .gadget amd64_movr32_4_7
     mov w27, w25
-    gret_nomem
+    gret
 .gadget amd64_movr32_4_8
     ldr w27, [_cpu, CPU_amd64_regs + 64]
-    gret_nomem
+    gret
 .gadget amd64_movr32_4_9
     ldr w27, [_cpu, CPU_amd64_regs + 72]
-    gret_nomem
+    gret
 .gadget amd64_movr32_4_10
     ldr w27, [_cpu, CPU_amd64_regs + 80]
-    gret_nomem
+    gret
 .gadget amd64_movr32_4_11
     ldr w27, [_cpu, CPU_amd64_regs + 88]
-    gret_nomem
+    gret
 .gadget amd64_movr32_4_12
     ldr w27, [_cpu, CPU_amd64_regs + 96]
-    gret_nomem
+    gret
 .gadget amd64_movr32_4_13
     ldr w27, [_cpu, CPU_amd64_regs + 104]
-    gret_nomem
+    gret
 .gadget amd64_movr32_4_14
     ldr w27, [_cpu, CPU_amd64_regs + 112]
-    gret_nomem
+    gret
 .gadget amd64_movr32_4_15
     ldr w27, [_cpu, CPU_amd64_regs + 120]
-    gret_nomem
+    gret
 .gadget amd64_movr32_5_0
     mov w26, w20
-    gret_nomem
+    gret
 .gadget amd64_movr32_5_1
     mov w26, w22
-    gret_nomem
+    gret
 .gadget amd64_movr32_5_2
     mov w26, w23
-    gret_nomem
+    gret
 .gadget amd64_movr32_5_3
     mov w26, w21
-    gret_nomem
+    gret
 .gadget amd64_movr32_5_4
     mov w26, w27
-    gret_nomem
+    gret
 .gadget amd64_movr32_5_5
     mov w26, w26
-    gret_nomem
+    gret
 .gadget amd64_movr32_5_6
     mov w26, w24
-    gret_nomem
+    gret
 .gadget amd64_movr32_5_7
     mov w26, w25
-    gret_nomem
+    gret
 .gadget amd64_movr32_5_8
     ldr w26, [_cpu, CPU_amd64_regs + 64]
-    gret_nomem
+    gret
 .gadget amd64_movr32_5_9
     ldr w26, [_cpu, CPU_amd64_regs + 72]
-    gret_nomem
+    gret
 .gadget amd64_movr32_5_10
     ldr w26, [_cpu, CPU_amd64_regs + 80]
-    gret_nomem
+    gret
 .gadget amd64_movr32_5_11
     ldr w26, [_cpu, CPU_amd64_regs + 88]
-    gret_nomem
+    gret
 .gadget amd64_movr32_5_12
     ldr w26, [_cpu, CPU_amd64_regs + 96]
-    gret_nomem
+    gret
 .gadget amd64_movr32_5_13
     ldr w26, [_cpu, CPU_amd64_regs + 104]
-    gret_nomem
+    gret
 .gadget amd64_movr32_5_14
     ldr w26, [_cpu, CPU_amd64_regs + 112]
-    gret_nomem
+    gret
 .gadget amd64_movr32_5_15
     ldr w26, [_cpu, CPU_amd64_regs + 120]
-    gret_nomem
+    gret
 .gadget amd64_movr32_6_0
     mov w24, w20
-    gret_nomem
+    gret
 .gadget amd64_movr32_6_1
     mov w24, w22
-    gret_nomem
+    gret
 .gadget amd64_movr32_6_2
     mov w24, w23
-    gret_nomem
+    gret
 .gadget amd64_movr32_6_3
     mov w24, w21
-    gret_nomem
+    gret
 .gadget amd64_movr32_6_4
     mov w24, w27
-    gret_nomem
+    gret
 .gadget amd64_movr32_6_5
     mov w24, w26
-    gret_nomem
+    gret
 .gadget amd64_movr32_6_6
     mov w24, w24
-    gret_nomem
+    gret
 .gadget amd64_movr32_6_7
     mov w24, w25
-    gret_nomem
+    gret
 .gadget amd64_movr32_6_8
     ldr w24, [_cpu, CPU_amd64_regs + 64]
-    gret_nomem
+    gret
 .gadget amd64_movr32_6_9
     ldr w24, [_cpu, CPU_amd64_regs + 72]
-    gret_nomem
+    gret
 .gadget amd64_movr32_6_10
     ldr w24, [_cpu, CPU_amd64_regs + 80]
-    gret_nomem
+    gret
 .gadget amd64_movr32_6_11
     ldr w24, [_cpu, CPU_amd64_regs + 88]
-    gret_nomem
+    gret
 .gadget amd64_movr32_6_12
     ldr w24, [_cpu, CPU_amd64_regs + 96]
-    gret_nomem
+    gret
 .gadget amd64_movr32_6_13
     ldr w24, [_cpu, CPU_amd64_regs + 104]
-    gret_nomem
+    gret
 .gadget amd64_movr32_6_14
     ldr w24, [_cpu, CPU_amd64_regs + 112]
-    gret_nomem
+    gret
 .gadget amd64_movr32_6_15
     ldr w24, [_cpu, CPU_amd64_regs + 120]
-    gret_nomem
+    gret
 .gadget amd64_movr32_7_0
     mov w25, w20
-    gret_nomem
+    gret
 .gadget amd64_movr32_7_1
     mov w25, w22
-    gret_nomem
+    gret
 .gadget amd64_movr32_7_2
     mov w25, w23
-    gret_nomem
+    gret
 .gadget amd64_movr32_7_3
     mov w25, w21
-    gret_nomem
+    gret
 .gadget amd64_movr32_7_4
     mov w25, w27
-    gret_nomem
+    gret
 .gadget amd64_movr32_7_5
     mov w25, w26
-    gret_nomem
+    gret
 .gadget amd64_movr32_7_6
     mov w25, w24
-    gret_nomem
+    gret
 .gadget amd64_movr32_7_7
     mov w25, w25
-    gret_nomem
+    gret
 .gadget amd64_movr32_7_8
     ldr w25, [_cpu, CPU_amd64_regs + 64]
-    gret_nomem
+    gret
 .gadget amd64_movr32_7_9
     ldr w25, [_cpu, CPU_amd64_regs + 72]
-    gret_nomem
+    gret
 .gadget amd64_movr32_7_10
     ldr w25, [_cpu, CPU_amd64_regs + 80]
-    gret_nomem
+    gret
 .gadget amd64_movr32_7_11
     ldr w25, [_cpu, CPU_amd64_regs + 88]
-    gret_nomem
+    gret
 .gadget amd64_movr32_7_12
     ldr w25, [_cpu, CPU_amd64_regs + 96]
-    gret_nomem
+    gret
 .gadget amd64_movr32_7_13
     ldr w25, [_cpu, CPU_amd64_regs + 104]
-    gret_nomem
+    gret
 .gadget amd64_movr32_7_14
     ldr w25, [_cpu, CPU_amd64_regs + 112]
-    gret_nomem
+    gret
 .gadget amd64_movr32_7_15
     ldr w25, [_cpu, CPU_amd64_regs + 120]
-    gret_nomem
+    gret
 .gadget amd64_movr32_8_0
     mov w8, w20
     str x8, [_cpu, CPU_amd64_regs + 64]
-    gret_nomem
+    gret
 .gadget amd64_movr32_8_1
     mov w8, w22
     str x8, [_cpu, CPU_amd64_regs + 64]
-    gret_nomem
+    gret
 .gadget amd64_movr32_8_2
     mov w8, w23
     str x8, [_cpu, CPU_amd64_regs + 64]
-    gret_nomem
+    gret
 .gadget amd64_movr32_8_3
     mov w8, w21
     str x8, [_cpu, CPU_amd64_regs + 64]
-    gret_nomem
+    gret
 .gadget amd64_movr32_8_4
     mov w8, w27
     str x8, [_cpu, CPU_amd64_regs + 64]
-    gret_nomem
+    gret
 .gadget amd64_movr32_8_5
     mov w8, w26
     str x8, [_cpu, CPU_amd64_regs + 64]
-    gret_nomem
+    gret
 .gadget amd64_movr32_8_6
     mov w8, w24
     str x8, [_cpu, CPU_amd64_regs + 64]
-    gret_nomem
+    gret
 .gadget amd64_movr32_8_7
     mov w8, w25
     str x8, [_cpu, CPU_amd64_regs + 64]
-    gret_nomem
+    gret
 .gadget amd64_movr32_9_0
     mov w8, w20
     str x8, [_cpu, CPU_amd64_regs + 72]
-    gret_nomem
+    gret
 .gadget amd64_movr32_9_1
     mov w8, w22
     str x8, [_cpu, CPU_amd64_regs + 72]
-    gret_nomem
+    gret
 .gadget amd64_movr32_9_2
     mov w8, w23
     str x8, [_cpu, CPU_amd64_regs + 72]
-    gret_nomem
+    gret
 .gadget amd64_movr32_9_3
     mov w8, w21
     str x8, [_cpu, CPU_amd64_regs + 72]
-    gret_nomem
+    gret
 .gadget amd64_movr32_9_4
     mov w8, w27
     str x8, [_cpu, CPU_amd64_regs + 72]
-    gret_nomem
+    gret
 .gadget amd64_movr32_9_5
     mov w8, w26
     str x8, [_cpu, CPU_amd64_regs + 72]
-    gret_nomem
+    gret
 .gadget amd64_movr32_9_6
     mov w8, w24
     str x8, [_cpu, CPU_amd64_regs + 72]
-    gret_nomem
+    gret
 .gadget amd64_movr32_9_7
     mov w8, w25
     str x8, [_cpu, CPU_amd64_regs + 72]
-    gret_nomem
+    gret
 .gadget amd64_movr32_10_0
     mov w8, w20
     str x8, [_cpu, CPU_amd64_regs + 80]
-    gret_nomem
+    gret
 .gadget amd64_movr32_10_1
     mov w8, w22
     str x8, [_cpu, CPU_amd64_regs + 80]
-    gret_nomem
+    gret
 .gadget amd64_movr32_10_2
     mov w8, w23
     str x8, [_cpu, CPU_amd64_regs + 80]
-    gret_nomem
+    gret
 .gadget amd64_movr32_10_3
     mov w8, w21
     str x8, [_cpu, CPU_amd64_regs + 80]
-    gret_nomem
+    gret
 .gadget amd64_movr32_10_4
     mov w8, w27
     str x8, [_cpu, CPU_amd64_regs + 80]
-    gret_nomem
+    gret
 .gadget amd64_movr32_10_5
     mov w8, w26
     str x8, [_cpu, CPU_amd64_regs + 80]
-    gret_nomem
+    gret
 .gadget amd64_movr32_10_6
     mov w8, w24
     str x8, [_cpu, CPU_amd64_regs + 80]
-    gret_nomem
+    gret
 .gadget amd64_movr32_10_7
     mov w8, w25
     str x8, [_cpu, CPU_amd64_regs + 80]
-    gret_nomem
+    gret
 .gadget amd64_movr32_11_0
     mov w8, w20
     str x8, [_cpu, CPU_amd64_regs + 88]
-    gret_nomem
+    gret
 .gadget amd64_movr32_11_1
     mov w8, w22
     str x8, [_cpu, CPU_amd64_regs + 88]
-    gret_nomem
+    gret
 .gadget amd64_movr32_11_2
     mov w8, w23
     str x8, [_cpu, CPU_amd64_regs + 88]
-    gret_nomem
+    gret
 .gadget amd64_movr32_11_3
     mov w8, w21
     str x8, [_cpu, CPU_amd64_regs + 88]
-    gret_nomem
+    gret
 .gadget amd64_movr32_11_4
     mov w8, w27
     str x8, [_cpu, CPU_amd64_regs + 88]
-    gret_nomem
+    gret
 .gadget amd64_movr32_11_5
     mov w8, w26
     str x8, [_cpu, CPU_amd64_regs + 88]
-    gret_nomem
+    gret
 .gadget amd64_movr32_11_6
     mov w8, w24
     str x8, [_cpu, CPU_amd64_regs + 88]
-    gret_nomem
+    gret
 .gadget amd64_movr32_11_7
     mov w8, w25
     str x8, [_cpu, CPU_amd64_regs + 88]
-    gret_nomem
+    gret
 .gadget amd64_movr32_12_0
     mov w8, w20
     str x8, [_cpu, CPU_amd64_regs + 96]
-    gret_nomem
+    gret
 .gadget amd64_movr32_12_1
     mov w8, w22
     str x8, [_cpu, CPU_amd64_regs + 96]
-    gret_nomem
+    gret
 .gadget amd64_movr32_12_2
     mov w8, w23
     str x8, [_cpu, CPU_amd64_regs + 96]
-    gret_nomem
+    gret
 .gadget amd64_movr32_12_3
     mov w8, w21
     str x8, [_cpu, CPU_amd64_regs + 96]
-    gret_nomem
+    gret
 .gadget amd64_movr32_12_4
     mov w8, w27
     str x8, [_cpu, CPU_amd64_regs + 96]
-    gret_nomem
+    gret
 .gadget amd64_movr32_12_5
     mov w8, w26
     str x8, [_cpu, CPU_amd64_regs + 96]
-    gret_nomem
+    gret
 .gadget amd64_movr32_12_6
     mov w8, w24
     str x8, [_cpu, CPU_amd64_regs + 96]
-    gret_nomem
+    gret
 .gadget amd64_movr32_12_7
     mov w8, w25
     str x8, [_cpu, CPU_amd64_regs + 96]
-    gret_nomem
+    gret
 .gadget amd64_movr32_13_0
     mov w8, w20
     str x8, [_cpu, CPU_amd64_regs + 104]
-    gret_nomem
+    gret
 .gadget amd64_movr32_13_1
     mov w8, w22
     str x8, [_cpu, CPU_amd64_regs + 104]
-    gret_nomem
+    gret
 .gadget amd64_movr32_13_2
     mov w8, w23
     str x8, [_cpu, CPU_amd64_regs + 104]
-    gret_nomem
+    gret
 .gadget amd64_movr32_13_3
     mov w8, w21
     str x8, [_cpu, CPU_amd64_regs + 104]
-    gret_nomem
+    gret
 .gadget amd64_movr32_13_4
     mov w8, w27
     str x8, [_cpu, CPU_amd64_regs + 104]
-    gret_nomem
+    gret
 .gadget amd64_movr32_13_5
     mov w8, w26
     str x8, [_cpu, CPU_amd64_regs + 104]
-    gret_nomem
+    gret
 .gadget amd64_movr32_13_6
     mov w8, w24
     str x8, [_cpu, CPU_amd64_regs + 104]
-    gret_nomem
+    gret
 .gadget amd64_movr32_13_7
     mov w8, w25
     str x8, [_cpu, CPU_amd64_regs + 104]
-    gret_nomem
+    gret
 .gadget amd64_movr32_14_0
     mov w8, w20
     str x8, [_cpu, CPU_amd64_regs + 112]
-    gret_nomem
+    gret
 .gadget amd64_movr32_14_1
     mov w8, w22
     str x8, [_cpu, CPU_amd64_regs + 112]
-    gret_nomem
+    gret
 .gadget amd64_movr32_14_2
     mov w8, w23
     str x8, [_cpu, CPU_amd64_regs + 112]
-    gret_nomem
+    gret
 .gadget amd64_movr32_14_3
     mov w8, w21
     str x8, [_cpu, CPU_amd64_regs + 112]
-    gret_nomem
+    gret
 .gadget amd64_movr32_14_4
     mov w8, w27
     str x8, [_cpu, CPU_amd64_regs + 112]
-    gret_nomem
+    gret
 .gadget amd64_movr32_14_5
     mov w8, w26
     str x8, [_cpu, CPU_amd64_regs + 112]
-    gret_nomem
+    gret
 .gadget amd64_movr32_14_6
     mov w8, w24
     str x8, [_cpu, CPU_amd64_regs + 112]
-    gret_nomem
+    gret
 .gadget amd64_movr32_14_7
     mov w8, w25
     str x8, [_cpu, CPU_amd64_regs + 112]
-    gret_nomem
+    gret
 .gadget amd64_movr32_15_0
     mov w8, w20
     str x8, [_cpu, CPU_amd64_regs + 120]
-    gret_nomem
+    gret
 .gadget amd64_movr32_15_1
     mov w8, w22
     str x8, [_cpu, CPU_amd64_regs + 120]
-    gret_nomem
+    gret
 .gadget amd64_movr32_15_2
     mov w8, w23
     str x8, [_cpu, CPU_amd64_regs + 120]
-    gret_nomem
+    gret
 .gadget amd64_movr32_15_3
     mov w8, w21
     str x8, [_cpu, CPU_amd64_regs + 120]
-    gret_nomem
+    gret
 .gadget amd64_movr32_15_4
     mov w8, w27
     str x8, [_cpu, CPU_amd64_regs + 120]
-    gret_nomem
+    gret
 .gadget amd64_movr32_15_5
     mov w8, w26
     str x8, [_cpu, CPU_amd64_regs + 120]
-    gret_nomem
+    gret
 .gadget amd64_movr32_15_6
     mov w8, w24
     str x8, [_cpu, CPU_amd64_regs + 120]
-    gret_nomem
+    gret
 .gadget amd64_movr32_15_7
     mov w8, w25
     str x8, [_cpu, CPU_amd64_regs + 120]
-    gret_nomem
+    gret
 .gadget amd64_movr64_0_0
     mov x20, x20
-    gret_nomem
+    gret
 .gadget amd64_movr64_0_1
     mov x20, x22
-    gret_nomem
+    gret
 .gadget amd64_movr64_0_2
     mov x20, x23
-    gret_nomem
+    gret
 .gadget amd64_movr64_0_3
     mov x20, x21
-    gret_nomem
+    gret
 .gadget amd64_movr64_0_4
     mov x20, x27
-    gret_nomem
+    gret
 .gadget amd64_movr64_0_5
     mov x20, x26
-    gret_nomem
+    gret
 .gadget amd64_movr64_0_6
     mov x20, x24
-    gret_nomem
+    gret
 .gadget amd64_movr64_0_7
     mov x20, x25
-    gret_nomem
+    gret
 .gadget amd64_movr64_0_8
     ldr x20, [_cpu, CPU_amd64_regs + 64]
-    gret_nomem
+    gret
 .gadget amd64_movr64_0_9
     ldr x20, [_cpu, CPU_amd64_regs + 72]
-    gret_nomem
+    gret
 .gadget amd64_movr64_0_10
     ldr x20, [_cpu, CPU_amd64_regs + 80]
-    gret_nomem
+    gret
 .gadget amd64_movr64_0_11
     ldr x20, [_cpu, CPU_amd64_regs + 88]
-    gret_nomem
+    gret
 .gadget amd64_movr64_0_12
     ldr x20, [_cpu, CPU_amd64_regs + 96]
-    gret_nomem
+    gret
 .gadget amd64_movr64_0_13
     ldr x20, [_cpu, CPU_amd64_regs + 104]
-    gret_nomem
+    gret
 .gadget amd64_movr64_0_14
     ldr x20, [_cpu, CPU_amd64_regs + 112]
-    gret_nomem
+    gret
 .gadget amd64_movr64_0_15
     ldr x20, [_cpu, CPU_amd64_regs + 120]
-    gret_nomem
+    gret
 .gadget amd64_movr64_1_0
     mov x22, x20
-    gret_nomem
+    gret
 .gadget amd64_movr64_1_1
     mov x22, x22
-    gret_nomem
+    gret
 .gadget amd64_movr64_1_2
     mov x22, x23
-    gret_nomem
+    gret
 .gadget amd64_movr64_1_3
     mov x22, x21
-    gret_nomem
+    gret
 .gadget amd64_movr64_1_4
     mov x22, x27
-    gret_nomem
+    gret
 .gadget amd64_movr64_1_5
     mov x22, x26
-    gret_nomem
+    gret
 .gadget amd64_movr64_1_6
     mov x22, x24
-    gret_nomem
+    gret
 .gadget amd64_movr64_1_7
     mov x22, x25
-    gret_nomem
+    gret
 .gadget amd64_movr64_1_8
     ldr x22, [_cpu, CPU_amd64_regs + 64]
-    gret_nomem
+    gret
 .gadget amd64_movr64_1_9
     ldr x22, [_cpu, CPU_amd64_regs + 72]
-    gret_nomem
+    gret
 .gadget amd64_movr64_1_10
     ldr x22, [_cpu, CPU_amd64_regs + 80]
-    gret_nomem
+    gret
 .gadget amd64_movr64_1_11
     ldr x22, [_cpu, CPU_amd64_regs + 88]
-    gret_nomem
+    gret
 .gadget amd64_movr64_1_12
     ldr x22, [_cpu, CPU_amd64_regs + 96]
-    gret_nomem
+    gret
 .gadget amd64_movr64_1_13
     ldr x22, [_cpu, CPU_amd64_regs + 104]
-    gret_nomem
+    gret
 .gadget amd64_movr64_1_14
     ldr x22, [_cpu, CPU_amd64_regs + 112]
-    gret_nomem
+    gret
 .gadget amd64_movr64_1_15
     ldr x22, [_cpu, CPU_amd64_regs + 120]
-    gret_nomem
+    gret
 .gadget amd64_movr64_2_0
     mov x23, x20
-    gret_nomem
+    gret
 .gadget amd64_movr64_2_1
     mov x23, x22
-    gret_nomem
+    gret
 .gadget amd64_movr64_2_2
     mov x23, x23
-    gret_nomem
+    gret
 .gadget amd64_movr64_2_3
     mov x23, x21
-    gret_nomem
+    gret
 .gadget amd64_movr64_2_4
     mov x23, x27
-    gret_nomem
+    gret
 .gadget amd64_movr64_2_5
     mov x23, x26
-    gret_nomem
+    gret
 .gadget amd64_movr64_2_6
     mov x23, x24
-    gret_nomem
+    gret
 .gadget amd64_movr64_2_7
     mov x23, x25
-    gret_nomem
+    gret
 .gadget amd64_movr64_2_8
     ldr x23, [_cpu, CPU_amd64_regs + 64]
-    gret_nomem
+    gret
 .gadget amd64_movr64_2_9
     ldr x23, [_cpu, CPU_amd64_regs + 72]
-    gret_nomem
+    gret
 .gadget amd64_movr64_2_10
     ldr x23, [_cpu, CPU_amd64_regs + 80]
-    gret_nomem
+    gret
 .gadget amd64_movr64_2_11
     ldr x23, [_cpu, CPU_amd64_regs + 88]
-    gret_nomem
+    gret
 .gadget amd64_movr64_2_12
     ldr x23, [_cpu, CPU_amd64_regs + 96]
-    gret_nomem
+    gret
 .gadget amd64_movr64_2_13
     ldr x23, [_cpu, CPU_amd64_regs + 104]
-    gret_nomem
+    gret
 .gadget amd64_movr64_2_14
     ldr x23, [_cpu, CPU_amd64_regs + 112]
-    gret_nomem
+    gret
 .gadget amd64_movr64_2_15
     ldr x23, [_cpu, CPU_amd64_regs + 120]
-    gret_nomem
+    gret
 .gadget amd64_movr64_3_0
     mov x21, x20
-    gret_nomem
+    gret
 .gadget amd64_movr64_3_1
     mov x21, x22
-    gret_nomem
+    gret
 .gadget amd64_movr64_3_2
     mov x21, x23
-    gret_nomem
+    gret
 .gadget amd64_movr64_3_3
     mov x21, x21
-    gret_nomem
+    gret
 .gadget amd64_movr64_3_4
     mov x21, x27
-    gret_nomem
+    gret
 .gadget amd64_movr64_3_5
     mov x21, x26
-    gret_nomem
+    gret
 .gadget amd64_movr64_3_6
     mov x21, x24
-    gret_nomem
+    gret
 .gadget amd64_movr64_3_7
     mov x21, x25
-    gret_nomem
+    gret
 .gadget amd64_movr64_3_8
     ldr x21, [_cpu, CPU_amd64_regs + 64]
-    gret_nomem
+    gret
 .gadget amd64_movr64_3_9
     ldr x21, [_cpu, CPU_amd64_regs + 72]
-    gret_nomem
+    gret
 .gadget amd64_movr64_3_10
     ldr x21, [_cpu, CPU_amd64_regs + 80]
-    gret_nomem
+    gret
 .gadget amd64_movr64_3_11
     ldr x21, [_cpu, CPU_amd64_regs + 88]
-    gret_nomem
+    gret
 .gadget amd64_movr64_3_12
     ldr x21, [_cpu, CPU_amd64_regs + 96]
-    gret_nomem
+    gret
 .gadget amd64_movr64_3_13
     ldr x21, [_cpu, CPU_amd64_regs + 104]
-    gret_nomem
+    gret
 .gadget amd64_movr64_3_14
     ldr x21, [_cpu, CPU_amd64_regs + 112]
-    gret_nomem
+    gret
 .gadget amd64_movr64_3_15
     ldr x21, [_cpu, CPU_amd64_regs + 120]
-    gret_nomem
+    gret
 .gadget amd64_movr64_4_0
     mov x27, x20
-    gret_nomem
+    gret
 .gadget amd64_movr64_4_1
     mov x27, x22
-    gret_nomem
+    gret
 .gadget amd64_movr64_4_2
     mov x27, x23
-    gret_nomem
+    gret
 .gadget amd64_movr64_4_3
     mov x27, x21
-    gret_nomem
+    gret
 .gadget amd64_movr64_4_4
     mov x27, x27
-    gret_nomem
+    gret
 .gadget amd64_movr64_4_5
     mov x27, x26
-    gret_nomem
+    gret
 .gadget amd64_movr64_4_6
     mov x27, x24
-    gret_nomem
+    gret
 .gadget amd64_movr64_4_7
     mov x27, x25
-    gret_nomem
+    gret
 .gadget amd64_movr64_4_8
     ldr x27, [_cpu, CPU_amd64_regs + 64]
-    gret_nomem
+    gret
 .gadget amd64_movr64_4_9
     ldr x27, [_cpu, CPU_amd64_regs + 72]
-    gret_nomem
+    gret
 .gadget amd64_movr64_4_10
     ldr x27, [_cpu, CPU_amd64_regs + 80]
-    gret_nomem
+    gret
 .gadget amd64_movr64_4_11
     ldr x27, [_cpu, CPU_amd64_regs + 88]
-    gret_nomem
+    gret
 .gadget amd64_movr64_4_12
     ldr x27, [_cpu, CPU_amd64_regs + 96]
-    gret_nomem
+    gret
 .gadget amd64_movr64_4_13
     ldr x27, [_cpu, CPU_amd64_regs + 104]
-    gret_nomem
+    gret
 .gadget amd64_movr64_4_14
     ldr x27, [_cpu, CPU_amd64_regs + 112]
-    gret_nomem
+    gret
 .gadget amd64_movr64_4_15
     ldr x27, [_cpu, CPU_amd64_regs + 120]
-    gret_nomem
+    gret
 .gadget amd64_movr64_5_0
     mov x26, x20
-    gret_nomem
+    gret
 .gadget amd64_movr64_5_1
     mov x26, x22
-    gret_nomem
+    gret
 .gadget amd64_movr64_5_2
     mov x26, x23
-    gret_nomem
+    gret
 .gadget amd64_movr64_5_3
     mov x26, x21
-    gret_nomem
+    gret
 .gadget amd64_movr64_5_4
     mov x26, x27
-    gret_nomem
+    gret
 .gadget amd64_movr64_5_5
     mov x26, x26
-    gret_nomem
+    gret
 .gadget amd64_movr64_5_6
     mov x26, x24
-    gret_nomem
+    gret
 .gadget amd64_movr64_5_7
     mov x26, x25
-    gret_nomem
+    gret
 .gadget amd64_movr64_5_8
     ldr x26, [_cpu, CPU_amd64_regs + 64]
-    gret_nomem
+    gret
 .gadget amd64_movr64_5_9
     ldr x26, [_cpu, CPU_amd64_regs + 72]
-    gret_nomem
+    gret
 .gadget amd64_movr64_5_10
     ldr x26, [_cpu, CPU_amd64_regs + 80]
-    gret_nomem
+    gret
 .gadget amd64_movr64_5_11
     ldr x26, [_cpu, CPU_amd64_regs + 88]
-    gret_nomem
+    gret
 .gadget amd64_movr64_5_12
     ldr x26, [_cpu, CPU_amd64_regs + 96]
-    gret_nomem
+    gret
 .gadget amd64_movr64_5_13
     ldr x26, [_cpu, CPU_amd64_regs + 104]
-    gret_nomem
+    gret
 .gadget amd64_movr64_5_14
     ldr x26, [_cpu, CPU_amd64_regs + 112]
-    gret_nomem
+    gret
 .gadget amd64_movr64_5_15
     ldr x26, [_cpu, CPU_amd64_regs + 120]
-    gret_nomem
+    gret
 .gadget amd64_movr64_6_0
     mov x24, x20
-    gret_nomem
+    gret
 .gadget amd64_movr64_6_1
     mov x24, x22
-    gret_nomem
+    gret
 .gadget amd64_movr64_6_2
     mov x24, x23
-    gret_nomem
+    gret
 .gadget amd64_movr64_6_3
     mov x24, x21
-    gret_nomem
+    gret
 .gadget amd64_movr64_6_4
     mov x24, x27
-    gret_nomem
+    gret
 .gadget amd64_movr64_6_5
     mov x24, x26
-    gret_nomem
+    gret
 .gadget amd64_movr64_6_6
     mov x24, x24
-    gret_nomem
+    gret
 .gadget amd64_movr64_6_7
     mov x24, x25
-    gret_nomem
+    gret
 .gadget amd64_movr64_6_8
     ldr x24, [_cpu, CPU_amd64_regs + 64]
-    gret_nomem
+    gret
 .gadget amd64_movr64_6_9
     ldr x24, [_cpu, CPU_amd64_regs + 72]
-    gret_nomem
+    gret
 .gadget amd64_movr64_6_10
     ldr x24, [_cpu, CPU_amd64_regs + 80]
-    gret_nomem
+    gret
 .gadget amd64_movr64_6_11
     ldr x24, [_cpu, CPU_amd64_regs + 88]
-    gret_nomem
+    gret
 .gadget amd64_movr64_6_12
     ldr x24, [_cpu, CPU_amd64_regs + 96]
-    gret_nomem
+    gret
 .gadget amd64_movr64_6_13
     ldr x24, [_cpu, CPU_amd64_regs + 104]
-    gret_nomem
+    gret
 .gadget amd64_movr64_6_14
     ldr x24, [_cpu, CPU_amd64_regs + 112]
-    gret_nomem
+    gret
 .gadget amd64_movr64_6_15
     ldr x24, [_cpu, CPU_amd64_regs + 120]
-    gret_nomem
+    gret
 .gadget amd64_movr64_7_0
     mov x25, x20
-    gret_nomem
+    gret
 .gadget amd64_movr64_7_1
     mov x25, x22
-    gret_nomem
+    gret
 .gadget amd64_movr64_7_2
     mov x25, x23
-    gret_nomem
+    gret
 .gadget amd64_movr64_7_3
     mov x25, x21
-    gret_nomem
+    gret
 .gadget amd64_movr64_7_4
     mov x25, x27
-    gret_nomem
+    gret
 .gadget amd64_movr64_7_5
     mov x25, x26
-    gret_nomem
+    gret
 .gadget amd64_movr64_7_6
     mov x25, x24
-    gret_nomem
+    gret
 .gadget amd64_movr64_7_7
     mov x25, x25
-    gret_nomem
+    gret
 .gadget amd64_movr64_7_8
     ldr x25, [_cpu, CPU_amd64_regs + 64]
-    gret_nomem
+    gret
 .gadget amd64_movr64_7_9
     ldr x25, [_cpu, CPU_amd64_regs + 72]
-    gret_nomem
+    gret
 .gadget amd64_movr64_7_10
     ldr x25, [_cpu, CPU_amd64_regs + 80]
-    gret_nomem
+    gret
 .gadget amd64_movr64_7_11
     ldr x25, [_cpu, CPU_amd64_regs + 88]
-    gret_nomem
+    gret
 .gadget amd64_movr64_7_12
     ldr x25, [_cpu, CPU_amd64_regs + 96]
-    gret_nomem
+    gret
 .gadget amd64_movr64_7_13
     ldr x25, [_cpu, CPU_amd64_regs + 104]
-    gret_nomem
+    gret
 .gadget amd64_movr64_7_14
     ldr x25, [_cpu, CPU_amd64_regs + 112]
-    gret_nomem
+    gret
 .gadget amd64_movr64_7_15
     ldr x25, [_cpu, CPU_amd64_regs + 120]
-    gret_nomem
+    gret
 .gadget amd64_movr64_8_0
     str x20, [_cpu, CPU_amd64_regs + 64]
-    gret_nomem
+    gret
 .gadget amd64_movr64_8_1
     str x22, [_cpu, CPU_amd64_regs + 64]
-    gret_nomem
+    gret
 .gadget amd64_movr64_8_2
     str x23, [_cpu, CPU_amd64_regs + 64]
-    gret_nomem
+    gret
 .gadget amd64_movr64_8_3
     str x21, [_cpu, CPU_amd64_regs + 64]
-    gret_nomem
+    gret
 .gadget amd64_movr64_8_4
     str x27, [_cpu, CPU_amd64_regs + 64]
-    gret_nomem
+    gret
 .gadget amd64_movr64_8_5
     str x26, [_cpu, CPU_amd64_regs + 64]
-    gret_nomem
+    gret
 .gadget amd64_movr64_8_6
     str x24, [_cpu, CPU_amd64_regs + 64]
-    gret_nomem
+    gret
 .gadget amd64_movr64_8_7
     str x25, [_cpu, CPU_amd64_regs + 64]
-    gret_nomem
+    gret
 .gadget amd64_movr64_9_0
     str x20, [_cpu, CPU_amd64_regs + 72]
-    gret_nomem
+    gret
 .gadget amd64_movr64_9_1
     str x22, [_cpu, CPU_amd64_regs + 72]
-    gret_nomem
+    gret
 .gadget amd64_movr64_9_2
     str x23, [_cpu, CPU_amd64_regs + 72]
-    gret_nomem
+    gret
 .gadget amd64_movr64_9_3
     str x21, [_cpu, CPU_amd64_regs + 72]
-    gret_nomem
+    gret
 .gadget amd64_movr64_9_4
     str x27, [_cpu, CPU_amd64_regs + 72]
-    gret_nomem
+    gret
 .gadget amd64_movr64_9_5
     str x26, [_cpu, CPU_amd64_regs + 72]
-    gret_nomem
+    gret
 .gadget amd64_movr64_9_6
     str x24, [_cpu, CPU_amd64_regs + 72]
-    gret_nomem
+    gret
 .gadget amd64_movr64_9_7
     str x25, [_cpu, CPU_amd64_regs + 72]
-    gret_nomem
+    gret
 .gadget amd64_movr64_10_0
     str x20, [_cpu, CPU_amd64_regs + 80]
-    gret_nomem
+    gret
 .gadget amd64_movr64_10_1
     str x22, [_cpu, CPU_amd64_regs + 80]
-    gret_nomem
+    gret
 .gadget amd64_movr64_10_2
     str x23, [_cpu, CPU_amd64_regs + 80]
-    gret_nomem
+    gret
 .gadget amd64_movr64_10_3
     str x21, [_cpu, CPU_amd64_regs + 80]
-    gret_nomem
+    gret
 .gadget amd64_movr64_10_4
     str x27, [_cpu, CPU_amd64_regs + 80]
-    gret_nomem
+    gret
 .gadget amd64_movr64_10_5
     str x26, [_cpu, CPU_amd64_regs + 80]
-    gret_nomem
+    gret
 .gadget amd64_movr64_10_6
     str x24, [_cpu, CPU_amd64_regs + 80]
-    gret_nomem
+    gret
 .gadget amd64_movr64_10_7
     str x25, [_cpu, CPU_amd64_regs + 80]
-    gret_nomem
+    gret
 .gadget amd64_movr64_11_0
     str x20, [_cpu, CPU_amd64_regs + 88]
-    gret_nomem
+    gret
 .gadget amd64_movr64_11_1
     str x22, [_cpu, CPU_amd64_regs + 88]
-    gret_nomem
+    gret
 .gadget amd64_movr64_11_2
     str x23, [_cpu, CPU_amd64_regs + 88]
-    gret_nomem
+    gret
 .gadget amd64_movr64_11_3
     str x21, [_cpu, CPU_amd64_regs + 88]
-    gret_nomem
+    gret
 .gadget amd64_movr64_11_4
     str x27, [_cpu, CPU_amd64_regs + 88]
-    gret_nomem
+    gret
 .gadget amd64_movr64_11_5
     str x26, [_cpu, CPU_amd64_regs + 88]
-    gret_nomem
+    gret
 .gadget amd64_movr64_11_6
     str x24, [_cpu, CPU_amd64_regs + 88]
-    gret_nomem
+    gret
 .gadget amd64_movr64_11_7
     str x25, [_cpu, CPU_amd64_regs + 88]
-    gret_nomem
+    gret
 .gadget amd64_movr64_12_0
     str x20, [_cpu, CPU_amd64_regs + 96]
-    gret_nomem
+    gret
 .gadget amd64_movr64_12_1
     str x22, [_cpu, CPU_amd64_regs + 96]
-    gret_nomem
+    gret
 .gadget amd64_movr64_12_2
     str x23, [_cpu, CPU_amd64_regs + 96]
-    gret_nomem
+    gret
 .gadget amd64_movr64_12_3
     str x21, [_cpu, CPU_amd64_regs + 96]
-    gret_nomem
+    gret
 .gadget amd64_movr64_12_4
     str x27, [_cpu, CPU_amd64_regs + 96]
-    gret_nomem
+    gret
 .gadget amd64_movr64_12_5
     str x26, [_cpu, CPU_amd64_regs + 96]
-    gret_nomem
+    gret
 .gadget amd64_movr64_12_6
     str x24, [_cpu, CPU_amd64_regs + 96]
-    gret_nomem
+    gret
 .gadget amd64_movr64_12_7
     str x25, [_cpu, CPU_amd64_regs + 96]
-    gret_nomem
+    gret
 .gadget amd64_movr64_13_0
     str x20, [_cpu, CPU_amd64_regs + 104]
-    gret_nomem
+    gret
 .gadget amd64_movr64_13_1
     str x22, [_cpu, CPU_amd64_regs + 104]
-    gret_nomem
+    gret
 .gadget amd64_movr64_13_2
     str x23, [_cpu, CPU_amd64_regs + 104]
-    gret_nomem
+    gret
 .gadget amd64_movr64_13_3
     str x21, [_cpu, CPU_amd64_regs + 104]
-    gret_nomem
+    gret
 .gadget amd64_movr64_13_4
     str x27, [_cpu, CPU_amd64_regs + 104]
-    gret_nomem
+    gret
 .gadget amd64_movr64_13_5
     str x26, [_cpu, CPU_amd64_regs + 104]
-    gret_nomem
+    gret
 .gadget amd64_movr64_13_6
     str x24, [_cpu, CPU_amd64_regs + 104]
-    gret_nomem
+    gret
 .gadget amd64_movr64_13_7
     str x25, [_cpu, CPU_amd64_regs + 104]
-    gret_nomem
+    gret
 .gadget amd64_movr64_14_0
     str x20, [_cpu, CPU_amd64_regs + 112]
-    gret_nomem
+    gret
 .gadget amd64_movr64_14_1
     str x22, [_cpu, CPU_amd64_regs + 112]
-    gret_nomem
+    gret
 .gadget amd64_movr64_14_2
     str x23, [_cpu, CPU_amd64_regs + 112]
-    gret_nomem
+    gret
 .gadget amd64_movr64_14_3
     str x21, [_cpu, CPU_amd64_regs + 112]
-    gret_nomem
+    gret
 .gadget amd64_movr64_14_4
     str x27, [_cpu, CPU_amd64_regs + 112]
-    gret_nomem
+    gret
 .gadget amd64_movr64_14_5
     str x26, [_cpu, CPU_amd64_regs + 112]
-    gret_nomem
+    gret
 .gadget amd64_movr64_14_6
     str x24, [_cpu, CPU_amd64_regs + 112]
-    gret_nomem
+    gret
 .gadget amd64_movr64_14_7
     str x25, [_cpu, CPU_amd64_regs + 112]
-    gret_nomem
+    gret
 .gadget amd64_movr64_15_0
     str x20, [_cpu, CPU_amd64_regs + 120]
-    gret_nomem
+    gret
 .gadget amd64_movr64_15_1
     str x22, [_cpu, CPU_amd64_regs + 120]
-    gret_nomem
+    gret
 .gadget amd64_movr64_15_2
     str x23, [_cpu, CPU_amd64_regs + 120]
-    gret_nomem
+    gret
 .gadget amd64_movr64_15_3
     str x21, [_cpu, CPU_amd64_regs + 120]
-    gret_nomem
+    gret
 .gadget amd64_movr64_15_4
     str x27, [_cpu, CPU_amd64_regs + 120]
-    gret_nomem
+    gret
 .gadget amd64_movr64_15_5
     str x26, [_cpu, CPU_amd64_regs + 120]
-    gret_nomem
+    gret
 .gadget amd64_movr64_15_6
     str x24, [_cpu, CPU_amd64_regs + 120]
-    gret_nomem
+    gret
 .gadget amd64_movr64_15_7
     str x25, [_cpu, CPU_amd64_regs + 120]
-    gret_nomem
+    gret
 .pushsection_rodata
 .global.name amd64_movr_gadgets
     .quad NAME(gadget_amd64_movr32_0_0)
@@ -1785,7 +1785,7 @@
     str x26, [x8, 40]
     str x24, [x8, 48]
     str x25, [x8, 56]
-    gret_nomem
+    gret
 
 # A register-form x87 instruction: [opcode<<8|modrm][next rip][start rip].
 # amd64_jit_x87_reg touches only cpu->fp and the flags in struct cpu_state
@@ -8218,7 +8218,7 @@ _gadget_array_start fused_test8
 8101:
     ldr _ip, [_ip, \toff]
 8102:
-    amd64_chain_ip 1
+    amd64_chain_ip
 .endm
 
 .macro amd64_fused_cmp_ri cond
@@ -9933,7 +9933,7 @@ amd64_v_gen_i2f cvtsi2ss, 1
     ldr \R\()10, [_cpu, CPU_amd64_regs + 8 * \sr]
     amd64_r16_op_into \op, \R, \d, \hd, \R\()10
     .endif
-    gret_nomem
+    gret
 .else
 .gadget amd64_arr_\op\()\s\()_\d\()_\sr
     amd64_r16_get \R, 13, \d, \hd
@@ -9947,7 +9947,7 @@ amd64_v_gen_i2f cvtsi2ss, 1
     cset w16, vs
     amd64_cached_set_addsub_flags \bits
     amd64_r16_put 15, \d, \hd
-    gret_nomem
+    gret
 .endif
 .endm
 # or/and/xor reg,reg
@@ -9960,7 +9960,7 @@ amd64_v_gen_i2f cvtsi2ss, 1
     ldr \R\()10, [_cpu, CPU_amd64_regs + 8 * \sr]
     amd64_r16_op_into \op, \R, \d, \hd, \R\()10
     .endif
-    gret_nomem
+    gret
 .else
 .gadget amd64_lrr_\op\()\s\()_\d\()_\sr
     .if \d < 8
@@ -9982,7 +9982,7 @@ amd64_v_gen_i2f cvtsi2ss, 1
     amd64_r16_put 15, \d, \hd
     mov x11, \s
     amd64_cached_set_logic_flags x15, x11
-    gret_nomem
+    gret
 .endif
 .endm
 # add/sub reg,imm
@@ -9991,7 +9991,7 @@ amd64_v_gen_i2f cvtsi2ss, 1
 .gadget amd64_ari_\op\()\s\()_\d\()_nf
     ldr x8, [_ip]
     amd64_r16_op_into \op, \R, \d, \hd, \R\()8
-    gret_nomem 1
+    gret 1
 .else
 .gadget amd64_ari_\op\()\s\()_\d
     amd64_r16_get \R, 13, \d, \hd
@@ -10008,7 +10008,7 @@ amd64_v_gen_i2f cvtsi2ss, 1
     cset w16, vs
     amd64_cached_set_addsub_flags \bits
     amd64_r16_put 15, \d, \hd
-    gret_nomem 1
+    gret 1
 .endif
 .endm
 # or/and/xor reg,imm
@@ -10017,7 +10017,7 @@ amd64_v_gen_i2f cvtsi2ss, 1
 .gadget amd64_lri_\op\()\s\()_\d\()_nf
     ldr x8, [_ip]
     amd64_r16_op_into \op, \R, \d, \hd, \R\()8
-    gret_nomem 1
+    gret 1
 .else
 .gadget amd64_lri_\op\()\s\()_\d
     ldr x13, [_ip]
@@ -10030,7 +10030,7 @@ amd64_v_gen_i2f cvtsi2ss, 1
     amd64_r16_put 15, \d, \hd
     mov x11, \s
     amd64_cached_set_logic_flags x15, x11
-    gret_nomem 1
+    gret 1
 .endif
 .endm
 
@@ -10675,9 +10675,8 @@ amd64_r16_ri amd64_spp16, pop, 64, x, 63, 0
 # validated against block->addr and is_jetsam, exactly as the arm64 guest's
 # ret_cache_dispatch does -- by the same chain path a jmp takes (poke check,
 # chain budget). On a miss, write the register cache back and leave to C with
-# rip = x10. Ends the gadget; uses label 8. nomem=1 when the gadget read no
-# guest memory (amd64_chain_ip).
-.macro amd64_rc_dispatch nomem=0
+# rip = x10. Ends the gadget; uses label 8.
+.macro amd64_rc_dispatch
     eor x12, x10, x10, lsr #12
     ubfx x12, x12, #1, #12
     mov x13, LOCAL_ret_cache
@@ -10690,7 +10689,7 @@ amd64_r16_ri amd64_spp16, pop, 64, x, 63, 0
     ldurb w14, [x13, #(JIT_BLOCK_is_jetsam - JIT_BLOCK_code)]
     cbnz w14, 8f
     mov _ip, x13
-    amd64_chain_ip \nomem
+    amd64_chain_ip
 8:  amd64_spill_low8
     str x10, [_cpu, CPU_amd64_rip]
     str w10, [_cpu, CPU_eip]
@@ -10831,7 +10830,7 @@ amd64_r16_ri amd64_spp16, pop, 64, x, 63, 0
     amd64_svwrite_done 8, scallr_\r
     sub x27, x27, 8
 .endif
-    amd64_rc_dispatch 1
+    amd64_rc_dispatch
 7:  amd64_spill_low8
     b amd64_branch_noncanonical
 .ifc \op, call
@@ -11216,7 +11215,7 @@ NAME(amd64_specmem_end):
     .else
     amd64_r16_op_into sub, \R, \d, \hd, #1
     .endif
-    gret_nomem
+    gret
 .else
 .gadget amd64_idr_\op\()\s\()_\d
     amd64_r16_get \R, 13, \d, \hd
@@ -11230,7 +11229,7 @@ NAME(amd64_specmem_end):
     mov x10, 1
     amd64_cached_set_addsub_flags \bits
     amd64_r16_put 15, \d, \hd
-    gret_nomem
+    gret
 .endif
 .endm
 amd64_r16_family amd64_r16_ri, amd64_idr16, inc
@@ -11256,7 +11255,7 @@ amd64_r16_family amd64_r16_ri, amd64_idr16, dec
 .gadget amd64_shi_\op\()\s\()_\d\()_nf
     ldr x10, [_ip]
     amd64_r16_op_into \op, \R, \d, \hd, \R\()10
-    gret_nomem 1
+    gret 1
 .else
 .gadget amd64_shi_\op\()\s\()_\d
     ldr x10, [_ip]
@@ -11283,7 +11282,7 @@ amd64_r16_family amd64_r16_ri, amd64_idr16, dec
     csel w16, w16, wzr, eq
     amd64_r16_put 15, \d, \hd
     amd64_cached_set_shift_flags \bits
-    gret_nomem 1
+    gret 1
 .endif
 .endm
 amd64_r16_family amd64_r16_ri, amd64_shi16, shl
@@ -11331,7 +11330,7 @@ amd64_r16_family amd64_r16_ri, amd64_shi16, sar
     lsl x3, x8, \sc
     .endif
     .endif
-    gret_nomem
+    gret
 .endm
 .macro amd64_ea_scales op, s, R, bits, nf, b, hb, i, hi
     amd64_ea1 \b, \hb, \i, \hi, 0
@@ -11346,10 +11345,10 @@ amd64_r16_srcs amd64_ea_scales, 0, 0, x, 0, 0, 16, 0
 # gadget after it adds the disp as for an indexed operand (base 17).
 .gadget amd64_ea_fs
     ldr x3, [_cpu, CPU_tls_ptr]
-    gret_nomem
+    gret
 .gadget amd64_ea_gs
     ldr x3, [_cpu, CPU_amd64_gs_base]
-    gret_nomem
+    gret
 
 # lea r32/r64 per register: amd64_lea<size>_<dst>_<base>: dst = base + disp;
 # amd64_movi<size>_<dst>: dst = the operand (a rip-relative lea, worked out
@@ -11366,7 +11365,7 @@ amd64_r16_srcs amd64_ea_scales, 0, 0, x, 0, 0, 16, 0
     ldr \R\()8, [_ip]
     str x8, [_cpu, CPU_amd64_regs + 8 * \d]
     .endif
-    gret_nomem 1
+    gret 1
     .exitm
     .endif
     .if \b == 17
@@ -11395,7 +11394,7 @@ amd64_r16_srcs amd64_ea_scales, 0, 0, x, 0, 0, 16, 0
     str x13, [_cpu, CPU_amd64_regs + 8 * \d]
     .endif
     .endif
-    gret_nomem 1
+    gret 1
 .endm
 amd64_r16_rr17 amd64_lea16, 0, 32, w, 0, 0
 amd64_r16_rr17 amd64_lea16, 0, 64, x, 0, 0
@@ -11448,7 +11447,7 @@ amd64_r16_rr17 amd64_lea16, 0, 64, x, 0, 0
     cset w14, cc
     cset w16, vs
     amd64_cached_set_addsub_flags \bits
-    gret_nomem
+    gret
 .endm
 .macro amd64_cri16 op, s, R, bits, nf, d, hd
 .gadget amd64_cri\s\()_\d
@@ -11461,7 +11460,7 @@ amd64_r16_rr17 amd64_lea16, 0, 64, x, 0, 0
     cset w14, cc
     cset w16, vs
     amd64_cached_set_addsub_flags \bits
-    gret_nomem 1
+    gret 1
 .endm
 amd64_r16_rr amd64_crr16, cmp, 32, w, 31, 0
 amd64_r16_rr amd64_crr16, cmp, 64, x, 63, 0
@@ -11543,9 +11542,9 @@ amd64_r16_ri amd64_cri16, cmp, 64, x, 63, 0
     str w17, [_cpu, CPU_eflags]
     .endif
 .ifc \op, rr
-    gret_nomem
+    gret
 .else
-    gret_nomem 1
+    gret 1
 .endif
 .endm
 amd64_r16_family amd64_r16_rr, amd64_im16, rr
@@ -11688,7 +11687,7 @@ amd64_r16_family amd64_r16_rr, amd64_im16, ri
     mvn \R\()13, \R\()13
     str x13, [_cpu, CPU_amd64_regs + 8 * \d]
     .endif
-    gret_nomem
+    gret
 .else
 .if \nf
 .gadget amd64_neg\s\()_\d\()_nf
@@ -11699,7 +11698,7 @@ amd64_r16_family amd64_r16_rr, amd64_im16, ri
     neg \R\()13, \R\()13
     str x13, [_cpu, CPU_amd64_regs + 8 * \d]
     .endif
-    gret_nomem
+    gret
 .else
 .gadget amd64_neg\s\()_\d
     amd64_r16_get \R, 10, \d, \hd
@@ -11709,7 +11708,7 @@ amd64_r16_family amd64_r16_rr, amd64_im16, ri
     cset w16, vs
     amd64_cached_set_addsub_flags \bits
     amd64_r16_put 15, \d, \hd
-    gret_nomem
+    gret
 .endif
 .endif
 .endm
@@ -11736,7 +11735,7 @@ amd64_r16_family amd64_r16_ri, amd64_nn16, neg
     .endif
     mov x11, \s
     amd64_cached_set_logic_flags x15, x11
-    gret_nomem
+    gret
 .endm
 amd64_r16_rr amd64_tst16, test, 32, w, 31, 0
 amd64_r16_rr amd64_tst16, test, 64, x, 63, 0
@@ -11793,7 +11792,7 @@ amd64_r16_rr amd64_tst16, test, 64, x, 63, 0
 # amd64_mx_<kind>_<dst>_<src>, any of the sixteen. Kinds: zb, zw (zero-extend
 # a byte/word; the 32- and 64-bit results are the same), sb32, sb64, sw32,
 # sw64 (sign-extend), and zbh, sbh32, sbh64 for ah..bh (bits 8-15 of rax..rbx,
-# src 0-3). No flags, gret_nomem. Table amd64_mx_gadgets[(kind * 16 + dst) *
+# src 0-3). No flags. Table amd64_mx_gadgets[(kind * 16 + dst) *
 # 16 + src] in that kind order, the high-byte kinds' src 4-15 empty.
 .macro amd64_mx_op kind, rd, wd, xs, ws
     .ifc \kind, zb
@@ -11842,7 +11841,7 @@ amd64_r16_rr amd64_tst16, test, 64, x, 63, 0
     str x13, [_cpu, CPU_amd64_regs + 8 * \d]
     .endif
     .endif
-    gret_nomem
+    gret
 .endm
 .macro amd64_mxh_srcs op, s, R, bits, nf, d, hd
     amd64_mx16 \op, \s, \R, \bits, \nf, \d, \hd, 0, 20
