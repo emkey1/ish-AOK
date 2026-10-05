@@ -36,6 +36,166 @@
 
 .text
 
+// ---- host atomics in the gadgets themselves ----
+// Atomics are naturally aligned (a misaligned one is SIGBUS/BUS_ADRALN,
+// INT_ALIGN), so one resolved page
+// covers the access, and the host's own exclusives do the atomic part:
+// ldaxr/stlxr loops -- ARMv8.0, so A10X hosts run them -- with nothing but
+// register work between the pair.
+
+// x7 = the guest address of an atomic of x0 bytes (its alignment too) ->
+// x7 = a writable host pointer and x27 = 0; or x27 = INT_ALIGN (misaligned)
+// or INT_PF (unmapped, read-only, ...), the fault recorded in cpu_state.
+// Clobbers x9-x11; a miss or a write the mmu wants revalidated takes
+// tlb_write_ptr_slow, as the scalar stores do.
+a64_atomic_wptr:
+    sub x9, x0, #1
+    tst x7, x9
+    b.ne 8f
+    ldr x10, [_tlb, #(-TLB_entries+TLB_mmu)]
+    ldr x9, [_tlb, #(-TLB_entries+TLB_mem_changes)]
+    ldr x11, [x10, #MMU_changes]
+    cmp x9, x11
+    b.ne 2f
+    ldrb w10, [x10, #MMU_requires_write_revalidate]
+    cbnz w10, 2f
+    and x9, x7, #0xfffffffffffff000
+    ubfx x10, x7, #12, #10
+    eor x10, x10, x7, lsr #22
+    and x10, x10, #(1 << TLB_BITS) - 1
+    mov w11, #TLB_ENTRY_SIZE
+    madd x10, x10, x11, _tlb
+    ldr x11, [x10, #TLB_ENTRY_page_if_writable]
+    cmp x9, x11
+    b.ne 2f
+    str x9, [_tlb, #(-TLB_entries+TLB_dirty_page)]
+    ldr x11, [x10, #TLB_ENTRY_data_minus_addr]
+    add x7, x11, x7
+    mov x27, #0
+    ret
+2:  save_c
+    sub x0, _tlb, #TLB_entries     // (x2 read before it is written)
+    mov x1, x7
+    bl NAME(tlb_write_ptr_slow)
+    mov x27, x0
+    restore_c
+    cbz x27, 9f
+    mov x7, x27
+    mov x27, #0
+    ret
+9:  ldr x9, [_tlb, #(-TLB_entries+TLB_segfault_addr)]
+    str x9, [_cpu, #CPU_segfault_addr]
+    mov w9, #1
+    strb w9, [_cpu, #CPU_segfault_was_write]
+    mov x27, #INT_PF
+    ret
+8:  str x7, [_cpu, #CPU_segfault_addr]
+    mov w9, #1
+    strb w9, [_cpu, #CPU_segfault_was_write]
+    mov x27, #INT_ALIGN
+    ret
+// the same for a load (LDXP: a read-only page will do)
+a64_atomic_rptr:
+    sub x9, x0, #1
+    tst x7, x9
+    b.ne 8f
+    and x9, x7, #0xfffffffffffff000
+    ubfx x10, x7, #12, #10
+    eor x10, x10, x7, lsr #22
+    and x10, x10, #(1 << TLB_BITS) - 1
+    mov w11, #TLB_ENTRY_SIZE
+    madd x10, x10, x11, _tlb
+    ldr x11, [x10, #TLB_ENTRY_page]
+    cmp x9, x11
+    b.ne 2f
+    ldr x11, [x10, #TLB_ENTRY_data_minus_addr]
+    add x7, x11, x7
+    mov x27, #0
+    ret
+2:  save_c
+    sub x0, _tlb, #TLB_entries
+    mov x1, x7
+    mov x2, #MEM_READ
+    bl NAME(tlb_handle_miss)
+    mov x27, x0
+    restore_c
+    cbz x27, 9f
+    mov x7, x27
+    mov x27, #0
+    ret
+9:  ldr x9, [_tlb, #(-TLB_entries+TLB_segfault_addr)]
+    str x9, [_cpu, #CPU_segfault_addr]
+    strb wzr, [_cpu, #CPU_segfault_was_write]
+    mov x27, #INT_PF
+    ret
+8:  str x7, [_cpu, #CPU_segfault_addr]
+    strb wzr, [_cpu, #CPU_segfault_was_write]
+    mov x27, #INT_ALIGN
+    ret
+
+// compare-and-swap of 1 << \sizelog bytes at host x7: expected x24,
+// desired x25 -> x8 = the value seen (zero-extended), x9 = 1 if stored
+.macro host_cas sizelog
+.if \sizelog == 0
+    uxtb w10, w24
+.elseif \sizelog == 1
+    uxth w10, w24
+.elseif \sizelog == 2
+    mov w10, w24
+.else
+    mov x10, x24
+.endif
+71:
+.if \sizelog == 0
+    ldaxrb w8, [x7]
+    cmp w8, w10
+.elseif \sizelog == 1
+    ldaxrh w8, [x7]
+    cmp w8, w10
+.elseif \sizelog == 2
+    ldaxr w8, [x7]
+    cmp w8, w10
+.else
+    ldaxr x8, [x7]
+    cmp x8, x10
+.endif
+    b.ne 72f
+.if \sizelog == 0
+    stlxrb w9, w25, [x7]
+.elseif \sizelog == 1
+    stlxrh w9, w25, [x7]
+.elseif \sizelog == 2
+    stlxr w9, w25, [x7]
+.else
+    stlxr w9, x25, [x7]
+.endif
+    cbnz w9, 71b
+    mov x9, #1
+    b 73f
+72: clrex
+    mov x9, #0
+73:
+.endm
+
+// 16-byte compare-and-swap at host x7: expected x24:x25, desired x26:x12
+// (lo:hi) -> x8:x10 the pair seen, x9 = 1 if stored. A pair is read
+// atomically only by a store-exclusive that succeeds, so a mismatch
+// stores back what it read.
+.macro host_cas128
+71: ldaxp x8, x10, [x7]
+    cmp x8, x24
+    ccmp x10, x25, #0, eq
+    b.ne 72f
+    stlxp w9, x26, x12, [x7]
+    cbnz w9, 71b
+    mov x9, #1
+    b 73f
+72: stlxp w9, x8, x10, [x7]
+    cbnz w9, 71b
+    mov x9, #0
+73:
+.endm
+
 // LDXR: load, then arm the monitor with the address and observed value.
 .macro ldxr_gadget name, bits, ldinsn, reg
 .gadget \name
@@ -75,7 +235,7 @@
 // interpreter does).
 // STXR: host-atomic store-conditional. Fails fast (status 1) if the
 // monitor isn't armed for this guest address; otherwise attempts a host
-// CAS(addr: excl_val -> Rt) via arm64_cas (emu/tlb.c). A won CAS is
+// CAS(addr: excl_val -> Rt) (host_cas). A won CAS is
 // STXR success (status 0); a lost CAS (another agent changed memory)
 // is failure, so the guest LL/SC loop retries. Replaces the old
 // load-compare-store, which raced (two threads could both pass the
@@ -111,24 +271,12 @@
     add x10, x10, x20, lsl #3
     ldr x25, [x10]
 3:
-    mov x26, #(1 << \sizelog)      // size_bytes
-    sub sp, sp, #16                // [sp]=old_out, [sp+8]=swapped
-    save_c
-    mov x3, x26
-    mov x4, x24
-    mov x5, x25
-    add x6, sp, #0xa0
-    add x7, sp, #0xa8
-    mov x0, x1
-    sub x1, x2, #TLB_entries
-    mov x2, x21
-    bl NAME(arm64_cas)
-    mov x27, x0                    // result (0 / INT_PF)
-    restore_c
-    ldr w9, [sp, #8]               // swapped
-    add sp, sp, #16
+    mov x7, x21
+    mov x0, #(1 << \sizelog)
+    bl a64_atomic_wptr
     cbnz x27, stxr_pf_\name
-    eor x11, x9, #1                // swapped=1 -> status 0 (success); 0 -> 1
+    host_cas \sizelog
+    eor x11, x9, #1                // stored -> status 0 (success); not -> 1
     b stxr_status_\name
 stxr_fail_\name:
     mov x11, #1
@@ -157,7 +305,7 @@ stxr_gadget stxr16, 1
 stxr_gadget stxr32, 2
 stxr_gadget stxr64, 3
 
-// CAS: host-atomic compare-and-swap via arm64_cas. Rs always receives the
+// CAS: host-atomic compare-and-swap (host_cas). Rs always receives the
 // observed old value (zero-extended). Was load-compare-store (same race
 // as STXR). [gadget][rt | rn<<8 | rs<<16][orig_ip]
 .macro cas_gadget name, sizelog
@@ -191,23 +339,11 @@ stxr_gadget stxr64, 3
     add x10, x10, x20, lsl #3
     ldr x25, [x10]
 4:
-    mov x26, #(1 << \sizelog)
-    sub sp, sp, #16
-    save_c
-    mov x3, x26
-    mov x4, x24
-    mov x5, x25
-    add x6, sp, #0xa0       // &old_out
-    add x7, sp, #0xa8       // &swapped (unused)
-    mov x0, x1
-    sub x1, x2, #TLB_entries
-    mov x2, x21
-    bl NAME(arm64_cas)
-    mov x27, x0
-    restore_c
-    ldr x8, [sp]           // observed old value
-    add sp, sp, #16
+    mov x7, x21
+    mov x0, #(1 << \sizelog)
+    bl a64_atomic_wptr
     cbnz x27, cas_pf_\name
+    host_cas \sizelog
     cmp x23, #31           // Rs=31 discards
     b.eq cas_done_\name
     add x9, _cpu, #CPU_x0
@@ -236,11 +372,83 @@ cas_gadget cas64, 3
     str x8, [_cpu, #CPU_excl_addr]
     gret
 
+// one LSE read-modify-write of \sz bytes at host x7, operand x25, op x24
+// (0 add 1 clr 2 eor 3 set 4 smax 5 smin 6 umax 7 umin 8 swp), the old
+// value (zero-extended) in x8
+.macro rmw_loop ldx, stx, r, sz
+.if \sz == 1
+    sxtb x13, w25
+    uxtb w14, w25
+.elseif \sz == 2
+    sxth x13, w25
+    uxth w14, w25
+.elseif \sz == 4
+    sxtw x13, w25
+    mov w14, w25
+.else
+    mov x13, x25
+    mov x14, x25
+.endif
+71: \ldx \r\()8, [x7]
+    adr x12, 70f
+    add x12, x12, x24, lsl #3
+    br x12
+70: add x10, x8, x25
+    b 79f
+    bic x10, x8, x25
+    b 79f
+    eor x10, x8, x25
+    b 79f
+    orr x10, x8, x25
+    b 79f
+    b 74f
+    nop
+    b 75f
+    nop
+    b 76f
+    nop
+    b 77f
+    nop
+    mov x10, x25
+    b 79f
+74:
+.if \sz == 1
+    sxtb x11, w8
+.elseif \sz == 2
+    sxth x11, w8
+.elseif \sz == 4
+    sxtw x11, w8
+.else
+    mov x11, x8
+.endif
+    cmp x11, x13
+    csel x10, x8, x25, gt
+    b 79f
+75:
+.if \sz == 1
+    sxtb x11, w8
+.elseif \sz == 2
+    sxth x11, w8
+.elseif \sz == 4
+    sxtw x11, w8
+.else
+    mov x11, x8
+.endif
+    cmp x11, x13
+    csel x10, x8, x25, lt
+    b 79f
+76: cmp x8, x14
+    csel x10, x8, x25, hi
+    b 79f
+77: cmp x8, x14
+    csel x10, x8, x25, lo
+79: \stx w9, \r\()10, [x7]
+    cbnz w9, 71b
+.endm
+
 // LSE atomic RMW (LDADD/LDCLR/LDEOR/LDSET/LDSMAX/LDSMIN/LDUMAX/LDUMIN
-// and SWP), via the arm64_lse_rmw C helper (emu/tlb.c) for correct
-// width/signedness handling. Same shape as simd.S's ld1st1_multi. The
-// operand comes from Rs (31 = XZR = 0), the old value is written to Rt
-// (31 = discard). Not host-atomic — matches the CAS/exclusive model.
+// and SWP), host-atomic (rmw_loop). The operand comes from Rs (31 = XZR =
+// 0), the old value is written to Rt (31 = discard).
 // [gadget][rt | rn<<8 | rs<<16 | size<<24 | op<<26][orig_ip]
 .gadget lse_rmw
     ldr x8, [_ip]
@@ -266,25 +474,22 @@ cas_gadget cas64, 3
     add x10, x9, x22, lsl #3
     ldr x25, [x10]          // operand
 3:
-    mov x26, #1
-    lsl x26, x26, x23       // size_bytes
-
-    sub sp, sp, #16         // reserve old_out slot (survives save_c's frame)
-    save_c
-    mov x3, x26             // size_bytes
-    mov x4, x24             // op
-    mov x5, x25             // operand
-    add x6, sp, #0xa0       // &old_out (the reserved slot, above the save_c frame)
-    mov x0, x1             // cpu  (x1 still intact)
-    sub x1, x2, #TLB_entries // struct tlb *
-    mov x2, x7             // addr
-    bl NAME(arm64_lse_rmw)
-    mov x27, x0            // result (0 / INT_PF), callee-saved
-    restore_c
-    ldr x8, [sp]          // old value
-    add sp, sp, #16
-
+    mov x0, #1
+    lsl x0, x0, x23         // size_bytes, the alignment
+    bl a64_atomic_wptr
     cbnz x27, lse_rmw_fault
+    cmp x23, #2
+    b.eq 32f
+    b.hi 64f
+    cbz x23, 8f
+    rmw_loop ldaxrh, stlxrh, w, 2
+    b 99f
+8:  rmw_loop ldaxrb, stlxrb, w, 1
+    b 99f
+32: rmw_loop ldaxr, stlxr, w, 4
+    b 99f
+64: rmw_loop ldaxr, stlxr, x, 8
+99:
 
     cmp x20, #31          // Rt=31 discards the old value
     b.eq lse_rmw_done
@@ -298,11 +503,8 @@ lse_rmw_fault:
     mov w0, w27
     b jit_exit
 
-// CASP (LSE compare-and-swap pair): host-atomic 2*sz-byte CAS via the
-// arm64_casp C helper (emu/tlb.c) — same shape as the cas gadget above,
-// with the pair operands marshalled through a stack scratch block because
-// four 64-bit values plus two result slots don't fit the register-only
-// C ABI. Rs/Rs+1 always receive the observed old pair (there is no
+// CASP (LSE compare-and-swap pair): host-atomic 2*sz-byte CAS (host_cas
+// on the W pair as one 8-byte value, host_cas128 on the X pair). Rs/Rs+1 always receive the observed old pair (there is no
 // status register; the LL/SC-style status is CAS-implicit). gen_step_arm64
 // guarantees Rs and Rt are even (odd encodings are UNDEFINED), so Rs/Rt
 // themselves are never 31; Rs+1/Rt+1 can be 31 only for Rs/Rt = 30, where
@@ -339,26 +541,22 @@ lse_rmw_fault:
     b.eq 4f
     ldr x12, [x9, x11, lsl #3]  // desired hi (Rt+1; 31 = XZR)
 4:
-    sub sp, sp, #64          // scratch (survives save_c's 0xa0 frame):
-                             // [0]=old_lo [8]=old_hi [16]=swapped (unused)
-                             // [32]=exp_lo [40]=exp_hi [48]=des_lo [56]=des_hi
-    stp x24, x25, [sp, #32]
-    stp x26, x12, [sp, #48]
-    save_c
-    mov x0, x1               // cpu (x1 still intact)
-    sub x1, x2, #TLB_entries // struct tlb *
-    mov x2, x21              // addr
-    mov x3, #(1 << \sizelog) // sz: bytes per register half
-    add x4, sp, #(0xa0+32)   // expected[2]
-    add x5, sp, #(0xa0+48)   // desired[2]
-    add x6, sp, #0xa0        // old_out[2]
-    add x7, sp, #(0xa0+16)   // &swapped
-    bl NAME(arm64_casp)
-    mov x27, x0              // result (0 / INT_PF / INT_GPF)
-    restore_c
-    ldp x8, x9, [sp]         // observed old pair
-    add sp, sp, #64
+    mov x7, x21
+    mov x0, #(2 << \sizelog)    // the whole pair's alignment
+    bl a64_atomic_wptr
     cbnz x27, casp_fault_\name
+.if \sizelog == 2                // the W pair: one 8-byte value, lo first
+    mov w24, w24
+    orr x24, x24, x25, lsl #32
+    mov w26, w26
+    orr x25, x26, x12, lsl #32
+    host_cas 3
+    lsr x9, x8, #32
+    mov w8, w8
+.else
+    host_cas128
+    mov x9, x10
+.endif
     add x10, _cpu, #CPU_x0
     str x8, [x10, x23, lsl #3]  // old lo -> Rs
     add x11, x23, #1
@@ -376,10 +574,9 @@ casp_fault_\name:
 casp_gadget casp32, 2
 casp_gadget casp64, 3
 
-// LDXP (load exclusive pair): load {lo, hi} and arm the monitor, all via
-// the arm64_ldxp C helper (emu/tlb.c) — the helper does the alignment
-// check, the (possibly torn; see its header comment) pair load, AND arms
-// excl_addr/excl_val/excl_val_hi itself, so the gadget only unpacks the
+// LDXP (load exclusive pair): the alignment check, the pair load (the X
+// pair as two loads: a torn one fails the STXP's CAS, and the guest's LL/SC
+// loop retries) and arming excl_addr/excl_val/excl_val_hi, then the
 // two results into Rt/Rt2 (31 = discard; Rt==Rt2 is CONSTRAINED
 // UNPREDICTABLE and simply stores hi last). LDAXP's acquire bit (o0) is
 // accepted and ignored, same as every other atomic gadget here.
@@ -401,19 +598,21 @@ casp_gadget casp64, 3
     b 2f
 1:  ldr x21, [_cpu, #CPU_sp]
 2:
-    sub sp, sp, #16          // val_out[2] (survives save_c's 0xa0 frame)
-    save_c
-    mov x0, x1               // cpu (x1 still intact)
-    sub x1, x2, #TLB_entries // struct tlb *
-    mov x2, x21              // addr
-    mov x3, #(1 << \sizelog) // sz: bytes per register half
-    add x4, sp, #0xa0        // val_out[2]
-    bl NAME(arm64_ldxp)
-    mov x27, x0              // result (0 / INT_PF / INT_GPF)
-    restore_c
-    ldp x8, x9, [sp]         // loaded pair {lo, hi}
-    add sp, sp, #16
+    mov x7, x21
+    mov x0, #(2 << \sizelog)
+    bl a64_atomic_rptr
     cbnz x27, ldxp_pf_\name
+.if \sizelog == 2
+    ldr x8, [x7]
+    lsr x9, x8, #32
+    mov w8, w8
+.else
+    ldr x8, [x7]                 // two 8-byte loads: a pair load that is
+    ldr x9, [x7, #8]             // torn shows at STXP, whose CAS fails
+.endif
+    str x21, [_cpu, #CPU_excl_addr]
+    str x8, [_cpu, #CPU_excl_val]
+    str x9, [_cpu, #CPU_excl_val_hi]
     add x10, _cpu, #CPU_x0
     cmp x20, #31             // Rt = 31 discards the lo half
     b.eq 3f
@@ -431,9 +630,8 @@ ldxp_pf_\name:
 ldxp_gadget ldxp32, 2
 ldxp_gadget ldxp64, 3
 
-// STXP (store exclusive pair): the arm64_stxp C helper (emu/tlb.c) does
-// the whole monitor-check + host-atomic pair CAS + monitor-clear; the
-// gadget marshals the desired pair from Rt/Rt2 (31 = XZR = 0) and writes
+// STXP (store exclusive pair): the monitor check, a host-atomic pair CAS
+// against the armed pair, and the monitor clear, here; the gadget takes the desired pair from Rt/Rt2 (31 = XZR = 0) and writes
 // the returned status to Rs (0 = stored, 1 = failed; 31 = discard).
 // STLXP's release bit (o0) is accepted and ignored. On a fault the
 // monitor is preserved (helper contract) so the restarted instruction
@@ -466,21 +664,30 @@ ldxp_gadget ldxp64, 3
     b.eq 4f
     ldr x26, [x9, x24, lsl #3]
 4:
-    sub sp, sp, #16          // [0]=status out (survives save_c's frame)
-    save_c
-    mov x0, x1               // cpu (x1 still intact)
-    sub x1, x2, #TLB_entries // struct tlb *
-    mov x2, x21              // addr
-    mov x3, #(1 << \sizelog) // sz: bytes per register half
-    mov x4, x25              // desired lo
-    mov x5, x26              // desired hi
-    add x6, sp, #0xa0        // &status
-    bl NAME(arm64_stxp)
-    mov x27, x0              // result (0 / INT_PF / INT_GPF)
-    restore_c
-    ldr w8, [sp]             // status (0 = stored, 1 = failed)
-    add sp, sp, #16
-    cbnz x27, stxp_pf_\name
+    mov x8, #1                   // status: failed unless stored
+    ldr x9, [_cpu, #CPU_excl_addr]
+    cmp x9, x21
+    b.ne 6f
+    mov x7, x21
+    mov x0, #(2 << \sizelog)
+    bl a64_atomic_wptr
+    cbnz x27, stxp_pf_\name     // the monitor stays armed for the restart
+    mov x12, x26                 // desired hi
+    mov x26, x25                 // desired lo
+    ldr x24, [_cpu, #CPU_excl_val]
+    ldr x25, [_cpu, #CPU_excl_val_hi]
+.if \sizelog == 2
+    mov w24, w24
+    orr x24, x24, x25, lsl #32
+    mov w26, w26
+    orr x25, x26, x12, lsl #32
+    host_cas 3
+.else
+    host_cas128
+.endif
+    eor x8, x9, #1
+6:  mov x9, #-1                  // any completed STXP clears the monitor
+    str x9, [_cpu, #CPU_excl_addr]
     cmp x23, #31             // Rs = 31 discards the status
     b.eq 5f
     add x9, _cpu, #CPU_x0

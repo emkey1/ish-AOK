@@ -145,133 +145,32 @@ int arm64_vldst_struct(struct cpu_state *cpu, struct tlb *tlb, guest_addr_t addr
     return 0;
 }
 
-// LSE atomic read-modify-write (LDADD/LDCLR/LDEOR/LDSET/LDSMAX/LDSMIN/
-// LDUMAX/LDUMIN and SWP). GENUINELY host-atomic: it resolves the guest
-// address to its backing host pointer and runs a real host __atomic RMW
-// there, so concurrent guest threads (each on its own host pthread) don't
-// lose updates. LSE requires natural alignment, so a valid access never
-// crosses a page — one host pointer suffices. size_bytes is 1/2/4/8;
-// op 0-7 are the arithmetic forms, op 8 is SWP. Returns 0 / INT_PF.
+// The pair atomics below are the arm64 interpreter's (emu/arm64_interp.c);
+// the JIT's atomics are gadgets (jit/guest-arm64/atomics.S).
 //
-// The min/max variants and the sub-64-bit widths are done with a
-// compare-exchange loop (there's no direct __atomic_fetch_max, and byte/
-// half atomics still lower to LL/SC on the host anyway), which is itself
-// lock-free and race-free.
-// Misaligned LSE atomics take an alignment fault on real hardware (they
+// Misaligned atomics take an alignment fault on real hardware (they
 // are architecturally required to be naturally aligned). Enforcing that
 // here is also a host-memory-safety requirement, not just conformance:
 // the helpers below resolve ONE host page and then run a host atomic of
 // up to 16 bytes at the resolved pointer, so a misaligned guest atomic
 // straddling a page boundary would read/write host memory beyond the
 // page that was actually resolved. Natural alignment guarantees the
-// access can never cross a page. The kernel's interrupt plumbing has no
-// SIGBUS/BUS_ADRALN path for guest faults (see handle_interrupt in
-// kernel/calls.c: INT_* maps to SIGSEGV/SIGILL/SIGFPE only), so this
-// reports INT_GPF -> SIGSEGV rather than Linux's SIGBUS; a misaligned
-// atomic is a hard programming error and the fatal signal is what
-// matters. cpu->segfault_addr carries the misaligned address.
+// access can never cross a page. INT_ALIGN: SIGBUS/BUS_ADRALN at
+// cpu->segfault_addr, as Linux sends (INT_GPF, before it, was taken for a
+// page fault and retried forever).
 static int arm64_atomic_alignment_fault(struct cpu_state *cpu, guest_addr_t addr) {
     cpu->segfault_addr = addr;
     cpu->segfault_was_write = true;
-    return INT_GPF;
+    return INT_ALIGN;
 }
 
-int arm64_lse_rmw(struct cpu_state *cpu, struct tlb *tlb, guest_addr_t addr,
-                  unsigned size_bytes, unsigned op, uint64_t operand,
-                  uint64_t *old_out) {
-    if (addr & (size_bytes - 1))
-        return arm64_atomic_alignment_fault(cpu, addr);
-    void *ptr = tlb_write_ptr_slow(tlb, addr);
-    if (ptr == NULL) {
-        cpu->segfault_addr = tlb->segfault_addr;
-        cpu->segfault_was_write = true;
-        return INT_PF;
-    }
-    unsigned bits = size_bytes * 8;
-    uint64_t smask = bits < 64 ? (1ull << (bits - 1)) : 0;
-
-#define LSE_RMW_AT(TYPE) do {                                             \
-        TYPE *p = ptr;                                                    \
-        TYPE arg = (TYPE) operand;                                        \
-        TYPE old = __atomic_load_n(p, __ATOMIC_RELAXED), neu;            \
-        do {                                                             \
-            switch (op) {                                                \
-                case 0: neu = (TYPE) (old + arg); break;   /* LDADD */   \
-                case 1: neu = (TYPE) (old & ~arg); break;  /* LDCLR */   \
-                case 2: neu = (TYPE) (old ^ arg); break;   /* LDEOR */   \
-                case 3: neu = (TYPE) (old | arg); break;   /* LDSET */   \
-                case 4: neu = (int64_t) ((old ^ smask) - smask) >         \
-                              (int64_t) ((arg ^ smask) - smask)           \
-                              ? old : arg; break;          /* LDSMAX */  \
-                case 5: neu = (int64_t) ((old ^ smask) - smask) <         \
-                              (int64_t) ((arg ^ smask) - smask)           \
-                              ? old : arg; break;          /* LDSMIN */  \
-                case 6: neu = old > arg ? old : arg; break; /* LDUMAX */ \
-                case 7: neu = old < arg ? old : arg; break; /* LDUMIN */ \
-                default: neu = arg; break;                 /* SWP */     \
-            }                                                            \
-        } while (!__atomic_compare_exchange_n(p, &old, neu, true,        \
-                     __ATOMIC_SEQ_CST, __ATOMIC_RELAXED));               \
-        *old_out = (uint64_t) old;                                       \
-    } while (0)
-
-    switch (size_bytes) {
-        case 1: LSE_RMW_AT(uint8_t); break;
-        case 2: LSE_RMW_AT(uint16_t); break;
-        case 4: LSE_RMW_AT(uint32_t); break;
-        default: LSE_RMW_AT(uint64_t); break;
-    }
-#undef LSE_RMW_AT
-    return 0;
-}
-
-// Host-atomic compare-and-swap for the LSE CAS gadget and the STXR
-// store-conditional. Compares memory at size_bytes against `expected`; if
-// equal, atomically stores `desired` and sets *swapped=1, else leaves it
-// and sets *swapped=0. Always returns the observed old value (zero-
-// extended) in *old_out. Genuinely atomic against concurrent guest
-// threads — replaces the old load-compare-store, which had an ABA race
-// (two threads could both pass the compare and both store). Returns
-// 0 / INT_PF.
-int arm64_cas(struct cpu_state *cpu, struct tlb *tlb, guest_addr_t addr,
-              unsigned size_bytes, uint64_t expected, uint64_t desired,
-              uint64_t *old_out, uint32_t *swapped) {
-    if (addr & (size_bytes - 1))
-        return arm64_atomic_alignment_fault(cpu, addr);
-    void *ptr = tlb_write_ptr_slow(tlb, addr);
-    if (ptr == NULL) {
-        cpu->segfault_addr = tlb->segfault_addr;
-        cpu->segfault_was_write = true;
-        return INT_PF;
-    }
-#define LSE_CAS_AT(TYPE) do {                                            \
-        TYPE exp = (TYPE) expected;                                      \
-        bool ok = __atomic_compare_exchange_n((TYPE *) ptr, &exp,        \
-                     (TYPE) desired, false, __ATOMIC_SEQ_CST,            \
-                     __ATOMIC_SEQ_CST);                                  \
-        *swapped = ok ? 1 : 0;                                           \
-        *old_out = (uint64_t) exp; /* CAS writes the observed value on fail */ \
-    } while (0)
-    switch (size_bytes) {
-        case 1: LSE_CAS_AT(uint8_t); break;
-        case 2: LSE_CAS_AT(uint16_t); break;
-        case 4: LSE_CAS_AT(uint32_t); break;
-        default: LSE_CAS_AT(uint64_t); break;
-    }
-#undef LSE_CAS_AT
-    return 0;
-}
-
-// Host-atomic compare-and-swap PAIR (CASP/CASPA/CASPL/CASPAL) for the
-// casp gadgets (jit/guest-arm64/atomics.S) and the interpreter. sz is the
+// Host-atomic compare-and-swap PAIR (CASP/CASPA/CASPL/CASPAL). sz is the
 // per-register width (4 for the W-pair form, 8 for the X-pair form); the
 // register pair maps to guest memory little-endian as [addr] = lo (Rs/Rt)
 // and [addr+sz] = hi (Rs+1/Rt+1), so the whole pair is one 2*sz-byte
 // little-endian value. expected/desired/old_out are {lo, hi} arrays
-// (arrays rather than four scalars keep the C ABI at 8 register args, so
-// the gadget's marshalling stays register-only like arm64_cas's).
 // old_out always receives the observed memory value, zero-extended per
-// half for the 32-bit form. Returns 0 / INT_PF / INT_GPF.
+// half for the 32-bit form. Returns 0 / INT_PF / INT_ALIGN.
 //
 // The 64-bit pair uses a 16-byte __atomic_compare_exchange on an
 // unsigned __int128 — on an ARMv8.0 baseline host clang lowers that to an
@@ -312,14 +211,13 @@ int arm64_casp(struct cpu_state *cpu, struct tlb *tlb, guest_addr_t addr,
     return 0;
 }
 
-// LDXP (load exclusive pair) for the ldxp gadgets (jit/guest-arm64/
-// atomics.S) and the interpreter. sz is the per-register width (4 for the
+// LDXP (load exclusive pair). sz is the per-register width (4 for the
 // W-pair form, 8 for the X-pair form); memory maps little-endian as
 // [addr] = lo (Rt) and [addr+sz] = hi (Rt2), same layout as arm64_casp.
 // Loads the pair, writes it to val_out (each half zero-extended for the
 // 32-bit form), and arms the exclusive monitor (excl_addr/excl_val/
 // excl_val_hi) with the address and observed pair. Returns 0 / INT_PF /
-// INT_GPF (alignment is the TOTAL pair size, per the ARM ARM — which also
+// INT_ALIGN (alignment is the TOTAL pair size, per the ARM ARM — which also
 // guarantees the single resolved host pointer covers the whole pair).
 //
 // The 64-bit pair is read as two 8-byte atomic loads, NOT one 16-byte
@@ -363,7 +261,7 @@ int arm64_ldxp(struct cpu_state *cpu, struct tlb *tlb, guest_addr_t addr,
 // (architected), but is PRESERVED on a fault return so the restarted
 // instruction can succeed once the fault (e.g. COW break) is resolved —
 // same contract as the stxr gadget's fault path. Returns 0 / INT_PF /
-// INT_GPF.
+// INT_ALIGN.
 int arm64_stxp(struct cpu_state *cpu, struct tlb *tlb, guest_addr_t addr,
                unsigned sz, uint64_t desired_lo, uint64_t desired_hi,
                uint32_t *status_out) {

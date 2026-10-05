@@ -46,6 +46,10 @@
 // block is translated -- because a read of that page would succeed, and the
 // ordinary fault path's retry would only run into the same fetch again.
 #define INT_PF_EXEC 0x105
+// A misaligned access that must be aligned (an arm64 atomic): SIGBUS with
+// BUS_ADRALN at segfault_addr, as Linux sends. Never a page fault: the page is
+// fine, and retrying through mem_ptr_fault re-ran the access forever.
+#define INT_ALIGN 0x106
 // #GP with an error code: the selector a segment load, IRET or sigreturn
 // could not use (bits 15-2: index and TI), or vector * 8 + 2 for `int n`
 // through a gate user mode may not use. Plain INT_GPF is #GP(0). The code

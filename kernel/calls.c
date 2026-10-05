@@ -7152,6 +7152,21 @@ static void handle_bus_interrupt(struct cpu_state *cpu) {
     deliver_signal(current, SIGBUS_, info);
 }
 
+// A misaligned atomic (INT_ALIGN): Linux's alignment fault, SIGBUS with
+// BUS_ADRALN at the address.
+static void handle_alignment_interrupt(struct cpu_state *cpu) {
+    printk("ERROR: %d(%s) [%s] alignment fault on %#llx at %#llx\n",
+           current->pid, current->comm, guest_abi_desc(current->abi).name,
+           (unsigned long long) cpu->segfault_addr,
+           (unsigned long long) current_fault_ip(cpu));
+    record_guest_fault_event("alignment", cpu, cpu->segfault_addr, cpu->segfault_was_write);
+    struct siginfo_ info = {
+        .code = BUS_ADRALN_,
+        .fault.addr = cpu->segfault_addr,
+    };
+    deliver_signal(current, SIGBUS_, info);
+}
+
 static void handle_arithmetic_interrupt(struct cpu_state *cpu) {
     printk("ERROR: %d(%s) [%s] arithmetic fault at 0x%x\n",
            current->pid, current->comm, guest_abi_desc(current->abi).name, cpu->eip);
@@ -7229,6 +7244,9 @@ void handle_interrupt(int interrupt) {
             break;
         case INT_BUS:
             handle_bus_interrupt(cpu);
+            break;
+        case INT_ALIGN:
+            handle_alignment_interrupt(cpu);
             break;
         case INT_PF_EXEC:
             handle_exec_fault_interrupt(cpu);
