@@ -326,7 +326,7 @@ struct cpu_state {
     // NaN-boxed into the low 32 bits per the ISA spec.
     qword_t riscv64_f[32];
     dword_t riscv64_fcsr;
-    // V (RVV 1.0, VLEN 128: jit/riscv64_vector.c). v0-v31 as bytes, and
+    // V (RVV 1.0, VLEN 128: jit/guest-riscv64/vector.S). v0-v31 as bytes, and
     // the vector CSRs; vcsr is vxrm << 1 | vxsat. vtype's bit 63 is vill.
     union xmm_reg riscv64_v[32];
     qword_t riscv64_vl;

@@ -49,7 +49,7 @@ UIMM6 = [0, 1, 7, 13, 31, 45]
 # model kinds and ops (the C model's enums below)
 (K_BIN, K_CMP, K_RED, K_VID, K_EXT, K_MSF, K_CPOP, K_FIRST, K_MVXS, K_MVSX, K_LX, K_W,
  K_SLIDE, K_GATHER, K_COMPRESS, K_IOTA, K_CARRY, K_UNARY, K_FB, K_FC, K_FMVFS, K_FMVSF,
- K_FCVT, K_FUN1, K_FRED, K_FW) = range(26)
+ K_FCVT, K_FUN1, K_FRED, K_FW, K_MEM, K_FX, K_WRED) = range(29)
 BINOPS = ['add', 'sub', 'rsub', 'and', 'or', 'xor', 'andn', 'mv', 'minu', 'min', 'maxu', 'max',
           'sll', 'srl', 'sra', 'ror', 'rol', 'mul', 'macc', 'nmsac', 'madd', 'nmsub', 'merge',
           'divu', 'div', 'remu', 'rem', 'mulhu', 'mulhsu', 'mulh']
@@ -251,13 +251,70 @@ for i, mn, forms in ((0, 'vfwadd', 'vv vf'), (1, 'vfwsub', 'vv vf'), (2, 'vfwadd
 add('vfmv.f.s', 'vfmv.f.s ft0, v16\\nfmv.x.d %[r], ft0', K_FMVFS, masked=False, ok=FP_OK)
 add('vfmv.s.f', 'fmv.d.x ft0, %[x]\\nvfmv.s.f v8, ft0', K_FMVSF, aux=1, masked=False, ok=FP_OK)
 
+# memory: K_MEM (see the model); vd/vs3 v8, the index group v16
+def mem_ok(e, nf, indexed=False, ie=0):
+    def ok(sew, l):
+        if indexed:  # ie in bytes: the index EMUL = LMUL * ie*8 / SEW
+            iem = lmul8(l) * ie * 8 // sew
+            return lmul8(l) * ie * 8 >= sew and iem <= 64 and nf * max(1, lmul8(l) // 8) <= 8
+        return lmul8(l) * e >= sew and lmul8(l) * e // sew <= 64 and nf * max(1, lmul8(l) * e // sew // 8) <= 8
+    return ok
+for e in (8, 16, 32, 64):
+    add(f'vle{e}.v', f'vle{e}.v v8, (%[mem])', K_MEM, 0, imm=1, aux=e // 8, ok=mem_ok(e, 1))
+    add(f'vse{e}.v', f'vse{e}.v v8, (%[mem])', K_MEM, 1, imm=1, aux=e // 8, ok=mem_ok(e, 1))
+    add(f'vle{e}ff.v', f'vle{e}ff.v v8, (%[mem])', K_MEM, 8, imm=1, aux=e // 8, ok=mem_ok(e, 1))
+    add(f'vlse{e}.v', f'vlse{e}.v v8, (%[mem]), %[x]', K_MEM, 4, imm=1, aux=e // 8, ok=mem_ok(e, 1))
+    add(f'vsse{e}.v', f'vsse{e}.v v8, (%[mem]), %[x]', K_MEM, 5, imm=1, aux=e // 8, ok=mem_ok(e, 1))
+    for o in ('u', 'o'):
+        add(f'vs{o}xei{e}', f'vs{o}xei{e}.v v8, (%[mem]), v16', K_MEM, 3, imm=1, sign=e // 8,
+            ok=mem_ok(0, 1, True, e // 8))
+    for nf in (2, 3, 4, 8):
+        add(f'vlseg{nf}e{e}.v', f'vlseg{nf}e{e}.v v8, (%[mem])', K_MEM, 0, imm=nf, aux=e // 8, ok=mem_ok(e, nf))
+        add(f'vsseg{nf}e{e}.v', f'vsseg{nf}e{e}.v v8, (%[mem])', K_MEM, 1, imm=nf, aux=e // 8, ok=mem_ok(e, nf))
+    for nf in (2, 5):
+        add(f'vlsseg{nf}e{e}.v', f'vlsseg{nf}e{e}.v v8, (%[mem]), %[x]', K_MEM, 4, imm=nf, aux=e // 8, ok=mem_ok(e, nf))
+        add(f'vssseg{nf}e{e}.v', f'vssseg{nf}e{e}.v v8, (%[mem]), %[x]', K_MEM, 5, imm=nf, aux=e // 8, ok=mem_ok(e, nf))
+        add(f'vluxseg{nf}ei{e}.v', f'vluxseg{nf}ei{e}.v v8, (%[mem]), v16', K_MEM, 2, imm=nf, sign=e // 8,
+            ok=mem_ok(0, nf, True, e // 8))
+        add(f'vsuxseg{nf}ei{e}.v', f'vsuxseg{nf}ei{e}.v v8, (%[mem]), v16', K_MEM, 3, imm=nf, sign=e // 8,
+            ok=mem_ok(0, nf, True, e // 8))
+    for nf in (1, 2, 4, 8):
+        add(f'vl{nf}re{e}.v', f'vl{nf}re{e}.v v8, (%[mem])', K_MEM, 16, imm=nf, aux=e // 8, masked=False)
+for nf in (1, 2, 4, 8):
+    add(f'vs{nf}r.v', f'vs{nf}r.v v8, (%[mem])', K_MEM, 17, imm=nf, aux=1, masked=False)
+add('vlm.v', 'vlm.v v8, (%[mem])', K_MEM, 32, imm=1, aux=1, masked=False)
+add('vsm.v', 'vsm.v v8, (%[mem])', K_MEM, 33, imm=1, aux=1, masked=False)
+
+# fixed point: K_FX, op as the gadgets number them, aux = vxrm; the text
+# sets vxrm, clears vxsat and reads it into r
+FXOPS = [('vsaddu', 'vv vx vi'), ('vsadd', 'vv vx vi'), ('vssubu', 'vv vx'), ('vssub', 'vv vx'),
+         ('vaaddu', 'vv vx'), ('vaadd', 'vv vx'), ('vasubu', 'vv vx'), ('vasub', 'vv vx'),
+         ('vsmul', 'vv vx'), ('vssrl', 'vv vx vi'), ('vssra', 'vv vx vi'),
+         ('vnclipu', 'wv wx wi'), ('vnclip', 'wv wx wi')]
+fx_rm = 0
+for op, (mn, forms) in enumerate(FXOPS):
+    for f in forms.split():
+        form = {'v': 0, 'x': 1, 'i': 2}[f[1]]
+        for k in range(2):
+            fx_rm = (fx_rm + 1) % 4
+            imm = nextimm(UIMMS if op >= 9 else IMMS) if form == 2 else 0
+            src = {0: 'v24', 1: '%[x]', 2: str(imm)}[form]
+            okf = (lambda sew, l: sew <= 32 and lmul8(l) < 64) if op >= 11 else (lambda sew, l: True)
+            line = f'{mn}.{f} v8, v16, {src}'
+            wrap = lambda b, rm=fx_rm: f'csrwi vxsat, 0\\ncsrwi vxrm, {rm}\\n' + b + '\\ncsrr %[r], vxsat'
+            add(f'{mn}.{f} {src} rm{fx_rm}', wrap(line), K_FX, op, form, imm=imm, aux=fx_rm, ok=okf, masked=False)
+            cases.append((f'{mn}.{f} {src} rm{fx_rm} v0.t', wrap(line + ', v0.t'),
+                          (K_FX, op, form, 1, 8, 16, 24, imm, fx_rm, 0, '~0ull'), okf))
+for i, mn in enumerate(('vwredsumu', 'vwredsum')):
+    add(f'{mn}.vs', f'{mn}.vs v8, v16, v24', K_WRED, i, ok=lambda sew, l: sew <= 32)
+
 add('vid.v', 'vid.v v8', K_VID)
 for f in (2, 4, 8):
     for s_ in ('z', 's'):
         add(f'v{s_}ext.vf{f}', f'v{s_}ext.vf{f} v8, v16', K_EXT, aux=f, sign=int(s_ == 's'),
             ok=lambda sew, l, f=f: sew // f >= 8 and lmul8(l) >= f)
 for i, op in enumerate(('vmsbf', 'vmsif', 'vmsof')):
-    add(f'{op}.m', f'{op}.m v8, v16', K_MSF, i, masked=False)
+    add(f'{op}.m', f'{op}.m v8, v16', K_MSF, i)
 add('vcpop.m', 'vcpop.m %[r], v16', K_CPOP)
 add('vfirst.m', 'vfirst.m %[r], v16', K_FIRST)
 add('vmv.x.s', 'vmv.x.s %[r], v16', K_MVXS, masked=False)
@@ -288,6 +345,7 @@ w('''// GENERATED by tools/gen-rvv-gadget-test.py -- edit the generator, not thi
 #include <fenv.h>
 #include <math.h>
 #include <setjmp.h>
+#include <sys/mman.h>
 #include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -296,6 +354,10 @@ w('''// GENERATED by tools/gen-rvv-gadget-test.py -- edit the generator, not thi
 #define V __attribute__((target("arch=rv64gcv_zvbb"), noinline))
 static uint8_t in[512] __attribute__((aligned(16))), ou[512], om[512];
 static uint8_t mem[8192 + 64] __attribute__((aligned(4096)));
+// memory as each case starts (mem0) and as the model leaves it (mm); the
+// base register of the memory cases (mbase, in mem)
+static uint8_t mem0[sizeof(mem)], mm[sizeof(mem)];
+static uint8_t *mbase = mem;
 static unsigned long checks, bad;
 static uint64_t rng = 0x9e3779b97f4a7c15ull;
 static uint64_t rnd(void) { rng ^= rng << 13; rng ^= rng >> 7; rng ^= rng << 17; return rng; }
@@ -303,7 +365,7 @@ static uint64_t rnd(void) { rng ^= rng << 13; rng ^= rng >> 7; rng ^= rng << 17;
 // the register file in from in[], the instruction, v0 and v8-v31 out to ou[]
 #define VREGS "v0", "v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10", "v11", "v12", \\
         "v13", "v14", "v15", "v16", "v17", "v18", "v19", "v20", "v21", "v22", "v23", "v24", "v25", \\
-        "v26", "v27", "v28", "v29", "v30", "v31"
+        "v26", "v27", "v28", "v29", "v30", "v31", "vl", "vtype"
 #define RUNV(VSET, TEXT) asm volatile("li %[r], 0\\n" \\
         "vsetvli t0, zero, e8, m8, ta, ma\\n" \\
         "vle8.v v8, (%[i8])\\n" "vle8.v v16, (%[i16])\\n" "vle8.v v24, (%[i24])\\n" \\
@@ -314,7 +376,7 @@ static uint64_t rnd(void) { rng ^= rng << 13; rng ^= rng >> 7; rng ^= rng << 17;
         "vsetvli t0, zero, e8, m1, ta, ma\\n" "vse8.v v0, (%[o0])\\n" \\
         : [r] "=&r"(ru) \\
         : [i0] "r"(in), [i8] "r"(in + 128), [i16] "r"(in + 256), [i24] "r"(in + 384), \\
-          [avl] "r"(avl), [x] "r"(x), [mem] "r"(mem), [vt] "r"(vt), \\
+          [avl] "r"(avl), [x] "r"(x), [mem] "r"(mbase), [vt] "r"(vt), \\
           [o0] "r"(ou), [o8] "r"(ou + 128), [o16] "r"(ou + 256), [o24] "r"(ou + 384) \\
         : "t0", "t1", "ft0", "memory", VREGS)
 
@@ -324,6 +386,15 @@ static void compare(const char *what, const char *vt, uint64_t avl, uint64_t ru,
     for (int i = 0; i < 512 && at < 0; i++)
         if ((i < 16 || i >= 128) && ou[i] != om[i])
             at = i;
+    int mat = -1;
+    for (int i = 0; i < (int) sizeof(mem) && mat < 0; i++)
+        if (mem[i] != mm[i])
+            mat = i;
+    if (mat >= 0 && at < 0 && ru == rm) {
+        if (bad++ < 40)
+            printf("%s %s avl %llu: mem[%d] = %#x, want %#x\\n", what, vt, (unsigned long long) avl, mat, mem[mat], mm[mat]);
+        return;
+    }
     if ((at >= 0 || ru != rm) && bad++ < 40) {
         if (at >= 0)
             printf("%s %s avl %llu: v%d byte %d = %#x, want %#x\\n", what, vt, (unsigned long long) avl,
@@ -354,7 +425,7 @@ static void setbit(uint8_t *p, unsigned i, int b) {
 // into om and *r. Element i of register group g is at g * 16 + i * SEW/8.
 enum { K_BIN, K_CMP, K_RED, K_VID, K_EXT, K_MSF, K_CPOP, K_FIRST, K_MVXS, K_MVSX, K_LX, K_W,
        K_SLIDE, K_GATHER, K_COMPRESS, K_IOTA, K_CARRY, K_UNARY, K_FB, K_FC, K_FMVFS, K_FMVSF,
-       K_FCVT, K_FUN1, K_FRED, K_FW };
+       K_FCVT, K_FUN1, K_FRED, K_FW, K_MEM, K_FX, K_WRED };
 struct mc { int kind, op, form, masked, vd, vs2, vs1; int64_t imm; int aux, sign; uint64_t xmask; };
 
 static uint64_t ld(const uint8_t *f, int reg, unsigned i, int eb) {
@@ -672,8 +743,18 @@ static uint64_t fflags_now(void) {
     return (uint64_t) fetestexcept(FE_ALL_EXCEPT);
 }
 
+// the memory cases' base and scalar: a base around mem's page boundary
+// (strided and unit-stride), and a small signed stride
+static uint64_t xfix(const struct mc *c, uint64_t x) {
+    mbase = mem;
+    if (c->kind != K_MEM || ((c->op >> 1) & 3) == 1)
+        return x;
+    mbase = mem + 3000 + (x >> 40) % 2000;
+    return (uint64_t) ((int64_t) (x % 41) - 20);
+}
 static void model(const struct mc *c, int bits, int lmul8, uint64_t avl, uint64_t x, uint64_t *r) {
     memcpy(om, in, sizeof(om));
+    memcpy(mm, mem0, sizeof(mm));
     *r = 0;
     int eb = bits / 8;
     unsigned vlmax = (unsigned) (128 * lmul8 / 8 / bits), vl = avl < vlmax ? (unsigned) avl : vlmax;
@@ -878,6 +959,93 @@ static void model(const struct mc *c, int bits, int lmul8, uint64_t avl, uint64_
             }
         *r = fflags_now();
         break;
+    case K_MEM: {
+        // op: 1 store, mode << 1 (0 unit, 1 indexed, 2 strided), 8 ff, 16
+        // whole register, 32 mask; imm nf; aux the data EEW bytes
+        // (unit/strided), sign the index EEW bytes
+        int store = c->op & 1, mode = c->op >> 1 & 3, whole = c->op >> 4 & 1, maskm = c->op >> 5 & 1;
+        int deb = mode == 1 ? eb : c->aux, fields = (int) c->imm, regs;
+        unsigned evl = vl;
+        if (whole) {
+            evl = (unsigned) (fields * 16 / deb);
+            regs = fields;
+            fields = 1;
+        } else if (maskm) {
+            evl = (vl + 7) / 8;
+            regs = 1;
+        } else {
+            int emul8 = mode == 1 ? lmul8 : lmul8 * deb / eb;
+            regs = emul8 < 8 ? 1 : emul8 / 8;
+        }
+        for (unsigned i = 0; i < evl; i++) {
+            if (!ACT(i))
+                continue;
+            for (int f = 0; f < fields; f++) {
+                uint8_t *a = mode == 0 ? mbase + (i * (unsigned) fields + (unsigned) f) * (unsigned) deb
+                           : mode == 2 ? mbase + (int64_t) i * (int64_t) x + f * deb
+                           : mbase + ld(in, c->vs2, i, c->sign) + f * deb;
+                unsigned ro = (unsigned) ((c->vd + f * regs) * 16) + i * (unsigned) deb;
+                if (store)
+                    memcpy(mm + (a - mem), in + ro, (size_t) deb);
+                else
+                    memcpy(om + ro, a, (size_t) deb);
+            }
+        }
+        break;
+    }
+    case K_FX: {
+        int nar = c->op >= 11, ab = nar ? 2 * eb : eb;
+        int sgn = c->op == 1 || c->op == 3 || c->op == 5 || c->op == 7 || c->op == 8 || c->op == 10 || c->op == 12;
+        int bsgn = c->op == 1 || c->op == 3 || c->op == 5 || c->op == 7 || c->op == 8;
+        uint64_t m = bits == 64 ? ~0ull : (1ull << bits) - 1;
+        __int128 smax = (__int128) (m >> 1), smin = -smax - 1;
+        int sat = 0;
+        for (unsigned i = 0; i < vl; i++) {
+            if (!ACT(i))
+                continue;
+            uint64_t ra = ld(in, c->vs2, i, ab), rb = c->form == 0 ? ld(in, c->vs1, i, eb) : c->form == 1 ? x : (uint64_t) c->imm;
+            __int128 a = sgn ? (__int128) sx(ra, ab * 8) : (__int128) ra;
+            __int128 b = c->form == 2 && c->op >= 9 ? (__int128) rb
+                       : bsgn ? (__int128) sx(rb & m, bits) : (__int128) (rb & m);
+            __int128 v = 0;
+            int d = 0;
+            switch (c->op) {
+            case 0: case 1: v = a + b; break;
+            case 2: case 3: v = a - b; break;
+            case 4: case 5: v = a + b; d = 1; break;
+            case 6: case 7: v = a - b; d = 1; break;
+            case 8: v = a * b; d = bits - 1; break;
+            case 9: case 10: v = a; d = (int) (rb & (uint64_t) (bits - 1)); break;
+            case 11: case 12: v = a; d = (int) (rb & (uint64_t) (2 * bits - 1)); break;
+            }
+            if (d) { // roundoff by vxrm
+                int b1 = (int) (v >> (d - 1) & 1), bd = (int) (v >> d & 1);
+                __int128 low = v & ((((__int128) 1) << (d - 1)) - 1), all = v & ((((__int128) 1) << d) - 1);
+                int r = c->aux == 0 ? b1 : c->aux == 1 ? b1 & (low != 0 || bd) : c->aux == 2 ? 0 : (!bd && all != 0);
+                v = (v >> d) + r;
+            }
+            if (c->op <= 3 || c->op == 8 || c->op >= 11) { // saturating
+                int s_ = c->op == 1 || c->op == 3 || c->op == 8 || c->op == 12;
+                __int128 hi = s_ ? smax : (__int128) m, lo = s_ ? smin : 0;
+                if (v > hi) { v = hi; sat = 1; }
+                if (v < lo) { v = lo; sat = 1; }
+            }
+            st(om, c->vd, i, eb, (uint64_t) v);
+        }
+        *r = (uint64_t) sat;
+        break;
+    }
+    case K_WRED:
+        if (vl != 0) {
+            uint64_t acc = ld(in, c->vs1, 0, 2 * eb);
+            for (unsigned i = 0; i < vl; i++)
+                if (ACT(i)) {
+                    uint64_t e = ld(in, c->vs2, i, eb);
+                    acc += c->op ? (uint64_t) sx(e, bits) : e;
+                }
+            st(om, c->vd, 0, 2 * eb, acc);
+        }
+        break;
     case K_FMVFS:
         *r = bits == 32 ? 0xffffffff00000000ull | ld(in, c->vs2, 0, 4) : ld(in, c->vs2, 0, 8);
         break;
@@ -898,13 +1066,14 @@ static void model(const struct mc *c, int bits, int lmul8, uint64_t avl, uint64_
                 st(om, c->vd, i, eb, c->sign ? (uint64_t) sx(v, sb * 8) : v);
             }
         break;
-    case K_MSF: {
+    case K_MSF: { // masked: only active elements count, and only they change
         unsigned first = vl;
         for (unsigned i = 0; i < vl && first == vl; i++)
-            if (bit(in + c->vs2 * 16, i))
+            if (ACT(i) && bit(in + c->vs2 * 16, i))
                 first = i;
         for (unsigned i = 0; i < vl; i++)
-            setbit(om + c->vd * 16, i, c->op == 0 ? i < first : c->op == 1 ? i <= first : i == first);
+            if (ACT(i))
+                setbit(om + c->vd * 16, i, c->op == 0 ? i < first : c->op == 1 ? i <= first : i == first);
         break;
     }
     case K_CPOP:
@@ -930,7 +1099,7 @@ static void model(const struct mc *c, int bits, int lmul8, uint64_t avl, uint64_
         for (unsigned i = 0; i < vl; i++)
             if (ACT(i)) {
                 uint64_t v = 0;
-                memcpy(&v, mem + ld(in, c->vs2, i, c->aux), (size_t) eb);
+                memcpy(&v, mbase + ld(in, c->vs2, i, c->aux), (size_t) eb);
                 st(om, c->vd, i, eb, v);
             }
         break;
@@ -945,7 +1114,8 @@ static void model(const struct mc *c, int bits, int lmul8, uint64_t avl, uint64_
     V static void FN(uint64_t avl, uint64_t x) { \\
         static const struct mc m = {__VA_ARGS__}; \\
         uint64_t ru, rm, vt = VT; \\
-        x &= m.xmask; \\
+        x = xfix(&m, x & m.xmask); \\
+        memcpy(mem, mem0, sizeof(mem)); \\
         model(&m, SEW, LMUL8, avl, x, &rm); \\
         RUNV("vsetvli t1, %[avl], e" #SEW ", " #L ", tu, mu", TEXT); \\
         compare(NAME, "e" #SEW #L, avl, ru, rm); \\
@@ -956,7 +1126,8 @@ static void model(const struct mc *c, int bits, int lmul8, uint64_t avl, uint64_
     V static void FN(uint64_t avl, uint64_t x, int sew, int lmul8, uint64_t vt, const char *vtn) { \\
         static const struct mc m = {__VA_ARGS__}; \\
         uint64_t ru, rm; \\
-        x &= m.xmask; \\
+        x = xfix(&m, x & m.xmask); \\
+        memcpy(mem, mem0, sizeof(mem)); \\
         model(&m, sew, lmul8, avl, x, &rm); \\
         RUNV("vsetvl t1, %[avl], %[vt]", TEXT); \\
         compare(NAME " (re-dispatched)", vtn, avl, ru, rm); \\
@@ -967,7 +1138,7 @@ VTYPES = list(vtypes())
 fns = []    # typed: (fn, vlmax, isz)
 rfns = []   # re-dispatched: (fn, allowed-vtype mask, isz)
 for name, text, f, ok in cases:
-    isz = f[8] if f[0] == K_LX else 0
+    isz = f[8] if f[0] == K_LX else f[9] if f[0] == K_MEM and (f[1] >> 1) & 3 == 1 else 0
     allowed = [v for v in VTYPES if ok(*v)]
     mask = sum(1 << VTYPES.index(v) for v in allowed)
     fn = f'r{len(rfns)}'
@@ -1024,7 +1195,7 @@ for (s1, l1), (s2, l2) in pairs:
     w(f'    asm volatile("vsetvli t1, %[avl], {s1}, {l1}, tu, mu\\n"')
     w(f'        "vsetvli zero, zero, {s2}, {l2}, tu, mu\\n"')
     w('        "csrr %[vl], vl\\n" "csrr %[vt], vtype\\n"')
-    w('        : [vl] "=&r"(vl), [vt] "=&r"(vt) : [avl] "r"(avl) : "t1");')
+    w('        : [vl] "=&r"(vl), [vt] "=&r"(vt) : [avl] "r"(avl) : "t1", "vl", "vtype");')
     if vm1 == vm2:
         w(f'    uint64_t wl = avl < {vm1} ? avl : {vm1}, wt = {vtcode(int(s2[1:]), l2)};')
     else:
@@ -1052,7 +1223,8 @@ ills = []
 for text in ('vadd.vv v9, v16, v24', 'vadd.vv v8, v17, v24', 'vadd.vv v8, v16, v25',
              'vmseq.vv v8, v17, v24', 'vredsum.vs v8, v17, v24', 'vid.v v9', 'vxor.vx v13, v16, t1',
              'vwadd.vv v10, v16, v24', 'vnsrl.wv v8, v18, v24', 'e64:vwadd.vv v8, v16, v24', 'e64:vwmul.vx v8, v16, t1',
-             'm8:vwadd.vv v16, v8, v24', 'm8:vnsrl.wi v8, v16, 3', 'e16:vfslide1up.vf v8, v16, ft0'):
+             'm8:vwadd.vv v16, v8, v24', 'm8:vnsrl.wi v8, v16, 3', 'e16:vfslide1up.vf v8, v16, ft0',
+             'csrwi vstart, 1\\nvadd.vv v8, v16, v24', '.insn r 0x57, 0, 0x1b, x8, x16, x24'):
     sew = 64 if text.startswith('e64:') else 16 if text.startswith('e16:') else 32
     lmuls = (('m8', 3),) if text.startswith('m8:') else (('m2', 1), ('m4', 2), ('m8', 3))
     text = text.split(':')[-1]
@@ -1065,6 +1237,145 @@ for text in ('vadd.vv v9, v16, v24', 'vadd.vv v8, v17, v24', 'vadd.vv v8, v16, v
             w(f'    asm volatile("{vset}\\n" "{text}\\n" : : [avl] "r"(avl), [vt] "r"(vt) : "t1", "memory", VREGS);')
             w('}')
             ills.append((fn, f'{text} e{sew}{l} {how}'))
+w("""
+// fault-only-first loads and precise faults against a PROT_NONE page
+static sigjmp_buf segv_jmp;
+static void on_sigsegv(int sig) { (void) sig; siglongjmp(segv_jmp, 1); }
+V static void guard_cases(void) {
+    uint8_t *g = mmap(NULL, 8192, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (g == MAP_FAILED)
+        return;
+    mprotect(g + 4096, 4096, PROT_NONE);
+    for (int i = 0; i < 4096; i++)
+        g[i] = (uint8_t) rnd();
+    signal(SIGSEGV, on_sigsegv);
+    for (int k = 1; k <= 16; k++) {
+        uint8_t out[16];
+        uint64_t vl, avl = 16;
+        const uint8_t *base = g + 4096 - k;
+        memset(out, 0xa5, sizeof(out));
+        // fault-only-first: k bytes before the guard page load, vl = k
+        __asm__ volatile("vsetvli t1, %[avl], e8, m1, ta, ma\\n"
+            "vmv.v.i v8, 0\\n"
+            "vle8ff.v v8, (%[b])\\n"
+            "csrr %[vl], vl\\n"
+            "vsetvli t1, %[avl], e8, m1, ta, ma\\n"
+            "vse8.v v8, (%[o])\\n"
+            : [vl] "=&r"(vl) : [avl] "r"(avl), [b] "r"(base), [o] "r"(out)         : "t1", "memory", "v8", "vl", "vtype");
+        checks++;
+        if ((vl != (uint64_t) (k < 16 ? k : 16) || memcmp(out, base, (size_t) (k < 16 ? k : 16))) && bad++ < 40)
+            printf("vle8ff.v %d bytes before a guard page: vl %llu\\n", k, (unsigned long long) vl);
+        if (k >= 16)
+            continue;
+        // a plain load across it faults, after the bytes before it
+        checks++;
+        if (sigsetjmp(segv_jmp, 1) == 0) {
+            __asm__ volatile("vsetvli t1, %[avl], e8, m1, ta, ma\\n"
+                "vle8.v v8, (%[b])\\n" : : [avl] "r"(avl), [b] "r"(base)         : "t1", "memory", "v8", "vl", "vtype");
+            if (bad++ < 40)
+                printf("vle8.v across a guard page: no fault\\n");
+        }
+        // a store across it writes the bytes before it, then faults
+        uint8_t *sb = g + 4096 - k;
+        memset(sb, 0, (size_t) k);
+        checks++;
+        if (sigsetjmp(segv_jmp, 1) == 0) {
+            __asm__ volatile("vsetvli t1, %[avl], e8, m1, ta, ma\\n"
+                "vid.v v8\\n"
+                "vse8.v v8, (%[b])\\n" : : [avl] "r"(avl), [b] "r"(sb)         : "t1", "memory", "v8", "vl", "vtype");
+            if (bad++ < 40)
+                printf("vse8.v across a guard page: no fault\\n");
+        } else {
+            for (int i = 0; i < k; i++)
+                if (sb[i] != i) {
+                    if (bad++ < 40)
+                        printf("vse8.v across a guard page (%d before): byte %d = %d\\n", k, i, sb[i]);
+                    break;
+                }
+        }
+    }
+    signal(SIGSEGV, SIG_DFL);
+    munmap(g, 8192);
+}""")
+w("""
+// the vector CSRs, and vsetvl with legal and illegal vtypes
+V static void csr_cases(void) {
+    for (uint64_t k = 0; k < 64; k++) {
+        uint64_t rm = k & 3, sat = k >> 2 & 1, vcsr, xrm, xsat, st;
+        __asm__ volatile("csrw vxrm, %[a]\\n" "csrw vxsat, %[b]\\n" "csrr %[c], vcsr\\n"
+            : [c] "=&r"(vcsr) : [a] "r"(rm), [b] "r"(sat));
+        checks++;
+        if (vcsr != (rm << 1 | sat) && bad++ < 40)
+            printf("vcsr after vxrm %llu vxsat %llu: %#llx\\n", (unsigned long long) rm, (unsigned long long) sat, (unsigned long long) vcsr);
+        __asm__ volatile("csrw vcsr, %[a]\\n" "csrr %[b], vxrm\\n" "csrr %[c], vxsat\\n"
+            : [b] "=&r"(xrm), [c] "=&r"(xsat) : [a] "r"(k));
+        checks++;
+        if ((xrm != (k >> 1 & 3) || xsat != (k & 1)) && bad++ < 40)
+            printf("vcsr %llu: vxrm %llu vxsat %llu\\n", (unsigned long long) k, (unsigned long long) xrm, (unsigned long long) xsat);
+        __asm__ volatile("csrrs %[c], vxsat, %[a]\\n" "csrrc zero, vxrm, %[a]\\n" "csrr %[b], vxrm\\n"
+            : [b] "=&r"(xrm), [c] "=&r"(xsat) : [a] "r"(k & 1));
+        checks++;
+        if ((xsat != (k & 1) || xrm != ((k >> 1 & 3) & ~(k & 1))) && bad++ < 40)
+            printf("csrrs/csrrc %llu: %llu %llu\\n", (unsigned long long) k, (unsigned long long) xsat, (unsigned long long) xrm);
+        __asm__ volatile("csrw vstart, %[a]\\n" "csrr %[b], vstart\\n" "csrwi vstart, 0\\n" : [b] "=&r"(st) : [a] "r"(k * 37));
+        checks++;
+        if (st != ((k * 37) & 127) && bad++ < 40)
+            printf("vstart %llu: %llu\\n", (unsigned long long) (k * 37), (unsigned long long) st);
+    }
+    // an indexed load into its own index group that leaves the fast path at
+    // element 1 (it straddles a page) must resume there, not restart
+    for (int k = 0; k < 4; k++) {
+        uint64_t idx[2] = {(uint64_t) (100 + 8 * k), (uint64_t) (4096 - 3 - k)}, out[2], want[2];
+        memcpy(&want[0], mem + idx[0], 8);
+        memcpy(&want[1], mem + idx[1], 8);
+        uint64_t two = 2;
+        __asm__ volatile("vsetvli t1, %[n], e64, m1, ta, ma\\n"
+            "vle64.v v16, (%[i])\\n"
+            "vluxei64.v v16, (%[m]), v16\\n"
+            "vse64.v v16, (%[o])\\n"
+            : : [n] "r"(two), [i] "r"(idx), [m] "r"(mem), [o] "r"(out) : "t1", "memory", "v16", "vl", "vtype");
+        checks++;
+        if ((out[0] != want[0] || out[1] != want[1]) && bad++ < 40)
+            printf("vluxei64 v16, (mem), v16 across a page at element 1: %#llx %#llx\\n",
+                   (unsigned long long) out[0], (unsigned long long) out[1]);
+    }
+    __asm__ volatile("csrwi vxrm, 0\\n" "csrwi vxsat, 0\\n");
+    // vsetvl zero, zero, rs2: vl kept when VLMAX is unchanged, else vill
+    {
+        static const uint64_t kts[] = {0x10, 0x08, 0x01, 0x17, 0x1e, 0x11, 0x0b, 0x1f, 0x04, 0x100};
+        for (unsigned t = 0; t < sizeof(kts) / sizeof(kts[0]); t++) {
+            uint64_t vl, vt, three = 3, v = kts[t];
+            __asm__ volatile("vsetvli zero, %[a], e32, m1, ta, ma\\n" "vsetvl zero, zero, %[v]\\n"
+                "csrr %[vl], vl\\n" "csrr %[vt], vtype\\n"
+                : [vl] "=&r"(vl), [vt] "=&r"(vt) : [a] "r"(three), [v] "r"(v) : "vl", "vtype");
+            unsigned vsew = (unsigned) (v >> 3 & 7), vlmul = (unsigned) (v & 7);
+            int legal = (v >> 8) == 0 && vlmul != 4 && vsew <= 3 && (vlmul < 4 || vsew + (8 - vlmul) <= 3);
+            uint64_t vlmax = legal ? (vlmul < 4 ? (16u >> vsew) << vlmul : (16u >> vsew) >> (8 - vlmul)) : 0;
+            int keep = legal && vlmax == 4; // e32, m1's
+            checks++;
+            if ((vl != (keep ? 3u : 0u) || vt != (keep ? v : 1ull << 63)) && bad++ < 40)
+                printf("vsetvl zero, zero, %#llx from e32m1 vl 3: vl %llu vtype %#llx\\n",
+                       (unsigned long long) v, (unsigned long long) vl, (unsigned long long) vt);
+        }
+    }
+    // vsetvl: the vtype from a register, legal or not
+    static const uint64_t vts[] = {0x00, 0x01, 0x02, 0x03, 0x05, 0x06, 0x07, 0x08, 0x0b, 0x0f, 0x10, 0x13, 0x17, 0x18,
+        0x1b, 0x1d, 0x1e, 0x1f, 0xc0, 0xd3, 0x04, 0x0c, 0x20, 0x100, 0x8000000000000000ull, 0x15, 0x16, 0x0d};
+    for (unsigned t = 0; t < sizeof(vts) / sizeof(vts[0]); t++)
+        for (uint64_t avl = 0; avl < 140; avl += 13) {
+            uint64_t vl, vt, rd, v = vts[t];
+            __asm__ volatile("vsetvl %[rd], %[avl], %[v]\\n" "csrr %[vl], vl\\n" "csrr %[vt], vtype\\n"
+                : [rd] "=&r"(rd), [vl] "=&r"(vl), [vt] "=&r"(vt) : [avl] "r"(avl), [v] "r"(v) : "vl", "vtype");
+            unsigned vsew = (unsigned) (v >> 3 & 7), vlmul = (unsigned) (v & 7);
+            int legal = (v >> 8) == 0 && vlmul != 4 && vsew <= 3 && (vlmul < 4 || vsew + (8 - vlmul) <= 3);
+            uint64_t vlmax = legal ? (vlmul < 4 ? (16u >> vsew) << vlmul : (16u >> vsew) >> (8 - vlmul)) : 0;
+            uint64_t wvl = legal ? (avl < vlmax ? avl : vlmax) : 0, wvt = legal ? v : 1ull << 63;
+            checks++;
+            if ((vl != wvl || vt != wvt || rd != wvl) && bad++ < 40)
+                printf("vsetvl avl %llu vtype %#llx: vl %llu vtype %#llx rd %llu\\n", (unsigned long long) avl,
+                       (unsigned long long) v, (unsigned long long) vl, (unsigned long long) vt, (unsigned long long) rd);
+        }
+}""")
 w('static void sigill_cases(void) {')
 w('    signal(SIGILL, on_sigill);')
 for fn, what in ills:
@@ -1092,14 +1403,22 @@ w('};')
 w('''
 int main(void) {
     for (int i = 0; i < (int) sizeof(mem); i++)
-        mem[i] = (uint8_t) rnd();
+        mem0[i] = mem[i] = (uint8_t) rnd();
     // the last rounds draw bytes from 00/01/7f/80/ff: zero, one, -1, MIN and
     // MAX at every SEW, for the division and overflow cases
     static const uint8_t special[5] = {0x00, 0x01, 0x7f, 0x80, 0xff};
-    for (int round = 0; round < 12; round++) {
+    // and the last two whole words of 0, 1, -1, MIN and MAX (so each SEW's
+    // top element of a word is one of them)
+    static const uint64_t wspecial[5] = {0, 1, ~0ull, 1ull << 63, ~(1ull << 63)};
+    for (int round = 0; round < 14; round++) {
         for (unsigned c = 0; c < sizeof(tcases) / sizeof(tcases[0]); c++) {
             for (int i = 0; i < 512; i++)
                 in[i] = round >= 8 ? special[rnd() % 5] : (uint8_t) rnd();
+            if (round >= 12)
+                for (int i = 0; i < 512; i += 8) {
+                    uint64_t v = wspecial[rnd() % 5];
+                    memcpy(in + i, &v, 8);
+                }
             if (tcases[c].isz)
                 indices((int) tcases[c].isz);
             uint64_t avl = round == 0 ? 0 : round == 1 ? tcases[c].vlmax : rnd() % (tcases[c].vlmax + 3);
@@ -1107,7 +1426,7 @@ int main(void) {
             fesetround(modes[round % 4]);
             uint64_t x = rnd();
             if (round >= 8)
-                x = rnd() % 2 ? 0 : (uint64_t) -1;
+                x = round >= 12 ? wspecial[rnd() % 5] : rnd() % 2 ? 0 : (uint64_t) -1;
             tcases[c].fn(avl, x);
         }
         for (unsigned c = 0; c < sizeof(rcases) / sizeof(rcases[0]); c++)
@@ -1116,18 +1435,25 @@ int main(void) {
                     continue;
                 for (int i = 0; i < 512; i++)
                     in[i] = round >= 8 ? special[rnd() % 5] : (uint8_t) rnd();
+            if (round >= 12)
+                for (int i = 0; i < 512; i += 8) {
+                    uint64_t v = wspecial[rnd() % 5];
+                    memcpy(in + i, &v, 8);
+                }
                 if (rcases[c].isz)
                     indices((int) rcases[c].isz);
                 unsigned vlmax = (unsigned) (128 * vts[v].lmul8 / 8 / vts[v].sew);
                 uint64_t avl = round == 0 ? 0 : round == 1 ? vlmax : rnd() % (vlmax + 3);
                 uint64_t x = rnd();
                 if (round >= 8)
-                    x = rnd() % 2 ? 0 : (uint64_t) -1;
+                    x = round >= 12 ? wspecial[rnd() % 5] : rnd() % 2 ? 0 : (uint64_t) -1;
                 rcases[c].fn(avl, x, vts[v].sew, vts[v].lmul8, vts[v].vt, vts[v].name);
             }
     }
     fesetround(FE_TONEAREST);
     sigill_cases();
+    guard_cases();
+    csr_cases();
     printf("riscv64_rvv_gadgets: %s (%lu checks, %lu mismatches)\\n", bad ? "FAIL" : "PASS", checks, bad);
     return bad != 0;
 }''')

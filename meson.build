@@ -588,7 +588,6 @@ if jit_cpu_family == 'aarch64' and guest_archs.contains('riscv64')
         'jit/guest-riscv64/fp.S',
         'jit/guest-riscv64/rcache.S',
         'jit/guest-riscv64/vector.S',
-        'jit/riscv64_vector.c', # RVV in C; uses AArch64 asm for fminnm/fmaxnm
     ]
 endif
 

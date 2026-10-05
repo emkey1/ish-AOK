@@ -10,6 +10,7 @@
 #include <fenv.h>
 #include <math.h>
 #include <setjmp.h>
+#include <sys/mman.h>
 #include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -18,6 +19,10 @@
 #define V __attribute__((target("arch=rv64gcv_zvbb"), noinline))
 static uint8_t in[512] __attribute__((aligned(16))), ou[512], om[512];
 static uint8_t mem[8192 + 64] __attribute__((aligned(4096)));
+// memory as each case starts (mem0) and as the model leaves it (mm); the
+// base register of the memory cases (mbase, in mem)
+static uint8_t mem0[sizeof(mem)], mm[sizeof(mem)];
+static uint8_t *mbase = mem;
 static unsigned long checks, bad;
 static uint64_t rng = 0x9e3779b97f4a7c15ull;
 static uint64_t rnd(void) { rng ^= rng << 13; rng ^= rng >> 7; rng ^= rng << 17; return rng; }
@@ -25,7 +30,7 @@ static uint64_t rnd(void) { rng ^= rng << 13; rng ^= rng >> 7; rng ^= rng << 17;
 // the register file in from in[], the instruction, v0 and v8-v31 out to ou[]
 #define VREGS "v0", "v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10", "v11", "v12", \
         "v13", "v14", "v15", "v16", "v17", "v18", "v19", "v20", "v21", "v22", "v23", "v24", "v25", \
-        "v26", "v27", "v28", "v29", "v30", "v31"
+        "v26", "v27", "v28", "v29", "v30", "v31", "vl", "vtype"
 #define RUNV(VSET, TEXT) asm volatile("li %[r], 0\n" \
         "vsetvli t0, zero, e8, m8, ta, ma\n" \
         "vle8.v v8, (%[i8])\n" "vle8.v v16, (%[i16])\n" "vle8.v v24, (%[i24])\n" \
@@ -36,7 +41,7 @@ static uint64_t rnd(void) { rng ^= rng << 13; rng ^= rng >> 7; rng ^= rng << 17;
         "vsetvli t0, zero, e8, m1, ta, ma\n" "vse8.v v0, (%[o0])\n" \
         : [r] "=&r"(ru) \
         : [i0] "r"(in), [i8] "r"(in + 128), [i16] "r"(in + 256), [i24] "r"(in + 384), \
-          [avl] "r"(avl), [x] "r"(x), [mem] "r"(mem), [vt] "r"(vt), \
+          [avl] "r"(avl), [x] "r"(x), [mem] "r"(mbase), [vt] "r"(vt), \
           [o0] "r"(ou), [o8] "r"(ou + 128), [o16] "r"(ou + 256), [o24] "r"(ou + 384) \
         : "t0", "t1", "ft0", "memory", VREGS)
 
@@ -46,6 +51,15 @@ static void compare(const char *what, const char *vt, uint64_t avl, uint64_t ru,
     for (int i = 0; i < 512 && at < 0; i++)
         if ((i < 16 || i >= 128) && ou[i] != om[i])
             at = i;
+    int mat = -1;
+    for (int i = 0; i < (int) sizeof(mem) && mat < 0; i++)
+        if (mem[i] != mm[i])
+            mat = i;
+    if (mat >= 0 && at < 0 && ru == rm) {
+        if (bad++ < 40)
+            printf("%s %s avl %llu: mem[%d] = %#x, want %#x\n", what, vt, (unsigned long long) avl, mat, mem[mat], mm[mat]);
+        return;
+    }
     if ((at >= 0 || ru != rm) && bad++ < 40) {
         if (at >= 0)
             printf("%s %s avl %llu: v%d byte %d = %#x, want %#x\n", what, vt, (unsigned long long) avl,
@@ -76,7 +90,7 @@ static void setbit(uint8_t *p, unsigned i, int b) {
 // into om and *r. Element i of register group g is at g * 16 + i * SEW/8.
 enum { K_BIN, K_CMP, K_RED, K_VID, K_EXT, K_MSF, K_CPOP, K_FIRST, K_MVXS, K_MVSX, K_LX, K_W,
        K_SLIDE, K_GATHER, K_COMPRESS, K_IOTA, K_CARRY, K_UNARY, K_FB, K_FC, K_FMVFS, K_FMVSF,
-       K_FCVT, K_FUN1, K_FRED, K_FW };
+       K_FCVT, K_FUN1, K_FRED, K_FW, K_MEM, K_FX, K_WRED };
 struct mc { int kind, op, form, masked, vd, vs2, vs1; int64_t imm; int aux, sign; uint64_t xmask; };
 
 static uint64_t ld(const uint8_t *f, int reg, unsigned i, int eb) {
@@ -394,8 +408,18 @@ static uint64_t fflags_now(void) {
     return (uint64_t) fetestexcept(FE_ALL_EXCEPT);
 }
 
+// the memory cases' base and scalar: a base around mem's page boundary
+// (strided and unit-stride), and a small signed stride
+static uint64_t xfix(const struct mc *c, uint64_t x) {
+    mbase = mem;
+    if (c->kind != K_MEM || ((c->op >> 1) & 3) == 1)
+        return x;
+    mbase = mem + 3000 + (x >> 40) % 2000;
+    return (uint64_t) ((int64_t) (x % 41) - 20);
+}
 static void model(const struct mc *c, int bits, int lmul8, uint64_t avl, uint64_t x, uint64_t *r) {
     memcpy(om, in, sizeof(om));
+    memcpy(mm, mem0, sizeof(mm));
     *r = 0;
     int eb = bits / 8;
     unsigned vlmax = (unsigned) (128 * lmul8 / 8 / bits), vl = avl < vlmax ? (unsigned) avl : vlmax;
@@ -600,6 +624,93 @@ static void model(const struct mc *c, int bits, int lmul8, uint64_t avl, uint64_
             }
         *r = fflags_now();
         break;
+    case K_MEM: {
+        // op: 1 store, mode << 1 (0 unit, 1 indexed, 2 strided), 8 ff, 16
+        // whole register, 32 mask; imm nf; aux the data EEW bytes
+        // (unit/strided), sign the index EEW bytes
+        int store = c->op & 1, mode = c->op >> 1 & 3, whole = c->op >> 4 & 1, maskm = c->op >> 5 & 1;
+        int deb = mode == 1 ? eb : c->aux, fields = (int) c->imm, regs;
+        unsigned evl = vl;
+        if (whole) {
+            evl = (unsigned) (fields * 16 / deb);
+            regs = fields;
+            fields = 1;
+        } else if (maskm) {
+            evl = (vl + 7) / 8;
+            regs = 1;
+        } else {
+            int emul8 = mode == 1 ? lmul8 : lmul8 * deb / eb;
+            regs = emul8 < 8 ? 1 : emul8 / 8;
+        }
+        for (unsigned i = 0; i < evl; i++) {
+            if (!ACT(i))
+                continue;
+            for (int f = 0; f < fields; f++) {
+                uint8_t *a = mode == 0 ? mbase + (i * (unsigned) fields + (unsigned) f) * (unsigned) deb
+                           : mode == 2 ? mbase + (int64_t) i * (int64_t) x + f * deb
+                           : mbase + ld(in, c->vs2, i, c->sign) + f * deb;
+                unsigned ro = (unsigned) ((c->vd + f * regs) * 16) + i * (unsigned) deb;
+                if (store)
+                    memcpy(mm + (a - mem), in + ro, (size_t) deb);
+                else
+                    memcpy(om + ro, a, (size_t) deb);
+            }
+        }
+        break;
+    }
+    case K_FX: {
+        int nar = c->op >= 11, ab = nar ? 2 * eb : eb;
+        int sgn = c->op == 1 || c->op == 3 || c->op == 5 || c->op == 7 || c->op == 8 || c->op == 10 || c->op == 12;
+        int bsgn = c->op == 1 || c->op == 3 || c->op == 5 || c->op == 7 || c->op == 8;
+        uint64_t m = bits == 64 ? ~0ull : (1ull << bits) - 1;
+        __int128 smax = (__int128) (m >> 1), smin = -smax - 1;
+        int sat = 0;
+        for (unsigned i = 0; i < vl; i++) {
+            if (!ACT(i))
+                continue;
+            uint64_t ra = ld(in, c->vs2, i, ab), rb = c->form == 0 ? ld(in, c->vs1, i, eb) : c->form == 1 ? x : (uint64_t) c->imm;
+            __int128 a = sgn ? (__int128) sx(ra, ab * 8) : (__int128) ra;
+            __int128 b = c->form == 2 && c->op >= 9 ? (__int128) rb
+                       : bsgn ? (__int128) sx(rb & m, bits) : (__int128) (rb & m);
+            __int128 v = 0;
+            int d = 0;
+            switch (c->op) {
+            case 0: case 1: v = a + b; break;
+            case 2: case 3: v = a - b; break;
+            case 4: case 5: v = a + b; d = 1; break;
+            case 6: case 7: v = a - b; d = 1; break;
+            case 8: v = a * b; d = bits - 1; break;
+            case 9: case 10: v = a; d = (int) (rb & (uint64_t) (bits - 1)); break;
+            case 11: case 12: v = a; d = (int) (rb & (uint64_t) (2 * bits - 1)); break;
+            }
+            if (d) { // roundoff by vxrm
+                int b1 = (int) (v >> (d - 1) & 1), bd = (int) (v >> d & 1);
+                __int128 low = v & ((((__int128) 1) << (d - 1)) - 1), all = v & ((((__int128) 1) << d) - 1);
+                int r = c->aux == 0 ? b1 : c->aux == 1 ? b1 & (low != 0 || bd) : c->aux == 2 ? 0 : (!bd && all != 0);
+                v = (v >> d) + r;
+            }
+            if (c->op <= 3 || c->op == 8 || c->op >= 11) { // saturating
+                int s_ = c->op == 1 || c->op == 3 || c->op == 8 || c->op == 12;
+                __int128 hi = s_ ? smax : (__int128) m, lo = s_ ? smin : 0;
+                if (v > hi) { v = hi; sat = 1; }
+                if (v < lo) { v = lo; sat = 1; }
+            }
+            st(om, c->vd, i, eb, (uint64_t) v);
+        }
+        *r = (uint64_t) sat;
+        break;
+    }
+    case K_WRED:
+        if (vl != 0) {
+            uint64_t acc = ld(in, c->vs1, 0, 2 * eb);
+            for (unsigned i = 0; i < vl; i++)
+                if (ACT(i)) {
+                    uint64_t e = ld(in, c->vs2, i, eb);
+                    acc += c->op ? (uint64_t) sx(e, bits) : e;
+                }
+            st(om, c->vd, 0, 2 * eb, acc);
+        }
+        break;
     case K_FMVFS:
         *r = bits == 32 ? 0xffffffff00000000ull | ld(in, c->vs2, 0, 4) : ld(in, c->vs2, 0, 8);
         break;
@@ -620,13 +731,14 @@ static void model(const struct mc *c, int bits, int lmul8, uint64_t avl, uint64_
                 st(om, c->vd, i, eb, c->sign ? (uint64_t) sx(v, sb * 8) : v);
             }
         break;
-    case K_MSF: {
+    case K_MSF: { // masked: only active elements count, and only they change
         unsigned first = vl;
         for (unsigned i = 0; i < vl && first == vl; i++)
-            if (bit(in + c->vs2 * 16, i))
+            if (ACT(i) && bit(in + c->vs2 * 16, i))
                 first = i;
         for (unsigned i = 0; i < vl; i++)
-            setbit(om + c->vd * 16, i, c->op == 0 ? i < first : c->op == 1 ? i <= first : i == first);
+            if (ACT(i))
+                setbit(om + c->vd * 16, i, c->op == 0 ? i < first : c->op == 1 ? i <= first : i == first);
         break;
     }
     case K_CPOP:
@@ -652,7 +764,7 @@ static void model(const struct mc *c, int bits, int lmul8, uint64_t avl, uint64_
         for (unsigned i = 0; i < vl; i++)
             if (ACT(i)) {
                 uint64_t v = 0;
-                memcpy(&v, mem + ld(in, c->vs2, i, c->aux), (size_t) eb);
+                memcpy(&v, mbase + ld(in, c->vs2, i, c->aux), (size_t) eb);
                 st(om, c->vd, i, eb, v);
             }
         break;
@@ -667,7 +779,8 @@ static void model(const struct mc *c, int bits, int lmul8, uint64_t avl, uint64_
     V static void FN(uint64_t avl, uint64_t x) { \
         static const struct mc m = {__VA_ARGS__}; \
         uint64_t ru, rm, vt = VT; \
-        x &= m.xmask; \
+        x = xfix(&m, x & m.xmask); \
+        memcpy(mem, mem0, sizeof(mem)); \
         model(&m, SEW, LMUL8, avl, x, &rm); \
         RUNV("vsetvli t1, %[avl], e" #SEW ", " #L ", tu, mu", TEXT); \
         compare(NAME, "e" #SEW #L, avl, ru, rm); \
@@ -678,7 +791,8 @@ static void model(const struct mc *c, int bits, int lmul8, uint64_t avl, uint64_
     V static void FN(uint64_t avl, uint64_t x, int sew, int lmul8, uint64_t vt, const char *vtn) { \
         static const struct mc m = {__VA_ARGS__}; \
         uint64_t ru, rm; \
-        x &= m.xmask; \
+        x = xfix(&m, x & m.xmask); \
+        memcpy(mem, mem0, sizeof(mem)); \
         model(&m, sew, lmul8, avl, x, &rm); \
         RUNV("vsetvl t1, %[avl], %[vt]", TEXT); \
         compare(NAME " (re-dispatched)", vtn, avl, ru, rm); \
@@ -3074,181 +3188,1826 @@ TCASE(c1797, 64, m1, 8, 24, "vfmv.f.s", "vfmv.f.s ft0, v16\nfmv.x.d %[r], ft0", 
 RCASE(r589, "vfmv.s.f", "fmv.d.x ft0, %[x]\nvfmv.s.f v8, ft0", 21, 0, 0, 0, 8, 16, 24, 0, 1, 0, ~0ull)
 TCASE(c1798, 32, m1, 8, 16, "vfmv.s.f", "fmv.d.x ft0, %[x]\nvfmv.s.f v8, ft0", 21, 0, 0, 0, 8, 16, 24, 0, 1, 0, ~0ull)
 TCASE(c1799, 64, m1, 8, 24, "vfmv.s.f", "fmv.d.x ft0, %[x]\nvfmv.s.f v8, ft0", 21, 0, 0, 0, 8, 16, 24, 0, 1, 0, ~0ull)
-RCASE(r590, "vid.v", "vid.v v8", 3, 0, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
-TCASE(c1800, 8, m1, 8, 0, "vid.v", "vid.v v8", 3, 0, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
-TCASE(c1801, 16, m1, 8, 8, "vid.v", "vid.v v8", 3, 0, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
-TCASE(c1802, 32, m1, 8, 16, "vid.v", "vid.v v8", 3, 0, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
-TCASE(c1803, 64, m1, 8, 24, "vid.v", "vid.v v8", 3, 0, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
-RCASE(r591, "vid.v v0.t", "vid.v v8, v0.t", 3, 0, 0, 1, 8, 16, 24, 0, 0, 0, ~0ull)
-TCASE(c1804, 8, m1, 8, 0, "vid.v v0.t", "vid.v v8, v0.t", 3, 0, 0, 1, 8, 16, 24, 0, 0, 0, ~0ull)
-TCASE(c1805, 16, m1, 8, 8, "vid.v v0.t", "vid.v v8, v0.t", 3, 0, 0, 1, 8, 16, 24, 0, 0, 0, ~0ull)
-TCASE(c1806, 32, m1, 8, 16, "vid.v v0.t", "vid.v v8, v0.t", 3, 0, 0, 1, 8, 16, 24, 0, 0, 0, ~0ull)
-TCASE(c1807, 64, m1, 8, 24, "vid.v v0.t", "vid.v v8, v0.t", 3, 0, 0, 1, 8, 16, 24, 0, 0, 0, ~0ull)
-RCASE(r592, "vzext.vf2", "vzext.vf2 v8, v16", 4, 0, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
-TCASE(c1808, 16, m1, 8, 8, "vzext.vf2", "vzext.vf2 v8, v16", 4, 0, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
-TCASE(c1809, 32, m1, 8, 16, "vzext.vf2", "vzext.vf2 v8, v16", 4, 0, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
-TCASE(c1810, 64, m1, 8, 24, "vzext.vf2", "vzext.vf2 v8, v16", 4, 0, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
-RCASE(r593, "vzext.vf2 v0.t", "vzext.vf2 v8, v16, v0.t", 4, 0, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
-TCASE(c1811, 16, m1, 8, 8, "vzext.vf2 v0.t", "vzext.vf2 v8, v16, v0.t", 4, 0, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
-TCASE(c1812, 32, m1, 8, 16, "vzext.vf2 v0.t", "vzext.vf2 v8, v16, v0.t", 4, 0, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
-TCASE(c1813, 64, m1, 8, 24, "vzext.vf2 v0.t", "vzext.vf2 v8, v16, v0.t", 4, 0, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
-RCASE(r594, "vsext.vf2", "vsext.vf2 v8, v16", 4, 0, 0, 0, 8, 16, 24, 0, 2, 1, ~0ull)
-TCASE(c1814, 16, m1, 8, 8, "vsext.vf2", "vsext.vf2 v8, v16", 4, 0, 0, 0, 8, 16, 24, 0, 2, 1, ~0ull)
-TCASE(c1815, 32, m1, 8, 16, "vsext.vf2", "vsext.vf2 v8, v16", 4, 0, 0, 0, 8, 16, 24, 0, 2, 1, ~0ull)
-TCASE(c1816, 64, m1, 8, 24, "vsext.vf2", "vsext.vf2 v8, v16", 4, 0, 0, 0, 8, 16, 24, 0, 2, 1, ~0ull)
-RCASE(r595, "vsext.vf2 v0.t", "vsext.vf2 v8, v16, v0.t", 4, 0, 0, 1, 8, 16, 24, 0, 2, 1, ~0ull)
-TCASE(c1817, 16, m1, 8, 8, "vsext.vf2 v0.t", "vsext.vf2 v8, v16, v0.t", 4, 0, 0, 1, 8, 16, 24, 0, 2, 1, ~0ull)
-TCASE(c1818, 32, m1, 8, 16, "vsext.vf2 v0.t", "vsext.vf2 v8, v16, v0.t", 4, 0, 0, 1, 8, 16, 24, 0, 2, 1, ~0ull)
-TCASE(c1819, 64, m1, 8, 24, "vsext.vf2 v0.t", "vsext.vf2 v8, v16, v0.t", 4, 0, 0, 1, 8, 16, 24, 0, 2, 1, ~0ull)
-RCASE(r596, "vzext.vf4", "vzext.vf4 v8, v16", 4, 0, 0, 0, 8, 16, 24, 0, 4, 0, ~0ull)
-TCASE(c1820, 32, m1, 8, 16, "vzext.vf4", "vzext.vf4 v8, v16", 4, 0, 0, 0, 8, 16, 24, 0, 4, 0, ~0ull)
-TCASE(c1821, 64, m1, 8, 24, "vzext.vf4", "vzext.vf4 v8, v16", 4, 0, 0, 0, 8, 16, 24, 0, 4, 0, ~0ull)
-RCASE(r597, "vzext.vf4 v0.t", "vzext.vf4 v8, v16, v0.t", 4, 0, 0, 1, 8, 16, 24, 0, 4, 0, ~0ull)
-TCASE(c1822, 32, m1, 8, 16, "vzext.vf4 v0.t", "vzext.vf4 v8, v16, v0.t", 4, 0, 0, 1, 8, 16, 24, 0, 4, 0, ~0ull)
-TCASE(c1823, 64, m1, 8, 24, "vzext.vf4 v0.t", "vzext.vf4 v8, v16, v0.t", 4, 0, 0, 1, 8, 16, 24, 0, 4, 0, ~0ull)
-RCASE(r598, "vsext.vf4", "vsext.vf4 v8, v16", 4, 0, 0, 0, 8, 16, 24, 0, 4, 1, ~0ull)
-TCASE(c1824, 32, m1, 8, 16, "vsext.vf4", "vsext.vf4 v8, v16", 4, 0, 0, 0, 8, 16, 24, 0, 4, 1, ~0ull)
-TCASE(c1825, 64, m1, 8, 24, "vsext.vf4", "vsext.vf4 v8, v16", 4, 0, 0, 0, 8, 16, 24, 0, 4, 1, ~0ull)
-RCASE(r599, "vsext.vf4 v0.t", "vsext.vf4 v8, v16, v0.t", 4, 0, 0, 1, 8, 16, 24, 0, 4, 1, ~0ull)
-TCASE(c1826, 32, m1, 8, 16, "vsext.vf4 v0.t", "vsext.vf4 v8, v16, v0.t", 4, 0, 0, 1, 8, 16, 24, 0, 4, 1, ~0ull)
-TCASE(c1827, 64, m1, 8, 24, "vsext.vf4 v0.t", "vsext.vf4 v8, v16, v0.t", 4, 0, 0, 1, 8, 16, 24, 0, 4, 1, ~0ull)
-RCASE(r600, "vzext.vf8", "vzext.vf8 v8, v16", 4, 0, 0, 0, 8, 16, 24, 0, 8, 0, ~0ull)
-TCASE(c1828, 64, m1, 8, 24, "vzext.vf8", "vzext.vf8 v8, v16", 4, 0, 0, 0, 8, 16, 24, 0, 8, 0, ~0ull)
-RCASE(r601, "vzext.vf8 v0.t", "vzext.vf8 v8, v16, v0.t", 4, 0, 0, 1, 8, 16, 24, 0, 8, 0, ~0ull)
-TCASE(c1829, 64, m1, 8, 24, "vzext.vf8 v0.t", "vzext.vf8 v8, v16, v0.t", 4, 0, 0, 1, 8, 16, 24, 0, 8, 0, ~0ull)
-RCASE(r602, "vsext.vf8", "vsext.vf8 v8, v16", 4, 0, 0, 0, 8, 16, 24, 0, 8, 1, ~0ull)
-TCASE(c1830, 64, m1, 8, 24, "vsext.vf8", "vsext.vf8 v8, v16", 4, 0, 0, 0, 8, 16, 24, 0, 8, 1, ~0ull)
-RCASE(r603, "vsext.vf8 v0.t", "vsext.vf8 v8, v16, v0.t", 4, 0, 0, 1, 8, 16, 24, 0, 8, 1, ~0ull)
-TCASE(c1831, 64, m1, 8, 24, "vsext.vf8 v0.t", "vsext.vf8 v8, v16, v0.t", 4, 0, 0, 1, 8, 16, 24, 0, 8, 1, ~0ull)
-RCASE(r604, "vmsbf.m", "vmsbf.m v8, v16", 5, 0, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
-TCASE(c1832, 8, m1, 8, 0, "vmsbf.m", "vmsbf.m v8, v16", 5, 0, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
-TCASE(c1833, 16, m1, 8, 8, "vmsbf.m", "vmsbf.m v8, v16", 5, 0, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
-TCASE(c1834, 32, m1, 8, 16, "vmsbf.m", "vmsbf.m v8, v16", 5, 0, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
-TCASE(c1835, 64, m1, 8, 24, "vmsbf.m", "vmsbf.m v8, v16", 5, 0, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
-RCASE(r605, "vmsif.m", "vmsif.m v8, v16", 5, 1, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
-TCASE(c1836, 8, m1, 8, 0, "vmsif.m", "vmsif.m v8, v16", 5, 1, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
-TCASE(c1837, 16, m1, 8, 8, "vmsif.m", "vmsif.m v8, v16", 5, 1, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
-TCASE(c1838, 32, m1, 8, 16, "vmsif.m", "vmsif.m v8, v16", 5, 1, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
-TCASE(c1839, 64, m1, 8, 24, "vmsif.m", "vmsif.m v8, v16", 5, 1, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
-RCASE(r606, "vmsof.m", "vmsof.m v8, v16", 5, 2, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
-TCASE(c1840, 8, m1, 8, 0, "vmsof.m", "vmsof.m v8, v16", 5, 2, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
-TCASE(c1841, 16, m1, 8, 8, "vmsof.m", "vmsof.m v8, v16", 5, 2, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
-TCASE(c1842, 32, m1, 8, 16, "vmsof.m", "vmsof.m v8, v16", 5, 2, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
-TCASE(c1843, 64, m1, 8, 24, "vmsof.m", "vmsof.m v8, v16", 5, 2, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
-RCASE(r607, "vcpop.m", "vcpop.m %[r], v16", 6, 0, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
-TCASE(c1844, 8, m1, 8, 0, "vcpop.m", "vcpop.m %[r], v16", 6, 0, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
-TCASE(c1845, 16, m1, 8, 8, "vcpop.m", "vcpop.m %[r], v16", 6, 0, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
-TCASE(c1846, 32, m1, 8, 16, "vcpop.m", "vcpop.m %[r], v16", 6, 0, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
-TCASE(c1847, 64, m1, 8, 24, "vcpop.m", "vcpop.m %[r], v16", 6, 0, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
-RCASE(r608, "vcpop.m v0.t", "vcpop.m %[r], v16, v0.t", 6, 0, 0, 1, 8, 16, 24, 0, 0, 0, ~0ull)
-TCASE(c1848, 8, m1, 8, 0, "vcpop.m v0.t", "vcpop.m %[r], v16, v0.t", 6, 0, 0, 1, 8, 16, 24, 0, 0, 0, ~0ull)
-TCASE(c1849, 16, m1, 8, 8, "vcpop.m v0.t", "vcpop.m %[r], v16, v0.t", 6, 0, 0, 1, 8, 16, 24, 0, 0, 0, ~0ull)
-TCASE(c1850, 32, m1, 8, 16, "vcpop.m v0.t", "vcpop.m %[r], v16, v0.t", 6, 0, 0, 1, 8, 16, 24, 0, 0, 0, ~0ull)
-TCASE(c1851, 64, m1, 8, 24, "vcpop.m v0.t", "vcpop.m %[r], v16, v0.t", 6, 0, 0, 1, 8, 16, 24, 0, 0, 0, ~0ull)
-RCASE(r609, "vfirst.m", "vfirst.m %[r], v16", 7, 0, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
-TCASE(c1852, 8, m1, 8, 0, "vfirst.m", "vfirst.m %[r], v16", 7, 0, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
-TCASE(c1853, 16, m1, 8, 8, "vfirst.m", "vfirst.m %[r], v16", 7, 0, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
-TCASE(c1854, 32, m1, 8, 16, "vfirst.m", "vfirst.m %[r], v16", 7, 0, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
-TCASE(c1855, 64, m1, 8, 24, "vfirst.m", "vfirst.m %[r], v16", 7, 0, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
-RCASE(r610, "vfirst.m v0.t", "vfirst.m %[r], v16, v0.t", 7, 0, 0, 1, 8, 16, 24, 0, 0, 0, ~0ull)
-TCASE(c1856, 8, m1, 8, 0, "vfirst.m v0.t", "vfirst.m %[r], v16, v0.t", 7, 0, 0, 1, 8, 16, 24, 0, 0, 0, ~0ull)
-TCASE(c1857, 16, m1, 8, 8, "vfirst.m v0.t", "vfirst.m %[r], v16, v0.t", 7, 0, 0, 1, 8, 16, 24, 0, 0, 0, ~0ull)
-TCASE(c1858, 32, m1, 8, 16, "vfirst.m v0.t", "vfirst.m %[r], v16, v0.t", 7, 0, 0, 1, 8, 16, 24, 0, 0, 0, ~0ull)
-TCASE(c1859, 64, m1, 8, 24, "vfirst.m v0.t", "vfirst.m %[r], v16, v0.t", 7, 0, 0, 1, 8, 16, 24, 0, 0, 0, ~0ull)
-RCASE(r611, "vmv.x.s", "vmv.x.s %[r], v16", 8, 0, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
-TCASE(c1860, 8, m1, 8, 0, "vmv.x.s", "vmv.x.s %[r], v16", 8, 0, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
-TCASE(c1861, 16, m1, 8, 8, "vmv.x.s", "vmv.x.s %[r], v16", 8, 0, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
-TCASE(c1862, 32, m1, 8, 16, "vmv.x.s", "vmv.x.s %[r], v16", 8, 0, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
-TCASE(c1863, 64, m1, 8, 24, "vmv.x.s", "vmv.x.s %[r], v16", 8, 0, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
-RCASE(r612, "vmv.s.x", "vmv.s.x v8, %[x]", 9, 0, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
-TCASE(c1864, 8, m1, 8, 0, "vmv.s.x", "vmv.s.x v8, %[x]", 9, 0, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
-TCASE(c1865, 16, m1, 8, 8, "vmv.s.x", "vmv.s.x v8, %[x]", 9, 0, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
-TCASE(c1866, 32, m1, 8, 16, "vmv.s.x", "vmv.s.x v8, %[x]", 9, 0, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
-TCASE(c1867, 64, m1, 8, 24, "vmv.s.x", "vmv.s.x v8, %[x]", 9, 0, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
-RCASE(r613, "vluxei8", "vluxei8.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 1, 0, ~0ull)
-TCASE(c1868, 8, m1, 8, 0, "vluxei8", "vluxei8.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 1, 0, ~0ull)
-TCASE(c1869, 16, m1, 8, 8, "vluxei8", "vluxei8.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 1, 0, ~0ull)
-TCASE(c1870, 32, m1, 8, 16, "vluxei8", "vluxei8.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 1, 0, ~0ull)
-TCASE(c1871, 64, m1, 8, 24, "vluxei8", "vluxei8.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 1, 0, ~0ull)
-RCASE(r614, "vluxei8 v0.t", "vluxei8.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 1, 0, ~0ull)
-TCASE(c1872, 8, m1, 8, 0, "vluxei8 v0.t", "vluxei8.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 1, 0, ~0ull)
-TCASE(c1873, 16, m1, 8, 8, "vluxei8 v0.t", "vluxei8.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 1, 0, ~0ull)
-TCASE(c1874, 32, m1, 8, 16, "vluxei8 v0.t", "vluxei8.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 1, 0, ~0ull)
-TCASE(c1875, 64, m1, 8, 24, "vluxei8 v0.t", "vluxei8.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 1, 0, ~0ull)
-RCASE(r615, "vloxei8", "vloxei8.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 1, 0, ~0ull)
-TCASE(c1876, 8, m1, 8, 0, "vloxei8", "vloxei8.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 1, 0, ~0ull)
-TCASE(c1877, 16, m1, 8, 8, "vloxei8", "vloxei8.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 1, 0, ~0ull)
-TCASE(c1878, 32, m1, 8, 16, "vloxei8", "vloxei8.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 1, 0, ~0ull)
-TCASE(c1879, 64, m1, 8, 24, "vloxei8", "vloxei8.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 1, 0, ~0ull)
-RCASE(r616, "vloxei8 v0.t", "vloxei8.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 1, 0, ~0ull)
-TCASE(c1880, 8, m1, 8, 0, "vloxei8 v0.t", "vloxei8.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 1, 0, ~0ull)
-TCASE(c1881, 16, m1, 8, 8, "vloxei8 v0.t", "vloxei8.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 1, 0, ~0ull)
-TCASE(c1882, 32, m1, 8, 16, "vloxei8 v0.t", "vloxei8.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 1, 0, ~0ull)
-TCASE(c1883, 64, m1, 8, 24, "vloxei8 v0.t", "vloxei8.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 1, 0, ~0ull)
-RCASE(r617, "vluxei16", "vluxei16.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
-TCASE(c1884, 8, m1, 8, 0, "vluxei16", "vluxei16.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
-TCASE(c1885, 16, m1, 8, 8, "vluxei16", "vluxei16.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
-TCASE(c1886, 32, m1, 8, 16, "vluxei16", "vluxei16.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
-TCASE(c1887, 64, m1, 8, 24, "vluxei16", "vluxei16.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
-RCASE(r618, "vluxei16 v0.t", "vluxei16.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
-TCASE(c1888, 8, m1, 8, 0, "vluxei16 v0.t", "vluxei16.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
-TCASE(c1889, 16, m1, 8, 8, "vluxei16 v0.t", "vluxei16.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
-TCASE(c1890, 32, m1, 8, 16, "vluxei16 v0.t", "vluxei16.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
-TCASE(c1891, 64, m1, 8, 24, "vluxei16 v0.t", "vluxei16.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
-RCASE(r619, "vloxei16", "vloxei16.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
-TCASE(c1892, 8, m1, 8, 0, "vloxei16", "vloxei16.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
-TCASE(c1893, 16, m1, 8, 8, "vloxei16", "vloxei16.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
-TCASE(c1894, 32, m1, 8, 16, "vloxei16", "vloxei16.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
-TCASE(c1895, 64, m1, 8, 24, "vloxei16", "vloxei16.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
-RCASE(r620, "vloxei16 v0.t", "vloxei16.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
-TCASE(c1896, 8, m1, 8, 0, "vloxei16 v0.t", "vloxei16.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
-TCASE(c1897, 16, m1, 8, 8, "vloxei16 v0.t", "vloxei16.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
-TCASE(c1898, 32, m1, 8, 16, "vloxei16 v0.t", "vloxei16.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
-TCASE(c1899, 64, m1, 8, 24, "vloxei16 v0.t", "vloxei16.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
-RCASE(r621, "vluxei32", "vluxei32.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 4, 0, ~0ull)
-TCASE(c1900, 8, m1, 8, 0, "vluxei32", "vluxei32.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 4, 0, ~0ull)
-TCASE(c1901, 16, m1, 8, 8, "vluxei32", "vluxei32.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 4, 0, ~0ull)
-TCASE(c1902, 32, m1, 8, 16, "vluxei32", "vluxei32.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 4, 0, ~0ull)
-TCASE(c1903, 64, m1, 8, 24, "vluxei32", "vluxei32.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 4, 0, ~0ull)
-RCASE(r622, "vluxei32 v0.t", "vluxei32.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 4, 0, ~0ull)
-TCASE(c1904, 8, m1, 8, 0, "vluxei32 v0.t", "vluxei32.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 4, 0, ~0ull)
-TCASE(c1905, 16, m1, 8, 8, "vluxei32 v0.t", "vluxei32.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 4, 0, ~0ull)
-TCASE(c1906, 32, m1, 8, 16, "vluxei32 v0.t", "vluxei32.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 4, 0, ~0ull)
-TCASE(c1907, 64, m1, 8, 24, "vluxei32 v0.t", "vluxei32.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 4, 0, ~0ull)
-RCASE(r623, "vloxei32", "vloxei32.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 4, 0, ~0ull)
-TCASE(c1908, 8, m1, 8, 0, "vloxei32", "vloxei32.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 4, 0, ~0ull)
-TCASE(c1909, 16, m1, 8, 8, "vloxei32", "vloxei32.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 4, 0, ~0ull)
-TCASE(c1910, 32, m1, 8, 16, "vloxei32", "vloxei32.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 4, 0, ~0ull)
-TCASE(c1911, 64, m1, 8, 24, "vloxei32", "vloxei32.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 4, 0, ~0ull)
-RCASE(r624, "vloxei32 v0.t", "vloxei32.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 4, 0, ~0ull)
-TCASE(c1912, 8, m1, 8, 0, "vloxei32 v0.t", "vloxei32.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 4, 0, ~0ull)
-TCASE(c1913, 16, m1, 8, 8, "vloxei32 v0.t", "vloxei32.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 4, 0, ~0ull)
-TCASE(c1914, 32, m1, 8, 16, "vloxei32 v0.t", "vloxei32.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 4, 0, ~0ull)
-TCASE(c1915, 64, m1, 8, 24, "vloxei32 v0.t", "vloxei32.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 4, 0, ~0ull)
-RCASE(r625, "vluxei64", "vluxei64.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 8, 0, ~0ull)
-TCASE(c1916, 8, m1, 8, 0, "vluxei64", "vluxei64.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 8, 0, ~0ull)
-TCASE(c1917, 16, m1, 8, 8, "vluxei64", "vluxei64.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 8, 0, ~0ull)
-TCASE(c1918, 32, m1, 8, 16, "vluxei64", "vluxei64.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 8, 0, ~0ull)
-TCASE(c1919, 64, m1, 8, 24, "vluxei64", "vluxei64.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 8, 0, ~0ull)
-RCASE(r626, "vluxei64 v0.t", "vluxei64.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 8, 0, ~0ull)
-TCASE(c1920, 8, m1, 8, 0, "vluxei64 v0.t", "vluxei64.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 8, 0, ~0ull)
-TCASE(c1921, 16, m1, 8, 8, "vluxei64 v0.t", "vluxei64.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 8, 0, ~0ull)
-TCASE(c1922, 32, m1, 8, 16, "vluxei64 v0.t", "vluxei64.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 8, 0, ~0ull)
-TCASE(c1923, 64, m1, 8, 24, "vluxei64 v0.t", "vluxei64.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 8, 0, ~0ull)
-RCASE(r627, "vloxei64", "vloxei64.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 8, 0, ~0ull)
-TCASE(c1924, 8, m1, 8, 0, "vloxei64", "vloxei64.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 8, 0, ~0ull)
-TCASE(c1925, 16, m1, 8, 8, "vloxei64", "vloxei64.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 8, 0, ~0ull)
-TCASE(c1926, 32, m1, 8, 16, "vloxei64", "vloxei64.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 8, 0, ~0ull)
-TCASE(c1927, 64, m1, 8, 24, "vloxei64", "vloxei64.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 8, 0, ~0ull)
-RCASE(r628, "vloxei64 v0.t", "vloxei64.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 8, 0, ~0ull)
-TCASE(c1928, 8, m1, 8, 0, "vloxei64 v0.t", "vloxei64.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 8, 0, ~0ull)
-TCASE(c1929, 16, m1, 8, 8, "vloxei64 v0.t", "vloxei64.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 8, 0, ~0ull)
-TCASE(c1930, 32, m1, 8, 16, "vloxei64 v0.t", "vloxei64.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 8, 0, ~0ull)
-TCASE(c1931, 64, m1, 8, 24, "vloxei64 v0.t", "vloxei64.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 8, 0, ~0ull)
-RCASE(r629, "vluxei32 vd=vs2", "vluxei32.v v16, (%[mem]), v16", 10, 0, 0, 0, 16, 16, 24, 0, 4, 0, ~0ull)
-TCASE(c1932, 32, m1, 8, 16, "vluxei32 vd=vs2", "vluxei32.v v16, (%[mem]), v16", 10, 0, 0, 0, 16, 16, 24, 0, 4, 0, ~0ull)
-RCASE(r630, "vluxei64 vd=vs2", "vluxei64.v v16, (%[mem]), v16", 10, 0, 0, 0, 16, 16, 24, 0, 8, 0, ~0ull)
-TCASE(c1933, 64, m1, 8, 24, "vluxei64 vd=vs2", "vluxei64.v v16, (%[mem]), v16", 10, 0, 0, 0, 16, 16, 24, 0, 8, 0, ~0ull)
+RCASE(r590, "vle8.v", "vle8.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 1, 1, 0, ~0ull)
+TCASE(c1800, 8, m1, 8, 0, "vle8.v", "vle8.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 1, 1, 0, ~0ull)
+TCASE(c1801, 16, m1, 8, 8, "vle8.v", "vle8.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 1, 1, 0, ~0ull)
+TCASE(c1802, 32, m1, 8, 16, "vle8.v", "vle8.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 1, 1, 0, ~0ull)
+TCASE(c1803, 64, m1, 8, 24, "vle8.v", "vle8.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 1, 1, 0, ~0ull)
+RCASE(r591, "vle8.v v0.t", "vle8.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 1, 1, 0, ~0ull)
+TCASE(c1804, 8, m1, 8, 0, "vle8.v v0.t", "vle8.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 1, 1, 0, ~0ull)
+TCASE(c1805, 16, m1, 8, 8, "vle8.v v0.t", "vle8.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 1, 1, 0, ~0ull)
+TCASE(c1806, 32, m1, 8, 16, "vle8.v v0.t", "vle8.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 1, 1, 0, ~0ull)
+TCASE(c1807, 64, m1, 8, 24, "vle8.v v0.t", "vle8.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 1, 1, 0, ~0ull)
+RCASE(r592, "vse8.v", "vse8.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 1, 1, 0, ~0ull)
+TCASE(c1808, 8, m1, 8, 0, "vse8.v", "vse8.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 1, 1, 0, ~0ull)
+TCASE(c1809, 16, m1, 8, 8, "vse8.v", "vse8.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 1, 1, 0, ~0ull)
+TCASE(c1810, 32, m1, 8, 16, "vse8.v", "vse8.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 1, 1, 0, ~0ull)
+TCASE(c1811, 64, m1, 8, 24, "vse8.v", "vse8.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 1, 1, 0, ~0ull)
+RCASE(r593, "vse8.v v0.t", "vse8.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 1, 1, 0, ~0ull)
+TCASE(c1812, 8, m1, 8, 0, "vse8.v v0.t", "vse8.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 1, 1, 0, ~0ull)
+TCASE(c1813, 16, m1, 8, 8, "vse8.v v0.t", "vse8.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 1, 1, 0, ~0ull)
+TCASE(c1814, 32, m1, 8, 16, "vse8.v v0.t", "vse8.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 1, 1, 0, ~0ull)
+TCASE(c1815, 64, m1, 8, 24, "vse8.v v0.t", "vse8.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 1, 1, 0, ~0ull)
+RCASE(r594, "vle8ff.v", "vle8ff.v v8, (%[mem])", 26, 8, 0, 0, 8, 16, 24, 1, 1, 0, ~0ull)
+TCASE(c1816, 8, m1, 8, 0, "vle8ff.v", "vle8ff.v v8, (%[mem])", 26, 8, 0, 0, 8, 16, 24, 1, 1, 0, ~0ull)
+TCASE(c1817, 16, m1, 8, 8, "vle8ff.v", "vle8ff.v v8, (%[mem])", 26, 8, 0, 0, 8, 16, 24, 1, 1, 0, ~0ull)
+TCASE(c1818, 32, m1, 8, 16, "vle8ff.v", "vle8ff.v v8, (%[mem])", 26, 8, 0, 0, 8, 16, 24, 1, 1, 0, ~0ull)
+TCASE(c1819, 64, m1, 8, 24, "vle8ff.v", "vle8ff.v v8, (%[mem])", 26, 8, 0, 0, 8, 16, 24, 1, 1, 0, ~0ull)
+RCASE(r595, "vle8ff.v v0.t", "vle8ff.v v8, (%[mem]), v0.t", 26, 8, 0, 1, 8, 16, 24, 1, 1, 0, ~0ull)
+TCASE(c1820, 8, m1, 8, 0, "vle8ff.v v0.t", "vle8ff.v v8, (%[mem]), v0.t", 26, 8, 0, 1, 8, 16, 24, 1, 1, 0, ~0ull)
+TCASE(c1821, 16, m1, 8, 8, "vle8ff.v v0.t", "vle8ff.v v8, (%[mem]), v0.t", 26, 8, 0, 1, 8, 16, 24, 1, 1, 0, ~0ull)
+TCASE(c1822, 32, m1, 8, 16, "vle8ff.v v0.t", "vle8ff.v v8, (%[mem]), v0.t", 26, 8, 0, 1, 8, 16, 24, 1, 1, 0, ~0ull)
+TCASE(c1823, 64, m1, 8, 24, "vle8ff.v v0.t", "vle8ff.v v8, (%[mem]), v0.t", 26, 8, 0, 1, 8, 16, 24, 1, 1, 0, ~0ull)
+RCASE(r596, "vlse8.v", "vlse8.v v8, (%[mem]), %[x]", 26, 4, 0, 0, 8, 16, 24, 1, 1, 0, ~0ull)
+TCASE(c1824, 8, m1, 8, 0, "vlse8.v", "vlse8.v v8, (%[mem]), %[x]", 26, 4, 0, 0, 8, 16, 24, 1, 1, 0, ~0ull)
+TCASE(c1825, 16, m1, 8, 8, "vlse8.v", "vlse8.v v8, (%[mem]), %[x]", 26, 4, 0, 0, 8, 16, 24, 1, 1, 0, ~0ull)
+TCASE(c1826, 32, m1, 8, 16, "vlse8.v", "vlse8.v v8, (%[mem]), %[x]", 26, 4, 0, 0, 8, 16, 24, 1, 1, 0, ~0ull)
+TCASE(c1827, 64, m1, 8, 24, "vlse8.v", "vlse8.v v8, (%[mem]), %[x]", 26, 4, 0, 0, 8, 16, 24, 1, 1, 0, ~0ull)
+RCASE(r597, "vlse8.v v0.t", "vlse8.v v8, (%[mem]), %[x], v0.t", 26, 4, 0, 1, 8, 16, 24, 1, 1, 0, ~0ull)
+TCASE(c1828, 8, m1, 8, 0, "vlse8.v v0.t", "vlse8.v v8, (%[mem]), %[x], v0.t", 26, 4, 0, 1, 8, 16, 24, 1, 1, 0, ~0ull)
+TCASE(c1829, 16, m1, 8, 8, "vlse8.v v0.t", "vlse8.v v8, (%[mem]), %[x], v0.t", 26, 4, 0, 1, 8, 16, 24, 1, 1, 0, ~0ull)
+TCASE(c1830, 32, m1, 8, 16, "vlse8.v v0.t", "vlse8.v v8, (%[mem]), %[x], v0.t", 26, 4, 0, 1, 8, 16, 24, 1, 1, 0, ~0ull)
+TCASE(c1831, 64, m1, 8, 24, "vlse8.v v0.t", "vlse8.v v8, (%[mem]), %[x], v0.t", 26, 4, 0, 1, 8, 16, 24, 1, 1, 0, ~0ull)
+RCASE(r598, "vsse8.v", "vsse8.v v8, (%[mem]), %[x]", 26, 5, 0, 0, 8, 16, 24, 1, 1, 0, ~0ull)
+TCASE(c1832, 8, m1, 8, 0, "vsse8.v", "vsse8.v v8, (%[mem]), %[x]", 26, 5, 0, 0, 8, 16, 24, 1, 1, 0, ~0ull)
+TCASE(c1833, 16, m1, 8, 8, "vsse8.v", "vsse8.v v8, (%[mem]), %[x]", 26, 5, 0, 0, 8, 16, 24, 1, 1, 0, ~0ull)
+TCASE(c1834, 32, m1, 8, 16, "vsse8.v", "vsse8.v v8, (%[mem]), %[x]", 26, 5, 0, 0, 8, 16, 24, 1, 1, 0, ~0ull)
+TCASE(c1835, 64, m1, 8, 24, "vsse8.v", "vsse8.v v8, (%[mem]), %[x]", 26, 5, 0, 0, 8, 16, 24, 1, 1, 0, ~0ull)
+RCASE(r599, "vsse8.v v0.t", "vsse8.v v8, (%[mem]), %[x], v0.t", 26, 5, 0, 1, 8, 16, 24, 1, 1, 0, ~0ull)
+TCASE(c1836, 8, m1, 8, 0, "vsse8.v v0.t", "vsse8.v v8, (%[mem]), %[x], v0.t", 26, 5, 0, 1, 8, 16, 24, 1, 1, 0, ~0ull)
+TCASE(c1837, 16, m1, 8, 8, "vsse8.v v0.t", "vsse8.v v8, (%[mem]), %[x], v0.t", 26, 5, 0, 1, 8, 16, 24, 1, 1, 0, ~0ull)
+TCASE(c1838, 32, m1, 8, 16, "vsse8.v v0.t", "vsse8.v v8, (%[mem]), %[x], v0.t", 26, 5, 0, 1, 8, 16, 24, 1, 1, 0, ~0ull)
+TCASE(c1839, 64, m1, 8, 24, "vsse8.v v0.t", "vsse8.v v8, (%[mem]), %[x], v0.t", 26, 5, 0, 1, 8, 16, 24, 1, 1, 0, ~0ull)
+RCASE(r600, "vsuxei8", "vsuxei8.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 1, 0, 1, ~0ull)
+TCASE(c1840, 8, m1, 8, 0, "vsuxei8", "vsuxei8.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 1, 0, 1, ~0ull)
+TCASE(c1841, 16, m1, 8, 8, "vsuxei8", "vsuxei8.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 1, 0, 1, ~0ull)
+TCASE(c1842, 32, m1, 8, 16, "vsuxei8", "vsuxei8.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 1, 0, 1, ~0ull)
+TCASE(c1843, 64, m1, 8, 24, "vsuxei8", "vsuxei8.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 1, 0, 1, ~0ull)
+RCASE(r601, "vsuxei8 v0.t", "vsuxei8.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 1, 0, 1, ~0ull)
+TCASE(c1844, 8, m1, 8, 0, "vsuxei8 v0.t", "vsuxei8.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 1, 0, 1, ~0ull)
+TCASE(c1845, 16, m1, 8, 8, "vsuxei8 v0.t", "vsuxei8.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 1, 0, 1, ~0ull)
+TCASE(c1846, 32, m1, 8, 16, "vsuxei8 v0.t", "vsuxei8.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 1, 0, 1, ~0ull)
+TCASE(c1847, 64, m1, 8, 24, "vsuxei8 v0.t", "vsuxei8.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 1, 0, 1, ~0ull)
+RCASE(r602, "vsoxei8", "vsoxei8.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 1, 0, 1, ~0ull)
+TCASE(c1848, 8, m1, 8, 0, "vsoxei8", "vsoxei8.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 1, 0, 1, ~0ull)
+TCASE(c1849, 16, m1, 8, 8, "vsoxei8", "vsoxei8.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 1, 0, 1, ~0ull)
+TCASE(c1850, 32, m1, 8, 16, "vsoxei8", "vsoxei8.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 1, 0, 1, ~0ull)
+TCASE(c1851, 64, m1, 8, 24, "vsoxei8", "vsoxei8.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 1, 0, 1, ~0ull)
+RCASE(r603, "vsoxei8 v0.t", "vsoxei8.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 1, 0, 1, ~0ull)
+TCASE(c1852, 8, m1, 8, 0, "vsoxei8 v0.t", "vsoxei8.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 1, 0, 1, ~0ull)
+TCASE(c1853, 16, m1, 8, 8, "vsoxei8 v0.t", "vsoxei8.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 1, 0, 1, ~0ull)
+TCASE(c1854, 32, m1, 8, 16, "vsoxei8 v0.t", "vsoxei8.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 1, 0, 1, ~0ull)
+TCASE(c1855, 64, m1, 8, 24, "vsoxei8 v0.t", "vsoxei8.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 1, 0, 1, ~0ull)
+RCASE(r604, "vlseg2e8.v", "vlseg2e8.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 2, 1, 0, ~0ull)
+TCASE(c1856, 8, m1, 8, 0, "vlseg2e8.v", "vlseg2e8.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 2, 1, 0, ~0ull)
+TCASE(c1857, 16, m1, 8, 8, "vlseg2e8.v", "vlseg2e8.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 2, 1, 0, ~0ull)
+TCASE(c1858, 32, m1, 8, 16, "vlseg2e8.v", "vlseg2e8.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 2, 1, 0, ~0ull)
+TCASE(c1859, 64, m1, 8, 24, "vlseg2e8.v", "vlseg2e8.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 2, 1, 0, ~0ull)
+RCASE(r605, "vlseg2e8.v v0.t", "vlseg2e8.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 2, 1, 0, ~0ull)
+TCASE(c1860, 8, m1, 8, 0, "vlseg2e8.v v0.t", "vlseg2e8.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 2, 1, 0, ~0ull)
+TCASE(c1861, 16, m1, 8, 8, "vlseg2e8.v v0.t", "vlseg2e8.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 2, 1, 0, ~0ull)
+TCASE(c1862, 32, m1, 8, 16, "vlseg2e8.v v0.t", "vlseg2e8.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 2, 1, 0, ~0ull)
+TCASE(c1863, 64, m1, 8, 24, "vlseg2e8.v v0.t", "vlseg2e8.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 2, 1, 0, ~0ull)
+RCASE(r606, "vsseg2e8.v", "vsseg2e8.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 2, 1, 0, ~0ull)
+TCASE(c1864, 8, m1, 8, 0, "vsseg2e8.v", "vsseg2e8.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 2, 1, 0, ~0ull)
+TCASE(c1865, 16, m1, 8, 8, "vsseg2e8.v", "vsseg2e8.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 2, 1, 0, ~0ull)
+TCASE(c1866, 32, m1, 8, 16, "vsseg2e8.v", "vsseg2e8.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 2, 1, 0, ~0ull)
+TCASE(c1867, 64, m1, 8, 24, "vsseg2e8.v", "vsseg2e8.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 2, 1, 0, ~0ull)
+RCASE(r607, "vsseg2e8.v v0.t", "vsseg2e8.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 2, 1, 0, ~0ull)
+TCASE(c1868, 8, m1, 8, 0, "vsseg2e8.v v0.t", "vsseg2e8.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 2, 1, 0, ~0ull)
+TCASE(c1869, 16, m1, 8, 8, "vsseg2e8.v v0.t", "vsseg2e8.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 2, 1, 0, ~0ull)
+TCASE(c1870, 32, m1, 8, 16, "vsseg2e8.v v0.t", "vsseg2e8.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 2, 1, 0, ~0ull)
+TCASE(c1871, 64, m1, 8, 24, "vsseg2e8.v v0.t", "vsseg2e8.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 2, 1, 0, ~0ull)
+RCASE(r608, "vlseg3e8.v", "vlseg3e8.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 3, 1, 0, ~0ull)
+TCASE(c1872, 8, m1, 8, 0, "vlseg3e8.v", "vlseg3e8.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 3, 1, 0, ~0ull)
+TCASE(c1873, 16, m1, 8, 8, "vlseg3e8.v", "vlseg3e8.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 3, 1, 0, ~0ull)
+TCASE(c1874, 32, m1, 8, 16, "vlseg3e8.v", "vlseg3e8.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 3, 1, 0, ~0ull)
+TCASE(c1875, 64, m1, 8, 24, "vlseg3e8.v", "vlseg3e8.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 3, 1, 0, ~0ull)
+RCASE(r609, "vlseg3e8.v v0.t", "vlseg3e8.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 3, 1, 0, ~0ull)
+TCASE(c1876, 8, m1, 8, 0, "vlseg3e8.v v0.t", "vlseg3e8.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 3, 1, 0, ~0ull)
+TCASE(c1877, 16, m1, 8, 8, "vlseg3e8.v v0.t", "vlseg3e8.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 3, 1, 0, ~0ull)
+TCASE(c1878, 32, m1, 8, 16, "vlseg3e8.v v0.t", "vlseg3e8.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 3, 1, 0, ~0ull)
+TCASE(c1879, 64, m1, 8, 24, "vlseg3e8.v v0.t", "vlseg3e8.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 3, 1, 0, ~0ull)
+RCASE(r610, "vsseg3e8.v", "vsseg3e8.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 3, 1, 0, ~0ull)
+TCASE(c1880, 8, m1, 8, 0, "vsseg3e8.v", "vsseg3e8.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 3, 1, 0, ~0ull)
+TCASE(c1881, 16, m1, 8, 8, "vsseg3e8.v", "vsseg3e8.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 3, 1, 0, ~0ull)
+TCASE(c1882, 32, m1, 8, 16, "vsseg3e8.v", "vsseg3e8.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 3, 1, 0, ~0ull)
+TCASE(c1883, 64, m1, 8, 24, "vsseg3e8.v", "vsseg3e8.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 3, 1, 0, ~0ull)
+RCASE(r611, "vsseg3e8.v v0.t", "vsseg3e8.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 3, 1, 0, ~0ull)
+TCASE(c1884, 8, m1, 8, 0, "vsseg3e8.v v0.t", "vsseg3e8.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 3, 1, 0, ~0ull)
+TCASE(c1885, 16, m1, 8, 8, "vsseg3e8.v v0.t", "vsseg3e8.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 3, 1, 0, ~0ull)
+TCASE(c1886, 32, m1, 8, 16, "vsseg3e8.v v0.t", "vsseg3e8.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 3, 1, 0, ~0ull)
+TCASE(c1887, 64, m1, 8, 24, "vsseg3e8.v v0.t", "vsseg3e8.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 3, 1, 0, ~0ull)
+RCASE(r612, "vlseg4e8.v", "vlseg4e8.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 4, 1, 0, ~0ull)
+TCASE(c1888, 8, m1, 8, 0, "vlseg4e8.v", "vlseg4e8.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 4, 1, 0, ~0ull)
+TCASE(c1889, 16, m1, 8, 8, "vlseg4e8.v", "vlseg4e8.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 4, 1, 0, ~0ull)
+TCASE(c1890, 32, m1, 8, 16, "vlseg4e8.v", "vlseg4e8.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 4, 1, 0, ~0ull)
+TCASE(c1891, 64, m1, 8, 24, "vlseg4e8.v", "vlseg4e8.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 4, 1, 0, ~0ull)
+RCASE(r613, "vlseg4e8.v v0.t", "vlseg4e8.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 4, 1, 0, ~0ull)
+TCASE(c1892, 8, m1, 8, 0, "vlseg4e8.v v0.t", "vlseg4e8.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 4, 1, 0, ~0ull)
+TCASE(c1893, 16, m1, 8, 8, "vlseg4e8.v v0.t", "vlseg4e8.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 4, 1, 0, ~0ull)
+TCASE(c1894, 32, m1, 8, 16, "vlseg4e8.v v0.t", "vlseg4e8.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 4, 1, 0, ~0ull)
+TCASE(c1895, 64, m1, 8, 24, "vlseg4e8.v v0.t", "vlseg4e8.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 4, 1, 0, ~0ull)
+RCASE(r614, "vsseg4e8.v", "vsseg4e8.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 4, 1, 0, ~0ull)
+TCASE(c1896, 8, m1, 8, 0, "vsseg4e8.v", "vsseg4e8.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 4, 1, 0, ~0ull)
+TCASE(c1897, 16, m1, 8, 8, "vsseg4e8.v", "vsseg4e8.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 4, 1, 0, ~0ull)
+TCASE(c1898, 32, m1, 8, 16, "vsseg4e8.v", "vsseg4e8.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 4, 1, 0, ~0ull)
+TCASE(c1899, 64, m1, 8, 24, "vsseg4e8.v", "vsseg4e8.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 4, 1, 0, ~0ull)
+RCASE(r615, "vsseg4e8.v v0.t", "vsseg4e8.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 4, 1, 0, ~0ull)
+TCASE(c1900, 8, m1, 8, 0, "vsseg4e8.v v0.t", "vsseg4e8.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 4, 1, 0, ~0ull)
+TCASE(c1901, 16, m1, 8, 8, "vsseg4e8.v v0.t", "vsseg4e8.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 4, 1, 0, ~0ull)
+TCASE(c1902, 32, m1, 8, 16, "vsseg4e8.v v0.t", "vsseg4e8.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 4, 1, 0, ~0ull)
+TCASE(c1903, 64, m1, 8, 24, "vsseg4e8.v v0.t", "vsseg4e8.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 4, 1, 0, ~0ull)
+RCASE(r616, "vlseg8e8.v", "vlseg8e8.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 8, 1, 0, ~0ull)
+TCASE(c1904, 8, m1, 8, 0, "vlseg8e8.v", "vlseg8e8.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 8, 1, 0, ~0ull)
+TCASE(c1905, 16, m1, 8, 8, "vlseg8e8.v", "vlseg8e8.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 8, 1, 0, ~0ull)
+TCASE(c1906, 32, m1, 8, 16, "vlseg8e8.v", "vlseg8e8.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 8, 1, 0, ~0ull)
+TCASE(c1907, 64, m1, 8, 24, "vlseg8e8.v", "vlseg8e8.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 8, 1, 0, ~0ull)
+RCASE(r617, "vlseg8e8.v v0.t", "vlseg8e8.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 8, 1, 0, ~0ull)
+TCASE(c1908, 8, m1, 8, 0, "vlseg8e8.v v0.t", "vlseg8e8.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 8, 1, 0, ~0ull)
+TCASE(c1909, 16, m1, 8, 8, "vlseg8e8.v v0.t", "vlseg8e8.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 8, 1, 0, ~0ull)
+TCASE(c1910, 32, m1, 8, 16, "vlseg8e8.v v0.t", "vlseg8e8.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 8, 1, 0, ~0ull)
+TCASE(c1911, 64, m1, 8, 24, "vlseg8e8.v v0.t", "vlseg8e8.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 8, 1, 0, ~0ull)
+RCASE(r618, "vsseg8e8.v", "vsseg8e8.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 8, 1, 0, ~0ull)
+TCASE(c1912, 8, m1, 8, 0, "vsseg8e8.v", "vsseg8e8.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 8, 1, 0, ~0ull)
+TCASE(c1913, 16, m1, 8, 8, "vsseg8e8.v", "vsseg8e8.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 8, 1, 0, ~0ull)
+TCASE(c1914, 32, m1, 8, 16, "vsseg8e8.v", "vsseg8e8.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 8, 1, 0, ~0ull)
+TCASE(c1915, 64, m1, 8, 24, "vsseg8e8.v", "vsseg8e8.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 8, 1, 0, ~0ull)
+RCASE(r619, "vsseg8e8.v v0.t", "vsseg8e8.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 8, 1, 0, ~0ull)
+TCASE(c1916, 8, m1, 8, 0, "vsseg8e8.v v0.t", "vsseg8e8.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 8, 1, 0, ~0ull)
+TCASE(c1917, 16, m1, 8, 8, "vsseg8e8.v v0.t", "vsseg8e8.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 8, 1, 0, ~0ull)
+TCASE(c1918, 32, m1, 8, 16, "vsseg8e8.v v0.t", "vsseg8e8.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 8, 1, 0, ~0ull)
+TCASE(c1919, 64, m1, 8, 24, "vsseg8e8.v v0.t", "vsseg8e8.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 8, 1, 0, ~0ull)
+RCASE(r620, "vlsseg2e8.v", "vlsseg2e8.v v8, (%[mem]), %[x]", 26, 4, 0, 0, 8, 16, 24, 2, 1, 0, ~0ull)
+TCASE(c1920, 8, m1, 8, 0, "vlsseg2e8.v", "vlsseg2e8.v v8, (%[mem]), %[x]", 26, 4, 0, 0, 8, 16, 24, 2, 1, 0, ~0ull)
+TCASE(c1921, 16, m1, 8, 8, "vlsseg2e8.v", "vlsseg2e8.v v8, (%[mem]), %[x]", 26, 4, 0, 0, 8, 16, 24, 2, 1, 0, ~0ull)
+TCASE(c1922, 32, m1, 8, 16, "vlsseg2e8.v", "vlsseg2e8.v v8, (%[mem]), %[x]", 26, 4, 0, 0, 8, 16, 24, 2, 1, 0, ~0ull)
+TCASE(c1923, 64, m1, 8, 24, "vlsseg2e8.v", "vlsseg2e8.v v8, (%[mem]), %[x]", 26, 4, 0, 0, 8, 16, 24, 2, 1, 0, ~0ull)
+RCASE(r621, "vlsseg2e8.v v0.t", "vlsseg2e8.v v8, (%[mem]), %[x], v0.t", 26, 4, 0, 1, 8, 16, 24, 2, 1, 0, ~0ull)
+TCASE(c1924, 8, m1, 8, 0, "vlsseg2e8.v v0.t", "vlsseg2e8.v v8, (%[mem]), %[x], v0.t", 26, 4, 0, 1, 8, 16, 24, 2, 1, 0, ~0ull)
+TCASE(c1925, 16, m1, 8, 8, "vlsseg2e8.v v0.t", "vlsseg2e8.v v8, (%[mem]), %[x], v0.t", 26, 4, 0, 1, 8, 16, 24, 2, 1, 0, ~0ull)
+TCASE(c1926, 32, m1, 8, 16, "vlsseg2e8.v v0.t", "vlsseg2e8.v v8, (%[mem]), %[x], v0.t", 26, 4, 0, 1, 8, 16, 24, 2, 1, 0, ~0ull)
+TCASE(c1927, 64, m1, 8, 24, "vlsseg2e8.v v0.t", "vlsseg2e8.v v8, (%[mem]), %[x], v0.t", 26, 4, 0, 1, 8, 16, 24, 2, 1, 0, ~0ull)
+RCASE(r622, "vssseg2e8.v", "vssseg2e8.v v8, (%[mem]), %[x]", 26, 5, 0, 0, 8, 16, 24, 2, 1, 0, ~0ull)
+TCASE(c1928, 8, m1, 8, 0, "vssseg2e8.v", "vssseg2e8.v v8, (%[mem]), %[x]", 26, 5, 0, 0, 8, 16, 24, 2, 1, 0, ~0ull)
+TCASE(c1929, 16, m1, 8, 8, "vssseg2e8.v", "vssseg2e8.v v8, (%[mem]), %[x]", 26, 5, 0, 0, 8, 16, 24, 2, 1, 0, ~0ull)
+TCASE(c1930, 32, m1, 8, 16, "vssseg2e8.v", "vssseg2e8.v v8, (%[mem]), %[x]", 26, 5, 0, 0, 8, 16, 24, 2, 1, 0, ~0ull)
+TCASE(c1931, 64, m1, 8, 24, "vssseg2e8.v", "vssseg2e8.v v8, (%[mem]), %[x]", 26, 5, 0, 0, 8, 16, 24, 2, 1, 0, ~0ull)
+RCASE(r623, "vssseg2e8.v v0.t", "vssseg2e8.v v8, (%[mem]), %[x], v0.t", 26, 5, 0, 1, 8, 16, 24, 2, 1, 0, ~0ull)
+TCASE(c1932, 8, m1, 8, 0, "vssseg2e8.v v0.t", "vssseg2e8.v v8, (%[mem]), %[x], v0.t", 26, 5, 0, 1, 8, 16, 24, 2, 1, 0, ~0ull)
+TCASE(c1933, 16, m1, 8, 8, "vssseg2e8.v v0.t", "vssseg2e8.v v8, (%[mem]), %[x], v0.t", 26, 5, 0, 1, 8, 16, 24, 2, 1, 0, ~0ull)
+TCASE(c1934, 32, m1, 8, 16, "vssseg2e8.v v0.t", "vssseg2e8.v v8, (%[mem]), %[x], v0.t", 26, 5, 0, 1, 8, 16, 24, 2, 1, 0, ~0ull)
+TCASE(c1935, 64, m1, 8, 24, "vssseg2e8.v v0.t", "vssseg2e8.v v8, (%[mem]), %[x], v0.t", 26, 5, 0, 1, 8, 16, 24, 2, 1, 0, ~0ull)
+RCASE(r624, "vluxseg2ei8.v", "vluxseg2ei8.v v8, (%[mem]), v16", 26, 2, 0, 0, 8, 16, 24, 2, 0, 1, ~0ull)
+TCASE(c1936, 8, m1, 8, 0, "vluxseg2ei8.v", "vluxseg2ei8.v v8, (%[mem]), v16", 26, 2, 0, 0, 8, 16, 24, 2, 0, 1, ~0ull)
+TCASE(c1937, 16, m1, 8, 8, "vluxseg2ei8.v", "vluxseg2ei8.v v8, (%[mem]), v16", 26, 2, 0, 0, 8, 16, 24, 2, 0, 1, ~0ull)
+TCASE(c1938, 32, m1, 8, 16, "vluxseg2ei8.v", "vluxseg2ei8.v v8, (%[mem]), v16", 26, 2, 0, 0, 8, 16, 24, 2, 0, 1, ~0ull)
+TCASE(c1939, 64, m1, 8, 24, "vluxseg2ei8.v", "vluxseg2ei8.v v8, (%[mem]), v16", 26, 2, 0, 0, 8, 16, 24, 2, 0, 1, ~0ull)
+RCASE(r625, "vluxseg2ei8.v v0.t", "vluxseg2ei8.v v8, (%[mem]), v16, v0.t", 26, 2, 0, 1, 8, 16, 24, 2, 0, 1, ~0ull)
+TCASE(c1940, 8, m1, 8, 0, "vluxseg2ei8.v v0.t", "vluxseg2ei8.v v8, (%[mem]), v16, v0.t", 26, 2, 0, 1, 8, 16, 24, 2, 0, 1, ~0ull)
+TCASE(c1941, 16, m1, 8, 8, "vluxseg2ei8.v v0.t", "vluxseg2ei8.v v8, (%[mem]), v16, v0.t", 26, 2, 0, 1, 8, 16, 24, 2, 0, 1, ~0ull)
+TCASE(c1942, 32, m1, 8, 16, "vluxseg2ei8.v v0.t", "vluxseg2ei8.v v8, (%[mem]), v16, v0.t", 26, 2, 0, 1, 8, 16, 24, 2, 0, 1, ~0ull)
+TCASE(c1943, 64, m1, 8, 24, "vluxseg2ei8.v v0.t", "vluxseg2ei8.v v8, (%[mem]), v16, v0.t", 26, 2, 0, 1, 8, 16, 24, 2, 0, 1, ~0ull)
+RCASE(r626, "vsuxseg2ei8.v", "vsuxseg2ei8.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 2, 0, 1, ~0ull)
+TCASE(c1944, 8, m1, 8, 0, "vsuxseg2ei8.v", "vsuxseg2ei8.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 2, 0, 1, ~0ull)
+TCASE(c1945, 16, m1, 8, 8, "vsuxseg2ei8.v", "vsuxseg2ei8.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 2, 0, 1, ~0ull)
+TCASE(c1946, 32, m1, 8, 16, "vsuxseg2ei8.v", "vsuxseg2ei8.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 2, 0, 1, ~0ull)
+TCASE(c1947, 64, m1, 8, 24, "vsuxseg2ei8.v", "vsuxseg2ei8.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 2, 0, 1, ~0ull)
+RCASE(r627, "vsuxseg2ei8.v v0.t", "vsuxseg2ei8.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 2, 0, 1, ~0ull)
+TCASE(c1948, 8, m1, 8, 0, "vsuxseg2ei8.v v0.t", "vsuxseg2ei8.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 2, 0, 1, ~0ull)
+TCASE(c1949, 16, m1, 8, 8, "vsuxseg2ei8.v v0.t", "vsuxseg2ei8.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 2, 0, 1, ~0ull)
+TCASE(c1950, 32, m1, 8, 16, "vsuxseg2ei8.v v0.t", "vsuxseg2ei8.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 2, 0, 1, ~0ull)
+TCASE(c1951, 64, m1, 8, 24, "vsuxseg2ei8.v v0.t", "vsuxseg2ei8.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 2, 0, 1, ~0ull)
+RCASE(r628, "vlsseg5e8.v", "vlsseg5e8.v v8, (%[mem]), %[x]", 26, 4, 0, 0, 8, 16, 24, 5, 1, 0, ~0ull)
+TCASE(c1952, 8, m1, 8, 0, "vlsseg5e8.v", "vlsseg5e8.v v8, (%[mem]), %[x]", 26, 4, 0, 0, 8, 16, 24, 5, 1, 0, ~0ull)
+TCASE(c1953, 16, m1, 8, 8, "vlsseg5e8.v", "vlsseg5e8.v v8, (%[mem]), %[x]", 26, 4, 0, 0, 8, 16, 24, 5, 1, 0, ~0ull)
+TCASE(c1954, 32, m1, 8, 16, "vlsseg5e8.v", "vlsseg5e8.v v8, (%[mem]), %[x]", 26, 4, 0, 0, 8, 16, 24, 5, 1, 0, ~0ull)
+TCASE(c1955, 64, m1, 8, 24, "vlsseg5e8.v", "vlsseg5e8.v v8, (%[mem]), %[x]", 26, 4, 0, 0, 8, 16, 24, 5, 1, 0, ~0ull)
+RCASE(r629, "vlsseg5e8.v v0.t", "vlsseg5e8.v v8, (%[mem]), %[x], v0.t", 26, 4, 0, 1, 8, 16, 24, 5, 1, 0, ~0ull)
+TCASE(c1956, 8, m1, 8, 0, "vlsseg5e8.v v0.t", "vlsseg5e8.v v8, (%[mem]), %[x], v0.t", 26, 4, 0, 1, 8, 16, 24, 5, 1, 0, ~0ull)
+TCASE(c1957, 16, m1, 8, 8, "vlsseg5e8.v v0.t", "vlsseg5e8.v v8, (%[mem]), %[x], v0.t", 26, 4, 0, 1, 8, 16, 24, 5, 1, 0, ~0ull)
+TCASE(c1958, 32, m1, 8, 16, "vlsseg5e8.v v0.t", "vlsseg5e8.v v8, (%[mem]), %[x], v0.t", 26, 4, 0, 1, 8, 16, 24, 5, 1, 0, ~0ull)
+TCASE(c1959, 64, m1, 8, 24, "vlsseg5e8.v v0.t", "vlsseg5e8.v v8, (%[mem]), %[x], v0.t", 26, 4, 0, 1, 8, 16, 24, 5, 1, 0, ~0ull)
+RCASE(r630, "vssseg5e8.v", "vssseg5e8.v v8, (%[mem]), %[x]", 26, 5, 0, 0, 8, 16, 24, 5, 1, 0, ~0ull)
+TCASE(c1960, 8, m1, 8, 0, "vssseg5e8.v", "vssseg5e8.v v8, (%[mem]), %[x]", 26, 5, 0, 0, 8, 16, 24, 5, 1, 0, ~0ull)
+TCASE(c1961, 16, m1, 8, 8, "vssseg5e8.v", "vssseg5e8.v v8, (%[mem]), %[x]", 26, 5, 0, 0, 8, 16, 24, 5, 1, 0, ~0ull)
+TCASE(c1962, 32, m1, 8, 16, "vssseg5e8.v", "vssseg5e8.v v8, (%[mem]), %[x]", 26, 5, 0, 0, 8, 16, 24, 5, 1, 0, ~0ull)
+TCASE(c1963, 64, m1, 8, 24, "vssseg5e8.v", "vssseg5e8.v v8, (%[mem]), %[x]", 26, 5, 0, 0, 8, 16, 24, 5, 1, 0, ~0ull)
+RCASE(r631, "vssseg5e8.v v0.t", "vssseg5e8.v v8, (%[mem]), %[x], v0.t", 26, 5, 0, 1, 8, 16, 24, 5, 1, 0, ~0ull)
+TCASE(c1964, 8, m1, 8, 0, "vssseg5e8.v v0.t", "vssseg5e8.v v8, (%[mem]), %[x], v0.t", 26, 5, 0, 1, 8, 16, 24, 5, 1, 0, ~0ull)
+TCASE(c1965, 16, m1, 8, 8, "vssseg5e8.v v0.t", "vssseg5e8.v v8, (%[mem]), %[x], v0.t", 26, 5, 0, 1, 8, 16, 24, 5, 1, 0, ~0ull)
+TCASE(c1966, 32, m1, 8, 16, "vssseg5e8.v v0.t", "vssseg5e8.v v8, (%[mem]), %[x], v0.t", 26, 5, 0, 1, 8, 16, 24, 5, 1, 0, ~0ull)
+TCASE(c1967, 64, m1, 8, 24, "vssseg5e8.v v0.t", "vssseg5e8.v v8, (%[mem]), %[x], v0.t", 26, 5, 0, 1, 8, 16, 24, 5, 1, 0, ~0ull)
+RCASE(r632, "vluxseg5ei8.v", "vluxseg5ei8.v v8, (%[mem]), v16", 26, 2, 0, 0, 8, 16, 24, 5, 0, 1, ~0ull)
+TCASE(c1968, 8, m1, 8, 0, "vluxseg5ei8.v", "vluxseg5ei8.v v8, (%[mem]), v16", 26, 2, 0, 0, 8, 16, 24, 5, 0, 1, ~0ull)
+TCASE(c1969, 16, m1, 8, 8, "vluxseg5ei8.v", "vluxseg5ei8.v v8, (%[mem]), v16", 26, 2, 0, 0, 8, 16, 24, 5, 0, 1, ~0ull)
+TCASE(c1970, 32, m1, 8, 16, "vluxseg5ei8.v", "vluxseg5ei8.v v8, (%[mem]), v16", 26, 2, 0, 0, 8, 16, 24, 5, 0, 1, ~0ull)
+TCASE(c1971, 64, m1, 8, 24, "vluxseg5ei8.v", "vluxseg5ei8.v v8, (%[mem]), v16", 26, 2, 0, 0, 8, 16, 24, 5, 0, 1, ~0ull)
+RCASE(r633, "vluxseg5ei8.v v0.t", "vluxseg5ei8.v v8, (%[mem]), v16, v0.t", 26, 2, 0, 1, 8, 16, 24, 5, 0, 1, ~0ull)
+TCASE(c1972, 8, m1, 8, 0, "vluxseg5ei8.v v0.t", "vluxseg5ei8.v v8, (%[mem]), v16, v0.t", 26, 2, 0, 1, 8, 16, 24, 5, 0, 1, ~0ull)
+TCASE(c1973, 16, m1, 8, 8, "vluxseg5ei8.v v0.t", "vluxseg5ei8.v v8, (%[mem]), v16, v0.t", 26, 2, 0, 1, 8, 16, 24, 5, 0, 1, ~0ull)
+TCASE(c1974, 32, m1, 8, 16, "vluxseg5ei8.v v0.t", "vluxseg5ei8.v v8, (%[mem]), v16, v0.t", 26, 2, 0, 1, 8, 16, 24, 5, 0, 1, ~0ull)
+TCASE(c1975, 64, m1, 8, 24, "vluxseg5ei8.v v0.t", "vluxseg5ei8.v v8, (%[mem]), v16, v0.t", 26, 2, 0, 1, 8, 16, 24, 5, 0, 1, ~0ull)
+RCASE(r634, "vsuxseg5ei8.v", "vsuxseg5ei8.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 5, 0, 1, ~0ull)
+TCASE(c1976, 8, m1, 8, 0, "vsuxseg5ei8.v", "vsuxseg5ei8.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 5, 0, 1, ~0ull)
+TCASE(c1977, 16, m1, 8, 8, "vsuxseg5ei8.v", "vsuxseg5ei8.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 5, 0, 1, ~0ull)
+TCASE(c1978, 32, m1, 8, 16, "vsuxseg5ei8.v", "vsuxseg5ei8.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 5, 0, 1, ~0ull)
+TCASE(c1979, 64, m1, 8, 24, "vsuxseg5ei8.v", "vsuxseg5ei8.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 5, 0, 1, ~0ull)
+RCASE(r635, "vsuxseg5ei8.v v0.t", "vsuxseg5ei8.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 5, 0, 1, ~0ull)
+TCASE(c1980, 8, m1, 8, 0, "vsuxseg5ei8.v v0.t", "vsuxseg5ei8.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 5, 0, 1, ~0ull)
+TCASE(c1981, 16, m1, 8, 8, "vsuxseg5ei8.v v0.t", "vsuxseg5ei8.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 5, 0, 1, ~0ull)
+TCASE(c1982, 32, m1, 8, 16, "vsuxseg5ei8.v v0.t", "vsuxseg5ei8.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 5, 0, 1, ~0ull)
+TCASE(c1983, 64, m1, 8, 24, "vsuxseg5ei8.v v0.t", "vsuxseg5ei8.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 5, 0, 1, ~0ull)
+RCASE(r636, "vl1re8.v", "vl1re8.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 1, 1, 0, ~0ull)
+TCASE(c1984, 8, m1, 8, 0, "vl1re8.v", "vl1re8.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 1, 1, 0, ~0ull)
+TCASE(c1985, 16, m1, 8, 8, "vl1re8.v", "vl1re8.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 1, 1, 0, ~0ull)
+TCASE(c1986, 32, m1, 8, 16, "vl1re8.v", "vl1re8.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 1, 1, 0, ~0ull)
+TCASE(c1987, 64, m1, 8, 24, "vl1re8.v", "vl1re8.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 1, 1, 0, ~0ull)
+RCASE(r637, "vl2re8.v", "vl2re8.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 2, 1, 0, ~0ull)
+TCASE(c1988, 8, m1, 8, 0, "vl2re8.v", "vl2re8.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 2, 1, 0, ~0ull)
+TCASE(c1989, 16, m1, 8, 8, "vl2re8.v", "vl2re8.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 2, 1, 0, ~0ull)
+TCASE(c1990, 32, m1, 8, 16, "vl2re8.v", "vl2re8.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 2, 1, 0, ~0ull)
+TCASE(c1991, 64, m1, 8, 24, "vl2re8.v", "vl2re8.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 2, 1, 0, ~0ull)
+RCASE(r638, "vl4re8.v", "vl4re8.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 4, 1, 0, ~0ull)
+TCASE(c1992, 8, m1, 8, 0, "vl4re8.v", "vl4re8.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 4, 1, 0, ~0ull)
+TCASE(c1993, 16, m1, 8, 8, "vl4re8.v", "vl4re8.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 4, 1, 0, ~0ull)
+TCASE(c1994, 32, m1, 8, 16, "vl4re8.v", "vl4re8.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 4, 1, 0, ~0ull)
+TCASE(c1995, 64, m1, 8, 24, "vl4re8.v", "vl4re8.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 4, 1, 0, ~0ull)
+RCASE(r639, "vl8re8.v", "vl8re8.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 8, 1, 0, ~0ull)
+TCASE(c1996, 8, m1, 8, 0, "vl8re8.v", "vl8re8.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 8, 1, 0, ~0ull)
+TCASE(c1997, 16, m1, 8, 8, "vl8re8.v", "vl8re8.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 8, 1, 0, ~0ull)
+TCASE(c1998, 32, m1, 8, 16, "vl8re8.v", "vl8re8.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 8, 1, 0, ~0ull)
+TCASE(c1999, 64, m1, 8, 24, "vl8re8.v", "vl8re8.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 8, 1, 0, ~0ull)
+RCASE(r640, "vle16.v", "vle16.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 1, 2, 0, ~0ull)
+TCASE(c2000, 8, m1, 8, 0, "vle16.v", "vle16.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 1, 2, 0, ~0ull)
+TCASE(c2001, 16, m1, 8, 8, "vle16.v", "vle16.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 1, 2, 0, ~0ull)
+TCASE(c2002, 32, m1, 8, 16, "vle16.v", "vle16.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 1, 2, 0, ~0ull)
+TCASE(c2003, 64, m1, 8, 24, "vle16.v", "vle16.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 1, 2, 0, ~0ull)
+RCASE(r641, "vle16.v v0.t", "vle16.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 1, 2, 0, ~0ull)
+TCASE(c2004, 8, m1, 8, 0, "vle16.v v0.t", "vle16.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 1, 2, 0, ~0ull)
+TCASE(c2005, 16, m1, 8, 8, "vle16.v v0.t", "vle16.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 1, 2, 0, ~0ull)
+TCASE(c2006, 32, m1, 8, 16, "vle16.v v0.t", "vle16.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 1, 2, 0, ~0ull)
+TCASE(c2007, 64, m1, 8, 24, "vle16.v v0.t", "vle16.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 1, 2, 0, ~0ull)
+RCASE(r642, "vse16.v", "vse16.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 1, 2, 0, ~0ull)
+TCASE(c2008, 8, m1, 8, 0, "vse16.v", "vse16.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 1, 2, 0, ~0ull)
+TCASE(c2009, 16, m1, 8, 8, "vse16.v", "vse16.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 1, 2, 0, ~0ull)
+TCASE(c2010, 32, m1, 8, 16, "vse16.v", "vse16.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 1, 2, 0, ~0ull)
+TCASE(c2011, 64, m1, 8, 24, "vse16.v", "vse16.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 1, 2, 0, ~0ull)
+RCASE(r643, "vse16.v v0.t", "vse16.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 1, 2, 0, ~0ull)
+TCASE(c2012, 8, m1, 8, 0, "vse16.v v0.t", "vse16.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 1, 2, 0, ~0ull)
+TCASE(c2013, 16, m1, 8, 8, "vse16.v v0.t", "vse16.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 1, 2, 0, ~0ull)
+TCASE(c2014, 32, m1, 8, 16, "vse16.v v0.t", "vse16.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 1, 2, 0, ~0ull)
+TCASE(c2015, 64, m1, 8, 24, "vse16.v v0.t", "vse16.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 1, 2, 0, ~0ull)
+RCASE(r644, "vle16ff.v", "vle16ff.v v8, (%[mem])", 26, 8, 0, 0, 8, 16, 24, 1, 2, 0, ~0ull)
+TCASE(c2016, 8, m1, 8, 0, "vle16ff.v", "vle16ff.v v8, (%[mem])", 26, 8, 0, 0, 8, 16, 24, 1, 2, 0, ~0ull)
+TCASE(c2017, 16, m1, 8, 8, "vle16ff.v", "vle16ff.v v8, (%[mem])", 26, 8, 0, 0, 8, 16, 24, 1, 2, 0, ~0ull)
+TCASE(c2018, 32, m1, 8, 16, "vle16ff.v", "vle16ff.v v8, (%[mem])", 26, 8, 0, 0, 8, 16, 24, 1, 2, 0, ~0ull)
+TCASE(c2019, 64, m1, 8, 24, "vle16ff.v", "vle16ff.v v8, (%[mem])", 26, 8, 0, 0, 8, 16, 24, 1, 2, 0, ~0ull)
+RCASE(r645, "vle16ff.v v0.t", "vle16ff.v v8, (%[mem]), v0.t", 26, 8, 0, 1, 8, 16, 24, 1, 2, 0, ~0ull)
+TCASE(c2020, 8, m1, 8, 0, "vle16ff.v v0.t", "vle16ff.v v8, (%[mem]), v0.t", 26, 8, 0, 1, 8, 16, 24, 1, 2, 0, ~0ull)
+TCASE(c2021, 16, m1, 8, 8, "vle16ff.v v0.t", "vle16ff.v v8, (%[mem]), v0.t", 26, 8, 0, 1, 8, 16, 24, 1, 2, 0, ~0ull)
+TCASE(c2022, 32, m1, 8, 16, "vle16ff.v v0.t", "vle16ff.v v8, (%[mem]), v0.t", 26, 8, 0, 1, 8, 16, 24, 1, 2, 0, ~0ull)
+TCASE(c2023, 64, m1, 8, 24, "vle16ff.v v0.t", "vle16ff.v v8, (%[mem]), v0.t", 26, 8, 0, 1, 8, 16, 24, 1, 2, 0, ~0ull)
+RCASE(r646, "vlse16.v", "vlse16.v v8, (%[mem]), %[x]", 26, 4, 0, 0, 8, 16, 24, 1, 2, 0, ~0ull)
+TCASE(c2024, 8, m1, 8, 0, "vlse16.v", "vlse16.v v8, (%[mem]), %[x]", 26, 4, 0, 0, 8, 16, 24, 1, 2, 0, ~0ull)
+TCASE(c2025, 16, m1, 8, 8, "vlse16.v", "vlse16.v v8, (%[mem]), %[x]", 26, 4, 0, 0, 8, 16, 24, 1, 2, 0, ~0ull)
+TCASE(c2026, 32, m1, 8, 16, "vlse16.v", "vlse16.v v8, (%[mem]), %[x]", 26, 4, 0, 0, 8, 16, 24, 1, 2, 0, ~0ull)
+TCASE(c2027, 64, m1, 8, 24, "vlse16.v", "vlse16.v v8, (%[mem]), %[x]", 26, 4, 0, 0, 8, 16, 24, 1, 2, 0, ~0ull)
+RCASE(r647, "vlse16.v v0.t", "vlse16.v v8, (%[mem]), %[x], v0.t", 26, 4, 0, 1, 8, 16, 24, 1, 2, 0, ~0ull)
+TCASE(c2028, 8, m1, 8, 0, "vlse16.v v0.t", "vlse16.v v8, (%[mem]), %[x], v0.t", 26, 4, 0, 1, 8, 16, 24, 1, 2, 0, ~0ull)
+TCASE(c2029, 16, m1, 8, 8, "vlse16.v v0.t", "vlse16.v v8, (%[mem]), %[x], v0.t", 26, 4, 0, 1, 8, 16, 24, 1, 2, 0, ~0ull)
+TCASE(c2030, 32, m1, 8, 16, "vlse16.v v0.t", "vlse16.v v8, (%[mem]), %[x], v0.t", 26, 4, 0, 1, 8, 16, 24, 1, 2, 0, ~0ull)
+TCASE(c2031, 64, m1, 8, 24, "vlse16.v v0.t", "vlse16.v v8, (%[mem]), %[x], v0.t", 26, 4, 0, 1, 8, 16, 24, 1, 2, 0, ~0ull)
+RCASE(r648, "vsse16.v", "vsse16.v v8, (%[mem]), %[x]", 26, 5, 0, 0, 8, 16, 24, 1, 2, 0, ~0ull)
+TCASE(c2032, 8, m1, 8, 0, "vsse16.v", "vsse16.v v8, (%[mem]), %[x]", 26, 5, 0, 0, 8, 16, 24, 1, 2, 0, ~0ull)
+TCASE(c2033, 16, m1, 8, 8, "vsse16.v", "vsse16.v v8, (%[mem]), %[x]", 26, 5, 0, 0, 8, 16, 24, 1, 2, 0, ~0ull)
+TCASE(c2034, 32, m1, 8, 16, "vsse16.v", "vsse16.v v8, (%[mem]), %[x]", 26, 5, 0, 0, 8, 16, 24, 1, 2, 0, ~0ull)
+TCASE(c2035, 64, m1, 8, 24, "vsse16.v", "vsse16.v v8, (%[mem]), %[x]", 26, 5, 0, 0, 8, 16, 24, 1, 2, 0, ~0ull)
+RCASE(r649, "vsse16.v v0.t", "vsse16.v v8, (%[mem]), %[x], v0.t", 26, 5, 0, 1, 8, 16, 24, 1, 2, 0, ~0ull)
+TCASE(c2036, 8, m1, 8, 0, "vsse16.v v0.t", "vsse16.v v8, (%[mem]), %[x], v0.t", 26, 5, 0, 1, 8, 16, 24, 1, 2, 0, ~0ull)
+TCASE(c2037, 16, m1, 8, 8, "vsse16.v v0.t", "vsse16.v v8, (%[mem]), %[x], v0.t", 26, 5, 0, 1, 8, 16, 24, 1, 2, 0, ~0ull)
+TCASE(c2038, 32, m1, 8, 16, "vsse16.v v0.t", "vsse16.v v8, (%[mem]), %[x], v0.t", 26, 5, 0, 1, 8, 16, 24, 1, 2, 0, ~0ull)
+TCASE(c2039, 64, m1, 8, 24, "vsse16.v v0.t", "vsse16.v v8, (%[mem]), %[x], v0.t", 26, 5, 0, 1, 8, 16, 24, 1, 2, 0, ~0ull)
+RCASE(r650, "vsuxei16", "vsuxei16.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 1, 0, 2, ~0ull)
+TCASE(c2040, 8, m1, 8, 0, "vsuxei16", "vsuxei16.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 1, 0, 2, ~0ull)
+TCASE(c2041, 16, m1, 8, 8, "vsuxei16", "vsuxei16.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 1, 0, 2, ~0ull)
+TCASE(c2042, 32, m1, 8, 16, "vsuxei16", "vsuxei16.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 1, 0, 2, ~0ull)
+TCASE(c2043, 64, m1, 8, 24, "vsuxei16", "vsuxei16.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 1, 0, 2, ~0ull)
+RCASE(r651, "vsuxei16 v0.t", "vsuxei16.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 1, 0, 2, ~0ull)
+TCASE(c2044, 8, m1, 8, 0, "vsuxei16 v0.t", "vsuxei16.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 1, 0, 2, ~0ull)
+TCASE(c2045, 16, m1, 8, 8, "vsuxei16 v0.t", "vsuxei16.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 1, 0, 2, ~0ull)
+TCASE(c2046, 32, m1, 8, 16, "vsuxei16 v0.t", "vsuxei16.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 1, 0, 2, ~0ull)
+TCASE(c2047, 64, m1, 8, 24, "vsuxei16 v0.t", "vsuxei16.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 1, 0, 2, ~0ull)
+RCASE(r652, "vsoxei16", "vsoxei16.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 1, 0, 2, ~0ull)
+TCASE(c2048, 8, m1, 8, 0, "vsoxei16", "vsoxei16.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 1, 0, 2, ~0ull)
+TCASE(c2049, 16, m1, 8, 8, "vsoxei16", "vsoxei16.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 1, 0, 2, ~0ull)
+TCASE(c2050, 32, m1, 8, 16, "vsoxei16", "vsoxei16.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 1, 0, 2, ~0ull)
+TCASE(c2051, 64, m1, 8, 24, "vsoxei16", "vsoxei16.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 1, 0, 2, ~0ull)
+RCASE(r653, "vsoxei16 v0.t", "vsoxei16.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 1, 0, 2, ~0ull)
+TCASE(c2052, 8, m1, 8, 0, "vsoxei16 v0.t", "vsoxei16.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 1, 0, 2, ~0ull)
+TCASE(c2053, 16, m1, 8, 8, "vsoxei16 v0.t", "vsoxei16.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 1, 0, 2, ~0ull)
+TCASE(c2054, 32, m1, 8, 16, "vsoxei16 v0.t", "vsoxei16.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 1, 0, 2, ~0ull)
+TCASE(c2055, 64, m1, 8, 24, "vsoxei16 v0.t", "vsoxei16.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 1, 0, 2, ~0ull)
+RCASE(r654, "vlseg2e16.v", "vlseg2e16.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 2, 2, 0, ~0ull)
+TCASE(c2056, 8, m1, 8, 0, "vlseg2e16.v", "vlseg2e16.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 2, 2, 0, ~0ull)
+TCASE(c2057, 16, m1, 8, 8, "vlseg2e16.v", "vlseg2e16.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 2, 2, 0, ~0ull)
+TCASE(c2058, 32, m1, 8, 16, "vlseg2e16.v", "vlseg2e16.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 2, 2, 0, ~0ull)
+TCASE(c2059, 64, m1, 8, 24, "vlseg2e16.v", "vlseg2e16.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 2, 2, 0, ~0ull)
+RCASE(r655, "vlseg2e16.v v0.t", "vlseg2e16.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 2, 2, 0, ~0ull)
+TCASE(c2060, 8, m1, 8, 0, "vlseg2e16.v v0.t", "vlseg2e16.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 2, 2, 0, ~0ull)
+TCASE(c2061, 16, m1, 8, 8, "vlseg2e16.v v0.t", "vlseg2e16.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 2, 2, 0, ~0ull)
+TCASE(c2062, 32, m1, 8, 16, "vlseg2e16.v v0.t", "vlseg2e16.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 2, 2, 0, ~0ull)
+TCASE(c2063, 64, m1, 8, 24, "vlseg2e16.v v0.t", "vlseg2e16.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 2, 2, 0, ~0ull)
+RCASE(r656, "vsseg2e16.v", "vsseg2e16.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 2, 2, 0, ~0ull)
+TCASE(c2064, 8, m1, 8, 0, "vsseg2e16.v", "vsseg2e16.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 2, 2, 0, ~0ull)
+TCASE(c2065, 16, m1, 8, 8, "vsseg2e16.v", "vsseg2e16.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 2, 2, 0, ~0ull)
+TCASE(c2066, 32, m1, 8, 16, "vsseg2e16.v", "vsseg2e16.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 2, 2, 0, ~0ull)
+TCASE(c2067, 64, m1, 8, 24, "vsseg2e16.v", "vsseg2e16.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 2, 2, 0, ~0ull)
+RCASE(r657, "vsseg2e16.v v0.t", "vsseg2e16.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 2, 2, 0, ~0ull)
+TCASE(c2068, 8, m1, 8, 0, "vsseg2e16.v v0.t", "vsseg2e16.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 2, 2, 0, ~0ull)
+TCASE(c2069, 16, m1, 8, 8, "vsseg2e16.v v0.t", "vsseg2e16.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 2, 2, 0, ~0ull)
+TCASE(c2070, 32, m1, 8, 16, "vsseg2e16.v v0.t", "vsseg2e16.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 2, 2, 0, ~0ull)
+TCASE(c2071, 64, m1, 8, 24, "vsseg2e16.v v0.t", "vsseg2e16.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 2, 2, 0, ~0ull)
+RCASE(r658, "vlseg3e16.v", "vlseg3e16.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 3, 2, 0, ~0ull)
+TCASE(c2072, 8, m1, 8, 0, "vlseg3e16.v", "vlseg3e16.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 3, 2, 0, ~0ull)
+TCASE(c2073, 16, m1, 8, 8, "vlseg3e16.v", "vlseg3e16.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 3, 2, 0, ~0ull)
+TCASE(c2074, 32, m1, 8, 16, "vlseg3e16.v", "vlseg3e16.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 3, 2, 0, ~0ull)
+TCASE(c2075, 64, m1, 8, 24, "vlseg3e16.v", "vlseg3e16.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 3, 2, 0, ~0ull)
+RCASE(r659, "vlseg3e16.v v0.t", "vlseg3e16.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 3, 2, 0, ~0ull)
+TCASE(c2076, 8, m1, 8, 0, "vlseg3e16.v v0.t", "vlseg3e16.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 3, 2, 0, ~0ull)
+TCASE(c2077, 16, m1, 8, 8, "vlseg3e16.v v0.t", "vlseg3e16.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 3, 2, 0, ~0ull)
+TCASE(c2078, 32, m1, 8, 16, "vlseg3e16.v v0.t", "vlseg3e16.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 3, 2, 0, ~0ull)
+TCASE(c2079, 64, m1, 8, 24, "vlseg3e16.v v0.t", "vlseg3e16.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 3, 2, 0, ~0ull)
+RCASE(r660, "vsseg3e16.v", "vsseg3e16.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 3, 2, 0, ~0ull)
+TCASE(c2080, 8, m1, 8, 0, "vsseg3e16.v", "vsseg3e16.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 3, 2, 0, ~0ull)
+TCASE(c2081, 16, m1, 8, 8, "vsseg3e16.v", "vsseg3e16.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 3, 2, 0, ~0ull)
+TCASE(c2082, 32, m1, 8, 16, "vsseg3e16.v", "vsseg3e16.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 3, 2, 0, ~0ull)
+TCASE(c2083, 64, m1, 8, 24, "vsseg3e16.v", "vsseg3e16.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 3, 2, 0, ~0ull)
+RCASE(r661, "vsseg3e16.v v0.t", "vsseg3e16.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 3, 2, 0, ~0ull)
+TCASE(c2084, 8, m1, 8, 0, "vsseg3e16.v v0.t", "vsseg3e16.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 3, 2, 0, ~0ull)
+TCASE(c2085, 16, m1, 8, 8, "vsseg3e16.v v0.t", "vsseg3e16.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 3, 2, 0, ~0ull)
+TCASE(c2086, 32, m1, 8, 16, "vsseg3e16.v v0.t", "vsseg3e16.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 3, 2, 0, ~0ull)
+TCASE(c2087, 64, m1, 8, 24, "vsseg3e16.v v0.t", "vsseg3e16.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 3, 2, 0, ~0ull)
+RCASE(r662, "vlseg4e16.v", "vlseg4e16.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 4, 2, 0, ~0ull)
+TCASE(c2088, 8, m1, 8, 0, "vlseg4e16.v", "vlseg4e16.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 4, 2, 0, ~0ull)
+TCASE(c2089, 16, m1, 8, 8, "vlseg4e16.v", "vlseg4e16.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 4, 2, 0, ~0ull)
+TCASE(c2090, 32, m1, 8, 16, "vlseg4e16.v", "vlseg4e16.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 4, 2, 0, ~0ull)
+TCASE(c2091, 64, m1, 8, 24, "vlseg4e16.v", "vlseg4e16.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 4, 2, 0, ~0ull)
+RCASE(r663, "vlseg4e16.v v0.t", "vlseg4e16.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 4, 2, 0, ~0ull)
+TCASE(c2092, 8, m1, 8, 0, "vlseg4e16.v v0.t", "vlseg4e16.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 4, 2, 0, ~0ull)
+TCASE(c2093, 16, m1, 8, 8, "vlseg4e16.v v0.t", "vlseg4e16.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 4, 2, 0, ~0ull)
+TCASE(c2094, 32, m1, 8, 16, "vlseg4e16.v v0.t", "vlseg4e16.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 4, 2, 0, ~0ull)
+TCASE(c2095, 64, m1, 8, 24, "vlseg4e16.v v0.t", "vlseg4e16.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 4, 2, 0, ~0ull)
+RCASE(r664, "vsseg4e16.v", "vsseg4e16.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 4, 2, 0, ~0ull)
+TCASE(c2096, 8, m1, 8, 0, "vsseg4e16.v", "vsseg4e16.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 4, 2, 0, ~0ull)
+TCASE(c2097, 16, m1, 8, 8, "vsseg4e16.v", "vsseg4e16.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 4, 2, 0, ~0ull)
+TCASE(c2098, 32, m1, 8, 16, "vsseg4e16.v", "vsseg4e16.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 4, 2, 0, ~0ull)
+TCASE(c2099, 64, m1, 8, 24, "vsseg4e16.v", "vsseg4e16.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 4, 2, 0, ~0ull)
+RCASE(r665, "vsseg4e16.v v0.t", "vsseg4e16.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 4, 2, 0, ~0ull)
+TCASE(c2100, 8, m1, 8, 0, "vsseg4e16.v v0.t", "vsseg4e16.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 4, 2, 0, ~0ull)
+TCASE(c2101, 16, m1, 8, 8, "vsseg4e16.v v0.t", "vsseg4e16.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 4, 2, 0, ~0ull)
+TCASE(c2102, 32, m1, 8, 16, "vsseg4e16.v v0.t", "vsseg4e16.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 4, 2, 0, ~0ull)
+TCASE(c2103, 64, m1, 8, 24, "vsseg4e16.v v0.t", "vsseg4e16.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 4, 2, 0, ~0ull)
+RCASE(r666, "vlseg8e16.v", "vlseg8e16.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 8, 2, 0, ~0ull)
+TCASE(c2104, 8, mf2, 4, 7, "vlseg8e16.v", "vlseg8e16.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 8, 2, 0, ~0ull)
+TCASE(c2105, 16, m1, 8, 8, "vlseg8e16.v", "vlseg8e16.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 8, 2, 0, ~0ull)
+TCASE(c2106, 32, m1, 8, 16, "vlseg8e16.v", "vlseg8e16.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 8, 2, 0, ~0ull)
+TCASE(c2107, 64, m1, 8, 24, "vlseg8e16.v", "vlseg8e16.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 8, 2, 0, ~0ull)
+RCASE(r667, "vlseg8e16.v v0.t", "vlseg8e16.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 8, 2, 0, ~0ull)
+TCASE(c2108, 8, mf2, 4, 7, "vlseg8e16.v v0.t", "vlseg8e16.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 8, 2, 0, ~0ull)
+TCASE(c2109, 16, m1, 8, 8, "vlseg8e16.v v0.t", "vlseg8e16.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 8, 2, 0, ~0ull)
+TCASE(c2110, 32, m1, 8, 16, "vlseg8e16.v v0.t", "vlseg8e16.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 8, 2, 0, ~0ull)
+TCASE(c2111, 64, m1, 8, 24, "vlseg8e16.v v0.t", "vlseg8e16.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 8, 2, 0, ~0ull)
+RCASE(r668, "vsseg8e16.v", "vsseg8e16.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 8, 2, 0, ~0ull)
+TCASE(c2112, 8, mf2, 4, 7, "vsseg8e16.v", "vsseg8e16.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 8, 2, 0, ~0ull)
+TCASE(c2113, 16, m1, 8, 8, "vsseg8e16.v", "vsseg8e16.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 8, 2, 0, ~0ull)
+TCASE(c2114, 32, m1, 8, 16, "vsseg8e16.v", "vsseg8e16.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 8, 2, 0, ~0ull)
+TCASE(c2115, 64, m1, 8, 24, "vsseg8e16.v", "vsseg8e16.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 8, 2, 0, ~0ull)
+RCASE(r669, "vsseg8e16.v v0.t", "vsseg8e16.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 8, 2, 0, ~0ull)
+TCASE(c2116, 8, mf2, 4, 7, "vsseg8e16.v v0.t", "vsseg8e16.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 8, 2, 0, ~0ull)
+TCASE(c2117, 16, m1, 8, 8, "vsseg8e16.v v0.t", "vsseg8e16.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 8, 2, 0, ~0ull)
+TCASE(c2118, 32, m1, 8, 16, "vsseg8e16.v v0.t", "vsseg8e16.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 8, 2, 0, ~0ull)
+TCASE(c2119, 64, m1, 8, 24, "vsseg8e16.v v0.t", "vsseg8e16.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 8, 2, 0, ~0ull)
+RCASE(r670, "vlsseg2e16.v", "vlsseg2e16.v v8, (%[mem]), %[x]", 26, 4, 0, 0, 8, 16, 24, 2, 2, 0, ~0ull)
+TCASE(c2120, 8, m1, 8, 0, "vlsseg2e16.v", "vlsseg2e16.v v8, (%[mem]), %[x]", 26, 4, 0, 0, 8, 16, 24, 2, 2, 0, ~0ull)
+TCASE(c2121, 16, m1, 8, 8, "vlsseg2e16.v", "vlsseg2e16.v v8, (%[mem]), %[x]", 26, 4, 0, 0, 8, 16, 24, 2, 2, 0, ~0ull)
+TCASE(c2122, 32, m1, 8, 16, "vlsseg2e16.v", "vlsseg2e16.v v8, (%[mem]), %[x]", 26, 4, 0, 0, 8, 16, 24, 2, 2, 0, ~0ull)
+TCASE(c2123, 64, m1, 8, 24, "vlsseg2e16.v", "vlsseg2e16.v v8, (%[mem]), %[x]", 26, 4, 0, 0, 8, 16, 24, 2, 2, 0, ~0ull)
+RCASE(r671, "vlsseg2e16.v v0.t", "vlsseg2e16.v v8, (%[mem]), %[x], v0.t", 26, 4, 0, 1, 8, 16, 24, 2, 2, 0, ~0ull)
+TCASE(c2124, 8, m1, 8, 0, "vlsseg2e16.v v0.t", "vlsseg2e16.v v8, (%[mem]), %[x], v0.t", 26, 4, 0, 1, 8, 16, 24, 2, 2, 0, ~0ull)
+TCASE(c2125, 16, m1, 8, 8, "vlsseg2e16.v v0.t", "vlsseg2e16.v v8, (%[mem]), %[x], v0.t", 26, 4, 0, 1, 8, 16, 24, 2, 2, 0, ~0ull)
+TCASE(c2126, 32, m1, 8, 16, "vlsseg2e16.v v0.t", "vlsseg2e16.v v8, (%[mem]), %[x], v0.t", 26, 4, 0, 1, 8, 16, 24, 2, 2, 0, ~0ull)
+TCASE(c2127, 64, m1, 8, 24, "vlsseg2e16.v v0.t", "vlsseg2e16.v v8, (%[mem]), %[x], v0.t", 26, 4, 0, 1, 8, 16, 24, 2, 2, 0, ~0ull)
+RCASE(r672, "vssseg2e16.v", "vssseg2e16.v v8, (%[mem]), %[x]", 26, 5, 0, 0, 8, 16, 24, 2, 2, 0, ~0ull)
+TCASE(c2128, 8, m1, 8, 0, "vssseg2e16.v", "vssseg2e16.v v8, (%[mem]), %[x]", 26, 5, 0, 0, 8, 16, 24, 2, 2, 0, ~0ull)
+TCASE(c2129, 16, m1, 8, 8, "vssseg2e16.v", "vssseg2e16.v v8, (%[mem]), %[x]", 26, 5, 0, 0, 8, 16, 24, 2, 2, 0, ~0ull)
+TCASE(c2130, 32, m1, 8, 16, "vssseg2e16.v", "vssseg2e16.v v8, (%[mem]), %[x]", 26, 5, 0, 0, 8, 16, 24, 2, 2, 0, ~0ull)
+TCASE(c2131, 64, m1, 8, 24, "vssseg2e16.v", "vssseg2e16.v v8, (%[mem]), %[x]", 26, 5, 0, 0, 8, 16, 24, 2, 2, 0, ~0ull)
+RCASE(r673, "vssseg2e16.v v0.t", "vssseg2e16.v v8, (%[mem]), %[x], v0.t", 26, 5, 0, 1, 8, 16, 24, 2, 2, 0, ~0ull)
+TCASE(c2132, 8, m1, 8, 0, "vssseg2e16.v v0.t", "vssseg2e16.v v8, (%[mem]), %[x], v0.t", 26, 5, 0, 1, 8, 16, 24, 2, 2, 0, ~0ull)
+TCASE(c2133, 16, m1, 8, 8, "vssseg2e16.v v0.t", "vssseg2e16.v v8, (%[mem]), %[x], v0.t", 26, 5, 0, 1, 8, 16, 24, 2, 2, 0, ~0ull)
+TCASE(c2134, 32, m1, 8, 16, "vssseg2e16.v v0.t", "vssseg2e16.v v8, (%[mem]), %[x], v0.t", 26, 5, 0, 1, 8, 16, 24, 2, 2, 0, ~0ull)
+TCASE(c2135, 64, m1, 8, 24, "vssseg2e16.v v0.t", "vssseg2e16.v v8, (%[mem]), %[x], v0.t", 26, 5, 0, 1, 8, 16, 24, 2, 2, 0, ~0ull)
+RCASE(r674, "vluxseg2ei16.v", "vluxseg2ei16.v v8, (%[mem]), v16", 26, 2, 0, 0, 8, 16, 24, 2, 0, 2, ~0ull)
+TCASE(c2136, 8, m1, 8, 0, "vluxseg2ei16.v", "vluxseg2ei16.v v8, (%[mem]), v16", 26, 2, 0, 0, 8, 16, 24, 2, 0, 2, ~0ull)
+TCASE(c2137, 16, m1, 8, 8, "vluxseg2ei16.v", "vluxseg2ei16.v v8, (%[mem]), v16", 26, 2, 0, 0, 8, 16, 24, 2, 0, 2, ~0ull)
+TCASE(c2138, 32, m1, 8, 16, "vluxseg2ei16.v", "vluxseg2ei16.v v8, (%[mem]), v16", 26, 2, 0, 0, 8, 16, 24, 2, 0, 2, ~0ull)
+TCASE(c2139, 64, m1, 8, 24, "vluxseg2ei16.v", "vluxseg2ei16.v v8, (%[mem]), v16", 26, 2, 0, 0, 8, 16, 24, 2, 0, 2, ~0ull)
+RCASE(r675, "vluxseg2ei16.v v0.t", "vluxseg2ei16.v v8, (%[mem]), v16, v0.t", 26, 2, 0, 1, 8, 16, 24, 2, 0, 2, ~0ull)
+TCASE(c2140, 8, m1, 8, 0, "vluxseg2ei16.v v0.t", "vluxseg2ei16.v v8, (%[mem]), v16, v0.t", 26, 2, 0, 1, 8, 16, 24, 2, 0, 2, ~0ull)
+TCASE(c2141, 16, m1, 8, 8, "vluxseg2ei16.v v0.t", "vluxseg2ei16.v v8, (%[mem]), v16, v0.t", 26, 2, 0, 1, 8, 16, 24, 2, 0, 2, ~0ull)
+TCASE(c2142, 32, m1, 8, 16, "vluxseg2ei16.v v0.t", "vluxseg2ei16.v v8, (%[mem]), v16, v0.t", 26, 2, 0, 1, 8, 16, 24, 2, 0, 2, ~0ull)
+TCASE(c2143, 64, m1, 8, 24, "vluxseg2ei16.v v0.t", "vluxseg2ei16.v v8, (%[mem]), v16, v0.t", 26, 2, 0, 1, 8, 16, 24, 2, 0, 2, ~0ull)
+RCASE(r676, "vsuxseg2ei16.v", "vsuxseg2ei16.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 2, 0, 2, ~0ull)
+TCASE(c2144, 8, m1, 8, 0, "vsuxseg2ei16.v", "vsuxseg2ei16.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 2, 0, 2, ~0ull)
+TCASE(c2145, 16, m1, 8, 8, "vsuxseg2ei16.v", "vsuxseg2ei16.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 2, 0, 2, ~0ull)
+TCASE(c2146, 32, m1, 8, 16, "vsuxseg2ei16.v", "vsuxseg2ei16.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 2, 0, 2, ~0ull)
+TCASE(c2147, 64, m1, 8, 24, "vsuxseg2ei16.v", "vsuxseg2ei16.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 2, 0, 2, ~0ull)
+RCASE(r677, "vsuxseg2ei16.v v0.t", "vsuxseg2ei16.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 2, 0, 2, ~0ull)
+TCASE(c2148, 8, m1, 8, 0, "vsuxseg2ei16.v v0.t", "vsuxseg2ei16.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 2, 0, 2, ~0ull)
+TCASE(c2149, 16, m1, 8, 8, "vsuxseg2ei16.v v0.t", "vsuxseg2ei16.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 2, 0, 2, ~0ull)
+TCASE(c2150, 32, m1, 8, 16, "vsuxseg2ei16.v v0.t", "vsuxseg2ei16.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 2, 0, 2, ~0ull)
+TCASE(c2151, 64, m1, 8, 24, "vsuxseg2ei16.v v0.t", "vsuxseg2ei16.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 2, 0, 2, ~0ull)
+RCASE(r678, "vlsseg5e16.v", "vlsseg5e16.v v8, (%[mem]), %[x]", 26, 4, 0, 0, 8, 16, 24, 5, 2, 0, ~0ull)
+TCASE(c2152, 8, mf2, 4, 7, "vlsseg5e16.v", "vlsseg5e16.v v8, (%[mem]), %[x]", 26, 4, 0, 0, 8, 16, 24, 5, 2, 0, ~0ull)
+TCASE(c2153, 16, m1, 8, 8, "vlsseg5e16.v", "vlsseg5e16.v v8, (%[mem]), %[x]", 26, 4, 0, 0, 8, 16, 24, 5, 2, 0, ~0ull)
+TCASE(c2154, 32, m1, 8, 16, "vlsseg5e16.v", "vlsseg5e16.v v8, (%[mem]), %[x]", 26, 4, 0, 0, 8, 16, 24, 5, 2, 0, ~0ull)
+TCASE(c2155, 64, m1, 8, 24, "vlsseg5e16.v", "vlsseg5e16.v v8, (%[mem]), %[x]", 26, 4, 0, 0, 8, 16, 24, 5, 2, 0, ~0ull)
+RCASE(r679, "vlsseg5e16.v v0.t", "vlsseg5e16.v v8, (%[mem]), %[x], v0.t", 26, 4, 0, 1, 8, 16, 24, 5, 2, 0, ~0ull)
+TCASE(c2156, 8, mf2, 4, 7, "vlsseg5e16.v v0.t", "vlsseg5e16.v v8, (%[mem]), %[x], v0.t", 26, 4, 0, 1, 8, 16, 24, 5, 2, 0, ~0ull)
+TCASE(c2157, 16, m1, 8, 8, "vlsseg5e16.v v0.t", "vlsseg5e16.v v8, (%[mem]), %[x], v0.t", 26, 4, 0, 1, 8, 16, 24, 5, 2, 0, ~0ull)
+TCASE(c2158, 32, m1, 8, 16, "vlsseg5e16.v v0.t", "vlsseg5e16.v v8, (%[mem]), %[x], v0.t", 26, 4, 0, 1, 8, 16, 24, 5, 2, 0, ~0ull)
+TCASE(c2159, 64, m1, 8, 24, "vlsseg5e16.v v0.t", "vlsseg5e16.v v8, (%[mem]), %[x], v0.t", 26, 4, 0, 1, 8, 16, 24, 5, 2, 0, ~0ull)
+RCASE(r680, "vssseg5e16.v", "vssseg5e16.v v8, (%[mem]), %[x]", 26, 5, 0, 0, 8, 16, 24, 5, 2, 0, ~0ull)
+TCASE(c2160, 8, mf2, 4, 7, "vssseg5e16.v", "vssseg5e16.v v8, (%[mem]), %[x]", 26, 5, 0, 0, 8, 16, 24, 5, 2, 0, ~0ull)
+TCASE(c2161, 16, m1, 8, 8, "vssseg5e16.v", "vssseg5e16.v v8, (%[mem]), %[x]", 26, 5, 0, 0, 8, 16, 24, 5, 2, 0, ~0ull)
+TCASE(c2162, 32, m1, 8, 16, "vssseg5e16.v", "vssseg5e16.v v8, (%[mem]), %[x]", 26, 5, 0, 0, 8, 16, 24, 5, 2, 0, ~0ull)
+TCASE(c2163, 64, m1, 8, 24, "vssseg5e16.v", "vssseg5e16.v v8, (%[mem]), %[x]", 26, 5, 0, 0, 8, 16, 24, 5, 2, 0, ~0ull)
+RCASE(r681, "vssseg5e16.v v0.t", "vssseg5e16.v v8, (%[mem]), %[x], v0.t", 26, 5, 0, 1, 8, 16, 24, 5, 2, 0, ~0ull)
+TCASE(c2164, 8, mf2, 4, 7, "vssseg5e16.v v0.t", "vssseg5e16.v v8, (%[mem]), %[x], v0.t", 26, 5, 0, 1, 8, 16, 24, 5, 2, 0, ~0ull)
+TCASE(c2165, 16, m1, 8, 8, "vssseg5e16.v v0.t", "vssseg5e16.v v8, (%[mem]), %[x], v0.t", 26, 5, 0, 1, 8, 16, 24, 5, 2, 0, ~0ull)
+TCASE(c2166, 32, m1, 8, 16, "vssseg5e16.v v0.t", "vssseg5e16.v v8, (%[mem]), %[x], v0.t", 26, 5, 0, 1, 8, 16, 24, 5, 2, 0, ~0ull)
+TCASE(c2167, 64, m1, 8, 24, "vssseg5e16.v v0.t", "vssseg5e16.v v8, (%[mem]), %[x], v0.t", 26, 5, 0, 1, 8, 16, 24, 5, 2, 0, ~0ull)
+RCASE(r682, "vluxseg5ei16.v", "vluxseg5ei16.v v8, (%[mem]), v16", 26, 2, 0, 0, 8, 16, 24, 5, 0, 2, ~0ull)
+TCASE(c2168, 8, m1, 8, 0, "vluxseg5ei16.v", "vluxseg5ei16.v v8, (%[mem]), v16", 26, 2, 0, 0, 8, 16, 24, 5, 0, 2, ~0ull)
+TCASE(c2169, 16, m1, 8, 8, "vluxseg5ei16.v", "vluxseg5ei16.v v8, (%[mem]), v16", 26, 2, 0, 0, 8, 16, 24, 5, 0, 2, ~0ull)
+TCASE(c2170, 32, m1, 8, 16, "vluxseg5ei16.v", "vluxseg5ei16.v v8, (%[mem]), v16", 26, 2, 0, 0, 8, 16, 24, 5, 0, 2, ~0ull)
+TCASE(c2171, 64, m1, 8, 24, "vluxseg5ei16.v", "vluxseg5ei16.v v8, (%[mem]), v16", 26, 2, 0, 0, 8, 16, 24, 5, 0, 2, ~0ull)
+RCASE(r683, "vluxseg5ei16.v v0.t", "vluxseg5ei16.v v8, (%[mem]), v16, v0.t", 26, 2, 0, 1, 8, 16, 24, 5, 0, 2, ~0ull)
+TCASE(c2172, 8, m1, 8, 0, "vluxseg5ei16.v v0.t", "vluxseg5ei16.v v8, (%[mem]), v16, v0.t", 26, 2, 0, 1, 8, 16, 24, 5, 0, 2, ~0ull)
+TCASE(c2173, 16, m1, 8, 8, "vluxseg5ei16.v v0.t", "vluxseg5ei16.v v8, (%[mem]), v16, v0.t", 26, 2, 0, 1, 8, 16, 24, 5, 0, 2, ~0ull)
+TCASE(c2174, 32, m1, 8, 16, "vluxseg5ei16.v v0.t", "vluxseg5ei16.v v8, (%[mem]), v16, v0.t", 26, 2, 0, 1, 8, 16, 24, 5, 0, 2, ~0ull)
+TCASE(c2175, 64, m1, 8, 24, "vluxseg5ei16.v v0.t", "vluxseg5ei16.v v8, (%[mem]), v16, v0.t", 26, 2, 0, 1, 8, 16, 24, 5, 0, 2, ~0ull)
+RCASE(r684, "vsuxseg5ei16.v", "vsuxseg5ei16.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 5, 0, 2, ~0ull)
+TCASE(c2176, 8, m1, 8, 0, "vsuxseg5ei16.v", "vsuxseg5ei16.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 5, 0, 2, ~0ull)
+TCASE(c2177, 16, m1, 8, 8, "vsuxseg5ei16.v", "vsuxseg5ei16.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 5, 0, 2, ~0ull)
+TCASE(c2178, 32, m1, 8, 16, "vsuxseg5ei16.v", "vsuxseg5ei16.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 5, 0, 2, ~0ull)
+TCASE(c2179, 64, m1, 8, 24, "vsuxseg5ei16.v", "vsuxseg5ei16.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 5, 0, 2, ~0ull)
+RCASE(r685, "vsuxseg5ei16.v v0.t", "vsuxseg5ei16.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 5, 0, 2, ~0ull)
+TCASE(c2180, 8, m1, 8, 0, "vsuxseg5ei16.v v0.t", "vsuxseg5ei16.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 5, 0, 2, ~0ull)
+TCASE(c2181, 16, m1, 8, 8, "vsuxseg5ei16.v v0.t", "vsuxseg5ei16.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 5, 0, 2, ~0ull)
+TCASE(c2182, 32, m1, 8, 16, "vsuxseg5ei16.v v0.t", "vsuxseg5ei16.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 5, 0, 2, ~0ull)
+TCASE(c2183, 64, m1, 8, 24, "vsuxseg5ei16.v v0.t", "vsuxseg5ei16.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 5, 0, 2, ~0ull)
+RCASE(r686, "vl1re16.v", "vl1re16.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 1, 2, 0, ~0ull)
+TCASE(c2184, 8, m1, 8, 0, "vl1re16.v", "vl1re16.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 1, 2, 0, ~0ull)
+TCASE(c2185, 16, m1, 8, 8, "vl1re16.v", "vl1re16.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 1, 2, 0, ~0ull)
+TCASE(c2186, 32, m1, 8, 16, "vl1re16.v", "vl1re16.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 1, 2, 0, ~0ull)
+TCASE(c2187, 64, m1, 8, 24, "vl1re16.v", "vl1re16.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 1, 2, 0, ~0ull)
+RCASE(r687, "vl2re16.v", "vl2re16.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 2, 2, 0, ~0ull)
+TCASE(c2188, 8, m1, 8, 0, "vl2re16.v", "vl2re16.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 2, 2, 0, ~0ull)
+TCASE(c2189, 16, m1, 8, 8, "vl2re16.v", "vl2re16.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 2, 2, 0, ~0ull)
+TCASE(c2190, 32, m1, 8, 16, "vl2re16.v", "vl2re16.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 2, 2, 0, ~0ull)
+TCASE(c2191, 64, m1, 8, 24, "vl2re16.v", "vl2re16.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 2, 2, 0, ~0ull)
+RCASE(r688, "vl4re16.v", "vl4re16.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 4, 2, 0, ~0ull)
+TCASE(c2192, 8, m1, 8, 0, "vl4re16.v", "vl4re16.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 4, 2, 0, ~0ull)
+TCASE(c2193, 16, m1, 8, 8, "vl4re16.v", "vl4re16.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 4, 2, 0, ~0ull)
+TCASE(c2194, 32, m1, 8, 16, "vl4re16.v", "vl4re16.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 4, 2, 0, ~0ull)
+TCASE(c2195, 64, m1, 8, 24, "vl4re16.v", "vl4re16.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 4, 2, 0, ~0ull)
+RCASE(r689, "vl8re16.v", "vl8re16.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 8, 2, 0, ~0ull)
+TCASE(c2196, 8, m1, 8, 0, "vl8re16.v", "vl8re16.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 8, 2, 0, ~0ull)
+TCASE(c2197, 16, m1, 8, 8, "vl8re16.v", "vl8re16.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 8, 2, 0, ~0ull)
+TCASE(c2198, 32, m1, 8, 16, "vl8re16.v", "vl8re16.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 8, 2, 0, ~0ull)
+TCASE(c2199, 64, m1, 8, 24, "vl8re16.v", "vl8re16.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 8, 2, 0, ~0ull)
+RCASE(r690, "vle32.v", "vle32.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 1, 4, 0, ~0ull)
+TCASE(c2200, 8, m1, 8, 0, "vle32.v", "vle32.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 1, 4, 0, ~0ull)
+TCASE(c2201, 16, m1, 8, 8, "vle32.v", "vle32.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 1, 4, 0, ~0ull)
+TCASE(c2202, 32, m1, 8, 16, "vle32.v", "vle32.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 1, 4, 0, ~0ull)
+TCASE(c2203, 64, m1, 8, 24, "vle32.v", "vle32.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 1, 4, 0, ~0ull)
+RCASE(r691, "vle32.v v0.t", "vle32.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 1, 4, 0, ~0ull)
+TCASE(c2204, 8, m1, 8, 0, "vle32.v v0.t", "vle32.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 1, 4, 0, ~0ull)
+TCASE(c2205, 16, m1, 8, 8, "vle32.v v0.t", "vle32.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 1, 4, 0, ~0ull)
+TCASE(c2206, 32, m1, 8, 16, "vle32.v v0.t", "vle32.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 1, 4, 0, ~0ull)
+TCASE(c2207, 64, m1, 8, 24, "vle32.v v0.t", "vle32.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 1, 4, 0, ~0ull)
+RCASE(r692, "vse32.v", "vse32.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 1, 4, 0, ~0ull)
+TCASE(c2208, 8, m1, 8, 0, "vse32.v", "vse32.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 1, 4, 0, ~0ull)
+TCASE(c2209, 16, m1, 8, 8, "vse32.v", "vse32.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 1, 4, 0, ~0ull)
+TCASE(c2210, 32, m1, 8, 16, "vse32.v", "vse32.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 1, 4, 0, ~0ull)
+TCASE(c2211, 64, m1, 8, 24, "vse32.v", "vse32.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 1, 4, 0, ~0ull)
+RCASE(r693, "vse32.v v0.t", "vse32.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 1, 4, 0, ~0ull)
+TCASE(c2212, 8, m1, 8, 0, "vse32.v v0.t", "vse32.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 1, 4, 0, ~0ull)
+TCASE(c2213, 16, m1, 8, 8, "vse32.v v0.t", "vse32.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 1, 4, 0, ~0ull)
+TCASE(c2214, 32, m1, 8, 16, "vse32.v v0.t", "vse32.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 1, 4, 0, ~0ull)
+TCASE(c2215, 64, m1, 8, 24, "vse32.v v0.t", "vse32.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 1, 4, 0, ~0ull)
+RCASE(r694, "vle32ff.v", "vle32ff.v v8, (%[mem])", 26, 8, 0, 0, 8, 16, 24, 1, 4, 0, ~0ull)
+TCASE(c2216, 8, m1, 8, 0, "vle32ff.v", "vle32ff.v v8, (%[mem])", 26, 8, 0, 0, 8, 16, 24, 1, 4, 0, ~0ull)
+TCASE(c2217, 16, m1, 8, 8, "vle32ff.v", "vle32ff.v v8, (%[mem])", 26, 8, 0, 0, 8, 16, 24, 1, 4, 0, ~0ull)
+TCASE(c2218, 32, m1, 8, 16, "vle32ff.v", "vle32ff.v v8, (%[mem])", 26, 8, 0, 0, 8, 16, 24, 1, 4, 0, ~0ull)
+TCASE(c2219, 64, m1, 8, 24, "vle32ff.v", "vle32ff.v v8, (%[mem])", 26, 8, 0, 0, 8, 16, 24, 1, 4, 0, ~0ull)
+RCASE(r695, "vle32ff.v v0.t", "vle32ff.v v8, (%[mem]), v0.t", 26, 8, 0, 1, 8, 16, 24, 1, 4, 0, ~0ull)
+TCASE(c2220, 8, m1, 8, 0, "vle32ff.v v0.t", "vle32ff.v v8, (%[mem]), v0.t", 26, 8, 0, 1, 8, 16, 24, 1, 4, 0, ~0ull)
+TCASE(c2221, 16, m1, 8, 8, "vle32ff.v v0.t", "vle32ff.v v8, (%[mem]), v0.t", 26, 8, 0, 1, 8, 16, 24, 1, 4, 0, ~0ull)
+TCASE(c2222, 32, m1, 8, 16, "vle32ff.v v0.t", "vle32ff.v v8, (%[mem]), v0.t", 26, 8, 0, 1, 8, 16, 24, 1, 4, 0, ~0ull)
+TCASE(c2223, 64, m1, 8, 24, "vle32ff.v v0.t", "vle32ff.v v8, (%[mem]), v0.t", 26, 8, 0, 1, 8, 16, 24, 1, 4, 0, ~0ull)
+RCASE(r696, "vlse32.v", "vlse32.v v8, (%[mem]), %[x]", 26, 4, 0, 0, 8, 16, 24, 1, 4, 0, ~0ull)
+TCASE(c2224, 8, m1, 8, 0, "vlse32.v", "vlse32.v v8, (%[mem]), %[x]", 26, 4, 0, 0, 8, 16, 24, 1, 4, 0, ~0ull)
+TCASE(c2225, 16, m1, 8, 8, "vlse32.v", "vlse32.v v8, (%[mem]), %[x]", 26, 4, 0, 0, 8, 16, 24, 1, 4, 0, ~0ull)
+TCASE(c2226, 32, m1, 8, 16, "vlse32.v", "vlse32.v v8, (%[mem]), %[x]", 26, 4, 0, 0, 8, 16, 24, 1, 4, 0, ~0ull)
+TCASE(c2227, 64, m1, 8, 24, "vlse32.v", "vlse32.v v8, (%[mem]), %[x]", 26, 4, 0, 0, 8, 16, 24, 1, 4, 0, ~0ull)
+RCASE(r697, "vlse32.v v0.t", "vlse32.v v8, (%[mem]), %[x], v0.t", 26, 4, 0, 1, 8, 16, 24, 1, 4, 0, ~0ull)
+TCASE(c2228, 8, m1, 8, 0, "vlse32.v v0.t", "vlse32.v v8, (%[mem]), %[x], v0.t", 26, 4, 0, 1, 8, 16, 24, 1, 4, 0, ~0ull)
+TCASE(c2229, 16, m1, 8, 8, "vlse32.v v0.t", "vlse32.v v8, (%[mem]), %[x], v0.t", 26, 4, 0, 1, 8, 16, 24, 1, 4, 0, ~0ull)
+TCASE(c2230, 32, m1, 8, 16, "vlse32.v v0.t", "vlse32.v v8, (%[mem]), %[x], v0.t", 26, 4, 0, 1, 8, 16, 24, 1, 4, 0, ~0ull)
+TCASE(c2231, 64, m1, 8, 24, "vlse32.v v0.t", "vlse32.v v8, (%[mem]), %[x], v0.t", 26, 4, 0, 1, 8, 16, 24, 1, 4, 0, ~0ull)
+RCASE(r698, "vsse32.v", "vsse32.v v8, (%[mem]), %[x]", 26, 5, 0, 0, 8, 16, 24, 1, 4, 0, ~0ull)
+TCASE(c2232, 8, m1, 8, 0, "vsse32.v", "vsse32.v v8, (%[mem]), %[x]", 26, 5, 0, 0, 8, 16, 24, 1, 4, 0, ~0ull)
+TCASE(c2233, 16, m1, 8, 8, "vsse32.v", "vsse32.v v8, (%[mem]), %[x]", 26, 5, 0, 0, 8, 16, 24, 1, 4, 0, ~0ull)
+TCASE(c2234, 32, m1, 8, 16, "vsse32.v", "vsse32.v v8, (%[mem]), %[x]", 26, 5, 0, 0, 8, 16, 24, 1, 4, 0, ~0ull)
+TCASE(c2235, 64, m1, 8, 24, "vsse32.v", "vsse32.v v8, (%[mem]), %[x]", 26, 5, 0, 0, 8, 16, 24, 1, 4, 0, ~0ull)
+RCASE(r699, "vsse32.v v0.t", "vsse32.v v8, (%[mem]), %[x], v0.t", 26, 5, 0, 1, 8, 16, 24, 1, 4, 0, ~0ull)
+TCASE(c2236, 8, m1, 8, 0, "vsse32.v v0.t", "vsse32.v v8, (%[mem]), %[x], v0.t", 26, 5, 0, 1, 8, 16, 24, 1, 4, 0, ~0ull)
+TCASE(c2237, 16, m1, 8, 8, "vsse32.v v0.t", "vsse32.v v8, (%[mem]), %[x], v0.t", 26, 5, 0, 1, 8, 16, 24, 1, 4, 0, ~0ull)
+TCASE(c2238, 32, m1, 8, 16, "vsse32.v v0.t", "vsse32.v v8, (%[mem]), %[x], v0.t", 26, 5, 0, 1, 8, 16, 24, 1, 4, 0, ~0ull)
+TCASE(c2239, 64, m1, 8, 24, "vsse32.v v0.t", "vsse32.v v8, (%[mem]), %[x], v0.t", 26, 5, 0, 1, 8, 16, 24, 1, 4, 0, ~0ull)
+RCASE(r700, "vsuxei32", "vsuxei32.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 1, 0, 4, ~0ull)
+TCASE(c2240, 8, m1, 8, 0, "vsuxei32", "vsuxei32.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 1, 0, 4, ~0ull)
+TCASE(c2241, 16, m1, 8, 8, "vsuxei32", "vsuxei32.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 1, 0, 4, ~0ull)
+TCASE(c2242, 32, m1, 8, 16, "vsuxei32", "vsuxei32.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 1, 0, 4, ~0ull)
+TCASE(c2243, 64, m1, 8, 24, "vsuxei32", "vsuxei32.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 1, 0, 4, ~0ull)
+RCASE(r701, "vsuxei32 v0.t", "vsuxei32.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 1, 0, 4, ~0ull)
+TCASE(c2244, 8, m1, 8, 0, "vsuxei32 v0.t", "vsuxei32.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 1, 0, 4, ~0ull)
+TCASE(c2245, 16, m1, 8, 8, "vsuxei32 v0.t", "vsuxei32.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 1, 0, 4, ~0ull)
+TCASE(c2246, 32, m1, 8, 16, "vsuxei32 v0.t", "vsuxei32.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 1, 0, 4, ~0ull)
+TCASE(c2247, 64, m1, 8, 24, "vsuxei32 v0.t", "vsuxei32.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 1, 0, 4, ~0ull)
+RCASE(r702, "vsoxei32", "vsoxei32.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 1, 0, 4, ~0ull)
+TCASE(c2248, 8, m1, 8, 0, "vsoxei32", "vsoxei32.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 1, 0, 4, ~0ull)
+TCASE(c2249, 16, m1, 8, 8, "vsoxei32", "vsoxei32.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 1, 0, 4, ~0ull)
+TCASE(c2250, 32, m1, 8, 16, "vsoxei32", "vsoxei32.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 1, 0, 4, ~0ull)
+TCASE(c2251, 64, m1, 8, 24, "vsoxei32", "vsoxei32.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 1, 0, 4, ~0ull)
+RCASE(r703, "vsoxei32 v0.t", "vsoxei32.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 1, 0, 4, ~0ull)
+TCASE(c2252, 8, m1, 8, 0, "vsoxei32 v0.t", "vsoxei32.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 1, 0, 4, ~0ull)
+TCASE(c2253, 16, m1, 8, 8, "vsoxei32 v0.t", "vsoxei32.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 1, 0, 4, ~0ull)
+TCASE(c2254, 32, m1, 8, 16, "vsoxei32 v0.t", "vsoxei32.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 1, 0, 4, ~0ull)
+TCASE(c2255, 64, m1, 8, 24, "vsoxei32 v0.t", "vsoxei32.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 1, 0, 4, ~0ull)
+RCASE(r704, "vlseg2e32.v", "vlseg2e32.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 2, 4, 0, ~0ull)
+TCASE(c2256, 8, m1, 8, 0, "vlseg2e32.v", "vlseg2e32.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 2, 4, 0, ~0ull)
+TCASE(c2257, 16, m1, 8, 8, "vlseg2e32.v", "vlseg2e32.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 2, 4, 0, ~0ull)
+TCASE(c2258, 32, m1, 8, 16, "vlseg2e32.v", "vlseg2e32.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 2, 4, 0, ~0ull)
+TCASE(c2259, 64, m1, 8, 24, "vlseg2e32.v", "vlseg2e32.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 2, 4, 0, ~0ull)
+RCASE(r705, "vlseg2e32.v v0.t", "vlseg2e32.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 2, 4, 0, ~0ull)
+TCASE(c2260, 8, m1, 8, 0, "vlseg2e32.v v0.t", "vlseg2e32.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 2, 4, 0, ~0ull)
+TCASE(c2261, 16, m1, 8, 8, "vlseg2e32.v v0.t", "vlseg2e32.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 2, 4, 0, ~0ull)
+TCASE(c2262, 32, m1, 8, 16, "vlseg2e32.v v0.t", "vlseg2e32.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 2, 4, 0, ~0ull)
+TCASE(c2263, 64, m1, 8, 24, "vlseg2e32.v v0.t", "vlseg2e32.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 2, 4, 0, ~0ull)
+RCASE(r706, "vsseg2e32.v", "vsseg2e32.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 2, 4, 0, ~0ull)
+TCASE(c2264, 8, m1, 8, 0, "vsseg2e32.v", "vsseg2e32.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 2, 4, 0, ~0ull)
+TCASE(c2265, 16, m1, 8, 8, "vsseg2e32.v", "vsseg2e32.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 2, 4, 0, ~0ull)
+TCASE(c2266, 32, m1, 8, 16, "vsseg2e32.v", "vsseg2e32.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 2, 4, 0, ~0ull)
+TCASE(c2267, 64, m1, 8, 24, "vsseg2e32.v", "vsseg2e32.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 2, 4, 0, ~0ull)
+RCASE(r707, "vsseg2e32.v v0.t", "vsseg2e32.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 2, 4, 0, ~0ull)
+TCASE(c2268, 8, m1, 8, 0, "vsseg2e32.v v0.t", "vsseg2e32.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 2, 4, 0, ~0ull)
+TCASE(c2269, 16, m1, 8, 8, "vsseg2e32.v v0.t", "vsseg2e32.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 2, 4, 0, ~0ull)
+TCASE(c2270, 32, m1, 8, 16, "vsseg2e32.v v0.t", "vsseg2e32.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 2, 4, 0, ~0ull)
+TCASE(c2271, 64, m1, 8, 24, "vsseg2e32.v v0.t", "vsseg2e32.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 2, 4, 0, ~0ull)
+RCASE(r708, "vlseg3e32.v", "vlseg3e32.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 3, 4, 0, ~0ull)
+TCASE(c2272, 8, mf2, 4, 7, "vlseg3e32.v", "vlseg3e32.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 3, 4, 0, ~0ull)
+TCASE(c2273, 16, m1, 8, 8, "vlseg3e32.v", "vlseg3e32.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 3, 4, 0, ~0ull)
+TCASE(c2274, 32, m1, 8, 16, "vlseg3e32.v", "vlseg3e32.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 3, 4, 0, ~0ull)
+TCASE(c2275, 64, m1, 8, 24, "vlseg3e32.v", "vlseg3e32.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 3, 4, 0, ~0ull)
+RCASE(r709, "vlseg3e32.v v0.t", "vlseg3e32.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 3, 4, 0, ~0ull)
+TCASE(c2276, 8, mf2, 4, 7, "vlseg3e32.v v0.t", "vlseg3e32.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 3, 4, 0, ~0ull)
+TCASE(c2277, 16, m1, 8, 8, "vlseg3e32.v v0.t", "vlseg3e32.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 3, 4, 0, ~0ull)
+TCASE(c2278, 32, m1, 8, 16, "vlseg3e32.v v0.t", "vlseg3e32.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 3, 4, 0, ~0ull)
+TCASE(c2279, 64, m1, 8, 24, "vlseg3e32.v v0.t", "vlseg3e32.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 3, 4, 0, ~0ull)
+RCASE(r710, "vsseg3e32.v", "vsseg3e32.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 3, 4, 0, ~0ull)
+TCASE(c2280, 8, mf2, 4, 7, "vsseg3e32.v", "vsseg3e32.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 3, 4, 0, ~0ull)
+TCASE(c2281, 16, m1, 8, 8, "vsseg3e32.v", "vsseg3e32.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 3, 4, 0, ~0ull)
+TCASE(c2282, 32, m1, 8, 16, "vsseg3e32.v", "vsseg3e32.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 3, 4, 0, ~0ull)
+TCASE(c2283, 64, m1, 8, 24, "vsseg3e32.v", "vsseg3e32.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 3, 4, 0, ~0ull)
+RCASE(r711, "vsseg3e32.v v0.t", "vsseg3e32.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 3, 4, 0, ~0ull)
+TCASE(c2284, 8, mf2, 4, 7, "vsseg3e32.v v0.t", "vsseg3e32.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 3, 4, 0, ~0ull)
+TCASE(c2285, 16, m1, 8, 8, "vsseg3e32.v v0.t", "vsseg3e32.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 3, 4, 0, ~0ull)
+TCASE(c2286, 32, m1, 8, 16, "vsseg3e32.v v0.t", "vsseg3e32.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 3, 4, 0, ~0ull)
+TCASE(c2287, 64, m1, 8, 24, "vsseg3e32.v v0.t", "vsseg3e32.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 3, 4, 0, ~0ull)
+RCASE(r712, "vlseg4e32.v", "vlseg4e32.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 4, 4, 0, ~0ull)
+TCASE(c2288, 8, mf2, 4, 7, "vlseg4e32.v", "vlseg4e32.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 4, 4, 0, ~0ull)
+TCASE(c2289, 16, m1, 8, 8, "vlseg4e32.v", "vlseg4e32.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 4, 4, 0, ~0ull)
+TCASE(c2290, 32, m1, 8, 16, "vlseg4e32.v", "vlseg4e32.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 4, 4, 0, ~0ull)
+TCASE(c2291, 64, m1, 8, 24, "vlseg4e32.v", "vlseg4e32.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 4, 4, 0, ~0ull)
+RCASE(r713, "vlseg4e32.v v0.t", "vlseg4e32.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 4, 4, 0, ~0ull)
+TCASE(c2292, 8, mf2, 4, 7, "vlseg4e32.v v0.t", "vlseg4e32.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 4, 4, 0, ~0ull)
+TCASE(c2293, 16, m1, 8, 8, "vlseg4e32.v v0.t", "vlseg4e32.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 4, 4, 0, ~0ull)
+TCASE(c2294, 32, m1, 8, 16, "vlseg4e32.v v0.t", "vlseg4e32.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 4, 4, 0, ~0ull)
+TCASE(c2295, 64, m1, 8, 24, "vlseg4e32.v v0.t", "vlseg4e32.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 4, 4, 0, ~0ull)
+RCASE(r714, "vsseg4e32.v", "vsseg4e32.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 4, 4, 0, ~0ull)
+TCASE(c2296, 8, mf2, 4, 7, "vsseg4e32.v", "vsseg4e32.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 4, 4, 0, ~0ull)
+TCASE(c2297, 16, m1, 8, 8, "vsseg4e32.v", "vsseg4e32.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 4, 4, 0, ~0ull)
+TCASE(c2298, 32, m1, 8, 16, "vsseg4e32.v", "vsseg4e32.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 4, 4, 0, ~0ull)
+TCASE(c2299, 64, m1, 8, 24, "vsseg4e32.v", "vsseg4e32.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 4, 4, 0, ~0ull)
+RCASE(r715, "vsseg4e32.v v0.t", "vsseg4e32.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 4, 4, 0, ~0ull)
+TCASE(c2300, 8, mf2, 4, 7, "vsseg4e32.v v0.t", "vsseg4e32.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 4, 4, 0, ~0ull)
+TCASE(c2301, 16, m1, 8, 8, "vsseg4e32.v v0.t", "vsseg4e32.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 4, 4, 0, ~0ull)
+TCASE(c2302, 32, m1, 8, 16, "vsseg4e32.v v0.t", "vsseg4e32.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 4, 4, 0, ~0ull)
+TCASE(c2303, 64, m1, 8, 24, "vsseg4e32.v v0.t", "vsseg4e32.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 4, 4, 0, ~0ull)
+RCASE(r716, "vlseg8e32.v", "vlseg8e32.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 8, 4, 0, ~0ull)
+TCASE(c2304, 16, mf2, 4, 15, "vlseg8e32.v", "vlseg8e32.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 8, 4, 0, ~0ull)
+TCASE(c2305, 32, m1, 8, 16, "vlseg8e32.v", "vlseg8e32.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 8, 4, 0, ~0ull)
+TCASE(c2306, 64, m1, 8, 24, "vlseg8e32.v", "vlseg8e32.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 8, 4, 0, ~0ull)
+RCASE(r717, "vlseg8e32.v v0.t", "vlseg8e32.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 8, 4, 0, ~0ull)
+TCASE(c2307, 16, mf2, 4, 15, "vlseg8e32.v v0.t", "vlseg8e32.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 8, 4, 0, ~0ull)
+TCASE(c2308, 32, m1, 8, 16, "vlseg8e32.v v0.t", "vlseg8e32.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 8, 4, 0, ~0ull)
+TCASE(c2309, 64, m1, 8, 24, "vlseg8e32.v v0.t", "vlseg8e32.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 8, 4, 0, ~0ull)
+RCASE(r718, "vsseg8e32.v", "vsseg8e32.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 8, 4, 0, ~0ull)
+TCASE(c2310, 16, mf2, 4, 15, "vsseg8e32.v", "vsseg8e32.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 8, 4, 0, ~0ull)
+TCASE(c2311, 32, m1, 8, 16, "vsseg8e32.v", "vsseg8e32.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 8, 4, 0, ~0ull)
+TCASE(c2312, 64, m1, 8, 24, "vsseg8e32.v", "vsseg8e32.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 8, 4, 0, ~0ull)
+RCASE(r719, "vsseg8e32.v v0.t", "vsseg8e32.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 8, 4, 0, ~0ull)
+TCASE(c2313, 16, mf2, 4, 15, "vsseg8e32.v v0.t", "vsseg8e32.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 8, 4, 0, ~0ull)
+TCASE(c2314, 32, m1, 8, 16, "vsseg8e32.v v0.t", "vsseg8e32.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 8, 4, 0, ~0ull)
+TCASE(c2315, 64, m1, 8, 24, "vsseg8e32.v v0.t", "vsseg8e32.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 8, 4, 0, ~0ull)
+RCASE(r720, "vlsseg2e32.v", "vlsseg2e32.v v8, (%[mem]), %[x]", 26, 4, 0, 0, 8, 16, 24, 2, 4, 0, ~0ull)
+TCASE(c2316, 8, m1, 8, 0, "vlsseg2e32.v", "vlsseg2e32.v v8, (%[mem]), %[x]", 26, 4, 0, 0, 8, 16, 24, 2, 4, 0, ~0ull)
+TCASE(c2317, 16, m1, 8, 8, "vlsseg2e32.v", "vlsseg2e32.v v8, (%[mem]), %[x]", 26, 4, 0, 0, 8, 16, 24, 2, 4, 0, ~0ull)
+TCASE(c2318, 32, m1, 8, 16, "vlsseg2e32.v", "vlsseg2e32.v v8, (%[mem]), %[x]", 26, 4, 0, 0, 8, 16, 24, 2, 4, 0, ~0ull)
+TCASE(c2319, 64, m1, 8, 24, "vlsseg2e32.v", "vlsseg2e32.v v8, (%[mem]), %[x]", 26, 4, 0, 0, 8, 16, 24, 2, 4, 0, ~0ull)
+RCASE(r721, "vlsseg2e32.v v0.t", "vlsseg2e32.v v8, (%[mem]), %[x], v0.t", 26, 4, 0, 1, 8, 16, 24, 2, 4, 0, ~0ull)
+TCASE(c2320, 8, m1, 8, 0, "vlsseg2e32.v v0.t", "vlsseg2e32.v v8, (%[mem]), %[x], v0.t", 26, 4, 0, 1, 8, 16, 24, 2, 4, 0, ~0ull)
+TCASE(c2321, 16, m1, 8, 8, "vlsseg2e32.v v0.t", "vlsseg2e32.v v8, (%[mem]), %[x], v0.t", 26, 4, 0, 1, 8, 16, 24, 2, 4, 0, ~0ull)
+TCASE(c2322, 32, m1, 8, 16, "vlsseg2e32.v v0.t", "vlsseg2e32.v v8, (%[mem]), %[x], v0.t", 26, 4, 0, 1, 8, 16, 24, 2, 4, 0, ~0ull)
+TCASE(c2323, 64, m1, 8, 24, "vlsseg2e32.v v0.t", "vlsseg2e32.v v8, (%[mem]), %[x], v0.t", 26, 4, 0, 1, 8, 16, 24, 2, 4, 0, ~0ull)
+RCASE(r722, "vssseg2e32.v", "vssseg2e32.v v8, (%[mem]), %[x]", 26, 5, 0, 0, 8, 16, 24, 2, 4, 0, ~0ull)
+TCASE(c2324, 8, m1, 8, 0, "vssseg2e32.v", "vssseg2e32.v v8, (%[mem]), %[x]", 26, 5, 0, 0, 8, 16, 24, 2, 4, 0, ~0ull)
+TCASE(c2325, 16, m1, 8, 8, "vssseg2e32.v", "vssseg2e32.v v8, (%[mem]), %[x]", 26, 5, 0, 0, 8, 16, 24, 2, 4, 0, ~0ull)
+TCASE(c2326, 32, m1, 8, 16, "vssseg2e32.v", "vssseg2e32.v v8, (%[mem]), %[x]", 26, 5, 0, 0, 8, 16, 24, 2, 4, 0, ~0ull)
+TCASE(c2327, 64, m1, 8, 24, "vssseg2e32.v", "vssseg2e32.v v8, (%[mem]), %[x]", 26, 5, 0, 0, 8, 16, 24, 2, 4, 0, ~0ull)
+RCASE(r723, "vssseg2e32.v v0.t", "vssseg2e32.v v8, (%[mem]), %[x], v0.t", 26, 5, 0, 1, 8, 16, 24, 2, 4, 0, ~0ull)
+TCASE(c2328, 8, m1, 8, 0, "vssseg2e32.v v0.t", "vssseg2e32.v v8, (%[mem]), %[x], v0.t", 26, 5, 0, 1, 8, 16, 24, 2, 4, 0, ~0ull)
+TCASE(c2329, 16, m1, 8, 8, "vssseg2e32.v v0.t", "vssseg2e32.v v8, (%[mem]), %[x], v0.t", 26, 5, 0, 1, 8, 16, 24, 2, 4, 0, ~0ull)
+TCASE(c2330, 32, m1, 8, 16, "vssseg2e32.v v0.t", "vssseg2e32.v v8, (%[mem]), %[x], v0.t", 26, 5, 0, 1, 8, 16, 24, 2, 4, 0, ~0ull)
+TCASE(c2331, 64, m1, 8, 24, "vssseg2e32.v v0.t", "vssseg2e32.v v8, (%[mem]), %[x], v0.t", 26, 5, 0, 1, 8, 16, 24, 2, 4, 0, ~0ull)
+RCASE(r724, "vluxseg2ei32.v", "vluxseg2ei32.v v8, (%[mem]), v16", 26, 2, 0, 0, 8, 16, 24, 2, 0, 4, ~0ull)
+TCASE(c2332, 8, m1, 8, 0, "vluxseg2ei32.v", "vluxseg2ei32.v v8, (%[mem]), v16", 26, 2, 0, 0, 8, 16, 24, 2, 0, 4, ~0ull)
+TCASE(c2333, 16, m1, 8, 8, "vluxseg2ei32.v", "vluxseg2ei32.v v8, (%[mem]), v16", 26, 2, 0, 0, 8, 16, 24, 2, 0, 4, ~0ull)
+TCASE(c2334, 32, m1, 8, 16, "vluxseg2ei32.v", "vluxseg2ei32.v v8, (%[mem]), v16", 26, 2, 0, 0, 8, 16, 24, 2, 0, 4, ~0ull)
+TCASE(c2335, 64, m1, 8, 24, "vluxseg2ei32.v", "vluxseg2ei32.v v8, (%[mem]), v16", 26, 2, 0, 0, 8, 16, 24, 2, 0, 4, ~0ull)
+RCASE(r725, "vluxseg2ei32.v v0.t", "vluxseg2ei32.v v8, (%[mem]), v16, v0.t", 26, 2, 0, 1, 8, 16, 24, 2, 0, 4, ~0ull)
+TCASE(c2336, 8, m1, 8, 0, "vluxseg2ei32.v v0.t", "vluxseg2ei32.v v8, (%[mem]), v16, v0.t", 26, 2, 0, 1, 8, 16, 24, 2, 0, 4, ~0ull)
+TCASE(c2337, 16, m1, 8, 8, "vluxseg2ei32.v v0.t", "vluxseg2ei32.v v8, (%[mem]), v16, v0.t", 26, 2, 0, 1, 8, 16, 24, 2, 0, 4, ~0ull)
+TCASE(c2338, 32, m1, 8, 16, "vluxseg2ei32.v v0.t", "vluxseg2ei32.v v8, (%[mem]), v16, v0.t", 26, 2, 0, 1, 8, 16, 24, 2, 0, 4, ~0ull)
+TCASE(c2339, 64, m1, 8, 24, "vluxseg2ei32.v v0.t", "vluxseg2ei32.v v8, (%[mem]), v16, v0.t", 26, 2, 0, 1, 8, 16, 24, 2, 0, 4, ~0ull)
+RCASE(r726, "vsuxseg2ei32.v", "vsuxseg2ei32.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 2, 0, 4, ~0ull)
+TCASE(c2340, 8, m1, 8, 0, "vsuxseg2ei32.v", "vsuxseg2ei32.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 2, 0, 4, ~0ull)
+TCASE(c2341, 16, m1, 8, 8, "vsuxseg2ei32.v", "vsuxseg2ei32.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 2, 0, 4, ~0ull)
+TCASE(c2342, 32, m1, 8, 16, "vsuxseg2ei32.v", "vsuxseg2ei32.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 2, 0, 4, ~0ull)
+TCASE(c2343, 64, m1, 8, 24, "vsuxseg2ei32.v", "vsuxseg2ei32.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 2, 0, 4, ~0ull)
+RCASE(r727, "vsuxseg2ei32.v v0.t", "vsuxseg2ei32.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 2, 0, 4, ~0ull)
+TCASE(c2344, 8, m1, 8, 0, "vsuxseg2ei32.v v0.t", "vsuxseg2ei32.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 2, 0, 4, ~0ull)
+TCASE(c2345, 16, m1, 8, 8, "vsuxseg2ei32.v v0.t", "vsuxseg2ei32.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 2, 0, 4, ~0ull)
+TCASE(c2346, 32, m1, 8, 16, "vsuxseg2ei32.v v0.t", "vsuxseg2ei32.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 2, 0, 4, ~0ull)
+TCASE(c2347, 64, m1, 8, 24, "vsuxseg2ei32.v v0.t", "vsuxseg2ei32.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 2, 0, 4, ~0ull)
+RCASE(r728, "vlsseg5e32.v", "vlsseg5e32.v v8, (%[mem]), %[x]", 26, 4, 0, 0, 8, 16, 24, 5, 4, 0, ~0ull)
+TCASE(c2348, 16, mf2, 4, 15, "vlsseg5e32.v", "vlsseg5e32.v v8, (%[mem]), %[x]", 26, 4, 0, 0, 8, 16, 24, 5, 4, 0, ~0ull)
+TCASE(c2349, 32, m1, 8, 16, "vlsseg5e32.v", "vlsseg5e32.v v8, (%[mem]), %[x]", 26, 4, 0, 0, 8, 16, 24, 5, 4, 0, ~0ull)
+TCASE(c2350, 64, m1, 8, 24, "vlsseg5e32.v", "vlsseg5e32.v v8, (%[mem]), %[x]", 26, 4, 0, 0, 8, 16, 24, 5, 4, 0, ~0ull)
+RCASE(r729, "vlsseg5e32.v v0.t", "vlsseg5e32.v v8, (%[mem]), %[x], v0.t", 26, 4, 0, 1, 8, 16, 24, 5, 4, 0, ~0ull)
+TCASE(c2351, 16, mf2, 4, 15, "vlsseg5e32.v v0.t", "vlsseg5e32.v v8, (%[mem]), %[x], v0.t", 26, 4, 0, 1, 8, 16, 24, 5, 4, 0, ~0ull)
+TCASE(c2352, 32, m1, 8, 16, "vlsseg5e32.v v0.t", "vlsseg5e32.v v8, (%[mem]), %[x], v0.t", 26, 4, 0, 1, 8, 16, 24, 5, 4, 0, ~0ull)
+TCASE(c2353, 64, m1, 8, 24, "vlsseg5e32.v v0.t", "vlsseg5e32.v v8, (%[mem]), %[x], v0.t", 26, 4, 0, 1, 8, 16, 24, 5, 4, 0, ~0ull)
+RCASE(r730, "vssseg5e32.v", "vssseg5e32.v v8, (%[mem]), %[x]", 26, 5, 0, 0, 8, 16, 24, 5, 4, 0, ~0ull)
+TCASE(c2354, 16, mf2, 4, 15, "vssseg5e32.v", "vssseg5e32.v v8, (%[mem]), %[x]", 26, 5, 0, 0, 8, 16, 24, 5, 4, 0, ~0ull)
+TCASE(c2355, 32, m1, 8, 16, "vssseg5e32.v", "vssseg5e32.v v8, (%[mem]), %[x]", 26, 5, 0, 0, 8, 16, 24, 5, 4, 0, ~0ull)
+TCASE(c2356, 64, m1, 8, 24, "vssseg5e32.v", "vssseg5e32.v v8, (%[mem]), %[x]", 26, 5, 0, 0, 8, 16, 24, 5, 4, 0, ~0ull)
+RCASE(r731, "vssseg5e32.v v0.t", "vssseg5e32.v v8, (%[mem]), %[x], v0.t", 26, 5, 0, 1, 8, 16, 24, 5, 4, 0, ~0ull)
+TCASE(c2357, 16, mf2, 4, 15, "vssseg5e32.v v0.t", "vssseg5e32.v v8, (%[mem]), %[x], v0.t", 26, 5, 0, 1, 8, 16, 24, 5, 4, 0, ~0ull)
+TCASE(c2358, 32, m1, 8, 16, "vssseg5e32.v v0.t", "vssseg5e32.v v8, (%[mem]), %[x], v0.t", 26, 5, 0, 1, 8, 16, 24, 5, 4, 0, ~0ull)
+TCASE(c2359, 64, m1, 8, 24, "vssseg5e32.v v0.t", "vssseg5e32.v v8, (%[mem]), %[x], v0.t", 26, 5, 0, 1, 8, 16, 24, 5, 4, 0, ~0ull)
+RCASE(r732, "vluxseg5ei32.v", "vluxseg5ei32.v v8, (%[mem]), v16", 26, 2, 0, 0, 8, 16, 24, 5, 0, 4, ~0ull)
+TCASE(c2360, 8, m1, 8, 0, "vluxseg5ei32.v", "vluxseg5ei32.v v8, (%[mem]), v16", 26, 2, 0, 0, 8, 16, 24, 5, 0, 4, ~0ull)
+TCASE(c2361, 16, m1, 8, 8, "vluxseg5ei32.v", "vluxseg5ei32.v v8, (%[mem]), v16", 26, 2, 0, 0, 8, 16, 24, 5, 0, 4, ~0ull)
+TCASE(c2362, 32, m1, 8, 16, "vluxseg5ei32.v", "vluxseg5ei32.v v8, (%[mem]), v16", 26, 2, 0, 0, 8, 16, 24, 5, 0, 4, ~0ull)
+TCASE(c2363, 64, m1, 8, 24, "vluxseg5ei32.v", "vluxseg5ei32.v v8, (%[mem]), v16", 26, 2, 0, 0, 8, 16, 24, 5, 0, 4, ~0ull)
+RCASE(r733, "vluxseg5ei32.v v0.t", "vluxseg5ei32.v v8, (%[mem]), v16, v0.t", 26, 2, 0, 1, 8, 16, 24, 5, 0, 4, ~0ull)
+TCASE(c2364, 8, m1, 8, 0, "vluxseg5ei32.v v0.t", "vluxseg5ei32.v v8, (%[mem]), v16, v0.t", 26, 2, 0, 1, 8, 16, 24, 5, 0, 4, ~0ull)
+TCASE(c2365, 16, m1, 8, 8, "vluxseg5ei32.v v0.t", "vluxseg5ei32.v v8, (%[mem]), v16, v0.t", 26, 2, 0, 1, 8, 16, 24, 5, 0, 4, ~0ull)
+TCASE(c2366, 32, m1, 8, 16, "vluxseg5ei32.v v0.t", "vluxseg5ei32.v v8, (%[mem]), v16, v0.t", 26, 2, 0, 1, 8, 16, 24, 5, 0, 4, ~0ull)
+TCASE(c2367, 64, m1, 8, 24, "vluxseg5ei32.v v0.t", "vluxseg5ei32.v v8, (%[mem]), v16, v0.t", 26, 2, 0, 1, 8, 16, 24, 5, 0, 4, ~0ull)
+RCASE(r734, "vsuxseg5ei32.v", "vsuxseg5ei32.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 5, 0, 4, ~0ull)
+TCASE(c2368, 8, m1, 8, 0, "vsuxseg5ei32.v", "vsuxseg5ei32.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 5, 0, 4, ~0ull)
+TCASE(c2369, 16, m1, 8, 8, "vsuxseg5ei32.v", "vsuxseg5ei32.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 5, 0, 4, ~0ull)
+TCASE(c2370, 32, m1, 8, 16, "vsuxseg5ei32.v", "vsuxseg5ei32.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 5, 0, 4, ~0ull)
+TCASE(c2371, 64, m1, 8, 24, "vsuxseg5ei32.v", "vsuxseg5ei32.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 5, 0, 4, ~0ull)
+RCASE(r735, "vsuxseg5ei32.v v0.t", "vsuxseg5ei32.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 5, 0, 4, ~0ull)
+TCASE(c2372, 8, m1, 8, 0, "vsuxseg5ei32.v v0.t", "vsuxseg5ei32.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 5, 0, 4, ~0ull)
+TCASE(c2373, 16, m1, 8, 8, "vsuxseg5ei32.v v0.t", "vsuxseg5ei32.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 5, 0, 4, ~0ull)
+TCASE(c2374, 32, m1, 8, 16, "vsuxseg5ei32.v v0.t", "vsuxseg5ei32.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 5, 0, 4, ~0ull)
+TCASE(c2375, 64, m1, 8, 24, "vsuxseg5ei32.v v0.t", "vsuxseg5ei32.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 5, 0, 4, ~0ull)
+RCASE(r736, "vl1re32.v", "vl1re32.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 1, 4, 0, ~0ull)
+TCASE(c2376, 8, m1, 8, 0, "vl1re32.v", "vl1re32.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 1, 4, 0, ~0ull)
+TCASE(c2377, 16, m1, 8, 8, "vl1re32.v", "vl1re32.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 1, 4, 0, ~0ull)
+TCASE(c2378, 32, m1, 8, 16, "vl1re32.v", "vl1re32.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 1, 4, 0, ~0ull)
+TCASE(c2379, 64, m1, 8, 24, "vl1re32.v", "vl1re32.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 1, 4, 0, ~0ull)
+RCASE(r737, "vl2re32.v", "vl2re32.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 2, 4, 0, ~0ull)
+TCASE(c2380, 8, m1, 8, 0, "vl2re32.v", "vl2re32.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 2, 4, 0, ~0ull)
+TCASE(c2381, 16, m1, 8, 8, "vl2re32.v", "vl2re32.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 2, 4, 0, ~0ull)
+TCASE(c2382, 32, m1, 8, 16, "vl2re32.v", "vl2re32.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 2, 4, 0, ~0ull)
+TCASE(c2383, 64, m1, 8, 24, "vl2re32.v", "vl2re32.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 2, 4, 0, ~0ull)
+RCASE(r738, "vl4re32.v", "vl4re32.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 4, 4, 0, ~0ull)
+TCASE(c2384, 8, m1, 8, 0, "vl4re32.v", "vl4re32.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 4, 4, 0, ~0ull)
+TCASE(c2385, 16, m1, 8, 8, "vl4re32.v", "vl4re32.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 4, 4, 0, ~0ull)
+TCASE(c2386, 32, m1, 8, 16, "vl4re32.v", "vl4re32.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 4, 4, 0, ~0ull)
+TCASE(c2387, 64, m1, 8, 24, "vl4re32.v", "vl4re32.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 4, 4, 0, ~0ull)
+RCASE(r739, "vl8re32.v", "vl8re32.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 8, 4, 0, ~0ull)
+TCASE(c2388, 8, m1, 8, 0, "vl8re32.v", "vl8re32.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 8, 4, 0, ~0ull)
+TCASE(c2389, 16, m1, 8, 8, "vl8re32.v", "vl8re32.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 8, 4, 0, ~0ull)
+TCASE(c2390, 32, m1, 8, 16, "vl8re32.v", "vl8re32.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 8, 4, 0, ~0ull)
+TCASE(c2391, 64, m1, 8, 24, "vl8re32.v", "vl8re32.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 8, 4, 0, ~0ull)
+RCASE(r740, "vle64.v", "vle64.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 1, 8, 0, ~0ull)
+TCASE(c2392, 8, m1, 8, 0, "vle64.v", "vle64.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 1, 8, 0, ~0ull)
+TCASE(c2393, 16, m1, 8, 8, "vle64.v", "vle64.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 1, 8, 0, ~0ull)
+TCASE(c2394, 32, m1, 8, 16, "vle64.v", "vle64.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 1, 8, 0, ~0ull)
+TCASE(c2395, 64, m1, 8, 24, "vle64.v", "vle64.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 1, 8, 0, ~0ull)
+RCASE(r741, "vle64.v v0.t", "vle64.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 1, 8, 0, ~0ull)
+TCASE(c2396, 8, m1, 8, 0, "vle64.v v0.t", "vle64.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 1, 8, 0, ~0ull)
+TCASE(c2397, 16, m1, 8, 8, "vle64.v v0.t", "vle64.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 1, 8, 0, ~0ull)
+TCASE(c2398, 32, m1, 8, 16, "vle64.v v0.t", "vle64.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 1, 8, 0, ~0ull)
+TCASE(c2399, 64, m1, 8, 24, "vle64.v v0.t", "vle64.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 1, 8, 0, ~0ull)
+RCASE(r742, "vse64.v", "vse64.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 1, 8, 0, ~0ull)
+TCASE(c2400, 8, m1, 8, 0, "vse64.v", "vse64.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 1, 8, 0, ~0ull)
+TCASE(c2401, 16, m1, 8, 8, "vse64.v", "vse64.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 1, 8, 0, ~0ull)
+TCASE(c2402, 32, m1, 8, 16, "vse64.v", "vse64.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 1, 8, 0, ~0ull)
+TCASE(c2403, 64, m1, 8, 24, "vse64.v", "vse64.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 1, 8, 0, ~0ull)
+RCASE(r743, "vse64.v v0.t", "vse64.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 1, 8, 0, ~0ull)
+TCASE(c2404, 8, m1, 8, 0, "vse64.v v0.t", "vse64.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 1, 8, 0, ~0ull)
+TCASE(c2405, 16, m1, 8, 8, "vse64.v v0.t", "vse64.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 1, 8, 0, ~0ull)
+TCASE(c2406, 32, m1, 8, 16, "vse64.v v0.t", "vse64.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 1, 8, 0, ~0ull)
+TCASE(c2407, 64, m1, 8, 24, "vse64.v v0.t", "vse64.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 1, 8, 0, ~0ull)
+RCASE(r744, "vle64ff.v", "vle64ff.v v8, (%[mem])", 26, 8, 0, 0, 8, 16, 24, 1, 8, 0, ~0ull)
+TCASE(c2408, 8, m1, 8, 0, "vle64ff.v", "vle64ff.v v8, (%[mem])", 26, 8, 0, 0, 8, 16, 24, 1, 8, 0, ~0ull)
+TCASE(c2409, 16, m1, 8, 8, "vle64ff.v", "vle64ff.v v8, (%[mem])", 26, 8, 0, 0, 8, 16, 24, 1, 8, 0, ~0ull)
+TCASE(c2410, 32, m1, 8, 16, "vle64ff.v", "vle64ff.v v8, (%[mem])", 26, 8, 0, 0, 8, 16, 24, 1, 8, 0, ~0ull)
+TCASE(c2411, 64, m1, 8, 24, "vle64ff.v", "vle64ff.v v8, (%[mem])", 26, 8, 0, 0, 8, 16, 24, 1, 8, 0, ~0ull)
+RCASE(r745, "vle64ff.v v0.t", "vle64ff.v v8, (%[mem]), v0.t", 26, 8, 0, 1, 8, 16, 24, 1, 8, 0, ~0ull)
+TCASE(c2412, 8, m1, 8, 0, "vle64ff.v v0.t", "vle64ff.v v8, (%[mem]), v0.t", 26, 8, 0, 1, 8, 16, 24, 1, 8, 0, ~0ull)
+TCASE(c2413, 16, m1, 8, 8, "vle64ff.v v0.t", "vle64ff.v v8, (%[mem]), v0.t", 26, 8, 0, 1, 8, 16, 24, 1, 8, 0, ~0ull)
+TCASE(c2414, 32, m1, 8, 16, "vle64ff.v v0.t", "vle64ff.v v8, (%[mem]), v0.t", 26, 8, 0, 1, 8, 16, 24, 1, 8, 0, ~0ull)
+TCASE(c2415, 64, m1, 8, 24, "vle64ff.v v0.t", "vle64ff.v v8, (%[mem]), v0.t", 26, 8, 0, 1, 8, 16, 24, 1, 8, 0, ~0ull)
+RCASE(r746, "vlse64.v", "vlse64.v v8, (%[mem]), %[x]", 26, 4, 0, 0, 8, 16, 24, 1, 8, 0, ~0ull)
+TCASE(c2416, 8, m1, 8, 0, "vlse64.v", "vlse64.v v8, (%[mem]), %[x]", 26, 4, 0, 0, 8, 16, 24, 1, 8, 0, ~0ull)
+TCASE(c2417, 16, m1, 8, 8, "vlse64.v", "vlse64.v v8, (%[mem]), %[x]", 26, 4, 0, 0, 8, 16, 24, 1, 8, 0, ~0ull)
+TCASE(c2418, 32, m1, 8, 16, "vlse64.v", "vlse64.v v8, (%[mem]), %[x]", 26, 4, 0, 0, 8, 16, 24, 1, 8, 0, ~0ull)
+TCASE(c2419, 64, m1, 8, 24, "vlse64.v", "vlse64.v v8, (%[mem]), %[x]", 26, 4, 0, 0, 8, 16, 24, 1, 8, 0, ~0ull)
+RCASE(r747, "vlse64.v v0.t", "vlse64.v v8, (%[mem]), %[x], v0.t", 26, 4, 0, 1, 8, 16, 24, 1, 8, 0, ~0ull)
+TCASE(c2420, 8, m1, 8, 0, "vlse64.v v0.t", "vlse64.v v8, (%[mem]), %[x], v0.t", 26, 4, 0, 1, 8, 16, 24, 1, 8, 0, ~0ull)
+TCASE(c2421, 16, m1, 8, 8, "vlse64.v v0.t", "vlse64.v v8, (%[mem]), %[x], v0.t", 26, 4, 0, 1, 8, 16, 24, 1, 8, 0, ~0ull)
+TCASE(c2422, 32, m1, 8, 16, "vlse64.v v0.t", "vlse64.v v8, (%[mem]), %[x], v0.t", 26, 4, 0, 1, 8, 16, 24, 1, 8, 0, ~0ull)
+TCASE(c2423, 64, m1, 8, 24, "vlse64.v v0.t", "vlse64.v v8, (%[mem]), %[x], v0.t", 26, 4, 0, 1, 8, 16, 24, 1, 8, 0, ~0ull)
+RCASE(r748, "vsse64.v", "vsse64.v v8, (%[mem]), %[x]", 26, 5, 0, 0, 8, 16, 24, 1, 8, 0, ~0ull)
+TCASE(c2424, 8, m1, 8, 0, "vsse64.v", "vsse64.v v8, (%[mem]), %[x]", 26, 5, 0, 0, 8, 16, 24, 1, 8, 0, ~0ull)
+TCASE(c2425, 16, m1, 8, 8, "vsse64.v", "vsse64.v v8, (%[mem]), %[x]", 26, 5, 0, 0, 8, 16, 24, 1, 8, 0, ~0ull)
+TCASE(c2426, 32, m1, 8, 16, "vsse64.v", "vsse64.v v8, (%[mem]), %[x]", 26, 5, 0, 0, 8, 16, 24, 1, 8, 0, ~0ull)
+TCASE(c2427, 64, m1, 8, 24, "vsse64.v", "vsse64.v v8, (%[mem]), %[x]", 26, 5, 0, 0, 8, 16, 24, 1, 8, 0, ~0ull)
+RCASE(r749, "vsse64.v v0.t", "vsse64.v v8, (%[mem]), %[x], v0.t", 26, 5, 0, 1, 8, 16, 24, 1, 8, 0, ~0ull)
+TCASE(c2428, 8, m1, 8, 0, "vsse64.v v0.t", "vsse64.v v8, (%[mem]), %[x], v0.t", 26, 5, 0, 1, 8, 16, 24, 1, 8, 0, ~0ull)
+TCASE(c2429, 16, m1, 8, 8, "vsse64.v v0.t", "vsse64.v v8, (%[mem]), %[x], v0.t", 26, 5, 0, 1, 8, 16, 24, 1, 8, 0, ~0ull)
+TCASE(c2430, 32, m1, 8, 16, "vsse64.v v0.t", "vsse64.v v8, (%[mem]), %[x], v0.t", 26, 5, 0, 1, 8, 16, 24, 1, 8, 0, ~0ull)
+TCASE(c2431, 64, m1, 8, 24, "vsse64.v v0.t", "vsse64.v v8, (%[mem]), %[x], v0.t", 26, 5, 0, 1, 8, 16, 24, 1, 8, 0, ~0ull)
+RCASE(r750, "vsuxei64", "vsuxei64.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 1, 0, 8, ~0ull)
+TCASE(c2432, 8, m1, 8, 0, "vsuxei64", "vsuxei64.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 1, 0, 8, ~0ull)
+TCASE(c2433, 16, m1, 8, 8, "vsuxei64", "vsuxei64.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 1, 0, 8, ~0ull)
+TCASE(c2434, 32, m1, 8, 16, "vsuxei64", "vsuxei64.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 1, 0, 8, ~0ull)
+TCASE(c2435, 64, m1, 8, 24, "vsuxei64", "vsuxei64.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 1, 0, 8, ~0ull)
+RCASE(r751, "vsuxei64 v0.t", "vsuxei64.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 1, 0, 8, ~0ull)
+TCASE(c2436, 8, m1, 8, 0, "vsuxei64 v0.t", "vsuxei64.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 1, 0, 8, ~0ull)
+TCASE(c2437, 16, m1, 8, 8, "vsuxei64 v0.t", "vsuxei64.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 1, 0, 8, ~0ull)
+TCASE(c2438, 32, m1, 8, 16, "vsuxei64 v0.t", "vsuxei64.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 1, 0, 8, ~0ull)
+TCASE(c2439, 64, m1, 8, 24, "vsuxei64 v0.t", "vsuxei64.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 1, 0, 8, ~0ull)
+RCASE(r752, "vsoxei64", "vsoxei64.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 1, 0, 8, ~0ull)
+TCASE(c2440, 8, m1, 8, 0, "vsoxei64", "vsoxei64.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 1, 0, 8, ~0ull)
+TCASE(c2441, 16, m1, 8, 8, "vsoxei64", "vsoxei64.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 1, 0, 8, ~0ull)
+TCASE(c2442, 32, m1, 8, 16, "vsoxei64", "vsoxei64.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 1, 0, 8, ~0ull)
+TCASE(c2443, 64, m1, 8, 24, "vsoxei64", "vsoxei64.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 1, 0, 8, ~0ull)
+RCASE(r753, "vsoxei64 v0.t", "vsoxei64.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 1, 0, 8, ~0ull)
+TCASE(c2444, 8, m1, 8, 0, "vsoxei64 v0.t", "vsoxei64.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 1, 0, 8, ~0ull)
+TCASE(c2445, 16, m1, 8, 8, "vsoxei64 v0.t", "vsoxei64.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 1, 0, 8, ~0ull)
+TCASE(c2446, 32, m1, 8, 16, "vsoxei64 v0.t", "vsoxei64.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 1, 0, 8, ~0ull)
+TCASE(c2447, 64, m1, 8, 24, "vsoxei64 v0.t", "vsoxei64.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 1, 0, 8, ~0ull)
+RCASE(r754, "vlseg2e64.v", "vlseg2e64.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 2, 8, 0, ~0ull)
+TCASE(c2448, 8, mf2, 4, 7, "vlseg2e64.v", "vlseg2e64.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 2, 8, 0, ~0ull)
+TCASE(c2449, 16, m1, 8, 8, "vlseg2e64.v", "vlseg2e64.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 2, 8, 0, ~0ull)
+TCASE(c2450, 32, m1, 8, 16, "vlseg2e64.v", "vlseg2e64.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 2, 8, 0, ~0ull)
+TCASE(c2451, 64, m1, 8, 24, "vlseg2e64.v", "vlseg2e64.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 2, 8, 0, ~0ull)
+RCASE(r755, "vlseg2e64.v v0.t", "vlseg2e64.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 2, 8, 0, ~0ull)
+TCASE(c2452, 8, mf2, 4, 7, "vlseg2e64.v v0.t", "vlseg2e64.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 2, 8, 0, ~0ull)
+TCASE(c2453, 16, m1, 8, 8, "vlseg2e64.v v0.t", "vlseg2e64.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 2, 8, 0, ~0ull)
+TCASE(c2454, 32, m1, 8, 16, "vlseg2e64.v v0.t", "vlseg2e64.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 2, 8, 0, ~0ull)
+TCASE(c2455, 64, m1, 8, 24, "vlseg2e64.v v0.t", "vlseg2e64.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 2, 8, 0, ~0ull)
+RCASE(r756, "vsseg2e64.v", "vsseg2e64.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 2, 8, 0, ~0ull)
+TCASE(c2456, 8, mf2, 4, 7, "vsseg2e64.v", "vsseg2e64.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 2, 8, 0, ~0ull)
+TCASE(c2457, 16, m1, 8, 8, "vsseg2e64.v", "vsseg2e64.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 2, 8, 0, ~0ull)
+TCASE(c2458, 32, m1, 8, 16, "vsseg2e64.v", "vsseg2e64.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 2, 8, 0, ~0ull)
+TCASE(c2459, 64, m1, 8, 24, "vsseg2e64.v", "vsseg2e64.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 2, 8, 0, ~0ull)
+RCASE(r757, "vsseg2e64.v v0.t", "vsseg2e64.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 2, 8, 0, ~0ull)
+TCASE(c2460, 8, mf2, 4, 7, "vsseg2e64.v v0.t", "vsseg2e64.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 2, 8, 0, ~0ull)
+TCASE(c2461, 16, m1, 8, 8, "vsseg2e64.v v0.t", "vsseg2e64.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 2, 8, 0, ~0ull)
+TCASE(c2462, 32, m1, 8, 16, "vsseg2e64.v v0.t", "vsseg2e64.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 2, 8, 0, ~0ull)
+TCASE(c2463, 64, m1, 8, 24, "vsseg2e64.v v0.t", "vsseg2e64.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 2, 8, 0, ~0ull)
+RCASE(r758, "vlseg3e64.v", "vlseg3e64.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 3, 8, 0, ~0ull)
+TCASE(c2464, 16, mf2, 4, 15, "vlseg3e64.v", "vlseg3e64.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 3, 8, 0, ~0ull)
+TCASE(c2465, 32, m1, 8, 16, "vlseg3e64.v", "vlseg3e64.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 3, 8, 0, ~0ull)
+TCASE(c2466, 64, m1, 8, 24, "vlseg3e64.v", "vlseg3e64.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 3, 8, 0, ~0ull)
+RCASE(r759, "vlseg3e64.v v0.t", "vlseg3e64.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 3, 8, 0, ~0ull)
+TCASE(c2467, 16, mf2, 4, 15, "vlseg3e64.v v0.t", "vlseg3e64.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 3, 8, 0, ~0ull)
+TCASE(c2468, 32, m1, 8, 16, "vlseg3e64.v v0.t", "vlseg3e64.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 3, 8, 0, ~0ull)
+TCASE(c2469, 64, m1, 8, 24, "vlseg3e64.v v0.t", "vlseg3e64.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 3, 8, 0, ~0ull)
+RCASE(r760, "vsseg3e64.v", "vsseg3e64.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 3, 8, 0, ~0ull)
+TCASE(c2470, 16, mf2, 4, 15, "vsseg3e64.v", "vsseg3e64.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 3, 8, 0, ~0ull)
+TCASE(c2471, 32, m1, 8, 16, "vsseg3e64.v", "vsseg3e64.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 3, 8, 0, ~0ull)
+TCASE(c2472, 64, m1, 8, 24, "vsseg3e64.v", "vsseg3e64.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 3, 8, 0, ~0ull)
+RCASE(r761, "vsseg3e64.v v0.t", "vsseg3e64.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 3, 8, 0, ~0ull)
+TCASE(c2473, 16, mf2, 4, 15, "vsseg3e64.v v0.t", "vsseg3e64.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 3, 8, 0, ~0ull)
+TCASE(c2474, 32, m1, 8, 16, "vsseg3e64.v v0.t", "vsseg3e64.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 3, 8, 0, ~0ull)
+TCASE(c2475, 64, m1, 8, 24, "vsseg3e64.v v0.t", "vsseg3e64.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 3, 8, 0, ~0ull)
+RCASE(r762, "vlseg4e64.v", "vlseg4e64.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 4, 8, 0, ~0ull)
+TCASE(c2476, 16, mf2, 4, 15, "vlseg4e64.v", "vlseg4e64.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 4, 8, 0, ~0ull)
+TCASE(c2477, 32, m1, 8, 16, "vlseg4e64.v", "vlseg4e64.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 4, 8, 0, ~0ull)
+TCASE(c2478, 64, m1, 8, 24, "vlseg4e64.v", "vlseg4e64.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 4, 8, 0, ~0ull)
+RCASE(r763, "vlseg4e64.v v0.t", "vlseg4e64.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 4, 8, 0, ~0ull)
+TCASE(c2479, 16, mf2, 4, 15, "vlseg4e64.v v0.t", "vlseg4e64.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 4, 8, 0, ~0ull)
+TCASE(c2480, 32, m1, 8, 16, "vlseg4e64.v v0.t", "vlseg4e64.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 4, 8, 0, ~0ull)
+TCASE(c2481, 64, m1, 8, 24, "vlseg4e64.v v0.t", "vlseg4e64.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 4, 8, 0, ~0ull)
+RCASE(r764, "vsseg4e64.v", "vsseg4e64.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 4, 8, 0, ~0ull)
+TCASE(c2482, 16, mf2, 4, 15, "vsseg4e64.v", "vsseg4e64.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 4, 8, 0, ~0ull)
+TCASE(c2483, 32, m1, 8, 16, "vsseg4e64.v", "vsseg4e64.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 4, 8, 0, ~0ull)
+TCASE(c2484, 64, m1, 8, 24, "vsseg4e64.v", "vsseg4e64.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 4, 8, 0, ~0ull)
+RCASE(r765, "vsseg4e64.v v0.t", "vsseg4e64.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 4, 8, 0, ~0ull)
+TCASE(c2485, 16, mf2, 4, 15, "vsseg4e64.v v0.t", "vsseg4e64.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 4, 8, 0, ~0ull)
+TCASE(c2486, 32, m1, 8, 16, "vsseg4e64.v v0.t", "vsseg4e64.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 4, 8, 0, ~0ull)
+TCASE(c2487, 64, m1, 8, 24, "vsseg4e64.v v0.t", "vsseg4e64.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 4, 8, 0, ~0ull)
+RCASE(r766, "vlseg8e64.v", "vlseg8e64.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 8, 8, 0, ~0ull)
+TCASE(c2488, 32, mf2, 4, 23, "vlseg8e64.v", "vlseg8e64.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 8, 8, 0, ~0ull)
+TCASE(c2489, 64, m1, 8, 24, "vlseg8e64.v", "vlseg8e64.v v8, (%[mem])", 26, 0, 0, 0, 8, 16, 24, 8, 8, 0, ~0ull)
+RCASE(r767, "vlseg8e64.v v0.t", "vlseg8e64.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 8, 8, 0, ~0ull)
+TCASE(c2490, 32, mf2, 4, 23, "vlseg8e64.v v0.t", "vlseg8e64.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 8, 8, 0, ~0ull)
+TCASE(c2491, 64, m1, 8, 24, "vlseg8e64.v v0.t", "vlseg8e64.v v8, (%[mem]), v0.t", 26, 0, 0, 1, 8, 16, 24, 8, 8, 0, ~0ull)
+RCASE(r768, "vsseg8e64.v", "vsseg8e64.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 8, 8, 0, ~0ull)
+TCASE(c2492, 32, mf2, 4, 23, "vsseg8e64.v", "vsseg8e64.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 8, 8, 0, ~0ull)
+TCASE(c2493, 64, m1, 8, 24, "vsseg8e64.v", "vsseg8e64.v v8, (%[mem])", 26, 1, 0, 0, 8, 16, 24, 8, 8, 0, ~0ull)
+RCASE(r769, "vsseg8e64.v v0.t", "vsseg8e64.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 8, 8, 0, ~0ull)
+TCASE(c2494, 32, mf2, 4, 23, "vsseg8e64.v v0.t", "vsseg8e64.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 8, 8, 0, ~0ull)
+TCASE(c2495, 64, m1, 8, 24, "vsseg8e64.v v0.t", "vsseg8e64.v v8, (%[mem]), v0.t", 26, 1, 0, 1, 8, 16, 24, 8, 8, 0, ~0ull)
+RCASE(r770, "vlsseg2e64.v", "vlsseg2e64.v v8, (%[mem]), %[x]", 26, 4, 0, 0, 8, 16, 24, 2, 8, 0, ~0ull)
+TCASE(c2496, 8, mf2, 4, 7, "vlsseg2e64.v", "vlsseg2e64.v v8, (%[mem]), %[x]", 26, 4, 0, 0, 8, 16, 24, 2, 8, 0, ~0ull)
+TCASE(c2497, 16, m1, 8, 8, "vlsseg2e64.v", "vlsseg2e64.v v8, (%[mem]), %[x]", 26, 4, 0, 0, 8, 16, 24, 2, 8, 0, ~0ull)
+TCASE(c2498, 32, m1, 8, 16, "vlsseg2e64.v", "vlsseg2e64.v v8, (%[mem]), %[x]", 26, 4, 0, 0, 8, 16, 24, 2, 8, 0, ~0ull)
+TCASE(c2499, 64, m1, 8, 24, "vlsseg2e64.v", "vlsseg2e64.v v8, (%[mem]), %[x]", 26, 4, 0, 0, 8, 16, 24, 2, 8, 0, ~0ull)
+RCASE(r771, "vlsseg2e64.v v0.t", "vlsseg2e64.v v8, (%[mem]), %[x], v0.t", 26, 4, 0, 1, 8, 16, 24, 2, 8, 0, ~0ull)
+TCASE(c2500, 8, mf2, 4, 7, "vlsseg2e64.v v0.t", "vlsseg2e64.v v8, (%[mem]), %[x], v0.t", 26, 4, 0, 1, 8, 16, 24, 2, 8, 0, ~0ull)
+TCASE(c2501, 16, m1, 8, 8, "vlsseg2e64.v v0.t", "vlsseg2e64.v v8, (%[mem]), %[x], v0.t", 26, 4, 0, 1, 8, 16, 24, 2, 8, 0, ~0ull)
+TCASE(c2502, 32, m1, 8, 16, "vlsseg2e64.v v0.t", "vlsseg2e64.v v8, (%[mem]), %[x], v0.t", 26, 4, 0, 1, 8, 16, 24, 2, 8, 0, ~0ull)
+TCASE(c2503, 64, m1, 8, 24, "vlsseg2e64.v v0.t", "vlsseg2e64.v v8, (%[mem]), %[x], v0.t", 26, 4, 0, 1, 8, 16, 24, 2, 8, 0, ~0ull)
+RCASE(r772, "vssseg2e64.v", "vssseg2e64.v v8, (%[mem]), %[x]", 26, 5, 0, 0, 8, 16, 24, 2, 8, 0, ~0ull)
+TCASE(c2504, 8, mf2, 4, 7, "vssseg2e64.v", "vssseg2e64.v v8, (%[mem]), %[x]", 26, 5, 0, 0, 8, 16, 24, 2, 8, 0, ~0ull)
+TCASE(c2505, 16, m1, 8, 8, "vssseg2e64.v", "vssseg2e64.v v8, (%[mem]), %[x]", 26, 5, 0, 0, 8, 16, 24, 2, 8, 0, ~0ull)
+TCASE(c2506, 32, m1, 8, 16, "vssseg2e64.v", "vssseg2e64.v v8, (%[mem]), %[x]", 26, 5, 0, 0, 8, 16, 24, 2, 8, 0, ~0ull)
+TCASE(c2507, 64, m1, 8, 24, "vssseg2e64.v", "vssseg2e64.v v8, (%[mem]), %[x]", 26, 5, 0, 0, 8, 16, 24, 2, 8, 0, ~0ull)
+RCASE(r773, "vssseg2e64.v v0.t", "vssseg2e64.v v8, (%[mem]), %[x], v0.t", 26, 5, 0, 1, 8, 16, 24, 2, 8, 0, ~0ull)
+TCASE(c2508, 8, mf2, 4, 7, "vssseg2e64.v v0.t", "vssseg2e64.v v8, (%[mem]), %[x], v0.t", 26, 5, 0, 1, 8, 16, 24, 2, 8, 0, ~0ull)
+TCASE(c2509, 16, m1, 8, 8, "vssseg2e64.v v0.t", "vssseg2e64.v v8, (%[mem]), %[x], v0.t", 26, 5, 0, 1, 8, 16, 24, 2, 8, 0, ~0ull)
+TCASE(c2510, 32, m1, 8, 16, "vssseg2e64.v v0.t", "vssseg2e64.v v8, (%[mem]), %[x], v0.t", 26, 5, 0, 1, 8, 16, 24, 2, 8, 0, ~0ull)
+TCASE(c2511, 64, m1, 8, 24, "vssseg2e64.v v0.t", "vssseg2e64.v v8, (%[mem]), %[x], v0.t", 26, 5, 0, 1, 8, 16, 24, 2, 8, 0, ~0ull)
+RCASE(r774, "vluxseg2ei64.v", "vluxseg2ei64.v v8, (%[mem]), v16", 26, 2, 0, 0, 8, 16, 24, 2, 0, 8, ~0ull)
+TCASE(c2512, 8, m1, 8, 0, "vluxseg2ei64.v", "vluxseg2ei64.v v8, (%[mem]), v16", 26, 2, 0, 0, 8, 16, 24, 2, 0, 8, ~0ull)
+TCASE(c2513, 16, m1, 8, 8, "vluxseg2ei64.v", "vluxseg2ei64.v v8, (%[mem]), v16", 26, 2, 0, 0, 8, 16, 24, 2, 0, 8, ~0ull)
+TCASE(c2514, 32, m1, 8, 16, "vluxseg2ei64.v", "vluxseg2ei64.v v8, (%[mem]), v16", 26, 2, 0, 0, 8, 16, 24, 2, 0, 8, ~0ull)
+TCASE(c2515, 64, m1, 8, 24, "vluxseg2ei64.v", "vluxseg2ei64.v v8, (%[mem]), v16", 26, 2, 0, 0, 8, 16, 24, 2, 0, 8, ~0ull)
+RCASE(r775, "vluxseg2ei64.v v0.t", "vluxseg2ei64.v v8, (%[mem]), v16, v0.t", 26, 2, 0, 1, 8, 16, 24, 2, 0, 8, ~0ull)
+TCASE(c2516, 8, m1, 8, 0, "vluxseg2ei64.v v0.t", "vluxseg2ei64.v v8, (%[mem]), v16, v0.t", 26, 2, 0, 1, 8, 16, 24, 2, 0, 8, ~0ull)
+TCASE(c2517, 16, m1, 8, 8, "vluxseg2ei64.v v0.t", "vluxseg2ei64.v v8, (%[mem]), v16, v0.t", 26, 2, 0, 1, 8, 16, 24, 2, 0, 8, ~0ull)
+TCASE(c2518, 32, m1, 8, 16, "vluxseg2ei64.v v0.t", "vluxseg2ei64.v v8, (%[mem]), v16, v0.t", 26, 2, 0, 1, 8, 16, 24, 2, 0, 8, ~0ull)
+TCASE(c2519, 64, m1, 8, 24, "vluxseg2ei64.v v0.t", "vluxseg2ei64.v v8, (%[mem]), v16, v0.t", 26, 2, 0, 1, 8, 16, 24, 2, 0, 8, ~0ull)
+RCASE(r776, "vsuxseg2ei64.v", "vsuxseg2ei64.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 2, 0, 8, ~0ull)
+TCASE(c2520, 8, m1, 8, 0, "vsuxseg2ei64.v", "vsuxseg2ei64.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 2, 0, 8, ~0ull)
+TCASE(c2521, 16, m1, 8, 8, "vsuxseg2ei64.v", "vsuxseg2ei64.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 2, 0, 8, ~0ull)
+TCASE(c2522, 32, m1, 8, 16, "vsuxseg2ei64.v", "vsuxseg2ei64.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 2, 0, 8, ~0ull)
+TCASE(c2523, 64, m1, 8, 24, "vsuxseg2ei64.v", "vsuxseg2ei64.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 2, 0, 8, ~0ull)
+RCASE(r777, "vsuxseg2ei64.v v0.t", "vsuxseg2ei64.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 2, 0, 8, ~0ull)
+TCASE(c2524, 8, m1, 8, 0, "vsuxseg2ei64.v v0.t", "vsuxseg2ei64.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 2, 0, 8, ~0ull)
+TCASE(c2525, 16, m1, 8, 8, "vsuxseg2ei64.v v0.t", "vsuxseg2ei64.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 2, 0, 8, ~0ull)
+TCASE(c2526, 32, m1, 8, 16, "vsuxseg2ei64.v v0.t", "vsuxseg2ei64.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 2, 0, 8, ~0ull)
+TCASE(c2527, 64, m1, 8, 24, "vsuxseg2ei64.v v0.t", "vsuxseg2ei64.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 2, 0, 8, ~0ull)
+RCASE(r778, "vlsseg5e64.v", "vlsseg5e64.v v8, (%[mem]), %[x]", 26, 4, 0, 0, 8, 16, 24, 5, 8, 0, ~0ull)
+TCASE(c2528, 32, mf2, 4, 23, "vlsseg5e64.v", "vlsseg5e64.v v8, (%[mem]), %[x]", 26, 4, 0, 0, 8, 16, 24, 5, 8, 0, ~0ull)
+TCASE(c2529, 64, m1, 8, 24, "vlsseg5e64.v", "vlsseg5e64.v v8, (%[mem]), %[x]", 26, 4, 0, 0, 8, 16, 24, 5, 8, 0, ~0ull)
+RCASE(r779, "vlsseg5e64.v v0.t", "vlsseg5e64.v v8, (%[mem]), %[x], v0.t", 26, 4, 0, 1, 8, 16, 24, 5, 8, 0, ~0ull)
+TCASE(c2530, 32, mf2, 4, 23, "vlsseg5e64.v v0.t", "vlsseg5e64.v v8, (%[mem]), %[x], v0.t", 26, 4, 0, 1, 8, 16, 24, 5, 8, 0, ~0ull)
+TCASE(c2531, 64, m1, 8, 24, "vlsseg5e64.v v0.t", "vlsseg5e64.v v8, (%[mem]), %[x], v0.t", 26, 4, 0, 1, 8, 16, 24, 5, 8, 0, ~0ull)
+RCASE(r780, "vssseg5e64.v", "vssseg5e64.v v8, (%[mem]), %[x]", 26, 5, 0, 0, 8, 16, 24, 5, 8, 0, ~0ull)
+TCASE(c2532, 32, mf2, 4, 23, "vssseg5e64.v", "vssseg5e64.v v8, (%[mem]), %[x]", 26, 5, 0, 0, 8, 16, 24, 5, 8, 0, ~0ull)
+TCASE(c2533, 64, m1, 8, 24, "vssseg5e64.v", "vssseg5e64.v v8, (%[mem]), %[x]", 26, 5, 0, 0, 8, 16, 24, 5, 8, 0, ~0ull)
+RCASE(r781, "vssseg5e64.v v0.t", "vssseg5e64.v v8, (%[mem]), %[x], v0.t", 26, 5, 0, 1, 8, 16, 24, 5, 8, 0, ~0ull)
+TCASE(c2534, 32, mf2, 4, 23, "vssseg5e64.v v0.t", "vssseg5e64.v v8, (%[mem]), %[x], v0.t", 26, 5, 0, 1, 8, 16, 24, 5, 8, 0, ~0ull)
+TCASE(c2535, 64, m1, 8, 24, "vssseg5e64.v v0.t", "vssseg5e64.v v8, (%[mem]), %[x], v0.t", 26, 5, 0, 1, 8, 16, 24, 5, 8, 0, ~0ull)
+RCASE(r782, "vluxseg5ei64.v", "vluxseg5ei64.v v8, (%[mem]), v16", 26, 2, 0, 0, 8, 16, 24, 5, 0, 8, ~0ull)
+TCASE(c2536, 8, m1, 8, 0, "vluxseg5ei64.v", "vluxseg5ei64.v v8, (%[mem]), v16", 26, 2, 0, 0, 8, 16, 24, 5, 0, 8, ~0ull)
+TCASE(c2537, 16, m1, 8, 8, "vluxseg5ei64.v", "vluxseg5ei64.v v8, (%[mem]), v16", 26, 2, 0, 0, 8, 16, 24, 5, 0, 8, ~0ull)
+TCASE(c2538, 32, m1, 8, 16, "vluxseg5ei64.v", "vluxseg5ei64.v v8, (%[mem]), v16", 26, 2, 0, 0, 8, 16, 24, 5, 0, 8, ~0ull)
+TCASE(c2539, 64, m1, 8, 24, "vluxseg5ei64.v", "vluxseg5ei64.v v8, (%[mem]), v16", 26, 2, 0, 0, 8, 16, 24, 5, 0, 8, ~0ull)
+RCASE(r783, "vluxseg5ei64.v v0.t", "vluxseg5ei64.v v8, (%[mem]), v16, v0.t", 26, 2, 0, 1, 8, 16, 24, 5, 0, 8, ~0ull)
+TCASE(c2540, 8, m1, 8, 0, "vluxseg5ei64.v v0.t", "vluxseg5ei64.v v8, (%[mem]), v16, v0.t", 26, 2, 0, 1, 8, 16, 24, 5, 0, 8, ~0ull)
+TCASE(c2541, 16, m1, 8, 8, "vluxseg5ei64.v v0.t", "vluxseg5ei64.v v8, (%[mem]), v16, v0.t", 26, 2, 0, 1, 8, 16, 24, 5, 0, 8, ~0ull)
+TCASE(c2542, 32, m1, 8, 16, "vluxseg5ei64.v v0.t", "vluxseg5ei64.v v8, (%[mem]), v16, v0.t", 26, 2, 0, 1, 8, 16, 24, 5, 0, 8, ~0ull)
+TCASE(c2543, 64, m1, 8, 24, "vluxseg5ei64.v v0.t", "vluxseg5ei64.v v8, (%[mem]), v16, v0.t", 26, 2, 0, 1, 8, 16, 24, 5, 0, 8, ~0ull)
+RCASE(r784, "vsuxseg5ei64.v", "vsuxseg5ei64.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 5, 0, 8, ~0ull)
+TCASE(c2544, 8, m1, 8, 0, "vsuxseg5ei64.v", "vsuxseg5ei64.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 5, 0, 8, ~0ull)
+TCASE(c2545, 16, m1, 8, 8, "vsuxseg5ei64.v", "vsuxseg5ei64.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 5, 0, 8, ~0ull)
+TCASE(c2546, 32, m1, 8, 16, "vsuxseg5ei64.v", "vsuxseg5ei64.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 5, 0, 8, ~0ull)
+TCASE(c2547, 64, m1, 8, 24, "vsuxseg5ei64.v", "vsuxseg5ei64.v v8, (%[mem]), v16", 26, 3, 0, 0, 8, 16, 24, 5, 0, 8, ~0ull)
+RCASE(r785, "vsuxseg5ei64.v v0.t", "vsuxseg5ei64.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 5, 0, 8, ~0ull)
+TCASE(c2548, 8, m1, 8, 0, "vsuxseg5ei64.v v0.t", "vsuxseg5ei64.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 5, 0, 8, ~0ull)
+TCASE(c2549, 16, m1, 8, 8, "vsuxseg5ei64.v v0.t", "vsuxseg5ei64.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 5, 0, 8, ~0ull)
+TCASE(c2550, 32, m1, 8, 16, "vsuxseg5ei64.v v0.t", "vsuxseg5ei64.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 5, 0, 8, ~0ull)
+TCASE(c2551, 64, m1, 8, 24, "vsuxseg5ei64.v v0.t", "vsuxseg5ei64.v v8, (%[mem]), v16, v0.t", 26, 3, 0, 1, 8, 16, 24, 5, 0, 8, ~0ull)
+RCASE(r786, "vl1re64.v", "vl1re64.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 1, 8, 0, ~0ull)
+TCASE(c2552, 8, m1, 8, 0, "vl1re64.v", "vl1re64.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 1, 8, 0, ~0ull)
+TCASE(c2553, 16, m1, 8, 8, "vl1re64.v", "vl1re64.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 1, 8, 0, ~0ull)
+TCASE(c2554, 32, m1, 8, 16, "vl1re64.v", "vl1re64.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 1, 8, 0, ~0ull)
+TCASE(c2555, 64, m1, 8, 24, "vl1re64.v", "vl1re64.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 1, 8, 0, ~0ull)
+RCASE(r787, "vl2re64.v", "vl2re64.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 2, 8, 0, ~0ull)
+TCASE(c2556, 8, m1, 8, 0, "vl2re64.v", "vl2re64.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 2, 8, 0, ~0ull)
+TCASE(c2557, 16, m1, 8, 8, "vl2re64.v", "vl2re64.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 2, 8, 0, ~0ull)
+TCASE(c2558, 32, m1, 8, 16, "vl2re64.v", "vl2re64.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 2, 8, 0, ~0ull)
+TCASE(c2559, 64, m1, 8, 24, "vl2re64.v", "vl2re64.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 2, 8, 0, ~0ull)
+RCASE(r788, "vl4re64.v", "vl4re64.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 4, 8, 0, ~0ull)
+TCASE(c2560, 8, m1, 8, 0, "vl4re64.v", "vl4re64.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 4, 8, 0, ~0ull)
+TCASE(c2561, 16, m1, 8, 8, "vl4re64.v", "vl4re64.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 4, 8, 0, ~0ull)
+TCASE(c2562, 32, m1, 8, 16, "vl4re64.v", "vl4re64.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 4, 8, 0, ~0ull)
+TCASE(c2563, 64, m1, 8, 24, "vl4re64.v", "vl4re64.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 4, 8, 0, ~0ull)
+RCASE(r789, "vl8re64.v", "vl8re64.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 8, 8, 0, ~0ull)
+TCASE(c2564, 8, m1, 8, 0, "vl8re64.v", "vl8re64.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 8, 8, 0, ~0ull)
+TCASE(c2565, 16, m1, 8, 8, "vl8re64.v", "vl8re64.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 8, 8, 0, ~0ull)
+TCASE(c2566, 32, m1, 8, 16, "vl8re64.v", "vl8re64.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 8, 8, 0, ~0ull)
+TCASE(c2567, 64, m1, 8, 24, "vl8re64.v", "vl8re64.v v8, (%[mem])", 26, 16, 0, 0, 8, 16, 24, 8, 8, 0, ~0ull)
+RCASE(r790, "vs1r.v", "vs1r.v v8, (%[mem])", 26, 17, 0, 0, 8, 16, 24, 1, 1, 0, ~0ull)
+TCASE(c2568, 8, m1, 8, 0, "vs1r.v", "vs1r.v v8, (%[mem])", 26, 17, 0, 0, 8, 16, 24, 1, 1, 0, ~0ull)
+TCASE(c2569, 16, m1, 8, 8, "vs1r.v", "vs1r.v v8, (%[mem])", 26, 17, 0, 0, 8, 16, 24, 1, 1, 0, ~0ull)
+TCASE(c2570, 32, m1, 8, 16, "vs1r.v", "vs1r.v v8, (%[mem])", 26, 17, 0, 0, 8, 16, 24, 1, 1, 0, ~0ull)
+TCASE(c2571, 64, m1, 8, 24, "vs1r.v", "vs1r.v v8, (%[mem])", 26, 17, 0, 0, 8, 16, 24, 1, 1, 0, ~0ull)
+RCASE(r791, "vs2r.v", "vs2r.v v8, (%[mem])", 26, 17, 0, 0, 8, 16, 24, 2, 1, 0, ~0ull)
+TCASE(c2572, 8, m1, 8, 0, "vs2r.v", "vs2r.v v8, (%[mem])", 26, 17, 0, 0, 8, 16, 24, 2, 1, 0, ~0ull)
+TCASE(c2573, 16, m1, 8, 8, "vs2r.v", "vs2r.v v8, (%[mem])", 26, 17, 0, 0, 8, 16, 24, 2, 1, 0, ~0ull)
+TCASE(c2574, 32, m1, 8, 16, "vs2r.v", "vs2r.v v8, (%[mem])", 26, 17, 0, 0, 8, 16, 24, 2, 1, 0, ~0ull)
+TCASE(c2575, 64, m1, 8, 24, "vs2r.v", "vs2r.v v8, (%[mem])", 26, 17, 0, 0, 8, 16, 24, 2, 1, 0, ~0ull)
+RCASE(r792, "vs4r.v", "vs4r.v v8, (%[mem])", 26, 17, 0, 0, 8, 16, 24, 4, 1, 0, ~0ull)
+TCASE(c2576, 8, m1, 8, 0, "vs4r.v", "vs4r.v v8, (%[mem])", 26, 17, 0, 0, 8, 16, 24, 4, 1, 0, ~0ull)
+TCASE(c2577, 16, m1, 8, 8, "vs4r.v", "vs4r.v v8, (%[mem])", 26, 17, 0, 0, 8, 16, 24, 4, 1, 0, ~0ull)
+TCASE(c2578, 32, m1, 8, 16, "vs4r.v", "vs4r.v v8, (%[mem])", 26, 17, 0, 0, 8, 16, 24, 4, 1, 0, ~0ull)
+TCASE(c2579, 64, m1, 8, 24, "vs4r.v", "vs4r.v v8, (%[mem])", 26, 17, 0, 0, 8, 16, 24, 4, 1, 0, ~0ull)
+RCASE(r793, "vs8r.v", "vs8r.v v8, (%[mem])", 26, 17, 0, 0, 8, 16, 24, 8, 1, 0, ~0ull)
+TCASE(c2580, 8, m1, 8, 0, "vs8r.v", "vs8r.v v8, (%[mem])", 26, 17, 0, 0, 8, 16, 24, 8, 1, 0, ~0ull)
+TCASE(c2581, 16, m1, 8, 8, "vs8r.v", "vs8r.v v8, (%[mem])", 26, 17, 0, 0, 8, 16, 24, 8, 1, 0, ~0ull)
+TCASE(c2582, 32, m1, 8, 16, "vs8r.v", "vs8r.v v8, (%[mem])", 26, 17, 0, 0, 8, 16, 24, 8, 1, 0, ~0ull)
+TCASE(c2583, 64, m1, 8, 24, "vs8r.v", "vs8r.v v8, (%[mem])", 26, 17, 0, 0, 8, 16, 24, 8, 1, 0, ~0ull)
+RCASE(r794, "vlm.v", "vlm.v v8, (%[mem])", 26, 32, 0, 0, 8, 16, 24, 1, 1, 0, ~0ull)
+TCASE(c2584, 8, m1, 8, 0, "vlm.v", "vlm.v v8, (%[mem])", 26, 32, 0, 0, 8, 16, 24, 1, 1, 0, ~0ull)
+TCASE(c2585, 16, m1, 8, 8, "vlm.v", "vlm.v v8, (%[mem])", 26, 32, 0, 0, 8, 16, 24, 1, 1, 0, ~0ull)
+TCASE(c2586, 32, m1, 8, 16, "vlm.v", "vlm.v v8, (%[mem])", 26, 32, 0, 0, 8, 16, 24, 1, 1, 0, ~0ull)
+TCASE(c2587, 64, m1, 8, 24, "vlm.v", "vlm.v v8, (%[mem])", 26, 32, 0, 0, 8, 16, 24, 1, 1, 0, ~0ull)
+RCASE(r795, "vsm.v", "vsm.v v8, (%[mem])", 26, 33, 0, 0, 8, 16, 24, 1, 1, 0, ~0ull)
+TCASE(c2588, 8, m1, 8, 0, "vsm.v", "vsm.v v8, (%[mem])", 26, 33, 0, 0, 8, 16, 24, 1, 1, 0, ~0ull)
+TCASE(c2589, 16, m1, 8, 8, "vsm.v", "vsm.v v8, (%[mem])", 26, 33, 0, 0, 8, 16, 24, 1, 1, 0, ~0ull)
+TCASE(c2590, 32, m1, 8, 16, "vsm.v", "vsm.v v8, (%[mem])", 26, 33, 0, 0, 8, 16, 24, 1, 1, 0, ~0ull)
+TCASE(c2591, 64, m1, 8, 24, "vsm.v", "vsm.v v8, (%[mem])", 26, 33, 0, 0, 8, 16, 24, 1, 1, 0, ~0ull)
+RCASE(r796, "vsaddu.vv v24 rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvsaddu.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 0, 0, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2592, 8, m1, 8, 0, "vsaddu.vv v24 rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvsaddu.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 0, 0, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2593, 16, m1, 8, 8, "vsaddu.vv v24 rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvsaddu.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 0, 0, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2594, 32, m1, 8, 16, "vsaddu.vv v24 rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvsaddu.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 0, 0, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2595, 64, m1, 8, 24, "vsaddu.vv v24 rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvsaddu.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 0, 0, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+RCASE(r797, "vsaddu.vv v24 rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvsaddu.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 0, 0, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2596, 8, m1, 8, 0, "vsaddu.vv v24 rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvsaddu.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 0, 0, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2597, 16, m1, 8, 8, "vsaddu.vv v24 rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvsaddu.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 0, 0, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2598, 32, m1, 8, 16, "vsaddu.vv v24 rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvsaddu.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 0, 0, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2599, 64, m1, 8, 24, "vsaddu.vv v24 rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvsaddu.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 0, 0, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+RCASE(r798, "vsaddu.vv v24 rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvsaddu.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 0, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2600, 8, m1, 8, 0, "vsaddu.vv v24 rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvsaddu.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 0, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2601, 16, m1, 8, 8, "vsaddu.vv v24 rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvsaddu.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 0, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2602, 32, m1, 8, 16, "vsaddu.vv v24 rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvsaddu.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 0, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2603, 64, m1, 8, 24, "vsaddu.vv v24 rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvsaddu.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 0, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+RCASE(r799, "vsaddu.vv v24 rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvsaddu.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 0, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2604, 8, m1, 8, 0, "vsaddu.vv v24 rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvsaddu.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 0, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2605, 16, m1, 8, 8, "vsaddu.vv v24 rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvsaddu.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 0, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2606, 32, m1, 8, 16, "vsaddu.vv v24 rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvsaddu.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 0, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2607, 64, m1, 8, 24, "vsaddu.vv v24 rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvsaddu.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 0, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+RCASE(r800, "vsaddu.vx %[x] rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvsaddu.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 0, 1, 0, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2608, 8, m1, 8, 0, "vsaddu.vx %[x] rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvsaddu.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 0, 1, 0, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2609, 16, m1, 8, 8, "vsaddu.vx %[x] rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvsaddu.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 0, 1, 0, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2610, 32, m1, 8, 16, "vsaddu.vx %[x] rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvsaddu.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 0, 1, 0, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2611, 64, m1, 8, 24, "vsaddu.vx %[x] rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvsaddu.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 0, 1, 0, 8, 16, 24, 0, 3, 0, ~0ull)
+RCASE(r801, "vsaddu.vx %[x] rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvsaddu.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 0, 1, 1, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2612, 8, m1, 8, 0, "vsaddu.vx %[x] rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvsaddu.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 0, 1, 1, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2613, 16, m1, 8, 8, "vsaddu.vx %[x] rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvsaddu.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 0, 1, 1, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2614, 32, m1, 8, 16, "vsaddu.vx %[x] rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvsaddu.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 0, 1, 1, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2615, 64, m1, 8, 24, "vsaddu.vx %[x] rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvsaddu.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 0, 1, 1, 8, 16, 24, 0, 3, 0, ~0ull)
+RCASE(r802, "vsaddu.vx %[x] rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvsaddu.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 0, 1, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2616, 8, m1, 8, 0, "vsaddu.vx %[x] rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvsaddu.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 0, 1, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2617, 16, m1, 8, 8, "vsaddu.vx %[x] rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvsaddu.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 0, 1, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2618, 32, m1, 8, 16, "vsaddu.vx %[x] rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvsaddu.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 0, 1, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2619, 64, m1, 8, 24, "vsaddu.vx %[x] rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvsaddu.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 0, 1, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+RCASE(r803, "vsaddu.vx %[x] rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvsaddu.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 0, 1, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2620, 8, m1, 8, 0, "vsaddu.vx %[x] rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvsaddu.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 0, 1, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2621, 16, m1, 8, 8, "vsaddu.vx %[x] rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvsaddu.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 0, 1, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2622, 32, m1, 8, 16, "vsaddu.vx %[x] rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvsaddu.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 0, 1, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2623, 64, m1, 8, 24, "vsaddu.vx %[x] rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvsaddu.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 0, 1, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+RCASE(r804, "vsaddu.vi 5 rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvsaddu.vi v8, v16, 5\ncsrr %[r], vxsat", 27, 0, 2, 0, 8, 16, 24, 5, 1, 0, ~0ull)
+TCASE(c2624, 8, m1, 8, 0, "vsaddu.vi 5 rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvsaddu.vi v8, v16, 5\ncsrr %[r], vxsat", 27, 0, 2, 0, 8, 16, 24, 5, 1, 0, ~0ull)
+TCASE(c2625, 16, m1, 8, 8, "vsaddu.vi 5 rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvsaddu.vi v8, v16, 5\ncsrr %[r], vxsat", 27, 0, 2, 0, 8, 16, 24, 5, 1, 0, ~0ull)
+TCASE(c2626, 32, m1, 8, 16, "vsaddu.vi 5 rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvsaddu.vi v8, v16, 5\ncsrr %[r], vxsat", 27, 0, 2, 0, 8, 16, 24, 5, 1, 0, ~0ull)
+TCASE(c2627, 64, m1, 8, 24, "vsaddu.vi 5 rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvsaddu.vi v8, v16, 5\ncsrr %[r], vxsat", 27, 0, 2, 0, 8, 16, 24, 5, 1, 0, ~0ull)
+RCASE(r805, "vsaddu.vi 5 rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvsaddu.vi v8, v16, 5, v0.t\ncsrr %[r], vxsat", 27, 0, 2, 1, 8, 16, 24, 5, 1, 0, ~0ull)
+TCASE(c2628, 8, m1, 8, 0, "vsaddu.vi 5 rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvsaddu.vi v8, v16, 5, v0.t\ncsrr %[r], vxsat", 27, 0, 2, 1, 8, 16, 24, 5, 1, 0, ~0ull)
+TCASE(c2629, 16, m1, 8, 8, "vsaddu.vi 5 rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvsaddu.vi v8, v16, 5, v0.t\ncsrr %[r], vxsat", 27, 0, 2, 1, 8, 16, 24, 5, 1, 0, ~0ull)
+TCASE(c2630, 32, m1, 8, 16, "vsaddu.vi 5 rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvsaddu.vi v8, v16, 5, v0.t\ncsrr %[r], vxsat", 27, 0, 2, 1, 8, 16, 24, 5, 1, 0, ~0ull)
+TCASE(c2631, 64, m1, 8, 24, "vsaddu.vi 5 rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvsaddu.vi v8, v16, 5, v0.t\ncsrr %[r], vxsat", 27, 0, 2, 1, 8, 16, 24, 5, 1, 0, ~0ull)
+RCASE(r806, "vsaddu.vi 15 rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvsaddu.vi v8, v16, 15\ncsrr %[r], vxsat", 27, 0, 2, 0, 8, 16, 24, 15, 2, 0, ~0ull)
+TCASE(c2632, 8, m1, 8, 0, "vsaddu.vi 15 rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvsaddu.vi v8, v16, 15\ncsrr %[r], vxsat", 27, 0, 2, 0, 8, 16, 24, 15, 2, 0, ~0ull)
+TCASE(c2633, 16, m1, 8, 8, "vsaddu.vi 15 rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvsaddu.vi v8, v16, 15\ncsrr %[r], vxsat", 27, 0, 2, 0, 8, 16, 24, 15, 2, 0, ~0ull)
+TCASE(c2634, 32, m1, 8, 16, "vsaddu.vi 15 rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvsaddu.vi v8, v16, 15\ncsrr %[r], vxsat", 27, 0, 2, 0, 8, 16, 24, 15, 2, 0, ~0ull)
+TCASE(c2635, 64, m1, 8, 24, "vsaddu.vi 15 rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvsaddu.vi v8, v16, 15\ncsrr %[r], vxsat", 27, 0, 2, 0, 8, 16, 24, 15, 2, 0, ~0ull)
+RCASE(r807, "vsaddu.vi 15 rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvsaddu.vi v8, v16, 15, v0.t\ncsrr %[r], vxsat", 27, 0, 2, 1, 8, 16, 24, 15, 2, 0, ~0ull)
+TCASE(c2636, 8, m1, 8, 0, "vsaddu.vi 15 rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvsaddu.vi v8, v16, 15, v0.t\ncsrr %[r], vxsat", 27, 0, 2, 1, 8, 16, 24, 15, 2, 0, ~0ull)
+TCASE(c2637, 16, m1, 8, 8, "vsaddu.vi 15 rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvsaddu.vi v8, v16, 15, v0.t\ncsrr %[r], vxsat", 27, 0, 2, 1, 8, 16, 24, 15, 2, 0, ~0ull)
+TCASE(c2638, 32, m1, 8, 16, "vsaddu.vi 15 rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvsaddu.vi v8, v16, 15, v0.t\ncsrr %[r], vxsat", 27, 0, 2, 1, 8, 16, 24, 15, 2, 0, ~0ull)
+TCASE(c2639, 64, m1, 8, 24, "vsaddu.vi 15 rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvsaddu.vi v8, v16, 15, v0.t\ncsrr %[r], vxsat", 27, 0, 2, 1, 8, 16, 24, 15, 2, 0, ~0ull)
+RCASE(r808, "vsadd.vv v24 rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvsadd.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 1, 0, 0, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2640, 8, m1, 8, 0, "vsadd.vv v24 rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvsadd.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 1, 0, 0, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2641, 16, m1, 8, 8, "vsadd.vv v24 rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvsadd.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 1, 0, 0, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2642, 32, m1, 8, 16, "vsadd.vv v24 rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvsadd.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 1, 0, 0, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2643, 64, m1, 8, 24, "vsadd.vv v24 rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvsadd.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 1, 0, 0, 8, 16, 24, 0, 3, 0, ~0ull)
+RCASE(r809, "vsadd.vv v24 rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvsadd.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 1, 0, 1, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2644, 8, m1, 8, 0, "vsadd.vv v24 rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvsadd.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 1, 0, 1, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2645, 16, m1, 8, 8, "vsadd.vv v24 rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvsadd.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 1, 0, 1, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2646, 32, m1, 8, 16, "vsadd.vv v24 rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvsadd.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 1, 0, 1, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2647, 64, m1, 8, 24, "vsadd.vv v24 rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvsadd.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 1, 0, 1, 8, 16, 24, 0, 3, 0, ~0ull)
+RCASE(r810, "vsadd.vv v24 rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvsadd.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 1, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2648, 8, m1, 8, 0, "vsadd.vv v24 rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvsadd.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 1, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2649, 16, m1, 8, 8, "vsadd.vv v24 rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvsadd.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 1, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2650, 32, m1, 8, 16, "vsadd.vv v24 rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvsadd.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 1, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2651, 64, m1, 8, 24, "vsadd.vv v24 rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvsadd.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 1, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+RCASE(r811, "vsadd.vv v24 rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvsadd.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 1, 0, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2652, 8, m1, 8, 0, "vsadd.vv v24 rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvsadd.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 1, 0, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2653, 16, m1, 8, 8, "vsadd.vv v24 rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvsadd.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 1, 0, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2654, 32, m1, 8, 16, "vsadd.vv v24 rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvsadd.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 1, 0, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2655, 64, m1, 8, 24, "vsadd.vv v24 rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvsadd.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 1, 0, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+RCASE(r812, "vsadd.vx %[x] rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvsadd.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 1, 1, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2656, 8, m1, 8, 0, "vsadd.vx %[x] rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvsadd.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 1, 1, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2657, 16, m1, 8, 8, "vsadd.vx %[x] rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvsadd.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 1, 1, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2658, 32, m1, 8, 16, "vsadd.vx %[x] rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvsadd.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 1, 1, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2659, 64, m1, 8, 24, "vsadd.vx %[x] rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvsadd.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 1, 1, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+RCASE(r813, "vsadd.vx %[x] rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvsadd.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 1, 1, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2660, 8, m1, 8, 0, "vsadd.vx %[x] rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvsadd.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 1, 1, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2661, 16, m1, 8, 8, "vsadd.vx %[x] rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvsadd.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 1, 1, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2662, 32, m1, 8, 16, "vsadd.vx %[x] rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvsadd.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 1, 1, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2663, 64, m1, 8, 24, "vsadd.vx %[x] rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvsadd.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 1, 1, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+RCASE(r814, "vsadd.vx %[x] rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvsadd.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 1, 1, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2664, 8, m1, 8, 0, "vsadd.vx %[x] rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvsadd.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 1, 1, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2665, 16, m1, 8, 8, "vsadd.vx %[x] rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvsadd.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 1, 1, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2666, 32, m1, 8, 16, "vsadd.vx %[x] rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvsadd.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 1, 1, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2667, 64, m1, 8, 24, "vsadd.vx %[x] rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvsadd.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 1, 1, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+RCASE(r815, "vsadd.vx %[x] rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvsadd.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 1, 1, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2668, 8, m1, 8, 0, "vsadd.vx %[x] rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvsadd.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 1, 1, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2669, 16, m1, 8, 8, "vsadd.vx %[x] rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvsadd.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 1, 1, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2670, 32, m1, 8, 16, "vsadd.vx %[x] rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvsadd.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 1, 1, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2671, 64, m1, 8, 24, "vsadd.vx %[x] rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvsadd.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 1, 1, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+RCASE(r816, "vsadd.vi -16 rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvsadd.vi v8, v16, -16\ncsrr %[r], vxsat", 27, 1, 2, 0, 8, 16, 24, -16, 3, 0, ~0ull)
+TCASE(c2672, 8, m1, 8, 0, "vsadd.vi -16 rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvsadd.vi v8, v16, -16\ncsrr %[r], vxsat", 27, 1, 2, 0, 8, 16, 24, -16, 3, 0, ~0ull)
+TCASE(c2673, 16, m1, 8, 8, "vsadd.vi -16 rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvsadd.vi v8, v16, -16\ncsrr %[r], vxsat", 27, 1, 2, 0, 8, 16, 24, -16, 3, 0, ~0ull)
+TCASE(c2674, 32, m1, 8, 16, "vsadd.vi -16 rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvsadd.vi v8, v16, -16\ncsrr %[r], vxsat", 27, 1, 2, 0, 8, 16, 24, -16, 3, 0, ~0ull)
+TCASE(c2675, 64, m1, 8, 24, "vsadd.vi -16 rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvsadd.vi v8, v16, -16\ncsrr %[r], vxsat", 27, 1, 2, 0, 8, 16, 24, -16, 3, 0, ~0ull)
+RCASE(r817, "vsadd.vi -16 rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvsadd.vi v8, v16, -16, v0.t\ncsrr %[r], vxsat", 27, 1, 2, 1, 8, 16, 24, -16, 3, 0, ~0ull)
+TCASE(c2676, 8, m1, 8, 0, "vsadd.vi -16 rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvsadd.vi v8, v16, -16, v0.t\ncsrr %[r], vxsat", 27, 1, 2, 1, 8, 16, 24, -16, 3, 0, ~0ull)
+TCASE(c2677, 16, m1, 8, 8, "vsadd.vi -16 rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvsadd.vi v8, v16, -16, v0.t\ncsrr %[r], vxsat", 27, 1, 2, 1, 8, 16, 24, -16, 3, 0, ~0ull)
+TCASE(c2678, 32, m1, 8, 16, "vsadd.vi -16 rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvsadd.vi v8, v16, -16, v0.t\ncsrr %[r], vxsat", 27, 1, 2, 1, 8, 16, 24, -16, 3, 0, ~0ull)
+TCASE(c2679, 64, m1, 8, 24, "vsadd.vi -16 rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvsadd.vi v8, v16, -16, v0.t\ncsrr %[r], vxsat", 27, 1, 2, 1, 8, 16, 24, -16, 3, 0, ~0ull)
+RCASE(r818, "vsadd.vi -1 rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvsadd.vi v8, v16, -1\ncsrr %[r], vxsat", 27, 1, 2, 0, 8, 16, 24, -1, 0, 0, ~0ull)
+TCASE(c2680, 8, m1, 8, 0, "vsadd.vi -1 rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvsadd.vi v8, v16, -1\ncsrr %[r], vxsat", 27, 1, 2, 0, 8, 16, 24, -1, 0, 0, ~0ull)
+TCASE(c2681, 16, m1, 8, 8, "vsadd.vi -1 rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvsadd.vi v8, v16, -1\ncsrr %[r], vxsat", 27, 1, 2, 0, 8, 16, 24, -1, 0, 0, ~0ull)
+TCASE(c2682, 32, m1, 8, 16, "vsadd.vi -1 rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvsadd.vi v8, v16, -1\ncsrr %[r], vxsat", 27, 1, 2, 0, 8, 16, 24, -1, 0, 0, ~0ull)
+TCASE(c2683, 64, m1, 8, 24, "vsadd.vi -1 rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvsadd.vi v8, v16, -1\ncsrr %[r], vxsat", 27, 1, 2, 0, 8, 16, 24, -1, 0, 0, ~0ull)
+RCASE(r819, "vsadd.vi -1 rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvsadd.vi v8, v16, -1, v0.t\ncsrr %[r], vxsat", 27, 1, 2, 1, 8, 16, 24, -1, 0, 0, ~0ull)
+TCASE(c2684, 8, m1, 8, 0, "vsadd.vi -1 rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvsadd.vi v8, v16, -1, v0.t\ncsrr %[r], vxsat", 27, 1, 2, 1, 8, 16, 24, -1, 0, 0, ~0ull)
+TCASE(c2685, 16, m1, 8, 8, "vsadd.vi -1 rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvsadd.vi v8, v16, -1, v0.t\ncsrr %[r], vxsat", 27, 1, 2, 1, 8, 16, 24, -1, 0, 0, ~0ull)
+TCASE(c2686, 32, m1, 8, 16, "vsadd.vi -1 rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvsadd.vi v8, v16, -1, v0.t\ncsrr %[r], vxsat", 27, 1, 2, 1, 8, 16, 24, -1, 0, 0, ~0ull)
+TCASE(c2687, 64, m1, 8, 24, "vsadd.vi -1 rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvsadd.vi v8, v16, -1, v0.t\ncsrr %[r], vxsat", 27, 1, 2, 1, 8, 16, 24, -1, 0, 0, ~0ull)
+RCASE(r820, "vssubu.vv v24 rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvssubu.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 2, 0, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2688, 8, m1, 8, 0, "vssubu.vv v24 rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvssubu.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 2, 0, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2689, 16, m1, 8, 8, "vssubu.vv v24 rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvssubu.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 2, 0, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2690, 32, m1, 8, 16, "vssubu.vv v24 rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvssubu.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 2, 0, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2691, 64, m1, 8, 24, "vssubu.vv v24 rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvssubu.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 2, 0, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+RCASE(r821, "vssubu.vv v24 rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvssubu.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 2, 0, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2692, 8, m1, 8, 0, "vssubu.vv v24 rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvssubu.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 2, 0, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2693, 16, m1, 8, 8, "vssubu.vv v24 rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvssubu.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 2, 0, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2694, 32, m1, 8, 16, "vssubu.vv v24 rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvssubu.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 2, 0, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2695, 64, m1, 8, 24, "vssubu.vv v24 rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvssubu.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 2, 0, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+RCASE(r822, "vssubu.vv v24 rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvssubu.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 2, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2696, 8, m1, 8, 0, "vssubu.vv v24 rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvssubu.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 2, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2697, 16, m1, 8, 8, "vssubu.vv v24 rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvssubu.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 2, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2698, 32, m1, 8, 16, "vssubu.vv v24 rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvssubu.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 2, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2699, 64, m1, 8, 24, "vssubu.vv v24 rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvssubu.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 2, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+RCASE(r823, "vssubu.vv v24 rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvssubu.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 2, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2700, 8, m1, 8, 0, "vssubu.vv v24 rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvssubu.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 2, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2701, 16, m1, 8, 8, "vssubu.vv v24 rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvssubu.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 2, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2702, 32, m1, 8, 16, "vssubu.vv v24 rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvssubu.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 2, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2703, 64, m1, 8, 24, "vssubu.vv v24 rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvssubu.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 2, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+RCASE(r824, "vssubu.vx %[x] rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvssubu.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 2, 1, 0, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2704, 8, m1, 8, 0, "vssubu.vx %[x] rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvssubu.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 2, 1, 0, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2705, 16, m1, 8, 8, "vssubu.vx %[x] rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvssubu.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 2, 1, 0, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2706, 32, m1, 8, 16, "vssubu.vx %[x] rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvssubu.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 2, 1, 0, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2707, 64, m1, 8, 24, "vssubu.vx %[x] rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvssubu.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 2, 1, 0, 8, 16, 24, 0, 3, 0, ~0ull)
+RCASE(r825, "vssubu.vx %[x] rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvssubu.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 2, 1, 1, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2708, 8, m1, 8, 0, "vssubu.vx %[x] rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvssubu.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 2, 1, 1, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2709, 16, m1, 8, 8, "vssubu.vx %[x] rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvssubu.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 2, 1, 1, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2710, 32, m1, 8, 16, "vssubu.vx %[x] rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvssubu.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 2, 1, 1, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2711, 64, m1, 8, 24, "vssubu.vx %[x] rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvssubu.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 2, 1, 1, 8, 16, 24, 0, 3, 0, ~0ull)
+RCASE(r826, "vssubu.vx %[x] rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvssubu.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 2, 1, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2712, 8, m1, 8, 0, "vssubu.vx %[x] rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvssubu.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 2, 1, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2713, 16, m1, 8, 8, "vssubu.vx %[x] rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvssubu.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 2, 1, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2714, 32, m1, 8, 16, "vssubu.vx %[x] rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvssubu.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 2, 1, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2715, 64, m1, 8, 24, "vssubu.vx %[x] rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvssubu.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 2, 1, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+RCASE(r827, "vssubu.vx %[x] rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvssubu.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 2, 1, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2716, 8, m1, 8, 0, "vssubu.vx %[x] rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvssubu.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 2, 1, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2717, 16, m1, 8, 8, "vssubu.vx %[x] rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvssubu.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 2, 1, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2718, 32, m1, 8, 16, "vssubu.vx %[x] rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvssubu.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 2, 1, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2719, 64, m1, 8, 24, "vssubu.vx %[x] rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvssubu.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 2, 1, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+RCASE(r828, "vssub.vv v24 rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvssub.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 3, 0, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2720, 8, m1, 8, 0, "vssub.vv v24 rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvssub.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 3, 0, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2721, 16, m1, 8, 8, "vssub.vv v24 rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvssub.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 3, 0, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2722, 32, m1, 8, 16, "vssub.vv v24 rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvssub.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 3, 0, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2723, 64, m1, 8, 24, "vssub.vv v24 rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvssub.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 3, 0, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+RCASE(r829, "vssub.vv v24 rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvssub.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 3, 0, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2724, 8, m1, 8, 0, "vssub.vv v24 rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvssub.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 3, 0, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2725, 16, m1, 8, 8, "vssub.vv v24 rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvssub.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 3, 0, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2726, 32, m1, 8, 16, "vssub.vv v24 rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvssub.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 3, 0, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2727, 64, m1, 8, 24, "vssub.vv v24 rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvssub.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 3, 0, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+RCASE(r830, "vssub.vv v24 rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvssub.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 3, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2728, 8, m1, 8, 0, "vssub.vv v24 rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvssub.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 3, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2729, 16, m1, 8, 8, "vssub.vv v24 rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvssub.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 3, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2730, 32, m1, 8, 16, "vssub.vv v24 rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvssub.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 3, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2731, 64, m1, 8, 24, "vssub.vv v24 rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvssub.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 3, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+RCASE(r831, "vssub.vv v24 rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvssub.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 3, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2732, 8, m1, 8, 0, "vssub.vv v24 rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvssub.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 3, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2733, 16, m1, 8, 8, "vssub.vv v24 rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvssub.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 3, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2734, 32, m1, 8, 16, "vssub.vv v24 rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvssub.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 3, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2735, 64, m1, 8, 24, "vssub.vv v24 rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvssub.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 3, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+RCASE(r832, "vssub.vx %[x] rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvssub.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 3, 1, 0, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2736, 8, m1, 8, 0, "vssub.vx %[x] rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvssub.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 3, 1, 0, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2737, 16, m1, 8, 8, "vssub.vx %[x] rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvssub.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 3, 1, 0, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2738, 32, m1, 8, 16, "vssub.vx %[x] rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvssub.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 3, 1, 0, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2739, 64, m1, 8, 24, "vssub.vx %[x] rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvssub.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 3, 1, 0, 8, 16, 24, 0, 3, 0, ~0ull)
+RCASE(r833, "vssub.vx %[x] rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvssub.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 3, 1, 1, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2740, 8, m1, 8, 0, "vssub.vx %[x] rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvssub.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 3, 1, 1, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2741, 16, m1, 8, 8, "vssub.vx %[x] rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvssub.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 3, 1, 1, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2742, 32, m1, 8, 16, "vssub.vx %[x] rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvssub.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 3, 1, 1, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2743, 64, m1, 8, 24, "vssub.vx %[x] rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvssub.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 3, 1, 1, 8, 16, 24, 0, 3, 0, ~0ull)
+RCASE(r834, "vssub.vx %[x] rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvssub.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 3, 1, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2744, 8, m1, 8, 0, "vssub.vx %[x] rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvssub.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 3, 1, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2745, 16, m1, 8, 8, "vssub.vx %[x] rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvssub.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 3, 1, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2746, 32, m1, 8, 16, "vssub.vx %[x] rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvssub.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 3, 1, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2747, 64, m1, 8, 24, "vssub.vx %[x] rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvssub.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 3, 1, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+RCASE(r835, "vssub.vx %[x] rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvssub.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 3, 1, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2748, 8, m1, 8, 0, "vssub.vx %[x] rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvssub.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 3, 1, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2749, 16, m1, 8, 8, "vssub.vx %[x] rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvssub.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 3, 1, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2750, 32, m1, 8, 16, "vssub.vx %[x] rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvssub.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 3, 1, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2751, 64, m1, 8, 24, "vssub.vx %[x] rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvssub.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 3, 1, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+RCASE(r836, "vaaddu.vv v24 rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvaaddu.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 4, 0, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2752, 8, m1, 8, 0, "vaaddu.vv v24 rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvaaddu.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 4, 0, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2753, 16, m1, 8, 8, "vaaddu.vv v24 rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvaaddu.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 4, 0, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2754, 32, m1, 8, 16, "vaaddu.vv v24 rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvaaddu.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 4, 0, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2755, 64, m1, 8, 24, "vaaddu.vv v24 rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvaaddu.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 4, 0, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+RCASE(r837, "vaaddu.vv v24 rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvaaddu.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 4, 0, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2756, 8, m1, 8, 0, "vaaddu.vv v24 rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvaaddu.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 4, 0, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2757, 16, m1, 8, 8, "vaaddu.vv v24 rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvaaddu.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 4, 0, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2758, 32, m1, 8, 16, "vaaddu.vv v24 rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvaaddu.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 4, 0, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2759, 64, m1, 8, 24, "vaaddu.vv v24 rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvaaddu.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 4, 0, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+RCASE(r838, "vaaddu.vv v24 rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvaaddu.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 4, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2760, 8, m1, 8, 0, "vaaddu.vv v24 rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvaaddu.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 4, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2761, 16, m1, 8, 8, "vaaddu.vv v24 rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvaaddu.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 4, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2762, 32, m1, 8, 16, "vaaddu.vv v24 rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvaaddu.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 4, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2763, 64, m1, 8, 24, "vaaddu.vv v24 rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvaaddu.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 4, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+RCASE(r839, "vaaddu.vv v24 rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvaaddu.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 4, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2764, 8, m1, 8, 0, "vaaddu.vv v24 rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvaaddu.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 4, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2765, 16, m1, 8, 8, "vaaddu.vv v24 rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvaaddu.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 4, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2766, 32, m1, 8, 16, "vaaddu.vv v24 rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvaaddu.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 4, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2767, 64, m1, 8, 24, "vaaddu.vv v24 rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvaaddu.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 4, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+RCASE(r840, "vaaddu.vx %[x] rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvaaddu.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 4, 1, 0, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2768, 8, m1, 8, 0, "vaaddu.vx %[x] rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvaaddu.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 4, 1, 0, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2769, 16, m1, 8, 8, "vaaddu.vx %[x] rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvaaddu.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 4, 1, 0, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2770, 32, m1, 8, 16, "vaaddu.vx %[x] rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvaaddu.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 4, 1, 0, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2771, 64, m1, 8, 24, "vaaddu.vx %[x] rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvaaddu.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 4, 1, 0, 8, 16, 24, 0, 3, 0, ~0ull)
+RCASE(r841, "vaaddu.vx %[x] rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvaaddu.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 4, 1, 1, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2772, 8, m1, 8, 0, "vaaddu.vx %[x] rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvaaddu.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 4, 1, 1, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2773, 16, m1, 8, 8, "vaaddu.vx %[x] rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvaaddu.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 4, 1, 1, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2774, 32, m1, 8, 16, "vaaddu.vx %[x] rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvaaddu.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 4, 1, 1, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2775, 64, m1, 8, 24, "vaaddu.vx %[x] rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvaaddu.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 4, 1, 1, 8, 16, 24, 0, 3, 0, ~0ull)
+RCASE(r842, "vaaddu.vx %[x] rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvaaddu.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 4, 1, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2776, 8, m1, 8, 0, "vaaddu.vx %[x] rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvaaddu.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 4, 1, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2777, 16, m1, 8, 8, "vaaddu.vx %[x] rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvaaddu.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 4, 1, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2778, 32, m1, 8, 16, "vaaddu.vx %[x] rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvaaddu.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 4, 1, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2779, 64, m1, 8, 24, "vaaddu.vx %[x] rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvaaddu.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 4, 1, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+RCASE(r843, "vaaddu.vx %[x] rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvaaddu.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 4, 1, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2780, 8, m1, 8, 0, "vaaddu.vx %[x] rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvaaddu.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 4, 1, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2781, 16, m1, 8, 8, "vaaddu.vx %[x] rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvaaddu.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 4, 1, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2782, 32, m1, 8, 16, "vaaddu.vx %[x] rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvaaddu.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 4, 1, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2783, 64, m1, 8, 24, "vaaddu.vx %[x] rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvaaddu.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 4, 1, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+RCASE(r844, "vaadd.vv v24 rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvaadd.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 5, 0, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2784, 8, m1, 8, 0, "vaadd.vv v24 rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvaadd.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 5, 0, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2785, 16, m1, 8, 8, "vaadd.vv v24 rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvaadd.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 5, 0, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2786, 32, m1, 8, 16, "vaadd.vv v24 rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvaadd.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 5, 0, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2787, 64, m1, 8, 24, "vaadd.vv v24 rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvaadd.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 5, 0, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+RCASE(r845, "vaadd.vv v24 rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvaadd.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 5, 0, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2788, 8, m1, 8, 0, "vaadd.vv v24 rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvaadd.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 5, 0, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2789, 16, m1, 8, 8, "vaadd.vv v24 rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvaadd.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 5, 0, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2790, 32, m1, 8, 16, "vaadd.vv v24 rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvaadd.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 5, 0, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2791, 64, m1, 8, 24, "vaadd.vv v24 rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvaadd.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 5, 0, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+RCASE(r846, "vaadd.vv v24 rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvaadd.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 5, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2792, 8, m1, 8, 0, "vaadd.vv v24 rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvaadd.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 5, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2793, 16, m1, 8, 8, "vaadd.vv v24 rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvaadd.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 5, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2794, 32, m1, 8, 16, "vaadd.vv v24 rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvaadd.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 5, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2795, 64, m1, 8, 24, "vaadd.vv v24 rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvaadd.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 5, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+RCASE(r847, "vaadd.vv v24 rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvaadd.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 5, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2796, 8, m1, 8, 0, "vaadd.vv v24 rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvaadd.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 5, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2797, 16, m1, 8, 8, "vaadd.vv v24 rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvaadd.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 5, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2798, 32, m1, 8, 16, "vaadd.vv v24 rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvaadd.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 5, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2799, 64, m1, 8, 24, "vaadd.vv v24 rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvaadd.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 5, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+RCASE(r848, "vaadd.vx %[x] rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvaadd.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 5, 1, 0, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2800, 8, m1, 8, 0, "vaadd.vx %[x] rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvaadd.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 5, 1, 0, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2801, 16, m1, 8, 8, "vaadd.vx %[x] rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvaadd.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 5, 1, 0, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2802, 32, m1, 8, 16, "vaadd.vx %[x] rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvaadd.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 5, 1, 0, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2803, 64, m1, 8, 24, "vaadd.vx %[x] rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvaadd.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 5, 1, 0, 8, 16, 24, 0, 3, 0, ~0ull)
+RCASE(r849, "vaadd.vx %[x] rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvaadd.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 5, 1, 1, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2804, 8, m1, 8, 0, "vaadd.vx %[x] rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvaadd.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 5, 1, 1, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2805, 16, m1, 8, 8, "vaadd.vx %[x] rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvaadd.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 5, 1, 1, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2806, 32, m1, 8, 16, "vaadd.vx %[x] rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvaadd.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 5, 1, 1, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2807, 64, m1, 8, 24, "vaadd.vx %[x] rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvaadd.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 5, 1, 1, 8, 16, 24, 0, 3, 0, ~0ull)
+RCASE(r850, "vaadd.vx %[x] rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvaadd.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 5, 1, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2808, 8, m1, 8, 0, "vaadd.vx %[x] rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvaadd.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 5, 1, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2809, 16, m1, 8, 8, "vaadd.vx %[x] rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvaadd.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 5, 1, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2810, 32, m1, 8, 16, "vaadd.vx %[x] rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvaadd.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 5, 1, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2811, 64, m1, 8, 24, "vaadd.vx %[x] rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvaadd.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 5, 1, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+RCASE(r851, "vaadd.vx %[x] rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvaadd.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 5, 1, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2812, 8, m1, 8, 0, "vaadd.vx %[x] rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvaadd.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 5, 1, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2813, 16, m1, 8, 8, "vaadd.vx %[x] rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvaadd.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 5, 1, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2814, 32, m1, 8, 16, "vaadd.vx %[x] rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvaadd.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 5, 1, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2815, 64, m1, 8, 24, "vaadd.vx %[x] rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvaadd.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 5, 1, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+RCASE(r852, "vasubu.vv v24 rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvasubu.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 6, 0, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2816, 8, m1, 8, 0, "vasubu.vv v24 rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvasubu.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 6, 0, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2817, 16, m1, 8, 8, "vasubu.vv v24 rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvasubu.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 6, 0, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2818, 32, m1, 8, 16, "vasubu.vv v24 rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvasubu.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 6, 0, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2819, 64, m1, 8, 24, "vasubu.vv v24 rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvasubu.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 6, 0, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+RCASE(r853, "vasubu.vv v24 rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvasubu.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 6, 0, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2820, 8, m1, 8, 0, "vasubu.vv v24 rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvasubu.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 6, 0, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2821, 16, m1, 8, 8, "vasubu.vv v24 rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvasubu.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 6, 0, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2822, 32, m1, 8, 16, "vasubu.vv v24 rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvasubu.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 6, 0, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2823, 64, m1, 8, 24, "vasubu.vv v24 rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvasubu.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 6, 0, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+RCASE(r854, "vasubu.vv v24 rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvasubu.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 6, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2824, 8, m1, 8, 0, "vasubu.vv v24 rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvasubu.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 6, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2825, 16, m1, 8, 8, "vasubu.vv v24 rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvasubu.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 6, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2826, 32, m1, 8, 16, "vasubu.vv v24 rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvasubu.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 6, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2827, 64, m1, 8, 24, "vasubu.vv v24 rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvasubu.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 6, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+RCASE(r855, "vasubu.vv v24 rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvasubu.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 6, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2828, 8, m1, 8, 0, "vasubu.vv v24 rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvasubu.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 6, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2829, 16, m1, 8, 8, "vasubu.vv v24 rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvasubu.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 6, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2830, 32, m1, 8, 16, "vasubu.vv v24 rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvasubu.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 6, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2831, 64, m1, 8, 24, "vasubu.vv v24 rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvasubu.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 6, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+RCASE(r856, "vasubu.vx %[x] rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvasubu.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 6, 1, 0, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2832, 8, m1, 8, 0, "vasubu.vx %[x] rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvasubu.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 6, 1, 0, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2833, 16, m1, 8, 8, "vasubu.vx %[x] rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvasubu.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 6, 1, 0, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2834, 32, m1, 8, 16, "vasubu.vx %[x] rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvasubu.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 6, 1, 0, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2835, 64, m1, 8, 24, "vasubu.vx %[x] rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvasubu.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 6, 1, 0, 8, 16, 24, 0, 3, 0, ~0ull)
+RCASE(r857, "vasubu.vx %[x] rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvasubu.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 6, 1, 1, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2836, 8, m1, 8, 0, "vasubu.vx %[x] rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvasubu.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 6, 1, 1, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2837, 16, m1, 8, 8, "vasubu.vx %[x] rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvasubu.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 6, 1, 1, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2838, 32, m1, 8, 16, "vasubu.vx %[x] rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvasubu.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 6, 1, 1, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2839, 64, m1, 8, 24, "vasubu.vx %[x] rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvasubu.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 6, 1, 1, 8, 16, 24, 0, 3, 0, ~0ull)
+RCASE(r858, "vasubu.vx %[x] rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvasubu.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 6, 1, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2840, 8, m1, 8, 0, "vasubu.vx %[x] rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvasubu.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 6, 1, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2841, 16, m1, 8, 8, "vasubu.vx %[x] rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvasubu.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 6, 1, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2842, 32, m1, 8, 16, "vasubu.vx %[x] rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvasubu.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 6, 1, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2843, 64, m1, 8, 24, "vasubu.vx %[x] rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvasubu.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 6, 1, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+RCASE(r859, "vasubu.vx %[x] rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvasubu.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 6, 1, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2844, 8, m1, 8, 0, "vasubu.vx %[x] rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvasubu.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 6, 1, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2845, 16, m1, 8, 8, "vasubu.vx %[x] rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvasubu.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 6, 1, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2846, 32, m1, 8, 16, "vasubu.vx %[x] rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvasubu.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 6, 1, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2847, 64, m1, 8, 24, "vasubu.vx %[x] rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvasubu.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 6, 1, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+RCASE(r860, "vasub.vv v24 rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvasub.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 7, 0, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2848, 8, m1, 8, 0, "vasub.vv v24 rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvasub.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 7, 0, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2849, 16, m1, 8, 8, "vasub.vv v24 rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvasub.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 7, 0, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2850, 32, m1, 8, 16, "vasub.vv v24 rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvasub.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 7, 0, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2851, 64, m1, 8, 24, "vasub.vv v24 rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvasub.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 7, 0, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+RCASE(r861, "vasub.vv v24 rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvasub.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 7, 0, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2852, 8, m1, 8, 0, "vasub.vv v24 rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvasub.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 7, 0, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2853, 16, m1, 8, 8, "vasub.vv v24 rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvasub.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 7, 0, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2854, 32, m1, 8, 16, "vasub.vv v24 rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvasub.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 7, 0, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2855, 64, m1, 8, 24, "vasub.vv v24 rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvasub.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 7, 0, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+RCASE(r862, "vasub.vv v24 rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvasub.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 7, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2856, 8, m1, 8, 0, "vasub.vv v24 rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvasub.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 7, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2857, 16, m1, 8, 8, "vasub.vv v24 rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvasub.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 7, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2858, 32, m1, 8, 16, "vasub.vv v24 rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvasub.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 7, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2859, 64, m1, 8, 24, "vasub.vv v24 rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvasub.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 7, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+RCASE(r863, "vasub.vv v24 rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvasub.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 7, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2860, 8, m1, 8, 0, "vasub.vv v24 rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvasub.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 7, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2861, 16, m1, 8, 8, "vasub.vv v24 rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvasub.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 7, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2862, 32, m1, 8, 16, "vasub.vv v24 rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvasub.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 7, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2863, 64, m1, 8, 24, "vasub.vv v24 rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvasub.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 7, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+RCASE(r864, "vasub.vx %[x] rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvasub.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 7, 1, 0, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2864, 8, m1, 8, 0, "vasub.vx %[x] rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvasub.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 7, 1, 0, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2865, 16, m1, 8, 8, "vasub.vx %[x] rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvasub.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 7, 1, 0, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2866, 32, m1, 8, 16, "vasub.vx %[x] rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvasub.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 7, 1, 0, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2867, 64, m1, 8, 24, "vasub.vx %[x] rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvasub.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 7, 1, 0, 8, 16, 24, 0, 3, 0, ~0ull)
+RCASE(r865, "vasub.vx %[x] rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvasub.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 7, 1, 1, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2868, 8, m1, 8, 0, "vasub.vx %[x] rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvasub.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 7, 1, 1, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2869, 16, m1, 8, 8, "vasub.vx %[x] rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvasub.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 7, 1, 1, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2870, 32, m1, 8, 16, "vasub.vx %[x] rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvasub.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 7, 1, 1, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2871, 64, m1, 8, 24, "vasub.vx %[x] rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvasub.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 7, 1, 1, 8, 16, 24, 0, 3, 0, ~0ull)
+RCASE(r866, "vasub.vx %[x] rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvasub.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 7, 1, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2872, 8, m1, 8, 0, "vasub.vx %[x] rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvasub.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 7, 1, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2873, 16, m1, 8, 8, "vasub.vx %[x] rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvasub.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 7, 1, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2874, 32, m1, 8, 16, "vasub.vx %[x] rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvasub.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 7, 1, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2875, 64, m1, 8, 24, "vasub.vx %[x] rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvasub.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 7, 1, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+RCASE(r867, "vasub.vx %[x] rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvasub.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 7, 1, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2876, 8, m1, 8, 0, "vasub.vx %[x] rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvasub.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 7, 1, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2877, 16, m1, 8, 8, "vasub.vx %[x] rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvasub.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 7, 1, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2878, 32, m1, 8, 16, "vasub.vx %[x] rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvasub.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 7, 1, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2879, 64, m1, 8, 24, "vasub.vx %[x] rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvasub.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 7, 1, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+RCASE(r868, "vsmul.vv v24 rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvsmul.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 8, 0, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2880, 8, m1, 8, 0, "vsmul.vv v24 rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvsmul.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 8, 0, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2881, 16, m1, 8, 8, "vsmul.vv v24 rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvsmul.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 8, 0, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2882, 32, m1, 8, 16, "vsmul.vv v24 rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvsmul.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 8, 0, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2883, 64, m1, 8, 24, "vsmul.vv v24 rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvsmul.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 8, 0, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+RCASE(r869, "vsmul.vv v24 rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvsmul.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 8, 0, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2884, 8, m1, 8, 0, "vsmul.vv v24 rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvsmul.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 8, 0, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2885, 16, m1, 8, 8, "vsmul.vv v24 rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvsmul.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 8, 0, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2886, 32, m1, 8, 16, "vsmul.vv v24 rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvsmul.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 8, 0, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2887, 64, m1, 8, 24, "vsmul.vv v24 rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvsmul.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 8, 0, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+RCASE(r870, "vsmul.vv v24 rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvsmul.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 8, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2888, 8, m1, 8, 0, "vsmul.vv v24 rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvsmul.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 8, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2889, 16, m1, 8, 8, "vsmul.vv v24 rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvsmul.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 8, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2890, 32, m1, 8, 16, "vsmul.vv v24 rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvsmul.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 8, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2891, 64, m1, 8, 24, "vsmul.vv v24 rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvsmul.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 8, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+RCASE(r871, "vsmul.vv v24 rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvsmul.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 8, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2892, 8, m1, 8, 0, "vsmul.vv v24 rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvsmul.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 8, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2893, 16, m1, 8, 8, "vsmul.vv v24 rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvsmul.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 8, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2894, 32, m1, 8, 16, "vsmul.vv v24 rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvsmul.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 8, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2895, 64, m1, 8, 24, "vsmul.vv v24 rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvsmul.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 8, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+RCASE(r872, "vsmul.vx %[x] rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvsmul.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 8, 1, 0, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2896, 8, m1, 8, 0, "vsmul.vx %[x] rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvsmul.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 8, 1, 0, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2897, 16, m1, 8, 8, "vsmul.vx %[x] rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvsmul.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 8, 1, 0, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2898, 32, m1, 8, 16, "vsmul.vx %[x] rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvsmul.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 8, 1, 0, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2899, 64, m1, 8, 24, "vsmul.vx %[x] rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvsmul.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 8, 1, 0, 8, 16, 24, 0, 3, 0, ~0ull)
+RCASE(r873, "vsmul.vx %[x] rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvsmul.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 8, 1, 1, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2900, 8, m1, 8, 0, "vsmul.vx %[x] rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvsmul.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 8, 1, 1, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2901, 16, m1, 8, 8, "vsmul.vx %[x] rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvsmul.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 8, 1, 1, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2902, 32, m1, 8, 16, "vsmul.vx %[x] rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvsmul.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 8, 1, 1, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2903, 64, m1, 8, 24, "vsmul.vx %[x] rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvsmul.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 8, 1, 1, 8, 16, 24, 0, 3, 0, ~0ull)
+RCASE(r874, "vsmul.vx %[x] rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvsmul.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 8, 1, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2904, 8, m1, 8, 0, "vsmul.vx %[x] rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvsmul.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 8, 1, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2905, 16, m1, 8, 8, "vsmul.vx %[x] rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvsmul.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 8, 1, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2906, 32, m1, 8, 16, "vsmul.vx %[x] rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvsmul.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 8, 1, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2907, 64, m1, 8, 24, "vsmul.vx %[x] rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvsmul.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 8, 1, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+RCASE(r875, "vsmul.vx %[x] rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvsmul.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 8, 1, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2908, 8, m1, 8, 0, "vsmul.vx %[x] rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvsmul.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 8, 1, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2909, 16, m1, 8, 8, "vsmul.vx %[x] rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvsmul.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 8, 1, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2910, 32, m1, 8, 16, "vsmul.vx %[x] rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvsmul.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 8, 1, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2911, 64, m1, 8, 24, "vsmul.vx %[x] rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvsmul.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 8, 1, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+RCASE(r876, "vssrl.vv v24 rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvssrl.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 9, 0, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2912, 8, m1, 8, 0, "vssrl.vv v24 rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvssrl.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 9, 0, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2913, 16, m1, 8, 8, "vssrl.vv v24 rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvssrl.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 9, 0, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2914, 32, m1, 8, 16, "vssrl.vv v24 rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvssrl.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 9, 0, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2915, 64, m1, 8, 24, "vssrl.vv v24 rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvssrl.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 9, 0, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+RCASE(r877, "vssrl.vv v24 rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvssrl.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 9, 0, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2916, 8, m1, 8, 0, "vssrl.vv v24 rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvssrl.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 9, 0, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2917, 16, m1, 8, 8, "vssrl.vv v24 rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvssrl.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 9, 0, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2918, 32, m1, 8, 16, "vssrl.vv v24 rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvssrl.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 9, 0, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2919, 64, m1, 8, 24, "vssrl.vv v24 rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvssrl.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 9, 0, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+RCASE(r878, "vssrl.vv v24 rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvssrl.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 9, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2920, 8, m1, 8, 0, "vssrl.vv v24 rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvssrl.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 9, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2921, 16, m1, 8, 8, "vssrl.vv v24 rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvssrl.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 9, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2922, 32, m1, 8, 16, "vssrl.vv v24 rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvssrl.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 9, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2923, 64, m1, 8, 24, "vssrl.vv v24 rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvssrl.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 9, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+RCASE(r879, "vssrl.vv v24 rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvssrl.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 9, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2924, 8, m1, 8, 0, "vssrl.vv v24 rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvssrl.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 9, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2925, 16, m1, 8, 8, "vssrl.vv v24 rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvssrl.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 9, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2926, 32, m1, 8, 16, "vssrl.vv v24 rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvssrl.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 9, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2927, 64, m1, 8, 24, "vssrl.vv v24 rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvssrl.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 9, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+RCASE(r880, "vssrl.vx %[x] rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvssrl.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 9, 1, 0, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2928, 8, m1, 8, 0, "vssrl.vx %[x] rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvssrl.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 9, 1, 0, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2929, 16, m1, 8, 8, "vssrl.vx %[x] rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvssrl.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 9, 1, 0, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2930, 32, m1, 8, 16, "vssrl.vx %[x] rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvssrl.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 9, 1, 0, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2931, 64, m1, 8, 24, "vssrl.vx %[x] rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvssrl.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 9, 1, 0, 8, 16, 24, 0, 3, 0, ~0ull)
+RCASE(r881, "vssrl.vx %[x] rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvssrl.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 9, 1, 1, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2932, 8, m1, 8, 0, "vssrl.vx %[x] rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvssrl.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 9, 1, 1, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2933, 16, m1, 8, 8, "vssrl.vx %[x] rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvssrl.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 9, 1, 1, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2934, 32, m1, 8, 16, "vssrl.vx %[x] rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvssrl.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 9, 1, 1, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2935, 64, m1, 8, 24, "vssrl.vx %[x] rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvssrl.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 9, 1, 1, 8, 16, 24, 0, 3, 0, ~0ull)
+RCASE(r882, "vssrl.vx %[x] rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvssrl.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 9, 1, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2936, 8, m1, 8, 0, "vssrl.vx %[x] rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvssrl.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 9, 1, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2937, 16, m1, 8, 8, "vssrl.vx %[x] rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvssrl.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 9, 1, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2938, 32, m1, 8, 16, "vssrl.vx %[x] rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvssrl.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 9, 1, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2939, 64, m1, 8, 24, "vssrl.vx %[x] rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvssrl.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 9, 1, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+RCASE(r883, "vssrl.vx %[x] rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvssrl.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 9, 1, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2940, 8, m1, 8, 0, "vssrl.vx %[x] rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvssrl.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 9, 1, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2941, 16, m1, 8, 8, "vssrl.vx %[x] rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvssrl.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 9, 1, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2942, 32, m1, 8, 16, "vssrl.vx %[x] rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvssrl.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 9, 1, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2943, 64, m1, 8, 24, "vssrl.vx %[x] rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvssrl.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 9, 1, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+RCASE(r884, "vssrl.vi 3 rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvssrl.vi v8, v16, 3\ncsrr %[r], vxsat", 27, 9, 2, 0, 8, 16, 24, 3, 1, 0, ~0ull)
+TCASE(c2944, 8, m1, 8, 0, "vssrl.vi 3 rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvssrl.vi v8, v16, 3\ncsrr %[r], vxsat", 27, 9, 2, 0, 8, 16, 24, 3, 1, 0, ~0ull)
+TCASE(c2945, 16, m1, 8, 8, "vssrl.vi 3 rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvssrl.vi v8, v16, 3\ncsrr %[r], vxsat", 27, 9, 2, 0, 8, 16, 24, 3, 1, 0, ~0ull)
+TCASE(c2946, 32, m1, 8, 16, "vssrl.vi 3 rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvssrl.vi v8, v16, 3\ncsrr %[r], vxsat", 27, 9, 2, 0, 8, 16, 24, 3, 1, 0, ~0ull)
+TCASE(c2947, 64, m1, 8, 24, "vssrl.vi 3 rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvssrl.vi v8, v16, 3\ncsrr %[r], vxsat", 27, 9, 2, 0, 8, 16, 24, 3, 1, 0, ~0ull)
+RCASE(r885, "vssrl.vi 3 rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvssrl.vi v8, v16, 3, v0.t\ncsrr %[r], vxsat", 27, 9, 2, 1, 8, 16, 24, 3, 1, 0, ~0ull)
+TCASE(c2948, 8, m1, 8, 0, "vssrl.vi 3 rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvssrl.vi v8, v16, 3, v0.t\ncsrr %[r], vxsat", 27, 9, 2, 1, 8, 16, 24, 3, 1, 0, ~0ull)
+TCASE(c2949, 16, m1, 8, 8, "vssrl.vi 3 rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvssrl.vi v8, v16, 3, v0.t\ncsrr %[r], vxsat", 27, 9, 2, 1, 8, 16, 24, 3, 1, 0, ~0ull)
+TCASE(c2950, 32, m1, 8, 16, "vssrl.vi 3 rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvssrl.vi v8, v16, 3, v0.t\ncsrr %[r], vxsat", 27, 9, 2, 1, 8, 16, 24, 3, 1, 0, ~0ull)
+TCASE(c2951, 64, m1, 8, 24, "vssrl.vi 3 rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvssrl.vi v8, v16, 3, v0.t\ncsrr %[r], vxsat", 27, 9, 2, 1, 8, 16, 24, 3, 1, 0, ~0ull)
+RCASE(r886, "vssrl.vi 7 rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvssrl.vi v8, v16, 7\ncsrr %[r], vxsat", 27, 9, 2, 0, 8, 16, 24, 7, 2, 0, ~0ull)
+TCASE(c2952, 8, m1, 8, 0, "vssrl.vi 7 rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvssrl.vi v8, v16, 7\ncsrr %[r], vxsat", 27, 9, 2, 0, 8, 16, 24, 7, 2, 0, ~0ull)
+TCASE(c2953, 16, m1, 8, 8, "vssrl.vi 7 rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvssrl.vi v8, v16, 7\ncsrr %[r], vxsat", 27, 9, 2, 0, 8, 16, 24, 7, 2, 0, ~0ull)
+TCASE(c2954, 32, m1, 8, 16, "vssrl.vi 7 rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvssrl.vi v8, v16, 7\ncsrr %[r], vxsat", 27, 9, 2, 0, 8, 16, 24, 7, 2, 0, ~0ull)
+TCASE(c2955, 64, m1, 8, 24, "vssrl.vi 7 rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvssrl.vi v8, v16, 7\ncsrr %[r], vxsat", 27, 9, 2, 0, 8, 16, 24, 7, 2, 0, ~0ull)
+RCASE(r887, "vssrl.vi 7 rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvssrl.vi v8, v16, 7, v0.t\ncsrr %[r], vxsat", 27, 9, 2, 1, 8, 16, 24, 7, 2, 0, ~0ull)
+TCASE(c2956, 8, m1, 8, 0, "vssrl.vi 7 rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvssrl.vi v8, v16, 7, v0.t\ncsrr %[r], vxsat", 27, 9, 2, 1, 8, 16, 24, 7, 2, 0, ~0ull)
+TCASE(c2957, 16, m1, 8, 8, "vssrl.vi 7 rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvssrl.vi v8, v16, 7, v0.t\ncsrr %[r], vxsat", 27, 9, 2, 1, 8, 16, 24, 7, 2, 0, ~0ull)
+TCASE(c2958, 32, m1, 8, 16, "vssrl.vi 7 rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvssrl.vi v8, v16, 7, v0.t\ncsrr %[r], vxsat", 27, 9, 2, 1, 8, 16, 24, 7, 2, 0, ~0ull)
+TCASE(c2959, 64, m1, 8, 24, "vssrl.vi 7 rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvssrl.vi v8, v16, 7, v0.t\ncsrr %[r], vxsat", 27, 9, 2, 1, 8, 16, 24, 7, 2, 0, ~0ull)
+RCASE(r888, "vssra.vv v24 rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvssra.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 10, 0, 0, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2960, 8, m1, 8, 0, "vssra.vv v24 rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvssra.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 10, 0, 0, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2961, 16, m1, 8, 8, "vssra.vv v24 rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvssra.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 10, 0, 0, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2962, 32, m1, 8, 16, "vssra.vv v24 rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvssra.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 10, 0, 0, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2963, 64, m1, 8, 24, "vssra.vv v24 rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvssra.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 10, 0, 0, 8, 16, 24, 0, 3, 0, ~0ull)
+RCASE(r889, "vssra.vv v24 rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvssra.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 10, 0, 1, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2964, 8, m1, 8, 0, "vssra.vv v24 rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvssra.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 10, 0, 1, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2965, 16, m1, 8, 8, "vssra.vv v24 rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvssra.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 10, 0, 1, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2966, 32, m1, 8, 16, "vssra.vv v24 rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvssra.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 10, 0, 1, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c2967, 64, m1, 8, 24, "vssra.vv v24 rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvssra.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 10, 0, 1, 8, 16, 24, 0, 3, 0, ~0ull)
+RCASE(r890, "vssra.vv v24 rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvssra.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 10, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2968, 8, m1, 8, 0, "vssra.vv v24 rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvssra.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 10, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2969, 16, m1, 8, 8, "vssra.vv v24 rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvssra.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 10, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2970, 32, m1, 8, 16, "vssra.vv v24 rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvssra.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 10, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2971, 64, m1, 8, 24, "vssra.vv v24 rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvssra.vv v8, v16, v24\ncsrr %[r], vxsat", 27, 10, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+RCASE(r891, "vssra.vv v24 rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvssra.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 10, 0, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2972, 8, m1, 8, 0, "vssra.vv v24 rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvssra.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 10, 0, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2973, 16, m1, 8, 8, "vssra.vv v24 rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvssra.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 10, 0, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2974, 32, m1, 8, 16, "vssra.vv v24 rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvssra.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 10, 0, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c2975, 64, m1, 8, 24, "vssra.vv v24 rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvssra.vv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 10, 0, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+RCASE(r892, "vssra.vx %[x] rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvssra.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 10, 1, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2976, 8, m1, 8, 0, "vssra.vx %[x] rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvssra.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 10, 1, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2977, 16, m1, 8, 8, "vssra.vx %[x] rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvssra.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 10, 1, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2978, 32, m1, 8, 16, "vssra.vx %[x] rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvssra.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 10, 1, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2979, 64, m1, 8, 24, "vssra.vx %[x] rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvssra.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 10, 1, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+RCASE(r893, "vssra.vx %[x] rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvssra.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 10, 1, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2980, 8, m1, 8, 0, "vssra.vx %[x] rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvssra.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 10, 1, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2981, 16, m1, 8, 8, "vssra.vx %[x] rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvssra.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 10, 1, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2982, 32, m1, 8, 16, "vssra.vx %[x] rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvssra.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 10, 1, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c2983, 64, m1, 8, 24, "vssra.vx %[x] rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvssra.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 10, 1, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+RCASE(r894, "vssra.vx %[x] rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvssra.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 10, 1, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2984, 8, m1, 8, 0, "vssra.vx %[x] rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvssra.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 10, 1, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2985, 16, m1, 8, 8, "vssra.vx %[x] rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvssra.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 10, 1, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2986, 32, m1, 8, 16, "vssra.vx %[x] rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvssra.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 10, 1, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2987, 64, m1, 8, 24, "vssra.vx %[x] rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvssra.vx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 10, 1, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+RCASE(r895, "vssra.vx %[x] rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvssra.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 10, 1, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2988, 8, m1, 8, 0, "vssra.vx %[x] rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvssra.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 10, 1, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2989, 16, m1, 8, 8, "vssra.vx %[x] rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvssra.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 10, 1, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2990, 32, m1, 8, 16, "vssra.vx %[x] rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvssra.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 10, 1, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c2991, 64, m1, 8, 24, "vssra.vx %[x] rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvssra.vx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 10, 1, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+RCASE(r896, "vssra.vi 13 rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvssra.vi v8, v16, 13\ncsrr %[r], vxsat", 27, 10, 2, 0, 8, 16, 24, 13, 3, 0, ~0ull)
+TCASE(c2992, 8, m1, 8, 0, "vssra.vi 13 rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvssra.vi v8, v16, 13\ncsrr %[r], vxsat", 27, 10, 2, 0, 8, 16, 24, 13, 3, 0, ~0ull)
+TCASE(c2993, 16, m1, 8, 8, "vssra.vi 13 rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvssra.vi v8, v16, 13\ncsrr %[r], vxsat", 27, 10, 2, 0, 8, 16, 24, 13, 3, 0, ~0ull)
+TCASE(c2994, 32, m1, 8, 16, "vssra.vi 13 rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvssra.vi v8, v16, 13\ncsrr %[r], vxsat", 27, 10, 2, 0, 8, 16, 24, 13, 3, 0, ~0ull)
+TCASE(c2995, 64, m1, 8, 24, "vssra.vi 13 rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvssra.vi v8, v16, 13\ncsrr %[r], vxsat", 27, 10, 2, 0, 8, 16, 24, 13, 3, 0, ~0ull)
+RCASE(r897, "vssra.vi 13 rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvssra.vi v8, v16, 13, v0.t\ncsrr %[r], vxsat", 27, 10, 2, 1, 8, 16, 24, 13, 3, 0, ~0ull)
+TCASE(c2996, 8, m1, 8, 0, "vssra.vi 13 rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvssra.vi v8, v16, 13, v0.t\ncsrr %[r], vxsat", 27, 10, 2, 1, 8, 16, 24, 13, 3, 0, ~0ull)
+TCASE(c2997, 16, m1, 8, 8, "vssra.vi 13 rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvssra.vi v8, v16, 13, v0.t\ncsrr %[r], vxsat", 27, 10, 2, 1, 8, 16, 24, 13, 3, 0, ~0ull)
+TCASE(c2998, 32, m1, 8, 16, "vssra.vi 13 rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvssra.vi v8, v16, 13, v0.t\ncsrr %[r], vxsat", 27, 10, 2, 1, 8, 16, 24, 13, 3, 0, ~0ull)
+TCASE(c2999, 64, m1, 8, 24, "vssra.vi 13 rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvssra.vi v8, v16, 13, v0.t\ncsrr %[r], vxsat", 27, 10, 2, 1, 8, 16, 24, 13, 3, 0, ~0ull)
+RCASE(r898, "vssra.vi 31 rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvssra.vi v8, v16, 31\ncsrr %[r], vxsat", 27, 10, 2, 0, 8, 16, 24, 31, 0, 0, ~0ull)
+TCASE(c3000, 8, m1, 8, 0, "vssra.vi 31 rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvssra.vi v8, v16, 31\ncsrr %[r], vxsat", 27, 10, 2, 0, 8, 16, 24, 31, 0, 0, ~0ull)
+TCASE(c3001, 16, m1, 8, 8, "vssra.vi 31 rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvssra.vi v8, v16, 31\ncsrr %[r], vxsat", 27, 10, 2, 0, 8, 16, 24, 31, 0, 0, ~0ull)
+TCASE(c3002, 32, m1, 8, 16, "vssra.vi 31 rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvssra.vi v8, v16, 31\ncsrr %[r], vxsat", 27, 10, 2, 0, 8, 16, 24, 31, 0, 0, ~0ull)
+TCASE(c3003, 64, m1, 8, 24, "vssra.vi 31 rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvssra.vi v8, v16, 31\ncsrr %[r], vxsat", 27, 10, 2, 0, 8, 16, 24, 31, 0, 0, ~0ull)
+RCASE(r899, "vssra.vi 31 rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvssra.vi v8, v16, 31, v0.t\ncsrr %[r], vxsat", 27, 10, 2, 1, 8, 16, 24, 31, 0, 0, ~0ull)
+TCASE(c3004, 8, m1, 8, 0, "vssra.vi 31 rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvssra.vi v8, v16, 31, v0.t\ncsrr %[r], vxsat", 27, 10, 2, 1, 8, 16, 24, 31, 0, 0, ~0ull)
+TCASE(c3005, 16, m1, 8, 8, "vssra.vi 31 rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvssra.vi v8, v16, 31, v0.t\ncsrr %[r], vxsat", 27, 10, 2, 1, 8, 16, 24, 31, 0, 0, ~0ull)
+TCASE(c3006, 32, m1, 8, 16, "vssra.vi 31 rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvssra.vi v8, v16, 31, v0.t\ncsrr %[r], vxsat", 27, 10, 2, 1, 8, 16, 24, 31, 0, 0, ~0ull)
+TCASE(c3007, 64, m1, 8, 24, "vssra.vi 31 rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvssra.vi v8, v16, 31, v0.t\ncsrr %[r], vxsat", 27, 10, 2, 1, 8, 16, 24, 31, 0, 0, ~0ull)
+RCASE(r900, "vnclipu.wv v24 rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvnclipu.wv v8, v16, v24\ncsrr %[r], vxsat", 27, 11, 0, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c3008, 8, m1, 8, 0, "vnclipu.wv v24 rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvnclipu.wv v8, v16, v24\ncsrr %[r], vxsat", 27, 11, 0, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c3009, 16, m1, 8, 8, "vnclipu.wv v24 rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvnclipu.wv v8, v16, v24\ncsrr %[r], vxsat", 27, 11, 0, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c3010, 32, m1, 8, 16, "vnclipu.wv v24 rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvnclipu.wv v8, v16, v24\ncsrr %[r], vxsat", 27, 11, 0, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+RCASE(r901, "vnclipu.wv v24 rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvnclipu.wv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 11, 0, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c3011, 8, m1, 8, 0, "vnclipu.wv v24 rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvnclipu.wv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 11, 0, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c3012, 16, m1, 8, 8, "vnclipu.wv v24 rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvnclipu.wv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 11, 0, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c3013, 32, m1, 8, 16, "vnclipu.wv v24 rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvnclipu.wv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 11, 0, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+RCASE(r902, "vnclipu.wv v24 rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvnclipu.wv v8, v16, v24\ncsrr %[r], vxsat", 27, 11, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c3014, 8, m1, 8, 0, "vnclipu.wv v24 rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvnclipu.wv v8, v16, v24\ncsrr %[r], vxsat", 27, 11, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c3015, 16, m1, 8, 8, "vnclipu.wv v24 rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvnclipu.wv v8, v16, v24\ncsrr %[r], vxsat", 27, 11, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c3016, 32, m1, 8, 16, "vnclipu.wv v24 rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvnclipu.wv v8, v16, v24\ncsrr %[r], vxsat", 27, 11, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+RCASE(r903, "vnclipu.wv v24 rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvnclipu.wv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 11, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c3017, 8, m1, 8, 0, "vnclipu.wv v24 rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvnclipu.wv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 11, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c3018, 16, m1, 8, 8, "vnclipu.wv v24 rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvnclipu.wv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 11, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c3019, 32, m1, 8, 16, "vnclipu.wv v24 rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvnclipu.wv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 11, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+RCASE(r904, "vnclipu.wx %[x] rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvnclipu.wx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 11, 1, 0, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c3020, 8, m1, 8, 0, "vnclipu.wx %[x] rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvnclipu.wx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 11, 1, 0, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c3021, 16, m1, 8, 8, "vnclipu.wx %[x] rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvnclipu.wx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 11, 1, 0, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c3022, 32, m1, 8, 16, "vnclipu.wx %[x] rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvnclipu.wx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 11, 1, 0, 8, 16, 24, 0, 3, 0, ~0ull)
+RCASE(r905, "vnclipu.wx %[x] rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvnclipu.wx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 11, 1, 1, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c3023, 8, m1, 8, 0, "vnclipu.wx %[x] rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvnclipu.wx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 11, 1, 1, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c3024, 16, m1, 8, 8, "vnclipu.wx %[x] rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvnclipu.wx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 11, 1, 1, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c3025, 32, m1, 8, 16, "vnclipu.wx %[x] rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvnclipu.wx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 11, 1, 1, 8, 16, 24, 0, 3, 0, ~0ull)
+RCASE(r906, "vnclipu.wx %[x] rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvnclipu.wx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 11, 1, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3026, 8, m1, 8, 0, "vnclipu.wx %[x] rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvnclipu.wx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 11, 1, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3027, 16, m1, 8, 8, "vnclipu.wx %[x] rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvnclipu.wx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 11, 1, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3028, 32, m1, 8, 16, "vnclipu.wx %[x] rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvnclipu.wx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 11, 1, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+RCASE(r907, "vnclipu.wx %[x] rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvnclipu.wx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 11, 1, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3029, 8, m1, 8, 0, "vnclipu.wx %[x] rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvnclipu.wx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 11, 1, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3030, 16, m1, 8, 8, "vnclipu.wx %[x] rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvnclipu.wx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 11, 1, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3031, 32, m1, 8, 16, "vnclipu.wx %[x] rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvnclipu.wx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 11, 1, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+RCASE(r908, "vnclipu.wi 0 rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvnclipu.wi v8, v16, 0\ncsrr %[r], vxsat", 27, 11, 2, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c3032, 8, m1, 8, 0, "vnclipu.wi 0 rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvnclipu.wi v8, v16, 0\ncsrr %[r], vxsat", 27, 11, 2, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c3033, 16, m1, 8, 8, "vnclipu.wi 0 rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvnclipu.wi v8, v16, 0\ncsrr %[r], vxsat", 27, 11, 2, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c3034, 32, m1, 8, 16, "vnclipu.wi 0 rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvnclipu.wi v8, v16, 0\ncsrr %[r], vxsat", 27, 11, 2, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+RCASE(r909, "vnclipu.wi 0 rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvnclipu.wi v8, v16, 0, v0.t\ncsrr %[r], vxsat", 27, 11, 2, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c3035, 8, m1, 8, 0, "vnclipu.wi 0 rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvnclipu.wi v8, v16, 0, v0.t\ncsrr %[r], vxsat", 27, 11, 2, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c3036, 16, m1, 8, 8, "vnclipu.wi 0 rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvnclipu.wi v8, v16, 0, v0.t\ncsrr %[r], vxsat", 27, 11, 2, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c3037, 32, m1, 8, 16, "vnclipu.wi 0 rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvnclipu.wi v8, v16, 0, v0.t\ncsrr %[r], vxsat", 27, 11, 2, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+RCASE(r910, "vnclipu.wi 1 rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvnclipu.wi v8, v16, 1\ncsrr %[r], vxsat", 27, 11, 2, 0, 8, 16, 24, 1, 2, 0, ~0ull)
+TCASE(c3038, 8, m1, 8, 0, "vnclipu.wi 1 rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvnclipu.wi v8, v16, 1\ncsrr %[r], vxsat", 27, 11, 2, 0, 8, 16, 24, 1, 2, 0, ~0ull)
+TCASE(c3039, 16, m1, 8, 8, "vnclipu.wi 1 rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvnclipu.wi v8, v16, 1\ncsrr %[r], vxsat", 27, 11, 2, 0, 8, 16, 24, 1, 2, 0, ~0ull)
+TCASE(c3040, 32, m1, 8, 16, "vnclipu.wi 1 rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvnclipu.wi v8, v16, 1\ncsrr %[r], vxsat", 27, 11, 2, 0, 8, 16, 24, 1, 2, 0, ~0ull)
+RCASE(r911, "vnclipu.wi 1 rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvnclipu.wi v8, v16, 1, v0.t\ncsrr %[r], vxsat", 27, 11, 2, 1, 8, 16, 24, 1, 2, 0, ~0ull)
+TCASE(c3041, 8, m1, 8, 0, "vnclipu.wi 1 rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvnclipu.wi v8, v16, 1, v0.t\ncsrr %[r], vxsat", 27, 11, 2, 1, 8, 16, 24, 1, 2, 0, ~0ull)
+TCASE(c3042, 16, m1, 8, 8, "vnclipu.wi 1 rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvnclipu.wi v8, v16, 1, v0.t\ncsrr %[r], vxsat", 27, 11, 2, 1, 8, 16, 24, 1, 2, 0, ~0ull)
+TCASE(c3043, 32, m1, 8, 16, "vnclipu.wi 1 rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvnclipu.wi v8, v16, 1, v0.t\ncsrr %[r], vxsat", 27, 11, 2, 1, 8, 16, 24, 1, 2, 0, ~0ull)
+RCASE(r912, "vnclip.wv v24 rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvnclip.wv v8, v16, v24\ncsrr %[r], vxsat", 27, 12, 0, 0, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c3044, 8, m1, 8, 0, "vnclip.wv v24 rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvnclip.wv v8, v16, v24\ncsrr %[r], vxsat", 27, 12, 0, 0, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c3045, 16, m1, 8, 8, "vnclip.wv v24 rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvnclip.wv v8, v16, v24\ncsrr %[r], vxsat", 27, 12, 0, 0, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c3046, 32, m1, 8, 16, "vnclip.wv v24 rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvnclip.wv v8, v16, v24\ncsrr %[r], vxsat", 27, 12, 0, 0, 8, 16, 24, 0, 3, 0, ~0ull)
+RCASE(r913, "vnclip.wv v24 rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvnclip.wv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 12, 0, 1, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c3047, 8, m1, 8, 0, "vnclip.wv v24 rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvnclip.wv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 12, 0, 1, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c3048, 16, m1, 8, 8, "vnclip.wv v24 rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvnclip.wv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 12, 0, 1, 8, 16, 24, 0, 3, 0, ~0ull)
+TCASE(c3049, 32, m1, 8, 16, "vnclip.wv v24 rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvnclip.wv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 12, 0, 1, 8, 16, 24, 0, 3, 0, ~0ull)
+RCASE(r914, "vnclip.wv v24 rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvnclip.wv v8, v16, v24\ncsrr %[r], vxsat", 27, 12, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3050, 8, m1, 8, 0, "vnclip.wv v24 rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvnclip.wv v8, v16, v24\ncsrr %[r], vxsat", 27, 12, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3051, 16, m1, 8, 8, "vnclip.wv v24 rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvnclip.wv v8, v16, v24\ncsrr %[r], vxsat", 27, 12, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3052, 32, m1, 8, 16, "vnclip.wv v24 rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvnclip.wv v8, v16, v24\ncsrr %[r], vxsat", 27, 12, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+RCASE(r915, "vnclip.wv v24 rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvnclip.wv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 12, 0, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3053, 8, m1, 8, 0, "vnclip.wv v24 rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvnclip.wv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 12, 0, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3054, 16, m1, 8, 8, "vnclip.wv v24 rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvnclip.wv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 12, 0, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3055, 32, m1, 8, 16, "vnclip.wv v24 rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvnclip.wv v8, v16, v24, v0.t\ncsrr %[r], vxsat", 27, 12, 0, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+RCASE(r916, "vnclip.wx %[x] rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvnclip.wx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 12, 1, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c3056, 8, m1, 8, 0, "vnclip.wx %[x] rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvnclip.wx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 12, 1, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c3057, 16, m1, 8, 8, "vnclip.wx %[x] rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvnclip.wx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 12, 1, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c3058, 32, m1, 8, 16, "vnclip.wx %[x] rm1", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvnclip.wx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 12, 1, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+RCASE(r917, "vnclip.wx %[x] rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvnclip.wx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 12, 1, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c3059, 8, m1, 8, 0, "vnclip.wx %[x] rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvnclip.wx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 12, 1, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c3060, 16, m1, 8, 8, "vnclip.wx %[x] rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvnclip.wx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 12, 1, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c3061, 32, m1, 8, 16, "vnclip.wx %[x] rm1 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 1\nvnclip.wx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 12, 1, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+RCASE(r918, "vnclip.wx %[x] rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvnclip.wx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 12, 1, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c3062, 8, m1, 8, 0, "vnclip.wx %[x] rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvnclip.wx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 12, 1, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c3063, 16, m1, 8, 8, "vnclip.wx %[x] rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvnclip.wx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 12, 1, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c3064, 32, m1, 8, 16, "vnclip.wx %[x] rm2", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvnclip.wx v8, v16, %[x]\ncsrr %[r], vxsat", 27, 12, 1, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+RCASE(r919, "vnclip.wx %[x] rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvnclip.wx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 12, 1, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c3065, 8, m1, 8, 0, "vnclip.wx %[x] rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvnclip.wx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 12, 1, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c3066, 16, m1, 8, 8, "vnclip.wx %[x] rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvnclip.wx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 12, 1, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c3067, 32, m1, 8, 16, "vnclip.wx %[x] rm2 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 2\nvnclip.wx v8, v16, %[x], v0.t\ncsrr %[r], vxsat", 27, 12, 1, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+RCASE(r920, "vnclip.wi 3 rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvnclip.wi v8, v16, 3\ncsrr %[r], vxsat", 27, 12, 2, 0, 8, 16, 24, 3, 3, 0, ~0ull)
+TCASE(c3068, 8, m1, 8, 0, "vnclip.wi 3 rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvnclip.wi v8, v16, 3\ncsrr %[r], vxsat", 27, 12, 2, 0, 8, 16, 24, 3, 3, 0, ~0ull)
+TCASE(c3069, 16, m1, 8, 8, "vnclip.wi 3 rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvnclip.wi v8, v16, 3\ncsrr %[r], vxsat", 27, 12, 2, 0, 8, 16, 24, 3, 3, 0, ~0ull)
+TCASE(c3070, 32, m1, 8, 16, "vnclip.wi 3 rm3", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvnclip.wi v8, v16, 3\ncsrr %[r], vxsat", 27, 12, 2, 0, 8, 16, 24, 3, 3, 0, ~0ull)
+RCASE(r921, "vnclip.wi 3 rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvnclip.wi v8, v16, 3, v0.t\ncsrr %[r], vxsat", 27, 12, 2, 1, 8, 16, 24, 3, 3, 0, ~0ull)
+TCASE(c3071, 8, m1, 8, 0, "vnclip.wi 3 rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvnclip.wi v8, v16, 3, v0.t\ncsrr %[r], vxsat", 27, 12, 2, 1, 8, 16, 24, 3, 3, 0, ~0ull)
+TCASE(c3072, 16, m1, 8, 8, "vnclip.wi 3 rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvnclip.wi v8, v16, 3, v0.t\ncsrr %[r], vxsat", 27, 12, 2, 1, 8, 16, 24, 3, 3, 0, ~0ull)
+TCASE(c3073, 32, m1, 8, 16, "vnclip.wi 3 rm3 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 3\nvnclip.wi v8, v16, 3, v0.t\ncsrr %[r], vxsat", 27, 12, 2, 1, 8, 16, 24, 3, 3, 0, ~0ull)
+RCASE(r922, "vnclip.wi 7 rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvnclip.wi v8, v16, 7\ncsrr %[r], vxsat", 27, 12, 2, 0, 8, 16, 24, 7, 0, 0, ~0ull)
+TCASE(c3074, 8, m1, 8, 0, "vnclip.wi 7 rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvnclip.wi v8, v16, 7\ncsrr %[r], vxsat", 27, 12, 2, 0, 8, 16, 24, 7, 0, 0, ~0ull)
+TCASE(c3075, 16, m1, 8, 8, "vnclip.wi 7 rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvnclip.wi v8, v16, 7\ncsrr %[r], vxsat", 27, 12, 2, 0, 8, 16, 24, 7, 0, 0, ~0ull)
+TCASE(c3076, 32, m1, 8, 16, "vnclip.wi 7 rm0", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvnclip.wi v8, v16, 7\ncsrr %[r], vxsat", 27, 12, 2, 0, 8, 16, 24, 7, 0, 0, ~0ull)
+RCASE(r923, "vnclip.wi 7 rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvnclip.wi v8, v16, 7, v0.t\ncsrr %[r], vxsat", 27, 12, 2, 1, 8, 16, 24, 7, 0, 0, ~0ull)
+TCASE(c3077, 8, m1, 8, 0, "vnclip.wi 7 rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvnclip.wi v8, v16, 7, v0.t\ncsrr %[r], vxsat", 27, 12, 2, 1, 8, 16, 24, 7, 0, 0, ~0ull)
+TCASE(c3078, 16, m1, 8, 8, "vnclip.wi 7 rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvnclip.wi v8, v16, 7, v0.t\ncsrr %[r], vxsat", 27, 12, 2, 1, 8, 16, 24, 7, 0, 0, ~0ull)
+TCASE(c3079, 32, m1, 8, 16, "vnclip.wi 7 rm0 v0.t", "csrwi vxsat, 0\ncsrwi vxrm, 0\nvnclip.wi v8, v16, 7, v0.t\ncsrr %[r], vxsat", 27, 12, 2, 1, 8, 16, 24, 7, 0, 0, ~0ull)
+RCASE(r924, "vwredsumu.vs", "vwredsumu.vs v8, v16, v24", 28, 0, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3080, 8, m1, 8, 0, "vwredsumu.vs", "vwredsumu.vs v8, v16, v24", 28, 0, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3081, 16, m1, 8, 8, "vwredsumu.vs", "vwredsumu.vs v8, v16, v24", 28, 0, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3082, 32, m1, 8, 16, "vwredsumu.vs", "vwredsumu.vs v8, v16, v24", 28, 0, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+RCASE(r925, "vwredsumu.vs v0.t", "vwredsumu.vs v8, v16, v24, v0.t", 28, 0, 0, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3083, 8, m1, 8, 0, "vwredsumu.vs v0.t", "vwredsumu.vs v8, v16, v24, v0.t", 28, 0, 0, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3084, 16, m1, 8, 8, "vwredsumu.vs v0.t", "vwredsumu.vs v8, v16, v24, v0.t", 28, 0, 0, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3085, 32, m1, 8, 16, "vwredsumu.vs v0.t", "vwredsumu.vs v8, v16, v24, v0.t", 28, 0, 0, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+RCASE(r926, "vwredsum.vs", "vwredsum.vs v8, v16, v24", 28, 1, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3086, 8, m1, 8, 0, "vwredsum.vs", "vwredsum.vs v8, v16, v24", 28, 1, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3087, 16, m1, 8, 8, "vwredsum.vs", "vwredsum.vs v8, v16, v24", 28, 1, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3088, 32, m1, 8, 16, "vwredsum.vs", "vwredsum.vs v8, v16, v24", 28, 1, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+RCASE(r927, "vwredsum.vs v0.t", "vwredsum.vs v8, v16, v24, v0.t", 28, 1, 0, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3089, 8, m1, 8, 0, "vwredsum.vs v0.t", "vwredsum.vs v8, v16, v24, v0.t", 28, 1, 0, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3090, 16, m1, 8, 8, "vwredsum.vs v0.t", "vwredsum.vs v8, v16, v24, v0.t", 28, 1, 0, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3091, 32, m1, 8, 16, "vwredsum.vs v0.t", "vwredsum.vs v8, v16, v24, v0.t", 28, 1, 0, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+RCASE(r928, "vid.v", "vid.v v8", 3, 0, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3092, 8, m1, 8, 0, "vid.v", "vid.v v8", 3, 0, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3093, 16, m1, 8, 8, "vid.v", "vid.v v8", 3, 0, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3094, 32, m1, 8, 16, "vid.v", "vid.v v8", 3, 0, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3095, 64, m1, 8, 24, "vid.v", "vid.v v8", 3, 0, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+RCASE(r929, "vid.v v0.t", "vid.v v8, v0.t", 3, 0, 0, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3096, 8, m1, 8, 0, "vid.v v0.t", "vid.v v8, v0.t", 3, 0, 0, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3097, 16, m1, 8, 8, "vid.v v0.t", "vid.v v8, v0.t", 3, 0, 0, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3098, 32, m1, 8, 16, "vid.v v0.t", "vid.v v8, v0.t", 3, 0, 0, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3099, 64, m1, 8, 24, "vid.v v0.t", "vid.v v8, v0.t", 3, 0, 0, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+RCASE(r930, "vzext.vf2", "vzext.vf2 v8, v16", 4, 0, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c3100, 16, m1, 8, 8, "vzext.vf2", "vzext.vf2 v8, v16", 4, 0, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c3101, 32, m1, 8, 16, "vzext.vf2", "vzext.vf2 v8, v16", 4, 0, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c3102, 64, m1, 8, 24, "vzext.vf2", "vzext.vf2 v8, v16", 4, 0, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+RCASE(r931, "vzext.vf2 v0.t", "vzext.vf2 v8, v16, v0.t", 4, 0, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c3103, 16, m1, 8, 8, "vzext.vf2 v0.t", "vzext.vf2 v8, v16, v0.t", 4, 0, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c3104, 32, m1, 8, 16, "vzext.vf2 v0.t", "vzext.vf2 v8, v16, v0.t", 4, 0, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c3105, 64, m1, 8, 24, "vzext.vf2 v0.t", "vzext.vf2 v8, v16, v0.t", 4, 0, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+RCASE(r932, "vsext.vf2", "vsext.vf2 v8, v16", 4, 0, 0, 0, 8, 16, 24, 0, 2, 1, ~0ull)
+TCASE(c3106, 16, m1, 8, 8, "vsext.vf2", "vsext.vf2 v8, v16", 4, 0, 0, 0, 8, 16, 24, 0, 2, 1, ~0ull)
+TCASE(c3107, 32, m1, 8, 16, "vsext.vf2", "vsext.vf2 v8, v16", 4, 0, 0, 0, 8, 16, 24, 0, 2, 1, ~0ull)
+TCASE(c3108, 64, m1, 8, 24, "vsext.vf2", "vsext.vf2 v8, v16", 4, 0, 0, 0, 8, 16, 24, 0, 2, 1, ~0ull)
+RCASE(r933, "vsext.vf2 v0.t", "vsext.vf2 v8, v16, v0.t", 4, 0, 0, 1, 8, 16, 24, 0, 2, 1, ~0ull)
+TCASE(c3109, 16, m1, 8, 8, "vsext.vf2 v0.t", "vsext.vf2 v8, v16, v0.t", 4, 0, 0, 1, 8, 16, 24, 0, 2, 1, ~0ull)
+TCASE(c3110, 32, m1, 8, 16, "vsext.vf2 v0.t", "vsext.vf2 v8, v16, v0.t", 4, 0, 0, 1, 8, 16, 24, 0, 2, 1, ~0ull)
+TCASE(c3111, 64, m1, 8, 24, "vsext.vf2 v0.t", "vsext.vf2 v8, v16, v0.t", 4, 0, 0, 1, 8, 16, 24, 0, 2, 1, ~0ull)
+RCASE(r934, "vzext.vf4", "vzext.vf4 v8, v16", 4, 0, 0, 0, 8, 16, 24, 0, 4, 0, ~0ull)
+TCASE(c3112, 32, m1, 8, 16, "vzext.vf4", "vzext.vf4 v8, v16", 4, 0, 0, 0, 8, 16, 24, 0, 4, 0, ~0ull)
+TCASE(c3113, 64, m1, 8, 24, "vzext.vf4", "vzext.vf4 v8, v16", 4, 0, 0, 0, 8, 16, 24, 0, 4, 0, ~0ull)
+RCASE(r935, "vzext.vf4 v0.t", "vzext.vf4 v8, v16, v0.t", 4, 0, 0, 1, 8, 16, 24, 0, 4, 0, ~0ull)
+TCASE(c3114, 32, m1, 8, 16, "vzext.vf4 v0.t", "vzext.vf4 v8, v16, v0.t", 4, 0, 0, 1, 8, 16, 24, 0, 4, 0, ~0ull)
+TCASE(c3115, 64, m1, 8, 24, "vzext.vf4 v0.t", "vzext.vf4 v8, v16, v0.t", 4, 0, 0, 1, 8, 16, 24, 0, 4, 0, ~0ull)
+RCASE(r936, "vsext.vf4", "vsext.vf4 v8, v16", 4, 0, 0, 0, 8, 16, 24, 0, 4, 1, ~0ull)
+TCASE(c3116, 32, m1, 8, 16, "vsext.vf4", "vsext.vf4 v8, v16", 4, 0, 0, 0, 8, 16, 24, 0, 4, 1, ~0ull)
+TCASE(c3117, 64, m1, 8, 24, "vsext.vf4", "vsext.vf4 v8, v16", 4, 0, 0, 0, 8, 16, 24, 0, 4, 1, ~0ull)
+RCASE(r937, "vsext.vf4 v0.t", "vsext.vf4 v8, v16, v0.t", 4, 0, 0, 1, 8, 16, 24, 0, 4, 1, ~0ull)
+TCASE(c3118, 32, m1, 8, 16, "vsext.vf4 v0.t", "vsext.vf4 v8, v16, v0.t", 4, 0, 0, 1, 8, 16, 24, 0, 4, 1, ~0ull)
+TCASE(c3119, 64, m1, 8, 24, "vsext.vf4 v0.t", "vsext.vf4 v8, v16, v0.t", 4, 0, 0, 1, 8, 16, 24, 0, 4, 1, ~0ull)
+RCASE(r938, "vzext.vf8", "vzext.vf8 v8, v16", 4, 0, 0, 0, 8, 16, 24, 0, 8, 0, ~0ull)
+TCASE(c3120, 64, m1, 8, 24, "vzext.vf8", "vzext.vf8 v8, v16", 4, 0, 0, 0, 8, 16, 24, 0, 8, 0, ~0ull)
+RCASE(r939, "vzext.vf8 v0.t", "vzext.vf8 v8, v16, v0.t", 4, 0, 0, 1, 8, 16, 24, 0, 8, 0, ~0ull)
+TCASE(c3121, 64, m1, 8, 24, "vzext.vf8 v0.t", "vzext.vf8 v8, v16, v0.t", 4, 0, 0, 1, 8, 16, 24, 0, 8, 0, ~0ull)
+RCASE(r940, "vsext.vf8", "vsext.vf8 v8, v16", 4, 0, 0, 0, 8, 16, 24, 0, 8, 1, ~0ull)
+TCASE(c3122, 64, m1, 8, 24, "vsext.vf8", "vsext.vf8 v8, v16", 4, 0, 0, 0, 8, 16, 24, 0, 8, 1, ~0ull)
+RCASE(r941, "vsext.vf8 v0.t", "vsext.vf8 v8, v16, v0.t", 4, 0, 0, 1, 8, 16, 24, 0, 8, 1, ~0ull)
+TCASE(c3123, 64, m1, 8, 24, "vsext.vf8 v0.t", "vsext.vf8 v8, v16, v0.t", 4, 0, 0, 1, 8, 16, 24, 0, 8, 1, ~0ull)
+RCASE(r942, "vmsbf.m", "vmsbf.m v8, v16", 5, 0, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3124, 8, m1, 8, 0, "vmsbf.m", "vmsbf.m v8, v16", 5, 0, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3125, 16, m1, 8, 8, "vmsbf.m", "vmsbf.m v8, v16", 5, 0, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3126, 32, m1, 8, 16, "vmsbf.m", "vmsbf.m v8, v16", 5, 0, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3127, 64, m1, 8, 24, "vmsbf.m", "vmsbf.m v8, v16", 5, 0, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+RCASE(r943, "vmsbf.m v0.t", "vmsbf.m v8, v16, v0.t", 5, 0, 0, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3128, 8, m1, 8, 0, "vmsbf.m v0.t", "vmsbf.m v8, v16, v0.t", 5, 0, 0, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3129, 16, m1, 8, 8, "vmsbf.m v0.t", "vmsbf.m v8, v16, v0.t", 5, 0, 0, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3130, 32, m1, 8, 16, "vmsbf.m v0.t", "vmsbf.m v8, v16, v0.t", 5, 0, 0, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3131, 64, m1, 8, 24, "vmsbf.m v0.t", "vmsbf.m v8, v16, v0.t", 5, 0, 0, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+RCASE(r944, "vmsif.m", "vmsif.m v8, v16", 5, 1, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3132, 8, m1, 8, 0, "vmsif.m", "vmsif.m v8, v16", 5, 1, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3133, 16, m1, 8, 8, "vmsif.m", "vmsif.m v8, v16", 5, 1, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3134, 32, m1, 8, 16, "vmsif.m", "vmsif.m v8, v16", 5, 1, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3135, 64, m1, 8, 24, "vmsif.m", "vmsif.m v8, v16", 5, 1, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+RCASE(r945, "vmsif.m v0.t", "vmsif.m v8, v16, v0.t", 5, 1, 0, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3136, 8, m1, 8, 0, "vmsif.m v0.t", "vmsif.m v8, v16, v0.t", 5, 1, 0, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3137, 16, m1, 8, 8, "vmsif.m v0.t", "vmsif.m v8, v16, v0.t", 5, 1, 0, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3138, 32, m1, 8, 16, "vmsif.m v0.t", "vmsif.m v8, v16, v0.t", 5, 1, 0, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3139, 64, m1, 8, 24, "vmsif.m v0.t", "vmsif.m v8, v16, v0.t", 5, 1, 0, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+RCASE(r946, "vmsof.m", "vmsof.m v8, v16", 5, 2, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3140, 8, m1, 8, 0, "vmsof.m", "vmsof.m v8, v16", 5, 2, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3141, 16, m1, 8, 8, "vmsof.m", "vmsof.m v8, v16", 5, 2, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3142, 32, m1, 8, 16, "vmsof.m", "vmsof.m v8, v16", 5, 2, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3143, 64, m1, 8, 24, "vmsof.m", "vmsof.m v8, v16", 5, 2, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+RCASE(r947, "vmsof.m v0.t", "vmsof.m v8, v16, v0.t", 5, 2, 0, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3144, 8, m1, 8, 0, "vmsof.m v0.t", "vmsof.m v8, v16, v0.t", 5, 2, 0, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3145, 16, m1, 8, 8, "vmsof.m v0.t", "vmsof.m v8, v16, v0.t", 5, 2, 0, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3146, 32, m1, 8, 16, "vmsof.m v0.t", "vmsof.m v8, v16, v0.t", 5, 2, 0, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3147, 64, m1, 8, 24, "vmsof.m v0.t", "vmsof.m v8, v16, v0.t", 5, 2, 0, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+RCASE(r948, "vcpop.m", "vcpop.m %[r], v16", 6, 0, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3148, 8, m1, 8, 0, "vcpop.m", "vcpop.m %[r], v16", 6, 0, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3149, 16, m1, 8, 8, "vcpop.m", "vcpop.m %[r], v16", 6, 0, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3150, 32, m1, 8, 16, "vcpop.m", "vcpop.m %[r], v16", 6, 0, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3151, 64, m1, 8, 24, "vcpop.m", "vcpop.m %[r], v16", 6, 0, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+RCASE(r949, "vcpop.m v0.t", "vcpop.m %[r], v16, v0.t", 6, 0, 0, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3152, 8, m1, 8, 0, "vcpop.m v0.t", "vcpop.m %[r], v16, v0.t", 6, 0, 0, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3153, 16, m1, 8, 8, "vcpop.m v0.t", "vcpop.m %[r], v16, v0.t", 6, 0, 0, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3154, 32, m1, 8, 16, "vcpop.m v0.t", "vcpop.m %[r], v16, v0.t", 6, 0, 0, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3155, 64, m1, 8, 24, "vcpop.m v0.t", "vcpop.m %[r], v16, v0.t", 6, 0, 0, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+RCASE(r950, "vfirst.m", "vfirst.m %[r], v16", 7, 0, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3156, 8, m1, 8, 0, "vfirst.m", "vfirst.m %[r], v16", 7, 0, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3157, 16, m1, 8, 8, "vfirst.m", "vfirst.m %[r], v16", 7, 0, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3158, 32, m1, 8, 16, "vfirst.m", "vfirst.m %[r], v16", 7, 0, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3159, 64, m1, 8, 24, "vfirst.m", "vfirst.m %[r], v16", 7, 0, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+RCASE(r951, "vfirst.m v0.t", "vfirst.m %[r], v16, v0.t", 7, 0, 0, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3160, 8, m1, 8, 0, "vfirst.m v0.t", "vfirst.m %[r], v16, v0.t", 7, 0, 0, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3161, 16, m1, 8, 8, "vfirst.m v0.t", "vfirst.m %[r], v16, v0.t", 7, 0, 0, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3162, 32, m1, 8, 16, "vfirst.m v0.t", "vfirst.m %[r], v16, v0.t", 7, 0, 0, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3163, 64, m1, 8, 24, "vfirst.m v0.t", "vfirst.m %[r], v16, v0.t", 7, 0, 0, 1, 8, 16, 24, 0, 0, 0, ~0ull)
+RCASE(r952, "vmv.x.s", "vmv.x.s %[r], v16", 8, 0, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3164, 8, m1, 8, 0, "vmv.x.s", "vmv.x.s %[r], v16", 8, 0, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3165, 16, m1, 8, 8, "vmv.x.s", "vmv.x.s %[r], v16", 8, 0, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3166, 32, m1, 8, 16, "vmv.x.s", "vmv.x.s %[r], v16", 8, 0, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3167, 64, m1, 8, 24, "vmv.x.s", "vmv.x.s %[r], v16", 8, 0, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+RCASE(r953, "vmv.s.x", "vmv.s.x v8, %[x]", 9, 0, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3168, 8, m1, 8, 0, "vmv.s.x", "vmv.s.x v8, %[x]", 9, 0, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3169, 16, m1, 8, 8, "vmv.s.x", "vmv.s.x v8, %[x]", 9, 0, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3170, 32, m1, 8, 16, "vmv.s.x", "vmv.s.x v8, %[x]", 9, 0, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+TCASE(c3171, 64, m1, 8, 24, "vmv.s.x", "vmv.s.x v8, %[x]", 9, 0, 0, 0, 8, 16, 24, 0, 0, 0, ~0ull)
+RCASE(r954, "vluxei8", "vluxei8.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c3172, 8, m1, 8, 0, "vluxei8", "vluxei8.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c3173, 16, m1, 8, 8, "vluxei8", "vluxei8.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c3174, 32, m1, 8, 16, "vluxei8", "vluxei8.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c3175, 64, m1, 8, 24, "vluxei8", "vluxei8.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+RCASE(r955, "vluxei8 v0.t", "vluxei8.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c3176, 8, m1, 8, 0, "vluxei8 v0.t", "vluxei8.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c3177, 16, m1, 8, 8, "vluxei8 v0.t", "vluxei8.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c3178, 32, m1, 8, 16, "vluxei8 v0.t", "vluxei8.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c3179, 64, m1, 8, 24, "vluxei8 v0.t", "vluxei8.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+RCASE(r956, "vloxei8", "vloxei8.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c3180, 8, m1, 8, 0, "vloxei8", "vloxei8.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c3181, 16, m1, 8, 8, "vloxei8", "vloxei8.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c3182, 32, m1, 8, 16, "vloxei8", "vloxei8.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c3183, 64, m1, 8, 24, "vloxei8", "vloxei8.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 1, 0, ~0ull)
+RCASE(r957, "vloxei8 v0.t", "vloxei8.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c3184, 8, m1, 8, 0, "vloxei8 v0.t", "vloxei8.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c3185, 16, m1, 8, 8, "vloxei8 v0.t", "vloxei8.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c3186, 32, m1, 8, 16, "vloxei8 v0.t", "vloxei8.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+TCASE(c3187, 64, m1, 8, 24, "vloxei8 v0.t", "vloxei8.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 1, 0, ~0ull)
+RCASE(r958, "vluxei16", "vluxei16.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c3188, 8, m1, 8, 0, "vluxei16", "vluxei16.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c3189, 16, m1, 8, 8, "vluxei16", "vluxei16.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c3190, 32, m1, 8, 16, "vluxei16", "vluxei16.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c3191, 64, m1, 8, 24, "vluxei16", "vluxei16.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+RCASE(r959, "vluxei16 v0.t", "vluxei16.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c3192, 8, m1, 8, 0, "vluxei16 v0.t", "vluxei16.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c3193, 16, m1, 8, 8, "vluxei16 v0.t", "vluxei16.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c3194, 32, m1, 8, 16, "vluxei16 v0.t", "vluxei16.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c3195, 64, m1, 8, 24, "vluxei16 v0.t", "vluxei16.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+RCASE(r960, "vloxei16", "vloxei16.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c3196, 8, m1, 8, 0, "vloxei16", "vloxei16.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c3197, 16, m1, 8, 8, "vloxei16", "vloxei16.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c3198, 32, m1, 8, 16, "vloxei16", "vloxei16.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c3199, 64, m1, 8, 24, "vloxei16", "vloxei16.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 2, 0, ~0ull)
+RCASE(r961, "vloxei16 v0.t", "vloxei16.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c3200, 8, m1, 8, 0, "vloxei16 v0.t", "vloxei16.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c3201, 16, m1, 8, 8, "vloxei16 v0.t", "vloxei16.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c3202, 32, m1, 8, 16, "vloxei16 v0.t", "vloxei16.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+TCASE(c3203, 64, m1, 8, 24, "vloxei16 v0.t", "vloxei16.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 2, 0, ~0ull)
+RCASE(r962, "vluxei32", "vluxei32.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 4, 0, ~0ull)
+TCASE(c3204, 8, m1, 8, 0, "vluxei32", "vluxei32.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 4, 0, ~0ull)
+TCASE(c3205, 16, m1, 8, 8, "vluxei32", "vluxei32.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 4, 0, ~0ull)
+TCASE(c3206, 32, m1, 8, 16, "vluxei32", "vluxei32.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 4, 0, ~0ull)
+TCASE(c3207, 64, m1, 8, 24, "vluxei32", "vluxei32.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 4, 0, ~0ull)
+RCASE(r963, "vluxei32 v0.t", "vluxei32.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 4, 0, ~0ull)
+TCASE(c3208, 8, m1, 8, 0, "vluxei32 v0.t", "vluxei32.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 4, 0, ~0ull)
+TCASE(c3209, 16, m1, 8, 8, "vluxei32 v0.t", "vluxei32.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 4, 0, ~0ull)
+TCASE(c3210, 32, m1, 8, 16, "vluxei32 v0.t", "vluxei32.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 4, 0, ~0ull)
+TCASE(c3211, 64, m1, 8, 24, "vluxei32 v0.t", "vluxei32.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 4, 0, ~0ull)
+RCASE(r964, "vloxei32", "vloxei32.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 4, 0, ~0ull)
+TCASE(c3212, 8, m1, 8, 0, "vloxei32", "vloxei32.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 4, 0, ~0ull)
+TCASE(c3213, 16, m1, 8, 8, "vloxei32", "vloxei32.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 4, 0, ~0ull)
+TCASE(c3214, 32, m1, 8, 16, "vloxei32", "vloxei32.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 4, 0, ~0ull)
+TCASE(c3215, 64, m1, 8, 24, "vloxei32", "vloxei32.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 4, 0, ~0ull)
+RCASE(r965, "vloxei32 v0.t", "vloxei32.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 4, 0, ~0ull)
+TCASE(c3216, 8, m1, 8, 0, "vloxei32 v0.t", "vloxei32.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 4, 0, ~0ull)
+TCASE(c3217, 16, m1, 8, 8, "vloxei32 v0.t", "vloxei32.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 4, 0, ~0ull)
+TCASE(c3218, 32, m1, 8, 16, "vloxei32 v0.t", "vloxei32.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 4, 0, ~0ull)
+TCASE(c3219, 64, m1, 8, 24, "vloxei32 v0.t", "vloxei32.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 4, 0, ~0ull)
+RCASE(r966, "vluxei64", "vluxei64.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 8, 0, ~0ull)
+TCASE(c3220, 8, m1, 8, 0, "vluxei64", "vluxei64.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 8, 0, ~0ull)
+TCASE(c3221, 16, m1, 8, 8, "vluxei64", "vluxei64.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 8, 0, ~0ull)
+TCASE(c3222, 32, m1, 8, 16, "vluxei64", "vluxei64.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 8, 0, ~0ull)
+TCASE(c3223, 64, m1, 8, 24, "vluxei64", "vluxei64.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 8, 0, ~0ull)
+RCASE(r967, "vluxei64 v0.t", "vluxei64.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 8, 0, ~0ull)
+TCASE(c3224, 8, m1, 8, 0, "vluxei64 v0.t", "vluxei64.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 8, 0, ~0ull)
+TCASE(c3225, 16, m1, 8, 8, "vluxei64 v0.t", "vluxei64.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 8, 0, ~0ull)
+TCASE(c3226, 32, m1, 8, 16, "vluxei64 v0.t", "vluxei64.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 8, 0, ~0ull)
+TCASE(c3227, 64, m1, 8, 24, "vluxei64 v0.t", "vluxei64.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 8, 0, ~0ull)
+RCASE(r968, "vloxei64", "vloxei64.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 8, 0, ~0ull)
+TCASE(c3228, 8, m1, 8, 0, "vloxei64", "vloxei64.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 8, 0, ~0ull)
+TCASE(c3229, 16, m1, 8, 8, "vloxei64", "vloxei64.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 8, 0, ~0ull)
+TCASE(c3230, 32, m1, 8, 16, "vloxei64", "vloxei64.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 8, 0, ~0ull)
+TCASE(c3231, 64, m1, 8, 24, "vloxei64", "vloxei64.v v8, (%[mem]), v16", 10, 0, 0, 0, 8, 16, 24, 0, 8, 0, ~0ull)
+RCASE(r969, "vloxei64 v0.t", "vloxei64.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 8, 0, ~0ull)
+TCASE(c3232, 8, m1, 8, 0, "vloxei64 v0.t", "vloxei64.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 8, 0, ~0ull)
+TCASE(c3233, 16, m1, 8, 8, "vloxei64 v0.t", "vloxei64.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 8, 0, ~0ull)
+TCASE(c3234, 32, m1, 8, 16, "vloxei64 v0.t", "vloxei64.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 8, 0, ~0ull)
+TCASE(c3235, 64, m1, 8, 24, "vloxei64 v0.t", "vloxei64.v v8, (%[mem]), v16, v0.t", 10, 0, 0, 1, 8, 16, 24, 0, 8, 0, ~0ull)
+RCASE(r970, "vluxei32 vd=vs2", "vluxei32.v v16, (%[mem]), v16", 10, 0, 0, 0, 16, 16, 24, 0, 4, 0, ~0ull)
+TCASE(c3236, 32, m1, 8, 16, "vluxei32 vd=vs2", "vluxei32.v v16, (%[mem]), v16", 10, 0, 0, 0, 16, 16, 24, 0, 4, 0, ~0ull)
+RCASE(r971, "vluxei64 vd=vs2", "vluxei64.v v16, (%[mem]), v16", 10, 0, 0, 0, 16, 16, 24, 0, 8, 0, ~0ull)
+TCASE(c3237, 64, m1, 8, 24, "vluxei64 vd=vs2", "vluxei64.v v16, (%[mem]), v16", 10, 0, 0, 0, 16, 16, 24, 0, 8, 0, ~0ull)
 V static void m0(uint64_t avl, uint64_t x) {
     uint64_t ru, vt = 0;
     RUNV("vsetvli t1, %[avl], e8, mf2, tu, mu", "vmandn.mm v8, v16, v24");
@@ -5262,7 +7021,7 @@ V static void m156(uint64_t avl, uint64_t x) {
     asm volatile("vsetvli t1, %[avl], e32, m2, tu, mu\n"
         "vsetvli zero, zero, e16, m1, tu, mu\n"
         "csrr %[vl], vl\n" "csrr %[vt], vtype\n"
-        : [vl] "=&r"(vl), [vt] "=&r"(vt) : [avl] "r"(avl) : "t1");
+        : [vl] "=&r"(vl), [vt] "=&r"(vt) : [avl] "r"(avl) : "t1", "vl", "vtype");
     uint64_t wl = avl < 8 ? avl : 8, wt = 8;
     memset(ou, 0, sizeof(ou)); memset(om, 0, sizeof(om));
     compare("vsetvli x0,x0 e32m2->e16m1 vl", "", avl, vl, wl);
@@ -5274,7 +7033,7 @@ V static void m157(uint64_t avl, uint64_t x) {
     asm volatile("vsetvli t1, %[avl], e8, m1, tu, mu\n"
         "vsetvli zero, zero, e64, m8, tu, mu\n"
         "csrr %[vl], vl\n" "csrr %[vt], vtype\n"
-        : [vl] "=&r"(vl), [vt] "=&r"(vt) : [avl] "r"(avl) : "t1");
+        : [vl] "=&r"(vl), [vt] "=&r"(vt) : [avl] "r"(avl) : "t1", "vl", "vtype");
     uint64_t wl = avl < 16 ? avl : 16, wt = 27;
     memset(ou, 0, sizeof(ou)); memset(om, 0, sizeof(om));
     compare("vsetvli x0,x0 e8m1->e64m8 vl", "", avl, vl, wl);
@@ -5286,7 +7045,7 @@ V static void m158(uint64_t avl, uint64_t x) {
     asm volatile("vsetvli t1, %[avl], e32, m2, tu, mu\n"
         "vsetvli zero, zero, e8, m1, tu, mu\n"
         "csrr %[vl], vl\n" "csrr %[vt], vtype\n"
-        : [vl] "=&r"(vl), [vt] "=&r"(vt) : [avl] "r"(avl) : "t1");
+        : [vl] "=&r"(vl), [vt] "=&r"(vt) : [avl] "r"(avl) : "t1", "vl", "vtype");
     uint64_t wl = 0, wt = 1ull << 63;
     memset(ou, 0, sizeof(ou)); memset(om, 0, sizeof(om));
     compare("vsetvli x0,x0 e32m2->e8m1 vl", "", avl, vl, wl);
@@ -5298,7 +7057,7 @@ V static void m159(uint64_t avl, uint64_t x) {
     asm volatile("vsetvli t1, %[avl], e16, mf2, tu, mu\n"
         "vsetvli zero, zero, e32, m1, tu, mu\n"
         "csrr %[vl], vl\n" "csrr %[vt], vtype\n"
-        : [vl] "=&r"(vl), [vt] "=&r"(vt) : [avl] "r"(avl) : "t1");
+        : [vl] "=&r"(vl), [vt] "=&r"(vt) : [avl] "r"(avl) : "t1", "vl", "vtype");
     uint64_t wl = avl < 4 ? avl : 4, wt = 16;
     memset(ou, 0, sizeof(ou)); memset(om, 0, sizeof(om));
     compare("vsetvli x0,x0 e16mf2->e32m1 vl", "", avl, vl, wl);
@@ -5310,7 +7069,7 @@ V static void m160(uint64_t avl, uint64_t x) {
     asm volatile("vsetvli t1, %[avl], e64, m1, tu, mu\n"
         "vsetvli zero, zero, e64, m1, tu, mu\n"
         "csrr %[vl], vl\n" "csrr %[vt], vtype\n"
-        : [vl] "=&r"(vl), [vt] "=&r"(vt) : [avl] "r"(avl) : "t1");
+        : [vl] "=&r"(vl), [vt] "=&r"(vt) : [avl] "r"(avl) : "t1", "vl", "vtype");
     uint64_t wl = avl < 2 ? avl : 2, wt = 24;
     memset(ou, 0, sizeof(ou)); memset(om, 0, sizeof(om));
     compare("vsetvli x0,x0 e64m1->e64m1 vl", "", avl, vl, wl);
@@ -5632,6 +7391,193 @@ V static void ill75(void) {
     uint64_t avl = 4, vt = 11;
     asm volatile("vsetvl t1, %[avl], %[vt]\n" "vfslide1up.vf v8, v16, ft0\n" : : [avl] "r"(avl), [vt] "r"(vt) : "t1", "memory", VREGS);
 }
+V static void ill76(void) {
+    uint64_t avl = 4, vt = 17;
+    asm volatile("vsetvli t1, %[avl], e32, m2, tu, mu\n" "csrwi vstart, 1\nvadd.vv v8, v16, v24\n" : : [avl] "r"(avl), [vt] "r"(vt) : "t1", "memory", VREGS);
+}
+V static void ill77(void) {
+    uint64_t avl = 4, vt = 17;
+    asm volatile("vsetvl t1, %[avl], %[vt]\n" "csrwi vstart, 1\nvadd.vv v8, v16, v24\n" : : [avl] "r"(avl), [vt] "r"(vt) : "t1", "memory", VREGS);
+}
+V static void ill78(void) {
+    uint64_t avl = 4, vt = 18;
+    asm volatile("vsetvli t1, %[avl], e32, m4, tu, mu\n" "csrwi vstart, 1\nvadd.vv v8, v16, v24\n" : : [avl] "r"(avl), [vt] "r"(vt) : "t1", "memory", VREGS);
+}
+V static void ill79(void) {
+    uint64_t avl = 4, vt = 18;
+    asm volatile("vsetvl t1, %[avl], %[vt]\n" "csrwi vstart, 1\nvadd.vv v8, v16, v24\n" : : [avl] "r"(avl), [vt] "r"(vt) : "t1", "memory", VREGS);
+}
+V static void ill80(void) {
+    uint64_t avl = 4, vt = 19;
+    asm volatile("vsetvli t1, %[avl], e32, m8, tu, mu\n" "csrwi vstart, 1\nvadd.vv v8, v16, v24\n" : : [avl] "r"(avl), [vt] "r"(vt) : "t1", "memory", VREGS);
+}
+V static void ill81(void) {
+    uint64_t avl = 4, vt = 19;
+    asm volatile("vsetvl t1, %[avl], %[vt]\n" "csrwi vstart, 1\nvadd.vv v8, v16, v24\n" : : [avl] "r"(avl), [vt] "r"(vt) : "t1", "memory", VREGS);
+}
+V static void ill82(void) {
+    uint64_t avl = 4, vt = 17;
+    asm volatile("vsetvli t1, %[avl], e32, m2, tu, mu\n" ".insn r 0x57, 0, 0x1b, x8, x16, x24\n" : : [avl] "r"(avl), [vt] "r"(vt) : "t1", "memory", VREGS);
+}
+V static void ill83(void) {
+    uint64_t avl = 4, vt = 17;
+    asm volatile("vsetvl t1, %[avl], %[vt]\n" ".insn r 0x57, 0, 0x1b, x8, x16, x24\n" : : [avl] "r"(avl), [vt] "r"(vt) : "t1", "memory", VREGS);
+}
+V static void ill84(void) {
+    uint64_t avl = 4, vt = 18;
+    asm volatile("vsetvli t1, %[avl], e32, m4, tu, mu\n" ".insn r 0x57, 0, 0x1b, x8, x16, x24\n" : : [avl] "r"(avl), [vt] "r"(vt) : "t1", "memory", VREGS);
+}
+V static void ill85(void) {
+    uint64_t avl = 4, vt = 18;
+    asm volatile("vsetvl t1, %[avl], %[vt]\n" ".insn r 0x57, 0, 0x1b, x8, x16, x24\n" : : [avl] "r"(avl), [vt] "r"(vt) : "t1", "memory", VREGS);
+}
+V static void ill86(void) {
+    uint64_t avl = 4, vt = 19;
+    asm volatile("vsetvli t1, %[avl], e32, m8, tu, mu\n" ".insn r 0x57, 0, 0x1b, x8, x16, x24\n" : : [avl] "r"(avl), [vt] "r"(vt) : "t1", "memory", VREGS);
+}
+V static void ill87(void) {
+    uint64_t avl = 4, vt = 19;
+    asm volatile("vsetvl t1, %[avl], %[vt]\n" ".insn r 0x57, 0, 0x1b, x8, x16, x24\n" : : [avl] "r"(avl), [vt] "r"(vt) : "t1", "memory", VREGS);
+}
+
+// fault-only-first loads and precise faults against a PROT_NONE page
+static sigjmp_buf segv_jmp;
+static void on_sigsegv(int sig) { (void) sig; siglongjmp(segv_jmp, 1); }
+V static void guard_cases(void) {
+    uint8_t *g = mmap(NULL, 8192, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (g == MAP_FAILED)
+        return;
+    mprotect(g + 4096, 4096, PROT_NONE);
+    for (int i = 0; i < 4096; i++)
+        g[i] = (uint8_t) rnd();
+    signal(SIGSEGV, on_sigsegv);
+    for (int k = 1; k <= 16; k++) {
+        uint8_t out[16];
+        uint64_t vl, avl = 16;
+        const uint8_t *base = g + 4096 - k;
+        memset(out, 0xa5, sizeof(out));
+        // fault-only-first: k bytes before the guard page load, vl = k
+        __asm__ volatile("vsetvli t1, %[avl], e8, m1, ta, ma\n"
+            "vmv.v.i v8, 0\n"
+            "vle8ff.v v8, (%[b])\n"
+            "csrr %[vl], vl\n"
+            "vsetvli t1, %[avl], e8, m1, ta, ma\n"
+            "vse8.v v8, (%[o])\n"
+            : [vl] "=&r"(vl) : [avl] "r"(avl), [b] "r"(base), [o] "r"(out)         : "t1", "memory", "v8", "vl", "vtype");
+        checks++;
+        if ((vl != (uint64_t) (k < 16 ? k : 16) || memcmp(out, base, (size_t) (k < 16 ? k : 16))) && bad++ < 40)
+            printf("vle8ff.v %d bytes before a guard page: vl %llu\n", k, (unsigned long long) vl);
+        if (k >= 16)
+            continue;
+        // a plain load across it faults, after the bytes before it
+        checks++;
+        if (sigsetjmp(segv_jmp, 1) == 0) {
+            __asm__ volatile("vsetvli t1, %[avl], e8, m1, ta, ma\n"
+                "vle8.v v8, (%[b])\n" : : [avl] "r"(avl), [b] "r"(base)         : "t1", "memory", "v8", "vl", "vtype");
+            if (bad++ < 40)
+                printf("vle8.v across a guard page: no fault\n");
+        }
+        // a store across it writes the bytes before it, then faults
+        uint8_t *sb = g + 4096 - k;
+        memset(sb, 0, (size_t) k);
+        checks++;
+        if (sigsetjmp(segv_jmp, 1) == 0) {
+            __asm__ volatile("vsetvli t1, %[avl], e8, m1, ta, ma\n"
+                "vid.v v8\n"
+                "vse8.v v8, (%[b])\n" : : [avl] "r"(avl), [b] "r"(sb)         : "t1", "memory", "v8", "vl", "vtype");
+            if (bad++ < 40)
+                printf("vse8.v across a guard page: no fault\n");
+        } else {
+            for (int i = 0; i < k; i++)
+                if (sb[i] != i) {
+                    if (bad++ < 40)
+                        printf("vse8.v across a guard page (%d before): byte %d = %d\n", k, i, sb[i]);
+                    break;
+                }
+        }
+    }
+    signal(SIGSEGV, SIG_DFL);
+    munmap(g, 8192);
+}
+
+// the vector CSRs, and vsetvl with legal and illegal vtypes
+V static void csr_cases(void) {
+    for (uint64_t k = 0; k < 64; k++) {
+        uint64_t rm = k & 3, sat = k >> 2 & 1, vcsr, xrm, xsat, st;
+        __asm__ volatile("csrw vxrm, %[a]\n" "csrw vxsat, %[b]\n" "csrr %[c], vcsr\n"
+            : [c] "=&r"(vcsr) : [a] "r"(rm), [b] "r"(sat));
+        checks++;
+        if (vcsr != (rm << 1 | sat) && bad++ < 40)
+            printf("vcsr after vxrm %llu vxsat %llu: %#llx\n", (unsigned long long) rm, (unsigned long long) sat, (unsigned long long) vcsr);
+        __asm__ volatile("csrw vcsr, %[a]\n" "csrr %[b], vxrm\n" "csrr %[c], vxsat\n"
+            : [b] "=&r"(xrm), [c] "=&r"(xsat) : [a] "r"(k));
+        checks++;
+        if ((xrm != (k >> 1 & 3) || xsat != (k & 1)) && bad++ < 40)
+            printf("vcsr %llu: vxrm %llu vxsat %llu\n", (unsigned long long) k, (unsigned long long) xrm, (unsigned long long) xsat);
+        __asm__ volatile("csrrs %[c], vxsat, %[a]\n" "csrrc zero, vxrm, %[a]\n" "csrr %[b], vxrm\n"
+            : [b] "=&r"(xrm), [c] "=&r"(xsat) : [a] "r"(k & 1));
+        checks++;
+        if ((xsat != (k & 1) || xrm != ((k >> 1 & 3) & ~(k & 1))) && bad++ < 40)
+            printf("csrrs/csrrc %llu: %llu %llu\n", (unsigned long long) k, (unsigned long long) xsat, (unsigned long long) xrm);
+        __asm__ volatile("csrw vstart, %[a]\n" "csrr %[b], vstart\n" "csrwi vstart, 0\n" : [b] "=&r"(st) : [a] "r"(k * 37));
+        checks++;
+        if (st != ((k * 37) & 127) && bad++ < 40)
+            printf("vstart %llu: %llu\n", (unsigned long long) (k * 37), (unsigned long long) st);
+    }
+    // an indexed load into its own index group that leaves the fast path at
+    // element 1 (it straddles a page) must resume there, not restart
+    for (int k = 0; k < 4; k++) {
+        uint64_t idx[2] = {(uint64_t) (100 + 8 * k), (uint64_t) (4096 - 3 - k)}, out[2], want[2];
+        memcpy(&want[0], mem + idx[0], 8);
+        memcpy(&want[1], mem + idx[1], 8);
+        uint64_t two = 2;
+        __asm__ volatile("vsetvli t1, %[n], e64, m1, ta, ma\n"
+            "vle64.v v16, (%[i])\n"
+            "vluxei64.v v16, (%[m]), v16\n"
+            "vse64.v v16, (%[o])\n"
+            : : [n] "r"(two), [i] "r"(idx), [m] "r"(mem), [o] "r"(out) : "t1", "memory", "v16", "vl", "vtype");
+        checks++;
+        if ((out[0] != want[0] || out[1] != want[1]) && bad++ < 40)
+            printf("vluxei64 v16, (mem), v16 across a page at element 1: %#llx %#llx\n",
+                   (unsigned long long) out[0], (unsigned long long) out[1]);
+    }
+    __asm__ volatile("csrwi vxrm, 0\n" "csrwi vxsat, 0\n");
+    // vsetvl zero, zero, rs2: vl kept when VLMAX is unchanged, else vill
+    {
+        static const uint64_t kts[] = {0x10, 0x08, 0x01, 0x17, 0x1e, 0x11, 0x0b, 0x1f, 0x04, 0x100};
+        for (unsigned t = 0; t < sizeof(kts) / sizeof(kts[0]); t++) {
+            uint64_t vl, vt, three = 3, v = kts[t];
+            __asm__ volatile("vsetvli zero, %[a], e32, m1, ta, ma\n" "vsetvl zero, zero, %[v]\n"
+                "csrr %[vl], vl\n" "csrr %[vt], vtype\n"
+                : [vl] "=&r"(vl), [vt] "=&r"(vt) : [a] "r"(three), [v] "r"(v) : "vl", "vtype");
+            unsigned vsew = (unsigned) (v >> 3 & 7), vlmul = (unsigned) (v & 7);
+            int legal = (v >> 8) == 0 && vlmul != 4 && vsew <= 3 && (vlmul < 4 || vsew + (8 - vlmul) <= 3);
+            uint64_t vlmax = legal ? (vlmul < 4 ? (16u >> vsew) << vlmul : (16u >> vsew) >> (8 - vlmul)) : 0;
+            int keep = legal && vlmax == 4; // e32, m1's
+            checks++;
+            if ((vl != (keep ? 3u : 0u) || vt != (keep ? v : 1ull << 63)) && bad++ < 40)
+                printf("vsetvl zero, zero, %#llx from e32m1 vl 3: vl %llu vtype %#llx\n",
+                       (unsigned long long) v, (unsigned long long) vl, (unsigned long long) vt);
+        }
+    }
+    // vsetvl: the vtype from a register, legal or not
+    static const uint64_t vts[] = {0x00, 0x01, 0x02, 0x03, 0x05, 0x06, 0x07, 0x08, 0x0b, 0x0f, 0x10, 0x13, 0x17, 0x18,
+        0x1b, 0x1d, 0x1e, 0x1f, 0xc0, 0xd3, 0x04, 0x0c, 0x20, 0x100, 0x8000000000000000ull, 0x15, 0x16, 0x0d};
+    for (unsigned t = 0; t < sizeof(vts) / sizeof(vts[0]); t++)
+        for (uint64_t avl = 0; avl < 140; avl += 13) {
+            uint64_t vl, vt, rd, v = vts[t];
+            __asm__ volatile("vsetvl %[rd], %[avl], %[v]\n" "csrr %[vl], vl\n" "csrr %[vt], vtype\n"
+                : [rd] "=&r"(rd), [vl] "=&r"(vl), [vt] "=&r"(vt) : [avl] "r"(avl), [v] "r"(v) : "vl", "vtype");
+            unsigned vsew = (unsigned) (v >> 3 & 7), vlmul = (unsigned) (v & 7);
+            int legal = (v >> 8) == 0 && vlmul != 4 && vsew <= 3 && (vlmul < 4 || vsew + (8 - vlmul) <= 3);
+            uint64_t vlmax = legal ? (vlmul < 4 ? (16u >> vsew) << vlmul : (16u >> vsew) >> (8 - vlmul)) : 0;
+            uint64_t wvl = legal ? (avl < vlmax ? avl : vlmax) : 0, wvt = legal ? v : 1ull << 63;
+            checks++;
+            if ((vl != wvl || vt != wvt || rd != wvl) && bad++ < 40)
+                printf("vsetvl avl %llu vtype %#llx: vl %llu vtype %#llx rd %llu\n", (unsigned long long) avl,
+                       (unsigned long long) v, (unsigned long long) vl, (unsigned long long) vt, (unsigned long long) rd);
+        }
+}
 static void sigill_cases(void) {
     signal(SIGILL, on_sigill);
     expect_sigill("vadd.vv v9, v16, v24 e32m2 typed", ill0);
@@ -5710,6 +7656,18 @@ static void sigill_cases(void) {
     expect_sigill("vfslide1up.vf v8, v16, ft0 e16m4 re-dispatched", ill73);
     expect_sigill("vfslide1up.vf v8, v16, ft0 e16m8 typed", ill74);
     expect_sigill("vfslide1up.vf v8, v16, ft0 e16m8 re-dispatched", ill75);
+    expect_sigill("csrwi vstart, 1\nvadd.vv v8, v16, v24 e32m2 typed", ill76);
+    expect_sigill("csrwi vstart, 1\nvadd.vv v8, v16, v24 e32m2 re-dispatched", ill77);
+    expect_sigill("csrwi vstart, 1\nvadd.vv v8, v16, v24 e32m4 typed", ill78);
+    expect_sigill("csrwi vstart, 1\nvadd.vv v8, v16, v24 e32m4 re-dispatched", ill79);
+    expect_sigill("csrwi vstart, 1\nvadd.vv v8, v16, v24 e32m8 typed", ill80);
+    expect_sigill("csrwi vstart, 1\nvadd.vv v8, v16, v24 e32m8 re-dispatched", ill81);
+    expect_sigill(".insn r 0x57, 0, 0x1b, x8, x16, x24 e32m2 typed", ill82);
+    expect_sigill(".insn r 0x57, 0, 0x1b, x8, x16, x24 e32m2 re-dispatched", ill83);
+    expect_sigill(".insn r 0x57, 0, 0x1b, x8, x16, x24 e32m4 typed", ill84);
+    expect_sigill(".insn r 0x57, 0, 0x1b, x8, x16, x24 e32m4 re-dispatched", ill85);
+    expect_sigill(".insn r 0x57, 0, 0x1b, x8, x16, x24 e32m8 typed", ill86);
+    expect_sigill(".insn r 0x57, 0, 0x1b, x8, x16, x24 e32m8 re-dispatched", ill87);
     signal(SIGILL, SIG_DFL);
 }
 
@@ -6328,45 +8286,386 @@ static const struct rcase rcases[] = {
     {r589, 523264u, 0},
     {r590, 524287u, 0},
     {r591, 524287u, 0},
-    {r592, 524256u, 0},
-    {r593, 524256u, 0},
-    {r594, 524256u, 0},
-    {r595, 524256u, 0},
-    {r596, 523264u, 0},
-    {r597, 523264u, 0},
-    {r598, 523264u, 0},
-    {r599, 523264u, 0},
-    {r600, 491520u, 0},
-    {r601, 491520u, 0},
-    {r602, 491520u, 0},
-    {r603, 491520u, 0},
-    {r604, 524287u, 0},
-    {r605, 524287u, 0},
-    {r606, 524287u, 0},
-    {r607, 524287u, 0},
-    {r608, 524287u, 0},
-    {r609, 524287u, 0},
-    {r610, 524287u, 0},
-    {r611, 524287u, 0},
-    {r612, 524287u, 0},
-    {r613, 524287u, 1},
-    {r614, 524287u, 1},
-    {r615, 524287u, 1},
-    {r616, 524287u, 1},
-    {r617, 524271u, 2},
-    {r618, 524271u, 2},
-    {r619, 524271u, 2},
-    {r620, 524271u, 2},
-    {r621, 523751u, 4},
-    {r622, 523751u, 4},
-    {r623, 523751u, 4},
-    {r624, 523751u, 4},
-    {r625, 507107u, 8},
-    {r626, 507107u, 8},
-    {r627, 507107u, 8},
-    {r628, 507107u, 8},
-    {r629, 31744u, 4},
-    {r630, 491520u, 8},
+    {r592, 524287u, 0},
+    {r593, 524287u, 0},
+    {r594, 524287u, 0},
+    {r595, 524287u, 0},
+    {r596, 524287u, 0},
+    {r597, 524287u, 0},
+    {r598, 524287u, 0},
+    {r599, 524287u, 0},
+    {r600, 524287u, 1},
+    {r601, 524287u, 1},
+    {r602, 524287u, 1},
+    {r603, 524287u, 1},
+    {r604, 524271u, 0},
+    {r605, 524271u, 0},
+    {r606, 524271u, 0},
+    {r607, 524271u, 0},
+    {r608, 523751u, 0},
+    {r609, 523751u, 0},
+    {r610, 523751u, 0},
+    {r611, 523751u, 0},
+    {r612, 523751u, 0},
+    {r613, 523751u, 0},
+    {r614, 523751u, 0},
+    {r615, 523751u, 0},
+    {r616, 507107u, 0},
+    {r617, 507107u, 0},
+    {r618, 507107u, 0},
+    {r619, 507107u, 0},
+    {r620, 524271u, 0},
+    {r621, 524271u, 0},
+    {r622, 524271u, 0},
+    {r623, 524271u, 0},
+    {r624, 245231u, 1},
+    {r625, 245231u, 1},
+    {r626, 245231u, 1},
+    {r627, 245231u, 1},
+    {r628, 507107u, 0},
+    {r629, 507107u, 0},
+    {r630, 507107u, 0},
+    {r631, 507107u, 0},
+    {r632, 35939u, 1},
+    {r633, 35939u, 1},
+    {r634, 35939u, 1},
+    {r635, 35939u, 1},
+    {r636, 524287u, 0},
+    {r637, 524287u, 0},
+    {r638, 524287u, 0},
+    {r639, 524287u, 0},
+    {r640, 524271u, 0},
+    {r641, 524271u, 0},
+    {r642, 524271u, 0},
+    {r643, 524271u, 0},
+    {r644, 524271u, 0},
+    {r645, 524271u, 0},
+    {r646, 524271u, 0},
+    {r647, 524271u, 0},
+    {r648, 524271u, 0},
+    {r649, 524271u, 0},
+    {r650, 524271u, 2},
+    {r651, 524271u, 2},
+    {r652, 524271u, 2},
+    {r653, 524271u, 2},
+    {r654, 523751u, 0},
+    {r655, 523751u, 0},
+    {r656, 523751u, 0},
+    {r657, 523751u, 0},
+    {r658, 507107u, 0},
+    {r659, 507107u, 0},
+    {r660, 507107u, 0},
+    {r661, 507107u, 0},
+    {r662, 507107u, 0},
+    {r663, 507107u, 0},
+    {r664, 507107u, 0},
+    {r665, 507107u, 0},
+    {r666, 236641u, 0},
+    {r667, 236641u, 0},
+    {r668, 236641u, 0},
+    {r669, 236641u, 0},
+    {r670, 523751u, 0},
+    {r671, 523751u, 0},
+    {r672, 523751u, 0},
+    {r673, 523751u, 0},
+    {r674, 245231u, 2},
+    {r675, 245231u, 2},
+    {r676, 245231u, 2},
+    {r677, 245231u, 2},
+    {r678, 236641u, 0},
+    {r679, 236641u, 0},
+    {r680, 236641u, 0},
+    {r681, 236641u, 0},
+    {r682, 35939u, 2},
+    {r683, 35939u, 2},
+    {r684, 35939u, 2},
+    {r685, 35939u, 2},
+    {r686, 524287u, 0},
+    {r687, 524287u, 0},
+    {r688, 524287u, 0},
+    {r689, 524287u, 0},
+    {r690, 523751u, 0},
+    {r691, 523751u, 0},
+    {r692, 523751u, 0},
+    {r693, 523751u, 0},
+    {r694, 523751u, 0},
+    {r695, 523751u, 0},
+    {r696, 523751u, 0},
+    {r697, 523751u, 0},
+    {r698, 523751u, 0},
+    {r699, 523751u, 0},
+    {r700, 523751u, 4},
+    {r701, 523751u, 4},
+    {r702, 523751u, 4},
+    {r703, 523751u, 4},
+    {r704, 507107u, 0},
+    {r705, 507107u, 0},
+    {r706, 507107u, 0},
+    {r707, 507107u, 0},
+    {r708, 236641u, 0},
+    {r709, 236641u, 0},
+    {r710, 236641u, 0},
+    {r711, 236641u, 0},
+    {r712, 236641u, 0},
+    {r713, 236641u, 0},
+    {r714, 236641u, 0},
+    {r715, 236641u, 0},
+    {r716, 101408u, 0},
+    {r717, 101408u, 0},
+    {r718, 101408u, 0},
+    {r719, 101408u, 0},
+    {r720, 507107u, 0},
+    {r721, 507107u, 0},
+    {r722, 507107u, 0},
+    {r723, 507107u, 0},
+    {r724, 245223u, 4},
+    {r725, 245223u, 4},
+    {r726, 245223u, 4},
+    {r727, 245223u, 4},
+    {r728, 101408u, 0},
+    {r729, 101408u, 0},
+    {r730, 101408u, 0},
+    {r731, 101408u, 0},
+    {r732, 35939u, 4},
+    {r733, 35939u, 4},
+    {r734, 35939u, 4},
+    {r735, 35939u, 4},
+    {r736, 524287u, 0},
+    {r737, 524287u, 0},
+    {r738, 524287u, 0},
+    {r739, 524287u, 0},
+    {r740, 507107u, 0},
+    {r741, 507107u, 0},
+    {r742, 507107u, 0},
+    {r743, 507107u, 0},
+    {r744, 507107u, 0},
+    {r745, 507107u, 0},
+    {r746, 507107u, 0},
+    {r747, 507107u, 0},
+    {r748, 507107u, 0},
+    {r749, 507107u, 0},
+    {r750, 507107u, 8},
+    {r751, 507107u, 8},
+    {r752, 507107u, 8},
+    {r753, 507107u, 8},
+    {r754, 236641u, 0},
+    {r755, 236641u, 0},
+    {r756, 236641u, 0},
+    {r757, 236641u, 0},
+    {r758, 101408u, 0},
+    {r759, 101408u, 0},
+    {r760, 101408u, 0},
+    {r761, 101408u, 0},
+    {r762, 101408u, 0},
+    {r763, 101408u, 0},
+    {r764, 101408u, 0},
+    {r765, 101408u, 0},
+    {r766, 33792u, 0},
+    {r767, 33792u, 0},
+    {r768, 33792u, 0},
+    {r769, 33792u, 0},
+    {r770, 236641u, 0},
+    {r771, 236641u, 0},
+    {r772, 236641u, 0},
+    {r773, 236641u, 0},
+    {r774, 244963u, 8},
+    {r775, 244963u, 8},
+    {r776, 244963u, 8},
+    {r777, 244963u, 8},
+    {r778, 33792u, 0},
+    {r779, 33792u, 0},
+    {r780, 33792u, 0},
+    {r781, 33792u, 0},
+    {r782, 35939u, 8},
+    {r783, 35939u, 8},
+    {r784, 35939u, 8},
+    {r785, 35939u, 8},
+    {r786, 524287u, 0},
+    {r787, 524287u, 0},
+    {r788, 524287u, 0},
+    {r789, 524287u, 0},
+    {r790, 524287u, 0},
+    {r791, 524287u, 0},
+    {r792, 524287u, 0},
+    {r793, 524287u, 0},
+    {r794, 524287u, 0},
+    {r795, 524287u, 0},
+    {r796, 524287u, 0},
+    {r797, 524287u, 0},
+    {r798, 524287u, 0},
+    {r799, 524287u, 0},
+    {r800, 524287u, 0},
+    {r801, 524287u, 0},
+    {r802, 524287u, 0},
+    {r803, 524287u, 0},
+    {r804, 524287u, 0},
+    {r805, 524287u, 0},
+    {r806, 524287u, 0},
+    {r807, 524287u, 0},
+    {r808, 524287u, 0},
+    {r809, 524287u, 0},
+    {r810, 524287u, 0},
+    {r811, 524287u, 0},
+    {r812, 524287u, 0},
+    {r813, 524287u, 0},
+    {r814, 524287u, 0},
+    {r815, 524287u, 0},
+    {r816, 524287u, 0},
+    {r817, 524287u, 0},
+    {r818, 524287u, 0},
+    {r819, 524287u, 0},
+    {r820, 524287u, 0},
+    {r821, 524287u, 0},
+    {r822, 524287u, 0},
+    {r823, 524287u, 0},
+    {r824, 524287u, 0},
+    {r825, 524287u, 0},
+    {r826, 524287u, 0},
+    {r827, 524287u, 0},
+    {r828, 524287u, 0},
+    {r829, 524287u, 0},
+    {r830, 524287u, 0},
+    {r831, 524287u, 0},
+    {r832, 524287u, 0},
+    {r833, 524287u, 0},
+    {r834, 524287u, 0},
+    {r835, 524287u, 0},
+    {r836, 524287u, 0},
+    {r837, 524287u, 0},
+    {r838, 524287u, 0},
+    {r839, 524287u, 0},
+    {r840, 524287u, 0},
+    {r841, 524287u, 0},
+    {r842, 524287u, 0},
+    {r843, 524287u, 0},
+    {r844, 524287u, 0},
+    {r845, 524287u, 0},
+    {r846, 524287u, 0},
+    {r847, 524287u, 0},
+    {r848, 524287u, 0},
+    {r849, 524287u, 0},
+    {r850, 524287u, 0},
+    {r851, 524287u, 0},
+    {r852, 524287u, 0},
+    {r853, 524287u, 0},
+    {r854, 524287u, 0},
+    {r855, 524287u, 0},
+    {r856, 524287u, 0},
+    {r857, 524287u, 0},
+    {r858, 524287u, 0},
+    {r859, 524287u, 0},
+    {r860, 524287u, 0},
+    {r861, 524287u, 0},
+    {r862, 524287u, 0},
+    {r863, 524287u, 0},
+    {r864, 524287u, 0},
+    {r865, 524287u, 0},
+    {r866, 524287u, 0},
+    {r867, 524287u, 0},
+    {r868, 524287u, 0},
+    {r869, 524287u, 0},
+    {r870, 524287u, 0},
+    {r871, 524287u, 0},
+    {r872, 524287u, 0},
+    {r873, 524287u, 0},
+    {r874, 524287u, 0},
+    {r875, 524287u, 0},
+    {r876, 524287u, 0},
+    {r877, 524287u, 0},
+    {r878, 524287u, 0},
+    {r879, 524287u, 0},
+    {r880, 524287u, 0},
+    {r881, 524287u, 0},
+    {r882, 524287u, 0},
+    {r883, 524287u, 0},
+    {r884, 524287u, 0},
+    {r885, 524287u, 0},
+    {r886, 524287u, 0},
+    {r887, 524287u, 0},
+    {r888, 524287u, 0},
+    {r889, 524287u, 0},
+    {r890, 524287u, 0},
+    {r891, 524287u, 0},
+    {r892, 524287u, 0},
+    {r893, 524287u, 0},
+    {r894, 524287u, 0},
+    {r895, 524287u, 0},
+    {r896, 524287u, 0},
+    {r897, 524287u, 0},
+    {r898, 524287u, 0},
+    {r899, 524287u, 0},
+    {r900, 15855u, 0},
+    {r901, 15855u, 0},
+    {r902, 15855u, 0},
+    {r903, 15855u, 0},
+    {r904, 15855u, 0},
+    {r905, 15855u, 0},
+    {r906, 15855u, 0},
+    {r907, 15855u, 0},
+    {r908, 15855u, 0},
+    {r909, 15855u, 0},
+    {r910, 15855u, 0},
+    {r911, 15855u, 0},
+    {r912, 15855u, 0},
+    {r913, 15855u, 0},
+    {r914, 15855u, 0},
+    {r915, 15855u, 0},
+    {r916, 15855u, 0},
+    {r917, 15855u, 0},
+    {r918, 15855u, 0},
+    {r919, 15855u, 0},
+    {r920, 15855u, 0},
+    {r921, 15855u, 0},
+    {r922, 15855u, 0},
+    {r923, 15855u, 0},
+    {r924, 32767u, 0},
+    {r925, 32767u, 0},
+    {r926, 32767u, 0},
+    {r927, 32767u, 0},
+    {r928, 524287u, 0},
+    {r929, 524287u, 0},
+    {r930, 524256u, 0},
+    {r931, 524256u, 0},
+    {r932, 524256u, 0},
+    {r933, 524256u, 0},
+    {r934, 523264u, 0},
+    {r935, 523264u, 0},
+    {r936, 523264u, 0},
+    {r937, 523264u, 0},
+    {r938, 491520u, 0},
+    {r939, 491520u, 0},
+    {r940, 491520u, 0},
+    {r941, 491520u, 0},
+    {r942, 524287u, 0},
+    {r943, 524287u, 0},
+    {r944, 524287u, 0},
+    {r945, 524287u, 0},
+    {r946, 524287u, 0},
+    {r947, 524287u, 0},
+    {r948, 524287u, 0},
+    {r949, 524287u, 0},
+    {r950, 524287u, 0},
+    {r951, 524287u, 0},
+    {r952, 524287u, 0},
+    {r953, 524287u, 0},
+    {r954, 524287u, 1},
+    {r955, 524287u, 1},
+    {r956, 524287u, 1},
+    {r957, 524287u, 1},
+    {r958, 524271u, 2},
+    {r959, 524271u, 2},
+    {r960, 524271u, 2},
+    {r961, 524271u, 2},
+    {r962, 523751u, 4},
+    {r963, 523751u, 4},
+    {r964, 523751u, 4},
+    {r965, 523751u, 4},
+    {r966, 507107u, 8},
+    {r967, 507107u, 8},
+    {r968, 507107u, 8},
+    {r969, 507107u, 8},
+    {r970, 31744u, 4},
+    {r971, 491520u, 8},
 };
 struct tcase { void (*fn)(uint64_t, uint64_t); unsigned vlmax, isz; };
 static const struct tcase tcases[] = {
@@ -8178,29 +10477,29 @@ static const struct tcase tcases[] = {
     {c1805, 8, 0},
     {c1806, 4, 0},
     {c1807, 2, 0},
-    {c1808, 8, 0},
-    {c1809, 4, 0},
-    {c1810, 2, 0},
-    {c1811, 8, 0},
-    {c1812, 4, 0},
-    {c1813, 2, 0},
-    {c1814, 8, 0},
-    {c1815, 4, 0},
-    {c1816, 2, 0},
+    {c1808, 16, 0},
+    {c1809, 8, 0},
+    {c1810, 4, 0},
+    {c1811, 2, 0},
+    {c1812, 16, 0},
+    {c1813, 8, 0},
+    {c1814, 4, 0},
+    {c1815, 2, 0},
+    {c1816, 16, 0},
     {c1817, 8, 0},
     {c1818, 4, 0},
     {c1819, 2, 0},
-    {c1820, 4, 0},
-    {c1821, 2, 0},
+    {c1820, 16, 0},
+    {c1821, 8, 0},
     {c1822, 4, 0},
     {c1823, 2, 0},
-    {c1824, 4, 0},
-    {c1825, 2, 0},
+    {c1824, 16, 0},
+    {c1825, 8, 0},
     {c1826, 4, 0},
     {c1827, 2, 0},
-    {c1828, 2, 0},
-    {c1829, 2, 0},
-    {c1830, 2, 0},
+    {c1828, 16, 0},
+    {c1829, 8, 0},
+    {c1830, 4, 0},
     {c1831, 2, 0},
     {c1832, 16, 0},
     {c1833, 8, 0},
@@ -8210,22 +10509,22 @@ static const struct tcase tcases[] = {
     {c1837, 8, 0},
     {c1838, 4, 0},
     {c1839, 2, 0},
-    {c1840, 16, 0},
-    {c1841, 8, 0},
-    {c1842, 4, 0},
-    {c1843, 2, 0},
-    {c1844, 16, 0},
-    {c1845, 8, 0},
-    {c1846, 4, 0},
-    {c1847, 2, 0},
-    {c1848, 16, 0},
-    {c1849, 8, 0},
-    {c1850, 4, 0},
-    {c1851, 2, 0},
-    {c1852, 16, 0},
-    {c1853, 8, 0},
-    {c1854, 4, 0},
-    {c1855, 2, 0},
+    {c1840, 16, 1},
+    {c1841, 8, 1},
+    {c1842, 4, 1},
+    {c1843, 2, 1},
+    {c1844, 16, 1},
+    {c1845, 8, 1},
+    {c1846, 4, 1},
+    {c1847, 2, 1},
+    {c1848, 16, 1},
+    {c1849, 8, 1},
+    {c1850, 4, 1},
+    {c1851, 2, 1},
+    {c1852, 16, 1},
+    {c1853, 8, 1},
+    {c1854, 4, 1},
+    {c1855, 2, 1},
     {c1856, 16, 0},
     {c1857, 8, 0},
     {c1858, 4, 0},
@@ -8238,72 +10537,1376 @@ static const struct tcase tcases[] = {
     {c1865, 8, 0},
     {c1866, 4, 0},
     {c1867, 2, 0},
-    {c1868, 16, 1},
-    {c1869, 8, 1},
-    {c1870, 4, 1},
-    {c1871, 2, 1},
-    {c1872, 16, 1},
-    {c1873, 8, 1},
-    {c1874, 4, 1},
-    {c1875, 2, 1},
-    {c1876, 16, 1},
-    {c1877, 8, 1},
-    {c1878, 4, 1},
-    {c1879, 2, 1},
-    {c1880, 16, 1},
-    {c1881, 8, 1},
-    {c1882, 4, 1},
-    {c1883, 2, 1},
-    {c1884, 16, 2},
-    {c1885, 8, 2},
-    {c1886, 4, 2},
-    {c1887, 2, 2},
-    {c1888, 16, 2},
-    {c1889, 8, 2},
-    {c1890, 4, 2},
-    {c1891, 2, 2},
-    {c1892, 16, 2},
-    {c1893, 8, 2},
-    {c1894, 4, 2},
-    {c1895, 2, 2},
-    {c1896, 16, 2},
-    {c1897, 8, 2},
-    {c1898, 4, 2},
-    {c1899, 2, 2},
-    {c1900, 16, 4},
-    {c1901, 8, 4},
-    {c1902, 4, 4},
-    {c1903, 2, 4},
-    {c1904, 16, 4},
-    {c1905, 8, 4},
-    {c1906, 4, 4},
-    {c1907, 2, 4},
-    {c1908, 16, 4},
-    {c1909, 8, 4},
-    {c1910, 4, 4},
-    {c1911, 2, 4},
-    {c1912, 16, 4},
-    {c1913, 8, 4},
-    {c1914, 4, 4},
-    {c1915, 2, 4},
-    {c1916, 16, 8},
-    {c1917, 8, 8},
-    {c1918, 4, 8},
-    {c1919, 2, 8},
-    {c1920, 16, 8},
-    {c1921, 8, 8},
-    {c1922, 4, 8},
-    {c1923, 2, 8},
-    {c1924, 16, 8},
-    {c1925, 8, 8},
-    {c1926, 4, 8},
-    {c1927, 2, 8},
-    {c1928, 16, 8},
-    {c1929, 8, 8},
-    {c1930, 4, 8},
-    {c1931, 2, 8},
-    {c1932, 4, 4},
-    {c1933, 2, 8},
+    {c1868, 16, 0},
+    {c1869, 8, 0},
+    {c1870, 4, 0},
+    {c1871, 2, 0},
+    {c1872, 16, 0},
+    {c1873, 8, 0},
+    {c1874, 4, 0},
+    {c1875, 2, 0},
+    {c1876, 16, 0},
+    {c1877, 8, 0},
+    {c1878, 4, 0},
+    {c1879, 2, 0},
+    {c1880, 16, 0},
+    {c1881, 8, 0},
+    {c1882, 4, 0},
+    {c1883, 2, 0},
+    {c1884, 16, 0},
+    {c1885, 8, 0},
+    {c1886, 4, 0},
+    {c1887, 2, 0},
+    {c1888, 16, 0},
+    {c1889, 8, 0},
+    {c1890, 4, 0},
+    {c1891, 2, 0},
+    {c1892, 16, 0},
+    {c1893, 8, 0},
+    {c1894, 4, 0},
+    {c1895, 2, 0},
+    {c1896, 16, 0},
+    {c1897, 8, 0},
+    {c1898, 4, 0},
+    {c1899, 2, 0},
+    {c1900, 16, 0},
+    {c1901, 8, 0},
+    {c1902, 4, 0},
+    {c1903, 2, 0},
+    {c1904, 16, 0},
+    {c1905, 8, 0},
+    {c1906, 4, 0},
+    {c1907, 2, 0},
+    {c1908, 16, 0},
+    {c1909, 8, 0},
+    {c1910, 4, 0},
+    {c1911, 2, 0},
+    {c1912, 16, 0},
+    {c1913, 8, 0},
+    {c1914, 4, 0},
+    {c1915, 2, 0},
+    {c1916, 16, 0},
+    {c1917, 8, 0},
+    {c1918, 4, 0},
+    {c1919, 2, 0},
+    {c1920, 16, 0},
+    {c1921, 8, 0},
+    {c1922, 4, 0},
+    {c1923, 2, 0},
+    {c1924, 16, 0},
+    {c1925, 8, 0},
+    {c1926, 4, 0},
+    {c1927, 2, 0},
+    {c1928, 16, 0},
+    {c1929, 8, 0},
+    {c1930, 4, 0},
+    {c1931, 2, 0},
+    {c1932, 16, 0},
+    {c1933, 8, 0},
+    {c1934, 4, 0},
+    {c1935, 2, 0},
+    {c1936, 16, 1},
+    {c1937, 8, 1},
+    {c1938, 4, 1},
+    {c1939, 2, 1},
+    {c1940, 16, 1},
+    {c1941, 8, 1},
+    {c1942, 4, 1},
+    {c1943, 2, 1},
+    {c1944, 16, 1},
+    {c1945, 8, 1},
+    {c1946, 4, 1},
+    {c1947, 2, 1},
+    {c1948, 16, 1},
+    {c1949, 8, 1},
+    {c1950, 4, 1},
+    {c1951, 2, 1},
+    {c1952, 16, 0},
+    {c1953, 8, 0},
+    {c1954, 4, 0},
+    {c1955, 2, 0},
+    {c1956, 16, 0},
+    {c1957, 8, 0},
+    {c1958, 4, 0},
+    {c1959, 2, 0},
+    {c1960, 16, 0},
+    {c1961, 8, 0},
+    {c1962, 4, 0},
+    {c1963, 2, 0},
+    {c1964, 16, 0},
+    {c1965, 8, 0},
+    {c1966, 4, 0},
+    {c1967, 2, 0},
+    {c1968, 16, 1},
+    {c1969, 8, 1},
+    {c1970, 4, 1},
+    {c1971, 2, 1},
+    {c1972, 16, 1},
+    {c1973, 8, 1},
+    {c1974, 4, 1},
+    {c1975, 2, 1},
+    {c1976, 16, 1},
+    {c1977, 8, 1},
+    {c1978, 4, 1},
+    {c1979, 2, 1},
+    {c1980, 16, 1},
+    {c1981, 8, 1},
+    {c1982, 4, 1},
+    {c1983, 2, 1},
+    {c1984, 16, 0},
+    {c1985, 8, 0},
+    {c1986, 4, 0},
+    {c1987, 2, 0},
+    {c1988, 16, 0},
+    {c1989, 8, 0},
+    {c1990, 4, 0},
+    {c1991, 2, 0},
+    {c1992, 16, 0},
+    {c1993, 8, 0},
+    {c1994, 4, 0},
+    {c1995, 2, 0},
+    {c1996, 16, 0},
+    {c1997, 8, 0},
+    {c1998, 4, 0},
+    {c1999, 2, 0},
+    {c2000, 16, 0},
+    {c2001, 8, 0},
+    {c2002, 4, 0},
+    {c2003, 2, 0},
+    {c2004, 16, 0},
+    {c2005, 8, 0},
+    {c2006, 4, 0},
+    {c2007, 2, 0},
+    {c2008, 16, 0},
+    {c2009, 8, 0},
+    {c2010, 4, 0},
+    {c2011, 2, 0},
+    {c2012, 16, 0},
+    {c2013, 8, 0},
+    {c2014, 4, 0},
+    {c2015, 2, 0},
+    {c2016, 16, 0},
+    {c2017, 8, 0},
+    {c2018, 4, 0},
+    {c2019, 2, 0},
+    {c2020, 16, 0},
+    {c2021, 8, 0},
+    {c2022, 4, 0},
+    {c2023, 2, 0},
+    {c2024, 16, 0},
+    {c2025, 8, 0},
+    {c2026, 4, 0},
+    {c2027, 2, 0},
+    {c2028, 16, 0},
+    {c2029, 8, 0},
+    {c2030, 4, 0},
+    {c2031, 2, 0},
+    {c2032, 16, 0},
+    {c2033, 8, 0},
+    {c2034, 4, 0},
+    {c2035, 2, 0},
+    {c2036, 16, 0},
+    {c2037, 8, 0},
+    {c2038, 4, 0},
+    {c2039, 2, 0},
+    {c2040, 16, 2},
+    {c2041, 8, 2},
+    {c2042, 4, 2},
+    {c2043, 2, 2},
+    {c2044, 16, 2},
+    {c2045, 8, 2},
+    {c2046, 4, 2},
+    {c2047, 2, 2},
+    {c2048, 16, 2},
+    {c2049, 8, 2},
+    {c2050, 4, 2},
+    {c2051, 2, 2},
+    {c2052, 16, 2},
+    {c2053, 8, 2},
+    {c2054, 4, 2},
+    {c2055, 2, 2},
+    {c2056, 16, 0},
+    {c2057, 8, 0},
+    {c2058, 4, 0},
+    {c2059, 2, 0},
+    {c2060, 16, 0},
+    {c2061, 8, 0},
+    {c2062, 4, 0},
+    {c2063, 2, 0},
+    {c2064, 16, 0},
+    {c2065, 8, 0},
+    {c2066, 4, 0},
+    {c2067, 2, 0},
+    {c2068, 16, 0},
+    {c2069, 8, 0},
+    {c2070, 4, 0},
+    {c2071, 2, 0},
+    {c2072, 16, 0},
+    {c2073, 8, 0},
+    {c2074, 4, 0},
+    {c2075, 2, 0},
+    {c2076, 16, 0},
+    {c2077, 8, 0},
+    {c2078, 4, 0},
+    {c2079, 2, 0},
+    {c2080, 16, 0},
+    {c2081, 8, 0},
+    {c2082, 4, 0},
+    {c2083, 2, 0},
+    {c2084, 16, 0},
+    {c2085, 8, 0},
+    {c2086, 4, 0},
+    {c2087, 2, 0},
+    {c2088, 16, 0},
+    {c2089, 8, 0},
+    {c2090, 4, 0},
+    {c2091, 2, 0},
+    {c2092, 16, 0},
+    {c2093, 8, 0},
+    {c2094, 4, 0},
+    {c2095, 2, 0},
+    {c2096, 16, 0},
+    {c2097, 8, 0},
+    {c2098, 4, 0},
+    {c2099, 2, 0},
+    {c2100, 16, 0},
+    {c2101, 8, 0},
+    {c2102, 4, 0},
+    {c2103, 2, 0},
+    {c2104, 8, 0},
+    {c2105, 8, 0},
+    {c2106, 4, 0},
+    {c2107, 2, 0},
+    {c2108, 8, 0},
+    {c2109, 8, 0},
+    {c2110, 4, 0},
+    {c2111, 2, 0},
+    {c2112, 8, 0},
+    {c2113, 8, 0},
+    {c2114, 4, 0},
+    {c2115, 2, 0},
+    {c2116, 8, 0},
+    {c2117, 8, 0},
+    {c2118, 4, 0},
+    {c2119, 2, 0},
+    {c2120, 16, 0},
+    {c2121, 8, 0},
+    {c2122, 4, 0},
+    {c2123, 2, 0},
+    {c2124, 16, 0},
+    {c2125, 8, 0},
+    {c2126, 4, 0},
+    {c2127, 2, 0},
+    {c2128, 16, 0},
+    {c2129, 8, 0},
+    {c2130, 4, 0},
+    {c2131, 2, 0},
+    {c2132, 16, 0},
+    {c2133, 8, 0},
+    {c2134, 4, 0},
+    {c2135, 2, 0},
+    {c2136, 16, 2},
+    {c2137, 8, 2},
+    {c2138, 4, 2},
+    {c2139, 2, 2},
+    {c2140, 16, 2},
+    {c2141, 8, 2},
+    {c2142, 4, 2},
+    {c2143, 2, 2},
+    {c2144, 16, 2},
+    {c2145, 8, 2},
+    {c2146, 4, 2},
+    {c2147, 2, 2},
+    {c2148, 16, 2},
+    {c2149, 8, 2},
+    {c2150, 4, 2},
+    {c2151, 2, 2},
+    {c2152, 8, 0},
+    {c2153, 8, 0},
+    {c2154, 4, 0},
+    {c2155, 2, 0},
+    {c2156, 8, 0},
+    {c2157, 8, 0},
+    {c2158, 4, 0},
+    {c2159, 2, 0},
+    {c2160, 8, 0},
+    {c2161, 8, 0},
+    {c2162, 4, 0},
+    {c2163, 2, 0},
+    {c2164, 8, 0},
+    {c2165, 8, 0},
+    {c2166, 4, 0},
+    {c2167, 2, 0},
+    {c2168, 16, 2},
+    {c2169, 8, 2},
+    {c2170, 4, 2},
+    {c2171, 2, 2},
+    {c2172, 16, 2},
+    {c2173, 8, 2},
+    {c2174, 4, 2},
+    {c2175, 2, 2},
+    {c2176, 16, 2},
+    {c2177, 8, 2},
+    {c2178, 4, 2},
+    {c2179, 2, 2},
+    {c2180, 16, 2},
+    {c2181, 8, 2},
+    {c2182, 4, 2},
+    {c2183, 2, 2},
+    {c2184, 16, 0},
+    {c2185, 8, 0},
+    {c2186, 4, 0},
+    {c2187, 2, 0},
+    {c2188, 16, 0},
+    {c2189, 8, 0},
+    {c2190, 4, 0},
+    {c2191, 2, 0},
+    {c2192, 16, 0},
+    {c2193, 8, 0},
+    {c2194, 4, 0},
+    {c2195, 2, 0},
+    {c2196, 16, 0},
+    {c2197, 8, 0},
+    {c2198, 4, 0},
+    {c2199, 2, 0},
+    {c2200, 16, 0},
+    {c2201, 8, 0},
+    {c2202, 4, 0},
+    {c2203, 2, 0},
+    {c2204, 16, 0},
+    {c2205, 8, 0},
+    {c2206, 4, 0},
+    {c2207, 2, 0},
+    {c2208, 16, 0},
+    {c2209, 8, 0},
+    {c2210, 4, 0},
+    {c2211, 2, 0},
+    {c2212, 16, 0},
+    {c2213, 8, 0},
+    {c2214, 4, 0},
+    {c2215, 2, 0},
+    {c2216, 16, 0},
+    {c2217, 8, 0},
+    {c2218, 4, 0},
+    {c2219, 2, 0},
+    {c2220, 16, 0},
+    {c2221, 8, 0},
+    {c2222, 4, 0},
+    {c2223, 2, 0},
+    {c2224, 16, 0},
+    {c2225, 8, 0},
+    {c2226, 4, 0},
+    {c2227, 2, 0},
+    {c2228, 16, 0},
+    {c2229, 8, 0},
+    {c2230, 4, 0},
+    {c2231, 2, 0},
+    {c2232, 16, 0},
+    {c2233, 8, 0},
+    {c2234, 4, 0},
+    {c2235, 2, 0},
+    {c2236, 16, 0},
+    {c2237, 8, 0},
+    {c2238, 4, 0},
+    {c2239, 2, 0},
+    {c2240, 16, 4},
+    {c2241, 8, 4},
+    {c2242, 4, 4},
+    {c2243, 2, 4},
+    {c2244, 16, 4},
+    {c2245, 8, 4},
+    {c2246, 4, 4},
+    {c2247, 2, 4},
+    {c2248, 16, 4},
+    {c2249, 8, 4},
+    {c2250, 4, 4},
+    {c2251, 2, 4},
+    {c2252, 16, 4},
+    {c2253, 8, 4},
+    {c2254, 4, 4},
+    {c2255, 2, 4},
+    {c2256, 16, 0},
+    {c2257, 8, 0},
+    {c2258, 4, 0},
+    {c2259, 2, 0},
+    {c2260, 16, 0},
+    {c2261, 8, 0},
+    {c2262, 4, 0},
+    {c2263, 2, 0},
+    {c2264, 16, 0},
+    {c2265, 8, 0},
+    {c2266, 4, 0},
+    {c2267, 2, 0},
+    {c2268, 16, 0},
+    {c2269, 8, 0},
+    {c2270, 4, 0},
+    {c2271, 2, 0},
+    {c2272, 8, 0},
+    {c2273, 8, 0},
+    {c2274, 4, 0},
+    {c2275, 2, 0},
+    {c2276, 8, 0},
+    {c2277, 8, 0},
+    {c2278, 4, 0},
+    {c2279, 2, 0},
+    {c2280, 8, 0},
+    {c2281, 8, 0},
+    {c2282, 4, 0},
+    {c2283, 2, 0},
+    {c2284, 8, 0},
+    {c2285, 8, 0},
+    {c2286, 4, 0},
+    {c2287, 2, 0},
+    {c2288, 8, 0},
+    {c2289, 8, 0},
+    {c2290, 4, 0},
+    {c2291, 2, 0},
+    {c2292, 8, 0},
+    {c2293, 8, 0},
+    {c2294, 4, 0},
+    {c2295, 2, 0},
+    {c2296, 8, 0},
+    {c2297, 8, 0},
+    {c2298, 4, 0},
+    {c2299, 2, 0},
+    {c2300, 8, 0},
+    {c2301, 8, 0},
+    {c2302, 4, 0},
+    {c2303, 2, 0},
+    {c2304, 4, 0},
+    {c2305, 4, 0},
+    {c2306, 2, 0},
+    {c2307, 4, 0},
+    {c2308, 4, 0},
+    {c2309, 2, 0},
+    {c2310, 4, 0},
+    {c2311, 4, 0},
+    {c2312, 2, 0},
+    {c2313, 4, 0},
+    {c2314, 4, 0},
+    {c2315, 2, 0},
+    {c2316, 16, 0},
+    {c2317, 8, 0},
+    {c2318, 4, 0},
+    {c2319, 2, 0},
+    {c2320, 16, 0},
+    {c2321, 8, 0},
+    {c2322, 4, 0},
+    {c2323, 2, 0},
+    {c2324, 16, 0},
+    {c2325, 8, 0},
+    {c2326, 4, 0},
+    {c2327, 2, 0},
+    {c2328, 16, 0},
+    {c2329, 8, 0},
+    {c2330, 4, 0},
+    {c2331, 2, 0},
+    {c2332, 16, 4},
+    {c2333, 8, 4},
+    {c2334, 4, 4},
+    {c2335, 2, 4},
+    {c2336, 16, 4},
+    {c2337, 8, 4},
+    {c2338, 4, 4},
+    {c2339, 2, 4},
+    {c2340, 16, 4},
+    {c2341, 8, 4},
+    {c2342, 4, 4},
+    {c2343, 2, 4},
+    {c2344, 16, 4},
+    {c2345, 8, 4},
+    {c2346, 4, 4},
+    {c2347, 2, 4},
+    {c2348, 4, 0},
+    {c2349, 4, 0},
+    {c2350, 2, 0},
+    {c2351, 4, 0},
+    {c2352, 4, 0},
+    {c2353, 2, 0},
+    {c2354, 4, 0},
+    {c2355, 4, 0},
+    {c2356, 2, 0},
+    {c2357, 4, 0},
+    {c2358, 4, 0},
+    {c2359, 2, 0},
+    {c2360, 16, 4},
+    {c2361, 8, 4},
+    {c2362, 4, 4},
+    {c2363, 2, 4},
+    {c2364, 16, 4},
+    {c2365, 8, 4},
+    {c2366, 4, 4},
+    {c2367, 2, 4},
+    {c2368, 16, 4},
+    {c2369, 8, 4},
+    {c2370, 4, 4},
+    {c2371, 2, 4},
+    {c2372, 16, 4},
+    {c2373, 8, 4},
+    {c2374, 4, 4},
+    {c2375, 2, 4},
+    {c2376, 16, 0},
+    {c2377, 8, 0},
+    {c2378, 4, 0},
+    {c2379, 2, 0},
+    {c2380, 16, 0},
+    {c2381, 8, 0},
+    {c2382, 4, 0},
+    {c2383, 2, 0},
+    {c2384, 16, 0},
+    {c2385, 8, 0},
+    {c2386, 4, 0},
+    {c2387, 2, 0},
+    {c2388, 16, 0},
+    {c2389, 8, 0},
+    {c2390, 4, 0},
+    {c2391, 2, 0},
+    {c2392, 16, 0},
+    {c2393, 8, 0},
+    {c2394, 4, 0},
+    {c2395, 2, 0},
+    {c2396, 16, 0},
+    {c2397, 8, 0},
+    {c2398, 4, 0},
+    {c2399, 2, 0},
+    {c2400, 16, 0},
+    {c2401, 8, 0},
+    {c2402, 4, 0},
+    {c2403, 2, 0},
+    {c2404, 16, 0},
+    {c2405, 8, 0},
+    {c2406, 4, 0},
+    {c2407, 2, 0},
+    {c2408, 16, 0},
+    {c2409, 8, 0},
+    {c2410, 4, 0},
+    {c2411, 2, 0},
+    {c2412, 16, 0},
+    {c2413, 8, 0},
+    {c2414, 4, 0},
+    {c2415, 2, 0},
+    {c2416, 16, 0},
+    {c2417, 8, 0},
+    {c2418, 4, 0},
+    {c2419, 2, 0},
+    {c2420, 16, 0},
+    {c2421, 8, 0},
+    {c2422, 4, 0},
+    {c2423, 2, 0},
+    {c2424, 16, 0},
+    {c2425, 8, 0},
+    {c2426, 4, 0},
+    {c2427, 2, 0},
+    {c2428, 16, 0},
+    {c2429, 8, 0},
+    {c2430, 4, 0},
+    {c2431, 2, 0},
+    {c2432, 16, 8},
+    {c2433, 8, 8},
+    {c2434, 4, 8},
+    {c2435, 2, 8},
+    {c2436, 16, 8},
+    {c2437, 8, 8},
+    {c2438, 4, 8},
+    {c2439, 2, 8},
+    {c2440, 16, 8},
+    {c2441, 8, 8},
+    {c2442, 4, 8},
+    {c2443, 2, 8},
+    {c2444, 16, 8},
+    {c2445, 8, 8},
+    {c2446, 4, 8},
+    {c2447, 2, 8},
+    {c2448, 8, 0},
+    {c2449, 8, 0},
+    {c2450, 4, 0},
+    {c2451, 2, 0},
+    {c2452, 8, 0},
+    {c2453, 8, 0},
+    {c2454, 4, 0},
+    {c2455, 2, 0},
+    {c2456, 8, 0},
+    {c2457, 8, 0},
+    {c2458, 4, 0},
+    {c2459, 2, 0},
+    {c2460, 8, 0},
+    {c2461, 8, 0},
+    {c2462, 4, 0},
+    {c2463, 2, 0},
+    {c2464, 4, 0},
+    {c2465, 4, 0},
+    {c2466, 2, 0},
+    {c2467, 4, 0},
+    {c2468, 4, 0},
+    {c2469, 2, 0},
+    {c2470, 4, 0},
+    {c2471, 4, 0},
+    {c2472, 2, 0},
+    {c2473, 4, 0},
+    {c2474, 4, 0},
+    {c2475, 2, 0},
+    {c2476, 4, 0},
+    {c2477, 4, 0},
+    {c2478, 2, 0},
+    {c2479, 4, 0},
+    {c2480, 4, 0},
+    {c2481, 2, 0},
+    {c2482, 4, 0},
+    {c2483, 4, 0},
+    {c2484, 2, 0},
+    {c2485, 4, 0},
+    {c2486, 4, 0},
+    {c2487, 2, 0},
+    {c2488, 2, 0},
+    {c2489, 2, 0},
+    {c2490, 2, 0},
+    {c2491, 2, 0},
+    {c2492, 2, 0},
+    {c2493, 2, 0},
+    {c2494, 2, 0},
+    {c2495, 2, 0},
+    {c2496, 8, 0},
+    {c2497, 8, 0},
+    {c2498, 4, 0},
+    {c2499, 2, 0},
+    {c2500, 8, 0},
+    {c2501, 8, 0},
+    {c2502, 4, 0},
+    {c2503, 2, 0},
+    {c2504, 8, 0},
+    {c2505, 8, 0},
+    {c2506, 4, 0},
+    {c2507, 2, 0},
+    {c2508, 8, 0},
+    {c2509, 8, 0},
+    {c2510, 4, 0},
+    {c2511, 2, 0},
+    {c2512, 16, 8},
+    {c2513, 8, 8},
+    {c2514, 4, 8},
+    {c2515, 2, 8},
+    {c2516, 16, 8},
+    {c2517, 8, 8},
+    {c2518, 4, 8},
+    {c2519, 2, 8},
+    {c2520, 16, 8},
+    {c2521, 8, 8},
+    {c2522, 4, 8},
+    {c2523, 2, 8},
+    {c2524, 16, 8},
+    {c2525, 8, 8},
+    {c2526, 4, 8},
+    {c2527, 2, 8},
+    {c2528, 2, 0},
+    {c2529, 2, 0},
+    {c2530, 2, 0},
+    {c2531, 2, 0},
+    {c2532, 2, 0},
+    {c2533, 2, 0},
+    {c2534, 2, 0},
+    {c2535, 2, 0},
+    {c2536, 16, 8},
+    {c2537, 8, 8},
+    {c2538, 4, 8},
+    {c2539, 2, 8},
+    {c2540, 16, 8},
+    {c2541, 8, 8},
+    {c2542, 4, 8},
+    {c2543, 2, 8},
+    {c2544, 16, 8},
+    {c2545, 8, 8},
+    {c2546, 4, 8},
+    {c2547, 2, 8},
+    {c2548, 16, 8},
+    {c2549, 8, 8},
+    {c2550, 4, 8},
+    {c2551, 2, 8},
+    {c2552, 16, 0},
+    {c2553, 8, 0},
+    {c2554, 4, 0},
+    {c2555, 2, 0},
+    {c2556, 16, 0},
+    {c2557, 8, 0},
+    {c2558, 4, 0},
+    {c2559, 2, 0},
+    {c2560, 16, 0},
+    {c2561, 8, 0},
+    {c2562, 4, 0},
+    {c2563, 2, 0},
+    {c2564, 16, 0},
+    {c2565, 8, 0},
+    {c2566, 4, 0},
+    {c2567, 2, 0},
+    {c2568, 16, 0},
+    {c2569, 8, 0},
+    {c2570, 4, 0},
+    {c2571, 2, 0},
+    {c2572, 16, 0},
+    {c2573, 8, 0},
+    {c2574, 4, 0},
+    {c2575, 2, 0},
+    {c2576, 16, 0},
+    {c2577, 8, 0},
+    {c2578, 4, 0},
+    {c2579, 2, 0},
+    {c2580, 16, 0},
+    {c2581, 8, 0},
+    {c2582, 4, 0},
+    {c2583, 2, 0},
+    {c2584, 16, 0},
+    {c2585, 8, 0},
+    {c2586, 4, 0},
+    {c2587, 2, 0},
+    {c2588, 16, 0},
+    {c2589, 8, 0},
+    {c2590, 4, 0},
+    {c2591, 2, 0},
+    {c2592, 16, 0},
+    {c2593, 8, 0},
+    {c2594, 4, 0},
+    {c2595, 2, 0},
+    {c2596, 16, 0},
+    {c2597, 8, 0},
+    {c2598, 4, 0},
+    {c2599, 2, 0},
+    {c2600, 16, 0},
+    {c2601, 8, 0},
+    {c2602, 4, 0},
+    {c2603, 2, 0},
+    {c2604, 16, 0},
+    {c2605, 8, 0},
+    {c2606, 4, 0},
+    {c2607, 2, 0},
+    {c2608, 16, 0},
+    {c2609, 8, 0},
+    {c2610, 4, 0},
+    {c2611, 2, 0},
+    {c2612, 16, 0},
+    {c2613, 8, 0},
+    {c2614, 4, 0},
+    {c2615, 2, 0},
+    {c2616, 16, 0},
+    {c2617, 8, 0},
+    {c2618, 4, 0},
+    {c2619, 2, 0},
+    {c2620, 16, 0},
+    {c2621, 8, 0},
+    {c2622, 4, 0},
+    {c2623, 2, 0},
+    {c2624, 16, 0},
+    {c2625, 8, 0},
+    {c2626, 4, 0},
+    {c2627, 2, 0},
+    {c2628, 16, 0},
+    {c2629, 8, 0},
+    {c2630, 4, 0},
+    {c2631, 2, 0},
+    {c2632, 16, 0},
+    {c2633, 8, 0},
+    {c2634, 4, 0},
+    {c2635, 2, 0},
+    {c2636, 16, 0},
+    {c2637, 8, 0},
+    {c2638, 4, 0},
+    {c2639, 2, 0},
+    {c2640, 16, 0},
+    {c2641, 8, 0},
+    {c2642, 4, 0},
+    {c2643, 2, 0},
+    {c2644, 16, 0},
+    {c2645, 8, 0},
+    {c2646, 4, 0},
+    {c2647, 2, 0},
+    {c2648, 16, 0},
+    {c2649, 8, 0},
+    {c2650, 4, 0},
+    {c2651, 2, 0},
+    {c2652, 16, 0},
+    {c2653, 8, 0},
+    {c2654, 4, 0},
+    {c2655, 2, 0},
+    {c2656, 16, 0},
+    {c2657, 8, 0},
+    {c2658, 4, 0},
+    {c2659, 2, 0},
+    {c2660, 16, 0},
+    {c2661, 8, 0},
+    {c2662, 4, 0},
+    {c2663, 2, 0},
+    {c2664, 16, 0},
+    {c2665, 8, 0},
+    {c2666, 4, 0},
+    {c2667, 2, 0},
+    {c2668, 16, 0},
+    {c2669, 8, 0},
+    {c2670, 4, 0},
+    {c2671, 2, 0},
+    {c2672, 16, 0},
+    {c2673, 8, 0},
+    {c2674, 4, 0},
+    {c2675, 2, 0},
+    {c2676, 16, 0},
+    {c2677, 8, 0},
+    {c2678, 4, 0},
+    {c2679, 2, 0},
+    {c2680, 16, 0},
+    {c2681, 8, 0},
+    {c2682, 4, 0},
+    {c2683, 2, 0},
+    {c2684, 16, 0},
+    {c2685, 8, 0},
+    {c2686, 4, 0},
+    {c2687, 2, 0},
+    {c2688, 16, 0},
+    {c2689, 8, 0},
+    {c2690, 4, 0},
+    {c2691, 2, 0},
+    {c2692, 16, 0},
+    {c2693, 8, 0},
+    {c2694, 4, 0},
+    {c2695, 2, 0},
+    {c2696, 16, 0},
+    {c2697, 8, 0},
+    {c2698, 4, 0},
+    {c2699, 2, 0},
+    {c2700, 16, 0},
+    {c2701, 8, 0},
+    {c2702, 4, 0},
+    {c2703, 2, 0},
+    {c2704, 16, 0},
+    {c2705, 8, 0},
+    {c2706, 4, 0},
+    {c2707, 2, 0},
+    {c2708, 16, 0},
+    {c2709, 8, 0},
+    {c2710, 4, 0},
+    {c2711, 2, 0},
+    {c2712, 16, 0},
+    {c2713, 8, 0},
+    {c2714, 4, 0},
+    {c2715, 2, 0},
+    {c2716, 16, 0},
+    {c2717, 8, 0},
+    {c2718, 4, 0},
+    {c2719, 2, 0},
+    {c2720, 16, 0},
+    {c2721, 8, 0},
+    {c2722, 4, 0},
+    {c2723, 2, 0},
+    {c2724, 16, 0},
+    {c2725, 8, 0},
+    {c2726, 4, 0},
+    {c2727, 2, 0},
+    {c2728, 16, 0},
+    {c2729, 8, 0},
+    {c2730, 4, 0},
+    {c2731, 2, 0},
+    {c2732, 16, 0},
+    {c2733, 8, 0},
+    {c2734, 4, 0},
+    {c2735, 2, 0},
+    {c2736, 16, 0},
+    {c2737, 8, 0},
+    {c2738, 4, 0},
+    {c2739, 2, 0},
+    {c2740, 16, 0},
+    {c2741, 8, 0},
+    {c2742, 4, 0},
+    {c2743, 2, 0},
+    {c2744, 16, 0},
+    {c2745, 8, 0},
+    {c2746, 4, 0},
+    {c2747, 2, 0},
+    {c2748, 16, 0},
+    {c2749, 8, 0},
+    {c2750, 4, 0},
+    {c2751, 2, 0},
+    {c2752, 16, 0},
+    {c2753, 8, 0},
+    {c2754, 4, 0},
+    {c2755, 2, 0},
+    {c2756, 16, 0},
+    {c2757, 8, 0},
+    {c2758, 4, 0},
+    {c2759, 2, 0},
+    {c2760, 16, 0},
+    {c2761, 8, 0},
+    {c2762, 4, 0},
+    {c2763, 2, 0},
+    {c2764, 16, 0},
+    {c2765, 8, 0},
+    {c2766, 4, 0},
+    {c2767, 2, 0},
+    {c2768, 16, 0},
+    {c2769, 8, 0},
+    {c2770, 4, 0},
+    {c2771, 2, 0},
+    {c2772, 16, 0},
+    {c2773, 8, 0},
+    {c2774, 4, 0},
+    {c2775, 2, 0},
+    {c2776, 16, 0},
+    {c2777, 8, 0},
+    {c2778, 4, 0},
+    {c2779, 2, 0},
+    {c2780, 16, 0},
+    {c2781, 8, 0},
+    {c2782, 4, 0},
+    {c2783, 2, 0},
+    {c2784, 16, 0},
+    {c2785, 8, 0},
+    {c2786, 4, 0},
+    {c2787, 2, 0},
+    {c2788, 16, 0},
+    {c2789, 8, 0},
+    {c2790, 4, 0},
+    {c2791, 2, 0},
+    {c2792, 16, 0},
+    {c2793, 8, 0},
+    {c2794, 4, 0},
+    {c2795, 2, 0},
+    {c2796, 16, 0},
+    {c2797, 8, 0},
+    {c2798, 4, 0},
+    {c2799, 2, 0},
+    {c2800, 16, 0},
+    {c2801, 8, 0},
+    {c2802, 4, 0},
+    {c2803, 2, 0},
+    {c2804, 16, 0},
+    {c2805, 8, 0},
+    {c2806, 4, 0},
+    {c2807, 2, 0},
+    {c2808, 16, 0},
+    {c2809, 8, 0},
+    {c2810, 4, 0},
+    {c2811, 2, 0},
+    {c2812, 16, 0},
+    {c2813, 8, 0},
+    {c2814, 4, 0},
+    {c2815, 2, 0},
+    {c2816, 16, 0},
+    {c2817, 8, 0},
+    {c2818, 4, 0},
+    {c2819, 2, 0},
+    {c2820, 16, 0},
+    {c2821, 8, 0},
+    {c2822, 4, 0},
+    {c2823, 2, 0},
+    {c2824, 16, 0},
+    {c2825, 8, 0},
+    {c2826, 4, 0},
+    {c2827, 2, 0},
+    {c2828, 16, 0},
+    {c2829, 8, 0},
+    {c2830, 4, 0},
+    {c2831, 2, 0},
+    {c2832, 16, 0},
+    {c2833, 8, 0},
+    {c2834, 4, 0},
+    {c2835, 2, 0},
+    {c2836, 16, 0},
+    {c2837, 8, 0},
+    {c2838, 4, 0},
+    {c2839, 2, 0},
+    {c2840, 16, 0},
+    {c2841, 8, 0},
+    {c2842, 4, 0},
+    {c2843, 2, 0},
+    {c2844, 16, 0},
+    {c2845, 8, 0},
+    {c2846, 4, 0},
+    {c2847, 2, 0},
+    {c2848, 16, 0},
+    {c2849, 8, 0},
+    {c2850, 4, 0},
+    {c2851, 2, 0},
+    {c2852, 16, 0},
+    {c2853, 8, 0},
+    {c2854, 4, 0},
+    {c2855, 2, 0},
+    {c2856, 16, 0},
+    {c2857, 8, 0},
+    {c2858, 4, 0},
+    {c2859, 2, 0},
+    {c2860, 16, 0},
+    {c2861, 8, 0},
+    {c2862, 4, 0},
+    {c2863, 2, 0},
+    {c2864, 16, 0},
+    {c2865, 8, 0},
+    {c2866, 4, 0},
+    {c2867, 2, 0},
+    {c2868, 16, 0},
+    {c2869, 8, 0},
+    {c2870, 4, 0},
+    {c2871, 2, 0},
+    {c2872, 16, 0},
+    {c2873, 8, 0},
+    {c2874, 4, 0},
+    {c2875, 2, 0},
+    {c2876, 16, 0},
+    {c2877, 8, 0},
+    {c2878, 4, 0},
+    {c2879, 2, 0},
+    {c2880, 16, 0},
+    {c2881, 8, 0},
+    {c2882, 4, 0},
+    {c2883, 2, 0},
+    {c2884, 16, 0},
+    {c2885, 8, 0},
+    {c2886, 4, 0},
+    {c2887, 2, 0},
+    {c2888, 16, 0},
+    {c2889, 8, 0},
+    {c2890, 4, 0},
+    {c2891, 2, 0},
+    {c2892, 16, 0},
+    {c2893, 8, 0},
+    {c2894, 4, 0},
+    {c2895, 2, 0},
+    {c2896, 16, 0},
+    {c2897, 8, 0},
+    {c2898, 4, 0},
+    {c2899, 2, 0},
+    {c2900, 16, 0},
+    {c2901, 8, 0},
+    {c2902, 4, 0},
+    {c2903, 2, 0},
+    {c2904, 16, 0},
+    {c2905, 8, 0},
+    {c2906, 4, 0},
+    {c2907, 2, 0},
+    {c2908, 16, 0},
+    {c2909, 8, 0},
+    {c2910, 4, 0},
+    {c2911, 2, 0},
+    {c2912, 16, 0},
+    {c2913, 8, 0},
+    {c2914, 4, 0},
+    {c2915, 2, 0},
+    {c2916, 16, 0},
+    {c2917, 8, 0},
+    {c2918, 4, 0},
+    {c2919, 2, 0},
+    {c2920, 16, 0},
+    {c2921, 8, 0},
+    {c2922, 4, 0},
+    {c2923, 2, 0},
+    {c2924, 16, 0},
+    {c2925, 8, 0},
+    {c2926, 4, 0},
+    {c2927, 2, 0},
+    {c2928, 16, 0},
+    {c2929, 8, 0},
+    {c2930, 4, 0},
+    {c2931, 2, 0},
+    {c2932, 16, 0},
+    {c2933, 8, 0},
+    {c2934, 4, 0},
+    {c2935, 2, 0},
+    {c2936, 16, 0},
+    {c2937, 8, 0},
+    {c2938, 4, 0},
+    {c2939, 2, 0},
+    {c2940, 16, 0},
+    {c2941, 8, 0},
+    {c2942, 4, 0},
+    {c2943, 2, 0},
+    {c2944, 16, 0},
+    {c2945, 8, 0},
+    {c2946, 4, 0},
+    {c2947, 2, 0},
+    {c2948, 16, 0},
+    {c2949, 8, 0},
+    {c2950, 4, 0},
+    {c2951, 2, 0},
+    {c2952, 16, 0},
+    {c2953, 8, 0},
+    {c2954, 4, 0},
+    {c2955, 2, 0},
+    {c2956, 16, 0},
+    {c2957, 8, 0},
+    {c2958, 4, 0},
+    {c2959, 2, 0},
+    {c2960, 16, 0},
+    {c2961, 8, 0},
+    {c2962, 4, 0},
+    {c2963, 2, 0},
+    {c2964, 16, 0},
+    {c2965, 8, 0},
+    {c2966, 4, 0},
+    {c2967, 2, 0},
+    {c2968, 16, 0},
+    {c2969, 8, 0},
+    {c2970, 4, 0},
+    {c2971, 2, 0},
+    {c2972, 16, 0},
+    {c2973, 8, 0},
+    {c2974, 4, 0},
+    {c2975, 2, 0},
+    {c2976, 16, 0},
+    {c2977, 8, 0},
+    {c2978, 4, 0},
+    {c2979, 2, 0},
+    {c2980, 16, 0},
+    {c2981, 8, 0},
+    {c2982, 4, 0},
+    {c2983, 2, 0},
+    {c2984, 16, 0},
+    {c2985, 8, 0},
+    {c2986, 4, 0},
+    {c2987, 2, 0},
+    {c2988, 16, 0},
+    {c2989, 8, 0},
+    {c2990, 4, 0},
+    {c2991, 2, 0},
+    {c2992, 16, 0},
+    {c2993, 8, 0},
+    {c2994, 4, 0},
+    {c2995, 2, 0},
+    {c2996, 16, 0},
+    {c2997, 8, 0},
+    {c2998, 4, 0},
+    {c2999, 2, 0},
+    {c3000, 16, 0},
+    {c3001, 8, 0},
+    {c3002, 4, 0},
+    {c3003, 2, 0},
+    {c3004, 16, 0},
+    {c3005, 8, 0},
+    {c3006, 4, 0},
+    {c3007, 2, 0},
+    {c3008, 16, 0},
+    {c3009, 8, 0},
+    {c3010, 4, 0},
+    {c3011, 16, 0},
+    {c3012, 8, 0},
+    {c3013, 4, 0},
+    {c3014, 16, 0},
+    {c3015, 8, 0},
+    {c3016, 4, 0},
+    {c3017, 16, 0},
+    {c3018, 8, 0},
+    {c3019, 4, 0},
+    {c3020, 16, 0},
+    {c3021, 8, 0},
+    {c3022, 4, 0},
+    {c3023, 16, 0},
+    {c3024, 8, 0},
+    {c3025, 4, 0},
+    {c3026, 16, 0},
+    {c3027, 8, 0},
+    {c3028, 4, 0},
+    {c3029, 16, 0},
+    {c3030, 8, 0},
+    {c3031, 4, 0},
+    {c3032, 16, 0},
+    {c3033, 8, 0},
+    {c3034, 4, 0},
+    {c3035, 16, 0},
+    {c3036, 8, 0},
+    {c3037, 4, 0},
+    {c3038, 16, 0},
+    {c3039, 8, 0},
+    {c3040, 4, 0},
+    {c3041, 16, 0},
+    {c3042, 8, 0},
+    {c3043, 4, 0},
+    {c3044, 16, 0},
+    {c3045, 8, 0},
+    {c3046, 4, 0},
+    {c3047, 16, 0},
+    {c3048, 8, 0},
+    {c3049, 4, 0},
+    {c3050, 16, 0},
+    {c3051, 8, 0},
+    {c3052, 4, 0},
+    {c3053, 16, 0},
+    {c3054, 8, 0},
+    {c3055, 4, 0},
+    {c3056, 16, 0},
+    {c3057, 8, 0},
+    {c3058, 4, 0},
+    {c3059, 16, 0},
+    {c3060, 8, 0},
+    {c3061, 4, 0},
+    {c3062, 16, 0},
+    {c3063, 8, 0},
+    {c3064, 4, 0},
+    {c3065, 16, 0},
+    {c3066, 8, 0},
+    {c3067, 4, 0},
+    {c3068, 16, 0},
+    {c3069, 8, 0},
+    {c3070, 4, 0},
+    {c3071, 16, 0},
+    {c3072, 8, 0},
+    {c3073, 4, 0},
+    {c3074, 16, 0},
+    {c3075, 8, 0},
+    {c3076, 4, 0},
+    {c3077, 16, 0},
+    {c3078, 8, 0},
+    {c3079, 4, 0},
+    {c3080, 16, 0},
+    {c3081, 8, 0},
+    {c3082, 4, 0},
+    {c3083, 16, 0},
+    {c3084, 8, 0},
+    {c3085, 4, 0},
+    {c3086, 16, 0},
+    {c3087, 8, 0},
+    {c3088, 4, 0},
+    {c3089, 16, 0},
+    {c3090, 8, 0},
+    {c3091, 4, 0},
+    {c3092, 16, 0},
+    {c3093, 8, 0},
+    {c3094, 4, 0},
+    {c3095, 2, 0},
+    {c3096, 16, 0},
+    {c3097, 8, 0},
+    {c3098, 4, 0},
+    {c3099, 2, 0},
+    {c3100, 8, 0},
+    {c3101, 4, 0},
+    {c3102, 2, 0},
+    {c3103, 8, 0},
+    {c3104, 4, 0},
+    {c3105, 2, 0},
+    {c3106, 8, 0},
+    {c3107, 4, 0},
+    {c3108, 2, 0},
+    {c3109, 8, 0},
+    {c3110, 4, 0},
+    {c3111, 2, 0},
+    {c3112, 4, 0},
+    {c3113, 2, 0},
+    {c3114, 4, 0},
+    {c3115, 2, 0},
+    {c3116, 4, 0},
+    {c3117, 2, 0},
+    {c3118, 4, 0},
+    {c3119, 2, 0},
+    {c3120, 2, 0},
+    {c3121, 2, 0},
+    {c3122, 2, 0},
+    {c3123, 2, 0},
+    {c3124, 16, 0},
+    {c3125, 8, 0},
+    {c3126, 4, 0},
+    {c3127, 2, 0},
+    {c3128, 16, 0},
+    {c3129, 8, 0},
+    {c3130, 4, 0},
+    {c3131, 2, 0},
+    {c3132, 16, 0},
+    {c3133, 8, 0},
+    {c3134, 4, 0},
+    {c3135, 2, 0},
+    {c3136, 16, 0},
+    {c3137, 8, 0},
+    {c3138, 4, 0},
+    {c3139, 2, 0},
+    {c3140, 16, 0},
+    {c3141, 8, 0},
+    {c3142, 4, 0},
+    {c3143, 2, 0},
+    {c3144, 16, 0},
+    {c3145, 8, 0},
+    {c3146, 4, 0},
+    {c3147, 2, 0},
+    {c3148, 16, 0},
+    {c3149, 8, 0},
+    {c3150, 4, 0},
+    {c3151, 2, 0},
+    {c3152, 16, 0},
+    {c3153, 8, 0},
+    {c3154, 4, 0},
+    {c3155, 2, 0},
+    {c3156, 16, 0},
+    {c3157, 8, 0},
+    {c3158, 4, 0},
+    {c3159, 2, 0},
+    {c3160, 16, 0},
+    {c3161, 8, 0},
+    {c3162, 4, 0},
+    {c3163, 2, 0},
+    {c3164, 16, 0},
+    {c3165, 8, 0},
+    {c3166, 4, 0},
+    {c3167, 2, 0},
+    {c3168, 16, 0},
+    {c3169, 8, 0},
+    {c3170, 4, 0},
+    {c3171, 2, 0},
+    {c3172, 16, 1},
+    {c3173, 8, 1},
+    {c3174, 4, 1},
+    {c3175, 2, 1},
+    {c3176, 16, 1},
+    {c3177, 8, 1},
+    {c3178, 4, 1},
+    {c3179, 2, 1},
+    {c3180, 16, 1},
+    {c3181, 8, 1},
+    {c3182, 4, 1},
+    {c3183, 2, 1},
+    {c3184, 16, 1},
+    {c3185, 8, 1},
+    {c3186, 4, 1},
+    {c3187, 2, 1},
+    {c3188, 16, 2},
+    {c3189, 8, 2},
+    {c3190, 4, 2},
+    {c3191, 2, 2},
+    {c3192, 16, 2},
+    {c3193, 8, 2},
+    {c3194, 4, 2},
+    {c3195, 2, 2},
+    {c3196, 16, 2},
+    {c3197, 8, 2},
+    {c3198, 4, 2},
+    {c3199, 2, 2},
+    {c3200, 16, 2},
+    {c3201, 8, 2},
+    {c3202, 4, 2},
+    {c3203, 2, 2},
+    {c3204, 16, 4},
+    {c3205, 8, 4},
+    {c3206, 4, 4},
+    {c3207, 2, 4},
+    {c3208, 16, 4},
+    {c3209, 8, 4},
+    {c3210, 4, 4},
+    {c3211, 2, 4},
+    {c3212, 16, 4},
+    {c3213, 8, 4},
+    {c3214, 4, 4},
+    {c3215, 2, 4},
+    {c3216, 16, 4},
+    {c3217, 8, 4},
+    {c3218, 4, 4},
+    {c3219, 2, 4},
+    {c3220, 16, 8},
+    {c3221, 8, 8},
+    {c3222, 4, 8},
+    {c3223, 2, 8},
+    {c3224, 16, 8},
+    {c3225, 8, 8},
+    {c3226, 4, 8},
+    {c3227, 2, 8},
+    {c3228, 16, 8},
+    {c3229, 8, 8},
+    {c3230, 4, 8},
+    {c3231, 2, 8},
+    {c3232, 16, 8},
+    {c3233, 8, 8},
+    {c3234, 4, 8},
+    {c3235, 2, 8},
+    {c3236, 4, 4},
+    {c3237, 2, 8},
     {m0, 128, 0},
     {m1, 128, 0},
     {m2, 128, 0},
@@ -8469,14 +12072,22 @@ static const struct tcase tcases[] = {
 
 int main(void) {
     for (int i = 0; i < (int) sizeof(mem); i++)
-        mem[i] = (uint8_t) rnd();
+        mem0[i] = mem[i] = (uint8_t) rnd();
     // the last rounds draw bytes from 00/01/7f/80/ff: zero, one, -1, MIN and
     // MAX at every SEW, for the division and overflow cases
     static const uint8_t special[5] = {0x00, 0x01, 0x7f, 0x80, 0xff};
-    for (int round = 0; round < 12; round++) {
+    // and the last two whole words of 0, 1, -1, MIN and MAX (so each SEW's
+    // top element of a word is one of them)
+    static const uint64_t wspecial[5] = {0, 1, ~0ull, 1ull << 63, ~(1ull << 63)};
+    for (int round = 0; round < 14; round++) {
         for (unsigned c = 0; c < sizeof(tcases) / sizeof(tcases[0]); c++) {
             for (int i = 0; i < 512; i++)
                 in[i] = round >= 8 ? special[rnd() % 5] : (uint8_t) rnd();
+            if (round >= 12)
+                for (int i = 0; i < 512; i += 8) {
+                    uint64_t v = wspecial[rnd() % 5];
+                    memcpy(in + i, &v, 8);
+                }
             if (tcases[c].isz)
                 indices((int) tcases[c].isz);
             uint64_t avl = round == 0 ? 0 : round == 1 ? tcases[c].vlmax : rnd() % (tcases[c].vlmax + 3);
@@ -8484,7 +12095,7 @@ int main(void) {
             fesetround(modes[round % 4]);
             uint64_t x = rnd();
             if (round >= 8)
-                x = rnd() % 2 ? 0 : (uint64_t) -1;
+                x = round >= 12 ? wspecial[rnd() % 5] : rnd() % 2 ? 0 : (uint64_t) -1;
             tcases[c].fn(avl, x);
         }
         for (unsigned c = 0; c < sizeof(rcases) / sizeof(rcases[0]); c++)
@@ -8493,18 +12104,25 @@ int main(void) {
                     continue;
                 for (int i = 0; i < 512; i++)
                     in[i] = round >= 8 ? special[rnd() % 5] : (uint8_t) rnd();
+            if (round >= 12)
+                for (int i = 0; i < 512; i += 8) {
+                    uint64_t v = wspecial[rnd() % 5];
+                    memcpy(in + i, &v, 8);
+                }
                 if (rcases[c].isz)
                     indices((int) rcases[c].isz);
                 unsigned vlmax = (unsigned) (128 * vts[v].lmul8 / 8 / vts[v].sew);
                 uint64_t avl = round == 0 ? 0 : round == 1 ? vlmax : rnd() % (vlmax + 3);
                 uint64_t x = rnd();
                 if (round >= 8)
-                    x = rnd() % 2 ? 0 : (uint64_t) -1;
+                    x = round >= 12 ? wspecial[rnd() % 5] : rnd() % 2 ? 0 : (uint64_t) -1;
                 rcases[c].fn(avl, x, vts[v].sew, vts[v].lmul8, vts[v].vt, vts[v].name);
             }
     }
     fesetround(FE_TONEAREST);
     sigill_cases();
+    guard_cases();
+    csr_cases();
     printf("riscv64_rvv_gadgets: %s (%lu checks, %lu mismatches)\n", bad ? "FAIL" : "PASS", checks, bad);
     return bad != 0;
 }

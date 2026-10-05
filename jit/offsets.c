@@ -126,4 +126,6 @@ void riscv64() {
     OFFSET(CPU, cpu_state, riscv64_vl);
     OFFSET(CPU, cpu_state, riscv64_vtype);
     OFFSET(CPU, cpu_state, riscv64_vstart);
+    OFFSET(CPU, cpu_state, riscv64_vxrm);
+    OFFSET(CPU, cpu_state, riscv64_vxsat);
 }

@@ -1,4 +1,4 @@
-// riscv64_rvv.c -- AOK's V extension (jit/riscv64_vector.c) against scalar
+// riscv64_rvv.c -- AOK's V extension (jit/guest-riscv64/vector.S) against scalar
 // code. Every kernel is compiled twice from one body: once for rv64gcv at
 // -O3, where gcc vectorizes it (strip-mined vsetvl, unit-stride, strided,
 // indexed and segment accesses, masks, reductions, widening and narrowing,
