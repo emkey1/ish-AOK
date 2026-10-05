@@ -47,3 +47,7 @@
 ## 2024-09-26 - Add VoiceOver hints to file manager navigation buttons
 **Learning:** Icon-only navigation buttons in toolbars (like Back, Forward, Up, More Actions) often only have short `accessibilityLabel`s which lack context for screen readers. In iOS, these buttons can benefit greatly from an `accessibilityHint` to provide clearer action descriptions.
 **Action:** When evaluating toolbars with icon-only buttons, ensure an `accessibilityHint` is provided alongside the `accessibilityLabel` if the label alone is not sufficiently descriptive of the resulting action (e.g., "Navigates to the previously visited folder." instead of just "Back").
+
+## 2024-11-20 - Non-interactive Base Classes require Explicit Accessibility
+**Learning:** In iOS UI development, base non-interactive visual classes like `UIImageView` are ignored by VoiceOver by default. If using them as primary informative or interactive elements (e.g., a drag handle or a visual preview graphic), you must explicitly set `isAccessibilityElement = YES` along with the appropriate labels for screen readers to recognize them.
+**Action:** Always enable `isAccessibilityElement = YES` on `UIImageView` or similar non-interactive base classes when they serve a functional or primary informational purpose.

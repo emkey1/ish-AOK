@@ -726,6 +726,8 @@ static const NSInteger kMaximumTerminalFontSize = 72;
         [button setTitle:@"⚙︎" forState:UIControlStateNormal];
         button.titleLabel.font = [UIFont systemFontOfSize:18 weight:UIFontWeightSemibold];
     }
+    button.accessibilityLabel = NSLocalizedString(@"Settings", @"Accessibility label for the settings button");
+    button.accessibilityHint = NSLocalizedString(@"Opens the application settings.", @"Accessibility hint for the settings button");
     [button addTarget:self action:@selector(showAbout:) forControlEvents:UIControlEventPrimaryActionTriggered];
     [self.view addSubview:button];
     self.floatingSettingsButton = button;

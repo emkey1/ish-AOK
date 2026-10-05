@@ -9234,6 +9234,8 @@ static CGFloat ISHWorkspaceToolScaledFontSize(WorkspaceThemedToolViewController 
                                       ISHWorkspaceThemeEditablePaletteForIdentifier(identifier),
                                       CGSizeMake(92, 52),
                                       NO)];
+    previewView.isAccessibilityElement = YES;
+    previewView.accessibilityLabel = NSLocalizedString(@"Theme Preview", @"Accessibility label for theme preview image");
     previewView.translatesAutoresizingMaskIntoConstraints = NO;
     previewView.contentMode = UIViewContentModeScaleAspectFill;
     previewView.clipsToBounds = YES;
