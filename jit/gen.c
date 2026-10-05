@@ -556,7 +556,7 @@ static void amd64_flag_rw(const struct amd64_jit_insn *insn, unsigned *r, unsign
 }
 
 #if defined(__aarch64__)
-#define AMD64_SPEC_TWIN_BITS 15 // 32768 slots, > 2 x the 8040 pairs
+#define AMD64_SPEC_TWIN_BITS 15 // 32768 slots, > 2 x the 8220 pairs
 #define AMD64_SPEC_TWIN_SLOTS (1u << AMD64_SPEC_TWIN_BITS)
 static unsigned long amd64_spec_twin_full[AMD64_SPEC_TWIN_SLOTS];
 static unsigned long amd64_spec_twin_nf[AMD64_SPEC_TWIN_SLOTS];
@@ -579,6 +579,7 @@ static void amd64_spec_twin_init(void) {
     extern void (*const amd64_imr_gadgets[])(void), (*const amd64_imr_nf_gadgets[])(void);
     extern void (*const amd64_imi_gadgets[])(void), (*const amd64_imi_nf_gadgets[])(void);
     extern void (*const amd64_neg_gadgets[])(void), (*const amd64_neg_nf_gadgets[])(void);
+    extern void (*const amd64_sri_gadgets[])(void), (*const amd64_sri_nf_gadgets[])(void);
     static const struct {
         void (*const *full)(void); void (*const *nf)(void); unsigned n; unsigned writes;
     } fams[] = {
@@ -593,6 +594,7 @@ static void amd64_spec_twin_init(void) {
         {amd64_imr_gadgets, amd64_imr_nf_gadgets, 2 * 256, AMD64_FL_CF | AMD64_FL_OF},
         {amd64_imi_gadgets, amd64_imi_nf_gadgets, 2 * 256, AMD64_FL_CF | AMD64_FL_OF},
         {amd64_neg_gadgets, amd64_neg_nf_gadgets, 2 * 16, AMD64_FL_ALL},
+        {amd64_sri_gadgets, amd64_sri_nf_gadgets, 5 * 2 * 18, AMD64_FL_ALL},
     };
     for (unsigned f = 0; f < sizeof(fams) / sizeof(fams[0]); f++) {
         for (unsigned i = 0; i < fams[f].n; i++) {
@@ -653,7 +655,7 @@ static unsigned long amd64_flags_twin(unsigned long g, unsigned *writes) {
         }
     }
     // The register-specialised arith/logic/shift/inc-dec gadgets (math.S
-    // amd64_arr/ari/lrr/lri/slo/shi/idr/sim/imr/imi/neg), 8040 pairs, through a hash table
+    // amd64_arr/ari/lrr/lri/slo/shi/idr/sim/imr/imi/neg/sri), 8220 pairs, through a hash table
     // built once.
     return amd64_spec_twin(g, writes);
 }
@@ -9471,6 +9473,19 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
         unsigned dst_size = insn.rex.w ? 64 : 32;
         next_ip = state->amd64_ip + 1;
         state->amd64_ip = next_ip;
+#if defined(__aarch64__)
+        if (amd64_jit_fuse_mask() & JIT_FUSE_AMD64_MOVR) {
+            // Per register pair (math.S amd64_mx_*); kinds zb zw sb32 sb64 sw32 sw64.
+            extern void (*const amd64_mx_gadgets[])(void);
+            bool word = insn.op2 == 0xb7 || insn.op2 == 0xbf, sign = insn.op2 >= 0xbe;
+            unsigned kind = !sign ? (word ? 1 : 0) : (word ? 4 : 2) + (dst_size == 64);
+            gen_amd64_r16_enter(state, dst_id, src_id);
+            gen(state, (unsigned long) amd64_mx_gadgets[(kind * 16 + dst_id) * 16 + src_id]);
+            gen_amd64_r16_wrote(state, dst_id);
+            gen_amd64_defer_rip(state, next_ip);
+            return true;
+        }
+#endif
         amd64_jit_debug("movx-reg-reg-direct ip=%llx op2=%02x src=%u dst=%u size=%u next=%llx",
                 (unsigned long long) insn.start_ip,
                 insn.op2,
@@ -9560,6 +9575,28 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
     // /proc/ish/amd64_jit fallback count from 0 to 1, and 0F BE was the other
     // 2 of the 16 fallbacks in a plain `cc -O2`. amd64_jit_movx now decodes
     // the prefix and writes a 16-bit destination.
+#if defined(__aarch64__)
+    // movzx/movsx from ah..bh (no REX, rm 4-7): the high-byte kinds of
+    // amd64_mx (zbh, sbh32, sbh64), src = rax..rbx.
+    if (!insn.operand_size_prefix && !insn.address_size_prefix &&
+            !insn.seg_prefix && !insn.lock_prefix &&
+            insn.rep_mode == amd64_jit_rep_none && insn.two_byte_opcode &&
+            insn.has_modrm && amd64_modrm_mod(insn.modrm) == 3 &&
+            (insn.op2 == 0xb6 || insn.op2 == 0xbe) && !insn.rex.present &&
+            amd64_modrm_rm(insn.modrm) >= 4 &&
+            (amd64_jit_fuse_mask() & JIT_FUSE_AMD64_MOVR)) {
+        extern void (*const amd64_mx_gadgets[])(void);
+        unsigned src = amd64_modrm_rm(insn.modrm) - 4, dst = amd64_modrm_reg(insn.modrm);
+        unsigned kind = insn.op2 == 0xb6 ? 6 : 7; // no REX: never a 64-bit destination
+        next_ip = state->amd64_ip + 1;
+        state->amd64_ip = next_ip;
+        gen_amd64_ensure_reg_cache(state);
+        gen(state, (unsigned long) amd64_mx_gadgets[(kind * 16 + dst) * 16 + src]);
+        gen_amd64_mark_reg_cache_dirty(state);
+        gen_amd64_defer_rip(state, next_ip);
+        return true;
+    }
+#endif
     if (!insn.address_size_prefix &&
             insn.rep_mode == amd64_jit_rep_none && insn.two_byte_opcode &&
             (insn.op2 == 0xb6 || insn.op2 == 0xb7 ||
@@ -14722,6 +14759,25 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
                 (unsigned long long) insn.start_ip, group, is_logic, is_cmp, size,
                 (unsigned long) imm, meta, disp, (unsigned long long) next_ip);
 #if defined(__aarch64__)
+        if (!is_cmp && (size == 32 || size == 64) && !insn.lock_prefix &&
+                (group == 0 || group == 1 || group == 4 || group == 5 || group == 6) &&
+                (amd64_jit_fuse_mask() & JIT_FUSE_AMD64_MEMR)) {
+            // add/or/and/sub/xor [mem], imm on the register cache (math.S
+            // amd64_sri, ops add sub or and xor).
+            unsigned slot;
+            unsigned long word;
+            if (gen_amd64_m16_operand(state, &insn, meta, disp, next_ip, &slot, &word)) {
+                extern void (*const amd64_sri_gadgets[])(void);
+                unsigned op = group == 0 ? 0 : group == 5 ? 1 : group == 1 ? 2 : group == 4 ? 3 : 4;
+                state->amd64_deferred_rip_valid = false; // the gadget publishes the rip
+                gen(state, (unsigned long) amd64_sri_gadgets[(op * 2 + (size == 64)) * 18 + slot]);
+                gen(state, word);
+                gen(state, (unsigned long) insn.start_ip);
+                gen(state, (unsigned long) imm);
+                gen_amd64_defer_rip(state, next_ip);
+                return true;
+            }
+        }
         if (is_cmp && (size == 32 || size == 64) && !insn.lock_prefix &&
                 (amd64_jit_fuse_mask() & JIT_FUSE_AMD64_MEMR)) {
             // cmp [mem], imm on the register cache (math.S amd64_scmi).
@@ -14918,6 +14974,25 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
         amd64_jit_debug("mov-imm-mem ip=%llx size=%u imm=%lx next=%llx",
                 (unsigned long long) insn.start_ip, size, imm,
                 (unsigned long long) next_ip);
+#if defined(__aarch64__)
+        {
+            // On the register cache (math.S amd64_ssi).
+            unsigned slot;
+            unsigned long word;
+            if (!insn.lock_prefix && (amd64_jit_fuse_mask() & JIT_FUSE_AMD64_MEMR) &&
+                    gen_amd64_m16_operand(state, &insn, meta, disp, next_ip, &slot, &word)) {
+                extern void (*const amd64_ssi_gadgets[])(void);
+                unsigned si = size == 8 ? 0 : size == 16 ? 1 : size == 32 ? 2 : 3;
+                state->amd64_deferred_rip_valid = false; // the gadget publishes the rip
+                gen(state, (unsigned long) amd64_ssi_gadgets[si * 18 + slot]);
+                gen(state, word);
+                gen(state, (unsigned long) insn.start_ip);
+                gen(state, (unsigned long) imm);
+                gen_amd64_defer_rip(state, next_ip);
+                return true;
+            }
+        }
+#endif
         gen_amd64_flush_reg_cache(state);
         gen_amd64_flush_rip(state);
         gen(state, (unsigned long) g);

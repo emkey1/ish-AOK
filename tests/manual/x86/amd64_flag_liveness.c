@@ -97,7 +97,7 @@ static void emit_mem_one(void) {
     use_rbp = (int) (rnd() & 1);
     if (rnd() % 4 == 0) { // the indexed and the 16-bit / byte forms
         int lowbyte_rex = (a & 8) || (rnd() & 1); // REX makes a's low byte addressable
-        switch (rnd() % 13) {
+        switch (rnd() % 15) {
             case 9: { // inc/dec [m] (FF /0, /1), plain or indexed
                 int ext = (int) (rnd() & 1);
                 if (rnd() & 1) { set_r14(); rex_sib(w, 0); b(0xff); sib_operand(ext); }
@@ -110,6 +110,22 @@ static void emit_mem_one(void) {
                 else { if (a & 8) b(0x41); b((uint8_t) (0x50 + (a & 7))); }
                 if (c & 8) b(0x41);
                 b((uint8_t) (0x58 + (c & 7)));
+                break;
+            }
+            case 13: { // mov [m], imm (C7 /0 imm32, or C6 /0 imm8), plain or indexed
+                int byte = (int) (rnd() & 1), idx = (int) (rnd() & 1);
+                if (idx) { set_r14(); rex_sib(byte ? 0 : w, 0); b(byte ? 0xc6 : 0xc7); sib_operand(0); }
+                else { rex_mem_any(byte ? 0 : w, 0); b(byte ? 0xc6 : 0xc7); mem_any(0); }
+                if (byte) b((uint8_t) rnd());
+                else { uint32_t v = (uint32_t) rnd(); memcpy(p, &v, 4); p += 4; }
+                break;
+            }
+            case 14: { // add/or/and/sub/xor [m], imm8 (83 /0,1,4,5,6), plain or indexed
+                static const int ext[] = {0, 1, 4, 5, 6};
+                int e = ext[rnd() % 5];
+                if (rnd() & 1) { set_r14(); rex_sib(w, 0); b(0x83); sib_operand(e); }
+                else { rex_mem_any(w, 0); b(0x83); mem_any(e); }
+                b((uint8_t) rnd());
                 break;
             }
             case 11: // cmp [m], a or cmp [m], imm8 (83 /7)
@@ -175,7 +191,7 @@ static void emit_one(void) {
         emit_mem_one();
         return;
     }
-    switch (rnd() % 18) {
+    switch (rnd() % 19) {
         case 0: case 1: case 2: case 3: { // alu reg,reg: add or adc sbb and sub xor cmp
             static const uint8_t ops[] = {0x01, 0x09, 0x11, 0x19, 0x21, 0x29, 0x31, 0x39};
             rex(w, c, a); b(ops[rnd() % 8]); modrm_rr(c, a); break;
@@ -216,6 +232,18 @@ static void emit_one(void) {
                 b((uint8_t) (0x70 + rnd() % 16)); b(3);
             }
             rex(1, c, a); b(0x89); modrm_rr(c, a); break;
+        }
+        case 16: { // movzx/movsx a, c8/c16; 1 time in 3 from ah..bh (no REX)
+            static const uint8_t mx[] = {0xb6, 0xb7, 0xbe, 0xbf};
+            if (rnd() % 3 == 0) {
+                int d = (int) (rnd() % 8);
+                if (d == 4 || d == 5) d = 0; // rsp/rbp stay out
+                b(0x0f); b(rnd() & 1 ? 0xb6 : 0xbe); b((uint8_t) (0xc0 | d << 3 | (4 + rnd() % 4)));
+            } else {
+                b((uint8_t) (0x40 | (w ? 8 : 0) | ((a & 8) ? 4 : 0) | ((c & 8) ? 1 : 0))); // REX: low bytes
+                b(0x0f); b(mx[rnd() % 4]); modrm_rr(a, c);
+            }
+            break;
         }
         case 15: // neg a / not a (F7 /3, /2)
             rex(w, 0, a); b(0xf7); modrm_rr(rnd() & 1 ? 3 : 2, a); break;
