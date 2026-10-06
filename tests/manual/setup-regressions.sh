@@ -558,6 +558,8 @@ if [ "$is_amd64_guest" -eq 1 ]; then
     need_file x86/amd64_sse_int.c
     need_file x86/amd64_sse_shift.c
     need_file x86/amd64_sse_mov.c
+    need_file x86/amd64_sse_float.c
+    need_file x86/amd64_sse_ud.c
     need_file x86/amd64_pushf_popf.c
     need_file x86/amd64_ret_pop.c
     need_file x86/amd64_moffs_stack16.c
@@ -1023,7 +1025,7 @@ if [ "$is_x86_guest" -eq 1 ] && [ "$is_amd64_guest" -eq 0 ]; then
     all_tests="avx32_smoke bcd_adjust i386_segment_regs i386_push16 i386_enter_branch16 i386_flags_pushf_lahf $all_tests"
 fi
 if [ "$is_amd64_guest" -eq 1 ]; then
-    all_tests="$all_tests amd64_regress amd64_popcnt amd64_cmpxchg amd64_xadd amd64_muldiv amd64_push_rm amd64_alu_mem amd64_xchg_mem amd64_shift amd64_0f_rm amd64_misc_rm amd64_sse_int amd64_sse_shift amd64_sse_mov amd64_pushf_popf amd64_ret_pop amd64_moffs_stack16 amd64_loop_addr32 amd64_string_ops avx_regress amd64_incdec amd64_x87_cache amd64_singlestep amd64_segment_regs amd64_gs_base"
+    all_tests="$all_tests amd64_regress amd64_popcnt amd64_cmpxchg amd64_xadd amd64_muldiv amd64_push_rm amd64_alu_mem amd64_xchg_mem amd64_shift amd64_0f_rm amd64_misc_rm amd64_sse_int amd64_sse_shift amd64_sse_mov amd64_sse_float amd64_sse_ud amd64_pushf_popf amd64_ret_pop amd64_moffs_stack16 amd64_loop_addr32 amd64_string_ops avx_regress amd64_incdec amd64_x87_cache amd64_singlestep amd64_segment_regs amd64_gs_base"
 fi
 if [ "$is_arm64_guest" -eq 1 ]; then
     all_tests="$all_tests atomics64 arm64_lse_gadgets arm64_vldst_gadgets arm64_sha512_crc32 arm64_regress vector_smoke simd_elem_moves simd_three_same alu_ospec ldst_lspec vldst_lspec smc_stale_block ret_retcache stlr_ldar_publish ptrace_singlestep singlestep_fused ands_bcond_fusion cbz_tbz hle_loop dc_zva arm64_fp_env"

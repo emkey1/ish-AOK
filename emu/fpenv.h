@@ -26,6 +26,7 @@ void fpenv_host_default(void);
 // float80's rounding and precision in step with it.
 void fpenv_x86_sync_mxcsr(struct cpu_state *cpu);
 void fpenv_x86_load_mxcsr(struct cpu_state *cpu);
+void fpenv_amd64_load_mxcsr(struct cpu_state *cpu);
 
 // arm64 MRS/MSR of FPCR and FPSR, from the gadgets. op: 0 = MRS FPCR,
 // 1 = MSR FPCR, 2 = MRS FPSR, 3 = MSR FPSR. Returns the value an MRS reads.

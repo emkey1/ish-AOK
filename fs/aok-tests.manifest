@@ -402,6 +402,8 @@ x86/amd64_misc_rm.c
 x86/amd64_sse_int.c
 x86/amd64_sse_shift.c
 x86/amd64_sse_mov.c
+x86/amd64_sse_float.c
+x86/amd64_sse_ud.c
 x86/amd64_pushf_popf.c
 x86/amd64_ret_pop.c
 x86/amd64_moffs_stack16.c

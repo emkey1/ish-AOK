@@ -7237,7 +7237,7 @@ static inline int amd64_fxsave_op(struct cpu_state *cpu, struct tlb *tlb,
                 return INT_PF;
             }
             cpu->mxcsr = mxcsr & 0xffff;
-            fpenv_x86_load_mxcsr(cpu);
+            fpenv_amd64_load_mxcsr(cpu);
         } else {
             fpenv_x86_sync_mxcsr(cpu);
             mxcsr = cpu->mxcsr;
@@ -7281,7 +7281,7 @@ static inline int amd64_fxsave_op(struct cpu_state *cpu, struct tlb *tlb,
         }
         amd64_restore_fxsave_area(cpu, &area);
         cpu->mxcsr &= 0xffff;
-        fpenv_x86_load_mxcsr(cpu);
+        fpenv_amd64_load_mxcsr(cpu);
     }
 
     return INT_NONE;
