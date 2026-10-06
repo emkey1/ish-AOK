@@ -44,7 +44,6 @@ int amd64_jit_grp3_test(struct cpu_state *cpu, struct tlb *tlb,
         unsigned long opcode, unsigned long next_ip);
 int amd64_jit_sse3_haddsub(struct cpu_state *cpu, struct tlb *tlb,
         unsigned long op2, unsigned long next_ip);
-int amd64_jit_0f38(struct cpu_state *cpu, struct tlb *tlb, unsigned long start_ip);
 int amd64_jit_sreg(struct cpu_state *cpu, struct tlb *tlb, unsigned long next_ip);
 int amd64_jit_iret(struct cpu_state *cpu, struct tlb *tlb, unsigned long start_ip);
 int amd64_jit_ud2(struct cpu_state *cpu, struct tlb *tlb, unsigned long start_ip);

@@ -152,10 +152,11 @@ static void host_install(uint64_t bits) {
         host.dflt = host.installed = v & FPCR_GUEST;
         host.init = true;
     }
-    if (bits != host.installed) {
+    // Compared with the live FPCR, not the last install: the amd64 LDMXCSR
+    // gadget writes FPCR's rounding mode itself (math.S amd64_ldmxcsr_m).
+    if ((host_fpcr_read() & FPCR_GUEST) != bits)
         host_fpcr_write(host.base | bits);
-        host.installed = bits;
-    }
+    host.installed = bits;
 }
 
 static void host_install_default(void) {

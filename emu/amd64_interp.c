@@ -15680,57 +15680,6 @@ amd64_jit_sse3_pf:
     return INT_PF;
 }
 
-int amd64_jit_0f38(struct cpu_state *cpu, struct tlb *tlb,
-        unsigned long start_ip) {
-    qword_t saved_rip = (qword_t) start_ip;
-    struct amd64_rex_prefix rex = {0};
-    enum amd64_seg seg_prefix = AMD64_SEG_NONE;
-    bool operand_size_prefix = false;
-    enum amd64_rep_mode rep_mode = AMD64_REP_NONE;
-    byte_t byte;
-    int interrupt;
-
-    cpu->amd64_rip = saved_rip;
-    cpu->amd64_address_size_prefix = false;
-    for (;;) {
-        if (!amd64_fetch_u8(cpu, tlb, &byte))
-            goto amd64_jit_0f38_pf;
-        if (amd64_ignored_segment_prefix(byte))
-            continue;
-        if (byte == 0x64) { seg_prefix = AMD64_SEG_FS; continue; }
-        if (byte == 0x65) { seg_prefix = AMD64_SEG_GS; continue; }
-        if (byte == 0x66) { operand_size_prefix = true; continue; }
-        if (byte == 0xf3) { rep_mode = AMD64_REPZ; continue; }
-        if (byte == 0xf2) { rep_mode = AMD64_REPNZ; continue; }
-        if (byte >= 0x40 && byte <= 0x4f) {
-            rex.present = true;
-            rex.w = (byte & 8) != 0;
-            rex.r = (byte & 4) != 0;
-            rex.x = (byte & 2) != 0;
-            rex.b = (byte & 1) != 0;
-            continue;
-        }
-        break;
-    }
-    if (byte != 0x0f)
-        return INT_UNDEFINED;
-    if (!amd64_fetch_u8(cpu, tlb, &byte))
-        goto amd64_jit_0f38_pf;
-    if (byte != 0x38)
-        return INT_UNDEFINED;
-
-    interrupt = amd64_0f38_op(cpu, tlb, saved_rip, rex, seg_prefix,
-            operand_size_prefix, rep_mode);
-    // crc32 writes a general-purpose register, and ptest writes flags.
-    amd64_sync_legacy_regs(cpu);
-    return interrupt;
-
-amd64_jit_0f38_pf:
-    cpu->amd64_rip = saved_rip;
-    amd64_sync_legacy_regs(cpu);
-    return INT_PF;
-}
-
 // The JIT's bridge for 8C, 8E and 0F A0/A1/A8/A9; see amd64_sreg_op. Rare
 // enough (once per .NET exception) that a gadget would buy nothing, and a
 // bridge keeps the block around it compiled. Continues the block.

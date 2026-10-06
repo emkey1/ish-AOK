@@ -77,6 +77,17 @@ for asm, kind in (('addsubps %%xmm2, %%xmm1', 's'), ('addsubpd %%xmm2, %%xmm1', 
                   ('hsubps %%xmm2, %%xmm1', 's'), ('hsubpd %%xmm2, %%xmm1', 'd'),
                   ('haddps (%%rsi), %%xmm1', 's')):
     add(asm.replace('%%', '').replace('(rsi)', 'm'), asm, kind)
+# SSE4.1: ROUNDxx (every imm: the four modes, MXCSR's, precision masked or
+# not), DPPS/DPPD (masks that select some, all, none)
+for sfx, kind in (('ps', 's'), ('pd', 'd'), ('ss', 's'), ('sd', 'd')):
+    for imm in (0, 1, 2, 3, 4, 8, 9, 10, 11, 12):
+        add(f'round{sfx} {imm}', f'round{sfx} ${imm}, %%xmm2, %%xmm1', kind)
+    add(f'round{sfx} m', f'round{sfx} $1, (%%rsi), %%xmm1', kind)
+for imm in (0xff, 0xf1, 0x31, 0x5a, 0x80, 0x0f, 0xe3):
+    add(f'dpps {imm:#x}', f'dpps ${imm}, %%xmm2, %%xmm1', 's')
+for imm in (0x33, 0x31, 0x12, 0x21, 0x03, 0x30):
+    add(f'dppd {imm:#x}', f'dppd ${imm}, %%xmm2, %%xmm1', 'd')
+add('dpps m', 'dpps $0xf3, (%%rsi), %%xmm1', 's')
 # RCP/RSQRT: implementation-defined precision; bound-checked, not hashed
 APPROX = [('rcpps', 'rcpps %%xmm2, %%xmm1'), ('rcpss', 'rcpss %%xmm2, %%xmm1'),
           ('rsqrtps', 'rsqrtps %%xmm2, %%xmm1'), ('rsqrtss', 'rsqrtss %%xmm2, %%xmm1')]
