@@ -402,6 +402,9 @@ static void setup_host_mounts(void) {
         else
             fprintf(stderr, "ISH_FOREIGN_EXEC: want root, libs or off, not %s\n", foreign);
     }
+    // Any root: login shells naming a native program this build lacks get one
+    // that exists (kernel/native_root.c).
+    native_root_repair_login_shells();
     const char *native_root = getenv("ISH_NATIVE_ROOT");
     if (native_root != NULL && strcmp(native_root, "1") == 0) {
         int nerr = native_root_provision();

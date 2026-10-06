@@ -64,5 +64,8 @@ bool native_root_user_name_valid(const char *name);
 // `login -f`). Returns 0 or a negative errno: _EINVAL for a bad name, _EEXIST
 // when the name or the uid is taken.
 int native_root_add_user(const char *name, const char *password);
+// Every boot, every root: /etc/passwd shells naming a native program this
+// build lacks are repointed. Returns how many changed, or an error.
+int native_root_repair_login_shells(void);
 
 #endif

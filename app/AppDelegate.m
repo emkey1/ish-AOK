@@ -4195,6 +4195,13 @@ static TerminalViewController *CreateTerminalViewController(void) {
                                                  @"error": @(nativeErr),
                                                  @"zoneinfoError": @(zoneErr)}];
     }
+    // Any root: an account whose login shell is a native program this build
+    // does not ship (/AOK/native/bash, dropped in September) gets one that
+    // exists, or sshd, login and su all turn it away (kernel/native_root.c).
+    int shellsRepaired = native_root_repair_login_shells();
+    if (shellsRepaired != 0)
+        [ISHDiagnosticsStore recordLaunchStage:@"boot.root.login_shells_repaired"
+                                       details:@{@"root": bootRoot, @"result": @(shellsRepaired)}];
     // Every /AOK mount's source is a host container path: long, mostly a UUID,
     // and useless to the guest, so each names itself instead -- the same thing
     // Linux's own virtual filesystems do, where proc reports "proc" and a tmpfs

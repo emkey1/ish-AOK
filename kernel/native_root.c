@@ -376,6 +376,96 @@ static const char *login_shell(void) {
     return NATIVE_DIR "sh";
 }
 
+// A login shell in /etc/passwd that names a native program this build does
+// not have -- /AOK/native/bash above all, which stopped shipping (bd17993b7)
+// with accounts on device still pointing at it -- leaves that account unable
+// to log in: sshd refuses a user whose shell is missing, by key and by
+// password alike, and login and su fail the same way. Each such shell goes to
+// the root's own program of that name (a distro's /bin/bash), else native
+// zsh, else /bin/sh. Only those entries change; the file is otherwise the
+// user's. Runs at every boot of every root.
+int native_root_repair_login_shells(void) {
+    size_t len = 0;
+    char *passwd = read_file("/etc/passwd", &len);
+    if (passwd == NULL)
+        return 0;
+    size_t cap = len + 1024, out_len = 0;
+    char *out = malloc(cap);
+    if (out == NULL) {
+        free(passwd);
+        return _ENOMEM;
+    }
+    int changed = 0;
+    for (char *line = passwd; *line != '\0';) {
+        char *end = strchr(line, '\n');
+        size_t line_len = end != NULL ? (size_t) (end - line) : strlen(line);
+        // the shell: the seventh field, the last
+        char *shell = NULL;
+        int colons = 0;
+        for (size_t i = 0; i < line_len; i++)
+            if (line[i] == ':' && ++colons == 6)
+                shell = line + i + 1;
+        const char *replacement = NULL;
+        size_t shell_len = shell != NULL ? (size_t) (line + line_len - shell) : 0;
+        size_t dir_len = strlen(NATIVE_DIR);
+        char name[64], candidate[MAX_PATH];
+        if (shell != NULL && shell_len > dir_len && shell_len - dir_len < sizeof(name) &&
+                strncmp(shell, NATIVE_DIR, dir_len) == 0) {
+            memcpy(name, shell + dir_len, shell_len - dir_len);
+            name[shell_len - dir_len] = '\0';
+            if (strchr(name, '/') == NULL && !native_program_built(name)) {
+                // the distro's own, unless that is a link into /AOK/native
+                // (native-links' work), which is the same missing program
+                static const char *const dirs[] = {"/bin/", "/usr/bin/"};
+                for (size_t d = 0; d < 2 && replacement == NULL; d++) {
+                    char target[MAX_PATH];
+                    snprintf(candidate, sizeof(candidate), "%s%s", dirs[d], name);
+                    if (path_exists(candidate) && !is_our_link(candidate, target, sizeof(target)))
+                        replacement = candidate;
+                }
+                if (replacement == NULL)
+                    replacement = native_program_built("zsh") ? NATIVE_DIR "zsh" : "/bin/sh";
+            }
+        }
+        size_t keep = replacement != NULL ? (size_t) (shell - line) : line_len;
+        size_t need = keep + (replacement != NULL ? strlen(replacement) : 0) + 2;
+        if (out_len + need > cap) {
+            cap = (out_len + need) * 2;
+            char *bigger = realloc(out, cap);
+            if (bigger == NULL) {
+                free(out);
+                free(passwd);
+                return _ENOMEM;
+            }
+            out = bigger;
+        }
+        memcpy(out + out_len, line, keep);
+        out_len += keep;
+        if (replacement != NULL) {
+            size_t user_len = strcspn(line, ":");
+            printk("native: login shell of %.*s was %.*s, which this build does not have: now %s\n",
+                   (int) user_len, line, (int) shell_len, shell, replacement);
+            memcpy(out + out_len, replacement, strlen(replacement));
+            out_len += strlen(replacement);
+            changed++;
+        }
+        if (end == NULL)
+            break;
+        out[out_len++] = '\n';
+        line = end + 1;
+    }
+    out[out_len] = '\0';
+    int err = 0;
+    if (changed != 0) {
+        struct statbuf stat;
+        mode_t_ mode = generic_statat(AT_PWD, "/etc/passwd", &stat, 0) == 0 ? stat.mode & 07777 : 0644;
+        err = write_file("/etc/passwd", out, mode, false);
+    }
+    free(out);
+    free(passwd);
+    return err < 0 ? err : changed;
+}
+
 static long days_since_epoch(void) {
     return (long) (time(NULL) / 86400);
 }
