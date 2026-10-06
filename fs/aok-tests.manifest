@@ -32,6 +32,7 @@ x86/x87_kat.c
 x86/x87_env.c
 x86/x87_kat_unmasked.c
 x86/x87_mf.c
+x86/x87_trans.c
 x86/alu_flags.c
 x86/lock_misaligned.c
 x86/priv_gp.c

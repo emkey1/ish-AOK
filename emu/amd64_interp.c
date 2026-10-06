@@ -7439,9 +7439,7 @@ static int amd64_cmpxchg8b_16b(struct cpu_state *cpu, struct tlb *tlb,
 
 // The register forms of the x87 escapes (mod == 3): no memory operand, no
 // prefix that matters, nothing to fault on, so they are fully known from
-// the opcode and ModRM -- the JIT calls this directly through
-// amd64_jit_x87_reg instead of re-fetching and re-decoding the instruction
-// on every execution the way amd64_jit_x87 must for the memory forms.
+// the opcode and ModRM.
 static int amd64_x87_reg_op(struct cpu_state *cpu, unsigned subop, unsigned fullop, unsigned rm) {
     switch (subop) {
     case 0xd80:
@@ -15850,26 +15848,6 @@ amd64_jit_vex_pf:
     cpu->amd64_rip = saved_rip;
     amd64_sync_legacy_regs(cpu);
     return INT_PF;
-}
-
-// A register-form x87 instruction, opcode and ModRM decoded at translation
-// time: word = opcode << 8 | modrm. The JIT sends only the transcendentals
-// here (everything else is jit/gadgets-aarch64/x87.S), and they write no
-// general register. The C rounding state follows the control word, which
-// the gadgets change without telling it.
-int amd64_jit_x87_reg(struct cpu_state *cpu, struct tlb *tlb,
-        unsigned long word, unsigned long next_ip) {
-    (void) tlb;
-    unsigned opcode = (word >> 8) & 0xff, modrm = word & 0xff;
-    unsigned reg = (modrm >> 3) & 7, rm = modrm & 7;
-    fpu_sync_control(cpu);
-    int interrupt = amd64_x87_reg_op(cpu, (opcode << 4) | reg, (opcode << 8) | (reg << 4) | rm, rm);
-    if (interrupt != INT_NONE)
-        return interrupt;
-    cpu->amd64_rip = (qword_t) next_ip;
-    if (opcode == 0xdf && reg == 4)
-        amd64_sync_legacy_regs(cpu);
-    return INT_NONE;
 }
 
 int amd64_jit_cmpxchg8b(struct cpu_state *cpu, struct tlb *tlb,

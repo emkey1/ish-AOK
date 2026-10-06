@@ -9381,12 +9381,11 @@ static inline unsigned long x87_word(unsigned long imm, bool amd64, bool cache_l
 
 // The register forms: the gadget and its immediate for opcode/ModRM.
 // X87R_UD is #UD; X87R_NOP emits nothing (FENI/FDISI/FSETPM, no-wait no-ops
-// since the 387); X87R_C a transcendental, still emu/fpu.c; X87R_FNSTSW_AX the
-// one that writes a general register, which each guest does its own way.
+// since the 387); X87R_FNSTSW_AX the one that writes a general register,
+// which each guest does its own way.
 // FCMOVcc gets the gadget for the guest's flag representation.
 #define X87R_UD ((void (*)(void)) 0)
 #define X87R_NOP ((void (*)(void)) 1)
-#define X87R_C ((void (*)(void)) 2)
 #define X87R_FNSTSW_AX ((void (*)(void)) 3)
 __attribute__((unused)) static void (*x87_reg_gadget(bool amd64, unsigned opcode, unsigned modrm, unsigned long *imm))(void) {
     extern void gadget_x87_fwait(void);
@@ -9399,7 +9398,9 @@ __attribute__((unused)) static void (*x87_reg_gadget(bool amd64, unsigned opcode
            gadget_x87_fincstp(void), gadget_x87_fdecstp(void), gadget_x87_fnclex(void),
            gadget_x87_fninit(void), gadget_x87_fsqrt(void), gadget_x87_frndint(void),
            gadget_x87_fscale(void), gadget_x87_fxtract(void), gadget_x87_fprem(void),
-           gadget_x87_fprem1(void);
+           gadget_x87_fprem1(void), gadget_x87_f2xm1(void), gadget_x87_fyl2x(void),
+           gadget_x87_fptan(void), gadget_x87_fpatan(void), gadget_x87_fyl2xp1(void),
+           gadget_x87_fsincos(void), gadget_x87_fsin(void), gadget_x87_fcos(void);
     extern void gadget_x87_fcmovb(void), gadget_x87_fcmove(void), gadget_x87_fcmovbe(void),
            gadget_x87_fcmovu(void), gadget_x87_fcmovnb(void), gadget_x87_fcmovne(void),
            gadget_x87_fcmovnbe(void), gadget_x87_fcmovnu(void);
@@ -9450,7 +9451,10 @@ __attribute__((unused)) static void (*x87_reg_gadget(bool amd64, unsigned opcode
             case 5: return gadget_x87_fprem1;
             case 6: return gadget_x87_fdecstp;
             case 7: return gadget_x87_fincstp;
-            default: return X87R_C;               // F2XM1 FYL2X FPTAN FPATAN
+            case 0: return gadget_x87_f2xm1;
+            case 1: return gadget_x87_fyl2x;
+            case 2: return gadget_x87_fptan;
+            default: return gadget_x87_fpatan;
             }
         default:
             switch (rm) {
@@ -9458,7 +9462,10 @@ __attribute__((unused)) static void (*x87_reg_gadget(bool amd64, unsigned opcode
             case 2: return gadget_x87_fsqrt;
             case 4: return gadget_x87_frndint;
             case 5: return gadget_x87_fscale;
-            default: return X87R_C;               // FYL2XP1 FSINCOS FSIN FCOS
+            case 1: return gadget_x87_fyl2xp1;
+            case 3: return gadget_x87_fsincos;
+            case 6: return gadget_x87_fsin;
+            default: return gadget_x87_fcos;
             }
         }
     case 0xda:
@@ -9713,8 +9720,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
     }
 
     // x87 (D8-DF): jit/gadgets-aarch64/x87.S, the same gadgets as the i386
-    // guest's for the register forms. The transcendentals are still C
-    // (emu/fpu.c, through amd64_jit_x87_reg).
+    // guest's for the register forms.
     //
     // return true, not gen_exit: x87 encodings carry no immediate, so the ModRM
     // extent IS the whole instruction and the block can carry on afterwards.
@@ -9761,21 +9767,6 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
                 extern void gadget_amd64_x87_fnstsw_ax(void);
                 gen_amd64_flush_reg_cache(state);
                 gen(state, (unsigned long) gadget_amd64_x87_fnstsw_ax);
-                gen_amd64_defer_rip(state, next_ip);
-                return true;
-            }
-            if (g == X87R_C) {
-                // A transcendental: no general register read or written, so
-                // the register cache and the deferred rip stay as they are
-                // (see amd64_x87_reg_gadget in gadgets-aarch64/math.S).
-                extern void gadget_amd64_x87_reg(void);
-                extern void gadget_amd64_x87_reg_cached(void);
-                amd64_bridge_note(amd64_jit_x87_reg, insn.opcode);
-                gen(state, (unsigned long) (state->amd64_reg_cache_valid
-                        ? gadget_amd64_x87_reg_cached : gadget_amd64_x87_reg));
-                gen(state, ((unsigned long) insn.opcode << 8) | insn.modrm);
-                gen(state, (unsigned long) next_ip);
-                gen(state, (unsigned long) insn.start_ip);
                 gen_amd64_defer_rip(state, next_ip);
                 return true;
             }
@@ -18452,15 +18443,6 @@ void helper_rdtsc(struct cpu_state *cpu);
 #define fh_write_bits h_write_bits
 #endif
 #if defined(__aarch64__)
-// The transcendentals, still emu/fpu.c (X87_STEP sends them here).
-#define F2XM1() fh(fpu_2xm1)
-#define FYL2X() fh(fpu_yl2x)
-#define FYL2XP1() fh(fpu_yl2xp1)
-#define FPATAN() fh(fpu_patan)
-#define FPTAN() fh(fpu_ptan)
-#define FSIN() fh(fpu_sin)
-#define FCOS() fh(fpu_cos)
-#define FSINCOS() fh(fpu_sincos)
 // The 0f ae memory forms: FXSAVE/FXRSTOR are x87.S; LDMXCSR/STMXCSR are
 // still emu/fpu.c, as the i386 guest's SSE is. The helper suffix is a literal
 // 32 rather than `oz` because these have no operand-size form and decode.h is
@@ -18472,7 +18454,7 @@ void helper_rdtsc(struct cpu_state *cpu);
 #define EMMS() do { g(x87_emms); GEN(x87_word(0, false, false, state->orig_ip)); } while (0)
 #define FWAIT() do { g(x87_fwait); GEN(x87_word(0, false, false, state->orig_ip)); } while (0)
 // The x87 (D8-DF): x87.S, through the tables the amd64 decoder uses (above
-// gen_step_amd64). The transcendentals are still emu/fpu.c.
+// gen_step_amd64).
 #define X87_STEP(op) do { \
     if (modrm.type != modrm_reg) { \
         void (*xg)(void) = x87_mem_gadget(false, op, modrm.opcode, OP_SIZE == 16); \
@@ -18491,19 +18473,6 @@ void helper_rdtsc(struct cpu_state *cpu);
         break; \
     if (xg == X87R_FNSTSW_AX) { \
         g(fstsw_ax); \
-        break; \
-    } \
-    if (xg == X87R_C) { \
-        switch (modrm.opcode << 3 | modrm.rm_opcode) { \
-        case 0x30: F2XM1(); break; \
-        case 0x31: FYL2X(); break; \
-        case 0x32: FPTAN(); break; \
-        case 0x33: FPATAN(); break; \
-        case 0x39: FYL2XP1(); break; \
-        case 0x3b: FSINCOS(); break; \
-        case 0x3e: FSIN(); break; \
-        default: FCOS(); break; \
-        } \
         break; \
     } \
     GEN(xg); \

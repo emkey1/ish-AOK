@@ -49,8 +49,6 @@ int amd64_jit_iret(struct cpu_state *cpu, struct tlb *tlb, unsigned long start_i
 int amd64_jit_ud2(struct cpu_state *cpu, struct tlb *tlb, unsigned long start_ip);
 int amd64_jit_vex(struct cpu_state *cpu, struct tlb *tlb,
         unsigned long lead, unsigned long start_ip);
-int amd64_jit_x87_reg(struct cpu_state *cpu, struct tlb *tlb,
-        unsigned long word, unsigned long next_ip);
 int amd64_jit_cmpxchg8b(struct cpu_state *cpu, struct tlb *tlb,
         unsigned long next_ip);
 int amd64_jit_modrm_imm(struct cpu_state *cpu, struct tlb *tlb,
