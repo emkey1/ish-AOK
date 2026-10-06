@@ -372,16 +372,25 @@ log "sudo for the wheel group"
 # ===========================================================================
 grep -q '^@includedir /etc/sudoers.d\|^#includedir /etc/sudoers.d' /etc/sudoers 2>/dev/null || \
     echo '@includedir /etc/sudoers.d' >> /etc/sudoers
+# Named to sort FIRST: sudo reads /etc/sudoers.d in name order and the LAST
+# matching rule wins, so a fragment the user adds (zz-me-nopasswd, 90-me, ...)
+# must come after this one to be able to override it. AOK's earlier name,
+# aok-wheel, sorted after the common ones -- a user's NOPASSWD file was silently
+# beaten by its password rule -- so that file goes, if it is still ours.
+_old=/etc/sudoers.d/aok-wheel
+if [ -f "$_old" ] && { [ "$(cat "$_old")" = '%wheel ALL=(ALL:ALL) NOPASSWD: ALL' ] || [ "$(cat "$_old")" = '%wheel ALL=(ALL:ALL) ALL' ]; }; then
+    rm -f "$_old"
+fi
 if [ "$SUDO_NOPASSWD" = 1 ]; then
-    echo '%wheel ALL=(ALL:ALL) NOPASSWD: ALL' > /etc/sudoers.d/aok-wheel
+    echo '%wheel ALL=(ALL:ALL) NOPASSWD: ALL' > /etc/sudoers.d/00-aok-wheel
     note "passwordless sudo for %wheel"
 else
-    echo '%wheel ALL=(ALL:ALL) ALL' > /etc/sudoers.d/aok-wheel
+    echo '%wheel ALL=(ALL:ALL) ALL' > /etc/sudoers.d/00-aok-wheel
     note "%wheel sudo (password required; set SUDO_NOPASSWD=1 for passwordless)"
 fi
-chmod 0440 /etc/sudoers.d/aok-wheel
-if command -v visudo >/dev/null 2>&1 && ! visudo -cf /etc/sudoers.d/aok-wheel >/dev/null 2>&1; then
-    rm -f /etc/sudoers.d/aok-wheel
+chmod 0440 /etc/sudoers.d/00-aok-wheel
+if command -v visudo >/dev/null 2>&1 && ! visudo -cf /etc/sudoers.d/00-aok-wheel >/dev/null 2>&1; then
+    rm -f /etc/sudoers.d/00-aok-wheel
     note "WARNING: generated sudoers fragment failed validation; removed it"
 fi
 if [ -n "$TARGET_USER" ] && id "$TARGET_USER" >/dev/null 2>&1; then

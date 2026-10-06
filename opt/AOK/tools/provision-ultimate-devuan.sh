@@ -253,17 +253,26 @@ log "sudo for the sudo group"
 # Devuan/Debian use the 'sudo' group (not Alpine's 'wheel'). The stock
 # /etc/sudoers already has '#includedir /etc/sudoers.d'; we drop a file there.
 getent group sudo >/dev/null 2>&1 || groupadd sudo 2>/dev/null || true
+# Named to sort FIRST: sudo reads /etc/sudoers.d in name order and the LAST
+# matching rule wins, so a fragment the user adds (zz-me-nopasswd, 90-me, ...)
+# must come after this one to be able to override it. AOK's earlier name,
+# aok-sudo, sorted after the common ones -- a user's NOPASSWD file was silently
+# beaten by its password rule -- so that file goes, if it is still ours.
+_old=/etc/sudoers.d/aok-sudo
+if [ -f "$_old" ] && { [ "$(cat "$_old")" = '%sudo ALL=(ALL:ALL) NOPASSWD: ALL' ] || [ "$(cat "$_old")" = '%sudo ALL=(ALL:ALL) ALL' ]; }; then
+    rm -f "$_old"
+fi
 if [ "$SUDO_NOPASSWD" = 1 ]; then
-    echo '%sudo ALL=(ALL:ALL) NOPASSWD: ALL' > /etc/sudoers.d/aok-sudo
+    echo '%sudo ALL=(ALL:ALL) NOPASSWD: ALL' > /etc/sudoers.d/00-aok-sudo
     note "passwordless sudo for the sudo group"
 else
-    echo '%sudo ALL=(ALL:ALL) ALL' > /etc/sudoers.d/aok-sudo
+    echo '%sudo ALL=(ALL:ALL) ALL' > /etc/sudoers.d/00-aok-sudo
     note "sudo-group sudo (password required; set SUDO_NOPASSWD=1 for passwordless)"
 fi
-chmod 0440 /etc/sudoers.d/aok-sudo
+chmod 0440 /etc/sudoers.d/00-aok-sudo
 # Refuse to leave an invalid sudoers fragment in place.
-if command -v visudo >/dev/null 2>&1 && ! visudo -cf /etc/sudoers.d/aok-sudo >/dev/null 2>&1; then
-    rm -f /etc/sudoers.d/aok-sudo
+if command -v visudo >/dev/null 2>&1 && ! visudo -cf /etc/sudoers.d/00-aok-sudo >/dev/null 2>&1; then
+    rm -f /etc/sudoers.d/00-aok-sudo
     note "WARNING: generated sudoers fragment failed validation; removed it"
 fi
 if [ -n "$TARGET_USER" ] && id "$TARGET_USER" >/dev/null 2>&1; then

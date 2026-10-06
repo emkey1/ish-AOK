@@ -254,14 +254,23 @@ log "sudo for the wheel group"
 # ===========================================================================
 grep -q '^@includedir /etc/sudoers.d' /etc/sudoers 2>/dev/null || \
     echo '@includedir /etc/sudoers.d' >> /etc/sudoers
+# Named to sort FIRST: sudo reads /etc/sudoers.d in name order and the LAST
+# matching rule wins, so a fragment the user adds (zz-me-nopasswd, 90-me, ...)
+# must come after this one to be able to override it. AOK's earlier name,
+# wheel, sorted after the common ones -- a user's NOPASSWD file was silently
+# beaten by its password rule -- so that file goes, if it is still ours.
+_old=/etc/sudoers.d/wheel
+if [ -f "$_old" ] && { [ "$(cat "$_old")" = '%wheel ALL=(ALL) NOPASSWD: ALL' ] || [ "$(cat "$_old")" = '%wheel ALL=(ALL) ALL' ]; }; then
+    rm -f "$_old"
+fi
 if [ "$SUDO_NOPASSWD" = 1 ]; then
-    echo '%wheel ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/wheel
+    echo '%wheel ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/00-wheel
     note "passwordless sudo for %wheel"
 else
-    echo '%wheel ALL=(ALL) ALL' > /etc/sudoers.d/wheel
+    echo '%wheel ALL=(ALL) ALL' > /etc/sudoers.d/00-wheel
     note "%wheel sudo (password required; set SUDO_NOPASSWD=1 for passwordless)"
 fi
-chmod 0440 /etc/sudoers.d/wheel
+chmod 0440 /etc/sudoers.d/00-wheel
 if [ -n "$TARGET_USER" ] && id "$TARGET_USER" >/dev/null 2>&1; then
     id -nG "$TARGET_USER" | tr ' ' '\n' | grep -qx wheel || adduser "$TARGET_USER" wheel 2>/dev/null
     note "$TARGET_USER is in: $(id -nG "$TARGET_USER")"
