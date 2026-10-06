@@ -18312,8 +18312,14 @@ void helper_aad(struct cpu_state *cpu, uint32_t base);
 #define POPF(z) glue(POPF_, z)()
 #define PUSHF_32() gg(pushf32, state->orig_ip)
 #define PUSHF_16() gg(pushf16, state->orig_ip)
+#if defined(__aarch64__)
 #define POPF_32() ggg(popf32, state->orig_ip, state->ip)
 #define POPF_16() ggg(popf16, state->orig_ip, state->ip)
+#else
+// (jit/gadgets-x86_64's POPF takes only the instruction's ip)
+#define POPF_32() gg(popf32, state->orig_ip)
+#define POPF_16() gg(popf16, state->orig_ip)
+#endif
 #define SAHF g(sahf)
 #define LAHF g(lahf)
 #define CMC g(cmc)
@@ -18399,8 +18405,14 @@ void helper_aad(struct cpu_state *cpu, uint32_t base);
 
 void helper_rdtsc(struct cpu_state *cpu);
 #define RDTSC h(helper_rdtsc)
+#if defined(__aarch64__)
 #define CPUID() gg(cpuid, (unsigned long) &cpuid_tables[0])
 #define XGETBV() ggg(xgetbv, (unsigned long) xcr0_value(), state->orig_ip)
+#else
+// jit/gadgets-x86_64's take no operands: they call helper_cpuid/xgetbv
+#define CPUID() g(cpuid)
+#define XGETBV() g(xgetbv)
+#endif
 
 // atomic
 #define atomic_op(type, src, dst,z) load(src, z); op(atomic_##type, dst, z)
