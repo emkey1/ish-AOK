@@ -202,7 +202,7 @@ PURE = {
     # exactly why fileno must be redirected, because a funopen stream has no
     # descriptor and the host answers -1 with EBADF. bash reads
     # isatty(fileno(stdin)) to decide whether it is interactive.
-    "snprintf", "vsnprintf", "sprintf", "vsprintf", "sscanf", "vsscanf",
+    "snprintf", "vsnprintf", "sscanf", "vsscanf",
     "asprintf", "vasprintf", "fprintf", "vfprintf", "fputs", "fputc", "putc",
     "fwrite", "fread", "fgets", "fgetc", "getc", "ungetc",
     # fclose is NOT here either, for a different reason from fflush's: closing a
@@ -403,7 +403,7 @@ INTERNAL = {
     # bounds check the compiler inserts. They compute over the caller's own
     # memory and trap; nothing observes the host.
     "__memcpy_chk", "__memmove_chk", "__memset_chk",
-    "__snprintf_chk", "__sprintf_chk", "__vsnprintf_chk",
+    "__snprintf_chk", "__vsnprintf_chk",
     "__strcat_chk", "__strcpy_chk", "__strncpy_chk",
     "__strlcat_chk", "__strlcpy_chk",
     # stpcpy/stpncpy's, which arrived with dash -- same wrappers, same

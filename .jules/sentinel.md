@@ -53,3 +53,8 @@
 **Vulnerability:** None in practice: the buffer is sized as `sizeof("TERM=") + strlen(term)`, exactly what the `sprintf` writes. Hardening only -- the bound now travels with the call, so a later change to the sizing cannot silently overrun.
 **Learning:** Hardcoding string formatting directly into fixed-size structures without using bounded functions like `snprintf` creates critical security risks.
 **Prevention:** Always use `snprintf` combined with explicit buffer length parameters when formatting strings into dynamically allocated buffers.
+
+## 2026-10-06 - [Fix kernel buffer overflows by replacing sprintf with snprintf]
+**Vulnerability:** Unbounded `sprintf` usage in `kernel/foreign_exec.c` and `kernel/native.c` created buffer overflow vulnerabilities when handling environment variables.
+**Learning:** Legacy C string formatting functions are persistent risks even in core components.
+**Prevention:** Replaced unbounded `sprintf` with bounds-checked `snprintf`. Explicitly removed `sprintf` and related unsafe functions from the allowed native libc whitelist (`tools/check-native-libc.py`) to prevent future regressions.
