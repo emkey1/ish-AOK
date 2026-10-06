@@ -51,8 +51,11 @@ x86/x86_smc.c
 x86/x86_smc_alias.c
 x86/x86_fp_env.c
 x86/x86_prefetch.c
+x86/x86_signal_entry_flags.c
+x86/x86_cpuid_xgetbv.c
 x86/x86_ud_siginfo.c
 x86/i386_push16.c
+x86/i386_flags_pushf_lahf.c
 x86/i386_enter_branch16.c
 signal_core.c
 singlestep_fused.c
@@ -386,6 +389,13 @@ sysfs_power_supply.c
 proc_ish_arch.c
 proc_ish_host_state.c
 x86/amd64_regress.c
+x86/amd64_popcnt.c
+x86/amd64_cmpxchg.c
+x86/amd64_pushf_popf.c
+x86/amd64_ret_pop.c
+x86/amd64_moffs_stack16.c
+x86/amd64_loop_addr32.c
+x86/amd64_string_ops.c
 x86/amd64_incdec.c
 x86/amd64_x87_cache.c
 x86/popf_ac_id.c

@@ -5441,6 +5441,70 @@ amd64_v_str3a_mem pcmpestri, amd64_jit_pcmpestri
     gret 1
     amd64_vread_bullshit 8, pop_reg
 
+# 16-bit stack pushes and pops (0x66): PUSH r16 (50+r), PUSH imm16 (68 iw /
+# 6A ib), POP r16 (58+r), LEAVE (C9). RSP moves by 2; a register keeps bits
+# 16-63 (so `pop %sp` keeps RSP's upper 48 bits, after the +2). RSP is
+# committed only after the access. push16_reg: [reg], push16_imm: [imm],
+# pop16_reg: [reg]; gret 1. leave16: gret 0.
+.gadget amd64_push16_reg
+    ldr  x8, [_ip]
+    add  x14, _cpu, CPU_amd64_regs
+    ldr  x10, [x14, x8, lsl 3]
+    ldr  x9, [x14, 4*8]
+    sub  x9, x9, 2
+    amd64_vwrite_prep 2, push16_reg
+    strh w10, [x9]
+    amd64_vwrite_done 2, push16_reg
+    add  x14, _cpu, CPU_amd64_regs
+    ldr  x8, [x14, 4*8]
+    sub  x8, x8, 2
+    str  x8, [x14, 4*8]
+    gret 1
+    amd64_vwrite_bullshit 2, push16_reg
+.gadget amd64_push16_imm
+    ldr  x10, [_ip]
+    add  x14, _cpu, CPU_amd64_regs
+    ldr  x9, [x14, 4*8]
+    sub  x9, x9, 2
+    amd64_vwrite_prep 2, push16_imm
+    strh w10, [x9]
+    amd64_vwrite_done 2, push16_imm
+    add  x14, _cpu, CPU_amd64_regs
+    ldr  x8, [x14, 4*8]
+    sub  x8, x8, 2
+    str  x8, [x14, 4*8]
+    gret 1
+    amd64_vwrite_bullshit 2, push16_imm
+.gadget amd64_pop16_reg
+    ldr  x8, [_ip]
+    mov  x10, x8
+    add  x14, _cpu, CPU_amd64_regs
+    ldr  x9, [x14, 4*8]
+    amd64_vread_prep 2, pop16_reg
+    ldrh w11, [x9]
+    add  x14, _cpu, CPU_amd64_regs
+    ldr  x8, [x14, 4*8]
+    add  x8, x8, 2
+    str  x8, [x14, 4*8]
+    ldr  x12, [x14, x10, lsl 3]
+    bfi  x12, x11, 0, 16
+    str  x12, [x14, x10, lsl 3]
+    gret 1
+    amd64_vread_bullshit 2, pop16_reg
+.gadget amd64_leave16
+    add  x14, _cpu, CPU_amd64_regs
+    ldr  x9, [x14, 5*8]               /* RBP: the new RSP, and the read address */
+    amd64_vread_prep 2, leave16
+    ldrh w11, [x9]
+    add  x14, _cpu, CPU_amd64_regs
+    ldr  x8, [x14, 5*8]
+    add  x12, x8, 2
+    str  x12, [x14, 4*8]              /* RSP = RBP + 2 */
+    bfi  x8, x11, 0, 16
+    str  x8, [x14, 5*8]               /* BP = the popped word */
+    gret 0
+    amd64_vread_bullshit 2, leave16
+
 # amd64 push imm (0x68 imm32 / 0x6a imm8): push a sign-extended 64-bit immediate.
 # gen.c has already sign-extended the immediate to 64 bits and emits it as
 # operand 0, so the gadget just stores it. Same flush/fault contract as push_reg.
@@ -5458,6 +5522,501 @@ amd64_v_str3a_mem pcmpestri, amd64_jit_pcmpestri
     str  x8, [x14, 4*8]
     gret 1
     amd64_vwrite_bullshit 8, push_imm
+
+# PUSHF (9C) / POPF (9D), 64-bit and, with 0x66, 16-bit. PUSHF pushes the
+# flags as collapse_flags would picture them: CF and OF from their bytes (set
+# when nonzero), bit 1 set, bits 3 and 5 clear, IF set, the rest as eflags has
+# them; 16-bit pushes the low word. POPF loads CF PF AF ZF SF TF DF OF NT, and
+# in 64-bit AC and ID too -- what Linux lets user mode change (IF, IOPL and the
+# rest stay); CF and OF go to their bytes as well. A POPF that leaves TF set
+# ends the block, so the frontend single-steps from the next instruction and
+# the trap comes after it, as on hardware. RSP moves only once the access
+# succeeded, so a fault re-executes cleanly. PUSHF: no operands, gret 0.
+# POPF: [next_ip], gret 1.
+.macro amd64_pushf_value
+    ldr  w10, [_cpu, CPU_eflags]
+    ldrb w11, [_cpu, CPU_cf]
+    ldrb w12, [_cpu, CPU_of]
+    bic  w10, w10, 1
+    bic  w10, w10, (1 << 11)
+    cmp  w11, 0
+    cset w11, ne
+    orr  w10, w10, w11
+    cmp  w12, 0
+    cset w12, ne
+    orr  w10, w10, w12, lsl 11
+    orr  w10, w10, 2
+    bic  w10, w10, 8
+    bic  w10, w10, 32
+    orr  w10, w10, (1 << 9)
+    str  w10, [_cpu, CPU_eflags]
+.endm
+.gadget amd64_pushf64
+    amd64_pushf_value
+    add  x14, _cpu, CPU_amd64_regs
+    ldr  x9, [x14, 4*8]
+    sub  x9, x9, 8
+    amd64_vwrite_prep 8, pushf64
+    str  x10, [x9]
+    amd64_vwrite_done 8, pushf64
+    add  x14, _cpu, CPU_amd64_regs
+    ldr  x8, [x14, 4*8]
+    sub  x8, x8, 8
+    str  x8, [x14, 4*8]
+    gret 0
+    amd64_vwrite_bullshit 8, pushf64
+.gadget amd64_pushf16
+    amd64_pushf_value
+    add  x14, _cpu, CPU_amd64_regs
+    ldr  x9, [x14, 4*8]
+    sub  x9, x9, 2
+    amd64_vwrite_prep 2, pushf16
+    strh w10, [x9]
+    amd64_vwrite_done 2, pushf16
+    add  x14, _cpu, CPU_amd64_regs
+    ldr  x8, [x14, 4*8]
+    sub  x8, x8, 2
+    str  x8, [x14, 4*8]
+    gret 0
+    amd64_vwrite_bullshit 2, pushf16
+.macro amd64_gen_popf name, vbytes, writable_hi
+.gadget amd64_\name
+    add  x14, _cpu, CPU_amd64_regs
+    ldr  x9, [x14, 4*8]
+    amd64_vread_prep \vbytes, \name
+.if \vbytes == 2
+    ldrh w10, [x9]
+.else
+    ldr  x10, [x9]
+.endif
+    ldr  w11, [_cpu, CPU_eflags]
+    mov  w12, 0x4dd5                 /* CF PF AF ZF SF TF DF OF NT */
+    movk w12, \writable_hi, lsl 16   /* 64-bit: AC (18), ID (21) */
+    bic  w11, w11, w12
+    and  w13, w10, w12
+    orr  w11, w11, w13
+    str  w11, [_cpu, CPU_eflags]
+    and  w13, w11, 1
+    strb w13, [_cpu, CPU_cf]
+    ubfx w13, w11, 11, 1
+    strb w13, [_cpu, CPU_of]
+    strb wzr, [_cpu, CPU_flags_res]  /* the eager bits are authoritative now */
+    add  x14, _cpu, CPU_amd64_regs
+    ldr  x8, [x14, 4*8]
+    add  x8, x8, \vbytes
+    str  x8, [x14, 4*8]
+    tbz  w11, 8, 1f                  /* TF: leave the JIT (a yield), so */
+    ldr  x10, [_ip]                  /* the frontend single-steps on */
+    str  x10, [_cpu, CPU_amd64_rip]
+    str  w10, [_cpu, CPU_eip]
+    mov  w0, INT_TIMER
+    b    jit_exit
+1:  gret 1
+    amd64_vread_bullshit \vbytes, \name
+.endm
+amd64_gen_popf popf64, 8, 0x24
+amd64_gen_popf popf16, 2, 0
+
+# ===========================================================================
+# amd64 string instructions: MOVS STOS LODS SCAS CMPS, 1/2/4/8 bytes, with or
+# without REP/REPE (F3) / REPNE (F2), the 0x67 address size (ESI/EDI/ECX, a
+# 32-bit update), and an FS/GS override on the DS:RSI operand (MOVS, LODS,
+# CMPS; ES:RDI cannot be overridden). DF picks the direction. Per element
+# through the read/write preps, with RCX/RSI/RDI written back after each one:
+# a fault leaves them as the restart state with rip at the instruction. A REP
+# checks for a poke every 256 elements and leaves at the instruction, so it
+# stays interruptible. Forward REP MOVS/STOS with 64-bit addressing moves a
+# page span at a time instead (a MOVS whose destination overlaps the source
+# ahead of it -- the byte-smearing case -- stays per element).
+# The register cache is flushed before, so x20-x26 hold the loop state:
+# x20 count, x21 rsi, x22 rdi, x23 step (+-size), x24 packed, x25 rax,
+# x26 the poke countdown.
+# Code stream: [packed][start_ip][next_ip], packed = rep (0-1: 0 none, 1 F3,
+# 2 F2) | addr32 (2) | fs (3) | gs (4). gret 3.
+
+# x9 += the source segment's base
+.macro amd64_str_seg
+    tbz  x24, 3, .Lss_fs_\@
+    ldr  x8, [_cpu, CPU_tls_ptr]
+    add  x9, x9, x8
+.Lss_fs_\@:
+    tbz  x24, 4, .Lss_gs_\@
+    ldr  x8, [_cpu, CPU_amd64_gs_base]
+    add  x9, x9, x8
+.Lss_gs_\@:
+.endm
+
+.macro amd64_str_load vb, n, src
+.if \vb == 1
+    ldrb w\n, [\src]
+.elseif \vb == 2
+    ldrh w\n, [\src]
+.elseif \vb == 4
+    ldr  w\n, [\src]
+.else
+    ldr  x\n, [\src]
+.endif
+.endm
+
+# CMP lhs (x13), rhs (x10), both zero-extended from \bits -> flags; x15 =
+# the result.
+.macro amd64_str_cmp_flags bits
+.if \bits == 64
+    subs x15, x13, x10
+    cset w14, cc
+    cset w16, vs
+.else
+    lsl  x4, x13, (64 - \bits)
+    lsl  x5, x10, (64 - \bits)
+    subs x6, x4, x5
+    cset w14, cc
+    cset w16, vs
+    lsr  x15, x6, (64 - \bits)
+.endif
+    amd64_cached_set_addsub_flags (\bits - 1)
+.endm
+
+# The registers back to CPU state: RSI, RDI, and RCX under a REP; 32-bit
+# under 0x67.
+.macro amd64_str_store_regs
+    tbz  x24, 2, .Lsr_64_\@
+    mov  w20, w20
+    mov  w21, w21
+    mov  w22, w22
+.Lsr_64_\@:
+    add  x14, _cpu, CPU_amd64_regs
+    str  x21, [x14, 6*8]
+    str  x22, [x14, 7*8]
+    tst  x24, 3
+    b.eq .Lsr_norep_\@
+    str  x20, [x14, 1*8]
+.Lsr_norep_\@:
+.endm
+
+.macro amd64_gen_string op, vb, bits, lg
+.gadget amd64_str_\op\vb
+    ldr  x24, [_ip]
+    add  x14, _cpu, CPU_amd64_regs
+    ldr  x20, [x14, 1*8]
+    ldr  x21, [x14, 6*8]
+    ldr  x22, [x14, 7*8]
+    ldr  x25, [x14]
+    tbz  x24, 2, 1f
+    mov  w20, w20
+    mov  w21, w21
+    mov  w22, w22
+1:  ldr  w8, [_cpu, CPU_eflags]
+    mov  x23, \vb
+    tbz  w8, 10, 2f
+    neg  x23, x23
+2:  mov  x26, 256
+    tst  x24, 3
+    b.eq 30f                         /* no REP: one element */
+
+.ifc \op,movs
+    /* forward REP MOVS, 64-bit addressing, no source override: page spans */
+    tbnz x23, 63, 20f
+    tst  x24, (4 | 8 | 16)
+    b.ne 20f
+40: cbz  x20, 90f
+    and  x8, x22, 0xfff
+    mov  x9, 0x1000
+    sub  x9, x9, x8                  /* bytes to the destination's page end */
+    and  x8, x21, 0xfff
+    mov  x10, 0x1000
+    sub  x10, x10, x8
+    cmp  x9, x10
+    csel x9, x9, x10, lo             /* the nearer page end */
+    lsr  x9, x9, \lg
+    cmp  x9, x20
+    csel x9, x9, x20, lo             /* x9 = whole elements in this span */
+    cbz  x9, 20f                     /* an element straddles a page */
+    lsl  x26, x9, \lg   /* bytes */
+    cmp  x22, x21                    /* destination ahead of the source and */
+    b.ls 41f                         /* inside this span: element by element */
+    sub  x8, x22, x21
+    cmp  x8, x26
+    b.lo 20f
+41: mov  x9, x21
+    amd64_vread_prep 1, str_\op\vb\()_bs
+    mov  x10, x9                     /* host source (x10 survives a C call) */
+    mov  x9, x22
+    amd64_vwrite_prep 1, str_\op\vb\()_bd
+    mov  x11, x26
+    bl   amd64_str_copy              /* x9 <- x10, x11 bytes */
+    lsr  x8, x26, \lg
+    sub  x20, x20, x8
+    add  x21, x21, x26
+    add  x22, x22, x26
+    amd64_str_store_regs
+    cbz  x20, 90f
+    ldr  x8, [_cpu, CPU_poked_ptr]
+    ldrb w8, [x8]
+    cbnz w8, 80f
+    b    40b
+.endif
+.ifc \op,stos
+    /* forward REP STOS, 64-bit addressing: page spans */
+    tbnz x23, 63, 20f
+    tst  x24, 4
+    b.ne 20f
+    /* the pattern, the accumulator's low \vb bytes over 8 */
+.if \vb == 1
+    and  x8, x25, 0xff
+    mov  x9, 0x0101010101010101
+    mul  x8, x8, x9
+.elseif \vb == 2
+    and  x8, x25, 0xffff
+    mov  x9, 0x0001000100010001
+    mul  x8, x8, x9
+.elseif \vb == 4
+    mov  w8, w25
+    orr  x8, x8, x8, lsl 32
+.else
+    mov  x8, x25
+.endif
+    mov  x3, x8                      /* x3 survives a C call */
+40: cbz  x20, 90f
+    and  x8, x22, 0xfff
+    mov  x9, 0x1000
+    sub  x9, x9, x8
+    lsr  x9, x9, \lg
+    cmp  x9, x20
+    csel x9, x9, x20, lo
+    cbz  x9, 20f
+    lsl  x26, x9, \lg
+    mov  x9, x22
+    amd64_vwrite_prep 1, str_\op\vb\()_bd
+    mov  x11, x26
+    bl   amd64_str_fill              /* x9, x11 bytes of the pattern x3 */
+    lsr  x8, x26, \lg
+    sub  x20, x20, x8
+    add  x22, x22, x26
+    amd64_str_store_regs
+    cbz  x20, 90f
+    ldr  x8, [_cpu, CPU_poked_ptr]
+    ldrb w8, [x8]
+    cbnz w8, 80f
+    b    40b
+.endif
+
+    /* REP, element by element */
+20: mov  x26, 256
+21: cbz  x20, 90f
+30: /* one element */
+.ifc \op,movs
+    mov  x9, x21
+    amd64_str_seg
+    amd64_vread_prep \vb, str_\op\vb\()_r
+    amd64_str_load \vb, 10, x9
+    mov  x9, x22
+    amd64_vwrite_prep \vb, str_\op\vb\()_w
+.if \vb == 1
+    strb w10, [x9]
+.elseif \vb == 2
+    strh w10, [x9]
+.elseif \vb == 4
+    str  w10, [x9]
+.else
+    str  x10, [x9]
+.endif
+    amd64_vwrite_done \vb, str_\op\vb\()_w
+    add  x21, x21, x23
+    add  x22, x22, x23
+.endif
+.ifc \op,stos
+    mov  x9, x22
+    amd64_vwrite_prep \vb, str_\op\vb\()_w
+.if \vb == 1
+    strb w25, [x9]
+.elseif \vb == 2
+    strh w25, [x9]
+.elseif \vb == 4
+    str  w25, [x9]
+.else
+    str  x25, [x9]
+.endif
+    amd64_vwrite_done \vb, str_\op\vb\()_w
+    add  x22, x22, x23
+.endif
+.ifc \op,lods
+    mov  x9, x21
+    amd64_str_seg
+    amd64_vread_prep \vb, str_\op\vb\()_r
+    amd64_str_load \vb, 10, x9
+.if \vb == 1
+    bfi  x25, x10, 0, 8
+.elseif \vb == 2
+    bfi  x25, x10, 0, 16
+.elseif \vb == 4
+    mov  w25, w10
+.else
+    mov  x25, x10
+.endif
+    add  x14, _cpu, CPU_amd64_regs
+    str  x25, [x14]
+    add  x21, x21, x23
+.endif
+.ifc \op,scas
+    mov  x9, x22
+    amd64_vread_prep \vb, str_\op\vb\()_r
+    amd64_str_load \vb, 10, x9
+.if \vb == 8
+    mov  x13, x25
+.elseif \vb == 4
+    mov  w13, w25
+.elseif \vb == 2
+    and  x13, x25, 0xffff
+.else
+    and  x13, x25, 0xff
+.endif
+    amd64_str_cmp_flags \bits
+    add  x22, x22, x23
+.endif
+.ifc \op,cmps
+    mov  x9, x21
+    amd64_str_seg
+    amd64_vread_prep \vb, str_\op\vb\()_r
+    amd64_str_load \vb, 3, x9        /* x3: the next prep leaves it alone */
+    mov  x9, x22
+    amd64_vread_prep \vb, str_\op\vb\()_r2
+    amd64_str_load \vb, 10, x9
+    mov  x13, x3
+    amd64_str_cmp_flags \bits
+    add  x21, x21, x23
+    add  x22, x22, x23
+.endif
+    tst  x24, 3
+    b.eq 31f
+    sub  x20, x20, 1
+31: amd64_str_store_regs
+    tst  x24, 3
+    b.eq 90f                         /* no REP: done */
+.ifin(\op, scas,cmps)
+    tbnz x24, 1, 32f
+    cbnz x15, 90f                    /* REPE: stop when not equal */
+    b    33f
+32: cbz  x15, 90f                    /* REPNE: stop when equal */
+33:
+.endifin
+    subs x26, x26, 1
+    b.ne 21b
+    mov  x26, 256
+    cbz  x20, 90f
+    ldr  x8, [_cpu, CPU_poked_ptr]
+    ldrb w8, [x8]
+    cbz  w8, 21b
+80: /* poked with elements left: leave at the instruction, the registers
+       being its restart state */
+    ldr  x8, [_ip, 8]
+    str  x8, [_cpu, CPU_amd64_rip]
+    str  w8, [_cpu, CPU_eip]
+    b    jit_ret
+90: gret 3
+.ifin(\op, movs,lods,scas,cmps)
+    amd64_vread_bullshit \vb, str_\op\vb\()_r
+.endifin
+.ifc \op,cmps
+    amd64_vread_bullshit \vb, str_\op\vb\()_r2
+.endif
+.ifin(\op, movs,stos)
+    amd64_vwrite_bullshit \vb, str_\op\vb\()_w
+    amd64_vwrite_bullshit 1, str_\op\vb\()_bd
+.endifin
+.ifc \op,movs
+    amd64_vread_bullshit 1, str_\op\vb\()_bs
+.endif
+.endm
+
+# x11 bytes, host x10 -> host x9, lowest first: right for a destination at or
+# below the source (each chunk is loaded before the stores that could reach
+# it). Clobbers x9-x12, q0-q3.
+amd64_str_copy:
+1:  cmp  x11, 64
+    b.lo 2f
+    ldp  q0, q1, [x10]
+    ldp  q2, q3, [x10, 32]
+    add  x10, x10, 64
+    stp  q0, q1, [x9]
+    stp  q2, q3, [x9, 32]
+    add  x9, x9, 64
+    sub  x11, x11, 64
+    b    1b
+2:  cmp  x11, 8
+    b.lo 3f
+    ldr  x12, [x10], 8
+    str  x12, [x9], 8
+    sub  x11, x11, 8
+    b    2b
+3:  cbz  x11, 4f
+    ldrb w12, [x10], 1
+    strb w12, [x9], 1
+    sub  x11, x11, 1
+    b    3b
+4:  ret
+
+# x11 bytes at host x9 with the 8-byte pattern x3 (phase from the start).
+# Clobbers x9, x11, x12, q0.
+amd64_str_fill:
+    dup  v0.2d, x3
+1:  cmp  x11, 64
+    b.lo 2f
+    stp  q0, q0, [x9]
+    stp  q0, q0, [x9, 32]
+    add  x9, x9, 64
+    sub  x11, x11, 64
+    b    1b
+2:  mov  x12, x3
+3:  cmp  x11, 8
+    b.lo 4f
+    str  x12, [x9], 8
+    sub  x11, x11, 8
+    b    3b
+4:  cbz  x11, 5f
+    strb w12, [x9], 1
+    lsr  x12, x12, 8
+    sub  x11, x11, 1
+    b    4b
+5:  ret
+
+.irp op, movs,stos,lods,scas,cmps
+amd64_gen_string \op, 1, 8, 0
+amd64_gen_string \op, 2, 16, 1
+amd64_gen_string \op, 4, 32, 2
+amd64_gen_string \op, 8, 64, 3
+.endr
+
+# CPUID (0F A2): cpuid_lookup (misc.S) on the amd64 table; the four results
+# are 32-bit writes, zero-extended. [table], gret 1. XGETBV (0F 01 D0):
+# EDX:EAX = XCR0 for ECX = 0, else #GP at the instruction (gen.c flushed rip
+# to it). [xcr0], gret 1.
+.gadget amd64_cpuid
+    ldr  x10, [_ip]
+    add  x14, _cpu, CPU_amd64_regs
+    ldr  w8, [x14]
+    ldr  w9, [x14, 1*8]
+    bl   cpuid_lookup
+    add  x15, _cpu, CPU_amd64_regs
+    str  x11, [x15]                  /* the w writes zeroed the upper halves */
+    str  x13, [x15, 1*8]
+    str  x14, [x15, 2*8]
+    str  x12, [x15, 3*8]
+    gret 1
+.gadget amd64_xgetbv
+    add  x14, _cpu, CPU_amd64_regs
+    ldr  w9, [x14, 1*8]
+    cbnz w9, 1f
+    ldr  x8, [_ip]
+    mov  w10, w8
+    str  x10, [x14]
+    lsr  x8, x8, 32
+    str  x8, [x14, 2*8]
+    gret 1
+1:  str  xzr, [_cpu, CPU_segfault_addr]
+    strb wzr, [_cpu, CPU_segfault_was_write]
+    strb wzr, [_cpu, CPU_segfault_reported]
+    mov  x0, INT_GPF
+    b    jit_exit
 
 # amd64 leave (0xc9): mov rsp, rbp ; pop rbp. RBP is regs[5]. The pop reads from
 # [RBP] (the new RSP), then RSP = RBP + 8 and RBP = the popped value. RSP/RBP are
@@ -5514,6 +6073,96 @@ amd64_branch_noncanonical:
     str  w10, [_cpu, CPU_eip]        /* mirror low 32 bits, as amd64_jmp does */
     b    jit_ret
     amd64_vread_bullshit 8, ret
+
+# RET imm16 (C2 iw): RET, then RSP += imm16 on top of the 8 the pop takes. The
+# target is checked the way RET checks it, before RSP moves. Operand: [imm].
+.gadget amd64_ret_imm
+    add  x14, _cpu, CPU_amd64_regs
+    ldr  x9, [x14, 4*8]
+    amd64_vread_prep 8, ret_imm
+    ldr  x10, [x9]
+    amd64_branch_canonical x10
+    add  x14, _cpu, CPU_amd64_regs
+    ldr  x8, [x14, 4*8]
+    ldr  x11, [_ip]
+    add  x8, x8, 8
+    add  x8, x8, x11
+    str  x8, [x14, 4*8]
+    str  x10, [_cpu, CPU_amd64_rip]
+    str  w10, [_cpu, CPU_eip]
+    b    jit_ret
+    amd64_vread_bullshit 8, ret_imm
+
+# POP r/m (8F /0), 64-bit or, with 0x66, 16-bit. A memory destination's
+# address is computed with RSP already advanced (the SDM's rule, which `pop
+# off(%rsp)` depends on), but RSP is committed only once the store has worked:
+# a faulting store re-executes from the original slot -- musl's sigsetjmp does
+# `popq off(%rdi)` into a jmp_buf that may not be touched yet. A register
+# destination takes the value after RSP moves, so `pop %rsp` loads it.
+# Memory: [meta][disp][next_ip], gret 3. Register: [reg], gret 1.
+.macro amd64_gen_pop_rm_mem name, vbytes
+.gadget amd64_\name
+    add  x14, _cpu, CPU_amd64_regs
+    ldr  x9, [x14, 4*8]
+    amd64_vread_prep \vbytes, \name\()_r
+.if \vbytes == 2
+    ldrh w10, [x9]
+.else
+    ldr  x10, [x9]
+.endif
+    add  x14, _cpu, CPU_amd64_regs
+    ldr  x3, [x14, 4*8]              /* RSP as it was */
+    add  x4, x3, \vbytes
+    str  x4, [x14, 4*8]              /* advanced, for the address only */
+    ldr  x8, [_ip]
+    ldr  x9, [_ip, 8]
+    amd64_vmem_addr
+    add  x14, _cpu, CPU_amd64_regs
+    str  x3, [x14, 4*8]              /* back, until the store has worked */
+    amd64_vwrite_prep \vbytes, \name\()_w
+.if \vbytes == 2
+    strh w10, [x9]
+.else
+    str  x10, [x9]
+.endif
+    amd64_vwrite_done \vbytes, \name\()_w
+    add  x14, _cpu, CPU_amd64_regs
+    ldr  x3, [x14, 4*8]
+    add  x3, x3, \vbytes
+    str  x3, [x14, 4*8]
+    gret 3
+    amd64_vread_bullshit \vbytes, \name\()_r
+    amd64_vwrite_bullshit \vbytes, \name\()_w
+.endm
+amd64_gen_pop_rm_mem pop_rm_mem16, 2
+amd64_gen_pop_rm_mem pop_rm_mem64, 8
+.macro amd64_gen_pop_rm_reg name, vbytes
+.gadget amd64_\name
+    add  x14, _cpu, CPU_amd64_regs
+    ldr  x9, [x14, 4*8]
+    amd64_vread_prep \vbytes, \name
+.if \vbytes == 2
+    ldrh w10, [x9]
+.else
+    ldr  x10, [x9]
+.endif
+    add  x14, _cpu, CPU_amd64_regs
+    ldr  x8, [x14, 4*8]
+    add  x8, x8, \vbytes
+    str  x8, [x14, 4*8]
+    ldr  x11, [_ip]
+.if \vbytes == 2
+    ldr  x12, [x14, x11, lsl 3]
+    bfi  x12, x10, 0, 16
+    str  x12, [x14, x11, lsl 3]
+.else
+    str  x10, [x14, x11, lsl 3]
+.endif
+    gret 1
+    amd64_vread_bullshit \vbytes, \name
+.endm
+amd64_gen_pop_rm_reg pop_rm_reg16, 2
+amd64_gen_pop_rm_reg pop_rm_reg64, 8
 
 # amd64 indirect jmp, register form (0xff /4, mod==3): rip = regs[rm], exit. No
 # memory access. Operand 0 = rm register number (0-15). Always 64-bit in long mode.
@@ -6886,38 +7535,100 @@ amd64_gen_mov_imm_mem mov_imm_mem32, 4
 amd64_gen_mov_imm_mem mov_imm_mem64, 8
 
 # CMPXCHG [mem], reg (0F B1), 32/64-bit -- the atomic compare-exchange that
-# every mutex and lock-free structure is built on; 6.1% of remaining bridges.
-# The gadget is a thin shell: it computes the address, fetches the source
-# register, and calls amd64_jit_cmpxchg, which owns the compare / conditional
-# swap / RAX-or-ZF bookkeeping and routes the swap itself through the same
-# host-CAS-or-mutex primitive the interpreter uses. Same pattern as pcmpistri:
-# the block stays native, the fiddly atomic core stays in verified C.
-#
-# _cpu is x1 and _tlb is x2, so the argument setup reads them BEFORE x1/x2 are
-# overwritten (the trap that bit both the pcmpistri and the lock_imm gadgets).
+# every mutex and lock-free structure is built on. Aligned (the case compilers
+# produce): a host exclusive compare-and-swap at the write-prepped host address
+# (ARMv8.0: ldaxr/stlxr). Misaligned: x86_atomic_cas (emu/tlb.c), the shared
+# misaligned-LOCK primitive -- a 16-byte block CAS, or this address space's
+# split lock for an operand that straddles blocks. Either way the result is
+# the old value; the flags are CMP rax, old; a failed compare loads it into rax
+# (zero-extended for 32-bit), a successful one leaves rax alone. A page that
+# is not writable faults even when the compare fails, as on x86. The LOCK
+# prefix changes nothing a single thread can see; the swap is atomic anyway.
 # Operands: [meta][disp][next_ip][size]. gret 4.
-.gadget amd64_cmpxchg_mem
+.macro amd64_gen_cmpxchg_mem name, vbytes, sbit
+.gadget amd64_\name
     ldr  x8, [_ip]
     ldr  x9, [_ip, 8]
     amd64_vmem_addr                  /* x9 = guest effective address */
+    tst  x9, (\vbytes - 1)
+    b.ne 8f
+    amd64_vwrite_prep \vbytes, \name
     ldr  x8, [_ip]
-    ubfx x12, x8, 8, 4               /* src reg id */
+    ubfx x12, x8, 8, 4
     add  x14, _cpu, CPU_amd64_regs
-    ldr  x13, [x14, x12, lsl 3]      /* src value, read while _cpu is intact */
-    ldr  x11, [_ip, 24]              /* size in bits */
+    ldr  x3, [x14, x12, lsl 3]       /* desired: the source register */
+    ldr  x10, [x14]                  /* expected: rax */
+.if \vbytes == 4
+1:  ldaxr w13, [x9]
+    cmp  w13, w10
+    b.ne 2f
+    stlxr w11, w3, [x9]
+.else
+1:  ldaxr x13, [x9]
+    cmp  x13, x10
+    b.ne 2f
+    stlxr w11, x3, [x9]
+.endif
+    cbnz w11, 1b
+    b    4f
+2:  clrex
+4:  mov  x4, x13                     /* the old value (zero-extended for 32) */
+    mov  x13, x10                    /* CMP rax, old: lhs rax, rhs old */
+    mov  x10, x4
+.if \vbytes == 4
+    subs w15, w13, w10
+    cset w14, cc
+    cset w16, vs
+    mov  w15, w15
+.else
+    subs x15, x13, x10
+    cset w14, cc
+    cset w16, vs
+.endif
+    amd64_cached_set_addsub_flags \sbit
+    cbz  x15, 5f                     /* equal: swapped, rax stays */
+    add  x14, _cpu, CPU_amd64_regs
+    str  x4, [x14]                   /* rax = old */
+5:  gret 4
+
+8:  /* misaligned: x86_atomic_cas(cpu, tlb, addr, size, expected, desired,
+       &old, &swapped). _cpu is x1 and _tlb x2: read them before they are
+       argument registers. */
+    ldr  x8, [_ip]
+    ubfx x12, x8, 8, 4
+    add  x14, _cpu, CPU_amd64_regs
+    ldr  x5, [x14, x12, lsl 3]
+    ldr  x4, [x14]
+.if \vbytes == 4
+    mov  w4, w4
+    mov  w5, w5
+.endif
+    sub  sp, sp, 16
+    mov  x6, sp                      /* &old: this slot, above save_c's frame */
+    add  x7, sp, 8                   /* &swapped */
     save_c
-    mov  x3, x11                     /* size */
-    mov  x4, x13                     /* src */
-    mov  x0, _cpu                    /* cpu   (reads x1) */
-    sub  x1, _tlb, TLB_entries       /* tlb   (reads x2) */
-    mov  x2, x9                      /* addr  (x2 now free) */
-    bl   NAME(amd64_jit_cmpxchg)
+    mov  x0, _cpu
+    sub  x1, _tlb, TLB_entries
+    mov  x2, x9
+    mov  x3, \vbytes
+    bl   NAME(x86_atomic_cas)
     mov  x19, x0
     restore_c
-    cbnz x19, 9f
-    gret 4
-9:  mov  x0, x19                     /* the helper's interrupt (INT_PF): deliver it */
+    ldr  x13, [sp]
+    add  sp, sp, 16
+    cbnz w19, 9f
+    add  x14, _cpu, CPU_amd64_regs
+    ldr  x10, [x14]
+.if \vbytes == 4
+    mov  w10, w10
+.endif
+    b    4b
+9:  mov  x0, x19                     /* INT_PF, segfault_addr already set */
     b    jit_exit
+    amd64_vwrite_bullshit \vbytes, \name
+.endm
+amd64_gen_cmpxchg_mem cmpxchg_mem32, 4, 31
+amd64_gen_cmpxchg_mem cmpxchg_mem64, 8, 63
 
 amd64_gen_imm_arith imm_arith32, 4, 31
 amd64_gen_imm_arith imm_arith64, 8, 63
@@ -8535,6 +9246,83 @@ _gadget_array_start fused_test8
 .endm
 amd64_gen_bitscan_mem bitscan_mem32, 4
 amd64_gen_bitscan_mem bitscan_mem64, 8
+
+# POPCNT r, r/m (F3 0F B8), 16/32/64. Body inputs: x10 = the source, zero-
+# extended from its size; x12 = the destination slot; x8 bits 8-9 = the size
+# (1 = 16, 2 = 32, 3 = 64). CF, OF, SF, AF and PF clear, ZF = (source == 0);
+# the lazy bits are cleared. A 16-bit destination keeps bits 16-63, a 32-bit
+# one is zero-extended. No scalar popcount on aarch64: v0 is free scratch here
+# (dead after gret, no C call in between), as in the i386 popcnt.
+.macro amd64_popcnt_body
+    fmov d0, x10
+    cnt  v0.8b, v0.8b
+    addv b0, v0.8b
+    fmov w15, s0
+    strb wzr, [_cpu, CPU_cf]
+    strb wzr, [_cpu, CPU_of]
+    cmp  x10, 0
+    cset w9, eq
+    ldrb w11, [_cpu, CPU_eflags]
+    bic  w11, w11, PF_FLAG           /* not one logical immediate: bit by bit */
+    bic  w11, w11, AF_FLAG
+    bic  w11, w11, ZF_FLAG
+    bic  w11, w11, SF_FLAG
+    orr  w11, w11, w9, lsl 6
+    strb w11, [_cpu, CPU_eflags]
+    ldrb w11, [_cpu, CPU_flags_res]
+    bic  w11, w11, (PF_RES | ZF_RES | SF_RES | AF_OPS)
+    strb w11, [_cpu, CPU_flags_res]
+    add  x14, _cpu, CPU_amd64_regs
+    ubfx x13, x8, 8, 2
+    cmp  x13, 1
+    b.ne 1f
+    ldr  x16, [x14, x12, lsl 3]
+    bfi  x16, x15, 0, 16
+    mov  x15, x16
+1:  str  x15, [x14, x12, lsl 3]
+.endm
+
+# Register source. packed(0) = src(0-3) | dst(4-7) | size(8-9). gret 1.
+.gadget amd64_popcnt_reg
+    ldr  x8, [_ip]
+    and  x11, x8, 0xf
+    ubfx x12, x8, 4, 4
+    add  x14, _cpu, CPU_amd64_regs
+    ldr  x10, [x14, x11, lsl 3]
+    ubfx x13, x8, 8, 2
+    cmp  x13, 2
+    b.hi 2f
+    b.eq 1f
+    and  x10, x10, 0xffff
+    b    2f
+1:  mov  w10, w10
+2:  amd64_popcnt_body
+    gret 1
+
+# Memory source. Operands: [meta][disp][next_ip][packed = dst(4-7) | size(8-9)].
+# gret 4.
+.macro amd64_gen_popcnt_mem name, vbytes
+.gadget amd64_\name
+    ldr  x8, [_ip]
+    ldr  x9, [_ip, 8]
+    amd64_vmem_addr
+    amd64_vread_prep \vbytes, \name
+.if \vbytes == 2
+    ldrh w10, [x9]
+.elseif \vbytes == 4
+    ldr  w10, [x9]
+.else
+    ldr  x10, [x9]
+.endif
+    ldr  x8, [_ip, 24]
+    ubfx x12, x8, 4, 4
+    amd64_popcnt_body
+    gret 4
+    amd64_vread_bullshit \vbytes, \name
+.endm
+amd64_gen_popcnt_mem popcnt_mem16, 2
+amd64_gen_popcnt_mem popcnt_mem32, 4
+amd64_gen_popcnt_mem popcnt_mem64, 8
 
 # IMUL r, r/m (0F AF) and IMUL r, r/m, imm (69 id / 6B ib) with a memory
 # source, 32/64. The multiply and the CF=OF=overflow rule are amd64_imul_body's;

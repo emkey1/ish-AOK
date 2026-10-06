@@ -12,6 +12,37 @@ void helper_cpuid(dword_t *a, dword_t *b, dword_t *c, dword_t *d) {
     do_cpuid(a, b, c, d);
 }
 
+int cpuid_long_mode_override = -1;
+struct cpuid_table cpuid_tables[2];
+
+static void cpuid_fill(struct cpuid_answer *ans, dword_t leaf, dword_t subleaf) {
+    dword_t a = leaf, b = 0, c = subleaf, d = 0;
+    do_cpuid(&a, &b, &c, &d);
+    *ans = (struct cpuid_answer) {a, b, c, d};
+}
+
+__attribute__((constructor)) void cpuid_tables_init(void) {
+    for (int lm = 0; lm < 2; lm++) {
+        cpuid_long_mode_override = lm;
+        struct cpuid_answer *s = cpuid_tables[lm].slot;
+        cpuid_fill(&s[CPUID_SLOT_LEAF0], 0, 0);
+        cpuid_fill(&s[CPUID_SLOT_LEAF1], 1, 0);
+        cpuid_fill(&s[CPUID_SLOT_LEAF7_0], 7, 0);
+        cpuid_fill(&s[CPUID_SLOT_LEAFD_0], 0xd, 0);
+        cpuid_fill(&s[CPUID_SLOT_LEAFD_1], 0xd, 1);
+        cpuid_fill(&s[CPUID_SLOT_LEAFD_2], 0xd, 2);
+        cpuid_fill(&s[CPUID_SLOT_LEAFD_5], 0xd, 5);
+        cpuid_fill(&s[CPUID_SLOT_LEAFD_6], 0xd, 6);
+        cpuid_fill(&s[CPUID_SLOT_LEAFD_7], 0xd, 7);
+        cpuid_fill(&s[CPUID_SLOT_EXT0], 0x80000000u, 0);
+        cpuid_fill(&s[CPUID_SLOT_EXT1], 0x80000001u, 0);
+        cpuid_fill(&s[CPUID_SLOT_ABOVE_BASIC], cpuid_basic_max_leaf() + 1, 0);
+        cpuid_fill(&s[CPUID_SLOT_ZERO], 2, 0);
+        cpuid_fill(&s[CPUID_SLOT_ABOVE_EXT], 0x80000002u, 0);
+    }
+    cpuid_long_mode_override = -1;
+}
+
 // XGETBV for the i386 guest. Takes the same four-register frame as
 // helper_cpuid so it can reuse that gadget's shape exactly: ecx selects the
 // register on the way in, eax/edx take the value on the way out, ebx is

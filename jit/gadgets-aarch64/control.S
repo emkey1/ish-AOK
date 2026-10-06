@@ -1,4 +1,5 @@
 #include "gadgets.h"
+#include "emu/interrupt.h"
 
 # An indirect jmp or call to _tmp: enter the target's block straight from
 # the dispatch loop's block cache (jit_frame.i386_cache, jit_cache_hash's
@@ -414,6 +415,46 @@ amd64_gen_loop loop, none
 amd64_gen_loop loope, e
 amd64_gen_loop loopne, ne
 
+# The 0x67 forms (67 E0-E3) count in ECX: a 32-bit write, so RCX's upper half
+# is cleared, as Linux's hardware does it. JECXZ tests ECX alone.
+# Operands: [taken][else].
+.macro amd64_gen_loop32 name, ztest
+    .gadget amd64_\name
+        ldr w8, [_cpu, (CPU_amd64_regs + 8)]   /* ECX */
+        sub w8, w8, 1
+        str x8, [_cpu, (CPU_amd64_regs + 8)]   /* zero-extended into RCX */
+        cbz w8, 1f
+        .ifc \ztest,e
+            do_jump z, 5f
+            b 1f
+        5:
+        .endif
+        .ifc \ztest,ne
+            do_jump z, 1f
+        .endif
+        ldr x10, [_ip]
+        str x10, [_cpu, CPU_amd64_rip]
+        str w10, [_cpu, CPU_eip]
+        b jit_ret
+    1:
+        ldr x10, [_ip, 8]
+        str x10, [_cpu, CPU_amd64_rip]
+        str w10, [_cpu, CPU_eip]
+        b jit_ret
+.endm
+amd64_gen_loop32 loop32, none
+amd64_gen_loop32 loope32, e
+amd64_gen_loop32 loopne32, ne
+.gadget amd64_jecxz
+    ldr w8, [_cpu, (CPU_amd64_regs + 8)]
+    cbz w8, 1f
+    ldr x10, [_ip, 8]
+    b 2f
+1:  ldr x10, [_ip]
+2:  str x10, [_cpu, CPU_amd64_rip]
+    str w10, [_cpu, CPU_eip]
+    b jit_ret
+
 # amd64 JRCXZ (0xe3), rel8: branch if RCX == 0. Unlike LOOP it neither
 # decrements the counter nor consults ZF, so it needs no do_jump and no flag
 # reasoning at all -- just a register test. Chained like the jcc gadgets rather
@@ -568,12 +609,74 @@ amd64_gen_loop loopne, ne
 # the fault path leaves ESP where it finds it, and the old gadget had already
 # moved it; nor did it carry an orig_ip, so a fault took EIP from whatever
 # word followed it in the block.
+# collapse_flags (emu/cpu.h) in place: ZF, SF and PF from CPU_res and AF from
+# op1 ^ op2 ^ res where the lazy bits say so, CF and OF from their bytes (set
+# when nonzero), bit 1 set, bits 3 and 5 clear, IF set; the lazy bits cleared.
+# Clobbers w8-w12.
+.macro i386_collapse_flags
+    ldr  w8, [_cpu, CPU_eflags]
+    ldrb w9, [_cpu, CPU_flags_res]
+    ldr  w10, [_cpu, CPU_res]
+    tbz  w9, 1, .Lcf_zf_\@             /* ZF_RES */
+    bic  w8, w8, ZF_FLAG
+    cmp  w10, 0
+    cset w11, eq
+    orr  w8, w8, w11, lsl 6
+.Lcf_zf_\@:
+    tbz  w9, 2, .Lcf_sf_\@             /* SF_RES */
+    bic  w8, w8, SF_FLAG
+    lsr  w11, w10, 31
+    orr  w8, w8, w11, lsl 7
+.Lcf_sf_\@:
+    tbz  w9, 0, .Lcf_pf_\@             /* PF_RES: even parity of the low byte */
+    bic  w8, w8, PF_FLAG
+    eor  w11, w10, w10, lsr 4
+    eor  w11, w11, w11, lsr 2
+    eor  w11, w11, w11, lsr 1
+    mvn  w11, w11
+    and  w11, w11, 1
+    orr  w8, w8, w11, lsl 2
+.Lcf_pf_\@:
+    tbz  w9, 3, .Lcf_af_\@             /* AF_OPS */
+    ldr  w11, [_cpu, CPU_op1]
+    ldr  w12, [_cpu, CPU_op2]
+    eor  w11, w11, w12
+    eor  w11, w11, w10
+    ubfx w11, w11, 4, 1
+    bic  w8, w8, AF_FLAG
+    orr  w8, w8, w11, lsl 4
+.Lcf_af_\@:
+    strb wzr, [_cpu, CPU_flags_res]
+    ldrb w11, [_cpu, CPU_cf]
+    cmp  w11, 0
+    cset w11, ne
+    bic  w8, w8, 1
+    orr  w8, w8, w11
+    ldrb w11, [_cpu, CPU_of]
+    cmp  w11, 0
+    cset w11, ne
+    bic  w8, w8, (1 << 11)
+    orr  w8, w8, w11, lsl 11
+    orr  w8, w8, 2
+    bic  w8, w8, 8
+    bic  w8, w8, 32
+    orr  w8, w8, (1 << 9)
+    str  w8, [_cpu, CPU_eflags]
+.endm
+
+# expand_flags: CF and OF bytes from eflags, no lazy bits. Clobbers w8, w9.
+.macro i386_expand_flags
+    ldr  w8, [_cpu, CPU_eflags]
+    and  w9, w8, 1
+    strb w9, [_cpu, CPU_cf]
+    ubfx w9, w8, 11, 1
+    strb w9, [_cpu, CPU_of]
+    strb wzr, [_cpu, CPU_flags_res]
+.endm
+
 .macro do_pushf size, s
     .gadget pushf\size
-        save_c
-        mov x0, _cpu
-        bl NAME(helper_collapse_flags)
-        restore_c
+        i386_collapse_flags
 
         sub _addr, esp, (\size/8)
         write_prep \size, pushf\size
@@ -588,6 +691,9 @@ do_pushf 32
 do_pushf 16, h
 .purgem do_pushf
 
+# [gadget][orig_ip][next_ip]. A POPF that leaves TF set leaves the JIT at the
+# next instruction (as a yield), so cpu_single_step takes over from there and
+# the trap comes after it, as on hardware.
 .macro do_popf size, s, mask_hi
     .gadget popf\size
         mov _addr, esp
@@ -602,11 +708,12 @@ do_pushf 16, h
         str w10, [_cpu, CPU_eflags]
         add esp, esp, (\size/8)
 
-        save_c
-        mov x0, _cpu
-        bl NAME(helper_expand_flags)
-        restore_c
-        gret 1
+        i386_expand_flags
+        tbz w10, 8, 1f
+        ldr eip, [_ip, 8]
+        mov _tmp, INT_TIMER
+        b jit_exit
+1:      gret 2
         read_bullshit \size, popf\size
 .endm
 do_popf 32, , 0x24
@@ -616,20 +723,14 @@ do_popf 16, h, 0
 .gadget sahf
     ubfx w8, eax, 8, 8
     strb w8, [_cpu, CPU_eflags]
-    save_c
-    mov x0, _cpu
-    bl NAME(helper_expand_flags)
-    restore_c
+    i386_expand_flags
     gret
 
 # LAHF (0x9f): AH = the low byte of EFLAGS (SF:ZF:0:AF:0:PF:1:CF). collapse_flags
 # materializes that byte (sets bit1=1, bits3/5=0); mirror of sahf in reverse. i386
 # had no lahf gadget at all -> guest lahf SIGILL'd.
 .gadget lahf
-    save_c
-    mov x0, _cpu
-    bl NAME(helper_collapse_flags)
-    restore_c
+    i386_collapse_flags
     ldrb w8, [_cpu, CPU_eflags]
     bfi eax, w8, 8, 8
     gret

@@ -2846,6 +2846,19 @@ static void x86_signal_handler_fpu_init(struct cpu_state *cpu) {
     cpu->mxcsr = 0x1f80;
 }
 
+// Linux's handle_signal: a handler starts with DF, RF and TF clear; the frame
+// keeps what the interrupted code had. A handler entered with DF set ran its
+// string instructions backwards, and one entered with the guest's own TF set
+// (a POPF) single-stepped itself into a SIGTRAP it had blocked. A tracer's
+// PTRACE_SINGLESTEP keeps stepping into the handler.
+static void x86_signal_handler_flags_init(struct cpu_state *cpu) {
+    cpu->df = 0;
+    cpu->df_offset = 1;
+    cpu->eflags &= ~(1u << 16);   // RF
+    if (!current->ptrace_singlestep)
+        cpu->tf = 0;
+}
+
 // The i386 signal frame's FPU state, laid out as Linux does it: the legacy
 // FNSAVE-style header, then an FXSAVE image, placed ABOVE the frame with the
 // FXSAVE half 64-byte aligned (fpu__alloc_mathframe), sigcontext.fpstate
@@ -3464,6 +3477,7 @@ static void receive_signal(struct sighand *sighand, struct siginfo_ *info) {
             do_exit_group(SIGSEGV_);
         }
         x86_signal_handler_fpu_init(&current->cpu);
+        x86_signal_handler_flags_init(&current->cpu);
 
         if (action->flags & SA_RESETHAND_)
             *action = (struct sigaction_) {.handler = SIG_DFL_};
@@ -3532,6 +3546,7 @@ static void receive_signal(struct sighand *sighand, struct siginfo_ *info) {
         do_exit_group(SIGSEGV_);
     }
     x86_signal_handler_fpu_init(&current->cpu);
+    x86_signal_handler_flags_init(&current->cpu);
     i386_sreg_signal_enter(&current->cpu);
 
     if (action->flags & SA_RESETHAND_)

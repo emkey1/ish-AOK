@@ -6,7 +6,12 @@
 #include "kernel/abi.h"
 extern bool isGlibC;
 
+// cpuid_tables_init's override while it fills the amd64 and i386 tables:
+// -1 none, else the long mode to answer for.
+extern int cpuid_long_mode_override;
 static inline bool cpuid_guest_supports_long_mode(void) {
+    if (cpuid_long_mode_override >= 0)
+        return cpuid_long_mode_override;
     return current != NULL && current->abi == GUEST_ABI_AMD64;
 }
 
@@ -368,5 +373,24 @@ static inline void do_cpuid(dword_t *eax, dword_t *ebx, dword_t *ecx, dword_t *e
             break;
     }
 }
+
+// What CPUID answers, as the CPUID gadgets look it up (jit/gadgets-aarch64/
+// misc.S cpuid_lookup): do_cpuid's answers for each leaf and subleaf it
+// distinguishes, filled once per guest ABI. The answers are the machine's
+// description, fixed for the process; the gadget is the instruction.
+struct cpuid_answer { dword_t eax, ebx, ecx, edx; };
+enum {
+    CPUID_SLOT_LEAF0, CPUID_SLOT_LEAF1, CPUID_SLOT_LEAF7_0,
+    CPUID_SLOT_LEAFD_0, CPUID_SLOT_LEAFD_1, CPUID_SLOT_LEAFD_2,
+    CPUID_SLOT_LEAFD_5, CPUID_SLOT_LEAFD_6, CPUID_SLOT_LEAFD_7,
+    CPUID_SLOT_EXT0, CPUID_SLOT_EXT1,
+    CPUID_SLOT_ABOVE_BASIC,   // a leaf above the basic maximum
+    CPUID_SLOT_ZERO,          // an unimplemented leaf or subleaf below it
+    CPUID_SLOT_ABOVE_EXT,     // any other extended leaf
+    CPUID_SLOTS,
+};
+struct cpuid_table { struct cpuid_answer slot[CPUID_SLOTS]; };
+extern struct cpuid_table cpuid_tables[2];   // [0] i386, [1] amd64
+void cpuid_tables_init(void);
 
 #endif

@@ -1314,6 +1314,7 @@ static struct task *task_create_pid_(struct task *parent, pid_t_ want_pid) {
     task->native_helper_threads = 0;
     task->exit_arch = NULL;
     memset(task->ptrace_debugreg, 0, sizeof(task->ptrace_debugreg));
+    task->ptrace_singlestep = false;
     lock_init(&task->ptrace.lock, "task_creat_ptr\0");
     cond_init(&task->ptrace.cond);
 

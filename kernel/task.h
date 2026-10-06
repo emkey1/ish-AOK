@@ -752,6 +752,11 @@ struct task {
     // Inherited by fork; exec applies it (riscv64_v_ctrl_exec). At the end
     // for the reason given above native_standin_child.
     dword_t riscv64_v_ctrl;
+    // The tracer's last resume was PTRACE_SINGLESTEP (cpu.tf is then its doing,
+    // not the guest's): entering a signal handler keeps stepping rather than
+    // clearing TF as it does for the guest's own (x86_signal_handler_flags).
+    // Not inherited. At the end for the reason given above native_standin_child.
+    bool ptrace_singlestep;
 };
 // whether the riscv64 V extension is on for this task (PR_RISCV_V_*)
 static inline bool riscv64_v_enabled(struct task *task) {

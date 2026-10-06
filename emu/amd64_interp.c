@@ -4297,33 +4297,6 @@ int amd64_jit_locked_xchg_slow(struct cpu_state *cpu, struct tlb *tlb,
     return 0;
 }
 
-// The whole CMPXCHG r/m, reg -- compare RAX with [mem], swap in the source
-// register if they are equal, otherwise load [mem] into RAX; flags come from
-// the compare (RAX - dst). amd64_locked_cmpxchg does the atomic swap (host CAS
-// when aligned, the global-mutex path when misaligned), and this wrapper adds
-// the flag and RAX/ZF bookkeeping the interpreter's own copy does inline, so
-// the native gadget stays a thin address-computing shell. The lock prefix does
-// not change the result a single thread sees, so both the locked and the plain
-// memory form route here.
-int amd64_jit_cmpxchg(struct cpu_state *cpu, struct tlb *tlb,
-        qword_t guest_addr, unsigned size, qword_t src) {
-    qword_t acc = amd64_reg_get(cpu, amd64_rax, size);
-    qword_t dst = 0;
-    bool swapped = false;
-    if (!amd64_locked_cmpxchg(cpu, tlb, guest_addr, size, acc, src, &dst, &swapped))
-        return INT_PF;
-    qword_t result = amd64_trunc(acc - dst, size);
-    amd64_set_sub_flags(cpu, acc, dst, result, size);
-    if (swapped) {
-        cpu->zf = 1;
-    } else {
-        amd64_reg_set(cpu, amd64_rax, size, dst);
-        cpu->zf = 0;
-    }
-    cpu->zf_res = 0;   // ZF was just written explicitly, not deferred
-    return 0;
-}
-
 // LOCK INC / LOCK DEC [addr]. INC and DEC set every arithmetic flag EXCEPT
 // CF, which they preserve -- the caller-visible reason this is not just
 // amd64_locked_alu with rhs = 1.
@@ -8436,12 +8409,11 @@ static inline int amd64_string_op(struct cpu_state *cpu, struct tlb *tlb,
             // defines for #PF. Rewinding rip to the instruction is therefore
             // all that is needed, and re-executing resumes where this stopped.
             //
-            // INT_TIMER, NOT INT_NONE, and that is the whole trick. Under the
-            // JIT this runs as a C helper called from inside the gadget chain
-            // (amd64_jit_string_op, reached from gen.c's string-op arm), and
-            // INT_NONE tells the chain "this instruction retired, go to the
-            // next one" -- so it advances past the rep and the rewind of
-            // cpu->amd64_rip is simply ignored.
+            // INT_TIMER, NOT INT_NONE, and that is the whole trick. When this
+            // was also the JIT's bridge (the string gadgets in math.S replace
+            // it), INT_NONE told the gadget chain "this instruction retired,
+            // go to the next one" -- so it advanced past the rep and the
+            // rewind of cpu->amd64_rip was simply ignored.
             // Returning INT_NONE here abandoned the rep mid-copy instead of
             // resuming it -- measured as a 96 MB backward movsb finishing in
             // 1.5ms with 95% of the destination still holding its old bytes.
@@ -11680,7 +11652,7 @@ restart_prefix:
         }
         if (modrm.reg != 0)
             return INT_UNDEFINED;
-        // See amd64_jit_pop_rm's identical fix (#487): amd64_pop_size() commits
+        // As the POP r/m gadget does (#487, math.S amd64_pop_rm_mem): amd64_pop_size() commits
         // the RSP advance on a successful read, before the destination write
         // below is attempted. If that write then faults, restore RSP here too
         // -- otherwise the re-executed instruction pops from the wrong (already
@@ -12756,173 +12728,6 @@ amd64_gpf_restore:
     return INT_PF;
 }
 
-int amd64_jit_ret_imm(struct cpu_state *cpu, struct tlb *tlb,
-        unsigned long imm16) {
-    qword_t target;
-    guest_addr_t checked_target;
-    qword_t saved_rip = cpu->amd64_rip;
-    qword_t old_rsp = cpu->amd64_regs[amd64_rsp];
-    if (imm16 > 0xffff)
-        return INT_GPF;
-    if (!amd64_pop(cpu, tlb, &target)) {
-        cpu->amd64_rip = saved_rip;
-        amd64_sync_legacy_regs(cpu);
-        return INT_PF;
-    }
-    cpu->amd64_regs[amd64_rsp] += (uint16_t) imm16;
-    amd64_trace_suspicious_rsp_write(cpu, old_rsp, cpu->amd64_regs[amd64_rsp], 64);
-    if (!amd64_guest_addr_ok(target, 1, &checked_target)) {
-        cpu->amd64_rip = target;
-        amd64_sync_legacy_regs(cpu);
-        return INT_GPF;
-    }
-    cpu->amd64_rip = target;
-    amd64_sync_legacy_regs(cpu);
-    return INT_NONE;
-}
-
-int amd64_jit_leave(struct cpu_state *cpu, struct tlb *tlb,
-        unsigned long pop_size, unsigned long next_ip) {
-    qword_t saved_rip = cpu->amd64_rip;
-    qword_t old_rsp;
-    qword_t value;
-    if (pop_size != 16 && pop_size != 64)
-        return INT_GPF;
-    old_rsp = cpu->amd64_regs[amd64_rsp];
-    cpu->amd64_regs[amd64_rsp] = cpu->amd64_regs[amd64_rbp];
-    amd64_trace_as_stack(amd64_as_stack_leave, pop_size, old_rsp, cpu->amd64_regs[amd64_rsp],
-                         cpu->amd64_regs[amd64_rbp]);
-    if (!amd64_pop_size(cpu, tlb, pop_size, &value)) {
-        cpu->amd64_rip = saved_rip;
-        amd64_sync_legacy_regs(cpu);
-        return INT_PF;
-    }
-    amd64_reg_set(cpu, amd64_rbp, pop_size, value);
-    cpu->amd64_rip = (qword_t) next_ip;
-    amd64_sync_legacy_regs(cpu);
-    return INT_NONE;
-}
-
-int amd64_jit_pop_rm(struct cpu_state *cpu, struct tlb *tlb,
-        unsigned long next_ip) {
-    qword_t saved_rip = cpu->amd64_rip;
-    guest_addr_t checked_next_ip;
-    struct amd64_rex_prefix rex = {0};
-    struct amd64_modrm modrm;
-    enum amd64_seg seg_prefix = AMD64_SEG_NONE;
-    bool operand_size_prefix = false;
-    bool lock_prefix = false;
-    byte_t byte;
-    qword_t value;
-    unsigned pop_size;
-
-    if (!amd64_guest_addr_ok((qword_t) next_ip, 1, &checked_next_ip))
-        return INT_GPF;
-
-    cpu->amd64_address_size_prefix = false;
-    for (;;) {
-        if (!amd64_fetch_u8(cpu, tlb, &byte))
-            goto amd64_pop_rm_pf;
-        if (amd64_ignored_segment_prefix(byte))
-            continue;
-        if (byte == 0x64) {
-            seg_prefix = AMD64_SEG_FS;
-            continue;
-        }
-        if (byte == 0x65) {
-            seg_prefix = AMD64_SEG_GS;
-            continue;
-        }
-        if (byte == 0xf0) {
-            lock_prefix = true;
-            continue;
-        }
-        if (byte == 0x66) {
-            operand_size_prefix = true;
-            continue;
-        }
-        if (byte >= 0x40 && byte <= 0x4f) {
-            rex.present = true;
-            rex.w = (byte & 8) != 0;
-            rex.r = (byte & 4) != 0;
-            rex.x = (byte & 2) != 0;
-            rex.b = (byte & 1) != 0;
-            continue;
-        }
-        break;
-    }
-    if (byte != 0x8f || lock_prefix)
-        return INT_UNDEFINED;
-    if (!amd64_decode_modrm(cpu, tlb, rex, &modrm))
-        goto amd64_pop_rm_pf;
-    if (modrm.reg != 0)
-        return INT_UNDEFINED;
-
-    pop_size = operand_size_prefix ? 16 : 64;
-    {
-        // amd64_pop_size() commits the RSP advance as soon as its read succeeds,
-        // before the destination write below is attempted. If that write then
-        // faults (e.g. a first-touch or COW page needing a fault-in), the whole
-        // instruction bails to amd64_pop_rm_pf for a re-execute -- but without
-        // restoring RSP here, the retry re-reads from the *already-advanced*
-        // stack slot instead of the original one, silently dropping the real
-        // popped value (e.g. a return address) and substituting whatever
-        // garbage sits one slot up. Found via #487: musl's sigsetjmp does
-        // `popq off(%rdi)` to relocate its own return address into the
-        // jmp_buf; the first attempt's write to the jmp_buf (freshly-touched
-        // .bss) faulted, and the retry's mis-popped value corrupted the saved
-        // return address, later crashing with rip set to that garbage value.
-        qword_t rsp_before_pop = cpu->amd64_regs[amd64_rsp];
-        if (!amd64_pop_size(cpu, tlb, pop_size, &value))
-            goto amd64_pop_rm_pf;
-        if (!amd64_write_rm(cpu, tlb, &modrm, seg_prefix, pop_size, value)) {
-            cpu->amd64_regs[amd64_rsp] = rsp_before_pop;
-            goto amd64_pop_rm_pf;
-        }
-    }
-    cpu->amd64_rip = (qword_t) next_ip;
-    amd64_sync_legacy_regs(cpu);
-    return INT_NONE;
-
-amd64_pop_rm_pf:
-    cpu->amd64_rip = saved_rip;
-    amd64_sync_legacy_regs(cpu);
-    return INT_PF;
-}
-
-int amd64_jit_push_flags(struct cpu_state *cpu, struct tlb *tlb,
-        unsigned long push_size, unsigned long next_ip) {
-    qword_t saved_rip = cpu->amd64_rip;
-    if (push_size != 16 && push_size != 64)
-        return INT_GPF;
-    collapse_flags(cpu);
-    if (!amd64_push_size(cpu, tlb, push_size, cpu->eflags)) {
-        cpu->amd64_rip = saved_rip;
-        amd64_sync_legacy_regs(cpu);
-        return INT_PF;
-    }
-    cpu->amd64_rip = (qword_t) next_ip;
-    amd64_sync_legacy_regs(cpu);
-    return INT_NONE;
-}
-
-int amd64_jit_pop_flags(struct cpu_state *cpu, struct tlb *tlb,
-        unsigned long pop_size, unsigned long next_ip) {
-    qword_t saved_rip = cpu->amd64_rip;
-    qword_t value;
-    if (pop_size != 16 && pop_size != 64)
-        return INT_GPF;
-    if (!amd64_pop_size(cpu, tlb, pop_size, &value)) {
-        cpu->amd64_rip = saved_rip;
-        amd64_sync_legacy_regs(cpu);
-        return INT_PF;
-    }
-    amd64_popf_apply(cpu, value, pop_size);
-    cpu->amd64_rip = (qword_t) next_ip;
-    amd64_sync_legacy_regs(cpu);
-    return INT_NONE;
-}
-
 int amd64_jit_xchg_rm(struct cpu_state *cpu, struct tlb *tlb,
         unsigned long opcode, unsigned long next_ip) {
     qword_t saved_rip = cpu->amd64_rip;
@@ -13057,28 +12862,6 @@ int amd64_jit_rdtsc(struct cpu_state *cpu, struct tlb *tlb,
 // parallel copy there would be work with a known expiry date, and worse, it
 // would let this instruction appear to work today via the interpreter fallback
 // and then vanish when the fallback goes.
-int amd64_jit_xgetbv(struct cpu_state *cpu, struct tlb *tlb,
-        unsigned long next_ip) {
-    guest_addr_t checked_next_ip;
-    qword_t xcr0;
-    (void) tlb;
-    if (!amd64_guest_addr_ok((qword_t) next_ip, 1, &checked_next_ip))
-        return INT_GPF;
-    // ECX selects the register. XCR0 is the only one that exists; hardware
-    // raises #GP for anything else.
-    if ((dword_t) cpu->amd64_regs[amd64_rcx] != 0) {
-        cpu->amd64_rip = (qword_t) next_ip;
-        amd64_sync_legacy_regs(cpu);
-        return INT_GPF;
-    }
-    xcr0 = xcr0_value();
-    amd64_reg_set(cpu, amd64_rax, 32, (dword_t) xcr0);
-    amd64_reg_set(cpu, amd64_rdx, 32, (dword_t) (xcr0 >> 32));
-    cpu->amd64_rip = (qword_t) next_ip;
-    amd64_sync_legacy_regs(cpu);
-    return INT_NONE;
-}
-
 // VMCALL (0f 01 c1), the JIT's way into amd64_vmcall. Plain prefixes only, so
 // the instruction is exactly three bytes and a fault reports next_ip - 3.
 int amd64_jit_vmcall(struct cpu_state *cpu, struct tlb *tlb,
@@ -13110,7 +12893,7 @@ int amd64_jit_vmcall(struct cpu_state *cpu, struct tlb *tlb,
 // reports the instruction that caused it, and the interpreter's own INT_PRIV
 // path rewinds to amd64_current_insn_rip for exactly this reason.
 //
-// JIT-side only, deliberately -- see amd64_jit_xgetbv above for why the
+// JIT-side only, deliberately -- see the XGETBV gadget (math.S amd64_xgetbv) for why the
 // interpreter is not the place for this.
 int amd64_jit_port_io(struct cpu_state *cpu, struct tlb *tlb,
         unsigned long insn_ip) {
@@ -13118,189 +12901,6 @@ int amd64_jit_port_io(struct cpu_state *cpu, struct tlb *tlb,
     cpu->amd64_rip = (qword_t) insn_ip;
     amd64_sync_legacy_regs(cpu);
     return INT_PRIV;
-}
-
-int amd64_jit_cpuid(struct cpu_state *cpu, struct tlb *tlb,
-        unsigned long next_ip) {
-    guest_addr_t checked_next_ip;
-    dword_t eax;
-    dword_t ebx;
-    dword_t ecx;
-    dword_t edx;
-    (void) tlb;
-    if (!amd64_guest_addr_ok((qword_t) next_ip, 1, &checked_next_ip))
-        return INT_GPF;
-    eax = (dword_t) cpu->amd64_regs[amd64_rax];
-    ebx = (dword_t) cpu->amd64_regs[amd64_rbx];
-    ecx = (dword_t) cpu->amd64_regs[amd64_rcx];
-    edx = (dword_t) cpu->amd64_regs[amd64_rdx];
-    do_cpuid(&eax, &ebx, &ecx, &edx);
-    cpu->amd64_regs[amd64_rax] = eax;
-    cpu->amd64_regs[amd64_rbx] = ebx;
-    cpu->amd64_regs[amd64_rcx] = ecx;
-    cpu->amd64_regs[amd64_rdx] = edx;
-    cpu->eax = eax;
-    cpu->ebx = ebx;
-    cpu->ecx = ecx;
-    cpu->edx = edx;
-    cpu->amd64_rip = (qword_t) next_ip;
-    amd64_sync_legacy_regs(cpu);
-    return INT_NONE;
-}
-
-int amd64_jit_moffs_accum(struct cpu_state *cpu, struct tlb *tlb,
-        unsigned long opcode, unsigned long next_ip) {
-    qword_t saved_rip = cpu->amd64_rip;
-    guest_addr_t checked_next_ip;
-    struct amd64_rex_prefix rex = {0};
-    bool operand_size_prefix = false;
-    enum amd64_seg seg_prefix = AMD64_SEG_NONE;
-    byte_t byte;
-    qword_t addr;
-    qword_t value;
-    unsigned size;
-
-    if (opcode < 0xa0 || opcode > 0xa3)
-        return INT_UNDEFINED;
-    if (!amd64_guest_addr_ok((qword_t) next_ip, 1, &checked_next_ip))
-        return INT_GPF;
-
-    cpu->amd64_address_size_prefix = false;
-    for (;;) {
-        if (!amd64_fetch_u8(cpu, tlb, &byte))
-            goto amd64_moffs_accum_pf;
-        if (amd64_ignored_segment_prefix(byte))
-            continue;
-        if (byte == 0x64) {
-            seg_prefix = AMD64_SEG_FS;
-            continue;
-        }
-        if (byte == 0x65) {
-            seg_prefix = AMD64_SEG_GS;
-            continue;
-        }
-        if (byte == 0x66) {
-            operand_size_prefix = true;
-            continue;
-        }
-        if (byte == 0x67) {
-            cpu->amd64_address_size_prefix = true;
-            continue;
-        }
-        if (byte >= 0x40 && byte <= 0x4f) {
-            rex.present = true;
-            rex.w = (byte & 8) != 0;
-            rex.r = (byte & 4) != 0;
-            rex.x = (byte & 2) != 0;
-            rex.b = (byte & 1) != 0;
-            continue;
-        }
-        break;
-    }
-    if (byte != opcode)
-        return INT_UNDEFINED;
-    if (!amd64_fetch_moffs_addr(cpu, tlb, &addr))
-        goto amd64_moffs_accum_pf;
-    addr += amd64_seg_base(cpu, seg_prefix);
-
-    size = (opcode == 0xa0 || opcode == 0xa2) ? 8 :
-        (rex.w ? 64 : (operand_size_prefix ? 16 : 32));
-    if (opcode == 0xa0 || opcode == 0xa1) {
-        if (!amd64_mem_read(cpu, tlb, addr, &value, size / 8))
-            goto amd64_moffs_accum_pf;
-        amd64_reg_set(cpu, amd64_rax, size, value);
-    } else {
-        value = amd64_reg_get(cpu, amd64_rax, size);
-        if (!amd64_mem_write(cpu, tlb, addr, &value, size / 8))
-            goto amd64_moffs_accum_pf;
-    }
-
-    cpu->amd64_rip = (qword_t) next_ip;
-    amd64_sync_legacy_regs(cpu);
-    return INT_NONE;
-
-amd64_moffs_accum_pf:
-    cpu->amd64_rip = saved_rip;
-    amd64_sync_legacy_regs(cpu);
-    return INT_PF;
-}
-
-int amd64_jit_string_op(struct cpu_state *cpu, struct tlb *tlb,
-        unsigned long opcode, unsigned long next_ip) {
-    qword_t saved_rip = cpu->amd64_rip;
-    guest_addr_t checked_next_ip;
-    struct amd64_rex_prefix rex = {0};
-    enum amd64_seg seg_prefix = AMD64_SEG_NONE;
-    bool operand_size_prefix = false;
-    enum amd64_rep_mode rep_mode = AMD64_REP_NONE;
-    byte_t byte;
-    unsigned size;
-    int interrupt;
-
-    if (!((opcode >= 0xa4 && opcode <= 0xa7) ||
-          (opcode >= 0xaa && opcode <= 0xaf)))
-        return INT_UNDEFINED;
-    if (!amd64_guest_addr_ok((qword_t) next_ip, 1, &checked_next_ip))
-        return INT_GPF;
-
-    cpu->amd64_address_size_prefix = false;
-    for (;;) {
-        if (!amd64_fetch_u8(cpu, tlb, &byte))
-            goto amd64_string_op_jit_pf;
-        if (amd64_ignored_segment_prefix(byte))
-            continue;
-        if (byte == 0x64) {
-            seg_prefix = AMD64_SEG_FS;
-            continue;
-        }
-        if (byte == 0x65) {
-            seg_prefix = AMD64_SEG_GS;
-            continue;
-        }
-        if (byte == 0x66) {
-            operand_size_prefix = true;
-            continue;
-        }
-        if (byte == 0x67) {
-            cpu->amd64_address_size_prefix = true;
-            continue;
-        }
-        if (byte == 0xf3) {
-            rep_mode = AMD64_REPZ;
-            continue;
-        }
-        if (byte == 0xf2) {
-            rep_mode = AMD64_REPNZ;
-            continue;
-        }
-        if (byte >= 0x40 && byte <= 0x4f) {
-            rex.present = true;
-            rex.w = (byte & 8) != 0;
-            rex.r = (byte & 4) != 0;
-            rex.x = (byte & 2) != 0;
-            rex.b = (byte & 1) != 0;
-            continue;
-        }
-        break;
-    }
-    if (byte != opcode)
-        return INT_UNDEFINED;
-
-    size = (opcode & 1) == 0 ? 8 : (rex.w ? 64 : (operand_size_prefix ? 16 : 32));
-    interrupt = amd64_string_op(cpu, tlb, saved_rip, (byte_t) opcode, size, rep_mode,
-            seg_prefix);
-    if (interrupt != INT_NONE) {
-        amd64_sync_legacy_regs(cpu);
-        return interrupt;
-    }
-    cpu->amd64_rip = (qword_t) next_ip;
-    amd64_sync_legacy_regs(cpu);
-    return INT_NONE;
-
-amd64_string_op_jit_pf:
-    cpu->amd64_rip = saved_rip;
-    amd64_sync_legacy_regs(cpu);
-    return INT_PF;
 }
 
 int amd64_jit_mov_imm(struct cpu_state *cpu, struct tlb *tlb,
@@ -16794,10 +16394,6 @@ amd64_grp3_op_pf:
 // wherever rip lands. That is safe because for amd64 cpu->amd64_rip is
 // authoritative and cpu->eip is derived from it after every block
 // (jit/jit.c), so the exit gadget's own eip write cannot win.
-// POPCNT (F3 0F B8) as a bridge. Its semantics lived only inside the
-// interpreter's mega-switch, so no arm could route to it and every POPCNT
-// de-JITted its block; amd64_popcnt_op is that body, factored out so both
-// engines share one copy.
 // The three-byte 0F 38 escape as a bridge, for the opcodes in that map that
 // have no native arm (ptest, blendv, pmovsx/zx, crc32 and friends). pshufb and
 // the other natively-handled members never reach here -- this arm sits after
@@ -16818,33 +16414,6 @@ amd64_grp3_op_pf:
 // operation is five lines of fully-specified arithmetic, not a body worth
 // sharing: decrement the 32-bit counter (which zero-extends into RCX, as every
 // 32-bit write does), then branch on it and, for LOOPE/LOOPNE, on ZF.
-int amd64_jit_loop_addr32(struct cpu_state *cpu, struct tlb *tlb,
-        unsigned long opcode, unsigned long target_ip, unsigned long next_ip) {
-    (void) tlb;
-    uint32_t count;
-    bool take;
-
-    if (opcode < 0xe0 || opcode > 0xe3)
-        return INT_UNDEFINED;
-
-    if (opcode == 0xe3) {
-        // JECXZ: tests the counter, never modifies it.
-        take = (uint32_t) amd64_reg_get(cpu, amd64_rcx, 32) == 0;
-    } else {
-        count = (uint32_t) amd64_reg_get(cpu, amd64_rcx, 32) - 1;
-        amd64_reg_set(cpu, amd64_rcx, 32, count);
-        take = count != 0;
-        if (opcode == 0xe1)                 // LOOPE  / LOOPZ
-            take = take && amd64_cond_eval(cpu, 4);
-        else if (opcode == 0xe0)            // LOOPNE / LOOPNZ
-            take = take && !amd64_cond_eval(cpu, 4);
-    }
-
-    cpu->amd64_rip = (qword_t) (take ? target_ip : next_ip);
-    amd64_sync_legacy_regs(cpu);
-    return INT_NONE;
-}
-
 // SSE3 horizontal add/sub (0F 7C / 7D / D0) as a bridge. Its semantics lived
 // only inside the interpreter's mega-switch, so no arm could route to them and
 // every haddpd/hsubps/addsubpd de-JITted its block.
@@ -16957,68 +16526,6 @@ int amd64_jit_0f38(struct cpu_state *cpu, struct tlb *tlb,
     return interrupt;
 
 amd64_jit_0f38_pf:
-    cpu->amd64_rip = saved_rip;
-    amd64_sync_legacy_regs(cpu);
-    return INT_PF;
-}
-
-int amd64_jit_popcnt(struct cpu_state *cpu, struct tlb *tlb,
-        unsigned long next_ip) {
-    qword_t saved_rip = cpu->amd64_rip;
-    guest_addr_t checked_next_ip;
-    struct amd64_rex_prefix rex = {0};
-    struct amd64_modrm modrm;
-    enum amd64_seg seg_prefix = AMD64_SEG_NONE;
-    bool operand_size_prefix = false;
-    bool repz = false;
-    byte_t byte;
-    unsigned op_size;
-    int interrupt;
-
-    if (!amd64_guest_addr_ok((qword_t) next_ip, 1, &checked_next_ip))
-        return INT_GPF;
-
-    cpu->amd64_address_size_prefix = false;
-    for (;;) {
-        if (!amd64_fetch_u8(cpu, tlb, &byte))
-            goto amd64_jit_popcnt_pf;
-        if (amd64_ignored_segment_prefix(byte))
-            continue;
-        if (byte == 0x64) { seg_prefix = AMD64_SEG_FS; continue; }
-        if (byte == 0x65) { seg_prefix = AMD64_SEG_GS; continue; }
-        if (byte == 0x66) { operand_size_prefix = true; continue; }
-        if (byte == 0xf3) { repz = true; continue; }
-        if (byte >= 0x40 && byte <= 0x4f) {
-            rex.present = true;
-            rex.w = (byte & 8) != 0;
-            rex.r = (byte & 4) != 0;
-            rex.x = (byte & 2) != 0;
-            rex.b = (byte & 1) != 0;
-            continue;
-        }
-        break;
-    }
-    if (byte != 0x0f)
-        return INT_UNDEFINED;
-    if (!amd64_fetch_u8(cpu, tlb, &byte))
-        goto amd64_jit_popcnt_pf;
-    if (byte != 0xb8)
-        return INT_UNDEFINED;
-    // The F3 prefix is what makes this POPCNT at all.
-    if (!repz)
-        return INT_UNDEFINED;
-    if (!amd64_decode_modrm(cpu, tlb, rex, &modrm))
-        goto amd64_jit_popcnt_pf;
-
-    op_size = rex.w ? 64 : (operand_size_prefix ? 16 : 32);
-    interrupt = amd64_popcnt_op(cpu, tlb, &modrm, seg_prefix, op_size);
-    if (interrupt != INT_NONE)
-        goto amd64_jit_popcnt_pf;
-    cpu->amd64_rip = (qword_t) next_ip;
-    amd64_sync_legacy_regs(cpu);
-    return INT_NONE;
-
-amd64_jit_popcnt_pf:
     cpu->amd64_rip = saved_rip;
     amd64_sync_legacy_regs(cpu);
     return INT_PF;

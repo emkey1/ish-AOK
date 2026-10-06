@@ -9217,24 +9217,57 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
         (insn.seg_prefix ? 0x20 : 0) |
         (insn.rep_mode != amd64_jit_rep_none ? 0x40 : 0);
 
-    // POPCNT (F3 0F B8). Bridged; the semantics were factored out of the
-    // interpreter's mega-switch into amd64_popcnt_op so both engines share one
-    // copy. Continues the block: the ModRM extent is the exact length.
-    if (insn.two_byte_opcode && !insn.address_size_prefix && !insn.lock_prefix &&
+    // POPCNT (F3 0F B8) r, r/m, 16/32/64: gadget_amd64_popcnt_reg, or
+    // popcnt_mem16/32/64 for a memory source. With LOCK it is #UD. Continues
+    // the block.
+    if (insn.two_byte_opcode && !insn.address_size_prefix &&
             insn.rep_mode == amd64_jit_repz && insn.has_modrm &&
             insn.op2 == 0xb8) {
-        if (!gen_amd64_decode_rm_extent(state, tlb, &insn, &next_ip)) {
+        if (insn.lock_prefix) {
+            state->amd64_ip = state->amd64_orig_ip;
+            gen_amd64_flush_reg_cache(state);
+            gen_amd64_flush_rip(state);
+            gen_amd64_helper_tlb_1_retint(state, amd64_jit_ud2,
+                    (unsigned long) state->amd64_orig_ip);
+            gen_exit(state);
+            return false;
+        }
+        unsigned size = insn.rex.w ? 64 : insn.operand_size_prefix ? 16 : 32;
+        unsigned long size_code = (size == 16 ? 1ul : size == 32 ? 2ul : 3ul) << 8;
+        unsigned dst_id = amd64_modrm_reg(insn.modrm) | (insn.rex.r ? 8 : 0);
+        if (amd64_modrm_mod(insn.modrm) == 3) {
+            unsigned src_id = amd64_modrm_rm(insn.modrm) | (insn.rex.b ? 8 : 0);
+            if (!gen_amd64_decode_rm_extent(state, tlb, &insn, &next_ip)) {
+                state->amd64_ip = state->amd64_orig_ip;
+                state->amd64_fallback_to_interp = true;
+                return false;
+            }
+            state->amd64_ip = next_ip;
+            gen_amd64_flush_reg_cache(state);
+            extern void gadget_amd64_popcnt_reg(void);
+            gen(state, (unsigned long) gadget_amd64_popcnt_reg);
+            gen(state, (unsigned long) src_id | ((unsigned long) dst_id << 4) | size_code);
+            gen_amd64_defer_rip(state, next_ip);
+            return true;
+        }
+        unsigned long meta, disp;
+        if (!gen_amd64_decode_mem_meta(state, tlb, &insn, size, &meta, &disp, &next_ip)) {
             state->amd64_ip = state->amd64_orig_ip;
             state->amd64_fallback_to_interp = true;
             return false;
         }
         state->amd64_ip = next_ip;
-        amd64_jit_debug("popcnt-helper ip=%llx next=%llx",
-                (unsigned long long) insn.start_ip, (unsigned long long) next_ip);
         gen_amd64_flush_reg_cache(state);
         gen_amd64_flush_rip(state);
-        gen_amd64_helper_tlb_1_retint(state, amd64_jit_popcnt,
-                (unsigned long) next_ip);
+        extern void gadget_amd64_popcnt_mem16(void), gadget_amd64_popcnt_mem32(void),
+                gadget_amd64_popcnt_mem64(void);
+        gen(state, (unsigned long) (size == 16 ? gadget_amd64_popcnt_mem16
+                                  : size == 32 ? gadget_amd64_popcnt_mem32
+                                               : gadget_amd64_popcnt_mem64));
+        gen(state, meta);
+        gen(state, disp);
+        gen(state, (unsigned long) next_ip);
+        gen(state, ((unsigned long) dst_id << 4) | size_code);
         gen_amd64_defer_rip(state, next_ip);
         return true;
     }
@@ -9472,27 +9505,32 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
         }
         next_ip = state->amd64_ip + sizeof(imm16);
         state->amd64_ip = next_ip;
-        amd64_jit_debug("ret-imm-helper ip=%llx imm=%u",
+        amd64_jit_debug("ret-imm ip=%llx imm=%u",
                 (unsigned long long) insn.start_ip,
                 (unsigned) imm16);
-        gen_amd64_helper_tlb_1_retint(state, amd64_jit_ret_imm,
-                (unsigned long) imm16);
-        gen_exit(state);
+        // Like the plain ret: the gadget branches to jit_ret itself.
+        gen_amd64_flush_reg_cache(state);
+        gen_amd64_flush_rip(state);
+        extern void gadget_amd64_ret_imm(void);
+        gen(state, (unsigned long) gadget_amd64_ret_imm);
+        gen(state, (unsigned long) imm16);
         return false;
     }
 
     if (amd64_jit_one_byte_ret_prefixes(&insn) && insn.opcode == 0xc9) {
         next_ip = insn.end_ip;
         state->amd64_ip = next_ip;
-        if (insn.operand_size_prefix) {
-            // 16-bit leave is rare; keep bridging it (ends the block).
-            amd64_jit_debug("leave16-helper ip=%llx next=%llx",
+        if (insn.operand_size_prefix && !insn.rex.w) {
+            // 16-bit leave: mov rsp, rbp; pop bp.
+            amd64_jit_debug("leave16 ip=%llx next=%llx",
                     (unsigned long long) insn.start_ip,
                     (unsigned long long) next_ip);
-            gen_amd64_helper_tlb_2_retint(state, amd64_jit_leave,
-                    16, (unsigned long) next_ip);
-            gen_exit(state);
-            return false;
+            gen_amd64_flush_reg_cache(state);
+            gen_amd64_flush_rip(state);
+            extern void gadget_amd64_leave16(void);
+            gen(state, (unsigned long) gadget_amd64_leave16);
+            gen_amd64_defer_rip(state, next_ip);
+            return true;
         }
         amd64_jit_debug("leave ip=%llx next=%llx",
                 (unsigned long long) insn.start_ip,
@@ -9663,11 +9701,14 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
                 (unsigned long long) insn.start_ip, insn.opcode,
                 (unsigned long long) target_ip, (unsigned long long) next_ip);
         gen_amd64_flush_reg_cache(state);
-        gen_amd64_flush_rip(state);
-        gen_amd64_helper_tlb_3_retint(state, amd64_jit_loop_addr32,
-                (unsigned long) insn.opcode, (unsigned long) target_ip,
-                (unsigned long) next_ip);
-        gen_exit(state);
+        extern void gadget_amd64_loop32(void), gadget_amd64_loope32(void),
+                gadget_amd64_loopne32(void), gadget_amd64_jecxz(void);
+        state->amd64_deferred_rip_valid = false;   // the gadget sets rip and exits
+        gen(state, (unsigned long) (insn.opcode == 0xe2 ? gadget_amd64_loop32
+                : insn.opcode == 0xe1 ? gadget_amd64_loope32
+                : insn.opcode == 0xe0 ? gadget_amd64_loopne32 : gadget_amd64_jecxz));
+        gen(state, (unsigned long) target_ip);
+        gen(state, (unsigned long) next_ip);
         return false;
     }
 
@@ -9767,16 +9808,25 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
         return false;
     }
 
-    if (amd64_jit_plain_prefixes(&insn) && insn.two_byte_opcode &&
-            (insn.op2 == 0x31 || insn.op2 == 0xa2)) {
+    if (amd64_jit_plain_prefixes(&insn) && insn.two_byte_opcode && insn.op2 == 0xa2) {
+        // CPUID: gadget_amd64_cpuid looks the answer up in cpuid_tables[1].
         next_ip = insn.end_ip;
-        amd64_jit_debug("%s-helper ip=%llx next=%llx",
-                insn.op2 == 0x31 ? "rdtsc" : "cpuid",
+        state->amd64_ip = next_ip;
+        amd64_jit_debug("cpuid ip=%llx next=%llx",
+                (unsigned long long) insn.start_ip, (unsigned long long) next_ip);
+        gen_amd64_flush_reg_cache(state);
+        extern void gadget_amd64_cpuid(void);
+        gen(state, (unsigned long) gadget_amd64_cpuid);
+        gen(state, (unsigned long) &cpuid_tables[1]);
+        gen_amd64_defer_rip(state, next_ip);
+        return true;
+    }
+    if (amd64_jit_plain_prefixes(&insn) && insn.two_byte_opcode && insn.op2 == 0x31) {
+        next_ip = insn.end_ip;
+        amd64_jit_debug("rdtsc-helper ip=%llx next=%llx",
                 (unsigned long long) insn.start_ip,
                 (unsigned long long) next_ip);
-        gen_amd64_helper_tlb_1_retint(state,
-                insn.op2 == 0x31 ? amd64_jit_rdtsc : amd64_jit_cpuid,
-                (unsigned long) next_ip);
+        gen_amd64_helper_tlb_1_retint(state, amd64_jit_rdtsc, (unsigned long) next_ip);
         gen_exit(state);
         return false;
     }
@@ -9801,10 +9851,13 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
             amd64_jit_debug("xgetbv ip=%llx next=%llx",
                     (unsigned long long) insn.start_ip,
                     (unsigned long long) next_ip);
-            gen_amd64_helper_tlb_1_retint(state, amd64_jit_xgetbv,
-                    (unsigned long) next_ip);
-            gen_exit(state);
-            return false;
+            gen_amd64_flush_reg_cache(state);
+            gen_amd64_flush_rip(state);
+            extern void gadget_amd64_xgetbv(void);
+            gen(state, (unsigned long) gadget_amd64_xgetbv);
+            gen(state, (unsigned long) xcr0_value());
+            gen_amd64_defer_rip(state, next_ip);
+            return true;
         }
         // VMCALL (0f 01 c1): AOK_VCLOCK, the clock read AOK's vDSO makes
         // (vdso/amd64/vdso.S) -- see amd64_vmcall.
@@ -10105,45 +10158,95 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
         return false;
     }
 
+    // MOV AL/AX/EAX/RAX <-> [moffs] (A0-A3): the plain MOV load/store
+    // gadgets, fed an address that is only the absolute offset (64-bit, or
+    // with 0x67 32-bit, zero-extended), plus FS/GS. Continues the block.
     if (!insn.two_byte_opcode && !insn.lock_prefix &&
             insn.rep_mode == amd64_jit_rep_none &&
             insn.opcode >= 0xa0 && insn.opcode <= 0xa3) {
-        next_ip = state->amd64_ip +
-            (insn.address_size_prefix ? sizeof(uint32_t) : sizeof(uint64_t));
+        unsigned asz = insn.address_size_prefix ? 4 : 8;
+        uint64_t moffs = 0;
+        if (!tlb_read(tlb, state->amd64_ip, &moffs, asz)) {
+            state->amd64_ip = state->amd64_orig_ip;
+            state->amd64_fallback_to_interp = true;
+            return false;
+        }
+        next_ip = state->amd64_ip + asz;
         state->amd64_ip = next_ip;
-        amd64_jit_debug("moffs-helper ip=%llx opcode=%02x next=%llx",
-                (unsigned long long) insn.start_ip,
-                insn.opcode,
-                (unsigned long long) next_ip);
-        gen_amd64_helper_tlb_2_retint(state, amd64_jit_moffs_accum,
-                (unsigned long) insn.opcode, (unsigned long) next_ip);
-        gen_exit(state);
-        return false;
+        bool is_load = insn.opcode <= 0xa1;
+        unsigned size = (insn.opcode & 1) == 0 ? 8
+            : (insn.rex.w ? 64 : (insn.operand_size_prefix ? 16 : 32));
+        unsigned long meta = ((unsigned long) insn.opcode << AMD64_JIT_MEM_OPCODE_SHIFT) |
+            ((unsigned long) size << AMD64_JIT_MEM_SIZE_SHIFT);   // reg 0: the accumulator
+        if (insn.seg_prefix == AMD64_SEG_FS)
+            meta |= AMD64_JIT_MEM_FS;
+        else if (insn.seg_prefix == AMD64_SEG_GS)
+            meta |= AMD64_JIT_MEM_GS;
+        if (insn.rex.present)
+            meta |= AMD64_JIT_MEM_REX_PRESENT;
+        amd64_jit_debug("moffs ip=%llx opcode=%02x moffs=%llx next=%llx",
+                (unsigned long long) insn.start_ip, insn.opcode,
+                (unsigned long long) moffs, (unsigned long long) next_ip);
+        gen_amd64_flush_reg_cache(state);
+        gen_amd64_flush_rip(state);
+        extern void gadget_amd64_mov_load8(void), gadget_amd64_mov_load16(void),
+                gadget_amd64_mov_load32(void), gadget_amd64_mov_load64(void),
+                gadget_amd64_mov_store8(void), gadget_amd64_mov_store16(void),
+                gadget_amd64_mov_store32(void), gadget_amd64_mov_store64(void);
+        void (*g)(void);
+        if (is_load)
+            g = size == 8 ? gadget_amd64_mov_load8 : size == 16 ? gadget_amd64_mov_load16
+              : size == 32 ? gadget_amd64_mov_load32 : gadget_amd64_mov_load64;
+        else
+            g = size == 8 ? gadget_amd64_mov_store8 : size == 16 ? gadget_amd64_mov_store16
+              : size == 32 ? gadget_amd64_mov_store32 : gadget_amd64_mov_store64;
+        gen(state, (unsigned long) g);
+        gen(state, meta);
+        gen(state, (unsigned long) moffs);
+        gen(state, (unsigned long) next_ip);
+        gen_amd64_defer_rip(state, next_ip);
+        return true;
     }
 
-    // An FS or GS override is taken: amd64_jit_string_op decodes it and moves
-    // the DS:RSI operand by its base, as the interpreter does.
+    // MOVS STOS LODS SCAS CMPS (A4-A7, AA-AF), any size, with or without REP,
+    // 0x67 and an FS/GS override: math.S's amd64_str_<op><size> gadgets. They
+    // continue the block; a fault or a poke mid-REP leaves at the instruction.
     if (!insn.two_byte_opcode &&
             !insn.lock_prefix &&
             ((insn.opcode >= 0xa4 && insn.opcode <= 0xa7) ||
              (insn.opcode >= 0xaa && insn.opcode <= 0xaf))) {
         next_ip = insn.end_ip;
         state->amd64_ip = next_ip;
-        amd64_jit_debug("string-helper ip=%llx opcode=%02x next=%llx",
-                (unsigned long long) insn.start_ip,
-                insn.opcode,
+        unsigned op = insn.opcode <= 0xa5 ? 0 : insn.opcode <= 0xa7 ? 4
+                    : insn.opcode <= 0xab ? 1 : insn.opcode <= 0xad ? 2 : 3;
+        unsigned lg = (insn.opcode & 1) == 0 ? 0
+                    : insn.rex.w ? 3 : insn.operand_size_prefix ? 1 : 2;
+        unsigned long packed =
+            (insn.rep_mode == amd64_jit_repz ? 1ul : insn.rep_mode == amd64_jit_repnz ? 2ul : 0ul) |
+            (insn.address_size_prefix ? 4ul : 0ul) |
+            (insn.seg_prefix == AMD64_SEG_FS ? 8ul : 0ul) |
+            (insn.seg_prefix == AMD64_SEG_GS ? 16ul : 0ul);
+        amd64_jit_debug("string ip=%llx opcode=%02x packed=%lx next=%llx",
+                (unsigned long long) insn.start_ip, insn.opcode, packed,
                 (unsigned long long) next_ip);
-        if (getenv("ISH_TRACE_AMD64_BRIDGES") != NULL)
-            fprintf(stderr, "[amd64-bridges] string op=%02x rep=%u w=%u p66=%u a32=%u\n",
-                    insn.opcode, (unsigned) insn.rep_mode, insn.rex.w,
-                    insn.operand_size_prefix, insn.address_size_prefix);
-        gen_amd64_helper_tlb_2_retint(state, amd64_jit_string_op,
-                (unsigned long) insn.opcode, (unsigned long) next_ip);
-        // The helper runs the whole (REP) string op in C and returns INT_NONE
-        // with the registers advanced, or INT_TIMER with rip at the instruction
-        // when poked mid-way (the retint gadget exits on anything but INT_NONE).
-        // Neither needs the block to end here: continue, like any other gadget
-        // that calls a C twin. Ending it cost a block boundary per memcpy.
+#define AMD64_STR_DECL(op) gadget_amd64_str_##op##1(void), gadget_amd64_str_##op##2(void), \
+                      gadget_amd64_str_##op##4(void), gadget_amd64_str_##op##8(void)
+#define AMD64_STR(op) gadget_amd64_str_##op##1, gadget_amd64_str_##op##2, \
+                      gadget_amd64_str_##op##4, gadget_amd64_str_##op##8
+        extern void AMD64_STR_DECL(movs), AMD64_STR_DECL(stos), AMD64_STR_DECL(lods),
+                AMD64_STR_DECL(scas), AMD64_STR_DECL(cmps);
+        static void (*const str_gadgets[5][4])(void) = {
+            {AMD64_STR(movs)}, {AMD64_STR(stos)}, {AMD64_STR(lods)},
+            {AMD64_STR(scas)}, {AMD64_STR(cmps)},
+        };
+#undef AMD64_STR
+#undef AMD64_STR_DECL
+        gen_amd64_flush_reg_cache(state);
+        gen_amd64_flush_rip(state);
+        gen(state, (unsigned long) str_gadgets[op][lg]);
+        gen(state, packed);
+        gen(state, (unsigned long) insn.start_ip);
+        gen(state, (unsigned long) next_ip);
         gen_amd64_defer_rip(state, next_ip);
         return true;
     }
@@ -10758,7 +10861,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
     // 0F B1 CMPXCHG [mem], reg, 32/64-bit, memory destination. Before the
     // 0f-rm-helper arm, which otherwise claims it. The byte form (B0) and the
     // 0x66 form keep bridging. A LOCK prefix changes nothing a single thread
-    // can observe and the helper is atomic regardless, so it is accepted.
+    // can observe and the gadget is atomic regardless, so it is accepted.
     if (!insn.address_size_prefix && insn.two_byte_opcode && insn.has_modrm &&
             !insn.operand_size_prefix && insn.rep_mode == amd64_jit_rep_none &&
             amd64_modrm_mod(insn.modrm) != 3 && insn.op2 == 0xb1) {
@@ -10769,13 +10872,14 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
             state->amd64_fallback_to_interp = true;
             return false;
         }
-        extern void gadget_amd64_cmpxchg_mem(void);
+        extern void gadget_amd64_cmpxchg_mem32(void), gadget_amd64_cmpxchg_mem64(void);
         state->amd64_ip = next_ip;
         amd64_jit_debug("cmpxchg-mem ip=%llx size=%u next=%llx",
                 (unsigned long long) insn.start_ip, size, (unsigned long long) next_ip);
         gen_amd64_flush_reg_cache(state);
         gen_amd64_flush_rip(state);
-        gen(state, (unsigned long) gadget_amd64_cmpxchg_mem);
+        gen(state, (unsigned long) (size == 64 ? gadget_amd64_cmpxchg_mem64
+                                               : gadget_amd64_cmpxchg_mem32));
         gen(state, meta);
         gen(state, disp);
         gen(state, (unsigned long) next_ip);
@@ -13712,20 +13816,111 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
         return true;
     }
 
+    // PUSH/POP r (50-5F) with 0x66 or REX.W, which the arms above leave out:
+    // 0x66 alone is a 16-bit push/pop (gadget_amd64_push16_reg/pop16_reg),
+    // REX.W -- which wins over 0x66 -- the 64-bit one.
+    if (!insn.two_byte_opcode && !insn.address_size_prefix && !insn.lock_prefix &&
+            insn.rep_mode == amd64_jit_rep_none &&
+            (insn.operand_size_prefix || insn.rex.w) &&
+            insn.opcode >= 0x50 && insn.opcode <= 0x5f) {
+        bool is_push = insn.opcode <= 0x57;
+        reg = (unsigned long) ((insn.opcode & 7) | (insn.rex.b ? 8 : 0));
+        next_ip = insn.end_ip;
+        state->amd64_ip = next_ip;
+        amd64_jit_debug("%s ip=%llx reg=%lu size=%d next=%llx", is_push ? "push-reg-x" : "pop-reg-x",
+                (unsigned long long) insn.start_ip, reg, insn.rex.w ? 64 : 16,
+                (unsigned long long) next_ip);
+        gen_amd64_flush_reg_cache(state);
+        gen_amd64_flush_rip(state);
+        extern void gadget_amd64_push_reg(void), gadget_amd64_pop_reg(void);
+        extern void gadget_amd64_push16_reg(void), gadget_amd64_pop16_reg(void);
+        if (insn.rex.w)
+            gen(state, (unsigned long) (is_push ? gadget_amd64_push_reg : gadget_amd64_pop_reg));
+        else
+            gen(state, (unsigned long) (is_push ? gadget_amd64_push16_reg : gadget_amd64_pop16_reg));
+        gen(state, reg);
+        gen_amd64_defer_rip(state, next_ip);
+        return true;
+    }
+
+    // PUSH imm16 (66 68 iw / 66 6A ib, sign-extended to 16 bits).
+    if (!insn.two_byte_opcode && !insn.address_size_prefix && !insn.lock_prefix &&
+            insn.rep_mode == amd64_jit_rep_none && insn.operand_size_prefix && !insn.rex.w &&
+            (insn.opcode == 0x68 || insn.opcode == 0x6a)) {
+        uint16_t imm = 0;
+        if (insn.opcode == 0x68) {
+            if (!tlb_read(tlb, state->amd64_ip, &imm, 2)) {
+                state->amd64_ip = state->amd64_orig_ip;
+                state->amd64_fallback_to_interp = true;
+                return false;
+            }
+            next_ip = state->amd64_ip + 2;
+        } else {
+            if (!tlb_read(tlb, state->amd64_ip, &rel8, 1)) {
+                state->amd64_ip = state->amd64_orig_ip;
+                state->amd64_fallback_to_interp = true;
+                return false;
+            }
+            imm = (uint16_t) (int16_t) rel8;
+            next_ip = state->amd64_ip + 1;
+        }
+        state->amd64_ip = next_ip;
+        gen_amd64_flush_reg_cache(state);
+        gen_amd64_flush_rip(state);
+        extern void gadget_amd64_push16_imm(void);
+        gen(state, (unsigned long) gadget_amd64_push16_imm);
+        gen(state, (unsigned long) imm);
+        gen_amd64_defer_rip(state, next_ip);
+        return true;
+    }
+
+    // POP r/m (8F /0), 64-bit or 16-bit: gadget_amd64_pop_rm_mem64/16 or
+    // pop_rm_reg64/16. LOCK, or a reg field other than 0 (AMD's XOP), is #UD.
     if (!insn.two_byte_opcode && !insn.address_size_prefix &&
             insn.rep_mode == amd64_jit_rep_none && insn.has_modrm &&
             insn.opcode == 0x8f) {
-        if (!gen_amd64_decode_rm_extent(state, tlb, &insn, &next_ip)) {
+        if (insn.lock_prefix || amd64_modrm_reg(insn.modrm) != 0) {
+            state->amd64_ip = state->amd64_orig_ip;
+            gen_amd64_flush_reg_cache(state);
+            gen_amd64_flush_rip(state);
+            gen_amd64_helper_tlb_1_retint(state, amd64_jit_ud2,
+                    (unsigned long) state->amd64_orig_ip);
+            gen_exit(state);
+            return false;
+        }
+        bool w16 = insn.operand_size_prefix;
+        if (amd64_modrm_mod(insn.modrm) == 3) {
+            if (!gen_amd64_decode_rm_extent(state, tlb, &insn, &next_ip)) {
+                state->amd64_ip = state->amd64_orig_ip;
+                state->amd64_fallback_to_interp = true;
+                return false;
+            }
+            state->amd64_ip = next_ip;
+            gen_amd64_flush_reg_cache(state);
+            gen_amd64_flush_rip(state);
+            extern void gadget_amd64_pop_rm_reg16(void), gadget_amd64_pop_rm_reg64(void);
+            gen(state, (unsigned long) (w16 ? gadget_amd64_pop_rm_reg16 : gadget_amd64_pop_rm_reg64));
+            gen(state, (unsigned long) (amd64_modrm_rm(insn.modrm) | (insn.rex.b ? 8 : 0)));
+            gen_amd64_defer_rip(state, next_ip);
+            return true;
+        }
+        unsigned long meta, disp;
+        if (!gen_amd64_decode_mem_meta(state, tlb, &insn, w16 ? 16 : 64, &meta, &disp, &next_ip)) {
             state->amd64_ip = state->amd64_orig_ip;
             state->amd64_fallback_to_interp = true;
             return false;
         }
         state->amd64_ip = next_ip;
-        amd64_jit_debug("pop-rm-helper ip=%llx next=%llx",
-                (unsigned long long) insn.start_ip,
-                (unsigned long long) next_ip);
-        gen_amd64_helper_tlb_1_retint(state, amd64_jit_pop_rm,
-                (unsigned long) next_ip);
+        amd64_jit_debug("pop-rm ip=%llx next=%llx",
+                (unsigned long long) insn.start_ip, (unsigned long long) next_ip);
+        gen_amd64_flush_reg_cache(state);
+        gen_amd64_flush_rip(state);
+        extern void gadget_amd64_pop_rm_mem16(void), gadget_amd64_pop_rm_mem64(void);
+        gen(state, (unsigned long) (w16 ? gadget_amd64_pop_rm_mem16 : gadget_amd64_pop_rm_mem64));
+        gen(state, meta);
+        gen(state, disp);
+        gen(state, (unsigned long) next_ip);
+        gen_amd64_defer_rip(state, next_ip);
         return true;
     }
 
@@ -13779,27 +13974,26 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
         return true;
     }
 
-    if (amd64_jit_one_byte_plain_prefixes(&insn) &&
-            insn.opcode == 0x9c) {
+    // PUSHF (9C) / POPF (9D), 64-bit or, with 0x66, 16-bit: gadget_amd64_pushf64/
+    // pushf16 and popf64/popf16. A LOCK is #UD (it reaches the interpreter).
+    if (!insn.two_byte_opcode && !insn.address_size_prefix && !insn.lock_prefix &&
+            insn.rep_mode == amd64_jit_rep_none &&
+            (insn.opcode == 0x9c || insn.opcode == 0x9d)) {
         next_ip = insn.end_ip;
         state->amd64_ip = next_ip;
-        amd64_jit_debug("pushf-helper ip=%llx next=%llx",
-                (unsigned long long) insn.start_ip,
-                (unsigned long long) next_ip);
-        gen_amd64_helper_tlb_2_retint(state, amd64_jit_push_flags,
-                64, (unsigned long) next_ip);
-        return true;
-    }
-
-    if (amd64_jit_one_byte_plain_prefixes(&insn) &&
-            insn.opcode == 0x9d) {
-        next_ip = insn.end_ip;
-        state->amd64_ip = next_ip;
-        amd64_jit_debug("popf-helper ip=%llx next=%llx",
-                (unsigned long long) insn.start_ip,
-                (unsigned long long) next_ip);
-        gen_amd64_helper_tlb_2_retint(state, amd64_jit_pop_flags,
-                64, (unsigned long) next_ip);
+        amd64_jit_debug("%s ip=%llx next=%llx", insn.opcode == 0x9c ? "pushf" : "popf",
+                (unsigned long long) insn.start_ip, (unsigned long long) next_ip);
+        gen_amd64_flush_reg_cache(state);
+        gen_amd64_flush_rip(state);
+        extern void gadget_amd64_pushf64(void), gadget_amd64_pushf16(void);
+        extern void gadget_amd64_popf64(void), gadget_amd64_popf16(void);
+        bool w16 = insn.operand_size_prefix;
+        gen(state, (unsigned long) (insn.opcode == 0x9c
+                ? (w16 ? gadget_amd64_pushf16 : gadget_amd64_pushf64)
+                : (w16 ? gadget_amd64_popf16 : gadget_amd64_popf64)));
+        if (insn.opcode == 0x9d)
+            gen(state, (unsigned long) next_ip);   // where a TF-setting POPF leaves to
+        gen_amd64_defer_rip(state, next_ip);
         return true;
     }
 
@@ -17642,8 +17836,8 @@ void helper_aad(struct cpu_state *cpu, uint32_t base);
 #define POPF(z) glue(POPF_, z)()
 #define PUSHF_32() gg(pushf32, state->orig_ip)
 #define PUSHF_16() gg(pushf16, state->orig_ip)
-#define POPF_32() gg(popf32, state->orig_ip)
-#define POPF_16() gg(popf16, state->orig_ip)
+#define POPF_32() ggg(popf32, state->orig_ip, state->ip)
+#define POPF_16() ggg(popf16, state->orig_ip, state->ip)
 #define SAHF g(sahf)
 #define LAHF g(lahf)
 #define CMC g(cmc)
@@ -17729,8 +17923,8 @@ void helper_aad(struct cpu_state *cpu, uint32_t base);
 
 void helper_rdtsc(struct cpu_state *cpu);
 #define RDTSC h(helper_rdtsc)
-#define CPUID() g(cpuid)
-#define XGETBV() g(xgetbv)
+#define CPUID() gg(cpuid, (unsigned long) &cpuid_tables[0])
+#define XGETBV() ggg(xgetbv, (unsigned long) xcr0_value(), state->orig_ip)
 
 // atomic
 #define atomic_op(type, src, dst,z) load(src, z); op(atomic_##type, dst, z)

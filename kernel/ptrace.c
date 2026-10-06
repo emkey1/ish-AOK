@@ -72,6 +72,7 @@ static void ptrace_resume_child_locked(struct task *child, int resume_sig,
     // not.
     task_ref_cnt_mod(child, 1);
     child->cpu.tf = single_step;
+    child->ptrace_singlestep = single_step;
     child->ptrace.stop_at_syscall = stop_at_syscall;
     if (!stop_at_syscall)
         child->ptrace.syscall_stopped = false;

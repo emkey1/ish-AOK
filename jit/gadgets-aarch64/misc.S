@@ -1,47 +1,82 @@
 #include "gadgets.h"
+#include "emu/interrupt.h"
 #include "math.h"
 
 .gadget cpuid
-    # regrettable
-    save_c
-    sub sp, sp, 0x10
-    str eax, [sp, 0xc]
-    str ebx, [sp, 0x8]
-    str ecx, [sp, 0x4]
-    str edx, [sp, 0x0]
-    add x0, sp, 0xc
-    add x1, sp, 0x8
-    add x2, sp, 0x4
-    mov x3, sp
-    bl NAME(helper_cpuid)
-    ldr eax, [sp, 0xc]
-    ldr ebx, [sp, 0x8]
-    ldr ecx, [sp, 0x4]
-    ldr edx, [sp, 0x0]
-    add sp, sp, 0x10
-    restore_c
-    gret
+    ldr  x10, [_ip]                  /* cpuid_tables[0] */
+    mov  w8, eax
+    mov  w9, ecx
+    bl   cpuid_lookup
+    mov  eax, w11
+    mov  ebx, w12
+    mov  ecx, w13
+    mov  edx, w14
+    gret 1
+
+# CPUID's answer for leaf w8, subleaf w9, from the table at x10 (struct
+# cpuid_table, emu/cpuid.h): do_cpuid's choice of slot, in asm. Out: w11 eax,
+# w12 ebx, w13 ecx, w14 edx. Clobbers x15. Shared with the amd64 gadget.
+.global cpuid_lookup
+cpuid_lookup:
+    mov  w15, 0                      /* CPUID_SLOT_LEAF0 */
+    cbz  w8, 9f
+    mov  w15, 1
+    cmp  w8, 1
+    b.eq 9f
+    cmp  w8, 7
+    b.eq 7f
+    cmp  w8, 0xd
+    b.eq 8f
+    mov  w15, 9                      /* CPUID_SLOT_EXT0 */
+    mov  w11, 0x80000000
+    cmp  w8, w11
+    b.eq 9f
+    mov  w15, 10
+    add  w11, w11, 1
+    cmp  w8, w11
+    b.eq 9f
+    mov  w15, 13                     /* any other extended leaf */
+    tbnz w8, 31, 9f
+    ldr  w11, [x10]                  /* leaf 0's eax: the basic maximum */
+    mov  w15, 11
+    cmp  w8, w11
+    b.hi 9f
+    mov  w15, 12                     /* below it, unimplemented: zeros */
+    b    9f
+7:  mov  w15, 12
+    cbnz w9, 9f
+    mov  w15, 2
+    b    9f
+8:  mov  w15, 12                     /* leaf 0xD: subleaves 0 1 2 5 6 7 */
+    cmp  w9, 2
+    b.hi 81f
+    add  w15, w9, 3
+    b    9f
+81: cmp  w9, 7
+    b.hi 9f
+    cmp  w9, 5
+    b.lo 9f
+    add  w15, w9, 1
+9:  add  x15, x10, x15, lsl 4
+    ldp  w11, w12, [x15]
+    ldp  w13, w14, [x15, 8]
+    ret
 
 .gadget xgetbv
-    # same frame as cpuid: ecx in, eax/edx out
-    save_c
-    sub sp, sp, 0x10
-    str eax, [sp, 0xc]
-    str ebx, [sp, 0x8]
-    str ecx, [sp, 0x4]
-    str edx, [sp, 0x0]
-    add x0, sp, 0xc
-    add x1, sp, 0x8
-    add x2, sp, 0x4
-    mov x3, sp
-    bl NAME(helper_xgetbv)
-    ldr eax, [sp, 0xc]
-    ldr ebx, [sp, 0x8]
-    ldr ecx, [sp, 0x4]
-    ldr edx, [sp, 0x0]
-    add sp, sp, 0x10
-    restore_c
-    gret
+    # [xcr0][orig_ip]: ECX selects the register, and XCR0 is the only one;
+    # anything else is #GP at the instruction, as on hardware.
+    cbnz ecx, 1f
+    ldr  x8, [_ip]
+    mov  eax, w8
+    lsr  x8, x8, 32
+    mov  edx, w8
+    gret 2
+1:  str  xzr, [_cpu, CPU_segfault_addr]
+    strb wzr, [_cpu, CPU_segfault_was_write]
+    strb wzr, [_cpu, CPU_segfault_reported]
+    ldr  eip, [_ip, 8]
+    mov  _tmp, INT_GPF
+    b    jit_exit
 
 
 .macro do_cmpxchg size, s
