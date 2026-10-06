@@ -2904,6 +2904,11 @@ def_amd64_cached_logic_reg_reg _nf
     add x12, _cpu, CPU_amd64_regs
     add x13, x12, x9, lsl 3
     add x14, x12, x10, lsl 3
+    tbz x8, 15, 4f                  /* a byte form's AH..BH: the second byte */
+    add x13, x13, 1
+4:  tbz x8, 16, 5f
+    add x14, x14, 1
+5:
     cmp x11, 64
     b.eq 1f
     cmp x11, 32
@@ -8801,8 +8806,8 @@ amd64_gen_pop_rm_reg pop_rm_reg64, 8
 # at the effective address -- this is the PLT thunk `jmp *off(%rip)` and vtable/
 # function-pointer dispatch. rip = *(u64 *)addr, then exit. meta(op0)/disp(op1)
 # describe the addressing mode and next_ip(op2) is the rip-relative base consumed by
-# amd64_vmem_addr. rip is flushed by gen.c so a #PF on the target load re-executes.
-# The FS-prefix form is excluded in gen.c (amd64_vmem_addr does not add tls_ptr).
+# amd64_vmem_addr (FS and GS included). rip is flushed by gen.c so a #PF on the
+# target load re-executes.
 .gadget amd64_jmp_indir_mem
     ldr  x8, [_ip]                   /* meta */
     ldr  x9, [_ip, 8]                /* disp */
@@ -8820,7 +8825,7 @@ amd64_gen_pop_rm_reg pop_rm_reg64, 8
 # faulting accesses -- the target load (id call_im) and the push (id call_im_w). x10
 # holds the target across the push's vwrite_prep (preserved by save_c). RSP is
 # committed only after the push store and rip is flushed by gen.c, so a #PF on either
-# access cleanly re-executes the whole instruction. FS-prefix form excluded in gen.c.
+# access cleanly re-executes the whole instruction.
 .gadget amd64_call_indir_mem
     ldr  x8, [_ip]                   /* meta */
     ldr  x9, [_ip, 8]                /* disp */
@@ -9218,7 +9223,7 @@ amd64_gen_opstore_logic opstore_logic64, 8, 64
 # amd64 INC/DEC [mem] (0xff /0 = inc, /1 = dec), mod!=3, sizes 32/64. Read-modify-write
 # on the SAME address (guest addr in x0 across both preps; result -> x10 before the
 # store), exactly the opstore_arith frame. INC = lhs+1, DEC = lhs-1. Flags match the
-# interp (amd64_jit_ff_group case 0/1): set the full add/sub flags for rhs=1, then
+# interpreter's: set the full add/sub flags for rhs=1, then
 # RESTORE CF -- inc/dec preserve CF. CF is eager (CPU_cf byte + eflags bit0), so we
 # snapshot it after the read (w9) and rewrite both after the flag macro. OF/AF/ZF/SF/PF
 # come from adds/subs at native width (32/64 -> V is correct); the computed CF in x14 is
@@ -10140,6 +10145,386 @@ amd64_gen_cmpxchg_mem cmpxchg_mem8, 1, 8
 amd64_gen_cmpxchg_mem cmpxchg_mem16, 2, 16
 amd64_gen_cmpxchg_mem cmpxchg_mem32, 4, 32
 amd64_gen_cmpxchg_mem cmpxchg_mem64, 8, 64
+
+# ZF (and no other flag) = w16: the eflags bit, the lazy one cleared.
+.macro amd64_set_zf_only
+    ldrb w11, [_cpu, CPU_flags_res]
+    bic  w11, w11, ZF_RES
+    strb w11, [_cpu, CPU_flags_res]
+    ldr  w11, [_cpu, CPU_eflags]
+    bic  w11, w11, ZF_FLAG
+    orr  w11, w11, w16, lsl 6
+    str  w11, [_cpu, CPU_eflags]
+.endm
+
+# ---------------------------------------------------------------------------
+# Segment registers on amd64: MOV r/m, Sreg (8C), MOV Sreg, r/m (8E), PUSH and
+# POP FS and GS (0F A0 A1 A8 A9) -- what a 64-bit Linux task sees, as
+# emu/amd64_interp.c's amd64_sreg_op sets out (measured on camd): CS reads
+# 0x33 and SS 0x2b; ES, DS, FS and GS what was last loaded (cpu->amd64_sreg).
+# A load must be a selector Linux's GDT makes loadable -- SS 0x2b only; the
+# others null or GDT entries 4, 5, 6 and 15 at any RPL -- else #GP with the
+# selector's index and TI as the error code. A load into FS or GS sets that
+# base to 0 (every loadable descriptor's base, and a null selector's on the
+# Intel CPU AOK reports). gen.c has flushed the register cache and the rip.
+# ---------------------------------------------------------------------------
+
+// (emu/cpu.h's, which assembly cannot include)
+#define AMD64_SREG_CS 1
+#define AMD64_SREG_SS 2
+#define AMD64_SREG_FS 4
+#define AMD64_SREG_GS 5
+#define AMD64_SEL_USER_CS 0x33
+#define AMD64_SEL_USER_DS 0x2b
+
+// w10 = the selector Sreg w0 reads. Clobbers x10.
+.macro amd64_sreg_get
+    mov  w10, AMD64_SEL_USER_CS
+    cmp  w0, AMD64_SREG_CS
+    b.eq .Lsg\@
+    mov  w10, AMD64_SEL_USER_DS
+    cmp  w0, AMD64_SREG_SS
+    b.eq .Lsg\@
+    mov  x10, CPU_amd64_sreg         /* (past an add's 12-bit immediate) */
+    add  x10, x10, x0, lsl 1
+    ldrh w10, [_cpu, x10]
+.Lsg\@:
+.endm
+
+// Selector w10 into Sreg w0, or #GP. Clobbers x11.
+.macro amd64_sreg_set
+    cmp  w0, AMD64_SREG_SS
+    b.ne .Lss1\@
+    cmp  w10, AMD64_SEL_USER_DS
+    b.ne amd64_sreg_gp
+    b    .Lss9\@                    /* SS: it reads 0x2b anyway */
+.Lss1\@:
+    tbnz w10, 2, amd64_sreg_gp       /* an LDT selector: none here */
+    lsr  w11, w10, 3
+    cbz  w11, .Lss2\@                /* null */
+    cmp  w11, 4
+    b.lo amd64_sreg_gp
+    cmp  w11, 6
+    b.ls .Lss2\@
+    cmp  w11, 15
+    b.ne amd64_sreg_gp
+.Lss2\@:
+    mov  x11, CPU_amd64_sreg
+    add  x11, x11, x0, lsl 1
+    strh w10, [_cpu, x11]
+    cmp  w0, AMD64_SREG_FS
+    b.ne .Lss3\@
+    str  xzr, [_cpu, CPU_tls_ptr]
+    b    .Lss9\@
+.Lss3\@:
+    cmp  w0, AMD64_SREG_GS
+    b.ne .Lss9\@
+    str  xzr, [_cpu, CPU_amd64_gs_base]
+.Lss9\@:
+.endm
+
+// #GP(w10 & 0xfffc) at the instruction (SIGSEGV, SI_KERNEL).
+amd64_sreg_gp:
+    str  xzr, [_cpu, CPU_segfault_addr]
+    strb wzr, [_cpu, CPU_segfault_was_write]
+    strb wzr, [_cpu, CPU_segfault_reported]
+    and  w10, w10, 0xfffc
+    mov  x0, INT_GPF_CODE_BASE
+    orr  x0, x0, x10
+    b    jit_exit
+
+# MOV reg, Sreg: [sreg | dst << 4 | size << 8]: 16 bits keep the rest of the
+# register, 32 and 64 zero-extend. gret 1.
+.gadget amd64_sreg_to_reg
+    ldr  x8, [_ip]
+    and  w0, w8, 7
+    amd64_sreg_get
+    ubfx x9, x8, 4, 4
+    ubfx x12, x8, 8, 7
+    add  x13, _cpu, CPU_amd64_regs
+    cmp  x12, 16
+    b.ne 1f
+    ldr  x14, [x13, x9, lsl 3]
+    bfi  x14, x10, 0, 16
+    mov  x10, x14
+1:  str  x10, [x13, x9, lsl 3]
+    gret 1
+
+# MOV [mem], Sreg: two bytes, whatever the operand size. [meta][disp][next_ip]
+# [sreg]. gret 4.
+.gadget amd64_sreg_to_mem
+    ldr  x8, [_ip]
+    ldr  x9, [_ip, 8]
+    amd64_vmem_addr
+    amd64_vwrite_prep 2, sreg_st
+    ldr  x0, [_ip, 24]
+    amd64_sreg_get
+    strh w10, [x9]
+    amd64_vwrite_done 2, sreg_st
+    gret 4
+    amd64_vwrite_bullshit 2, sreg_st
+
+# MOV Sreg, reg: the low word. [sreg | src << 4]. gret 1.
+.gadget amd64_sreg_from_reg
+    ldr  x8, [_ip]
+    and  w0, w8, 7
+    ubfx x9, x8, 4, 4
+    add  x13, _cpu, CPU_amd64_regs
+    add  x13, x13, x9, lsl 3
+    ldrh w10, [x13]
+    amd64_sreg_set
+    gret 1
+
+# MOV Sreg, [mem]: two bytes. [meta][disp][next_ip][sreg]. gret 4.
+.gadget amd64_sreg_from_mem
+    ldr  x8, [_ip]
+    ldr  x9, [_ip, 8]
+    amd64_vmem_addr
+    amd64_vread_prep 2, sreg_ld
+    ldrh w10, [x9]
+    ldr  x0, [_ip, 24]
+    amd64_sreg_set
+    gret 4
+    amd64_vread_bullshit 2, sreg_ld
+
+# PUSH FS/GS: eight bytes, the selector zero-extended, or two with 0x66.
+# POP FS/GS: eight (or two), the low word loaded; a #GP leaves RSP as it was.
+# [sreg]. gret 1.
+.macro amd64_gen_sreg_stack bytes
+.gadget amd64_push_sreg\bytes
+    ldr  x0, [_ip]
+    amd64_sreg_get
+    add  x14, _cpu, CPU_amd64_regs
+    ldr  x9, [x14, 4*8]
+    sub  x9, x9, \bytes
+    amd64_vwrite_prep \bytes, push_sreg\bytes
+.if \bytes == 2
+    strh w10, [x9]
+.else
+    str  x10, [x9]
+.endif
+    amd64_vwrite_done \bytes, push_sreg\bytes
+    add  x14, _cpu, CPU_amd64_regs
+    ldr  x8, [x14, 4*8]
+    sub  x8, x8, \bytes
+    str  x8, [x14, 4*8]
+    gret 1
+    amd64_vwrite_bullshit \bytes, push_sreg\bytes
+
+.gadget amd64_pop_sreg\bytes
+    add  x14, _cpu, CPU_amd64_regs
+    ldr  x9, [x14, 4*8]
+    amd64_vread_prep \bytes, pop_sreg\bytes
+    ldrh w10, [x9]
+    ldr  x0, [_ip]
+    amd64_sreg_set
+    add  x14, _cpu, CPU_amd64_regs
+    ldr  x8, [x14, 4*8]
+    add  x8, x8, \bytes
+    str  x8, [x14, 4*8]
+    gret 1
+    amd64_vread_bullshit \bytes, pop_sreg\bytes
+.endm
+amd64_gen_sreg_stack 2
+amd64_gen_sreg_stack 8
+
+# IRET (CF): IRETQ with REX.W, IRETD, IRETW with 0x66 -- from user mode a
+# same-privilege return popping five slots of the operand size: RIP, CS,
+# RFLAGS, RSP, SS (emu/amd64_interp.c's amd64_iret_op has camd's
+# measurements). All five are read first (a fault in any is #PF, RSP as it
+# was); then CS must be 0x33 and SS 0x2b in their low words, else #GP with
+# that selector's index and TI (CS first; 0x23, which would leave 64-bit
+# mode, is #GP(0)); a non-canonical RIP is #GP(0). RFLAGS goes in under
+# POPF's rule. Nothing may sit on the stack across the reads (a fault leaves
+# the gadget), so what is kept lives in the registers the read path
+# preserves: x3 RIP; x0 CS | SS << 16 | RFLAGS << 32; x10 the guest RSP, then
+# the new one. Ends the block. No operands.
+.macro amd64_iret_slot bytes, i, id
+    add  x9, x10, \i * \bytes
+    amd64_vread_prep \bytes, \id
+.if \bytes == 2
+    ldrh w13, [x9]
+.elseif \bytes == 4
+    ldr  w13, [x9]
+.else
+    ldr  x13, [x9]
+.endif
+.endm
+.macro amd64_gen_iret bytes, writable_hi
+.gadget amd64_iret\bytes
+    add  x14, _cpu, CPU_amd64_regs
+    ldr  x10, [x14, 4*8]
+    amd64_iret_slot \bytes, 1, iret\bytes\()_cs
+    and  x0, x13, 0xffff
+    amd64_iret_slot \bytes, 4, iret\bytes\()_ss
+    and  x13, x13, 0xffff
+    orr  x0, x0, x13, lsl 16
+    amd64_iret_slot \bytes, 2, iret\bytes\()_fl
+    mov  w13, w13
+    orr  x0, x0, x13, lsl 32
+    amd64_iret_slot \bytes, 0, iret\bytes\()_ip
+    mov  x3, x13
+    amd64_iret_slot \bytes, 3, iret\bytes\()_sp
+    mov  x10, x13
+    and  w13, w0, 0xffff
+    cmp  w13, AMD64_SEL_USER_CS
+    b.eq 1f
+    mov  w10, w13
+    cmp  w13, 0x23
+    csel w10, wzr, w10, eq
+    b    amd64_sreg_gp
+1:  ubfx w13, w0, 16, 16
+    cmp  w13, AMD64_SEL_USER_DS
+    b.eq 2f
+    mov  w10, w13
+    b    amd64_sreg_gp
+2:  sbfx x12, x3, 0, 48
+    cmp  x12, x3
+    b.ne amd64_branch_noncanonical
+    lsr  x13, x0, 32                 /* RFLAGS: POPF's rule */
+    ldr  w11, [_cpu, CPU_eflags]
+    mov  w12, 0x4dd5
+    movk w12, \writable_hi, lsl 16
+    bic  w11, w11, w12
+    and  w13, w13, w12
+    orr  w11, w11, w13
+    str  w11, [_cpu, CPU_eflags]
+    and  w13, w11, 1
+    strb w13, [_cpu, CPU_cf]
+    ubfx w13, w11, 11, 1
+    strb w13, [_cpu, CPU_of]
+    strb wzr, [_cpu, CPU_flags_res]
+    add  x14, _cpu, CPU_amd64_regs
+    str  x10, [x14, 4*8]
+    str  x3, [_cpu, CPU_amd64_rip]
+    str  w3, [_cpu, CPU_eip]
+    tbz  w11, 8, 3f                  /* TF: single-step from the target */
+    mov  w0, INT_TIMER
+    b    jit_exit
+3:  b    jit_ret
+    amd64_vread_bullshit \bytes, iret\bytes\()_cs
+    amd64_vread_bullshit \bytes, iret\bytes\()_ss
+    amd64_vread_bullshit \bytes, iret\bytes\()_fl
+    amd64_vread_bullshit \bytes, iret\bytes\()_ip
+    amd64_vread_bullshit \bytes, iret\bytes\()_sp
+.endm
+amd64_gen_iret 8, 0x24
+amd64_gen_iret 4, 0x24
+amd64_gen_iret 2, 0
+
+# CLFLUSH / CLFLUSHOPT (0F AE /7, memory). Guest memory has one coherent view,
+# so there is nothing to write back -- but the line must be mapped and
+# readable, or it is a #PF, as on x86. Operands: [meta][disp][next_ip]. gret 3.
+.gadget amd64_clflush
+    ldr  x8, [_ip]
+    ldr  x9, [_ip, 8]
+    amd64_vmem_addr
+    amd64_vread_prep 1, clflush
+    gret 3
+    amd64_vread_bullshit 1, clflush
+
+# CMPXCHG8B (0F C7 /1): compare EDX:EAX with the 8-byte operand; equal, store
+# ECX:EBX there and set ZF; else load it into EDX:EAX (each half
+# zero-extended) and clear ZF. No other flag changes; atomic, LOCK or not --
+# an exclusive CAS when aligned, x86_atomic_cas (emu/tlb.c) when not.
+# Operands: [meta][disp][next_ip]. gret 3.
+.gadget amd64_cmpxchg8b_mem
+    ldr  x8, [_ip]
+    ldr  x9, [_ip, 8]
+    amd64_vmem_addr
+    tst  x9, 7
+    b.ne 8f
+    amd64_vwrite_prep 8, cmpxchg8b
+    add  x14, _cpu, CPU_amd64_regs
+    ldr  w10, [x14]                  /* expected: edx:eax */
+    ldr  w12, [x14, 16]
+    orr  x10, x10, x12, lsl 32
+    ldr  w3, [x14, 24]               /* desired: ecx:ebx */
+    ldr  w12, [x14, 8]
+    orr  x3, x3, x12, lsl 32
+1:  ldaxr x13, [x9]
+    cmp  x13, x10
+    b.ne 2f
+    stlxr w11, x3, [x9]
+    cbnz w11, 1b
+    b    4f
+2:  clrex
+4:  cmp  x13, x10
+    cset w16, eq
+    amd64_set_zf_only
+    cbnz w16, 5f
+    add  x14, _cpu, CPU_amd64_regs
+    mov  w15, w13
+    str  x15, [x14]                  /* rax = the low half, zero-extended */
+    lsr  x15, x13, 32
+    str  x15, [x14, 16]              /* rdx = the high half */
+5:  gret 3
+8:  /* misaligned: x86_atomic_cas(cpu, tlb, addr, 8, expected, desired, &old,
+       &swapped), as amd64_cmpxchg_mem64 does */
+    add  x14, _cpu, CPU_amd64_regs
+    ldr  w4, [x14]
+    ldr  w12, [x14, 16]
+    orr  x4, x4, x12, lsl 32
+    ldr  w5, [x14, 24]
+    ldr  w12, [x14, 8]
+    orr  x5, x5, x12, lsl 32
+    sub  sp, sp, 16
+    mov  x6, sp
+    add  x7, sp, 8
+    save_c
+    mov  x0, _cpu
+    sub  x1, _tlb, TLB_entries
+    mov  x2, x9
+    mov  x3, 8
+    bl   NAME(x86_atomic_cas)
+    mov  x19, x0
+    restore_c
+    ldr  x13, [sp]
+    add  sp, sp, 16
+    cbnz w19, 9f
+    add  x14, _cpu, CPU_amd64_regs
+    ldr  w10, [x14]
+    ldr  w12, [x14, 16]
+    orr  x10, x10, x12, lsl 32
+    b    4b
+9:  mov  x0, x19                     /* INT_PF, segfault_addr already set */
+    b    jit_exit
+    amd64_vwrite_bullshit 8, cmpxchg8b
+
+# CMPXCHG16B (REX.W 0F C7 /1): the same with RDX:RAX and RCX:RBX and a
+# 16-byte operand, which must be 16-byte aligned (#GP: the meta word's ALIGN16
+# bit, in amd64_vmem_addr). A pair load is single-copy atomic only with a
+# successful store-exclusive, so a mismatch stores the old value back (as x86
+# itself writes the operand back) and retries if that fails.
+# Operands: [meta][disp][next_ip]. gret 3.
+.gadget amd64_cmpxchg16b_mem
+    ldr  x8, [_ip]
+    ldr  x9, [_ip, 8]
+    amd64_vmem_addr
+    amd64_vwrite_prep 16, cmpxchg16b
+    add  x14, _cpu, CPU_amd64_regs
+    ldr  x10, [x14]                  /* expected: rdx:rax */
+    ldr  x12, [x14, 16]
+    ldr  x3, [x14, 24]               /* desired: rcx:rbx */
+    ldr  x4, [x14, 8]
+1:  ldaxp x13, x15, [x9]
+    cmp  x13, x10
+    ccmp x15, x12, 0, eq
+    b.ne 2f
+    stlxp w11, x3, x4, [x9]
+    cbnz w11, 1b
+    mov  w16, 1
+    b    4f
+2:  stlxp w11, x13, x15, [x9]
+    cbnz w11, 1b
+    mov  w16, 0
+4:  amd64_set_zf_only
+    cbnz w16, 5f
+    add  x14, _cpu, CPU_amd64_regs
+    str  x13, [x14]
+    str  x15, [x14, 16]
+5:  gret 3
+    amd64_vwrite_bullshit 16, cmpxchg16b
 
 # XADD [mem], reg (0F C0, 0F C1), 8/16/32/64, with or without LOCK (atomic
 # either way): [mem] += reg, reg = the old value, the flags those of the ADD.

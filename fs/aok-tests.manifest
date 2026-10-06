@@ -419,6 +419,11 @@ x86/amd64_moffs_stack16.c
 x86/amd64_loop_addr32.c
 x86/amd64_string_ops.c
 x86/amd64_incdec.c
+x86/amd64_ff_indirect.c
+x86/amd64_odd_shapes.c
+x86/amd64_cmpxchg16b.c
+x86/amd64_0fae.c
+x86/amd64_iret.c
 x86/amd64_x87_cache.c
 x86/popf_ac_id.c
 x86/amd64_singlestep.c

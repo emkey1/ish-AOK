@@ -338,7 +338,7 @@ amd64_chain:
     # block, and this engine -- unlike the fully-translated arm64/riscv64 ones
     # this design was lifted from -- has gadgets that RE-DECODE their own
     # instruction out of guest memory at that rip: the helper-call gadgets
-    # (amd64_jit_ff_group and its siblings in emu/amd64_interp.c) walk prefixes
+    # (the amd64_jit_* bridges in emu/amd64_interp.c) walk prefixes
     # with amd64_fetch_u8, which fetches at CPU_amd64_rip and advances it. A
     # chained entry that left rip stale therefore decoded whatever instruction
     # rip happened to point at -- musl's __init_libc basename loop chains
