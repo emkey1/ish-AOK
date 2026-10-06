@@ -550,6 +550,9 @@ emu_src += [
     gadgets+'/misc.S',
     offsets,
 ]
+if jit_cpu_family == 'aarch64'
+    emu_src += [gadgets+'/x87.S']  # the x87; an x86_64 host keeps emu/fpu.c
+endif
 # AArch64 GUEST gadgets (native ARM64 guest code) -- only meaningful/
 # buildable on an aarch64 host, since they're literal AArch64 assembly.
 # Distinct from gadgets-aarch64/ above (the ARM64 HOST gadget set used by

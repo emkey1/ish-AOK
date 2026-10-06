@@ -8127,6 +8127,8 @@ static inline int amd64_handle_x87(struct cpu_state *cpu, struct tlb *tlb,
     unsigned fullop;
     qword_t addr = 0;
 
+    // The JIT's x87 (x87.S) keeps cpu->fcw; float80's rounding state follows.
+    fpu_sync_control(cpu);
     if (!amd64_decode_modrm(cpu, tlb, rex, &modrm))
         goto amd64_fpu_gpf_restore;
 
@@ -15851,12 +15853,16 @@ amd64_jit_vex_pf:
 }
 
 // A register-form x87 instruction, opcode and ModRM decoded at translation
-// time: word = opcode << 8 | modrm. Only FNSTSW AX touches a general register.
+// time: word = opcode << 8 | modrm. The JIT sends only the transcendentals
+// here (everything else is jit/gadgets-aarch64/x87.S), and they write no
+// general register. The C rounding state follows the control word, which
+// the gadgets change without telling it.
 int amd64_jit_x87_reg(struct cpu_state *cpu, struct tlb *tlb,
         unsigned long word, unsigned long next_ip) {
     (void) tlb;
     unsigned opcode = (word >> 8) & 0xff, modrm = word & 0xff;
     unsigned reg = (modrm >> 3) & 7, rm = modrm & 7;
+    fpu_sync_control(cpu);
     int interrupt = amd64_x87_reg_op(cpu, (opcode << 4) | reg, (opcode << 8) | (reg << 4) | rm, rm);
     if (interrupt != INT_NONE)
         return interrupt;
@@ -15864,99 +15870,6 @@ int amd64_jit_x87_reg(struct cpu_state *cpu, struct tlb *tlb,
     if (opcode == 0xdf && reg == 4)
         amd64_sync_legacy_regs(cpu);
     return INT_NONE;
-}
-
-// A memory-form x87 instruction whose ModRM and addressing the JIT decoded at
-// translation time (gen_amd64_decode_mem_meta): only the effective address
-// is left to compute, as amd64_jit_mem_op does.
-int amd64_jit_x87_mem(struct cpu_state *cpu, struct tlb *tlb,
-        unsigned long meta, unsigned long disp, unsigned long next_ip) {
-    unsigned opcode = (meta >> AMD64_JIT_MEM_OPCODE_SHIFT) & 0xff;
-    unsigned reg = (meta >> AMD64_JIT_MEM_REG_SHIFT) & 7;
-    unsigned base = (meta >> AMD64_JIT_MEM_BASE_SHIFT) & 0xf;
-    unsigned index = (meta >> AMD64_JIT_MEM_INDEX_SHIFT) & 0xf;
-    unsigned scale = (meta >> AMD64_JIT_MEM_SCALE_SHIFT) & 0x3;
-    qword_t addr = (qword_t) disp;
-    if (opcode < 0xd8 || opcode > 0xdf)
-        return INT_UNDEFINED;
-    if ((meta & AMD64_JIT_MEM_RIP_REL) != 0)
-        addr += (qword_t) next_ip;
-    if ((meta & AMD64_JIT_MEM_HAS_BASE) != 0)
-        addr += cpu->amd64_regs[base];
-    if ((meta & AMD64_JIT_MEM_HAS_INDEX) != 0)
-        addr += cpu->amd64_regs[index] << scale;
-    if ((meta & AMD64_JIT_MEM_FS) != 0)
-        addr += cpu->tls_ptr;
-    if ((meta & AMD64_JIT_MEM_GS) != 0)
-        addr += cpu->amd64_gs_base;
-    int interrupt = amd64_x87_mem_op(cpu, tlb, (opcode << 4) | reg, addr, cpu->amd64_rip);
-    if (interrupt != INT_NONE)
-        return interrupt;
-    cpu->amd64_rip = (qword_t) next_ip;
-    return INT_NONE;
-}
-
-int amd64_jit_x87(struct cpu_state *cpu, struct tlb *tlb,
-        unsigned long opcode, unsigned long next_ip) {
-    qword_t saved_rip = cpu->amd64_rip;
-    guest_addr_t checked_next_ip;
-    struct amd64_rex_prefix rex = {0};
-    enum amd64_seg seg_prefix = AMD64_SEG_NONE;
-    byte_t byte;
-    int interrupt;
-
-    if (opcode < 0xd8 || opcode > 0xdf)
-        return INT_UNDEFINED;
-    if (!amd64_guest_addr_ok((qword_t) next_ip, 1, &checked_next_ip))
-        return INT_GPF;
-
-    cpu->amd64_address_size_prefix = false;
-    for (;;) {
-        if (!amd64_fetch_u8(cpu, tlb, &byte))
-            goto amd64_jit_x87_pf;
-        if (amd64_ignored_segment_prefix(byte))
-            continue;
-        if (byte == 0x64) {
-            seg_prefix = AMD64_SEG_FS;
-            continue;
-        }
-        if (byte == 0x65) {
-            seg_prefix = AMD64_SEG_GS;
-            continue;
-        }
-        // 0x66 has no meaning for an x87 escape; consumed so it cannot desync
-        // the fetch. A LOCK prefix is deliberately NOT consumed -- it is #UD on
-        // x87, and leaving it to fail the opcode check below is how that gets
-        // reported.
-        if (byte == 0x66)
-            continue;
-        if (byte >= 0x40 && byte <= 0x4f) {
-            rex.present = true;
-            rex.w = (byte & 8) != 0;
-            rex.r = (byte & 4) != 0;
-            rex.x = (byte & 2) != 0;
-            rex.b = (byte & 1) != 0;
-            continue;
-        }
-        break;
-    }
-    if (byte != (byte_t) opcode)
-        return INT_UNDEFINED;
-
-    // rip now points AT the ModRM byte, which is where amd64_handle_x87 wants
-    // it. It restores rip itself on a fault, using the saved_rip we hand it.
-    interrupt = amd64_handle_x87(cpu, tlb, saved_rip, rex, seg_prefix,
-            (byte_t) opcode);
-    if (interrupt != INT_NONE)
-        return interrupt;
-    cpu->amd64_rip = (qword_t) next_ip;
-    amd64_sync_legacy_regs(cpu);
-    return INT_NONE;
-
-amd64_jit_x87_pf:
-    cpu->amd64_rip = saved_rip;
-    amd64_sync_legacy_regs(cpu);
-    return INT_PF;
 }
 
 int amd64_jit_cmpxchg8b(struct cpu_state *cpu, struct tlb *tlb,

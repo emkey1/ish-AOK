@@ -390,9 +390,15 @@ static void check_fxsave_cow_after_fork(void) {
         // for byte. (A reference taken before the fork would NOT: fflush and
         // fork are entitled to use XMM, and the amd64 guest's area carries
         // all sixteen of them.)
+        // FXSAVE writes the first 160 bytes and the XMM registers the mode
+        // has (8 or 16, 16 bytes each) and leaves the rest of the area alone
+        // -- on hardware too (camd, -m32 and 64-bit) -- so that part must
+        // still hold the fill and only the written part can be compared.
         FXSAVE_AT(p + 0xf00);
         FXSAVE_AT(ref512);
-        _exit(memcmp(p + 0xf00, ref512, FXSAVE_SIZE) == 0 ? 0 : 1);
+        size_t written = 160 + 16 * (sizeof(void *) == 8 ? 16 : 8);
+        _exit(memcmp(p + 0xf00, ref512, written) == 0 &&
+              count_written(p + 0xf00 + written, FXSAVE_SIZE - written) == 0 ? 0 : 1);
     }
 
     int status = 0;
@@ -403,8 +409,8 @@ static void check_fxsave_cow_after_fork(void) {
         return;
     }
     if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-        printf("FAIL: child's straddling fxsave did not land all 512 bytes "
-               "(status %d)\n", status);
+        printf("FAIL: child's straddling fxsave did not land its bytes, or wrote "
+               "the ones FXSAVE leaves alone (status %d)\n", status);
         failures_total++;
     }
     unsigned parent_changed = count_written(p + PAGE, 256);

@@ -1518,7 +1518,11 @@ static intptr_t elf_exec(struct fd *fd, const char *file, struct exec_args argv,
 
     save->mm->stack_start = sp;
     save->cpu.amd64_syscall = (struct amd64_syscall_state) {};
+    // FNINIT's state, as Linux's start_thread leaves the FPU: every register
+    // empty, nothing flagged.
     save->cpu.fcw = 0x37f;
+    save->cpu.fsw = 0;
+    save->cpu.x87_valid = 0;
     save->cpu.mxcsr = 0x1f80;
 
     memset(save->cpu.amd64_regs, 0, sizeof(save->cpu.amd64_regs));

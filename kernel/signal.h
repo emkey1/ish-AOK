@@ -92,6 +92,11 @@ struct sigaction_ {
 #define ILL_ILLOPC_ 1
 #define ILL_ILLOPN_ 2
 #define FPE_INTDIV_ 1
+#define FPE_FLTDIV_ 3
+#define FPE_FLTOVF_ 4
+#define FPE_FLTUND_ 5
+#define FPE_FLTRES_ 6
+#define FPE_FLTINV_ 7
 #define SEGV_MAPERR_ 1
 #define SEGV_ACCERR_ 2
 #define BUS_ADRALN_ 1

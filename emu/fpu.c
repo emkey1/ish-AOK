@@ -54,12 +54,15 @@ static void fpu_transcendental_inexact(struct cpu_state *cpu, float80 result) {
         cpu->pe = 1;
 }
 
+// The interpreter's x87 keeps the tag the gadgets keep (cpu->x87_valid).
 static void fpu_push(struct cpu_state *cpu, float80 f) {
     cpu->top--;
     ST(0) = f;
+    cpu->x87_valid |= (byte_t) (1u << cpu->top);
 }
 #define fpush(f) fpu_push(cpu, f)
 void fpu_pop(struct cpu_state *cpu) {
+    cpu->x87_valid &= (byte_t) ~(1u << cpu->top);
     cpu->top++;
 }
 
@@ -266,6 +269,7 @@ void fpu_sqrt(struct cpu_state *cpu) {
 }
 
 void fpu_yl2x(struct cpu_state *cpu) {
+    fpu_sync_control(cpu);  // the x87.S gadgets change fcw without telling float80
     FPU_BEGIN();
     ST(1) = f80_mul(ST(1), f80_log2(ST(0)));
     FPU_END();
@@ -276,6 +280,7 @@ void fpu_yl2x(struct cpu_state *cpu) {
 // accuracy when ST(0) is tiny, where forming 1 + ST(0) first throws the
 // answer away; f80_log2p1 never forms it.
 void fpu_yl2xp1(struct cpu_state *cpu) {
+    fpu_sync_control(cpu);  // the x87.S gadgets change fcw without telling float80
     FPU_BEGIN();
     ST(1) = f80_mul(ST(1), f80_log2p1(ST(0)));
     FPU_END();
@@ -283,6 +288,7 @@ void fpu_yl2xp1(struct cpu_state *cpu) {
 }
 
 void fpu_2xm1(struct cpu_state *cpu) {
+    fpu_sync_control(cpu);  // the x87.S gadgets change fcw without telling float80
     // an example of the ancient chinese art of chi ting
     ST(0) = f80_from_double(host_libm2(pow, 2, f80_to_double(ST(0))) - 1);
     fpu_transcendental_inexact(cpu, ST(0));
@@ -623,6 +629,7 @@ void fpu_divrm64(struct cpu_state *cpu, float64 *f) {
 }
 
 void fpu_patan(struct cpu_state *cpu) {
+    fpu_sync_control(cpu);  // the x87.S gadgets change fcw without telling float80
     // there's no native atan2 for 80-bit float yet.
     ST(1) = f80_from_double(host_libm2(atan2, f80_to_double(ST(1)), f80_to_double(ST(0))));
     fpu_transcendental_inexact(cpu, ST(1));
@@ -645,6 +652,7 @@ static bool fpu_trig_out_of_range(struct cpu_state *cpu, double arg) {
 }
 
 void fpu_sin(struct cpu_state *cpu) {
+    fpu_sync_control(cpu);  // the x87.S gadgets change fcw without telling float80
     double arg = f80_to_double(ST(0));
     if (fpu_trig_out_of_range(cpu, arg))
         return;
@@ -652,6 +660,7 @@ void fpu_sin(struct cpu_state *cpu) {
     fpu_transcendental_inexact(cpu, ST(0));
 }
 void fpu_cos(struct cpu_state *cpu) {
+    fpu_sync_control(cpu);  // the x87.S gadgets change fcw without telling float80
     double arg = f80_to_double(ST(0));
     if (fpu_trig_out_of_range(cpu, arg))
         return;
@@ -663,6 +672,7 @@ void fpu_cos(struct cpu_state *cpu) {
 // 1.0 straight off again (32-bit HotSpot's Math.tan does exactly that). An
 // operand out of range sets C2 and leaves the stack alone, as for fsin.
 void fpu_ptan(struct cpu_state *cpu) {
+    fpu_sync_control(cpu);  // the x87.S gadgets change fcw without telling float80
     double arg = f80_to_double(ST(0));
     if (fpu_trig_out_of_range(cpu, arg))
         return;
@@ -671,6 +681,7 @@ void fpu_ptan(struct cpu_state *cpu) {
     fpush(fpu_consts[fconst_one]);
 }
 void fpu_sincos(struct cpu_state *cpu) {
+    fpu_sync_control(cpu);  // the x87.S gadgets change fcw without telling float80
     // ST(0) is replaced by sin, then cos is pushed, so on exit ST(0) is cos
     // and ST(1) is sin. Like fsin/fcos this goes through double rather than
     // computing at 80-bit precision.
@@ -833,6 +844,7 @@ void fpu_ldmxcsr32(struct cpu_state *cpu, dword_t *value) {
 void fpu_init(struct cpu_state *cpu) {
     cpu->fcw = 0x037f;
     cpu->fsw = 0;
+    cpu->x87_valid = 0;
     fpu_sync_control(cpu);
 }
 

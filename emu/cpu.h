@@ -49,12 +49,8 @@ int amd64_jit_iret(struct cpu_state *cpu, struct tlb *tlb, unsigned long start_i
 int amd64_jit_ud2(struct cpu_state *cpu, struct tlb *tlb, unsigned long start_ip);
 int amd64_jit_vex(struct cpu_state *cpu, struct tlb *tlb,
         unsigned long lead, unsigned long start_ip);
-int amd64_jit_x87_mem(struct cpu_state *cpu, struct tlb *tlb,
-        unsigned long meta, unsigned long disp, unsigned long next_ip);
 int amd64_jit_x87_reg(struct cpu_state *cpu, struct tlb *tlb,
         unsigned long word, unsigned long next_ip);
-int amd64_jit_x87(struct cpu_state *cpu, struct tlb *tlb,
-        unsigned long opcode, unsigned long next_ip);
 int amd64_jit_cmpxchg8b(struct cpu_state *cpu, struct tlb *tlb,
         unsigned long next_ip);
 int amd64_jit_modrm_imm(struct cpu_state *cpu, struct tlb *tlb,
@@ -353,25 +349,33 @@ struct cpu_state {
     union xmm_reg xmm[16];
     // fpu
     float80 fp[8];
+    // The status word's bitfields are 16-bit units, so the union is exactly the
+    // word and x87_valid sits in what was its padding: no later field moves.
     union {
         word_t fsw;
         struct {
-            bitfield ie:1; // invalid operation
-            bitfield de:1; // denormalized operand
-            bitfield ze:1; // divide by zero
-            bitfield oe:1; // overflow
-            bitfield ue:1; // underflow
-            bitfield pe:1; // precision
-            bitfield stf:1; // stack fault
-            bitfield es:1; // exception status
-            bitfield c0:1;
-            bitfield c1:1;
-            bitfield c2:1;
-            unsigned top:3;
-            bitfield c3:1;
-            bitfield b:1; // fpu busy (?)
+            uint16_t ie:1; // invalid operation
+            uint16_t de:1; // denormalized operand
+            uint16_t ze:1; // divide by zero
+            uint16_t oe:1; // overflow
+            uint16_t ue:1; // underflow
+            uint16_t pe:1; // precision
+            uint16_t stf:1; // stack fault
+            uint16_t es:1; // exception status
+            uint16_t c0:1;
+            uint16_t c1:1;
+            uint16_t c2:1;
+            uint16_t top:3;
+            uint16_t c3:1;
+            uint16_t b:1; // busy: mirrors es
         };
     };
+    // The x87 tag word, abridged as FXSAVE stores it: bit i set when PHYSICAL
+    // register fp[i] holds a value, clear when it is empty. Zero (all empty)
+    // is FNINIT's state, and the one a fresh task starts in. FNSTENV's full
+    // two-bit tags are derived from it and the register contents.
+    byte_t x87_valid;
+    byte_t x87_pad_;
     union {
         word_t fcw;
         struct {

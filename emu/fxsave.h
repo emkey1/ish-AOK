@@ -52,24 +52,54 @@ static_assert(sizeof(struct fxsave_area) == 512, "fxsave area size");
 // xmm_count is 8 for a 32-bit guest and 16 for a long-mode one. The slots
 // above the count are left zeroed, which is what the reserved region of the
 // 32-bit area is required to read as.
+// The full x87 tag of physical register i, as FNSTENV and the legacy signal
+// frame report it: 11 empty (x87_valid clear), 01 zero, 10 special (NaN,
+// infinity, denormal or an unsupported encoding), 00 valid.
+static inline unsigned x87_tag_of(const struct cpu_state *cpu, int i) {
+    if (!(cpu->x87_valid & (1u << i)))
+        return 3;
+    const float80 v = cpu->fp[i];
+    unsigned exp = v.signExp & 0x7fff;
+    if (exp == 0)
+        return v.signif == 0 ? 1 : 2;
+    if (exp == 0x7fff || !(v.signif >> 63))
+        return 2;
+    return 0;
+}
+static inline word_t x87_full_tag(const struct cpu_state *cpu) {
+    word_t tag = 0;
+    for (int i = 0; i < 8; i++)
+        tag |= (word_t) (x87_tag_of(cpu, i) << (2 * i));
+    return tag;
+}
+// FLDENV/FRSTOR's reading of a full tag word: 11 is empty, anything else
+// holds a value (whose class the contents decide).
+static inline byte_t x87_valid_from_full_tag(word_t tag) {
+    byte_t valid = 0;
+    for (int i = 0; i < 8; i++)
+        if (((tag >> (2 * i)) & 3) != 3)
+            valid |= (byte_t) (1u << i);
+    return valid;
+}
+
+// xmm_count is 8 for a 32-bit guest and 16 for a long-mode one. The slots
+// above the count are left zeroed, which is what the reserved region of the
+// 32-bit area is required to read as. The registers go in STACK order, ST(0)
+// first; the abridged tag is by PHYSICAL register, as FXSAVE stores both.
 static inline void fxsave_fill(struct cpu_state *cpu, struct fxsave_area *area,
         int xmm_count) {
     memset(area, 0, sizeof(*area));
     area->fcw = cpu->fcw;
     area->fsw = cpu->fsw;
+    area->ftw = cpu->x87_valid;
     area->mxcsr = cpu->mxcsr;
     area->mxcsr_mask = 0xffff;
 
     for (int i = 0; i < 8; i++) {
-        const float80 value = cpu->fp[i];
+        const float80 value = cpu->fp[(cpu->top + i) & 7];
         for (int j = 0; j < 4; j++)
             area->st[i].significand[j] = (word_t) (value.signif >> (j * 16));
         area->st[i].exponent = value.signExp;
-        // The abridged tag word: one bit per register, set when the register
-        // is not empty. We do not model the full two-bits-per-register tag, so
-        // "has any bits set" stands in for "not empty".
-        if (value.signif != 0 || value.signExp != 0)
-            area->ftw |= (byte_t) (1u << i);
     }
 
     for (int i = 0; i < xmm_count; i++)
@@ -85,6 +115,7 @@ static inline void fxsave_restore(struct cpu_state *cpu,
     word_t fcw = area->fcw;
     fpu_ldcw16(cpu, &fcw);
     cpu->fsw = area->fsw;
+    cpu->x87_valid = area->ftw;
     cpu->mxcsr = area->mxcsr;
 
     for (int i = 0; i < 8; i++) {
@@ -92,7 +123,7 @@ static inline void fxsave_restore(struct cpu_state *cpu,
         for (int j = 0; j < 4; j++)
             value.signif |= (uint64_t) area->st[i].significand[j] << (j * 16);
         value.signExp = area->st[i].exponent;
-        cpu->fp[i] = value;
+        cpu->fp[(cpu->top + i) & 7] = value;
     }
 
     for (int i = 0; i < xmm_count; i++)

@@ -152,7 +152,7 @@ restart:
                 case 0x4f: TRACEI("cmovnle modrm, reg");
                            READMODRM; CMOVN(LE, modrm_val, modrm_reg,oz); break;
 
-                case 0x77: TRACEI("emms (ignored because there is no mmx)"); break;
+                case 0x77: TRACEI("emms"); EMMS(); break;
 
                 case 0x80: TRACEI("jo rel\t");
                            READIMM; J_REL(O, imm); break;
@@ -1300,7 +1300,7 @@ restart:
         case 0x98: TRACEI("cvte"); CVTE; break;
         case 0x99: TRACEI("cvt"); CVT; break;
 
-        case 0x9b: TRACEI("fwait (ignored)"); break;
+        case 0x9b: TRACEI("fwait"); FWAIT(); break;
 
         case 0x9c: TRACEI("pushf"); PUSHF(oz); break;
         case 0x9d: TRACEI("popf"); POPF(oz); break;
@@ -1422,6 +1422,15 @@ restart:
 
 #undef GRP2
 
+#ifdef X87_STEP
+        // x87: decoded in one place for both x86 guests (jit/gen.c, X87_STEP,
+        // the x87.S gadgets).
+        case 0xd8: case 0xd9: case 0xda: case 0xdb: case 0xdc: case 0xdd: case 0xde: case 0xdf:
+            TRACEI("fpu\t\t"); READMODRM;
+            X87_STEP(insn);
+            break;
+#else
+        // An x86_64 host, which has no x87.S: emu/fpu.c through helpers.
         case 0xd8: case 0xd9: case 0xda: case 0xdb: case 0xdc: case 0xdd: case 0xde: case 0xdf:
             TRACEI("fpu\t\t"); READMODRM;
             if (modrm.type != modrm_reg) {
@@ -1569,6 +1578,7 @@ restart:
                 }}
             }
             break;
+#endif
 
         case 0x27: TRACEI("daa"); DAA(); break;
         case 0x2f: TRACEI("das"); DAS(); break;

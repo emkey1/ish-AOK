@@ -2843,6 +2843,7 @@ static sigset_t_ sigmask_to_save(void) {
 static void x86_signal_handler_fpu_init(struct cpu_state *cpu) {
     cpu->fcw = 0x037f;
     cpu->fsw = 0;
+    cpu->x87_valid = 0;
     cpu->mxcsr = 0x1f80;
 }
 
@@ -2873,7 +2874,7 @@ static void setup_i386_fpstate(struct fpstate_ *fpstate, struct cpu_state *cpu) 
     memset(fpstate, 0, sizeof(*fpstate));
     fpstate->cw = 0xffff0000u | cpu->fcw;
     fpstate->sw = 0xffff0000u | cpu->fsw;
-    fpstate->tag = 0xffff0000u;
+    fpstate->tag = 0xffff0000u | x87_full_tag(cpu);
     for (int i = 0; i < 8; i++) {
         float80 value = cpu->fp[(cpu->top + i) % 8];
         for (int j = 0; j < 4; j++)
@@ -2893,6 +2894,7 @@ static void restore_i386_fpstate(struct fpstate_ *fpstate, struct cpu_state *cpu
         word_t cw = (word_t) fpstate->cw;
         fpu_ldcw16(cpu, &cw);
         cpu->fsw = (word_t) fpstate->sw;
+        cpu->x87_valid = x87_valid_from_full_tag((word_t) fpstate->tag);
         for (int i = 0; i < 8; i++) {
             float80 value = {0};
             for (int j = 0; j < 4; j++)
@@ -3016,9 +3018,11 @@ static void setup_amd64_fpstate(struct amd64_fpstate_ *fpstate, struct cpu_state
     // used to write, which sigreturn then did not restore either.
     fpstate->mxcsr = cpu->mxcsr;
     fpstate->mxcr_mask = 0xffff;
+    fpstate->twd = cpu->x87_valid;
 
+    // ST(0) first, as FXSAVE lays the registers out; the tag is physical.
     for (int i = 0; i < 8; i++) {
-        const float80 value = cpu->fp[i];
+        const float80 value = cpu->fp[(cpu->top + i) & 7];
         for (int j = 0; j < 4; j++)
             fpstate->st[i].significand[j] = (word_t) (value.signif >> (j * 16));
         fpstate->st[i].exponent = value.signExp;
@@ -3934,12 +3938,13 @@ static void restore_amd64_fpstate(struct amd64_fpstate_ *fpstate, struct cpu_sta
     cpu->fsw = fpstate->swd;
     // Linux clears the bits no CPU implements rather than failing.
     cpu->mxcsr = fpstate->mxcsr & 0xffff;
+    cpu->x87_valid = (byte_t) fpstate->twd;
 
     for (int i = 0; i < 8; i++) {
         uint64_t significand = 0;
         for (int j = 0; j < 4; j++)
             significand |= (uint64_t) fpstate->st[i].significand[j] << (j * 16);
-        cpu->fp[i] = (float80) {
+        cpu->fp[(cpu->top + i) & 7] = (float80) {
             .signif = significand,
             .signExp = fpstate->st[i].exponent,
         };

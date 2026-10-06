@@ -6,6 +6,7 @@
 # before anything reads them (amd64_flags_note); see there for the rules.
 .set AMD64_NF, 0
 #include "math.h"
+#include "amd64-mem.h"
 #include "emu/interrupt.h"
 
 .gadget load32_addr
@@ -1787,9 +1788,8 @@
     str x25, [x8, 56]
     gret
 
-# A register-form x87 instruction: [opcode<<8|modrm][next rip][start rip].
-# amd64_jit_x87_reg touches only cpu->fp and the flags in struct cpu_state
-# (FNSTSW AX, the exception, keeps the flushing bridge), and x20-x27 are
+# An x87 transcendental (everything else is x87.S): [opcode<<8|modrm][next
+# rip][start rip]. amd64_jit_x87_reg touches only cpu->fp, and x20-x27 are
 # callee-saved, so the register cache stays live across the call instead of
 # being stored and reloaded around it. On an interrupt the cache is stored
 # (the _cached form, when it holds the registers) and rip set to the
@@ -1827,31 +1827,6 @@
 .endm
 amd64_x87_reg_gadget amd64_x87_reg, 0
 amd64_x87_reg_gadget amd64_x87_reg_cached, 1
-
-# A memory-form x87 instruction: [meta][disp][next rip], addressing decoded at
-# translation (gen_amd64_decode_mem_meta). amd64_jit_x87_mem reads the base
-# and index registers from cpu->amd64_regs, so the generator stores a dirty
-# cache first, but it writes no general register, so the cache stays valid
-# across the call (the flushing bridge ended in load_regs, which reloads the
-# i386 view and leaves the cache to be reloaded by the next instruction).
-.gadget amd64_x87_mem
-    save_c
-    mov x0, _cpu
-    sub x1, _tlb, TLB_entries
-    ldr x2, [_ip]
-    ldr x3, [_ip, 8]
-    ldr x4, [_ip, 16]
-    bl NAME(amd64_jit_x87_mem)
-    mov x14, x0
-    restore_c
-    cmn w14, #1
-    b.ne 1f
-    gret 3
-1:
-    mov x0, x14
-    ldr x8, [_cpu, CPU_amd64_rip]
-    mov eip, w8
-    b jit_exit
 
 .macro amd64_cached_read id, dst
     cmp \id, 0
@@ -4833,34 +4808,7 @@ amd64_v_neon_binop punpcklqdq, zip1, 2d
 # x8/x11/x12/x13/x14/x15/x0 scratch; never touches x20-x27 (the flushed cache).
 # ---------------------------------------------------------------------------
 
-# 64-bit TLB read fast path: x9 = guest addr in -> host ptr out (or miss/xpage).
-.macro amd64_vread_prep size, id
-    and  x8, x9, 0xfff
-    cmp  x8, (0x1000-\size)
-    b.hi amd64_vxpage_\id
-    and  x8, x9, #0xfffffffffffff000
-    ubfx x11, x9, 12, TLB_BITS
-    eor  x11, x11, x9, lsr #(12 + TLB_BITS)
-    and  x11, x11, #(1 << TLB_BITS) - 1
-    mov  w12, TLB_ENTRY_SIZE
-    madd x11, x11, x12, _tlb
-    ldr  x13, [x11, TLB_ENTRY_page]
-    cmp  x8, x13
-    b.ne amd64_vmiss_\id
-    ldr  x13, [x11, TLB_ENTRY_data_minus_addr]
-    add  x9, x13, x9
-amd64_vback_\id:
-.endm
 
-.macro amd64_vread_bullshit size, id
-amd64_vmiss_\id:
-    bl amd64_vmem_read_miss
-    b amd64_vback_\id
-amd64_vxpage_\id:
-    mov x19, \size
-    bl amd64_vmem_crosspage_read
-    b amd64_vback_\id
-.endm
 
 .global amd64_vmem_read_miss
 amd64_vmem_read_miss:
@@ -4899,53 +4847,8 @@ amd64_vmem_segfault_read:
     mov x0, INT_PF
     b jit_exit
 
-# Compute the 64-bit effective address from meta(x8)/disp(x9) into x9. Reads base
-# and index from cpu->amd64_regs in memory (the reg cache was flushed by gen.c).
-.macro amd64_vmem_addr
-    tbz  x8, 30, 7001f
-    ubfx x0, x8, 20, 4
-    add  x14, _cpu, CPU_amd64_regs
-    ldr  x14, [x14, x0, lsl 3]
-    add  x9, x9, x14
-7001:
-    tbz  x8, 31, 7002f
-    ubfx x0, x8, 24, 4
-    ubfx x15, x8, 28, 2
-    add  x14, _cpu, CPU_amd64_regs
-    ldr  x14, [x14, x0, lsl 3]
-    lsl  x14, x14, x15
-    add  x9, x9, x14
-7002:
-    tbz  x8, 32, 7003f
-    ldr  x14, [_ip, 16]
-    add  x9, x9, x14
-7003:
-    /* AMD64_JIT_MEM_FS (bit 33): an %fs-relative address, which in long mode is
-       just a flat base added to the effective address. Without this every
-       FS-prefixed memory instruction had to bridge -- and that is nearly all of
-       them in threaded code, because the stack-protector canary at %fs:0x28 and
-       every __thread variable go through it. Measured on a 4-thread pthread
-       workload it was 22% of ALL interpreter bridges: mov 8b 12.3%, sub 2b
-       5.3%, mov 89 3.0%, xor 33 1.3%. */
-    tbz  x8, 33, 7004f
-    ldr  x14, [_cpu, CPU_tls_ptr]
-    add  x9, x9, x14
-7004:
-    /* AMD64_JIT_MEM_GS (bit 36): the same for a %gs-relative address, whose
-       base ARCH_SET_GS sets. */
-    tbz  x8, 36, 7005f
-    ldr  x14, [_cpu, CPU_amd64_gs_base]
-    add  x9, x9, x14
-7005:
-    /* AMD64_JIT_MEM_ALIGN16 (bit 37): a legacy-SSE m128 that must be 16-byte
-       aligned; misaligned is #GP(0) at the instruction (rip was flushed to it
-       before the gadget). */
-    tbz  x8, 37, 7006f
-    tst  x9, 15
-    b.ne amd64_vmem_misaligned
-7006:
-.endm
 
+.global amd64_vmem_misaligned
 amd64_vmem_misaligned:
     str  xzr, [_cpu, CPU_segfault_addr]
     strb wzr, [_cpu, CPU_segfault_was_write]
@@ -4953,62 +4856,8 @@ amd64_vmem_misaligned:
     mov  x0, INT_GPF
     b    jit_exit
 
-# movaps/movups xmm, m128 (0F 28 / 0F 10): cpu->xmm[reg] = [addr]
-# 64-bit TLB write fast path: x9 = guest addr in -> writable host ptr out (or the
-# cross-page staging buffer, flushed by amd64_vwrite_done). Mirrors the 32-bit
-# write_prep: a TLB-staleness / host-page-mirroring check routes to the slow C
-# resolver; the hit path checks page_if_writable and records the dirty page.
-.macro amd64_vwrite_prep size, id
-    and  x8, x9, 0xfff
-    cmp  x8, (0x1000-\size)
-    b.hi amd64_vwxpage_\id
-    ldr  x11, [_tlb, (-TLB_entries+TLB_mmu)]
-    ldr  x8,  [_tlb, (-TLB_entries+TLB_mem_changes)]
-    ldr  x12, [x11, MMU_changes]
-    cmp  x8, x12
-    b.ne amd64_vwslow_\id
-    ldrb w12, [x11, MMU_requires_write_revalidate]
-    cbz  w12, amd64_vwfast_\id
-amd64_vwslow_\id:
-    bl   amd64_vmem_write_resolve
-    b    amd64_vwback_\id
-amd64_vwfast_\id:
-    and  x8, x9, #0xfffffffffffff000
-    str  x8, [_tlb, (-TLB_entries+TLB_dirty_page)]
-    ubfx x11, x9, 12, TLB_BITS
-    eor  x11, x11, x9, lsr #(12 + TLB_BITS)
-    and  x11, x11, #(1 << TLB_BITS) - 1
-    mov  w12, TLB_ENTRY_SIZE
-    madd x11, x11, x12, _tlb
-    ldr  x13, [x11, TLB_ENTRY_page_if_writable]
-    cmp  x8, x13
-    b.ne amd64_vwmiss_\id
-    ldr  x13, [x11, TLB_ENTRY_data_minus_addr]
-    add  x9, x13, x9
-amd64_vwback_\id:
-.endm
 
-# After the store, if x9 was the cross-page staging buffer, flush it to memory.
-.macro amd64_vwrite_done size, id
-    mov x8, LOCAL_value
-    add x8, _cpu, x8
-    cmp  x8, x9
-    b.ne amd64_vwdone_\id
-    mov  x19, \size
-    bl   amd64_vmem_crosspage_write
-amd64_vwdone_\id:
-.endm
 
-.macro amd64_vwrite_bullshit size, id
-amd64_vwmiss_\id:
-    bl   amd64_vmem_write_miss
-    b    amd64_vwback_\id
-amd64_vwxpage_\id:
-    str  x9, [_cpu, LOCAL_value_addr]
-    mov x9, LOCAL_value
-    add x9, _cpu, x9
-    b    amd64_vwback_\id
-.endm
 
 .global amd64_vmem_write_resolve
 amd64_vmem_write_resolve:

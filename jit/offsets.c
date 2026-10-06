@@ -39,6 +39,9 @@ void cpu() {
     OFFSET(CPU, cpu_state, flags_res);
     OFFSET(CPU, cpu_state, df_offset);
     OFFSET(CPU, cpu_state, fsw);
+    OFFSET(CPU, cpu_state, fcw);
+    OFFSET(CPU, cpu_state, fp);
+    OFFSET(CPU, cpu_state, x87_valid);
     OFFSET(CPU, cpu_state, xmm);
     OFFSET(CPU, cpu_state, mm);
     OFFSET(CPU, cpu_state, mxcsr);

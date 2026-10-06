@@ -7171,11 +7171,40 @@ static void handle_arithmetic_interrupt(struct cpu_state *cpu) {
     printk("ERROR: %d(%s) [%s] arithmetic fault at 0x%x\n",
            current->pid, current->comm, guest_abi_desc(current->abi).name, cpu->eip);
     dump_stack(8);
+    // #DE is vector 0: the frame's REG_TRAPNO, which was whatever trap came
+    // before it.
+    cpu->trapno = INT_DIV;
     struct siginfo_ info = {
         .code = FPE_INTDIV_,
         .fault.addr = current_fault_ip(cpu),
     };
     deliver_signal(current, SIGFPE_, info);
+}
+
+// #MF (math_error -> fpu__exception_code): the first of swd & ~cwd's IE
+// (the stack faults too), ZE, OE, DE or UE, and PE, as SIGFPE at the waiting
+// instruction, trap 16, error 0. Nothing unmasked is a spurious #MF, and
+// Linux sends nothing for it.
+static void handle_x87_math_interrupt(struct cpu_state *cpu) {
+    unsigned err = cpu->fsw & ~cpu->fcw;
+    int code;
+    if (err & 0x001)
+        code = FPE_FLTINV_;
+    else if (err & 0x004)
+        code = FPE_FLTDIV_;
+    else if (err & 0x008)
+        code = FPE_FLTOVF_;
+    else if (err & 0x012)
+        code = FPE_FLTUND_;
+    else if (err & 0x020)
+        code = FPE_FLTRES_;
+    else
+        return;
+    cpu->trapno = INT_MF;
+    deliver_signal(current, SIGFPE_, (struct siginfo_) {
+        .code = code,
+        .fault.addr = current_fault_ip(cpu),
+    });
 }
 
 static void handle_privileged_instruction_interrupt(struct cpu_state *cpu) {
@@ -7256,6 +7285,9 @@ void handle_interrupt(int interrupt) {
             break;
         case INT_DIV:
             handle_arithmetic_interrupt(cpu);
+            break;
+        case INT_MF:
+            handle_x87_math_interrupt(cpu);
             break;
         case INT_PRIV:
             handle_privileged_instruction_interrupt(cpu);

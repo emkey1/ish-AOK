@@ -28,6 +28,10 @@ x86/atomic_neg_not.c
 x86/cow_atomic_fault.c
 x86/x87_fpu.c
 x86/x87_fsqrt.c
+x86/x87_kat.c
+x86/x87_env.c
+x86/x87_kat_unmasked.c
+x86/x87_mf.c
 x86/alu_flags.c
 x86/lock_misaligned.c
 x86/priv_gp.c

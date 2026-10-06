@@ -522,6 +522,18 @@ static void amd64_flag_rw(const struct amd64_jit_insn *insn, unsigned *r, unsign
                          ((insn->rex.w && (op & 1)) ? 0x3f : 0x1f)) != 0)
                     *w = AMD64_FL_ALL;
                 return;
+            case 0xd8: case 0xd9: case 0xda: case 0xdb:
+            case 0xdc: case 0xdd: case 0xde: case 0xdf:
+                // x87: FCOMI/FUCOMI(P) write all six, FCMOVcc reads CF ZF PF,
+                // nothing else touches them (x87.S). A memory form's address
+                // registers are not flags.
+                if (insn->has_modrm && (insn->modrm >> 6) == 3) {
+                    if ((op == 0xdb || op == 0xdf) && (reg == 5 || reg == 6))
+                        *w = AMD64_FL_ALL;
+                    else if ((op == 0xda || op == 0xdb) && reg < 4)
+                        *r = AMD64_FL_CF | AMD64_FL_ZF | AMD64_FL_PF;
+                }
+                return;
             case 0xf5: *r = AMD64_FL_CF; *w = AMD64_FL_CF; return; // cmc
             case 0xf6: case 0xf7:
                 if (reg <= 1 || reg == 3)
@@ -9309,6 +9321,213 @@ static bool gen_amd64_unary(struct gen_state *state, struct tlb *tlb,
 }
 #endif
 
+#if defined(__aarch64__)
+// ---- x87 (D8-DF), both guests: jit/gadgets-aarch64/x87.S ------------------
+//
+// The memory forms by opcode and ModRM reg; NULL is #UD. The four
+// environment forms have a 16-bit layout under an operand-size prefix
+// (x87_mem_gadget swaps those in).
+#define X87M_FORMS(X) \
+    X(add_f32) X(mul_f32) X(com_f32) X(comp_f32) X(sub_f32) X(subr_f32) X(div_f32) X(divr_f32) \
+    X(add_f64) X(mul_f64) X(com_f64) X(comp_f64) X(sub_f64) X(subr_f64) X(div_f64) X(divr_f64) \
+    X(add_i16) X(mul_i16) X(com_i16) X(comp_i16) X(sub_i16) X(subr_i16) X(div_i16) X(divr_i16) \
+    X(add_i32) X(mul_i32) X(com_i32) X(comp_i32) X(sub_i32) X(subr_i32) X(div_i32) X(divr_i32) \
+    X(fld_f32) X(fst_f32) X(fstp_f32) X(fldenv32) X(fldenv16) X(fldcw) X(fnstenv32) X(fnstenv16) \
+    X(fnstcw) X(fild_i32) X(fisttp_i32) X(fist_i32) X(fistp_i32) X(fld_f80) X(fstp_f80) \
+    X(fld_f64) X(fisttp_i64) X(fst_f64) X(fstp_f64) X(frstor32) X(frstor16) X(fnsave32) \
+    X(fnsave16) X(fnstsw) X(fild_i16) X(fisttp_i16) X(fist_i16) X(fistp_i16) X(fbld) X(fild_i64) \
+    X(fbstp) X(fistp_i64) X(fxsave) X(fxrstor)
+#define X(n) extern void gadget_x87m_##n(void), gadget_amd64_x87m_##n(void);
+X87M_FORMS(X)
+#undef X
+#define X87M_TABLE(P) { \
+    { P(add_f32), P(mul_f32), P(com_f32), P(comp_f32), P(sub_f32), P(subr_f32), P(div_f32), P(divr_f32) }, \
+    { P(fld_f32), NULL, P(fst_f32), P(fstp_f32), P(fldenv32), P(fldcw), P(fnstenv32), P(fnstcw) }, \
+    { P(add_i32), P(mul_i32), P(com_i32), P(comp_i32), P(sub_i32), P(subr_i32), P(div_i32), P(divr_i32) }, \
+    { P(fild_i32), P(fisttp_i32), P(fist_i32), P(fistp_i32), NULL, P(fld_f80), NULL, P(fstp_f80) }, \
+    { P(add_f64), P(mul_f64), P(com_f64), P(comp_f64), P(sub_f64), P(subr_f64), P(div_f64), P(divr_f64) }, \
+    { P(fld_f64), P(fisttp_i64), P(fst_f64), P(fstp_f64), P(frstor32), NULL, P(fnsave32), P(fnstsw) }, \
+    { P(add_i16), P(mul_i16), P(com_i16), P(comp_i16), P(sub_i16), P(subr_i16), P(div_i16), P(divr_i16) }, \
+    { P(fild_i16), P(fisttp_i16), P(fist_i16), P(fistp_i16), P(fbld), P(fild_i64), P(fbstp), P(fistp_i64) } }
+#define X87M_I386(n) gadget_x87m_##n
+#define X87M_AMD64(n) gadget_amd64_x87m_##n
+static void (*const x87m_i386[8][8])(void) = X87M_TABLE(X87M_I386);
+static void (*const x87m_amd64[8][8])(void) = X87M_TABLE(X87M_AMD64);
+
+__attribute__((unused)) static void (*x87_mem_gadget(bool amd64, unsigned opcode, unsigned reg, bool opsize16))(void) {
+    void (*g)(void) = (amd64 ? x87m_amd64 : x87m_i386)[opcode - 0xd8][reg];
+    if (opsize16) {
+        if (amd64) {
+            if (g == gadget_amd64_x87m_fldenv32) g = gadget_amd64_x87m_fldenv16;
+            if (g == gadget_amd64_x87m_fnstenv32) g = gadget_amd64_x87m_fnstenv16;
+            if (g == gadget_amd64_x87m_frstor32) g = gadget_amd64_x87m_frstor16;
+            if (g == gadget_amd64_x87m_fnsave32) g = gadget_amd64_x87m_fnsave16;
+        } else {
+            if (g == gadget_x87m_fldenv32) g = gadget_x87m_fldenv16;
+            if (g == gadget_x87m_fnstenv32) g = gadget_x87m_fnstenv16;
+            if (g == gadget_x87m_frstor32) g = gadget_x87m_frstor16;
+            if (g == gadget_x87m_fnsave32) g = gadget_x87m_fnsave16;
+        }
+    }
+    return g;
+}
+
+// A register-form x87 gadget's word: its immediate, then what its #MF exit
+// needs (x87.S x87_mf_rr) -- bit 8 the amd64 register cache is live, bit 9 the
+// guest is amd64, and the instruction's address from bit 16.
+static inline unsigned long x87_word(unsigned long imm, bool amd64, bool cache_live, guest_addr_t ip) {
+    return imm | (cache_live ? 1ul << 8 : 0) | (amd64 ? 1ul << 9 : 0) | ((unsigned long) ip << 16);
+}
+
+// The register forms: the gadget and its immediate for opcode/ModRM.
+// X87R_UD is #UD; X87R_NOP emits nothing (FENI/FDISI/FSETPM, no-wait no-ops
+// since the 387); X87R_C a transcendental, still emu/fpu.c; X87R_FNSTSW_AX the
+// one that writes a general register, which each guest does its own way.
+// FCMOVcc gets the gadget for the guest's flag representation.
+#define X87R_UD ((void (*)(void)) 0)
+#define X87R_NOP ((void (*)(void)) 1)
+#define X87R_C ((void (*)(void)) 2)
+#define X87R_FNSTSW_AX ((void (*)(void)) 3)
+__attribute__((unused)) static void (*x87_reg_gadget(bool amd64, unsigned opcode, unsigned modrm, unsigned long *imm))(void) {
+    extern void gadget_x87_fwait(void);
+    extern void gadget_x87_add_rr(void), gadget_x87_sub_rr(void), gadget_x87_subr_rr(void),
+           gadget_x87_mul_rr(void), gadget_x87_div_rr(void), gadget_x87_divr_rr(void),
+           gadget_x87_com_rr(void), gadget_x87_ucom_rr(void), gadget_x87_comi_rr(void),
+           gadget_x87_ucomi_rr(void), gadget_x87_fld_rr(void), gadget_x87_fst_rr(void),
+           gadget_x87_fxch(void), gadget_x87_ffree(void), gadget_x87_fchs(void), gadget_x87_fabs(void),
+           gadget_x87_ftst(void), gadget_x87_fxam(void), gadget_x87_fldc(void),
+           gadget_x87_fincstp(void), gadget_x87_fdecstp(void), gadget_x87_fnclex(void),
+           gadget_x87_fninit(void), gadget_x87_fsqrt(void), gadget_x87_frndint(void),
+           gadget_x87_fscale(void), gadget_x87_fxtract(void), gadget_x87_fprem(void),
+           gadget_x87_fprem1(void);
+    extern void gadget_x87_fcmovb(void), gadget_x87_fcmove(void), gadget_x87_fcmovbe(void),
+           gadget_x87_fcmovu(void), gadget_x87_fcmovnb(void), gadget_x87_fcmovne(void),
+           gadget_x87_fcmovnbe(void), gadget_x87_fcmovnu(void);
+    extern void gadget_amd64_x87_fcmovb(void), gadget_amd64_x87_fcmove(void),
+           gadget_amd64_x87_fcmovbe(void), gadget_amd64_x87_fcmovu(void),
+           gadget_amd64_x87_fcmovnb(void), gadget_amd64_x87_fcmovne(void),
+           gadget_amd64_x87_fcmovnbe(void), gadget_amd64_x87_fcmovnu(void);
+    static void (*const fcmov[2][8])(void) = {
+        {gadget_x87_fcmovb, gadget_x87_fcmove, gadget_x87_fcmovbe, gadget_x87_fcmovu,
+         gadget_x87_fcmovnb, gadget_x87_fcmovne, gadget_x87_fcmovnbe, gadget_x87_fcmovnu},
+        {gadget_amd64_x87_fcmovb, gadget_amd64_x87_fcmove, gadget_amd64_x87_fcmovbe,
+         gadget_amd64_x87_fcmovu, gadget_amd64_x87_fcmovnb, gadget_amd64_x87_fcmovne,
+         gadget_amd64_x87_fcmovnbe, gadget_amd64_x87_fcmovnu},
+    };
+    // D8 /r ST(0) op ST(i), DC /r ST(i) op ST(0) (whose sub/div pairs Intel
+    // names the other way round), DE the DC forms then pop.
+    static void (*const arith_d8[8])(void) = {gadget_x87_add_rr, gadget_x87_mul_rr, NULL, NULL,
+        gadget_x87_sub_rr, gadget_x87_subr_rr, gadget_x87_div_rr, gadget_x87_divr_rr};
+    static void (*const arith_dc[8])(void) = {gadget_x87_add_rr, gadget_x87_mul_rr, NULL, NULL,
+        gadget_x87_subr_rr, gadget_x87_sub_rr, gadget_x87_divr_rr, gadget_x87_div_rr};
+    unsigned reg = (modrm >> 3) & 7, rm = modrm & 7;
+    *imm = rm;
+    switch (opcode) {
+    case 0xd8:
+        if (reg == 2 || reg == 3) {
+            *imm = rm | (reg == 3 ? 1u << 6 : 0);
+            return gadget_x87_com_rr;
+        }
+        return arith_d8[reg];
+    case 0xd9:
+        switch (reg) {
+        case 0: return gadget_x87_fld_rr;
+        case 1: return gadget_x87_fxch;
+        case 2: return rm == 0 ? gadget_x87_fwait : X87R_UD;     // FNOP waits
+        case 3: *imm = rm | 3u << 6; return gadget_x87_fst_rr;   // FSTP1, an alias
+        case 4:
+            switch (rm) {
+            case 0: return gadget_x87_fchs;
+            case 1: return gadget_x87_fabs;
+            case 4: return gadget_x87_ftst;
+            case 5: return gadget_x87_fxam;
+            default: return X87R_UD;
+            }
+        case 5: return rm == 7 ? X87R_UD : gadget_x87_fldc;
+        case 6:
+            switch (rm) {
+            case 4: return gadget_x87_fxtract;
+            case 5: return gadget_x87_fprem1;
+            case 6: return gadget_x87_fdecstp;
+            case 7: return gadget_x87_fincstp;
+            default: return X87R_C;               // F2XM1 FYL2X FPTAN FPATAN
+            }
+        default:
+            switch (rm) {
+            case 0: return gadget_x87_fprem;
+            case 2: return gadget_x87_fsqrt;
+            case 4: return gadget_x87_frndint;
+            case 5: return gadget_x87_fscale;
+            default: return X87R_C;               // FYL2XP1 FSINCOS FSIN FCOS
+            }
+        }
+    case 0xda:
+        if (reg < 4)
+            return fcmov[amd64][reg];
+        if (modrm == 0xe9) {
+            *imm = 1 | 2u << 6;                   // FUCOMPP
+            return gadget_x87_ucom_rr;
+        }
+        return X87R_UD;
+    case 0xdb:
+        if (reg < 4)
+            return fcmov[amd64][reg + 4];
+        if (reg == 4) {
+            switch (rm) {
+            case 0: case 1: case 4: return X87R_NOP;
+            case 2: return gadget_x87_fnclex;
+            case 3: return gadget_x87_fninit;
+            default: return X87R_UD;
+            }
+        }
+        if (reg == 5) return gadget_x87_ucomi_rr;
+        if (reg == 6) return gadget_x87_comi_rr;
+        return X87R_UD;
+    case 0xdc:
+        if (reg == 2 || reg == 3) {               // FCOM2, FCOMP3: aliases
+            *imm = rm | (reg == 3 ? 1u << 6 : 0);
+            return gadget_x87_com_rr;
+        }
+        *imm = rm << 3;
+        return arith_dc[reg];
+    case 0xdd:
+        switch (reg) {
+        case 0: return gadget_x87_ffree;
+        case 1: return gadget_x87_fxch;           // FXCH4
+        case 2: return gadget_x87_fst_rr;
+        case 3: *imm = rm | 1u << 6; return gadget_x87_fst_rr;
+        case 4: return gadget_x87_ucom_rr;
+        case 5: *imm = rm | 1u << 6; return gadget_x87_ucom_rr;
+        default: return X87R_UD;
+        }
+    case 0xde:
+        if (reg == 2) {                           // FCOMP5
+            *imm = rm | 1u << 6;
+            return gadget_x87_com_rr;
+        }
+        if (reg == 3) {
+            if (rm != 1)
+                return X87R_UD;
+            *imm = 1 | 2u << 6;                   // FCOMPP
+            return gadget_x87_com_rr;
+        }
+        *imm = rm << 3 | 1u << 6;
+        return arith_dc[reg];
+    default:
+        switch (reg) {
+        case 0: *imm = rm | 1u << 6; return gadget_x87_ffree;   // FFREEP
+        case 1: return gadget_x87_fxch;                         // FXCH7
+        case 2: case 3: *imm = rm | 1u << 6; return gadget_x87_fst_rr;  // FSTP8, FSTP9
+        case 4: return rm == 0 ? X87R_FNSTSW_AX : X87R_UD;
+        case 5: *imm = rm | 1u << 6; return gadget_x87_ucomi_rr;
+        case 6: *imm = rm | 1u << 6; return gadget_x87_comi_rr;
+        default: return X87R_UD;
+        }
+    }
+}
+
+#endif
+
 int gen_step_amd64(struct gen_state *state, struct tlb *tlb) {
     return gen_step64(state, tlb);
 }
@@ -9493,13 +9712,9 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
         return false;
     }
 
-    // x87 (D8-DF), as a bridge into the interpreter's own amd64_handle_x87.
-    //
-    // This is the established design for x87 in this tree, not a compromise:
-    // the i386 engine has no x87 gadgets either -- gen_step32 emits generic
-    // helper gadgets that call the same C fpu_* functions, and the only native
-    // x87 gadget anywhere is fstsw_ax. amd64_handle_x87 lives outside
-    // amd64_step_to_interrupt, so it survives that function's deletion.
+    // x87 (D8-DF): jit/gadgets-aarch64/x87.S, the same gadgets as the i386
+    // guest's for the register forms. The transcendentals are still C
+    // (emu/fpu.c, through amd64_jit_x87_reg).
     //
     // return true, not gen_exit: x87 encodings carry no immediate, so the ModRM
     // extent IS the whole instruction and the block can carry on afterwards.
@@ -9523,40 +9738,68 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
             return false;
         }
         state->amd64_ip = next_ip;
-        amd64_jit_debug("x87-helper ip=%llx opcode=%02x modrm=%02x next=%llx",
+        amd64_jit_debug("x87 ip=%llx opcode=%02x modrm=%02x next=%llx",
                 (unsigned long long) insn.start_ip, insn.opcode, insn.modrm,
                 (unsigned long long) next_ip);
-        if ((insn.modrm >> 6) == 3 && !(insn.opcode == 0xdf && ((insn.modrm >> 3) & 7) == 4)) {
 #if defined(__aarch64__)
-            // Register form other than FNSTSW AX: no general register read or
-            // written, so the register cache and the deferred rip stay as they
-            // are (see amd64_x87_reg_gadget in gadgets-aarch64/math.S).
-            extern void gadget_amd64_x87_reg(void);
-            extern void gadget_amd64_x87_reg_cached(void);
-            amd64_bridge_note(amd64_jit_x87_reg, insn.opcode);
-            gen(state, (unsigned long) (state->amd64_reg_cache_valid
-                    ? gadget_amd64_x87_reg_cached : gadget_amd64_x87_reg));
-            gen(state, ((unsigned long) insn.opcode << 8) | insn.modrm);
-            gen(state, (unsigned long) next_ip);
-            gen(state, (unsigned long) insn.start_ip);
+        if ((insn.modrm >> 6) == 3) {
+            unsigned long imm;
+            void (*g)(void) = x87_reg_gadget(true, insn.opcode, insn.modrm, &imm);
+            if (g == X87R_NOP) {
+                gen_amd64_defer_rip(state, next_ip);
+                return true;
+            }
+            if (g == X87R_UD) {
+                state->amd64_ip = state->amd64_orig_ip;
+                gen_amd64_flush_reg_cache(state);
+                gen_amd64_flush_rip(state);
+                gen_amd64_helper_tlb_1_retint(state, amd64_jit_ud2, (unsigned long) state->amd64_orig_ip);
+                gen_exit(state);
+                return false;
+            }
+            if (g == X87R_FNSTSW_AX) {
+                extern void gadget_amd64_x87_fnstsw_ax(void);
+                gen_amd64_flush_reg_cache(state);
+                gen(state, (unsigned long) gadget_amd64_x87_fnstsw_ax);
+                gen_amd64_defer_rip(state, next_ip);
+                return true;
+            }
+            if (g == X87R_C) {
+                // A transcendental: no general register read or written, so
+                // the register cache and the deferred rip stay as they are
+                // (see amd64_x87_reg_gadget in gadgets-aarch64/math.S).
+                extern void gadget_amd64_x87_reg(void);
+                extern void gadget_amd64_x87_reg_cached(void);
+                amd64_bridge_note(amd64_jit_x87_reg, insn.opcode);
+                gen(state, (unsigned long) (state->amd64_reg_cache_valid
+                        ? gadget_amd64_x87_reg_cached : gadget_amd64_x87_reg));
+                gen(state, ((unsigned long) insn.opcode << 8) | insn.modrm);
+                gen(state, (unsigned long) next_ip);
+                gen(state, (unsigned long) insn.start_ip);
+                gen_amd64_defer_rip(state, next_ip);
+                return true;
+            }
+            // The x87 state and, for FCOMI and FCMOV, the flags in cpu_state:
+            // the register cache stays live.
+            gen(state, (unsigned long) g);
+            gen(state, x87_word(imm, true, state->amd64_reg_cache_valid, insn.start_ip));
             gen_amd64_defer_rip(state, next_ip);
             return true;
-#endif
         }
-#if defined(__aarch64__)
-        if ((insn.modrm >> 6) != 3 && x87_meta_ok && x87_mem_next == next_ip) {
-            // Memory form: the helper reads the address registers from
-            // cpu->amd64_regs and writes none, so store a dirty cache but keep
-            // it (see amd64_x87_mem in gadgets-aarch64/math.S).
-            extern void gadget_amd64_x87_mem(void);
-            extern void gadget_amd64_store_low8_reg_cache(void);
-            amd64_bridge_note(amd64_jit_x87_mem, insn.opcode);
-            if (state->amd64_reg_cache_valid && state->amd64_reg_cache_dirty) {
-                gen(state, (unsigned long) gadget_amd64_store_low8_reg_cache);
-                state->amd64_reg_cache_dirty = false;
-            }
+        void (*g)(void) = x87_mem_gadget(true, insn.opcode, (insn.modrm >> 3) & 7,
+                insn.operand_size_prefix);
+        if (g == NULL) {
+            state->amd64_ip = state->amd64_orig_ip;
+            gen_amd64_flush_reg_cache(state);
             gen_amd64_flush_rip(state);
-            gen(state, (unsigned long) gadget_amd64_x87_mem);
+            gen_amd64_helper_tlb_1_retint(state, amd64_jit_ud2, (unsigned long) state->amd64_orig_ip);
+            gen_exit(state);
+            return false;
+        }
+        if (x87_meta_ok && x87_mem_next == next_ip) {
+            gen_amd64_flush_reg_cache(state);
+            gen_amd64_flush_rip(state);
+            gen(state, (unsigned long) g);
             gen(state, x87_meta);
             gen(state, x87_disp);
             gen(state, (unsigned long) next_ip);
@@ -9564,38 +9807,25 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
             return true;
         }
 #endif
-        gen_amd64_flush_reg_cache(state);
-        gen_amd64_flush_rip(state);
-        if ((insn.modrm >> 6) == 3) {
-            // Register form: fully decoded here, so the helper runs the
-            // operation without re-fetching and re-decoding the instruction.
-            gen_amd64_helper_tlb_2_retint(state, amd64_jit_x87_reg,
-                    ((unsigned long) insn.opcode << 8) | insn.modrm, (unsigned long) next_ip);
-        } else {
-            // Memory form: the addressing was decoded above; only the
-            // effective address is computed at run time.
-            if (x87_meta_ok && x87_mem_next == next_ip)
-                gen_amd64_helper_tlb_3_retint(state, amd64_jit_x87_mem, x87_meta, x87_disp,
-                        (unsigned long) next_ip);
-            else
-                gen_amd64_helper_tlb_2_retint(state, amd64_jit_x87,
-                        (unsigned long) insn.opcode, (unsigned long) next_ip);
-        }
-        gen_amd64_defer_rip(state, next_ip);
-        return true;
+        state->amd64_ip = state->amd64_orig_ip;
+        state->amd64_fallback_to_interp = true;
+        return false;
     }
 
-    // FWAIT / WAIT (0x9b). No ModRM, no operands, and nothing to do: this
-    // emulator raises no deferred x87 exceptions for it to sync with. It had no
-    // arm, so it de-JITted its block -- and it appears in musl's long-double
-    // printf path right beside the x87 it waits on, so it cost a block break
-    // exactly where x87 code is densest.
+    // FWAIT / WAIT (0x9b): #MF if an unmasked x87 exception is pending, else
+    // nothing (x87.S x87_fwait). It appears in musl's long-double printf
+    // path right beside the x87 it waits on.
     if (!insn.two_byte_opcode && !insn.address_size_prefix && !insn.lock_prefix &&
             insn.rep_mode == amd64_jit_rep_none && insn.opcode == 0x9b) {
         next_ip = insn.start_ip + 1;
         state->amd64_ip = next_ip;
-        amd64_jit_debug("fwait-nop ip=%llx next=%llx",
+        amd64_jit_debug("fwait ip=%llx next=%llx",
                 (unsigned long long) insn.start_ip, (unsigned long long) next_ip);
+#if defined(__aarch64__)
+        extern void gadget_x87_fwait(void);
+        gen(state, (unsigned long) gadget_x87_fwait);
+        gen(state, x87_word(0, true, state->amd64_reg_cache_valid, insn.start_ip));
+#endif
         gen_amd64_defer_rip(state, next_ip);
         return true;
     }
@@ -11583,19 +11813,22 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
         return true;
     }
 
-    // emms (0F 77): no modrm, no operands. Architecturally it just empties the
-    // x87 FPU tag word; this emulator models no x87 tag state that gates MMX
-    // register access (the i386 decoder likewise treats emms as ignored), so it
-    // is a pure no-op. Without this the JIT raised #UD on the trailing emms that
-    // every real MMX routine emits (e.g. libgcrypt SHA), independent of the
-    // 0F 7F store fix. Strict prefixes: bare 0F 77 only; any 66/F2/F3 variant
-    // falls through to the interpreter, which also treats it as a nop.
+    // emms (0F 77): no modrm, no operands; it empties the x87 tag word
+    // (x87.S x87_emms). Without this arm the JIT raised #UD on the trailing
+    // emms that every real MMX routine emits (e.g. libgcrypt SHA). Strict
+    // prefixes: bare 0F 77 only; any 66/F2/F3 variant falls through to the
+    // interpreter.
     if (!insn.operand_size_prefix && !insn.address_size_prefix &&
             !insn.seg_prefix && !insn.lock_prefix &&
             insn.rep_mode == amd64_jit_rep_none && insn.two_byte_opcode &&
             insn.op2 == 0x77) {
         next_ip = insn.end_ip;
         state->amd64_ip = next_ip;
+#if defined(__aarch64__)
+        extern void gadget_x87_emms(void);
+        gen(state, (unsigned long) gadget_x87_emms);
+        gen(state, x87_word(0, true, state->amd64_reg_cache_valid, insn.start_ip));
+#endif
         amd64_jit_debug("emms-direct ip=%llx next=%llx",
                 (unsigned long long) insn.start_ip,
                 (unsigned long long) next_ip);
@@ -12334,7 +12567,31 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
         gen_amd64_defer_rip(state, next_ip);
         return true;
     }
-    // 0F AE with a memory operand (FXSAVE/FXRSTOR/XSAVE*/CLFLUSH): still C,
+#if defined(__aarch64__)
+    // FXSAVE / FXRSTOR (0F AE /0 /1, memory, REX.W or not -- the 64-bit form
+    // differs only in the pointers, which are not kept): x87.S.
+    if (!insn.address_size_prefix && insn.rep_mode == amd64_jit_rep_none && !insn.operand_size_prefix &&
+            !insn.lock_prefix && insn.two_byte_opcode && insn.has_modrm && insn.op2 == 0xae &&
+            amd64_modrm_mod(insn.modrm) != 3 && amd64_modrm_reg(insn.modrm) <= 1) {
+        unsigned long meta, disp;
+        if (!gen_amd64_decode_mem_meta(state, tlb, &insn, 64, &meta, &disp, &next_ip)) {
+            state->amd64_ip = state->amd64_orig_ip;
+            state->amd64_fallback_to_interp = true;
+            return false;
+        }
+        state->amd64_ip = next_ip;
+        gen_amd64_flush_reg_cache(state);
+        gen_amd64_flush_rip(state);
+        gen(state, (unsigned long) (amd64_modrm_reg(insn.modrm) == 0
+                    ? gadget_amd64_x87m_fxsave : gadget_amd64_x87m_fxrstor));
+        gen(state, meta | AMD64_JIT_MEM_ALIGN16);   // #GP unless 16-byte aligned
+        gen(state, disp);
+        gen(state, (unsigned long) next_ip);
+        gen_amd64_defer_rip(state, next_ip);
+        return true;
+    }
+#endif
+    // 0F AE with a memory operand (XSAVE*/CLFLUSH): still C,
     // emu/amd64_interp.c amd64_jit_0f_rm.
     if (!insn.address_size_prefix && insn.rep_mode == amd64_jit_rep_none &&
             insn.two_byte_opcode && insn.has_modrm && insn.op2 == 0xae) {
@@ -18194,6 +18451,68 @@ void helper_rdtsc(struct cpu_state *cpu);
 #define fh_read_bits h_read_bits
 #define fh_write_bits h_write_bits
 #endif
+#if defined(__aarch64__)
+// The transcendentals, still emu/fpu.c (X87_STEP sends them here).
+#define F2XM1() fh(fpu_2xm1)
+#define FYL2X() fh(fpu_yl2x)
+#define FYL2XP1() fh(fpu_yl2xp1)
+#define FPATAN() fh(fpu_patan)
+#define FPTAN() fh(fpu_ptan)
+#define FSIN() fh(fpu_sin)
+#define FCOS() fh(fpu_cos)
+#define FSINCOS() fh(fpu_sincos)
+// The 0f ae memory forms: FXSAVE/FXRSTOR are x87.S; LDMXCSR/STMXCSR are
+// still emu/fpu.c, as the i386 guest's SSE is. The helper suffix is a literal
+// 32 rather than `oz` because these have no operand-size form and decode.h is
+// compiled once per OP_SIZE, so both passes must reach the same helper.
+#define STMXCSR() fh_write(fpu_stmxcsr, 32)
+#define LDMXCSR() fh_read(fpu_ldmxcsr, 32)
+#define FXSAVE() do { extern void gadget_x87m_fxsave(void); g_addr(); GEN(gadget_x87m_fxsave); GEN(state->orig_ip); } while (0)
+#define FXRSTOR() do { extern void gadget_x87m_fxrstor(void); g_addr(); GEN(gadget_x87m_fxrstor); GEN(state->orig_ip); } while (0)
+#define EMMS() do { g(x87_emms); GEN(x87_word(0, false, false, state->orig_ip)); } while (0)
+#define FWAIT() do { g(x87_fwait); GEN(x87_word(0, false, false, state->orig_ip)); } while (0)
+// The x87 (D8-DF): x87.S, through the tables the amd64 decoder uses (above
+// gen_step_amd64). The transcendentals are still emu/fpu.c.
+#define X87_STEP(op) do { \
+    if (modrm.type != modrm_reg) { \
+        void (*xg)(void) = x87_mem_gadget(false, op, modrm.opcode, OP_SIZE == 16); \
+        if (xg == NULL) \
+            UNDEFINED; \
+        g_addr(); \
+        GEN(xg); \
+        GEN(state->orig_ip); \
+        break; \
+    } \
+    unsigned long ximm; \
+    void (*xg)(void) = x87_reg_gadget(false, op, 0xc0 | modrm.opcode << 3 | modrm.rm_opcode, &ximm); \
+    if (xg == X87R_UD) \
+        UNDEFINED; \
+    if (xg == X87R_NOP) \
+        break; \
+    if (xg == X87R_FNSTSW_AX) { \
+        g(fstsw_ax); \
+        break; \
+    } \
+    if (xg == X87R_C) { \
+        switch (modrm.opcode << 3 | modrm.rm_opcode) { \
+        case 0x30: F2XM1(); break; \
+        case 0x31: FYL2X(); break; \
+        case 0x32: FPTAN(); break; \
+        case 0x33: FPATAN(); break; \
+        case 0x39: FYL2XP1(); break; \
+        case 0x3b: FSINCOS(); break; \
+        case 0x3e: FSIN(); break; \
+        default: FCOS(); break; \
+        } \
+        break; \
+    } \
+    GEN(xg); \
+    GEN(x87_word(ximm, false, false, state->orig_ip)); \
+} while (0)
+#else
+// An x86_64 host: no x87.S, so emu/fpu.c through the helper gadgets.
+#define EMMS()
+#define FWAIT()
 #define st_0 0
 #define st_i modrm.rm_opcode
 #define FLD() fhh(fpu_ld, st_i);
@@ -18288,6 +18607,7 @@ void helper_rdtsc(struct cpu_state *cpu);
 #define FCMOVNE(src) fhh(fpu_cmovne, src)
 #define FCMOVNBE(src) fhh(fpu_cmovnbe, src)
 #define FCMOVNU(src) fhh(fpu_cmovnu, src)
+#endif
 
 // vector
 

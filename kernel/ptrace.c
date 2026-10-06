@@ -363,9 +363,11 @@ static void get_user_fpregs_amd64(struct task *task, struct user_fpregs_struct_a
     // A stopped tracee's flags are all in cpu_state already: they are folded
     // in whenever it leaves guest code (emu/fpenv.c).
     user_fpregs_->mxcsr = cpu->mxcsr;
+    user_fpregs_->twd = cpu->x87_valid;
 
+    // FXSAVE's layout: ST(0) first, the abridged tag by physical register.
     for (int i = 0; i < 8; i++) {
-        const float80 value = cpu->fp[i];
+        const float80 value = cpu->fp[(cpu->top + i) & 7];
         for (int j = 0; j < 4; j++)
             user_fpregs_->st[i].significand[j] = (word_t) (value.signif >> (j * 16));
         user_fpregs_->st[i].exponent = value.signExp;
@@ -380,12 +382,13 @@ static void set_user_fpregs_amd64(struct cpu_state *cpu, const struct user_fpreg
     cpu->fcw = user_fpregs_->cwd;
     cpu->fsw = user_fpregs_->swd;
     cpu->mxcsr = user_fpregs_->mxcsr & 0xffff;
+    cpu->x87_valid = (byte_t) user_fpregs_->twd;
 
     for (int i = 0; i < 8; i++) {
         uint64_t significand = 0;
         for (int j = 0; j < 4; j++)
             significand |= (uint64_t) user_fpregs_->st[i].significand[j] << (j * 16);
-        cpu->fp[i] = (float80) {
+        cpu->fp[(cpu->top + i) & 7] = (float80) {
             .signif = significand,
             .signExp = user_fpregs_->st[i].exponent,
         };
