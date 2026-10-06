@@ -40,6 +40,7 @@ void cpu() {
     OFFSET(CPU, cpu_state, df_offset);
     OFFSET(CPU, cpu_state, fsw);
     OFFSET(CPU, cpu_state, xmm);
+    OFFSET(CPU, cpu_state, mm);
     MACRO(PF_RES);
     MACRO(ZF_RES);
     MACRO(SF_RES);
