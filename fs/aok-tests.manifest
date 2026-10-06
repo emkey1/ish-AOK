@@ -391,6 +391,14 @@ proc_ish_host_state.c
 x86/amd64_regress.c
 x86/amd64_popcnt.c
 x86/amd64_cmpxchg.c
+x86/amd64_xadd.c
+x86/amd64_muldiv.c
+x86/amd64_push_rm.c
+x86/amd64_alu_mem.c
+x86/amd64_xchg_mem.c
+x86/amd64_shift.c
+x86/amd64_0f_rm.c
+x86/amd64_misc_rm.c
 x86/amd64_pushf_popf.c
 x86/amd64_ret_pop.c
 x86/amd64_moffs_stack16.c

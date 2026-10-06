@@ -431,6 +431,50 @@ int x86_atomic_cas(struct cpu_state *cpu, struct tlb *tlb, guest_addr_t addr,
     return 0;
 }
 
+// LOCK XADD, for the XADD gadget's misaligned operands (an aligned one is a
+// host exclusive loop in the gadget): [addr] += rhs, *old_out = what it held.
+struct x86_xadd_ctx { qword_t rhs, mask; };
+static qword_t x86_xadd_fn(qword_t old, void *ctx) {
+    struct x86_xadd_ctx *c = ctx;
+    return (old + c->rhs) & c->mask;
+}
+int x86_atomic_xadd(struct cpu_state *cpu, struct tlb *tlb, guest_addr_t addr,
+                    unsigned size_bytes, qword_t rhs, qword_t *old_out) {
+    struct x86_xadd_ctx c = { rhs, size_bytes == 8 ? ~(qword_t) 0 : ((qword_t) 1 << (size_bytes * 8)) - 1 };
+    qword_t neu;
+    return x86_atomic_rmw(cpu, tlb, addr, size_bytes, x86_xadd_fn, &c, old_out, &neu);
+}
+
+// LOCK <alu> [mem] for the ALU gadget's misaligned operands (an aligned one is
+// a host exclusive loop in the gadget): op is the x86 group number (0 add,
+// 1 or, 2 adc, 3 sbb, 4 and, 5 sub, 6 xor), cin the carry for adc/sbb.
+// *old_out = what [mem] held; the gadget computes the flags from it.
+struct x86_alu_ctx { unsigned op; qword_t rhs, cin, mask; };
+static qword_t x86_alu_fn(qword_t old, void *ctx) {
+    struct x86_alu_ctx *c = ctx;
+    qword_t r;
+    switch (c->op) {
+        case 0: r = old + c->rhs; break;
+        case 1: r = old | c->rhs; break;
+        case 2: r = old + c->rhs + c->cin; break;
+        case 3: r = old - c->rhs - c->cin; break;
+        case 4: r = old & c->rhs; break;
+        case 5: r = old - c->rhs; break;
+        case 10: r = -old; break;          // NEG
+        case 11: r = ~old; break;          // NOT
+        default: r = old ^ c->rhs; break;
+    }
+    return r & c->mask;
+}
+int x86_atomic_alu(struct cpu_state *cpu, struct tlb *tlb, guest_addr_t addr,
+                   unsigned size_bytes, unsigned op, qword_t rhs, qword_t cin,
+                   qword_t *old_out) {
+    struct x86_alu_ctx c = { op, rhs, cin,
+        size_bytes == 8 ? ~(qword_t) 0 : ((qword_t) 1 << (size_bytes * 8)) - 1 };
+    qword_t neu;
+    return x86_atomic_rmw(cpu, tlb, addr, size_bytes, x86_alu_fn, &c, old_out, &neu);
+}
+
 // LOCK CMPXCHG16B. The instruction already requires 16-byte alignment (the
 // caller raises #GP otherwise), so there is no unaligned path -- and that
 // alignment is also what guarantees the single resolved page covers all 16

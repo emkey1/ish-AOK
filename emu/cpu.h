@@ -30,20 +30,12 @@ int amd64_jit_vmcall(struct cpu_state *cpu, struct tlb *tlb,
         unsigned long next_ip);
 int amd64_jit_port_io(struct cpu_state *cpu, struct tlb *tlb,
         unsigned long insn_ip);
-int amd64_jit_mov_imm(struct cpu_state *cpu, struct tlb *tlb,
-        unsigned long reg_size, unsigned long value, unsigned long next_ip);
 int amd64_jit_reg_reg_op(struct cpu_state *cpu, struct tlb *tlb,
         unsigned long op_regs_size, unsigned long next_ip);
 int amd64_jit_reg_imm_op(struct cpu_state *cpu, struct tlb *tlb,
         unsigned long op_group_rm_size, unsigned long value, unsigned long next_ip);
-int amd64_jit_imul_imm(struct cpu_state *cpu, struct tlb *tlb,
-        unsigned long opcode, unsigned long next_ip);
-int amd64_jit_accum_imm_op(struct cpu_state *cpu, struct tlb *tlb,
-        unsigned long opcode, unsigned long next_ip);
 int amd64_jit_mem_op(struct cpu_state *cpu, struct tlb *tlb,
         unsigned long meta, unsigned long disp, unsigned long next_ip);
-int amd64_jit_movx(struct cpu_state *cpu, struct tlb *tlb,
-        unsigned long op2, unsigned long next_ip);
 int amd64_jit_0f_rm(struct cpu_state *cpu, struct tlb *tlb,
         unsigned long op2, unsigned long next_ip);
 int amd64_jit_0f_vec_rm(struct cpu_state *cpu, struct tlb *tlb,
@@ -66,14 +58,10 @@ int amd64_jit_x87(struct cpu_state *cpu, struct tlb *tlb,
         unsigned long opcode, unsigned long next_ip);
 int amd64_jit_cmpxchg8b(struct cpu_state *cpu, struct tlb *tlb,
         unsigned long next_ip);
-int amd64_jit_grp3_op(struct cpu_state *cpu, struct tlb *tlb,
-        unsigned long opcode, unsigned long next_ip);
 int amd64_jit_modrm_imm(struct cpu_state *cpu, struct tlb *tlb,
         unsigned long opcode, unsigned long next_ip);
 int amd64_jit_shift(struct cpu_state *cpu, struct tlb *tlb,
         unsigned long opcode, unsigned long next_ip);
-int amd64_jit_fe_group(struct cpu_state *cpu, struct tlb *tlb,
-        unsigned long next_ip);
 int amd64_jit_ff_group(struct cpu_state *cpu, struct tlb *tlb,
         unsigned long next_ip);
 void cpu_poke(struct cpu_state *cpu);

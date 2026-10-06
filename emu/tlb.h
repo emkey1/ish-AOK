@@ -135,6 +135,11 @@ typedef qword_t (*x86_atomic_fn)(qword_t old, void *ctx);
 int x86_atomic_rmw(struct cpu_state *cpu, struct tlb *tlb, guest_addr_t addr,
                    unsigned size_bytes, x86_atomic_fn fn, void *ctx,
                    qword_t *old_out, qword_t *new_out);
+int x86_atomic_alu(struct cpu_state *cpu, struct tlb *tlb, guest_addr_t addr,
+                   unsigned size_bytes, unsigned op, qword_t rhs, qword_t cin,
+                   qword_t *old_out);
+int x86_atomic_xadd(struct cpu_state *cpu, struct tlb *tlb, guest_addr_t addr,
+                    unsigned size_bytes, qword_t rhs, qword_t *old_out);
 int x86_atomic_cas(struct cpu_state *cpu, struct tlb *tlb, guest_addr_t addr,
                    unsigned size_bytes, qword_t expected, qword_t desired,
                    qword_t *old_out, bool *swapped);
