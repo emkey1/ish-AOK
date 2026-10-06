@@ -47,3 +47,7 @@
 ## 2024-09-26 - Add VoiceOver hints to file manager navigation buttons
 **Learning:** Icon-only navigation buttons in toolbars (like Back, Forward, Up, More Actions) often only have short `accessibilityLabel`s which lack context for screen readers. In iOS, these buttons can benefit greatly from an `accessibilityHint` to provide clearer action descriptions.
 **Action:** When evaluating toolbars with icon-only buttons, ensure an `accessibilityHint` is provided alongside the `accessibilityLabel` if the label alone is not sufficiently descriptive of the resulting action (e.g., "Navigates to the previously visited folder." instead of just "Back").
+
+## 2024-10-27 - Root Directory Breadcrumb Accessibility
+**Learning:** In iOS UI development, when rendering file system paths in breadcrumb navigation, the root directory string (e.g., `/`) will be ambiguously announced as 'slash' by screen readers like VoiceOver unless it has a descriptive label.
+**Action:** Always assign a descriptive `accessibilityLabel` (e.g., 'Root Directory') to the root directory component in breadcrumb navigation.

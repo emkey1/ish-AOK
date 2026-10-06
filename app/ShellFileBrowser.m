@@ -364,6 +364,9 @@ NSString *ISHShellQuoteArgument(NSString *argument) {
         BOOL isLast = (i == titles.count - 1);
         UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem];
         [button setTitle:titles[i] forState:UIControlStateNormal];
+        if ([titles[i] isEqualToString:@"/"]) {
+            button.accessibilityLabel = NSLocalizedString(@"Root Directory", @"Accessibility label for the root directory breadcrumb");
+        }
         button.titleLabel.font = [UIFont systemFontOfSize:15
                                                    weight:isLast ? UIFontWeightSemibold : UIFontWeightRegular];
         [button setTitleColor:isLast ? UIColor.labelColor : UIColor.systemBlueColor
