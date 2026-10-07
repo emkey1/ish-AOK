@@ -11,6 +11,7 @@
 #include "jit/gen.h"
 #include "jit/jitprof.h"
 #include "jit/arm64_mops.h"
+#include "jit/frame.h"
 #include "emu/fpenv.h"
 #include "emu/modrm.h"
 #include "emu/cpuid.h"
@@ -84,6 +85,8 @@ enum amd64_jit_mem_meta {
     // A legacy-SSE 128-bit operand that must be 16-byte aligned: the vector
     // gadgets' amd64_vmem_addr raises #GP(0) when it is not (math.S).
     AMD64_JIT_MEM_ALIGN16 = 1ul << 37,
+    // A VEX.256 operand that must be 32-byte aligned (amd64-mem.h).
+    AMD64_JIT_MEM_ALIGN32 = 1ul << 38,
 };
 
 static inline byte_t amd64_modrm_mod(byte_t modrm) {
@@ -9528,6 +9531,998 @@ __attribute__((unused)) static void x86_shuffle_index(int kind, uint8_t imm, uns
 }
 
 #if defined(__aarch64__)
+// ---- VEX (AVX, AVX2), both x86 guests: math.S's vex.inc gadgets --------
+// A decoded VEX instruction, whichever guest it came from: the map (1 0F,
+// 2 0F38, 3 0F3A), pp (0 none, 1 66, 2 F3, 3 F2), the opcode, VEX.L and .W,
+// vvvv, the ModRM reg and r/m register numbers (0-7 on i386, 0-15 on
+// amd64), whether r/m is memory, and imm8.
+struct vex_insn {
+    unsigned map, pp, op, l, w, vvvv, reg, rm;
+    bool mem;
+    uint8_t imm;
+};
+// kinds: the operand roles of a vex.inc frame (see its header)
+enum vex_kind {
+    VXK_L3,     // dst = reg, s1 = vvvv, s2 = r/m
+    VXK_L2,     // dst = reg, s2 = r/m; vvvv must be 1111b
+    VXK_SHX,    // dst = reg, s1 = vvvv, s2 = r/m: the count, an m128 at either L
+    VXK_SHI,    // dst = vvvv, s2 = r/m (a register), imm8; the op in ModRM.reg
+    VXK_SCAL,   // a scalar op: as VXK_L3, VEX.L ignored, the operand sbytes wide
+    VXK_TBL1,   // dst = reg, s2 = r/m, vvvv 1111b: a one-source shuffle by imm8 (aux = its kind)
+    VXK_TBL2,   // dst = reg, s1 = vvvv, s2 = r/m: a two-source shuffle by imm8
+    VXK_TBL2U,  // dst = reg, s2 = r/m, vvvv 1111b: VPERMILPD's two-source index of one
+    VXK_LOAD,   // dst = reg, s2 = r/m, vvvv 1111b, a full-width (or sbytes) load or copy
+    VXK_STORE,  // r/m = reg: memory a store (sbytes or the width), a register a copy
+    VXK_MOVS,   // VMOVSS/SD load: memory dst = m (vvvv 1111b), register a 3-operand merge
+    VXK_MOVSST, // VMOVSS/SD store: memory a store, register rm = {reg low, vvvv rest}
+    VXK_LOHI,   // VMOVLPS/HPS..: memory a 3-operand merge of m64 (aux: the gadget for a register)
+    VXK_STQ,    // VMOVLPS/HPS.. store: m64 from reg's low (aux 0) or high (aux 8) qword
+    VXK_GPRIN,  // VMOVD/Q xmm, r/m: a register staged from the GPR, memory 4 or 8 (W)
+    VXK_GPROUT, // VMOVD/Q r/m, xmm: a register write, a memory store of 4 or 8 (W)
+    VXK_BCAST,  // dst = reg, s2 = r/m (sbytes of memory): a broadcast
+    VXK_INS128, // dst = reg, s1 = vvvv, s2 = r/m (16 bytes): VINSERTF128/I128
+    VXK_EXT128, // r/m = reg's 128-bit lane: VEXTRACTF128/I128
+    VXK_PERMQ,  // dst = reg, s2 = r/m (32 bytes), vvvv 1111b: VPERMQ/PD imm8
+    VXK_ZERO,   // VZEROUPPER / VZEROALL (no ModRM)
+    VXK_WIDEN,  // dst = reg, s2 = r/m, vvvv 1111b: each half from sbytes of the source (2x for VEX.256)
+    VXK_NARROW, // dst = reg (128 bits), s2 = r/m (the width), vvvv 1111b
+    VXK_G2R,    // GPR reg = f(s2 = r/m: a register, or sbytes of memory), vvvv 1111b
+    VXK_FLAGS,  // EFLAGS = f(s1 = reg, s2 = r/m: sbytes of memory), vvvv 1111b
+    VXK_TEST,   // EFLAGS = f(s1 = reg, s2 = r/m), vvvv 1111b, the full width
+    VXK_INTIN,  // dst = reg, s1 = vvvv, s2 = a GPR (r/m, staged) or sbytes of memory
+    VXK_INSPS,  // VINSERTPS: as VXK_L3, memory 4 bytes and imm8[7:6] 0
+    VXK_PEXTR,  // r/m (a GPR or memory) = reg's lane imm8: sbytes wide (gadget: the SSE one)
+    VXK_BLENDV, // dst = reg, s1 = vvvv, s2 = r/m, the mask register imm8[7:4]
+    VXK_SPECIAL,// emitted by each guest's emitter (aux: which)
+    VXK_MASKMOV,// VMASKMOV*/VPMASKMOV*: memory only; aux 0 load (dst = reg), 1 store (data = reg); sbytes the element
+    VXK_BMI,    // BMI1/BMI2 on general registers (aux: vex_bmi's op)
+    VXK_PS2PH,  // VCVTPS2PH: r/m (an xmm, or memory 8/16 bytes) = reg converted, imm8
+};
+// VXK_SPECIAL's
+#define VEX_SP_LDMXCSR 1
+#define VEX_SP_STMXCSR 2
+#define VEX_SP_PCMPSTR 3
+#define VEX_SP_MASKMOVDQU 4
+struct vex_entry {
+    uint8_t map, pp, op;
+    int8_t group;           // ModRM.reg for the 71-73 groups, else -1
+    uint8_t kind;
+    uint8_t lmask;          // bit 0: VEX.128 exists, bit 1: VEX.256
+    uint8_t sbytes;         // VXK_SCAL: the memory operand's bytes; VEX.128's when not 16 (MOVDDUP's 8)
+    void (*gadget)(void);
+    uint8_t aux;            // VXK_TBL*: x86_shuffle_index's kind
+    uint8_t ihs;            // VXK_TBL*: the high lane's imm8 is imm8 >> ihs
+    uint8_t wreq;           // 0: VEX.W either; 1: W0 only; 2: W1 only
+    uint8_t align;          // VXK_LOAD/STORE: a memory operand aligned to the width
+    void (*gadget2)(void);  // VXK_LOHI: the register form's gadget (VMOVHLPS, VMOVLHPS)
+};
+#define VEX_L128 1
+#define VEX_L256 2
+#define VEX_LBOTH 3
+// A row's common fields; the rest zero (a row that sets any of them spells
+// out all 13: the table must not lean on positional defaults).
+#define VE(map, pp, op, group, kind, lmask, sbytes, gadget) \
+    {map, pp, op, group, kind, lmask, sbytes, gadget, 0, 0, 0, 0, NULL}
+// 66 0F: the integer ops (vex.inc vex_vi_*)
+#define VEX_0F_INT(X) X(0x60, punpcklbw) X(0x61, punpcklwd) X(0x62, punpckldq) X(0x63, packsswb) \
+    X(0x64, pcmpgtb) X(0x65, pcmpgtw) X(0x66, pcmpgtd) X(0x67, packuswb) X(0x68, punpckhbw) \
+    X(0x69, punpckhwd) X(0x6a, punpckhdq) X(0x6b, packssdw) X(0x6c, punpcklqdq) X(0x6d, punpckhqdq) \
+    X(0x74, pcmpeqb) X(0x75, pcmpeqw) X(0x76, pcmpeqd) X(0xd4, paddq) X(0xd5, pmullw) \
+    X(0xd8, psubusb) X(0xd9, psubusw) X(0xda, pminub) X(0xdb, pand) X(0xdc, paddusb) X(0xdd, paddusw) \
+    X(0xde, pmaxub) X(0xdf, pandn) X(0xe0, pavgb) X(0xe3, pavgw) X(0xe4, pmulhuw) X(0xe5, pmulhw) \
+    X(0xe8, psubsb) X(0xe9, psubsw) X(0xea, pminsw) X(0xeb, por) X(0xec, paddsb) X(0xed, paddsw) \
+    X(0xee, pmaxsw) X(0xef, pxor) X(0xf4, pmuludq) X(0xf5, pmaddwd) X(0xf6, psadbw) X(0xf8, psubb) \
+    X(0xf9, psubw) X(0xfa, psubd) X(0xfb, psubq) X(0xfc, paddb) X(0xfd, paddw) X(0xfe, paddd)
+// 66 0F38, two-operand and three
+#define VEX_38_INT(X) X(0x00, pshufb) X(0x01, phaddw) X(0x02, phaddd) X(0x03, phaddsw) X(0x04, pmaddubsw) \
+    X(0x05, phsubw) X(0x06, phsubd) X(0x07, phsubsw) X(0x08, psignb) X(0x09, psignw) X(0x0a, psignd) \
+    X(0x0b, pmulhrsw) X(0x28, pmuldq) X(0x29, pcmpeqq) X(0x2b, packusdw) X(0x37, pcmpgtq) X(0x38, pminsb) \
+    X(0x39, pminsd) X(0x3a, pminuw) X(0x3b, pminud) X(0x3c, pmaxsb) X(0x3d, pmaxsd) X(0x3e, pmaxuw) \
+    X(0x3f, pmaxud) X(0x40, pmulld)
+#define VEX_38_UNARY(X) X(0x1c, pabsb) X(0x1d, pabsw) X(0x1e, pabsd)
+// 66 0F D1-F3: shifts by an xmm count; 71-73: by imm8 (group, ModRM.reg)
+#define VEX_SHX(X) X(0xd1, psrlw) X(0xd2, psrld) X(0xd3, psrlq) X(0xe1, psraw) X(0xe2, psrad) \
+    X(0xf1, psllw) X(0xf2, pslld) X(0xf3, psllq)
+#define VEX_SHI(X) X(0x71, 2, psrlw) X(0x71, 4, psraw) X(0x71, 6, psllw) X(0x72, 2, psrld) \
+    X(0x72, 4, psrad) X(0x72, 6, pslld) X(0x73, 2, psrlq) X(0x73, 3, psrldq) X(0x73, 6, psllq) \
+    X(0x73, 7, pslldq)
+// 0F: the float ops, by pp (none ps, 66 pd, F3 ss, F2 sd)
+#define VEX_FARITH(X) X(0x58, add) X(0x59, mul) X(0x5c, sub) X(0x5d, min) X(0x5e, div) X(0x5f, max)
+#define VEX_DECL_XF(op, n) extern void gadget_vex_xf_##n##ps(void), gadget_vex_xf_##n##pd(void), \
+    gadget_vex_xf_##n##ss(void), gadget_vex_xf_##n##sd(void);
+VEX_FARITH(VEX_DECL_XF) VEX_DECL_XF(0x51, sqrt) VEX_DECL_XF(0xc2, cmp)
+extern void gadget_vex_xf_addsubps(void), gadget_vex_xf_addsubpd(void), gadget_vex_xf_haddps(void),
+       gadget_vex_xf_haddpd(void), gadget_vex_xf_hsubps(void), gadget_vex_xf_hsubpd(void);
+#define VEX_ROW_XF(op, n) VE(1, 0, op, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_xf_##n##ps), \
+    VE(1, 1, op, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_xf_##n##pd), \
+    VE(1, 2, op, -1, VXK_SCAL, VEX_LBOTH, 4, gadget_vex_xf_##n##ss), \
+    VE(1, 3, op, -1, VXK_SCAL, VEX_LBOTH, 8, gadget_vex_xf_##n##sd),
+#define VEX_DECL_VI(op, n) extern void gadget_vex_vi_##n(void);
+#define VEX_DECL_SHX(op, n) extern void gadget_vex_vsh_##n##_x(void);
+#define VEX_DECL_SHI(op, r, n) extern void gadget_vex_vsh_##n##_i(void);
+VEX_0F_INT(VEX_DECL_VI) VEX_38_INT(VEX_DECL_VI) VEX_38_UNARY(VEX_DECL_VI) VEX_SHX(VEX_DECL_SHX) VEX_SHI(VEX_DECL_SHI)
+#define VEX_MOVX(X) X(0x20, pmovsxbw, 8) X(0x21, pmovsxbd, 4) X(0x22, pmovsxbq, 2) X(0x23, pmovsxwd, 8) \
+    X(0x24, pmovsxwq, 4) X(0x25, pmovsxdq, 8) X(0x30, pmovzxbw, 8) X(0x31, pmovzxbd, 4) X(0x32, pmovzxbq, 2) \
+    X(0x33, pmovzxwd, 8) X(0x34, pmovzxwq, 4) X(0x35, pmovzxdq, 8)
+#define VEX_DECL_MOVX(op, n, b) extern void gadget_vex_vi_##n(void);
+VEX_MOVX(VEX_DECL_MOVX)
+#define VEX_ROW_MOVX(op, n, b) VE(2, 1, op, -1, VXK_WIDEN, VEX_LBOTH, b, gadget_vex_vi_##n),
+extern void gadget_vex_fma_maddsub132ps(void), gadget_vex_fma_maddsub132pd(void), gadget_vex_fma_msubadd132ps(void), gadget_vex_fma_msubadd132pd(void), gadget_vex_fma_madd132ps(void), gadget_vex_fma_madd132pd(void), gadget_vex_fma_madd132ss(void), gadget_vex_fma_madd132sd(void), gadget_vex_fma_msub132ps(void), gadget_vex_fma_msub132pd(void), gadget_vex_fma_msub132ss(void), gadget_vex_fma_msub132sd(void), gadget_vex_fma_nmadd132ps(void), gadget_vex_fma_nmadd132pd(void), gadget_vex_fma_nmadd132ss(void), gadget_vex_fma_nmadd132sd(void), gadget_vex_fma_nmsub132ps(void), gadget_vex_fma_nmsub132pd(void), gadget_vex_fma_nmsub132ss(void), gadget_vex_fma_nmsub132sd(void), gadget_vex_fma_maddsub213ps(void), gadget_vex_fma_maddsub213pd(void), gadget_vex_fma_msubadd213ps(void), gadget_vex_fma_msubadd213pd(void), gadget_vex_fma_madd213ps(void), gadget_vex_fma_madd213pd(void), gadget_vex_fma_madd213ss(void), gadget_vex_fma_madd213sd(void), gadget_vex_fma_msub213ps(void), gadget_vex_fma_msub213pd(void), gadget_vex_fma_msub213ss(void), gadget_vex_fma_msub213sd(void), gadget_vex_fma_nmadd213ps(void), gadget_vex_fma_nmadd213pd(void), gadget_vex_fma_nmadd213ss(void), gadget_vex_fma_nmadd213sd(void), gadget_vex_fma_nmsub213ps(void), gadget_vex_fma_nmsub213pd(void), gadget_vex_fma_nmsub213ss(void), gadget_vex_fma_nmsub213sd(void), gadget_vex_fma_maddsub231ps(void), gadget_vex_fma_maddsub231pd(void), gadget_vex_fma_msubadd231ps(void), gadget_vex_fma_msubadd231pd(void), gadget_vex_fma_madd231ps(void), gadget_vex_fma_madd231pd(void), gadget_vex_fma_madd231ss(void), gadget_vex_fma_madd231sd(void), gadget_vex_fma_msub231ps(void), gadget_vex_fma_msub231pd(void), gadget_vex_fma_msub231ss(void), gadget_vex_fma_msub231sd(void), gadget_vex_fma_nmadd231ps(void), gadget_vex_fma_nmadd231pd(void), gadget_vex_fma_nmadd231ss(void), gadget_vex_fma_nmadd231sd(void), gadget_vex_fma_nmsub231ps(void), gadget_vex_fma_nmsub231pd(void), gadget_vex_fma_nmsub231ss(void), gadget_vex_fma_nmsub231sd(void);
+extern void gadget_vex_xf_cvttss2si32(void), gadget_vex_xf_cvttss2si64(void), gadget_vex_xf_cvttsd2si32(void),
+       gadget_vex_xf_cvttsd2si64(void), gadget_vex_xf_cvtss2si32(void), gadget_vex_xf_cvtss2si64(void),
+       gadget_vex_xf_cvtsd2si32(void), gadget_vex_xf_cvtsd2si64(void), gadget_vex_movmskps(void),
+       gadget_vex_movmskpd(void), gadget_vex_pmovmskb(void), gadget_vex_xf_ucomiss(void), gadget_vex_xf_ucomisd(void),
+       gadget_vex_xf_comiss(void), gadget_vex_xf_comisd(void), gadget_vex_ptest(void), gadget_vex_testps(void),
+       gadget_vex_testpd(void), gadget_vex_xf_cvtsi2ss32(void), gadget_vex_xf_cvtsi2ss64(void),
+       gadget_vex_xf_cvtsi2sd32(void), gadget_vex_xf_cvtsi2sd64(void), gadget_vex_pinsrb(void), gadget_vex_pinsrw(void),
+       gadget_vex_pinsrd(void), gadget_vex_pinsrq(void), gadget_vex_insertps(void),
+       gadget_amd64_s4_pextrb_r(void), gadget_amd64_s4_pextrw_r(void), gadget_amd64_s4_pextrd_r(void),
+       gadget_amd64_s4_pextrq_r(void), gadget_vex_blendvps(void), gadget_vex_blendvpd(void),
+       gadget_vex_pblendvb(void), gadget_amd64_pcmpestrm_r(void), gadget_amd64_pcmpestri_r(void),
+       gadget_amd64_pcmpistrm_r(void), gadget_amd64_pcmpistri_r(void);
+extern void gadget_vex_xf_cvtps2pd(void), gadget_vex_xf_cvtdq2pd(void), gadget_vex_xf_cvtpd2ps(void),
+       gadget_vex_xf_cvtpd2dq(void), gadget_vex_xf_cvttpd2dq(void), gadget_vex_xf_cvtss2sd(void),
+       gadget_vex_xf_cvtsd2ss(void), gadget_vex_xf_cvtph2ps(void), gadget_vex_cvtps2ph(void);
+extern void gadget_vex_vi_phminposuw(void), gadget_vex_tbl1(void), gadget_vex_tbl2(void),
+       gadget_vex_v3a_palignr(void), gadget_vex_v3a_pblendw(void), gadget_vex_v3a_blendps(void),
+       gadget_vex_v3a_blendpd(void), gadget_vex_v3a_mpsadbw(void), gadget_vex_xf_dpps(void),
+       gadget_vex_xf_dppd(void), gadget_vex_xf_roundps(void), gadget_vex_xf_roundpd(void),
+       gadget_vex_xf_roundss(void), gadget_vex_xf_roundsd(void), gadget_vex_xf_cvtdq2ps(void),
+       gadget_vex_xf_cvtps2dq(void), gadget_vex_xf_cvttps2dq(void), gadget_vex_xf_rcpps(void),
+       gadget_vex_xf_rcpss(void), gadget_vex_xf_rsqrtps(void), gadget_vex_xf_rsqrtss(void),
+       gadget_vex_xf_movsldup(void), gadget_vex_xf_movshdup(void), gadget_vex_xf_movddup(void),
+       gadget_vex_mv_all(void), gadget_vex_mv_ss(void), gadget_vex_mv_sd(void), gadget_vex_mv_hl(void),
+       gadget_vex_mv_lh(void), gadget_vex_mv_q(void), gadget_vex_bc_b(void), gadget_vex_bc_w(void),
+       gadget_vex_bc_d(void), gadget_vex_bc_q(void), gadget_vex_bc_x(void), gadget_vex_zeroupper(void),
+       gadget_vex_zeroall(void), gadget_vex_ins128(void), gadget_vex_ext128(void), gadget_vex_perm2x128(void),
+       gadget_vex_permq(void), gadget_vex_permd(void), gadget_vex_permilps_v(void), gadget_vex_permilpd_v(void),
+       gadget_vex_shv_srld(void), gadget_vex_shv_srlq(void), gadget_vex_shv_srad(void), gadget_vex_shv_slld(void),
+       gadget_vex_shv_sllq(void);
+#define VEX_ROW_0F(op, n) VE(1, 1, op, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_vi_##n),
+#define VEX_ROW_38(op, n) VE(2, 1, op, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_vi_##n),
+#define VEX_ROW_38U(op, n) VE(2, 1, op, -1, VXK_L2, VEX_LBOTH, 0, gadget_vex_vi_##n),
+#define VEX_ROW_SHX(op, n) VE(1, 1, op, -1, VXK_SHX, VEX_LBOTH, 0, gadget_vex_vsh_##n##_x),
+#define VEX_ROW_SHI(op, r, n) VE(1, 1, op, r, VXK_SHI, VEX_LBOTH, 1, gadget_vex_vsh_##n##_i),
+static const struct vex_entry vex_table[] = {
+    VEX_0F_INT(VEX_ROW_0F) VEX_38_INT(VEX_ROW_38) VEX_38_UNARY(VEX_ROW_38U)
+    VE(2, 1, 0x41, -1, VXK_L2, VEX_L128, 0, gadget_vex_vi_phminposuw),
+    VEX_SHX(VEX_ROW_SHX) VEX_SHI(VEX_ROW_SHI)
+    VEX_FARITH(VEX_ROW_XF) VEX_ROW_XF(0xc2, cmp)
+    VE(1, 0, 0x51, -1, VXK_L2, VEX_LBOTH, 0, gadget_vex_xf_sqrtps),
+    VE(1, 1, 0x51, -1, VXK_L2, VEX_LBOTH, 0, gadget_vex_xf_sqrtpd),
+    VE(1, 2, 0x51, -1, VXK_SCAL, VEX_LBOTH, 4, gadget_vex_xf_sqrtss),
+    VE(1, 3, 0x51, -1, VXK_SCAL, VEX_LBOTH, 8, gadget_vex_xf_sqrtsd),
+    VE(1, 1, 0xd0, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_xf_addsubpd),
+    VE(1, 3, 0xd0, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_xf_addsubps),
+    VE(1, 1, 0x7c, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_xf_haddpd),
+    VE(1, 3, 0x7c, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_xf_haddps),
+    VE(1, 1, 0x7d, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_xf_hsubpd),
+    VE(1, 3, 0x7d, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_xf_hsubps),
+    // the bitwise ps/pd ops and the ps/pd unpacks: the integer bodies
+    VE(1, 0, 0x54, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_vi_pand), VE(1, 1, 0x54, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_vi_pand),
+    VE(1, 0, 0x55, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_vi_pandn), VE(1, 1, 0x55, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_vi_pandn),
+    VE(1, 0, 0x56, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_vi_por), VE(1, 1, 0x56, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_vi_por),
+    VE(1, 0, 0x57, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_vi_pxor), VE(1, 1, 0x57, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_vi_pxor),
+    VE(1, 0, 0x14, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_vi_punpckldq), VE(1, 1, 0x14, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_vi_punpcklqdq),
+    VE(1, 0, 0x15, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_vi_punpckhdq), VE(1, 1, 0x15, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_vi_punpckhqdq),
+    // shuffles by imm8
+    {1, 1, 0x70, -1, VXK_TBL1, VEX_LBOTH, 0, gadget_vex_tbl1, 2, 0, 0, 0, NULL},       // VPSHUFD
+    {1, 2, 0x70, -1, VXK_TBL1, VEX_LBOTH, 0, gadget_vex_tbl1, 4, 0, 0, 0, NULL},       // VPSHUFHW
+    {1, 3, 0x70, -1, VXK_TBL1, VEX_LBOTH, 0, gadget_vex_tbl1, 3, 0, 0, 0, NULL},       // VPSHUFLW
+    {1, 0, 0xc6, -1, VXK_TBL2, VEX_LBOTH, 0, gadget_vex_tbl2, 0, 0, 0, 0, NULL},       // VSHUFPS
+    {1, 1, 0xc6, -1, VXK_TBL2, VEX_LBOTH, 0, gadget_vex_tbl2, 1, 2, 0, 0, NULL},       // VSHUFPD
+    {3, 1, 0x04, -1, VXK_TBL1, VEX_LBOTH, 0, gadget_vex_tbl1, 2, 0, 0, 0, NULL},       // VPERMILPS imm
+    {3, 1, 0x05, -1, VXK_TBL2U, VEX_LBOTH, 0, gadget_vex_tbl1, 1, 2, 0, 0, NULL},      // VPERMILPD imm
+    // 0F3A: blends, align, MPSADBW, DPPS/DPPD, ROUND
+    VE(3, 1, 0x0f, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_v3a_palignr),
+    VE(3, 1, 0x0e, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_v3a_pblendw),
+    VE(3, 1, 0x0c, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_v3a_blendps),
+    VE(3, 1, 0x0d, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_v3a_blendpd),
+    VE(3, 1, 0x02, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_v3a_blendps),          // VPBLENDD: dwords
+    VE(3, 1, 0x42, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_v3a_mpsadbw),
+    VE(3, 1, 0x40, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_xf_dpps),
+    VE(3, 1, 0x41, -1, VXK_L3, VEX_L128, 0, gadget_vex_xf_dppd),
+    VE(3, 1, 0x08, -1, VXK_L2, VEX_LBOTH, 0, gadget_vex_xf_roundps),
+    VE(3, 1, 0x09, -1, VXK_L2, VEX_LBOTH, 0, gadget_vex_xf_roundpd),
+    VE(3, 1, 0x0a, -1, VXK_SCAL, VEX_LBOTH, 4, gadget_vex_xf_roundss),
+    VE(3, 1, 0x0b, -1, VXK_SCAL, VEX_LBOTH, 8, gadget_vex_xf_roundsd),
+    // the lane-local conversions, reciprocals, dups
+    VE(1, 0, 0x5b, -1, VXK_L2, VEX_LBOTH, 0, gadget_vex_xf_cvtdq2ps),
+    VE(1, 1, 0x5b, -1, VXK_L2, VEX_LBOTH, 0, gadget_vex_xf_cvtps2dq),
+    VE(1, 2, 0x5b, -1, VXK_L2, VEX_LBOTH, 0, gadget_vex_xf_cvttps2dq),
+    VE(1, 0, 0x52, -1, VXK_L2, VEX_LBOTH, 0, gadget_vex_xf_rsqrtps),
+    VE(1, 2, 0x52, -1, VXK_SCAL, VEX_LBOTH, 4, gadget_vex_xf_rsqrtss),
+    VE(1, 0, 0x53, -1, VXK_L2, VEX_LBOTH, 0, gadget_vex_xf_rcpps),
+    VE(1, 2, 0x53, -1, VXK_SCAL, VEX_LBOTH, 4, gadget_vex_xf_rcpss),
+    VE(1, 2, 0x12, -1, VXK_L2, VEX_LBOTH, 0, gadget_vex_xf_movsldup),
+    VE(1, 2, 0x16, -1, VXK_L2, VEX_LBOTH, 0, gadget_vex_xf_movshdup),
+    VE(1, 3, 0x12, -1, VXK_L2, VEX_LBOTH, 8, gadget_vex_xf_movddup),           // VEX.128 reads an m64
+    // data movement: {map, pp, op, group, kind, lmask, sbytes, gadget, aux, ihs, wreq, align, gadget2}
+    VE(1, 0, 0x10, -1, VXK_LOAD, VEX_LBOTH, 0, gadget_vex_mv_all),                // VMOVUPS
+    VE(1, 1, 0x10, -1, VXK_LOAD, VEX_LBOTH, 0, gadget_vex_mv_all),                // VMOVUPD
+    {1, 2, 0x10, -1, VXK_MOVS, VEX_LBOTH, 4, gadget_vex_mv_all, 0, 0, 0, 0, gadget_vex_mv_ss},  // VMOVSS
+    {1, 3, 0x10, -1, VXK_MOVS, VEX_LBOTH, 8, gadget_vex_mv_all, 0, 0, 0, 0, gadget_vex_mv_sd},  // VMOVSD
+    VE(1, 0, 0x11, -1, VXK_STORE, VEX_LBOTH, 0, gadget_vex_mv_all),
+    VE(1, 1, 0x11, -1, VXK_STORE, VEX_LBOTH, 0, gadget_vex_mv_all),
+    {1, 2, 0x11, -1, VXK_MOVSST, VEX_LBOTH, 4, NULL, 0, 0, 0, 0, gadget_vex_mv_ss},
+    {1, 3, 0x11, -1, VXK_MOVSST, VEX_LBOTH, 8, NULL, 0, 0, 0, 0, gadget_vex_mv_sd},
+    {1, 0, 0x28, -1, VXK_LOAD, VEX_LBOTH, 0, gadget_vex_mv_all, 0, 0, 0, 1, NULL},   // VMOVAPS
+    {1, 1, 0x28, -1, VXK_LOAD, VEX_LBOTH, 0, gadget_vex_mv_all, 0, 0, 0, 1, NULL},   // VMOVAPD
+    {1, 0, 0x29, -1, VXK_STORE, VEX_LBOTH, 0, gadget_vex_mv_all, 0, 0, 0, 1, NULL},
+    {1, 1, 0x29, -1, VXK_STORE, VEX_LBOTH, 0, gadget_vex_mv_all, 0, 0, 0, 1, NULL},
+    {1, 1, 0x6f, -1, VXK_LOAD, VEX_LBOTH, 0, gadget_vex_mv_all, 0, 0, 0, 1, NULL},   // VMOVDQA
+    VE(1, 2, 0x6f, -1, VXK_LOAD, VEX_LBOTH, 0, gadget_vex_mv_all),                // VMOVDQU
+    {1, 1, 0x7f, -1, VXK_STORE, VEX_LBOTH, 0, gadget_vex_mv_all, 0, 0, 0, 1, NULL},
+    VE(1, 2, 0x7f, -1, VXK_STORE, VEX_LBOTH, 0, gadget_vex_mv_all),
+    {1, 3, 0xf0, -1, VXK_LOAD, VEX_LBOTH, 0, gadget_vex_mv_all, 1, 0, 0, 0, NULL},             // VLDDQU (aux 1: memory only)
+    {2, 1, 0x2a, -1, VXK_LOAD, VEX_LBOTH, 0, gadget_vex_mv_all, 1, 0, 0, 1, NULL},   // VMOVNTDQA
+    {1, 0, 0x2b, -1, VXK_STORE, VEX_LBOTH, 0, NULL, 0, 0, 0, 1, NULL},                // VMOVNTPS
+    {1, 1, 0x2b, -1, VXK_STORE, VEX_LBOTH, 0, NULL, 0, 0, 0, 1, NULL},                // VMOVNTPD
+    {1, 1, 0xe7, -1, VXK_STORE, VEX_LBOTH, 0, NULL, 0, 0, 0, 1, NULL},                // VMOVNTDQ
+    {1, 0, 0x12, -1, VXK_LOHI, VEX_L128, 0, gadget_vex_mv_sd, 0, 0, 0, 0, gadget_vex_mv_hl},  // VMOVLPS / VMOVHLPS
+    VE(1, 1, 0x12, -1, VXK_LOHI, VEX_L128, 0, gadget_vex_mv_sd),                // VMOVLPD
+    {1, 0, 0x16, -1, VXK_LOHI, VEX_L128, 0, gadget_vex_mv_lh, 0, 0, 0, 0, gadget_vex_mv_lh},  // VMOVHPS / VMOVLHPS
+    VE(1, 1, 0x16, -1, VXK_LOHI, VEX_L128, 0, gadget_vex_mv_lh),                // VMOVHPD
+    {1, 0, 0x13, -1, VXK_STQ, VEX_L128, 0, NULL, 0, 0, 0, 0, NULL},
+    {1, 1, 0x13, -1, VXK_STQ, VEX_L128, 0, NULL, 0, 0, 0, 0, NULL},
+    {1, 0, 0x17, -1, VXK_STQ, VEX_L128, 0, NULL, 8, 0, 0, 0, NULL},
+    {1, 1, 0x17, -1, VXK_STQ, VEX_L128, 0, NULL, 8, 0, 0, 0, NULL},
+    VE(1, 1, 0x6e, -1, VXK_GPRIN, VEX_L128, 0, gadget_vex_mv_all),                // VMOVD/VMOVQ xmm, r/m
+    VE(1, 1, 0x7e, -1, VXK_GPROUT, VEX_L128, 0, NULL),                            // VMOVD/VMOVQ r/m, xmm
+    VE(1, 2, 0x7e, -1, VXK_LOAD, VEX_L128, 8, gadget_vex_mv_q),                   // VMOVQ xmm, xmm/m64
+    VE(1, 1, 0xd6, -1, VXK_STORE, VEX_L128, 8, gadget_vex_mv_q),                  // VMOVQ xmm/m64, xmm
+    {1, 0, 0x77, -1, VXK_ZERO, VEX_LBOTH, 0, gadget_vex_zeroupper, 0, 0, 0, 0, gadget_vex_zeroall},
+    // broadcasts (aux 1: memory only)
+    {2, 1, 0x18, -1, VXK_BCAST, VEX_LBOTH, 4, gadget_vex_bc_d, 0, 0, 1, 0, NULL},        // VBROADCASTSS
+    {2, 1, 0x19, -1, VXK_BCAST, VEX_L256, 8, gadget_vex_bc_q, 0, 0, 1, 0, NULL},         // VBROADCASTSD
+    {2, 1, 0x1a, -1, VXK_BCAST, VEX_L256, 16, gadget_vex_bc_x, 1, 0, 1, 0, NULL},        // VBROADCASTF128
+    {2, 1, 0x5a, -1, VXK_BCAST, VEX_L256, 16, gadget_vex_bc_x, 1, 0, 1, 0, NULL},        // VBROADCASTI128
+    {2, 1, 0x78, -1, VXK_BCAST, VEX_LBOTH, 1, gadget_vex_bc_b, 0, 0, 1, 0, NULL},        // VPBROADCASTB
+    {2, 1, 0x79, -1, VXK_BCAST, VEX_LBOTH, 2, gadget_vex_bc_w, 0, 0, 1, 0, NULL},        // VPBROADCASTW
+    {2, 1, 0x58, -1, VXK_BCAST, VEX_LBOTH, 4, gadget_vex_bc_d, 0, 0, 1, 0, NULL},        // VPBROADCASTD
+    {2, 1, 0x59, -1, VXK_BCAST, VEX_LBOTH, 8, gadget_vex_bc_q, 0, 0, 1, 0, NULL},        // VPBROADCASTQ
+    // 128-bit lanes, permutes, variable shifts
+    {3, 1, 0x18, -1, VXK_INS128, VEX_L256, 0, gadget_vex_ins128, 0, 0, 1, 0, NULL},      // VINSERTF128
+    {3, 1, 0x38, -1, VXK_INS128, VEX_L256, 0, gadget_vex_ins128, 0, 0, 1, 0, NULL},      // VINSERTI128
+    {3, 1, 0x19, -1, VXK_EXT128, VEX_L256, 0, gadget_vex_ext128, 0, 0, 1, 0, NULL},      // VEXTRACTF128
+    {3, 1, 0x39, -1, VXK_EXT128, VEX_L256, 0, gadget_vex_ext128, 0, 0, 1, 0, NULL},      // VEXTRACTI128
+    {3, 1, 0x06, -1, VXK_L3, VEX_L256, 0, gadget_vex_perm2x128, 0, 0, 1, 0, NULL},       // VPERM2F128
+    {3, 1, 0x46, -1, VXK_L3, VEX_L256, 0, gadget_vex_perm2x128, 0, 0, 1, 0, NULL},       // VPERM2I128
+    {3, 1, 0x00, -1, VXK_PERMQ, VEX_L256, 0, gadget_vex_permq, 0, 0, 2, 0, NULL},        // VPERMQ
+    {3, 1, 0x01, -1, VXK_PERMQ, VEX_L256, 0, gadget_vex_permq, 0, 0, 2, 0, NULL},        // VPERMPD
+    {2, 1, 0x36, -1, VXK_L3, VEX_L256, 0, gadget_vex_permd, 0, 0, 1, 0, NULL},           // VPERMD
+    {2, 1, 0x16, -1, VXK_L3, VEX_L256, 0, gadget_vex_permd, 0, 0, 1, 0, NULL},           // VPERMPS
+    {2, 1, 0x0c, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_permilps_v, 0, 0, 1, 0, NULL},     // VPERMILPS
+    {2, 1, 0x0d, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_permilpd_v, 0, 0, 1, 0, NULL},     // VPERMILPD
+    {2, 1, 0x45, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_shv_srld, 0, 0, 1, 0, NULL},       // VPSRLVD
+    {2, 1, 0x45, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_shv_srlq, 0, 0, 2, 0, NULL},       // VPSRLVQ
+    {2, 1, 0x46, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_shv_srad, 0, 0, 1, 0, NULL},       // VPSRAVD
+    {2, 1, 0x47, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_shv_slld, 0, 0, 1, 0, NULL},       // VPSLLVD
+    {2, 1, 0x47, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_shv_sllq, 0, 0, 2, 0, NULL},       // VPSLLVQ
+    // the width-changing conversions and VPMOVSX/ZX
+    VE(1, 0, 0x5a, -1, VXK_WIDEN, VEX_LBOTH, 8, gadget_vex_xf_cvtps2pd),
+    VE(1, 1, 0x5a, -1, VXK_NARROW, VEX_LBOTH, 0, gadget_vex_xf_cvtpd2ps),
+    {2, 1, 0x13, -1, VXK_WIDEN, VEX_LBOTH, 8, gadget_vex_xf_cvtph2ps, 0, 0, 1, 0, NULL},  // VCVTPH2PS
+    {3, 1, 0x1d, -1, VXK_PS2PH, VEX_LBOTH, 0, gadget_vex_cvtps2ph, 0, 0, 1, 0, NULL},    // VCVTPS2PH
+    VE(1, 2, 0x5a, -1, VXK_SCAL, VEX_LBOTH, 4, gadget_vex_xf_cvtss2sd),
+    VE(1, 3, 0x5a, -1, VXK_SCAL, VEX_LBOTH, 8, gadget_vex_xf_cvtsd2ss),
+    VE(1, 2, 0xe6, -1, VXK_WIDEN, VEX_LBOTH, 8, gadget_vex_xf_cvtdq2pd),
+    VE(1, 1, 0xe6, -1, VXK_NARROW, VEX_LBOTH, 0, gadget_vex_xf_cvttpd2dq),
+    VE(1, 3, 0xe6, -1, VXK_NARROW, VEX_LBOTH, 0, gadget_vex_xf_cvtpd2dq),
+    VEX_MOVX(VEX_ROW_MOVX)
+    // to and from general registers, and the flags
+    {1, 2, 0x2c, -1, VXK_G2R, VEX_LBOTH, 4, gadget_vex_xf_cvttss2si32, 0, 0, 1, 0, NULL},
+    {1, 2, 0x2c, -1, VXK_G2R, VEX_LBOTH, 4, gadget_vex_xf_cvttss2si64, 0, 0, 2, 0, NULL},
+    {1, 3, 0x2c, -1, VXK_G2R, VEX_LBOTH, 8, gadget_vex_xf_cvttsd2si32, 0, 0, 1, 0, NULL},
+    {1, 3, 0x2c, -1, VXK_G2R, VEX_LBOTH, 8, gadget_vex_xf_cvttsd2si64, 0, 0, 2, 0, NULL},
+    {1, 2, 0x2d, -1, VXK_G2R, VEX_LBOTH, 4, gadget_vex_xf_cvtss2si32, 0, 0, 1, 0, NULL},
+    {1, 2, 0x2d, -1, VXK_G2R, VEX_LBOTH, 4, gadget_vex_xf_cvtss2si64, 0, 0, 2, 0, NULL},
+    {1, 3, 0x2d, -1, VXK_G2R, VEX_LBOTH, 8, gadget_vex_xf_cvtsd2si32, 0, 0, 1, 0, NULL},
+    {1, 3, 0x2d, -1, VXK_G2R, VEX_LBOTH, 8, gadget_vex_xf_cvtsd2si64, 0, 0, 2, 0, NULL},
+    VE(1, 0, 0x50, -1, VXK_G2R, VEX_LBOTH, 0, gadget_vex_movmskps),
+    VE(1, 1, 0x50, -1, VXK_G2R, VEX_LBOTH, 0, gadget_vex_movmskpd),
+    VE(1, 1, 0xd7, -1, VXK_G2R, VEX_LBOTH, 0, gadget_vex_pmovmskb),
+    VE(1, 0, 0x2e, -1, VXK_FLAGS, VEX_LBOTH, 4, gadget_vex_xf_ucomiss),
+    VE(1, 1, 0x2e, -1, VXK_FLAGS, VEX_LBOTH, 8, gadget_vex_xf_ucomisd),
+    VE(1, 0, 0x2f, -1, VXK_FLAGS, VEX_LBOTH, 4, gadget_vex_xf_comiss),
+    VE(1, 1, 0x2f, -1, VXK_FLAGS, VEX_LBOTH, 8, gadget_vex_xf_comisd),
+    VE(2, 1, 0x17, -1, VXK_TEST, VEX_LBOTH, 0, gadget_vex_ptest),
+    {2, 1, 0x0e, -1, VXK_TEST, VEX_LBOTH, 0, gadget_vex_testps, 0, 0, 1, 0, NULL},
+    {2, 1, 0x0f, -1, VXK_TEST, VEX_LBOTH, 0, gadget_vex_testpd, 0, 0, 1, 0, NULL},
+    {1, 2, 0x2a, -1, VXK_INTIN, VEX_LBOTH, 4, gadget_vex_xf_cvtsi2ss32, 0, 0, 1, 0, NULL},
+    {1, 2, 0x2a, -1, VXK_INTIN, VEX_LBOTH, 8, gadget_vex_xf_cvtsi2ss64, 0, 0, 2, 0, NULL},
+    {1, 3, 0x2a, -1, VXK_INTIN, VEX_LBOTH, 4, gadget_vex_xf_cvtsi2sd32, 0, 0, 1, 0, NULL},
+    {1, 3, 0x2a, -1, VXK_INTIN, VEX_LBOTH, 8, gadget_vex_xf_cvtsi2sd64, 0, 0, 2, 0, NULL},
+    VE(3, 1, 0x20, -1, VXK_INTIN, VEX_L128, 1, gadget_vex_pinsrb),
+    VE(1, 1, 0xc4, -1, VXK_INTIN, VEX_L128, 2, gadget_vex_pinsrw),
+    {3, 1, 0x22, -1, VXK_INTIN, VEX_L128, 4, gadget_vex_pinsrd, 0, 0, 1, 0, NULL},
+    {3, 1, 0x22, -1, VXK_INTIN, VEX_L128, 8, gadget_vex_pinsrq, 0, 0, 2, 0, NULL},
+    VE(3, 1, 0x21, -1, VXK_INSPS, VEX_L128, 0, gadget_vex_insertps),
+    VE(3, 1, 0x14, -1, VXK_PEXTR, VEX_L128, 1, gadget_amd64_s4_pextrb_r),
+    VE(3, 1, 0x15, -1, VXK_PEXTR, VEX_L128, 2, gadget_amd64_s4_pextrw_r),
+    {3, 1, 0x16, -1, VXK_PEXTR, VEX_L128, 4, gadget_amd64_s4_pextrd_r, 0, 0, 1, 0, NULL},
+    {3, 1, 0x16, -1, VXK_PEXTR, VEX_L128, 8, gadget_amd64_s4_pextrq_r, 0, 0, 2, 0, NULL},
+    VE(3, 1, 0x17, -1, VXK_PEXTR, VEX_L128, 4, gadget_amd64_s4_pextrd_r),         // VEXTRACTPS
+    VE(1, 1, 0xc5, -1, VXK_PEXTR, VEX_L128, 2, gadget_amd64_s4_pextrw_r),
+    {3, 1, 0x4a, -1, VXK_BLENDV, VEX_LBOTH, 0, gadget_vex_blendvps, 0, 0, 1, 0, NULL},
+    {3, 1, 0x4b, -1, VXK_BLENDV, VEX_LBOTH, 0, gadget_vex_blendvpd, 0, 0, 1, 0, NULL},
+    {3, 1, 0x4c, -1, VXK_BLENDV, VEX_LBOTH, 0, gadget_vex_pblendvb, 0, 0, 1, 0, NULL},
+    {1, 0, 0xae, 2, VXK_SPECIAL, VEX_L128, 0, NULL, VEX_SP_LDMXCSR, 0, 0, 0, NULL},
+    {1, 0, 0xae, 3, VXK_SPECIAL, VEX_L128, 0, NULL, VEX_SP_STMXCSR, 0, 0, 0, NULL},
+    {3, 1, 0x60, -1, VXK_SPECIAL, VEX_L128, 0, gadget_amd64_pcmpestrm_r, VEX_SP_PCMPSTR, 0, 0, 0, NULL},
+    {3, 1, 0x61, -1, VXK_SPECIAL, VEX_L128, 0, gadget_amd64_pcmpestri_r, VEX_SP_PCMPSTR, 0, 0, 0, NULL},
+    {3, 1, 0x62, -1, VXK_SPECIAL, VEX_L128, 0, gadget_amd64_pcmpistrm_r, VEX_SP_PCMPSTR, 0, 0, 0, NULL},
+    {3, 1, 0x63, -1, VXK_SPECIAL, VEX_L128, 0, gadget_amd64_pcmpistri_r, VEX_SP_PCMPSTR, 0, 0, 0, NULL},
+    {1, 1, 0xf7, -1, VXK_SPECIAL, VEX_L128, 0, NULL, VEX_SP_MASKMOVDQU, 0, 0, 0, NULL},
+    {2, 1, 0x2c, -1, VXK_MASKMOV, VEX_LBOTH, 4, NULL, 0, 0, 1, 0, NULL},              // VMASKMOVPS load
+    {2, 1, 0x2d, -1, VXK_MASKMOV, VEX_LBOTH, 8, NULL, 0, 0, 1, 0, NULL},              // VMASKMOVPD load
+    {2, 1, 0x2e, -1, VXK_MASKMOV, VEX_LBOTH, 4, NULL, 1, 0, 1, 0, NULL},              // VMASKMOVPS store
+    {2, 1, 0x2f, -1, VXK_MASKMOV, VEX_LBOTH, 8, NULL, 1, 0, 1, 0, NULL},              // VMASKMOVPD store
+    {2, 1, 0x8c, -1, VXK_MASKMOV, VEX_LBOTH, 4, NULL, 0, 0, 1, 0, NULL},              // VPMASKMOVD load
+    {2, 1, 0x8c, -1, VXK_MASKMOV, VEX_LBOTH, 8, NULL, 0, 0, 2, 0, NULL},              // VPMASKMOVQ load
+    {2, 1, 0x8e, -1, VXK_MASKMOV, VEX_LBOTH, 4, NULL, 1, 0, 1, 0, NULL},              // VPMASKMOVD store
+    {2, 1, 0x8e, -1, VXK_MASKMOV, VEX_LBOTH, 8, NULL, 1, 0, 2, 0, NULL},              // VPMASKMOVQ store
+    // BMI1/BMI2
+    {2, 0, 0xf2, -1, VXK_BMI, VEX_L128, 0, NULL, 0, 0, 0, 0, NULL},                         // ANDN
+    {2, 0, 0xf3, 1, VXK_BMI, VEX_L128, 0, NULL, 1, 0, 0, 0, NULL},                          // BLSR
+    {2, 0, 0xf3, 2, VXK_BMI, VEX_L128, 0, NULL, 2, 0, 0, 0, NULL},                          // BLSMSK
+    {2, 0, 0xf3, 3, VXK_BMI, VEX_L128, 0, NULL, 3, 0, 0, 0, NULL},                          // BLSI
+    {2, 0, 0xf5, -1, VXK_BMI, VEX_L128, 0, NULL, 4, 0, 0, 0, NULL},                         // BZHI
+    {2, 2, 0xf5, -1, VXK_BMI, VEX_L128, 0, NULL, 5, 0, 0, 0, NULL},                         // PEXT
+    {2, 3, 0xf5, -1, VXK_BMI, VEX_L128, 0, NULL, 6, 0, 0, 0, NULL},                         // PDEP
+    {2, 3, 0xf6, -1, VXK_BMI, VEX_L128, 0, NULL, 7, 0, 0, 0, NULL},                         // MULX
+    {2, 0, 0xf7, -1, VXK_BMI, VEX_L128, 0, NULL, 8, 0, 0, 0, NULL},                         // BEXTR
+    {2, 1, 0xf7, -1, VXK_BMI, VEX_L128, 0, NULL, 9, 0, 0, 0, NULL},                         // SHLX
+    {2, 2, 0xf7, -1, VXK_BMI, VEX_L128, 0, NULL, 10, 0, 0, 0, NULL},                        // SARX
+    {2, 3, 0xf7, -1, VXK_BMI, VEX_L128, 0, NULL, 11, 0, 0, 0, NULL},                        // SHRX
+    {3, 3, 0xf0, -1, VXK_BMI, VEX_L128, 0, NULL, 12, 0, 0, 0, NULL},                        // RORX
+    // FMA3
+    {2, 1, 0x96, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_fma_maddsub132ps, 0, 0, 1, 0, NULL},
+    {2, 1, 0x96, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_fma_maddsub132pd, 0, 0, 2, 0, NULL},
+    {2, 1, 0x97, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_fma_msubadd132ps, 0, 0, 1, 0, NULL},
+    {2, 1, 0x97, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_fma_msubadd132pd, 0, 0, 2, 0, NULL},
+    {2, 1, 0x98, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_fma_madd132ps, 0, 0, 1, 0, NULL},
+    {2, 1, 0x98, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_fma_madd132pd, 0, 0, 2, 0, NULL},
+    {2, 1, 0x99, -1, VXK_SCAL, VEX_LBOTH, 4, gadget_vex_fma_madd132ss, 0, 0, 1, 0, NULL},
+    {2, 1, 0x99, -1, VXK_SCAL, VEX_LBOTH, 8, gadget_vex_fma_madd132sd, 0, 0, 2, 0, NULL},
+    {2, 1, 0x9a, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_fma_msub132ps, 0, 0, 1, 0, NULL},
+    {2, 1, 0x9a, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_fma_msub132pd, 0, 0, 2, 0, NULL},
+    {2, 1, 0x9b, -1, VXK_SCAL, VEX_LBOTH, 4, gadget_vex_fma_msub132ss, 0, 0, 1, 0, NULL},
+    {2, 1, 0x9b, -1, VXK_SCAL, VEX_LBOTH, 8, gadget_vex_fma_msub132sd, 0, 0, 2, 0, NULL},
+    {2, 1, 0x9c, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_fma_nmadd132ps, 0, 0, 1, 0, NULL},
+    {2, 1, 0x9c, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_fma_nmadd132pd, 0, 0, 2, 0, NULL},
+    {2, 1, 0x9d, -1, VXK_SCAL, VEX_LBOTH, 4, gadget_vex_fma_nmadd132ss, 0, 0, 1, 0, NULL},
+    {2, 1, 0x9d, -1, VXK_SCAL, VEX_LBOTH, 8, gadget_vex_fma_nmadd132sd, 0, 0, 2, 0, NULL},
+    {2, 1, 0x9e, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_fma_nmsub132ps, 0, 0, 1, 0, NULL},
+    {2, 1, 0x9e, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_fma_nmsub132pd, 0, 0, 2, 0, NULL},
+    {2, 1, 0x9f, -1, VXK_SCAL, VEX_LBOTH, 4, gadget_vex_fma_nmsub132ss, 0, 0, 1, 0, NULL},
+    {2, 1, 0x9f, -1, VXK_SCAL, VEX_LBOTH, 8, gadget_vex_fma_nmsub132sd, 0, 0, 2, 0, NULL},
+    {2, 1, 0xa6, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_fma_maddsub213ps, 0, 0, 1, 0, NULL},
+    {2, 1, 0xa6, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_fma_maddsub213pd, 0, 0, 2, 0, NULL},
+    {2, 1, 0xa7, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_fma_msubadd213ps, 0, 0, 1, 0, NULL},
+    {2, 1, 0xa7, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_fma_msubadd213pd, 0, 0, 2, 0, NULL},
+    {2, 1, 0xa8, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_fma_madd213ps, 0, 0, 1, 0, NULL},
+    {2, 1, 0xa8, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_fma_madd213pd, 0, 0, 2, 0, NULL},
+    {2, 1, 0xa9, -1, VXK_SCAL, VEX_LBOTH, 4, gadget_vex_fma_madd213ss, 0, 0, 1, 0, NULL},
+    {2, 1, 0xa9, -1, VXK_SCAL, VEX_LBOTH, 8, gadget_vex_fma_madd213sd, 0, 0, 2, 0, NULL},
+    {2, 1, 0xaa, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_fma_msub213ps, 0, 0, 1, 0, NULL},
+    {2, 1, 0xaa, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_fma_msub213pd, 0, 0, 2, 0, NULL},
+    {2, 1, 0xab, -1, VXK_SCAL, VEX_LBOTH, 4, gadget_vex_fma_msub213ss, 0, 0, 1, 0, NULL},
+    {2, 1, 0xab, -1, VXK_SCAL, VEX_LBOTH, 8, gadget_vex_fma_msub213sd, 0, 0, 2, 0, NULL},
+    {2, 1, 0xac, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_fma_nmadd213ps, 0, 0, 1, 0, NULL},
+    {2, 1, 0xac, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_fma_nmadd213pd, 0, 0, 2, 0, NULL},
+    {2, 1, 0xad, -1, VXK_SCAL, VEX_LBOTH, 4, gadget_vex_fma_nmadd213ss, 0, 0, 1, 0, NULL},
+    {2, 1, 0xad, -1, VXK_SCAL, VEX_LBOTH, 8, gadget_vex_fma_nmadd213sd, 0, 0, 2, 0, NULL},
+    {2, 1, 0xae, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_fma_nmsub213ps, 0, 0, 1, 0, NULL},
+    {2, 1, 0xae, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_fma_nmsub213pd, 0, 0, 2, 0, NULL},
+    {2, 1, 0xaf, -1, VXK_SCAL, VEX_LBOTH, 4, gadget_vex_fma_nmsub213ss, 0, 0, 1, 0, NULL},
+    {2, 1, 0xaf, -1, VXK_SCAL, VEX_LBOTH, 8, gadget_vex_fma_nmsub213sd, 0, 0, 2, 0, NULL},
+    {2, 1, 0xb6, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_fma_maddsub231ps, 0, 0, 1, 0, NULL},
+    {2, 1, 0xb6, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_fma_maddsub231pd, 0, 0, 2, 0, NULL},
+    {2, 1, 0xb7, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_fma_msubadd231ps, 0, 0, 1, 0, NULL},
+    {2, 1, 0xb7, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_fma_msubadd231pd, 0, 0, 2, 0, NULL},
+    {2, 1, 0xb8, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_fma_madd231ps, 0, 0, 1, 0, NULL},
+    {2, 1, 0xb8, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_fma_madd231pd, 0, 0, 2, 0, NULL},
+    {2, 1, 0xb9, -1, VXK_SCAL, VEX_LBOTH, 4, gadget_vex_fma_madd231ss, 0, 0, 1, 0, NULL},
+    {2, 1, 0xb9, -1, VXK_SCAL, VEX_LBOTH, 8, gadget_vex_fma_madd231sd, 0, 0, 2, 0, NULL},
+    {2, 1, 0xba, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_fma_msub231ps, 0, 0, 1, 0, NULL},
+    {2, 1, 0xba, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_fma_msub231pd, 0, 0, 2, 0, NULL},
+    {2, 1, 0xbb, -1, VXK_SCAL, VEX_LBOTH, 4, gadget_vex_fma_msub231ss, 0, 0, 1, 0, NULL},
+    {2, 1, 0xbb, -1, VXK_SCAL, VEX_LBOTH, 8, gadget_vex_fma_msub231sd, 0, 0, 2, 0, NULL},
+    {2, 1, 0xbc, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_fma_nmadd231ps, 0, 0, 1, 0, NULL},
+    {2, 1, 0xbc, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_fma_nmadd231pd, 0, 0, 2, 0, NULL},
+    {2, 1, 0xbd, -1, VXK_SCAL, VEX_LBOTH, 4, gadget_vex_fma_nmadd231ss, 0, 0, 1, 0, NULL},
+    {2, 1, 0xbd, -1, VXK_SCAL, VEX_LBOTH, 8, gadget_vex_fma_nmadd231sd, 0, 0, 2, 0, NULL},
+    {2, 1, 0xbe, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_fma_nmsub231ps, 0, 0, 1, 0, NULL},
+    {2, 1, 0xbe, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_fma_nmsub231pd, 0, 0, 2, 0, NULL},
+    {2, 1, 0xbf, -1, VXK_SCAL, VEX_LBOTH, 4, gadget_vex_fma_nmsub231ss, 0, 0, 1, 0, NULL},
+    {2, 1, 0xbf, -1, VXK_SCAL, VEX_LBOTH, 8, gadget_vex_fma_nmsub231sd, 0, 0, 2, 0, NULL},
+};
+
+static const struct vex_entry *vex_lookup(const struct vex_insn *v) {
+    for (size_t i = 0; i < sizeof(vex_table) / sizeof(vex_table[0]); i++) {
+        const struct vex_entry *e = &vex_table[i];
+        if (e->map == v->map && e->pp == v->pp && e->op == v->op &&
+                (e->group < 0 || (unsigned) e->group == (v->reg & 7)) &&
+                (e->wreq == 0 || e->wreq == 1 + v->w))
+            return e;
+    }
+    return NULL;
+}
+
+// Whether the instruction has an imm8 (read by the decoders before the
+// lookup): the 0F3A map, and the shift groups.
+static bool vex_has_imm8(unsigned map, unsigned op) {
+    return map == 3 || (map == 1 && ((op >= 0x70 && op <= 0x73) || op == 0xc2 || (op >= 0xc4 && op <= 0xc6)));
+}
+
+// What to emit for v. VP_FRAME: a vex.inc frame gadget and its word (and
+// extra words), after staging its memory operand (stage_bytes) or a general
+// register (gpr_stage); VP_STORE: st_bytes from cpu_state offsets st_src to
+// the memory operand; VP_GPROUT: the low 4/8 bytes at gpr_src to GPR
+// gpr_dst; VP_UD: #UD. False: v is not in the table (the caller's old path).
+enum vex_plan_type { VP_FRAME, VP_STORE, VP_GPROUT, VP_SPECIAL, VP_MASKED, VP_BMI, VP_UD };
+struct vex_plan {
+    enum vex_plan_type type;
+    void (*gadget)(void);
+    unsigned long word;
+    unsigned nextra;
+    unsigned long extra[4];     // code-stream words after the word (the tbl indices)
+    unsigned stage_bytes, align;
+    int gpr_stage;              // a general register to stage, or -1
+    bool gpr_w;                 // amd64: 64 bits of it
+    unsigned st_bytes;
+    unsigned long st_src;       // lo offset | hi offset << 16
+    unsigned gpr_dst;
+    unsigned long gpr_src;
+    bool writes_gpr;            // a VP_FRAME gadget writes amd64_regs (amd64: flush the cache)
+    uint8_t word_imm_mask;      // nonzero: the imm8 the word carries is masked with it
+    unsigned special;           // VP_SPECIAL: VEX_SP_*
+    unsigned masked_store, masked_esz;  // VP_MASKED
+    unsigned bmi_op, bmi_dst, bmi_a, bmi_b, bmi_dst2;  // VP_BMI: registers (amd64 numbering)
+    int gpr_out;                // i386: copy amd64_regs[0] to this register after, or -1
+    unsigned st_after;          // a VP_FRAME into VEX_STAGE, stored to memory (these bytes) after a write probe
+};
+#define VEX_XMM_OFF(i) ((unsigned long) CPU_OFFSET(xmm[(i) & 15]))
+#define VEX_YHI_OFF(i) ((unsigned long) CPU_OFFSET(ymm_hi[(i) & 15]))
+static bool vex_plan(const struct vex_insn *v, struct vex_plan *p, bool i386) {
+    const struct vex_entry *e = vex_lookup(v);
+    if (e == NULL)
+        return false;
+    memset(p, 0, sizeof(*p));
+    p->gpr_stage = -1;
+    p->gpr_out = -1;
+    p->type = VP_UD;
+    if (!(e->lmask & (v->l ? VEX_L256 : VEX_L128)))
+        return true;
+    unsigned width = v->l ? 32 : 16;
+    unsigned s1 = v->vvvv, s2 = v->rm, d = v->reg, bytes = width;
+    bool lbit = v->l, stage = v->mem;
+    void (*g)(void) = e->gadget;
+#define NEED_VVVV0 do { if (v->vvvv != 0) return true; } while (0)
+#define STORE(n, lo, hi) do { p->type = VP_STORE; p->st_bytes = (n); p->st_src = (lo) | (hi) << 16; \
+        p->align = e->align ? (n) : 0; return true; } while (0)
+    switch (e->kind) {
+    case VXK_L3:
+        break;
+    case VXK_L2:
+        NEED_VVVV0;
+        s1 = v->rm;
+        if (!v->l && e->sbytes != 0)
+            bytes = e->sbytes;
+        break;
+    case VXK_SHX:
+        bytes = 16;
+        break;
+    case VXK_SHI:
+        if (v->mem)
+            return true;
+        d = v->vvvv;
+        s1 = 0;
+        break;
+    case VXK_SCAL:
+        bytes = e->sbytes;
+        lbit = false;
+        break;
+    case VXK_TBL1:
+    case VXK_TBL2U:
+        NEED_VVVV0;
+        s1 = v->rm;
+        break;
+    case VXK_TBL2:
+        break;
+    case VXK_LOAD:
+        NEED_VVVV0;
+        if (!v->mem && e->aux)
+            return true;                        // memory only
+        s1 = v->rm;
+        if (e->sbytes != 0) {
+            bytes = e->sbytes;
+            lbit = false;
+        }
+        p->align = e->align && v->mem ? bytes : 0;
+        break;
+    case VXK_STORE:
+        NEED_VVVV0;
+        if (v->mem) {
+            unsigned n = e->sbytes ? e->sbytes : width;
+            STORE(n, VEX_XMM_OFF(v->reg), VEX_YHI_OFF(v->reg));
+        }
+        if (g == NULL)
+            return true;                        // the non-temporal stores: memory only
+        d = v->rm;
+        s1 = s2 = v->reg;
+        if (e->sbytes != 0)
+            lbit = false;
+        break;
+    case VXK_MOVS:
+        lbit = false;
+        if (v->mem) {
+            NEED_VVVV0;
+            bytes = e->sbytes;
+        } else {
+            g = e->gadget2;
+        }
+        break;
+    case VXK_MOVSST:
+        if (v->mem) {
+            NEED_VVVV0;
+            STORE(e->sbytes, VEX_XMM_OFF(v->reg), 0ul);
+        }
+        g = e->gadget2;
+        d = v->rm;
+        s2 = v->reg;
+        lbit = false;
+        break;
+    case VXK_LOHI:
+        if (v->mem) {
+            bytes = 8;
+        } else {
+            if (e->gadget2 == NULL)
+                return true;
+            g = e->gadget2;
+        }
+        break;
+    case VXK_STQ:
+        if (!v->mem)
+            return true;
+        NEED_VVVV0;
+        STORE(8, VEX_XMM_OFF(v->reg) + e->aux, 0ul);
+    case VXK_GPRIN:
+        NEED_VVVV0;
+        s1 = v->rm;
+        lbit = false;
+        if (v->mem) {
+            bytes = v->w ? 8 : 4;
+        } else {
+            p->gpr_stage = v->rm;
+            p->gpr_w = v->w;
+            stage = true;
+        }
+        break;
+    case VXK_GPROUT:
+        NEED_VVVV0;
+        if (v->mem)
+            STORE(v->w ? 8u : 4u, VEX_XMM_OFF(v->reg), 0ul);
+        p->type = VP_GPROUT;
+        p->gpr_dst = v->rm;
+        p->gpr_src = VEX_XMM_OFF(v->reg);
+        p->gpr_w = v->w;
+        return true;
+    case VXK_BCAST:
+        NEED_VVVV0;
+        if (!v->mem && e->aux)
+            return true;                        // VBROADCASTF128/I128: memory only
+        s1 = v->rm;
+        bytes = e->sbytes;
+        break;
+    case VXK_INS128:
+        bytes = 16;
+        break;
+    case VXK_EXT128:
+        NEED_VVVV0;
+        if (v->mem)
+            STORE(16, (v->imm & 1) ? VEX_YHI_OFF(v->reg) : VEX_XMM_OFF(v->reg), 0ul);
+        d = v->rm;
+        s2 = v->reg;
+        break;
+    case VXK_PERMQ: {
+        NEED_VVVV0;
+        uint8_t idx[32];
+        for (unsigned q = 0; q < 4; q++)
+            for (unsigned j = 0; j < 8; j++)
+                idx[8 * q + j] = 8 * ((v->imm >> (2 * q)) & 3) + j;
+        memcpy(p->extra, idx, 32);
+        p->nextra = 4;
+        break;
+    }
+    case VXK_WIDEN:
+        NEED_VVVV0;
+        s1 = v->rm;
+        bytes = v->l ? 2 * e->sbytes : e->sbytes;
+        break;
+    case VXK_NARROW:
+        NEED_VVVV0;
+        s1 = v->rm;
+        break;
+    case VXK_PS2PH:
+        NEED_VVVV0;
+        s1 = v->reg;
+        s2 = 0;
+        d = v->rm;
+        if (v->mem) {
+            p->st_after = v->l ? 16 : 8;
+            stage = false;
+            d = 0;
+        }
+        break;
+    case VXK_G2R:
+        NEED_VVVV0;
+        if (v->mem && e->sbytes == 0)
+            return true;                        // VMOVMSKPS/PD, VPMOVMSKB: register only
+        bytes = e->sbytes;
+        if (e->sbytes != 0)
+            lbit = false;
+        d = i386 ? 0 : v->reg;
+        p->writes_gpr = true;
+        p->gpr_out = i386 ? (int) v->reg : -1;
+        break;
+    case VXK_FLAGS:
+        NEED_VVVV0;
+        s1 = v->reg;
+        bytes = e->sbytes;
+        lbit = false;
+        break;
+    case VXK_TEST:
+        NEED_VVVV0;
+        s1 = v->reg;
+        break;
+    case VXK_INTIN:
+        lbit = false;
+        if (v->mem) {
+            bytes = e->sbytes;
+        } else {
+            p->gpr_stage = v->rm;
+            p->gpr_w = e->sbytes == 8;
+            stage = true;
+        }
+        break;
+    case VXK_INSPS:
+        if (v->mem) {
+            bytes = 4;
+            p->word_imm_mask = 0x3f;
+        }
+        break;
+    case VXK_PEXTR: {
+        NEED_VVVV0;
+        unsigned n = e->sbytes, lane = v->imm & (16 / n - 1);
+        if (v->op == 0xc5) {                    // VPEXTRW r32, xmm, imm8: the 0F map's, register only
+            if (v->mem)
+                return true;
+            p->type = VP_FRAME;
+            p->gadget = g;
+            p->word = (v->rm & 15) | (unsigned long) (i386 ? 0 : v->reg & 15) << 4 | (unsigned long) lane << 8;
+            p->writes_gpr = true;
+            p->gpr_out = i386 ? (int) v->reg : -1;
+            return true;
+        }
+        if (v->mem)
+            STORE(n, VEX_XMM_OFF(v->reg) + lane * n, 0ul);
+        p->type = VP_FRAME;
+        p->gadget = g;
+        p->word = (v->reg & 15) | (unsigned long) (i386 ? 0 : v->rm & 15) << 4 | (unsigned long) lane << 8;
+        p->writes_gpr = true;
+        p->gpr_out = i386 ? (int) v->rm : -1;
+        return true;
+    }
+    case VXK_BLENDV:
+        if (!i386 || (v->imm >> 4) < 8)
+            break;
+        return true;                            // xmm8-15 do not exist in 32-bit mode
+    case VXK_BMI:
+        p->type = VP_BMI;
+        p->bmi_op = e->aux;
+        p->bmi_dst = v->reg;
+        p->bmi_a = v->vvvv;
+        p->bmi_b = v->rm;
+        p->bmi_dst2 = 0;
+        if (e->aux >= 1 && e->aux <= 3) {       // BLSR BLSMSK BLSI: dst is vvvv
+            p->bmi_dst = v->vvvv;
+        } else if (e->aux == 7) {               // MULX: a is EDX/RDX, low to vvvv
+            p->bmi_a = 2;
+            p->bmi_dst2 = v->vvvv;
+        } else if (e->aux == 12) {              // RORX: no vvvv
+            NEED_VVVV0;
+        }
+        p->word = e->aux | (v->w ? 1ul << 16 : 0) | (v->mem ? 1ul << 17 : 0) | (unsigned long) v->imm << 24;
+        p->stage_bytes = v->mem ? (v->w ? 8 : 4) : 0;
+        return true;
+    case VXK_MASKMOV:
+        if (!v->mem)
+            return true;
+        p->type = VP_MASKED;
+        p->masked_store = e->aux;
+        p->masked_esz = e->sbytes;
+        p->word = (width / e->sbytes) | (unsigned long) (v->reg & 15) << 8 | (unsigned long) (v->vvvv & 15) << 12 |
+                (v->l ? 1ul << 16 : 0);
+        return true;
+    case VXK_SPECIAL:
+        if (e->aux == VEX_SP_MASKMOVDQU) {
+            NEED_VVVV0;
+            if (v->mem)
+                return true;
+            p->type = VP_SPECIAL;
+            p->special = e->aux;
+            return true;
+        }
+        NEED_VVVV0;
+        if ((e->aux == VEX_SP_LDMXCSR || e->aux == VEX_SP_STMXCSR) && !v->mem)
+            return true;
+        p->type = VP_SPECIAL;
+        p->gadget = g;
+        p->special = e->aux;
+        return true;
+    case VXK_ZERO:
+        p->type = VP_FRAME;
+        p->gadget = v->l ? e->gadget2 : g;
+        p->word = v->rm;                        // (the caller puts the register count here)
+        return true;
+    }
+#undef NEED_VVVV0
+#undef STORE
+    if (e->kind == VXK_TBL1 || e->kind == VXK_TBL2 || e->kind == VXK_TBL2U) {
+        x86_shuffle_index(e->aux, v->imm, &p->extra[0], &p->extra[1]);
+        x86_shuffle_index(e->aux, (uint8_t) (v->imm >> e->ihs), &p->extra[2], &p->extra[3]);
+        p->nextra = 4;
+        // VPERMILPD: SHUFPD's index with both sources the one register, so
+        // a one-source tbl of it
+        if (e->kind == VXK_TBL2U)
+            for (unsigned i = 0; i < 4; i++)
+                p->extra[i] &= 0x0f0f0f0f0f0f0f0full;
+    }
+    p->type = VP_FRAME;
+    p->gadget = g;
+    if (v->mem && p->gpr_stage < 0 && p->st_after == 0)
+        p->stage_bytes = bytes;
+    uint8_t imm = p->word_imm_mask ? (uint8_t) (v->imm & p->word_imm_mask) : v->imm;
+    p->word = (s1 & 15) | (unsigned long) (s2 & 15) << 4 | (unsigned long) (d & 15) << 8 |
+            (stage ? 1ul << 12 : 0) | (lbit ? 1ul << 13 : 0) | (p->st_after ? 1ul << 14 : 0) |
+            (unsigned long) imm << 16;
+    return true;
+}
+#define VEX_STAGE_OFF ((unsigned long) offsetof(struct jit_frame, value) + 256)
+
+// amd64: the VEX instruction at state->amd64_ip (just past its C4/C5 lead
+// byte), with insn's legacy prefixes. True when emitted (a gadget or #UD);
+// false with the IP untouched when the table does not have it yet.
+static int gen_amd64_vex(struct gen_state *state, struct tlb *tlb, const struct amd64_jit_insn *insn) {
+    guest_addr_t ip = state->amd64_ip;
+    byte_t b1, b2 = 0, op, modrm = 0;
+    struct vex_insn v = {0};
+    bool r, x, b;
+    if (!tlb_read(tlb, ip, &b1, 1))
+        return -1;
+    ip++;
+    if (insn->opcode == 0xc5) {
+        r = !(b1 & 0x80);
+        x = b = false;
+        v.map = 1;
+        v.vvvv = (~b1 >> 3) & 15;
+        v.l = (b1 >> 2) & 1;
+        v.pp = b1 & 3;
+    } else {
+        if (!tlb_read(tlb, ip, &b2, 1))
+            return -1;
+        ip++;
+        r = !(b1 & 0x80);
+        x = !(b1 & 0x40);
+        b = !(b1 & 0x20);
+        v.map = b1 & 0x1f;
+        v.w = b2 >> 7;
+        v.vvvv = (~b2 >> 3) & 15;
+        v.l = (b2 >> 2) & 1;
+        v.pp = b2 & 3;
+    }
+    if (!tlb_read(tlb, ip, &op, 1))
+        return -1;
+    ip++;
+    v.op = op;
+    if (v.map < 1 || v.map > 3)
+        return -1;
+    if (v.map == 1 && v.op == 0x77) {           // VZEROUPPER / VZEROALL: no ModRM
+        if (insn->operand_size_prefix || insn->rep_mode != amd64_jit_rep_none ||
+                insn->lock_prefix || insn->rex.present)
+            return gen_amd64_ud(state);
+        struct vex_plan p;
+        v.rm = 16;
+        if (!vex_plan(&v, &p, false))
+            return -1;
+        if (p.type == VP_UD)
+            return gen_amd64_ud(state);
+        state->amd64_ip = ip;
+        gen(state, (unsigned long) p.gadget);
+        gen(state, p.word);
+        gen_amd64_defer_rip(state, ip);
+        return 1;
+    }
+    if (!tlb_read(tlb, ip, &modrm, 1))
+        return -1;
+    v.reg = amd64_modrm_reg(modrm) | (r ? 8 : 0);
+    v.rm = amd64_modrm_rm(modrm) | (b ? 8 : 0);
+    v.mem = amd64_modrm_mod(modrm) != 3;
+    if (vex_lookup(&v) == NULL)
+        return -1;
+    // VEX after 66, F2, F3, LOCK or REX is #UD
+    if (insn->operand_size_prefix || insn->rep_mode != amd64_jit_rep_none ||
+            insn->lock_prefix || insn->rex.present)
+        return gen_amd64_ud(state);
+    struct amd64_jit_insn m = *insn;
+    m.modrm = modrm;
+    m.has_modrm = true;
+    m.rex.present = true;
+    m.rex.r = r;
+    m.rex.x = x;
+    m.rex.b = b;
+    m.rex.w = v.w;
+    guest_addr_t saved = state->amd64_ip;
+    state->amd64_ip = ip;                      // the decoders start at the ModRM
+    unsigned long meta = 0, disp = 0;
+    guest_addr_t next_ip;
+    // (meta's size field is 8 bits: 256 would carry into the base register's.
+    // The vex.inc gadgets take their size from the gadget, not meta.)
+    bool ok = v.mem ? gen_amd64_decode_mem_meta(state, tlb, &m, 128, &meta, &disp, &next_ip)
+                    : gen_amd64_decode_rm_extent(state, tlb, &m, &next_ip);
+    if (ok && vex_has_imm8(v.map, v.op)) {
+        ok = tlb_read(tlb, next_ip, &v.imm, 1);
+        next_ip++;
+    }
+    if (!ok) {
+        state->amd64_ip = saved;
+        return -1;
+    }
+    struct vex_plan p;
+    vex_plan(&v, &p, false);
+    if (p.type == VP_UD)
+        return gen_amd64_ud(state);
+    state->amd64_ip = next_ip;
+    if (p.type == VP_FRAME && p.stage_bytes == 0 && p.gpr_stage < 0 && p.st_after == 0 && v.mem)
+        return gen_amd64_ud(state);
+    if (v.mem || p.gpr_stage >= 0 || p.type == VP_GPROUT || p.writes_gpr || p.type == VP_MASKED) {
+        gen_amd64_flush_reg_cache(state);
+        gen_amd64_flush_rip(state);
+    }
+    unsigned long amd64_align = p.align == 32 ? AMD64_JIT_MEM_ALIGN32 : p.align == 16 ? AMD64_JIT_MEM_ALIGN16 : 0;
+    if (p.type == VP_STORE) {
+        extern void gadget_vex_st_amd64_1(void), gadget_vex_st_amd64_2(void), gadget_vex_st_amd64_4(void),
+                gadget_vex_st_amd64_8(void), gadget_vex_st_amd64_16(void), gadget_vex_st_amd64_32(void);
+        void (*st)(void) = p.st_bytes == 32 ? gadget_vex_st_amd64_32 : p.st_bytes == 16 ? gadget_vex_st_amd64_16
+                : p.st_bytes == 8 ? gadget_vex_st_amd64_8 : p.st_bytes == 4 ? gadget_vex_st_amd64_4
+                : p.st_bytes == 2 ? gadget_vex_st_amd64_2 : gadget_vex_st_amd64_1;
+        gen(state, (unsigned long) st);
+        gen(state, meta | amd64_align);
+        gen(state, disp);
+        gen(state, (unsigned long) next_ip);
+        gen(state, p.st_src);
+        gen_amd64_defer_rip(state, next_ip);
+        return 1;
+    }
+    if (p.type == VP_BMI) {
+        extern void gadget_vex_bmi(void), gadget_vex_ld_amd64_4(void), gadget_vex_ld_amd64_8(void);
+        gen_amd64_flush_reg_cache(state);
+        gen_amd64_flush_rip(state);
+        if (v.mem) {
+            gen(state, (unsigned long) (p.stage_bytes == 8 ? gadget_vex_ld_amd64_8 : gadget_vex_ld_amd64_4));
+            gen(state, meta);
+            gen(state, disp);
+            gen(state, (unsigned long) next_ip);
+        }
+        gen(state, (unsigned long) gadget_vex_bmi);
+        gen(state, p.word | (unsigned long) (p.bmi_dst & 15) << 4 | (unsigned long) (p.bmi_a & 15) << 8 |
+                (unsigned long) (p.bmi_b & 15) << 12 | (unsigned long) (p.bmi_dst2 & 15) << 20);
+        gen_amd64_defer_rip(state, next_ip);
+        return 1;
+    }
+    if (p.type == VP_MASKED) {
+        extern void gadget_vex_mskld_amd64_4(void), gadget_vex_mskld_amd64_8(void),
+                gadget_vex_mskst_amd64_4(void), gadget_vex_mskst_amd64_8(void);
+        gen(state, (unsigned long) (p.masked_store ? (p.masked_esz == 8 ? gadget_vex_mskst_amd64_8 : gadget_vex_mskst_amd64_4)
+                                                   : (p.masked_esz == 8 ? gadget_vex_mskld_amd64_8 : gadget_vex_mskld_amd64_4)));
+        gen(state, meta);
+        gen(state, disp);
+        gen(state, (unsigned long) next_ip);
+        gen(state, p.word);
+        gen_amd64_defer_rip(state, next_ip);
+        return 1;
+    }
+    if (p.type == VP_SPECIAL && p.special == VEX_SP_MASKMOVDQU) {
+        extern void gadget_amd64_maskmovdqu(void);
+        gen_amd64_flush_reg_cache(state);
+        gen_amd64_flush_rip(state);
+        gen(state, (unsigned long) gadget_amd64_maskmovdqu);
+        gen(state, (unsigned long) (v.reg & 15) | (unsigned long) (v.rm & 15) << 4);
+        gen_amd64_defer_rip(state, next_ip);
+        return 1;
+    }
+    if (p.type == VP_SPECIAL) {
+        extern void gadget_amd64_ldmxcsr_m(void), gadget_amd64_stmxcsr_m(void), gadget_vex_zero_hi(void),
+                gadget_amd64_pcmpestrm_m(void), gadget_amd64_pcmpestri_m(void),
+                gadget_amd64_pcmpistrm_m(void), gadget_amd64_pcmpistri_m(void);
+        if (p.special == VEX_SP_LDMXCSR || p.special == VEX_SP_STMXCSR) {
+            gen(state, (unsigned long) (p.special == VEX_SP_LDMXCSR ? gadget_amd64_ldmxcsr_m : gadget_amd64_stmxcsr_m));
+            gen(state, meta);
+            gen(state, disp);
+            gen(state, (unsigned long) next_ip);
+        } else {
+            // the SSE gadgets (they read RAX/RDX and write RCX or xmm0)
+            gen_amd64_flush_reg_cache(state);
+            if (v.mem) {
+                void (*mg)(void) = v.op == 0x60 ? gadget_amd64_pcmpestrm_m : v.op == 0x61 ? gadget_amd64_pcmpestri_m
+                        : v.op == 0x62 ? gadget_amd64_pcmpistrm_m : gadget_amd64_pcmpistri_m;
+                gen(state, (unsigned long) mg);
+                gen(state, meta);
+                gen(state, disp);
+                gen(state, (unsigned long) next_ip);
+                gen(state, (unsigned long) v.imm | (v.w ? 1ul << 8 : 0));
+            } else {
+                gen(state, (unsigned long) p.gadget);
+                gen(state, (unsigned long) (v.rm & 15) | (unsigned long) (v.reg & 15) << 4 |
+                        (v.w ? 1ul << 8 : 0) | (unsigned long) v.imm << 16);
+            }
+            if (!(v.op & 1)) {                  // PCMPxSTRM: xmm0 was written, VEX.128
+                gen(state, (unsigned long) gadget_vex_zero_hi);
+                gen(state, 0);
+            }
+        }
+        gen_amd64_defer_rip(state, next_ip);
+        return 1;
+    }
+    if (p.type == VP_GPROUT) {
+        extern void gadget_vex_to_gpr_amd64(void);
+        gen(state, (unsigned long) gadget_vex_to_gpr_amd64);
+        gen(state, p.gpr_src | (unsigned long) (p.gpr_dst & 15) << 16 | (p.gpr_w ? 1ul << 20 : 0));
+        gen_amd64_defer_rip(state, next_ip);
+        return 1;
+    }
+    if (p.gpr_stage >= 0) {
+        extern void gadget_vex_gst_amd64(void);
+        gen(state, (unsigned long) gadget_vex_gst_amd64);
+        gen(state, (unsigned long) (p.gpr_stage & 15) | (p.gpr_w ? 16ul : 0));
+    } else if (p.stage_bytes != 0) {
+        extern void gadget_vex_ld_amd64_1(void), gadget_vex_ld_amd64_2(void), gadget_vex_ld_amd64_4(void),
+                gadget_vex_ld_amd64_8(void), gadget_vex_ld_amd64_16(void), gadget_vex_ld_amd64_32(void);
+        void (*ld)(void) = p.stage_bytes == 32 ? gadget_vex_ld_amd64_32 : p.stage_bytes == 16 ? gadget_vex_ld_amd64_16
+                : p.stage_bytes == 8 ? gadget_vex_ld_amd64_8 : p.stage_bytes == 4 ? gadget_vex_ld_amd64_4
+                : p.stage_bytes == 2 ? gadget_vex_ld_amd64_2 : gadget_vex_ld_amd64_1;
+        gen(state, (unsigned long) ld);
+        gen(state, meta | amd64_align);
+        gen(state, disp);
+        gen(state, (unsigned long) next_ip);
+    }
+    if (p.st_after != 0) {
+        extern void gadget_vex_wprobe_amd64_8(void), gadget_vex_wprobe_amd64_16(void);
+        gen(state, (unsigned long) (p.st_after == 16 ? gadget_vex_wprobe_amd64_16 : gadget_vex_wprobe_amd64_8));
+        gen(state, meta);
+        gen(state, disp);
+        gen(state, (unsigned long) next_ip);
+    }
+    gen(state, (unsigned long) p.gadget);
+    gen(state, p.word);
+    for (unsigned i = 0; i < p.nextra; i++)
+        gen(state, p.extra[i]);
+    if (p.st_after != 0) {
+        extern void gadget_vex_st_amd64_8(void), gadget_vex_st_amd64_16(void);
+        gen(state, (unsigned long) (p.st_after == 16 ? gadget_vex_st_amd64_16 : gadget_vex_st_amd64_8));
+        gen(state, meta);
+        gen(state, disp);
+        gen(state, (unsigned long) next_ip);
+        gen(state, VEX_STAGE_OFF);
+    }
+    gen_amd64_defer_rip(state, next_ip);
+    return 1;
+}
+#endif
+
+#if defined(__aarch64__)
 static int gen_step64(struct gen_state *state, struct tlb *tlb) {
     struct amd64_jit_insn insn;
     int8_t rel8;
@@ -9741,6 +10736,11 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
     // handed that address and advances rip itself, and the block ends. That is
     // sound because cpu->amd64_rip is authoritative for amd64 and jit.c derives
     // eip from it after every block, so the exit gadget's stale eip cannot win.
+    if (!insn.two_byte_opcode && (insn.opcode == 0xc4 || insn.opcode == 0xc5)) {
+        int r = gen_amd64_vex(state, tlb, &insn);
+        if (r >= 0)
+            return r;
+    }
     if (!insn.two_byte_opcode &&
             (insn.opcode == 0xc4 || insn.opcode == 0xc5 || insn.opcode == 0x62)) {
         state->amd64_ip = state->amd64_orig_ip;
@@ -18645,6 +19645,10 @@ static inline uint16_t cpu_reg_offset(enum arg arg, int index) {
 //
 // 32-bit mode makes this simpler than amd64: VEX.R/X/B are ignored, so every
 // operand is xmm0-7, and there is no REX interaction to worry about.
+#if defined(__aarch64__)
+static void gen_i386_gpr_out(struct gen_state *state, unsigned r, unsigned slot);
+static void gen_i386_gpr_in(struct gen_state *state, unsigned r, unsigned slot);
+#endif
 static inline bool gen_vex32(struct gen_state *state, struct tlb *tlb, struct modrm *modrm,
         bool seg_tls, unsigned map, unsigned pp, unsigned op, unsigned l, unsigned w,
         unsigned vvvv, uint8_t imm8) {
@@ -18654,6 +19658,155 @@ static inline bool gen_vex32(struct gen_state *state, struct tlb *tlb, struct mo
     // top bit must be zero once un-inverted.
     if (vvvv > 7)
         UNDEFINED;
+
+#if defined(__aarch64__)
+    // math.S's vex.inc gadgets, where the table has the instruction
+    {
+        struct vex_insn v = {map, pp, op, l, w, vvvv, modrm->opcode & 7, modrm->rm_opcode & 7,
+                             modrm->type != modrm_reg, imm8};
+        struct vex_plan p;
+        if (map == 1 && op == 0x77)
+            v.rm = 8;                           // VZEROUPPER/VZEROALL: the registers
+        if ((map == 1 && pp == 1 && (op == 0x6e || op == 0x7e)) || (map == 1 && (op == 0x2a || op == 0x2c ||
+                op == 0x2d)) || (map == 3 && (op == 0x16 || op == 0x22)))
+            v.w = 0;                            // VMOVD, VCVT*SI*, VPEXTRD, VPINSRD: W is ignored in 32-bit mode
+        if (vex_plan(&v, &p, true)) {
+            extern void gadget_vec_align16(void), gadget_vec_align32(void);
+            if (p.type == VP_UD)
+                UNDEFINED;
+            if (p.type == VP_GPROUT) {
+                extern void gadget_vec_movd_from_reg_a(void), gadget_vec_movd_from_reg_c(void),
+                        gadget_vec_movd_from_reg_d(void), gadget_vec_movd_from_reg_b(void),
+                        gadget_vec_movd_from_reg_sp(void), gadget_vec_movd_from_reg_bp(void),
+                        gadget_vec_movd_from_reg_si(void), gadget_vec_movd_from_reg_di(void);
+                static void (*const out[8])(void) = {
+                    gadget_vec_movd_from_reg_a, gadget_vec_movd_from_reg_c, gadget_vec_movd_from_reg_d,
+                    gadget_vec_movd_from_reg_b, gadget_vec_movd_from_reg_sp, gadget_vec_movd_from_reg_bp,
+                    gadget_vec_movd_from_reg_si, gadget_vec_movd_from_reg_di,
+                };
+                GEN(out[p.gpr_dst & 7]);
+                GEN(p.gpr_src);
+                return true;
+            }
+            if (p.type == VP_BMI) {
+                extern void gadget_vex_bmi(void), gadget_vex_ld_i386_4(void);
+                gen_i386_gpr_in(state, p.bmi_a, 1);
+                if (v.mem) {
+                    gen_addr(state, modrm, seg_tls);
+                    GEN(gadget_vex_ld_i386_4);
+                    GEN(state->orig_ip);
+                } else {
+                    gen_i386_gpr_in(state, p.bmi_b, 2);
+                }
+                GEN(gadget_vex_bmi);
+                GEN((p.word & ~(1ul << 16)) | 0ul << 4 | 1ul << 8 | 2ul << 12 | 3ul << 20);
+                if (p.bmi_op == 7)
+                    gen_i386_gpr_out(state, p.bmi_dst2, 3);     // MULX: the low half first, the high wins
+                gen_i386_gpr_out(state, p.bmi_dst, 0);
+                return true;
+            }
+            if (p.type == VP_MASKED) {
+                extern void gadget_vex_mskld_i386_4(void), gadget_vex_mskld_i386_8(void),
+                        gadget_vex_mskst_i386_4(void), gadget_vex_mskst_i386_8(void);
+                gen_addr(state, modrm, seg_tls);
+                GEN(p.masked_store ? (p.masked_esz == 8 ? gadget_vex_mskst_i386_8 : gadget_vex_mskst_i386_4)
+                                   : (p.masked_esz == 8 ? gadget_vex_mskld_i386_8 : gadget_vex_mskld_i386_4));
+                GEN(state->orig_ip);
+                GEN(p.word);
+                return true;
+            }
+            if (p.type == VP_SPECIAL && p.special == VEX_SP_MASKMOVDQU) {
+                extern void gadget_vec_maskmov16(void);
+                GEN(gadget_vec_maskmov16);
+                GEN(state->orig_ip);
+                GEN(CPU_OFFSET(xmm[v.reg]) | ((unsigned long) CPU_OFFSET(xmm[v.rm]) << 16));
+                return true;
+            }
+            if (p.type == VP_SPECIAL) {
+                extern void gadget_i386_ldmxcsr(void), gadget_i386_stmxcsr(void), gadget_vec_ldtmp128(void),
+                        gadget_vec_pcmpstr_enter(void), gadget_vec_pcmpstr_leave(void),
+                        gadget_vec_pcmpstr_leave_ecx(void), gadget_vex_zero_hi(void);
+                if (p.special == VEX_SP_LDMXCSR || p.special == VEX_SP_STMXCSR) {
+                    gen_addr(state, modrm, seg_tls);
+                    GEN(p.special == VEX_SP_LDMXCSR ? gadget_i386_ldmxcsr : gadget_i386_stmxcsr);
+                    GEN(state->orig_ip);
+                    return true;
+                }
+                unsigned src = v.rm;
+                if (v.mem) {                    // staged in xmm15, which no i386 task has
+                    gen_addr(state, modrm, seg_tls);
+                    GEN(gadget_vec_ldtmp128);
+                    GEN(state->orig_ip);
+                    GEN(CPU_OFFSET(xmm[15]));
+                    src = 15;
+                }
+                GEN(gadget_vec_pcmpstr_enter);
+                GEN(p.gadget);
+                GEN(src | (v.reg << 4) | ((unsigned long) v.imm << 16));
+                GEN((op & 1) ? gadget_vec_pcmpstr_leave_ecx : gadget_vec_pcmpstr_leave);
+                if (!(op & 1)) {
+                    GEN(gadget_vex_zero_hi);
+                    GEN(0);
+                }
+                return true;
+            }
+            if (v.mem) {
+                gen_addr(state, modrm, seg_tls);
+                if (p.align != 0) {
+                    GEN(p.align == 32 ? gadget_vec_align32 : gadget_vec_align16);
+                    GEN(state->orig_ip);
+                }
+            }
+            if (p.type == VP_STORE) {
+                extern void gadget_vex_st_i386_1(void), gadget_vex_st_i386_2(void), gadget_vex_st_i386_4(void),
+                        gadget_vex_st_i386_8(void), gadget_vex_st_i386_16(void), gadget_vex_st_i386_32(void);
+                GEN(p.st_bytes == 32 ? gadget_vex_st_i386_32 : p.st_bytes == 16 ? gadget_vex_st_i386_16
+                        : p.st_bytes == 8 ? gadget_vex_st_i386_8 : p.st_bytes == 4 ? gadget_vex_st_i386_4
+                        : p.st_bytes == 2 ? gadget_vex_st_i386_2 : gadget_vex_st_i386_1);
+                GEN(state->orig_ip);
+                GEN(p.st_src);
+                return true;
+            }
+            if (p.gpr_stage >= 0) {
+                extern void gadget_vex_gst_reg_a(void), gadget_vex_gst_reg_c(void), gadget_vex_gst_reg_d(void),
+                        gadget_vex_gst_reg_b(void), gadget_vex_gst_reg_sp(void), gadget_vex_gst_reg_bp(void),
+                        gadget_vex_gst_reg_si(void), gadget_vex_gst_reg_di(void);
+                static void (*const in[8])(void) = {
+                    gadget_vex_gst_reg_a, gadget_vex_gst_reg_c, gadget_vex_gst_reg_d, gadget_vex_gst_reg_b,
+                    gadget_vex_gst_reg_sp, gadget_vex_gst_reg_bp, gadget_vex_gst_reg_si, gadget_vex_gst_reg_di,
+                };
+                GEN(in[p.gpr_stage & 7]);
+            } else if (p.stage_bytes != 0) {
+                extern void gadget_vex_ld_i386_1(void), gadget_vex_ld_i386_2(void), gadget_vex_ld_i386_4(void),
+                        gadget_vex_ld_i386_8(void), gadget_vex_ld_i386_16(void), gadget_vex_ld_i386_32(void);
+                GEN(p.stage_bytes == 32 ? gadget_vex_ld_i386_32 : p.stage_bytes == 16 ? gadget_vex_ld_i386_16
+                        : p.stage_bytes == 8 ? gadget_vex_ld_i386_8 : p.stage_bytes == 4 ? gadget_vex_ld_i386_4
+                        : p.stage_bytes == 2 ? gadget_vex_ld_i386_2 : gadget_vex_ld_i386_1);
+                GEN(state->orig_ip);
+            }
+            if (p.st_after != 0) {
+                extern void gadget_vex_wprobe_i386_8(void), gadget_vex_wprobe_i386_16(void);
+                GEN(p.st_after == 16 ? gadget_vex_wprobe_i386_16 : gadget_vex_wprobe_i386_8);
+                GEN(state->orig_ip);
+            }
+            GEN(p.gadget);
+            GEN(p.word);
+            for (unsigned i = 0; i < p.nextra; i++)
+                GEN(p.extra[i]);
+            if (p.st_after != 0) {
+                extern void gadget_vex_st_i386_8(void), gadget_vex_st_i386_16(void);
+                gen_addr(state, modrm, seg_tls);        // (the probe left the host address there)
+                GEN(p.st_after == 16 ? gadget_vex_st_i386_16 : gadget_vex_st_i386_8);
+                GEN(state->orig_ip);
+                GEN(VEX_STAGE_OFF);
+            }
+            if (p.gpr_out >= 0)
+                gen_i386_gpr_out(state, (unsigned) p.gpr_out, 0);
+            (void) tlb;
+            return true;
+        }
+    }
+#endif
 
     unsigned mem_bits = avx32_mem_bits(map, op, pp, w, vlen);
     bool rm_mem = modrm->type != modrm_reg;

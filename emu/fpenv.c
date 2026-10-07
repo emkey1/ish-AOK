@@ -42,7 +42,8 @@
 //    flushes denormal inputs.
 //  - Underflow: aarch64 detects tininess before rounding, x86 and RISC-V after,
 //    so a result that rounds up to the smallest normal raises UE/UF on one and
-//    not the other.
+//    not the other. The x86 SSE/AVX gadgets correct for it (math.S xf_tiny,
+//    and vex.inc's FMA and VCVTPS2PH), FTZ included; other paths do not.
 //  - RISC-V RMM (round to nearest, ties to max magnitude) has no FPCR encoding
 //    and runs as RNE in arithmetic; conversions that name it statically are
 //    exact (fcvta).

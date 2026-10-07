@@ -793,7 +793,7 @@ bool avx32_has_imm8(unsigned map, unsigned op, unsigned pp) {
     if (map == 3)
         return true; // every 0F3A form this front-end implements takes one
     if (map == 1)
-        return op == 0x70 || op == 0x71 || op == 0x72 || op == 0x73 || op == 0xc2 || op == 0xc6;
+        return op == 0x70 || op == 0x71 || op == 0x72 || op == 0x73 || op == 0xc2 || op == 0xc4 || op == 0xc5 || op == 0xc6;
     (void) pp;
     return false;
 }

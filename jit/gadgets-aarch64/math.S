@@ -6330,6 +6330,144 @@ amd64_gen_maskmov maskmovdqu, 16
 .Lxz_done_\@:
 .endm
 
+.macro xf_minnorm m, x, t               /* lanes that are exactly +-the smallest normal */
+.ifc \t,s
+    mov  w9, 0x7fffffff
+    dup  \m\().4s, w9
+    and  \m\().16b, \x\().16b, \m\().16b
+    mov  w9, 0x00800000
+    dup  v31.4s, w9
+    cmeq \m\().4s, \m\().4s, v31.4s
+.else
+    mov  x9, 0x7fffffffffffffff
+    dup  \m\().2d, x9
+    and  \m\().16b, \x\().16b, \m\().16b
+    mov  x9, 0x0010000000000000
+    dup  v31.2d, x9
+    cmeq \m\().2d, \m\().2d, v31.2d
+.endif
+.endm
+.macro xf_pow2 m, t, e                  /* every lane 2^\e */
+.ifc \t,s
+    mov  w9, ((\e + 127) << 23)
+    dup  \m\().4s, w9
+.else
+    mov  x9, ((\e + 1023) << 52)
+    dup  \m\().2d, x9
+.endif
+.endm
+.macro xf_lanebits_sign m, t             /* every lane's sign bit */
+.ifc \t,s
+    movi \m\().4s, 0x80, lsl 24
+.else
+    mov  x9, 0x8000000000000000
+    dup  \m\().2d, x9
+.endif
+.endm
+
+# Tininess: x86 decides it after rounding (to the precision, the exponent
+# unbounded), the host before. They differ only where the result came out
+# exactly +-the smallest normal (v21, of the lanes v7). The tail: x17 holds
+# the op's FPSR, x16 the FPSR before it, v22 the candidates x86 has tiny, and
+# x9 the other lanes' UFC; rebuild UFC from those and flush the tiny ones
+# under FTZ (the sign kept, UE PE).
+.macro xf_tiny_tail t, a, ftz=1
+    and  x15, x16, 8
+    orr  x9, x9, x15                     /* or from before the op */
+    bic  x17, x17, 8
+    orr  x17, x17, x9
+    umaxv b31, v22.16b
+    fmov w15, s31
+    cbz  w15, 1f
+    orr  x17, x17, 8                     /* a candidate x86 has tiny */
+.if \ftz
+    ldr  w9, [_cpu, CPU_mxcsr]
+    tbz  w9, 15, 1f
+    xf_lanebits_sign v3, \t
+    and  v3.16b, v3.16b, v22.16b
+    and  v3.16b, v3.16b, v2.16b
+    bic  v2.16b, v2.16b, v22.16b
+    orr  v2.16b, v2.16b, v3.16b
+    orr  w9, w9, 0x30
+    str  w9, [_cpu, CPU_mxcsr]
+.endif
+1:  msr  fpsr, x17
+.endm
+.macro xf_tiny_test t, a                 /* v22: v21's lanes whose v28 (scaled by 2^64) is tiny */
+    fabs v28.\a, v28.\a
+.ifc \t,s
+    xf_pow2 v30, s, -62
+.else
+    xf_pow2 v30, d, -958
+.endif
+    fcmgt v22.\a, v30.\a, v28.\a
+    and  v22.16b, v22.16b, v21.16b
+.endm
+
+# MUL/DIV of v4, v5 into v2 (x16: FPSR before the op): redo the candidates
+# with an operand scaled by 2^64 -- exact, the result normal, so rounded as
+# unbounded -- and the op again with them zeroed for the other lanes' UFC.
+# Clobbers v20-v31, x9, x15-x17.
+.macro xf_tiny op, t, a, p
+    xf_minnorm v21, v2, \t
+    and  v21.16b, v21.16b, v7.16b
+    xf_any v21, .Lxt_done\@
+    mrs  x17, fpsr
+    xf_pow2 v30, \t, 64
+.ifc \op,fmul                            /* scale the smaller */
+    fabs v27.\a, v4.\a
+    fabs v31.\a, v5.\a
+    fcmge v29.\a, v31.\a, v27.\a
+    fmul v27.\a, v4.\a, v30.\a
+    fmul v28.\a, v5.\a, v30.\a
+    bsl  v29.16b, v27.16b, v4.16b
+    mov  v27.16b, v5.16b
+    fabs v31.\a, v4.\a
+    fabs v26.\a, v5.\a
+    fcmge v31.\a, v26.\a, v31.\a
+    bif  v27.16b, v28.16b, v31.16b
+    fmul v28.\a, v29.\a, v27.\a
+.else                                    /* the dividend */
+    fmul v29.\a, v4.\a, v30.\a
+    fdiv v28.\a, v29.\a, v5.\a
+.endif
+    xf_tiny_test \t, \a
+    mov  x9, 0
+.if \p
+    bic  v27.16b, v4.16b, v21.16b
+    bic  v28.16b, v5.16b, v21.16b
+    msr  fpsr, xzr
+    \op v27.\a, v27.\a, v28.\a
+    mrs  x9, fpsr
+    and  x9, x9, 8
+.endif
+    xf_tiny_tail \t, \a
+.Lxt_done\@:
+.endm
+
+# CVTPD2PS/CVTSD2SS of v5 into v2's singles (v7 their lanes).
+.macro xf_tiny_cvt p
+    xf_minnorm v21, v2, s
+    and  v21.16b, v21.16b, v7.16b
+    xf_any v21, .Lxtc_done\@
+    mrs  x17, fpsr
+    xf_pow2 v30, d, 64
+    fmul v29.2d, v5.2d, v30.2d
+    fcvtn v28.2s, v29.2d
+    xf_tiny_test s, 4s
+    mov  x9, 0
+.if \p
+    sxtl v27.2d, v21.2s
+    bic  v27.16b, v5.16b, v27.16b
+    msr  fpsr, xzr
+    fcvtn v28.2s, v27.2d
+    mrs  x9, fpsr
+    and  x9, x9, 8
+.endif
+    xf_tiny_tail s, 4s
+.Lxtc_done\@:
+.endm
+
 .macro xf_defnan t                      /* v18: x86's default NaN */
 .ifc \t,s
     mov  w9, 0xffc00000
@@ -6373,10 +6511,17 @@ amd64_gen_maskmov maskmovdqu, 16
     xf_consts \t
     xf_lanes \t, \p
     xf_pre2 \a, \excl
+    mrs  x16, fpsr
 .if \p
     \op  v2.\a, v4.\a, v5.\a
 .else
     \op  \t\()2, \t\()4, \t\()5
+.endif
+.ifc \op,fmul
+    xf_tiny fmul, \t, \a, \p
+.endif
+.ifc \op,fdiv
+    xf_tiny fdiv, \t, \a, \p
 .endif
     xf_ftz \a
     xf_nanfix \t, \a, 2
@@ -6802,9 +6947,11 @@ amd64_xf hsubpd, hadd, d, 2d, 1, 1
     xf_consts d
     movi v7.16b, 0xff
     xf_pre1n 2d
+    mrs  x16, fpsr
     fcvtn v2.2s, v5.2d
     xf_consts s
     movi d7, 0xffffffffffffffff
+    xf_tiny_cvt 1
     xf_ftz 4s
 .endm
 .macro xfb_cvtss2sd
@@ -6819,9 +6966,11 @@ amd64_xf hsubpd, hadd, d, 2d, 1, 1
     xf_consts d
     movi d7, 0xffffffffffffffff
     xf_pre1n 2d
+    mrs  x16, fpsr
     fcvt s2, d5
     xf_consts s
     movi d7, 0x00000000ffffffff
+    xf_tiny_cvt 0
     xf_ftz 4s
     mov  v0.s[0], v2.s[0]
     mov  v2.16b, v0.16b
@@ -7322,7 +7471,9 @@ amd64_xf_round roundsd, d, 2d, 0, 8
     and  v0.16b, v0.16b, v7.16b
     and  v1.16b, v1.16b, v7.16b
     xf_pre2 4s, 0
+    mrs  x16, fpsr
     fmul v2.4s, v4.4s, v5.4s
+    xf_tiny fmul, s, 4s, 1
     xf_ftz 4s
     xf_nanfix s, 4s, 2
     uzp1 v0.4s, v2.4s, v2.4s             /* p0 p2 */
@@ -7349,7 +7500,9 @@ amd64_xf_round roundsd, d, 2d, 0, 8
     and  v0.16b, v0.16b, v7.16b
     and  v1.16b, v1.16b, v7.16b
     xf_pre2 2d, 0
+    mrs  x16, fpsr
     fmul v2.2d, v4.2d, v5.2d
+    xf_tiny fmul, d, 2d, 1
     xf_ftz 2d
     xf_nanfix d, 2d, 2
     mov  v0.16b, v2.16b
@@ -16683,3 +16836,5 @@ amd64_r16_ri amd64_tsi16, test, 64, x, 63, 0
         amd64_b18_row sri_\op, 64, 1
     .endr
 .popsection
+
+#include "vex.inc"

@@ -77,6 +77,13 @@ amd64_vxpage_\id:
     b.eq 7006f
     b    amd64_vmem_misaligned      /* external to x87.S: no conditional branch reaches it */
 7006:
+    /* AMD64_JIT_MEM_ALIGN32 (bit 38): a VEX.256 operand that must be 32-byte
+       aligned (VMOVAPS ymm and its kind). */
+    tbz  x8, 38, 7007f
+    tst  x9, 31
+    b.eq 7007f
+    b    amd64_vmem_misaligned
+7007:
 .endm
 
 # 64-bit TLB write fast path: x9 = guest addr in -> writable host ptr out (or the
