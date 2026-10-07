@@ -1220,6 +1220,7 @@ restart:
             _READIMM(vex_op, 8);
             TRACEI("vex insn");
             if (avx32_has_modrm(vex_map, vex_op, vex_pp)) {
+                modrm.index = reg_none;         // (a SIB overwrites it: gen_vex32's VSIB test)
                 READMODRM;
             } else {
                 // No ModRM byte: synthesize a register-form operand so the

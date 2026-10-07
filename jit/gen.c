@@ -9540,6 +9540,8 @@ struct vex_insn {
     unsigned map, pp, op, l, w, vvvv, reg, rm;
     bool mem;
     uint8_t imm;
+    int vsib_index;             // the SIB's index field as a vector register, -1 without a SIB
+    unsigned vsib_scale;
 };
 // kinds: the operand roles of a vex.inc frame (see its header)
 enum vex_kind {
@@ -9577,6 +9579,7 @@ enum vex_kind {
     VXK_MASKMOV,// VMASKMOV*/VPMASKMOV*: memory only; aux 0 load (dst = reg), 1 store (data = reg); sbytes the element
     VXK_BMI,    // BMI1/BMI2 on general registers (aux: vex_bmi's op)
     VXK_PS2PH,  // VCVTPS2PH: r/m (an xmm, or memory 8/16 bytes) = reg converted, imm8
+    VXK_GATHER, // VSIB gathers: dst = reg, mask = vvvv; aux: qword indices; VEX.W: qword data
 };
 // VXK_SPECIAL's
 #define VEX_SP_LDMXCSR 1
@@ -9804,6 +9807,10 @@ static const struct vex_entry vex_table[] = {
     VE(1, 1, 0x5a, -1, VXK_NARROW, VEX_LBOTH, 0, gadget_vex_xf_cvtpd2ps),
     {2, 1, 0x13, -1, VXK_WIDEN, VEX_LBOTH, 8, gadget_vex_xf_cvtph2ps, 0, 0, 1, 0, NULL},  // VCVTPH2PS
     {3, 1, 0x1d, -1, VXK_PS2PH, VEX_LBOTH, 0, gadget_vex_cvtps2ph, 0, 0, 1, 0, NULL},    // VCVTPS2PH
+    {2, 1, 0x90, -1, VXK_GATHER, VEX_LBOTH, 0, NULL, 0, 0, 0, 0, NULL},  // VPGATHERDD/DQ
+    {2, 1, 0x91, -1, VXK_GATHER, VEX_LBOTH, 0, NULL, 1, 0, 0, 0, NULL},  // VPGATHERQD/QQ
+    {2, 1, 0x92, -1, VXK_GATHER, VEX_LBOTH, 0, NULL, 0, 0, 0, 0, NULL},  // VGATHERDPS/DPD
+    {2, 1, 0x93, -1, VXK_GATHER, VEX_LBOTH, 0, NULL, 1, 0, 0, 0, NULL},  // VGATHERQPS/QPD
     VE(1, 2, 0x5a, -1, VXK_SCAL, VEX_LBOTH, 4, gadget_vex_xf_cvtss2sd),
     VE(1, 3, 0x5a, -1, VXK_SCAL, VEX_LBOTH, 8, gadget_vex_xf_cvtsd2ss),
     VE(1, 2, 0xe6, -1, VXK_WIDEN, VEX_LBOTH, 8, gadget_vex_xf_cvtdq2pd),
@@ -9961,7 +9968,7 @@ static bool vex_has_imm8(unsigned map, unsigned op) {
 // register (gpr_stage); VP_STORE: st_bytes from cpu_state offsets st_src to
 // the memory operand; VP_GPROUT: the low 4/8 bytes at gpr_src to GPR
 // gpr_dst; VP_UD: #UD. False: v is not in the table (the caller's old path).
-enum vex_plan_type { VP_FRAME, VP_STORE, VP_GPROUT, VP_SPECIAL, VP_MASKED, VP_BMI, VP_UD };
+enum vex_plan_type { VP_FRAME, VP_STORE, VP_GPROUT, VP_SPECIAL, VP_MASKED, VP_BMI, VP_GATHER, VP_UD };
 struct vex_plan {
     enum vex_plan_type type;
     void (*gadget)(void);
@@ -10145,6 +10152,18 @@ static bool vex_plan(const struct vex_insn *v, struct vex_plan *p, bool i386) {
         NEED_VVVV0;
         s1 = v->rm;
         break;
+    case VXK_GATHER:
+        // VSIB: memory with a SIB, its index a vector register; dst, mask
+        // and index three different registers
+        if (!v->mem || v->vsib_index < 0)
+            return true;
+        if (v->reg == v->vvvv || v->reg == (unsigned) v->vsib_index || v->vvvv == (unsigned) v->vsib_index)
+            return true;
+        p->type = VP_GATHER;
+        p->word = (v->reg & 15) | (unsigned long) (v->vvvv & 15) << 4 | (unsigned long) (v->vsib_index & 15) << 8 |
+                (unsigned long) (v->vsib_scale & 3) << 12 | (v->w ? 1ul << 14 : 0) | (e->aux ? 1ul << 15 : 0) |
+                (v->l ? 1ul << 16 : 0);
+        return true;
     case VXK_PS2PH:
         NEED_VVVV0;
         s1 = v->reg;
@@ -10350,6 +10369,14 @@ static int gen_amd64_vex(struct gen_state *state, struct tlb *tlb, const struct 
     v.reg = amd64_modrm_reg(modrm) | (r ? 8 : 0);
     v.rm = amd64_modrm_rm(modrm) | (b ? 8 : 0);
     v.mem = amd64_modrm_mod(modrm) != 3;
+    v.vsib_index = -1;
+    if (v.mem && amd64_modrm_rm(modrm) == 4) {
+        byte_t sib;
+        if (!tlb_read(tlb, ip + 1, &sib, 1))
+            return -1;
+        v.vsib_index = (int) (((sib >> 3) & 7) | (x ? 8 : 0));
+        v.vsib_scale = sib >> 6;
+    }
     if (vex_lookup(&v) == NULL)
         return -1;
     // VEX after 66, F2, F3, LOCK or REX is #UD
@@ -10403,6 +10430,18 @@ static int gen_amd64_vex(struct gen_state *state, struct tlb *tlb, const struct 
         gen(state, disp);
         gen(state, (unsigned long) next_ip);
         gen(state, p.st_src);
+        gen_amd64_defer_rip(state, next_ip);
+        return 1;
+    }
+    if (p.type == VP_GATHER) {
+        // the address without the SIB's index: that is the vector register
+        extern void gadget_vex_gather_amd64(void);
+        meta &= ~(AMD64_JIT_MEM_HAS_INDEX | 0xful << AMD64_JIT_MEM_INDEX_SHIFT | 3ul << AMD64_JIT_MEM_SCALE_SHIFT);
+        gen(state, (unsigned long) gadget_vex_gather_amd64);
+        gen(state, meta);
+        gen(state, disp);
+        gen(state, (unsigned long) next_ip);
+        gen(state, p.word);
         gen_amd64_defer_rip(state, next_ip);
         return 1;
     }
@@ -19663,7 +19702,12 @@ static inline bool gen_vex32(struct gen_state *state, struct tlb *tlb, struct mo
     // math.S's vex.inc gadgets, where the table has the instruction
     {
         struct vex_insn v = {map, pp, op, l, w, vvvv, modrm->opcode & 7, modrm->rm_opcode & 7,
-                             modrm->type != modrm_reg, imm8};
+                             modrm->type != modrm_reg, imm8, -1, 0};
+        // (decode.h presets index to reg_none: anything else is a SIB's raw index field)
+        if (modrm->type != modrm_reg && modrm->index != reg_none) {
+            v.vsib_index = (int) modrm->index;
+            v.vsib_scale = modrm->shift;
+        }
         struct vex_plan p;
         if (map == 1 && op == 0x77)
             v.rm = 8;                           // VZEROUPPER/VZEROALL: the registers
@@ -19703,6 +19747,16 @@ static inline bool gen_vex32(struct gen_state *state, struct tlb *tlb, struct mo
                 if (p.bmi_op == 7)
                     gen_i386_gpr_out(state, p.bmi_dst2, 3);     // MULX: the low half first, the high wins
                 gen_i386_gpr_out(state, p.bmi_dst, 0);
+                return true;
+            }
+            if (p.type == VP_GATHER) {
+                extern void gadget_vex_gather_i386(void);
+                struct modrm base = *modrm;
+                base.type = modrm_mem;          // base + disp: the index is the vector register
+                gen_addr(state, &base, seg_tls);
+                GEN(gadget_vex_gather_i386);
+                GEN(state->orig_ip);
+                GEN(p.word);
                 return true;
             }
             if (p.type == VP_MASKED) {

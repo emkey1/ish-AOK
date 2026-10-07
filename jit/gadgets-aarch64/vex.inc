@@ -1040,6 +1040,179 @@ vex_widen xf_cvtph2ps, 8, q2, xfb_cvtph2ps
     vex_zero_zmm
     gret 1
 
+# ---- gathers (VPGATHERDD/DQ/QD/QQ, VGATHERDPS/DPD/QPS/QPD) ----
+# Word: [dst (0-3) | mask (4-7) | index (8-11) | scale (12-13) | qword data
+# (14) | qword index (15) | L (16)]. Restartable as x86's: each step finds
+# the lowest element whose mask MSB is set (zeroing the clear ones it
+# passes), loads it, writes dst's element and zeroes the mask's, so a fault
+# leaves every element below it done, its mask element zero, and the rest as
+# they were; nothing is kept across the TLB slow path. Done, the
+# mask is zeroed whole and dst past its elements (and both zmm_hi).
+.macro vg_elem out, reg, boff           /* \out = &register \reg's byte \boff. Clobbers x15 */
+    mov  x15, CPU_xmm
+    cmp  \boff, 16
+    b.lo .Lvge\@
+    mov  x15, (CPU_ymm_hi - 16)
+.Lvge\@:
+    add  x15, x15, \boff, uxtw
+    add  x15, x15, \reg, uxtw 4
+    add  \out, _cpu, x15
+.endm
+# w12: the lowest element whose mask MSB is set, or w13 (the count) if none;
+# w16: log2 of the element's bytes. Clobbers x11, x14, x15, x17.
+.macro vg_find
+    ubfx w16, w8, 14, 1
+    add  w16, w16, 2
+    ubfx w11, w8, 16, 1
+    mov  w13, 2
+    lsl  w13, w13, w11
+    tst  w8, 0xc000
+    b.ne .Lvgf_n\@
+    lsl  w13, w13, 1                     /* dword index, dword data: 4 or 8 */
+.Lvgf_n\@:
+    ubfx w14, w8, 4, 4
+    mov  w12, 0
+.Lvgf_loop\@:
+    cmp  w12, w13
+    b.hs .Lvgf_done\@
+    add  w11, w12, 1
+    lsl  w11, w11, w16
+    sub  w11, w11, 1                     /* the element's top byte */
+    vg_elem x17, w14, w11
+    ldrb w17, [x17]
+    tbnz w17, 7, .Lvgf_done\@
+    lsl  w11, w12, w16                   /* not gathered: done, so its mask element zeroed */
+    vg_elem x17, w14, w11
+    cmp  w16, 3
+    b.eq .Lvgf_q\@
+    str  wzr, [x17]
+    b    .Lvgf_next\@
+.Lvgf_q\@:
+    str  xzr, [x17]
+.Lvgf_next\@:
+    add  w12, w12, 1
+    b    .Lvgf_loop\@
+.Lvgf_done\@:
+.endm
+.macro vg_index                          /* x10 = element w12's index, sign-extended, scaled */
+    ubfx w14, w8, 8, 4
+    tbnz w8, 15, .Lvgi_q\@
+    lsl  w11, w12, 2
+    vg_elem x17, w14, w11
+    ldrsw x10, [x17]
+    b    .Lvgi_done\@
+.Lvgi_q\@:
+    lsl  w11, w12, 3
+    vg_elem x17, w14, w11
+    ldr  x10, [x17]
+.Lvgi_done\@:
+    ubfx w11, w8, 12, 2
+    lsl  x10, x10, x11
+.endm
+.macro vg_store                          /* dst's element w12 = x10; the mask's zeroed */
+    lsl  w11, w12, w16
+    and  w14, w8, 15
+    vg_elem x17, w14, w11
+    cmp  w16, 3
+    b.eq .Lvgs_q\@
+    str  w10, [x17]
+    ubfx w14, w8, 4, 4
+    vg_elem x17, w14, w11
+    str  wzr, [x17]
+    b    .Lvgs_done\@
+.Lvgs_q\@:
+    str  x10, [x17]
+    ubfx w14, w8, 4, 4
+    vg_elem x17, w14, w11
+    str  xzr, [x17]
+.Lvgs_done\@:
+.endm
+.macro vg_finish                         /* (after vg_find found none: w13 count, w16 log2 size) */
+    lsl  w11, w13, w16                   /* dst's bytes: 8, 16 or 32 */
+    and  w14, w8, 15
+    vex_addr x9, x14, CPU_xmm, 4
+    vex_addr x10, x14, CPU_ymm_hi, 4
+    cmp  w11, 16
+    b.hi .Lvgfin_mask\@
+    stp  xzr, xzr, [x10]
+    b.eq .Lvgfin_mask\@
+    str  xzr, [x9, 8]
+.Lvgfin_mask\@:
+    vex_addr x9, x14, CPU_zmm_hi, 5
+    stp  xzr, xzr, [x9]
+    stp  xzr, xzr, [x9, 16]
+    ubfx w14, w8, 4, 4
+    vex_addr x9, x14, CPU_xmm, 4
+    stp  xzr, xzr, [x9]
+    vex_addr x9, x14, CPU_ymm_hi, 4
+    stp  xzr, xzr, [x9]
+    vex_addr x9, x14, CPU_zmm_hi, 5
+    stp  xzr, xzr, [x9]
+    stp  xzr, xzr, [x9, 16]
+.endm
+# i386: _addr = base + disp (+ segment), gen.c's; [orig_ip][word], gret 2.
+.gadget vex_gather_i386
+    mov  x15, VEX_STAGE
+    add  x15, _cpu, x15
+    str  _addr, [x15]
+.Lvgi386_loop:
+    ldr  x8, [_ip, 8]
+    vg_find
+    cmp  w12, w13
+    b.hs .Lvgi386_fin
+    vg_index
+    mov  x15, VEX_STAGE
+    add  x15, _cpu, x15
+    ldr  w9, [x15]
+    add  _addr, w9, w10                  /* (32-bit: the address wraps) */
+    tbnz w8, 14, .Lvgi386_q
+    read_prep 32, vex_gather_i386_4
+    ldr  w10, [_xaddr]
+    b    .Lvgi386_got
+.Lvgi386_q:
+    read_prep 64, vex_gather_i386_8
+    ldr  x10, [_xaddr]
+.Lvgi386_got:
+    ldr  x8, [_ip, 8]
+    vg_find
+    vg_store
+    b    .Lvgi386_loop
+.Lvgi386_fin:
+    vg_finish
+    gret 2
+    read_bullshit 32, vex_gather_i386_4
+    read_bullshit 64, vex_gather_i386_8
+# amd64: [meta (no index: base + disp + segment)][disp][next_ip][word], gret 4.
+.gadget vex_gather_amd64
+.Lvga_loop:
+    ldr  x8, [_ip, 24]
+    vg_find
+    cmp  w12, w13
+    b.hs .Lvga_fin
+    vg_index
+    ldr  x8, [_ip]
+    ldr  x9, [_ip, 8]
+    amd64_vmem_addr
+    add  x9, x9, x10
+    ldr  x8, [_ip, 24]
+    tbnz w8, 14, .Lvga_q
+    amd64_vread_prep 4, vex_gather_amd64_4
+    ldr  w10, [x9]
+    b    .Lvga_got
+.Lvga_q:
+    amd64_vread_prep 8, vex_gather_amd64_8
+    ldr  x10, [x9]
+.Lvga_got:
+    ldr  x8, [_ip, 24]
+    vg_find
+    vg_store
+    b    .Lvga_loop
+.Lvga_fin:
+    vg_finish
+    gret 4
+    amd64_vread_bullshit 4, vex_gather_amd64_4
+    amd64_vread_bullshit 8, vex_gather_amd64_8
+
 # A write probe: the store's fault, and nothing written. i386 [orig_ip],
 # gret 1; amd64 [meta][disp][next_ip], gret 3.
 .macro vex_wprobe_i386 bytes

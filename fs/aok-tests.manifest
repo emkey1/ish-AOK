@@ -431,6 +431,7 @@ x86/amd64_vex_mask.c
 x86/amd64_vex_bmi.c
 x86/amd64_vex_fma.c
 x86/amd64_vex_f16c.c
+x86/amd64_vex_gather.c
 x86/amd64_incdec.c
 x86/amd64_ff_indirect.c
 x86/amd64_odd_shapes.c
@@ -467,6 +468,7 @@ x86/i386_vex_mask.c
 x86/i386_vex_bmi.c
 x86/i386_vex_fma.c
 x86/i386_vex_f16c.c
+x86/i386_vex_gather.c
 x86/amd64_jit_guest_bench.sh
 setup-regressions.sh
 arm64/atomics64.c
