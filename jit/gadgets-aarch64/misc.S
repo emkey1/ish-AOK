@@ -2,6 +2,14 @@
 #include "emu/interrupt.h"
 #include "math.h"
 
+# RDTSC: EDX:EAX = the host counter in ns (gadgets-generic.h host_counter_ns).
+.gadget rdtsc
+    host_counter_ns x8, x9, x10, x11
+    mov  eax, w8
+    lsr  x8, x8, 32
+    mov  edx, w8
+    gret
+
 .gadget cpuid
     ldr  x10, [_ip]                  /* cpuid_tables[0] */
     mov  w8, eax
@@ -517,9 +525,8 @@ do_helper_tlb_retint 2
 #   vec_movd_to_<reg>: xmm = zero-extended reg            [gadget][xmm]
 #   vec_movd_from_<reg>: reg = xmm's low dword            [gadget][xmm]
 #   vec_ld32z / vec_ld64z: xmm = [addr] zero-extended     [gadget][orig ip][xmm]
-#   vec_st32 / vec_st64: [addr] = xmm's low dword/qword   [gadget][orig ip][xmm]
+#   vec_st8 / 16 / 32 / 64: [addr] = the slot's low byte .. qword  [gadget][orig ip][offset]
 #   vec_copy64z: dst = src's low qword, zero-extended     [gadget][src | dst << 16]
-#   vec_punpckldq: dst = dst.d0 src.d0 dst.d1 src.d1      [gadget][src | dst << 16]
 # The 64-bit memory forms keep the helpers' dmb ish (before a store, after a
 # load): i386 C11 atomics do 64-bit loads and stores with movq.
 .macro vec_movd_pair name, reg
@@ -536,6 +543,181 @@ do_helper_tlb_retint 2
     gret_nomem 1
 .endm
 .each_reg vec_movd_pair
+# MOVD mm, r32: the register zero-extended to the 8 bytes of an MMX register.
+.macro vec_movd_mm_pair name, reg
+.gadget vec_movd_mm_to_\name
+    ldrh w8, [_ip]
+    add x8, _cpu, x8
+    str \reg, [x8]
+    str wzr, [x8, 4]
+    gret_nomem 1
+.endm
+.each_reg vec_movd_mm_pair
+# A general register for the amd64 engine's vector gadgets, which take theirs
+# from cpu->amd64_regs (an i386 task has no use for it): into slot S,
+# zero-extended, or out of it (gen.c gen_i386_vec_mapped). [S], gret 1.
+.macro vec_gpr_pair name, reg
+.gadget vec_gpr_in_\name
+    ldr x9, [_ip]
+    mov w8, \reg
+    add x10, _cpu, CPU_amd64_regs
+    str x8, [x10, x9, lsl 3]
+    gret_nomem 1
+.gadget vec_gpr_out_\name
+    ldr x9, [_ip]
+    add x10, _cpu, CPU_amd64_regs
+    add x10, x10, x9, lsl 3
+    ldr \reg, [x10]
+    gret_nomem 1
+.endm
+.each_reg vec_gpr_pair
+# PCMPESTRx/PCMPISTRx run math.S's amd64_pcmp*_r, which take the lengths from
+# amd64_regs[0] and [2] (rax, rdx), put an index in [1] (rcx), and use x24-x27
+# -- esi, edi, ebp and esp here -- as scratch: enter parks those in slots 8-11
+# and copies eax and edx in; leave puts them back (and _ecx copies ECX out).
+# No operands.
+.gadget vec_pcmpstr_enter
+    add x10, _cpu, CPU_amd64_regs
+    mov w8, eax
+    str x8, [x10]
+    mov w8, edx
+    str x8, [x10, 16]
+    stp x24, x25, [x10, 64]
+    stp x26, x27, [x10, 80]
+    gret_nomem
+.gadget vec_pcmpstr_leave
+    add x10, _cpu, CPU_amd64_regs
+    ldp x24, x25, [x10, 64]
+    ldp x26, x27, [x10, 80]
+    gret_nomem
+.gadget vec_pcmpstr_leave_ecx
+    add x10, _cpu, CPU_amd64_regs
+    ldp x24, x25, [x10, 64]
+    ldp x26, x27, [x10, 80]
+    ldr ecx, [x10, 8]
+    gret_nomem
+# Register-to-register moves of 16, 8 or 4 bytes, the rest of the destination
+# kept (MOVAPS and its kind; MOVQ mm, MOVSD/MOVSS's register merge).
+# [src | dst << 16], gret 1.
+.gadget vec_copy128
+    ldrh w8, [_ip]
+    ldrh w9, [_ip, 2]
+    ldr q0, [_cpu, x8]
+    str q0, [_cpu, x9]
+    gret_nomem 1
+.gadget vec_copy64
+    ldrh w8, [_ip]
+    ldrh w9, [_ip, 2]
+    ldr x10, [_cpu, x8]
+    str x10, [_cpu, x9]
+    gret_nomem 1
+.gadget vec_copy32
+    ldrh w8, [_ip]
+    ldrh w9, [_ip, 2]
+    ldr w10, [_cpu, x8]
+    str w10, [_cpu, x9]
+    gret_nomem 1
+# [addr] = the 16 bytes at the cpu_state offset (MOVAPS/MOVNTDQ m128 and
+# their kind). [orig_ip][offset], gret 2.
+.gadget vec_st128
+    write_prep 128, vec_st128
+    ldrh w8, [_ip, 8]
+    ldr q0, [_cpu, x8]
+    str q0, [_xaddr]
+    write_done 128, vec_st128
+    gret 2
+    write_bullshit 128, vec_st128
+# MASKMOVQ / MASKMOVDQU: each byte of the data register whose byte in the
+# mask register has its top bit set, to [edi + i]. [orig_ip][data | mask << 16],
+# gret 2. (A byte store cannot cross a page: no staging.)
+.macro vec_maskmov bytes
+.gadget vec_maskmov\bytes
+    ldrh w11, [_ip, 8]
+    ldrh w12, [_ip, 10]
+    add x11, _cpu, x11
+    add x12, _cpu, x12
+    mov w13, 0
+1:  ldrb w14, [x12, x13]
+    tbz w14, 7, 2f
+    add _addr, edi, w13
+    write_prep 8, vec_maskmov\bytes
+    ldrb w14, [x11, x13]
+    strb w14, [_xaddr]
+    write_done 8, vec_maskmov\bytes
+2:  add w13, w13, 1
+    cmp w13, \bytes
+    b.lo 1b
+    gret 2
+    write_bullshit 8, vec_maskmov\bytes
+.endm
+vec_maskmov 8
+vec_maskmov 16
+
+# MOVD mm, m32: zero-extended to 8 bytes. [orig_ip][offset], gret 2.
+.gadget vec_ld32z8
+    read_prep 32, vec_ld32z8
+    ldr w9, [_xaddr]
+    ldrh w8, [_ip, 8]
+    add x8, _cpu, x8
+    str x9, [x8]
+    gret 2
+    read_bullshit 32, vec_ld32z8
+
+# The i386 guest's vector ops with a memory source run the amd64 engine's
+# register-form gadgets (math.S) on a staged copy of the operand: these read
+# it into the cpu_state slot at [_ip, 8] -- xmm15, which no i386 task has, or
+# an MMX register parked in xmm15 by vec_mm_stash -- whole, whatever the op
+# then reads of it. A fault leaves the slot unwritten. [orig_ip][offset],
+# gret 2. (gen.c gen_vec, i386_vec_map.)
+.macro vec_ldtmp bits
+.gadget vec_ldtmp\bits
+    read_prep \bits, vec_ldtmp\bits
+    ldrh w8, [_ip, 8]
+    add x8, _cpu, x8
+.if \bits == 128
+    ldr q0, [_xaddr]
+    str q0, [x8]
+.elseif \bits == 64
+    ldr x9, [_xaddr]
+    dmb ish
+    str x9, [x8]
+.elseif \bits == 32
+    ldr w9, [_xaddr]
+    str w9, [x8]
+.elseif \bits == 16
+    ldrh w9, [_xaddr]
+    strh w9, [x8]
+.else
+    ldrb w9, [_xaddr]
+    strb w9, [x8]
+.endif
+    gret 2
+    read_bullshit \bits, vec_ldtmp\bits
+.endm
+vec_ldtmp 8
+vec_ldtmp 16
+vec_ldtmp 32
+vec_ldtmp 64
+vec_ldtmp 128
+
+# MMX has no spare register: an op with a memory source parks mm[S] (S not the
+# destination) in xmm15's low half, loads the operand into mm[S], runs the
+# register form, and puts mm[S] back. Nothing between can fault but the load,
+# which leaves mm[S] as it was. [S], gret 1.
+.gadget vec_mm_stash
+    ldr  x8, [_ip]
+    add  x9, _cpu, CPU_mm
+    ldr  x10, [x9, x8, lsl 3]
+    add  x11, _cpu, CPU_xmm
+    str  x10, [x11, 15 * 16]
+    gret 1
+.gadget vec_mm_unstash
+    ldr  x8, [_ip]
+    add  x11, _cpu, CPU_xmm
+    ldr  x10, [x11, 15 * 16]
+    add  x9, _cpu, CPU_mm
+    str  x10, [x9, x8, lsl 3]
+    gret 1
 
 .gadget vec_ld32z
     read_prep 32, vec_ld32z
@@ -557,6 +739,22 @@ do_helper_tlb_retint 2
     str xzr, [x8, 8]
     gret 2
     read_bullshit 64, vec_ld64z
+.gadget vec_st8
+    write_prep 8, vec_st8
+    ldrh w8, [_ip, 8]
+    ldrb w9, [_cpu, x8]
+    strb w9, [_xaddr]
+    write_done 8, vec_st8
+    gret 2
+    write_bullshit 8, vec_st8
+.gadget vec_st16
+    write_prep 16, vec_st16
+    ldrh w8, [_ip, 8]
+    ldrh w9, [_cpu, x8]
+    strh w9, [_xaddr]
+    write_done 16, vec_st16
+    gret 2
+    write_bullshit 16, vec_st16
 .gadget vec_st32
     write_prep 32, vec_st32
     ldrh w8, [_ip, 8]
@@ -582,72 +780,6 @@ do_helper_tlb_retint 2
     str x10, [x9]
     str xzr, [x9, 8]
     gret_nomem 1
-.gadget vec_punpckldq
-    ldrh w8, [_ip]
-    ldrh w9, [_ip, 2]
-    add x8, _cpu, x8
-    add x9, _cpu, x9
-    ldr q0, [x9]
-    ldr q1, [x8]
-    zip1 v0.4s, v0.4s, v1.4s
-    str q0, [x9]
-    gret_nomem 1
-
-# A few register-form integer ops the same way (all of cpu->xmm, no C call):
-#   vec_pshufd: dst.d[i] = src.d[(imm >> 2i) & 3]       [gadget][src | dst << 16 | imm << 32]
-#   vec_pxor / vec_paddq: dst ^= src / dst.q[i] += src.q[i]  [gadget][src | dst << 16]
-#   vec_psrlq_imm / vec_psllq_imm: each qword shifted, 0 past 63  [gadget][xmm | count << 16]
-.gadget vec_pshufd
-    ldrh w8, [_ip]
-    ldrh w9, [_ip, 2]
-    ldrb w10, [_ip, 4]
-    add x8, _cpu, x8
-    add x9, _cpu, x9
-    and w11, w10, 3
-    ldr w12, [x8, x11, lsl 2]
-    ubfx w11, w10, 2, 2
-    ldr w13, [x8, x11, lsl 2]
-    ubfx w11, w10, 4, 2
-    ldr w14, [x8, x11, lsl 2]
-    ubfx w11, w10, 6, 2
-    ldr w15, [x8, x11, lsl 2]
-    stp w12, w13, [x9]
-    stp w14, w15, [x9, 8]
-    gret_nomem 1
-.irp op, pxor,paddq
-.gadget vec_\op
-    ldrh w8, [_ip]
-    ldrh w9, [_ip, 2]
-    add x8, _cpu, x8
-    add x9, _cpu, x9
-    ldr q0, [x8]
-    ldr q1, [x9]
-    .ifc \op, pxor
-    eor v1.16b, v1.16b, v0.16b
-    .else
-    add v1.2d, v1.2d, v0.2d
-    .endif
-    str q1, [x9]
-    gret_nomem 1
-.endr
-.irp dir, r,l
-.gadget vec_ps\dir\()lq_imm
-    ldrh w8, [_ip]
-    ldrb w9, [_ip, 2]
-    add x8, _cpu, x8
-    ldr q0, [x8]
-    mov w10, 64
-    cmp w9, 64
-    csel w9, w9, w10, lo   // a count past 63 clears: ushl by +-64 gives 0
-    .ifc \dir, r
-    neg w9, w9
-    .endif
-    sxtw x9, w9
-    dup v1.2d, x9
-    ushl v0.2d, v0.2d, v1.2d
-    str q0, [x8]
-    gret_nomem 1
-.endr
 
 .gadget fstsw_ax
     ldrh w10, [_cpu, CPU_fsw]

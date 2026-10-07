@@ -3,7 +3,8 @@
 // SSSE3 / SSE4.1 / SSE4.2 integer ops (0F 38 and 0F 3A): PSHUFB, PHADD/PHSUB
 // (and the saturating ones), PMADDUBSW, PMULHRSW, PSIGN, PABS, PMOVSX/ZX,
 // PMULDQ, PCMPEQQ/GTQ, PACKUSDW, PMIN/PMAX (SB SD UW UD), PMULLD,
-// PHMINPOSUW, PBLENDW, PALIGNR, MPSADBW -- XMM (66) and, where SSSE3 has
+// PHMINPOSUW, PBLENDW, PALIGNR, MPSADBW, and the SSE2 shuffles PSHUFD,
+// PSHUFLW, PSHUFHW and PSHUFW -- XMM (66) and, where SSSE3 has
 // them, MMX; register and memory sources, xmm1/xmm9 -- against byte-array
 // models; checked against real hardware (an AMD Ryzen). Vectorisation is off:
 // the model must not become SSE itself.
@@ -91,6 +92,16 @@ static void model(const char *m, int lb, int nb, const uint8_t *d, const uint8_t
         memset(out, 0, 16);
         put(out, 2, get(s + 2 * best, 2));
         put(out + 2, 2, (uint64_t) best);
+        return;
+    }
+    if (!strncmp(m, "shuf", 4)) {      // the source's lanes picked by imm; lw/hw keep the other half
+        int hw = !strcmp(m, "shufhw");
+        if (!strcmp(m, "shufd")) {
+            for (int k = 0; k < 4; k++) put(out + 4 * k, 4, get(s + 4 * ((imm >> (2 * k)) & 3), 4));
+            return;
+        }
+        memcpy(out, s, nb);
+        for (int k = 0; k < 4; k++) put(out + 8 * hw + 2 * k, 2, get(s + 8 * hw + 2 * ((imm >> (2 * k)) & 3), 2));
         return;
     }
     if (!strcmp(m, "blendw")) {
@@ -1105,6 +1116,314 @@ __attribute__((noinline)) static void f243(uint8_t *v, uint8_t *src) {
     __asm__ volatile("movdqu (%0), %%xmm1\n movdqu (%1), %%xmm2\n mpsadbw $7, (%%rdi), %%xmm1\n movdqu %%xmm1, (%0)"
                      :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
 }
+__attribute__((noinline)) static void f244(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movdqu (%0), %%xmm1\n movdqu (%1), %%xmm2\n pshufd $0, %%xmm2, %%xmm1\n movdqu %%xmm1, (%0)"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f245(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movdqu (%0), %%xmm9\n movdqu (%1), %%xmm10\n pshufd $0, %%xmm10, %%xmm9\n movdqu %%xmm9, (%0)"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f246(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movdqu (%0), %%xmm1\n movdqu (%1), %%xmm2\n pshufd $0, (%%rdi), %%xmm1\n movdqu %%xmm1, (%0)"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f247(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movdqu (%0), %%xmm1\n movdqu (%1), %%xmm2\n pshufd $27, %%xmm2, %%xmm1\n movdqu %%xmm1, (%0)"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f248(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movdqu (%0), %%xmm9\n movdqu (%1), %%xmm10\n pshufd $27, %%xmm10, %%xmm9\n movdqu %%xmm9, (%0)"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f249(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movdqu (%0), %%xmm1\n movdqu (%1), %%xmm2\n pshufd $27, (%%rdi), %%xmm1\n movdqu %%xmm1, (%0)"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f250(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movdqu (%0), %%xmm1\n movdqu (%1), %%xmm2\n pshufd $78, %%xmm2, %%xmm1\n movdqu %%xmm1, (%0)"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f251(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movdqu (%0), %%xmm9\n movdqu (%1), %%xmm10\n pshufd $78, %%xmm10, %%xmm9\n movdqu %%xmm9, (%0)"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f252(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movdqu (%0), %%xmm1\n movdqu (%1), %%xmm2\n pshufd $78, (%%rdi), %%xmm1\n movdqu %%xmm1, (%0)"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f253(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movdqu (%0), %%xmm1\n movdqu (%1), %%xmm2\n pshufd $177, %%xmm2, %%xmm1\n movdqu %%xmm1, (%0)"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f254(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movdqu (%0), %%xmm9\n movdqu (%1), %%xmm10\n pshufd $177, %%xmm10, %%xmm9\n movdqu %%xmm9, (%0)"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f255(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movdqu (%0), %%xmm1\n movdqu (%1), %%xmm2\n pshufd $177, (%%rdi), %%xmm1\n movdqu %%xmm1, (%0)"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f256(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movdqu (%0), %%xmm1\n movdqu (%1), %%xmm2\n pshufd $228, %%xmm2, %%xmm1\n movdqu %%xmm1, (%0)"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f257(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movdqu (%0), %%xmm9\n movdqu (%1), %%xmm10\n pshufd $228, %%xmm10, %%xmm9\n movdqu %%xmm9, (%0)"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f258(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movdqu (%0), %%xmm1\n movdqu (%1), %%xmm2\n pshufd $228, (%%rdi), %%xmm1\n movdqu %%xmm1, (%0)"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f259(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movdqu (%0), %%xmm1\n movdqu (%1), %%xmm2\n pshufd $255, %%xmm2, %%xmm1\n movdqu %%xmm1, (%0)"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f260(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movdqu (%0), %%xmm9\n movdqu (%1), %%xmm10\n pshufd $255, %%xmm10, %%xmm9\n movdqu %%xmm9, (%0)"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f261(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movdqu (%0), %%xmm1\n movdqu (%1), %%xmm2\n pshufd $255, (%%rdi), %%xmm1\n movdqu %%xmm1, (%0)"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f262(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movdqu (%0), %%xmm1\n movdqu (%1), %%xmm2\n pshufd $147, %%xmm2, %%xmm1\n movdqu %%xmm1, (%0)"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f263(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movdqu (%0), %%xmm9\n movdqu (%1), %%xmm10\n pshufd $147, %%xmm10, %%xmm9\n movdqu %%xmm9, (%0)"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f264(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movdqu (%0), %%xmm1\n movdqu (%1), %%xmm2\n pshufd $147, (%%rdi), %%xmm1\n movdqu %%xmm1, (%0)"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f265(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movdqu (%0), %%xmm1\n movdqu (%1), %%xmm2\n pshuflw $0, %%xmm2, %%xmm1\n movdqu %%xmm1, (%0)"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f266(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movdqu (%0), %%xmm9\n movdqu (%1), %%xmm10\n pshuflw $0, %%xmm10, %%xmm9\n movdqu %%xmm9, (%0)"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f267(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movdqu (%0), %%xmm1\n movdqu (%1), %%xmm2\n pshuflw $0, (%%rdi), %%xmm1\n movdqu %%xmm1, (%0)"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f268(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movdqu (%0), %%xmm1\n movdqu (%1), %%xmm2\n pshuflw $27, %%xmm2, %%xmm1\n movdqu %%xmm1, (%0)"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f269(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movdqu (%0), %%xmm9\n movdqu (%1), %%xmm10\n pshuflw $27, %%xmm10, %%xmm9\n movdqu %%xmm9, (%0)"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f270(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movdqu (%0), %%xmm1\n movdqu (%1), %%xmm2\n pshuflw $27, (%%rdi), %%xmm1\n movdqu %%xmm1, (%0)"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f271(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movdqu (%0), %%xmm1\n movdqu (%1), %%xmm2\n pshuflw $78, %%xmm2, %%xmm1\n movdqu %%xmm1, (%0)"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f272(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movdqu (%0), %%xmm9\n movdqu (%1), %%xmm10\n pshuflw $78, %%xmm10, %%xmm9\n movdqu %%xmm9, (%0)"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f273(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movdqu (%0), %%xmm1\n movdqu (%1), %%xmm2\n pshuflw $78, (%%rdi), %%xmm1\n movdqu %%xmm1, (%0)"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f274(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movdqu (%0), %%xmm1\n movdqu (%1), %%xmm2\n pshuflw $177, %%xmm2, %%xmm1\n movdqu %%xmm1, (%0)"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f275(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movdqu (%0), %%xmm9\n movdqu (%1), %%xmm10\n pshuflw $177, %%xmm10, %%xmm9\n movdqu %%xmm9, (%0)"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f276(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movdqu (%0), %%xmm1\n movdqu (%1), %%xmm2\n pshuflw $177, (%%rdi), %%xmm1\n movdqu %%xmm1, (%0)"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f277(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movdqu (%0), %%xmm1\n movdqu (%1), %%xmm2\n pshuflw $228, %%xmm2, %%xmm1\n movdqu %%xmm1, (%0)"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f278(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movdqu (%0), %%xmm9\n movdqu (%1), %%xmm10\n pshuflw $228, %%xmm10, %%xmm9\n movdqu %%xmm9, (%0)"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f279(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movdqu (%0), %%xmm1\n movdqu (%1), %%xmm2\n pshuflw $228, (%%rdi), %%xmm1\n movdqu %%xmm1, (%0)"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f280(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movdqu (%0), %%xmm1\n movdqu (%1), %%xmm2\n pshuflw $255, %%xmm2, %%xmm1\n movdqu %%xmm1, (%0)"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f281(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movdqu (%0), %%xmm9\n movdqu (%1), %%xmm10\n pshuflw $255, %%xmm10, %%xmm9\n movdqu %%xmm9, (%0)"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f282(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movdqu (%0), %%xmm1\n movdqu (%1), %%xmm2\n pshuflw $255, (%%rdi), %%xmm1\n movdqu %%xmm1, (%0)"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f283(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movdqu (%0), %%xmm1\n movdqu (%1), %%xmm2\n pshuflw $147, %%xmm2, %%xmm1\n movdqu %%xmm1, (%0)"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f284(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movdqu (%0), %%xmm9\n movdqu (%1), %%xmm10\n pshuflw $147, %%xmm10, %%xmm9\n movdqu %%xmm9, (%0)"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f285(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movdqu (%0), %%xmm1\n movdqu (%1), %%xmm2\n pshuflw $147, (%%rdi), %%xmm1\n movdqu %%xmm1, (%0)"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f286(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movdqu (%0), %%xmm1\n movdqu (%1), %%xmm2\n pshufhw $0, %%xmm2, %%xmm1\n movdqu %%xmm1, (%0)"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f287(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movdqu (%0), %%xmm9\n movdqu (%1), %%xmm10\n pshufhw $0, %%xmm10, %%xmm9\n movdqu %%xmm9, (%0)"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f288(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movdqu (%0), %%xmm1\n movdqu (%1), %%xmm2\n pshufhw $0, (%%rdi), %%xmm1\n movdqu %%xmm1, (%0)"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f289(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movdqu (%0), %%xmm1\n movdqu (%1), %%xmm2\n pshufhw $27, %%xmm2, %%xmm1\n movdqu %%xmm1, (%0)"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f290(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movdqu (%0), %%xmm9\n movdqu (%1), %%xmm10\n pshufhw $27, %%xmm10, %%xmm9\n movdqu %%xmm9, (%0)"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f291(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movdqu (%0), %%xmm1\n movdqu (%1), %%xmm2\n pshufhw $27, (%%rdi), %%xmm1\n movdqu %%xmm1, (%0)"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f292(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movdqu (%0), %%xmm1\n movdqu (%1), %%xmm2\n pshufhw $78, %%xmm2, %%xmm1\n movdqu %%xmm1, (%0)"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f293(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movdqu (%0), %%xmm9\n movdqu (%1), %%xmm10\n pshufhw $78, %%xmm10, %%xmm9\n movdqu %%xmm9, (%0)"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f294(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movdqu (%0), %%xmm1\n movdqu (%1), %%xmm2\n pshufhw $78, (%%rdi), %%xmm1\n movdqu %%xmm1, (%0)"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f295(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movdqu (%0), %%xmm1\n movdqu (%1), %%xmm2\n pshufhw $177, %%xmm2, %%xmm1\n movdqu %%xmm1, (%0)"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f296(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movdqu (%0), %%xmm9\n movdqu (%1), %%xmm10\n pshufhw $177, %%xmm10, %%xmm9\n movdqu %%xmm9, (%0)"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f297(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movdqu (%0), %%xmm1\n movdqu (%1), %%xmm2\n pshufhw $177, (%%rdi), %%xmm1\n movdqu %%xmm1, (%0)"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f298(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movdqu (%0), %%xmm1\n movdqu (%1), %%xmm2\n pshufhw $228, %%xmm2, %%xmm1\n movdqu %%xmm1, (%0)"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f299(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movdqu (%0), %%xmm9\n movdqu (%1), %%xmm10\n pshufhw $228, %%xmm10, %%xmm9\n movdqu %%xmm9, (%0)"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f300(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movdqu (%0), %%xmm1\n movdqu (%1), %%xmm2\n pshufhw $228, (%%rdi), %%xmm1\n movdqu %%xmm1, (%0)"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f301(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movdqu (%0), %%xmm1\n movdqu (%1), %%xmm2\n pshufhw $255, %%xmm2, %%xmm1\n movdqu %%xmm1, (%0)"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f302(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movdqu (%0), %%xmm9\n movdqu (%1), %%xmm10\n pshufhw $255, %%xmm10, %%xmm9\n movdqu %%xmm9, (%0)"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f303(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movdqu (%0), %%xmm1\n movdqu (%1), %%xmm2\n pshufhw $255, (%%rdi), %%xmm1\n movdqu %%xmm1, (%0)"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f304(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movdqu (%0), %%xmm1\n movdqu (%1), %%xmm2\n pshufhw $147, %%xmm2, %%xmm1\n movdqu %%xmm1, (%0)"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f305(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movdqu (%0), %%xmm9\n movdqu (%1), %%xmm10\n pshufhw $147, %%xmm10, %%xmm9\n movdqu %%xmm9, (%0)"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f306(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movdqu (%0), %%xmm1\n movdqu (%1), %%xmm2\n pshufhw $147, (%%rdi), %%xmm1\n movdqu %%xmm1, (%0)"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f307(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movq (%0), %%mm1\n movq (%1), %%mm2\n pshufw $0, %%mm2, %%mm1\n movq %%mm1, (%0)\n emms"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f308(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movq (%0), %%mm1\n movq (%1), %%mm2\n pshufw $0, (%%rdi), %%mm1\n movq %%mm1, (%0)\n emms"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f309(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movq (%0), %%mm1\n movq (%1), %%mm2\n pshufw $27, %%mm2, %%mm1\n movq %%mm1, (%0)\n emms"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f310(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movq (%0), %%mm1\n movq (%1), %%mm2\n pshufw $27, (%%rdi), %%mm1\n movq %%mm1, (%0)\n emms"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f311(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movq (%0), %%mm1\n movq (%1), %%mm2\n pshufw $78, %%mm2, %%mm1\n movq %%mm1, (%0)\n emms"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f312(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movq (%0), %%mm1\n movq (%1), %%mm2\n pshufw $78, (%%rdi), %%mm1\n movq %%mm1, (%0)\n emms"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f313(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movq (%0), %%mm1\n movq (%1), %%mm2\n pshufw $177, %%mm2, %%mm1\n movq %%mm1, (%0)\n emms"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f314(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movq (%0), %%mm1\n movq (%1), %%mm2\n pshufw $177, (%%rdi), %%mm1\n movq %%mm1, (%0)\n emms"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f315(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movq (%0), %%mm1\n movq (%1), %%mm2\n pshufw $228, %%mm2, %%mm1\n movq %%mm1, (%0)\n emms"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f316(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movq (%0), %%mm1\n movq (%1), %%mm2\n pshufw $228, (%%rdi), %%mm1\n movq %%mm1, (%0)\n emms"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f317(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movq (%0), %%mm1\n movq (%1), %%mm2\n pshufw $255, %%mm2, %%mm1\n movq %%mm1, (%0)\n emms"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f318(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movq (%0), %%mm1\n movq (%1), %%mm2\n pshufw $255, (%%rdi), %%mm1\n movq %%mm1, (%0)\n emms"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f319(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movq (%0), %%mm1\n movq (%1), %%mm2\n pshufw $147, %%mm2, %%mm1\n movq %%mm1, (%0)\n emms"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
+__attribute__((noinline)) static void f320(uint8_t *v, uint8_t *src) {
+    __asm__ volatile("movq (%0), %%mm1\n movq (%1), %%mm2\n pshufw $147, (%%rdi), %%mm1\n movq %%mm1, (%0)\n emms"
+                     :: "S"(v), "D"(src) : "memory", "xmm1", "xmm2", "xmm9", "xmm10", "mm1", "mm2");
+}
 struct form { const char *name, *m; int lb, x, imm; void (*fn)(uint8_t *, uint8_t *); };
 static const struct form forms[] = {
     {"pshufb xmm1", "pshufb", 1, 1, 0, f0},
@@ -1351,8 +1670,85 @@ static const struct form forms[] = {
     {"mpsadbw xmm1 7", "mpsadbw", 2, 1, 7, f241},
     {"mpsadbw xmm9 7", "mpsadbw", 2, 1, 7, f242},
     {"mpsadbw mem 7", "mpsadbw", 2, 1, 7, f243},
+    {"pshufd xmm1 0", "shufd", 4, 1, 0, f244},
+    {"pshufd xmm9 0", "shufd", 4, 1, 0, f245},
+    {"pshufd mem 0", "shufd", 4, 1, 0, f246},
+    {"pshufd xmm1 27", "shufd", 4, 1, 27, f247},
+    {"pshufd xmm9 27", "shufd", 4, 1, 27, f248},
+    {"pshufd mem 27", "shufd", 4, 1, 27, f249},
+    {"pshufd xmm1 78", "shufd", 4, 1, 78, f250},
+    {"pshufd xmm9 78", "shufd", 4, 1, 78, f251},
+    {"pshufd mem 78", "shufd", 4, 1, 78, f252},
+    {"pshufd xmm1 177", "shufd", 4, 1, 177, f253},
+    {"pshufd xmm9 177", "shufd", 4, 1, 177, f254},
+    {"pshufd mem 177", "shufd", 4, 1, 177, f255},
+    {"pshufd xmm1 228", "shufd", 4, 1, 228, f256},
+    {"pshufd xmm9 228", "shufd", 4, 1, 228, f257},
+    {"pshufd mem 228", "shufd", 4, 1, 228, f258},
+    {"pshufd xmm1 255", "shufd", 4, 1, 255, f259},
+    {"pshufd xmm9 255", "shufd", 4, 1, 255, f260},
+    {"pshufd mem 255", "shufd", 4, 1, 255, f261},
+    {"pshufd xmm1 147", "shufd", 4, 1, 147, f262},
+    {"pshufd xmm9 147", "shufd", 4, 1, 147, f263},
+    {"pshufd mem 147", "shufd", 4, 1, 147, f264},
+    {"pshuflw xmm1 0", "shuflw", 2, 1, 0, f265},
+    {"pshuflw xmm9 0", "shuflw", 2, 1, 0, f266},
+    {"pshuflw mem 0", "shuflw", 2, 1, 0, f267},
+    {"pshuflw xmm1 27", "shuflw", 2, 1, 27, f268},
+    {"pshuflw xmm9 27", "shuflw", 2, 1, 27, f269},
+    {"pshuflw mem 27", "shuflw", 2, 1, 27, f270},
+    {"pshuflw xmm1 78", "shuflw", 2, 1, 78, f271},
+    {"pshuflw xmm9 78", "shuflw", 2, 1, 78, f272},
+    {"pshuflw mem 78", "shuflw", 2, 1, 78, f273},
+    {"pshuflw xmm1 177", "shuflw", 2, 1, 177, f274},
+    {"pshuflw xmm9 177", "shuflw", 2, 1, 177, f275},
+    {"pshuflw mem 177", "shuflw", 2, 1, 177, f276},
+    {"pshuflw xmm1 228", "shuflw", 2, 1, 228, f277},
+    {"pshuflw xmm9 228", "shuflw", 2, 1, 228, f278},
+    {"pshuflw mem 228", "shuflw", 2, 1, 228, f279},
+    {"pshuflw xmm1 255", "shuflw", 2, 1, 255, f280},
+    {"pshuflw xmm9 255", "shuflw", 2, 1, 255, f281},
+    {"pshuflw mem 255", "shuflw", 2, 1, 255, f282},
+    {"pshuflw xmm1 147", "shuflw", 2, 1, 147, f283},
+    {"pshuflw xmm9 147", "shuflw", 2, 1, 147, f284},
+    {"pshuflw mem 147", "shuflw", 2, 1, 147, f285},
+    {"pshufhw xmm1 0", "shufhw", 2, 1, 0, f286},
+    {"pshufhw xmm9 0", "shufhw", 2, 1, 0, f287},
+    {"pshufhw mem 0", "shufhw", 2, 1, 0, f288},
+    {"pshufhw xmm1 27", "shufhw", 2, 1, 27, f289},
+    {"pshufhw xmm9 27", "shufhw", 2, 1, 27, f290},
+    {"pshufhw mem 27", "shufhw", 2, 1, 27, f291},
+    {"pshufhw xmm1 78", "shufhw", 2, 1, 78, f292},
+    {"pshufhw xmm9 78", "shufhw", 2, 1, 78, f293},
+    {"pshufhw mem 78", "shufhw", 2, 1, 78, f294},
+    {"pshufhw xmm1 177", "shufhw", 2, 1, 177, f295},
+    {"pshufhw xmm9 177", "shufhw", 2, 1, 177, f296},
+    {"pshufhw mem 177", "shufhw", 2, 1, 177, f297},
+    {"pshufhw xmm1 228", "shufhw", 2, 1, 228, f298},
+    {"pshufhw xmm9 228", "shufhw", 2, 1, 228, f299},
+    {"pshufhw mem 228", "shufhw", 2, 1, 228, f300},
+    {"pshufhw xmm1 255", "shufhw", 2, 1, 255, f301},
+    {"pshufhw xmm9 255", "shufhw", 2, 1, 255, f302},
+    {"pshufhw mem 255", "shufhw", 2, 1, 255, f303},
+    {"pshufhw xmm1 147", "shufhw", 2, 1, 147, f304},
+    {"pshufhw xmm9 147", "shufhw", 2, 1, 147, f305},
+    {"pshufhw mem 147", "shufhw", 2, 1, 147, f306},
+    {"pshufw mm1 0", "shuflw", 2, 0, 0, f307},
+    {"pshufw mem 0 mm", "shuflw", 2, 0, 0, f308},
+    {"pshufw mm1 27", "shuflw", 2, 0, 27, f309},
+    {"pshufw mem 27 mm", "shuflw", 2, 0, 27, f310},
+    {"pshufw mm1 78", "shuflw", 2, 0, 78, f311},
+    {"pshufw mem 78 mm", "shuflw", 2, 0, 78, f312},
+    {"pshufw mm1 177", "shuflw", 2, 0, 177, f313},
+    {"pshufw mem 177 mm", "shuflw", 2, 0, 177, f314},
+    {"pshufw mm1 228", "shuflw", 2, 0, 228, f315},
+    {"pshufw mem 228 mm", "shuflw", 2, 0, 228, f316},
+    {"pshufw mm1 255", "shuflw", 2, 0, 255, f317},
+    {"pshufw mem 255 mm", "shuflw", 2, 0, 255, f318},
+    {"pshufw mm1 147", "shuflw", 2, 0, 147, f319},
+    {"pshufw mem 147 mm", "shuflw", 2, 0, 147, f320},
 };
-#define NFORMS 244
+#define NFORMS 321
 
 int main(void) {
     static uint8_t v[16] __attribute__((aligned(16))), src[16] __attribute__((aligned(16))), d0[16], want[16];

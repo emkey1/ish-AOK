@@ -28,6 +28,29 @@
 #endif
 .endm
 
+#if defined(__aarch64__)
+# The guest's time-stamp and virtual counters (x86 RDTSC, arm64 CNTVCT_EL0):
+# the host's system counter in nanoseconds, floor(CNTVCT * 1e9 / CNTFRQ) done
+# as quotient and remainder so nothing overflows. 1 GHz is what the guests are
+# told (arm64 CNTFRQ_EL0). The ISB keeps the read after everything before it,
+# so a guest's LFENCE; RDTSC or ISB; MRS (which it may not pass on) still
+# orders it -- without it a read could come out older than a value another
+# thread had already published. \rd, \t1-\t3: x registers, all clobbered.
+.macro host_counter_ns rd, t1, t2, t3
+    isb
+    mrs  \rd, cntvct_el0
+    mrs  \t1, cntfrq_el0
+    udiv \t2, \rd, \t1
+    msub \t3, \t2, \t1, \rd
+    movz \rd, 0xca00
+    movk \rd, 0x3b9a, lsl 16            /* 1e9 */
+    mul  \t2, \t2, \rd
+    mul  \t3, \t3, \rd
+    udiv \t3, \t3, \t1
+    add  \rd, \t2, \t3
+.endm
+#endif
+
 #if __APPLE__
 #define NAME(x) _##x
 #else

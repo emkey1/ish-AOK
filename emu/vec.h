@@ -174,6 +174,7 @@ void vec_single_comi64(struct cpu_state *cpu, const double *src, const double *d
 void vec_single_fcmp64(NO_CPU, const double *src, union xmm_reg *dst, uint8_t type);
 void vec_single_fcmp32(NO_CPU, const float *src, union xmm_reg *dst, uint8_t type);
 void vec_fcmp_p64(NO_CPU, const union xmm_reg *src, union xmm_reg *dst, uint8_t type);
+void vec_fcmp_p32(NO_CPU, const union xmm_reg *src, union xmm_reg *dst, uint8_t type);
 
 void vec_cvtsi2sd32(NO_CPU, const int32_t *src, double *dst);
 void vec_cvttsd2si64(NO_CPU, const double *src, int32_t *dst);
@@ -186,6 +187,12 @@ void vec_cvtss2sd32(NO_CPU, const float *src, double *dst);
 
 void vec_cvttpd2dq64(NO_CPU, const union xmm_reg *src, union xmm_reg *dst);
 void vec_cvttps2dq32(NO_CPU, const union xmm_reg *src, union xmm_reg *dst);
+void vec_cvtps2dq128(NO_CPU, const union xmm_reg *src, union xmm_reg *dst);
+void vec_rcpps128(NO_CPU, const union xmm_reg *src, union xmm_reg *dst);
+void vec_rsqrtps128(NO_CPU, const union xmm_reg *src, union xmm_reg *dst);
+void vec_rcpss32(NO_CPU, const float *src, union xmm_reg *dst);
+void vec_rsqrtss32(NO_CPU, const float *src, union xmm_reg *dst);
+void vec_cvtpd2dq128(NO_CPU, const union xmm_reg *src, union xmm_reg *dst);
 void vec_cvtdq2pd64(NO_CPU, const union xmm_reg *src, union xmm_reg *dst);
 void vec_cvtps2pd64(NO_CPU, const union xmm_reg *src, union xmm_reg *dst);
 void vec_cvtpd2ps128(NO_CPU, const union xmm_reg *src, union xmm_reg *dst);
@@ -241,6 +248,8 @@ void vec_movl_p64(NO_CPU, const uint64_t *src, union xmm_reg *dst);
 void vec_movl_pm64(NO_CPU, const union xmm_reg *src, uint64_t *dst);
 void vec_movh_p64(NO_CPU, const uint64_t *src, union xmm_reg *dst);
 void vec_movh_pm64(NO_CPU, const union xmm_reg *src, uint64_t *dst);
+void vec_movhl128(NO_CPU, const union xmm_reg *src, union xmm_reg *dst);
+void vec_movlh128(NO_CPU, const union xmm_reg *src, union xmm_reg *dst);
 
 void vec_movmask_b64(NO_CPU, const union mm_reg *src, uint32_t *dst);
 void vec_movmask_b128(NO_CPU, const union xmm_reg *src, uint32_t *dst);
@@ -250,6 +259,7 @@ void vec_fmovmask_d128(NO_CPU, const union xmm_reg *src, uint32_t *dst);
 void vec_insert_w64(NO_CPU, const uint32_t *src, union mm_reg *dst, uint8_t index);
 void vec_insert_w128(NO_CPU, const uint32_t *src, union xmm_reg *dst, uint8_t index);
 void vec_extract_w128(NO_CPU, const union xmm_reg *src, uint32_t *dst, uint8_t index);
+void vec_extract_w64(NO_CPU, const union mm_reg *src, uint32_t *dst, uint8_t index);
 
 void vec_avg_b128(NO_CPU, const union xmm_reg *src, union xmm_reg *dst);
 void vec_avg_w128(NO_CPU, const union xmm_reg *src, union xmm_reg *dst);

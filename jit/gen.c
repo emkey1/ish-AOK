@@ -132,7 +132,7 @@ static bool amd64_opcode_needs_modrm(const struct amd64_jit_insn *insn) {
         case 0xc3:
         case 0x50:
         // 0x51 SQRT{PS,PD,SS,SD}: the scalar forms have gadgets
-        // (amd64_v_scalar_sqrt); without a ModRM byte here no arm could claim
+        // (math.S amd64_xf_sqrt*); without a ModRM byte here no arm could claim
         // them and every sqrtsd ran on the interpreter.
         case 0x51:
         case 0x52:          // RSQRTPS/SS, RCPPS/SS: missing, so they all ran on the interpreter
@@ -9531,6 +9531,30 @@ int gen_step_amd64(struct gen_state *state, struct tlb *tlb) {
     return gen_step64(state, tlb);
 }
 
+// The tbl index for math.S's amd64_v_tbl1/tbl2 shuffle gadgets, as two
+// little-endian quadwords. kind: 0 shufps, 1 shufpd (tbl2: {dst, src}), 2
+// pshufd, 3 pshuflw, 4 pshufhw (tbl1: the source alone).
+__attribute__((unused)) static void x86_shuffle_index(int kind, uint8_t imm, unsigned long *lo_out, unsigned long *hi_out) {
+    uint8_t idx[16];
+    for (unsigned i = 0; i < 16; i++) idx[i] = i;
+    switch (kind) {
+    case 0: for (unsigned k = 0; k < 4; k++) { unsigned sel = (imm >> (2 * k)) & 3;
+                for (unsigned j = 0; j < 4; j++) idx[4 * k + j] = (k < 2 ? 0 : 16) + 4 * sel + j; } break;
+    case 1: for (unsigned k = 0; k < 2; k++) { unsigned sel = (imm >> k) & 1;
+                for (unsigned j = 0; j < 8; j++) idx[8 * k + j] = (k == 0 ? 0 : 16) + 8 * sel + j; } break;
+    case 2: for (unsigned k = 0; k < 4; k++) { unsigned sel = (imm >> (2 * k)) & 3;
+                for (unsigned j = 0; j < 4; j++) idx[4 * k + j] = 4 * sel + j; } break;
+    case 3: for (unsigned k = 0; k < 4; k++) { unsigned sel = (imm >> (2 * k)) & 3;
+                for (unsigned j = 0; j < 2; j++) idx[2 * k + j] = 2 * sel + j; } break;
+    default: for (unsigned k = 0; k < 4; k++) { unsigned sel = (imm >> (2 * k)) & 3;
+                for (unsigned j = 0; j < 2; j++) idx[8 + 2 * k + j] = 8 + 2 * sel + j; } break;
+    }
+    unsigned long lo = 0, hi = 0;
+    for (unsigned i = 0; i < 8; i++) { lo |= (unsigned long) idx[i] << (8 * i); hi |= (unsigned long) idx[8 + i] << (8 * i); }
+    *lo_out = lo;
+    *hi_out = hi;
+}
+
 #if defined(__aarch64__)
 static int gen_step64(struct gen_state *state, struct tlb *tlb) {
     struct amd64_jit_insn insn;
@@ -10218,12 +10242,15 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
     }
     if (amd64_jit_plain_prefixes(&insn) && insn.two_byte_opcode && insn.op2 == 0x31) {
         next_ip = insn.end_ip;
-        amd64_jit_debug("rdtsc-helper ip=%llx next=%llx",
+        state->amd64_ip = next_ip;
+        amd64_jit_debug("rdtsc ip=%llx next=%llx",
                 (unsigned long long) insn.start_ip,
                 (unsigned long long) next_ip);
-        gen_amd64_helper_tlb_1_retint(state, amd64_jit_rdtsc, (unsigned long) next_ip);
-        gen_exit(state);
-        return false;
+        gen_amd64_flush_reg_cache(state);
+        extern void gadget_amd64_rdtsc(void);
+        gen(state, (unsigned long) gadget_amd64_rdtsc);
+        gen_amd64_defer_rip(state, next_ip);
+        return true;
     }
 
     // XGETBV (0f 01 d0), and VMCALL (0f 01 c1) below. 0f 01's other register
@@ -12837,22 +12864,8 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
             return false;
         }
         next_ip += sizeof(imm);
-        uint8_t idx[16];
-        for (unsigned i = 0; i < 16; i++) idx[i] = i;
-        switch (kind) {
-        case 0: for (unsigned k = 0; k < 4; k++) { unsigned sel = (imm >> (2 * k)) & 3;
-                    for (unsigned j = 0; j < 4; j++) idx[4 * k + j] = (k < 2 ? 0 : 16) + 4 * sel + j; } break;
-        case 1: for (unsigned k = 0; k < 2; k++) { unsigned sel = (imm >> k) & 1;
-                    for (unsigned j = 0; j < 8; j++) idx[8 * k + j] = (k == 0 ? 0 : 16) + 8 * sel + j; } break;
-        case 2: for (unsigned k = 0; k < 4; k++) { unsigned sel = (imm >> (2 * k)) & 3;
-                    for (unsigned j = 0; j < 4; j++) idx[4 * k + j] = 4 * sel + j; } break;
-        case 3: for (unsigned k = 0; k < 4; k++) { unsigned sel = (imm >> (2 * k)) & 3;
-                    for (unsigned j = 0; j < 2; j++) idx[2 * k + j] = 2 * sel + j; } break;
-        default: for (unsigned k = 0; k < 4; k++) { unsigned sel = (imm >> (2 * k)) & 3;
-                    for (unsigned j = 0; j < 2; j++) idx[8 + 2 * k + j] = 8 + 2 * sel + j; } break;
-        }
-        unsigned long lo = 0, hi = 0;
-        for (unsigned i = 0; i < 8; i++) { lo |= (unsigned long) idx[i] << (8 * i); hi |= (unsigned long) idx[8 + i] << (8 * i); }
+        unsigned long lo, hi;
+        x86_shuffle_index(kind, imm, &lo, &hi);
         state->amd64_ip = next_ip;
         amd64_jit_debug("v-shuf kind=%d ip=%llx imm=%02x mem=%d src=%u dst=%u next=%llx",
                 kind, (unsigned long long) insn.start_ip, imm, is_mem, rm_id, reg_id,
@@ -18162,26 +18175,41 @@ void helper_daa(struct cpu_state *cpu);
 void helper_das(struct cpu_state *cpu);
 void helper_aam(struct cpu_state *cpu, uint32_t base);
 void helper_aad(struct cpu_state *cpu, uint32_t base);
+#if defined(__aarch64__)
+// gadgets-aarch64/control.S, exact to AMD's flags (tests/manual/x86/i386_bcd.c)
+#define AAA() g(aaa)
+#define AAS() g(aas)
+#define DAA() g(daa)
+#define DAS() g(das)
+#define BCD_BASE(g_, base) gg(g_, (uint8_t) (base))
+#else
 #define AAA() h(helper_aaa)
 #define AAS() h(helper_aas)
 #define DAA() h(helper_daa)
 #define DAS() h(helper_das)
+#define BCD_BASE(g_, base) hh(helper_##g_, base)
+#endif
 // aam with base 0 is a divide error. The base is an immediate, so that is
 // decidable here rather than in the helper.
 #define AAM(base) do { \
     if ((base) == 0) { gggg(interrupt, INT_DIV, state->orig_ip, state->orig_ip); return false; } \
-    hh(helper_aam, base); \
+    BCD_BASE(aam, base); \
 } while (0)
-#define AAD(base) hh(helper_aad, base)
+#define AAD(base) BCD_BASE(aad, base)
 // LOOP rel8 (0xe2): decrement ECX without touching flags, then branch if the
 // result is nonzero. That is jcxz with its two ip slots swapped, so the
 // existing gadget covers it on both hosts.
-#define LOOP_REL(off) h(helper_loop_dec_ecx); ggg(jcxz, fake_ip, REL_TARGET(off)); jump_ips(-2, -1); end_block = true
+#if defined(__aarch64__)
+#define LOOP_DEC_ECX g(loop_dec_ecx)
+#else
+#define LOOP_DEC_ECX h(helper_loop_dec_ecx)
+#endif
+#define LOOP_REL(off) LOOP_DEC_ECX; ggg(jcxz, fake_ip, REL_TARGET(off)); jump_ips(-2, -1); end_block = true
 // LOOPZ/LOOPE (0xe1) and LOOPNZ/LOOPNE (0xe0): same decrement, but the branch
 // also tests ZF, which needs a gadget -- the taken/not-taken decision can't be
 // expressed by swapping jcxz's targets. Operand 0 = taken, operand 1 = else.
-#define LOOPZ_REL(off)  h(helper_loop_dec_ecx); ggg(loopz,  REL_TARGET(off), fake_ip); jump_ips(-2, -1); end_block = true
-#define LOOPNZ_REL(off) h(helper_loop_dec_ecx); ggg(loopnz, REL_TARGET(off), fake_ip); jump_ips(-2, -1); end_block = true
+#define LOOPZ_REL(off)  LOOP_DEC_ECX; ggg(loopz,  REL_TARGET(off), fake_ip); jump_ips(-2, -1); end_block = true
+#define LOOPNZ_REL(off) LOOP_DEC_ECX; ggg(loopnz, REL_TARGET(off), fake_ip); jump_ips(-2, -1); end_block = true
 #define jcc(cc, to, otherwise) do { \
     if (gen_try_fuse_jcc(state, cond_##cc)) { GEN(to); GEN(otherwise); } \
     else { gagg(jmp, cond_##cc, to, otherwise); } \
@@ -18378,7 +18406,11 @@ void helper_aad(struct cpu_state *cpu, uint32_t base);
 #define XADD(src, dst,z) XCHG(src, dst,z); ADD(src, dst,z)
 
 void helper_rdtsc(struct cpu_state *cpu);
+#if defined(__aarch64__)
+#define RDTSC g(rdtsc)
+#else
 #define RDTSC h(helper_rdtsc)
+#endif
 #if defined(__aarch64__)
 #define CPUID() gg(cpuid, (unsigned long) &cpuid_tables[0])
 #define XGETBV() ggg(xgetbv, (unsigned long) xcr0_value(), state->orig_ip)
@@ -18433,11 +18465,20 @@ void helper_rdtsc(struct cpu_state *cpu);
 // still emu/fpu.c, as the i386 guest's SSE is. The helper suffix is a literal
 // 32 rather than `oz` because these have no operand-size form and decode.h is
 // compiled once per OP_SIZE, so both passes must reach the same helper.
-#define STMXCSR() fh_write(fpu_stmxcsr, 32)
-#define LDMXCSR() fh_read(fpu_ldmxcsr, 32)
+#define STMXCSR() do { extern void gadget_i386_stmxcsr(void); g_addr(); GEN(gadget_i386_stmxcsr); GEN(state->orig_ip); } while (0)
+#define LDMXCSR() do { extern void gadget_i386_ldmxcsr(void); g_addr(); GEN(gadget_i386_ldmxcsr); GEN(state->orig_ip); } while (0)
 #define FXSAVE() do { extern void gadget_x87m_fxsave(void); g_addr(); GEN(gadget_x87m_fxsave); GEN(state->orig_ip); } while (0)
 #define FXRSTOR() do { extern void gadget_x87m_fxrstor(void); g_addr(); GEN(gadget_x87m_fxrstor); GEN(state->orig_ip); } while (0)
 #define EMMS() do { g(x87_emms); GEN(x87_word(0, false, false, state->orig_ip)); } while (0)
+// MASKMOVQ (z 64) / MASKMOVDQU (128): misc.S vec_maskmov8/16, data the reg
+// field's register, the mask r/m's
+#define MASKMOV(z) do { \
+    extern void gadget_vec_maskmov8(void), gadget_vec_maskmov16(void); \
+    GEN((z) == 64 ? gadget_vec_maskmov8 : gadget_vec_maskmov16); \
+    GEN(state->orig_ip); \
+    GEN((z) == 64 ? (CPU_OFFSET(mm[modrm.opcode & 7]) | ((uint64_t) CPU_OFFSET(mm[modrm.rm_opcode & 7]) << 16)) \
+            : (CPU_OFFSET(xmm[modrm.opcode & 7]) | ((uint64_t) CPU_OFFSET(xmm[modrm.rm_opcode & 7]) << 16))); \
+} while (0)
 #define FWAIT() do { g(x87_fwait); GEN(x87_word(0, false, false, state->orig_ip)); } while (0)
 // The x87 (D8-DF): x87.S, through the tables the amd64 decoder uses (above
 // gen_step_amd64).
@@ -18466,6 +18507,7 @@ void helper_rdtsc(struct cpu_state *cpu);
 } while (0)
 #else
 // An x86_64 host: no x87.S, so emu/fpu.c through the helper gadgets.
+#define MASKMOV(z) UNDEFINED
 #define EMMS()
 #define FWAIT()
 #define st_0 0
@@ -18647,135 +18689,525 @@ static inline bool gen_vex32(struct gen_state *state, struct tlb *tlb, struct mo
     return true;
 }
 
+#if defined(__aarch64__)
+// The i386 guest's vector ops as the amd64 engine's gadgets (math.S), which
+// work on cpu->xmm[] and cpu->mm[] by register number -- the same arrays,
+// i386 using xmm0-7 -- and are checked against hardware: a register source
+// runs the register form; a memory source is staged first (misc.S
+// vec_ldtmp*, into xmm15 or a parked MMX register) and then runs it too.
+// Keyed by the emu/vec.c helper decode.h names, so decode.h is unchanged.
+// kind IVK_SD: two operands, rm the source and reg the destination, the
+// gadget's word src | dst << 4 | imm << 8 (the imm8 an op may have);
+// IVK_IMM: a shift by imm8, the register in the r/m field, dst | imm << 8.
+// src, dst: each an XMM, MMX or general register (VK_*) -- a general
+// register as amd64_regs[0], which an i386 task does not use, copied in and
+// out by misc.S's vec_gpr_in_*/vec_gpr_out_*. mem_bits: the memory operand.
+enum { IVK_SD, IVK_IMM };
+enum { VK_X, VK_M, VK_G };
+struct i386_vec_gadget {
+    void (*helper)();
+    void (*gadget)(void);
+    unsigned char kind, mem_bits, src, dst;
+};
+// helper (decode.h's name), the amd64 gadget (family_name), MMX too
+#define I386_VI_BOTH(X) \
+    X(add_b, vi_paddb) X(add_w, vi_paddw) X(add_d, vi_paddd) X(add_q, vi_paddq) \
+    X(sub_b, vi_psubb) X(sub_w, vi_psubw) X(sub_d, vi_psubd) X(sub_q, vi_psubq) \
+    X(addss_b, vi_paddsb) X(addss_w, vi_paddsw) X(addus_b, vi_paddusb) X(addus_w, vi_paddusw) \
+    X(subss_b, vi_psubsb) X(subss_w, vi_psubsw) X(subus_b, vi_psubusb) X(subus_w, vi_psubusw) \
+    X(compare_eqb, vi_pcmpeqb) X(compare_eqw, vi_pcmpeqw) X(compare_eqd, vi_pcmpeqd) \
+    X(compares_gtb, vi_pcmpgtb) X(compares_gtw, vi_pcmpgtw) X(compares_gtd, vi_pcmpgtd) \
+    X(andn, vi_pandn) X(min_ub, vi_pminub) X(max_ub, vi_pmaxub) X(mins_w, vi_pminsw) X(maxs_w, vi_pmaxsw) \
+    X(avg_b, vi_pavgb) X(avg_w, vi_pavgw) X(mull, vi_pmullw) X(mulu, vi_pmulhw) X(muluu, vi_pmulhuw) \
+    X(mulu_dq, vi_pmuludq) X(madd_d, vi_pmaddwd) X(sumabs_w, vi_psadbw) \
+    X(unpackl_bw, vi_punpcklbw) X(unpackl_w, vi_punpcklwd) X(unpackl_dq, vi_punpckldq) \
+    X(unpackh_bw, vi_punpckhbw) X(unpackh_w, vi_punpckhwd) X(unpackh_d, vi_punpckhdq) \
+    X(packss_w, vi_packsswb) X(packsu_w, vi_packuswb) X(packss_d, vi_packssdw) \
+    X(shiftr_w, vsh_psrlw) X(shiftr_d, vsh_psrld) X(shiftr_q, vsh_psrlq) \
+    X(shiftrs_w, vsh_psraw) X(shiftrs_d, vsh_psrad) \
+    X(shiftl_w, vsh_psllw) X(shiftl_d, vsh_pslld) X(shiftl_q, vsh_psllq)
+// XMM only (66, 66 0F 38, the packed-single/double logic and unpacks)
+#define I386_VI_XMM(X) \
+    X(and_dq, vi_pand) X(or_dq, vi_por) X(xor_dq, vi_pxor) \
+    X(unpackl_qdq, vi_punpcklqdq) X(unpackh_dq, vi_punpckhqdq) \
+    X(unpackl_ps, vi_punpckldq) X(unpackh_ps, vi_punpckhdq) X(unpackl_pd, vi_punpcklqdq) \
+    X(unpackh_pd, vi_punpckhqdq) \
+    X(pshufb, vi_pshufb) X(phaddw, vi_phaddw) X(phaddd, vi_phaddd) X(phaddsw, vi_phaddsw) \
+    X(phsubw, vi_phsubw) X(phsubd, vi_phsubd) X(phsubsw, vi_phsubsw) X(pmaddubsw, vi_pmaddubsw) \
+    X(pmulhrsw, vi_pmulhrsw) X(psignb, vi_psignb) X(psignw, vi_psignw) X(psignd, vi_psignd) \
+    X(pabsb, vi_pabsb) X(pabsw, vi_pabsw) X(pabsd, vi_pabsd) X(pmuldq, vi_pmuldq) \
+    X(pcmpeqq, vi_pcmpeqq) X(pcmpgtq, vi_pcmpgtq) X(packusdw, vi_packusdw) \
+    X(pminsb, vi_pminsb) X(pminsd, vi_pminsd) X(pminuw, vi_pminuw) X(pminud, vi_pminud) \
+    X(pmaxsb, vi_pmaxsb) X(pmaxsd, vi_pmaxsd) X(pmaxuw, vi_pmaxuw) X(pmaxud, vi_pmaxud) \
+    X(pmulld, vi_pmulld) X(phminposuw, vi_phminposuw) \
+    X(pblendvb, vi_pblendvb) X(blendvps, vi_blendvps) X(blendvpd, vi_blendvpd)
+// MMX only (pand/por/pxor are the _q helpers there)
+#define I386_VI_MMX(X) X(and_q, vi_pand) X(or_q, vi_por) X(xor_q, vi_pxor)
+// shifts by imm8 (xi/mi)
+#define I386_VSH_IMM_BOTH(X) \
+    X(imm_shiftr_w, vsh_psrlw) X(imm_shiftr_d, vsh_psrld) X(imm_shiftr_q, vsh_psrlq) \
+    X(imm_shiftrs_w, vsh_psraw) X(imm_shiftrs_d, vsh_psrad) \
+    X(imm_shiftl_w, vsh_psllw) X(imm_shiftl_d, vsh_pslld) X(imm_shiftl_q, vsh_psllq)
+#define I386_VSH_IMM_XMM(X) X(imm_shiftr_dq, vsh_psrldq) X(imm_shiftl_dq, vsh_pslldq)
+#define I386_VI_DECL_BOTH(h, g) extern void gadget_amd64_##g##_xr(void), gadget_amd64_##g##_mr(void);
+#define I386_VI_DECL_XMM(h, g) extern void gadget_amd64_##g##_xr(void);
+#define I386_VI_DECL_MMX(h, g) extern void gadget_amd64_##g##_mr(void);
+#define I386_VI_DECL_IBOTH(h, g) extern void gadget_amd64_##g##_xi(void), gadget_amd64_##g##_mi(void);
+#define I386_VI_DECL_IXMM(h, g) extern void gadget_amd64_##g##_xi(void);
+I386_VI_BOTH(I386_VI_DECL_BOTH) I386_VI_XMM(I386_VI_DECL_XMM) I386_VI_MMX(I386_VI_DECL_MMX)
+I386_VSH_IMM_BOTH(I386_VI_DECL_IBOTH) I386_VSH_IMM_XMM(I386_VI_DECL_IXMM)
+// The SSE floating point (math.S amd64_xf_*, exact to x86): the helper with
+// its width suffix, the gadget, the memory operand's bits.
+#define I386_XF(X) \
+    X(add_p32, addps, 128) X(sub_p32, subps, 128) X(mul_p32, mulps, 128) X(div_p32, divps, 128) \
+    X(min_p32, minps, 128) X(max_p32, maxps, 128) X(sqrt_p32, sqrtps, 128) X(fcmp_p32, cmpps, 128) \
+    X(add_p64, addpd, 128) X(sub_p64, subpd, 128) X(mul_p64, mulpd, 128) X(div_p64, divpd, 128) \
+    X(min_p64, minpd, 128) X(max_p64, maxpd, 128) X(sqrt_p64, sqrtpd, 128) X(fcmp_p64, cmppd, 128) \
+    X(single_fadd32, addss, 32) X(single_fsub32, subss, 32) X(single_fmul32, mulss, 32) \
+    X(single_fdiv32, divss, 32) X(single_fmin32, minss, 32) X(single_fmax32, maxss, 32) \
+    X(single_fsqrt32, sqrtss, 32) X(single_fcmp32, cmpss, 32) \
+    X(single_fadd64, addsd, 64) X(single_fsub64, subsd, 64) X(single_fmul64, mulsd, 64) \
+    X(single_fdiv64, divsd, 64) X(single_fmin64, minsd, 64) X(single_fmax64, maxsd, 64) \
+    X(single_fsqrt64, sqrtsd, 64) X(single_fcmp64, cmpsd, 64) \
+    X(addsubps128, addsubps, 128) X(addsubpd128, addsubpd, 128) X(haddps128, haddps, 128) \
+    X(haddpd128, haddpd, 128) X(hsubps128, hsubps, 128) X(hsubpd128, hsubpd, 128) \
+    X(single_comi32, comiss, 32) X(single_ucomi32, ucomiss, 32) \
+    X(single_comi64, comisd, 64) X(single_ucomi64, ucomisd, 64) \
+    X(cvtps2pd64, cvtps2pd, 64) X(cvtpd2ps128, cvtpd2ps, 128) X(cvtss2sd32, cvtss2sd, 32) \
+    X(cvtsd2ss64, cvtsd2ss, 64) X(cvtdq2ps128, cvtdq2ps, 128) X(cvtdq2pd64, cvtdq2pd, 64) \
+    X(cvttps2dq32, cvttps2dq, 128) X(cvttpd2dq64, cvttpd2dq, 128) \
+    X(cvtps2dq128, cvtps2dq, 128) X(cvtpd2dq128, cvtpd2dq, 128) \
+    X(rcpps128, rcpps, 128) X(rsqrtps128, rsqrtps, 128) X(rcpss32, rcpss, 32) X(rsqrtss32, rsqrtss, 32) \
+    X(movsldup128, movsldup, 128) X(movshdup128, movshdup, 128) X(movddup64, movddup, 64) \
+    X(round_ps128, roundps, 128) X(round_pd128, roundpd, 128) X(round_ss32, roundss, 32) \
+    X(round_sd64, roundsd, 64) X(dpps128, dpps, 128) X(dppd128, dppd, 128)
+#define I386_XF_DECL(h, g, b) extern void gadget_amd64_xf_##g##_r(void);
+I386_XF(I386_XF_DECL)
+#define I386_VI_ROW_BOTH(h, g) {(void (*)()) vec_##h##128, gadget_amd64_##g##_xr, IVK_SD, 128, VK_X, VK_X}, \
+    {(void (*)()) vec_##h##64, gadget_amd64_##g##_mr, IVK_SD, 64, VK_M, VK_M},
+#define I386_VI_ROW_XMM(h, g) {(void (*)()) vec_##h##128, gadget_amd64_##g##_xr, IVK_SD, 128, VK_X, VK_X},
+#define I386_VI_ROW_MMX(h, g) {(void (*)()) vec_##h##64, gadget_amd64_##g##_mr, IVK_SD, 64, VK_M, VK_M},
+#define I386_VI_ROW_IBOTH(h, g) {(void (*)()) vec_##h##128, gadget_amd64_##g##_xi, IVK_IMM, 128, VK_X, VK_X}, \
+    {(void (*)()) vec_##h##64, gadget_amd64_##g##_mi, IVK_IMM, 64, VK_M, VK_M},
+#define I386_VI_ROW_IXMM(h, g) {(void (*)()) vec_##h##128, gadget_amd64_##g##_xi, IVK_IMM, 128, VK_X, VK_X},
+#define I386_XF_ROW(h, g, b) {(void (*)()) vec_##h, gadget_amd64_xf_##g##_r, IVK_SD, b, VK_X, VK_X},
+// with a general register: helper, gadget (whole name), memory bits, src, dst
+#define I386_VG(X) \
+    X(cvttss2si32, amd64_xf_cvttss2si32_r, 32, VK_X, VK_G) X(cvtss2si32, amd64_xf_cvtss2si32_r, 32, VK_X, VK_G) \
+    X(cvttsd2si64, amd64_xf_cvttsd2si32_r, 64, VK_X, VK_G) X(cvtsd2si64, amd64_xf_cvtsd2si32_r, 64, VK_X, VK_G) \
+    X(cvtsi2ss32, amd64_xf_cvtsi2ss_r, 32, VK_G, VK_X) X(cvtsi2sd32, amd64_xf_cvtsi2sd_r, 32, VK_G, VK_X) \
+    X(movmask_b128, amd64_v_pmovmskb_reg, 0, VK_X, VK_G) X(movmask_b64, amd64_mmx_pmovmskb, 0, VK_M, VK_G) \
+    X(fmovmask_s128, amd64_xf_movmskps, 0, VK_X, VK_G) X(fmovmask_d128, amd64_xf_movmskpd, 0, VK_X, VK_G) \
+    X(extract_w128, amd64_v_pextrw, 0, VK_X, VK_G) X(extract_w64, amd64_mmx_pextrw, 0, VK_M, VK_G) \
+    X(insert_w128, amd64_v_pinsrw_reg, 16, VK_G, VK_X) X(insert_w64, amd64_mmx_pinsrw_reg, 16, VK_G, VK_M) \
+    X(shuffle_w64, amd64_mmx_pshufw_reg, 64, VK_M, VK_M) \
+    X(movhl128, amd64_v_movhlps_reg, 0, VK_X, VK_X) X(movlh128, amd64_v_movlhps_reg, 0, VK_X, VK_X) \
+    X(ptest128, amd64_s4_ptest_r, 128, VK_X, VK_X) \
+    X(pmovsxbw64, amd64_vi_pmovsxbw_xr, 64, VK_X, VK_X) X(pmovsxbd32, amd64_vi_pmovsxbd_xr, 32, VK_X, VK_X) \
+    X(pmovsxbq16, amd64_vi_pmovsxbq_xr, 16, VK_X, VK_X) X(pmovsxwd64, amd64_vi_pmovsxwd_xr, 64, VK_X, VK_X) \
+    X(pmovsxwq32, amd64_vi_pmovsxwq_xr, 32, VK_X, VK_X) X(pmovsxdq64, amd64_vi_pmovsxdq_xr, 64, VK_X, VK_X) \
+    X(pmovzxbw64, amd64_vi_pmovzxbw_xr, 64, VK_X, VK_X) X(pmovzxbd32, amd64_vi_pmovzxbd_xr, 32, VK_X, VK_X) \
+    X(pmovzxbq16, amd64_vi_pmovzxbq_xr, 16, VK_X, VK_X) X(pmovzxwd64, amd64_vi_pmovzxwd_xr, 64, VK_X, VK_X) \
+    X(pmovzxwq32, amd64_vi_pmovzxwq_xr, 32, VK_X, VK_X) X(pmovzxdq64, amd64_vi_pmovzxdq_xr, 64, VK_X, VK_X) \
+    X(palignr128, amd64_v3a_palignr_xr, 128, VK_X, VK_X) X(blend_w128, amd64_v3a_pblendw_xr, 128, VK_X, VK_X) \
+    X(blend_ps128, amd64_v3a_blendps_xr, 128, VK_X, VK_X) X(blend_pd128, amd64_v3a_blendpd_xr, 128, VK_X, VK_X) \
+    X(mpsadbw128, amd64_v3a_mpsadbw_xr, 128, VK_X, VK_X)
+#define I386_VG_DECL(h, g, b, sk, dk) extern void gadget_##g(void);
+I386_VG(I386_VG_DECL)
+#define I386_VG_ROW(h, g, b, sk, dk) {(void (*)()) vec_##h, gadget_##g, IVK_SD, b, sk, dk},
+static const struct i386_vec_gadget i386_vec_map[] = {
+    I386_VI_BOTH(I386_VI_ROW_BOTH) I386_VI_XMM(I386_VI_ROW_XMM) I386_VI_MMX(I386_VI_ROW_MMX)
+    I386_VSH_IMM_BOTH(I386_VI_ROW_IBOTH) I386_VSH_IMM_XMM(I386_VI_ROW_IXMM)
+    I386_XF(I386_XF_ROW)
+    I386_VG(I386_VG_ROW)
+};
+
+static const struct i386_vec_gadget *i386_vec_lookup(void (*helper)()) {
+    for (size_t i = 0; i < sizeof(i386_vec_map) / sizeof(i386_vec_map[0]); i++)
+        if (i386_vec_map[i].helper == helper)
+            return &i386_vec_map[i];
+    return NULL;
+}
+
+// A general register into amd64_regs[slot] (zero-extended) or out of it
+// (misc.S vec_gpr_in_* / vec_gpr_out_*), x86 register order.
+extern void gadget_vec_gpr_in_reg_a(void), gadget_vec_gpr_in_reg_c(void), gadget_vec_gpr_in_reg_d(void),
+       gadget_vec_gpr_in_reg_b(void), gadget_vec_gpr_in_reg_sp(void), gadget_vec_gpr_in_reg_bp(void),
+       gadget_vec_gpr_in_reg_si(void), gadget_vec_gpr_in_reg_di(void);
+extern void gadget_vec_gpr_out_reg_a(void), gadget_vec_gpr_out_reg_c(void), gadget_vec_gpr_out_reg_d(void),
+       gadget_vec_gpr_out_reg_b(void), gadget_vec_gpr_out_reg_sp(void), gadget_vec_gpr_out_reg_bp(void),
+       gadget_vec_gpr_out_reg_si(void), gadget_vec_gpr_out_reg_di(void);
+static void gen_i386_gpr_in(struct gen_state *state, unsigned r, unsigned slot) {
+    static void (*const in[8])(void) = {
+        gadget_vec_gpr_in_reg_a, gadget_vec_gpr_in_reg_c, gadget_vec_gpr_in_reg_d, gadget_vec_gpr_in_reg_b,
+        gadget_vec_gpr_in_reg_sp, gadget_vec_gpr_in_reg_bp, gadget_vec_gpr_in_reg_si, gadget_vec_gpr_in_reg_di,
+    };
+    GEN(in[r & 7]);
+    GEN(slot);
+}
+static void gen_i386_gpr_out(struct gen_state *state, unsigned r, unsigned slot) {
+    static void (*const out[8])(void) = {
+        gadget_vec_gpr_out_reg_a, gadget_vec_gpr_out_reg_c, gadget_vec_gpr_out_reg_d, gadget_vec_gpr_out_reg_b,
+        gadget_vec_gpr_out_reg_sp, gadget_vec_gpr_out_reg_bp, gadget_vec_gpr_out_reg_si, gadget_vec_gpr_out_reg_di,
+    };
+    GEN(out[r & 7]);
+    GEN(slot);
+}
+
+// Emits m for the instruction; false if this shape is not one it handles.
+static bool gen_i386_vec_mapped(struct gen_state *state, const struct i386_vec_gadget *m,
+        enum arg src, enum arg dst, struct modrm *modrm, uint8_t imm, bool seg_tls, bool has_imm, int size) {
+    static const enum arg val[] = {[VK_X] = arg_xmm_modrm_val, [VK_M] = arg_mm_modrm_val, [VK_G] = arg_modrm_val};
+    static const enum arg reg[] = {[VK_X] = arg_xmm_modrm_reg, [VK_M] = arg_mm_modrm_reg, [VK_G] = arg_modrm_reg};
+    extern void gadget_vec_ldtmp16(void), gadget_vec_ldtmp32(void), gadget_vec_ldtmp64(void),
+           gadget_vec_ldtmp128(void), gadget_vec_mm_stash(void), gadget_vec_mm_unstash(void),
+           gadget_vec_align16(void);
+    unsigned r = modrm->rm_opcode & 7, d = modrm->opcode & 7;
+    if (m->kind == IVK_IMM) {
+        if (src != arg_imm || dst != reg[m->dst] || modrm->type != modrm_reg)
+            return false;
+        GEN(m->gadget);
+        GEN(r | ((unsigned long) imm << 8));
+        return true;
+    }
+    if (src != val[m->src] || dst != reg[m->dst])
+        return false;
+    bool mem = modrm->type != modrm_reg;
+    if (mem && m->mem_bits == 0)
+        return false;                  // a register-only form
+    unsigned long word_imm = has_imm ? (unsigned long) imm << 8 : 0;
+    unsigned s_idx = r, t = 8;
+    if (mem) {
+        gen_addr(state, modrm, seg_tls);
+        void (*ld)(void) = m->mem_bits == 16 ? gadget_vec_ldtmp16 : m->mem_bits == 32 ? gadget_vec_ldtmp32
+                : m->mem_bits == 64 ? gadget_vec_ldtmp64 : gadget_vec_ldtmp128;
+        uint16_t slot;
+        if (m->src == VK_X) {
+            if (m->mem_bits == 128 && (size == 128 || state->vec_align128) && !state->vec_noalign) {
+                GEN(gadget_vec_align16);
+                GEN(state->orig_ip);
+            }
+            s_idx = 15;
+            slot = CPU_OFFSET(xmm[15]);
+        } else if (m->src == VK_M) {
+            t = m->dst == VK_M && d == 0 ? 1 : 0;   // a register to park the operand in
+            GEN(gadget_vec_mm_stash);
+            GEN(t);
+            s_idx = t;
+            slot = CPU_OFFSET(mm[t]);
+        } else {
+            s_idx = 0;
+            slot = CPU_OFFSET(amd64_regs[0]);
+        }
+        GEN(ld);
+        GEN(state->orig_ip);
+        GEN(slot);
+    } else if (m->src == VK_G) {
+        gen_i386_gpr_in(state, r, 0);
+        s_idx = 0;
+    }
+    GEN(m->gadget);
+    GEN(s_idx | ((m->dst == VK_G ? 0 : d) << 4) | word_imm);
+    if (m->dst == VK_G)
+        gen_i386_gpr_out(state, d, 0);
+    if (t != 8) {
+        GEN(gadget_vec_mm_unstash);
+        GEN(t);
+    }
+    return true;
+}
+#endif
+
+#if defined(__aarch64__)
+// The shapes the map's two-operand word cannot say, as the amd64 engine's
+// gadgets too: the shuffles (math.S amd64_v_tbl1/tbl2, the imm8 turned into a
+// tbl index here), PEXTRB/W/D and EXTRACTPS to a register or memory, PINSRB/D,
+// INSERTPS, CRC32, PCMPESTRx/PCMPISTRx. A general register goes through
+// amd64_regs[] as in gen_i386_vec_mapped, a memory source through xmm15 or
+// amd64_regs[0], a memory destination from amd64_regs[0] (misc.S vec_st*).
+// False for a helper that is not one of them.
+static bool gen_i386_vec_special(struct gen_state *state, void (*helper)(), enum arg src, enum arg dst,
+        struct modrm *modrm, uint8_t imm, bool seg_tls, int size) {
+    extern void gadget_amd64_v_tbl1_reg(void), gadget_amd64_v_tbl2_reg(void),
+           gadget_amd64_s4_pextrb_r(void), gadget_amd64_s4_pextrw_r(void), gadget_amd64_s4_pextrd_r(void),
+           gadget_amd64_s4_pinsrb_r(void), gadget_amd64_s4_pinsrd_r(void), gadget_amd64_s4_insertps_r(void),
+           gadget_amd64_s4_crc32_r(void), gadget_amd64_s4_crc32_soft_r(void),
+           gadget_amd64_pcmpestrm_r(void), gadget_amd64_pcmpestri_r(void),
+           gadget_amd64_pcmpistrm_r(void), gadget_amd64_pcmpistri_r(void);
+    extern void gadget_vec_ldtmp8(void), gadget_vec_ldtmp16(void), gadget_vec_ldtmp32(void),
+           gadget_vec_ldtmp128(void), gadget_vec_align16(void),
+           gadget_vec_st8(void), gadget_vec_st16(void), gadget_vec_st32(void),
+           gadget_vec_pcmpstr_enter(void), gadget_vec_pcmpstr_leave(void), gadget_vec_pcmpstr_leave_ecx(void);
+#define IS(h) (helper == (void (*)()) vec_##h)
+    unsigned r = modrm->rm_opcode & 7, d = modrm->opcode & 7;
+    bool mem = modrm->type != modrm_reg;
+    uint16_t slot0 = CPU_OFFSET(amd64_regs[0]);
+    // an xmm source: the register, or the m128 staged in xmm15
+#define XMM_SRC(s) do { \
+        if (mem) { \
+            gen_addr(state, modrm, seg_tls); \
+            if ((size == 128 || state->vec_align128) && !state->vec_noalign) { \
+                GEN(gadget_vec_align16); \
+                GEN(state->orig_ip); \
+            } \
+            GEN(gadget_vec_ldtmp128); \
+            GEN(state->orig_ip); \
+            GEN(CPU_OFFSET(xmm[15])); \
+            s = 15; \
+        } else { \
+            s = r; \
+        } \
+    } while (0)
+    bool xx = src == arg_xmm_modrm_val && dst == arg_xmm_modrm_reg;
+
+    int kind = IS(shuffle_ps128) ? 0 : IS(shuffle_pd128) ? 1 : IS(shuffle_d128) ? 2
+            : IS(shuffle_lw128) ? 3 : IS(shuffle_hw128) ? 4 : -1;
+    if (kind >= 0) {
+        if (!xx)
+            return false;
+        unsigned s;
+        XMM_SRC(s);
+        unsigned long lo, hi;
+        x86_shuffle_index(kind, imm, &lo, &hi);
+        GEN(kind < 2 ? gadget_amd64_v_tbl2_reg : gadget_amd64_v_tbl1_reg);
+        GEN(s | (d << 4));
+        GEN(lo);
+        GEN(hi);
+        return true;
+    }
+
+    // PEXTRB/W/D, EXTRACTPS: lane imm of xmm[reg] to r/m
+    if (IS(extract_b_reg128) || IS(extract_b8) || IS(extract_w128) || IS(extract_w_mem16) || IS(extract_d32)) {
+        if (src != arg_xmm_modrm_reg || dst != arg_modrm_val)
+            return false;
+        bool b = IS(extract_b_reg128) || IS(extract_b8), w = IS(extract_w128) || IS(extract_w_mem16);
+        GEN(b ? gadget_amd64_s4_pextrb_r : w ? gadget_amd64_s4_pextrw_r : gadget_amd64_s4_pextrd_r);
+        GEN(d | ((unsigned long) (imm & (b ? 15 : w ? 7 : 3)) << 8));
+        if (mem) {
+            gen_addr(state, modrm, seg_tls);
+            GEN(b ? gadget_vec_st8 : w ? gadget_vec_st16 : gadget_vec_st32);
+            GEN(state->orig_ip);
+            GEN(slot0);
+        } else {
+            gen_i386_gpr_out(state, r, 0);
+        }
+        return true;
+    }
+
+    // PINSRB/D: r/m (its low byte or dword) to lane imm of xmm[reg]
+    if (IS(insert_b8) || IS(insert_d32)) {
+        if (src != arg_modrm_val || dst != arg_xmm_modrm_reg)
+            return false;
+        bool b = IS(insert_b8);
+        if (mem) {
+            gen_addr(state, modrm, seg_tls);
+            GEN(b ? gadget_vec_ldtmp8 : gadget_vec_ldtmp32);
+            GEN(state->orig_ip);
+            GEN(slot0);
+        } else {
+            gen_i386_gpr_in(state, r, 0);
+        }
+        GEN(b ? gadget_amd64_s4_pinsrb_r : gadget_amd64_s4_pinsrd_r);
+        GEN((d << 4) | ((unsigned long) (imm & (b ? 15 : 3)) << 8));
+        return true;
+    }
+
+    // INSERTPS: from an xmm lane imm[7:6], or an m32 (staged as xmm15's lane 0)
+    if (IS(insertps128) || IS(insertps32)) {
+        unsigned s;
+        uint8_t i = imm;
+        if (IS(insertps128) && xx && !mem) {
+            s = r;
+        } else if (IS(insertps32) && src == arg_modrm_val && dst == arg_xmm_modrm_reg && mem) {
+            gen_addr(state, modrm, seg_tls);
+            GEN(gadget_vec_ldtmp32);
+            GEN(state->orig_ip);
+            GEN(CPU_OFFSET(xmm[15]));
+            s = 15;
+            i &= 0x3f;
+        } else {
+            return false;
+        }
+        GEN(gadget_amd64_s4_insertps_r);
+        GEN(s | (d << 4) | ((unsigned long) i << 8));
+        return true;
+    }
+
+    // CRC32 r32, r/m8/16/32: the source in amd64_regs[0], the crc in [1]
+    if (IS(crc32_8) || IS(crc32_16) || IS(crc32_32)) {
+        if (src != arg_modrm_val || dst != arg_modrm_reg)
+            return false;
+        unsigned lg = IS(crc32_8) ? 0 : IS(crc32_16) ? 1 : 2;
+        unsigned long high = 0;
+        if (mem) {
+            gen_addr(state, modrm, seg_tls);
+            GEN(lg == 0 ? gadget_vec_ldtmp8 : lg == 1 ? gadget_vec_ldtmp16 : gadget_vec_ldtmp32);
+            GEN(state->orig_ip);
+            GEN(slot0);
+        } else if (lg == 0 && r >= 4) {
+            gen_i386_gpr_in(state, r - 4, 0);          // AH..BH
+            high = 1ul << 10;
+        } else {
+            gen_i386_gpr_in(state, r, 0);
+        }
+        gen_i386_gpr_in(state, d, 1);
+        GEN(arm64_host_has_crc32 ? gadget_amd64_s4_crc32_r : gadget_amd64_s4_crc32_soft_r);
+        GEN((1 << 4) | (lg << 8) | high);
+        gen_i386_gpr_out(state, d, 1);
+        return true;
+    }
+
+    // PCMPESTRx/PCMPISTRx: EAX and EDX the lengths, ECX or xmm0 the result
+    if (IS(pcmpestrm128) || IS(pcmpestri128) || IS(pcmpistrm128) || IS(pcmpistri128)) {
+        if (!xx)
+            return false;
+        unsigned s;
+        XMM_SRC(s);
+        bool index = IS(pcmpestri128) || IS(pcmpistri128);
+        GEN(gadget_vec_pcmpstr_enter);
+        GEN(IS(pcmpestrm128) ? gadget_amd64_pcmpestrm_r : IS(pcmpestri128) ? gadget_amd64_pcmpestri_r
+                : IS(pcmpistrm128) ? gadget_amd64_pcmpistrm_r : gadget_amd64_pcmpistri_r);
+        GEN(s | (d << 4) | ((unsigned long) imm << 16));
+        GEN(index ? gadget_vec_pcmpstr_leave_ecx : gadget_vec_pcmpstr_leave);
+        return true;
+    }
+#undef XMM_SRC
+#undef IS
+    return false;
+}
+#endif
+
+#if defined(__aarch64__)
+// The moves decode.h's VMOV and VMOV_MERGE_REG name (emu/vec.c's zeroN_copyM
+// and mergeN), every shape, as misc.S gadgets: false for a helper that is
+// not one of them.
+static bool gen_i386_vec_move(struct gen_state *state, void (*helper)(), enum arg src, enum arg dst,
+        bool rm_is_src, struct modrm *modrm, bool seg_tls, int size) {
+    extern void gadget_vec_movd_to_reg_a(void), gadget_vec_movd_to_reg_c(void),
+            gadget_vec_movd_to_reg_d(void), gadget_vec_movd_to_reg_b(void),
+            gadget_vec_movd_to_reg_sp(void), gadget_vec_movd_to_reg_bp(void),
+            gadget_vec_movd_to_reg_si(void), gadget_vec_movd_to_reg_di(void);
+    extern void gadget_vec_movd_mm_to_reg_a(void), gadget_vec_movd_mm_to_reg_c(void),
+            gadget_vec_movd_mm_to_reg_d(void), gadget_vec_movd_mm_to_reg_b(void),
+            gadget_vec_movd_mm_to_reg_sp(void), gadget_vec_movd_mm_to_reg_bp(void),
+            gadget_vec_movd_mm_to_reg_si(void), gadget_vec_movd_mm_to_reg_di(void);
+    extern void gadget_vec_movd_from_reg_a(void), gadget_vec_movd_from_reg_c(void),
+            gadget_vec_movd_from_reg_d(void), gadget_vec_movd_from_reg_b(void),
+            gadget_vec_movd_from_reg_sp(void), gadget_vec_movd_from_reg_bp(void),
+            gadget_vec_movd_from_reg_si(void), gadget_vec_movd_from_reg_di(void);
+    extern void gadget_vec_ld32z(void), gadget_vec_ld64z(void), gadget_vec_ld32z8(void),
+            gadget_vec_ldtmp64(void), gadget_vec_ldtmp128(void),
+            gadget_vec_st32(void), gadget_vec_st64(void), gadget_vec_st128(void),
+            gadget_vec_copy32(void), gadget_vec_copy64(void), gadget_vec_copy128(void),
+            gadget_vec_copy64z(void), gadget_vec_align16(void);
+    static void (*const movd_to[8])(void) = { // x86 register order
+        gadget_vec_movd_to_reg_a, gadget_vec_movd_to_reg_c, gadget_vec_movd_to_reg_d,
+        gadget_vec_movd_to_reg_b, gadget_vec_movd_to_reg_sp, gadget_vec_movd_to_reg_bp,
+        gadget_vec_movd_to_reg_si, gadget_vec_movd_to_reg_di,
+    };
+    static void (*const movd_mm_to[8])(void) = {
+        gadget_vec_movd_mm_to_reg_a, gadget_vec_movd_mm_to_reg_c, gadget_vec_movd_mm_to_reg_d,
+        gadget_vec_movd_mm_to_reg_b, gadget_vec_movd_mm_to_reg_sp, gadget_vec_movd_mm_to_reg_bp,
+        gadget_vec_movd_mm_to_reg_si, gadget_vec_movd_mm_to_reg_di,
+    };
+    static void (*const movd_from[8])(void) = {
+        gadget_vec_movd_from_reg_a, gadget_vec_movd_from_reg_c, gadget_vec_movd_from_reg_d,
+        gadget_vec_movd_from_reg_b, gadget_vec_movd_from_reg_sp, gadget_vec_movd_from_reg_bp,
+        gadget_vec_movd_from_reg_si, gadget_vec_movd_from_reg_di,
+    };
+#define IS(h) (helper == (void (*)()) vec_##h)
+    // MOVLPS/MOVHPS/MOVLPD/MOVHPD with memory: a quadword into or out of one
+    // half of the register
+    if ((IS(movl_p64) || IS(movh_p64) || IS(movl_pm64) || IS(movh_pm64)) && modrm->type != modrm_reg) {
+        bool load = IS(movl_p64) || IS(movh_p64);
+        uint16_t off = CPU_OFFSET(xmm[modrm->opcode & 7]) + (IS(movh_p64) || IS(movh_pm64) ? 8 : 0);
+        gen_addr(state, modrm, seg_tls);
+        GEN(load ? gadget_vec_ldtmp64 : gadget_vec_st64);
+        GEN(state->orig_ip);
+        GEN(off);
+        return true;
+    }
+    if (!(IS(zero128_copy128) || IS(zero128_copy64) || IS(zero128_copy32) || IS(zero64_copy64) ||
+            IS(zero64_copy32) || IS(zero32_copy32) || IS(merge128) || IS(merge64) || IS(merge32)))
+        return false;
+    enum arg rm = rm_is_src ? src : dst;
+    bool rm_reg = modrm->type == modrm_reg;
+    bool gpr = rm == arg_modrm_val;          // the r/m operand a general register (or memory)
+    unsigned r = modrm->rm_opcode & 7;
+    // the vector registers' cpu_state offsets (the reg side, and r/m's when a register)
+    uint16_t src_off = cpu_reg_offset(src, rm_is_src ? r : (modrm->opcode & 7));
+    uint16_t dst_off = cpu_reg_offset(dst, rm_is_src ? (modrm->opcode & 7) : r);
+    if (rm_reg) {
+        if (gpr) {
+            if (rm_is_src && IS(zero128_copy32)) {           // movd xmm, r32
+                GEN(movd_to[r]);
+                GEN(dst_off);
+            } else if (rm_is_src && IS(zero64_copy32)) {     // movd mm, r32
+                GEN(movd_mm_to[r]);
+                GEN(dst_off);
+            } else if (!rm_is_src && IS(zero32_copy32)) {    // movd r32, xmm/mm
+                GEN(movd_from[r]);
+                GEN(src_off);
+            } else {
+                return false;
+            }
+            return true;
+        }
+        void (*g)(void) = IS(zero128_copy128) ? gadget_vec_copy128
+                : IS(zero128_copy64) ? gadget_vec_copy64z
+                : IS(zero64_copy64) || IS(merge64) ? gadget_vec_copy64
+                : IS(merge32) ? gadget_vec_copy32 : NULL;
+        if (g == NULL)
+            return false;
+        GEN(g);
+        GEN(src_off | ((uint64_t) dst_off << 16));
+        return true;
+    }
+    gen_addr(state, modrm, seg_tls);
+    if ((IS(zero128_copy128) || IS(merge128)) && (size == 128 || state->vec_align128) && !state->vec_noalign) {
+        GEN(gadget_vec_align16);
+        GEN(state->orig_ip);
+    }
+    void (*g)(void);
+    uint16_t off;
+    if (rm_is_src) {
+        off = dst_off;
+        g = IS(zero128_copy128) ? gadget_vec_ldtmp128 : IS(zero128_copy64) ? gadget_vec_ld64z
+                : IS(zero128_copy32) ? gadget_vec_ld32z : IS(zero64_copy64) ? gadget_vec_ldtmp64
+                : IS(zero64_copy32) ? gadget_vec_ld32z8 : NULL;
+    } else {
+        off = src_off;
+        g = IS(merge128) ? gadget_vec_st128 : IS(merge64) ? gadget_vec_st64
+                : IS(merge32) ? gadget_vec_st32 : NULL;
+    }
+    if (g == NULL)
+        return false;
+    GEN(g);
+    GEN(state->orig_ip);
+    GEN(off);
+    return true;
+#undef IS
+}
+#endif
+
 static inline bool gen_vec(enum arg src, enum arg dst, void (*helper)(), gadget_t read_mem_gadget, gadget_t write_mem_gadget, struct gen_state *state, struct modrm *modrm, uint8_t imm, bool seg_tls, bool has_imm, int size) {
     bool rm_is_src = !could_be_memory(dst);
     enum arg rm = rm_is_src ? src : dst;
     enum arg reg = rm_is_src ? dst : src;
 
-    // Scalar SSE arithmetic, register to register: the amd64 engine's native
-    // gadgets (gadgets-aarch64/math.S, amd64_v_scalar_double/single) do exactly
-    // what the C helpers below do -- the host's own fadd/fsub/fmul/fdiv on the
-    // low lane, the rest of the destination kept -- and touch only cpu->xmm,
-    // so the i386 engine uses them instead of a C call per instruction.
-    // Operand word: source xmm in bits 0-3, destination in bits 4-7.
-#if defined(__aarch64__)   // the amd64 native gadgets exist for the aarch64 host only
-    if (rm_is_src && !has_imm && src == arg_xmm_modrm_val && dst == arg_xmm_modrm_reg &&
-            modrm->type == modrm_reg) {
-        extern void gadget_amd64_v_addsd_reg(void), gadget_amd64_v_subsd_reg(void);
-        extern void gadget_amd64_v_mulsd_reg(void), gadget_amd64_v_divsd_reg(void);
-        extern void gadget_amd64_v_addss_reg(void), gadget_amd64_v_subss_reg(void);
-        extern void gadget_amd64_v_mulss_reg(void), gadget_amd64_v_divss_reg(void);
-        static const struct { void (*helper)(); void (*gadget)(void); } native[] = {
-            {(void (*)()) vec_single_fadd64, gadget_amd64_v_addsd_reg},
-            {(void (*)()) vec_single_fsub64, gadget_amd64_v_subsd_reg},
-            {(void (*)()) vec_single_fmul64, gadget_amd64_v_mulsd_reg},
-            {(void (*)()) vec_single_fdiv64, gadget_amd64_v_divsd_reg},
-            {(void (*)()) vec_single_fadd32, gadget_amd64_v_addss_reg},
-            {(void (*)()) vec_single_fsub32, gadget_amd64_v_subss_reg},
-            {(void (*)()) vec_single_fmul32, gadget_amd64_v_mulss_reg},
-            {(void (*)()) vec_single_fdiv32, gadget_amd64_v_divss_reg},
-        };
-        for (size_t i = 0; i < sizeof(native) / sizeof(native[0]); i++) {
-            if (native[i].helper == helper) {
-                GEN(native[i].gadget);
-                GEN((modrm->rm_opcode & 0xf) | ((modrm->opcode & 0xf) << 4));
-                return true;
-            }
-        }
-    }
-#endif
-
 #if defined(__aarch64__)
-    // The commonest moves, natively (gadgets-aarch64/misc.S vec_movd_*,
-    // vec_ld*/vec_st*, vec_copy64z, vec_punpckldq): movd between an xmm and
-    // a general register or memory, movq/movsd/movss loads and stores, movq
-    // xmm to xmm, punpckldq -- what i386 gcc moves 64-bit values with.
-    if (has_imm && helper == (void (*)()) vec_shuffle_d128 && rm_is_src &&
-            src == arg_xmm_modrm_val && dst == arg_xmm_modrm_reg && modrm->type == modrm_reg) {
-        extern void gadget_vec_pshufd(void); // pshufd xmm, xmm, imm8
-        GEN(gadget_vec_pshufd);
-        GEN(CPU_OFFSET(xmm[modrm->rm_opcode & 7]) | ((uint64_t) CPU_OFFSET(xmm[modrm->opcode & 7]) << 16) |
-                ((uint64_t) imm << 32));
-        return true;
-    }
-    if (!has_imm) {
-        extern void gadget_vec_movd_to_reg_a(void), gadget_vec_movd_to_reg_c(void),
-                gadget_vec_movd_to_reg_d(void), gadget_vec_movd_to_reg_b(void),
-                gadget_vec_movd_to_reg_sp(void), gadget_vec_movd_to_reg_bp(void),
-                gadget_vec_movd_to_reg_si(void), gadget_vec_movd_to_reg_di(void);
-        extern void gadget_vec_movd_from_reg_a(void), gadget_vec_movd_from_reg_c(void),
-                gadget_vec_movd_from_reg_d(void), gadget_vec_movd_from_reg_b(void),
-                gadget_vec_movd_from_reg_sp(void), gadget_vec_movd_from_reg_bp(void),
-                gadget_vec_movd_from_reg_si(void), gadget_vec_movd_from_reg_di(void);
-        extern void gadget_vec_ld32z(void), gadget_vec_ld64z(void),
-                gadget_vec_st32(void), gadget_vec_st64(void),
-                gadget_vec_copy64z(void), gadget_vec_punpckldq(void);
-        static void (*const movd_to[8])(void) = { // x86 register order
-            gadget_vec_movd_to_reg_a, gadget_vec_movd_to_reg_c, gadget_vec_movd_to_reg_d,
-            gadget_vec_movd_to_reg_b, gadget_vec_movd_to_reg_sp, gadget_vec_movd_to_reg_bp,
-            gadget_vec_movd_to_reg_si, gadget_vec_movd_to_reg_di,
-        };
-        static void (*const movd_from[8])(void) = {
-            gadget_vec_movd_from_reg_a, gadget_vec_movd_from_reg_c, gadget_vec_movd_from_reg_d,
-            gadget_vec_movd_from_reg_b, gadget_vec_movd_from_reg_sp, gadget_vec_movd_from_reg_bp,
-            gadget_vec_movd_from_reg_si, gadget_vec_movd_from_reg_di,
-        };
-        bool rm_reg = modrm->type == modrm_reg;
-        bool rm_mem = could_be_memory(rm) && !rm_reg;
-        bool xmm_reg = reg == arg_xmm_modrm_reg;
-        uint16_t xoff = CPU_OFFSET(xmm[modrm->opcode & 7]);
-        if (xmm_reg && rm_is_src && helper == (void (*)()) vec_zero128_copy32 &&
-                rm == arg_modrm_val && rm_reg) { // movd xmm, r32
-            GEN(movd_to[modrm->rm_opcode & 7]);
-            GEN(xoff);
+    {
+        const struct i386_vec_gadget *m = i386_vec_lookup(helper);
+        if (m != NULL && gen_i386_vec_mapped(state, m, src, dst, modrm, imm, seg_tls, has_imm, size))
             return true;
-        }
-        if (xmm_reg && !rm_is_src && helper == (void (*)()) vec_zero32_copy32 &&
-                rm == arg_modrm_val && rm_reg) { // movd r32, xmm
-            GEN(movd_from[modrm->rm_opcode & 7]);
-            GEN(xoff);
+        if (gen_i386_vec_special(state, helper, src, dst, modrm, imm, seg_tls, size))
             return true;
-        }
-        if (xmm_reg && rm_is_src && rm_mem && (helper == (void (*)()) vec_zero128_copy32 ||
-                helper == (void (*)()) vec_zero128_copy64)) { // movd/movss/movq/movsd xmm, m
-            gen_addr(state, modrm, seg_tls);
-            GEN(helper == (void (*)()) vec_zero128_copy32 ? gadget_vec_ld32z : gadget_vec_ld64z);
-            GEN(state->orig_ip);
-            GEN(xoff);
+        if (!has_imm && gen_i386_vec_move(state, helper, src, dst, rm_is_src, modrm, seg_tls, size))
             return true;
-        }
-        if (xmm_reg && !rm_is_src && rm_mem && (helper == (void (*)()) vec_merge32 ||
-                helper == (void (*)()) vec_merge64)) { // movd/movss/movq/movsd m, xmm
-            gen_addr(state, modrm, seg_tls);
-            GEN(helper == (void (*)()) vec_merge32 ? gadget_vec_st32 : gadget_vec_st64);
-            GEN(state->orig_ip);
-            GEN(xoff);
-            return true;
-        }
-        if (rm == arg_xmm_modrm_val && rm_reg && xmm_reg && rm_is_src &&
-                (helper == (void (*)()) vec_xor_dq128 || helper == (void (*)()) vec_add_q128)) {
-            extern void gadget_vec_pxor(void), gadget_vec_paddq(void);
-            GEN(helper == (void (*)()) vec_xor_dq128 ? gadget_vec_pxor : gadget_vec_paddq);
-            GEN(CPU_OFFSET(xmm[modrm->rm_opcode & 7]) | ((uint64_t) xoff << 16));
-            return true;
-        }
-        if (rm == arg_imm && (helper == (void (*)()) vec_imm_shiftr_q128 ||
-                helper == (void (*)()) vec_imm_shiftl_q128) && reg == arg_xmm_modrm_reg) {
-            // psrlq/psllq xmm, imm8: the register is in the rm field
-            extern void gadget_vec_psrlq_imm(void), gadget_vec_psllq_imm(void);
-            GEN(helper == (void (*)()) vec_imm_shiftr_q128 ? gadget_vec_psrlq_imm : gadget_vec_psllq_imm);
-            GEN(CPU_OFFSET(xmm[modrm->rm_opcode & 7]) | ((uint64_t) imm << 16));
-            return true;
-        }
-        if (rm == arg_xmm_modrm_val && rm_reg && xmm_reg &&
-                (helper == (void (*)()) vec_zero128_copy64 || helper == (void (*)()) vec_unpackl_dq128)) {
-            // movq xmm, xmm (zero-extending) and punpckldq xmm, xmm
-            uint16_t roff = CPU_OFFSET(xmm[modrm->rm_opcode & 7]);
-            uint16_t src = rm_is_src ? roff : xoff, dst = rm_is_src ? xoff : roff;
-            GEN(helper == (void (*)()) vec_unpackl_dq128 ? gadget_vec_punpckldq : gadget_vec_copy64z);
-            GEN(src | ((uint64_t) dst << 16));
-            return true;
-        }
+        // every vector op decode.h names has a gadget: one without is a
+        // decoder change that needs one
+        printk("jit: i386 vector op with no gadget at ip %#x\n", (unsigned) state->orig_ip);
+        UNDEFINED;
     }
 #endif
 
@@ -18876,6 +19308,24 @@ static inline bool gen_vec(enum arg src, enum arg dst, void (*helper)(), gadget_
 #define VCOMPARE(src, dst,z) v(compare, src, dst,z)
 #define V_OP(op, src, dst, z) v(op, src, dst, z)
 #define V_OP_IMM(op, src, dst, z) v_imm(op, src, dst, z)
+// An op with a gadget and no emu/vec.c helper (decode.h's SSSE3 MMX forms):
+// gen_i386_vec_mapped with the gadget named directly; #UD on an x86_64 host,
+// whose i386 backend has only the helpers.
+#if defined(__aarch64__)
+#define vk_mm_modrm_val VK_M
+#define vk_mm_modrm_reg VK_M
+#define vk_xmm_modrm_val VK_X
+#define vk_xmm_modrm_reg VK_X
+#define v_gop(g, src, dst, z, hi) do { \
+    extern void gadget_##g(void); \
+    static const struct i386_vec_gadget m_ = {NULL, gadget_##g, IVK_SD, z, vk_##src, vk_##dst}; \
+    if (!gen_i386_vec_mapped(state, &m_, arg_##src, arg_##dst, &modrm, imm, seg_tls, hi, z)) UNDEFINED; \
+} while (0)
+#else
+#define v_gop(g, src, dst, z, hi) UNDEFINED
+#endif
+#define V_GOP(g, src, dst, z) v_gop(g, src, dst, z, false)
+#define V_GOP_IMM(g, src, dst, z) v_gop(g, src, dst, z, true)
 
 #define DECODER_RET static int
 #define DECODER_NAME gen_step

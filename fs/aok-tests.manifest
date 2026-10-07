@@ -212,6 +212,7 @@ proc_stat_monotonic.c
 proc_uptime_clock.c
 clock_boot_origin.c
 vdso_clock.c
+counter_ns.c
 proc_loadavg_rises.c
 blocked_wait_state.c
 proc_readdir_tgid.c
@@ -432,6 +433,15 @@ x86/amd64_gs_base.c
 x86/avx_regress.c
 x86/avx32_smoke.c
 x86/i386_segment_regs.c
+x86/i386_sse_int.c
+x86/i386_sse_shift.c
+x86/i386_sse_mov.c
+x86/i386_sse_float.c
+x86/i386_sse4_int.c
+x86/i386_sse4_misc.c
+x86/i386_pcmpstr.c
+x86/i386_mxcsr.c
+x86/i386_bcd.c
 x86/amd64_jit_guest_bench.sh
 setup-regressions.sh
 arm64/atomics64.c

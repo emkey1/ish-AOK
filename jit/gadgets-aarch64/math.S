@@ -4611,31 +4611,6 @@ amd64_v_lane64_binop psubq, sub
 # 0F 57 xorps / 66 0F 57 xorpd: 128-bit bitwise XOR (two 64-bit lanes)
 amd64_v_lane64_binop pxor, eor
 
-# Scalar-double SSE2 (F2 0F 58 addsd / 59 mulsd), reg-reg: operate on the low
-# 64-bit lane only, dst.f64[0] = dst.f64[0] OP src.f64[0]; dst's high 64 bits are
-# preserved (the 8-byte str writes only the low lane). aarch64 C `double` math
-# lowers to these same fadd/fmul, so this is bit-identical to the interpreter.
-# (First NEON use in a gadget: d0/d1 are caller-saved, loaded fresh from cpu->xmm
-# each time and dead after gret, and no C call is made, so they are free scratch.)
-.macro amd64_v_scalar_double name, fpop
-    .gadget amd64_v_\name\()_reg
-        ldr x8, [_ip]
-        and x9, x8, 0xf
-        ubfx x10, x8, 4, 4
-        add x11, _cpu, CPU_xmm
-        add x9, x11, x9, lsl 4
-        add x10, x11, x10, lsl 4
-        ldr d0, [x10]
-        ldr d1, [x9]
-        \fpop d0, d0, d1
-        str d0, [x10]
-        gret 1
-.endm
-
-# F2 0F 58 addsd
-amd64_v_scalar_double addsd, fadd
-# F2 0F 59 mulsd
-amd64_v_scalar_double mulsd, fmul
 
 # Packed byte op over the full 16 bytes of an xmm: cpu->xmm[dst] = xmm[dst] OP
 # xmm[src], via a single NEON .16b instruction. Used for the glibc strlen/memchr
@@ -7837,14 +7812,7 @@ amd64_xm_store store32, 4
 # the rounding mode goes onto FPCR (x86 RC 0 nearest 1 down 2 up 3 zero ->
 # RMode 0 2 1 3; FZ stays off for amd64, emu/fpenv.c).
 # STMXCSR: the host's flags (IOC DZC OFC UFC IXC IDC) fold into MXCSR first.
-.gadget amd64_ldmxcsr_m
-    ldr  x8, [_ip]
-    ldr  x9, [_ip, 8]
-    amd64_vmem_addr
-    amd64_vread_prep 4, ldmxcsr_m
-    ldr  w12, [x9]
-    lsr  w13, w12, 16
-    cbnz w13, 1f
+.macro mxcsr_install                     /* w12 = the new MXCSR, its reserved bits clear */
     str  w12, [_cpu, CPU_mxcsr]
     msr  fpsr, xzr
     ubfx w13, w12, 13, 1
@@ -7854,19 +7822,8 @@ amd64_xm_store store32, 4
     bic  x14, x14, (7 << 22)             /* RMode and FZ */
     orr  x14, x14, x13, lsl 22
     msr  fpcr, x14
-    gret 3
-1:  str  xzr, [_cpu, CPU_segfault_addr]
-    strb wzr, [_cpu, CPU_segfault_was_write]
-    strb wzr, [_cpu, CPU_segfault_reported]
-    mov  x0, INT_GPF
-    b    jit_exit
-    amd64_vread_bullshit 4, ldmxcsr_m
-
-.gadget amd64_stmxcsr_m
-    ldr  x8, [_ip]
-    ldr  x9, [_ip, 8]
-    amd64_vmem_addr
-    amd64_vwrite_prep 4, stmxcsr_m
+.endm
+.macro mxcsr_fold                        /* w12 = MXCSR with the host's flags in it, which are cleared */
     mrs  x13, fpsr
     ldr  w12, [_cpu, CPU_mxcsr]
     and  w14, w13, 1                     /* IOC -> IE */
@@ -7883,10 +7840,71 @@ amd64_xm_store store32, 4
     orr  w12, w12, w14, lsl 1
     str  w12, [_cpu, CPU_mxcsr]
     msr  fpsr, xzr
+.endm
+# RDTSC (0F 31): RAX, RDX = the counter's halves, zero-extended (gadgets-generic.h
+# host_counter_ns). No operand; gen.c flushes the register cache first.
+.gadget amd64_rdtsc
+    host_counter_ns x8, x9, x10, x11
+    add  x14, _cpu, CPU_amd64_regs
+    mov  w9, w8
+    str  x9, [x14]
+    lsr  x8, x8, 32
+    str  x8, [x14, 2*8]
+    gret
+
+.gadget amd64_ldmxcsr_m
+    ldr  x8, [_ip]
+    ldr  x9, [_ip, 8]
+    amd64_vmem_addr
+    amd64_vread_prep 4, ldmxcsr_m
+    ldr  w12, [x9]
+    lsr  w13, w12, 16
+    cbnz w13, 1f
+    mxcsr_install
+    gret 3
+1:  str  xzr, [_cpu, CPU_segfault_addr]
+    strb wzr, [_cpu, CPU_segfault_was_write]
+    strb wzr, [_cpu, CPU_segfault_reported]
+    mov  x0, INT_GPF
+    b    jit_exit
+    amd64_vread_bullshit 4, ldmxcsr_m
+
+.gadget amd64_stmxcsr_m
+    ldr  x8, [_ip]
+    ldr  x9, [_ip, 8]
+    amd64_vmem_addr
+    amd64_vwrite_prep 4, stmxcsr_m
+    mxcsr_fold
     str  w12, [x9]
     amd64_vwrite_done 4, stmxcsr_m
     gret 3
     amd64_vwrite_bullshit 4, stmxcsr_m
+
+# The same for the i386 guest, the address in _addr. [orig_ip], gret 1.
+# (The host FZ is off for it too on an aarch64 host: emu/fpenv.c.)
+.gadget i386_ldmxcsr
+    read_prep 32, i386_ldmxcsr
+    ldr  w12, [_xaddr]
+    lsr  w13, w12, 16
+    cbnz w13, 1f
+    mxcsr_install
+    gret 1
+1:  str  xzr, [_cpu, CPU_segfault_addr]
+    strb wzr, [_cpu, CPU_segfault_was_write]
+    strb wzr, [_cpu, CPU_segfault_reported]
+    ldr  x8, [_ip]
+    mov  eip, w8
+    mov  x0, INT_GPF
+    b    jit_exit
+    read_bullshit 32, i386_ldmxcsr
+
+.gadget i386_stmxcsr
+    write_prep 32, i386_stmxcsr
+    mxcsr_fold
+    str  w12, [_xaddr]
+    write_done 32, i386_stmxcsr
+    gret 1
+    write_bullshit 32, i386_stmxcsr
 
 
 
@@ -12069,45 +12087,6 @@ amd64_gen_negnot negnot64, 8
     bsl v2.16b, v0.16b, v1.16b
     mov v0.16b, v2.16b
 .endm
-# Scalar single, reg-reg and mem source (dst.f32[0], upper 96 preserved).
-.macro amd64_v_scalar_single name, fpop
-    .gadget amd64_v_\name\()_reg
-        ldr x8, [_ip]
-        and x9, x8, 0xf
-        ubfx x10, x8, 4, 4
-        add x11, _cpu, CPU_xmm
-        add x9, x11, x9, lsl 4
-        add x10, x11, x10, lsl 4
-        ldr s0, [x10]
-        ldr s1, [x9]
-        \fpop s0, s0, s1
-        str s0, [x10]
-        gret 1
-    .gadget amd64_v_\name\()_mem
-        ldr  x8, [_ip]
-        ldr  x9, [_ip, 8]
-        ubfx x10, x8, 8, 4
-        amd64_vmem_addr
-        amd64_vread_prep 4, \name\()_mem
-        ldr  w12, [x9]
-        fmov s1, w12
-        add  x14, _cpu, CPU_xmm
-        add  x14, x14, x10, lsl 4
-        ldr  s0, [x14]
-        \fpop s0, s0, s1
-        str  s0, [x14]
-        gret 3
-        amd64_vread_bullshit 4, \name\()_mem
-.endm
-
-amd64_v_scalar_single addss, fadd
-amd64_v_scalar_single subss, fsub
-amd64_v_scalar_single mulss, fmul
-amd64_v_scalar_single divss, fdiv
-
-# Scalar-double reg-reg stragglers for the existing macro.
-amd64_v_scalar_double subsd, fsub
-amd64_v_scalar_double divsd, fdiv
 
 # Scalar square root (F2 0F 51 sqrtsd, F3 0F 51 sqrtss): dst's low lane =
 # sqrt(src's low lane), the rest of dst preserved. fsqrt is IEEE correctly

@@ -734,3 +734,156 @@ do_popf 16, h, 0
     ldrb w8, [_cpu, CPU_eflags]
     bfi eax, w8, 8, 8
     gret
+
+# The BCD adjusts, exact to an AMD Ryzen for every AL, AF and CF in (camd,
+# tests/manual/x86/i386_bcd.c), the flags the SDM calls undefined included:
+#   DAA/DAS: AL +/- the correction (6 for the low digit, 0x60 for the high),
+#     CF and AF as the SDM says, SF ZF PF OF from that 8-bit add/sub.
+#   AAA/AAS: a 16-bit ADD/SUB of 0x106 to AX when the low digit needs it (of 0
+#     when not), AX's result masked with 0xff0f: SF ZF PF OF from the 16-bit
+#     result, CF = AF = whether it adjusted.
+#   AAM imm8: AH = AL / imm, AL = AL % imm; SF ZF PF from AL, CF AF OF clear.
+#   AAD imm8: AL = AL + AH * imm, an 8-bit ADD whose flags are all of them; AH 0.
+# Each collapses the lazy flags first (AF and CF are inputs) and leaves them
+# collapsed. AAM/AAD: [imm], gret 1 (AAM 0 is #DE, gen.c's); the rest no operand.
+.macro bcd_szp r, bits                  /* SF ZF PF of \r's low \bits into w8 */
+    ubfx w9, \r, (\bits - 1), 1
+    orr  w8, w8, w9, lsl 7
+    tst  \r, ((1 << \bits) - 1)
+    cset w9, eq
+    orr  w8, w8, w9, lsl 6
+    eor  w9, \r, \r, lsr 4
+    eor  w9, w9, w9, lsr 2
+    eor  w9, w9, w9, lsr 1
+    mvn  w9, w9
+    and  w9, w9, 1
+    orr  w8, w8, w9, lsl 2
+.endm
+.macro bcd_begin                        /* w8 = EFLAGS with CF PF AF ZF SF OF clear; w16 CF, w17 AF */
+    i386_collapse_flags
+    and  w16, w8, 1
+    ubfx w17, w8, 4, 1
+    mov  w9, 0x8d5
+    bic  w8, w8, w9
+.endm
+.macro bcd_end
+    str  w8, [_cpu, CPU_eflags]
+    i386_expand_flags
+.endm
+.macro bcd_ascii name, op                /* AAA (add) / AAS (sub) */
+.gadget \name
+    bcd_begin
+    and  w10, eax, 0xffff
+    and  w11, eax, 0xf
+    cmp  w11, 9
+    cset w12, hi
+    orr  w12, w12, w17                   /* adjust */
+    mov  w13, 0x106
+    cmp  w12, 0
+    csel w13, w13, wzr, ne
+    \op  w14, w10, w13                   /* the 16-bit result */
+    orr  w8, w8, w12                     /* CF */
+    orr  w8, w8, w12, lsl 4              /* AF */
+    bcd_szp w14, 16
+.ifc \op, add
+    eor  w9, w10, w14
+    eor  w15, w13, w14
+    and  w9, w9, w15
+.else
+    eor  w9, w10, w13
+    eor  w15, w10, w14
+    and  w9, w9, w15
+.endif
+    ubfx w9, w9, 15, 1
+    orr  w8, w8, w9, lsl 11              /* OF */
+    mov  w15, 0xff0f
+    and  w14, w14, w15
+    bfi  eax, w14, 0, 16
+    bcd_end
+    gret
+.endm
+bcd_ascii aaa, add
+bcd_ascii aas, sub
+.macro bcd_decimal name, op              /* DAA (add) / DAS (sub) */
+.gadget \name
+    bcd_begin
+    and  w10, eax, 0xff                  /* AL */
+    and  w11, eax, 0xf
+    cmp  w11, 9
+    cset w12, hi
+    orr  w12, w12, w17                   /* the low digit adjusts */
+    cmp  w10, 0x99
+    cset w13, hi
+    orr  w13, w13, w16                   /* the high digit adjusts: CF */
+    add  w14, w12, w12, lsl 1
+    lsl  w14, w14, 1                     /* 6 */
+    add  w15, w13, w13, lsl 1
+    add  w14, w14, w15, lsl 5            /* + 0x60 */
+    \op  w15, w10, w14                   /* the result */
+.ifc \op, sub
+    cmp  w10, 6                          /* DAS: a borrow out of the low digit's adjust */
+    cset w11, lo
+    and  w11, w11, w12
+    orr  w13, w13, w11
+.endif
+    orr  w8, w8, w13                     /* CF */
+    orr  w8, w8, w12, lsl 4              /* AF */
+    bcd_szp w15, 8
+.ifc \op, add
+    eor  w9, w10, w15
+    eor  w11, w14, w15
+    and  w9, w9, w11
+.else
+    eor  w9, w10, w14
+    eor  w11, w10, w15
+    and  w9, w9, w11
+.endif
+    ubfx w9, w9, 7, 1
+    orr  w8, w8, w9, lsl 11              /* OF */
+    bfi  eax, w15, 0, 8
+    bcd_end
+    gret
+.endm
+bcd_decimal daa, add
+bcd_decimal das, sub
+.gadget aam
+    bcd_begin
+    ldr  w13, [_ip]                      /* the base, not 0 */
+    and  w10, eax, 0xff
+    udiv w11, w10, w13
+    msub w12, w11, w13, w10              /* AL % base */
+    bcd_szp w12, 8
+    bfi  w12, w11, 8, 8
+    bfi  eax, w12, 0, 16
+    bcd_end
+    gret 1
+.gadget aad
+    bcd_begin
+    ldr  w13, [_ip]
+    and  w10, eax, 0xff                  /* AL */
+    ubfx w11, eax, 8, 8
+    mul  w11, w11, w13
+    and  w11, w11, 0xff                  /* AH * base, 8 bits */
+    add  w12, w10, w11
+    ubfx w9, w12, 8, 1
+    orr  w8, w8, w9                      /* CF */
+    eor  w9, w10, w11
+    eor  w9, w9, w12
+    ubfx w9, w9, 4, 1
+    orr  w8, w8, w9, lsl 4               /* AF */
+    eor  w9, w10, w12
+    eor  w14, w11, w12
+    and  w9, w9, w14
+    ubfx w9, w9, 7, 1
+    orr  w8, w8, w9, lsl 11              /* OF */
+    bcd_szp w12, 8
+    and  w12, w12, 0xff
+    bfi  eax, w12, 0, 16                 /* AH = 0 */
+    bcd_end
+    gret 1
+
+# LOOP/LOOPZ/LOOPNZ's decrement: ECX - 1, the flags untouched (the branch is
+# jcxz's or loopz's). No operand.
+.gadget loop_dec_ecx
+    sub  ecx, ecx, 1
+    gret

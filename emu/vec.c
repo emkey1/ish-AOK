@@ -469,6 +469,12 @@ void vec_fcmp_p64(NO_CPU, const union xmm_reg *src, union xmm_reg *dst, uint8_t 
         dst->qw[i] = cmpd(dst->f64[i], src->f64[i], type) ? -1 : 0;
     }
 }
+// (the x86_64 host's CMPPS; an aarch64 host runs math.S amd64_xf_cmpps_r)
+void vec_fcmp_p32(NO_CPU, const union xmm_reg *src, union xmm_reg *dst, uint8_t type) {
+    for (size_t i = 0; i < sizeof(dst->f32) / sizeof(*dst->f32); ++i) {
+        dst->u32[i] = cmps(dst->f32[i], src->f32[i], type) ? -1 : 0;
+    }
+}
 
 // come to the dark side of macros
 #define _ISNAN_int32_t(x) false
@@ -537,6 +543,39 @@ VEC_CVT(ss2sd32, float, double)
 
 PACKED_VEC_CVTT(tpd2dq64, f64, u32, double, int32_t, 2)
 PACKED_VEC_CVTT(tps2dq32, f32, u32, float, int32_t, 4)
+
+// RCPPS/RCPSS/RSQRTPS/RSQRTSS for the x86_64 host (an aarch64 host runs
+// math.S amd64_xf_rcp*/rsqrt*): the exact reciprocal is within the
+// approximation's bound.
+void vec_rcpps128(NO_CPU, const union xmm_reg *src, union xmm_reg *dst) {
+    for (int i = 0; i < 4; i++)
+        dst->f32[i] = 1.0f / src->f32[i];
+}
+void vec_rsqrtps128(NO_CPU, const union xmm_reg *src, union xmm_reg *dst) {
+    for (int i = 0; i < 4; i++)
+        dst->f32[i] = 1.0f / sqrtf(src->f32[i]);
+}
+void vec_rcpss32(NO_CPU, const float *src, union xmm_reg *dst) {
+    dst->f32[0] = 1.0f / *src;
+}
+void vec_rsqrtss32(NO_CPU, const float *src, union xmm_reg *dst) {
+    dst->f32[0] = 1.0f / sqrtf(*src);
+}
+
+// CVTPS2DQ / CVTPD2DQ: rounded by MXCSR.RC (the host's mode), then the
+// truncating forms' indefinite rule -- for the x86_64 host; an aarch64 host
+// runs math.S amd64_xf_cvtps2dq_r / cvtpd2dq_r.
+void vec_cvtps2dq128(NO_CPU, const union xmm_reg *src, union xmm_reg *dst) {
+    float r[4];
+    for (int i = 0; i < 4; i++)
+        r[i] = rintf(src->f32[i]);
+    VEC_TRUNC_INT(r, dst->u32, float, int32_t, 4);
+}
+void vec_cvtpd2dq128(NO_CPU, const union xmm_reg *src, union xmm_reg *dst) {
+    double r[2] = {rint(src->f64[0]), rint(src->f64[1])};
+    VEC_TRUNC_INT(r, dst->u32, double, int32_t, 2);
+    dst->qw[1] = 0;
+}
 
 // cvtdq2pd: two packed signed int32 from the low 64 bits of src -> two
 // doubles in dst. Read both source dwords before writing any result: src and
@@ -710,6 +749,18 @@ void vec_insert_w128(NO_CPU, const uint32_t *src, union xmm_reg *dst, uint8_t in
 }
 void vec_extract_w128(NO_CPU, const union xmm_reg *src, uint32_t *dst, uint8_t index) {
     *dst = src->u16[index % 8];
+}
+// MOVHLPS / MOVLHPS for the x86_64 host (an aarch64 host runs math.S
+// amd64_v_movhlps_reg / amd64_v_movlhps_reg)
+void vec_movhl128(NO_CPU, const union xmm_reg *src, union xmm_reg *dst) {
+    dst->qw[0] = src->qw[1];
+}
+void vec_movlh128(NO_CPU, const union xmm_reg *src, union xmm_reg *dst) {
+    dst->qw[1] = src->qw[0];
+}
+// (the x86_64 host's PEXTRW r32, mm; an aarch64 host runs math.S amd64_mmx_pextrw)
+void vec_extract_w64(NO_CPU, const union mm_reg *src, uint32_t *dst, uint8_t index) {
+    *dst = (uint16_t) (src->qw >> (16 * (index % 4)));
 }
 
 void vec_avg_b128(NO_CPU, const union xmm_reg *src, union xmm_reg *dst) {

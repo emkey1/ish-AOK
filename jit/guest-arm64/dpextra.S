@@ -599,21 +599,17 @@ dp3_store:
     str w9, [_cpu, #CPU_nzcv]
     gret
 
-// MRS Xt, CNTVCT_EL0: virtual counter read at runtime from the host
-// monotonic clock (nanoseconds; CNTFRQ_EL0 reports 1 GHz to match).
-// [gadget][rt]
+// MRS Xt, CNTVCT_EL0: the host's counter in nanoseconds (CNTFRQ_EL0 reports
+// 1 GHz to match; gadgets-generic.h host_counter_ns). [gadget][rt]
 .gadget mrs_cntvct
-    ldr x8, [_ip]
+    ldr x12, [_ip]
     add _ip, _ip, #8
-    and x19, x8, #0x1f         // rt, callee-saved across the C call
-    save_c
-    bl NAME(arm64_cntvct)
-    mov x20, x0                // result; x0 itself is restored by restore_c
-    restore_c
-    cmp x19, #31
+    and x12, x12, #0x1f
+    host_counter_ns x8, x9, x10, x11
+    cmp x12, #31
     b.eq 1f
     add x10, _cpu, #CPU_x0
-    str x20, [x10, x19, lsl #3]
+    str x8, [x10, x12, lsl #3]
 1:  gret
 
 // MRS Xt, S3_3_C15_C0_0: AOK_VCLOCK, which only the vDSO reads (vdso/arm64/

@@ -11,9 +11,10 @@
 //    8-bit steps loses the carry out of AL: hardware gives ax=fe0a for aas with
 //    ax=0000 and AF=1, while the 8-bit version gives ff0a.
 //
-//  * The flags the SDM calls "undefined" are not. Real hardware sets SF/ZF/PF
-//    from AL for aaa/aas, and sets aad's CF/AF from the implied 8-bit ADD of AL
-//    and AH*base. Software has been observed to depend on this, so we match it.
+//  * The flags the SDM calls "undefined" are not. Real hardware sets aaa/aas's
+//    SF/ZF/PF (from the 16-bit AX +/- 0x106 on AMD), and aad's CF/AF from the
+//    implied 8-bit ADD of AL and AH*base. Software has been observed to depend
+//    on this, so we match it; i386_bcd.c checks every input against an AMD.
 //
 // aam with a base of 0 is a divide error; since the base is an immediate that
 // is decided at translate time and raises INT_DIV rather than reaching the

@@ -183,10 +183,17 @@ static uint64_t host_take_flags(void) {
 #define MXCSR_RC_SHIFT 13
 #define MXCSR_FTZ (1u << 15)
 
-// fz: whether MXCSR.FTZ becomes the host's FZ. The amd64 float gadgets keep
-// it off and do FTZ and DAZ themselves (math.S amd64_xf_*): aarch64's FZ
-// flushes inputs and outputs together, while x86 splits them (FTZ outputs,
-// DAZ inputs) and raises DE for a denormal operand, which FZ cannot express.
+// fz: whether MXCSR.FTZ becomes the host's FZ. The x86 float gadgets keep
+// it off and do FTZ and DAZ themselves (math.S amd64_xf_*, which the i386
+// guest runs too on an aarch64 host): aarch64's FZ flushes inputs and outputs
+// together, while x86 splits them (FTZ outputs, DAZ inputs) and raises DE for
+// a denormal operand, which FZ cannot express. An x86_64 host's i386 guest
+// still has C helpers, which take FTZ from FZ.
+#if defined(__aarch64__)
+#define I386_HOST_FZ false
+#else
+#define I386_HOST_FZ true
+#endif
 static uint64_t x86_control(const struct cpu_state *cpu, bool fz) {
     // RC: nearest, down, up, toward zero.
     static const uint8_t rmode[4] = {RMODE_RN, RMODE_RM, RMODE_RP, RMODE_RZ};
@@ -219,7 +226,7 @@ void fpenv_x86_sync_mxcsr(struct cpu_state *cpu) {
 
 void fpenv_x86_load_mxcsr(struct cpu_state *cpu) {
     host_take_flags();
-    host_install(x86_control(cpu, true));
+    host_install(x86_control(cpu, I386_HOST_FZ));
 }
 
 void fpenv_amd64_load_mxcsr(struct cpu_state *cpu) {
@@ -344,7 +351,7 @@ void fpenv_enter(struct cpu_state *cpu, int abi) {
     switch (abi) {
         case GUEST_ABI_I386:
         case GUEST_ABI_AMD64:
-            host_install(x86_control(cpu, abi == GUEST_ABI_I386));
+            host_install(x86_control(cpu, abi == GUEST_ABI_I386 && I386_HOST_FZ));
             // float80's rounding and precision are per host thread; the
             // control word they follow is per guest thread, and may have been
             // changed by sigreturn, ptrace, exec or a checkpoint restore since.
