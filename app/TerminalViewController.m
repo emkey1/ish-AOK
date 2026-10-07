@@ -765,10 +765,13 @@ static const NSInteger kMaximumTerminalFontSize = 72;
 
 static const CGFloat kFindBarHeight = 44;
 
-- (UIButton *)_findBarButtonWithSymbol:(NSString *)symbolName fallback:(NSString *)fallback action:(SEL)action accessibilityLabel:(NSString *)label {
+- (UIButton *)_findBarButtonWithSymbol:(NSString *)symbolName fallback:(NSString *)fallback action:(SEL)action accessibilityLabel:(NSString *)label accessibilityHint:(NSString *)hint {
     UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem];
     button.translatesAutoresizingMaskIntoConstraints = NO;
     button.accessibilityLabel = label;
+    if (hint) {
+        button.accessibilityHint = hint;
+    }
     UIImageSymbolConfiguration *config = [UIImageSymbolConfiguration configurationWithPointSize:15 weight:UIImageSymbolWeightSemibold];
     UIImage *image = [UIImage systemImageNamed:symbolName withConfiguration:config];
     if (image != nil) {
@@ -822,13 +825,16 @@ static const CGFloat kFindBarHeight = 44;
 
     self.findPreviousButton = [self _findBarButtonWithSymbol:@"chevron.up" fallback:@"↑"
                                                       action:@selector(findPrevious:)
-                                          accessibilityLabel:NSLocalizedString(@"Previous match", @"Find bar button")];
+                                          accessibilityLabel:NSLocalizedString(@"Previous match", @"Find bar button")
+                                           accessibilityHint:NSLocalizedString(@"Navigates to the previous occurrence of the search term.", @"Find bar button hint")];
     self.findNextButton = [self _findBarButtonWithSymbol:@"chevron.down" fallback:@"↓"
                                                   action:@selector(findNext:)
-                                      accessibilityLabel:NSLocalizedString(@"Next match", @"Find bar button")];
+                                      accessibilityLabel:NSLocalizedString(@"Next match", @"Find bar button")
+                                       accessibilityHint:NSLocalizedString(@"Navigates to the next occurrence of the search term.", @"Find bar button hint")];
     self.findCloseButton = [self _findBarButtonWithSymbol:@"xmark" fallback:@"✕"
                                                    action:@selector(hideFindBar:)
-                                       accessibilityLabel:NSLocalizedString(@"Close find bar", @"Find bar button")];
+                                       accessibilityLabel:NSLocalizedString(@"Close find bar", @"Find bar button")
+                                        accessibilityHint:NSLocalizedString(@"Dismisses the search bar.", @"Find bar button hint")];
     for (UIButton *button in @[self.findPreviousButton, self.findNextButton, self.findCloseButton]) {
         [bar.contentView addSubview:button];
     }
