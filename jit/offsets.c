@@ -48,6 +48,8 @@ void cpu() {
     OFFSET(CPU, cpu_state, xmm);
     OFFSET(CPU, cpu_state, ymm_hi);
     OFFSET(CPU, cpu_state, zmm_hi);
+    OFFSET(CPU, cpu_state, xmm_ext);
+    OFFSET(CPU, cpu_state, avx512_k);
     OFFSET(CPU, cpu_state, mm);
     OFFSET(CPU, cpu_state, mxcsr);
     MACRO(PF_RES);

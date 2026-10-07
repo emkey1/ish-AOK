@@ -1040,6 +1040,148 @@ vex_widen xf_cvtph2ps, 8, q2, xfb_cvtph2ps
     vex_zero_zmm
     gret 1
 
+# ---- opmask instructions (AVX-512's k0-k7; VEX-encoded) ----
+# Word: [op (0-4) | dst k (8-10) | src1 k (12-14) | src2 k (16-18) |
+# log2 of the width in bytes (20-21) | imm8 (24-31) | GPR (32-35) | 64-bit
+# GPR (36)], gret 1. Every k write is zero-extended past the width. The GPR
+# forms use amd64_regs[GPR] (i386: gen.c copies its register through slot
+# 0); the memory forms go through VEX_STAGE (vex_ld_* before, vex_st_* after).
+# Ops: 0 and, 1 andn, 2 or, 3 xnor, 4 xor, 5 add, 6 not, 7 unpck (src1's
+# low half above src2's), 8 mov k, 9 mov from VEX_STAGE, 10 mov to
+# VEX_STAGE, 11 mov from the GPR, 12 mov to the GPR, 13 kortest, 14 ktest,
+# 15 kshiftl, 16 kshiftr.
+.gadget vex_kop
+    ldr  x8, [_ip]
+    mov  x14, CPU_avx512_k
+    add  x14, _cpu, x14
+    ubfx x9, x8, 12, 3
+    ldr  x10, [x14, x9, lsl 3]           /* src1 */
+    ubfx x9, x8, 16, 3
+    ldr  x11, [x14, x9, lsl 3]           /* src2 */
+    ubfx x9, x8, 20, 2                   /* the width's mask: x13 */
+    mov  x12, 8
+    lsl  x12, x12, x9                    /* the width in bits */
+    mov  x13, -1
+    cmp  x12, 64
+    b.eq 1f
+    mov  x13, 1
+    lsl  x13, x13, x12
+    sub  x13, x13, 1
+1:  and  x9, x8, 31
+    adr  x15, .Lkop_tab
+    ldr  w16, [x15, x9, lsl 2]
+    add  x15, x15, w16, sxtw
+    br   x15
+.Lkop_tab:
+    .irp t, and,andn,or,xnor,xor,add,not,unpck,mov,ld,st,fromgpr,togpr,kortest,ktest,shl,shr
+    .word .Lkop_\t - .Lkop_tab
+    .endr
+.Lkop_and:
+    and  x10, x10, x11
+    b    .Lkop_put
+.Lkop_andn:
+    bic  x10, x11, x10
+    b    .Lkop_put
+.Lkop_or:
+    orr  x10, x10, x11
+    b    .Lkop_put
+.Lkop_xnor:
+    eon  x10, x10, x11
+    b    .Lkop_put
+.Lkop_xor:
+    eor  x10, x10, x11
+    b    .Lkop_put
+.Lkop_add:
+    add  x10, x10, x11
+    b    .Lkop_put
+.Lkop_not:
+    mvn  x10, x11
+    b    .Lkop_put
+.Lkop_unpck:                             /* the result is twice the width */
+    and  x10, x10, x13
+    and  x11, x11, x13
+    lsl  x10, x10, x12
+    orr  x10, x10, x11
+    lsl  x12, x12, 1
+    mov  x13, -1
+    cmp  x12, 64
+    b.eq .Lkop_put
+    mov  x13, 1
+    lsl  x13, x13, x12
+    sub  x13, x13, 1
+    b    .Lkop_put
+.Lkop_mov:
+    mov  x10, x11
+    b    .Lkop_put
+.Lkop_ld:
+    mov  x15, VEX_STAGE
+    ldr  x10, [_cpu, x15]
+    b    .Lkop_put
+.Lkop_st:
+    and  x11, x11, x13
+    mov  x15, VEX_STAGE
+    str  x11, [_cpu, x15]
+    gret 1
+.Lkop_fromgpr:
+    ubfx x9, x8, 32, 4
+    add  x15, _cpu, CPU_amd64_regs
+    ldr  x10, [x15, x9, lsl 3]
+    b    .Lkop_put
+.Lkop_togpr:
+    and  x11, x11, x13
+    ubfx x9, x8, 32, 4
+    add  x15, _cpu, CPU_amd64_regs
+    str  x11, [x15, x9, lsl 3]           /* (zero-extended: the 32-bit forms too) */
+    gret 1
+.Lkop_kortest:                           /* ZF: (a | b) == 0, CF: all ones */
+    orr  x10, x10, x11
+    and  x10, x10, x13
+    cmp  x10, 0
+    cset w16, eq
+    cmp  x10, x13
+    cset w17, eq
+    b    .Lkop_flags
+.Lkop_ktest:                             /* ZF: (a & b) == 0, CF: (~a & b) == 0 */
+    and  x9, x10, x11
+    tst  x9, x13
+    cset w16, eq
+    bic  x9, x11, x10
+    tst  x9, x13
+    cset w17, eq
+.Lkop_flags:
+    ldr  w9, [_cpu, CPU_eflags]
+    mov  w10, (1 | (1 << 2) | (1 << 4) | (1 << 6) | (1 << 7) | (1 << 11))
+    bic  w9, w9, w10
+    orr  w9, w9, w17
+    orr  w9, w9, w16, lsl 6
+    str  w9, [_cpu, CPU_eflags]
+    strb w17, [_cpu, CPU_cf]
+    strb wzr, [_cpu, CPU_of]
+    ldrb w10, [_cpu, CPU_flags_res]
+    bic  w10, w10, (ZF_RES | SF_RES | PF_RES | AF_OPS)
+    strb w10, [_cpu, CPU_flags_res]
+    gret 1
+.Lkop_shl:
+    ubfx x9, x8, 24, 8
+    cmp  x9, x12
+    b.hs .Lkop_zero
+    lsl  x10, x11, x9
+    b    .Lkop_put
+.Lkop_shr:
+    ubfx x9, x8, 24, 8
+    cmp  x9, x12
+    b.hs .Lkop_zero
+    and  x11, x11, x13
+    lsr  x10, x11, x9
+    b    .Lkop_put
+.Lkop_zero:
+    mov  x10, 0
+.Lkop_put:
+    and  x10, x10, x13
+    ubfx x9, x8, 8, 3
+    str  x10, [x14, x9, lsl 3]
+    gret 1
+
 # ---- gathers (VPGATHERDD/DQ/QD/QQ, VGATHERDPS/DPD/QPS/QPD) ----
 # Word: [dst (0-3) | mask (4-7) | index (8-11) | scale (12-13) | qword data
 # (14) | qword index (15) | L (16)]. Restartable as x86's: each step finds
@@ -1231,7 +1373,7 @@ back_write_done_vex_wprobe_i386_\bytes :   /* (write_done's label; no write-back
     gret 3
     amd64_vwrite_bullshit \bytes, vex_wprobe_amd64_\bytes
 .endm
-.irp b, 8,16
+.irp b, 1,2,4,8,16
 vex_wprobe_i386 \b
 vex_wprobe_amd64 \b
 .endr
