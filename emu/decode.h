@@ -1182,6 +1182,39 @@ restart:
 
         case 0x67: TRACEI("address size prefix (ignored)"); goto restart;
 
+        case 0x62: {
+#if OP_SIZE == 32
+            // EVEX (AVX-512) -- or BOUND, which is not implemented, when the
+            // next byte's top two bits (EVEX.R and X, inverted) are not 11:
+            // 32-bit mode cannot clear them.
+            byte_t evex_p0, evex_p1, evex_p2, evex_op;
+            uint8_t evex_imm = 0;
+            _READIMM(evex_p0, 8);
+            if ((evex_p0 & 0xc0) != 0xc0) {
+                TRACEI("bound (unimplemented)");
+                UNDEFINED;
+            }
+            _READIMM(evex_p1, 8);
+            _READIMM(evex_p2, 8);
+            _READIMM(evex_op, 8);
+            TRACEI("evex insn");
+            addr_t evex_modrm_ip = state->ip;
+            modrm.index = reg_none;             // (a SIB overwrites it)
+            READMODRM;
+            byte_t evex_modrm;
+            if (!tlb_read(tlb, evex_modrm_ip, &evex_modrm, 1))
+                SEGFAULT;
+            if (evex_has_imm8(evex_p0 & 7, evex_op))
+                _READIMM(evex_imm, 8);
+            if (!gen_evex32(state, tlb, &modrm, seg_tls, evex_p0, evex_p1, evex_p2, evex_op, evex_modrm, evex_imm))
+                return false;
+            break;
+#else
+            TRACEI("evex after operand-size prefix");
+            UNDEFINED;
+#endif
+        }
+
         case 0xc4:
         case 0xc5: {
 #if OP_SIZE == 32

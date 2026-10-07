@@ -84,6 +84,12 @@ amd64_vxpage_\id:
     b.eq 7007f
     b    amd64_vmem_misaligned
 7007:
+    /* AMD64_JIT_MEM_ALIGN64 (bit 39): an EVEX.512 one, 64-byte aligned. */
+    tbz  x8, 39, 7008f
+    tst  x9, 63
+    b.eq 7008f
+    b    amd64_vmem_misaligned
+7008:
 .endm
 
 # 64-bit TLB write fast path: x9 = guest addr in -> writable host ptr out (or the

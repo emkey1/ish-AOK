@@ -16838,3 +16838,4 @@ amd64_r16_ri amd64_tsi16, test, 64, x, 63, 0
 .popsection
 
 #include "vex.inc"
+#include "evex.inc"

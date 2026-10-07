@@ -87,6 +87,8 @@ enum amd64_jit_mem_meta {
     AMD64_JIT_MEM_ALIGN16 = 1ul << 37,
     // A VEX.256 operand that must be 32-byte aligned (amd64-mem.h).
     AMD64_JIT_MEM_ALIGN32 = 1ul << 38,
+    // An EVEX.512 one that must be 64-byte aligned.
+    AMD64_JIT_MEM_ALIGN64 = 1ul << 39,
 };
 
 static inline byte_t amd64_modrm_mod(byte_t modrm) {
@@ -9542,6 +9544,7 @@ struct vex_insn {
     uint8_t imm;
     int vsib_index;             // the SIB's index field as a vector register, -1 without a SIB
     unsigned vsib_scale;
+    bool vvvv_hi;               // 32-bit mode: VEX.vvvv's bit 3 was set (vvvv holds the other three)
 };
 // kinds: the operand roles of a vex.inc frame (see its header)
 enum vex_kind {
@@ -10119,7 +10122,7 @@ static bool vex_plan(const struct vex_insn *v, struct vex_plan *p, bool i386) {
     unsigned s1 = v->vvvv, s2 = v->rm, d = v->reg, bytes = width;
     bool lbit = v->l, stage = v->mem;
     void (*g)(void) = e->gadget;
-#define NEED_VVVV0 do { if (v->vvvv != 0) return true; } while (0)
+#define NEED_VVVV0 do { if (v->vvvv != 0 || v->vvvv_hi) return true; } while (0)
 #define STORE(n, lo, hi) do { p->type = VP_STORE; p->st_bytes = (n); p->st_src = (lo) | (hi) << 16; \
         p->align = e->align ? (n) : 0; return true; } while (0)
     switch (e->kind) {
@@ -10715,6 +10718,429 @@ static int gen_amd64_vex(struct gen_state *state, struct tlb *tlb, const struct 
 }
 #endif
 
+// Whether an EVEX opcode has an imm8 after its operand (the decoder reads it
+// before the lookup): the 0F3A map, and the 0F map's shift groups, CMPPS/PD
+// and the shuffles.
+static inline bool evex_has_imm8(unsigned map, unsigned op) {
+    return map == 3 || (map == 1 && ((op >= 0x70 && op <= 0x73) || op == 0xc2 || (op >= 0xc4 && op <= 0xc6)));
+}
+
+#if defined(__aarch64__)
+// ---- EVEX (AVX-512): jit/gadgets-aarch64/evex.inc's frames ----
+//
+// An entry gives the opcode's operand roles (kind), the VEX.W it requires,
+// the element size masking works at (esz, log2 bytes), the embedded
+// broadcast's element (bcast, log2 bytes; 0: none, EVEX.b with memory is
+// #UD), the memory operand's tuple for disp8*N, whether a memory operand
+// must be aligned to the vector length, and whether masking is #UD.
+enum evex_kind {
+    EVK_L3,     // dst = reg, s1 = vvvv, s2 = r/m
+    EVK_L2,     // dst = reg, s2 = r/m (as s1 too); vvvv must be 1111b
+    EVK_LOAD,   // dst = reg, s2 = r/m: a move; vvvv 1111b
+    EVK_STORE,  // r/m = reg: a move to memory (masked: only the elements the mask enables) or a register
+    EVK_TOMASK, // k[reg] = s1 OP s2, element by element (the compares, VPTESTM/NM); zeroing only
+    EVK_SHI,    // dst = vvvv, s2 = r/m: the imm8 shifts and rotates (a group in ModRM.reg)
+    EVK_BCAST,  // dst = reg, s2 = r/m, vvvv 1111b: a broadcast (the frame's flags pick the quarter)
+    EVK_BCASTG, // dst = reg, s2 = the r/m GPR (staged), vvvv 1111b: VPBROADCASTB/W/D/Q from a GPR
+};
+// evex_entry.flags bits 4-7
+#define EVF_MEMONLY 0x10
+#define EVF_REGONLY 0x20
+#define EVF_MIN256 0x40
+#define EVF_MIN512 0x80
+enum evex_tuple { EVT_FV, EVT_FVM, EVT_FIX };  // FIX: disp8 * the operand's fixed size (ld)
+struct evex_entry {
+    uint8_t map, pp, op;
+    uint8_t kind, wreq, esz, bcast, tuple, align, nomask;
+    void (*gadget)(void);
+    uint8_t grp;                // ModRM.reg + 1 for a group (the imm8 shifts), else 0
+    uint8_t flags;              // the frame's word bits 33-36 (s2's quarter 0, q & 1; merge s1; dst in)
+    uint8_t ld;                 // a memory operand of this many bytes whatever VL (0: VL's)
+};
+#define EVEX_INT(X) \
+    X(1, 0xfc, 0, 0, 0, paddb) X(1, 0xfd, 0, 1, 0, paddw) X(1, 0xfe, 1, 2, 2, paddd) X(1, 0xd4, 2, 3, 3, paddq) \
+    X(1, 0xf8, 0, 0, 0, psubb) X(1, 0xf9, 0, 1, 0, psubw) X(1, 0xfa, 1, 2, 2, psubd) X(1, 0xfb, 2, 3, 3, psubq) \
+    X(1, 0xec, 0, 0, 0, paddsb) X(1, 0xed, 0, 1, 0, paddsw) X(1, 0xdc, 0, 0, 0, paddusb) X(1, 0xdd, 0, 1, 0, paddusw) \
+    X(1, 0xe8, 0, 0, 0, psubsb) X(1, 0xe9, 0, 1, 0, psubsw) X(1, 0xd8, 0, 0, 0, psubusb) X(1, 0xd9, 0, 1, 0, psubusw) \
+    X(1, 0xdb, 1, 2, 2, pand) X(1, 0xdb, 2, 3, 3, pand) X(1, 0xdf, 1, 2, 2, pandn) X(1, 0xdf, 2, 3, 3, pandn) \
+    X(1, 0xeb, 1, 2, 2, por) X(1, 0xeb, 2, 3, 3, por) X(1, 0xef, 1, 2, 2, pxor) X(1, 0xef, 2, 3, 3, pxor) \
+    X(1, 0xda, 0, 0, 0, pminub) X(1, 0xde, 0, 0, 0, pmaxub) X(1, 0xea, 0, 1, 0, pminsw) X(1, 0xee, 0, 1, 0, pmaxsw) \
+    X(1, 0xe0, 0, 0, 0, pavgb) X(1, 0xe3, 0, 1, 0, pavgw) X(1, 0xd5, 0, 1, 0, pmullw) X(1, 0xe5, 0, 1, 0, pmulhw) \
+    X(1, 0xe4, 0, 1, 0, pmulhuw) X(1, 0xf4, 2, 3, 3, pmuludq) X(1, 0xf5, 0, 2, 0, pmaddwd) \
+    X(1, 0x60, 0, 0, 0, punpcklbw) X(1, 0x61, 0, 1, 0, punpcklwd) X(1, 0x62, 1, 2, 2, punpckldq) \
+    X(1, 0x6c, 2, 3, 3, punpcklqdq) X(1, 0x68, 0, 0, 0, punpckhbw) X(1, 0x69, 0, 1, 0, punpckhwd) \
+    X(1, 0x6a, 1, 2, 2, punpckhdq) X(1, 0x6d, 2, 3, 3, punpckhqdq) X(1, 0x63, 0, 0, 0, packsswb) \
+    X(1, 0x67, 0, 0, 0, packuswb) X(1, 0x6b, 1, 1, 2, packssdw) \
+    X(2, 0x00, 0, 0, 0, pshufb) X(2, 0x04, 0, 1, 0, pmaddubsw) X(2, 0x0b, 0, 1, 0, pmulhrsw) \
+    X(2, 0x28, 2, 3, 3, pmuldq) X(2, 0x2b, 1, 1, 2, packusdw) X(2, 0x38, 0, 0, 0, pminsb) \
+    X(2, 0x39, 1, 2, 2, pminsd) X(2, 0x3a, 0, 1, 0, pminuw) X(2, 0x3b, 1, 2, 2, pminud) X(2, 0x3c, 0, 0, 0, pmaxsb) \
+    X(2, 0x3d, 1, 2, 2, pmaxsd) X(2, 0x3e, 0, 1, 0, pmaxuw) X(2, 0x3f, 1, 2, 2, pmaxud) X(2, 0x40, 1, 2, 2, pmulld)
+#define EVEX_INT_UN(X) X(2, 0x1c, 0, 0, 0, pabsb) X(2, 0x1d, 0, 1, 0, pabsw) X(2, 0x1e, 1, 2, 2, pabsd)
+#define EVEX_DECL(map, op, w, esz, bc, n) extern void gadget_evex_vi_##n(void);
+EVEX_INT(EVEX_DECL) EVEX_INT_UN(EVEX_DECL)
+extern void gadget_evex_mov(void), gadget_evex_vi_psadbw(void);
+extern void gadget_evex_bcast_b(void), gadget_evex_bcast_d(void), gadget_evex_bcast_q(void), gadget_evex_bcast_w(void), gadget_evex_blendm(void), gadget_evex_pabsq(void), gadget_evex_pmaxsq(void), gadget_evex_pmaxuq(void), gadget_evex_pminsq(void), gadget_evex_pminuq(void), gadget_evex_pmullq(void), gadget_evex_pslldq(void), gadget_evex_psrldq(void), gadget_evex_pternlog(void), gadget_evex_roli_d(void), gadget_evex_roli_q(void), gadget_evex_rolv_d(void), gadget_evex_rolv_q(void), gadget_evex_rori_d(void), gadget_evex_rori_q(void), gadget_evex_rorv_d(void), gadget_evex_rorv_q(void), gadget_evex_shi_slld(void), gadget_evex_shi_sllq(void), gadget_evex_shi_sllw(void), gadget_evex_shi_srad(void), gadget_evex_shi_sraq(void), gadget_evex_shi_sraw(void), gadget_evex_shi_srld(void), gadget_evex_shi_srlq(void), gadget_evex_shi_srlw(void), gadget_evex_shv_slld(void), gadget_evex_shv_sllq(void), gadget_evex_shv_sllw(void), gadget_evex_shv_srad(void), gadget_evex_shv_sraq(void), gadget_evex_shv_sraw(void), gadget_evex_shv_srld(void), gadget_evex_shv_srlq(void), gadget_evex_shv_srlw(void), gadget_evex_shx_slld(void), gadget_evex_shx_sllq(void), gadget_evex_shx_sllw(void), gadget_evex_shx_srad(void), gadget_evex_shx_sraq(void), gadget_evex_shx_sraw(void), gadget_evex_shx_srld(void), gadget_evex_shx_srlq(void), gadget_evex_shx_srlw(void);
+extern void gadget_evex_pcmpeqb(void), gadget_evex_pcmpeqw(void), gadget_evex_pcmpeqd(void), gadget_evex_pcmpeqq(void), gadget_evex_pcmpgtb(void), gadget_evex_pcmpgtw(void), gadget_evex_pcmpgtd(void), gadget_evex_pcmpgtq(void), gadget_evex_pcmpb(void), gadget_evex_pcmpw(void), gadget_evex_pcmpd(void), gadget_evex_pcmpq(void), gadget_evex_pcmpub(void), gadget_evex_pcmpuw(void), gadget_evex_pcmpud(void), gadget_evex_pcmpuq(void), gadget_evex_ptestmb(void), gadget_evex_ptestmw(void), gadget_evex_ptestmd(void), gadget_evex_ptestmq(void), gadget_evex_ptestnmb(void), gadget_evex_ptestnmw(void), gadget_evex_ptestnmd(void), gadget_evex_ptestnmq(void);
+
+#define EVEX_ROW(map, op, w, esz, bc, n) {map, 1, op, EVK_L3, w, esz, bc, bc ? EVT_FV : EVT_FVM, 0, 0, gadget_evex_vi_##n, 0, 0, 0},
+#define EVEX_ROW_UN(map, op, w, esz, bc, n) {map, 1, op, EVK_L2, w, esz, bc, bc ? EVT_FV : EVT_FVM, 0, 0, gadget_evex_vi_##n, 0, 0, 0},
+static const struct evex_entry evex_table[] = {
+    // the moves: VMOVDQA32/64, VMOVDQU8/16/32/64, VMOVUPS/PD, VMOVAPS/PD
+    {1, 1, 0x6f, EVK_LOAD, 1, 2, 0, EVT_FVM, 1, 0, gadget_evex_mov, 0, 0, 0}, {1, 1, 0x6f, EVK_LOAD, 2, 3, 0, EVT_FVM, 1, 0, gadget_evex_mov, 0, 0, 0},
+    {1, 2, 0x6f, EVK_LOAD, 1, 2, 0, EVT_FVM, 0, 0, gadget_evex_mov, 0, 0, 0}, {1, 2, 0x6f, EVK_LOAD, 2, 3, 0, EVT_FVM, 0, 0, gadget_evex_mov, 0, 0, 0},
+    {1, 3, 0x6f, EVK_LOAD, 1, 0, 0, EVT_FVM, 0, 0, gadget_evex_mov, 0, 0, 0}, {1, 3, 0x6f, EVK_LOAD, 2, 1, 0, EVT_FVM, 0, 0, gadget_evex_mov, 0, 0, 0},
+    {1, 1, 0x7f, EVK_STORE, 1, 2, 0, EVT_FVM, 1, 0, gadget_evex_mov, 0, 0, 0}, {1, 1, 0x7f, EVK_STORE, 2, 3, 0, EVT_FVM, 1, 0, gadget_evex_mov, 0, 0, 0},
+    {1, 2, 0x7f, EVK_STORE, 1, 2, 0, EVT_FVM, 0, 0, gadget_evex_mov, 0, 0, 0}, {1, 2, 0x7f, EVK_STORE, 2, 3, 0, EVT_FVM, 0, 0, gadget_evex_mov, 0, 0, 0},
+    {1, 3, 0x7f, EVK_STORE, 1, 0, 0, EVT_FVM, 0, 0, gadget_evex_mov, 0, 0, 0}, {1, 3, 0x7f, EVK_STORE, 2, 1, 0, EVT_FVM, 0, 0, gadget_evex_mov, 0, 0, 0},
+    {1, 0, 0x10, EVK_LOAD, 1, 2, 0, EVT_FVM, 0, 0, gadget_evex_mov, 0, 0, 0}, {1, 1, 0x10, EVK_LOAD, 2, 3, 0, EVT_FVM, 0, 0, gadget_evex_mov, 0, 0, 0},
+    {1, 0, 0x11, EVK_STORE, 1, 2, 0, EVT_FVM, 0, 0, gadget_evex_mov, 0, 0, 0}, {1, 1, 0x11, EVK_STORE, 2, 3, 0, EVT_FVM, 0, 0, gadget_evex_mov, 0, 0, 0},
+    {1, 0, 0x28, EVK_LOAD, 1, 2, 0, EVT_FVM, 1, 0, gadget_evex_mov, 0, 0, 0}, {1, 1, 0x28, EVK_LOAD, 2, 3, 0, EVT_FVM, 1, 0, gadget_evex_mov, 0, 0, 0},
+    {1, 0, 0x29, EVK_STORE, 1, 2, 0, EVT_FVM, 1, 0, gadget_evex_mov, 0, 0, 0}, {1, 1, 0x29, EVK_STORE, 2, 3, 0, EVT_FVM, 1, 0, gadget_evex_mov, 0, 0, 0},
+    // the integer ops (vex.inc's bodies); VPSADBW takes no mask
+    EVEX_INT(EVEX_ROW) EVEX_INT_UN(EVEX_ROW_UN)
+    {1, 1, 0xf6, EVK_L3, 0, 3, 0, EVT_FVM, 0, 1, gadget_evex_vi_psadbw, 0, 0, 0},
+    // the compares and tests into an opmask
+    {1, 1, 0x74, EVK_TOMASK, 0, 0, 0, EVT_FVM, 0, 0, gadget_evex_pcmpeqb, 0, 0, 0},
+    {1, 1, 0x75, EVK_TOMASK, 0, 1, 0, EVT_FVM, 0, 0, gadget_evex_pcmpeqw, 0, 0, 0},
+    {1, 1, 0x76, EVK_TOMASK, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_pcmpeqd, 0, 0, 0},
+    {1, 1, 0x64, EVK_TOMASK, 0, 0, 0, EVT_FVM, 0, 0, gadget_evex_pcmpgtb, 0, 0, 0},
+    {1, 1, 0x65, EVK_TOMASK, 0, 1, 0, EVT_FVM, 0, 0, gadget_evex_pcmpgtw, 0, 0, 0},
+    {1, 1, 0x66, EVK_TOMASK, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_pcmpgtd, 0, 0, 0},
+    {2, 1, 0x29, EVK_TOMASK, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_pcmpeqq, 0, 0, 0},
+    {2, 1, 0x37, EVK_TOMASK, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_pcmpgtq, 0, 0, 0},
+    {3, 1, 0x3f, EVK_TOMASK, 1, 0, 0, EVT_FVM, 0, 0, gadget_evex_pcmpb, 0, 0, 0},
+    {3, 1, 0x3f, EVK_TOMASK, 2, 1, 0, EVT_FVM, 0, 0, gadget_evex_pcmpw, 0, 0, 0},
+    {3, 1, 0x3e, EVK_TOMASK, 1, 0, 0, EVT_FVM, 0, 0, gadget_evex_pcmpub, 0, 0, 0},
+    {3, 1, 0x3e, EVK_TOMASK, 2, 1, 0, EVT_FVM, 0, 0, gadget_evex_pcmpuw, 0, 0, 0},
+    {3, 1, 0x1f, EVK_TOMASK, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_pcmpd, 0, 0, 0},
+    {3, 1, 0x1f, EVK_TOMASK, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_pcmpq, 0, 0, 0},
+    {3, 1, 0x1e, EVK_TOMASK, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_pcmpud, 0, 0, 0},
+    {3, 1, 0x1e, EVK_TOMASK, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_pcmpuq, 0, 0, 0},
+    {2, 1, 0x26, EVK_TOMASK, 1, 0, 0, EVT_FVM, 0, 0, gadget_evex_ptestmb, 0, 0, 0},
+    {2, 1, 0x26, EVK_TOMASK, 2, 1, 0, EVT_FVM, 0, 0, gadget_evex_ptestmw, 0, 0, 0},
+    {2, 1, 0x27, EVK_TOMASK, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_ptestmd, 0, 0, 0},
+    {2, 1, 0x27, EVK_TOMASK, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_ptestmq, 0, 0, 0},
+    {2, 2, 0x26, EVK_TOMASK, 1, 0, 0, EVT_FVM, 0, 0, gadget_evex_ptestnmb, 0, 0, 0},
+    {2, 2, 0x26, EVK_TOMASK, 2, 1, 0, EVT_FVM, 0, 0, gadget_evex_ptestnmw, 0, 0, 0},
+    {2, 2, 0x27, EVK_TOMASK, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_ptestnmd, 0, 0, 0},
+    {2, 2, 0x27, EVK_TOMASK, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_ptestnmq, 0, 0, 0},
+    // the shifts and rotates, the qword ops, VPTERNLOG, VPBLENDM, the broadcasts, the non-temporal moves
+    {1, 1, 0x71, EVK_SHI, 0, 1, 0, EVT_FVM, 0, 0, gadget_evex_shi_srlw, 3, 0, 0},
+    {1, 1, 0x71, EVK_SHI, 0, 1, 0, EVT_FVM, 0, 0, gadget_evex_shi_sraw, 5, 0, 0},
+    {1, 1, 0x71, EVK_SHI, 0, 1, 0, EVT_FVM, 0, 0, gadget_evex_shi_sllw, 7, 0, 0},
+    {1, 1, 0x72, EVK_SHI, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_rori_d, 1, 0, 0},
+    {1, 1, 0x72, EVK_SHI, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_rori_q, 1, 0, 0},
+    {1, 1, 0x72, EVK_SHI, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_roli_d, 2, 0, 0},
+    {1, 1, 0x72, EVK_SHI, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_roli_q, 2, 0, 0},
+    {1, 1, 0x72, EVK_SHI, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_shi_srld, 3, 0, 0},
+    {1, 1, 0x72, EVK_SHI, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_shi_srad, 5, 0, 0},
+    {1, 1, 0x72, EVK_SHI, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_shi_sraq, 5, 0, 0},
+    {1, 1, 0x72, EVK_SHI, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_shi_slld, 7, 0, 0},
+    {1, 1, 0x73, EVK_SHI, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_shi_srlq, 3, 0, 0},
+    {1, 1, 0x73, EVK_SHI, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_shi_sllq, 7, 0, 0},
+    {1, 1, 0x73, EVK_SHI, 0, 3, 0, EVT_FVM, 0, 1, gadget_evex_psrldq, 4, 0, 0},
+    {1, 1, 0x73, EVK_SHI, 0, 3, 0, EVT_FVM, 0, 1, gadget_evex_pslldq, 8, 0, 0},
+    {1, 1, 0xd1, EVK_L3, 0, 1, 0, EVT_FIX, 0, 0, gadget_evex_shx_srlw, 0, 1, 16},
+    {1, 1, 0xd2, EVK_L3, 1, 2, 0, EVT_FIX, 0, 0, gadget_evex_shx_srld, 0, 1, 16},
+    {1, 1, 0xd3, EVK_L3, 2, 3, 0, EVT_FIX, 0, 0, gadget_evex_shx_srlq, 0, 1, 16},
+    {1, 1, 0xe1, EVK_L3, 0, 1, 0, EVT_FIX, 0, 0, gadget_evex_shx_sraw, 0, 1, 16},
+    {1, 1, 0xe2, EVK_L3, 1, 2, 0, EVT_FIX, 0, 0, gadget_evex_shx_srad, 0, 1, 16},
+    {1, 1, 0xe2, EVK_L3, 2, 3, 0, EVT_FIX, 0, 0, gadget_evex_shx_sraq, 0, 1, 16},
+    {1, 1, 0xf1, EVK_L3, 0, 1, 0, EVT_FIX, 0, 0, gadget_evex_shx_sllw, 0, 1, 16},
+    {1, 1, 0xf2, EVK_L3, 1, 2, 0, EVT_FIX, 0, 0, gadget_evex_shx_slld, 0, 1, 16},
+    {1, 1, 0xf3, EVK_L3, 2, 3, 0, EVT_FIX, 0, 0, gadget_evex_shx_sllq, 0, 1, 16},
+    {2, 1, 0x45, EVK_L3, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_shv_srld, 0, 0, 0},
+    {2, 1, 0x45, EVK_L3, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_shv_srlq, 0, 0, 0},
+    {2, 1, 0x46, EVK_L3, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_shv_srad, 0, 0, 0},
+    {2, 1, 0x46, EVK_L3, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_shv_sraq, 0, 0, 0},
+    {2, 1, 0x47, EVK_L3, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_shv_slld, 0, 0, 0},
+    {2, 1, 0x47, EVK_L3, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_shv_sllq, 0, 0, 0},
+    {2, 1, 0x10, EVK_L3, 2, 1, 0, EVT_FVM, 0, 0, gadget_evex_shv_srlw, 0, 0, 0},
+    {2, 1, 0x11, EVK_L3, 2, 1, 0, EVT_FVM, 0, 0, gadget_evex_shv_sraw, 0, 0, 0},
+    {2, 1, 0x12, EVK_L3, 2, 1, 0, EVT_FVM, 0, 0, gadget_evex_shv_sllw, 0, 0, 0},
+    {2, 1, 0x15, EVK_L3, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_rolv_d, 0, 0, 0},
+    {2, 1, 0x15, EVK_L3, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_rolv_q, 0, 0, 0},
+    {2, 1, 0x14, EVK_L3, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_rorv_d, 0, 0, 0},
+    {2, 1, 0x14, EVK_L3, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_rorv_q, 0, 0, 0},
+    {2, 1, 0x39, EVK_L3, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_pminsq, 0, 0, 0},
+    {2, 1, 0x3b, EVK_L3, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_pminuq, 0, 0, 0},
+    {2, 1, 0x3d, EVK_L3, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_pmaxsq, 0, 0, 0},
+    {2, 1, 0x3f, EVK_L3, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_pmaxuq, 0, 0, 0},
+    {2, 1, 0x40, EVK_L3, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_pmullq, 0, 0, 0},
+    {2, 1, 0x1f, EVK_L2, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_pabsq, 0, 0, 0},
+    {3, 1, 0x25, EVK_L3, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_pternlog, 0, 8, 0},
+    {3, 1, 0x25, EVK_L3, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_pternlog, 0, 8, 0},
+    {2, 1, 0x64, EVK_L3, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_blendm, 0, 4, 0},
+    {2, 1, 0x64, EVK_L3, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_blendm, 0, 4, 0},
+    {2, 1, 0x65, EVK_L3, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_blendm, 0, 4, 0},
+    {2, 1, 0x65, EVK_L3, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_blendm, 0, 4, 0},
+    {2, 1, 0x66, EVK_L3, 1, 0, 0, EVT_FVM, 0, 0, gadget_evex_blendm, 0, 4, 0},
+    {2, 1, 0x66, EVK_L3, 2, 1, 0, EVT_FVM, 0, 0, gadget_evex_blendm, 0, 4, 0},
+    {2, 1, 0x78, EVK_BCAST, 1, 0, 0, EVT_FIX, 0, 0, gadget_evex_bcast_b, 0, 1, 1},
+    {2, 1, 0x79, EVK_BCAST, 1, 1, 0, EVT_FIX, 0, 0, gadget_evex_bcast_w, 0, 1, 2},
+    {2, 1, 0x58, EVK_BCAST, 1, 2, 0, EVT_FIX, 0, 0, gadget_evex_bcast_d, 0, 1, 4},
+    {2, 1, 0x59, EVK_BCAST, 2, 3, 0, EVT_FIX, 0, 0, gadget_evex_bcast_q, 0, 1, 8},
+    {2, 1, 0x59, EVK_BCAST, 1, 2, 0, EVT_FIX, 0, 0, gadget_evex_bcast_q, 0, 1, 8},
+    {2, 1, 0x18, EVK_BCAST, 1, 2, 0, EVT_FIX, 0, 0, gadget_evex_bcast_d, 0, 1, 4},
+    {2, 1, 0x19, EVK_BCAST, 2, 3, 0, EVT_FIX, 0, 0, gadget_evex_bcast_q, 0, 65, 8},
+    {2, 1, 0x19, EVK_BCAST, 1, 2, 0, EVT_FIX, 0, 0, gadget_evex_bcast_q, 0, 65, 8},
+    {2, 1, 0x5a, EVK_BCAST, 1, 2, 0, EVT_FIX, 0, 0, gadget_evex_mov, 0, 81, 16},
+    {2, 1, 0x5a, EVK_BCAST, 2, 3, 0, EVT_FIX, 0, 0, gadget_evex_mov, 0, 81, 16},
+    {2, 1, 0x1a, EVK_BCAST, 1, 2, 0, EVT_FIX, 0, 0, gadget_evex_mov, 0, 81, 16},
+    {2, 1, 0x1a, EVK_BCAST, 2, 3, 0, EVT_FIX, 0, 0, gadget_evex_mov, 0, 81, 16},
+    {2, 1, 0x5b, EVK_BCAST, 1, 2, 0, EVT_FIX, 0, 0, gadget_evex_mov, 0, 146, 32},
+    {2, 1, 0x5b, EVK_BCAST, 2, 3, 0, EVT_FIX, 0, 0, gadget_evex_mov, 0, 146, 32},
+    {2, 1, 0x1b, EVK_BCAST, 1, 2, 0, EVT_FIX, 0, 0, gadget_evex_mov, 0, 146, 32},
+    {2, 1, 0x1b, EVK_BCAST, 2, 3, 0, EVT_FIX, 0, 0, gadget_evex_mov, 0, 146, 32},
+    {2, 1, 0x7a, EVK_BCASTG, 1, 0, 0, EVT_FVM, 0, 0, gadget_evex_bcast_b, 0, 33, 0},
+    {2, 1, 0x7b, EVK_BCASTG, 1, 1, 0, EVT_FVM, 0, 0, gadget_evex_bcast_w, 0, 33, 0},
+    {2, 1, 0x7c, EVK_BCASTG, 1, 2, 0, EVT_FVM, 0, 0, gadget_evex_bcast_d, 0, 33, 0},
+    {2, 1, 0x7c, EVK_BCASTG, 2, 3, 0, EVT_FVM, 0, 0, gadget_evex_bcast_q, 0, 33, 0},
+    {1, 1, 0xe7, EVK_STORE, 1, 2, 0, EVT_FVM, 1, 1, gadget_evex_mov, 0, 16, 0},
+    {1, 0, 0x2b, EVK_STORE, 1, 2, 0, EVT_FVM, 1, 1, gadget_evex_mov, 0, 16, 0},
+    {1, 1, 0x2b, EVK_STORE, 2, 3, 0, EVT_FVM, 1, 1, gadget_evex_mov, 0, 16, 0},
+    {2, 1, 0x2a, EVK_LOAD, 1, 2, 0, EVT_FVM, 1, 1, gadget_evex_mov, 0, 16, 0},
+};
+struct evex_insn {
+    unsigned map, pp, op, w, vvvv, reg, rm, ll, aaa;
+    bool z, b, mem;
+    uint8_t imm;
+    bool vvvv_hi;               // 32-bit mode: vvvv's bit 3 was set (vvvv holds the other bits)
+};
+static const struct evex_entry *evex_lookup(const struct evex_insn *v) {
+    for (unsigned i = 0; i < sizeof(evex_table) / sizeof(evex_table[0]); i++) {
+        const struct evex_entry *e = &evex_table[i];
+        if (e->map == v->map && e->pp == v->pp && e->op == v->op &&
+                (e->wreq == 0 || e->wreq == (v->w ? 2 : 1)) && (e->grp == 0 || e->grp == (v->reg & 7) + 1))
+            return e;
+    }
+    return NULL;
+}
+// disp8 * N for the memory operand
+static unsigned evex_disp_scale(const struct evex_entry *e, const struct evex_insn *v) {
+    if (e->tuple == EVT_FV && v->b)
+        return 1u << e->bcast;
+    if (e->tuple == EVT_FIX)
+        return e->ld;
+    return 16u << v->ll;
+}
+struct evex_plan {
+    bool ud;
+    unsigned long word;
+    unsigned ld_bytes, bcast;   // the memory source: a loader for these bytes, or a broadcast of 1 << bcast
+    unsigned st_bytes;          // a store of the result (from EVEX_STAGE)
+    bool st_masked;             // ... of only the elements the mask enables
+    unsigned align;             // the memory operand must be aligned to this
+    int gpr_stage;              // a GPR to stage as s2 (VPBROADCAST from a GPR), or -1
+    bool gpr_w;                 // ... all 64 bits of it
+};
+// False: v is not in the table (the caller's old path).
+static bool evex_plan(const struct evex_insn *v, struct evex_plan *p) {
+    const struct evex_entry *e = evex_lookup(v);
+    if (e == NULL)
+        return false;
+    memset(p, 0, sizeof(*p));
+    p->ud = true;
+    p->gpr_stage = -1;
+    unsigned bytes = 16u << v->ll;
+    if (((e->flags & EVF_MEMONLY) && !v->mem) || ((e->flags & EVF_REGONLY) && v->mem) ||
+            ((e->flags & EVF_MIN256) && v->ll == 0) || ((e->flags & EVF_MIN512) && v->ll < 2))
+        return true;
+    if (v->ll == 3 || (v->z && v->aaa == 0) || (e->nomask && (v->aaa != 0 || v->z)))
+        return true;
+    if (v->b && (!v->mem || e->bcast == 0))
+        return true;                            // no rounding control here, no broadcast for this op
+    unsigned dst = v->reg, s1 = v->vvvv, s2 = v->rm;
+    bool stage = v->mem, to_stage = false;
+    unsigned aaa = v->aaa;
+    bool z = v->z;
+    switch (e->kind) {
+    case EVK_L3:
+        break;
+    case EVK_SHI:
+        dst = v->vvvv;
+        s1 = 0;
+        break;
+    case EVK_BCAST:
+        if (v->vvvv != 0 || v->vvvv_hi)
+            return true;
+        break;
+    case EVK_BCASTG:
+        if (v->vvvv != 0 || v->vvvv_hi)
+            return true;
+        p->gpr_stage = (int) v->rm;
+        p->gpr_w = v->w;
+        stage = true;
+        break;
+    case EVK_TOMASK:
+        if (v->z || v->reg > 7)
+            return true;                        // zeroing is the only kind; EVEX.R/R' on a k register (SDE)
+        dst = v->reg;
+        break;
+    case EVK_L2:
+    case EVK_LOAD:
+        if (v->vvvv != 0 || v->vvvv_hi)
+            return true;
+        s1 = v->rm;
+        break;
+    case EVK_STORE:
+        if (v->vvvv != 0 || v->vvvv_hi)
+            return true;
+        s2 = v->reg;
+        if (v->mem) {
+            if (v->z)
+                return true;                    // zeroing into memory
+            stage = false;
+            to_stage = true;
+            p->st_bytes = bytes;
+            p->st_masked = v->aaa != 0;
+            aaa = 0;                            // (the store applies it)
+            z = false;
+            dst = 0;
+        } else {
+            dst = v->rm;
+        }
+        break;
+    }
+    if (v->mem && e->align)
+        p->align = bytes;
+    if (stage && p->gpr_stage < 0) {
+        if (v->b)
+            p->bcast = e->bcast;
+        else
+            p->ld_bytes = e->ld ? e->ld : bytes;
+    }
+    p->ud = false;
+    p->word = (dst & 31) | (unsigned long) (s1 & 31) << 5 | (unsigned long) (s2 & 31) << 10 |
+            (stage ? 1ul << 15 : 0) | (unsigned long) v->ll << 16 | (unsigned long) (aaa & 7) << 18 |
+            (z ? 1ul << 21 : 0) | (unsigned long) e->esz << 22 | (unsigned long) v->imm << 24 |
+            (to_stage ? 1ul << 32 : 0) | (unsigned long) (e->flags & 15) << 33;
+    // the store gadget's own word: the mask and element size
+    if (p->st_masked)
+        p->word |= (unsigned long) (v->aaa & 7) << 40 | (unsigned long) e->esz << 44;
+    return true;
+}
+
+// amd64: the EVEX instruction at state->amd64_ip (just past its 62 lead
+// byte). As gen_amd64_vex: 1 when emitted (a gadget or #UD), -1 with the IP
+// untouched when the table does not have it yet.
+static int gen_amd64_evex(struct gen_state *state, struct tlb *tlb, const struct amd64_jit_insn *insn) {
+    guest_addr_t ip = state->amd64_ip;
+    byte_t p0, p1, p2, op, modrm;
+    if (!tlb_read(tlb, ip, &p0, 1) || !tlb_read(tlb, ip + 1, &p1, 1) || !tlb_read(tlb, ip + 2, &p2, 1) ||
+            !tlb_read(tlb, ip + 3, &op, 1) || !tlb_read(tlb, ip + 4, &modrm, 1))
+        return -1;
+    ip += 4;                                    // at the ModRM
+    struct evex_insn v = {0};
+    v.map = p0 & 7;
+    v.op = op;
+    v.w = p1 >> 7;
+    v.pp = p1 & 3;
+    v.z = p2 >> 7;
+    v.ll = (p2 >> 5) & 3;
+    v.b = (p2 >> 4) & 1;
+    v.aaa = p2 & 7;
+    bool r = !(p0 & 0x80), x = !(p0 & 0x40), b = !(p0 & 0x20), r2 = !(p0 & 0x10), v2 = !(p2 & 8);
+    v.vvvv = ((~p1 >> 3) & 15) | (v2 ? 16 : 0);
+    v.reg = amd64_modrm_reg(modrm) | (r ? 8 : 0) | (r2 ? 16 : 0);
+    v.mem = amd64_modrm_mod(modrm) != 3;
+    v.rm = amd64_modrm_rm(modrm) | (b ? 8 : 0) | (!v.mem && x ? 16 : 0);
+    if (v.map == 0 || (p0 & 0x08) || !(p1 & 4))
+        return gen_amd64_ud(state);             // map 0, P0 bit 3 set or P1 bit 2 clear: reserved
+    if (v.map > 3)
+        return -1;
+    const struct evex_entry *e = evex_lookup(&v);
+    if (e == NULL) {
+        for (unsigned i = 0; i < sizeof(evex_table) / sizeof(evex_table[0]); i++)
+            if (evex_table[i].map == v.map && evex_table[i].pp == v.pp && evex_table[i].op == v.op &&
+                    (evex_table[i].grp == 0 || evex_table[i].grp == (v.reg & 7) + 1))
+                return gen_amd64_ud(state);     // the opcode is here, but not with this VEX.W
+        return -1;
+    }
+    if (insn->operand_size_prefix || insn->rep_mode != amd64_jit_rep_none || insn->lock_prefix ||
+            insn->rex.present)
+        return gen_amd64_ud(state);             // a legacy prefix or REX before 62
+    struct amd64_jit_insn m = *insn;
+    m.modrm = modrm;
+    m.has_modrm = true;
+    m.rex.present = true;
+    m.rex.r = r;
+    m.rex.x = x;
+    m.rex.b = b;
+    m.rex.w = v.w;
+    guest_addr_t saved = state->amd64_ip;
+    state->amd64_ip = ip;
+    unsigned long meta = 0, disp = 0;
+    guest_addr_t next_ip;
+    bool ok = v.mem ? gen_amd64_decode_mem_meta(state, tlb, &m, 128, &meta, &disp, &next_ip)
+                    : gen_amd64_decode_rm_extent(state, tlb, &m, &next_ip);
+    if (ok && evex_has_imm8(v.map, v.op)) {
+        ok = tlb_read(tlb, next_ip, &v.imm, 1);
+        next_ip++;
+    }
+    if (!ok) {
+        state->amd64_ip = saved;
+        return -1;
+    }
+    struct evex_plan p;
+    evex_plan(&v, &p);
+    if (p.ud)
+        return gen_amd64_ud(state);
+    state->amd64_ip = next_ip;
+    if (v.mem && amd64_modrm_mod(modrm) == 1)
+        disp = (unsigned long) ((long) disp * (long) evex_disp_scale(e, &v));
+    if (v.mem || p.gpr_stage >= 0) {
+        gen_amd64_flush_reg_cache(state);
+        gen_amd64_flush_rip(state);
+    }
+    if (p.gpr_stage >= 0) {
+        extern void gadget_vex_gst_amd64(void);
+        gen(state, (unsigned long) gadget_vex_gst_amd64);
+        gen(state, (unsigned long) (p.gpr_stage & 15) | (p.gpr_w ? 16ul : 0));
+    }
+    unsigned long align = p.align == 64 ? AMD64_JIT_MEM_ALIGN64 : p.align == 32 ? AMD64_JIT_MEM_ALIGN32 :
+            p.align == 16 ? AMD64_JIT_MEM_ALIGN16 : 0;
+    if (p.ld_bytes != 0 || p.bcast != 0) {
+        // masked: only the enabled elements are read (a masked-off one may sit on an unmapped page)
+        extern void gadget_vex_ld_amd64_1(void), gadget_vex_ld_amd64_2(void), gadget_vex_ld_amd64_4(void),
+                gadget_vex_ld_amd64_8(void), gadget_vex_ld_amd64_16(void), gadget_vex_ld_amd64_32(void),
+                gadget_evex_ld_amd64_64(void), gadget_evex_ldb_amd64_4(void), gadget_evex_ldb_amd64_8(void),
+                gadget_evex_ldm_amd64(void), gadget_evex_ldbm_amd64_4(void), gadget_evex_ldbm_amd64_8(void);
+        // masked: only the enabled elements are read -- a full-width operand (a fixed-size
+        // one is read whole: TODO, see evex.inc)
+        bool masked = v.aaa != 0 && (p.bcast != 0 || p.ld_bytes == (16u << v.ll)) && e->tuple != EVT_FIX;
+        void (*ld)(void) = p.bcast == 2 ? (masked ? gadget_evex_ldbm_amd64_4 : gadget_evex_ldb_amd64_4) :
+                p.bcast == 3 ? (masked ? gadget_evex_ldbm_amd64_8 : gadget_evex_ldb_amd64_8) :
+                masked ? gadget_evex_ldm_amd64 :
+                p.ld_bytes == 64 ? gadget_evex_ld_amd64_64 : p.ld_bytes == 32 ? gadget_vex_ld_amd64_32 :
+                p.ld_bytes == 16 ? gadget_vex_ld_amd64_16 : p.ld_bytes == 8 ? gadget_vex_ld_amd64_8 :
+                p.ld_bytes == 4 ? gadget_vex_ld_amd64_4 : p.ld_bytes == 2 ? gadget_vex_ld_amd64_2 :
+                gadget_vex_ld_amd64_1;
+        gen(state, (unsigned long) ld);
+        gen(state, meta | align);
+        gen(state, disp);
+        gen(state, (unsigned long) next_ip);
+        if (masked)
+            gen(state, p.word);
+    }
+    gen(state, (unsigned long) e->gadget);
+    gen(state, p.word);
+    if (p.st_bytes != 0) {
+        extern void gadget_evex_st_amd64_16(void), gadget_evex_st_amd64_32(void), gadget_evex_st_amd64_64(void),
+                gadget_evex_stm_amd64(void);
+        gen(state, (unsigned long) (p.st_masked ? gadget_evex_stm_amd64 : p.st_bytes == 64 ? gadget_evex_st_amd64_64 :
+                p.st_bytes == 32 ? gadget_evex_st_amd64_32 : gadget_evex_st_amd64_16));
+        gen(state, meta | align);
+        gen(state, disp);
+        gen(state, (unsigned long) next_ip);
+        if (p.st_masked)
+            gen(state, p.word);
+    }
+    gen_amd64_defer_rip(state, next_ip);
+    return 1;
+}
+#endif
+
 #if defined(__aarch64__)
 static int gen_step64(struct gen_state *state, struct tlb *tlb) {
     struct amd64_jit_insn insn;
@@ -10931,6 +11357,11 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
     // eip from it after every block, so the exit gadget's stale eip cannot win.
     if (!insn.two_byte_opcode && (insn.opcode == 0xc4 || insn.opcode == 0xc5)) {
         int r = gen_amd64_vex(state, tlb, &insn);
+        if (r >= 0)
+            return r;
+    }
+    if (!insn.two_byte_opcode && insn.opcode == 0x62) {
+        int r = gen_amd64_evex(state, tlb, &insn);
         if (r >= 0)
             return r;
     }
@@ -19847,16 +20278,20 @@ static inline bool gen_vex32(struct gen_state *state, struct tlb *tlb, struct mo
         unsigned vvvv, uint8_t imm8) {
     unsigned vlen = l ? 256 : 128;
 
-    // VEX.vvvv is 4 bits but 32-bit mode has only 8 vector registers, so the
-    // top bit must be zero once un-inverted.
-    if (vvvv > 7)
-        UNDEFINED;
+    // VEX.vvvv is 4 bits but 32-bit mode has only 8 vector registers: as a
+    // register its top bit is ignored (an AMD Ryzen runs C4 E1 29 FE CB as
+    // VPADDD xmm1, xmm2, xmm3, and SDE agrees, k registers included), but
+    // where vvvv must be 1111b it still counts (VMOVDQU with it clear is #UD).
+    // (A C5's top vvvv bit is never clear: that byte would be LDS's ModRM.)
+    bool vvvv_hi = vvvv > 7;
+    (void) vvvv_hi;                             // (aarch64 hosts only)
+    vvvv &= 7;
 
 #if defined(__aarch64__)
     // math.S's vex.inc gadgets, where the table has the instruction
     {
         struct vex_insn v = {map, pp, op, l, w, vvvv, modrm->opcode & 7, modrm->rm_opcode & 7,
-                             modrm->type != modrm_reg, imm8, -1, 0};
+                             modrm->type != modrm_reg, imm8, -1, 0, vvvv_hi};
         // (decode.h presets index to reg_none: anything else is a SIB's raw index field)
         if (modrm->type != modrm_reg && modrm->index != reg_none) {
             v.vsib_index = (int) modrm->index;
@@ -20069,6 +20504,99 @@ static inline bool gen_vex32(struct gen_state *state, struct tlb *tlb, struct mo
     GEN((uint64_t) reg_off | ((uint64_t) desc << 32));
     (void) tlb;
     return true;
+}
+
+// EVEX (AVX-512) for the i386 guest: evex_table/evex_plan as gen_amd64_evex
+// uses them, onto evex.inc's frames. In 32-bit mode (Intel SDE, freestanding
+// on camd) EVEX.R' and B and vvvv's bit 3 are ignored as register bits --
+// vvvv's still counts where it must be 1111b -- and EVEX.V' set is #UD. An
+// EVEX the table does not have is #UD (0x62 was BOUND, unimplemented,
+// before); an x86_64 host has no EVEX.
+static inline bool gen_evex32(struct gen_state *state, struct tlb *tlb, struct modrm *modrm, bool seg_tls,
+        byte_t p0, byte_t p1, byte_t p2, byte_t op, byte_t raw_modrm, uint8_t imm8) {
+    (void) tlb;
+#if defined(__aarch64__)
+    struct evex_insn v = {0};
+    v.map = p0 & 7;
+    v.op = op;
+    v.w = p1 >> 7;
+    v.pp = p1 & 3;
+    v.z = p2 >> 7;
+    v.ll = (p2 >> 5) & 3;
+    v.b = (p2 >> 4) & 1;
+    v.aaa = p2 & 7;
+    v.imm = imm8;
+    if (v.map == 0 || (p0 & 0x08) || !(p1 & 4) || !(p2 & 8))
+        UNDEFINED;                              // reserved bits, or EVEX.V' (registers 16-31)
+    unsigned vvvv = (~p1 >> 3) & 15;
+    v.vvvv = vvvv & 7;
+    v.vvvv_hi = vvvv > 7;
+    v.reg = modrm->opcode & 7;
+    v.mem = modrm->type != modrm_reg;
+    v.rm = modrm->rm_opcode & 7;
+    const struct evex_entry *e = evex_lookup(&v);
+    if (e == NULL)
+        UNDEFINED;
+    struct evex_plan p;
+    evex_plan(&v, &p);
+    if (p.ud)
+        UNDEFINED;
+    struct modrm m = *modrm;
+    if (v.mem && (raw_modrm >> 6) == 1)
+        m.offset = (int32_t) ((int64_t) m.offset * evex_disp_scale(e, &v));     // disp8 * N
+    bool masked = v.aaa != 0 && (p.bcast != 0 || p.ld_bytes == (16u << v.ll)) && e->tuple != EVT_FIX;
+    if (p.gpr_stage >= 0) {
+        extern void gadget_vex_gst_reg_a(void), gadget_vex_gst_reg_c(void), gadget_vex_gst_reg_d(void),
+                gadget_vex_gst_reg_b(void), gadget_vex_gst_reg_sp(void), gadget_vex_gst_reg_bp(void),
+                gadget_vex_gst_reg_si(void), gadget_vex_gst_reg_di(void);
+        static void (*const in[8])(void) = {
+            gadget_vex_gst_reg_a, gadget_vex_gst_reg_c, gadget_vex_gst_reg_d, gadget_vex_gst_reg_b,
+            gadget_vex_gst_reg_sp, gadget_vex_gst_reg_bp, gadget_vex_gst_reg_si, gadget_vex_gst_reg_di,
+        };
+        if (v.w)
+            UNDEFINED;                          // VPBROADCASTQ from r64: 64-bit mode only
+        GEN(in[p.gpr_stage & 7]);
+    }
+    if (v.mem) {
+        extern void gadget_vec_align16(void), gadget_vec_align32(void), gadget_vec_align64(void);
+        gen_addr(state, &m, seg_tls);
+        if (p.align != 0) {
+            GEN(p.align == 64 ? gadget_vec_align64 : p.align == 32 ? gadget_vec_align32 : gadget_vec_align16);
+            GEN(state->orig_ip);
+        }
+        if (p.ld_bytes != 0 || p.bcast != 0) {
+            extern void gadget_vex_ld_i386_1(void), gadget_vex_ld_i386_2(void), gadget_vex_ld_i386_4(void),
+                    gadget_vex_ld_i386_8(void), gadget_vex_ld_i386_16(void), gadget_vex_ld_i386_32(void),
+                    gadget_evex_ld_i386_64(void), gadget_evex_ldb_i386_4(void), gadget_evex_ldb_i386_8(void),
+                    gadget_evex_ldm_i386(void), gadget_evex_ldbm_i386_4(void), gadget_evex_ldbm_i386_8(void);
+            GEN(p.bcast == 2 ? (masked ? gadget_evex_ldbm_i386_4 : gadget_evex_ldb_i386_4) :
+                    p.bcast == 3 ? (masked ? gadget_evex_ldbm_i386_8 : gadget_evex_ldb_i386_8) :
+                    masked ? gadget_evex_ldm_i386 : p.ld_bytes == 64 ? gadget_evex_ld_i386_64 :
+                    p.ld_bytes == 32 ? gadget_vex_ld_i386_32 : p.ld_bytes == 16 ? gadget_vex_ld_i386_16 :
+                    p.ld_bytes == 8 ? gadget_vex_ld_i386_8 : p.ld_bytes == 4 ? gadget_vex_ld_i386_4 :
+                    p.ld_bytes == 2 ? gadget_vex_ld_i386_2 : gadget_vex_ld_i386_1);
+            GEN(state->orig_ip);
+            if (masked)
+                GEN(p.word);
+        }
+    }
+    GEN(e->gadget);
+    GEN(p.word);
+    if (p.st_bytes != 0) {
+        extern void gadget_evex_st_i386_16(void), gadget_evex_st_i386_32(void), gadget_evex_st_i386_64(void),
+                gadget_evex_stm_i386(void);
+        gen_addr(state, &m, seg_tls);
+        GEN(p.st_masked ? gadget_evex_stm_i386 : p.st_bytes == 64 ? gadget_evex_st_i386_64 :
+                p.st_bytes == 32 ? gadget_evex_st_i386_32 : gadget_evex_st_i386_16);
+        GEN(state->orig_ip);
+        if (p.st_masked)
+            GEN(p.word);
+    }
+    return true;
+#else
+    (void) modrm; (void) seg_tls; (void) p0; (void) p1; (void) p2; (void) op; (void) raw_modrm; (void) imm8;
+    UNDEFINED;
+#endif
 }
 
 #if defined(__aarch64__)
