@@ -28,15 +28,6 @@ void fpenv_x86_sync_mxcsr(struct cpu_state *cpu);
 void fpenv_x86_load_mxcsr(struct cpu_state *cpu);
 void fpenv_amd64_load_mxcsr(struct cpu_state *cpu);
 
-// arm64 MRS/MSR of FPCR and FPSR, from the gadgets. op: 0 = MRS FPCR,
-// 1 = MSR FPCR, 2 = MRS FPSR, 3 = MSR FPSR. Returns the value an MRS reads.
-uint64_t fpenv_arm64_sysreg(struct cpu_state *cpu, unsigned op, uint64_t value);
-
-// riscv64: sync before reading fflags (fcsr bits 4:0); load after writing any
-// of fcsr, and pass whether the flags themselves were written.
-void fpenv_riscv64_sync_fflags(struct cpu_state *cpu);
-void fpenv_riscv64_load_fcsr(struct cpu_state *cpu, bool flags_written);
-
 // For a C helper that supplies an x86 invalid operation's result itself (the
 // negative indefinite NaN) and so never ran the host operation that would
 // have raised the flag: raise it, to be folded into MXCSR with the rest.

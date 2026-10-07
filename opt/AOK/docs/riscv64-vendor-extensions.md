@@ -48,47 +48,39 @@ it can't decode an instruction at all, it falls through to
 `gen_riscv64_undefined`, which raises `INT_UNDEFINED` (the guest gets
 `SIGILL`, exactly like on real hardware).
 
-The vendor hook adds one case to that decoder, ahead of the
-undefined-instruction fallback:
+A vendor instruction is defined as **a ratified-ISA instruction under
+another encoding**, and the hook is a rewrite right after the fetch:
 
 ```c
-case RISCV64_OP_CUSTOM0: case RISCV64_OP_CUSTOM1:
-case RISCV64_OP_CUSTOM2: case RISCV64_OP_CUSTOM3: {
-    if (riscv64_vendor_ext_enabled() && riscv64_vendor_ext_lookup(insn) != NULL) {
-        gen(state, (unsigned long) gadget_riscv64_call_helper);
-        gen(state, (unsigned long) riscv64_vendor_ext_dispatch);
-        gen(state, (unsigned long) insn);
-        return 1;
-    }
-    return gen_riscv64_undefined(state, insn);
+unsigned op7 = insn & 0x7f;
+if (op7 == RISCV64_OP_CUSTOM0 || op7 == RISCV64_OP_CUSTOM1 ||
+        op7 == RISCV64_OP_CUSTOM2 || op7 == RISCV64_OP_CUSTOM3) {
+    uint32_t standard = riscv64_vendor_ext_enabled() ? riscv64_vendor_ext_translate(insn, NULL) : 0;
+    if (standard != 0)
+        insn = standard;
 }
 ```
 
-Three things happen when a custom-opcode instruction is decoded:
+Three things happen when a custom-opcode instruction is fetched:
 
 1. **Is the pack enabled?** Off by default — see "Enabling" below.
 2. **Does the raw instruction word match a registered entry?** A tiny
-   linear scan over a `{mask, match, mnemonic, handler}` table.
-3. **If both yes:** emit one gadget — `call_helper`, already present in
-   `jit/guest-riscv64/fp.S` for the CSR and `fclass` implementations —
-   that saves the gadget register file, calls a plain C function with
-   `(cpu_state *, unsigned long arg)`, and restores. The `arg` here is
-   just the raw 32-bit instruction word; the C handler re-extracts
-   `rd`/`rs1`/whatever fields it needs using the same `emu/arch/riscv64/
-   decode.h` helpers the rest of the decoder uses.
+   linear scan over a `{mask, match, mnemonic, standard, carry}` table.
+3. **If both yes:** the word is replaced by `standard` — the ratified
+   instruction the entry names — with the vendor word's `rd`/`rs1`/`rs2`
+   filled in where `carry` says, and decoding carries on as if that had
+   been fetched. The JIT compiles it with the same gadgets as the real
+   one, so a vendor instruction runs at native gadget speed and with
+   nothing in C at run time.
 
-No new gadget assembly was needed for this. That's deliberate: `call_helper`
-already solves "run some C code with the right cpu_state pointer and
-without corrupting the JIT's own register conventions" — see its header
-comment in `fp.S` for the AAPCS64 aliasing hazard it works around (`_cpu`
-IS x1; read it before you overwrite x1 with your own argument). Any new
-vendor instruction that can be expressed as C reading/writing `cpu_state`
-fields rides this same gadget for free.
+If nothing matches (or the pack is disabled), the word reaches the
+custom-opcode case of the decoder unchanged, which is the exact same
+`gen_riscv64_undefined` path any other unimplemented instruction takes.
+**This hook only ever narrows what's legal — it never silently widens it.**
 
-If decode fails (wrong mask, or the pack is disabled), execution falls
-through to the exact same `gen_riscv64_undefined` path any other
-unimplemented instruction takes. **This hook only ever narrows what's
-legal — it never silently widens it.**
+An instruction that is not some ratified instruction under another name
+needs its own gadget, as every instruction this engine runs has: write it
+in `jit/guest-riscv64/` and emit it from the custom-opcode case instead.
 
 ## The example pack
 
@@ -106,14 +98,11 @@ under custom-0 (`0x0B`), differentiated by `funct3`:
 real vendor's silicon.** T-Head, Andes, SiFive, and others all ship real
 custom-0..3 extensions, but this project has no way to verify a
 hand-transcribed encoding against actual hardware, so it makes no claim of
-bit-compatibility with any of them. The four instructions above do fill a
-real gap, though: this port doesn't implement the standard `Zbb`
-bit-manipulation extension, so `clz`/`ctz`/`popcount`/byte-swap have no
-other way to execute under this engine today — a legitimate (if invented)
-motivation for a vendor extension to exist. Swap in a real, verified
-encoding here if you're targeting actual hardware; the mechanism doesn't
-care what bit pattern you choose, only that it lives in the reserved
-space.
+bit-compatibility with any of them. They are `Zbb`'s `clz`, `ctz`, `cpop`
+and `rev8` under other encodings, which is what a vendor instruction mapped
+onto the ratified ISA looks like. Swap in a real, verified encoding here if
+you're targeting actual hardware; the mechanism doesn't care what bit
+pattern you choose, only that it lives in the reserved space.
 
 Each instruction is encoded R-type-shaped (`rd`, `funct3`, `rs1`, `funct7`,
 `rs2`, `opcode`), with `funct7` pinned to `0` and `rs2`/the rest of the
@@ -123,41 +112,25 @@ leaving the rest of the `funct7` range free for some *other* pack sharing
 the same opcode. When you add your own instructions, claim only what you
 use.
 
-## Writing a handler
+## Writing an entry
 
-A handler is a plain C function:
+An entry names the vendor encoding and the ratified instruction it equals:
 
 ```c
-static void riscv64_vext_clz(struct cpu_state *cpu, uint32_t insn) {
-    unsigned rd = riscv64_rd(insn), rs1 = riscv64_rs1(insn);
-    uint64_t v = cpu->riscv64_regs[rs1];
-    if (rd != 0)
-        cpu->riscv64_regs[rd] = v == 0 ? 64 : (uint64_t) __builtin_clzll(v);
-}
+{ RISCV64_VENDOR_MASK, RISCV64_VENDOR_MATCH(0), "ish.clz", ZBB_UNARY(0x600, 1), CARRY_RD | CARRY_RS1 },
 ```
 
-Two invariants every handler must respect (both already enforced
-everywhere else in the riscv64 engine — see `emu/cpu.h`'s riscv64 register
-block comment):
+`standard` is the ratified encoding with its register fields zero
+(`ZBB_UNARY(0x600, 1)` is `clz x0, x0`), and `carry` says which of the
+vendor word's `rd` (bits 11:7), `rs1` (19:15) and `rs2` (24:20) are copied
+into it, at the same positions. Everything the ratified instruction does —
+`rd == x0` discarding the result, the PC advancing past it — it does here
+too, because it is that instruction by the time the JIT sees it.
 
-- **Never write `cpu->riscv64_regs[0]`.** `x0` is hardwired zero. Guard
-  every register write with `if (rd != 0)`. Reads don't need a guard:
-  `riscv64_regs[0]` is never written by anything else either, so it's
-  always zero to read.
-- **Don't touch `cpu->riscv64_pc`.** The gadget stream already advances
-  `pc` past your instruction before and after the callback runs (it's a
-  gadget just like any other, `gret`-terminated); a handler that also
-  moves `pc` will corrupt control flow. If you need a *branching* vendor
-  instruction, that's a materially different design (you'd need the
-  handler to signal a target back to the gadget rather than exiting
-  normally) — out of scope for this pack, flagged here so you don't
-  discover it the hard way.
-
-Register the handler in the static table with a `{mask, match}` pair that
-pins the opcode field (bits `[6:0]`) to one of the four custom opcodes.
-`RISCV64_VENDOR_MASK`/`RISCV64_VENDOR_MATCH` in the reference file are the
-mask/match pattern for "opcode + funct3, funct7 forced to 0"; adjust if
-your instruction needs to look at different bits.
+Pin the opcode field (bits `[6:0]`) of every `{mask, match}` pair to one of
+the four custom opcodes. `RISCV64_VENDOR_MASK`/`RISCV64_VENDOR_MATCH` in the
+reference file are the mask/match pattern for "opcode + funct3, funct7
+forced to 0"; adjust if your instruction needs to look at different bits.
 
 ## Enabling
 
@@ -177,7 +150,7 @@ sufficient for a built-in pack like this: the table is a static C array,
 compiled once, and every process either has the feature for its whole
 lifetime or doesn't.
 
-A more ambitious tier — a CLI-loadable plugin registering handlers into a
+A more ambitious tier — a CLI-loadable plugin registering entries into a
 *running* emulator, or toggling the pack on a live process — would need
 one more piece this reference implementation doesn't build:  **JIT
 block-cache invalidation on registration change.** Any block already
@@ -214,14 +187,15 @@ ISH_RISCV64_VENDOR_EXT=1 ish -r / riscv64_vendor_ext   # expect exit 0
 ```
 
 The test also checks the `rd == x0` case explicitly (`ish.clz x0, a1` must
-be a no-op) — the one invariant that's easy to get wrong in a new handler
-and easy to verify mechanically.
+be a no-op) — easy to get wrong in a new entry's `carry` and easy to verify
+mechanically.
 
 ## Generalizing beyond riscv64
 
 The design here — a decode-miss registry consulted before the
-undefined-instruction path, gated by a per-arch opcode-space rule, riding
-a generic "call a C handler" gadget — isn't riscv64-specific in spirit.
+undefined-instruction path, gated by a per-arch opcode-space rule, that
+rewrites a vendor word into the ratified instruction it equals — isn't
+riscv64-specific in spirit.
 arm64 has architecturally unallocated encodings that could play the same
 role as RISC-V's custom-0..3 opcodes (with a correspondingly stricter,
 hand-curated allow-list, since arm64 doesn't reserve a clean opcode field

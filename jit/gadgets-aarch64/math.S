@@ -8507,7 +8507,8 @@ amd64_gen_popf popf16, 2, 0
 
 # x11 bytes, host x10 -> host x9, lowest first: right for a destination at or
 # below the source (each chunk is loaded before the stores that could reach
-# it). Clobbers x9-x12, q0-q3.
+# it). Clobbers x9-x12, q0-q3. (Also the i386 REP MOVS gadgets', string.S.)
+.global.name x86_str_copy
 amd64_str_copy:
 1:  cmp  x11, 64
     b.lo 2f
@@ -8533,7 +8534,8 @@ amd64_str_copy:
 4:  ret
 
 # x11 bytes at host x9 with the 8-byte pattern x3 (phase from the start).
-# Clobbers x9, x11, x12, q0.
+# Clobbers x9, x11, x12, q0. (Also the i386 REP STOS gadgets'.)
+.global.name x86_str_fill
 amd64_str_fill:
     dup  v0.2d, x3
 1:  cmp  x11, 64

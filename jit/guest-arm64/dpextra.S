@@ -740,42 +740,78 @@ crc32_st:
 
 # vim: ft=gas
 
-// MRS/MSR FPCR and FPSR, through emu/fpenv.c: a written FPCR goes onto the
-// host FPU at once, so the guest's rounding mode, FZ and DN govern the very
-// next instruction; a read of FPSR gathers the flags the host FPU has raised
-// since (IOC..IXC, IDC, and QC from the saturating ops). They were plain
-// cpu_state loads and stores, which no FP operation ever looked at.
+// MRS/MSR FPCR and FPSR, emu/fpenv.c's model: a written FPCR goes onto the
+// host FPU at once (its guest-controlled bits: RMode, FZ16, FZ, DN, AHP --
+// the rest reads back zero), so the guest's rounding mode, FZ and DN govern
+// the very next instruction; a read of FPSR gathers the flags the host FPU
+// has raised since (IOC..IXC, IDC, QC) into cpu->arm64_fpsr; a write of FPSR
+// drops the host's and keeps the written flags. fpenv's FPCR cache compares
+// the live register, so writing it here keeps it coherent.
 // Code stream: [gadget][rt]
-.macro fpsysreg_gadget name, op, is_read
-.gadget \name
-    ldr x8, [_ip]
+#define ARM64_FPCR_GUEST_HI 0x07c8      /* (0x07c80000) */
+.macro fp_rt_read rd                    /* \rd = Xt (XZR reads 0); x12 = rt */
+    ldr x12, [_ip]
     add _ip, _ip, #8
-    save_c
-    and x19, x8, #0x1f          // rt, callee-saved across the C call
-    mov x2, #0
-.if !\is_read
-    cmp x19, #31
+    and x12, x12, #0x1f
+    mov \rd, #0
+    cmp x12, #31
     b.eq 1f
     add x9, _cpu, #CPU_x0
-    ldr x2, [x9, x19, lsl #3]   // Xt (XZR writes 0)
+    ldr \rd, [x9, x12, lsl #3]
 1:
-.endif
-    mov x0, _cpu                // _cpu IS x1: read it before x1 is loaded
-    mov x1, #\op
-    bl NAME(fpenv_arm64_sysreg)
-    mov x20, x0
-    restore_c
-.if \is_read
-    cmp x19, #31
+.endm
+.macro fp_rt_write rs                   /* Xt = \rs, x12 = rt */
+    cmp x12, #31
     b.eq 2f
     add x9, _cpu, #CPU_x0
-    str x20, [x9, x19, lsl #3]
+    str \rs, [x9, x12, lsl #3]
 2:
-.endif
-    gret
 .endm
-
-fpsysreg_gadget mrs_fpcr, 0, 1
-fpsysreg_gadget msr_fpcr, 1, 0
-fpsysreg_gadget mrs_fpsr, 2, 1
-fpsysreg_gadget msr_fpsr, 3, 0
+.macro fp_take_flags rd                 /* \rd = the host's sticky flags, now cleared */
+    mrs x10, fpsr
+    movz w11, #0x9f
+    movk w11, #0x0800, lsl #16
+    and \rd, x10, x11
+    cbz \rd, 3f
+    bic x10, x10, x11
+    msr fpsr, x10
+3:
+.endm
+.gadget mrs_fpcr
+    ldr x12, [_ip]
+    add _ip, _ip, #8
+    and x12, x12, #0x1f
+    ldr w13, [_cpu, #CPU_arm64_fpcr]
+    fp_rt_write x13
+    gret
+.gadget msr_fpcr
+    fp_rt_read x13
+    movz w11, #ARM64_FPCR_GUEST_HI, lsl #16
+    and w13, w13, w11
+    str w13, [_cpu, #CPU_arm64_fpcr]
+    mrs x10, fpcr
+    and x14, x10, x11
+    cmp x14, x13
+    b.eq 4f
+    bic x10, x10, x11
+    orr x10, x10, x13
+    msr fpcr, x10
+4:  gret
+.gadget mrs_fpsr
+    ldr x12, [_ip]
+    add _ip, _ip, #8
+    and x12, x12, #0x1f
+    fp_take_flags x13
+    ldr w14, [_cpu, #CPU_arm64_fpsr]
+    orr w14, w14, w13
+    str w14, [_cpu, #CPU_arm64_fpsr]
+    fp_rt_write x14
+    gret
+.gadget msr_fpsr
+    fp_rt_read x14
+    fp_take_flags x13
+    movz w11, #0x9f
+    movk w11, #0x0800, lsl #16
+    and w14, w14, w11
+    str w14, [_cpu, #CPU_arm64_fpsr]
+    gret

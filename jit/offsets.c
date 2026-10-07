@@ -27,6 +27,8 @@ void cpu() {
     OFFSET(CPU, cpu_state, amd64_regs);
     OFFSET(CPU, cpu_state, amd64_rip);
     OFFSET(CPU, cpu_state, i386_fs_base);
+    OFFSET(CPU, cpu_state, i386_sreg);
+    OFFSET(CPU, cpu_state, i386_tls);
     OFFSET(CPU, cpu_state, tls_ptr);
     OFFSET(CPU, cpu_state, amd64_gs_base);
     OFFSET(CPU, cpu_state, amd64_sreg);

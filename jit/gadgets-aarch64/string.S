@@ -57,68 +57,115 @@
         .ifnc \rep,once
             cbz ecx, 2f
         .endif
-        # Forward bulk fast path for movs/stos via rep_string_fast (jit/helpers.c):
-        # resolve the host page once per page-run instead of re-hashing the TLB
-        # per element. Backward (DF=1) and small counts fall through to the
-        # per-element loop below; cmps/scas/lods/once are unaffected (guarded).
+        # Forward REP MOVS/STOS a page span at a time: one TLB lookup per
+        # span, then math.S's x86_str_copy / x86_str_fill. ECX, ESI and EDI
+        # are updated after each span, so a fault or a poke leaves them as
+        # x86's restart state. Backward (DF=1) and short counts take the
+        # per-element loop below, and so does a MOVS whose destination is
+        # ahead of its source inside the span (the byte-smearing overlap); an
+        # element straddling a page goes through the per-element access.
         .ifin(\op, movs, stos)
         .ifc \rep,rep
             ldr w8, [_cpu, CPU_eflags]
             tst w8, DF_FLAG
-            b.ne 8f                     /* DF=1: backward, use per-element loop */
+            b.ne 8f                     /* DF=1: backward, per element */
             cmp ecx, 8
-            b.lo 8f                     /* tiny rep: per-element loop wins */
-            str esi, [_cpu, CPU_esi]
-            str edi, [_cpu, CPU_edi]
-            str ecx, [_cpu, CPU_ecx]
-            .ifc \op,stos
-            str eax, [_cpu, CPU_eax]
-            .endif
-            save_c
-            mov x0, _cpu
-            sub x1, _tlb, TLB_entries
-            mov w2, (\size/8)
-            .ifc \op,movs
-            mov w3, 1
+            b.lo 8f                     /* a short rep: per element */
+          .ifc \op,stos
+            .if \size == 8
+            and x13, xax, 0xff
+            mov x9, 0x0101010101010101
+            mul x13, x13, x9
+            .elseif \size == 16
+            and x13, xax, 0xffff
+            mov x9, 0x0001000100010001
+            mul x13, x13, x9
             .else
-            mov w3, 0
+            mov w13, eax
+            orr x13, x13, x13, lsl 32
             .endif
-            bl NAME(rep_string_fast)
-            mov x19, x0
-            restore_c
-            ldr esi, [_cpu, CPU_esi]
-            ldr edi, [_cpu, CPU_edi]
-            ldr ecx, [_cpu, CPU_ecx]
-            cbnz x19, 7f                /* nonzero: faulted, or poked */
-            gret 1
-        7:
-            cmp x19, 3
-            b.eq 5f                     /* x19==3: poked mid-rep */
-            cmp x19, 1
-            b.ne 6f                     /* x19==2: dest/write fault */
-            b segfault_read             /* x19==1: source/read fault */
-        6:
-            b segfault_write
-        5:
-            # Poked in the middle of a rep. ecx/esi/edi were written back by
-            # the helper and are the restart state x86 defines, so all this
-            # has to do is rewind eip to THIS instruction and leave: [_ip] is
-            # the same operand slot segfault_read/segfault_write read, which
-            # is there for exactly this purpose. The frontend consumes the
-            # poke (jit_should_yield -> cpu_take_poke), services whatever
-            # raised it, and re-enters; the rep resumes with the ecx it kept.
-            #
-            # Deliberately NOT the shared `poke` label. That one rewinds to the
-            # start of the BLOCK, which is correct where it is used -- at a
-            # block boundary -- and wrong here, because it would re-execute
-            # every instruction between the block start and this rep.
-            #
-            # An unconditional branch reaches jit_ret in entry.S; a conditional
-            # one could not (same range constraint as `b poke` in control.S),
-            # which is why the test above jumps to this local label first.
+          .endif
+        .Lspan\@:
+            and w8, edi, 0xfff
+            mov w9, 0x1000
+            sub w9, w9, w8              /* bytes to the destination's page end */
+          .ifc \op,movs
+            and w8, esi, 0xfff
+            mov w10, 0x1000
+            sub w10, w10, w8
+            cmp w9, w10
+            csel w9, w9, w10, lo        /* the nearer page end */
+          .endif
+            lsr w9, w9, (\size / 16)    /* whole elements (8 -> 0, 16 -> 1, 32 -> 2) */
+            cmp w9, ecx
+            csel w9, w9, ecx, lo
+            cbz w9, .Lone\@             /* an element straddles a page */
+            lsl w12, w9, (\size / 16)   /* bytes (w12, x13: kept across a miss's C call) */
+          .ifc \op,movs
+            cmp edi, esi                /* destination ahead of the source */
+            b.ls .Lcopy\@               /* and inside the span: per element */
+            sub w8, edi, esi
+            cmp w8, w12
+            b.lo 8f
+        .Lcopy\@:
+            mov _addr, esi
+            read_prep 8, \op\size\()_rep_bs
+            mov x13, _xaddr
+            mov _addr, edi
+            write_prep 8, \op\size\()_rep_bd
+            mov x9, _xaddr
+            mov x10, x13
+            mov w11, w12
+            mov w14, w12                /* the routines leave x14 alone */
+            bl NAME(x86_str_copy)
+            write_done 8, \op\size\()_rep_bd
+            add esi, esi, w14
+          .else
+            mov _addr, edi
+            write_prep 8, \op\size\()_rep_bd
+            mov x15, _xaddr
+            mov x9, _xaddr
+            mov w11, w12
+            mov w14, w12
+            mov x3, x13
+            bl NAME(x86_str_fill)
+            mov _xaddr, x15
+            write_done 8, \op\size\()_rep_bd
+          .endif
+            add edi, edi, w14
+            sub ecx, ecx, w14, lsr #(\size / 16)
+        .Lpoke\@:
+            cbz ecx, .Ldone\@
+            ldr x8, [_cpu, CPU_poked_ptr]
+            ldrb w8, [x8]
+            cbz w8, .Lspan\@
+            # Poked mid-rep: back to this instruction, ECX/ESI/EDI as they are
+            # (jit_exit's save_regs spills them), and out, as the per-element
+            # loop does.
             ldr x0, [_ip]
             mov eip, w0
             b jit_ret
+        .Lone\@:
+          .ifc \op,movs
+            mov _addr, esi
+            read_prep \size, \op\size\()_rep_os
+            ldr\s _tmp, [_xaddr]
+            mov _addr, edi
+            write_prep \size, \op\size\()_rep_od
+            str\s _tmp, [_xaddr]
+            write_done \size, \op\size\()_rep_od
+            add esi, esi, (\size / 8)
+          .else
+            mov _addr, edi
+            write_prep \size, \op\size\()_rep_od
+            str\s eax, [_xaddr]
+            write_done \size, \op\size\()_rep_od
+          .endif
+            add edi, edi, (\size / 8)
+            sub ecx, ecx, 1
+            b .Lpoke\@
+        .Ldone\@:
+            gret 1
         8:
         .endif
         .endifin
@@ -233,6 +280,16 @@
         .ifc \op,cmps
             read_bullshit \size, \op\size\()_\rep\()2
         .endif
+        .ifin(\op, movs, stos)
+        .ifc \rep,rep
+            write_bullshit 8, \op\size\()_rep_bd
+            write_bullshit \size, \op\size\()_rep_od
+          .ifc \op,movs
+            read_bullshit 8, \op\size\()_rep_bs
+            read_bullshit \size, \op\size\()_rep_os
+          .endif
+        .endif
+        .endifin
 .endm
 
 .irp op, lods,stos,movs,scas,cmps

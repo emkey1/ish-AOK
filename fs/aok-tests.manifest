@@ -442,6 +442,7 @@ x86/i386_sse4_misc.c
 x86/i386_pcmpstr.c
 x86/i386_mxcsr.c
 x86/i386_bcd.c
+x86/i386_string_ops.c
 x86/amd64_jit_guest_bench.sh
 setup-regressions.sh
 arm64/atomics64.c

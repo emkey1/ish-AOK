@@ -236,30 +236,10 @@ void fpenv_amd64_load_mxcsr(struct cpu_state *cpu) {
 
 // ---- arm64: FPCR/FPSR -------------------------------------------------------
 
-// What MSR FPCR keeps. Everything else reads back as zero: the trap enables
-// (as on cores without FP trapping, Apple's included) and FEAT_AFP, which the
-// guest is not told about.
-#define ARM64_FPCR_WRITABLE FPCR_GUEST
-#define ARM64_FPSR_WRITABLE FPSR_FLAGS
-
-uint64_t fpenv_arm64_sysreg(struct cpu_state *cpu, unsigned op, uint64_t value) {
-    switch (op) {
-        case 0:
-            return cpu->arm64_fpcr;
-        case 1:
-            cpu->arm64_fpcr = (dword_t) (value & ARM64_FPCR_WRITABLE);
-            host_install(cpu->arm64_fpcr & FPCR_GUEST);
-            return 0;
-        case 2:
-            cpu->arm64_fpsr |= (dword_t) host_take_flags();
-            return cpu->arm64_fpsr;
-        case 3:
-            host_take_flags();
-            cpu->arm64_fpsr = (dword_t) (value & ARM64_FPSR_WRITABLE);
-            return 0;
-    }
-    return 0;
-}
+// MRS/MSR FPCR and FPSR are gadgets (jit/guest-arm64/dpextra.S): what MSR FPCR
+// keeps is FPCR_GUEST, everything else reading back as zero -- the trap
+// enables (as on cores without FP trapping, Apple's included) and FEAT_AFP,
+// which the guest is not told about.
 
 // ---- riscv64: fcsr ------------------------------------------------------------
 
@@ -289,17 +269,7 @@ static void riscv64_fold(struct cpu_state *cpu, uint64_t f) {
     cpu->riscv64_fcsr |= m;
 }
 
-void fpenv_riscv64_sync_fflags(struct cpu_state *cpu) {
-    uint64_t f = host_take_flags();
-    if (f)
-        riscv64_fold(cpu, f);
-}
-
-void fpenv_riscv64_load_fcsr(struct cpu_state *cpu, bool flags_written) {
-    if (flags_written)
-        host_take_flags();
-    host_install(riscv64_control(cpu));
-}
+// The CSR reads and writes do the same in asm (jit/guest-riscv64/fp.S csr_fp).
 
 void fpenv_raise_invalid(void) {
 #if defined(__aarch64__)

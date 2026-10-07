@@ -474,6 +474,106 @@ fclass_gadget fclass_d, 1
     restore_c
     gret 2
 
+// ---- the FP CSRs and the counters --------------------------------------
+// fflags (0x001) = fcsr[4:0], frm (0x002) = fcsr[7:5], fcsr (0x003) =
+// fcsr[7:0], under csrrw/s/c and their immediate forms, emu/fpenv.c's model:
+// a read of fflags or fcsr first gathers the flags the host FPU raised
+// (IOC DZC OFC UFC IXC -> NV DZ OF UF NX, the bit order reversed); a write
+// goes onto the host FPU at once (frm's rounding mode -- RMM and the
+// reserved values run as RNE -- and DN, RISC-V's canonical NaN), a write of
+// the flags discarding the host's. fpenv's FPCR cache compares the live
+// register, so writing it here keeps it coherent.
+// [rd | rs1 << 5 | funct3 << 10 | csr << 13], gret 1.
+.macro rv_take_flags                     /* w13 = the host's flags as fflags; cleared */
+    mrs  x10, fpsr
+    movz w11, #0x9f
+    movk w11, #0x0800, lsl #16
+    ands w12, w10, w11
+    mov  w13, 0
+    b.eq 1f
+    bic  x10, x10, x11
+    msr  fpsr, x10
+    and  w12, w12, #0x1f
+    rbit w13, w12
+    lsr  w13, w13, #27
+1:
+.endm
+.gadget csr_fp
+    ldr  x8, [_ip]
+    and  x14, x8, #31                    /* rd */
+    ubfx x15, x8, #5, #5                 /* rs1 */
+    ubfx x16, x8, #10, #3                /* funct3 */
+    lsr  x17, x8, #13                    /* csr */
+    ldr  w9, [_cpu, #CPU_riscv64_fcsr]
+    cmp  x17, #2
+    b.eq 2f
+    rv_take_flags
+    orr  w9, w9, w13
+    str  w9, [_cpu, #CPU_riscv64_fcsr]
+2:  and  w4, w9, #0x1f                   /* old: fflags */
+    cmp  x17, #2
+    b.ne 3f
+    ubfx w4, w9, #5, #3                  /* frm */
+3:  cmp  x17, #3
+    b.ne 4f
+    and  w4, w9, #0xff                   /* fcsr */
+4:  mov  x5, x15                         /* src: the immediate */
+    tbnz x16, #2, 5f
+    add  x10, _cpu, #CPU_riscv64_regs
+    ldr  x5, [x10, x15, lsl #3]          /* or rs1 */
+5:  and  x6, x16, #3
+    cmp  x6, #1
+    b.eq 6f                              /* csrrw: always writes */
+    cbz  x15, 9f                         /* csrrs/c with rs1/uimm 0: a read */
+    orr  x10, x4, x5
+    bic  x11, x4, x5
+    cmp  x6, #2
+    csel x5, x10, x11, eq
+6:  cmp  x17, #1
+    b.ne 7f
+    bfi  w9, w5, #0, #5
+    b    8f
+7:  cmp  x17, #2
+    b.ne 71f
+    bfi  w9, w5, #5, #3
+    b    8f
+71: and  w9, w5, #0xff
+8:  str  w9, [_cpu, #CPU_riscv64_fcsr]
+    cmp  x17, #2
+    b.eq 81f
+    rv_take_flags                        /* the flags were written: the host's go */
+81: ubfx w10, w9, #5, #3
+    lsl  w10, w10, #1
+    mov  w11, #0x6c                      /* frm -> RMode: 0 3 2 1, the rest 0 */
+    lsr  w11, w11, w10
+    and  w11, w11, #3
+    lsl  w11, w11, #22
+    orr  w11, w11, #(1 << 25)            /* DN */
+    mrs  x10, fpcr
+    movz w12, #0x07c8, lsl #16           /* FPCR's guest bits */
+    and  w13, w10, w12
+    cmp  w13, w11
+    b.eq 9f
+    bic  x10, x10, x12
+    orr  x10, x10, x11
+    msr  fpcr, x10
+9:  cbz  x14, 10f
+    add  x10, _cpu, #CPU_riscv64_regs
+    str  x4, [x10, x14, lsl #3]
+10: gret 1
+
+// cycle, time, instret (0xc00-2, read only): all three the host counter in
+// nanoseconds (gadgets-generic.h host_counter_ns) -- there is no cycle or
+// instruction count to give, and Go's nanotime (`csrrs rd, time, x0`) only
+// needs a steady clock. [rd], gret 1.
+.gadget csr_counter
+    ldr  x12, [_ip]
+    host_counter_ns x8, x9, x10, x11
+    cbz  x12, 1f
+    add  x10, _cpu, #CPU_riscv64_regs
+    str  x8, [x10, x12, lsl #3]
+1:  gret 1
+
 // ---- fused multiply-add family (4 register operands) ----------------------
 // riscv->aarch64 mnemonic mapping is a crosswise trap, verified per-op:
 //   riscv fmadd  (a*b)+c  -> aarch64 fmadd

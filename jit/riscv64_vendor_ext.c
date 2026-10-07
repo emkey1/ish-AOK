@@ -1,7 +1,9 @@
-// RISC-V vendor/user extension hook: a decode-miss registry that lets
-// custom instructions execute via one generic "call a C handler" gadget,
-// with NO interpreter and NO change to the JIT's engine-only-for-the-
-// ratified-ISA design (docs/historical/riscv64_guest_plan.md patch 5b).
+// RISC-V vendor/user extension hook: a decode-time registry that lets a
+// custom instruction execute as the ratified-ISA instruction it is defined
+// to equal -- the decoder rewrites the word and the JIT compiles it with its
+// own gadgets -- with NO interpreter, NO C at run time, and NO change to the
+// JIT's engine-only-for-the-ratified-ISA design
+// (docs/historical/riscv64_guest_plan.md patch 5b).
 //
 // This file is ALSO the reference implementation for /AOK/docs' vendor
 // extension write-up (opt/AOK/docs/riscv64-vendor-extensions.md) — the
@@ -28,11 +30,10 @@
 // custom-0 extensions, but this project has no way to verify a
 // transcribed encoding against their actual hardware, so it does not
 // claim to be bit-compatible with any of them). They fill a real gap
-// though: this port doesn't implement the standard Zbb bit-manipulation
-// extension, so clz/ctz/popcount/byte-swap have no other way to run
-// under this engine — a legitimate, if invented, motivation for a
-// vendor extension. Swap in real encodings here once you have a
-// verified spec to check them against; the mechanism below doesn't care.
+// they are clz, ctz, cpop and rev8 of Zbb under other encodings, which is
+// what a vendor instruction mapped onto the ratified ISA looks like. Swap
+// in real encodings here once you have a verified spec to check them
+// against; the mechanism below doesn't care.
 //
 // ---- Enabling ----
 // Off by default (a vendor extension changing what encodings are legal
@@ -51,57 +52,38 @@
 #include "emu/cpu.h"
 #include "emu/arch/riscv64/decode.h"
 
+// One registered instruction: the words (insn & mask) == match, executing
+// as `standard`, a ratified-ISA encoding with its rd/rs1/rs2 fields zero;
+// `carry` says which of those the vendor word's own fields fill in (at the
+// same bit positions, R-type shaped).
 struct riscv64_vendor_insn {
     uint32_t mask;
     uint32_t match;
     const char *mnemonic;
-    void (*handler)(struct cpu_state *cpu, uint32_t insn);
+    uint32_t standard;
+    unsigned carry;
 };
+#define CARRY_RD  1
+#define CARRY_RS1 2
+#define CARRY_RS2 4
 
 // R-type shaped: opcode + funct3 select the operation, funct7 pinned to
 // 0 (claim as little of the custom-0 space as the pack actually uses,
 // leaving other funct7 values free for a different pack sharing the
-// same opcode), rs2 unused/ignored. rd==0 writes are dropped (the
-// riscv64_regs[0]-must-never-be-written invariant every gadget in this
-// port already follows); rs1==0 reads the permanently-zero slot, same
-// as everywhere else.
+// same opcode), rs2 unused/ignored. rd == 0 discards the result, as the
+// standard instruction does.
 #define RISCV64_VENDOR_MASK  0xfe00707fu
 #define RISCV64_VENDOR_MATCH(funct3) \
     (RISCV64_OP_CUSTOM0 | ((uint32_t) (funct3) << 12))
-
-static void riscv64_vext_clz(struct cpu_state *cpu, uint32_t insn) {
-    unsigned rd = riscv64_rd(insn), rs1 = riscv64_rs1(insn);
-    uint64_t v = cpu->riscv64_regs[rs1];
-    if (rd != 0)
-        cpu->riscv64_regs[rd] = v == 0 ? 64 : (uint64_t) __builtin_clzll(v);
-}
-
-static void riscv64_vext_ctz(struct cpu_state *cpu, uint32_t insn) {
-    unsigned rd = riscv64_rd(insn), rs1 = riscv64_rs1(insn);
-    uint64_t v = cpu->riscv64_regs[rs1];
-    if (rd != 0)
-        cpu->riscv64_regs[rd] = v == 0 ? 64 : (uint64_t) __builtin_ctzll(v);
-}
-
-static void riscv64_vext_pcnt(struct cpu_state *cpu, uint32_t insn) {
-    unsigned rd = riscv64_rd(insn), rs1 = riscv64_rs1(insn);
-    uint64_t v = cpu->riscv64_regs[rs1];
-    if (rd != 0)
-        cpu->riscv64_regs[rd] = (uint64_t) __builtin_popcountll(v);
-}
-
-static void riscv64_vext_bswap(struct cpu_state *cpu, uint32_t insn) {
-    unsigned rd = riscv64_rd(insn), rs1 = riscv64_rs1(insn);
-    uint64_t v = cpu->riscv64_regs[rs1];
-    if (rd != 0)
-        cpu->riscv64_regs[rd] = __builtin_bswap64(v);
-}
+// Zbb 1.0.0, OP-IMM: clz/ctz/cpop rd, rs1 (funct3 1, imm 0x600-0x602) and
+// rev8 rd, rs1 (funct3 5, imm 0x6b8).
+#define ZBB_UNARY(imm12, funct3) (((uint32_t) (imm12) << 20) | ((uint32_t) (funct3) << 12) | 0x13u)
 
 static const struct riscv64_vendor_insn riscv64_vendor_ext_table[] = {
-    { RISCV64_VENDOR_MASK, RISCV64_VENDOR_MATCH(0), "ish.clz",   riscv64_vext_clz },
-    { RISCV64_VENDOR_MASK, RISCV64_VENDOR_MATCH(1), "ish.ctz",   riscv64_vext_ctz },
-    { RISCV64_VENDOR_MASK, RISCV64_VENDOR_MATCH(2), "ish.pcnt",  riscv64_vext_pcnt },
-    { RISCV64_VENDOR_MASK, RISCV64_VENDOR_MATCH(3), "ish.bswap", riscv64_vext_bswap },
+    { RISCV64_VENDOR_MASK, RISCV64_VENDOR_MATCH(0), "ish.clz",   ZBB_UNARY(0x600, 1), CARRY_RD | CARRY_RS1 },
+    { RISCV64_VENDOR_MASK, RISCV64_VENDOR_MATCH(1), "ish.ctz",   ZBB_UNARY(0x601, 1), CARRY_RD | CARRY_RS1 },
+    { RISCV64_VENDOR_MASK, RISCV64_VENDOR_MATCH(2), "ish.pcnt",  ZBB_UNARY(0x602, 1), CARRY_RD | CARRY_RS1 },
+    { RISCV64_VENDOR_MASK, RISCV64_VENDOR_MATCH(3), "ish.bswap", ZBB_UNARY(0x6b8, 5), CARRY_RD | CARRY_RS1 },
 };
 #define RISCV64_VENDOR_EXT_COUNT \
     (sizeof(riscv64_vendor_ext_table) / sizeof(riscv64_vendor_ext_table[0]))
@@ -129,39 +111,23 @@ bool riscv64_vendor_ext_enabled(void) {
     return enabled;
 }
 
-// Gen-time lookup: does insn match a registered vendor instruction?
-// Returns the mnemonic for logging/tracing, or NULL on no match (in
-// which case the caller falls through to the normal undefined-
-// instruction path — this hook only ever narrows what's legal, never
-// widens silently).
-const char *riscv64_vendor_ext_lookup(uint32_t insn) {
+// Gen-time translation: the ratified instruction a registered vendor word
+// executes as, with its operand fields filled in; or 0 if nothing matches
+// (the caller then falls through to the undefined-instruction path -- this
+// hook only ever narrows what's legal, never widens silently). *mnemonic,
+// when not NULL, gets the entry's name for tracing.
+uint32_t riscv64_vendor_ext_translate(uint32_t insn, const char **mnemonic) {
     for (size_t i = 0; i < RISCV64_VENDOR_EXT_COUNT; i++) {
         const struct riscv64_vendor_insn *e = &riscv64_vendor_ext_table[i];
-        if ((insn & e->mask) == e->match)
-            return e->mnemonic;
+        if ((insn & e->mask) != e->match)
+            continue;
+        uint32_t out = e->standard;
+        if (e->carry & CARRY_RD)  out |= insn & (0x1fu << 7);
+        if (e->carry & CARRY_RS1) out |= insn & (0x1fu << 15);
+        if (e->carry & CARRY_RS2) out |= insn & (0x1fu << 20);
+        if (mnemonic != NULL)
+            *mnemonic = e->mnemonic;
+        return out;
     }
-    return NULL;
-}
-
-// Execution-time dispatch: the single function every matched vendor
-// instruction's callback gadget invokes (jit/guest-riscv64/fp.S's
-// call_helper, arg = the raw 32-bit instruction word). Re-scans the
-// same tiny table gen-time lookup used — cheap (4 entries) and keeps
-// the code stream to one word (the instruction itself) rather than
-// threading a second per-entry function pointer through gen().
-void riscv64_vendor_ext_dispatch(struct cpu_state *cpu, unsigned long arg) {
-    uint32_t insn = (uint32_t) arg;
-    for (size_t i = 0; i < RISCV64_VENDOR_EXT_COUNT; i++) {
-        const struct riscv64_vendor_insn *e = &riscv64_vendor_ext_table[i];
-        if ((insn & e->mask) == e->match) {
-            e->handler(cpu, insn);
-            return;
-        }
-    }
-    // Unreachable in practice: gen_step_riscv64 only emits a call to
-    // this dispatcher after riscv64_vendor_ext_lookup already matched
-    // the same static table. Left as a silent no-op rather than a
-    // crash — the guest instruction simply becomes inert, which is a
-    // far safer failure mode than executing garbage if this invariant
-    // is ever violated by a future change.
+    return 0;
 }

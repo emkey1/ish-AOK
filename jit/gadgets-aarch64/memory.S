@@ -576,6 +576,148 @@ NAME(si_gadgets):
     add _addr, _addr, w8
     gret
 
+# The segment-register moves, MOV r/m, Sreg (8C), MOV Sreg, r/m (8E), PUSH and
+# POP of one, under emu/i386_sreg.c's model and Linux's rules (camd): CS reads
+# 0x23 and the rest what was last loaded; a selector loads into ES, DS, FS or
+# GS if it is null, names GDT entry 4, 5, 6 or 15, or a filled TLS entry
+# (12-14), whatever its RPL; SS takes RPL 3 only, and 0x2b or a TLS entry not
+# read_exec_only. LDT selectors never load. A load into FS or GS takes that
+# TLS entry's base (0 otherwise) as i386_fs_base / tls_ptr. A refusal is
+# #GP(sel & 0xfffc) at the instruction, a POP's ESP as it was. Operands
+# [orig_ip][sreg] (MOV to a register: [sreg | 16-bit << 8]).
+#define I386_TLS_MIN 12
+.macro i386_sreg_get                    /* w10 = the selector Sreg x11 reads */
+    mov  w10, 0x23
+    cmp  w11, 1                         /* CS */
+    b.eq .Lsg\@
+    mov  x10, CPU_i386_sreg             /* (past an add's 12-bit immediate) */
+    add  x10, _cpu, x10
+    ldrh w10, [x10, x11, lsl 1]
+.Lsg\@:
+.endm
+.macro i386_sreg_set                    /* selector w10 into Sreg x11, or #GP. Clobbers x12-x14 */
+    tbnz w10, 2, i386_sreg_gp           /* an LDT selector */
+    lsr  w13, w10, 3
+    sub  w12, w13, I386_TLS_MIN
+    cmp  w12, 3
+    b.hs .Lnotls\@
+    mov  w14, 12                        /* sizeof(struct i386_tls_desc) */
+    mov  x13, CPU_i386_tls
+    add  x13, _cpu, x13
+    umaddl x12, w12, w14, x13           /* x12 = the TLS entry */
+    b    .Ltls\@
+.Lnotls\@:
+    mov  x12, 0
+.Ltls\@:
+    cmp  w11, 2                         /* SS */
+    b.ne .Lnotss\@
+    and  w13, w10, 3
+    cmp  w13, 3
+    b.ne i386_sreg_gp
+    cmp  w10, 0x2b
+    b.eq .Lok\@
+    cbz  x12, i386_sreg_gp
+    ldr  w13, [x12, 8]
+    cbz  w13, i386_sreg_gp
+    tbnz w13, 3, i386_sreg_gp           /* read_exec_only */
+    b    .Lok\@
+.Lnotss\@:
+    lsr  w13, w10, 3
+    cbz  w13, .Lok\@
+    cmp  w13, 15
+    b.eq .Lok\@
+    sub  w14, w13, 4
+    cmp  w14, 2
+    b.ls .Lok\@                         /* 4, 5, 6 */
+    cbz  x12, i386_sreg_gp
+    ldr  w13, [x12, 8]
+    cbz  w13, i386_sreg_gp
+.Lok\@:
+    mov  x13, CPU_i386_sreg
+    add  x13, _cpu, x13
+    strh w10, [x13, x11, lsl 1]
+    mov  w14, 0
+    cbz  x12, .Lbase\@
+    ldr  w14, [x12]
+.Lbase\@:
+    cmp  w11, 4                         /* FS */
+    b.ne .Lgs\@
+    str  w14, [_cpu, CPU_i386_fs_base]
+.Lgs\@:
+    cmp  w11, 5                         /* GS */
+    b.ne .Ldone\@
+    str  x14, [_cpu, CPU_tls_ptr]
+.Ldone\@:
+.endm
+i386_sreg_gp:
+    str  xzr, [_cpu, CPU_segfault_addr]
+    strb wzr, [_cpu, CPU_segfault_was_write]
+    strb wzr, [_cpu, CPU_segfault_reported]
+    and  w10, w10, 0xfffc
+    mov  x0, INT_GPF_CODE_BASE
+    orr  x0, x0, x10
+    ldr  x8, [_ip]
+    mov  eip, w8
+    b    jit_exit
+
+.macro i386_sreg_reg_pair name, reg
+.gadget sreg_to_\name                   /* [sreg | 16-bit << 8], gret 1 */
+    ldr  x8, [_ip]
+    and  x11, x8, 7
+    i386_sreg_get
+    tbz  x8, 8, 1f
+    bfi  \reg, w10, 0, 16
+    gret 1
+1:  mov  \reg, w10
+    gret 1
+.gadget sreg_from_\name                 /* [orig_ip][sreg], gret 2 */
+    ldr  x11, [_ip, 8]
+    uxth w10, \reg
+    i386_sreg_set
+    gret 2
+.endm
+.each_reg i386_sreg_reg_pair
+
+.gadget sreg_to_mem                     /* two bytes; [orig_ip][sreg], gret 2 */
+    write_prep 16, sreg_to_mem
+    ldr  x11, [_ip, 8]
+    i386_sreg_get
+    strh w10, [_xaddr]
+    write_done 16, sreg_to_mem
+    gret 2
+    write_bullshit 16, sreg_to_mem
+.gadget sreg_from_mem                   /* two bytes; [orig_ip][sreg], gret 2 */
+    read_prep 16, sreg_from_mem
+    ldrh w10, [_xaddr]
+    ldr  x11, [_ip, 8]
+    i386_sreg_set
+    gret 2
+    read_bullshit 16, sreg_from_mem
+
+.macro i386_sreg_stack bits, s
+.gadget push_sreg\bits                  /* zero-extended, as AMD stores it; [orig_ip][sreg], gret 2 */
+    sub  _addr, esp, (\bits / 8)
+    write_prep \bits, push_sreg\bits
+    ldr  x11, [_ip, 8]
+    i386_sreg_get
+    str\s w10, [_xaddr]
+    write_done \bits, push_sreg\bits
+    sub  esp, esp, (\bits / 8)
+    gret 2
+    write_bullshit \bits, push_sreg\bits
+.gadget pop_sreg\bits                   /* the low word loaded; [orig_ip][sreg], gret 2 */
+    mov  _addr, esp
+    read_prep \bits, pop_sreg\bits
+    ldrh w10, [_xaddr]
+    ldr  x11, [_ip, 8]
+    i386_sreg_set
+    add  esp, esp, (\bits / 8)
+    gret 2
+    read_bullshit \bits, pop_sreg\bits
+.endm
+i386_sreg_stack 16, h
+i386_sreg_stack 32,
+
 .irp type, read,write
 
 .global handle_\type\()_miss

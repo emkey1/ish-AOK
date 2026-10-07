@@ -6816,62 +6816,16 @@ static int gen_riscv64_branch_to(struct gen_state *state, guest_addr_t target) {
 }
 
 
-// CSR access helper, called through gadget_riscv64_call_helper (fp.S).
-// Only the FP CSRs exist in this port: fflags (0x001) = fcsr[4:0],
-// frm (0x002) = fcsr[7:5], fcsr (0x003) = fcsr[7:0]. The flags the host FPU
-// raised are gathered in before fflags is read, and a write goes onto the
-// host FPU at once: emu/fpenv.c.
-// Also handles the read-only Zicntr counters (cycle/time/instret, 0xc00-2):
-// there's no real cycle or instruction count to report, so all three alias
-// a host monotonic nanosecond counter -- Go's runtime.nanotime() (compiled
-// to `csrrs rd, time, x0`) only needs *a* monotonically increasing value.
-// Write attempts to these never reach here (rejected as illegal
-// instructions at decode time, see gen_step_riscv64's RISCV64_OP_SYSTEM).
+// AOK_VCLOCK (csrrs rd, 0xcc0, rs1), through gadget_riscv64_call_helper
+// (fp.S): the clock rs1 names, read the way clock_gettime(2) reads it, or bit
+// 63 set for "make the system call". Only the vDSO issues it
+// (vdso/riscv64/vdso.S). The FP CSRs and the counters are gadgets (fp.S).
 int64_t vdso_clock_ns(uint32_t clock); // kernel/time.c; see kernel/time.h
 void riscv64_csr_helper(struct cpu_state *cpu, unsigned long arg) {
     unsigned rd = arg & 31, rs1 = (arg >> 5) & 31;
-    unsigned funct3 = (arg >> 10) & 7, csr = (unsigned) (arg >> 13);
-    // AOK_VCLOCK (csrrs rd, 0xcc0, rs1): the clock rs1 names, read the way
-    // clock_gettime(2) reads it, or bit 63 set for "make the system call".
-    // Only the vDSO issues it (vdso/riscv64/vdso.S).
-    if (csr == 0xcc0) {
-        qword_t ns = (qword_t) vdso_clock_ns((uint32_t) cpu->riscv64_regs[rs1]);
-        if (rd != 0)
-            cpu->riscv64_regs[rd] = ns;
-        return;
-    }
-    if (csr == 0xc00 || csr == 0xc01 || csr == 0xc02) {
-        struct timespec now;
-        clock_gettime(CLOCK_MONOTONIC, &now);
-        if (rd != 0)
-            cpu->riscv64_regs[rd] = (uint64_t) now.tv_sec * 1000000000ull + (uint64_t) now.tv_nsec;
-        return;
-    }
-    if (csr != 2)
-        fpenv_riscv64_sync_fflags(cpu);
-    dword_t fcsr = cpu->riscv64_fcsr;
-    qword_t old = csr == 1 ? (fcsr & 0x1f)
-                : csr == 2 ? ((fcsr >> 5) & 7)
-                : (fcsr & 0xff);
-    qword_t src = (funct3 & 4) ? rs1 : cpu->riscv64_regs[rs1];
-    // csrrw/csrrwi always write; csrrs/c (and i forms) skip the write
-    // side effect when the rs1/uimm field is 0 (both encode it there).
-    bool write = (funct3 & 3) == 1 || rs1 != 0;
-    if (write) {
-        qword_t nv = (funct3 & 3) == 1 ? src
-                   : (funct3 & 3) == 2 ? (old | src)
-                   : (old & ~src);
-        if (csr == 1)
-            fcsr = (fcsr & ~0x1fu) | (nv & 0x1f);
-        else if (csr == 2)
-            fcsr = (fcsr & ~0xe0u) | ((nv & 7) << 5);
-        else
-            fcsr = nv & 0xff;
-        cpu->riscv64_fcsr = fcsr;
-        fpenv_riscv64_load_fcsr(cpu, csr != 2);
-    }
+    qword_t ns = (qword_t) vdso_clock_ns((uint32_t) cpu->riscv64_regs[rs1]);
     if (rd != 0)
-        cpu->riscv64_regs[rd] = old;
+        cpu->riscv64_regs[rd] = ns;
 }
 
 
@@ -8129,6 +8083,19 @@ int gen_step_riscv64(struct gen_state *state, struct tlb *tlb) {
     state->riscv64_ip += length;
     if (unlikely(state->jitprof != NULL))
         jitprof_note(state->jitprof, insn);
+    // A registered vendor instruction (custom-0..3, jit/riscv64_vendor_ext.c,
+    // ISH_RISCV64_VENDOR_EXT=1) compiles as the ratified one it equals.
+    {
+        unsigned op7 = insn & 0x7f;
+        if (op7 == RISCV64_OP_CUSTOM0 || op7 == RISCV64_OP_CUSTOM1 ||
+                op7 == RISCV64_OP_CUSTOM2 || op7 == RISCV64_OP_CUSTOM3) {
+            extern bool riscv64_vendor_ext_enabled(void);
+            extern uint32_t riscv64_vendor_ext_translate(uint32_t insn, const char **mnemonic);
+            uint32_t standard = riscv64_vendor_ext_enabled() ? riscv64_vendor_ext_translate(insn, NULL) : 0;
+            if (standard != 0)
+                insn = standard;
+        }
+    }
     if (gen_riscv64_try_rcache_run(state, tlb, insn))
         return 1;
 
@@ -8720,16 +8687,8 @@ int gen_step_riscv64(struct gen_state *state, struct tlb *tlb) {
         // walkthrough. Off by default; falls through to the normal
         // undefined-instruction path (SIGILL) on no match or when disabled,
         // exactly like any other unimplemented encoding.
-        extern bool riscv64_vendor_ext_enabled(void);
-        extern const char *riscv64_vendor_ext_lookup(uint32_t insn);
-        extern void riscv64_vendor_ext_dispatch(struct cpu_state *cpu, unsigned long arg);
-        if (riscv64_vendor_ext_enabled() && riscv64_vendor_ext_lookup(insn) != NULL) {
-            extern void gadget_riscv64_call_helper(void);
-            gen(state, (unsigned long) gadget_riscv64_call_helper);
-            gen(state, (unsigned long) riscv64_vendor_ext_dispatch);
-            gen(state, (unsigned long) insn);
-            return 1;
-        }
+        // (a registered vendor instruction was rewritten into its ratified
+        // equivalent at the fetch above; what reaches here is unregistered)
         return gen_riscv64_undefined(state, insn);
     }
 
@@ -8765,7 +8724,20 @@ int gen_step_riscv64(struct gen_state *state, struct tlb *tlb) {
             // 0xcc0, csrrs only: AOK_VCLOCK, the clock only AOK's vDSO reads
             // (vdso/riscv64/vdso.S). rs1 names the clock, rd gets its reading.
             bool vclock = csr == 0xcc0 && funct3 == 2;
-            if ((csr >= 1 && csr <= 3) || counter_read_only || vclock) { // fflags/frm/fcsr, cycle/time/instret, vclock
+            if (csr >= 1 && csr <= 3) { // fflags/frm/fcsr (fp.S)
+                extern void gadget_riscv64_csr_fp(void);
+                gen(state, (unsigned long) gadget_riscv64_csr_fp);
+                gen(state, rd | (rs1 << 5) | (funct3 << 10)
+                        | ((unsigned long) csr << 13));
+                return 1;
+            }
+            if (counter_read_only) { // cycle/time/instret (fp.S)
+                extern void gadget_riscv64_csr_counter(void);
+                gen(state, (unsigned long) gadget_riscv64_csr_counter);
+                gen(state, rd);
+                return 1;
+            }
+            if (vclock) { // the vDSO's clock: a kernel service, like a system call
                 extern void gadget_riscv64_call_helper(void);
                 extern void riscv64_csr_helper(struct cpu_state *cpu, unsigned long arg);
                 gen(state, (unsigned long) gadget_riscv64_call_helper);
@@ -18038,6 +18010,47 @@ static bool gen_ret16(struct gen_state *state, uint32_t release) {
 // costs nothing that matters, and the block goes on after it.
 static void gen_sreg(struct gen_state *state, struct modrm *modrm, unsigned kind,
         unsigned sreg, int size, bool seg_tls) {
+#if defined(__aarch64__)
+    // gadgets-aarch64/memory.S's sreg_* (the same rules, in asm)
+#define SREG_REGS(X) X(a) X(c) X(d) X(b) X(sp) X(bp) X(si) X(di)
+#define SREG_DECL(r) extern void gadget_sreg_to_reg_##r(void), gadget_sreg_from_reg_##r(void);
+    SREG_REGS(SREG_DECL)
+#define SREG_TO(r) gadget_sreg_to_reg_##r,
+#define SREG_FROM(r) gadget_sreg_from_reg_##r,
+    static void (*const to_reg[8])(void) = {SREG_REGS(SREG_TO)};
+    static void (*const from_reg[8])(void) = {SREG_REGS(SREG_FROM)};
+#undef SREG_REGS
+#undef SREG_DECL
+#undef SREG_TO
+#undef SREG_FROM
+    extern void gadget_sreg_to_mem(void), gadget_sreg_from_mem(void), gadget_push_sreg16(void),
+           gadget_push_sreg32(void), gadget_pop_sreg16(void), gadget_pop_sreg32(void);
+    bool mem = modrm != NULL && modrm->type != modrm_reg;
+    if (mem)
+        gen_addr(state, modrm, seg_tls);
+    switch (kind) {
+    case I386_SREG_OP_READ:
+        if (!mem) {
+            GEN(to_reg[modrm->base & 7]);
+            GEN(sreg | (size == 16 ? 1ul << 8 : 0));
+            return;
+        }
+        GEN(gadget_sreg_to_mem);
+        break;
+    case I386_SREG_OP_LOAD:
+        GEN(mem ? gadget_sreg_from_mem : from_reg[modrm->base & 7]);
+        break;
+    case I386_SREG_OP_PUSH:
+        GEN(size == 16 ? gadget_push_sreg16 : gadget_push_sreg32);
+        break;
+    default:
+        GEN(size == 16 ? gadget_pop_sreg16 : gadget_pop_sreg32);
+        break;
+    }
+    GEN(state->orig_ip);
+    GEN(sreg);
+    return;
+#endif
     unsigned long op = kind | sreg << 4 | (size == 16 ? I386_SREG_OP_16 : 0);
     if (modrm != NULL && modrm->type != modrm_reg) {
         gen_addr(state, modrm, seg_tls);

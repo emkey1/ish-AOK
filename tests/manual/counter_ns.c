@@ -1,12 +1,14 @@
 // counter_ns.c -- the guest's cycle counter: x86 RDTSC (i386: EDX:EAX; amd64:
-// RAX/RDX, their upper halves zero) or arm64 MRS CNTVCT_EL0 with CNTFRQ_EL0.
+// RAX/RDX, their upper halves zero), arm64 MRS CNTVCT_EL0 with CNTFRQ_EL0, or
+// riscv64 rdtime (cycle and instret read the same counter under AOK).
 // AOK makes it the host's system counter in nanoseconds (gadgets-generic.h
 // host_counter_ns), so: read in order (LFENCE; RDTSC, ISB; MRS, as Linux's
 // ordered reads are -- without the fence real hardware fails the next check
 // too) it never goes backwards, on one thread or across four that hand the
 // latest value round; and it runs at CLOCK_MONOTONIC's rate, within 2% over
-// 200 ms -- arm64 at CNTFRQ_EL0's (1 GHz under AOK). A real x86's TSC rate is
-// unknown here, so there the rate check runs only under AOK (/proc/ish).
+// 200 ms -- arm64 at CNTFRQ_EL0's (1 GHz under AOK). A real x86's TSC rate and
+// a real RISC-V's timebase are unknown here, so there the rate check runs only
+// under AOK (/proc/ish).
 #define _GNU_SOURCE
 #include <pthread.h>
 #include <stdint.h>
@@ -28,6 +30,12 @@ static uint64_t counter(void) {
 #elif defined(__aarch64__)
     uint64_t v;
     __asm__ volatile("isb\n mrs %0, cntvct_el0" : "=r"(v) :: "memory");
+    return v;
+#elif defined(__riscv)
+    uint64_t v, c, i;
+    __asm__ volatile("fence\n rdtime %0\n rdcycle %1\n rdinstret %2" : "=r"(v), "=r"(c), "=r"(i) :: "memory");
+    if (access("/proc/ish", F_OK) == 0 && (c < v || i < c))
+        return 0;                      // under AOK all three are the one counter, read in order
     return v;
 #else
     return 0;
@@ -65,8 +73,8 @@ static void *passer(void *arg) {
 }
 
 int main(void) {
-#if !defined(__x86_64__) && !defined(__i386__) && !defined(__aarch64__)
-    printf("counter_ns: SKIP (x86 and arm64 only)\n");
+#if !defined(__x86_64__) && !defined(__i386__) && !defined(__aarch64__) && !defined(__riscv)
+    printf("counter_ns: SKIP (x86, arm64 and riscv64 only)\n");
     return 0;
 #endif
     // one thread: never backwards, and never stuck for a million reads

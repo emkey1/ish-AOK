@@ -1962,6 +1962,14 @@ restart:
                 case 0xa7: TRACEI("repnz cmps"); REPNZ(cmps, oz); break;
                 case 0xae: TRACEI("repnz scasb"); REPNZ(scas, 8); break;
                 case 0xaf: TRACEI("repnz scas"); REPNZ(scas, oz); break;
+                // F2 on MOVS/STOS/LODS is a plain REP, as on hardware (camd);
+                // these were #UD
+                case 0xa4: TRACEI("repnz movsb"); REP(movs, 8); break;
+                case 0xa5: TRACEI("repnz movs"); REP(movs, oz); break;
+                case 0xaa: TRACEI("repnz stosb"); REP(stos, 8); break;
+                case 0xab: TRACEI("repnz stos"); REP(stos, oz); break;
+                case 0xac: TRACEI("repnz lodsb"); REP(lods, 8); break;
+                case 0xad: TRACEI("repnz lods"); REP(lods, oz); break;
                 default: TRACE("undefined"); UNDEFINED;
             }
             break;
