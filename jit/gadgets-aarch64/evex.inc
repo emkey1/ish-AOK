@@ -3946,3 +3946,359 @@ evex_l3 cvtsd2ss, 2, evb_cvtsd2ss
 # latter's destination r/m: a register, or memory through EVEX_STAGE)
 evex_cvtw cvtph2ps, h, 1, xfb_cvtph2ps
 evex_cvtn cvtps2ph, s, 1, xfb_cvtps2ph
+
+# ---- the EVEX gaps the VEX cutover's sweep found: VMOVSLDUP/SHDUP/DDUP,
+# VPBROADCASTMB2Q/MW2D, (V)COMISS/SD and (V)UCOMISS/SD ----
+.macro evb_dupmov kind
+.ifc \kind,sl
+    trn1 v0.4s, v1.4s, v1.4s
+.endif
+.ifc \kind,sh
+    trn2 v0.4s, v1.4s, v1.4s
+.endif
+.ifc \kind,dd
+    trn1 v0.2d, v1.2d, v1.2d
+.endif
+.endm
+evex_l3 movsldup, 0, evb_dupmov, sl
+evex_l3 movshdup, 0, evb_dupmov, sh
+evex_l3 movddup, 0, evb_dupmov, dd
+.macro evb_bcastm q                      /* every element: the k register's low 8 (q) or 16 bits */
+    ubfx x9, x8, 54, 3
+    mov  x15, CPU_avx512_k
+    add  x15, _cpu, x15
+    ldr  x10, [x15, x9, lsl 3]
+.if \q
+    and  x10, x10, 0xff
+    dup  v0.2d, x10
+.else
+    and  w10, w10, 0xffff
+    dup  v0.4s, w10
+.endif
+.endm
+evex_l3 bcastmb2q, 0, evb_bcastm, 1
+evex_l3 bcastmw2d, 0, evb_bcastm, 0
+# Word: [s1 = the ModRM reg (5-9) | s2 (10-14) | staged (15) | {sae} (51)].
+.macro evex_comis name, t, a, cmp
+.gadget evex_\name
+    ldr  x8, [_ip]
+    evx_fp_enter
+    ubfx w9, w8, 5, 5
+    mov  w10, 0
+    evx_qaddr x14, w9, w10
+    ldr  q0, [x14]
+    tbz  x8, 15, 1f
+    mov  x14, EVEX_STAGE
+    ldr  q1, [_cpu, x14]
+    b    2f
+1:  ubfx w9, w8, 10, 5
+    evx_qaddr x14, w9, w10
+    ldr  q1, [x14]
+2:  xf_consts \t
+    xf_lanes \t, 0
+    xf_pre2 \a, 0
+    \cmp \t\()4, \t\()5
+    amd64_v_comis_flags
+    evx_fp_exit
+    gret 1
+.endm
+evex_comis comiss, s, 4s, fcmpe
+evex_comis ucomiss, s, 4s, fcmp
+evex_comis comisd, d, 2d, fcmpe
+evex_comis ucomisd, d, 2d, fcmp
+
+# ---- EVEX.128 element moves: VPINSRB/W/D/Q, VMOVD/VMOVQ in (insert into s1,
+# or into zeros: word bit 46); VPEXTRB/W/D/Q, VEXTRACTPS, VPEXTRW, VMOVD/VMOVQ
+# out (an element to a general register, or to EVEX_STAGE for a store);
+# VINSERTPS; VMOVLPS/HPS/LPD/HPD/HLPS/LHPS; VMOVSS/SD's merges. ----
+.macro evb_ins esz                       /* s1 (or zeros) with element (imm8 mod the count) = s2's element 0 */
+    tbz  x8, 46, 1f
+    movi v0.2d, 0
+1:  mov  x9, (EVEX_STAGE + 128)
+    add  x9, _cpu, x9
+    str  q0, [x9]
+    and  w10, w12, (16 >> \esz) - 1
+.if \esz == 0
+    umov w11, v1.b[0]
+    strb w11, [x9, x10]
+.elseif \esz == 1
+    umov w11, v1.h[0]
+    strh w11, [x9, x10, lsl 1]
+.elseif \esz == 2
+    umov w11, v1.s[0]
+    str  w11, [x9, x10, lsl 2]
+.else
+    umov x11, v1.d[0]
+    str  x11, [x9, x10, lsl 3]
+.endif
+    ldr  q0, [x9]
+.endm
+evex_l3 insb, 0, evb_ins, 0
+evex_l3 insw, 0, evb_ins, 1
+evex_l3 insd, 0, evb_ins, 2
+evex_l3 insq, 0, evb_ins, 3
+# Element (imm8 mod the count) of s2's quarter 0, zero-extended, to
+# amd64_regs[g] (bits 0-3) or, word bit 32, to EVEX_STAGE. Word as
+# evex_cvt2gpr's, the imm8 at 24-31.
+.macro evex_extr name, esz
+.gadget evex_\name
+    ldr  x8, [_ip]
+    ubfx w9, w8, 10, 5
+    mov  w10, 0
+    evx_qaddr x14, w9, w10
+    ubfx w12, w8, 24, 8
+    and  w10, w12, (16 >> \esz) - 1
+.if \esz == 0
+    ldrb w11, [x14, x10]
+.elseif \esz == 1
+    ldrh w11, [x14, x10, lsl 1]
+.elseif \esz == 2
+    ldr  w11, [x14, x10, lsl 2]
+.else
+    ldr  x11, [x14, x10, lsl 3]
+.endif
+    tbz  x8, 32, 1f
+    mov  x14, EVEX_STAGE
+    str  x11, [_cpu, x14]
+    gret 1
+1:  and  w9, w8, 15
+    add  x14, _cpu, CPU_amd64_regs
+    str  x11, [x14, x9, lsl 3]
+    gret 1
+.endm
+evex_extr extrb, 0
+evex_extr extrw, 1
+evex_extr extrd, 2
+evex_extr extrq, 3
+.macro evb_insertps                      /* s1 with s2's element imm8[7:6] (memory: 0) at imm8[5:4]; zero by imm8[3:0] */
+    ubfx w10, w12, 6, 2
+    tbz  x8, 15, 1f
+    mov  w10, 0
+1:  mov  x9, (EVEX_STAGE + 128)
+    add  x9, _cpu, x9
+    str  q1, [x9]
+    ldr  w11, [x9, x10, lsl 2]
+    str  q0, [x9]
+    ubfx w10, w12, 4, 2
+    str  w11, [x9, x10, lsl 2]
+.irp i, 0, 1, 2, 3
+    tbz  w12, \i, 2f
+    str  wzr, [x9, (4 * \i)]
+2:
+.endr
+    ldr  q0, [x9]
+.endm
+evex_l3 insertps, 0, evb_insertps
+.macro evb_lohi kind                     /* VMOVLPS/LPD/HLPS (lo), VMOVHPS/HPD/LHPS (hi): s1's other half kept */
+    mov  v2.16b, v0.16b
+.ifc \kind,lo
+    tbnz x8, 15, 1f
+    mov  v2.d[0], v1.d[1]                /* VMOVHLPS: s2's high half */
+    b    2f
+1:  mov  v2.d[0], v1.d[0]                /* VMOVLPS/LPD: memory */
+2:
+.else
+    mov  v2.d[1], v1.d[0]                /* VMOVHPS/HPD, VMOVLHPS */
+.endif
+    mov  v0.16b, v2.16b
+.endm
+evex_l3 movlo, 0, evb_lohi, lo
+evex_l3 movhi, 0, evb_lohi, hi
+.macro evb_hi2lo                         /* (for VMOVHPS/HPD's store: s2's high half) */
+    mov  v0.16b, v1.16b
+    mov  v0.d[0], v1.d[1]
+.endm
+evex_l3 hi2lo, 0, evb_hi2lo
+.macro evb_movs esz                      /* VMOVSS/SD: s2's element 0 over s1 (memory: over zeros) */
+    tbz  x8, 15, 1f
+    movi v0.2d, 0
+1:
+.if \esz == 2
+    mov  v0.s[0], v1.s[0]
+.else
+    mov  v0.d[0], v1.d[0]
+.endif
+.endm
+evex_l3 movss, 0, evb_movs, 2
+evex_l3 movsd, 0, evb_movs, 3
+.macro evb_movq0                         /* VMOVQ: s2's low qword, the rest zero */
+    fmov d0, d1
+.endm
+evex_l3 movq0, 0, evb_movq0
+
+# ---- VDBPSADBW: per 128-bit lane, s2's dwords shuffled by imm8 (TMP), then
+# per qword four sums of absolute byte differences: s1 bytes 0-3 against
+# TMP 0-3 and 1-4, s1 4-7 against TMP 2-5 and 3-6 (one word each). ----
+.balign 16
+evex_dbps_idx:                           /* s1's windows, TMP's windows: qword 0, then 1 */
+    .byte 0, 1, 2, 3, 0, 1, 2, 3, 4, 5, 6, 7, 4, 5, 6, 7
+    .byte 8, 9, 10, 11, 8, 9, 10, 11, 12, 13, 14, 15, 12, 13, 14, 15
+    .byte 0, 1, 2, 3, 1, 2, 3, 4, 2, 3, 4, 5, 3, 4, 5, 6
+    .byte 8, 9, 10, 11, 9, 10, 11, 12, 10, 11, 12, 13, 11, 12, 13, 14
+.macro evb_dbpsadbw
+    mov  v6.16b, v0.16b                  /* (s1) */
+    evb_pshufd                           /* v0: TMP */
+    adr  x9, evex_dbps_idx
+    ld1  {v20.16b, v21.16b, v22.16b, v23.16b}, [x9]
+    tbl  v24.16b, {v6.16b}, v20.16b
+    tbl  v25.16b, {v6.16b}, v21.16b
+    tbl  v26.16b, {v0.16b}, v22.16b
+    tbl  v27.16b, {v0.16b}, v23.16b
+    uabd v24.16b, v24.16b, v26.16b
+    uabd v25.16b, v25.16b, v27.16b
+    uaddlp v24.8h, v24.16b
+    uaddlp v25.8h, v25.16b
+    addp v0.8h, v24.8h, v25.8h
+.endm
+evex_l3 dbpsadbw, 0, evb_dbpsadbw
+
+# ---- BF16. fp32 -> bf16 as these define it: no MXCSR, no flags, round to
+# nearest even, a denormal to 0 of its sign, a NaN quieted. VCVTNEPS2BF16
+# (narrowing: evex_cvtn); VCVTNE2PS2BF16 (s2's then s1's, whole vector);
+# VDPBF16PS (the destination's floats plus the two products of their
+# bf16 pairs, odd then even, each fused into the sum -- an
+# overflowing product is no infinity of its own -- rounded to nearest
+# even; DAZ, and FTZ with x86's tininess (after rounding); a NaN operand
+# propagated s1's first, then s2's, then the sum's; no flags). ----
+.macro evf_bf16 vd, vs                   /* \vd's low 64 bits: \vs's four floats as bf16. Clobbers v28-v31 */
+    ushr v28.4s, \vs\().4s, 16
+    movi v29.4s, 1
+    and  v28.16b, v28.16b, v29.16b
+    mov  w9, 0x7fff
+    dup  v30.4s, w9
+    add  v28.4s, v28.4s, v30.4s
+    add  v28.4s, v28.4s, \vs\().4s       /* x + 0x7fff + lsb: round to nearest even */
+    mov  w9, 0x7f800000
+    dup  v29.4s, w9
+    and  v30.16b, \vs\().16b, v29.16b
+    cmeq v31.4s, v30.4s, 0               /* a zero or a denormal: 0 of its sign */
+    movi v30.4s, 0x80, lsl 24
+    and  v30.16b, \vs\().16b, v30.16b
+    bit  v28.16b, v30.16b, v31.16b
+    bic  v30.16b, \vs\().16b, v30.16b    /* |x| */
+    cmhi v31.4s, v30.4s, v29.4s          /* a NaN: its top half, quieted */
+    movi v30.4s, 0x40, lsl 16
+    orr  v30.16b, \vs\().16b, v30.16b
+    bit  v28.16b, v30.16b, v31.16b
+    shrn \vd\().4h, v28.4s, 16
+.endm
+.macro evb_cvtneps2bf16
+    evf_bf16 v2, v1
+.endm
+evex_cvtn cvtneps2bf16, s, 0, evb_cvtneps2bf16
+.macro evfb_cvtne2ps2bf16                /* s2's chunks, then s1's, into the destination's quarters */
+    mov  x14, (EVEX_STAGE + 128)        /* (evf_bf16 clobbers w9) */
+    add  x14, _cpu, x14
+    ubfx w10, w8, 16, 2
+    mov  w11, 1
+    lsl  w11, w11, w10                   /* the quarters */
+    evf_bf16 v0, v20
+    evf_bf16 v1, v21
+    evf_bf16 v2, v22
+    evf_bf16 v3, v23
+    str  d0, [x14]
+    str  d1, [x14, 8]
+    str  d2, [x14, 16]
+    str  d3, [x14, 24]
+    add  x10, x14, x11, lsl 3             /* s1's after s2's: 8 bytes a source quarter */
+    evf_bf16 v0, v16
+    evf_bf16 v1, v17
+    evf_bf16 v2, v18
+    evf_bf16 v3, v19
+    str  d0, [x10]
+    str  d1, [x10, 8]
+    str  d2, [x10, 16]
+    str  d3, [x10, 24]
+    ldp  q0, q1, [x14]
+    ldp  q2, q3, [x14, 32]
+.endm
+evex_full cvtne2ps2bf16, evfb_cvtne2ps2bf16
+.macro evf_daz vd                       /* a denormal float lane: 0 of its sign. Clobbers w9, v28-v30 */
+    mov  w9, 0x7f800000
+    dup  v29.4s, w9
+    and  v28.16b, \vd\().16b, v29.16b
+    cmeq v28.4s, v28.4s, 0
+    movi v30.4s, 0x80, lsl 24
+    and  v30.16b, \vd\().16b, v30.16b
+    bit  \vd\().16b, v30.16b, v28.16b
+.endm
+# One step's half (lanes 0-1, or 2-3 with \hi) in f64: the product of two
+# bf16 values is exact there, and the sum rounded twice -- to f64, then to
+# f32 (v26) -- is the fused op's single rounding: the product has 16
+# significant bits and the sum 24, so a sum wider than f64's 53 has a run
+# of zeros or ones across f32's rounding point, which f64's rounding cannot
+# turn into an f32 midpoint. v27 the same scaled by 2^64 (v7), rounded at
+# an unbounded exponent for x86's tininess. Clobbers v20-v22.
+.macro evf_dphalf hi
+.if \hi
+    fcvtl2 v20.2d, v4.4s
+    fcvtl2 v21.2d, v5.4s
+    fcvtl2 v22.2d, v2.4s
+.else
+    fcvtl v20.2d, v4.2s
+    fcvtl v21.2d, v5.2s
+    fcvtl v22.2d, v2.2s
+.endif
+    fmul v20.2d, v20.2d, v21.2d          /* the product, exact */
+    fadd v21.2d, v22.2d, v20.2d
+    fmul v22.2d, v21.2d, v7.2d
+.if \hi
+    fcvtn2 v26.4s, v21.2d
+    fcvtn2 v27.4s, v22.2d
+.else
+    fcvtn v26.2s, v21.2d
+    fcvtn v27.2s, v22.2d
+.endif
+.endm
+.macro evf_dpstep                        /* v2 += v4 * v5, fused; x86's FTZ and NaNs */
+    evf_dphalf 0
+    evf_dphalf 1
+    fabs v27.4s, v27.4s
+    mov  w9, 0x20800000                  /* 2^-62: tiny after rounding */
+    dup  v28.4s, w9
+    fcmgt v28.4s, v28.4s, v27.4s
+    movi v29.4s, 0x80, lsl 24
+    and  v29.16b, v26.16b, v29.16b
+    bit  v26.16b, v29.16b, v28.16b
+    fcmeq v28.4s, v26.4s, v26.4s         /* an invalid op: the default NaN */
+    mov  w9, 0xffc00000
+    dup  v29.4s, w9
+    bif  v26.16b, v29.16b, v28.16b
+    movi v31.4s, 0x40, lsl 16            /* a NaN operand: s1's, s2's, the sum's, quieted */
+    fcmeq v28.4s, v2.4s, v2.4s
+    orr  v29.16b, v2.16b, v31.16b
+    bif  v26.16b, v29.16b, v28.16b
+    fcmeq v28.4s, v5.4s, v5.4s
+    orr  v29.16b, v5.16b, v31.16b
+    bif  v26.16b, v29.16b, v28.16b
+    fcmeq v28.4s, v4.4s, v4.4s
+    orr  v29.16b, v4.16b, v31.16b
+    bif  v26.16b, v29.16b, v28.16b
+    mov  v2.16b, v26.16b
+.endm
+.macro evb_dpbf16ps                      /* v2 (the destination) += s1's bf16 pairs times s2's */
+    mrs  x16, fpsr
+    mrs  x17, fpcr
+    mov  x9, x17
+    bic  x9, x9, (15 << 22)              /* RN, no FZ, no DN */
+    msr  fpcr, x9
+    mov  x9, 0x43f0000000000000          /* 2^64 */
+    dup  v7.2d, x9
+    evf_daz v2
+    movi v4.4s, 0xff, lsl 24
+    movi v5.4s, 0xff, lsl 16
+    orr  v5.16b, v4.16b, v5.16b
+    and  v4.16b, v0.16b, v5.16b          /* the odd ones */
+    and  v5.16b, v1.16b, v5.16b
+    evf_daz v4
+    evf_daz v5
+    evf_dpstep
+    shl  v4.4s, v0.4s, 16                /* the even ones */
+    shl  v5.4s, v1.4s, 16
+    evf_daz v4
+    evf_daz v5
+    evf_dpstep
+    msr  fpcr, x17
+    msr  fpsr, x16
+.endm
+evex_l3 dpbf16ps, 2, evb_dpbf16ps

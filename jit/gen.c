@@ -10796,6 +10796,10 @@ enum evex_kind {
     EVK_CVTNR,  // VCVTPS2PH: as EVK_CVTN with the source reg, the destination r/m (memory: VL / 2 bytes)
     EVK_CVTSI,  // VCVT(U)SI2SS/SD: as EVK_SCAL, s2 a GPR (staged) or memory of ld bytes
     EVK_CVT2GPR,// VCVT(T)SS/SD2(U)SI: the GPR reg = s2's low element (evex_cvt2gpr; gen_evex_cvt2gpr_word)
+    EVK_FLAGS,  // (V)(U)COMISS/SD: EFLAGS = s1 (reg) against s2's low element (r/m: ld bytes); vvvv 1111b
+    EVK_INS,    // dst = reg = s1 (vvvv) with an element from a GPR (staged) or memory of ld bytes: VPINSR*, VMOVD/Q in
+    EVK_EXTR,   // r/m (a GPR, or memory of ld bytes) = an element of reg (evex_extr; gen_evex_extr_word)
+    EVK_SSTORE, // VMOVSS/SD 11: memory = reg's element 0 (masked); register: rm = s1 (vvvv) <- reg's, as EVK_SCAL
 };
 // evex_entry.flags bits 4-7
 #define EVF_MEMONLY 0x10
@@ -10803,8 +10807,12 @@ enum evex_kind {
 #define EVF_MIN256 0x40
 #define EVF_MIN512 0x80
 #define EVF_LEGACY 0x100
-#define EVF_NOVVVV 0x200        // vvvv must be 1111b (a one-source op into an opmask: VFPCLASS)        // SSE and VEX.128 only (AESIMC, AESKEYGENASSIST): EVEX, VEX.256 #UD
-enum evex_tuple { EVT_FV, EVT_FVM, EVT_FIX, EVT_DIV };  // FIX: disp8 * the fixed size (ld); DIV: VL bytes >> ld
+#define EVF_NOVVVV 0x200        // vvvv must be 1111b (a one-source op into an opmask: VFPCLASS)
+#define EVF_L128 0x400          // EVEX.128 only: L'L must be 0 (the element moves)
+#define EVF_ZEROS1 0x800        // EVK_INS into zeros, not s1 (VMOVD/VMOVQ in): vvvv 1111b; word bit 46
+#define EVF_MEMNOVVVV 0x1000    // the memory form's vvvv must be 1111b (VMOVSS/SD's load)
+#define EVF_EXTR_SWAP 0x2000    // EVK_EXTR with the GPR in ModRM.reg and the source r/m (VPEXTRW 0F C5)        // SSE and VEX.128 only (AESIMC, AESKEYGENASSIST): EVEX, VEX.256 #UD
+enum evex_tuple { EVT_FV, EVT_FVM, EVT_FIX, EVT_DIV, EVT_DUP };  // DUP: VMOVDDUP's, 8 bytes at VL 128  // FIX: disp8 * the fixed size (ld); DIV: VL bytes >> ld
 struct evex_entry {
     uint8_t map, pp, op;
     uint8_t kind, wreq, esz, bcast, tuple, align, nomask;
@@ -10850,6 +10858,9 @@ extern void gadget_evex_cvtdq2ps(void), gadget_evex_cvtudq2ps(void), gadget_evex
 extern void gadget_evex_cvtps2pd(void), gadget_evex_cvtdq2pd(void), gadget_evex_cvtudq2pd(void), gadget_evex_cvtps2qq(void), gadget_evex_cvttps2qq(void), gadget_evex_cvtps2uqq(void), gadget_evex_cvttps2uqq(void), gadget_evex_cvtpd2ps(void), gadget_evex_cvtqq2ps(void), gadget_evex_cvtuqq2ps(void), gadget_evex_cvtpd2dq(void), gadget_evex_cvttpd2dq(void), gadget_evex_cvtpd2udq(void), gadget_evex_cvttpd2udq(void);
 extern void gadget_evex_cvtss2si32_0(void), gadget_evex_cvtss2si64_0(void), gadget_evex_cvtss2si32_1(void), gadget_evex_cvtss2si64_1(void), gadget_evex_cvttss2si32_0(void), gadget_evex_cvttss2si64_0(void), gadget_evex_cvttss2si32_1(void), gadget_evex_cvttss2si64_1(void), gadget_evex_cvtsi2ss32(void), gadget_evex_cvtsi2ss64(void), gadget_evex_cvtusi2ss32(void), gadget_evex_cvtusi2ss64(void), gadget_evex_cvtsd2si32_0(void), gadget_evex_cvtsd2si64_0(void), gadget_evex_cvtsd2si32_1(void), gadget_evex_cvtsd2si64_1(void), gadget_evex_cvttsd2si32_0(void), gadget_evex_cvttsd2si64_0(void), gadget_evex_cvttsd2si32_1(void), gadget_evex_cvttsd2si64_1(void), gadget_evex_cvtsi2sd32(void), gadget_evex_cvtsi2sd64(void), gadget_evex_cvtusi2sd32(void), gadget_evex_cvtusi2sd64(void), gadget_evex_cvtss2sd(void), gadget_evex_cvtsd2ss(void);
 extern void gadget_evex_cvtph2ps(void), gadget_evex_cvtps2ph(void);
+extern void gadget_evex_movsldup(void), gadget_evex_movshdup(void), gadget_evex_movddup(void), gadget_evex_bcastmb2q(void), gadget_evex_bcastmw2d(void), gadget_evex_comiss(void), gadget_evex_ucomiss(void), gadget_evex_comisd(void), gadget_evex_ucomisd(void);
+extern void gadget_evex_insb(void), gadget_evex_insw(void), gadget_evex_insd(void), gadget_evex_insq(void), gadget_evex_extrb(void), gadget_evex_extrw(void), gadget_evex_extrd(void), gadget_evex_extrq(void), gadget_evex_insertps(void), gadget_evex_movlo(void), gadget_evex_movhi(void), gadget_evex_hi2lo(void), gadget_evex_movss(void), gadget_evex_movsd(void), gadget_evex_movq0(void);
+extern void gadget_evex_dbpsadbw(void), gadget_evex_cvtneps2bf16(void), gadget_evex_cvtne2ps2bf16(void), gadget_evex_dpbf16ps(void);
 extern void gadget_evex_aesenc(void), gadget_evex_aesenclast(void), gadget_evex_aesdec(void), gadget_evex_aesdeclast(void), gadget_evex_aesimc(void), gadget_evex_aeskeygenassist(void), gadget_evex_pclmulqdq(void);
 extern void gadget_evex_pmultishiftqb(void), gadget_evex_pshldw(void), gadget_evex_pshldd(void), gadget_evex_pshldq(void), gadget_evex_pshrdw(void), gadget_evex_pshrdd(void), gadget_evex_pshrdq(void), gadget_evex_pshldvw(void), gadget_evex_pshldvd(void), gadget_evex_pshldvq(void), gadget_evex_pshrdvw(void), gadget_evex_pshrdvd(void), gadget_evex_pshrdvq(void), gadget_evex_pdpbusd(void), gadget_evex_pdpbusds(void), gadget_evex_pdpwssd(void), gadget_evex_pdpwssds(void), gadget_evex_pmadd52luq(void), gadget_evex_pmadd52huq(void), gadget_evex_popcntb(void), gadget_evex_popcntw(void), gadget_evex_pshufbitqmb(void), gadget_evex_gf2p8mulb(void), gadget_evex_gf2p8affineqb(void), gadget_evex_gf2p8affineinvqb(void);
 extern void gadget_evex_pconflictd(void), gadget_evex_pconflictq(void), gadget_evex_plzcntd(void), gadget_evex_plzcntq(void), gadget_evex_pmovb2m(void), gadget_evex_pmovd2m(void), gadget_evex_pmovm2b(void), gadget_evex_pmovm2d(void), gadget_evex_pmovm2q(void), gadget_evex_pmovm2w(void), gadget_evex_pmovq2m(void), gadget_evex_pmovw2m(void), gadget_evex_popcntd(void), gadget_evex_popcntq(void);
@@ -11326,6 +11337,67 @@ static const struct evex_entry evex_table[] = {
     // VCVTPH2PS ({sae}), VCVTPS2PH (imm8, {sae}; to a register or memory)
     {2, 1, 0x13, EVK_CVTW, 1, 2, 0, EVT_DIV, 0, 0, gadget_evex_cvtph2ps, 0, 0, 1, 2},
     {3, 1, 0x1d, EVK_CVTNR, 1, 1, 0, EVT_DIV, 0, 0, gadget_evex_cvtps2ph, 0, 0, 1, 2},
+    // AVX512DQ's float logic: the integer ops at the float element sizes
+    {1, 0, 0x54, EVK_L3, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_vi_pand, 0, 0, 0, 0},
+    {1, 1, 0x54, EVK_L3, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_vi_pand, 0, 0, 0, 0},
+    {1, 0, 0x55, EVK_L3, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_vi_pandn, 0, 0, 0, 0},
+    {1, 1, 0x55, EVK_L3, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_vi_pandn, 0, 0, 0, 0},
+    {1, 0, 0x56, EVK_L3, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_vi_por, 0, 0, 0, 0},
+    {1, 1, 0x56, EVK_L3, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_vi_por, 0, 0, 0, 0},
+    {1, 0, 0x57, EVK_L3, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_vi_pxor, 0, 0, 0, 0},
+    {1, 1, 0x57, EVK_L3, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_vi_pxor, 0, 0, 0, 0},
+    // VMOVSLDUP/SHDUP/DDUP; VPBROADCASTMB2Q/MW2D; (V)(U)COMISS/SD ({sae})
+    {1, 2, 0x12, EVK_L2, 1, 2, 0, EVT_FVM, 0, 0, gadget_evex_movsldup, 0, 0, 0, 0},
+    {1, 2, 0x16, EVK_L2, 1, 2, 0, EVT_FVM, 0, 0, gadget_evex_movshdup, 0, 0, 0, 0},
+    {1, 3, 0x12, EVK_L2, 2, 3, 0, EVT_DUP, 0, 0, gadget_evex_movddup, 0, 0, 0, 0},
+    {2, 2, 0x2a, EVK_M2V, 2, 3, 0, EVT_FVM, 0, 0, gadget_evex_bcastmb2q, 0, 32, 0, 0},
+    {2, 2, 0x3a, EVK_M2V, 1, 2, 0, EVT_FVM, 0, 0, gadget_evex_bcastmw2d, 0, 32, 0, 0},
+    {1, 0, 0x2f, EVK_FLAGS, 1, 2, 0, EVT_FIX, 0, 1, gadget_evex_comiss, 0, 0, 4, 2},
+    {1, 0, 0x2e, EVK_FLAGS, 1, 2, 0, EVT_FIX, 0, 1, gadget_evex_ucomiss, 0, 0, 4, 2},
+    {1, 1, 0x2f, EVK_FLAGS, 2, 3, 0, EVT_FIX, 0, 1, gadget_evex_comisd, 0, 0, 8, 2},
+    {1, 1, 0x2e, EVK_FLAGS, 2, 3, 0, EVT_FIX, 0, 1, gadget_evex_ucomisd, 0, 0, 8, 2},
+    // the EVEX.128 element moves: VMOVSS/SD, VMOVLPS/HPS/LPD/HPD/HLPS/LHPS, VMOVD/VMOVQ, VPINSR*, VPEXTR*,
+    // VEXTRACTPS, VINSERTPS
+    {1, 2, 0x10, EVK_SCAL, 1, 2, 0, EVT_FIX, 0, 0, gadget_evex_movss, 0, EVF_MEMNOVVVV, 4, 0},
+    {1, 3, 0x10, EVK_SCAL, 2, 3, 0, EVT_FIX, 0, 0, gadget_evex_movsd, 0, EVF_MEMNOVVVV, 8, 0},
+    {1, 2, 0x11, EVK_SSTORE, 1, 2, 0, EVT_FIX, 0, 0, gadget_evex_movss, 0, 0, 4, 0},
+    {1, 3, 0x11, EVK_SSTORE, 2, 3, 0, EVT_FIX, 0, 0, gadget_evex_movsd, 0, 0, 8, 0},
+    {1, 0, 0x12, EVK_L3, 1, 3, 0, EVT_FIX, 0, 1, gadget_evex_movlo, 0, EVF_L128, 8, 0},
+    {1, 1, 0x12, EVK_L3, 2, 3, 0, EVT_FIX, 0, 1, gadget_evex_movlo, 0, EVF_L128 | EVF_MEMONLY, 8, 0},
+    {1, 0, 0x13, EVK_STORE, 1, 3, 0, EVT_FIX, 0, 1, gadget_evex_mov, 0, EVF_L128 | EVF_MEMONLY, 8, 0},
+    {1, 1, 0x13, EVK_STORE, 2, 3, 0, EVT_FIX, 0, 1, gadget_evex_mov, 0, EVF_L128 | EVF_MEMONLY, 8, 0},
+    {1, 0, 0x16, EVK_L3, 1, 3, 0, EVT_FIX, 0, 1, gadget_evex_movhi, 0, EVF_L128, 8, 0},
+    {1, 1, 0x16, EVK_L3, 2, 3, 0, EVT_FIX, 0, 1, gadget_evex_movhi, 0, EVF_L128 | EVF_MEMONLY, 8, 0},
+    {1, 0, 0x17, EVK_STORE, 1, 3, 0, EVT_FIX, 0, 1, gadget_evex_hi2lo, 0, EVF_L128 | EVF_MEMONLY, 8, 0},
+    {1, 1, 0x17, EVK_STORE, 2, 3, 0, EVT_FIX, 0, 1, gadget_evex_hi2lo, 0, EVF_L128 | EVF_MEMONLY, 8, 0},
+    {1, 1, 0x6e, EVK_INS, 1, 2, 0, EVT_FIX, 0, 1, gadget_evex_insd, 0, EVF_L128 | EVF_ZEROS1, 4, 0},
+    {1, 1, 0x6e, EVK_INS, 2, 3, 0, EVT_FIX, 0, 1, gadget_evex_insq, 0, EVF_L128 | EVF_ZEROS1, 8, 0},
+    {1, 1, 0x7e, EVK_EXTR, 1, 2, 0, EVT_FIX, 0, 1, gadget_evex_extrd, 0, EVF_L128, 4, 0},
+    {1, 1, 0x7e, EVK_EXTR, 2, 3, 0, EVT_FIX, 0, 1, gadget_evex_extrq, 0, EVF_L128, 8, 0},
+    {1, 2, 0x7e, EVK_L2, 2, 3, 0, EVT_FIX, 0, 1, gadget_evex_movq0, 0, EVF_L128, 8, 0},
+    {1, 1, 0xd6, EVK_STORE, 2, 3, 0, EVT_FIX, 0, 1, gadget_evex_movq0, 0, EVF_L128, 8, 0},
+    {1, 1, 0xc4, EVK_INS, 1, 1, 0, EVT_FIX, 0, 1, gadget_evex_insw, 0, EVF_L128, 2, 0},
+    {1, 1, 0xc5, EVK_EXTR, 1, 1, 0, EVT_FIX, 0, 1, gadget_evex_extrw, 0, EVF_L128 | EVF_REGONLY | EVF_EXTR_SWAP, 2, 0},
+    {3, 1, 0x14, EVK_EXTR, 1, 0, 0, EVT_FIX, 0, 1, gadget_evex_extrb, 0, EVF_L128, 1, 0},
+    {3, 1, 0x15, EVK_EXTR, 1, 1, 0, EVT_FIX, 0, 1, gadget_evex_extrw, 0, EVF_L128, 2, 0},
+    {3, 1, 0x17, EVK_EXTR, 1, 2, 0, EVT_FIX, 0, 1, gadget_evex_extrd, 0, EVF_L128, 4, 0},
+    {3, 1, 0x20, EVK_INS, 1, 0, 0, EVT_FIX, 0, 1, gadget_evex_insb, 0, EVF_L128, 1, 0},
+    {1, 1, 0xc4, EVK_INS, 2, 1, 0, EVT_FIX, 0, 1, gadget_evex_insw, 0, EVF_L128, 2, 0},
+    {1, 1, 0xc5, EVK_EXTR, 2, 1, 0, EVT_FIX, 0, 1, gadget_evex_extrw, 0, EVF_L128 | EVF_REGONLY | EVF_EXTR_SWAP, 2, 0},
+    {3, 1, 0x14, EVK_EXTR, 2, 0, 0, EVT_FIX, 0, 1, gadget_evex_extrb, 0, EVF_L128, 1, 0},
+    {3, 1, 0x15, EVK_EXTR, 2, 1, 0, EVT_FIX, 0, 1, gadget_evex_extrw, 0, EVF_L128, 2, 0},
+    {3, 1, 0x17, EVK_EXTR, 2, 2, 0, EVT_FIX, 0, 1, gadget_evex_extrd, 0, EVF_L128, 4, 0},
+    {3, 1, 0x20, EVK_INS, 2, 0, 0, EVT_FIX, 0, 1, gadget_evex_insb, 0, EVF_L128, 1, 0},
+    {3, 1, 0x16, EVK_EXTR, 1, 2, 0, EVT_FIX, 0, 1, gadget_evex_extrd, 0, EVF_L128, 4, 0},
+    {3, 1, 0x16, EVK_EXTR, 2, 3, 0, EVT_FIX, 0, 1, gadget_evex_extrq, 0, EVF_L128, 8, 0},
+    {3, 1, 0x21, EVK_L3, 1, 2, 0, EVT_FIX, 0, 1, gadget_evex_insertps, 0, EVF_L128, 4, 0},
+    {3, 1, 0x22, EVK_INS, 1, 2, 0, EVT_FIX, 0, 1, gadget_evex_insd, 0, EVF_L128, 4, 0},
+    {3, 1, 0x22, EVK_INS, 2, 3, 0, EVT_FIX, 0, 1, gadget_evex_insq, 0, EVF_L128, 8, 0},
+    // VDBPSADBW; BF16: VCVTNEPS2BF16, VCVTNE2PS2BF16, VDPBF16PS
+    {3, 1, 0x42, EVK_L3, 1, 1, 0, EVT_FVM, 0, 0, gadget_evex_dbpsadbw, 0, 0, 0, 0},
+    {2, 2, 0x72, EVK_CVTN, 1, 1, 2, EVT_FV, 0, 0, gadget_evex_cvtneps2bf16, 0, 0, 0, 0},
+    {2, 3, 0x72, EVK_FULL, 1, 1, 2, EVT_FV, 0, 0, gadget_evex_cvtne2ps2bf16, 0, 0, 0, 0},
+    {2, 2, 0x52, EVK_L3, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_dpbf16ps, 0, 8, 0, 0},
     // AES and PCLMULQDQ (VAES, VPCLMULQDQ; the SSE and VEX forms through vex_to_evex)
     {2, 1, 0xdc, EVK_L3, 0, 2, 0, EVT_FVM, 0, 1, gadget_evex_aesenc, 0, 0, 0, 0},
     {2, 1, 0xdd, EVK_L3, 0, 2, 0, EVT_FVM, 0, 1, gadget_evex_aesenclast, 0, 0, 0, 0},
@@ -11360,7 +11432,19 @@ static unsigned evex_disp_scale(const struct evex_entry *e, const struct evex_in
         return e->ld;
     if (e->tuple == EVT_DIV)
         return (16u << v->ll) >> e->ld;
+    if (e->tuple == EVT_DUP)
+        return v->ll == 0 ? 8 : 16u << v->ll;
     return 16u << v->ll;
+}
+// VPEXTR*, VEXTRACTPS, VMOVD/VMOVQ out: evex_extr's word, or -1 for #UD:
+// vvvv 1111b, no masking, EVEX.128. g the GPR (amd64; i386 slot 0).
+static long gen_evex_extr_word(const struct evex_entry *e, const struct evex_insn *v, unsigned g) {
+    if ((v->vvvv & 15) != 0 || v->vvvv_hi || v->aaa != 0 || v->z || v->b || v->ll != 0)
+        return -1;
+    if ((e->flags & EVF_REGONLY) && v->mem)
+        return -1;
+    unsigned src = (e->flags & EVF_EXTR_SWAP) ? v->rm : v->reg;
+    return (long) (g | (unsigned long) (src & 31) << 10 | (unsigned long) v->imm << 24 | (v->mem ? 1ul << 32 : 0));
 }
 // VCVT(T)SS/SD2(U)SI's word (evex.inc evex_cvt2gpr), or -1 for #UD: vvvv
 // 1111b, no masking, EVEX.b on a register only ({er}, or {sae} truncating).
@@ -11404,7 +11488,8 @@ static bool evex_plan(const struct evex_insn *v, struct evex_plan *p) {
     memset(p, 0, sizeof(*p));
     p->ud = true;
     p->gpr_stage = -1;
-    bool scalar = e->kind == EVK_SCAL || e->kind == EVK_TOMASKS || e->kind == EVK_CVTSI;
+    bool scalar = e->kind == EVK_SCAL || e->kind == EVK_TOMASKS || e->kind == EVK_CVTSI || e->kind == EVK_FLAGS ||
+            (e->kind == EVK_SSTORE && !v->mem);
     bool round = v->b && !v->mem && e->fp != 0;   // {er} or {sae}: L'L is no length
     unsigned ll = round || scalar ? (scalar ? 0 : 2) : v->ll;
     unsigned bytes = 16u << ll;
@@ -11412,6 +11497,8 @@ static bool evex_plan(const struct evex_insn *v, struct evex_plan *p) {
             ((e->flags & EVF_MIN256) && v->ll == 0) || ((e->flags & EVF_MIN512) && v->ll < 2))
         return true;
     if ((v->ll == 3 && !round) || (v->z && v->aaa == 0) || (e->nomask && (v->aaa != 0 || v->z)))
+        return true;
+    if (((e->flags & EVF_L128) && v->ll != 0) || ((e->flags & EVF_MEMNOVVVV) && v->mem && (v->vvvv != 0 || v->vvvv_hi)))
         return true;
     if (v->b && (v->mem ? e->bcast == 0 : e->fp == 0))
         return true;                            // no broadcast for this op, or no rounding control
@@ -11517,6 +11604,40 @@ static bool evex_plan(const struct evex_insn *v, struct evex_plan *p) {
             dst = v->rm;
         }
         break;
+    case EVK_FLAGS:
+        if (v->vvvv != 0 || v->vvvv_hi)
+            return true;
+        s1 = v->reg;
+        dst = 0;
+        break;
+    case EVK_INS:
+        if ((e->flags & EVF_ZEROS1) && (v->vvvv != 0 || v->vvvv_hi))
+            return true;
+        if (!v->mem) {
+            p->gpr_stage = (int) v->rm;
+            p->gpr_w = v->w;
+            stage = true;
+        }
+        break;
+    case EVK_EXTR:
+        return true;                            // (gen_evex_extr_word's)
+    case EVK_SSTORE:
+        s2 = v->reg;
+        if (v->mem) {
+            if (v->z || v->vvvv != 0 || v->vvvv_hi)
+                return true;
+            stage = false;
+            to_stage = true;
+            p->st_bytes = e->ld;
+            p->st_masked = v->aaa != 0;
+            aaa = 0;
+            z = false;
+            dst = 0;
+        } else {
+            stage = false;
+            dst = v->rm;
+        }
+        break;
     case EVK_CVTSI:
         if (!v->mem) {
             p->gpr_stage = (int) v->rm;
@@ -11559,7 +11680,7 @@ static bool evex_plan(const struct evex_insn *v, struct evex_plan *p) {
                 return true;                    // zeroing into memory
             stage = false;
             to_stage = true;
-            p->st_bytes = bytes;
+            p->st_bytes = e->ld ? e->ld : bytes;
             p->st_masked = v->aaa != 0;
             aaa = 0;                            // (the store applies it)
             z = false;
@@ -11575,7 +11696,8 @@ static bool evex_plan(const struct evex_insn *v, struct evex_plan *p) {
         if (v->b)
             p->bcast = e->bcast;
         else
-            p->ld_bytes = e->tuple == EVT_DIV ? bytes >> e->ld : e->kind == EVK_EXPAND ? bytes : e->ld ? e->ld : bytes;
+            p->ld_bytes = e->tuple == EVT_DIV ? bytes >> e->ld : e->tuple == EVT_DUP && ll == 0 ? 8 :
+                    e->kind == EVK_EXPAND ? bytes : e->ld ? e->ld : bytes;
     }
     p->ud = false;
     p->word = (dst & 31) | (unsigned long) (s1 & 31) << 5 | (unsigned long) (s2 & 31) << 10 |
@@ -11602,6 +11724,10 @@ static bool evex_plan(const struct evex_insn *v, struct evex_plan *p) {
                 (ll == 0 && !to_stage ? 1ul << 47 : 0);
     if (e->kind == EVK_CVTNR && p->st_masked)   // a store of VL / 2 bytes, element by element
         p->word |= 1ul << 58 | (unsigned long) __builtin_ctz(bytes >> 1) << 59;
+    if ((e->kind == EVK_SSTORE || e->kind == EVK_STORE) && p->st_masked && e->ld)   // (one element's bytes)
+        p->word |= 1ul << 58 | (unsigned long) __builtin_ctz(e->ld) << 59;
+    if (e->flags & EVF_ZEROS1)
+        p->word |= 1ul << 46;
     if (e->kind == EVK_COMPRESS && p->st_masked)
         p->word |= 1ul << 62;                   // the store: the first popcount(k) elements
     p->ld_word = p->word;
@@ -11682,6 +11808,29 @@ static int gen_amd64_evex_at(struct gen_state *state, struct tlb *tlb, const str
     if (!ok) {
         state->amd64_ip = saved;
         return -1;
+    }
+    if (e->kind == EVK_EXTR) {
+        unsigned g = (e->flags & EVF_EXTR_SWAP) ? v.reg & 15 : v.rm & 15;
+        long word = from != EVF_EVEX ? -1 : gen_evex_extr_word(e, &v, g);
+        if (word < 0)
+            return gen_amd64_ud(state);
+        state->amd64_ip = next_ip;
+        gen_amd64_flush_reg_cache(state);
+        gen_amd64_flush_rip(state);
+        gen(state, (unsigned long) e->gadget);
+        gen(state, (unsigned long) word);
+        if (v.mem) {
+            extern void gadget_vex_st_amd64_1(void), gadget_vex_st_amd64_2(void), gadget_vex_st_amd64_4(void),
+                    gadget_vex_st_amd64_8(void);
+            gen(state, (unsigned long) (e->ld == 8 ? gadget_vex_st_amd64_8 : e->ld == 4 ? gadget_vex_st_amd64_4 :
+                    e->ld == 2 ? gadget_vex_st_amd64_2 : gadget_vex_st_amd64_1));
+            gen(state, meta);
+            gen(state, disp * (amd64_modrm_mod(modrm) == 1 ? e->ld : 1));
+            gen(state, (unsigned long) next_ip);
+            gen(state, VEX_STAGE_OFF);
+        }
+        gen_amd64_defer_rip(state, next_ip);
+        return 1;
     }
     if (e->kind == EVK_CVT2GPR) {
         long word = from != EVF_EVEX ? -1 : gen_evex_cvt2gpr_word(e, &v, v.reg & 15);
@@ -21243,14 +21392,38 @@ static inline bool gen_evex32_at(struct gen_state *state, struct tlb *tlb, struc
     v.reg = modrm->opcode & 7;
     v.mem = modrm->type != modrm_reg;
     v.rm = modrm->rm_opcode & 7;
-    if (v.map == 1 && (v.pp == 2 || v.pp == 3) && (v.op == 0x2a || v.op == 0x2c || v.op == 0x2d || v.op == 0x78 ||
-            v.op == 0x79 || v.op == 0x7b))
-        v.w = 0;                                // VCVT(U)SI2SS/SD, VCVT(T)SS/SD2(U)SI: W is ignored in 32-bit mode
+    if ((v.map == 1 && (v.pp == 2 || v.pp == 3) && (v.op == 0x2a || v.op == 0x2c || v.op == 0x2d || v.op == 0x78 ||
+            v.op == 0x79 || v.op == 0x7b)) || (v.map == 1 && v.pp == 1 && (v.op == 0x6e || v.op == 0x7e)) ||
+            (v.map == 3 && v.pp == 1 && (v.op == 0x16 || v.op == 0x22)))
+        v.w = 0;                                // VCVT(U)SI2SS/SD, VCVT(T)SS/SD2(U)SI, VMOVD/Q, VPEXTRD/Q, VPINSRD/Q:
+                                                // W is ignored in 32-bit mode (the SDM's N.E.)
     const struct evex_entry *e = evex_lookup(&v);
     if (e == NULL)
         UNDEFINED;
     if ((e->flags & EVF_LEGACY) && (from == EVF_EVEX || v.ll != 0))
         UNDEFINED;
+    if (e->kind == EVK_EXTR) {
+        long word = from != EVF_EVEX ? -1 : gen_evex_extr_word(e, &v, 0);
+        if (word < 0)
+            UNDEFINED;
+        GEN(e->gadget);
+        GEN(word);
+        if (v.mem) {
+            extern void gadget_vex_st_i386_1(void), gadget_vex_st_i386_2(void), gadget_vex_st_i386_4(void),
+                    gadget_vex_st_i386_8(void);
+            struct modrm mm = *modrm;
+            if ((raw_modrm >> 6) == 1)
+                mm.offset = (int32_t) ((int64_t) mm.offset * e->ld);
+            gen_addr(state, &mm, seg_tls);
+            GEN(e->ld == 8 ? gadget_vex_st_i386_8 : e->ld == 4 ? gadget_vex_st_i386_4 :
+                    e->ld == 2 ? gadget_vex_st_i386_2 : gadget_vex_st_i386_1);
+            GEN(state->orig_ip);
+            GEN(VEX_STAGE_OFF);
+        } else {
+            gen_i386_gpr_out(state, ((e->flags & EVF_EXTR_SWAP) ? v.reg : v.rm) & 7, 0);
+        }
+        return true;
+    }
     if (e->kind == EVK_CVT2GPR) {
         long word = from != EVF_EVEX ? -1 : gen_evex_cvt2gpr_word(e, &v, 0);
         if (word < 0)

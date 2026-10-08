@@ -3030,99 +3030,1323 @@ __attribute__((noinline)) static void f1003(struct st *t) {
     __asm__ volatile(LOAD "vmovdqa64 %%zmm2, %%zmm25\n vmovdqa64 %%zmm3, %%zmm30\n vpclmulqdq $0x10, %%zmm30, %%zmm25, %%zmm17\n vmovdqa64 %%zmm17, %%zmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
 }
 __attribute__((noinline)) static void f1004(struct st *t) {
-    __asm__ volatile(LOAD "mov %1, %%rax\n .byte 0x62, 0xf3, 0x6d, 0x48, 0x70, 0xcb, 0x05" SAVE :: "r"(t), "r"(t->m) : "memory", "rax", "xmm1", "xmm2", "xmm3");
+    __asm__ volatile(LOAD "vandps %%xmm3, %%xmm2, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
 }
 __attribute__((noinline)) static void f1005(struct st *t) {
-    __asm__ volatile(LOAD "mov %1, %%rax\n .byte 0x62, 0xf3, 0xed, 0x48, 0x70, 0xcb, 0x05" SAVE :: "r"(t), "r"(t->m) : "memory", "rax", "xmm1", "xmm2", "xmm3");
+    __asm__ volatile(LOAD "vandps %%xmm3, %%xmm2, %%xmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
 }
 __attribute__((noinline)) static void f1006(struct st *t) {
-    __asm__ volatile(LOAD "mov %1, %%rax\n .byte 0x62, 0xf2, 0xed, 0x48, 0x71, 0xcb" SAVE :: "r"(t), "r"(t->m) : "memory", "rax", "xmm1", "xmm2", "xmm3");
+    __asm__ volatile(LOAD "vandps %%xmm3, %%xmm2, %%xmm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
 }
 __attribute__((noinline)) static void f1007(struct st *t) {
-    __asm__ volatile(LOAD "mov %1, %%rax\n .byte 0x62, 0xf2, 0xed, 0x48, 0x50, 0xcb" SAVE :: "r"(t), "r"(t->m) : "memory", "rax", "xmm1", "xmm2", "xmm3");
+    __asm__ volatile(LOAD "vandps (%1), %%xmm2, %%xmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
 }
 __attribute__((noinline)) static void f1008(struct st *t) {
-    __asm__ volatile(LOAD "mov %1, %%rax\n .byte 0x62, 0xf2, 0x6d, 0x48, 0x50, 0xcb" SAVE :: "r"(t), "r"(t->m) : "memory", "rax", "xmm1", "xmm2", "xmm3");
+    __asm__ volatile(LOAD "vandps (%1)%{1to4%}, %%xmm2, %%xmm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
 }
 __attribute__((noinline)) static void f1009(struct st *t) {
-    __asm__ volatile(LOAD "mov %1, %%rax\n .byte 0x62, 0xf2, 0x6d, 0xc9, 0x8f, 0xcb" SAVE :: "r"(t), "r"(t->m) : "memory", "rax", "xmm1", "xmm2", "xmm3");
+    __asm__ volatile(LOAD "vandps %%ymm3, %%ymm2, %%ymm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
 }
 __attribute__((noinline)) static void f1010(struct st *t) {
-    __asm__ volatile(LOAD "mov %1, %%rax\n .byte 0x62, 0xf2, 0x6d, 0x49, 0x8f, 0xcb" SAVE :: "r"(t), "r"(t->m) : "memory", "rax", "xmm1", "xmm2", "xmm3");
+    __asm__ volatile(LOAD "vandps %%ymm3, %%ymm2, %%ymm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
 }
 __attribute__((noinline)) static void f1011(struct st *t) {
-    __asm__ volatile(LOAD "mov %1, %%rax\n .byte 0x62, 0xf2, 0xed, 0x48, 0x8f, 0xcb" SAVE :: "r"(t), "r"(t->m) : "memory", "rax", "xmm1", "xmm2", "xmm3");
+    __asm__ volatile(LOAD "vandps %%ymm3, %%ymm2, %%ymm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
 }
 __attribute__((noinline)) static void f1012(struct st *t) {
-    __asm__ volatile(LOAD "mov %1, %%rax\n .byte 0x62, 0xf2, 0xed, 0x48, 0xcf, 0xcb" SAVE :: "r"(t), "r"(t->m) : "memory", "rax", "xmm1", "xmm2", "xmm3");
+    __asm__ volatile(LOAD "vandps (%1), %%ymm2, %%ymm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
 }
 __attribute__((noinline)) static void f1013(struct st *t) {
-    __asm__ volatile(LOAD "mov %1, %%rax\n .byte 0x62, 0xf2, 0x6d, 0x48, 0x54, 0xcb" SAVE :: "r"(t), "r"(t->m) : "memory", "rax", "xmm1", "xmm2", "xmm3");
+    __asm__ volatile(LOAD "vandps (%1)%{1to8%}, %%ymm2, %%ymm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
 }
 __attribute__((noinline)) static void f1014(struct st *t) {
-    __asm__ volatile(LOAD "mov %1, %%rax\n .byte 0x62, 0xf2, 0x7d, 0x48, 0x54, 0xcb" SAVE :: "r"(t), "r"(t->m) : "memory", "rax", "xmm1", "xmm2", "xmm3");
+    __asm__ volatile(LOAD "vandps %%zmm3, %%zmm2, %%zmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
 }
 __attribute__((noinline)) static void f1015(struct st *t) {
-    __asm__ volatile(LOAD "mov %1, %%rax\n .byte 0x62, 0xf2, 0x6d, 0x48, 0xb4, 0xcb" SAVE :: "r"(t), "r"(t->m) : "memory", "rax", "xmm1", "xmm2", "xmm3");
+    __asm__ volatile(LOAD "vandps %%zmm3, %%zmm2, %%zmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
 }
 __attribute__((noinline)) static void f1016(struct st *t) {
-    __asm__ volatile(LOAD "mov %1, %%rax\n .byte 0x62, 0xf3, 0x6d, 0x48, 0xce, 0xcb, 0x00" SAVE :: "r"(t), "r"(t->m) : "memory", "rax", "xmm1", "xmm2", "xmm3");
+    __asm__ volatile(LOAD "vandps %%zmm3, %%zmm2, %%zmm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
 }
 __attribute__((noinline)) static void f1017(struct st *t) {
-    __asm__ volatile(LOAD "mov %1, %%rax\n .byte 0x62, 0xf2, 0x6d, 0x48, 0x83, 0xcb" SAVE :: "r"(t), "r"(t->m) : "memory", "rax", "xmm1", "xmm2", "xmm3");
+    __asm__ volatile(LOAD "vandps (%1), %%zmm2, %%zmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
 }
 __attribute__((noinline)) static void f1018(struct st *t) {
-    __asm__ volatile(LOAD "mov %1, %%rax\n .byte 0x62, 0xf2, 0x6d, 0x58, 0x8f, 0x08" SAVE :: "r"(t), "r"(t->m) : "memory", "rax", "xmm1", "xmm2", "xmm3");
+    __asm__ volatile(LOAD "vandps (%1)%{1to16%}, %%zmm2, %%zmm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
 }
 __attribute__((noinline)) static void f1019(struct st *t) {
-    __asm__ volatile(LOAD "mov %1, %%rax\n .byte 0xc4, 0xe2, 0xe9, 0xcf, 0xcb" SAVE :: "r"(t), "r"(t->m) : "memory", "rax", "xmm1", "xmm2", "xmm3");
+    __asm__ volatile(LOAD "vandnps %%xmm3, %%xmm2, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
 }
 __attribute__((noinline)) static void f1020(struct st *t) {
-    __asm__ volatile(LOAD "mov %1, %%rax\n .byte 0xc4, 0xe2, 0x69, 0xcf, 0xcb" SAVE :: "r"(t), "r"(t->m) : "memory", "rax", "xmm1", "xmm2", "xmm3");
+    __asm__ volatile(LOAD "vandnps %%xmm3, %%xmm2, %%xmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
 }
 __attribute__((noinline)) static void f1021(struct st *t) {
-    __asm__ volatile(LOAD "mov %1, %%rax\n .byte 0xc4, 0xe3, 0x69, 0xce, 0xcb, 0x00" SAVE :: "r"(t), "r"(t->m) : "memory", "rax", "xmm1", "xmm2", "xmm3");
+    __asm__ volatile(LOAD "vandnps %%xmm3, %%xmm2, %%xmm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
 }
 __attribute__((noinline)) static void f1022(struct st *t) {
-    __asm__ volatile(LOAD "mov %1, %%rax\n .byte 0xc4, 0xe3, 0xe9, 0xce, 0xcb, 0x00" SAVE :: "r"(t), "r"(t->m) : "memory", "rax", "xmm1", "xmm2", "xmm3");
+    __asm__ volatile(LOAD "vandnps (%1), %%xmm2, %%xmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
 }
 __attribute__((noinline)) static void f1023(struct st *t) {
-    __asm__ volatile(LOAD "mov %1, %%rax\n .byte 0x62, 0xf2, 0x6d, 0x48, 0xdc, 0xcb" SAVE :: "r"(t), "r"(t->m) : "memory", "rax", "xmm1", "xmm2", "xmm3");
+    __asm__ volatile(LOAD "vandnps (%1)%{1to4%}, %%xmm2, %%xmm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
 }
 __attribute__((noinline)) static void f1024(struct st *t) {
-    __asm__ volatile(LOAD "mov %1, %%rax\n .byte 0x62, 0xf2, 0x6d, 0x49, 0xdc, 0xcb" SAVE :: "r"(t), "r"(t->m) : "memory", "rax", "xmm1", "xmm2", "xmm3");
+    __asm__ volatile(LOAD "vandnps %%ymm3, %%ymm2, %%ymm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
 }
 __attribute__((noinline)) static void f1025(struct st *t) {
-    __asm__ volatile(LOAD "mov %1, %%rax\n .byte 0x62, 0xf2, 0x6d, 0xc8, 0xdc, 0xcb" SAVE :: "r"(t), "r"(t->m) : "memory", "rax", "xmm1", "xmm2", "xmm3");
+    __asm__ volatile(LOAD "vandnps %%ymm3, %%ymm2, %%ymm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
 }
 __attribute__((noinline)) static void f1026(struct st *t) {
-    __asm__ volatile(LOAD "mov %1, %%rax\n .byte 0x62, 0xf2, 0xed, 0x48, 0xdc, 0xcb" SAVE :: "r"(t), "r"(t->m) : "memory", "rax", "xmm1", "xmm2", "xmm3");
+    __asm__ volatile(LOAD "vandnps %%ymm3, %%ymm2, %%ymm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
 }
 __attribute__((noinline)) static void f1027(struct st *t) {
-    __asm__ volatile(LOAD "mov %1, %%rax\n .byte 0x62, 0xf2, 0x6d, 0x58, 0xdc, 0x08" SAVE :: "r"(t), "r"(t->m) : "memory", "rax", "xmm1", "xmm2", "xmm3");
+    __asm__ volatile(LOAD "vandnps (%1), %%ymm2, %%ymm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
 }
 __attribute__((noinline)) static void f1028(struct st *t) {
-    __asm__ volatile(LOAD "mov %1, %%rax\n .byte 0x62, 0xf2, 0x7d, 0x08, 0xdb, 0xcb" SAVE :: "r"(t), "r"(t->m) : "memory", "rax", "xmm1", "xmm2", "xmm3");
+    __asm__ volatile(LOAD "vandnps (%1)%{1to8%}, %%ymm2, %%ymm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
 }
 __attribute__((noinline)) static void f1029(struct st *t) {
-    __asm__ volatile(LOAD "mov %1, %%rax\n .byte 0xc4, 0xe2, 0x79, 0xdb, 0xcb" SAVE :: "r"(t), "r"(t->m) : "memory", "rax", "xmm1", "xmm2", "xmm3");
+    __asm__ volatile(LOAD "vandnps %%zmm3, %%zmm2, %%zmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
 }
 __attribute__((noinline)) static void f1030(struct st *t) {
-    __asm__ volatile(LOAD "mov %1, %%rax\n .byte 0xc4, 0xe2, 0x7d, 0xdb, 0xcb" SAVE :: "r"(t), "r"(t->m) : "memory", "rax", "xmm1", "xmm2", "xmm3");
+    __asm__ volatile(LOAD "vandnps %%zmm3, %%zmm2, %%zmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
 }
 __attribute__((noinline)) static void f1031(struct st *t) {
-    __asm__ volatile(LOAD "mov %1, %%rax\n .byte 0xc4, 0xe2, 0x69, 0xdb, 0xcb" SAVE :: "r"(t), "r"(t->m) : "memory", "rax", "xmm1", "xmm2", "xmm3");
+    __asm__ volatile(LOAD "vandnps %%zmm3, %%zmm2, %%zmm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
 }
 __attribute__((noinline)) static void f1032(struct st *t) {
-    __asm__ volatile(LOAD "mov %1, %%rax\n .byte 0x62, 0xf3, 0x7d, 0x08, 0xdf, 0xcb, 0x01" SAVE :: "r"(t), "r"(t->m) : "memory", "rax", "xmm1", "xmm2", "xmm3");
+    __asm__ volatile(LOAD "vandnps (%1), %%zmm2, %%zmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
 }
 __attribute__((noinline)) static void f1033(struct st *t) {
-    __asm__ volatile(LOAD "mov %1, %%rax\n .byte 0xc4, 0xe3, 0x7d, 0xdf, 0xcb, 0x01" SAVE :: "r"(t), "r"(t->m) : "memory", "rax", "xmm1", "xmm2", "xmm3");
+    __asm__ volatile(LOAD "vandnps (%1)%{1to16%}, %%zmm2, %%zmm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
 }
 __attribute__((noinline)) static void f1034(struct st *t) {
-    __asm__ volatile(LOAD "mov %1, %%rax\n .byte 0x62, 0xf3, 0x6d, 0x49, 0x44, 0xcb, 0x00" SAVE :: "r"(t), "r"(t->m) : "memory", "rax", "xmm1", "xmm2", "xmm3");
+    __asm__ volatile(LOAD "vorps %%xmm3, %%xmm2, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
 }
 __attribute__((noinline)) static void f1035(struct st *t) {
+    __asm__ volatile(LOAD "vorps %%xmm3, %%xmm2, %%xmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1036(struct st *t) {
+    __asm__ volatile(LOAD "vorps %%xmm3, %%xmm2, %%xmm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1037(struct st *t) {
+    __asm__ volatile(LOAD "vorps (%1), %%xmm2, %%xmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1038(struct st *t) {
+    __asm__ volatile(LOAD "vorps (%1)%{1to4%}, %%xmm2, %%xmm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1039(struct st *t) {
+    __asm__ volatile(LOAD "vorps %%ymm3, %%ymm2, %%ymm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1040(struct st *t) {
+    __asm__ volatile(LOAD "vorps %%ymm3, %%ymm2, %%ymm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1041(struct st *t) {
+    __asm__ volatile(LOAD "vorps %%ymm3, %%ymm2, %%ymm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1042(struct st *t) {
+    __asm__ volatile(LOAD "vorps (%1), %%ymm2, %%ymm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1043(struct st *t) {
+    __asm__ volatile(LOAD "vorps (%1)%{1to8%}, %%ymm2, %%ymm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1044(struct st *t) {
+    __asm__ volatile(LOAD "vorps %%zmm3, %%zmm2, %%zmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1045(struct st *t) {
+    __asm__ volatile(LOAD "vorps %%zmm3, %%zmm2, %%zmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1046(struct st *t) {
+    __asm__ volatile(LOAD "vorps %%zmm3, %%zmm2, %%zmm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1047(struct st *t) {
+    __asm__ volatile(LOAD "vorps (%1), %%zmm2, %%zmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1048(struct st *t) {
+    __asm__ volatile(LOAD "vorps (%1)%{1to16%}, %%zmm2, %%zmm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1049(struct st *t) {
+    __asm__ volatile(LOAD "vxorps %%xmm3, %%xmm2, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1050(struct st *t) {
+    __asm__ volatile(LOAD "vxorps %%xmm3, %%xmm2, %%xmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1051(struct st *t) {
+    __asm__ volatile(LOAD "vxorps %%xmm3, %%xmm2, %%xmm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1052(struct st *t) {
+    __asm__ volatile(LOAD "vxorps (%1), %%xmm2, %%xmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1053(struct st *t) {
+    __asm__ volatile(LOAD "vxorps (%1)%{1to4%}, %%xmm2, %%xmm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1054(struct st *t) {
+    __asm__ volatile(LOAD "vxorps %%ymm3, %%ymm2, %%ymm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1055(struct st *t) {
+    __asm__ volatile(LOAD "vxorps %%ymm3, %%ymm2, %%ymm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1056(struct st *t) {
+    __asm__ volatile(LOAD "vxorps %%ymm3, %%ymm2, %%ymm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1057(struct st *t) {
+    __asm__ volatile(LOAD "vxorps (%1), %%ymm2, %%ymm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1058(struct st *t) {
+    __asm__ volatile(LOAD "vxorps (%1)%{1to8%}, %%ymm2, %%ymm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1059(struct st *t) {
+    __asm__ volatile(LOAD "vxorps %%zmm3, %%zmm2, %%zmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1060(struct st *t) {
+    __asm__ volatile(LOAD "vxorps %%zmm3, %%zmm2, %%zmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1061(struct st *t) {
+    __asm__ volatile(LOAD "vxorps %%zmm3, %%zmm2, %%zmm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1062(struct st *t) {
+    __asm__ volatile(LOAD "vxorps (%1), %%zmm2, %%zmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1063(struct st *t) {
+    __asm__ volatile(LOAD "vxorps (%1)%{1to16%}, %%zmm2, %%zmm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1064(struct st *t) {
+    __asm__ volatile(LOAD "vandpd %%xmm3, %%xmm2, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1065(struct st *t) {
+    __asm__ volatile(LOAD "vandpd %%xmm3, %%xmm2, %%xmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1066(struct st *t) {
+    __asm__ volatile(LOAD "vandpd %%xmm3, %%xmm2, %%xmm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1067(struct st *t) {
+    __asm__ volatile(LOAD "vandpd (%1), %%xmm2, %%xmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1068(struct st *t) {
+    __asm__ volatile(LOAD "vandpd (%1)%{1to2%}, %%xmm2, %%xmm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1069(struct st *t) {
+    __asm__ volatile(LOAD "vandpd %%ymm3, %%ymm2, %%ymm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1070(struct st *t) {
+    __asm__ volatile(LOAD "vandpd %%ymm3, %%ymm2, %%ymm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1071(struct st *t) {
+    __asm__ volatile(LOAD "vandpd %%ymm3, %%ymm2, %%ymm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1072(struct st *t) {
+    __asm__ volatile(LOAD "vandpd (%1), %%ymm2, %%ymm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1073(struct st *t) {
+    __asm__ volatile(LOAD "vandpd (%1)%{1to4%}, %%ymm2, %%ymm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1074(struct st *t) {
+    __asm__ volatile(LOAD "vandpd %%zmm3, %%zmm2, %%zmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1075(struct st *t) {
+    __asm__ volatile(LOAD "vandpd %%zmm3, %%zmm2, %%zmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1076(struct st *t) {
+    __asm__ volatile(LOAD "vandpd %%zmm3, %%zmm2, %%zmm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1077(struct st *t) {
+    __asm__ volatile(LOAD "vandpd (%1), %%zmm2, %%zmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1078(struct st *t) {
+    __asm__ volatile(LOAD "vandpd (%1)%{1to8%}, %%zmm2, %%zmm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1079(struct st *t) {
+    __asm__ volatile(LOAD "vandnpd %%xmm3, %%xmm2, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1080(struct st *t) {
+    __asm__ volatile(LOAD "vandnpd %%xmm3, %%xmm2, %%xmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1081(struct st *t) {
+    __asm__ volatile(LOAD "vandnpd %%xmm3, %%xmm2, %%xmm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1082(struct st *t) {
+    __asm__ volatile(LOAD "vandnpd (%1), %%xmm2, %%xmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1083(struct st *t) {
+    __asm__ volatile(LOAD "vandnpd (%1)%{1to2%}, %%xmm2, %%xmm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1084(struct st *t) {
+    __asm__ volatile(LOAD "vandnpd %%ymm3, %%ymm2, %%ymm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1085(struct st *t) {
+    __asm__ volatile(LOAD "vandnpd %%ymm3, %%ymm2, %%ymm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1086(struct st *t) {
+    __asm__ volatile(LOAD "vandnpd %%ymm3, %%ymm2, %%ymm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1087(struct st *t) {
+    __asm__ volatile(LOAD "vandnpd (%1), %%ymm2, %%ymm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1088(struct st *t) {
+    __asm__ volatile(LOAD "vandnpd (%1)%{1to4%}, %%ymm2, %%ymm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1089(struct st *t) {
+    __asm__ volatile(LOAD "vandnpd %%zmm3, %%zmm2, %%zmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1090(struct st *t) {
+    __asm__ volatile(LOAD "vandnpd %%zmm3, %%zmm2, %%zmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1091(struct st *t) {
+    __asm__ volatile(LOAD "vandnpd %%zmm3, %%zmm2, %%zmm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1092(struct st *t) {
+    __asm__ volatile(LOAD "vandnpd (%1), %%zmm2, %%zmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1093(struct st *t) {
+    __asm__ volatile(LOAD "vandnpd (%1)%{1to8%}, %%zmm2, %%zmm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1094(struct st *t) {
+    __asm__ volatile(LOAD "vorpd %%xmm3, %%xmm2, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1095(struct st *t) {
+    __asm__ volatile(LOAD "vorpd %%xmm3, %%xmm2, %%xmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1096(struct st *t) {
+    __asm__ volatile(LOAD "vorpd %%xmm3, %%xmm2, %%xmm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1097(struct st *t) {
+    __asm__ volatile(LOAD "vorpd (%1), %%xmm2, %%xmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1098(struct st *t) {
+    __asm__ volatile(LOAD "vorpd (%1)%{1to2%}, %%xmm2, %%xmm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1099(struct st *t) {
+    __asm__ volatile(LOAD "vorpd %%ymm3, %%ymm2, %%ymm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1100(struct st *t) {
+    __asm__ volatile(LOAD "vorpd %%ymm3, %%ymm2, %%ymm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1101(struct st *t) {
+    __asm__ volatile(LOAD "vorpd %%ymm3, %%ymm2, %%ymm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1102(struct st *t) {
+    __asm__ volatile(LOAD "vorpd (%1), %%ymm2, %%ymm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1103(struct st *t) {
+    __asm__ volatile(LOAD "vorpd (%1)%{1to4%}, %%ymm2, %%ymm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1104(struct st *t) {
+    __asm__ volatile(LOAD "vorpd %%zmm3, %%zmm2, %%zmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1105(struct st *t) {
+    __asm__ volatile(LOAD "vorpd %%zmm3, %%zmm2, %%zmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1106(struct st *t) {
+    __asm__ volatile(LOAD "vorpd %%zmm3, %%zmm2, %%zmm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1107(struct st *t) {
+    __asm__ volatile(LOAD "vorpd (%1), %%zmm2, %%zmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1108(struct st *t) {
+    __asm__ volatile(LOAD "vorpd (%1)%{1to8%}, %%zmm2, %%zmm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1109(struct st *t) {
+    __asm__ volatile(LOAD "vxorpd %%xmm3, %%xmm2, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1110(struct st *t) {
+    __asm__ volatile(LOAD "vxorpd %%xmm3, %%xmm2, %%xmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1111(struct st *t) {
+    __asm__ volatile(LOAD "vxorpd %%xmm3, %%xmm2, %%xmm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1112(struct st *t) {
+    __asm__ volatile(LOAD "vxorpd (%1), %%xmm2, %%xmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1113(struct st *t) {
+    __asm__ volatile(LOAD "vxorpd (%1)%{1to2%}, %%xmm2, %%xmm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1114(struct st *t) {
+    __asm__ volatile(LOAD "vxorpd %%ymm3, %%ymm2, %%ymm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1115(struct st *t) {
+    __asm__ volatile(LOAD "vxorpd %%ymm3, %%ymm2, %%ymm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1116(struct st *t) {
+    __asm__ volatile(LOAD "vxorpd %%ymm3, %%ymm2, %%ymm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1117(struct st *t) {
+    __asm__ volatile(LOAD "vxorpd (%1), %%ymm2, %%ymm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1118(struct st *t) {
+    __asm__ volatile(LOAD "vxorpd (%1)%{1to4%}, %%ymm2, %%ymm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1119(struct st *t) {
+    __asm__ volatile(LOAD "vxorpd %%zmm3, %%zmm2, %%zmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1120(struct st *t) {
+    __asm__ volatile(LOAD "vxorpd %%zmm3, %%zmm2, %%zmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1121(struct st *t) {
+    __asm__ volatile(LOAD "vxorpd %%zmm3, %%zmm2, %%zmm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1122(struct st *t) {
+    __asm__ volatile(LOAD "vxorpd (%1), %%zmm2, %%zmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1123(struct st *t) {
+    __asm__ volatile(LOAD "vxorpd (%1)%{1to8%}, %%zmm2, %%zmm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1124(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovsldup %%xmm3, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1125(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovsldup (%1), %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1126(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovsldup %%xmm3, %%xmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1127(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovsldup (%1), %%xmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1128(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovsldup %%xmm3, %%xmm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1129(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovsldup (%1), %%xmm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1130(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovsldup %%ymm3, %%ymm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1131(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovsldup (%1), %%ymm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1132(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovsldup %%ymm3, %%ymm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1133(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovsldup (%1), %%ymm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1134(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovsldup %%ymm3, %%ymm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1135(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovsldup (%1), %%ymm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1136(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovsldup %%zmm3, %%zmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1137(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovsldup (%1), %%zmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1138(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovsldup %%zmm3, %%zmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1139(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovsldup (%1), %%zmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1140(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovsldup %%zmm3, %%zmm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1141(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovsldup (%1), %%zmm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1142(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovshdup %%xmm3, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1143(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovshdup (%1), %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1144(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovshdup %%xmm3, %%xmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1145(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovshdup (%1), %%xmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1146(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovshdup %%xmm3, %%xmm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1147(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovshdup (%1), %%xmm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1148(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovshdup %%ymm3, %%ymm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1149(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovshdup (%1), %%ymm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1150(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovshdup %%ymm3, %%ymm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1151(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovshdup (%1), %%ymm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1152(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovshdup %%ymm3, %%ymm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1153(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovshdup (%1), %%ymm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1154(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovshdup %%zmm3, %%zmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1155(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovshdup (%1), %%zmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1156(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovshdup %%zmm3, %%zmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1157(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovshdup (%1), %%zmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1158(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovshdup %%zmm3, %%zmm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1159(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovshdup (%1), %%zmm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1160(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovddup %%xmm3, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1161(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovddup (%1), %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1162(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovddup %%xmm3, %%xmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1163(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovddup (%1), %%xmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1164(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovddup %%xmm3, %%xmm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1165(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovddup (%1), %%xmm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1166(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovddup %%ymm3, %%ymm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1167(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovddup (%1), %%ymm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1168(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovddup %%ymm3, %%ymm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1169(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovddup (%1), %%ymm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1170(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovddup %%ymm3, %%ymm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1171(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovddup (%1), %%ymm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1172(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovddup %%zmm3, %%zmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1173(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovddup (%1), %%zmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1174(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovddup %%zmm3, %%zmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1175(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovddup (%1), %%zmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1176(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovddup %%zmm3, %%zmm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1177(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovddup (%1), %%zmm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1178(struct st *t) {
+    __asm__ volatile(LOAD "vpbroadcastmb2q %%k1, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1179(struct st *t) {
+    __asm__ volatile(LOAD "vpbroadcastmw2d %%k1, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1180(struct st *t) {
+    __asm__ volatile(LOAD "vpbroadcastmb2q %%k1, %%ymm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1181(struct st *t) {
+    __asm__ volatile(LOAD "vpbroadcastmw2d %%k1, %%ymm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1182(struct st *t) {
+    __asm__ volatile(LOAD "vpbroadcastmb2q %%k1, %%zmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1183(struct st *t) {
+    __asm__ volatile(LOAD "vpbroadcastmw2d %%k1, %%zmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1184(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovss %%xmm3, %%xmm2, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1185(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovss (%1), %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1186(struct st *t) {
+    __asm__ volatile(LOAD ".byte 0x62, 0xf1, 0x6e, 0x08, 0x11, 0xd9" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1187(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovss %%xmm3, %%xmm2, %%xmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1188(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovss (%1), %%xmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1189(struct st *t) {
+    __asm__ volatile(LOAD ".byte 0x62, 0xf1, 0x6e, 0x09, 0x11, 0xd9" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1190(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovss %%xmm3, %%xmm2, %%xmm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1191(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovss (%1), %%xmm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1192(struct st *t) {
+    __asm__ volatile(LOAD ".byte 0x62, 0xf1, 0x6e, 0x89, 0x11, 0xd9" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1193(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovss %%xmm3, (%1)" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1194(struct st *t) {
+    __asm__ volatile(LOAD "vmovss %%xmm3, (%1)%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1195(struct st *t) {
+    __asm__ volatile(LOAD "vmovdqa64 %%zmm1, %%zmm17\n vmovdqa64 %%zmm2, %%zmm25\n vmovdqa64 %%zmm3, %%zmm30\n vmovss %%xmm30, %%xmm25, %%xmm17%{%%k1%}\n vmovdqu64 %%zmm17, %%zmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1196(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovsd %%xmm3, %%xmm2, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1197(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovsd (%1), %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1198(struct st *t) {
+    __asm__ volatile(LOAD ".byte 0x62, 0xf1, 0xef, 0x08, 0x11, 0xd9" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1199(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovsd %%xmm3, %%xmm2, %%xmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1200(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovsd (%1), %%xmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1201(struct st *t) {
+    __asm__ volatile(LOAD ".byte 0x62, 0xf1, 0xef, 0x09, 0x11, 0xd9" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1202(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovsd %%xmm3, %%xmm2, %%xmm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1203(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovsd (%1), %%xmm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1204(struct st *t) {
+    __asm__ volatile(LOAD ".byte 0x62, 0xf1, 0xef, 0x89, 0x11, 0xd9" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1205(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovsd %%xmm3, (%1)" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1206(struct st *t) {
+    __asm__ volatile(LOAD "vmovsd %%xmm3, (%1)%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1207(struct st *t) {
+    __asm__ volatile(LOAD "vmovdqa64 %%zmm1, %%zmm17\n vmovdqa64 %%zmm2, %%zmm25\n vmovdqa64 %%zmm3, %%zmm30\n vmovsd %%xmm30, %%xmm25, %%xmm17%{%%k1%}\n vmovdqu64 %%zmm17, %%zmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1208(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovlps (%1), %%xmm2, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1209(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovlps %%xmm3, (%1)" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1210(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovhps (%1), %%xmm2, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1211(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovhps %%xmm3, (%1)" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1212(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovlpd (%1), %%xmm2, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1213(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovlpd %%xmm3, (%1)" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1214(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovhpd (%1), %%xmm2, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1215(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovhpd %%xmm3, (%1)" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1216(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovhlps %%xmm3, %%xmm2, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1217(struct st *t) {
+    __asm__ volatile(LOAD "vmovdqa64 %%zmm1, %%zmm17\n vmovdqa64 %%zmm2, %%zmm25\n vmovdqa64 %%zmm3, %%zmm30\n vmovhlps %%xmm30, %%xmm25, %%xmm17\n vmovdqu64 %%zmm17, %%zmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1218(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovlhps %%xmm3, %%xmm2, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1219(struct st *t) {
+    __asm__ volatile(LOAD "vmovdqa64 %%zmm1, %%zmm17\n vmovdqa64 %%zmm2, %%zmm25\n vmovdqa64 %%zmm3, %%zmm30\n vmovlhps %%xmm30, %%xmm25, %%xmm17\n vmovdqu64 %%zmm17, %%zmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1220(struct st *t) {
+    __asm__ volatile(LOAD "mov (%1), %%eax\n %{evex%} vmovd %%eax, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3", "rax");
+}
+__attribute__((noinline)) static void f1221(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovd (%1), %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1222(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovd %%xmm3, %%eax\n vmovd %%eax, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3", "rax");
+}
+__attribute__((noinline)) static void f1223(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovd %%xmm3, (%1)" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1224(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovq %%xmm3, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1225(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovq (%1), %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1226(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovq %%xmm3, (%1)" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1227(struct st *t) {
+    __asm__ volatile(LOAD ".byte 0x62, 0xf1, 0xfd, 0x08, 0xd6, 0xd9" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1228(struct st *t) {
+    __asm__ volatile(LOAD "mov (%1), %%rax\n %{evex%} vmovq %%rax, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3", "rax");
+}
+__attribute__((noinline)) static void f1229(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vmovq %%xmm3, %%rax\n vmovq %%rax, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3", "rax");
+}
+__attribute__((noinline)) static void f1230(struct st *t) {
+    __asm__ volatile(LOAD "mov (%1), %%rax\n vmovq %%rax, %%xmm17\n vmovdqu64 %%zmm17, %%zmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3", "rax");
+}
+__attribute__((noinline)) static void f1231(struct st *t) {
+    __asm__ volatile(LOAD "mov (%1), %%eax\n %{evex%} vpinsrb $0x0, %%eax, %%xmm2, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3", "rax");
+}
+__attribute__((noinline)) static void f1232(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vpinsrb $0x0, (%1), %%xmm2, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1233(struct st *t) {
+    __asm__ volatile(LOAD "mov (%1), %%eax\n %{evex%} vpinsrw $0x0, %%eax, %%xmm2, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3", "rax");
+}
+__attribute__((noinline)) static void f1234(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vpinsrw $0x0, (%1), %%xmm2, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1235(struct st *t) {
+    __asm__ volatile(LOAD "mov (%1), %%eax\n %{evex%} vpinsrd $0x0, %%eax, %%xmm2, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3", "rax");
+}
+__attribute__((noinline)) static void f1236(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vpinsrd $0x0, (%1), %%xmm2, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1237(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vpextrb $0x0, %%xmm3, %%eax\n vmovd %%eax, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3", "rax");
+}
+__attribute__((noinline)) static void f1238(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vpextrb $0x0, %%xmm3, (%1)" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1239(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vpextrw $0x0, %%xmm3, %%eax\n vmovd %%eax, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3", "rax");
+}
+__attribute__((noinline)) static void f1240(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vpextrw $0x0, %%xmm3, (%1)" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1241(struct st *t) {
+    __asm__ volatile(LOAD ".byte 0x62, 0xf1, 0x7d, 0x08, 0xc5, 0xc3, 0\n vmovd %%eax, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3", "rax");
+}
+__attribute__((noinline)) static void f1242(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vpextrd $0x0, %%xmm3, %%eax\n vmovd %%eax, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3", "rax");
+}
+__attribute__((noinline)) static void f1243(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vpextrd $0x0, %%xmm3, (%1)" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1244(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vextractps $0x0, %%xmm3, %%eax\n vmovd %%eax, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3", "rax");
+}
+__attribute__((noinline)) static void f1245(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vextractps $0x0, %%xmm3, (%1)" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1246(struct st *t) {
+    __asm__ volatile(LOAD "mov (%1), %%rax\n %{evex%} vpinsrq $0x0, %%rax, %%xmm2, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3", "rax");
+}
+__attribute__((noinline)) static void f1247(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vpinsrq $0x0, (%1), %%xmm2, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1248(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vpextrq $0x0, %%xmm3, %%rax\n vmovq %%rax, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3", "rax");
+}
+__attribute__((noinline)) static void f1249(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vpextrq $0x0, %%xmm3, (%1)" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1250(struct st *t) {
+    __asm__ volatile(LOAD "vmovdqa64 %%zmm1, %%zmm17\n vmovdqa64 %%zmm2, %%zmm25\n vmovdqa64 %%zmm3, %%zmm30\n vpextrd $0x0, %%xmm30, %%eax\n vmovd %%eax, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3", "rax");
+}
+__attribute__((noinline)) static void f1251(struct st *t) {
+    __asm__ volatile(LOAD "mov (%1), %%eax\n %{evex%} vpinsrb $0x5, %%eax, %%xmm2, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3", "rax");
+}
+__attribute__((noinline)) static void f1252(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vpinsrb $0x5, (%1), %%xmm2, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1253(struct st *t) {
+    __asm__ volatile(LOAD "mov (%1), %%eax\n %{evex%} vpinsrw $0x5, %%eax, %%xmm2, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3", "rax");
+}
+__attribute__((noinline)) static void f1254(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vpinsrw $0x5, (%1), %%xmm2, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1255(struct st *t) {
+    __asm__ volatile(LOAD "mov (%1), %%eax\n %{evex%} vpinsrd $0x5, %%eax, %%xmm2, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3", "rax");
+}
+__attribute__((noinline)) static void f1256(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vpinsrd $0x5, (%1), %%xmm2, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1257(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vpextrb $0x5, %%xmm3, %%eax\n vmovd %%eax, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3", "rax");
+}
+__attribute__((noinline)) static void f1258(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vpextrb $0x5, %%xmm3, (%1)" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1259(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vpextrw $0x5, %%xmm3, %%eax\n vmovd %%eax, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3", "rax");
+}
+__attribute__((noinline)) static void f1260(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vpextrw $0x5, %%xmm3, (%1)" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1261(struct st *t) {
+    __asm__ volatile(LOAD ".byte 0x62, 0xf1, 0x7d, 0x08, 0xc5, 0xc3, 5\n vmovd %%eax, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3", "rax");
+}
+__attribute__((noinline)) static void f1262(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vpextrd $0x5, %%xmm3, %%eax\n vmovd %%eax, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3", "rax");
+}
+__attribute__((noinline)) static void f1263(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vpextrd $0x5, %%xmm3, (%1)" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1264(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vextractps $0x5, %%xmm3, %%eax\n vmovd %%eax, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3", "rax");
+}
+__attribute__((noinline)) static void f1265(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vextractps $0x5, %%xmm3, (%1)" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1266(struct st *t) {
+    __asm__ volatile(LOAD "mov (%1), %%rax\n %{evex%} vpinsrq $0x5, %%rax, %%xmm2, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3", "rax");
+}
+__attribute__((noinline)) static void f1267(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vpinsrq $0x5, (%1), %%xmm2, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1268(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vpextrq $0x5, %%xmm3, %%rax\n vmovq %%rax, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3", "rax");
+}
+__attribute__((noinline)) static void f1269(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vpextrq $0x5, %%xmm3, (%1)" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1270(struct st *t) {
+    __asm__ volatile(LOAD "vmovdqa64 %%zmm1, %%zmm17\n vmovdqa64 %%zmm2, %%zmm25\n vmovdqa64 %%zmm3, %%zmm30\n vpextrd $0x5, %%xmm30, %%eax\n vmovd %%eax, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3", "rax");
+}
+__attribute__((noinline)) static void f1271(struct st *t) {
+    __asm__ volatile(LOAD "mov (%1), %%eax\n %{evex%} vpinsrb $0xff, %%eax, %%xmm2, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3", "rax");
+}
+__attribute__((noinline)) static void f1272(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vpinsrb $0xff, (%1), %%xmm2, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1273(struct st *t) {
+    __asm__ volatile(LOAD "mov (%1), %%eax\n %{evex%} vpinsrw $0xff, %%eax, %%xmm2, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3", "rax");
+}
+__attribute__((noinline)) static void f1274(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vpinsrw $0xff, (%1), %%xmm2, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1275(struct st *t) {
+    __asm__ volatile(LOAD "mov (%1), %%eax\n %{evex%} vpinsrd $0xff, %%eax, %%xmm2, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3", "rax");
+}
+__attribute__((noinline)) static void f1276(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vpinsrd $0xff, (%1), %%xmm2, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1277(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vpextrb $0xff, %%xmm3, %%eax\n vmovd %%eax, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3", "rax");
+}
+__attribute__((noinline)) static void f1278(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vpextrb $0xff, %%xmm3, (%1)" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1279(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vpextrw $0xff, %%xmm3, %%eax\n vmovd %%eax, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3", "rax");
+}
+__attribute__((noinline)) static void f1280(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vpextrw $0xff, %%xmm3, (%1)" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1281(struct st *t) {
+    __asm__ volatile(LOAD ".byte 0x62, 0xf1, 0x7d, 0x08, 0xc5, 0xc3, 255\n vmovd %%eax, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3", "rax");
+}
+__attribute__((noinline)) static void f1282(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vpextrd $0xff, %%xmm3, %%eax\n vmovd %%eax, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3", "rax");
+}
+__attribute__((noinline)) static void f1283(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vpextrd $0xff, %%xmm3, (%1)" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1284(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vextractps $0xff, %%xmm3, %%eax\n vmovd %%eax, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3", "rax");
+}
+__attribute__((noinline)) static void f1285(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vextractps $0xff, %%xmm3, (%1)" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1286(struct st *t) {
+    __asm__ volatile(LOAD "mov (%1), %%rax\n %{evex%} vpinsrq $0xff, %%rax, %%xmm2, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3", "rax");
+}
+__attribute__((noinline)) static void f1287(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vpinsrq $0xff, (%1), %%xmm2, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1288(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vpextrq $0xff, %%xmm3, %%rax\n vmovq %%rax, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3", "rax");
+}
+__attribute__((noinline)) static void f1289(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vpextrq $0xff, %%xmm3, (%1)" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1290(struct st *t) {
+    __asm__ volatile(LOAD "vmovdqa64 %%zmm1, %%zmm17\n vmovdqa64 %%zmm2, %%zmm25\n vmovdqa64 %%zmm3, %%zmm30\n vpextrd $0xff, %%xmm30, %%eax\n vmovd %%eax, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3", "rax");
+}
+__attribute__((noinline)) static void f1291(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vinsertps $0x0, %%xmm3, %%xmm2, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1292(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vinsertps $0x0, (%1), %%xmm2, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1293(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vinsertps $0x1d, %%xmm3, %%xmm2, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1294(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vinsertps $0x1d, (%1), %%xmm2, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1295(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vinsertps $0x6a, %%xmm3, %%xmm2, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1296(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vinsertps $0x6a, (%1), %%xmm2, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1297(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vinsertps $0xc5, %%xmm3, %%xmm2, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1298(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vinsertps $0xc5, (%1), %%xmm2, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1299(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vinsertps $0xff, %%xmm3, %%xmm2, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1300(struct st *t) {
+    __asm__ volatile(LOAD "%{evex%} vinsertps $0xff, (%1), %%xmm2, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1301(struct st *t) {
+    __asm__ volatile(LOAD "vdbpsadbw $0x0, %%xmm3, %%xmm2, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1302(struct st *t) {
+    __asm__ volatile(LOAD "vdbpsadbw $0x0, %%xmm3, %%xmm2, %%xmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1303(struct st *t) {
+    __asm__ volatile(LOAD "vdbpsadbw $0x0, %%xmm3, %%xmm2, %%xmm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1304(struct st *t) {
+    __asm__ volatile(LOAD "vdbpsadbw $0x0, (%1), %%xmm2, %%xmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1305(struct st *t) {
+    __asm__ volatile(LOAD "vdbpsadbw $0x0, %%ymm3, %%ymm2, %%ymm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1306(struct st *t) {
+    __asm__ volatile(LOAD "vdbpsadbw $0x0, %%ymm3, %%ymm2, %%ymm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1307(struct st *t) {
+    __asm__ volatile(LOAD "vdbpsadbw $0x0, %%ymm3, %%ymm2, %%ymm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1308(struct st *t) {
+    __asm__ volatile(LOAD "vdbpsadbw $0x0, (%1), %%ymm2, %%ymm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1309(struct st *t) {
+    __asm__ volatile(LOAD "vdbpsadbw $0x0, %%zmm3, %%zmm2, %%zmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1310(struct st *t) {
+    __asm__ volatile(LOAD "vdbpsadbw $0x0, %%zmm3, %%zmm2, %%zmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1311(struct st *t) {
+    __asm__ volatile(LOAD "vdbpsadbw $0x0, %%zmm3, %%zmm2, %%zmm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1312(struct st *t) {
+    __asm__ volatile(LOAD "vdbpsadbw $0x0, (%1), %%zmm2, %%zmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1313(struct st *t) {
+    __asm__ volatile(LOAD "vdbpsadbw $0x1b, %%xmm3, %%xmm2, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1314(struct st *t) {
+    __asm__ volatile(LOAD "vdbpsadbw $0x1b, %%xmm3, %%xmm2, %%xmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1315(struct st *t) {
+    __asm__ volatile(LOAD "vdbpsadbw $0x1b, %%xmm3, %%xmm2, %%xmm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1316(struct st *t) {
+    __asm__ volatile(LOAD "vdbpsadbw $0x1b, (%1), %%xmm2, %%xmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1317(struct st *t) {
+    __asm__ volatile(LOAD "vdbpsadbw $0x1b, %%ymm3, %%ymm2, %%ymm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1318(struct st *t) {
+    __asm__ volatile(LOAD "vdbpsadbw $0x1b, %%ymm3, %%ymm2, %%ymm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1319(struct st *t) {
+    __asm__ volatile(LOAD "vdbpsadbw $0x1b, %%ymm3, %%ymm2, %%ymm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1320(struct st *t) {
+    __asm__ volatile(LOAD "vdbpsadbw $0x1b, (%1), %%ymm2, %%ymm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1321(struct st *t) {
+    __asm__ volatile(LOAD "vdbpsadbw $0x1b, %%zmm3, %%zmm2, %%zmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1322(struct st *t) {
+    __asm__ volatile(LOAD "vdbpsadbw $0x1b, %%zmm3, %%zmm2, %%zmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1323(struct st *t) {
+    __asm__ volatile(LOAD "vdbpsadbw $0x1b, %%zmm3, %%zmm2, %%zmm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1324(struct st *t) {
+    __asm__ volatile(LOAD "vdbpsadbw $0x1b, (%1), %%zmm2, %%zmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1325(struct st *t) {
+    __asm__ volatile(LOAD "vdbpsadbw $0xe4, %%xmm3, %%xmm2, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1326(struct st *t) {
+    __asm__ volatile(LOAD "vdbpsadbw $0xe4, %%xmm3, %%xmm2, %%xmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1327(struct st *t) {
+    __asm__ volatile(LOAD "vdbpsadbw $0xe4, %%xmm3, %%xmm2, %%xmm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1328(struct st *t) {
+    __asm__ volatile(LOAD "vdbpsadbw $0xe4, (%1), %%xmm2, %%xmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1329(struct st *t) {
+    __asm__ volatile(LOAD "vdbpsadbw $0xe4, %%ymm3, %%ymm2, %%ymm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1330(struct st *t) {
+    __asm__ volatile(LOAD "vdbpsadbw $0xe4, %%ymm3, %%ymm2, %%ymm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1331(struct st *t) {
+    __asm__ volatile(LOAD "vdbpsadbw $0xe4, %%ymm3, %%ymm2, %%ymm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1332(struct st *t) {
+    __asm__ volatile(LOAD "vdbpsadbw $0xe4, (%1), %%ymm2, %%ymm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1333(struct st *t) {
+    __asm__ volatile(LOAD "vdbpsadbw $0xe4, %%zmm3, %%zmm2, %%zmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1334(struct st *t) {
+    __asm__ volatile(LOAD "vdbpsadbw $0xe4, %%zmm3, %%zmm2, %%zmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1335(struct st *t) {
+    __asm__ volatile(LOAD "vdbpsadbw $0xe4, %%zmm3, %%zmm2, %%zmm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1336(struct st *t) {
+    __asm__ volatile(LOAD "vdbpsadbw $0xe4, (%1), %%zmm2, %%zmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1337(struct st *t) {
+    __asm__ volatile(LOAD "vdbpsadbw $0xff, %%xmm3, %%xmm2, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1338(struct st *t) {
+    __asm__ volatile(LOAD "vdbpsadbw $0xff, %%xmm3, %%xmm2, %%xmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1339(struct st *t) {
+    __asm__ volatile(LOAD "vdbpsadbw $0xff, %%xmm3, %%xmm2, %%xmm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1340(struct st *t) {
+    __asm__ volatile(LOAD "vdbpsadbw $0xff, (%1), %%xmm2, %%xmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1341(struct st *t) {
+    __asm__ volatile(LOAD "vdbpsadbw $0xff, %%ymm3, %%ymm2, %%ymm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1342(struct st *t) {
+    __asm__ volatile(LOAD "vdbpsadbw $0xff, %%ymm3, %%ymm2, %%ymm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1343(struct st *t) {
+    __asm__ volatile(LOAD "vdbpsadbw $0xff, %%ymm3, %%ymm2, %%ymm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1344(struct st *t) {
+    __asm__ volatile(LOAD "vdbpsadbw $0xff, (%1), %%ymm2, %%ymm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1345(struct st *t) {
+    __asm__ volatile(LOAD "vdbpsadbw $0xff, %%zmm3, %%zmm2, %%zmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1346(struct st *t) {
+    __asm__ volatile(LOAD "vdbpsadbw $0xff, %%zmm3, %%zmm2, %%zmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1347(struct st *t) {
+    __asm__ volatile(LOAD "vdbpsadbw $0xff, %%zmm3, %%zmm2, %%zmm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1348(struct st *t) {
+    __asm__ volatile(LOAD "vdbpsadbw $0xff, (%1), %%zmm2, %%zmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1349(struct st *t) {
+    __asm__ volatile(LOAD "vdbpsadbw $0x93, %%xmm3, %%xmm2, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1350(struct st *t) {
+    __asm__ volatile(LOAD "vdbpsadbw $0x93, %%xmm3, %%xmm2, %%xmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1351(struct st *t) {
+    __asm__ volatile(LOAD "vdbpsadbw $0x93, %%xmm3, %%xmm2, %%xmm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1352(struct st *t) {
+    __asm__ volatile(LOAD "vdbpsadbw $0x93, (%1), %%xmm2, %%xmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1353(struct st *t) {
+    __asm__ volatile(LOAD "vdbpsadbw $0x93, %%ymm3, %%ymm2, %%ymm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1354(struct st *t) {
+    __asm__ volatile(LOAD "vdbpsadbw $0x93, %%ymm3, %%ymm2, %%ymm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1355(struct st *t) {
+    __asm__ volatile(LOAD "vdbpsadbw $0x93, %%ymm3, %%ymm2, %%ymm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1356(struct st *t) {
+    __asm__ volatile(LOAD "vdbpsadbw $0x93, (%1), %%ymm2, %%ymm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1357(struct st *t) {
+    __asm__ volatile(LOAD "vdbpsadbw $0x93, %%zmm3, %%zmm2, %%zmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1358(struct st *t) {
+    __asm__ volatile(LOAD "vdbpsadbw $0x93, %%zmm3, %%zmm2, %%zmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1359(struct st *t) {
+    __asm__ volatile(LOAD "vdbpsadbw $0x93, %%zmm3, %%zmm2, %%zmm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1360(struct st *t) {
+    __asm__ volatile(LOAD "vdbpsadbw $0x93, (%1), %%zmm2, %%zmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1361(struct st *t) {
+    __asm__ volatile(LOAD "vcvtneps2bf16 %%xmm3, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1362(struct st *t) {
+    __asm__ volatile(LOAD "vcvtneps2bf16x (%1), %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1363(struct st *t) {
+    __asm__ volatile(LOAD "vcvtneps2bf16 %%xmm3, %%xmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1364(struct st *t) {
+    __asm__ volatile(LOAD "vcvtneps2bf16x (%1), %%xmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1365(struct st *t) {
+    __asm__ volatile(LOAD "vcvtneps2bf16 %%xmm3, %%xmm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1366(struct st *t) {
+    __asm__ volatile(LOAD "vcvtneps2bf16x (%1), %%xmm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1367(struct st *t) {
+    __asm__ volatile(LOAD "vcvtneps2bf16 (%1)%{1to4%}, %%xmm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1368(struct st *t) {
+    __asm__ volatile(LOAD "vcvtneps2bf16 %%ymm3, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1369(struct st *t) {
+    __asm__ volatile(LOAD "vcvtneps2bf16y (%1), %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1370(struct st *t) {
+    __asm__ volatile(LOAD "vcvtneps2bf16 %%ymm3, %%xmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1371(struct st *t) {
+    __asm__ volatile(LOAD "vcvtneps2bf16y (%1), %%xmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1372(struct st *t) {
+    __asm__ volatile(LOAD "vcvtneps2bf16 %%ymm3, %%xmm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1373(struct st *t) {
+    __asm__ volatile(LOAD "vcvtneps2bf16y (%1), %%xmm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1374(struct st *t) {
+    __asm__ volatile(LOAD "vcvtneps2bf16 (%1)%{1to8%}, %%xmm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1375(struct st *t) {
+    __asm__ volatile(LOAD "vcvtneps2bf16 %%zmm3, %%ymm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1376(struct st *t) {
+    __asm__ volatile(LOAD "vcvtneps2bf16 (%1), %%ymm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1377(struct st *t) {
+    __asm__ volatile(LOAD "vcvtneps2bf16 %%zmm3, %%ymm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1378(struct st *t) {
+    __asm__ volatile(LOAD "vcvtneps2bf16 (%1), %%ymm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1379(struct st *t) {
+    __asm__ volatile(LOAD "vcvtneps2bf16 %%zmm3, %%ymm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1380(struct st *t) {
+    __asm__ volatile(LOAD "vcvtneps2bf16 (%1), %%ymm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1381(struct st *t) {
+    __asm__ volatile(LOAD "vcvtneps2bf16 (%1)%{1to16%}, %%ymm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1382(struct st *t) {
+    __asm__ volatile(LOAD "vcvtne2ps2bf16 %%xmm3, %%xmm2, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1383(struct st *t) {
+    __asm__ volatile(LOAD "vcvtne2ps2bf16 %%xmm3, %%xmm2, %%xmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1384(struct st *t) {
+    __asm__ volatile(LOAD "vcvtne2ps2bf16 %%xmm3, %%xmm2, %%xmm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1385(struct st *t) {
+    __asm__ volatile(LOAD "vcvtne2ps2bf16 (%1), %%xmm2, %%xmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1386(struct st *t) {
+    __asm__ volatile(LOAD "vcvtne2ps2bf16 (%1)%{1to4%}, %%xmm2, %%xmm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1387(struct st *t) {
+    __asm__ volatile(LOAD "vcvtne2ps2bf16 %%ymm3, %%ymm2, %%ymm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1388(struct st *t) {
+    __asm__ volatile(LOAD "vcvtne2ps2bf16 %%ymm3, %%ymm2, %%ymm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1389(struct st *t) {
+    __asm__ volatile(LOAD "vcvtne2ps2bf16 %%ymm3, %%ymm2, %%ymm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1390(struct st *t) {
+    __asm__ volatile(LOAD "vcvtne2ps2bf16 (%1), %%ymm2, %%ymm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1391(struct st *t) {
+    __asm__ volatile(LOAD "vcvtne2ps2bf16 (%1)%{1to8%}, %%ymm2, %%ymm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1392(struct st *t) {
+    __asm__ volatile(LOAD "vcvtne2ps2bf16 %%zmm3, %%zmm2, %%zmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1393(struct st *t) {
+    __asm__ volatile(LOAD "vcvtne2ps2bf16 %%zmm3, %%zmm2, %%zmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1394(struct st *t) {
+    __asm__ volatile(LOAD "vcvtne2ps2bf16 %%zmm3, %%zmm2, %%zmm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1395(struct st *t) {
+    __asm__ volatile(LOAD "vcvtne2ps2bf16 (%1), %%zmm2, %%zmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1396(struct st *t) {
+    __asm__ volatile(LOAD "vcvtne2ps2bf16 (%1)%{1to16%}, %%zmm2, %%zmm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1397(struct st *t) {
+    __asm__ volatile(LOAD "vdpbf16ps %%xmm3, %%xmm2, %%xmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1398(struct st *t) {
+    __asm__ volatile(LOAD "vdpbf16ps %%xmm3, %%xmm2, %%xmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1399(struct st *t) {
+    __asm__ volatile(LOAD "vdpbf16ps %%xmm3, %%xmm2, %%xmm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1400(struct st *t) {
+    __asm__ volatile(LOAD "vdpbf16ps (%1), %%xmm2, %%xmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1401(struct st *t) {
+    __asm__ volatile(LOAD "vdpbf16ps (%1)%{1to4%}, %%xmm2, %%xmm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1402(struct st *t) {
+    __asm__ volatile(LOAD "vdpbf16ps %%ymm3, %%ymm2, %%ymm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1403(struct st *t) {
+    __asm__ volatile(LOAD "vdpbf16ps %%ymm3, %%ymm2, %%ymm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1404(struct st *t) {
+    __asm__ volatile(LOAD "vdpbf16ps %%ymm3, %%ymm2, %%ymm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1405(struct st *t) {
+    __asm__ volatile(LOAD "vdpbf16ps (%1), %%ymm2, %%ymm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1406(struct st *t) {
+    __asm__ volatile(LOAD "vdpbf16ps (%1)%{1to8%}, %%ymm2, %%ymm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1407(struct st *t) {
+    __asm__ volatile(LOAD "vdpbf16ps %%zmm3, %%zmm2, %%zmm1" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1408(struct st *t) {
+    __asm__ volatile(LOAD "vdpbf16ps %%zmm3, %%zmm2, %%zmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1409(struct st *t) {
+    __asm__ volatile(LOAD "vdpbf16ps %%zmm3, %%zmm2, %%zmm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1410(struct st *t) {
+    __asm__ volatile(LOAD "vdpbf16ps (%1), %%zmm2, %%zmm1%{%%k1%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1411(struct st *t) {
+    __asm__ volatile(LOAD "vdpbf16ps (%1)%{1to16%}, %%zmm2, %%zmm1%{%%k1%}%{z%}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1412(struct st *t) {
+    __asm__ volatile(LOAD "mov %1, %%rax\n .byte 0x62, 0xf3, 0x6d, 0x48, 0x70, 0xcb, 0x05" SAVE :: "r"(t), "r"(t->m) : "memory", "rax", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1413(struct st *t) {
+    __asm__ volatile(LOAD "mov %1, %%rax\n .byte 0x62, 0xf3, 0xed, 0x48, 0x70, 0xcb, 0x05" SAVE :: "r"(t), "r"(t->m) : "memory", "rax", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1414(struct st *t) {
+    __asm__ volatile(LOAD "mov %1, %%rax\n .byte 0x62, 0xf2, 0xed, 0x48, 0x71, 0xcb" SAVE :: "r"(t), "r"(t->m) : "memory", "rax", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1415(struct st *t) {
+    __asm__ volatile(LOAD "mov %1, %%rax\n .byte 0x62, 0xf2, 0xed, 0x48, 0x50, 0xcb" SAVE :: "r"(t), "r"(t->m) : "memory", "rax", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1416(struct st *t) {
+    __asm__ volatile(LOAD "mov %1, %%rax\n .byte 0x62, 0xf2, 0x6d, 0x48, 0x50, 0xcb" SAVE :: "r"(t), "r"(t->m) : "memory", "rax", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1417(struct st *t) {
+    __asm__ volatile(LOAD "mov %1, %%rax\n .byte 0x62, 0xf2, 0x6d, 0xc9, 0x8f, 0xcb" SAVE :: "r"(t), "r"(t->m) : "memory", "rax", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1418(struct st *t) {
+    __asm__ volatile(LOAD "mov %1, %%rax\n .byte 0x62, 0xf2, 0x6d, 0x49, 0x8f, 0xcb" SAVE :: "r"(t), "r"(t->m) : "memory", "rax", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1419(struct st *t) {
+    __asm__ volatile(LOAD "mov %1, %%rax\n .byte 0x62, 0xf2, 0xed, 0x48, 0x8f, 0xcb" SAVE :: "r"(t), "r"(t->m) : "memory", "rax", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1420(struct st *t) {
+    __asm__ volatile(LOAD "mov %1, %%rax\n .byte 0x62, 0xf2, 0xed, 0x48, 0xcf, 0xcb" SAVE :: "r"(t), "r"(t->m) : "memory", "rax", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1421(struct st *t) {
+    __asm__ volatile(LOAD "mov %1, %%rax\n .byte 0x62, 0xf2, 0x6d, 0x48, 0x54, 0xcb" SAVE :: "r"(t), "r"(t->m) : "memory", "rax", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1422(struct st *t) {
+    __asm__ volatile(LOAD "mov %1, %%rax\n .byte 0x62, 0xf2, 0x7d, 0x48, 0x54, 0xcb" SAVE :: "r"(t), "r"(t->m) : "memory", "rax", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1423(struct st *t) {
+    __asm__ volatile(LOAD "mov %1, %%rax\n .byte 0x62, 0xf2, 0x6d, 0x48, 0xb4, 0xcb" SAVE :: "r"(t), "r"(t->m) : "memory", "rax", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1424(struct st *t) {
+    __asm__ volatile(LOAD "mov %1, %%rax\n .byte 0x62, 0xf3, 0x6d, 0x48, 0xce, 0xcb, 0x00" SAVE :: "r"(t), "r"(t->m) : "memory", "rax", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1425(struct st *t) {
+    __asm__ volatile(LOAD "mov %1, %%rax\n .byte 0x62, 0xf2, 0x6d, 0x48, 0x83, 0xcb" SAVE :: "r"(t), "r"(t->m) : "memory", "rax", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1426(struct st *t) {
+    __asm__ volatile(LOAD "mov %1, %%rax\n .byte 0x62, 0xf2, 0x6d, 0x58, 0x8f, 0x08" SAVE :: "r"(t), "r"(t->m) : "memory", "rax", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1427(struct st *t) {
+    __asm__ volatile(LOAD "mov %1, %%rax\n .byte 0xc4, 0xe2, 0xe9, 0xcf, 0xcb" SAVE :: "r"(t), "r"(t->m) : "memory", "rax", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1428(struct st *t) {
+    __asm__ volatile(LOAD "mov %1, %%rax\n .byte 0xc4, 0xe2, 0x69, 0xcf, 0xcb" SAVE :: "r"(t), "r"(t->m) : "memory", "rax", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1429(struct st *t) {
+    __asm__ volatile(LOAD "mov %1, %%rax\n .byte 0xc4, 0xe3, 0x69, 0xce, 0xcb, 0x00" SAVE :: "r"(t), "r"(t->m) : "memory", "rax", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1430(struct st *t) {
+    __asm__ volatile(LOAD "mov %1, %%rax\n .byte 0xc4, 0xe3, 0xe9, 0xce, 0xcb, 0x00" SAVE :: "r"(t), "r"(t->m) : "memory", "rax", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1431(struct st *t) {
+    __asm__ volatile(LOAD "mov %1, %%rax\n .byte 0x62, 0xf2, 0x6d, 0x48, 0xdc, 0xcb" SAVE :: "r"(t), "r"(t->m) : "memory", "rax", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1432(struct st *t) {
+    __asm__ volatile(LOAD "mov %1, %%rax\n .byte 0x62, 0xf2, 0x6d, 0x49, 0xdc, 0xcb" SAVE :: "r"(t), "r"(t->m) : "memory", "rax", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1433(struct st *t) {
+    __asm__ volatile(LOAD "mov %1, %%rax\n .byte 0x62, 0xf2, 0x6d, 0xc8, 0xdc, 0xcb" SAVE :: "r"(t), "r"(t->m) : "memory", "rax", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1434(struct st *t) {
+    __asm__ volatile(LOAD "mov %1, %%rax\n .byte 0x62, 0xf2, 0xed, 0x48, 0xdc, 0xcb" SAVE :: "r"(t), "r"(t->m) : "memory", "rax", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1435(struct st *t) {
+    __asm__ volatile(LOAD "mov %1, %%rax\n .byte 0x62, 0xf2, 0x6d, 0x58, 0xdc, 0x08" SAVE :: "r"(t), "r"(t->m) : "memory", "rax", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1436(struct st *t) {
+    __asm__ volatile(LOAD "mov %1, %%rax\n .byte 0x62, 0xf2, 0x7d, 0x08, 0xdb, 0xcb" SAVE :: "r"(t), "r"(t->m) : "memory", "rax", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1437(struct st *t) {
+    __asm__ volatile(LOAD "mov %1, %%rax\n .byte 0xc4, 0xe2, 0x79, 0xdb, 0xcb" SAVE :: "r"(t), "r"(t->m) : "memory", "rax", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1438(struct st *t) {
+    __asm__ volatile(LOAD "mov %1, %%rax\n .byte 0xc4, 0xe2, 0x7d, 0xdb, 0xcb" SAVE :: "r"(t), "r"(t->m) : "memory", "rax", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1439(struct st *t) {
+    __asm__ volatile(LOAD "mov %1, %%rax\n .byte 0xc4, 0xe2, 0x69, 0xdb, 0xcb" SAVE :: "r"(t), "r"(t->m) : "memory", "rax", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1440(struct st *t) {
+    __asm__ volatile(LOAD "mov %1, %%rax\n .byte 0x62, 0xf3, 0x7d, 0x08, 0xdf, 0xcb, 0x01" SAVE :: "r"(t), "r"(t->m) : "memory", "rax", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1441(struct st *t) {
+    __asm__ volatile(LOAD "mov %1, %%rax\n .byte 0xc4, 0xe3, 0x7d, 0xdf, 0xcb, 0x01" SAVE :: "r"(t), "r"(t->m) : "memory", "rax", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1442(struct st *t) {
+    __asm__ volatile(LOAD "mov %1, %%rax\n .byte 0x62, 0xf3, 0x6d, 0x49, 0x44, 0xcb, 0x00" SAVE :: "r"(t), "r"(t->m) : "memory", "rax", "xmm1", "xmm2", "xmm3");
+}
+__attribute__((noinline)) static void f1443(struct st *t) {
     __asm__ volatile(LOAD "mov %1, %%rax\n .byte 0xc4, 0xe3, 0xe9, 0x44, 0xcb, 0x00" SAVE :: "r"(t), "r"(t->m) : "memory", "rax", "xmm1", "xmm2", "xmm3");
 }
 static const struct { const char *name; void (*fn)(struct st *); } forms[] = {
@@ -4130,40 +5354,448 @@ static const struct { const char *name; void (*fn)(struct st *); } forms[] = {
     {"{vex} vaeskeygenassist $0xff mem", f1001},
     {"vaesenc 512 hi", f1002},
     {"vpclmulqdq 512 hi", f1003},
-    {"ud vpshldw W0", f1004},
-    {"ud vpshldw ok", f1005},
-    {"ud vpshldvd W1 ok", f1006},
-    {"ud vpdpbusd W1", f1007},
-    {"ud vpdpbusd ok", f1008},
-    {"ud vpshufbitqmb z", f1009},
-    {"ud vpshufbitqmb ok", f1010},
-    {"ud vpshufbitqmb W1", f1011},
-    {"ud vgf2p8mulb W1", f1012},
-    {"ud vpopcntb vvvv", f1013},
-    {"ud vpopcntb ok", f1014},
-    {"ud vpmadd52luq W0", f1015},
-    {"ud vgf2p8affineqb W0", f1016},
-    {"ud vpmultishiftqb W0", f1017},
-    {"ud vpshufbitqmb bcst", f1018},
-    {"ud vex vgf2p8mulb W1", f1019},
-    {"ud vex vgf2p8mulb ok", f1020},
-    {"ud vex vgf2p8affineqb W0", f1021},
-    {"ud vex vgf2p8affineqb ok", f1022},
-    {"ud vaesenc ok", f1023},
-    {"ud vaesenc masked", f1024},
-    {"ud vaesenc z", f1025},
-    {"ud vaesenc W1", f1026},
-    {"ud vaesenc b mem", f1027},
-    {"ud evex vaesimc", f1028},
-    {"ud vex vaesimc ok", f1029},
-    {"ud vex vaesimc L1", f1030},
-    {"ud vex vaesimc vvvv", f1031},
-    {"ud evex vaeskeygenassist", f1032},
-    {"ud vex vaeskeygenassist L1", f1033},
-    {"ud vpclmulqdq masked", f1034},
-    {"ud vex vpclmulqdq W1", f1035},
+    {"vandps 128 reg", f1004},
+    {"vandps 128 regm", f1005},
+    {"vandps 128 regz", f1006},
+    {"vandps 128 mem m", f1007},
+    {"vandps 128 bcst z", f1008},
+    {"vandps 256 reg", f1009},
+    {"vandps 256 regm", f1010},
+    {"vandps 256 regz", f1011},
+    {"vandps 256 mem m", f1012},
+    {"vandps 256 bcst z", f1013},
+    {"vandps 512 reg", f1014},
+    {"vandps 512 regm", f1015},
+    {"vandps 512 regz", f1016},
+    {"vandps 512 mem m", f1017},
+    {"vandps 512 bcst z", f1018},
+    {"vandnps 128 reg", f1019},
+    {"vandnps 128 regm", f1020},
+    {"vandnps 128 regz", f1021},
+    {"vandnps 128 mem m", f1022},
+    {"vandnps 128 bcst z", f1023},
+    {"vandnps 256 reg", f1024},
+    {"vandnps 256 regm", f1025},
+    {"vandnps 256 regz", f1026},
+    {"vandnps 256 mem m", f1027},
+    {"vandnps 256 bcst z", f1028},
+    {"vandnps 512 reg", f1029},
+    {"vandnps 512 regm", f1030},
+    {"vandnps 512 regz", f1031},
+    {"vandnps 512 mem m", f1032},
+    {"vandnps 512 bcst z", f1033},
+    {"vorps 128 reg", f1034},
+    {"vorps 128 regm", f1035},
+    {"vorps 128 regz", f1036},
+    {"vorps 128 mem m", f1037},
+    {"vorps 128 bcst z", f1038},
+    {"vorps 256 reg", f1039},
+    {"vorps 256 regm", f1040},
+    {"vorps 256 regz", f1041},
+    {"vorps 256 mem m", f1042},
+    {"vorps 256 bcst z", f1043},
+    {"vorps 512 reg", f1044},
+    {"vorps 512 regm", f1045},
+    {"vorps 512 regz", f1046},
+    {"vorps 512 mem m", f1047},
+    {"vorps 512 bcst z", f1048},
+    {"vxorps 128 reg", f1049},
+    {"vxorps 128 regm", f1050},
+    {"vxorps 128 regz", f1051},
+    {"vxorps 128 mem m", f1052},
+    {"vxorps 128 bcst z", f1053},
+    {"vxorps 256 reg", f1054},
+    {"vxorps 256 regm", f1055},
+    {"vxorps 256 regz", f1056},
+    {"vxorps 256 mem m", f1057},
+    {"vxorps 256 bcst z", f1058},
+    {"vxorps 512 reg", f1059},
+    {"vxorps 512 regm", f1060},
+    {"vxorps 512 regz", f1061},
+    {"vxorps 512 mem m", f1062},
+    {"vxorps 512 bcst z", f1063},
+    {"vandpd 128 reg", f1064},
+    {"vandpd 128 regm", f1065},
+    {"vandpd 128 regz", f1066},
+    {"vandpd 128 mem m", f1067},
+    {"vandpd 128 bcst z", f1068},
+    {"vandpd 256 reg", f1069},
+    {"vandpd 256 regm", f1070},
+    {"vandpd 256 regz", f1071},
+    {"vandpd 256 mem m", f1072},
+    {"vandpd 256 bcst z", f1073},
+    {"vandpd 512 reg", f1074},
+    {"vandpd 512 regm", f1075},
+    {"vandpd 512 regz", f1076},
+    {"vandpd 512 mem m", f1077},
+    {"vandpd 512 bcst z", f1078},
+    {"vandnpd 128 reg", f1079},
+    {"vandnpd 128 regm", f1080},
+    {"vandnpd 128 regz", f1081},
+    {"vandnpd 128 mem m", f1082},
+    {"vandnpd 128 bcst z", f1083},
+    {"vandnpd 256 reg", f1084},
+    {"vandnpd 256 regm", f1085},
+    {"vandnpd 256 regz", f1086},
+    {"vandnpd 256 mem m", f1087},
+    {"vandnpd 256 bcst z", f1088},
+    {"vandnpd 512 reg", f1089},
+    {"vandnpd 512 regm", f1090},
+    {"vandnpd 512 regz", f1091},
+    {"vandnpd 512 mem m", f1092},
+    {"vandnpd 512 bcst z", f1093},
+    {"vorpd 128 reg", f1094},
+    {"vorpd 128 regm", f1095},
+    {"vorpd 128 regz", f1096},
+    {"vorpd 128 mem m", f1097},
+    {"vorpd 128 bcst z", f1098},
+    {"vorpd 256 reg", f1099},
+    {"vorpd 256 regm", f1100},
+    {"vorpd 256 regz", f1101},
+    {"vorpd 256 mem m", f1102},
+    {"vorpd 256 bcst z", f1103},
+    {"vorpd 512 reg", f1104},
+    {"vorpd 512 regm", f1105},
+    {"vorpd 512 regz", f1106},
+    {"vorpd 512 mem m", f1107},
+    {"vorpd 512 bcst z", f1108},
+    {"vxorpd 128 reg", f1109},
+    {"vxorpd 128 regm", f1110},
+    {"vxorpd 128 regz", f1111},
+    {"vxorpd 128 mem m", f1112},
+    {"vxorpd 128 bcst z", f1113},
+    {"vxorpd 256 reg", f1114},
+    {"vxorpd 256 regm", f1115},
+    {"vxorpd 256 regz", f1116},
+    {"vxorpd 256 mem m", f1117},
+    {"vxorpd 256 bcst z", f1118},
+    {"vxorpd 512 reg", f1119},
+    {"vxorpd 512 regm", f1120},
+    {"vxorpd 512 regz", f1121},
+    {"vxorpd 512 mem m", f1122},
+    {"vxorpd 512 bcst z", f1123},
+    {"vmovsldup 128 reg", f1124},
+    {"vmovsldup 128 mem", f1125},
+    {"vmovsldup 128 regm", f1126},
+    {"vmovsldup 128 memm", f1127},
+    {"vmovsldup 128 regz", f1128},
+    {"vmovsldup 128 memz", f1129},
+    {"vmovsldup 256 reg", f1130},
+    {"vmovsldup 256 mem", f1131},
+    {"vmovsldup 256 regm", f1132},
+    {"vmovsldup 256 memm", f1133},
+    {"vmovsldup 256 regz", f1134},
+    {"vmovsldup 256 memz", f1135},
+    {"vmovsldup 512 reg", f1136},
+    {"vmovsldup 512 mem", f1137},
+    {"vmovsldup 512 regm", f1138},
+    {"vmovsldup 512 memm", f1139},
+    {"vmovsldup 512 regz", f1140},
+    {"vmovsldup 512 memz", f1141},
+    {"vmovshdup 128 reg", f1142},
+    {"vmovshdup 128 mem", f1143},
+    {"vmovshdup 128 regm", f1144},
+    {"vmovshdup 128 memm", f1145},
+    {"vmovshdup 128 regz", f1146},
+    {"vmovshdup 128 memz", f1147},
+    {"vmovshdup 256 reg", f1148},
+    {"vmovshdup 256 mem", f1149},
+    {"vmovshdup 256 regm", f1150},
+    {"vmovshdup 256 memm", f1151},
+    {"vmovshdup 256 regz", f1152},
+    {"vmovshdup 256 memz", f1153},
+    {"vmovshdup 512 reg", f1154},
+    {"vmovshdup 512 mem", f1155},
+    {"vmovshdup 512 regm", f1156},
+    {"vmovshdup 512 memm", f1157},
+    {"vmovshdup 512 regz", f1158},
+    {"vmovshdup 512 memz", f1159},
+    {"vmovddup 128 reg", f1160},
+    {"vmovddup 128 mem", f1161},
+    {"vmovddup 128 regm", f1162},
+    {"vmovddup 128 memm", f1163},
+    {"vmovddup 128 regz", f1164},
+    {"vmovddup 128 memz", f1165},
+    {"vmovddup 256 reg", f1166},
+    {"vmovddup 256 mem", f1167},
+    {"vmovddup 256 regm", f1168},
+    {"vmovddup 256 memm", f1169},
+    {"vmovddup 256 regz", f1170},
+    {"vmovddup 256 memz", f1171},
+    {"vmovddup 512 reg", f1172},
+    {"vmovddup 512 mem", f1173},
+    {"vmovddup 512 regm", f1174},
+    {"vmovddup 512 memm", f1175},
+    {"vmovddup 512 regz", f1176},
+    {"vmovddup 512 memz", f1177},
+    {"vpbroadcastmb2q 128", f1178},
+    {"vpbroadcastmw2d 128", f1179},
+    {"vpbroadcastmb2q 256", f1180},
+    {"vpbroadcastmw2d 256", f1181},
+    {"vpbroadcastmb2q 512", f1182},
+    {"vpbroadcastmw2d 512", f1183},
+    {"vmovss reg", f1184},
+    {"vmovss mem", f1185},
+    {"vmovss rev reg", f1186},
+    {"vmovss regm", f1187},
+    {"vmovss memm", f1188},
+    {"vmovss rev regm", f1189},
+    {"vmovss regz", f1190},
+    {"vmovss memz", f1191},
+    {"vmovss rev regz", f1192},
+    {"vmovss st", f1193},
+    {"vmovss st m", f1194},
+    {"vmovss reg hi", f1195},
+    {"vmovsd reg", f1196},
+    {"vmovsd mem", f1197},
+    {"vmovsd rev reg", f1198},
+    {"vmovsd regm", f1199},
+    {"vmovsd memm", f1200},
+    {"vmovsd rev regm", f1201},
+    {"vmovsd regz", f1202},
+    {"vmovsd memz", f1203},
+    {"vmovsd rev regz", f1204},
+    {"vmovsd st", f1205},
+    {"vmovsd st m", f1206},
+    {"vmovsd reg hi", f1207},
+    {"vmovlps ld", f1208},
+    {"vmovlps st", f1209},
+    {"vmovhps ld", f1210},
+    {"vmovhps st", f1211},
+    {"vmovlpd ld", f1212},
+    {"vmovlpd st", f1213},
+    {"vmovhpd ld", f1214},
+    {"vmovhpd st", f1215},
+    {"vmovhlps reg", f1216},
+    {"vmovhlps reg hi", f1217},
+    {"vmovlhps reg", f1218},
+    {"vmovlhps reg hi", f1219},
+    {"vmovd in reg", f1220},
+    {"vmovd in mem", f1221},
+    {"vmovd out reg", f1222},
+    {"vmovd out mem", f1223},
+    {"vmovq xmm reg", f1224},
+    {"vmovq xmm mem", f1225},
+    {"vmovq st", f1226},
+    {"vmovq d6 reg", f1227},
+    {"vmovq in reg", f1228},
+    {"vmovq out reg", f1229},
+    {"vmovq in hi", f1230},
+    {"vpinsrb $0x0 reg", f1231},
+    {"vpinsrb $0x0 mem", f1232},
+    {"vpinsrw $0x0 reg", f1233},
+    {"vpinsrw $0x0 mem", f1234},
+    {"vpinsrd $0x0 reg", f1235},
+    {"vpinsrd $0x0 mem", f1236},
+    {"vpextrb $0x0 reg", f1237},
+    {"vpextrb $0x0 mem", f1238},
+    {"vpextrw $0x0 reg", f1239},
+    {"vpextrw $0x0 mem", f1240},
+    {"vpextrw c5 $0x0 reg", f1241},
+    {"vpextrd $0x0 reg", f1242},
+    {"vpextrd $0x0 mem", f1243},
+    {"vextractps $0x0 reg", f1244},
+    {"vextractps $0x0 mem", f1245},
+    {"vpinsrq $0x0 reg", f1246},
+    {"vpinsrq $0x0 mem", f1247},
+    {"vpextrq $0x0 reg", f1248},
+    {"vpextrq $0x0 mem", f1249},
+    {"vpextrd $0x0 hi", f1250},
+    {"vpinsrb $0x5 reg", f1251},
+    {"vpinsrb $0x5 mem", f1252},
+    {"vpinsrw $0x5 reg", f1253},
+    {"vpinsrw $0x5 mem", f1254},
+    {"vpinsrd $0x5 reg", f1255},
+    {"vpinsrd $0x5 mem", f1256},
+    {"vpextrb $0x5 reg", f1257},
+    {"vpextrb $0x5 mem", f1258},
+    {"vpextrw $0x5 reg", f1259},
+    {"vpextrw $0x5 mem", f1260},
+    {"vpextrw c5 $0x5 reg", f1261},
+    {"vpextrd $0x5 reg", f1262},
+    {"vpextrd $0x5 mem", f1263},
+    {"vextractps $0x5 reg", f1264},
+    {"vextractps $0x5 mem", f1265},
+    {"vpinsrq $0x5 reg", f1266},
+    {"vpinsrq $0x5 mem", f1267},
+    {"vpextrq $0x5 reg", f1268},
+    {"vpextrq $0x5 mem", f1269},
+    {"vpextrd $0x5 hi", f1270},
+    {"vpinsrb $0xff reg", f1271},
+    {"vpinsrb $0xff mem", f1272},
+    {"vpinsrw $0xff reg", f1273},
+    {"vpinsrw $0xff mem", f1274},
+    {"vpinsrd $0xff reg", f1275},
+    {"vpinsrd $0xff mem", f1276},
+    {"vpextrb $0xff reg", f1277},
+    {"vpextrb $0xff mem", f1278},
+    {"vpextrw $0xff reg", f1279},
+    {"vpextrw $0xff mem", f1280},
+    {"vpextrw c5 $0xff reg", f1281},
+    {"vpextrd $0xff reg", f1282},
+    {"vpextrd $0xff mem", f1283},
+    {"vextractps $0xff reg", f1284},
+    {"vextractps $0xff mem", f1285},
+    {"vpinsrq $0xff reg", f1286},
+    {"vpinsrq $0xff mem", f1287},
+    {"vpextrq $0xff reg", f1288},
+    {"vpextrq $0xff mem", f1289},
+    {"vpextrd $0xff hi", f1290},
+    {"vinsertps $0x0 reg", f1291},
+    {"vinsertps $0x0 mem", f1292},
+    {"vinsertps $0x1d reg", f1293},
+    {"vinsertps $0x1d mem", f1294},
+    {"vinsertps $0x6a reg", f1295},
+    {"vinsertps $0x6a mem", f1296},
+    {"vinsertps $0xc5 reg", f1297},
+    {"vinsertps $0xc5 mem", f1298},
+    {"vinsertps $0xff reg", f1299},
+    {"vinsertps $0xff mem", f1300},
+    {"vdbpsadbw $0x0 128 reg", f1301},
+    {"vdbpsadbw $0x0 128 regm", f1302},
+    {"vdbpsadbw $0x0 128 regz", f1303},
+    {"vdbpsadbw $0x0 128 mem m", f1304},
+    {"vdbpsadbw $0x0 256 reg", f1305},
+    {"vdbpsadbw $0x0 256 regm", f1306},
+    {"vdbpsadbw $0x0 256 regz", f1307},
+    {"vdbpsadbw $0x0 256 mem m", f1308},
+    {"vdbpsadbw $0x0 512 reg", f1309},
+    {"vdbpsadbw $0x0 512 regm", f1310},
+    {"vdbpsadbw $0x0 512 regz", f1311},
+    {"vdbpsadbw $0x0 512 mem m", f1312},
+    {"vdbpsadbw $0x1b 128 reg", f1313},
+    {"vdbpsadbw $0x1b 128 regm", f1314},
+    {"vdbpsadbw $0x1b 128 regz", f1315},
+    {"vdbpsadbw $0x1b 128 mem m", f1316},
+    {"vdbpsadbw $0x1b 256 reg", f1317},
+    {"vdbpsadbw $0x1b 256 regm", f1318},
+    {"vdbpsadbw $0x1b 256 regz", f1319},
+    {"vdbpsadbw $0x1b 256 mem m", f1320},
+    {"vdbpsadbw $0x1b 512 reg", f1321},
+    {"vdbpsadbw $0x1b 512 regm", f1322},
+    {"vdbpsadbw $0x1b 512 regz", f1323},
+    {"vdbpsadbw $0x1b 512 mem m", f1324},
+    {"vdbpsadbw $0xe4 128 reg", f1325},
+    {"vdbpsadbw $0xe4 128 regm", f1326},
+    {"vdbpsadbw $0xe4 128 regz", f1327},
+    {"vdbpsadbw $0xe4 128 mem m", f1328},
+    {"vdbpsadbw $0xe4 256 reg", f1329},
+    {"vdbpsadbw $0xe4 256 regm", f1330},
+    {"vdbpsadbw $0xe4 256 regz", f1331},
+    {"vdbpsadbw $0xe4 256 mem m", f1332},
+    {"vdbpsadbw $0xe4 512 reg", f1333},
+    {"vdbpsadbw $0xe4 512 regm", f1334},
+    {"vdbpsadbw $0xe4 512 regz", f1335},
+    {"vdbpsadbw $0xe4 512 mem m", f1336},
+    {"vdbpsadbw $0xff 128 reg", f1337},
+    {"vdbpsadbw $0xff 128 regm", f1338},
+    {"vdbpsadbw $0xff 128 regz", f1339},
+    {"vdbpsadbw $0xff 128 mem m", f1340},
+    {"vdbpsadbw $0xff 256 reg", f1341},
+    {"vdbpsadbw $0xff 256 regm", f1342},
+    {"vdbpsadbw $0xff 256 regz", f1343},
+    {"vdbpsadbw $0xff 256 mem m", f1344},
+    {"vdbpsadbw $0xff 512 reg", f1345},
+    {"vdbpsadbw $0xff 512 regm", f1346},
+    {"vdbpsadbw $0xff 512 regz", f1347},
+    {"vdbpsadbw $0xff 512 mem m", f1348},
+    {"vdbpsadbw $0x93 128 reg", f1349},
+    {"vdbpsadbw $0x93 128 regm", f1350},
+    {"vdbpsadbw $0x93 128 regz", f1351},
+    {"vdbpsadbw $0x93 128 mem m", f1352},
+    {"vdbpsadbw $0x93 256 reg", f1353},
+    {"vdbpsadbw $0x93 256 regm", f1354},
+    {"vdbpsadbw $0x93 256 regz", f1355},
+    {"vdbpsadbw $0x93 256 mem m", f1356},
+    {"vdbpsadbw $0x93 512 reg", f1357},
+    {"vdbpsadbw $0x93 512 regm", f1358},
+    {"vdbpsadbw $0x93 512 regz", f1359},
+    {"vdbpsadbw $0x93 512 mem m", f1360},
+    {"vcvtneps2bf16 128 reg", f1361},
+    {"vcvtneps2bf16 128 mem", f1362},
+    {"vcvtneps2bf16 128 regm", f1363},
+    {"vcvtneps2bf16 128 memm", f1364},
+    {"vcvtneps2bf16 128 regz", f1365},
+    {"vcvtneps2bf16 128 memz", f1366},
+    {"vcvtneps2bf16 128 bcst z", f1367},
+    {"vcvtneps2bf16 256 reg", f1368},
+    {"vcvtneps2bf16 256 mem", f1369},
+    {"vcvtneps2bf16 256 regm", f1370},
+    {"vcvtneps2bf16 256 memm", f1371},
+    {"vcvtneps2bf16 256 regz", f1372},
+    {"vcvtneps2bf16 256 memz", f1373},
+    {"vcvtneps2bf16 256 bcst z", f1374},
+    {"vcvtneps2bf16 512 reg", f1375},
+    {"vcvtneps2bf16 512 mem", f1376},
+    {"vcvtneps2bf16 512 regm", f1377},
+    {"vcvtneps2bf16 512 memm", f1378},
+    {"vcvtneps2bf16 512 regz", f1379},
+    {"vcvtneps2bf16 512 memz", f1380},
+    {"vcvtneps2bf16 512 bcst z", f1381},
+    {"vcvtne2ps2bf16 128 reg", f1382},
+    {"vcvtne2ps2bf16 128 regm", f1383},
+    {"vcvtne2ps2bf16 128 regz", f1384},
+    {"vcvtne2ps2bf16 128 mem m", f1385},
+    {"vcvtne2ps2bf16 128 bcst z", f1386},
+    {"vcvtne2ps2bf16 256 reg", f1387},
+    {"vcvtne2ps2bf16 256 regm", f1388},
+    {"vcvtne2ps2bf16 256 regz", f1389},
+    {"vcvtne2ps2bf16 256 mem m", f1390},
+    {"vcvtne2ps2bf16 256 bcst z", f1391},
+    {"vcvtne2ps2bf16 512 reg", f1392},
+    {"vcvtne2ps2bf16 512 regm", f1393},
+    {"vcvtne2ps2bf16 512 regz", f1394},
+    {"vcvtne2ps2bf16 512 mem m", f1395},
+    {"vcvtne2ps2bf16 512 bcst z", f1396},
+    {"vdpbf16ps 128 reg", f1397},
+    {"vdpbf16ps 128 regm", f1398},
+    {"vdpbf16ps 128 regz", f1399},
+    {"vdpbf16ps 128 mem m", f1400},
+    {"vdpbf16ps 128 bcst z", f1401},
+    {"vdpbf16ps 256 reg", f1402},
+    {"vdpbf16ps 256 regm", f1403},
+    {"vdpbf16ps 256 regz", f1404},
+    {"vdpbf16ps 256 mem m", f1405},
+    {"vdpbf16ps 256 bcst z", f1406},
+    {"vdpbf16ps 512 reg", f1407},
+    {"vdpbf16ps 512 regm", f1408},
+    {"vdpbf16ps 512 regz", f1409},
+    {"vdpbf16ps 512 mem m", f1410},
+    {"vdpbf16ps 512 bcst z", f1411},
+    {"ud vpshldw W0", f1412},
+    {"ud vpshldw ok", f1413},
+    {"ud vpshldvd W1 ok", f1414},
+    {"ud vpdpbusd W1", f1415},
+    {"ud vpdpbusd ok", f1416},
+    {"ud vpshufbitqmb z", f1417},
+    {"ud vpshufbitqmb ok", f1418},
+    {"ud vpshufbitqmb W1", f1419},
+    {"ud vgf2p8mulb W1", f1420},
+    {"ud vpopcntb vvvv", f1421},
+    {"ud vpopcntb ok", f1422},
+    {"ud vpmadd52luq W0", f1423},
+    {"ud vgf2p8affineqb W0", f1424},
+    {"ud vpmultishiftqb W0", f1425},
+    {"ud vpshufbitqmb bcst", f1426},
+    {"ud vex vgf2p8mulb W1", f1427},
+    {"ud vex vgf2p8mulb ok", f1428},
+    {"ud vex vgf2p8affineqb W0", f1429},
+    {"ud vex vgf2p8affineqb ok", f1430},
+    {"ud vaesenc ok", f1431},
+    {"ud vaesenc masked", f1432},
+    {"ud vaesenc z", f1433},
+    {"ud vaesenc W1", f1434},
+    {"ud vaesenc b mem", f1435},
+    {"ud evex vaesimc", f1436},
+    {"ud vex vaesimc ok", f1437},
+    {"ud vex vaesimc L1", f1438},
+    {"ud vex vaesimc vvvv", f1439},
+    {"ud evex vaeskeygenassist", f1440},
+    {"ud vex vaeskeygenassist L1", f1441},
+    {"ud vpclmulqdq masked", f1442},
+    {"ud vex vpclmulqdq W1", f1443},
 };
-#define NF 1036
+#define NF 1444
 static const uint64_t want[NF] = {
     0xb6a6b31f937358a4ull,
     0xa7e2ce5c7991cea6ull,
@@ -5169,6 +6801,414 @@ static const uint64_t want[NF] = {
     0x11dcdec53ee03ad9ull,
     0x18e77845a178e2efull,
     0x30373cd3d2fe398dull,
+    0xdb0ef1806c2fd1e6ull,
+    0xe33451f1cac75b30ull,
+    0x13af07613b5e21a3ull,
+    0xb8a501d91f1d4359ull,
+    0x4b35713ed11d0c84ull,
+    0x232e658434c18272ull,
+    0xd00c974558b201c2ull,
+    0x3d3d7695676613c6ull,
+    0xecb74fa211f9faedull,
+    0xf5050ed377022d7full,
+    0x738aa04898e672e8ull,
+    0x16e9b8692bc6e09bull,
+    0x736ed0c5fee7038bull,
+    0xa1ad4764a82d1863ull,
+    0xacf237c9c4741065ull,
+    0x9dddae9cc94d0f47ull,
+    0xdc490c4686c42c96ull,
+    0x5eb6142836b7f4a4ull,
+    0x102b25b2e1033ff9ull,
+    0x99b7129f21e5fa05ull,
+    0x9fbc72b92374b0e6ull,
+    0x8c0431a6f2f82895ull,
+    0x60dec238f0a9a649ull,
+    0x969ab9dedd580018ull,
+    0x9a40f91174066b62ull,
+    0xd2458c0e95fe2651ull,
+    0x57317be387a6b4f7ull,
+    0xb1c5373662dd2acull,
+    0x1038dbca7ac9bf7dull,
+    0xd378f5cd8e7dbc96ull,
+    0xb2a74d035a563333ull,
+    0x3d07b440529633aeull,
+    0xa3be13e4d4c5d300ull,
+    0xc201cf7c40b7d726ull,
+    0xfb46801327848b1full,
+    0xe1ce172801b406bcull,
+    0x4c9b2b87e00bfcaaull,
+    0xe31b96f8072349cull,
+    0x146910c351e21da7ull,
+    0x5e92636e2b51d7b2ull,
+    0x3294170dfd9e7110ull,
+    0x368e19e78858d109ull,
+    0x8c8997818d287c56ull,
+    0x61ee45ce5095157full,
+    0xbf1929f790e0f5a3ull,
+    0x774736cb8e21f418ull,
+    0x8073ad16681ff9b5ull,
+    0x585f11ffa0c8b59full,
+    0x417fc06aa10bf1ecull,
+    0x4e00ad1e4c851e80ull,
+    0x5b0244958144a85bull,
+    0x9d418398ae123953ull,
+    0xfa57e106ed207e7eull,
+    0x60299343848ecbd7ull,
+    0x971b1d74ad2f6750ull,
+    0x49706dd19e327622ull,
+    0x2586162497d53e51ull,
+    0x755c0a36f20955d4ull,
+    0x2f96468c4e5e333cull,
+    0xda5c5ee51dd4b5a3ull,
+    0x167cc661e39c033eull,
+    0x9d0e6e98193dda3bull,
+    0x125c6d7c06bffadaull,
+    0x171e3ffb3e94dcd0ull,
+    0x90297b9a5282719eull,
+    0x9291afc2c442e9a0ull,
+    0xe003adc978014819ull,
+    0x18faef82ce3b033ull,
+    0xbbacb5121e98964aull,
+    0xc82b122b19ce8e28ull,
+    0xae3c7d68dd959a18ull,
+    0x3600444f404727e6ull,
+    0x12cafa7b23195388ull,
+    0xaeb48fc5e038ecb5ull,
+    0x94810a02354cd0ffull,
+    0xb93e388500efe5bfull,
+    0xd567df95df481de3ull,
+    0x45211d82fc1975b6ull,
+    0x8d646731f2bba23aull,
+    0x8a37e7fc259a4fd7ull,
+    0xc5cfd7fd468b2dcaull,
+    0x5e40ffdd92cb9fd7ull,
+    0xb1816220e7c3ac7dull,
+    0xa70da29c4cf80387ull,
+    0x133837b443762f2full,
+    0x505172c369f53bcull,
+    0x6f79f852e621145bull,
+    0x43298ff89668bc98ull,
+    0xa3e933e5f9d411eeull,
+    0x38fd1a9d0499577eull,
+    0x2dd36b1ffba3f2fdull,
+    0x43877054694facd4ull,
+    0xc67ba5021a747d11ull,
+    0xae6f2ff5cafcb8ccull,
+    0xeb9077ac0aaa5435ull,
+    0x217e653dd268e2f3ull,
+    0xfdde12fb8c0eef16ull,
+    0xa4c50b0b6ce9e6ffull,
+    0xa2201b41cce1d721ull,
+    0x1c4273a0f1a08aaeull,
+    0x35d728ef7439b0c2ull,
+    0x1ee1a7f41802b050ull,
+    0x216f4d9a07b63eedull,
+    0xe5a50520971af199ull,
+    0x70e35cff0e12e9ccull,
+    0x5f9f0f9ca9e15821ull,
+    0xf5c13e412472d8edull,
+    0xf050011eb530a901ull,
+    0xde28788602740838ull,
+    0x848bafb07b53cd61ull,
+    0x7152ad213d7b1952ull,
+    0x3213ba03c1245d89ull,
+    0xd23b63067e1f1866ull,
+    0x48e67a5e0f329682ull,
+    0x166af041d0b48a38ull,
+    0x2a21edfa3017b08ull,
+    0x8f4df58e763eb433ull,
+    0xeb0e2056d336151cull,
+    0xd1ae1bc843950eaaull,
+    0xe2f2d6ff71c46224ull,
+    0xf436c8c4ebb1ab69ull,
+    0xe9fbe53b0fa05be6ull,
+    0x96ab2e253e453369ull,
+    0x83f56b41bf23e2afull,
+    0xdc6118ada0b71815ull,
+    0x60d7f8f088f1b47bull,
+    0xbb570c422e3d7abaull,
+    0xd1f95d2dc3761dd7ull,
+    0x8f22b311aec3bafaull,
+    0x8b966641b1125885ull,
+    0xeb51b7b2196176dbull,
+    0xaf117b4a2b1449c1ull,
+    0x41b5bb1a6ae3fd9aull,
+    0x4582ca00e11c802ull,
+    0x435656079a08e284ull,
+    0xffe34d4d9ced822dull,
+    0x2e5b7aff41544b1ull,
+    0x697f332a1af3848cull,
+    0x284c84dabc970828ull,
+    0x8b737966278018ffull,
+    0xf59b162d7e98b811ull,
+    0xaeb8954c3ca40abull,
+    0x82da72dad2b749c3ull,
+    0x5da939984379e87full,
+    0x3279b15553dc7387ull,
+    0x77787a9805f141c0ull,
+    0xcc0fe1898327bf08ull,
+    0x7ee35081725b2d34ull,
+    0x4b1de044387421d3ull,
+    0x70c20495cbc68ec0ull,
+    0x27acca555793494eull,
+    0x9bbedcf18698c539ull,
+    0x9fe80f467d20e07aull,
+    0x37aa940910124245ull,
+    0x95e69b48d940a5f5ull,
+    0x58cb76071f3235a5ull,
+    0x6e4f1e21daca2be7ull,
+    0x4ad154391d7a2907ull,
+    0xd3d86beca5ca3a5cull,
+    0x9174f0169440acbdull,
+    0x881633c7b3c5eba9ull,
+    0x99897c78582fe0d9ull,
+    0x3e4bc06e37066116ull,
+    0x49d27f2a0babadcdull,
+    0x24c033d05decc6e8ull,
+    0xec1ed69fc342c5full,
+    0xa07ea92868a0b0d6ull,
+    0x8f1c4bde6ee9b43cull,
+    0x98e35fdbfae0d40ull,
+    0x338980f49bff5fe4ull,
+    0xd2d3db8ec677fed6ull,
+    0x5b42b47371bfe397ull,
+    0x3122712d60bc013cull,
+    0x66953b59eebf848bull,
+    0xe944a4e25cda46f9ull,
+    0xc1e96994f51d4663ull,
+    0x93ebb566e45ac6c4ull,
+    0x100d7e5631ce8a75ull,
+    0xf31293b0642afb9dull,
+    0xfa69734b8ded4868ull,
+    0xb926ab27b943b558ull,
+    0x1f29ba600bba272eull,
+    0x1d162358e0e3ac56ull,
+    0xc8588c32e9e2d7d4ull,
+    0xb310deafd4ec7825ull,
+    0xfcd20897d601fc97ull,
+    0xb25180ca264f7840ull,
+    0x2622c3573d0c983eull,
+    0x8a26d6fcc04db4beull,
+    0x61c1a9a8e911e6dull,
+    0x2bf03263baa7e73ull,
+    0xe4ea1db843a54cb6ull,
+    0x6c747132a3c6c1b8ull,
+    0xdd56d7ccea6c9338ull,
+    0x6e3252d9f6b121edull,
+    0xfeeecd029c1b2c56ull,
+    0xf15e1da9df438038ull,
+    0x1f7c65adcc1faeb4ull,
+    0xd40e5a93284be739ull,
+    0xa6b951f97782c618ull,
+    0x2b0783afca6a916aull,
+    0xe1cd87f3f448d5beull,
+    0x310fbb3c3f493f97ull,
+    0x1ea0e62f1310dbdbull,
+    0x9b94b1af445cac31ull,
+    0xb2203df19afb8724ull,
+    0x4962c3e3fc69c230ull,
+    0x8d5709b567206025ull,
+    0x6d9a822b36ad0865ull,
+    0x1c227c463de96bafull,
+    0x1f5cfed50160854dull,
+    0x57166b5aceeefa7cull,
+    0x111e9554786683abull,
+    0x4fb05194a131ab7cull,
+    0x6a94a0be6b4bcc84ull,
+    0x16836d0d922ca78eull,
+    0x7d18ed15ccc8a844ull,
+    0xb70ee325aa0cdce2ull,
+    0xe9df332a8faaaf3bull,
+    0x2760515a617157e7ull,
+    0x93d300594f90bb05ull,
+    0xf632c422b8f5890eull,
+    0xfea44c2dfa78d117ull,
+    0x6d19a258cf4af320ull,
+    0x274cfc77d5e18659ull,
+    0x161f88c344e559e3ull,
+    0x3cc3e579342ffcbaull,
+    0x1dd276ba2762a748ull,
+    0x5ba6b6fbfa84ac6aull,
+    0xfd92e7350faae639ull,
+    0x91e197000c7684cfull,
+    0xf73b6f99e7af6e39ull,
+    0x41b3b48f2ef6cf1aull,
+    0x8f481add62dfcdd0ull,
+    0x4ddf6b12d4d50469ull,
+    0xaf950dc4909f748eull,
+    0x6a0267411fd9d672ull,
+    0x779681984f17be66ull,
+    0x75d405ceac49eabull,
+    0x6073827ca17f7ae2ull,
+    0xbd6311c9b1d935edull,
+    0x3ecff2a18167f6fbull,
+    0x3fb3e930200cc476ull,
+    0xff918fa2312996c2ull,
+    0x1125b17ffe08aeedull,
+    0x758979747580ac4eull,
+    0x2454815649dc6076ull,
+    0x8b9043f553fcf1b9ull,
+    0xbc342fdb867fb212ull,
+    0x1077876f5e855e05ull,
+    0xaae9cc7b721cc186ull,
+    0x31a65ffc083c193cull,
+    0xd22c8a76176cd95ull,
+    0x7ecae8cf3ecf78d9ull,
+    0x641f0ac28fc867a5ull,
+    0xf5d2f8d32da545abull,
+    0x3a665e95d28d43c5ull,
+    0xd808927667254e1full,
+    0xc9cf2076d3c33030ull,
+    0xbae5170b006be48bull,
+    0xad9991a7f94a5de4ull,
+    0x3ff5f874f2d6dcf4ull,
+    0x5fdfc91bd37bd2c3ull,
+    0x1d6a858c1262ff63ull,
+    0x9f32119394d81dd7ull,
+    0x283be9387ccaf8a6ull,
+    0xac1c40d93847af7cull,
+    0xd9a5c1c24271a071ull,
+    0x7d25574666b71ebfull,
+    0x4d958f6e59c4ff33ull,
+    0x6f1088de39cb2e2full,
+    0xa17fa2ee8fb2a3b6ull,
+    0x5a4724818636d83full,
+    0xa42479fdacc71a28ull,
+    0x21fdcbfb6d491c40ull,
+    0x25ef61d92fc8862aull,
+    0x18823fa35f961401ull,
+    0xbf034876f65da69bull,
+    0x6a40d228b2e7df39ull,
+    0x6dd96c2650913c0bull,
+    0x1550b1b4578386b7ull,
+    0xc7e9af5ae7f68559ull,
+    0xa1ee9f6998edb5c7ull,
+    0xb1bda9f5d2576bb6ull,
+    0xddef685ac960ab64ull,
+    0xd17ace5003216757ull,
+    0xd5ef10749122819full,
+    0x1053c148a58270ull,
+    0xa065bd0bdb0c6784ull,
+    0xd9a0fa7fc550c9ull,
+    0xb96609bb42614a9cull,
+    0xd577f893240945e6ull,
+    0x61de6b052bd8d7a6ull,
+    0xdf7072d5998cf609ull,
+    0xd1931fa1f9625d91ull,
+    0x39e3ea99ae81787full,
+    0x8a886122f0a75555ull,
+    0xd4eed8e1e360495dull,
+    0x316e9a0ba86afce1ull,
+    0x32c8b6576ba975b4ull,
+    0x6786b792a19669c0ull,
+    0xdfb9d78292a53c9cull,
+    0xa7ec1542217dc73cull,
+    0x786bcb05a4c54355ull,
+    0x9243bb1099dbb90bull,
+    0x61b448151781589ull,
+    0xf8bbe3ef2609ead0ull,
+    0x5d60d973ad44344aull,
+    0xed4e8d3ff20d4195ull,
+    0xe4e93eebc968757eull,
+    0x7509b72240ed8e00ull,
+    0xb5ff06ee05e98798ull,
+    0xe848e2b3981382c3ull,
+    0xb74835519b928654ull,
+    0x593d678e687b1225ull,
+    0xaca36bc010a7b6ceull,
+    0xab98f979da354313ull,
+    0x8a49dfce15e2abfbull,
+    0x9028bb4547df0d48ull,
+    0x202ec017fc1254f5ull,
+    0xa88c5ab3c5dbc31bull,
+    0xd1c3d3fcbd209c15ull,
+    0x2c132c81652d1ac3ull,
+    0x6d4b6a6c7864ba39ull,
+    0xbf772ce1bf65c8d1ull,
+    0x23ec35c0766315fcull,
+    0x88039cdab10b52c9ull,
+    0x68d1c5fafaaef8c3ull,
+    0xdb3fd5b47082240dull,
+    0xf52c9e48d3213788ull,
+    0x9929800ced456defull,
+    0x746716108b48c2ebull,
+    0x3757f652c01e5a2cull,
+    0xfd1740a55101d13cull,
+    0x6bd6101879dde352ull,
+    0x878293bf8d2027f0ull,
+    0x983a4614eb216f10ull,
+    0xfdade10188ab7f69ull,
+    0xc72731fbf5f58427ull,
+    0x76045422caae06f4ull,
+    0x3fd94d5ca5cac57full,
+    0xf2b563620db983cfull,
+    0x1c224f2df6be24daull,
+    0x8b90b1ee5ebe6fb8ull,
+    0xd1d53139f6a0b22eull,
+    0xec11e3d66a83a201ull,
+    0x1b699412980db62dull,
+    0xea678757430fc734ull,
+    0x58ad2a46744e27c0ull,
+    0xf6da5e96d0f162ecull,
+    0x857394dcabbe2925ull,
+    0x1e7d0bbeab6bfb85ull,
+    0x5cd842f2fbd3a085ull,
+    0xf150544539f06c54ull,
+    0x20ec354450c6dd9dull,
+    0x4d2ebd13d58b203eull,
+    0x19c13d85b9b02fc1ull,
+    0x2648c3fc659c000dull,
+    0x9d38a2b78aa18c22ull,
+    0xff886f014189d0c7ull,
+    0xb02c15742e7643a4ull,
+    0x296461f41111913cull,
+    0x24b9e81835093ee5ull,
+    0x155246c424609800ull,
+    0xc569f2a351de0f5full,
+    0xfa19529019247dc9ull,
+    0x976dfe057360a754ull,
+    0x2ef096941c0fa2cfull,
+    0x9151a1a2d8f0e465ull,
+    0xfc9bfc4cd68473full,
+    0x116fbcb73daafe95ull,
+    0x4b1662eae049b9ddull,
+    0x3934cda02d2b34a9ull,
+    0xdee33fc03fc4a30aull,
+    0xf53904ee4d7956d2ull,
+    0x4183ce0c3055ef03ull,
+    0xa3e39793ace4e09ull,
+    0x6ad8393d0ff9815ull,
+    0x632643e09369ce3ull,
+    0x595bc0dfb72dee24ull,
+    0x599cbbef88f37eabull,
+    0x9314cb26974842e1ull,
+    0xf4e28ee74c46d278ull,
+    0x9ccebbba68112404ull,
+    0x3201f0887c20cc01ull,
+    0x84b7aba4d8a0c0bull,
+    0x2a44c2c8f7f33484ull,
+    0xe2de90f9360ee53aull,
+    0xf509f1ae05cac4b2ull,
+    0x9f9388356a76d4c4ull,
+    0x92ab5c20701a6ed4ull,
+    0xe946fbb471ce2105ull,
+    0x13042d9d4255ff89ull,
+    0xed5752d3f7069978ull,
+    0x906852e6c0a48bebull,
+    0x44a8229f59a70918ull,
+    0x928da0a6ec07b796ull,
+    0xab89e8a00f01c3feull,
+    0x289096ce8e7c840aull,
+    0xc0cf54ea0ac50755ull,
+    0xcbe859c44be850e5ull,
+    0x57a082f8abdcd587ull,
+    0x4fa4576c7cfd8197ull,
+    0x9ede57622efd9928ull,
+    0x3025844702268897ull,
+    0x59b44f02d693e71eull,
+    0x77e78eaa6a21f703ull,
+    0xea3e0b1a824f209ull,
     0xa0fb049c80575b81ull,
     0xa3384e8a34c6a3e5ull,
     0x2f5d3fce95e8049eull,

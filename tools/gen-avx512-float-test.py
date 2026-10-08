@@ -418,6 +418,35 @@ for imm in ('$0x0', '$0x1', '$0x2', '$0x3', '$0x4', '$0xf8'):
 if not I386:
     add('vcvtph2ps 512 reg m hi', 'vcvtph2ps %%ymm30, %%zmm17%{%%k1%}', 'ps', hi=True, table=True, zchk=False)
     add('vcvtps2ph $0x0 512 reg m hi', 'vcvtps2ph $0x0, %%zmm30, %%ymm17%{%%k1%}', 'ps', hi=True, zchk=False)
+# BF16: VCVTNEPS2BF16 (narrowing), VCVTNE2PS2BF16 (word elements) and
+# VDPBF16PS (the destination accumulates): no MXCSR, no flags
+SFX = {128: 'x', 256: 'y', 512: ''}
+for L, x in VL:
+    h = HALF[L]
+    for mk, mn in MK:
+        add(f'vcvtneps2bf16 {L} reg{mn}', f'vcvtneps2bf16 %%{x}3, %%{h}1{mk}', 'ps', zchk=False)
+        add(f'vcvtneps2bf16 {L} mem{mn}', f'vcvtneps2bf16{SFX[L]} (%1), %%{h}1{mk}', 'ps', zchk=False)
+        add(f'vcvtneps2bf16 {L} bcst{mn}', f'vcvtneps2bf16 (%1)%{{1to{L // 32}%}}, %%{h}1{mk}', 'ps', zchk=False)
+        add(f'vcvtne2ps2bf16 {L} reg{mn}', f'vcvtne2ps2bf16 %%{x}3, %%{x}2, %%{x}1{mk}', 'ps', zchk=False)
+        add(f'vcvtne2ps2bf16 {L} mem{mn}', f'vcvtne2ps2bf16 (%1), %%{x}2, %%{x}1{mk}', 'ps', zchk=False)
+        add(f'vcvtne2ps2bf16 {L} bcst{mn}', f'vcvtne2ps2bf16 (%1)%{{1to{L // 32}%}}, %%{x}2, %%{x}1{mk}', 'ps', zchk=False)
+        add(f'vdpbf16ps {L} reg{mn}', f'vdpbf16ps %%{x}3, %%{x}2, %%{x}1{mk}', 'ps', dst=True)
+        add(f'vdpbf16ps {L} mem{mn}', f'vdpbf16ps (%1), %%{x}2, %%{x}1{mk}', 'ps', dst=True)
+        add(f'vdpbf16ps {L} bcst{mn}', f'vdpbf16ps (%1)%{{1to{L // 32}%}}, %%{x}2, %%{x}1{mk}', 'ps', dst=True)
+if not I386:
+    add('vcvtneps2bf16 512 reg m hi', 'vcvtneps2bf16 %%zmm30, %%ymm17%{%%k1%}', 'ps', hi=True, zchk=False)
+    add('vcvtne2ps2bf16 512 reg m hi', 'vcvtne2ps2bf16 %%zmm30, %%zmm25, %%zmm17%{%%k1%}', 'ps', hi=True, zchk=False)
+    add('vdpbf16ps 512 reg m hi', 'vdpbf16ps %%zmm30, %%zmm25, %%zmm17%{%%k1%}', 'ps', hi=True, dst=True)
+# (V)(U)COMISS/SD, EVEX (and {sae}): CF, ZF and PF read by setcc (with
+# ROL between them, which keeps ZF and PF) into xmm1 for the hash
+for op, t in (('vcomiss', 'ss'), ('vucomiss', 'ss'), ('vcomisd', 'sd'), ('vucomisd', 'sd')):
+    fl = '\\n setb %%al\\n rol $8, %%eax\\n setz %%al\\n rol $8, %%eax\\n setp %%al\\n vmovd %%eax, %%xmm1'
+    z = 'xor %%eax, %%eax\\n '
+    add(f'{op} reg', f'{z}%{{evex%}} {op} %%xmm3, %%xmm2{fl}', t, gpr=True)
+    add(f'{op} mem', f'{z}%{{evex%}} {op} (%1), %%xmm2{fl}', t, gpr=True)
+    add(f'{op} {{sae}} reg', f'{z}{op} %{{sae%}}, %%xmm3, %%xmm2{fl}', t, gpr=True)
+    if not I386:
+        add(f'{op} reg hi', f'{z}{op} %%xmm30, %%xmm25{fl}', t, gpr=True)
 # 62 P0 P1 P2 op modrm [imm]: vaddps zmm1, zmm2, zmm3 is 62 f1 6c 48 58 cb, and
 # a memory operand is [eax]/[rax] = the memory buffer
 UD = {

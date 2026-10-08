@@ -118,6 +118,92 @@ if not I386:
         'vmovdqa64 %%zmm17, %%zmm1')
     add('vpclmulqdq 512 hi', 'vmovdqa64 %%zmm2, %%zmm25\\n vmovdqa64 %%zmm3, %%zmm30\\n vpclmulqdq $0x10, %%zmm30, %%zmm25, %%zmm17\\n '
         'vmovdqa64 %%zmm17, %%zmm1')
+# the EVEX gaps the VEX cutover's sweep found: AVX512DQ's float logic,
+# VMOVSLDUP/SHDUP/DDUP, VPBROADCASTMB2Q/MW2D
+for op in ('vandps', 'vandnps', 'vorps', 'vxorps'):
+    three(op, 4)
+for op in ('vandpd', 'vandnpd', 'vorpd', 'vxorpd'):
+    three(op, 8)
+for op in ('vmovsldup', 'vmovshdup', 'vmovddup'):
+    for L, x in VLS.items():
+        for mk, mn in MK:
+            add(f'{op} {L} reg{mn}', f'%{{evex%}} {op} %%{x}3, %%{x}1{mk}')
+            add(f'{op} {L} mem{mn}', f'%{{evex%}} {op} (%1), %%{x}1{mk}')
+for L, x in VLS.items():
+    add(f'vpbroadcastmb2q {L}', f'vpbroadcastmb2q %%k1, %%{x}1')
+    add(f'vpbroadcastmw2d {L}', f'vpbroadcastmw2d %%k1, %%{x}1')
+# the EVEX.128 element moves ({evex}: gas would pick VEX; and a form on
+# the registers 16-31): VMOVSS/SD, the half moves, VMOVD/VMOVQ, VPINSR*,
+# VPEXTR*, VEXTRACTPS, VINSERTPS; a general register is eax/rax
+E = '%{evex%} '
+HI = 'vmovdqa64 %%zmm1, %%zmm17\\n vmovdqa64 %%zmm2, %%zmm25\\n vmovdqa64 %%zmm3, %%zmm30\\n '   # (seeded)
+R6 = 'e' if I386 else 'r'
+for op in ('vmovss', 'vmovsd'):
+    for mk, mn in MK:
+        add(f'{op} reg{mn}', f'{E}{op} %%xmm3, %%xmm2, %%xmm1{mk}')
+        add(f'{op} mem{mn}', f'{E}{op} (%1), %%xmm1{mk}')
+        add(f'{op} rev reg{mn}', f'.byte 0x62, 0xf1, {"0x6e" if op == "vmovss" else "0xef"}, {"0x08" if not mk else "0x89" if "z" in mk else "0x09"}, 0x11, 0xd9')
+    add(f'{op} st', f'{E}{op} %%xmm3, (%1)')
+    add(f'{op} st m', f'{op} %%xmm3, (%1)%{{%%k1%}}')
+    if not I386:
+        add(f'{op} reg hi', f'{HI}{op} %%xmm30, %%xmm25, %%xmm17%{{%%k1%}}\\n vmovdqu64 %%zmm17, %%zmm1')
+for op in ('vmovlps', 'vmovhps', 'vmovlpd', 'vmovhpd'):
+    add(f'{op} ld', f'{E}{op} (%1), %%xmm2, %%xmm1')
+    add(f'{op} st', f'{E}{op} %%xmm3, (%1)')
+for op in ('vmovhlps', 'vmovlhps'):
+    add(f'{op} reg', f'{E}{op} %%xmm3, %%xmm2, %%xmm1')
+    if not I386:
+        add(f'{op} reg hi', f'{HI}{op} %%xmm30, %%xmm25, %%xmm17\\n vmovdqu64 %%zmm17, %%zmm1')
+add('vmovd in reg', f'mov (%1), %%eax\\n {E}vmovd %%eax, %%xmm1')
+add('vmovd in mem', f'{E}vmovd (%1), %%xmm1')
+add('vmovd out reg', f'{E}vmovd %%xmm3, %%eax\\n vmovd %%eax, %%xmm1')
+add('vmovd out mem', f'{E}vmovd %%xmm3, (%1)')
+add('vmovq xmm reg', f'{E}vmovq %%xmm3, %%xmm1')
+add('vmovq xmm mem', f'{E}vmovq (%1), %%xmm1')
+add('vmovq st', f'{E}vmovq %%xmm3, (%1)')
+add('vmovq d6 reg', '.byte 0x62, 0xf1, 0xfd, 0x08, 0xd6, 0xd9')       # vmovq xmm1, xmm3 the D6 way
+if not I386:
+    add('vmovq in reg', f'mov (%1), %%rax\\n {E}vmovq %%rax, %%xmm1')
+    add('vmovq out reg', f'{E}vmovq %%xmm3, %%rax\\n vmovq %%rax, %%xmm1')
+    add('vmovq in hi', 'mov (%1), %%rax\\n vmovq %%rax, %%xmm17\\n vmovdqu64 %%zmm17, %%zmm1')
+for imm in ('$0x0', '$0x5', '$0xff'):
+    add(f'vpinsrb {imm} reg', f'mov (%1), %%eax\\n {E}vpinsrb {imm}, %%eax, %%xmm2, %%xmm1')
+    add(f'vpinsrb {imm} mem', f'{E}vpinsrb {imm}, (%1), %%xmm2, %%xmm1')
+    add(f'vpinsrw {imm} reg', f'mov (%1), %%eax\\n {E}vpinsrw {imm}, %%eax, %%xmm2, %%xmm1')
+    add(f'vpinsrw {imm} mem', f'{E}vpinsrw {imm}, (%1), %%xmm2, %%xmm1')
+    add(f'vpinsrd {imm} reg', f'mov (%1), %%eax\\n {E}vpinsrd {imm}, %%eax, %%xmm2, %%xmm1')
+    add(f'vpinsrd {imm} mem', f'{E}vpinsrd {imm}, (%1), %%xmm2, %%xmm1')
+    add(f'vpextrb {imm} reg', f'{E}vpextrb {imm}, %%xmm3, %%eax\\n vmovd %%eax, %%xmm1')
+    add(f'vpextrb {imm} mem', f'{E}vpextrb {imm}, %%xmm3, (%1)')
+    add(f'vpextrw {imm} reg', f'{E}vpextrw {imm}, %%xmm3, %%eax\\n vmovd %%eax, %%xmm1')
+    add(f'vpextrw {imm} mem', f'{E}vpextrw {imm}, %%xmm3, (%1)')
+    add(f'vpextrw c5 {imm} reg', f'.byte 0x62, 0xf1, 0x7d, 0x08, 0xc5, 0xc3, {int(imm[1:], 16)}\\n vmovd %%eax, %%xmm1')
+    add(f'vpextrd {imm} reg', f'{E}vpextrd {imm}, %%xmm3, %%eax\\n vmovd %%eax, %%xmm1')
+    add(f'vpextrd {imm} mem', f'{E}vpextrd {imm}, %%xmm3, (%1)')
+    add(f'vextractps {imm} reg', f'{E}vextractps {imm}, %%xmm3, %%eax\\n vmovd %%eax, %%xmm1')
+    add(f'vextractps {imm} mem', f'{E}vextractps {imm}, %%xmm3, (%1)')
+    if not I386:
+        add(f'vpinsrq {imm} reg', f'mov (%1), %%rax\\n {E}vpinsrq {imm}, %%rax, %%xmm2, %%xmm1')
+        add(f'vpinsrq {imm} mem', f'{E}vpinsrq {imm}, (%1), %%xmm2, %%xmm1')
+        add(f'vpextrq {imm} reg', f'{E}vpextrq {imm}, %%xmm3, %%rax\\n vmovq %%rax, %%xmm1')
+        add(f'vpextrq {imm} mem', f'{E}vpextrq {imm}, %%xmm3, (%1)')
+        add(f'vpextrd {imm} hi', f'{HI}vpextrd {imm}, %%xmm30, %%eax\\n vmovd %%eax, %%xmm1')
+for imm in ('$0x0', '$0x1d', '$0x6a', '$0xc5', '$0xff'):
+    add(f'vinsertps {imm} reg', f'{E}vinsertps {imm}, %%xmm3, %%xmm2, %%xmm1')
+    add(f'vinsertps {imm} mem', f'{E}vinsertps {imm}, (%1), %%xmm2, %%xmm1')
+# VDBPSADBW; BF16: VCVTNEPS2BF16 (narrowing), VCVTNE2PS2BF16, VDPBF16PS
+for imm in ('$0x0', '$0x1b', '$0xe4', '$0xff', '$0x93'):
+    three('vdbpsadbw', 0, imm)
+HALF = {128: 'xmm', 256: 'xmm', 512: 'ymm'}
+SFX = {128: 'x', 256: 'y', 512: ''}
+for L, x in VLS.items():
+    h = HALF[L]
+    for mk, mn in MK:
+        add(f'vcvtneps2bf16 {L} reg{mn}', f'vcvtneps2bf16 %%{x}3, %%{h}1{mk}')
+        add(f'vcvtneps2bf16 {L} mem{mn}', f'vcvtneps2bf16{SFX[L]} (%1), %%{h}1{mk}')
+    add(f'vcvtneps2bf16 {L} bcst z', f'vcvtneps2bf16 (%1)%{{1to{L // 32}%}}, %%{h}1%{{%%k1%}}%{{z%}}')
+three('vcvtne2ps2bf16', 4)
+three('vdpbf16ps', 4)
 UD = {'vpshldw W0': '62 f3 6d 48 70 cb 05', 'vpshldw ok': '62 f3 ed 48 70 cb 05',
       'vpshldvd W1 ok': '62 f2 ed 48 71 cb', 'vpdpbusd W1': '62 f2 ed 48 50 cb', 'vpdpbusd ok': '62 f2 6d 48 50 cb',
       'vpshufbitqmb z': '62 f2 6d c9 8f cb', 'vpshufbitqmb ok': '62 f2 6d 49 8f cb',
@@ -162,8 +248,9 @@ for i, (name, asm) in enumerate(F):
     __asm__ volatile(LOAD "mov %1, %%{R}ax\\n .byte {asm[3:]}" SAVE :: "r"(t), "r"(t->m) : "memory", "{R}ax", "xmm1", "xmm2", "xmm3");
 }}''')
     else:
+        gx = f', "{R}ax"' if ('%%eax' in asm or '%%rax' in asm or '0xc3, ' in asm) else ''
         w(f'''__attribute__((noinline)) static void f{i}(struct st *t) {{
-    __asm__ volatile(LOAD "{asm}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+    __asm__ volatile(LOAD "{asm}" SAVE :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3"{gx});
 }}''')
 w('static const struct { const char *name; void (*fn)(struct st *); } forms[] = {')
 for i, (name, asm) in enumerate(F):
