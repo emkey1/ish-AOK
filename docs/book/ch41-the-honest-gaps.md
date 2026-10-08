@@ -161,10 +161,12 @@ And yet:
   about 18,000 lines.
 - It is still what runs on non-aarch64 hosts, because the amd64 JIT's gadgets
   exist only for aarch64 (Chapter 7).
-- It is still where AVX executes for amd64: the JIT cuts its block at a VEX or
-  EVEX prefix and hands the instruction to `amd64_jit_vex`, which lives in the
-  interpreter's file and decodes it there before `emu/avx.c` does the
-  arithmetic (Chapter 5).
+- It is still where some AVX-512 executes for amd64: the JIT runs every VEX
+  instruction as gadgets (one it does not know is #UD, checked against an
+  Intel CPU's answer for every VEX encoding of maps 1-3), and EVEX the same way
+  for what its table has; an EVEX instruction the table lacks still goes to
+  `amd64_jit_vex`, which lives in the interpreter's file and decodes it there
+  before `emu/avx.c` does the arithmetic (Chapter 5).
 - And it is still where **most `lock`-prefixed instructions** execute. Nearly
   every eligibility predicate in `jit/gen.c`'s amd64 front-end requires the
   lock prefix to be absent, so a locked `xadd`, `cmpxchg`, `inc` or `neg`

@@ -9719,14 +9719,14 @@ static const struct vex_entry vex_table[] = {
     {1, 3, 0x70, -1, VXK_TBL1, VEX_LBOTH, 0, gadget_vex_tbl1, 3, 0, 0, 0, NULL},       // VPSHUFLW
     {1, 0, 0xc6, -1, VXK_TBL2, VEX_LBOTH, 0, gadget_vex_tbl2, 0, 0, 0, 0, NULL},       // VSHUFPS
     {1, 1, 0xc6, -1, VXK_TBL2, VEX_LBOTH, 0, gadget_vex_tbl2, 1, 2, 0, 0, NULL},       // VSHUFPD
-    {3, 1, 0x04, -1, VXK_TBL1, VEX_LBOTH, 0, gadget_vex_tbl1, 2, 0, 0, 0, NULL},       // VPERMILPS imm
-    {3, 1, 0x05, -1, VXK_TBL2U, VEX_LBOTH, 0, gadget_vex_tbl1, 1, 2, 0, 0, NULL},      // VPERMILPD imm
+    {3, 1, 0x04, -1, VXK_TBL1, VEX_LBOTH, 0, gadget_vex_tbl1, 2, 0, 1, 0, NULL},       // VPERMILPS imm (W0)
+    {3, 1, 0x05, -1, VXK_TBL2U, VEX_LBOTH, 0, gadget_vex_tbl1, 1, 2, 1, 0, NULL},      // VPERMILPD imm (W0)
     // 0F3A: blends, align, MPSADBW, DPPS/DPPD, ROUND
     VE(3, 1, 0x0f, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_v3a_palignr),
     VE(3, 1, 0x0e, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_v3a_pblendw),
     VE(3, 1, 0x0c, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_v3a_blendps),
     VE(3, 1, 0x0d, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_v3a_blendpd),
-    VE(3, 1, 0x02, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_v3a_blendps),          // VPBLENDD: dwords
+    {3, 1, 0x02, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_v3a_blendps, 0, 0, 1, 0, NULL},   // VPBLENDD: dwords; W0
     VE(3, 1, 0x42, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_v3a_mpsadbw),
     VE(3, 1, 0x40, -1, VXK_L3, VEX_LBOTH, 0, gadget_vex_xf_dpps),
     VE(3, 1, 0x41, -1, VXK_L3, VEX_L128, 0, gadget_vex_xf_dppd),
@@ -10390,6 +10390,8 @@ static bool vex_plan(const struct vex_insn *v, struct vex_plan *p, bool i386) {
             break;
         return true;                            // xmm8-15 do not exist in 32-bit mode
     case VXK_BMI:
+        if (e->aux == 12)                       // RORX: no vvvv (before the type: NEED_VVVV0 leaves it)
+            NEED_VVVV0;
         p->type = VP_BMI;
         p->bmi_op = e->aux;
         p->bmi_dst = v->reg;
@@ -10401,8 +10403,6 @@ static bool vex_plan(const struct vex_insn *v, struct vex_plan *p, bool i386) {
         } else if (e->aux == 7) {               // MULX: a is EDX/RDX, low to vvvv
             p->bmi_a = 2;
             p->bmi_dst2 = v->vvvv;
-        } else if (e->aux == 12) {              // RORX: no vvvv
-            NEED_VVVV0;
         }
         p->word = e->aux | (v->w ? 1ul << 16 : 0) | (v->mem ? 1ul << 17 : 0) | (unsigned long) v->imm << 24;
         p->stage_bytes = v->mem ? (v->w ? 8 : 4) : 0;
@@ -10433,6 +10433,7 @@ static bool vex_plan(const struct vex_insn *v, struct vex_plan *p, bool i386) {
         p->special = e->aux;
         return true;
     case VXK_ZERO:
+        NEED_VVVV0;                             // (Intel: vvvv must be 1111b)
         p->type = VP_FRAME;
         p->gadget = v->l ? e->gadget2 : g;
         p->word = v->rm;                        // (the caller puts the register count here)
@@ -10466,13 +10467,16 @@ static bool vex_plan(const struct vex_insn *v, struct vex_plan *p, bool i386) {
 // byte), with insn's legacy prefixes. True when emitted (a gadget or #UD);
 // false with the IP untouched when the table does not have it yet.
 // The VEX forms of GFNI (VGF2P8MULB, VGF2P8AFFINE(INV)QB), AES (VAES*,
-// VAESIMC, VAESKEYGENASSIST) and VPCLMULQDQ are the EVEX table's ops at VL
+// VAESIMC, VAESKEYGENASSIST), VPCLMULQDQ and AVX-VNNI are the EVEX table's ops at VL
 // 128/256, unmasked: EVEX's P0-P2 from the VEX fields (R X B and vvvv as VEX
 // has them, R' and V' clear, L'L = L). Their legacy SSE forms too
 // (vex_via_evex: which).
 static inline bool vex_via_evex(unsigned map, unsigned pp, unsigned op) {
-    return pp == 1 && ((map == 2 && (op == 0xcf || (op >= 0xdb && op <= 0xdf))) ||
+    return pp == 1 && ((map == 2 && (op == 0xcf || (op >= 0xdb && op <= 0xdf) || (op >= 0x50 && op <= 0x53))) ||
             (map == 3 && (op == 0xce || op == 0xcf || op == 0xdf || op == 0x44)));
+}
+static inline bool sse_via_evex(unsigned map, unsigned op) {           // GFNI, AES, PCLMULQDQ (not AVX-VNNI)
+    return vex_via_evex(map, 1, op) && !(map == 2 && op >= 0x50 && op <= 0x53);
 }
 static inline bool sse_via_evex_unary(unsigned map, unsigned op) {     // AESIMC, AESKEYGENASSIST: no s1
     return (map == 2 && op == 0xdb) || (map == 3 && op == 0xdf);
@@ -10520,7 +10524,7 @@ static int gen_amd64_vex(struct gen_state *state, struct tlb *tlb, const struct 
     ip++;
     v.op = op;
     if (v.map < 1 || v.map > 3)
-        return -1;
+        return gen_amd64_ud(state);             // VEX maps 0 and 4-31 do not exist
     if (v.map == 1 && v.op == 0x77) {           // VZEROUPPER / VZEROALL: no ModRM
         if (insn->operand_size_prefix || insn->rep_mode != amd64_jit_rep_none ||
                 insn->lock_prefix || insn->rex.present)
@@ -10528,7 +10532,7 @@ static int gen_amd64_vex(struct gen_state *state, struct tlb *tlb, const struct 
         struct vex_plan p;
         v.rm = 16;
         if (!vex_plan(&v, &p, false))
-            return -1;
+            return gen_amd64_ud(state);
         if (p.type == VP_UD)
             return gen_amd64_ud(state);
         state->amd64_ip = ip;
@@ -10559,7 +10563,7 @@ static int gen_amd64_vex(struct gen_state *state, struct tlb *tlb, const struct 
         return gen_amd64_evex_at(state, tlb, insn, p0, p1, p2, v.op, modrm, ip, EVF_VEX);
     }
     if (vex_lookup(&v) == NULL)
-        return -1;
+        return gen_amd64_ud(state);             // not in the table: no such VEX instruction
     // VEX after 66, F2, F3, LOCK or REX is #UD
     if (insn->operand_size_prefix || insn->rep_mode != amd64_jit_rep_none ||
             insn->lock_prefix || insn->rex.present)
@@ -12023,14 +12027,20 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
         int r = gen_amd64_vex(state, tlb, &insn);
         if (r >= 0)
             return r;
+        // Its bytes or its memory operand would not decode here (a fetch that
+        // faults, a 0x67 address): the interpreter takes it, as it takes any
+        // instruction the decoder cannot. Every VEX instruction is gadgets or
+        // #UD (gen_amd64_vex): there is no C bridge for VEX.
+        state->amd64_ip = state->amd64_orig_ip;
+        state->amd64_fallback_to_interp = true;
+        return false;
     }
     if (!insn.two_byte_opcode && insn.opcode == 0x62) {
         int r = gen_amd64_evex(state, tlb, &insn);
         if (r >= 0)
             return r;
     }
-    if (!insn.two_byte_opcode &&
-            (insn.opcode == 0xc4 || insn.opcode == 0xc5 || insn.opcode == 0x62)) {
+    if (!insn.two_byte_opcode && insn.opcode == 0x62) {    // (EVEX the table lacks: still the C bridge)
         state->amd64_ip = state->amd64_orig_ip;
         amd64_jit_debug("vex-helper ip=%llx lead=%02x",
                 (unsigned long long) state->amd64_orig_ip, insn.opcode);
@@ -13560,7 +13570,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
         byte_t op3 = 0, modrm3 = 0;
         unsigned map = insn.op2 == 0x38 ? 2 : 3;
         if (tlb_read(tlb, state->amd64_ip, &op3, 1) && tlb_read(tlb, state->amd64_ip + 1, &modrm3, 1) &&
-                vex_via_evex(map, 1, op3)) {
+                sse_via_evex(map, op3)) {
             byte_t p0, p1, p2;
             vex_to_evex(insn.rex.r, insn.rex.x, insn.rex.b, map, map == 3, sse_via_evex_unary(map, op3) ? 0 :
                     amd64_modrm_reg(modrm3) | (insn.rex.r ? 8u : 0u), false, 1, &p0, &p1, &p2);
@@ -20993,8 +21003,10 @@ static inline bool gen_vex32(struct gen_state *state, struct tlb *tlb, struct mo
         if (map == 1 && op == 0x77)
             v.rm = 8;                           // VZEROUPPER/VZEROALL: the registers
         if ((map == 1 && pp == 1 && (op == 0x6e || op == 0x7e)) || (map == 1 && (op == 0x2a || op == 0x2c ||
-                op == 0x2d)) || (map == 3 && (op == 0x16 || op == 0x22)))
-            v.w = 0;                            // VMOVD, VCVT*SI*, VPEXTRD, VPINSRD: W is ignored in 32-bit mode
+                op == 0x2d)) || (map == 3 && (op == 0x16 || op == 0x22)) || (map == 1 && pp == 3 &&
+                (op == 0x92 || op == 0x93)))
+            v.w = 0;                            // VMOVD, VCVT*SI*, VPEXTRD, VPINSRD, KMOVD r32: W is ignored in
+                                                // 32-bit mode (the SDM's N.E.: the 64-bit form is the 32-bit one)
         if (vex_plan(&v, &p, true)) {
             extern void gadget_vec_align16(void), gadget_vec_align32(void);
             if (p.type == VP_UD)
@@ -21149,6 +21161,9 @@ static inline bool gen_vex32(struct gen_state *state, struct tlb *tlb, struct mo
             return true;
         }
     }
+    // Every VEX instruction is in the table (gadgets) or does not exist: #UD.
+    // (vec_avx32 below is the x86_64-host backend's, which has no gadgets.)
+    UNDEFINED;
 #endif
 
     unsigned mem_bits = avx32_mem_bits(map, op, pp, w, vlen);
