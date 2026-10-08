@@ -3,7 +3,8 @@
 # i386_avx512_float.c (usage: this script [--i386] [--answers FILE] OUT.c).
 #
 # AVX-512 (EVEX) floating-point arithmetic: VADD/VSUB/VMUL/VDIV/VMIN/VMAX/
-# VSQRT PS/PD at VL 128/256/512 (register, memory and {1toN} sources) and
+# VSQRT PS/PD, and FMA (VF[N]MADD/VF[N]MSUB 132/213/231 PS/PD/SS/SD,
+# VFMADDSUB/VFMSUBADD PS/PD, with {er}, the destination an operand too) at VL 128/256/512 (register, memory and {1toN} sources) and
 # SS/SD (register and m32/m64), VCMP PS/PD/SS/SD into k1 under every
 # predicate, unmasked, merge- and zero-masked (compares: with and without a
 # {k2} write mask), plus (amd64) one zmm16-31 form per op for EVEX.R'/V'/X.
@@ -30,6 +31,7 @@
 # and 512 bits; the SDM sets them to 0). Forms are keyed
 # and seeded by name, so the i386 test (zmm0-7, no 16-31 forms) takes the
 # amd64 answers. "dump" prints every case.
+import re
 import sys
 I386 = '--i386' in sys.argv
 args = [a for a in sys.argv[1:] if a != '--i386']
@@ -51,9 +53,23 @@ CMP_FEW = [0x00, 0x01, 0x03, 0x04, 0x0d, 0x11, 0x1c]
 CMP_SAE = [0x00, 0x01, 0x11, 0x1f]
 DBL = {'ps': 0, 'pd': 1, 'ss': 0, 'sd': 1}
 F = []   # (name, asm, flags: 1 double, 2 a compare, 4 the zmm16-31 registers, 8 zero-masked (the
-         #  elements it masks at bits 4-8))
-def add(name, asm, t, cmp=False, hi=False):
-    fl = DBL[t] | (2 if cmp else 0) | (4 if hi else 0)
+         #  elements it masks at bits 4-8), 1024 the destination is an operand too (FMA),
+         #  2048 VL 128 with 1.0 in every element past it, 4096 PE and DE checked clear here and
+         #  hashed clear)
+def add(name, asm, t, cmp=False, hi=False, dst=False):
+    fl = DBL[t] | (2 if cmp else 0) | (4 if hi else 0) | (1024 if dst else 0)
+    m = re.match(r'vrndscale[ps]d \$(0x[0-9a-f]+)', name)
+    if m and int(m.group(1), 16) & 8:
+        # SDE raises PE (and DE for a denormal) for VRNDSCALEPD/SD with imm8
+        # bit 3, which suppresses PE (VRNDSCALEPS/SS and ROUNDSD honour it;
+        # with bit 3 clear it raises no DE): the harness checks both clear
+        fl |= 4096
+    if dst and ' 128 ' in name:
+        # SDE evaluates an EVEX.128 FMA's elements 128-255 too, and raises
+        # their flags (a denormal in element 5 of a VFMADD231PS xmm{k}
+        # raises DE whatever k; VADDPS does not, nor VL 256 past 256): 1.0
+        # there, which no hardware reads, keeps them out of MXCSR
+        fl |= 2048
     if '%{z%}' in asm and not cmp:
         # SDE writes -0.0 into zero-masked VSUBPS/PD elements under round-down at
         # 256 and 512 bits (it appears to compute 0 - 0 there; its 128-bit form
@@ -133,6 +149,65 @@ for t in ('ps', 'pd', 'ss', 'sd'):
     if not I386:
         x = 'zmm' if packed else 'xmm'
         add(f'vcmp{t} $0x1 reg m hi', f'vcmp{t} $0x1, %%{x}30, %%{x}25, %%k1%{{%%k2%}}', t, cmp=True, hi=True)
+# FMA: 132/213/231, the destination an operand too
+FMA_P = ['fmadd', 'fmsub', 'fnmadd', 'fnmsub', 'fmaddsub', 'fmsubadd']
+FMA_S = ['fmadd', 'fmsub', 'fnmadd', 'fnmsub']
+for form in ('132', '213', '231'):
+    for op in FMA_P:
+        for t in ('ps', 'pd'):
+            bc = 4 if t == 'ps' else 8
+            n = f'v{op}{form}{t}'
+            for L, x in VL:
+                for mk, mn in MK:
+                    add(f'{n} {L} reg{mn}', f'{n} %%{x}3, %%{x}2, %%{x}1{mk}', t, dst=True)
+                    add(f'{n} {L} mem{mn}', f'{n} (%1), %%{x}2, %%{x}1{mk}', t, dst=True)
+                    add(f'{n} {L} bcst{mn}', f'{n} (%1)%{{1to{L // (8 * bc)}%}}, %%{x}2, %%{x}1{mk}', t, dst=True)
+            for rc in RC:
+                for mk, mn in MK:
+                    add(f'{n} {{{rc}-sae}} 512 reg{mn}', f'{n} %{{{rc}-sae%}}, %%zmm3, %%zmm2, %%zmm1{mk}', t, dst=True)
+            if not I386:
+                add(f'{n} 512 reg m hi', f'{n} %%zmm30, %%zmm25, %%zmm17%{{%%k1%}}', t, hi=True, dst=True)
+    for op in FMA_S:
+        for t in ('ss', 'sd'):
+            n = f'v{op}{form}{t}'
+            for mk, mn in MK:
+                add(f'{n} reg{mn}', f'{n} %%xmm3, %%xmm2, %%xmm1{mk}', t, dst=True)
+                add(f'{n} mem{mn}', f'{n} (%1), %%xmm2, %%xmm1{mk}', t, dst=True)
+                for rc in RC:
+                    add(f'{n} {{{rc}-sae}} reg{mn}', f'{n} %{{{rc}-sae%}}, %%xmm3, %%xmm2, %%xmm1{mk}', t, dst=True)
+            if not I386:
+                add(f'{n} reg m hi', f'{n} %%xmm30, %%xmm25, %%xmm17%{{%%k1%}}', t, hi=True, dst=True)
+# unary families on s2 (scalar: s1 the upper elements), {sae} at 512 and
+# scalar: VGETEXP
+def unary(op, imms=('',)):
+    for imm in imms:
+        ii = imm and imm + ', '
+        ni = imm and ' ' + imm
+        for t in ('ps', 'pd'):
+            bc = 4 if t == 'ps' else 8
+            n = f'v{op}{t}'
+            for L, x in VL:
+                for mk, mn in MK:
+                    add(f'{n}{ni} {L} reg{mn}', f'{n} {ii}%%{x}3, %%{x}1{mk}', t)
+                    add(f'{n}{ni} {L} mem{mn}', f'{n} {ii}(%1), %%{x}1{mk}', t)
+                    add(f'{n}{ni} {L} bcst{mn}', f'{n} {ii}(%1)%{{1to{L // (8 * bc)}%}}, %%{x}1{mk}', t)
+            for mk, mn in MK:
+                add(f'{n}{ni} {{sae}} 512 reg{mn}', f'{n} {ii}%{{sae%}}, %%zmm3, %%zmm1{mk}', t)
+            if not I386:
+                add(f'{n}{ni} 512 reg m hi', f'{n} {ii}%%zmm30, %%zmm17%{{%%k1%}}', t, hi=True)
+        for t in ('ss', 'sd'):
+            n = f'v{op}{t}'
+            for mk, mn in MK:
+                add(f'{n}{ni} reg{mn}', f'{n} {ii}%%xmm3, %%xmm2, %%xmm1{mk}', t)
+                add(f'{n}{ni} mem{mn}', f'{n} {ii}(%1), %%xmm2, %%xmm1{mk}', t)
+                add(f'{n}{ni} {{sae}} reg{mn}', f'{n} {ii}%{{sae%}}, %%xmm3, %%xmm2, %%xmm1{mk}', t)
+            if not I386:
+                add(f'{n}{ni} reg m hi', f'{n} {ii}%%xmm30, %%xmm25, %%xmm17%{{%%k1%}}', t, hi=True)
+unary('getexp')
+unary('getmant', [f'${i:#x}' for i in range(16)])
+RND = [0x00, 0x01, 0x02, 0x03, 0x04, 0x08, 0x0b, 0x0c, 0x10, 0x21, 0x32, 0x43, 0x5c, 0x88, 0xf0, 0xff]
+unary('rndscale', [f'${i:#x}' for i in RND])
+unary('reduce', [f'${i:#x}' for i in RND])
 # 62 P0 P1 P2 op modrm [imm]: vaddps zmm1, zmm2, zmm3 is 62 f1 6c 48 58 cb, and
 # a memory operand is [eax]/[rax] = the memory buffer
 UD = {
@@ -154,6 +229,11 @@ UD = {
     'vsqrtps W1': '62 f1 fc 48 51 cb', 'vsqrtpd W0': '62 f1 7d 48 51 cb',
     'vsqrtps ok': '62 f1 7c 48 51 cb', 'vsqrtps vvvv': '62 f1 6c 48 51 cb', 'vsqrtpd ok': '62 f1 fd 48 51 cb',
     'vsqrtpd vvvv': '62 f1 ed 48 51 cb', 'vsqrtps mem vvvv': '62 f1 6c 48 51 08',
+    # FMA: vfmadd231ps zmm1, zmm2, zmm3 is 62 f2 6d 48 b8 cb
+    'vfmadd231ps ok': '62 f2 6d 48 b8 cb', 'vfmadd231ss LL3': '62 f2 6d 68 b9 cb',
+    'vfmadd231ss rz-sae': '62 f2 6d 78 b9 cb', 'vfmadd231ps mem bcst LL3': '62 f2 6d 78 b8 08',
+    'vfmadd231ps z no mask': '62 f2 6d c8 b8 cb', 'vfmaddsub231ps ok': '62 f2 6d 48 b6 cb',
+    'vfmadd231ss mem bcst': '62 f2 6d 18 b9 08',
 }
 if not I386:
     UD.update({"vsqrtps V'": '62 f1 7c 40 51 cb', "vcmpps R'": '62 e1 6c 48 c2 cb 01',
@@ -269,7 +349,7 @@ static void fill(struct st *t, int dbl) {
 // enabled lanes 1.0 (no flag from any op); each masked-off lane an SNaN, a
 // denormal, a zero divisor or max finite against -3 (overflow, inexact,
 // sqrt invalid), rotated by mode so the scalar lane sees each
-static void quiet_lanes(struct st *t, int dbl, int mode) {
+static void quiet_lanes(struct st *t, int dbl, int mode, int dst) {
     int n = dbl ? 8 : 16;
     uint64_t one = dbl ? 0x3ff0000000000000ull : 0x3f800000, snan = dbl ? 0x7ff0000000000123ull : 0x7f800123,
              den = dbl ? 0x000fedcba9876543ull : 0x00654321, maxf = dbl ? 0x7fefffffffffffffull : 0x7f7fffff,
@@ -287,6 +367,8 @@ static void quiet_lanes(struct st *t, int dbl, int mode) {
         put(t->a, dbl, i, a);
         put(t->b, dbl, i, b);
         put(t->m, dbl, i, b);
+        if (dst)                                 /* (FMA: the destination is an operand) */
+            put(t->d, dbl, i, a);
     }
 }
 
@@ -305,7 +387,15 @@ int main(int argc, char **argv) {
             int mode = c % NM, j = c / NM;
             fill(&t, dbl);
             t.k = rnd();
-            if (j == 1) quiet_lanes(&t, dbl, mode);
+            if (j == 1) quiet_lanes(&t, dbl, mode, forms[fi].fl & 1024);
+            if (forms[fi].fl & 2048)
+                for (int i = 16 >> (2 + dbl); i < (dbl ? 8 : 16); i++) {
+                    uint64_t one = dbl ? 0x3ff0000000000000ull : 0x3f800000;
+                    put(t.d, dbl, i, one);
+                    put(t.a, dbl, i, one);
+                    put(t.b, dbl, i, one);
+                    put(t.m, dbl, i, one);
+                }
             if (j == 2) t.k = mode & 1 ? ~0ull : 0;
             t.mx = ud ? 0x1f80 : modes[mode];
             t.mxd = 0x1f80;
@@ -314,7 +404,7 @@ int main(int argc, char **argv) {
             memset(t.out, 0, 64);
             int sg = run(forms[fi].fn, &t);
             if ((forms[fi].fl & 8) && sg == 0) {          /* zero-masked: those elements must be 0 */
-                int n = forms[fi].fl >> 4, es = dbl ? 8 : 4, nz = 0;
+                int n = (forms[fi].fl >> 4) & 31, es = dbl ? 8 : 4, nz = 0;
                 for (int i = 0; i < n; i++) {
                     if (t.k >> i & 1)
                         continue;
@@ -323,6 +413,11 @@ int main(int argc, char **argv) {
                 }
                 if (nz && !print && !dump && bad++ < 40)
                     printf("FAIL %s (case %d): a zero-masked element is not 0\n", forms[fi].name, c);
+            }
+            if ((forms[fi].fl & 4096) && sg == 0) {      /* imm8 bit 3: no PE; RNDSCALE: no DE */
+                if ((t.mxo & 0x22) && !print && !dump && bad++ < 40)
+                    printf("FAIL %s (case %d): PE or DE raised (MXCSR %#x)\n", forms[fi].name, c, t.mxo);
+                t.mxo &= ~0x22u;
             }
             for (int i = 0; i < 64; i++) h = (h ^ t.out[i]) * 0x100000001b3ull;
             for (int b = 0; b < 8; b++) h = (h ^ ((t.kout >> (8 * b)) & 0xff)) * 0x100000001b3ull;
