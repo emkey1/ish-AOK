@@ -33,8 +33,6 @@ int amd64_jit_0f_vec_rm(struct cpu_state *cpu, struct tlb *tlb,
 int amd64_jit_sse3_haddsub(struct cpu_state *cpu, struct tlb *tlb,
         unsigned long op2, unsigned long next_ip);
 int amd64_jit_ud2(struct cpu_state *cpu, struct tlb *tlb, unsigned long start_ip);
-int amd64_jit_vex(struct cpu_state *cpu, struct tlb *tlb,
-        unsigned long lead, unsigned long start_ip);
 void cpu_poke(struct cpu_state *cpu);
 void dump_amd64_cc1_trace(const struct cpu_state *cpu);
 void dump_amd64_as_trace_task(const struct task *task);

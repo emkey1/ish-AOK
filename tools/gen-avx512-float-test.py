@@ -57,10 +57,10 @@ F = []   # (name, asm, flags: 1 double, 2 a compare, 4 the zmm16-31 registers, 8
          #  2048 VL 128 with 1.0 in every element past it, 4096 PE and DE checked clear here and
          #  hashed clear, 8192 VSCALEF: see below, 16384 s2 random bits (a VFIXUPIMM table, an
          #  integer source), 32768 s2 seeded with floats at the integer ranges' edges, 65536 the asm
-         #  uses eax/rax)
-def add(name, asm, t, cmp=False, hi=False, dst=False, table=False, ibound=False, zchk=True, gpr=False):
+         #  uses eax/rax, 131072 s2 seeded with RCP14/RSQRT14's edges)
+def add(name, asm, t, cmp=False, hi=False, dst=False, table=False, ibound=False, zchk=True, gpr=False, r14=False):
     fl = DBL[t] | (2 if cmp else 0) | (4 if hi else 0) | (1024 if dst else 0) | (16384 if table else 0) | \
-        (32768 if ibound else 0) | (65536 if gpr else 0)
+        (32768 if ibound else 0) | (65536 if gpr else 0) | (131072 if r14 else 0)
     m = re.match(r'vrndscale[ps]d \$(0x[0-9a-f]+)', name)
     if m and int(m.group(1), 16) & 8:
         # SDE raises PE (and DE for a denormal) for VRNDSCALEPD/SD with imm8
@@ -190,7 +190,7 @@ for form in ('132', '213', '231'):
                 add(f'{n} reg m hi', f'{n} %%xmm30, %%xmm25, %%xmm17%{{%%k1%}}', t, hi=True, dst=True)
 # unary families on s2 (scalar: s1 the upper elements), {sae} at 512 and
 # scalar: VGETEXP
-def unary(op, imms=('',)):
+def unary(op, imms=('',), sae=True, **kw):
     for imm in imms:
         ii = imm and imm + ', '
         ni = imm and ' ' + imm
@@ -199,22 +199,25 @@ def unary(op, imms=('',)):
             n = f'v{op}{t}'
             for L, x in VL:
                 for mk, mn in MK:
-                    add(f'{n}{ni} {L} reg{mn}', f'{n} {ii}%%{x}3, %%{x}1{mk}', t)
-                    add(f'{n}{ni} {L} mem{mn}', f'{n} {ii}(%1), %%{x}1{mk}', t)
-                    add(f'{n}{ni} {L} bcst{mn}', f'{n} {ii}(%1)%{{1to{L // (8 * bc)}%}}, %%{x}1{mk}', t)
-            for mk, mn in MK:
-                add(f'{n}{ni} {{sae}} 512 reg{mn}', f'{n} {ii}%{{sae%}}, %%zmm3, %%zmm1{mk}', t)
+                    add(f'{n}{ni} {L} reg{mn}', f'{n} {ii}%%{x}3, %%{x}1{mk}', t, **kw)
+                    add(f'{n}{ni} {L} mem{mn}', f'{n} {ii}(%1), %%{x}1{mk}', t, **kw)
+                    add(f'{n}{ni} {L} bcst{mn}', f'{n} {ii}(%1)%{{1to{L // (8 * bc)}%}}, %%{x}1{mk}', t, **kw)
+            for mk, mn in MK * sae:
+                add(f'{n}{ni} {{sae}} 512 reg{mn}', f'{n} {ii}%{{sae%}}, %%zmm3, %%zmm1{mk}', t, **kw)
             if not I386:
-                add(f'{n}{ni} 512 reg m hi', f'{n} {ii}%%zmm30, %%zmm17%{{%%k1%}}', t, hi=True)
+                add(f'{n}{ni} 512 reg m hi', f'{n} {ii}%%zmm30, %%zmm17%{{%%k1%}}', t, hi=True, **kw)
         for t in ('ss', 'sd'):
             n = f'v{op}{t}'
             for mk, mn in MK:
-                add(f'{n}{ni} reg{mn}', f'{n} {ii}%%xmm3, %%xmm2, %%xmm1{mk}', t)
-                add(f'{n}{ni} mem{mn}', f'{n} {ii}(%1), %%xmm2, %%xmm1{mk}', t)
-                add(f'{n}{ni} {{sae}} reg{mn}', f'{n} {ii}%{{sae%}}, %%xmm3, %%xmm2, %%xmm1{mk}', t)
+                add(f'{n}{ni} reg{mn}', f'{n} {ii}%%xmm3, %%xmm2, %%xmm1{mk}', t, **kw)
+                add(f'{n}{ni} mem{mn}', f'{n} {ii}(%1), %%xmm2, %%xmm1{mk}', t, **kw)
+                if sae:
+                    add(f'{n}{ni} {{sae}} reg{mn}', f'{n} {ii}%{{sae%}}, %%xmm3, %%xmm2, %%xmm1{mk}', t, **kw)
             if not I386:
-                add(f'{n}{ni} reg m hi', f'{n} {ii}%%xmm30, %%xmm25, %%xmm17%{{%%k1%}}', t, hi=True)
+                add(f'{n}{ni} reg m hi', f'{n} {ii}%%xmm30, %%xmm25, %%xmm17%{{%%k1%}}', t, hi=True, **kw)
 unary('getexp')
+unary('rcp14', sae=False, r14=True)           # (no flags, no {sae})
+unary('rsqrt14', sae=False, r14=True)
 unary('getmant', [f'${i:#x}' for i in range(16)])
 RND = [0x00, 0x01, 0x02, 0x03, 0x04, 0x08, 0x0b, 0x0c, 0x10, 0x21, 0x32, 0x43, 0x5c, 0x88, 0xf0, 0xff]
 unary('rndscale', [f'${i:#x}' for i in RND])
@@ -646,6 +649,24 @@ int main(int argc, char **argv) {
                                                   0x43dfffffffffffffull, 0x43f0000000000000ull, 0x43efffffffffffffull,
                                                   0x3fe0000000000000ull, 0xbfe0000000000000ull, 0xbff0000000000000ull,
                                                   0xbfefffffffffffffull, 0x41dfffffffd00000ull, 0xc1e00000001fffffull};
+                    uint64_t r = rnd();
+                    if (r & 1)
+                        continue;
+                    uint64_t v = dbl ? de[(r >> 8) % 18] : fe[(r >> 8) % 18];
+                    put(t.b, dbl, i, v);
+                    put(t.m, dbl, i, v);
+                }
+            if (forms[fi].fl & 131072)                    /* RCP14/RSQRT14's edges */
+                for (int i = 0; i < (dbl ? 8 : 16); i++) {
+                    static const uint32_t fe[] = {0x00200000, 0x80200000, 0x00200001, 0x001fffff, 0x00400000, 0x00600001,
+                                                  0x7f000000, 0xff000000, 0x7e800000, 0x7e800001, 0x7effffff, 0x7f000001,
+                                                  0x3f800000, 0x40800000, 0x40000000, 0x3f800080, 0x3f80007f, 0x00000003};
+                    static const uint64_t de[] = {0x0004000000000000ull, 0x8004000000000000ull, 0x0004000000000001ull,
+                                                  0x0003ffffffffffffull, 0x0008000000000000ull, 0x000c000000000001ull,
+                                                  0x7fe0000000000000ull, 0xffe0000000000000ull, 0x7fd0000000000000ull,
+                                                  0x7fd0000000000001ull, 0x7fdfffffffffffffull, 0x7fe0000000000001ull,
+                                                  0x3ff0000000000000ull, 0x4010000000000000ull, 0x4000000000000000ull,
+                                                  0x3ff0001000000000ull, 0x3ff0000fffffffffull, 3};
                     uint64_t r = rnd();
                     if (r & 1)
                         continue;

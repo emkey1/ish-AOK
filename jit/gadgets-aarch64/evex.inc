@@ -2990,6 +2990,238 @@ evex_l3 reducepd, 2, evb_rndscale, d, 2d, 1, 1
 evex_l3 reducess, 2, evb_rndscale, s, 4s, 0, 1
 evex_l3 reducesd, 2, evb_rndscale, d, 2d, 0, 1
 
+# ---- VRCP14PS/PD/SS/SD, VRSQRT14PS/PD/SS/SD: Intel's published reference
+# algorithm (recip14.c), as SDE computes it. No flags; DAZ, and FTZ for
+# RCP14's denormal results. The top 16 (RCP14) or 15 (RSQRT14) fraction bits
+# x = 1.t pick an interval i (6 bits, or 5 and the exponent's parity) with
+# coefficients a, b, and the result's fraction is the top 16 of
+# a*256 + b*(512 - u) (u: t's low 10 bits) above bit 9 -- the reference's
+# a - b*(x - y), exact in a double and truncated to 17 bits. A denormal is
+# normalised exactly through ucvtf of its fraction. Each table word is
+# a << 10 | b. The specials: a NaN quieted; RCP14: inf -> 0, and 0, a
+# denormal under DAZ or one at most 2^(emin-2) -> inf, all of x's sign;
+# RSQRT14: 0 -> inf of its sign, x < 0 -> the default NaN, +inf -> +0. ----
+.balign 4
+evex_rcp14_tab:
+    .word 0xfe05ff1, 0xfa253d1, 0xf6623b5, 0xf2bbb99, 0xef3077d, 0xebbf765, 0xe86774b, 0xe527335
+    .word 0xe1fe31d, 0xdeeab09, 0xdbecaf3, 0xd9032df, 0xd62cacd, 0xd3696bb, 0xd0b7ea9, 0xce17a97
+    .word 0xcb88687, 0xc908e77, 0xc699269, 0xc438659, 0xc1e5e4b, 0xbfa163d, 0xbd6a231, 0xbb3fe23
+    .word 0xb922217, 0xb710a0b, 0xb50ae01, 0xb3101f5, 0xb1205eb, 0xaf3bddf, 0xad611d5, 0xab905cb
+    .word 0xa9c91c3, 0xa80b5b9, 0xa6569b1, 0xa4aa9a7, 0xa30719f, 0xa16bd97, 0x9fd898f, 0x9e4d587
+    .word 0x9cc9981, 0x9b4cd79, 0x99d7d71, 0x986956b, 0x9701d65, 0x95a0d5d, 0x9446157, 0x92f1951
+    .word 0x91a354b, 0x905ad45, 0x8f1813f, 0x8ddb13b, 0x8ca3135, 0x8b70d2f, 0x8a4392b, 0x891b525
+    .word 0x87f8121, 0x86d951d, 0x85bfd17, 0x84ab513, 0x839ad0f, 0x828e50b, 0x8185d07, 0x8081503
+evex_rsqrt14_tab:
+    .word 0x1fc117e9, 0x167426c3, 0x1f46d7bb, 0x161db6a3, 0x1ed1e793, 0x15cb0287, 0x1e61fb6d, 0x157be26b
+    .word 0x1df6ab49, 0x15300253, 0x1d8faf27, 0x14e72e3b, 0x1d2cc707, 0x14a13625, 0x1ccd96eb, 0x145df60f
+    .word 0x1c71facf, 0x141d25fd, 0x1c19b6b5, 0x13debdeb, 0x1bc48e9d, 0x13a285d9, 0x1b726287, 0x136865c9
+    .word 0x1b22fa71, 0x133045b9, 0x1ad63a5b, 0x12f9f9ab, 0x1a8bee49, 0x12c5759d, 0x1a43fe37, 0x12929d91
+    .word 0x19fe4e25, 0x12614d85, 0x19babe15, 0x12317d79, 0x19792e05, 0x12032d6d, 0x193991f5, 0x11d63563
+    .word 0x18fbc5e7, 0x11aa7d59, 0x18bfbdd9, 0x1180094f, 0x188551cd, 0x1156c145, 0x184c7dc1, 0x112e913d
+    .word 0x18152db5, 0x11077935, 0x17df5da9, 0x10e1652d, 0x17aae99f, 0x10bc4d25, 0x1777c993, 0x1098291d
+    .word 0x1745ed89, 0x1074e517, 0x17154981, 0x1052850f, 0x16e5cd77, 0x1030f109, 0x16b7796f, 0x10102903
+.macro evf_r14consts t                   /* v3 sign, v4 |x|, v5 the exponent field, v6 the fraction (of v1) */
+.ifc \t,s
+    movi v3.4s, 0x80, lsl 24
+.else
+    mov  x9, 0x8000000000000000
+    dup  v3.2d, x9
+.endif
+    bic  v4.16b, v1.16b, v3.16b
+    and  v3.16b, v1.16b, v3.16b
+.ifc \t,s
+    ushr v5.4s, v4.4s, 23
+    shl  v6.4s, v4.4s, 9
+    ushr v6.4s, v6.4s, 9
+.else
+    ushr v5.2d, v4.2d, 52
+    shl  v6.2d, v4.2d, 12
+    ushr v6.2d, v6.2d, 12
+.endif
+.endm
+.macro evf_r14norm t, a                  /* a denormal's exponent (from 1 down) and fraction, exactly */
+    ucvtf v20.\a, v6.\a
+    evf_expfield v21, v20, \t
+    evf_dupc v22, \t, 149, 1074
+    sub  v21.\a, v21.\a, v22.\a
+.ifc \t,s
+    shl  v20.4s, v20.4s, 9
+    ushr v20.4s, v20.4s, 9
+.else
+    shl  v20.2d, v20.2d, 12
+    ushr v20.2d, v20.2d, 12
+.endif
+    cmeq v22.\a, v5.\a, 0
+    bit  v5.16b, v21.16b, v22.16b
+    bit  v6.16b, v20.16b, v22.16b
+.endm
+# v24 = the 16-bit fraction field from table \tab, the fraction's top bits
+# shifted down by \sh (16 RCP14, 15 RSQRT14) and, with \odd, the exponent's
+# parity in v7 as the index's low bit; \c is a's scale (256 RCP14, 128
+# RSQRT14). Shifted up into place for \t. Clobbers x9, x10, v20-v24.
+.macro evf_r14core t, tab, sh, odd, c
+.ifc \t,s
+    ushr v20.4s, v6.4s, (23 - \sh)
+.else
+    ushr v20.2d, v6.2d, (52 - \sh)
+    xtn  v20.2s, v20.2d
+.endif
+    ushr v21.4s, v20.4s, 10              /* i */
+.if \odd
+    shl  v21.4s, v21.4s, 1
+.ifc \t,s
+    orr  v21.16b, v21.16b, v7.16b
+.else
+    xtn  v22.2s, v7.2d
+    orr  v21.16b, v21.16b, v22.16b
+.endif
+.endif
+    movi v22.4s, 3, msl 8                /* 0x3ff */
+    and  v20.16b, v20.16b, v22.16b       /* u */
+    adr  x10, \tab
+    umov w9, v21.s[0]
+    ldr  w9, [x10, x9, lsl 2]
+    mov  v23.s[0], w9
+    umov w9, v21.s[1]
+    ldr  w9, [x10, x9, lsl 2]
+    mov  v23.s[1], w9
+.ifc \t,s
+    umov w9, v21.s[2]
+    ldr  w9, [x10, x9, lsl 2]
+    mov  v23.s[2], w9
+    umov w9, v21.s[3]
+    ldr  w9, [x10, x9, lsl 2]
+    mov  v23.s[3], w9
+.endif
+    and  v21.16b, v23.16b, v22.16b       /* b */
+    ushr v23.4s, v23.4s, 10              /* a */
+.if \c == 256
+    shl  v24.4s, v23.4s, 8
+.else
+    shl  v24.4s, v23.4s, 7
+.endif
+    movi v23.4s, 2, lsl 8                /* 512 */
+    sub  v20.4s, v23.4s, v20.4s
+    mla  v24.4s, v21.4s, v20.4s
+    ushr v24.4s, v24.4s, 9
+    movi v22.4s, 0xff, msl 8             /* 0xffff */
+    and  v24.16b, v24.16b, v22.16b
+.ifc \t,s
+    shl  v24.4s, v24.4s, 7
+.else
+    uxtl v24.2d, v24.2s
+    shl  v24.2d, v24.2d, 36
+.endif
+.endm
+.macro evb_rcp14 t, a, p
+    evf_r14consts \t
+    /* the specials: v26 their results, v27 their lanes */
+    evf_dupc v20, \t, 255, 2047
+    cmeq v27.\a, v5.\a, v20.\a
+    cmeq v21.\a, v6.\a, 0
+    and  v21.16b, v21.16b, v27.16b       /* inf: 0 of its sign */
+    evf_dupc v22, \t, 0x00400000, 0x0008000000000000
+    orr  v26.16b, v1.16b, v22.16b        /* NaN: quieted */
+    bit  v26.16b, v3.16b, v21.16b
+    cmeq v21.\a, v5.\a, 0                /* 0, a denormal under DAZ, or one at most 2^(emin-2): inf */
+    ldr  w9, [_cpu, CPU_mxcsr]
+    tbnz w9, 6, 1f
+    evf_dupc v22, \t, 0x00200000, 0x0004000000000000
+    cmhs v22.\a, v22.\a, v4.\a
+    and  v21.16b, v21.16b, v22.16b
+1:  evf_dupc v22, \t, 0x7f800000, 0x7ff0000000000000
+    orr  v22.16b, v3.16b, v22.16b
+    bit  v26.16b, v22.16b, v21.16b
+    orr  v27.16b, v27.16b, v21.16b
+    evf_r14norm \t, \a
+    evf_r14core \t, evex_rcp14_tab, 16, 0, 256
+    /* C (the significand, hidden bit and all) and R = 2B-1 - E the
+       exponent; a power of 2's C is the hidden bit alone and R one more */
+    evf_dupc v20, \t, 253, 2045
+    sub  v20.\a, v20.\a, v5.\a           /* R */
+    cmeq v21.\a, v6.\a, 0
+    bic  v24.16b, v24.16b, v21.16b
+    sub  v20.\a, v20.\a, v21.\a
+.ifc \t,s
+    shl  v22.4s, v20.4s, 23
+.else
+    shl  v22.2d, v20.2d, 52
+.endif
+    orr  v2.16b, v22.16b, v24.16b
+    orr  v2.16b, v2.16b, v3.16b          /* (R >= 1) */
+    cmle v21.\a, v20.\a, 0               /* a denormal result: C >> (1 - R), or FTZ 0 */
+    evf_dupc v22, \t, 0x00800000, 0x0010000000000000
+    orr  v24.16b, v24.16b, v22.16b
+    evf_dupc v22, \t, 1, 1
+    sub  v20.\a, v20.\a, v22.\a
+    ushl v24.\a, v24.\a, v20.\a
+    ldr  w9, [_cpu, CPU_mxcsr]
+    tbz  w9, 15, 2f
+    movi v24.16b, 0
+2:  orr  v24.16b, v24.16b, v3.16b
+    bit  v2.16b, v24.16b, v21.16b
+    bit  v2.16b, v26.16b, v27.16b
+    xf_merge \t, \p
+.endm
+.macro evb_rsqrt14 t, a, p
+    evf_r14consts \t
+    ldr  w9, [_cpu, CPU_mxcsr]
+    tbz  w9, 6, 1f
+    cmeq v21.\a, v5.\a, 0                /* DAZ: 0 of its sign */
+    bic  v4.16b, v4.16b, v21.16b
+    bic  v6.16b, v6.16b, v21.16b
+    bit  v1.16b, v3.16b, v21.16b
+1:  evf_dupc v20, \t, 255, 2047
+    cmeq v27.\a, v5.\a, v20.\a           /* +inf: +0 */
+    movi v26.16b, 0
+    cmlt v21.\a, v1.\a, 0                /* x < 0: the default NaN */
+    evf_dupc v22, \t, 0xffc00000, 0xfff8000000000000
+    bit  v26.16b, v22.16b, v21.16b
+    orr  v27.16b, v27.16b, v21.16b
+    cmeq v21.\a, v4.\a, 0                /* 0: inf of its sign */
+    evf_dupc v22, \t, 0x7f800000, 0x7ff0000000000000
+    orr  v22.16b, v3.16b, v22.16b
+    bit  v26.16b, v22.16b, v21.16b
+    orr  v27.16b, v27.16b, v21.16b
+    cmeq v20.\a, v5.\a, v20.\a           /* NaN: quieted */
+    cmtst v21.\a, v6.\a, v6.\a
+    and  v21.16b, v21.16b, v20.16b
+    evf_dupc v22, \t, 0x00400000, 0x0008000000000000
+    orr  v22.16b, v1.16b, v22.16b
+    bit  v26.16b, v22.16b, v21.16b
+    evf_r14norm \t, \a
+    evf_dupc v20, \t, 127, 1023
+    sub  v5.\a, v5.\a, v20.\a            /* the unbiased exponent */
+    evf_dupc v20, \t, 1, 1
+    and  v7.16b, v5.16b, v20.16b         /* its parity */
+    evf_r14core \t, evex_rsqrt14_tab, 15, 1, 128
+    evf_dupc v20, \t, 0x3f000000, 0x3fe0000000000000
+    orr  v24.16b, v24.16b, v20.16b       /* in [0.5, 1) */
+    cmeq v21.\a, v6.\a, 0                /* 1.0 for a power of 4 */
+    cmeq v22.\a, v7.\a, 0
+    and  v21.16b, v21.16b, v22.16b
+    evf_dupc v20, \t, 0x3f800000, 0x3ff0000000000000
+    bit  v24.16b, v20.16b, v21.16b
+.ifc \t,s
+    sshr v5.4s, v5.4s, 1
+    shl  v5.4s, v5.4s, 23
+.else
+    sshr v5.2d, v5.2d, 1
+    shl  v5.2d, v5.2d, 52
+.endif
+    sub  v2.\a, v24.\a, v5.\a            /* scaled by 2^-floor(e/2) */
+    bit  v2.16b, v26.16b, v27.16b
+    xf_merge \t, \p
+.endm
+evex_l3 rcp14ps, 2, evb_rcp14, s, 4s, 1
+evex_l3 rcp14pd, 2, evb_rcp14, d, 2d, 1
+evex_l3 rcp14ss, 2, evb_rcp14, s, 4s, 0
+evex_l3 rcp14sd, 2, evb_rcp14, d, 2d, 0
+evex_l3 rsqrt14ps, 2, evb_rsqrt14, s, 4s, 1
+evex_l3 rsqrt14pd, 2, evb_rsqrt14, d, 2d, 1
+evex_l3 rsqrt14ss, 2, evb_rsqrt14, s, 4s, 0
+evex_l3 rsqrt14sd, 2, evb_rsqrt14, d, 2d, 0
+
 # ---- VSCALEF: s1 * 2^floor(s2) (scalar: s1 the upper elements too), {er}.
 # The SDM's special cases first (a NaN propagated as a two-operand op's,
 # but a QNaN s1 with s2 +inf is +inf and with -inf +0;

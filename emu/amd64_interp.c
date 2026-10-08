@@ -14475,37 +14475,12 @@ amd64_0f_vec_rm_pf:
 //
 // amd64_sync_legacy_regs on the way out is mandatory, not decorative -- FNSTSW
 // AX writes RAX, so an x87 instruction can change a general-purpose register.
-// VEX / EVEX (0xC4, 0xC5, 0x62) -- the whole of AVX, AVX2 and AVX-512 -- as a
-// bridge the gadget chain can call.
-//
-// jit/gen.c's gen_step64 has no VEX arm and never had one, so before this every
-// AVX instruction an amd64 guest executed de-JITted its entire block. That cost
-// did not show up in any fallback census because the musl test roots never take
-// AVX paths; it was found with a three-line vpxor/vpaddd probe.
-//
-// This bridges to the interpreter's own front end rather than reimplementing
-// one, and that is a deliberate choice. amd64_vex_step dispatches the three
-// opcode maps plus BMI and the opmask group, with EVEX predication, embedded
-// broadcast, registers 16-31 and 512-bit vectors. The shared emu/avx.c core
-// used by the i386 guest is 128/256-bit, xmm0-7 only, VEX only, no masking --
-// a strict subset. Re-hosting the larger implementation to gain a native arm
-// would trade certain coverage for months of work; bridging keeps every
-// instruction the guest can execute today executing identically, and the block
-// compiled around it.
-//
-// UNLIKE the x87 bridge, this one cannot let the block continue. A VEX
-// instruction's length is not knowable at codegen time without decoding the
-// whole prefix, so gen.c hands over `start_ip` and this function advances rip
-// itself; the block therefore ends here and the frontend re-dispatches from
-// wherever rip lands. That is safe because for amd64 cpu->amd64_rip is
-// authoritative and cpu->eip is derived from it after every block
-// (jit/jit.c), so the exit gadget's own eip write cannot win.
 // The three-byte 0F 38 escape as a bridge, for the opcodes in that map that
 // have no native arm (ptest, blendv, pmovsx/zx, crc32 and friends). pshufb and
 // the other natively-handled members never reach here -- this arm sits after
 // them -- so this is the tail of the map, not the whole of it.
 //
-// Like the VEX bridge and unlike x87, it takes the instruction's FIRST byte and
+// Unlike the x87 bridge, it takes the instruction's FIRST byte and
 // advances rip itself: the length of a three-byte-escape instruction is not
 // worth recomputing in gen.c when the decoder being called already does it.
 // LOOP / LOOPE / LOOPNE / JRCXZ with a 0x67 address-size prefix (67 E0-E3),
@@ -14596,66 +14571,6 @@ int amd64_jit_ud2(struct cpu_state *cpu, struct tlb *tlb,
     cpu->amd64_rip = (qword_t) start_ip;
     amd64_sync_legacy_regs(cpu);
     return INT_UNDEFINED;
-}
-
-int amd64_jit_vex(struct cpu_state *cpu, struct tlb *tlb,
-        unsigned long lead, unsigned long start_ip) {
-    qword_t saved_rip = (qword_t) start_ip;
-    struct amd64_vex_prefix vex;
-    enum amd64_seg seg_prefix = AMD64_SEG_NONE;
-    byte_t byte;
-    int interrupt;
-
-    if (lead != 0xc4 && lead != 0xc5 && lead != 0x62)
-        return INT_UNDEFINED;
-
-    // Decode from the instruction's own first byte: gen.c deliberately did not
-    // consume it, because it cannot know how long this instruction is.
-    cpu->amd64_rip = saved_rip;
-    cpu->amd64_address_size_prefix = false;
-    for (;;) {
-        if (!amd64_fetch_u8(cpu, tlb, &byte))
-            goto amd64_jit_vex_pf;
-        if (amd64_ignored_segment_prefix(byte))
-            continue;
-        if (byte == 0x64) {
-            seg_prefix = AMD64_SEG_FS;
-            continue;
-        }
-        if (byte == 0x65) {
-            seg_prefix = AMD64_SEG_GS;
-            continue;
-        }
-        break;
-    }
-    // No legacy prefix and no REX may precede VEX -- they encode into the VEX
-    // bytes themselves -- so anything else here is not the instruction gen.c
-    // thought it saw.
-    if (byte != (byte_t) lead)
-        return INT_UNDEFINED;
-
-    if (!amd64_decode_vex(cpu, tlb, byte, &vex)) {
-        cpu->amd64_rip = saved_rip;
-        cpu->segfault_addr = saved_rip;
-        return INT_GPF;
-    }
-    if (!vex.present) {
-        cpu->amd64_rip = saved_rip;
-        amd64_sync_legacy_regs(cpu);
-        return INT_UNDEFINED;
-    }
-
-    interrupt = amd64_vex_step(cpu, tlb, saved_rip, vex, seg_prefix);
-    // BMI and the mask-to-GPR extracts (vpmovmskb, vmovmskps) write general
-    // purpose registers, so the legacy view has to be resynchronised exactly as
-    // the other bridges do.
-    amd64_sync_legacy_regs(cpu);
-    return interrupt;
-
-amd64_jit_vex_pf:
-    cpu->amd64_rip = saved_rip;
-    amd64_sync_legacy_regs(cpu);
-    return INT_PF;
 }
 
 int cpu_run_to_interrupt_amd64(struct cpu_state *cpu, struct tlb *tlb) {

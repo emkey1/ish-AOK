@@ -161,12 +161,6 @@ And yet:
   about 18,000 lines.
 - It is still what runs on non-aarch64 hosts, because the amd64 JIT's gadgets
   exist only for aarch64 (Chapter 7).
-- It is still where some AVX-512 executes for amd64: the JIT runs every VEX
-  instruction as gadgets (one it does not know is #UD, checked against an
-  Intel CPU's answer for every VEX encoding of maps 1-3), and EVEX the same way
-  for what its table has; an EVEX instruction the table lacks still goes to
-  `amd64_jit_vex`, which lives in the interpreter's file and decodes it there
-  before `emu/avx.c` does the arithmetic (Chapter 5).
 - And it is still where **most `lock`-prefixed instructions** execute. Nearly
   every eligibility predicate in `jit/gen.c`'s amd64 front-end requires the
   lock prefix to be absent, so a locked `xadd`, `cmpxchg`, `inc` or `neg`
@@ -183,6 +177,15 @@ times under the JIT with no errors and no block fallbacks, and one nontrivial
 translation unit assembled byte-identically under both engines. The bypass was
 deleted (`jit/jit.c` keeps the evidence in a comment), and with it a blind
 spot — `as` had never counted toward any "zero fallbacks" measurement.
+
+A second came off on 2026-10-08. It said the interpreter was still where some
+AVX-512 executed for amd64: an EVEX instruction the JIT's table lacked went to
+`amd64_jit_vex`, which decoded it in the interpreter's file before `emu/avx.c`
+did the arithmetic. Now the JIT runs every VEX and EVEX instruction as gadgets,
+and one it does not know is #UD — checked against an Intel CPU's answer for
+every VEX encoding of maps 1-3 and every EVEX encoding of maps 1-3, 5 and 6.
+The bridge is gone; only an instruction whose bytes cannot be read still lands
+in the interpreter, as any undecodable instruction does (Chapter 5).
 
 The locked instructions used to cost twice, and the correctness half is now
 paid. Until 553 the interpreter serialised locked instructions on the global

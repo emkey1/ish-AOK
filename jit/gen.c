@@ -9155,19 +9155,6 @@ static void amd64_bridge_note(void *helper, unsigned long arg0) {
         amd64_bridge_dump();
 }
 
-static void gen_amd64_helper_tlb_2_retint(struct gen_state *state, void *helper,
-        unsigned long arg0, unsigned long arg1) {
-    extern void gadget_helper_tlb_2_retint(void);
-    amd64_bridge_note(helper, (arg0 & 0xff) | ((arg0 & AMD64_JIT_MEM_FS) ? 0x100 : 0) |
-            ((arg0 & AMD64_JIT_MEM_GS) ? 0x200 : 0));
-    gen_amd64_flush_reg_cache(state);
-    gen_amd64_flush_rip(state);
-    gen(state, (unsigned long) gadget_helper_tlb_2_retint);
-    gen(state, (unsigned long) helper);
-    gen(state, arg0);
-    gen(state, arg1);
-}
-
 #if defined(__aarch64__)
 // The general ALU-with-memory gadget (math.S amd64_alu_mem*): op is the x86
 // group (0 add .. 7 cmp) or 8 for TEST. Emits it and returns true, or false
@@ -10846,6 +10833,8 @@ EVEX_INT(EVEX_DECL) EVEX_INT_UN(EVEX_DECL)
 extern void gadget_evex_mov(void), gadget_evex_vi_psadbw(void);
 extern void gadget_evex_compress0(void), gadget_evex_compress1(void), gadget_evex_compress2(void), gadget_evex_compress3(void), gadget_evex_expand0(void), gadget_evex_expand1(void), gadget_evex_expand2(void), gadget_evex_expand3(void), gadget_evex_pmov0xbd(void), gadget_evex_pmov0xbq(void), gadget_evex_pmov0xbw(void), gadget_evex_pmov0xdq(void), gadget_evex_pmov0xwd(void), gadget_evex_pmov0xwq(void), gadget_evex_pmov1xbd(void), gadget_evex_pmov1xbq(void), gadget_evex_pmov1xbw(void), gadget_evex_pmov1xdq(void), gadget_evex_pmov1xwd(void), gadget_evex_pmov1xwq(void), gadget_evex_pmov_sqxtn_db(void), gadget_evex_pmov_sqxtn_dw(void), gadget_evex_pmov_sqxtn_qb(void), gadget_evex_pmov_sqxtn_qd(void), gadget_evex_pmov_sqxtn_qw(void), gadget_evex_pmov_sqxtn_wb(void), gadget_evex_pmov_uqxtn_db(void), gadget_evex_pmov_uqxtn_dw(void), gadget_evex_pmov_uqxtn_qb(void), gadget_evex_pmov_uqxtn_qd(void), gadget_evex_pmov_uqxtn_qw(void), gadget_evex_pmov_uqxtn_wb(void), gadget_evex_pmov_xtn_db(void), gadget_evex_pmov_xtn_dw(void), gadget_evex_pmov_xtn_qb(void), gadget_evex_pmov_xtn_qd(void), gadget_evex_pmov_xtn_qw(void), gadget_evex_pmov_xtn_wb(void);
 extern void gadget_evex_fma_maddsub132ps(void), gadget_evex_fma_maddsub132pd(void), gadget_evex_fma_msubadd132ps(void), gadget_evex_fma_msubadd132pd(void), gadget_evex_fma_madd132ps(void), gadget_evex_fma_madd132pd(void), gadget_evex_fma_madd132ss(void), gadget_evex_fma_madd132sd(void), gadget_evex_fma_msub132ps(void), gadget_evex_fma_msub132pd(void), gadget_evex_fma_msub132ss(void), gadget_evex_fma_msub132sd(void), gadget_evex_fma_nmadd132ps(void), gadget_evex_fma_nmadd132pd(void), gadget_evex_fma_nmadd132ss(void), gadget_evex_fma_nmadd132sd(void), gadget_evex_fma_nmsub132ps(void), gadget_evex_fma_nmsub132pd(void), gadget_evex_fma_nmsub132ss(void), gadget_evex_fma_nmsub132sd(void), gadget_evex_fma_maddsub213ps(void), gadget_evex_fma_maddsub213pd(void), gadget_evex_fma_msubadd213ps(void), gadget_evex_fma_msubadd213pd(void), gadget_evex_fma_madd213ps(void), gadget_evex_fma_madd213pd(void), gadget_evex_fma_madd213ss(void), gadget_evex_fma_madd213sd(void), gadget_evex_fma_msub213ps(void), gadget_evex_fma_msub213pd(void), gadget_evex_fma_msub213ss(void), gadget_evex_fma_msub213sd(void), gadget_evex_fma_nmadd213ps(void), gadget_evex_fma_nmadd213pd(void), gadget_evex_fma_nmadd213ss(void), gadget_evex_fma_nmadd213sd(void), gadget_evex_fma_nmsub213ps(void), gadget_evex_fma_nmsub213pd(void), gadget_evex_fma_nmsub213ss(void), gadget_evex_fma_nmsub213sd(void), gadget_evex_fma_maddsub231ps(void), gadget_evex_fma_maddsub231pd(void), gadget_evex_fma_msubadd231ps(void), gadget_evex_fma_msubadd231pd(void), gadget_evex_fma_madd231ps(void), gadget_evex_fma_madd231pd(void), gadget_evex_fma_madd231ss(void), gadget_evex_fma_madd231sd(void), gadget_evex_fma_msub231ps(void), gadget_evex_fma_msub231pd(void), gadget_evex_fma_msub231ss(void), gadget_evex_fma_msub231sd(void), gadget_evex_fma_nmadd231ps(void), gadget_evex_fma_nmadd231pd(void), gadget_evex_fma_nmadd231ss(void), gadget_evex_fma_nmadd231sd(void), gadget_evex_fma_nmsub231ps(void), gadget_evex_fma_nmsub231pd(void), gadget_evex_fma_nmsub231ss(void), gadget_evex_fma_nmsub231sd(void);
+extern void gadget_evex_rcp14ps(void), gadget_evex_rcp14pd(void), gadget_evex_rcp14ss(void), gadget_evex_rcp14sd(void);
+extern void gadget_evex_rsqrt14ps(void), gadget_evex_rsqrt14pd(void), gadget_evex_rsqrt14ss(void), gadget_evex_rsqrt14sd(void);
 extern void gadget_evex_getexpps(void), gadget_evex_getexppd(void), gadget_evex_getexpss(void), gadget_evex_getexpsd(void);
 extern void gadget_evex_getmantps(void), gadget_evex_getmantpd(void), gadget_evex_getmantss(void), gadget_evex_getmantsd(void);
 extern void gadget_evex_rndscaleps(void), gadget_evex_rndscalepd(void), gadget_evex_rndscaless(void), gadget_evex_rndscalesd(void);
@@ -11240,6 +11229,14 @@ static const struct evex_entry evex_table[] = {
     {2, 1, 0xbf, EVK_SCAL, 1, 2, 0, EVT_FIX, 0, 0, gadget_evex_fma_nmsub231ss, 0, 8, 4, 1},
     {2, 1, 0xbf, EVK_SCAL, 2, 3, 0, EVT_FIX, 0, 0, gadget_evex_fma_nmsub231sd, 0, 8, 8, 1},
     // VGETEXP ({sae})
+    {2, 1, 0x4c, EVK_L2, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_rcp14ps, 0, 0, 0, 0},
+    {2, 1, 0x4c, EVK_L2, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_rcp14pd, 0, 0, 0, 0},
+    {2, 1, 0x4d, EVK_SCAL, 1, 2, 0, EVT_FIX, 0, 0, gadget_evex_rcp14ss, 0, 0, 4, 0},
+    {2, 1, 0x4d, EVK_SCAL, 2, 3, 0, EVT_FIX, 0, 0, gadget_evex_rcp14sd, 0, 0, 8, 0},
+    {2, 1, 0x4e, EVK_L2, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_rsqrt14ps, 0, 0, 0, 0},
+    {2, 1, 0x4e, EVK_L2, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_rsqrt14pd, 0, 0, 0, 0},
+    {2, 1, 0x4f, EVK_SCAL, 1, 2, 0, EVT_FIX, 0, 0, gadget_evex_rsqrt14ss, 0, 0, 4, 0},
+    {2, 1, 0x4f, EVK_SCAL, 2, 3, 0, EVT_FIX, 0, 0, gadget_evex_rsqrt14sd, 0, 0, 8, 0},
     {2, 1, 0x42, EVK_L2, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_getexpps, 0, 0, 0, 2},
     {2, 1, 0x42, EVK_L2, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_getexppd, 0, 0, 0, 2},
     {2, 1, 0x43, EVK_SCAL, 1, 2, 0, EVT_FIX, 0, 0, gadget_evex_getexpss, 0, 0, 4, 2},
@@ -11746,8 +11743,8 @@ static bool evex_plan(const struct evex_insn *v, struct evex_plan *p) {
 }
 
 // amd64: the EVEX instruction at state->amd64_ip (just past its 62 lead
-// byte). As gen_amd64_vex: 1 when emitted (a gadget or #UD), -1 with the IP
-// untouched when the table does not have it yet.
+// byte). As gen_amd64_vex: 1 when emitted (a gadget, or #UD for anything the
+// table lacks), -1 with the IP untouched when its bytes cannot be read.
 // An EVEX instruction from its P0-P2, opcode and ModRM, ip at the ModRM.
 // from: EVF_EVEX, or a VEX or legacy SSE encoding of an op the EVEX table
 // has (GFNI), P0-P2 made from its fields (vex_to_evex): no disp8*N, the
@@ -11773,14 +11770,14 @@ static int gen_amd64_evex_at(struct gen_state *state, struct tlb *tlb, const str
     if (v.map == 0 || (p0 & 0x08) || !(p1 & 4))
         return gen_amd64_ud(state);             // map 0, P0 bit 3 set or P1 bit 2 clear: reserved
     if (v.map > 3)
-        return -1;
+        return gen_amd64_ud(state);             // maps 4-7 (AVX512-FP16's 5 and 6): none here
     const struct evex_entry *e = evex_lookup(&v);
     if (e == NULL) {
         for (unsigned i = 0; i < sizeof(evex_table) / sizeof(evex_table[0]); i++)
             if (evex_table[i].map == v.map && evex_table[i].pp == v.pp && evex_table[i].op == v.op &&
                     (evex_table[i].grp == 0 || evex_table[i].grp == (v.reg & 7) + 1))
                 return gen_amd64_ud(state);     // the opcode is here, but not with this VEX.W
-        return -1;
+        return from_vex ? -1 : gen_amd64_ud(state); // an EVEX encoding the table lacks: #UD
     }
     if (!from_vex && (insn->operand_size_prefix || insn->rep_mode != amd64_jit_rep_none || insn->lock_prefix ||
             insn->rex.present))
@@ -12188,19 +12185,11 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
         int r = gen_amd64_evex(state, tlb, &insn);
         if (r >= 0)
             return r;
-    }
-    if (!insn.two_byte_opcode && insn.opcode == 0x62) {    // (EVEX the table lacks: still the C bridge)
+        // -1: not decodable here (its bytes cannot be read): the
+        // interpreter's, as for VEX. Every EVEX instruction is gadgets or #UD
+        // (gen_amd64_evex_at): there is no C bridge for EVEX either.
         state->amd64_ip = state->amd64_orig_ip;
-        amd64_jit_debug("vex-helper ip=%llx lead=%02x",
-                (unsigned long long) state->amd64_orig_ip, insn.opcode);
-        if (getenv("ISH_TRACE_AMD64_BRIDGES") != NULL)
-            fprintf(stderr, "[amd64-bridges] vex lead=%02x\n", insn.opcode);
-        gen_amd64_flush_reg_cache(state);
-        gen_amd64_flush_rip(state);
-        gen_amd64_helper_tlb_2_retint(state, amd64_jit_vex,
-                (unsigned long) insn.opcode,
-                (unsigned long) state->amd64_orig_ip);
-        gen_exit(state);
+        state->amd64_fallback_to_interp = true;
         return false;
     }
 
@@ -21394,9 +21383,11 @@ static inline bool gen_evex32_at(struct gen_state *state, struct tlb *tlb, struc
     v.rm = modrm->rm_opcode & 7;
     if ((v.map == 1 && (v.pp == 2 || v.pp == 3) && (v.op == 0x2a || v.op == 0x2c || v.op == 0x2d || v.op == 0x78 ||
             v.op == 0x79 || v.op == 0x7b)) || (v.map == 1 && v.pp == 1 && (v.op == 0x6e || v.op == 0x7e)) ||
-            (v.map == 3 && v.pp == 1 && (v.op == 0x16 || v.op == 0x22)))
-        v.w = 0;                                // VCVT(U)SI2SS/SD, VCVT(T)SS/SD2(U)SI, VMOVD/Q, VPEXTRD/Q, VPINSRD/Q:
-                                                // W is ignored in 32-bit mode (the SDM's N.E.)
+            (v.map == 3 && v.pp == 1 && (v.op == 0x16 || v.op == 0x22 || v.op == 0x20)) ||
+            (v.map == 1 && v.pp == 1 && v.op == 0xc4) || (v.map == 2 && v.pp == 1 && v.op == 0x7c))
+        v.w = 0;                                // VCVT(U)SI2SS/SD, VCVT(T)SS/SD2(U)SI, VMOVD/Q, VPEXTRD/Q, VPINSRD/Q,
+                                                // VPBROADCASTD/Q r: W is ignored in 32-bit mode (the SDM's N.E.);
+                                                // VPINSRB/W are WIG (their GPR is 32 bits here)
     const struct evex_entry *e = evex_lookup(&v);
     if (e == NULL)
         UNDEFINED;
