@@ -51,9 +51,12 @@ cpuid_lookup:
     b.hi 9f
     mov  w15, 12                     /* below it, unimplemented: zeros */
     b    9f
-7:  mov  w15, 12
-    cbnz w9, 9f
-    mov  w15, 2
+7:  mov  w15, 2                      /* leaf 7: subleaves 0 and 1 */
+    cbz  w9, 9f
+    mov  w15, 14                     /* CPUID_SLOT_LEAF7_1 */
+    cmp  w9, 1
+    b.eq 9f
+    mov  w15, 12
     b    9f
 8:  mov  w15, 12                     /* leaf 0xD: subleaves 0 1 2 5 6 7 */
     cmp  w9, 2

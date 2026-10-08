@@ -277,12 +277,11 @@ restart:
                 // here (there is no reordering to fence against when the guest
                 // sees one memory order), but the memory forms are not.
                 //
-                // /4 is XSAVE, /5 XRSTOR and /6 XSAVEOPT, which this engine
-                // does not implement. Those stay UNDEFINED rather than silently
-                // succeeding, because for a state-save instruction "accepted
-                // and ignored" means the guest reads back garbage later with
-                // nothing to blame; emu/cpuid.h keeps the XSAVE bit dark so
-                // nothing should be reaching them anyway.
+                // /4 is XSAVE, /5 XRSTOR and /6 XSAVEOPT (XSAVE's gadget):
+                // gadgets on aarch64 hosts, where emu/cpuid.h advertises
+                // them, UNDEFINED elsewhere rather than silently succeeding --
+                // for a state-save instruction "accepted and ignored" means
+                // the guest reads back garbage later with nothing to blame.
                 //
                 // /7 with a memory operand is CLFLUSH, which is a different
                 // case entirely and stays a no-op: there is one coherent view
@@ -304,6 +303,9 @@ restart:
                         case 1: TRACE("fxrstor"); FXRSTOR(); break;
                         case 2: TRACE("ldmxcsr"); LDMXCSR(); break;
                         case 3: TRACE("stmxcsr"); STMXCSR(); break;
+                        case 4: TRACE("xsave"); XSAVE(); break;
+                        case 5: TRACE("xrstor"); XRSTOR(); break;
+                        case 6: TRACE("xsaveopt"); XSAVE(); break;
                         case 7: TRACE("clflush"); break;
                         default: TRACE("undefined"); UNDEFINED;
                     }
@@ -536,6 +538,10 @@ restart:
                 case 0x38:
                            READINSN; // third opcode byte
                            switch (insn) {
+                               case 0xf0: TRACEI("movbe modrm, reg");      // memory only (gen.c MOVBE)
+                                          READMODRM; MOVBE(modrm_val, modrm_reg, oz); break;
+                               case 0xf1: TRACEI("movbe reg, modrm");
+                                          READMODRM; MOVBE(modrm_reg, modrm_val, oz); break;
                                case 0x00: TRACEI("pshufb xmm:modrm, xmm");
                                           READMODRM; V_OP(pshufb, xmm_modrm_val, xmm_modrm_reg,128); break;
                                case 0x01: TRACEI("phaddw xmm:modrm, xmm");
@@ -832,6 +838,10 @@ restart:
                 case 0x38:
                            READINSN;
                            switch (insn) {
+                               case 0xf0: TRACEI("movbe modrm, reg");      // memory only (gen.c MOVBE)
+                                          READMODRM; MOVBE(modrm_val, modrm_reg, oz); break;
+                               case 0xf1: TRACEI("movbe reg, modrm");
+                                          READMODRM; MOVBE(modrm_reg, modrm_val, oz); break;
                                case 0x00: TRACEI("pshufb mm:modrm, mm");
                                           READMODRM; V_GOP(amd64_vi_pshufb_mr, mm_modrm_val, mm_modrm_reg,64); break;
                                case 0x01: TRACEI("phaddw mm:modrm, mm");

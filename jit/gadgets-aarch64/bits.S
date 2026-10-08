@@ -361,3 +361,12 @@
 .each_reg x
 .purgem x
 .gadget_list bswap, REG_LIST
+
+# MOVBE's byte reversal, of what a load put in _tmp (gen.c's i386 MOVBE:
+# load, this, store).
+.gadget movbe_tmp32
+    rev _tmp, _tmp
+    gret
+.gadget movbe_tmp16
+    rev16 _tmp, _tmp
+    gret

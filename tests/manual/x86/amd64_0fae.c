@@ -1,8 +1,8 @@
 // 0F AE on amd64, the forms the JIT used to send to C (amd64_jit_0f_rm): LOCK
 // and 0x66 on the fences, FXSAVE, LDMXCSR and STMXCSR are #UD; a segment
 // prefix on a fence is ignored; CLFLUSH and CLFLUSHOPT (66) fault on a line
-// that is not readable; XSAVE, XRSTOR, XSAVEOPT, RDFSBASE and CLWB run only
-// where CPUID says so (#UD otherwise). Answers from an AMD Ryzen (camd), the
+// that is not readable; XSAVE, XRSTOR, XSAVEOPT (leaf 0x0D.1 too), RDFSBASE and
+// CLWB run only where CPUID says so (#UD otherwise). Answers from an AMD Ryzen (camd), the
 // feature-gated ones checked against the CPUID of the CPU running the test.
 #include <setjmp.h>
 #include <signal.h>
@@ -82,7 +82,10 @@ int main(void) {
     int x = osxsave ? 0 : SIGILL;
     T("xsave", x, "lea area(%%rip), %%rcx\n xor %%eax, %%eax\n xor %%edx, %%edx\n .byte 0x0f, 0xae, 0x21");
     T("xrstor", x, "lea area(%%rip), %%rcx\n xor %%eax, %%eax\n xor %%edx, %%edx\n .byte 0x0f, 0xae, 0x29");
-    T("xsaveopt", x, "lea area(%%rip), %%rcx\n xor %%eax, %%eax\n xor %%edx, %%edx\n .byte 0x0f, 0xae, 0x31");
+    unsigned da = 0, db, dc, dd;                // XSAVEOPT: leaf 0x0D subleaf 1, EAX bit 0
+    if (osxsave)
+        __asm__ volatile("cpuid" : "=a"(da), "=b"(db), "=c"(dc), "=d"(dd) : "a"(0xd), "c"(1));
+    T("xsaveopt", osxsave && (da & 1) ? 0 : SIGILL, "lea area(%%rip), %%rcx\n xor %%eax, %%eax\n xor %%edx, %%edx\n .byte 0x0f, 0xae, 0x31");
     T("rdfsbase", fsgsbase ? 0 : SIGILL, ".byte 0xf3, 0x48, 0x0f, 0xae, 0xc0");
     T("clwb", clwb ? 0 : SIGILL, "lea area(%%rip), %%rax\n .byte 0x66, 0x0f, 0xae, 0x30");
 

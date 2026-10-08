@@ -23,6 +23,8 @@ struct task;
 #define PTRACE_DETACH_ 17
 #define PTRACE_GETFPREGS_ 14
 #define PTRACE_SETFPREGS_ 15
+#define PTRACE_GETFPXREGS_ 18
+#define PTRACE_SETFPXREGS_ 19
 #define PTRACE_SYSCALL_ 24
 #define PTRACE_GET_THREAD_AREA_ 25
 #define PTRACE_SET_THREAD_AREA_ 26
@@ -39,6 +41,7 @@ struct task;
 #define NT_PRSTATUS_ 1
 #define NT_PRFPREG_ 2
 #define NT_X86_XSTATE_ 0x202
+#define NT_PRXFPREG_ 0x46e62b7f
 #define NT_ARM_TLS_ 0x401
 #define NT_ARM_HW_BREAK_ 0x402
 #define NT_ARM_HW_WATCH_ 0x403

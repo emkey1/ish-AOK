@@ -16,6 +16,7 @@
 #include "misc.h"
 #include "kernel/calls.h"
 #include "emu/cpuid.h"
+#include "emu/xsave.h"
 #include "emu/i386_sreg.h"
 #include "kernel/personality.h"
 #include "kernel/random.h"
@@ -1357,6 +1358,9 @@ static intptr_t elf_exec(struct fd *fd, const char *file, struct exec_args argv,
             {AX_HWCAP2, 0},
             {AX_EXECFN, file_addr},
             {AX_PLATFORM, platform_addr},
+            // Linux's x86 ARCH_DLINFO (5.14+): the most a signal frame
+            // takes, which glibc's sysconf(_SC_MINSIGSTKSZ) reports.
+            {AX_MINSIGSTKSZ, (dword_t) x86_sigframe_max_size(true)},
             {0, 0}
         };
         sp -= vector_bytes;
@@ -1464,10 +1468,15 @@ static intptr_t elf_exec(struct fd *fd, const char *file, struct exec_args argv,
             {AX_HWCAP2, hwcap2},
             {AX_EXECFN, file_addr},
             {AX_PLATFORM, platform_addr},
+            {AX_MINSIGSTKSZ, x86_sigframe_max_size(false)},   // (amd64's only: dropped below for the others)
             {0, 0}
         };
+        if (current->abi != GUEST_ABI_AMD64)
+            aux[sizeof(aux) / sizeof(aux[0]) - 2] = (struct aux64_ent) {0, 0};
         const struct aux64_ent *aux_from = vdso64_base != 0 ? aux : aux + 1;
         size_t aux_size = sizeof(aux) - (size_t) (aux_from - aux) * sizeof(aux[0]);
+        if (current->abi != GUEST_ABI_AMD64)
+            aux_size -= sizeof(aux[0]);         // one terminator, not two
         sp -= vector_bytes;
         sp -= aux_size;
         sp = align_stack(sp);
@@ -1518,12 +1527,12 @@ static intptr_t elf_exec(struct fd *fd, const char *file, struct exec_args argv,
 
     save->mm->stack_start = sp;
     save->cpu.amd64_syscall = (struct amd64_syscall_state) {};
-    // FNINIT's state, as Linux's start_thread leaves the FPU: every register
-    // empty, nothing flagged.
-    save->cpu.fcw = 0x37f;
-    save->cpu.fsw = 0;
-    save->cpu.x87_valid = 0;
-    save->cpu.mxcsr = 0x1f80;
+    // Every XSAVE component in its initial configuration, as Linux's
+    // start_thread leaves the FPU: x87 registers empty, nothing flagged,
+    // MXCSR 1F80H, every vector and opmask register zero -- none of the old
+    // image's -- and the MMX registers with them.
+    xsave_init_state(&save->cpu);
+    memset(save->cpu.mm, 0, sizeof(save->cpu.mm));
 
     memset(save->cpu.amd64_regs, 0, sizeof(save->cpu.amd64_regs));
     // Linux's start_thread loads 0 into ES, DS, FS and GS.

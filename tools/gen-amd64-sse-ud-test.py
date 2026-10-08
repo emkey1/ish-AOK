@@ -72,14 +72,14 @@ else:
     assert len(want) == len(forms)
     # What the AMD runs and AOK does not implement, so #UD here, as on a CPU
     # without them: SSE4A's MOVNTSS/MOVNTSD (F3/F2 0F 2B), SHA (0F 38 C8-CD,
-    # 0F 3A CC), ADX (66/F3 0F 38 F6), MOVBE (0F 38 F0/F1, none or 66). (AES
-    # and PCLMULQDQ run, as the AMD has them; *_avx512_ext.c checks them.)
+    # 0F 3A CC), ADX (66/F3 0F 38 F6). (AES and PCLMULQDQ run, as the AMD has
+    # them; *_avx512_ext.c checks them. MOVBE runs, as the AMD has it, since
+    # 2026-10-08: x86/x86_movbe.c checks it.)
     for i, (op, pfx, kind, b) in enumerate(forms):
         p = pfx[0] if pfx else 0
         if ((op == 0x2b and p in (0xf3, 0xf2) and kind == 'mem') or
                 (0x38c8 <= op <= 0x38cd and p == 0) or (op == 0x3acc and p == 0) or
-                (op == 0x38f6 and p in (0x66, 0xf3)) or
-                (op in (0x38f0, 0x38f1) and p in (0, 0x66))):
+                (op == 0x38f6 and p in (0x66, 0xf3))):
             want[i] = 4
         # GFNI (66 0F 38 CF, 66 0F 3A CE/CF), which the AMD lacks: AOK runs it, as a
         # CPU with it does (tests/manual/x86/*_avx512_ext.c checks it against SDE)
@@ -91,7 +91,7 @@ else:
 // 0F 3A maps, under each prefix, register,
 // REX register and memory forms: the signal it raises -- SIGILL for an
 // encoding x86 does not have, none for one it does -- against what an AMD
-// Ryzen did -- but for what AOK does not implement (SSE4A, SHA, ADX, MOVBE),
+// Ryzen did -- but for what AOK does not implement (SSE4A, SHA, ADX),
 // which the AMD runs and AOK, like a CPU without them, does not, and GFNI,
 // which AOK runs and the AMD does not have. A valid instruction run as #UD,
 // or an invalid one executed, fails here.''', HEAD] + body()

@@ -5778,6 +5778,75 @@ amd64_s4_pinsr pinsrq, 8
 amd64_s4_crc
 amd64_s4_crc _soft
 
+# MOVBE (0F 38 F0 /r, a load; F1 /r, a store; memory only): the operand moved
+# byte-reversed. [meta][disp][next_ip][1 a word, 2 a dword, 3 a qword],
+# gret 4; the register is meta's (bits 8-11). A word load keeps the
+# register's upper bits, a dword one zeroes them; no flags.
+.gadget amd64_movbe_ld
+    ldr  x8, [_ip]
+    ldr  x9, [_ip, 8]
+    ubfx x10, x8, 8, 4
+    amd64_vmem_addr
+    ldr  x11, [_ip, 24]
+    cmp  x11, 2
+    b.eq 2f
+    b.hi 3f
+    amd64_vread_prep 2, movbe_ld2
+    ldrh w12, [x9]
+    rev16 w12, w12
+    add  x11, _cpu, CPU_amd64_regs
+    add  x11, x11, x10, lsl 3
+    strh w12, [x11]
+    gret 4
+2:  amd64_vread_prep 4, movbe_ld4
+    ldr  w12, [x9]
+    rev  w12, w12
+    add  x11, _cpu, CPU_amd64_regs
+    str  x12, [x11, x10, lsl 3]
+    gret 4
+3:  amd64_vread_prep 8, movbe_ld8
+    ldr  x12, [x9]
+    rev  x12, x12
+    add  x11, _cpu, CPU_amd64_regs
+    str  x12, [x11, x10, lsl 3]
+    gret 4
+    amd64_vread_bullshit 2, movbe_ld2
+    amd64_vread_bullshit 4, movbe_ld4
+    amd64_vread_bullshit 8, movbe_ld8
+.gadget amd64_movbe_st
+    ldr  x8, [_ip]
+    ldr  x9, [_ip, 8]
+    ubfx x10, x8, 8, 4
+    amd64_vmem_addr
+    ldr  x11, [_ip, 24]
+    cmp  x11, 2
+    b.eq 2f
+    b.hi 3f
+    amd64_vwrite_prep 2, movbe_st2
+    add  x11, _cpu, CPU_amd64_regs
+    ldr  x12, [x11, x10, lsl 3]
+    rev16 w12, w12
+    strh w12, [x9]
+    amd64_vwrite_done 2, movbe_st2
+    gret 4
+2:  amd64_vwrite_prep 4, movbe_st4
+    add  x11, _cpu, CPU_amd64_regs
+    ldr  x12, [x11, x10, lsl 3]
+    rev  w12, w12
+    str  w12, [x9]
+    amd64_vwrite_done 4, movbe_st4
+    gret 4
+3:  amd64_vwrite_prep 8, movbe_st8
+    add  x11, _cpu, CPU_amd64_regs
+    ldr  x12, [x11, x10, lsl 3]
+    rev  x12, x12
+    str  x12, [x9]
+    amd64_vwrite_done 8, movbe_st8
+    gret 4
+    amd64_vwrite_bullshit 2, movbe_st2
+    amd64_vwrite_bullshit 4, movbe_st4
+    amd64_vwrite_bullshit 8, movbe_st8
+
 
 
 

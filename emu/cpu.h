@@ -415,11 +415,9 @@ struct cpu_state {
     // Splitting it this way rather than widening xmm[] keeps every existing
     // SSE gadget's cpu->xmm[i] offset exactly where it was.
     //
-    // Not threaded through ptrace GETFPREGS / signal-frame construction /
-    // clone: those only need state observable across a syscall, signal, or
-    // debugger boundary, which no current guest workload exercises for
-    // vector state. A debugger inspecting %ymm mid-signal won't see it --
-    // a known, narrow gap, not a straight-line-execution bug.
+    // Across the boundaries, as XSAVE state (emu/xsave.h): a signal frame's
+    // math frame and sigreturn, ptrace's NT_X86_XSTATE, exec's reset to the
+    // initial configuration; clone and checkpoints copy cpu_state whole.
     union xmm_reg xmm_ext[16];
     union xmm_reg ymm_hi[32];
     struct {

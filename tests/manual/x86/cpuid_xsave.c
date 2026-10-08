@@ -6,8 +6,9 @@
 // This file did not exist: no test in the tree executed CPUID at all, so the
 // claim rested on nobody having made a mistake yet. That is a live risk rather
 // than a theoretical one, because emu/cpuid.h's CPUID_ADVERTISE_VECTOR_STATE
-// is a switch someone is expected to flip, and flipping it turns on AVX,
-// AVX-512, AESNI, PCLMULQDQ and XSAVE in one edit.
+// is one switch for AVX, AVX2, FMA, F16C, the AVX-512 families, BF16,
+// AVX-VNNI, AESNI, PCLMULQDQ, GFNI, MOVBE, LZCNT and XSAVE -- on since
+// 2026-10-08, with a probe here for every bit it sets.
 //
 // Over-advertising is the failure that matters, and it is not a graceful one.
 // Feature-detecting software does not probe; it reads CPUID and commits.
@@ -26,12 +27,10 @@
 // requiring someone to remember this file exists.
 //
 // The XSAVE half is a self-consistency check on leaf 0x0D rather than an
-// instruction probe. AOK packs the extended state components itself (MPX is
-// absent, so everything above AVX is packed up against it), which means the
-// offsets and sizes in leaf 0x0D are hand-maintained numbers that software is
-// entitled to believe. They are only checked when XSAVE is actually
-// advertised: leaf 0x0D answers unconditionally today, describing state that
-// the dark leaf-1 bits mean no guest will go looking for.
+// instruction probe: the offsets and sizes there (Intel's standard format,
+// MPX's space left where it would be) are hand-maintained numbers that
+// software is entitled to believe, checked when XSAVE is advertised. What
+// XSAVE and XRSTOR do with them is x86/x86_xsave.c's.
 //
 // Representative instructions are register-only wherever the encoding allows,
 // so a probe that faults faults for the reason under test and not because it
@@ -48,8 +47,8 @@
 //
 // x86 only. Builds and runs on both the i386 and amd64 guests, which is the
 // point for the leaf 7 bits: those are advertised from one ABI-independent
-// function, while the i386 front end reaches vector code only through
-// gen_vex32 (VEX, 128/256-bit, 8 registers) and has no EVEX decoder at all.
+// function, and each guest's front end has to run them. AVX-VNNI and BF16
+// are spelled as bytes: the i386 root's binutils predates their mnemonics.
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdint.h>
@@ -247,7 +246,7 @@ static int p_xgetbv(void) {
 // found it, so a no-op and a correct execution look identical. The 64-byte
 // header sits at offset 512; poison it and require the write.
 static int p_xsave(void) {
-    // Larger than emu/cpuid.h's XSAVE_MAX_SIZE_ (2944) so the area is valid
+    // Larger than emu/cpuid.h's XSAVE_MAX_SIZE_ (2688) so the area is valid
     // whatever leaf 0x0D reports.
     static char area[4096] __attribute__((aligned(64)));
     memset(area, 0xa5, sizeof area);
@@ -343,6 +342,65 @@ static int p_avx512_vnni(void) {
     return 0;
 }
 
+static int p_movbe(void) {
+    static volatile uint32_t word = 0x11223344u;
+    uint32_t r;
+    __asm__ volatile("movbe (%1), %0" : "=r"(r) : "r"(&word) : "memory");
+    return r == 0x44332211u ? 0 : 1;
+}
+
+#ifdef __x86_64__
+static int p_lahf(void) {
+    __asm__ volatile("lahf" : : : "eax");
+    return 0;
+}
+
+// LZCNT, not BSR (which an F3 prefix leaves it as on a CPU without it): 31
+// for 1, where BSR gives 0.
+static int p_lzcnt(void) {
+    unsigned r, x = 1;
+    __asm__ volatile("lzcnt %1, %0" : "=r"(r) : "r"(x) : "cc");
+    return r == 31 ? 0 : 1;
+}
+#endif
+
+static int p_fma(void) {
+    __asm__ volatile("vfmadd231ps %%xmm0,%%xmm0,%%xmm0" : : : "memory");
+    return 0;
+}
+
+static int p_f16c(void) {
+    __asm__ volatile("vcvtph2ps %%xmm0,%%xmm0" : : : "memory");
+    return 0;
+}
+
+static int p_avx512ifma(void) {
+    __asm__ volatile("vpmadd52luq %%zmm0,%%zmm0,%%zmm0\n\tvzeroupper" : : : "memory");
+    return 0;
+}
+
+static int p_avx512cd(void) {
+    __asm__ volatile("vpconflictd %%zmm0,%%zmm0\n\tvzeroupper" : : : "memory");
+    return 0;
+}
+
+static int p_avx512_bitalg(void) {
+    __asm__ volatile("vpopcntb %%zmm0,%%zmm0\n\tvzeroupper" : : : "memory");
+    return 0;
+}
+
+// {vex} vpdpbusd %ymm0,%ymm0,%ymm0: VEX.256.66.0F38.W0 50 /r
+static int p_avx_vnni(void) {
+    __asm__ volatile(".byte 0xc4, 0xe2, 0x7d, 0x50, 0xc0\n\tvzeroupper" : : : "memory");
+    return 0;
+}
+
+// vdpbf16ps %zmm0,%zmm0,%zmm0: EVEX.512.F3.0F38.W0 52 /r
+static int p_avx512_bf16(void) {
+    __asm__ volatile(".byte 0x62, 0xf2, 0x7e, 0x48, 0x52, 0xc0\n\tvzeroupper" : : : "memory");
+    return 0;
+}
+
 static int p_avx512_vpopcntdq(void) {
     __asm__ volatile("vpopcntd %%zmm0,%%zmm0\n\tvzeroupper" : : : "memory");
     return 0;
@@ -404,6 +462,8 @@ static const struct feature features[] = {
     { "sse3",               1, 0, 'c',  0, p_sse3,       0 },
     { "pclmulqdq",          1, 0, 'c',  1, p_pclmulqdq,  0 },
     { "ssse3",              1, 0, 'c',  9, p_ssse3,      0 },
+    { "fma",                1, 0, 'c', 12, p_fma,        0 },
+    { "movbe",              1, 0, 'c', 22, p_movbe,      0 },
 #ifdef __x86_64__
     { "cx16",               1, 0, 'c', 13, p_cx16,       F_AMD64_ONLY },
 #endif
@@ -414,12 +474,15 @@ static const struct feature features[] = {
     { "xsave",              1, 0, 'c', 26, p_xsave,      0 },
     { "osxsave",            1, 0, 'c', 27, p_xgetbv,     0 },
     { "avx",                1, 0, 'c', 28, p_avx,        0 },
+    { "f16c",               1, 0, 'c', 29, p_f16c,       0 },
     // leaf 7 subleaf 0, ebx
     { "bmi1",               7, 0, 'b',  3, p_bmi1,       0 },
     { "avx2",               7, 0, 'b',  5, p_avx2,       0 },
     { "bmi2",               7, 0, 'b',  8, p_bmi2,       0 },
     { "avx512f",            7, 0, 'b', 16, p_avx512f,    0 },
     { "avx512dq",           7, 0, 'b', 17, p_avx512dq,   0 },
+    { "avx512ifma",         7, 0, 'b', 21, p_avx512ifma, 0 },
+    { "avx512cd",           7, 0, 'b', 28, p_avx512cd,   0 },
     { "avx512bw",           7, 0, 'b', 30, p_avx512bw,   0 },
     { "avx512vl",           7, 0, 'b', 31, p_avx512vl,   0 },
     // leaf 7 subleaf 0, ecx
@@ -429,10 +492,17 @@ static const struct feature features[] = {
     { "vaes",               7, 0, 'c',  9, p_vaes,               0 },
     { "vpclmulqdq",         7, 0, 'c', 10, p_vpclmulqdq,         0 },
     { "avx512_vnni",        7, 0, 'c', 11, p_avx512_vnni,        0 },
+    { "avx512_bitalg",      7, 0, 'c', 12, p_avx512_bitalg,      0 },
     { "avx512_vpopcntdq",   7, 0, 'c', 14, p_avx512_vpopcntdq,   0 },
+    // leaf 7 subleaf 1, eax
+    { "avx_vnni",           7, 1, 'a',  4, p_avx_vnni,           0 },
+    { "avx512_bf16",        7, 1, 'a',  5, p_avx512_bf16,        0 },
 #ifdef __x86_64__
     // leaf 0x80000001, edx
     { "syscall",   0x80000001, 0, 'd', 11, p_syscall,    F_AMD64_ONLY },
+    // leaf 0x80000001, ecx
+    { "lahf_lm",   0x80000001, 0, 'c',  0, p_lahf,       F_AMD64_ONLY },
+    { "abm",       0x80000001, 0, 'c',  5, p_lzcnt,      F_AMD64_ONLY },
 #endif
 };
 

@@ -100,6 +100,19 @@ static void format_cpuid_flags(char *buf, size_t size) {
         NULL, "tbm", "topoext", "perfctr_core", "perfctr_nb", NULL,
         "bpext", "ptsc", "perfctr_llc", "mwaitx", NULL, NULL,
     };
+    // Leaf 7 in Linux's word order (subleaf 0's EBX, subleaf 1's EAX,
+    // subleaf 0's ECX), with Linux's names; only bits AOK can set are named.
+    static const char *const leaf7_ebx_names[32] = {
+        [3] = "bmi1", [5] = "avx2", [8] = "bmi2", [16] = "avx512f", [17] = "avx512dq",
+        [21] = "avx512ifma", [28] = "avx512cd", [30] = "avx512bw", [31] = "avx512vl",
+    };
+    static const char *const leaf7_1_eax_names[32] = {
+        [4] = "avx_vnni", [5] = "avx512_bf16",
+    };
+    static const char *const leaf7_ecx_names[32] = {
+        [1] = "avx512vbmi", [6] = "avx512_vbmi2", [8] = "gfni", [9] = "vaes", [10] = "vpclmulqdq",
+        [11] = "avx512_vnni", [12] = "avx512_bitalg", [14] = "avx512_vpopcntdq",
+    };
     dword_t eax = 1, ebx = 0, ecx = 0, edx = 0;
 
     buf[0] = '\0';
@@ -112,6 +125,23 @@ static void format_cpuid_flags(char *buf, size_t size) {
         eax = 0x80000001u;
         do_cpuid(&eax, &ebx, &ecx, &edx);
         append_cpuid_flags(buf, size, ecx, edx, ext_ecx_names, ext_edx_names);
+    }
+
+    eax = 0;
+    do_cpuid(&eax, &ebx, &ecx, &edx);
+    if (eax >= 7) {
+        eax = 7;
+        ecx = 0;
+        do_cpuid(&eax, &ebx, &ecx, &edx);
+        dword_t max_sub = eax, l7_ebx = ebx, l7_ecx = ecx;
+        append_cpuid_leaf_flags(buf, size, l7_ebx, leaf7_ebx_names);
+        if (max_sub >= 1) {
+            eax = 7;
+            ecx = 1;
+            do_cpuid(&eax, &ebx, &ecx, &edx);
+            append_cpuid_leaf_flags(buf, size, eax, leaf7_1_eax_names);
+        }
+        append_cpuid_leaf_flags(buf, size, l7_ecx, leaf7_ecx_names);
     }
 }
 
@@ -226,7 +256,7 @@ static int proc_show_cpuinfo(struct proc_entry *UNUSED(entry), struct proc_data 
         cpu_model |= ((eax >> 16) & 0xf) << 4;
     unsigned cpu_stepping = eax & 0xf;
 
-    char cpu_flags[512] = { 0 };
+    char cpu_flags[1024] = { 0 };
     format_cpuid_flags(cpu_flags, sizeof(cpu_flags));
     char *host_architecture = copyHostArchitecture();
     char *host_machine_identifier = copyHostMachineIdentifier();

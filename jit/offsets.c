@@ -1,6 +1,7 @@
 #include "jit/jit.h"
 #include "jit/frame.h"
 #include "emu/cpu.h"
+#include "emu/cpuid.h"
 #include "emu/tlb.h"
 #include "emu/mmu.h"
 
@@ -52,6 +53,22 @@ void cpu() {
     OFFSET(CPU, cpu_state, avx512_k);
     OFFSET(CPU, cpu_state, mm);
     OFFSET(CPU, cpu_state, mxcsr);
+    MACRO(XCR0_X87_);
+    MACRO(XCR0_SSE_);
+    MACRO(XCR0_YMM_);
+    MACRO(XCR0_OPMASK_);
+    MACRO(XCR0_ZMM_HI256_);
+    MACRO(XCR0_HI16_ZMM_);
+    MACRO(XCR0_SUPPORTED_);
+    MACRO(XSAVE_LEGACY_SIZE_);
+    MACRO(XSAVE_YMM_OFFSET_);
+    MACRO(XSAVE_YMM_SIZE_);
+    MACRO(XSAVE_OPMASK_OFFSET_);
+    MACRO(XSAVE_OPMASK_SIZE_);
+    MACRO(XSAVE_ZMM_HI_OFFSET_);
+    MACRO(XSAVE_ZMM_HI_SIZE_);
+    MACRO(XSAVE_HI16_OFFSET_);
+    MACRO(XSAVE_HI16_SIZE_);
     MACRO(PF_RES);
     MACRO(ZF_RES);
     MACRO(SF_RES);

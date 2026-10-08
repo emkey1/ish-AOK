@@ -64,7 +64,13 @@ int main(void) {
     struct r ext = cpuid(emax + 1, 0);
     if (emax + 1 != 0x80000001u)
         check("past the extended maximum: eax = that maximum", ext.a, emax);
-    check("leaf 7, subleaf 1: zeros", ({ struct r x = cpuid(7, 1); x.a | x.b | x.c | x.d; }), 0);
+    {   // leaf 7: subleaf 0's eax the highest subleaf; subleaf 1 AVX-VNNI and
+        // AVX512_BF16 in eax (or nothing, with the vector bits dark); past it zeros
+        struct r l70 = cpuid(7, 0), l71 = cpuid(7, 1), l72 = cpuid(7, 2);
+        check("leaf 7, subleaf 1: eax within the highest subleaf's", l70.a >= 1 ? l71.a & ~0x30ul : l71.a, 0);
+        check("leaf 7, subleaf 1: ebx ecx edx zero", l71.b | l71.c | l71.d, 0);
+        check("leaf 7, subleaf 2: zeros", l72.a | l72.b | l72.c | l72.d, 0);
+    }
     check("leaf 0xD, subleaf 3: zeros", ({ struct r x = cpuid(0xd, 3); x.a | x.b | x.c | x.d; }), 0);
     check("leaf 0xD, subleaf 9: zeros", ({ struct r x = cpuid(0xd, 9); x.a | x.b | x.c | x.d; }), 0);
 #if defined(__x86_64__)

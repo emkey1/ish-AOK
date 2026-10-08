@@ -631,5 +631,8 @@ struct rt_sigframe_ {
 // everything align.
 extern int xsave_extra;
 extern int fxsave_extra;
+// The most stack an x86 signal frame takes, math frame and alignment
+// included: AT_MINSIGSTKSZ, and what an altstack has to hold.
+size_t x86_sigframe_max_size(bool ia32);
 
 #endif

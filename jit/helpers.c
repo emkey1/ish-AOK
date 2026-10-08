@@ -21,6 +21,11 @@ static void cpuid_fill(struct cpuid_answer *ans, dword_t leaf, dword_t subleaf) 
     *ans = (struct cpuid_answer) {a, b, c, d};
 }
 
+// jit/gadgets-aarch64/misc.S cpuid_lookup picks slots by number.
+_Static_assert(CPUID_SLOT_LEAF7_0 == 2 && CPUID_SLOT_LEAFD_0 == 3 && CPUID_SLOT_EXT0 == 9 &&
+        CPUID_SLOT_ABOVE_BASIC == 11 && CPUID_SLOT_ZERO == 12 && CPUID_SLOT_ABOVE_EXT == 13 &&
+        CPUID_SLOT_LEAF7_1 == 14, "cpuid_lookup's slot numbers");
+
 __attribute__((constructor)) void cpuid_tables_init(void) {
     for (int lm = 0; lm < 2; lm++) {
         cpuid_long_mode_override = lm;
@@ -28,6 +33,7 @@ __attribute__((constructor)) void cpuid_tables_init(void) {
         cpuid_fill(&s[CPUID_SLOT_LEAF0], 0, 0);
         cpuid_fill(&s[CPUID_SLOT_LEAF1], 1, 0);
         cpuid_fill(&s[CPUID_SLOT_LEAF7_0], 7, 0);
+        cpuid_fill(&s[CPUID_SLOT_LEAF7_1], 7, 1);
         cpuid_fill(&s[CPUID_SLOT_LEAFD_0], 0xd, 0);
         cpuid_fill(&s[CPUID_SLOT_LEAFD_1], 0xd, 1);
         cpuid_fill(&s[CPUID_SLOT_LEAFD_2], 0xd, 2);

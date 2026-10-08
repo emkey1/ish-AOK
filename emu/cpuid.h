@@ -29,20 +29,15 @@ static inline dword_t cpuid_extended_max_leaf(void) {
 
 // ---- XSAVE state components ------------------------------------------------
 //
-// We support x87, SSE, AVX (YMM_Hi128) and the three AVX-512 components. MPX
-// (states 3 and 4) is not implemented, so it is absent from XCR0 and the later
-// components are packed up against the AVX one. Software is required to take
-// component offsets from CPUID leaf 0x0D rather than assume a fixed map -- real
-// silicon varies here too, since Ice Lake dropped MPX exactly like this -- so
-// the only hard requirement is that this table and the offsets the XSAVE
-// implementation uses agree.
-//
-// There is no XSAVE implementation yet, so this table is currently the only
-// definition of the map and nothing derives from it. Leaf 0x0D answers
-// unconditionally all the same, which is harmless only because
-// CPUID_ADVERTISE_VECTOR_STATE keeps the leaf-1 XSAVE bit dark: software
-// checks that bit before it goes looking here. Whoever writes XSAVE/XRSTOR
-// must take its offsets from these constants rather than repeat them.
+// x87, SSE, AVX (YMM_Hi128) and the three AVX-512 components. MPX (states 3
+// and 4) is not implemented, so it is absent from XCR0, but its space stays
+// where Intel's standard format puts it: the offsets are Sapphire Rapids'
+// (and every Intel AVX-512 part's since MPX went), which debuggers that read
+// an XSAVE image by XCR0 and size rather than by CPUID -- gdb's Intel layout
+// -- expect. AMD's Zen 4 packs the AVX-512 components up against AVX
+// instead; AOK is GenuineIntel. Leaf 0x0D reports these, emu/xsave.h and the
+// XSAVE/XRSTOR gadgets (jit/gadgets-aarch64/x87.S, through jit/offsets.c)
+// use them.
 #define XCR0_X87_       (1u << 0)
 #define XCR0_SSE_       (1u << 1)
 #define XCR0_YMM_       (1u << 2)
@@ -58,13 +53,13 @@ static inline dword_t cpuid_extended_max_leaf(void) {
 #define XSAVE_HEADER_SIZE_   64
 #define XSAVE_YMM_OFFSET_    576            // 512 + 64
 #define XSAVE_YMM_SIZE_      256            // 16 regs * 16 bytes of ymm_hi
-#define XSAVE_OPMASK_OFFSET_ 832            // 576 + 256
+#define XSAVE_OPMASK_OFFSET_ 1088           // (MPX's BNDREGS 960 and BNDCSR 1024 before it)
 #define XSAVE_OPMASK_SIZE_   64             // k0-k7, 8 bytes each
-#define XSAVE_ZMM_HI_OFFSET_ 896            // 832 + 64
-#define XSAVE_ZMM_HI_SIZE_   1024           // 16 regs * 32 bytes (bits 256-511)
-#define XSAVE_HI16_OFFSET_   1920           // 896 + 1024
+#define XSAVE_ZMM_HI_OFFSET_ 1152
+#define XSAVE_ZMM_HI_SIZE_   512            // 16 regs * 32 bytes (bits 256-511)
+#define XSAVE_HI16_OFFSET_   1664
 #define XSAVE_HI16_SIZE_     1024           // regs 16-31, 64 bytes each
-#define XSAVE_MAX_SIZE_      2944           // 1920 + 1024
+#define XSAVE_MAX_SIZE_      2688           // 1664 + 1024
 
 // XCR0 as XGETBV(0) reports it. iSH is the OS, so every component we support
 // is permanently enabled: there is no CR4.OSXSAVE to clear and no path for a
@@ -75,33 +70,28 @@ static inline qword_t xcr0_value(void) {
     return XCR0_SUPPORTED_;
 }
 
-// Whether to tell guests the vector state exists.
+// Whether to tell guests the vector state exists: AVX, AVX2, FMA, F16C, the
+// AVX-512 families, BF16, AVX-VNNI, AES-NI, PCLMULQDQ and GFNI, and XSAVE.
 //
-// The machinery below (leaf 7, leaf 0x0D, XGETBV, XCR0) is complete and
-// tested, but advertising AVX is only SAFE once the extended vector state
-// survives a signal. Until then glibc would start selecting AVX string
-// routines, those run inside signal handlers too, and a handler clobbering
-// ymm_hi has nowhere to restore it from -- kernel/signal.c's amd64_fpstate_ is
-// static_asserted to the 512-byte legacy FXSAVE layout, which holds only the
-// low 128 bits of xmm[0-15]. That would trade today's dormant gap for silent
-// register corruption in any program taking a signal mid-AVX, which is a
-// strictly worse bug than the one we are fixing.
+// On an aarch64 host, yes. Every VEX and EVEX instruction is gadgets or #UD
+// (jit/gen.c; tests/manual/x86/*_vex_ud.c and *_evex_ud.c check every
+// encoding against Intel's answer), in both guests; XSAVE and XRSTOR are
+// gadgets (jit/gadgets-aarch64/x87.S); and the extended state rides through
+// a signal frame -- the XSAVE math frame with Linux's magics, restored by
+// sigreturn -- ptrace's NT_X86_XSTATE and exec (emu/xsave.h,
+// tests/manual/x86/x86_xsave.c). That was what kept this dark: advertising
+// AVX while a signal handler could clobber ymm_hi with nothing to restore it
+// from would have traded a dormant gap for silent register corruption.
+// tests/manual/x86/cpuid_xsave.c runs an instruction for every bit set here,
+// on both guest ABIs (these bits are ABI-independent).
 //
-// So the enumeration lands dark and this flips to 1 in the same commit that
-// teaches the signal frame (and ptrace's regsets) to carry ymm_hi, zmm_hi,
-// xmm_ext and the opmask registers. XSAVE/XRSTOR must land with it too: bit 26
-// below promises those instructions exist, and today nothing implements them.
-//
-// The signal frame is not the only debt. Flipping this to 1 and running
-// tests/manual/x86/cpuid_xsave.c on an i386 guest reports thirteen features
-// advertised that the guest cannot execute: every AVX-512 bit (the i386 front
-// end reaches vector code only through gen_vex32, which is VEX-only -- there
-// is no EVEX decoder), BMI1 and BMI2, and the legacy SSE encodings of AESNI
-// and PCLMULQDQ. The amd64 guest is in better shape but shares the XSAVE gap.
-// Run that test on BOTH guest ABIs before believing the switch is safe: these
-// bits are advertised from ABI-independent functions, so i386 gets whatever
-// amd64 is promised.
+// Elsewhere (the x86_64-host backend, which Linux CI builds) the vector
+// instructions are the interpreter's and XSAVE is #UD, so it stays dark.
+#if defined(__aarch64__)
+#define CPUID_ADVERTISE_VECTOR_STATE 1
+#else
 #define CPUID_ADVERTISE_VECTOR_STATE 0
+#endif
 
 static inline dword_t cpuid_leaf1_ecx_features(void) {
     dword_t features = 0;
@@ -134,6 +124,12 @@ static inline dword_t cpuid_leaf1_ecx_features(void) {
     features |= (1 << 26);  // xsave
     features |= (1 << 27);  // osxsave
     features |= (1 << 28);  // avx
+    features |= (1 << 12);  // fma
+    features |= (1 << 29);  // f16c
+    // MOVBE (gadgets on aarch64 hosts, as the rest here): with LZCNT and
+    // LAHF_LM (leaf 0x80000001) it completes x86-64-v3, which glibc's
+    // hwcaps levels -- and distributions built for v3 -- look for.
+    features |= (1 << 22);  // movbe
 #endif
     // cmpxchg16b is implemented for the amd64 (long-mode) guest, so advertise it
     // -- feature-detecting software (glibc, C++ 128-bit lock-free CAS) checks
@@ -233,6 +229,8 @@ static inline dword_t cpuid_leaf7_ebx_features(void) {
         | (1u << 8)     // bmi2
         | (1u << 16)    // avx512f
         | (1u << 17)    // avx512dq
+        | (1u << 21)    // avx512_ifma
+        | (1u << 28)    // avx512cd
         | (1u << 30)    // avx512bw
         | (1u << 31);   // avx512vl
 #endif
@@ -248,7 +246,19 @@ static inline dword_t cpuid_leaf7_ecx_features(void) {
         | (1u << 9)     // vaes
         | (1u << 10)    // vpclmulqdq
         | (1u << 11)    // avx512_vnni
+        | (1u << 12)    // avx512_bitalg
         | (1u << 14);   // avx512_vpopcntdq
+#endif
+}
+
+// Leaf 7 subleaf 1's EAX: AVX-VNNI (the VEX forms of VPDPBUSD and friends)
+// and AVX512_BF16.
+static inline dword_t cpuid_leaf7_1_eax_features(void) {
+#if !CPUID_ADVERTISE_VECTOR_STATE
+    return 0;
+#else
+    return (1u << 4)    // avx_vnni
+        | (1u << 5);    // avx512_bf16
 #endif
 }
 
@@ -266,8 +276,10 @@ static inline void cpuid_leaf_d(dword_t subleaf, dword_t *eax, dword_t *ebx,
             *ecx = XSAVE_MAX_SIZE_;
             break;
         case 1:
-            // No XSAVEOPT/XSAVEC/XGETBV1/XSAVES: plain XSAVE and XRSTOR only,
-            // so every bit here stays clear and software falls back to them.
+            // XSAVEOPT (XSAVE's gadget: its optimizations allow it to skip
+            // a write, never require it); no XSAVEC, XGETBV1 or XSAVES, so
+            // software that would compact falls back to XSAVE.
+            *eax = CPUID_ADVERTISE_VECTOR_STATE ? 1 : 0;
             break;
         case 2:
             *eax = XSAVE_YMM_SIZE_;
@@ -290,8 +302,15 @@ static inline void cpuid_leaf_d(dword_t subleaf, dword_t *eax, dword_t *ebx,
     }
 }
 
+// LAHF/SAHF in 64-bit mode (x86-64-v2) and LZCNT ("abm", x86-64-v3): both
+// gadgets on aarch64 hosts. (Leaf 0x80000001 is the amd64 guest's only.)
 static inline dword_t cpuid_leaf80000001_ecx_features(void) {
+#if !CPUID_ADVERTISE_VECTOR_STATE
     return 0;
+#else
+    return (1u << 0)    // lahf_lm
+        | (1u << 5);    // abm (lzcnt)
+#endif
 }
 
 static inline dword_t cpuid_leaf80000001_edx_features(void) {
@@ -324,10 +343,13 @@ static inline void do_cpuid(dword_t *eax, dword_t *ebx, dword_t *ecx, dword_t *e
             break;
         case 7:
             if (subleaf == 0) {
-                *eax = 0; // highest subleaf
+                *eax = CPUID_ADVERTISE_VECTOR_STATE ? 1 : 0; // highest subleaf
                 *ebx = cpuid_leaf7_ebx_features();
                 *ecx = cpuid_leaf7_ecx_features();
                 *edx = 0;
+            } else if (subleaf == 1 && CPUID_ADVERTISE_VECTOR_STATE) {
+                *eax = cpuid_leaf7_1_eax_features();
+                *ebx = *ecx = *edx = 0;
             } else {
                 *eax = *ebx = *ecx = *edx = 0;
             }
@@ -387,6 +409,7 @@ enum {
     CPUID_SLOT_ABOVE_BASIC,   // a leaf above the basic maximum
     CPUID_SLOT_ZERO,          // an unimplemented leaf or subleaf below it
     CPUID_SLOT_ABOVE_EXT,     // any other extended leaf
+    CPUID_SLOT_LEAF7_1,
     CPUID_SLOTS,
 };
 struct cpuid_table { struct cpuid_answer slot[CPUID_SLOTS]; };

@@ -16,6 +16,7 @@
 #include "emu/interrupt.h"
 #include "emu/memory.h"
 #include "emu/fxsave.h"
+#include "emu/xsave.h"
 #include "emu/i386_sreg.h"
 #include "util/sync.h"
 #include "kernel/anonfd_ckpt.h"
@@ -2837,14 +2838,13 @@ static sigset_t_ sigmask_to_save(void) {
 
 // Linux x86 starts a signal handler with the FPU in its initial state
 // (fpu__clear_user_states): x87 control word 0x37f, an empty stack, SSE
-// round-to-nearest with every exception masked, and no flags. The state the
+// round-to-nearest with every exception masked, and no flags -- and, as
+// Linux's fpu__clear_user_states leaves every XSAVE component, the x87
+// registers empty and every vector and opmask register zero. The state the
 // handler interrupted is in the frame, and sigreturn puts it back. arm64 and
 // riscv64 hand the handler FPCR/FPSR and fcsr as they were, so this is x86's.
 static void x86_signal_handler_fpu_init(struct cpu_state *cpu) {
-    cpu->fcw = 0x037f;
-    cpu->fsw = 0;
-    cpu->x87_valid = 0;
-    cpu->mxcsr = 0x1f80;
+    xsave_init_state(cpu);
 }
 
 // Linux's handle_signal: a handler starts with DF, RF and TF clear; the frame
@@ -2910,6 +2910,141 @@ static void restore_i386_fpstate(struct fpstate_ *fpstate, struct cpu_state *cpu
     cpu->mxcsr &= 0xffff;
 }
 
+// ---- The XSAVE math frame (Linux's arch/x86/kernel/fpu/signal.c) ----
+// Above the signal frame: the whole state as XSAVE writes it (emu/xsave.h),
+// 64-byte aligned, struct _fpx_sw_bytes in the legacy area's software bytes
+// (464-511) and FP_XSTATE_MAGIC2 just past the image -- which is how a libc
+// or a sigreturn knows the extended state is there. An i386 frame has the
+// FNSAVE-style header (struct fpstate_'s first 112 bytes) below the image,
+// and sigcontext.fpstate points at the header; an amd64 one at the image.
+// (tools/ptraceomatic sets xsave_extra to mirror a host kernel's frame and
+// keeps the FXSAVE-only frame that goes with it.)
+#define FP_XSTATE_MAGIC1_ 0x46505853u
+#define FP_XSTATE_MAGIC2_ 0x46505845u
+#define X86_MATHFRAME_SIZE_ (XSAVE_SIZE_ + 4)
+
+size_t x86_sigframe_max_size(bool ia32) {
+    size_t frame = ia32 ? (sizeof(struct rt_sigframe_) > sizeof(struct sigframe_) ?
+            sizeof(struct rt_sigframe_) : sizeof(struct sigframe_)) : sizeof(struct rt_sigframe_amd64);
+    return X86_MATHFRAME_SIZE_ + 63 + (ia32 ? I386_FPSTATE_LEGACY_SIZE : 0) + frame + 16 + 8;
+}
+
+// A frame on the altstack that does not fit in it -- it would run below
+// ss_sp -- is Linux's get_sigframe failure: SIGSEGV, rather than the bytes
+// under the altstack overwritten. An AVX-512 frame is larger than
+// MINSIGSTKSZ (AT_MINSIGSTKSZ says how large), as on hardware.
+static bool x86_frame_overruns_altstack(bool to_altstack, guest_addr_t frame_sp) {
+    if (!current->altstack || xsave_extra)
+        return false;
+    if (!to_altstack && !is_on_altstack(current_user_sp(current), current))
+        return false;
+    return frame_sp < current->altstack;
+}
+
+static guest_addr_t x86_alloc_mathframe(guest_addr_t sp, bool ia32, guest_addr_t *buf_fx) {
+    sp -= X86_MATHFRAME_SIZE_;
+    sp &= ~(guest_addr_t) 0x3f;
+    *buf_fx = sp;
+    if (ia32)
+        sp -= I386_FPSTATE_LEGACY_SIZE;
+    return sp;
+}
+
+static int x86_write_mathframe(guest_addr_t buf_fx, bool ia32, struct cpu_state *cpu) {
+    uint8_t img[X86_MATHFRAME_SIZE_];
+    xsave_fill(cpu, img, ia32 ? 8 : 16);
+    dword_t magic1 = FP_XSTATE_MAGIC1_, magic2 = FP_XSTATE_MAGIC2_, size = XSAVE_SIZE_;
+    dword_t extended = X86_MATHFRAME_SIZE_ + (ia32 ? I386_FPSTATE_LEGACY_SIZE : 0);
+    qword_t xfeatures = XCR0_SUPPORTED_;
+    memcpy(img + 464, &magic1, 4);
+    memcpy(img + 468, &extended, 4);
+    memcpy(img + 472, &xfeatures, 8);
+    memcpy(img + 480, &size, 4);
+    memcpy(img + XSAVE_SIZE_, &magic2, 4);
+    if (ia32) {
+        struct fpstate_ fpstate;
+        setup_i386_fpstate(&fpstate, cpu);
+        if (user_write(buf_fx - I386_FPSTATE_LEGACY_SIZE, &fpstate, I386_FPSTATE_LEGACY_SIZE))
+            return -1;
+    }
+    return user_write(buf_fx, img, sizeof(img)) ? -1 : 0;
+}
+
+// sigreturn's: an fpstate of 0 initializes every component (Linux's
+// fpu__clear_user_states). An image without both magics is FXSAVE only: x87
+// and SSE from it, MXCSR's reserved bits dropped, the rest initialized. With
+// them, the components the software bytes' xfeatures and the header's
+// XSTATE_BV both name are loaded and the rest initialized, as XRSTOR does;
+// one XRSTOR would #GP on is -1, as is one that cannot be read: SIGSEGV. On
+// i386 the x87 environment and registers come from the FNSAVE header, as
+// Linux's convert_to_fxsr takes them.
+static int x86_restore_mathframe(guest_addr_t fpstate, bool ia32, struct cpu_state *cpu) {
+    if (fpstate == 0) {
+        xsave_init_state(cpu);
+        return 0;
+    }
+    guest_addr_t buf_fx = fpstate;
+    struct fpstate_ hdr;
+    if (ia32) {
+        if (user_read(fpstate, &hdr, I386_FPSTATE_LEGACY_SIZE))
+            return -1;
+        if (hdr.magic == 0xffff) {
+            restore_i386_fpstate(&hdr, cpu);
+            return 0;
+        }
+        buf_fx += I386_FPSTATE_LEGACY_SIZE;
+    }
+    uint8_t img[X86_MATHFRAME_SIZE_];
+    memset(img, 0, sizeof(img));
+    if (user_read(buf_fx, img, XSAVE_LEGACY_SIZE_))
+        return -1;
+    dword_t magic1, extended, size;
+    qword_t xfeatures;
+    memcpy(&magic1, img + 464, 4);
+    memcpy(&extended, img + 468, 4);
+    memcpy(&xfeatures, img + 472, 8);
+    memcpy(&size, img + 480, 4);
+    bool fx_only = magic1 != FP_XSTATE_MAGIC1_ || size < XSAVE_LEGACY_SIZE_ + XSAVE_HEADER_SIZE_ ||
+            size > XSAVE_SIZE_ || size > extended;
+    if (!fx_only) {
+        dword_t magic2;
+        if (user_get(buf_fx + size, magic2))
+            return -1;
+        fx_only = magic2 != FP_XSTATE_MAGIC2_;
+    }
+    if (!fx_only && user_read(buf_fx + XSAVE_LEGACY_SIZE_, img + XSAVE_LEGACY_SIZE_, size - XSAVE_LEGACY_SIZE_))
+        return -1;
+    if (ia32) {
+        struct fxsave_area fx;
+        memcpy(&fx, img, sizeof(fx));
+        fx.fcw = (word_t) hdr.cw;
+        fx.fsw = (word_t) hdr.sw;
+        fx.ftw = x87_valid_from_full_tag((word_t) hdr.tag);
+        for (int i = 0; i < 8; i++) {
+            memcpy(fx.st[i].significand, hdr.st[i].significand, sizeof(fx.st[i].significand));
+            fx.st[i].exponent = hdr.st[i].exponent;
+        }
+        memcpy(img, &fx, sizeof(fx));
+    }
+    qword_t bv;
+    if (fx_only) {
+        memset(img + XSAVE_LEGACY_SIZE_, 0, XSAVE_SIZE_ - XSAVE_LEGACY_SIZE_);
+        bv = XCR0_X87_ | XCR0_SSE_;
+        dword_t mxcsr;
+        memcpy(&mxcsr, img + 24, 4);
+        mxcsr &= 0xffff;
+        memcpy(img + 24, &mxcsr, 4);
+    } else {
+        if (xsave_check(img, XCR0_SUPPORTED_))
+            return -1;
+        memcpy(&bv, img + XSAVE_LEGACY_SIZE_, 8);
+        bv &= xfeatures;
+    }
+    memcpy(img + XSAVE_LEGACY_SIZE_, &bv, 8);
+    xsave_restore(cpu, img, XCR0_SUPPORTED_, ia32 ? 8 : 16);
+    return 0;
+}
+
 static void setup_sigcontext(struct sigcontext_ *sc, struct cpu_state *cpu, int sig) {
     sc->ax = cpu->eax;
     sc->bx = cpu->ebx;
@@ -2958,7 +3093,7 @@ static void setup_rt_sigframe(struct siginfo_ *info, struct rt_sigframe_ *frame)
     frame->restorer = (addr_t) signal_restorer(&current->sighand->action[info->sig], true);
     frame->sig = info->sig;
     siginfo_to_i386_user(&frame->info, info);
-    frame->uc.flags = 0;
+    frame->uc.flags = xsave_extra ? 0 : 1;  // UC_FP_XSTATE: the math frame has XSAVE state
     frame->uc.link = 0;
     altstack_to_i386_user(current, &frame->uc.stack);
     setup_sigcontext(&frame->uc.mcontext, &current->cpu, info->sig);
@@ -3341,18 +3476,25 @@ static void receive_signal(struct sighand *sighand, struct siginfo_ *info) {
     bool need_siginfo = action->flags & SA_SIGINFO_;
 
     guest_addr_t sp = current_user_sp(current);
+    bool to_altstack = false;
     if (guest_abi_is_64bit(current->abi)) {
         // amd64 and arm64: architected behavior — the altstack is used
         // only when the action asks for it.
         if ((action->flags & SA_ONSTACK_) && current->altstack && !is_on_altstack(sp, current))
-            sp = current->altstack + current->altstack_size;
+            to_altstack = true;
     } else {
         // Preserve longstanding i386 behavior. Existing 32-bit userspace in
         // this tree has historically run all handlers on the altstack when
         // one is configured, regardless of SA_ONSTACK.
         if (current->altstack && !is_on_altstack(sp, current))
-            sp = current->altstack + current->altstack_size;
+            to_altstack = true;
     }
+    // amd64's red zone is skipped on the stack the signal interrupted, not
+    // on an altstack it switches to (Linux's get_sigframe).
+    if (current->abi == GUEST_ABI_AMD64 && !to_altstack && !xsave_extra && sp > 128)
+        sp -= 128;
+    if (to_altstack)
+        sp = current->altstack + current->altstack_size;
 
     if (current->abi == GUEST_ABI_ARM64) {
         struct rt_sigframe_arm64 frame;
@@ -3437,12 +3579,15 @@ static void receive_signal(struct sighand *sighand, struct siginfo_ *info) {
         size_t frame_size = sizeof(frame);
         setup_rt_sigframe_amd64(info, &frame);
 
-        if (sp > 128)
-            sp -= 128;
+        guest_addr_t buf_fx = 0;
         if (xsave_extra) {
+            if (sp > 128)
+                sp -= 128;
             sp -= xsave_extra;
             sp &= ~0x3full;
             sp -= fxsave_extra;
+        } else {
+            sp = x86_alloc_mathframe(sp, false, &buf_fx);
         }
         sp -= frame_size;
         sp = (sp & ~0xfull) - 8;
@@ -3455,7 +3600,9 @@ static void receive_signal(struct sighand *sighand, struct siginfo_ *info) {
             restorer = current->mm->vdso != 0 ? current->mm->vdso
                     : sp + offsetof(struct rt_sigframe_amd64, retcode);
         frame.pretcode = restorer;
-        frame.uc.mcontext.fpstate = sp + offsetof(struct rt_sigframe_amd64, uc.fpregs_mem);
+        // The math frame's image; ptraceomatic's mirror keeps the FXSAVE
+        // copy in the ucontext.
+        frame.uc.mcontext.fpstate = buf_fx ? buf_fx : sp + offsetof(struct rt_sigframe_amd64, uc.fpregs_mem);
 
         current->cpu.amd64_regs[amd64_rsp] = sp;
         current->cpu.esp = (dword_t) sp;
@@ -3470,7 +3617,8 @@ static void receive_signal(struct sighand *sighand, struct siginfo_ *info) {
 
         signal_handler_mask_set(action, info->sig);
 
-        if (user_write(sp, &frame, frame_size)) {
+        if (x86_frame_overruns_altstack(to_altstack, sp) ||
+                user_write(sp, &frame, frame_size) || (buf_fx && x86_write_mathframe(buf_fx, false, &current->cpu))) {
             // The handler can't run (the stack is unwritable or gone). Linux
             // force_sigsegv kills with SIG_DFL here. Calling deliver_signal
             // would self-deadlock: receive_signals already holds
@@ -3513,14 +3661,14 @@ static void receive_signal(struct sighand *sighand, struct siginfo_ *info) {
         sp -= xsave_extra;
         sp &=~ 0x3f;
         sp -= fxsave_extra;
-    } else {
-        sp -= sizeof(struct fpstate_) - I386_FPSTATE_LEGACY_SIZE;
-        sp &= ~0x3f;
-        sp -= I386_FPSTATE_LEGACY_SIZE;
     }
-    addr_t fpstate_addr = sp;
+    guest_addr_t buf_fx = 0;
     struct fpstate_ fpstate;
-    setup_i386_fpstate(&fpstate, &current->cpu);
+    if (xsave_extra)
+        setup_i386_fpstate(&fpstate, &current->cpu);
+    else
+        sp = (addr_t) x86_alloc_mathframe(sp, true, &buf_fx);
+    addr_t fpstate_addr = sp;
     if (need_siginfo)
         frame.rt_sigframe.uc.mcontext.fpstate = fpstate_addr;
     else
@@ -3541,8 +3689,9 @@ static void receive_signal(struct sighand *sighand, struct siginfo_ *info) {
     }
 
     // install frame
-    if (user_write(sp, &frame, frame_size) ||
-            user_write(fpstate_addr, &fpstate, sizeof(fpstate))) {
+    if (x86_frame_overruns_altstack(to_altstack, sp) || user_write(sp, &frame, frame_size) ||
+            (buf_fx ? x86_write_mathframe(buf_fx, true, &current->cpu)
+                    : user_write(fpstate_addr, &fpstate, sizeof(fpstate)))) {
         // See the amd64 path above: kill like Linux force_sigsegv instead of
         // re-taking sighand->lock via deliver_signal and self-deadlocking.
         printk("WARNING: failed to install frame for %d at %#x, killing\n", info->sig, sp);
@@ -3877,12 +4026,8 @@ void receive_signals(void) {
 // IRET faults.
 static int restore_sigcontext(struct sigcontext_ *context, struct cpu_state *cpu,
         int *gp_error) {
-    if (context->fpstate != 0) {
-        struct fpstate_ fpstate;
-        if (user_get(context->fpstate, fpstate))
-            return _EFAULT;
-        restore_i386_fpstate(&fpstate, cpu);
-    }
+    if (x86_restore_mathframe(context->fpstate, true, cpu))
+        return _EFAULT;
     cpu->eax = context->ax;
     cpu->ebx = context->bx;
     cpu->ecx = context->cx;
@@ -3931,28 +4076,6 @@ static void sync_i386_shadows_from_amd64(struct cpu_state *cpu) {
     cpu->ebp = (dword_t) cpu->amd64_regs[amd64_rbp];
     cpu->esp = (dword_t) cpu->amd64_regs[amd64_rsp];
     cpu->eip = (dword_t) cpu->amd64_rip;
-}
-
-static void restore_amd64_fpstate(struct amd64_fpstate_ *fpstate, struct cpu_state *cpu) {
-    cpu->fcw = fpstate->cwd;
-    cpu->fsw = fpstate->swd;
-    // Linux clears the bits no CPU implements rather than failing.
-    cpu->mxcsr = fpstate->mxcsr & 0xffff;
-    cpu->x87_valid = (byte_t) fpstate->twd;
-
-    for (int i = 0; i < 8; i++) {
-        uint64_t significand = 0;
-        for (int j = 0; j < 4; j++)
-            significand |= (uint64_t) fpstate->st[i].significand[j] << (j * 16);
-        cpu->fp[(cpu->top + i) & 7] = (float80) {
-            .signif = significand,
-            .signExp = fpstate->st[i].exponent,
-        };
-    }
-
-    for (int i = 0; i < 16; i++)
-        for (int j = 0; j < 4; j++)
-            cpu->xmm[i].u32[j] = fpstate->xmm[i].element[j];
 }
 
 static void restore_amd64_mcontext(struct amd64_mcontext_ *mcontext, struct cpu_state *cpu) {
@@ -4012,7 +4135,6 @@ dword_t sys_rt_sigreturn(void) {
 qword_t sys_rt_sigreturn_amd64(void) {
     struct cpu_state *cpu = &current->cpu;
     struct rt_sigframe_amd64 frame;
-    struct amd64_fpstate_ fpstate;
     guest_addr_t frame_addr = cpu->amd64_regs[amd64_rsp] - offsetof(struct rt_sigframe_amd64, uc);
     if (user_get(frame_addr, frame)) {
         deliver_signal(current, SIGSEGV_, SIGINFO_NIL);
@@ -4020,12 +4142,9 @@ qword_t sys_rt_sigreturn_amd64(void) {
     }
 
     restore_amd64_mcontext(&frame.uc.mcontext, cpu);
-    if (frame.uc.mcontext.fpstate != 0) {
-        if (user_get(frame.uc.mcontext.fpstate, fpstate)) {
-            deliver_signal(current, SIGSEGV_, SIGINFO_NIL);
-            return _EFAULT;
-        }
-        restore_amd64_fpstate(&fpstate, cpu);
+    if (x86_restore_mathframe(frame.uc.mcontext.fpstate, false, cpu)) {
+        deliver_signal(current, SIGSEGV_, SIGINFO_NIL);
+        return _EFAULT;
     }
 
     lock(&current->sighand->lock, 0);

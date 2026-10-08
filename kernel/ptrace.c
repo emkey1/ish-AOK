@@ -5,6 +5,7 @@
 #include "kernel/abi/i386.h"
 #include "kernel/signal.h"
 #include "emu/i386_sreg.h"
+#include "emu/xsave.h"
 #include "task.h"
 #include <string.h>
 
@@ -355,6 +356,63 @@ static int set_user_regs_amd64(struct task *task, const struct user_regs_struct_
     return err;
 }
 
+// i386's NT_PRFPREG and PTRACE_GETFPREGS: the FNSAVE layout (Linux's struct
+// user_i387_ia32_struct, convert_from_fxsr): control, status and the full
+// tag word with their upper halves set, no instruction or operand pointer
+// (the operand selector's upper half set), the registers in stack order,
+// ten bytes each.
+static void get_user_fpregs_i386(struct task *task, struct user_fpregs_struct_ *f) {
+    struct cpu_state *cpu = &task->cpu;
+    memset(f, 0, sizeof(*f));
+    f->cwd = 0xffff0000u | cpu->fcw;
+    f->swd = 0xffff0000u | cpu->fsw;
+    f->twd = 0xffff0000u | x87_full_tag(cpu);
+    f->fos = 0xffff0000u;
+    uint8_t *st = (uint8_t *) f->st_space;
+    for (int i = 0; i < 8; i++) {
+        float80 v = cpu->fp[(cpu->top + i) & 7];
+        memcpy(st + 10 * i, &v.signif, 8);
+        memcpy(st + 10 * i + 8, &v.signExp, 2);
+    }
+}
+
+static void set_user_fpregs_i386(struct cpu_state *cpu, const struct user_fpregs_struct_ *f) {
+    word_t cw = (word_t) f->cwd;
+    fpu_ldcw16(cpu, &cw);
+    cpu->fsw = (word_t) f->swd;
+    cpu->x87_valid = x87_valid_from_full_tag((word_t) f->twd);
+    const uint8_t *st = (const uint8_t *) f->st_space;
+    for (int i = 0; i < 8; i++) {
+        float80 v = {0};
+        memcpy(&v.signif, st + 10 * i, 8);
+        memcpy(&v.signExp, st + 10 * i + 8, 2);
+        cpu->fp[(cpu->top + i) & 7] = v;
+    }
+}
+
+// NT_X86_XSTATE, for amd64 and i386 tracees alike: the XSAVE image
+// (emu/xsave.h) with XCR0 in the software bytes' first quadword, where
+// Linux's ptrace puts it and gdb reads it (464) to learn which components
+// the image has. Setting one is validated as Linux's
+// validate_user_xstate_header does -- XSTATE_BV within XCR0, the rest of
+// the header zero, MXCSR's reserved bits clear -- or EINVAL; the components
+// XSTATE_BV lacks are initialized.
+static void get_user_xstate(struct task *task, uint8_t *img) {
+    xsave_fill(&task->cpu, img, task->abi == GUEST_ABI_I386 ? 8 : 16);
+    qword_t xcr0 = XCR0_SUPPORTED_;
+    memcpy(img + 464, &xcr0, sizeof(xcr0));
+}
+
+static int set_user_xstate(struct task *task, const uint8_t *img) {
+    for (int i = 16; i < XSAVE_HEADER_SIZE_; i++)
+        if (img[XSAVE_LEGACY_SIZE_ + i] != 0)
+            return _EINVAL;
+    if (xsave_check(img, XCR0_SUPPORTED_))
+        return _EINVAL;
+    xsave_restore(&task->cpu, img, XCR0_SUPPORTED_, task->abi == GUEST_ABI_I386 ? 8 : 16);
+    return 0;
+}
+
 static void get_user_fpregs_amd64(struct task *task, struct user_fpregs_struct_amd64_ *user_fpregs_) {
     struct cpu_state *cpu = &task->cpu;
     memset(user_fpregs_, 0, sizeof(*user_fpregs_));
@@ -611,7 +669,7 @@ static size_t ptrace_regset_slot(const struct task *child, qword_t note_type) {
         case GUEST_ABI_I386:
         default:
             switch (note_type) {
-                case NT_PRSTATUS_: case NT_PRFPREG_: return 4;
+                case NT_PRSTATUS_: case NT_PRFPREG_: case NT_PRXFPREG_: return 4;
                 case NT_X86_XSTATE_: return 8;
             }
             return 0;
@@ -814,14 +872,26 @@ static int ptrace_getregset(struct task *tracer, struct task *child, guest_addr_
                 struct user_fpregs_struct_riscv64_ user_fpregs_riscv64 = {};
                 get_user_fpregs_riscv64(child, &user_fpregs_riscv64);
                 return ptrace_getregset_write(tracer, iov_addr, &user_fpregs_riscv64, sizeof(user_fpregs_riscv64));
+            } else if (note_type == NT_X86_XSTATE_) {
+                uint8_t img[XSAVE_SIZE_];
+                get_user_xstate(child, img);
+                return ptrace_getregset_write(tracer, iov_addr, img, sizeof(img));
             } else if (child->abi == GUEST_ABI_AMD64) {
                 struct user_fpregs_struct_amd64_ user_fpregs_amd64 = {};
                 get_user_fpregs_amd64(child, &user_fpregs_amd64);
                 return ptrace_getregset_write(tracer, iov_addr, &user_fpregs_amd64, sizeof(user_fpregs_amd64));
             } else {
-                struct user_fpregs_struct_ user_fpregs_ = {};
+                struct user_fpregs_struct_ user_fpregs_;
+                get_user_fpregs_i386(child, &user_fpregs_);
                 return ptrace_getregset_write(tracer, iov_addr, &user_fpregs_, sizeof(user_fpregs_));
             }
+        }
+        case NT_PRXFPREG_: {                    // i386: the FXSAVE layout
+            if (child->abi != GUEST_ABI_I386)
+                return _EINVAL;
+            struct fxsave_area fx;
+            fxsave_fill(&child->cpu, &fx, 8);
+            return ptrace_getregset_write(tracer, iov_addr, &fx, sizeof(fx));
         }
         case NT_ARM_SYSTEM_CALL_: {
             if (child->abi != GUEST_ABI_ARM64)
@@ -948,6 +1018,13 @@ static int ptrace_setregset(struct task *tracer, struct task *child, guest_addr_
                 if (err < 0)
                     return err;
                 set_user_fpregs_riscv64(&child->cpu, &user_fpregs_riscv64);
+            } else if (note_type == NT_X86_XSTATE_) {
+                uint8_t img[XSAVE_SIZE_];
+                get_user_xstate(child, img);
+                int err = ptrace_setregset_read(tracer, iov_addr, img, sizeof(img));
+                if (err < 0)
+                    return err;
+                return set_user_xstate(child, img);
             } else if (child->abi == GUEST_ABI_AMD64) {
                 struct user_fpregs_struct_amd64_ user_fpregs_amd64;
                 get_user_fpregs_amd64(child, &user_fpregs_amd64);
@@ -956,13 +1033,26 @@ static int ptrace_setregset(struct task *tracer, struct task *child, guest_addr_
                     return err;
                 set_user_fpregs_amd64(&child->cpu, &user_fpregs_amd64);
             } else {
-                struct user_fpregs_struct_ user_fpregs_ = {};
+                struct user_fpregs_struct_ user_fpregs_;
+                get_user_fpregs_i386(child, &user_fpregs_);
                 int err = ptrace_setregset_read(tracer, iov_addr, &user_fpregs_, sizeof(user_fpregs_));
                 if (err < 0)
                     return err;
-                // TODO set floating point registers for i386 tracees
-                (void) user_fpregs_;
+                set_user_fpregs_i386(&child->cpu, &user_fpregs_);
             }
+            return 0;
+        }
+        case NT_PRXFPREG_: {
+            if (child->abi != GUEST_ABI_I386)
+                return _EINVAL;
+            struct fxsave_area fx;
+            fxsave_fill(&child->cpu, &fx, 8);
+            int err = ptrace_setregset_read(tracer, iov_addr, &fx, sizeof(fx));
+            if (err < 0)
+                return err;
+            if (fx.mxcsr & ~0xffffu)
+                return _EINVAL;
+            fxsave_restore(&child->cpu, &fx, 8);
             return 0;
         }
         case NT_ARM_HW_BREAK_:
@@ -2034,12 +2124,12 @@ dword_t sys_ptrace_guest(dword_t request, dword_t pid, guest_addr_t addr, guest_
                     return _EFAULT;
                 }
             } else {
-                struct user_fpregs_struct_ user_fpregs_ = {};
+                struct user_fpregs_struct_ user_fpregs_;
+                get_user_fpregs_i386(child, &user_fpregs_);
                 if (user_put(data, user_fpregs_)) {
                     unlock(&child->ptrace.lock);
                     return _EFAULT;
                 }
-                // TODO get float point registers for i386 tracees
             }
             unlock(&child->ptrace.lock);
 
@@ -2069,13 +2159,40 @@ dword_t sys_ptrace_guest(dword_t request, dword_t pid, guest_addr_t addr, guest_
                 if (user_get(data, user_fpregs_)) {
                     unlock(&child->ptrace.lock);
                     return _EFAULT;
-                } else {
-                    // TODO set floating point registers for i386 tracees
                 }
+                set_user_fpregs_i386(&child->cpu, &user_fpregs_);
             }
             unlock(&child->ptrace.lock);
 
             return 0;
+        }
+
+        case PTRACE_GETFPXREGS_:
+        case PTRACE_SETFPXREGS_: {
+            // i386 only: the FXSAVE layout, as NT_PRXFPREG.
+            STRACE("ptrace(PTRACE_%sFPXREGS, %d, %#llx, %#llx)", request == PTRACE_GETFPXREGS_ ? "GET" : "SET",
+                    pid, (unsigned long long) addr, (unsigned long long) data);
+            struct task *child = find_child(pid);
+            if (!child) return _ESRCH;
+            if (child->abi != GUEST_ABI_I386) {
+                unlock(&child->ptrace.lock);
+                return _EIO;
+            }
+            struct fxsave_area fx;
+            int err = 0;
+            if (request == PTRACE_GETFPXREGS_) {
+                fxsave_fill(&child->cpu, &fx, 8);
+                if (user_put(data, fx))
+                    err = _EFAULT;
+            } else if (user_get(data, fx)) {
+                err = _EFAULT;
+            } else if (fx.mxcsr & ~0xffffu) {
+                err = _EINVAL;
+            } else {
+                fxsave_restore(&child->cpu, &fx, 8);
+            }
+            unlock(&child->ptrace.lock);
+            return err;
         }
 
         case PTRACE_SYSCALL_: {

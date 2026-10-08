@@ -15048,10 +15048,13 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
     }
 #if defined(__aarch64__)
     // FXSAVE / FXRSTOR (0F AE /0 /1, memory, REX.W or not -- the 64-bit form
-    // differs only in the pointers, which are not kept): x87.S.
+    // differs only in the pointers, which are not kept), XSAVE / XRSTOR (/4
+    // /5, the same) and XSAVEOPT (/6: XSAVE's gadget -- its init and modified
+    // optimizations let it skip writing, never require it): x87.S.
     if (!insn.address_size_prefix && insn.rep_mode == amd64_jit_rep_none && !insn.operand_size_prefix &&
             !insn.lock_prefix && insn.two_byte_opcode && insn.has_modrm && insn.op2 == 0xae &&
-            amd64_modrm_mod(insn.modrm) != 3 && amd64_modrm_reg(insn.modrm) <= 1) {
+            amd64_modrm_mod(insn.modrm) != 3 && (amd64_modrm_reg(insn.modrm) <= 1 ||
+            amd64_modrm_reg(insn.modrm) == 4 || amd64_modrm_reg(insn.modrm) == 5 || amd64_modrm_reg(insn.modrm) == 6)) {
         unsigned long meta, disp;
         if (!gen_amd64_decode_mem_meta(state, tlb, &insn, 64, &meta, &disp, &next_ip)) {
             state->amd64_ip = state->amd64_orig_ip;
@@ -15061,9 +15064,11 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
         state->amd64_ip = next_ip;
         gen_amd64_flush_reg_cache(state);
         gen_amd64_flush_rip(state);
-        gen(state, (unsigned long) (amd64_modrm_reg(insn.modrm) == 0
-                    ? gadget_amd64_x87m_fxsave : gadget_amd64_x87m_fxrstor));
-        gen(state, meta | AMD64_JIT_MEM_ALIGN16);   // #GP unless 16-byte aligned
+        unsigned reg = amd64_modrm_reg(insn.modrm);
+        extern void gadget_amd64_x87m_xsave(void), gadget_amd64_x87m_xrstor(void);
+        gen(state, (unsigned long) (reg == 0 ? gadget_amd64_x87m_fxsave : reg == 1 ? gadget_amd64_x87m_fxrstor :
+                    reg == 5 ? gadget_amd64_x87m_xrstor : gadget_amd64_x87m_xsave));
+        gen(state, reg <= 1 ? meta | AMD64_JIT_MEM_ALIGN16 : meta);   // #GP unless 16-byte aligned (XSAVE's 64: its own)
         gen(state, disp);
         gen(state, (unsigned long) next_ip);
         gen_amd64_defer_rip(state, next_ip);
@@ -15074,7 +15079,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
     // and its kind: no FSGSBASE here) and 0x66 on any of the arms above are
     // #UD; a fence with a segment prefix is still a fence; CLFLUSH, and
     // CLFLUSHOPT (66), check the line is readable (math.S amd64_clflush);
-    // XSAVE, XRSTOR, XSAVEOPT and CLWB are #UD, not being advertised.
+    // CLWB is #UD, not being advertised.
     if (!insn.address_size_prefix && insn.two_byte_opcode && insn.has_modrm && insn.op2 == 0xae) {
         unsigned reg = amd64_modrm_reg(insn.modrm);
         if (insn.lock_prefix || insn.rep_mode != amd64_jit_rep_none)
@@ -19223,9 +19228,46 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
         return gen_amd64_ud(state);
     }
 
+#if defined(__aarch64__)
+    // MOVBE (0F 38 F0 /r, F1 /r; memory only, a register operand #UD; 0x66 a
+    // word, REX.W a qword; F2 is CRC32, above, and F3 #UD): math.S
+    // amd64_movbe_ld/st.
+    if (!insn.address_size_prefix && !insn.lock_prefix && insn.two_byte_opcode && insn.op2 == 0x38 &&
+            insn.rep_mode == amd64_jit_rep_none) {
+        byte_t op3 = 0, modrm3 = 0;
+        if (tlb_read(tlb, state->amd64_ip, &op3, 1) && (op3 == 0xf0 || op3 == 0xf1) &&
+                tlb_read(tlb, state->amd64_ip + 1, &modrm3, 1)) {
+            if (amd64_modrm_mod(modrm3) == 3)
+                return gen_amd64_ud(state);
+            struct amd64_jit_insn m3 = insn;
+            m3.modrm = modrm3;
+            m3.has_modrm = true;
+            state->amd64_ip += 1;               // the decoders start at the ModRM
+            unsigned size = insn.rex.w ? 64 : insn.operand_size_prefix ? 16 : 32;
+            unsigned long meta = 0, disp = 0;
+            if (!gen_amd64_decode_mem_meta(state, tlb, &m3, size, &meta, &disp, &next_ip)) {
+                state->amd64_ip = state->amd64_orig_ip;
+                state->amd64_fallback_to_interp = true;
+                return false;
+            }
+            state->amd64_ip = next_ip;
+            extern void gadget_amd64_movbe_ld(void), gadget_amd64_movbe_st(void);
+            gen_amd64_flush_reg_cache(state);
+            gen_amd64_flush_rip(state);
+            gen(state, (unsigned long) (op3 == 0xf0 ? gadget_amd64_movbe_ld : gadget_amd64_movbe_st));
+            gen(state, meta);
+            gen(state, disp);
+            gen(state, (unsigned long) next_ip);
+            gen(state, size == 16 ? 1 : size == 32 ? 2 : 3);
+            gen_amd64_defer_rip(state, next_ip);
+            return true;
+        }
+    }
+#endif
+
     // The rest of the three-byte maps (0F 38, 0F 3A): every valid shape AOK
-    // advertises is a gadget arm above (SSSE3, SSE4.1, SSE4.2); what reaches
-    // here -- AES, PCLMULQDQ, SHA, MOVBE, ADX, which CPUID does not advertise,
+    // advertises is a gadget arm above (SSSE3, SSE4.1, SSE4.2, MOVBE); what
+    // reaches here -- SHA and ADX, which CPUID does not advertise,
     // and the encodings x86 does not have -- is #UD, as on a CPU without them
     // (tests/manual/x86/amd64_sse_ud.c checks the maps form by form).
     if (insn.two_byte_opcode && (insn.op2 == 0x38 || insn.op2 == 0x3a) && !insn.address_size_prefix) {
@@ -20939,6 +20981,11 @@ void helper_rdtsc(struct cpu_state *cpu);
 #define LDMXCSR() do { extern void gadget_i386_ldmxcsr(void); g_addr(); GEN(gadget_i386_ldmxcsr); GEN(state->orig_ip); } while (0)
 #define FXSAVE() do { extern void gadget_x87m_fxsave(void); g_addr(); GEN(gadget_x87m_fxsave); GEN(state->orig_ip); } while (0)
 #define FXRSTOR() do { extern void gadget_x87m_fxrstor(void); g_addr(); GEN(gadget_x87m_fxrstor); GEN(state->orig_ip); } while (0)
+#define XSAVE() do { extern void gadget_x87m_xsave(void); g_addr(); GEN(gadget_x87m_xsave); GEN(state->orig_ip); } while (0)
+// MOVBE: load, byte-reverse _tmp (bits.S movbe_tmp16/32), store.
+#define MOVBE(src, dst, z) do { if (modrm.type == modrm_reg) UNDEFINED; load(src, z); \
+        if ((z) == 16) g(movbe_tmp16); else g(movbe_tmp32); store(dst, z); } while (0)
+#define XRSTOR() do { extern void gadget_x87m_xrstor(void); g_addr(); GEN(gadget_x87m_xrstor); GEN(state->orig_ip); } while (0)
 #define EMMS() do { g(x87_emms); GEN(x87_word(0, false, false, state->orig_ip)); } while (0)
 // MASKMOVQ (z 64) / MASKMOVDQU (128): misc.S vec_maskmov8/16, data the reg
 // field's register, the mask r/m's
@@ -21035,6 +21082,9 @@ void helper_rdtsc(struct cpu_state *cpu);
 // case here where the helper suffix and the access width do coincide.
 #define FXSAVE()  fh_write_bits(fpu_fxsave, 32, 4096)
 #define FXRSTOR() fh_read_bits(fpu_fxrestore, 32, 4096)
+#define XSAVE() UNDEFINED                       // (emu/cpuid.h advertises XSAVE on aarch64 hosts only)
+#define MOVBE(src, dst, z) UNDEFINED            // (and MOVBE)
+#define XRSTOR() UNDEFINED
 #define STMXCSR() fh_write(fpu_stmxcsr, 32)
 #define LDMXCSR() fh_read(fpu_ldmxcsr, 32)
 #define FINIT() fh(fpu_init)

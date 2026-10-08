@@ -129,6 +129,7 @@ struct aux64_ent {
 #define AX_EXECFN 31
 #define AX_SYSINFO 32
 #define AX_SYSINFO_EHDR 33
+#define AX_MINSIGSTKSZ 51
 
 struct dyn_ent {
     dword_t tag;
