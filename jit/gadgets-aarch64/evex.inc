@@ -479,7 +479,11 @@ evex_l3 vi_pmuldq, 0, vi38_body, muldq, -, -, 1
     ubfx w9, w8, 16, 2
     mov  w14, 16
     lsl  w14, w14, w9
-    lsr  w9, w14, w15                    /* the elements */
+    tbz  x8, 58, 4f                      /* an explicit length (a narrowing store): 1 << bits 59-61 */
+    ubfx x9, x8, 59, 3
+    mov  w14, 1
+    lsl  w14, w14, w9
+4:  lsr  w9, w14, w15                    /* the elements */
     cmp  w9, 64
     b.hs 1f
     mov  x11, 1
@@ -511,7 +515,14 @@ evex_l3 vi_pmuldq, 0, vi38_body, muldq, -, -, 1
     lsr  x11, x16, x11
     cmp  x11, 0
     cset w10, ne
-3:
+3:  /* Compress/expand (word bit 62) touch the first popcount(k) elements, but
+       fault as SDE has them: by the enabled elements' own positions. Those
+       reach at least as far as the packed ones, so: the first page if any
+       element is enabled (the packed start there), the second by position. */
+    tbz  x8, 62, 6f
+    cmp  x16, 0
+    cset w9, ne
+6:
 .endm
 
 # The copy: EVEX_STAGE <-> the two pages' host pointers \h1 (for [0,
@@ -526,6 +537,11 @@ evex_l3 vi_pmuldq, 0, vi38_body, muldq, -, -, 1
     ubfx w15, w8, 16, 2
     mov  w16, 16
     lsl  w16, w16, w15
+    tbz  x8, 58, .Levc_len\@
+    ubfx x15, x8, 59, 3
+    mov  w16, 1
+    lsl  w16, w16, w15
+.Levc_len\@:
     cmp  w11, w16
     b.hs .Levc_done\@
     cmp  w11, w17
@@ -559,6 +575,33 @@ evex_l3 vi_pmuldq, 0, vi38_body, muldq, -, -, 1
 .Levc_done\@:
 .endm
 
+# Compress mode (word bit 62): \k becomes its first popcount(k) bits (of the
+# operand's elements). Clobbers x15-x17, v30.
+.macro evm_compress_mask k, esz
+    tbz  x8, 62, .Lecm_done\@
+    ubfx w15, w8, 16, 2
+    mov  w16, 16
+    lsl  w16, w16, w15
+    lsr  w16, w16, \esz                  /* the elements */
+    cmp  w16, 64
+    b.hs 1f
+    mov  x17, 1
+    lsl  x17, x17, x16
+    sub  x17, x17, 1
+    and  \k, \k, x17
+1:  fmov d30, \k
+    cnt  v30.8b, v30.8b
+    addv b30, v30.8b
+    fmov w15, s30
+    mov  \k, -1
+    cmp  w15, 64
+    b.hs .Lecm_done\@
+    mov  \k, 1
+    lsl  \k, \k, x15
+    sub  \k, \k, 1
+.Lecm_done\@:
+.endm
+
 # amd64: [meta][disp][next_ip][word], gret 4. A, the split, the needs and
 # the host pointers live in x20-x25 across the TLB's slow path (gen.c
 # flushed the amd64 register cache, so they are free).
@@ -590,12 +633,13 @@ evex_l3 vi_pmuldq, 0, vi38_body, muldq, -, -, 1
 .endif
     mov  x25, x9
 2:  ldr  x8, [_ip, 24]
-    mov  w17, w22
     ubfx x9, x8, \ks, 3                  /* the opmask and element size, for a store's copy */
     mov  x11, CPU_avx512_k
     add  x11, _cpu, x11
     ldr  x12, [x11, x9, lsl 3]
     ubfx x13, x8, (\ks + 4), 2
+    evm_compress_mask x12, w13
+    mov  w17, w22                        /* the split (after: evm_compress_mask takes x15-x17) */
     evm_copy \store, x23, x25, w20, w21, x12, w13
     gret 4
 .if \store
@@ -645,16 +689,17 @@ evex_mem_amd64 stm, 1, 40
 .endif
     mov  x13, _xaddr
 2:  ldr  x8, [_ip, 8]
-    mov  x15, (EVEX_STAGE + 64)
-    add  x15, _cpu, x15
-    ldr  w17, [x15, 4]
-    ldr  w9, [x15, 8]
-    ldr  w10, [x15, 12]
     ubfx x16, x8, \ks, 3
     mov  x11, CPU_avx512_k
     add  x11, _cpu, x11
     ldr  x0, [x11, x16, lsl 3]
     ubfx x19, x8, (\ks + 4), 2
+    evm_compress_mask x0, w19
+    mov  x15, (EVEX_STAGE + 64)          /* (after: evm_compress_mask takes x15-x17) */
+    add  x15, _cpu, x15
+    ldr  w17, [x15, 4]
+    ldr  w9, [x15, 8]
+    ldr  w10, [x15, 12]
     evm_copy \store, x12, x13, w9, w10, x0, w19
     gret 2
 .if \store
@@ -1621,3 +1666,397 @@ evex_l3 permilpd_i, 0, evb_permilpd_i
 evex_l3 permilps_v, 0, evb_permilps_v
 evex_l3 permilpd_v, 0, evb_permilpd_v
 evex_l3 palignr, 0, evb_palignr
+
+# ---- VPLZCNTD/Q, VPOPCNTD/Q (s2's elements, as the unary bodies read) ----
+.macro evb_lzcnt q
+.if \q
+    /* clz of a qword: of the high half, plus 32 + clz(low) when that is 0 */
+    clz  v4.4s, v1.4s
+    uzp1 v5.4s, v4.4s, v4.4s             /* (low halves' counts) */
+    uzp2 v6.4s, v4.4s, v4.4s             /* (high halves' counts) */
+    movi v7.4s, 32
+    cmeq v2.4s, v6.4s, v7.4s
+    add  v5.4s, v5.4s, v7.4s
+    bit  v6.16b, v5.16b, v2.16b
+    uxtl v0.2d, v6.2s
+.else
+    clz  v0.4s, v1.4s
+.endif
+.endm
+.macro evb_popcnt q
+    cnt  v0.16b, v1.16b
+    uaddlp v0.8h, v0.16b
+    uaddlp v0.4s, v0.8h
+.if \q
+    uaddlp v0.2d, v0.4s
+.endif
+.endm
+evex_l3 plzcntd, 0, evb_lzcnt, 0
+evex_l3 plzcntq, 0, evb_lzcnt, 1
+evex_l3 popcntd, 0, evb_popcnt, 0
+evex_l3 popcntq, 0, evb_popcnt, 1
+
+# ---- VPMOVB2M/W2M/D2M/Q2M: k[reg] = each element's sign (s2's) ----
+.macro evb_tok arr
+    cmlt v0.\arr, v1.\arr, 0
+.endm
+evex_tomask pmovb2m, 0, evb_tok, 16b
+evex_tomask pmovw2m, 1, evb_tok, 8h
+evex_tomask pmovd2m, 2, evb_tok, 4s
+evex_tomask pmovq2m, 3, evb_tok, 2d
+
+# ---- VPMOVM2B/W/D/Q: each element all ones where k (the r/m's, at word
+# bits 54-56) has its bit. (The frame's own opmask field is 0.) ----
+.macro evb_m2v esz
+    ubfx x9, x8, 54, 3
+    mov  x15, CPU_avx512_k
+    add  x15, _cpu, x15
+    ldr  x11, [x15, x9, lsl 3]
+    mov  w15, (16 >> \esz)
+    mul  w16, w13, w15
+    lsr  x11, x11, x16
+    adr  x17, evex_kbits
+.if \esz == 0
+    ldr  q30, [x17]
+    dup  v31.8b, w11
+    lsr  w11, w11, 8
+    dup  v0.8b, w11
+    ins  v31.d[1], v0.d[0]
+    cmtst v0.16b, v31.16b, v30.16b
+.elseif \esz == 1
+    ldr  q30, [x17, 16]
+    dup  v31.8h, w11
+    cmtst v0.8h, v31.8h, v30.8h
+.elseif \esz == 2
+    ldr  q30, [x17, 32]
+    dup  v31.4s, w11
+    cmtst v0.4s, v31.4s, v30.4s
+.else
+    ldr  q30, [x17, 48]
+    dup  v31.2d, x11
+    cmtst v0.2d, v31.2d, v30.2d
+.endif
+.endm
+evex_l3 pmovm2b, 0, evb_m2v, 0
+evex_l3 pmovm2w, 0, evb_m2v, 1
+evex_l3 pmovm2d, 0, evb_m2v, 2
+evex_l3 pmovm2q, 0, evb_m2v, 3
+
+# ---- VPCONFLICTD/Q: element i = the bits j < i whose element equals i's
+# (s2's elements, whole vector: v20-v23), by a scalar pass through memory
+# at EVEX_STAGE + 128 (the source) and + 192 (the result) ----
+.macro evfb_conflict q
+    mov  x14, (EVEX_STAGE + 128)
+    add  x14, _cpu, x14
+    stp  q20, q21, [x14]
+    stp  q22, q23, [x14, 32]
+    evf_nelem (2 + \q)
+    mov  w10, 0                          /* i */
+.Lecf_i\@:
+    cmp  w10, w9
+    b.hs .Lecf_done\@
+.if \q
+    ldr  x11, [x14, x10, lsl 3]
+.else
+    ldr  w11, [x14, x10, lsl 2]
+.endif
+    mov  x15, 0                          /* the bits */
+    mov  w16, 0                          /* j */
+.Lecf_j\@:
+    cmp  w16, w10
+    b.hs .Lecf_put\@
+.if \q
+    ldr  x17, [x14, x16, lsl 3]
+    cmp  x17, x11
+.else
+    ldr  w17, [x14, x16, lsl 2]
+    cmp  w17, w11
+.endif
+    b.ne 1f
+    mov  x17, 1
+    lsl  x17, x17, x16
+    orr  x15, x15, x17
+1:  add  w16, w16, 1
+    b    .Lecf_j\@
+.Lecf_put\@:
+    add  x17, x14, 64
+.if \q
+    str  x15, [x17, x10, lsl 3]
+.else
+    str  w15, [x17, x10, lsl 2]
+.endif
+    add  w10, w10, 1
+    b    .Lecf_i\@
+.Lecf_done\@:
+    ldp  q0, q1, [x14, 64]
+    ldp  q2, q3, [x14, 96]
+.endm
+evex_full pconflictd, evfb_conflict, 0
+evex_full pconflictq, evfb_conflict, 1
+
+# ---- VPMOVSX/ZX: each result quarter widened from its chunk of s2 (16 >>
+# (de - se) bytes at q times that), pulled out of the whole source by tbl ----
+.macro evf_xtl sign, from                /* v4 widened one step from element size \from */
+.if \from == 0
+  .if \sign
+    sxtl v4.8h, v4.8b
+  .else
+    uxtl v4.8h, v4.8b
+  .endif
+.elseif \from == 1
+  .if \sign
+    sxtl v4.4s, v4.4h
+  .else
+    uxtl v4.4s, v4.4h
+  .endif
+.else
+  .if \sign
+    sxtl v4.2d, v4.2s
+  .else
+    uxtl v4.2d, v4.2s
+  .endif
+.endif
+.endm
+.macro evfb_ext1 vd, q, se, de, sign
+    adr  x9, vex_iota16
+    ldr  q4, [x9]
+    mov  w9, ((16 >> (\de - \se)) * \q)
+    dup  v5.16b, w9
+    add  v4.16b, v4.16b, v5.16b
+    tbl  v4.16b, {v20.16b, v21.16b, v22.16b, v23.16b}, v4.16b
+    evf_xtl \sign, \se
+.if \de - \se > 1
+    evf_xtl \sign, (\se + 1)
+.endif
+.if \de - \se > 2
+    evf_xtl \sign, (\se + 2)
+.endif
+    mov  \vd\().16b, v4.16b
+.endm
+.macro evfb_extend se, de, sign
+    evfb_ext1 v0, 0, \se, \de, \sign
+    evfb_ext1 v1, 1, \se, \de, \sign
+    evfb_ext1 v2, 2, \se, \de, \sign
+    evfb_ext1 v3, 3, \se, \de, \sign
+.endm
+.irp s, 0,1
+evex_full pmov\s\()xbw, evfb_extend, 0, 1, \s
+evex_full pmov\s\()xbd, evfb_extend, 0, 2, \s
+evex_full pmov\s\()xbq, evfb_extend, 0, 3, \s
+evex_full pmov\s\()xwd, evfb_extend, 1, 2, \s
+evex_full pmov\s\()xwq, evfb_extend, 1, 3, \s
+evex_full pmov\s\()xdq, evfb_extend, 2, 3, \s
+.endr
+
+# Masking done by the body (the narrowing moves): the frame stores unmasked;
+# the word's opmask is at bits 54-56 (0: none), zeroing at 57. On the
+# scratch at EVEX_STAGE + 192 (the result, n elements of size \esz), with
+# the old destination at + 128: a masked-off element becomes 0 or the old
+# one; past n it stays zero (a register destination is zeroed past the
+# result). Then v0-v3 from it. Clobbers x9, x11, x12, x14-x17.
+.macro evf_eltcp esz, from, to           /* element x16 of [\from] to [\to] */
+.if \esz == 0
+    ldrb w17, [\from, x16]
+    strb w17, [\to, x16]
+.elseif \esz == 1
+    ldrh w17, [\from, x16, lsl 1]
+    strh w17, [\to, x16, lsl 1]
+.elseif \esz == 2
+    ldr  w17, [\from, x16, lsl 2]
+    str  w17, [\to, x16, lsl 2]
+.else
+    ldr  x17, [\from, x16, lsl 3]
+    str  x17, [\to, x16, lsl 3]
+.endif
+.endm
+.macro evf_eltzero esz, to               /* element x16 of [\to] = 0 */
+.if \esz == 0
+    strb wzr, [\to, x16]
+.elseif \esz == 1
+    strh wzr, [\to, x16, lsl 1]
+.elseif \esz == 2
+    str  wzr, [\to, x16, lsl 2]
+.else
+    str  xzr, [\to, x16, lsl 3]
+.endif
+.endm
+.macro evf_bodymask esz, n               /* \n: a w register, the result's elements */
+    tbnz x8, 32, .Lebm_load\@            /* a store: the store masks */
+    ubfx x9, x8, 54, 3
+    cbz  w9, .Lebm_load\@
+    mov  x15, CPU_avx512_k
+    add  x15, _cpu, x15
+    ldr  x12, [x15, x9, lsl 3]           /* (not x10: the caller's count may be there) */
+    mov  x14, (EVEX_STAGE + 128)
+    add  x14, _cpu, x14
+    stp  q24, q25, [x14]
+    stp  q26, q27, [x14, 32]
+    add  x15, x14, 64
+    mov  x16, 0
+.Lebm_loop\@:
+    cmp  w16, \n
+    b.hs .Lebm_load\@
+    lsr  x11, x12, x16
+    tbnz x11, 0, .Lebm_next\@
+    tbnz x8, 57, .Lebm_z\@
+    evf_eltcp \esz, x14, x15
+    b    .Lebm_next\@
+.Lebm_z\@:
+    evf_eltzero \esz, x15
+.Lebm_next\@:
+    add  x16, x16, 1
+    b    .Lebm_loop\@
+.Lebm_load\@:
+    mov  x14, (EVEX_STAGE + 192)
+    add  x14, _cpu, x14
+    ldp  q0, q1, [x14]
+    ldp  q2, q3, [x14, 32]
+.endm
+
+# ---- VPMOV/VPMOVS/VPMOVUS (the narrowing moves): the source (word field
+# s1, its VL at bits 52-53; the frame's VL is the result's) a quarter at a
+# time, each narrowed to 16 >> (se - de) bytes appended at EVEX_STAGE + 192 ----
+.macro evf_xtn kind, from                /* v4 narrowed one step from element size \from */
+.if \from == 3
+    \kind v4.2s, v4.2d
+.elseif \from == 2
+    \kind v4.4h, v4.4s
+.else
+    \kind v4.8b, v4.8h
+.endif
+.endm
+.macro evfb_narrow kind, se, de
+    mov  x14, (EVEX_STAGE + 192)
+    add  x14, _cpu, x14
+    stp  xzr, xzr, [x14]
+    stp  xzr, xzr, [x14, 16]
+    stp  xzr, xzr, [x14, 32]
+    stp  xzr, xzr, [x14, 48]
+    ubfx x9, x8, 52, 2
+    mov  w10, 1
+    lsl  w10, w10, w9                    /* the source's quarters */
+    mov  w12, 0                          /* (the imm8 is unused here) */
+.Lenr_q\@:
+    cmp  w12, w10
+    b.hs .Lenr_done\@
+    ubfx w11, w8, 5, 5
+    evx_qaddr x15, w11, w12
+    ldr  q4, [x15]
+    evf_xtn \kind, \se
+.if \se - \de > 1
+    evf_xtn \kind, (\se - 1)
+.endif
+.if \se - \de > 2
+    evf_xtn \kind, (\se - 2)
+.endif
+    mov  x14, (EVEX_STAGE + 192)
+    add  x14, _cpu, x14
+    mov  w11, (16 >> (\se - \de))
+    mul  w11, w11, w12
+    add  x14, x14, x11
+.if \se - \de == 1
+    str  d4, [x14]
+.elseif \se - \de == 2
+    str  s4, [x14]
+.else
+    str  h4, [x14]
+.endif
+    add  w12, w12, 1
+    b    .Lenr_q\@
+.Lenr_done\@:
+    lsl  w10, w10, (4 - \se)             /* the result's elements: the source's */
+    evf_bodymask \de, w10
+.endm
+.irp k, xtn,sqxtn,uqxtn
+evex_full pmov_\k\()_wb, evfb_narrow, \k, 1, 0
+evex_full pmov_\k\()_db, evfb_narrow, \k, 2, 0
+evex_full pmov_\k\()_qb, evfb_narrow, \k, 3, 0
+evex_full pmov_\k\()_dw, evfb_narrow, \k, 2, 1
+evex_full pmov_\k\()_qw, evfb_narrow, \k, 3, 1
+evex_full pmov_\k\()_qd, evfb_narrow, \k, 3, 2
+.endr
+
+# ---- compress and expand: a scalar pass (the source at EVEX_STAGE + 128,
+# the result at + 192). VPCOMPRESS*: the enabled elements of s1 (the reg)
+# packed low; VPEXPAND*: s2's low elements spread to the enabled ones. The
+# opmask is the word's bits 54-56 (0: all); an element not written is the
+# old one, or zero (EVEX.z, word bit 57), or anything for a store. ----
+.macro evf_kload                         /* x10 = the opmask (all ones for none) */
+    ubfx x9, x8, 54, 3
+    mov  x10, -1
+    cbz  w9, 1f
+    mov  x15, CPU_avx512_k
+    add  x15, _cpu, x15
+    ldr  x10, [x15, x9, lsl 3]
+1:
+.endm
+.macro evf_prefill                       /* the result = 0 (zeroing, a store) or the old destination */
+    mov  x14, (EVEX_STAGE + 192)
+    add  x14, _cpu, x14
+    tbnz x8, 57, 1f
+    tbnz x8, 32, 1f
+    stp  q24, q25, [x14]
+    stp  q26, q27, [x14, 32]
+    b    2f
+1:  stp  xzr, xzr, [x14]
+    stp  xzr, xzr, [x14, 16]
+    stp  xzr, xzr, [x14, 32]
+    stp  xzr, xzr, [x14, 48]
+2:
+.endm
+.macro evf_cx_elt esz, from, fi, to, ti  /* [\to] element \ti = [\from] element \fi */
+.if \esz == 0
+    ldrb w17, [\from, \fi]
+    strb w17, [\to, \ti]
+.elseif \esz == 1
+    ldrh w17, [\from, \fi, lsl 1]
+    strh w17, [\to, \ti, lsl 1]
+.elseif \esz == 2
+    ldr  w17, [\from, \fi, lsl 2]
+    str  w17, [\to, \ti, lsl 2]
+.else
+    ldr  x17, [\from, \fi, lsl 3]
+    str  x17, [\to, \ti, lsl 3]
+.endif
+.endm
+.macro evfb_cx esz, expand
+    mov  x14, (EVEX_STAGE + 128)
+    add  x14, _cpu, x14
+.if \expand
+    stp  q20, q21, [x14]
+    stp  q22, q23, [x14, 32]
+.else
+    stp  q16, q17, [x14]
+    stp  q18, q19, [x14, 32]
+.endif
+    evf_prefill
+    evf_nelem \esz
+    mov  w13, w9                         /* the elements (evf_kload takes x9, x10) */
+    evf_kload
+    mov  x14, (EVEX_STAGE + 128)
+    add  x14, _cpu, x14
+    add  x15, x14, 64
+    mov  x16, 0                          /* i: the position the mask names */
+    mov  x12, 0                          /* j: the packed side */
+.Lecx_loop\@:
+    cmp  w16, w13
+    b.hs .Lecx_done\@
+    lsr  x11, x10, x16
+    tbz  x11, 0, .Lecx_next\@
+.if \expand
+    evf_cx_elt \esz, x14, x12, x15, x16
+.else
+    evf_cx_elt \esz, x14, x16, x15, x12
+.endif
+    add  x12, x12, 1
+.Lecx_next\@:
+    add  x16, x16, 1
+    b    .Lecx_loop\@
+.Lecx_done\@:
+    ldp  q0, q1, [x15]
+    ldp  q2, q3, [x15, 32]
+.endm
+.irp z, 0,1,2,3
+evex_full compress\z, evfb_cx, \z, 0
+evex_full expand\z, evfb_cx, \z, 1
+.endr
