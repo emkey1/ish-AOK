@@ -1176,7 +1176,12 @@ static char *tree(void) {
     for (size_t i = 0; i < n.n; i++) len += strlen(n.v[i]) + 1;
     char *s = malloc(len), *p = s;
     for (size_t i = 0; i < n.n; i++) {
-        p += sprintf(p, "%s\n", n.v[i]);
+        size_t avail = len > (size_t)(p - s) ? len - (size_t)(p - s) : 0;
+        int written = snprintf(p, avail, "%s\n", n.v[i]);
+        if (written >= 0 && (size_t)written < avail)
+            p += written;
+        else
+            p += avail > 0 ? avail - 1 : 0;
         free(n.v[i]);
     }
     *p = '\0';

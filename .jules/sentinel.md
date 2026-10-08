@@ -53,3 +53,7 @@
 **Vulnerability:** None in practice: the buffer is sized as `sizeof("TERM=") + strlen(term)`, exactly what the `sprintf` writes. Hardening only -- the bound now travels with the call, so a later change to the sizing cannot silently overrun.
 **Learning:** Hardcoding string formatting directly into fixed-size structures without using bounded functions like `snprintf` creates critical security risks.
 **Prevention:** Always use `snprintf` combined with explicit buffer length parameters when formatting strings into dynamically allocated buffers.
+## 2025-02-28 - Replace unbounded sprintf with snprintf
+**Vulnerability:** Unbounded `sprintf` calls in `kernel/native.c`, `kernel/foreign_exec.c`, `tests/manual/native_coreutils.c`, and `tests/manual/stat.c` were writing dynamically sized content (like environment variables or integer values formatted as strings) into heap or stack buffers without strict bounds checking, introducing potential buffer overflow risks.
+**Learning:** `sprintf` inherently lacks a bounding mechanism and is dangerous when printing dynamically sized data. We learned to carefully use `snprintf` by tracking the available buffer space (`avail`) and explicitely verifying its return value (which is the number of characters it *would* have written) against the remaining buffer capacity to ensure that string pointers advance safely without causing out-of-bounds writes.
+**Prevention:** Establish a code review standard that systematically rejects `sprintf` and `vsprintf` calls in favor of their bounded equivalents (`snprintf`, `vsnprintf`).
