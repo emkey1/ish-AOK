@@ -542,6 +542,15 @@ restart:
                                           READMODRM; V_OP(phaddw, xmm_modrm_val, xmm_modrm_reg,128); break;
                                case 0x02: TRACEI("phaddd xmm:modrm, xmm");
                                           READMODRM; V_OP(phaddd, xmm_modrm_val, xmm_modrm_reg,128); break;
+                               case 0xcf: case 0xdb: case 0xdc: case 0xdd: case 0xde: case 0xdf:
+                                          TRACEI("gf2p8mulb/aes* xmm:modrm, xmm");
+                                          {
+                                              byte_t sse_op = (byte_t) insn;
+                                              READMODRM;
+                                              if (!gen_sse_via_evex32(state, tlb, &modrm, seg_tls, 2, sse_op, 0))
+                                                  return false;
+                                          }
+                                          break;
                                case 0x03: TRACEI("phaddsw xmm:modrm, xmm");
                                           READMODRM; V_OP(phaddsw, xmm_modrm_val, xmm_modrm_reg,128); break;
                                case 0x04: TRACEI("pmaddubsw xmm:modrm, xmm");
@@ -634,6 +643,15 @@ restart:
                 case 0x3a:
                            READINSN; // third opcode byte
                            switch (insn) {
+                               case 0xce: case 0xcf: case 0xdf: case 0x44:
+                                          TRACEI("gf2p8affine(inv)qb/aeskeygenassist/pclmulqdq xmm:modrm, xmm, imm8");
+                                          {
+                                              byte_t gfni_op = (byte_t) insn;
+                                              READMODRM; READIMM8;
+                                              if (!gen_sse_via_evex32(state, tlb, &modrm, seg_tls, 3, gfni_op, (uint8_t) imm))
+                                                  return false;
+                                          }
+                                          break;
                                case 0x08: TRACEI("roundps xmm:modrm, xmm, imm8");
                                           READMODRM; READIMM8; V_OP_IMM(round_ps, xmm_modrm_val, xmm_modrm_reg,128); break;
                                case 0x09: TRACEI("roundpd xmm:modrm, xmm, imm8");

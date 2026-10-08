@@ -23,7 +23,8 @@
 #        nothing (37) | scalar: only element 0 is masked, the rest are the
 #        body's (s1's) (38) | {er}: the rounding below for the op (48) | its
 #        x86 RC (49-50) | {sae}: the op's flags (MXCSR, FPSR) discarded
-#        (51)], gret 1.
+#        (51) | ... | a legacy SSE encoding: the quarters past VL kept (63)],
+#        gret 1.
 # ===========================================================================
 
 #define EVEX_STAGE VEX_STAGE                 /* (64 bytes there) */
@@ -147,6 +148,7 @@
 # a store's EVEX_STAGE result). Clobbers x9, x10, x14, x15.
 .macro evx_finish
     tbnz x8, 32, .Lefi_done\@
+    tbnz x8, 63, .Lefi_done\@               /* a legacy SSE encoding (GFNI) */
     ubfx w9, w8, 16, 2
     mov  w10, 1
     lsl  w10, w10, w9
@@ -2060,3 +2062,567 @@ evex_full pmov_\k\()_qd, evfb_narrow, \k, 3, 2
 evex_full compress\z, evfb_cx, \z, 0
 evex_full expand\z, evfb_cx, \z, 1
 .endr
+
+# ---- VPMULTISHIFTQB (VBMI): each byte of s2's qword at the bit offset
+# s1's byte names (mod 64), the qword rotated ----
+.macro evb_mshq_q i
+    mov  x9, v1.d[\i]
+    mov  x10, v0.d[\i]
+    mov  x11, 0
+.irp j, 0,1,2,3,4,5,6,7
+    ubfx x14, x10, (8 * \j), 6
+    ror  x15, x9, x14
+    and  x15, x15, 0xff
+    orr  x11, x11, x15, lsl #(8 * \j)
+.endr
+    mov  v2.d[\i], x11
+.endm
+.macro evb_mshq
+    evb_mshq_q 0
+    evb_mshq_q 1
+.endm
+evex_l3 pmultishiftqb, 2, evb_mshq
+
+# ---- VPSHLD/VPSHRD (VBMI2): the element pair concatenated and shifted, by
+# imm8 (a = s1, b = s2) or, the V forms, by s2's element (a = the
+# destination, b = s1): left: a << c | b >> (bits - c); right: a >> c |
+# b << (bits - c), c mod bits. A NEON shift by bits or more is 0. ----
+.macro evb_shd left, var, arr, bits
+.ifc \arr,2d
+    mov  x9, (\bits - 1)
+    dup  v3.2d, x9
+    mov  x9, \bits
+    dup  v7.2d, x9
+.else
+    mov  w9, (\bits - 1)
+    dup  v3.\arr, w9
+    mov  w9, \bits
+    dup  v7.\arr, w9
+.endif
+.if \var
+    mov  v5.16b, v2.16b
+    mov  v6.16b, v0.16b
+    and  v4.16b, v1.16b, v3.16b
+.else
+    mov  v5.16b, v0.16b
+    mov  v6.16b, v1.16b
+  .ifc \arr,2d
+    and  x9, x12, (\bits - 1)
+    dup  v4.2d, x9
+  .else
+    and  w9, w12, (\bits - 1)
+    dup  v4.\arr, w9
+  .endif
+.endif
+.if \left
+    ushl v5.\arr, v5.\arr, v4.\arr
+    sub  v7.\arr, v4.\arr, v7.\arr       /* c - bits: right by bits - c */
+    ushl v6.\arr, v6.\arr, v7.\arr
+.else
+    neg  v4.\arr, v4.\arr
+    ushl v5.\arr, v5.\arr, v4.\arr
+    add  v7.\arr, v4.\arr, v7.\arr       /* bits - c */
+    ushl v6.\arr, v6.\arr, v7.\arr
+.endif
+    orr  v0.16b, v5.16b, v6.16b
+.endm
+evex_l3 pshldw, 0, evb_shd, 1, 0, 8h, 16
+evex_l3 pshldd, 0, evb_shd, 1, 0, 4s, 32
+evex_l3 pshldq, 0, evb_shd, 1, 0, 2d, 64
+evex_l3 pshrdw, 0, evb_shd, 0, 0, 8h, 16
+evex_l3 pshrdd, 0, evb_shd, 0, 0, 4s, 32
+evex_l3 pshrdq, 0, evb_shd, 0, 0, 2d, 64
+evex_l3 pshldvw, 0, evb_shd, 1, 1, 8h, 16
+evex_l3 pshldvd, 0, evb_shd, 1, 1, 4s, 32
+evex_l3 pshldvq, 0, evb_shd, 1, 1, 2d, 64
+evex_l3 pshrdvw, 0, evb_shd, 0, 1, 8h, 16
+evex_l3 pshrdvd, 0, evb_shd, 0, 1, 4s, 32
+evex_l3 pshrdvq, 0, evb_shd, 0, 1, 2d, 64
+
+# ---- VNNI: the destination's dwords plus the dot product of their s1/s2
+# bytes (s1 unsigned, s2 signed: VPDPBUSD) or words (signed: VPDPWSSD);
+# the S forms saturate the sum to a signed dword ----
+.macro evb_dpbusd sat
+    uxtl v4.8h, v0.8b
+    uxtl2 v5.8h, v0.16b
+    sxtl v6.8h, v1.8b
+    sxtl2 v7.8h, v1.16b
+    mul  v4.8h, v4.8h, v6.8h             /* (255 * -128 .. 255 * 127: a halfword) */
+    mul  v5.8h, v5.8h, v7.8h
+    saddlp v4.4s, v4.8h
+    saddlp v5.4s, v5.8h
+    addp v4.4s, v4.4s, v5.4s
+.if \sat
+    sqadd v2.4s, v2.4s, v4.4s
+.else
+    add  v2.4s, v2.4s, v4.4s
+.endif
+.endm
+.macro evb_dpwssd sat
+    smull v4.4s, v0.4h, v1.4h
+    smull2 v5.4s, v0.8h, v1.8h
+.if \sat
+    saddlp v4.2d, v4.4s                  /* (the pair can reach 2^31) */
+    saddlp v5.2d, v5.4s
+    sxtl v6.2d, v2.2s
+    sxtl2 v7.2d, v2.4s
+    add  v6.2d, v6.2d, v4.2d
+    add  v7.2d, v7.2d, v5.2d
+    sqxtn v2.2s, v6.2d
+    sqxtn2 v2.4s, v7.2d
+.else
+    addp v4.4s, v4.4s, v5.4s
+    add  v2.4s, v2.4s, v4.4s
+.endif
+.endm
+evex_l3 pdpbusd, 2, evb_dpbusd, 0
+evex_l3 pdpbusds, 2, evb_dpbusd, 1
+evex_l3 pdpwssd, 2, evb_dpwssd, 0
+evex_l3 pdpwssds, 2, evb_dpwssd, 1
+
+# ---- IFMA: the destination's qwords plus the low (L) or high (H) 52 bits
+# of the 104-bit product of s1's and s2's low 52 bits ----
+.macro evb_madd52_q i, hi
+    mov  x9, v0.d[\i]
+    mov  x10, v1.d[\i]
+    ubfx x9, x9, 0, 52
+    ubfx x10, x10, 0, 52
+.if \hi
+    umulh x11, x9, x10
+    mul  x9, x9, x10
+    extr x9, x11, x9, 52                 /* bits 52-115 (the top 12 are 0) */
+.else
+    mul  x9, x9, x10
+    ubfx x9, x9, 0, 52
+.endif
+    mov  x10, v2.d[\i]
+    add  x9, x9, x10
+    mov  v2.d[\i], x9
+.endm
+.macro evb_madd52 hi
+    evb_madd52_q 0, \hi
+    evb_madd52_q 1, \hi
+.endm
+evex_l3 pmadd52luq, 2, evb_madd52, 0
+evex_l3 pmadd52huq, 2, evb_madd52, 1
+
+# ---- BITALG: VPOPCNTB/W (s2's elements), VPSHUFBITQMB (k: the bit of s1's
+# qword that each byte of s2's names, mod 64) ----
+.macro evb_popcntbw w
+    cnt  v0.16b, v1.16b
+.if \w
+    uaddlp v0.8h, v0.16b
+.endif
+.endm
+evex_l3 popcntb, 0, evb_popcntbw, 0
+evex_l3 popcntw, 0, evb_popcntbw, 1
+.macro evb_shufbitqmb
+    movi v5.16b, 0x3f
+    and  v4.16b, v1.16b, v5.16b
+    ushr v6.16b, v4.16b, 3               /* the byte of the qword */
+    movi v7.2d, 0
+    mov  x9, 0x0808080808080808
+    mov  v7.d[1], x9
+    add  v6.16b, v6.16b, v7.16b
+    tbl  v6.16b, {v0.16b}, v6.16b
+    movi v5.16b, 7
+    and  v4.16b, v4.16b, v5.16b
+    neg  v4.16b, v4.16b
+    ushl v6.16b, v6.16b, v4.16b          /* the bit to bit 0 */
+    movi v5.16b, 1
+    cmtst v0.16b, v6.16b, v5.16b
+.endm
+evex_tomask pshufbitqmb, 0, evb_shufbitqmb
+
+# ---- GFNI: GF(2^8) mod x^8 + x^4 + x^3 + x + 1. GF2P8MULB: the product of
+# s1's and s2's bytes. GF2P8AFFINE(INV)QB: each byte x of s1 (or its
+# inverse, 0 for 0) through the matrix s2's qword is: result bit b =
+# parity(matrix byte 7 - b & x) ^ imm8 bit b ----
+.macro evb_gf2p8mulb
+    pmull v4.8h, v0.8b, v1.8b
+    pmull2 v5.8h, v0.16b, v1.16b
+    shrn v6.8b, v4.8h, 8                 /* the product's bits 8-14 */
+    shrn2 v6.16b, v5.8h, 8
+    xtn  v0.8b, v4.8h
+    xtn2 v0.16b, v5.8h
+    movi v3.16b, 0x1b
+    pmull v4.8h, v6.8b, v3.8b            /* x^8 = x^4 + x^3 + x + 1: bits 8-10 again */
+    pmull2 v5.8h, v6.16b, v3.16b
+    xtn  v7.8b, v4.8h
+    xtn2 v7.16b, v5.8h
+    eor  v0.16b, v0.16b, v7.16b
+    shrn v6.8b, v4.8h, 8
+    shrn2 v6.16b, v5.8h, 8
+    pmul v6.16b, v6.16b, v3.16b          /* (at most 7 bits now) */
+    eor  v0.16b, v0.16b, v6.16b
+.endm
+evex_l3 gf2p8mulb, 0, evb_gf2p8mulb
+.balign 16
+evex_gf_inverse:                         /* x^-1 in GF(2^8), 0 for 0 */
+    .byte 0x00, 0x01, 0x8d, 0xf6, 0xcb, 0x52, 0x7b, 0xd1, 0xe8, 0x4f, 0x29, 0xc0, 0xb0, 0xe1, 0xe5, 0xc7
+    .byte 0x74, 0xb4, 0xaa, 0x4b, 0x99, 0x2b, 0x60, 0x5f, 0x58, 0x3f, 0xfd, 0xcc, 0xff, 0x40, 0xee, 0xb2
+    .byte 0x3a, 0x6e, 0x5a, 0xf1, 0x55, 0x4d, 0xa8, 0xc9, 0xc1, 0x0a, 0x98, 0x15, 0x30, 0x44, 0xa2, 0xc2
+    .byte 0x2c, 0x45, 0x92, 0x6c, 0xf3, 0x39, 0x66, 0x42, 0xf2, 0x35, 0x20, 0x6f, 0x77, 0xbb, 0x59, 0x19
+    .byte 0x1d, 0xfe, 0x37, 0x67, 0x2d, 0x31, 0xf5, 0x69, 0xa7, 0x64, 0xab, 0x13, 0x54, 0x25, 0xe9, 0x09
+    .byte 0xed, 0x5c, 0x05, 0xca, 0x4c, 0x24, 0x87, 0xbf, 0x18, 0x3e, 0x22, 0xf0, 0x51, 0xec, 0x61, 0x17
+    .byte 0x16, 0x5e, 0xaf, 0xd3, 0x49, 0xa6, 0x36, 0x43, 0xf4, 0x47, 0x91, 0xdf, 0x33, 0x93, 0x21, 0x3b
+    .byte 0x79, 0xb7, 0x97, 0x85, 0x10, 0xb5, 0xba, 0x3c, 0xb6, 0x70, 0xd0, 0x06, 0xa1, 0xfa, 0x81, 0x82
+    .byte 0x83, 0x7e, 0x7f, 0x80, 0x96, 0x73, 0xbe, 0x56, 0x9b, 0x9e, 0x95, 0xd9, 0xf7, 0x02, 0xb9, 0xa4
+    .byte 0xde, 0x6a, 0x32, 0x6d, 0xd8, 0x8a, 0x84, 0x72, 0x2a, 0x14, 0x9f, 0x88, 0xf9, 0xdc, 0x89, 0x9a
+    .byte 0xfb, 0x7c, 0x2e, 0xc3, 0x8f, 0xb8, 0x65, 0x48, 0x26, 0xc8, 0x12, 0x4a, 0xce, 0xe7, 0xd2, 0x62
+    .byte 0x0c, 0xe0, 0x1f, 0xef, 0x11, 0x75, 0x78, 0x71, 0xa5, 0x8e, 0x76, 0x3d, 0xbd, 0xbc, 0x86, 0x57
+    .byte 0x0b, 0x28, 0x2f, 0xa3, 0xda, 0xd4, 0xe4, 0x0f, 0xa9, 0x27, 0x53, 0x04, 0x1b, 0xfc, 0xac, 0xe6
+    .byte 0x7a, 0x07, 0xae, 0x63, 0xc5, 0xdb, 0xe2, 0xea, 0x94, 0x8b, 0xc4, 0xd5, 0x9d, 0xf8, 0x90, 0x6b
+    .byte 0xb1, 0x0d, 0xd6, 0xeb, 0xc6, 0x0e, 0xcf, 0xad, 0x08, 0x4e, 0xd7, 0xe3, 0x5d, 0x50, 0x1e, 0xb3
+    .byte 0x5b, 0x23, 0x38, 0x34, 0x68, 0x46, 0x03, 0x8c, 0xdd, 0x9c, 0x7d, 0xa0, 0xcd, 0x1a, 0x41, 0x1c
+.macro evb_gf2p8affine inv
+.if \inv
+    adr  x9, evex_gf_inverse
+    ld1  {v16.16b, v17.16b, v18.16b, v19.16b}, [x9], 64
+    tbl  v4.16b, {v16.16b, v17.16b, v18.16b, v19.16b}, v0.16b
+    movi v5.16b, 64
+    sub  v6.16b, v0.16b, v5.16b
+    ld1  {v16.16b, v17.16b, v18.16b, v19.16b}, [x9], 64
+    tbx  v4.16b, {v16.16b, v17.16b, v18.16b, v19.16b}, v6.16b
+    sub  v6.16b, v6.16b, v5.16b
+    ld1  {v16.16b, v17.16b, v18.16b, v19.16b}, [x9], 64
+    tbx  v4.16b, {v16.16b, v17.16b, v18.16b, v19.16b}, v6.16b
+    sub  v6.16b, v6.16b, v5.16b
+    ld1  {v16.16b, v17.16b, v18.16b, v19.16b}, [x9]
+    tbx  v4.16b, {v16.16b, v17.16b, v18.16b, v19.16b}, v6.16b
+    mov  v0.16b, v4.16b
+.endif
+    movi v7.2d, 0
+    mov  x9, 0x0808080808080808
+    mov  v7.d[1], x9                     /* each byte's qword, as a tbl base */
+    dup  v2.16b, w12                     /* imm8 */
+.irp b, 0,1,2,3,4,5,6,7
+    movi v5.16b, (7 - \b)
+    add  v5.16b, v5.16b, v7.16b
+    tbl  v5.16b, {v1.16b}, v5.16b        /* matrix byte 7 - b */
+    and  v5.16b, v5.16b, v0.16b
+    cnt  v5.16b, v5.16b
+    movi v6.16b, 1
+    and  v5.16b, v5.16b, v6.16b
+    shl  v5.16b, v5.16b, \b
+    eor  v2.16b, v2.16b, v5.16b
+.endr
+.endm
+evex_l3 gf2p8affineqb, 2, evb_gf2p8affine, 0
+evex_l3 gf2p8affineinvqb, 2, evb_gf2p8affine, 1
+
+# ---- gathers and scatters: VPGATHER*/VGATHER*, VPSCATTER*/VSCATTER* ----
+# Word: [the data register (0-4) | the index register (5-9) | scale (10-11) |
+# qword data (12) | qword indices (13) | VL (16-17) | opmask (18-20) |
+# scatter (21)]. n elements: the VL's, of the wider of data and index.
+# Restartable as x86's: each step takes the lowest element the opmask still
+# enables, moves it and clears its bit, so a fault leaves the elements below
+# it done and their bits clear, the rest as they were. Nothing is kept
+# across the TLB slow path (it keeps only x0-x3 and x8-x13): each step
+# finds its element again after it. Done: the opmask zeroed whole, and a
+# gather's destination past its elements.
+.macro evg_next                          /* w12 = the lowest element the opmask enables, or 64. Clobbers x14-x17 */
+    ubfx w14, w8, 18, 3
+    mov  x16, CPU_avx512_k
+    add  x16, _cpu, x16
+    ldr  x17, [x16, x14, lsl 3]
+    ubfx w14, w8, 16, 2
+    mov  w15, 16
+    lsl  w15, w15, w14                   /* the VL's bytes */
+    ubfx w14, w8, 12, 2
+    cmp  w14, 0
+    cset w14, ne
+    add  w14, w14, 2
+    lsr  w15, w15, w14                   /* its elements (16 at most) */
+    mov  x14, 1
+    lsl  x14, x14, x15
+    sub  x14, x14, 1
+    and  x17, x17, x14
+    rbit x17, x17
+    clz  x12, x17
+.endm
+# \out = &element w12 of the register in the word's bits \field-(\field + 4),
+# of 4 << word bit \szbit bytes. Clobbers x14-x17.
+.macro evg_eaddr out, field, szbit
+    ubfx w17, w8, \szbit, 1
+    add  w17, w17, 2
+    lsl  w17, w12, w17                   /* the element's byte */
+    ubfx w14, w8, \field, 5
+    lsr  w16, w17, 4
+    evx_qaddr \out, w14, w16
+    and  w17, w17, 15
+    add  \out, \out, x17
+.endm
+.macro evg_index                         /* x13 = element w12's index, sign-extended, scaled. Clobbers x14-x17 */
+    evg_eaddr x13, 5, 13
+    tbnz w8, 13, .Legx_q\@
+    ldrsw x13, [x13]
+    b    .Legx_done\@
+.Legx_q\@:
+    ldr  x13, [x13]
+.Legx_done\@:
+    ubfx w14, w8, 10, 2
+    lsl  x13, x13, x14
+.endm
+.macro evg_clear                         /* the opmask's bit w12 cleared. Clobbers x13, x14, x16, x17 */
+    ubfx w14, w8, 18, 3
+    mov  x16, CPU_avx512_k
+    add  x16, _cpu, x16
+    ldr  x17, [x16, x14, lsl 3]
+    mov  x13, 1
+    lsl  x13, x13, x12
+    bic  x17, x17, x13
+    str  x17, [x16, x14, lsl 3]
+.endm
+.macro evg_put                           /* the data register's element w12 = x10, its bit cleared */
+    evg_eaddr x13, 0, 12
+    tbnz w8, 12, .Legp_q\@
+    str  w10, [x13]
+    b    .Legp_done\@
+.Legp_q\@:
+    str  x10, [x13]
+.Legp_done\@:
+    evg_clear
+.endm
+.macro evg_get                           /* x10 = the data register's element w12 */
+    evg_eaddr x13, 0, 12
+    tbnz w8, 12, .Legg_q\@
+    ldr  w10, [x13]
+    b    .Legg_done\@
+.Legg_q\@:
+    ldr  x10, [x13]
+.Legg_done\@:
+.endm
+.macro evg_finish
+    ubfx w14, w8, 18, 3
+    mov  x16, CPU_avx512_k
+    add  x16, _cpu, x16
+    str  xzr, [x16, x14, lsl 3]
+    tbnz w8, 21, .Legf_done\@            /* (a scatter) */
+    ubfx w14, w8, 16, 2
+    mov  w13, 16
+    lsl  w13, w13, w14                   /* the data's bytes: the VL's, */
+    ubfx w14, w8, 12, 2
+    cmp  w14, 2
+    b.ne .Legf_loop\@
+    lsr  w13, w13, 1                     /* or half for qword indices, dword data */
+.Legf_loop\@:
+    cmp  w13, 64
+    b.hs .Legf_done\@
+    lsr  w16, w13, 4
+    and  w17, w8, 31
+    evx_qaddr x14, w17, w16
+    and  w17, w13, 15
+    add  x14, x14, x17
+    str  xzr, [x14]
+    add  w13, w13, 8
+    b    .Legf_loop\@
+.Legf_done\@:
+.endm
+
+# amd64: [meta (no index: base + disp + segment)][disp][next_ip][word], gret 4.
+.gadget evex_gather_amd64
+.Lega_loop:
+    ldr  x8, [_ip, 24]
+    evg_next
+    cmp  w12, 64
+    b.hs .Lega_fin
+    evg_index
+    ldr  x8, [_ip]
+    ldr  x9, [_ip, 8]
+    amd64_vmem_addr
+    add  x9, x9, x13
+    ldr  x8, [_ip, 24]
+    tbnz w8, 12, .Lega_q
+    amd64_vread_prep 4, evex_gather_amd64_4
+    ldr  w10, [x9]
+    b    .Lega_got
+.Lega_q:
+    amd64_vread_prep 8, evex_gather_amd64_8
+    ldr  x10, [x9]
+.Lega_got:
+    ldr  x8, [_ip, 24]
+    evg_next
+    evg_put
+    b    .Lega_loop
+.Lega_fin:
+    evg_finish
+    gret 4
+    amd64_vread_bullshit 4, evex_gather_amd64_4
+    amd64_vread_bullshit 8, evex_gather_amd64_8
+
+.gadget evex_scatter_amd64
+.Lesa_loop:
+    ldr  x8, [_ip, 24]
+    evg_next
+    cmp  w12, 64
+    b.hs .Lesa_fin
+    evg_index
+    ldr  x8, [_ip]
+    ldr  x9, [_ip, 8]
+    amd64_vmem_addr
+    add  x9, x9, x13
+    ldr  x8, [_ip, 24]
+    tbnz w8, 12, .Lesa_q
+    amd64_vwrite_prep 4, evex_scatter_amd64_4
+    ldr  x8, [_ip, 24]
+    evg_next
+    evg_get
+    str  w10, [x9]
+    amd64_vwrite_done 4, evex_scatter_amd64_4
+    b    .Lesa_done
+.Lesa_q:
+    amd64_vwrite_prep 8, evex_scatter_amd64_8
+    ldr  x8, [_ip, 24]
+    evg_next
+    evg_get
+    str  x10, [x9]
+    amd64_vwrite_done 8, evex_scatter_amd64_8
+.Lesa_done:
+    ldr  x8, [_ip, 24]
+    evg_next
+    evg_clear
+    b    .Lesa_loop
+.Lesa_fin:
+    evg_finish
+    gret 4
+    amd64_vwrite_bullshit 4, evex_scatter_amd64_4
+    amd64_vwrite_bullshit 8, evex_scatter_amd64_8
+
+# i386: _addr = base + disp (+ segment), gen.c's; [orig_ip][word], gret 2.
+.gadget evex_gather_i386
+    mov  x15, EVEX_STAGE
+    add  x15, _cpu, x15
+    str  _addr, [x15]
+.Legi_loop:
+    ldr  x8, [_ip, 8]
+    evg_next
+    cmp  w12, 64
+    b.hs .Legi_fin
+    evg_index
+    mov  x15, EVEX_STAGE
+    add  x15, _cpu, x15
+    ldr  w9, [x15]
+    add  _addr, w9, w13                  /* (32-bit: the address wraps) */
+    tbnz w8, 12, .Legi_q
+    read_prep 32, evex_gather_i386_4
+    ldr  w10, [_xaddr]
+    b    .Legi_got
+.Legi_q:
+    read_prep 64, evex_gather_i386_8
+    ldr  x10, [_xaddr]
+.Legi_got:
+    ldr  x8, [_ip, 8]
+    evg_next
+    evg_put
+    b    .Legi_loop
+.Legi_fin:
+    evg_finish
+    gret 2
+    read_bullshit 32, evex_gather_i386_4
+    read_bullshit 64, evex_gather_i386_8
+
+.gadget evex_scatter_i386
+    mov  x15, EVEX_STAGE
+    add  x15, _cpu, x15
+    str  _addr, [x15]
+.Lesi_loop:
+    ldr  x8, [_ip, 8]
+    evg_next
+    cmp  w12, 64
+    b.hs .Lesi_fin
+    evg_index
+    mov  x15, EVEX_STAGE
+    add  x15, _cpu, x15
+    ldr  w9, [x15]
+    add  _addr, w9, w13
+    tbnz w8, 12, .Lesi_q
+    write_prep 32, evex_scatter_i386_4
+    ldr  x8, [_ip, 8]
+    evg_next
+    evg_get
+    str  w10, [_xaddr]
+    write_done 32, evex_scatter_i386_4
+    b    .Lesi_done
+.Lesi_q:
+    write_prep 64, evex_scatter_i386_8
+    ldr  x8, [_ip, 8]
+    evg_next
+    evg_get
+    str  x10, [_xaddr]
+    write_done 64, evex_scatter_i386_8
+.Lesi_done:
+    ldr  x8, [_ip, 8]
+    evg_next
+    evg_clear
+    b    .Lesi_loop
+.Lesi_fin:
+    evg_finish
+    gret 2
+    write_bullshit 32, evex_scatter_i386_4
+    write_bullshit 64, evex_scatter_i386_8
+
+# ---- AES (AESENC/ENCLAST/DEC/DECLAST, AESIMC, AESKEYGENASSIST) and
+# PCLMULQDQ, each 128-bit lane: the legacy SSE, VEX and EVEX (VAES,
+# VPCLMULQDQ) forms all come here (gen.c vex_to_evex). x86's round is ARM's
+# with the round key added after the column mix, not before the S-box. ----
+.arch_extension aes
+.macro evb_aes dec, last                 /* s1 the state, s2 the round key */
+    movi v4.2d, 0
+.if \dec
+    aesd v0.16b, v4.16b
+  .if !\last
+    aesimc v0.16b, v0.16b
+  .endif
+.else
+    aese v0.16b, v4.16b
+  .if !\last
+    aesmc v0.16b, v0.16b
+  .endif
+.endif
+    eor  v0.16b, v0.16b, v1.16b
+.endm
+evex_l3 aesenc, 0, evb_aes, 0, 0
+evex_l3 aesenclast, 0, evb_aes, 0, 1
+evex_l3 aesdec, 0, evb_aes, 1, 0
+evex_l3 aesdeclast, 0, evb_aes, 1, 1
+.macro evb_aesimc                        /* (unary: s2) */
+    aesimc v0.16b, v1.16b
+.endm
+evex_l3 aesimc, 0, evb_aesimc
+.macro evb_aeskga                        /* s2's dwords 1 and 3 through the S-box; each also rotated ^ imm8 */
+    dup  v4.4s, v1.s[1]
+    dup  v5.4s, v1.s[3]
+    movi v6.2d, 0
+    aese v4.16b, v6.16b                  /* (equal columns: ShiftRows moves nothing) */
+    aese v5.16b, v6.16b
+    mov  w9, v4.s[0]
+    mov  w10, v5.s[0]
+    ror  w11, w9, 8
+    eor  w11, w11, w12
+    ror  w14, w10, 8
+    eor  w14, w14, w12
+    mov  v0.s[0], w9
+    mov  v0.s[1], w11
+    mov  v0.s[2], w10
+    mov  v0.s[3], w14
+.endm
+evex_l3 aeskeygenassist, 0, evb_aeskga
+.macro evb_pclmul                        /* the qwords of s1 and s2 imm8 bits 0 and 4 pick, carryless */
+    tst  w12, 1
+    b.eq .Lepc_a0\@
+    dup  v4.2d, v0.d[1]
+    b    .Lepc_b\@
+.Lepc_a0\@:
+    mov  v4.16b, v0.16b
+.Lepc_b\@:
+    tst  w12, 0x10
+    b.eq .Lepc_b0\@
+    dup  v5.2d, v1.d[1]
+    b    .Lepc_mul\@
+.Lepc_b0\@:
+    mov  v5.16b, v1.16b
+.Lepc_mul\@:
+    pmull v0.1q, v4.1d, v5.1d
+.endm
+evex_l3 pclmulqdq, 0, evb_pclmul

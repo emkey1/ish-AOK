@@ -10465,6 +10465,28 @@ static bool vex_plan(const struct vex_insn *v, struct vex_plan *p, bool i386) {
 // amd64: the VEX instruction at state->amd64_ip (just past its C4/C5 lead
 // byte), with insn's legacy prefixes. True when emitted (a gadget or #UD);
 // false with the IP untouched when the table does not have it yet.
+// The VEX forms of GFNI (VGF2P8MULB, VGF2P8AFFINE(INV)QB), AES (VAES*,
+// VAESIMC, VAESKEYGENASSIST) and VPCLMULQDQ are the EVEX table's ops at VL
+// 128/256, unmasked: EVEX's P0-P2 from the VEX fields (R X B and vvvv as VEX
+// has them, R' and V' clear, L'L = L). Their legacy SSE forms too
+// (vex_via_evex: which).
+static inline bool vex_via_evex(unsigned map, unsigned pp, unsigned op) {
+    return pp == 1 && ((map == 2 && (op == 0xcf || (op >= 0xdb && op <= 0xdf))) ||
+            (map == 3 && (op == 0xce || op == 0xcf || op == 0xdf || op == 0x44)));
+}
+static inline bool sse_via_evex_unary(unsigned map, unsigned op) {     // AESIMC, AESKEYGENASSIST: no s1
+    return (map == 2 && op == 0xdb) || (map == 3 && op == 0xdf);
+}
+static inline void vex_to_evex(bool r, bool x, bool b, unsigned map, bool w, unsigned vvvv, bool l, unsigned pp,
+        byte_t *p0, byte_t *p1, byte_t *p2) {
+    *p0 = (byte_t) ((r ? 0 : 0x80) | (x ? 0 : 0x40) | (b ? 0 : 0x20) | 0x10 | map);
+    *p1 = (byte_t) ((w ? 0x80 : 0) | ((~vvvv & 15) << 3) | 4 | pp);
+    *p2 = (byte_t) ((l ? 0x20 : 0) | 8);
+}
+enum { EVF_EVEX, EVF_VEX, EVF_SSE };
+static int gen_amd64_evex_at(struct gen_state *state, struct tlb *tlb, const struct amd64_jit_insn *insn,
+        byte_t p0, byte_t p1, byte_t p2, byte_t op, byte_t modrm, guest_addr_t ip, int from);
+
 static int gen_amd64_vex(struct gen_state *state, struct tlb *tlb, const struct amd64_jit_insn *insn) {
     guest_addr_t ip = state->amd64_ip;
     byte_t b1, b2 = 0, op, modrm = 0;
@@ -10527,6 +10549,14 @@ static int gen_amd64_vex(struct gen_state *state, struct tlb *tlb, const struct 
             return -1;
         v.vsib_index = (int) (((sib >> 3) & 7) | (x ? 8 : 0));
         v.vsib_scale = sib >> 6;
+    }
+    if (vex_via_evex(v.map, v.pp, v.op)) {
+        if (insn->operand_size_prefix || insn->rep_mode != amd64_jit_rep_none ||
+                insn->lock_prefix || insn->rex.present)
+            return gen_amd64_ud(state);
+        byte_t p0, p1, p2;
+        vex_to_evex(r, x, b, v.map, v.w, v.vvvv, v.l, v.pp, &p0, &p1, &p2);
+        return gen_amd64_evex_at(state, tlb, insn, p0, p1, p2, v.op, modrm, ip, EVF_VEX);
     }
     if (vex_lookup(&v) == NULL)
         return -1;
@@ -10755,19 +10785,22 @@ enum evex_kind {
     EVK_NARROW, // r/m (a register, or memory of VL >> ld bytes) = reg narrowed: VPMOV(S/US)*; vvvv 1111b
     EVK_COMPRESS, // r/m (a register, or memory) = reg's enabled elements packed: VPCOMPRESS*
     EVK_EXPAND, // dst = reg, the r/m's low elements spread to the enabled ones: VPEXPAND*
+    EVK_GATHER, // reg = the VSIB elements the mask enables (opcode bit 0: qword indices; W: qword data)
+    EVK_SCATTER,// the VSIB elements the mask enables = reg's
 };
 // evex_entry.flags bits 4-7
 #define EVF_MEMONLY 0x10
 #define EVF_REGONLY 0x20
 #define EVF_MIN256 0x40
 #define EVF_MIN512 0x80
+#define EVF_LEGACY 0x100        // SSE and VEX.128 only (AESIMC, AESKEYGENASSIST): EVEX, VEX.256 #UD
 enum evex_tuple { EVT_FV, EVT_FVM, EVT_FIX, EVT_DIV };  // FIX: disp8 * the fixed size (ld); DIV: VL bytes >> ld
 struct evex_entry {
     uint8_t map, pp, op;
     uint8_t kind, wreq, esz, bcast, tuple, align, nomask;
     void (*gadget)(void);
     uint8_t grp;                // ModRM.reg + 1 for a group (the imm8 shifts), else 0
-    uint8_t flags;              // the frame's word bits 33-36 (s2's quarter 0, q & 1; merge s1; dst in)
+    uint16_t flags;             // the frame's word bits 33-36 (s2's quarter 0, q & 1; merge s1; dst in), EVF_*
     uint8_t ld;                 // a memory operand of this many bytes whatever VL (0: VL's)
     uint8_t fp;                 // a float op: 1 with {er} (EVEX.b, register: RC in L'L), 2 {sae} only
 };
@@ -10794,6 +10827,8 @@ struct evex_entry {
 EVEX_INT(EVEX_DECL) EVEX_INT_UN(EVEX_DECL)
 extern void gadget_evex_mov(void), gadget_evex_vi_psadbw(void);
 extern void gadget_evex_compress0(void), gadget_evex_compress1(void), gadget_evex_compress2(void), gadget_evex_compress3(void), gadget_evex_expand0(void), gadget_evex_expand1(void), gadget_evex_expand2(void), gadget_evex_expand3(void), gadget_evex_pmov0xbd(void), gadget_evex_pmov0xbq(void), gadget_evex_pmov0xbw(void), gadget_evex_pmov0xdq(void), gadget_evex_pmov0xwd(void), gadget_evex_pmov0xwq(void), gadget_evex_pmov1xbd(void), gadget_evex_pmov1xbq(void), gadget_evex_pmov1xbw(void), gadget_evex_pmov1xdq(void), gadget_evex_pmov1xwd(void), gadget_evex_pmov1xwq(void), gadget_evex_pmov_sqxtn_db(void), gadget_evex_pmov_sqxtn_dw(void), gadget_evex_pmov_sqxtn_qb(void), gadget_evex_pmov_sqxtn_qd(void), gadget_evex_pmov_sqxtn_qw(void), gadget_evex_pmov_sqxtn_wb(void), gadget_evex_pmov_uqxtn_db(void), gadget_evex_pmov_uqxtn_dw(void), gadget_evex_pmov_uqxtn_qb(void), gadget_evex_pmov_uqxtn_qd(void), gadget_evex_pmov_uqxtn_qw(void), gadget_evex_pmov_uqxtn_wb(void), gadget_evex_pmov_xtn_db(void), gadget_evex_pmov_xtn_dw(void), gadget_evex_pmov_xtn_qb(void), gadget_evex_pmov_xtn_qd(void), gadget_evex_pmov_xtn_qw(void), gadget_evex_pmov_xtn_wb(void);
+extern void gadget_evex_aesenc(void), gadget_evex_aesenclast(void), gadget_evex_aesdec(void), gadget_evex_aesdeclast(void), gadget_evex_aesimc(void), gadget_evex_aeskeygenassist(void), gadget_evex_pclmulqdq(void);
+extern void gadget_evex_pmultishiftqb(void), gadget_evex_pshldw(void), gadget_evex_pshldd(void), gadget_evex_pshldq(void), gadget_evex_pshrdw(void), gadget_evex_pshrdd(void), gadget_evex_pshrdq(void), gadget_evex_pshldvw(void), gadget_evex_pshldvd(void), gadget_evex_pshldvq(void), gadget_evex_pshrdvw(void), gadget_evex_pshrdvd(void), gadget_evex_pshrdvq(void), gadget_evex_pdpbusd(void), gadget_evex_pdpbusds(void), gadget_evex_pdpwssd(void), gadget_evex_pdpwssds(void), gadget_evex_pmadd52luq(void), gadget_evex_pmadd52huq(void), gadget_evex_popcntb(void), gadget_evex_popcntw(void), gadget_evex_pshufbitqmb(void), gadget_evex_gf2p8mulb(void), gadget_evex_gf2p8affineqb(void), gadget_evex_gf2p8affineinvqb(void);
 extern void gadget_evex_pconflictd(void), gadget_evex_pconflictq(void), gadget_evex_plzcntd(void), gadget_evex_plzcntq(void), gadget_evex_pmovb2m(void), gadget_evex_pmovd2m(void), gadget_evex_pmovm2b(void), gadget_evex_pmovm2d(void), gadget_evex_pmovm2q(void), gadget_evex_pmovm2w(void), gadget_evex_pmovq2m(void), gadget_evex_pmovw2m(void), gadget_evex_popcntd(void), gadget_evex_popcntq(void);
 extern void gadget_evex_alignd(void), gadget_evex_alignq(void), gadget_evex_extract(void), gadget_evex_insert(void), gadget_evex_palignr(void), gadget_evex_permb(void), gadget_evex_permd(void), gadget_evex_permi2b(void), gadget_evex_permi2d(void), gadget_evex_permi2q(void), gadget_evex_permi2w(void), gadget_evex_permilpd_i(void), gadget_evex_permilpd_v(void), gadget_evex_permilps_v(void), gadget_evex_permq(void), gadget_evex_permqi(void), gadget_evex_permt2b(void), gadget_evex_permt2d(void), gadget_evex_permt2q(void), gadget_evex_permt2w(void), gadget_evex_permw(void), gadget_evex_pshufd(void), gadget_evex_pshufhw(void), gadget_evex_pshuflw(void), gadget_evex_shuf4(void), gadget_evex_shufpd(void), gadget_evex_shufps(void);
 extern void gadget_evex_xf_addpd(void), gadget_evex_xf_addps(void), gadget_evex_xf_addsd(void), gadget_evex_xf_addss(void), gadget_evex_xf_cmppd(void), gadget_evex_xf_cmpps(void), gadget_evex_xf_cmpsd(void), gadget_evex_xf_cmpss(void), gadget_evex_xf_divpd(void), gadget_evex_xf_divps(void), gadget_evex_xf_divsd(void), gadget_evex_xf_divss(void), gadget_evex_xf_maxpd(void), gadget_evex_xf_maxps(void), gadget_evex_xf_maxsd(void), gadget_evex_xf_maxss(void), gadget_evex_xf_minpd(void), gadget_evex_xf_minps(void), gadget_evex_xf_minsd(void), gadget_evex_xf_minss(void), gadget_evex_xf_mulpd(void), gadget_evex_xf_mulps(void), gadget_evex_xf_mulsd(void), gadget_evex_xf_mulss(void), gadget_evex_xf_sqrtpd(void), gadget_evex_xf_sqrtps(void), gadget_evex_xf_sqrtsd(void), gadget_evex_xf_sqrtss(void), gadget_evex_xf_subpd(void), gadget_evex_xf_subps(void), gadget_evex_xf_subsd(void), gadget_evex_xf_subss(void);
@@ -11066,6 +11101,57 @@ static const struct evex_entry evex_table[] = {
     {2, 1, 0x88, EVK_EXPAND, 2, 3, 0, EVT_FIX, 0, 0, gadget_evex_expand3, 0, 0, 8, 0},
     {2, 1, 0x62, EVK_EXPAND, 1, 0, 0, EVT_FIX, 0, 0, gadget_evex_expand0, 0, 0, 1, 0},
     {2, 1, 0x62, EVK_EXPAND, 2, 1, 0, EVT_FIX, 0, 0, gadget_evex_expand1, 0, 0, 2, 0},
+    // gathers and scatters (gadgets picked by the guest: gen_evex_vsib_word)
+    {2, 1, 0x90, EVK_GATHER, 1, 2, 0, EVT_FIX, 0, 0, NULL, 0, 0, 4, 0},
+    {2, 1, 0x90, EVK_GATHER, 2, 3, 0, EVT_FIX, 0, 0, NULL, 0, 0, 8, 0},
+    {2, 1, 0x91, EVK_GATHER, 1, 2, 0, EVT_FIX, 0, 0, NULL, 0, 0, 4, 0},
+    {2, 1, 0x91, EVK_GATHER, 2, 3, 0, EVT_FIX, 0, 0, NULL, 0, 0, 8, 0},
+    {2, 1, 0x92, EVK_GATHER, 1, 2, 0, EVT_FIX, 0, 0, NULL, 0, 0, 4, 0},
+    {2, 1, 0x92, EVK_GATHER, 2, 3, 0, EVT_FIX, 0, 0, NULL, 0, 0, 8, 0},
+    {2, 1, 0x93, EVK_GATHER, 1, 2, 0, EVT_FIX, 0, 0, NULL, 0, 0, 4, 0},
+    {2, 1, 0x93, EVK_GATHER, 2, 3, 0, EVT_FIX, 0, 0, NULL, 0, 0, 8, 0},
+    {2, 1, 0xa0, EVK_SCATTER, 1, 2, 0, EVT_FIX, 0, 0, NULL, 0, 0, 4, 0},
+    {2, 1, 0xa0, EVK_SCATTER, 2, 3, 0, EVT_FIX, 0, 0, NULL, 0, 0, 8, 0},
+    {2, 1, 0xa1, EVK_SCATTER, 1, 2, 0, EVT_FIX, 0, 0, NULL, 0, 0, 4, 0},
+    {2, 1, 0xa1, EVK_SCATTER, 2, 3, 0, EVT_FIX, 0, 0, NULL, 0, 0, 8, 0},
+    {2, 1, 0xa2, EVK_SCATTER, 1, 2, 0, EVT_FIX, 0, 0, NULL, 0, 0, 4, 0},
+    {2, 1, 0xa2, EVK_SCATTER, 2, 3, 0, EVT_FIX, 0, 0, NULL, 0, 0, 8, 0},
+    {2, 1, 0xa3, EVK_SCATTER, 1, 2, 0, EVT_FIX, 0, 0, NULL, 0, 0, 4, 0},
+    {2, 1, 0xa3, EVK_SCATTER, 2, 3, 0, EVT_FIX, 0, 0, NULL, 0, 0, 8, 0},
+    // VBMI's VPMULTISHIFTQB, VBMI2's VPSHLD/VPSHRD(V), VNNI, IFMA, BITALG, GFNI
+    {2, 1, 0x83, EVK_L3, 2, 0, 3, EVT_FV, 0, 0, gadget_evex_pmultishiftqb, 0, 0, 0, 0},
+    {3, 1, 0x70, EVK_L3, 2, 1, 0, EVT_FVM, 0, 0, gadget_evex_pshldw, 0, 0, 0, 0},
+    {3, 1, 0x71, EVK_L3, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_pshldd, 0, 0, 0, 0},
+    {3, 1, 0x71, EVK_L3, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_pshldq, 0, 0, 0, 0},
+    {3, 1, 0x72, EVK_L3, 2, 1, 0, EVT_FVM, 0, 0, gadget_evex_pshrdw, 0, 0, 0, 0},
+    {3, 1, 0x73, EVK_L3, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_pshrdd, 0, 0, 0, 0},
+    {3, 1, 0x73, EVK_L3, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_pshrdq, 0, 0, 0, 0},
+    {2, 1, 0x70, EVK_L3, 2, 1, 0, EVT_FVM, 0, 0, gadget_evex_pshldvw, 0, 8, 0, 0},
+    {2, 1, 0x71, EVK_L3, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_pshldvd, 0, 8, 0, 0},
+    {2, 1, 0x71, EVK_L3, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_pshldvq, 0, 8, 0, 0},
+    {2, 1, 0x72, EVK_L3, 2, 1, 0, EVT_FVM, 0, 0, gadget_evex_pshrdvw, 0, 8, 0, 0},
+    {2, 1, 0x73, EVK_L3, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_pshrdvd, 0, 8, 0, 0},
+    {2, 1, 0x73, EVK_L3, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_pshrdvq, 0, 8, 0, 0},
+    {2, 1, 0x50, EVK_L3, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_pdpbusd, 0, 8, 0, 0},
+    {2, 1, 0x51, EVK_L3, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_pdpbusds, 0, 8, 0, 0},
+    {2, 1, 0x52, EVK_L3, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_pdpwssd, 0, 8, 0, 0},
+    {2, 1, 0x53, EVK_L3, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_pdpwssds, 0, 8, 0, 0},
+    {2, 1, 0xb4, EVK_L3, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_pmadd52luq, 0, 8, 0, 0},
+    {2, 1, 0xb5, EVK_L3, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_pmadd52huq, 0, 8, 0, 0},
+    {2, 1, 0x54, EVK_L2, 1, 0, 0, EVT_FVM, 0, 0, gadget_evex_popcntb, 0, 0, 0, 0},
+    {2, 1, 0x54, EVK_L2, 2, 1, 0, EVT_FVM, 0, 0, gadget_evex_popcntw, 0, 0, 0, 0},
+    {2, 1, 0x8f, EVK_TOMASK, 1, 0, 0, EVT_FVM, 0, 0, gadget_evex_pshufbitqmb, 0, 0, 0, 0},
+    {2, 1, 0xcf, EVK_L3, 1, 0, 0, EVT_FVM, 0, 0, gadget_evex_gf2p8mulb, 0, 0, 0, 0},
+    {3, 1, 0xce, EVK_L3, 2, 0, 3, EVT_FV, 0, 0, gadget_evex_gf2p8affineqb, 0, 0, 0, 0},
+    {3, 1, 0xcf, EVK_L3, 2, 0, 3, EVT_FV, 0, 0, gadget_evex_gf2p8affineinvqb, 0, 0, 0, 0},
+    // AES and PCLMULQDQ (VAES, VPCLMULQDQ; the SSE and VEX forms through vex_to_evex)
+    {2, 1, 0xdc, EVK_L3, 0, 2, 0, EVT_FVM, 0, 1, gadget_evex_aesenc, 0, 0, 0, 0},
+    {2, 1, 0xdd, EVK_L3, 0, 2, 0, EVT_FVM, 0, 1, gadget_evex_aesenclast, 0, 0, 0, 0},
+    {2, 1, 0xde, EVK_L3, 0, 2, 0, EVT_FVM, 0, 1, gadget_evex_aesdec, 0, 0, 0, 0},
+    {2, 1, 0xdf, EVK_L3, 0, 2, 0, EVT_FVM, 0, 1, gadget_evex_aesdeclast, 0, 0, 0, 0},
+    {2, 1, 0xdb, EVK_L2, 0, 2, 0, EVT_FVM, 0, 1, gadget_evex_aesimc, 0, EVF_LEGACY, 0, 0},
+    {3, 1, 0xdf, EVK_L2, 0, 2, 0, EVT_FVM, 0, 1, gadget_evex_aeskeygenassist, 0, EVF_LEGACY, 0, 0},
+    {3, 1, 0x44, EVK_L3, 0, 2, 0, EVT_FVM, 0, 1, gadget_evex_pclmulqdq, 0, 0, 0, 0},
 };
 struct evex_insn {
     unsigned map, pp, op, w, vvvv, reg, rm, ll, aaa;
@@ -11091,6 +11177,18 @@ static unsigned evex_disp_scale(const struct evex_entry *e, const struct evex_in
     if (e->tuple == EVT_DIV)
         return (16u << v->ll) >> e->ld;
     return 16u << v->ll;
+}
+// A gather's or scatter's word (evex.inc evg_*), or -1 for #UD: memory with
+// a SIB (index: its index register, 0-31), an opmask, no EVEX.z or b,
+// vvvv 1111b, a gather's destination not its index.
+static long gen_evex_vsib_word(const struct evex_entry *e, const struct evex_insn *v, bool sib,
+        unsigned index, unsigned scale) {
+    if (!v->mem || !sib || v->aaa == 0 || v->z || v->b || (v->vvvv & 15) != 0 || v->vvvv_hi || v->ll == 3)
+        return -1;
+    if (e->kind == EVK_GATHER && index == v->reg)
+        return -1;
+    return (long) (v->reg | index << 5 | scale << 10 | v->w << 12 | (v->op & 1) << 13 | v->ll << 16 |
+            v->aaa << 18 | (e->kind == EVK_SCATTER ? 1u << 21 : 0));
 }
 struct evex_plan {
     bool ud;
@@ -11290,13 +11388,14 @@ static bool evex_plan(const struct evex_insn *v, struct evex_plan *p) {
 // amd64: the EVEX instruction at state->amd64_ip (just past its 62 lead
 // byte). As gen_amd64_vex: 1 when emitted (a gadget or #UD), -1 with the IP
 // untouched when the table does not have it yet.
-static int gen_amd64_evex(struct gen_state *state, struct tlb *tlb, const struct amd64_jit_insn *insn) {
-    guest_addr_t ip = state->amd64_ip;
-    byte_t p0, p1, p2, op, modrm;
-    if (!tlb_read(tlb, ip, &p0, 1) || !tlb_read(tlb, ip + 1, &p1, 1) || !tlb_read(tlb, ip + 2, &p2, 1) ||
-            !tlb_read(tlb, ip + 3, &op, 1) || !tlb_read(tlb, ip + 4, &modrm, 1))
-        return -1;
-    ip += 4;                                    // at the ModRM
+// An EVEX instruction from its P0-P2, opcode and ModRM, ip at the ModRM.
+// from: EVF_EVEX, or a VEX or legacy SSE encoding of an op the EVEX table
+// has (GFNI), P0-P2 made from its fields (vex_to_evex): no disp8*N, the
+// prefix checks already done; SSE's operand is 16-byte aligned and the
+// bits above 128 are left alone (word bit 63).
+static int gen_amd64_evex_at(struct gen_state *state, struct tlb *tlb, const struct amd64_jit_insn *insn,
+        byte_t p0, byte_t p1, byte_t p2, byte_t op, byte_t modrm, guest_addr_t ip, int from) {
+    bool from_vex = from != EVF_EVEX;
     struct evex_insn v = {0};
     v.map = p0 & 7;
     v.op = op;
@@ -11323,9 +11422,11 @@ static int gen_amd64_evex(struct gen_state *state, struct tlb *tlb, const struct
                 return gen_amd64_ud(state);     // the opcode is here, but not with this VEX.W
         return -1;
     }
-    if (insn->operand_size_prefix || insn->rep_mode != amd64_jit_rep_none || insn->lock_prefix ||
-            insn->rex.present)
+    if (!from_vex && (insn->operand_size_prefix || insn->rep_mode != amd64_jit_rep_none || insn->lock_prefix ||
+            insn->rex.present))
         return gen_amd64_ud(state);             // a legacy prefix or REX before 62
+    if ((e->flags & EVF_LEGACY) && (from == EVF_EVEX || v.ll != 0))
+        return gen_amd64_ud(state);
     struct amd64_jit_insn m = *insn;
     m.modrm = modrm;
     m.has_modrm = true;
@@ -11348,12 +11449,44 @@ static int gen_amd64_evex(struct gen_state *state, struct tlb *tlb, const struct
         state->amd64_ip = saved;
         return -1;
     }
+    if (e->kind == EVK_GATHER || e->kind == EVK_SCATTER) {
+        byte_t sib = 0;
+        bool has_sib = v.mem && amd64_modrm_rm(modrm) == 4;
+        if (has_sib && !tlb_read(tlb, ip + 1, &sib, 1)) {
+            state->amd64_ip = saved;
+            return -1;
+        }
+        long word = from != EVF_EVEX ? -1 : gen_evex_vsib_word(e, &v, has_sib,
+                ((sib >> 3) & 7u) | (x ? 8u : 0u) | (v2 ? 16u : 0u), sib >> 6);
+        if (word < 0)
+            return gen_amd64_ud(state);
+        state->amd64_ip = next_ip;
+        if (amd64_modrm_mod(modrm) == 1)
+            disp = (unsigned long) ((long) disp * (long) evex_disp_scale(e, &v));
+        gen_amd64_flush_reg_cache(state);
+        gen_amd64_flush_rip(state);
+        // the address without the SIB's index: that is the vector register
+        meta &= ~(AMD64_JIT_MEM_HAS_INDEX | 0xful << AMD64_JIT_MEM_INDEX_SHIFT | 3ul << AMD64_JIT_MEM_SCALE_SHIFT);
+        extern void gadget_evex_gather_amd64(void), gadget_evex_scatter_amd64(void);
+        gen(state, (unsigned long) (e->kind == EVK_GATHER ? gadget_evex_gather_amd64 : gadget_evex_scatter_amd64));
+        gen(state, meta);
+        gen(state, disp);
+        gen(state, (unsigned long) next_ip);
+        gen(state, (unsigned long) word);
+        gen_amd64_defer_rip(state, next_ip);
+        return 1;
+    }
     struct evex_plan p;
     evex_plan(&v, &p);
     if (p.ud)
         return gen_amd64_ud(state);
+    if (from == EVF_SSE) {
+        p.word |= 1ul << 63;
+        if (v.mem && p.align == 0)
+            p.align = 16;
+    }
     state->amd64_ip = next_ip;
-    if (v.mem && amd64_modrm_mod(modrm) == 1)
+    if (v.mem && amd64_modrm_mod(modrm) == 1 && !from_vex)
         disp = (unsigned long) ((long) disp * (long) evex_disp_scale(e, &v));
     if (v.mem || p.gpr_stage >= 0) {
         gen_amd64_flush_reg_cache(state);
@@ -11411,6 +11544,16 @@ static int gen_amd64_evex(struct gen_state *state, struct tlb *tlb, const struct
     gen_amd64_defer_rip(state, next_ip);
     return 1;
 }
+
+static int gen_amd64_evex(struct gen_state *state, struct tlb *tlb, const struct amd64_jit_insn *insn) {
+    guest_addr_t ip = state->amd64_ip;
+    byte_t p0, p1, p2, op, modrm;
+    if (!tlb_read(tlb, ip, &p0, 1) || !tlb_read(tlb, ip + 1, &p1, 1) || !tlb_read(tlb, ip + 2, &p2, 1) ||
+            !tlb_read(tlb, ip + 3, &op, 1) || !tlb_read(tlb, ip + 4, &modrm, 1))
+        return -1;
+    return gen_amd64_evex_at(state, tlb, insn, p0, p1, p2, op, modrm, ip + 4, EVF_EVEX);
+}
+
 #endif
 
 #if defined(__aarch64__)
@@ -13157,6 +13300,27 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
                 gen_amd64_defer_rip(state, next_ip);
                 return true;
             }
+        }
+    }
+
+    // The SSE forms of GFNI (66 0F 38 CF, 66 0F 3A CE/CF), AES (66 0F 38 DB-DF,
+    // 66 0F 3A DF) and PCLMULQDQ (66 0F 3A 44): the EVEX table's ops at VL 128
+    // with s1 the destination (gen_amd64_evex_at, EVF_SSE)
+    if (!insn.address_size_prefix && !insn.lock_prefix && insn.two_byte_opcode && insn.operand_size_prefix &&
+            (insn.op2 == 0x38 || insn.op2 == 0x3a) && insn.rep_mode == amd64_jit_rep_none) {
+        byte_t op3 = 0, modrm3 = 0;
+        unsigned map = insn.op2 == 0x38 ? 2 : 3;
+        if (tlb_read(tlb, state->amd64_ip, &op3, 1) && tlb_read(tlb, state->amd64_ip + 1, &modrm3, 1) &&
+                vex_via_evex(map, 1, op3)) {
+            byte_t p0, p1, p2;
+            vex_to_evex(insn.rex.r, insn.rex.x, insn.rex.b, map, map == 3, sse_via_evex_unary(map, op3) ? 0 :
+                    amd64_modrm_reg(modrm3) | (insn.rex.r ? 8u : 0u), false, 1, &p0, &p1, &p2);
+            int r = gen_amd64_evex_at(state, tlb, &insn, p0, p1, p2, op3, modrm3, state->amd64_ip + 1, EVF_SSE);
+            if (r >= 0)
+                return r;
+            state->amd64_ip = state->amd64_orig_ip;
+            state->amd64_fallback_to_interp = true;
+            return false;
         }
     }
 
@@ -20545,6 +20709,8 @@ static inline uint16_t cpu_reg_offset(enum arg arg, int index) {
 static void gen_i386_gpr_out(struct gen_state *state, unsigned r, unsigned slot);
 static void gen_i386_gpr_in(struct gen_state *state, unsigned r, unsigned slot);
 #endif
+static inline bool gen_evex32_at(struct gen_state *state, struct tlb *tlb, struct modrm *modrm, bool seg_tls,
+        byte_t p0, byte_t p1, byte_t p2, byte_t op, byte_t raw_modrm, uint8_t imm8, int from);
 static inline bool gen_vex32(struct gen_state *state, struct tlb *tlb, struct modrm *modrm,
         bool seg_tls, unsigned map, unsigned pp, unsigned op, unsigned l, unsigned w,
         unsigned vvvv, uint8_t imm8) {
@@ -20560,6 +20726,11 @@ static inline bool gen_vex32(struct gen_state *state, struct tlb *tlb, struct mo
     vvvv &= 7;
 
 #if defined(__aarch64__)
+    if (vex_via_evex(map, pp, op)) {            // the EVEX table's (gen_amd64_vex has why)
+        byte_t p0, p1, p2;
+        vex_to_evex(false, false, false, map, w, vvvv | (vvvv_hi ? 8 : 0), l, pp, &p0, &p1, &p2);
+        return gen_evex32_at(state, tlb, modrm, seg_tls, p0, p1, p2, (byte_t) op, 0, imm8, EVF_VEX);
+    }
     // math.S's vex.inc gadgets, where the table has the instruction
     {
         struct vex_insn v = {map, pp, op, l, w, vvvv, modrm->opcode & 7, modrm->rm_opcode & 7,
@@ -20784,8 +20955,10 @@ static inline bool gen_vex32(struct gen_state *state, struct tlb *tlb, struct mo
 // vvvv's still counts where it must be 1111b -- and EVEX.V' set is #UD. An
 // EVEX the table does not have is #UD (0x62 was BOUND, unimplemented,
 // before); an x86_64 host has no EVEX.
-static inline bool gen_evex32(struct gen_state *state, struct tlb *tlb, struct modrm *modrm, bool seg_tls,
-        byte_t p0, byte_t p1, byte_t p2, byte_t op, byte_t raw_modrm, uint8_t imm8) {
+// from: EVF_EVEX, or a VEX or SSE encoding of an op the EVEX table has
+// (GFNI; gen_vex32, gen_gfni_sse32): as gen_amd64_evex_at's.
+static inline bool gen_evex32_at(struct gen_state *state, struct tlb *tlb, struct modrm *modrm, bool seg_tls,
+        byte_t p0, byte_t p1, byte_t p2, byte_t op, byte_t raw_modrm, uint8_t imm8, int from) {
     (void) tlb;
 #if defined(__aarch64__)
     struct evex_insn v = {0};
@@ -20809,12 +20982,37 @@ static inline bool gen_evex32(struct gen_state *state, struct tlb *tlb, struct m
     const struct evex_entry *e = evex_lookup(&v);
     if (e == NULL)
         UNDEFINED;
+    if ((e->flags & EVF_LEGACY) && (from == EVF_EVEX || v.ll != 0))
+        UNDEFINED;
+    if (e->kind == EVK_GATHER || e->kind == EVK_SCATTER) {
+        // (decode.h presets index to reg_none: anything else is a SIB's raw index field)
+        bool has_sib = v.mem && modrm->index != reg_none;
+        long word = from != EVF_EVEX ? -1 : gen_evex_vsib_word(e, &v, has_sib,
+                has_sib ? (unsigned) modrm->index & 7 : 0, has_sib ? modrm->shift : 0);
+        if (word < 0)
+            UNDEFINED;
+        struct modrm base = *modrm;
+        base.type = modrm_mem;                  // base + disp: the index is the vector register
+        if ((raw_modrm >> 6) == 1)
+            base.offset = (int32_t) ((int64_t) base.offset * evex_disp_scale(e, &v));
+        gen_addr(state, &base, seg_tls);
+        extern void gadget_evex_gather_i386(void), gadget_evex_scatter_i386(void);
+        GEN(e->kind == EVK_GATHER ? gadget_evex_gather_i386 : gadget_evex_scatter_i386);
+        GEN(state->orig_ip);
+        GEN(word);
+        return true;
+    }
     struct evex_plan p;
     evex_plan(&v, &p);
     if (p.ud)
         UNDEFINED;
+    if (from == EVF_SSE) {
+        p.word |= 1ul << 63;
+        if (v.mem && p.align == 0)
+            p.align = 16;
+    }
     struct modrm m = *modrm;
-    if (v.mem && (raw_modrm >> 6) == 1)
+    if (v.mem && (raw_modrm >> 6) == 1 && from == EVF_EVEX)
         m.offset = (int32_t) ((int64_t) m.offset * evex_disp_scale(e, &v));     // disp8 * N
     bool masked = p.ld_masked;
     if (p.gpr_stage >= 0) {
@@ -20873,6 +21071,29 @@ static inline bool gen_evex32(struct gen_state *state, struct tlb *tlb, struct m
     return true;
 #else
     (void) modrm; (void) seg_tls; (void) p0; (void) p1; (void) p2; (void) op; (void) raw_modrm; (void) imm8;
+    (void) from;
+    UNDEFINED;
+#endif
+}
+static inline bool gen_evex32(struct gen_state *state, struct tlb *tlb, struct modrm *modrm, bool seg_tls,
+        byte_t p0, byte_t p1, byte_t p2, byte_t op, byte_t raw_modrm, uint8_t imm8) {
+#if defined(__aarch64__)
+    return gen_evex32_at(state, tlb, modrm, seg_tls, p0, p1, p2, op, raw_modrm, imm8, EVF_EVEX);
+#else
+    return gen_evex32_at(state, tlb, modrm, seg_tls, p0, p1, p2, op, raw_modrm, imm8, 0);
+#endif
+}
+// The SSE forms of GFNI, AES and PCLMULQDQ (decode.h; vex_via_evex has which):
+// the EVEX table's ops at VL 128, s1 the destination (gen_evex32_at, EVF_SSE).
+static inline bool gen_sse_via_evex32(struct gen_state *state, struct tlb *tlb, struct modrm *modrm, bool seg_tls,
+        unsigned map, byte_t op, uint8_t imm8) {
+#if defined(__aarch64__)
+    byte_t p0, p1, p2;
+    vex_to_evex(false, false, false, map, map == 3, sse_via_evex_unary(map, op) ? 0 : modrm->opcode & 7, false, 1,
+            &p0, &p1, &p2);
+    return gen_evex32_at(state, tlb, modrm, seg_tls, p0, p1, p2, op, 0, imm8, EVF_SSE);
+#else
+    (void) tlb; (void) modrm; (void) seg_tls; (void) map; (void) op; (void) imm8;
     UNDEFINED;
 #endif
 }

@@ -121,10 +121,10 @@ static inline dword_t cpuid_leaf1_ecx_features(void) {
     // encoding-restricted to long mode).
     features |= (1 << 23);  // popcnt
 #if CPUID_ADVERTISE_VECTOR_STATE
-    // AESNI and PCLMULQDQ go with the vector switch rather than ahead of it:
-    // avx_regress covers their VEX forms, but advertising them makes OpenSSL
-    // and friends emit the LEGACY SSE encodings, which is a separate claim
-    // needing its own evidence before it is made.
+    // AESNI and PCLMULQDQ go with the vector switch rather than ahead of it.
+    // Advertising them makes OpenSSL and friends emit the LEGACY SSE
+    // encodings: those are gadgets too now (jit/gadgets-aarch64/evex.inc),
+    // checked against an AMD Ryzen and SDE in tests/manual/x86/*_avx512_ext.c.
     features |= (1 << 1);   // pclmulqdq
     features |= (1 << 25);  // aesni
     // The XSAVE feature set (XSAVE/XRSTOR/XGETBV), and since we are the OS the
