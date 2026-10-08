@@ -32,8 +32,14 @@ const char *uname_version = "iSH-AOK";
 // What 5.10 can be built without answers as such a build does: io_uring is
 // ENOSYS (CONFIG_IO_URING=n), and so are the namespaces AOK does not model. A
 // few later calls exist as well -- epoll_pwait2 (5.11), fchmodat2 (6.6) -- which
-// no program is harmed to find, since callers probe for them. The next release
-// up would promise mount_setattr (5.12) and futex_waitv (5.16), which are not.
+// no program is harmed to find, since callers probe for them. Two later x86
+// signal behaviours too, both 5.14's (kernel/signal.c): AT_MINSIGSTKSZ in the
+// auxv, which readers take from getauxval with a fallback for 0, and SIGSEGV
+// for a frame that overruns its altstack -- where 5.10 writes the frame past
+// the altstack's bottom over whatever lies below, which no program can rely
+// on and an AVX-512 frame (~3.5 KB, over MINSIGSTKSZ) makes reachable. The
+// next release up would promise mount_setattr (5.12) and futex_waitv (5.16),
+// which are not.
 //
 // 5.10.0 rather than a later 5.10.y, as Debian's 5.10 kernels spell it; libuv
 // turns io_uring on from 5.10.186, and should not go probing for it here.
