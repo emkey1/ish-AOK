@@ -115,6 +115,7 @@ enum {
     [super viewDidLoad];
     self.title = NSLocalizedString(@"Font", @"Font picker navigation title");
     self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:NSLocalizedString(@"Reset", @"Font picker button that restores the default font") style:UIBarButtonItemStylePlain target:self action:@selector(resetFont:)];
+    self.navigationItem.rightBarButtonItem.accessibilityHint = NSLocalizedString(@"Restores the default application font.", @"Accessibility hint for the font reset button");
     [self.tableView registerClass:UITableViewCell.class forCellReuseIdentifier:@"Font"];
     [self.tableView registerClass:UITableViewCell.class forCellReuseIdentifier:@"Filter"];
 
