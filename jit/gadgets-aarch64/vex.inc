@@ -1336,6 +1336,9 @@ vex_widen xf_cvtph2ps, 8, q2, xfb_cvtph2ps
     ldr  x9, [_ip, 8]
     amd64_vmem_addr
     add  x9, x9, x10
+    tbz  x8, 45, .Lvga_a32
+    mov  w9, w9                          /* a 0x67 element address: 32 bits (no segment: gen.c) */
+.Lvga_a32:
     ldr  x8, [_ip, 24]
     tbnz w8, 14, .Lvga_q
     amd64_vread_prep 4, vex_gather_amd64_4

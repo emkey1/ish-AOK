@@ -6224,14 +6224,25 @@ amd64_mmx_store store64, 8
 
 # MASKMOVQ mm, mm (0F F7) / MASKMOVDQU xmm, xmm (66 0F F7): the bytes of the
 # first operand whose mask byte (the second) has its top bit set, stored to
-# [rdi]. The whole width is write-prepped (a fault re-runs it) and merged.
-# [data (0-3) | mask (4-7)], gret 1 -- rip flushed, rdi in the register file.
+# [rdi] -- [edi] with 0x67, plus FS's or GS's base with an override. The
+# whole width is write-prepped (a fault re-runs it) and merged. [data (0-3) |
+# mask (4-7) | 0x67 (8) | FS (9) | GS (10)], gret 1 -- rip flushed, rdi in
+# the register file.
 .macro amd64_gen_maskmov name, vb
 .gadget amd64_\name
     ldr  x8, [_ip]
     and  x24, x8, 0xf                /* x24/x25 (the flushed reg cache) survive the prep */
     ubfx x25, x8, 4, 4
     ldr  x9, [_cpu, CPU_amd64_regs + 7 * 8]   /* rdi */
+    tbz  x8, 8, 1f
+    mov  w9, w9
+1:  tbz  x8, 9, 2f
+    ldr  x14, [_cpu, CPU_tls_ptr]
+    add  x9, x9, x14
+2:  tbz  x8, 10, 3f
+    ldr  x14, [_cpu, CPU_amd64_gs_base]
+    add  x9, x9, x14
+3:
     amd64_vwrite_prep \vb, \name
 .if \vb == 8
     add  x11, _cpu, CPU_mm

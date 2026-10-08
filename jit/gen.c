@@ -9038,7 +9038,10 @@ static bool gen_amd64_decode_rm_extent(struct gen_state *state, struct tlb *tlb,
     unsigned rm_low = amd64_modrm_rm(modrm);
     bool has_base = true;
 
-    if (insn->address_size_prefix)
+    // (A 0x67 still on the instruction is one gen_step64 left for its arm to
+    // take: on a register form -- MASKMOV*'s [rDI] -- the length is the same;
+    // on a memory operand, refused, as gen_amd64_decode_mem_meta does.)
+    if (insn->address_size_prefix && mod != 3)
         return false;
     if (mod == 3) {
         *next_ip_out = ip;
@@ -10662,7 +10665,9 @@ static int gen_amd64_vex(struct gen_state *state, struct tlb *tlb, const struct 
         gen_amd64_flush_reg_cache(state);
         gen_amd64_flush_rip(state);
         gen(state, (unsigned long) gadget_amd64_maskmovdqu);
-        gen(state, (unsigned long) (v.reg & 15) | (unsigned long) (v.rm & 15) << 4);
+        gen(state, (unsigned long) (v.reg & 15) | (unsigned long) (v.rm & 15) << 4 |
+                (insn->address_size_prefix ? 1ul << 8 : 0) |    // [edi], FS/GS
+                (insn->seg_prefix == AMD64_SEG_FS ? 1ul << 9 : 0) | (insn->seg_prefix == AMD64_SEG_GS ? 1ul << 10 : 0));
         gen_amd64_defer_rip(state, next_ip);
         return 1;
     }
@@ -12002,8 +12007,11 @@ static bool amd64_addr32_is_inert(struct gen_state *state, struct tlb *tlb,
     }
     if (insn->op2 == 0x38 || insn->op2 == 0x3a)              // the ModRM after op3
         return tlb_read(tlb, state->amd64_ip + 1, &m, 1) && (m >> 6) == 3;
-    if (insn->op2 == 0xf7 || insn->op2 == 0x01)
+    if (insn->op2 == 0xf7)
         return false;
+    if (insn->op2 == 0x01)                    // MONITOR, MONITORX, CLZERO: rAX is an address
+        return tlb_read(tlb, state->amd64_ip, &m, 1) && (m >> 6) == 3 &&   // (the decoder takes no ModRM here)
+                m != 0xc8 && m != 0xfa && m != 0xfc;
     if (insn->has_modrm)
         return amd64_modrm_mod(insn->modrm) == 3;
     return true;
@@ -12011,9 +12019,10 @@ static bool amd64_addr32_is_inert(struct gen_state *state, struct tlb *tlb,
 
 // Whether an effective 0x67 changes only a ModRM memory operand's address:
 // any instruction with one but the string/XLAT/moffs/LOOP family (no ModRM),
-// MASKMOV* and 0F 01 (implicit addresses), and VSIB gathers/scatters (VEX
-// map 2 0x90-0x93, EVEX map 2 0x90-0x93 and 0xa0-0xa3, whose element
-// addresses are 32-bit too).
+// MASKMOV* and 0F 01 (implicit addresses: MASKMOV's arms take 0x67
+// themselves), and VSIB gathers/scatters (VEX map 2 0x90-0x93, EVEX map 2
+// 0x90-0x93 and 0xa0-0xa3) with a segment override -- without one, their
+// gadgets truncate each element's base + index + disp.
 static bool amd64_addr32_is_plain_ea(struct gen_state *state, struct tlb *tlb,
         const struct amd64_jit_insn *insn) {
     if (!insn->two_byte_opcode) {
@@ -12027,7 +12036,7 @@ static bool amd64_addr32_is_plain_ea(struct gen_state *state, struct tlb *tlb,
             if (map == 1 && (opc == 0xf7 || opc == 0x77))
                 return false;
             if (map == 2 && ((opc >= 0x90 && opc <= 0x93) || (op == 0x62 && opc >= 0xa0 && opc <= 0xa3)))
-                return false;
+                return insn->seg_prefix == AMD64_SEG_NONE;   // (the gadgets truncate base + index; a segment base comes after)
             if (op == 0x62 && map == 2 && opc == 0xc6)       // the gather/scatter prefetches
                 return false;
             return true;
@@ -12826,6 +12835,11 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
             gen_amd64_defer_rip(state, next_ip);
             return true;
         }
+        // RDTSCP (0f 01 f9): not advertised (CPUID 0x80000001 EDX bit 27: the
+        // TSC_AUX it reads, getcpu's CPU number, lives in kernel state no
+        // gadget sees yet), so #UD, as on a CPU without it.
+        if (modrm == 0xf9)
+            return gen_amd64_ud(state);
         // VMCALL (0f 01 c1): AOK_VCLOCK, the clock read AOK's vDSO makes
         // (vdso/amd64/vdso.S) -- see amd64_vmcall.
         if (modrm == 0xc1) {
@@ -15778,7 +15792,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
 
     // MMX moves and the MMX odds and ends (no prefix), MOVQ2DQ/MOVDQ2Q (F3/F2
     // 0F D6), MOVNTDQ (66 0F E7), MASKMOVQ/MASKMOVDQU: math.S amd64_mmx_*.
-    if (!insn.address_size_prefix && !insn.lock_prefix && insn.two_byte_opcode && insn.has_modrm &&
+    if ((!insn.address_size_prefix || insn.op2 == 0xf7) && !insn.lock_prefix && insn.two_byte_opcode && insn.has_modrm &&
             (insn.op2 == 0x6e || insn.op2 == 0x6f || insn.op2 == 0x7e || insn.op2 == 0x7f ||
              insn.op2 == 0x70 || insn.op2 == 0xc4 || insn.op2 == 0xc5 || insn.op2 == 0xd6 ||
              insn.op2 == 0xd7 || insn.op2 == 0xe7 || insn.op2 == 0xf7)) {
@@ -15830,6 +15844,8 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
         } else if (reg && insn.op2 == 0xf7 && (none || p66)) {
             g = none ? gadget_amd64_maskmovq : gadget_amd64_maskmovdqu;
             packed = none ? (r | (m << 4)) : (gpr_r | (gpr_m << 4));
+            packed |= (insn.address_size_prefix ? 1ul << 8 : 0) |              // [edi], FS/GS
+                    (insn.seg_prefix == AMD64_SEG_FS ? 1ul << 9 : 0) | (insn.seg_prefix == AMD64_SEG_GS ? 1ul << 10 : 0);
             gpr = 3;
         }
         if (g != NULL) {

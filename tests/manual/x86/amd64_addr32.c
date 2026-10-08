@@ -90,6 +90,24 @@ int main(void) {
     __asm__ volatile("fxsave (%k0)" :: "r"(jarea) : "memory");
     CHECK(area[0] | area[1], "addr32 fxsave wrote nothing");
 
+    // MASKMOVDQU's [rdi] is [edi]; a VEX gather's element addresses are 32 bits
+    uint8_t mdata[16], mmask[16];
+    for (int i = 0; i < 16; i++) { mdata[i] = (uint8_t) (0xa0 + i); mmask[i] = i & 1 ? 0x80 : 0; }
+    unsigned long mdi = 0x7777000000000000ul | ((uintptr_t) low + 300);
+    __asm__ volatile("movdqu %1, %%xmm5\n movdqu %2, %%xmm6\n .byte 0x67\n maskmovdqu %%xmm6, %%xmm5"
+                     :: "D"(mdi), "m"(mdata), "m"(mmask) : "xmm5", "xmm6", "memory");
+    CHECK(low[300] == 0 && low[301] == 0xa1 && low[315] == 0xaf, "addr32 maskmovdqu: %#x %#x", low[300], low[301]);
+    uint32_t gidx[8] = {0, 1, 2, 3, 4, 5, 6, 7}, gout[8];
+    for (int i = 0; i < 8; i++)
+        memcpy(low + 512 + 4 * i, &(uint32_t) {100u + (unsigned) i}, 4);
+    __asm__ volatile("vmovdqu %1, %%ymm7\n vpcmpeqd %%ymm8, %%ymm8, %%ymm8\n vpgatherdd %%ymm8, 512(%k2,%%ymm7,4), %%ymm9\n"
+                     " vmovdqu %%ymm9, %0\n vzeroupper" : "=m"(gout) : "m"(gidx), "r"(junk) : "xmm7", "xmm8", "xmm9", "memory");
+    CHECK(gout[0] == 100 && gout[7] == 107, "addr32 vpgatherdd: %u %u", gout[0], gout[7]);
+    // 0F 01's register forms: 0x67 inert (XGETBV)
+    unsigned xlo, xhi;
+    __asm__ volatile(".byte 0x67, 0x0f, 0x01, 0xd0" : "=a"(xlo), "=d"(xhi) : "c"(0));
+    CHECK(xlo & 3, "addr32 xgetbv: %#x", xlo);
+
     // the string instructions and XLAT take EDI/ESI/ECX/EBX
     unsigned long rdi = 0xbeef00000000ul | ((uintptr_t) low + 100), rcx = 0xffff000000000004ul;
     __asm__ volatile("mov $0x5a, %%al\n addr32 rep stosb" : "+D"(rdi), "+c"(rcx) :: "rax", "memory");
