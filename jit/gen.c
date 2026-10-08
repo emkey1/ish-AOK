@@ -10742,6 +10742,13 @@ enum evex_kind {
     EVK_SHI,    // dst = vvvv, s2 = r/m: the imm8 shifts and rotates (a group in ModRM.reg)
     EVK_BCAST,  // dst = reg, s2 = r/m, vvvv 1111b: a broadcast (the frame's flags pick the quarter)
     EVK_BCASTG, // dst = reg, s2 = the r/m GPR (staged), vvvv 1111b: VPBROADCASTB/W/D/Q from a GPR
+    EVK_SCAL,   // a scalar op: as EVK_L3 at VL 128, element 0 masked (the rest s1's), memory 1 << esz bytes
+    EVK_TOMASKS,// a scalar compare into an opmask: as EVK_TOMASK at VL 128, memory 1 << esz bytes
+    EVK_FULL,   // as EVK_L3, on evex_full's whole-vector frame (the lane-crossing ops)
+    EVK_FULL1,  // as EVK_FULL with vvvv 1111b: dst = reg, the source s2 = r/m
+    EVK_FULL8,  // as EVK_FULL, word bit 39 (VINSERT*32x8/64x4)
+    EVK_EXTRACT,  // r/m (an xmm, or a masked store) = a 128-bit lane of reg: VEXTRACT*32x4/64x2
+    EVK_EXTRACT8, // ... a 256-bit half: VEXTRACT*32x8/64x4
 };
 // evex_entry.flags bits 4-7
 #define EVF_MEMONLY 0x10
@@ -10756,6 +10763,7 @@ struct evex_entry {
     uint8_t grp;                // ModRM.reg + 1 for a group (the imm8 shifts), else 0
     uint8_t flags;              // the frame's word bits 33-36 (s2's quarter 0, q & 1; merge s1; dst in)
     uint8_t ld;                 // a memory operand of this many bytes whatever VL (0: VL's)
+    uint8_t fp;                 // a float op: 1 with {er} (EVEX.b, register: RC in L'L), 2 {sae} only
 };
 #define EVEX_INT(X) \
     X(1, 0xfc, 0, 0, 0, paddb) X(1, 0xfd, 0, 1, 0, paddw) X(1, 0xfe, 1, 2, 2, paddd) X(1, 0xd4, 2, 3, 3, paddq) \
@@ -10779,127 +10787,219 @@ struct evex_entry {
 #define EVEX_DECL(map, op, w, esz, bc, n) extern void gadget_evex_vi_##n(void);
 EVEX_INT(EVEX_DECL) EVEX_INT_UN(EVEX_DECL)
 extern void gadget_evex_mov(void), gadget_evex_vi_psadbw(void);
+extern void gadget_evex_alignd(void), gadget_evex_alignq(void), gadget_evex_extract(void), gadget_evex_insert(void), gadget_evex_palignr(void), gadget_evex_permb(void), gadget_evex_permd(void), gadget_evex_permi2b(void), gadget_evex_permi2d(void), gadget_evex_permi2q(void), gadget_evex_permi2w(void), gadget_evex_permilpd_i(void), gadget_evex_permilpd_v(void), gadget_evex_permilps_v(void), gadget_evex_permq(void), gadget_evex_permqi(void), gadget_evex_permt2b(void), gadget_evex_permt2d(void), gadget_evex_permt2q(void), gadget_evex_permt2w(void), gadget_evex_permw(void), gadget_evex_pshufd(void), gadget_evex_pshufhw(void), gadget_evex_pshuflw(void), gadget_evex_shuf4(void), gadget_evex_shufpd(void), gadget_evex_shufps(void);
+extern void gadget_evex_xf_addpd(void), gadget_evex_xf_addps(void), gadget_evex_xf_addsd(void), gadget_evex_xf_addss(void), gadget_evex_xf_cmppd(void), gadget_evex_xf_cmpps(void), gadget_evex_xf_cmpsd(void), gadget_evex_xf_cmpss(void), gadget_evex_xf_divpd(void), gadget_evex_xf_divps(void), gadget_evex_xf_divsd(void), gadget_evex_xf_divss(void), gadget_evex_xf_maxpd(void), gadget_evex_xf_maxps(void), gadget_evex_xf_maxsd(void), gadget_evex_xf_maxss(void), gadget_evex_xf_minpd(void), gadget_evex_xf_minps(void), gadget_evex_xf_minsd(void), gadget_evex_xf_minss(void), gadget_evex_xf_mulpd(void), gadget_evex_xf_mulps(void), gadget_evex_xf_mulsd(void), gadget_evex_xf_mulss(void), gadget_evex_xf_sqrtpd(void), gadget_evex_xf_sqrtps(void), gadget_evex_xf_sqrtsd(void), gadget_evex_xf_sqrtss(void), gadget_evex_xf_subpd(void), gadget_evex_xf_subps(void), gadget_evex_xf_subsd(void), gadget_evex_xf_subss(void);
 extern void gadget_evex_bcast_b(void), gadget_evex_bcast_d(void), gadget_evex_bcast_q(void), gadget_evex_bcast_w(void), gadget_evex_blendm(void), gadget_evex_pabsq(void), gadget_evex_pmaxsq(void), gadget_evex_pmaxuq(void), gadget_evex_pminsq(void), gadget_evex_pminuq(void), gadget_evex_pmullq(void), gadget_evex_pslldq(void), gadget_evex_psrldq(void), gadget_evex_pternlog(void), gadget_evex_roli_d(void), gadget_evex_roli_q(void), gadget_evex_rolv_d(void), gadget_evex_rolv_q(void), gadget_evex_rori_d(void), gadget_evex_rori_q(void), gadget_evex_rorv_d(void), gadget_evex_rorv_q(void), gadget_evex_shi_slld(void), gadget_evex_shi_sllq(void), gadget_evex_shi_sllw(void), gadget_evex_shi_srad(void), gadget_evex_shi_sraq(void), gadget_evex_shi_sraw(void), gadget_evex_shi_srld(void), gadget_evex_shi_srlq(void), gadget_evex_shi_srlw(void), gadget_evex_shv_slld(void), gadget_evex_shv_sllq(void), gadget_evex_shv_sllw(void), gadget_evex_shv_srad(void), gadget_evex_shv_sraq(void), gadget_evex_shv_sraw(void), gadget_evex_shv_srld(void), gadget_evex_shv_srlq(void), gadget_evex_shv_srlw(void), gadget_evex_shx_slld(void), gadget_evex_shx_sllq(void), gadget_evex_shx_sllw(void), gadget_evex_shx_srad(void), gadget_evex_shx_sraq(void), gadget_evex_shx_sraw(void), gadget_evex_shx_srld(void), gadget_evex_shx_srlq(void), gadget_evex_shx_srlw(void);
 extern void gadget_evex_pcmpeqb(void), gadget_evex_pcmpeqw(void), gadget_evex_pcmpeqd(void), gadget_evex_pcmpeqq(void), gadget_evex_pcmpgtb(void), gadget_evex_pcmpgtw(void), gadget_evex_pcmpgtd(void), gadget_evex_pcmpgtq(void), gadget_evex_pcmpb(void), gadget_evex_pcmpw(void), gadget_evex_pcmpd(void), gadget_evex_pcmpq(void), gadget_evex_pcmpub(void), gadget_evex_pcmpuw(void), gadget_evex_pcmpud(void), gadget_evex_pcmpuq(void), gadget_evex_ptestmb(void), gadget_evex_ptestmw(void), gadget_evex_ptestmd(void), gadget_evex_ptestmq(void), gadget_evex_ptestnmb(void), gadget_evex_ptestnmw(void), gadget_evex_ptestnmd(void), gadget_evex_ptestnmq(void);
 
-#define EVEX_ROW(map, op, w, esz, bc, n) {map, 1, op, EVK_L3, w, esz, bc, bc ? EVT_FV : EVT_FVM, 0, 0, gadget_evex_vi_##n, 0, 0, 0},
-#define EVEX_ROW_UN(map, op, w, esz, bc, n) {map, 1, op, EVK_L2, w, esz, bc, bc ? EVT_FV : EVT_FVM, 0, 0, gadget_evex_vi_##n, 0, 0, 0},
+#define EVEX_ROW(map, op, w, esz, bc, n) {map, 1, op, EVK_L3, w, esz, bc, bc ? EVT_FV : EVT_FVM, 0, 0, gadget_evex_vi_##n, 0, 0, 0, 0},
+#define EVEX_ROW_UN(map, op, w, esz, bc, n) {map, 1, op, EVK_L2, w, esz, bc, bc ? EVT_FV : EVT_FVM, 0, 0, gadget_evex_vi_##n, 0, 0, 0, 0},
 static const struct evex_entry evex_table[] = {
     // the moves: VMOVDQA32/64, VMOVDQU8/16/32/64, VMOVUPS/PD, VMOVAPS/PD
-    {1, 1, 0x6f, EVK_LOAD, 1, 2, 0, EVT_FVM, 1, 0, gadget_evex_mov, 0, 0, 0}, {1, 1, 0x6f, EVK_LOAD, 2, 3, 0, EVT_FVM, 1, 0, gadget_evex_mov, 0, 0, 0},
-    {1, 2, 0x6f, EVK_LOAD, 1, 2, 0, EVT_FVM, 0, 0, gadget_evex_mov, 0, 0, 0}, {1, 2, 0x6f, EVK_LOAD, 2, 3, 0, EVT_FVM, 0, 0, gadget_evex_mov, 0, 0, 0},
-    {1, 3, 0x6f, EVK_LOAD, 1, 0, 0, EVT_FVM, 0, 0, gadget_evex_mov, 0, 0, 0}, {1, 3, 0x6f, EVK_LOAD, 2, 1, 0, EVT_FVM, 0, 0, gadget_evex_mov, 0, 0, 0},
-    {1, 1, 0x7f, EVK_STORE, 1, 2, 0, EVT_FVM, 1, 0, gadget_evex_mov, 0, 0, 0}, {1, 1, 0x7f, EVK_STORE, 2, 3, 0, EVT_FVM, 1, 0, gadget_evex_mov, 0, 0, 0},
-    {1, 2, 0x7f, EVK_STORE, 1, 2, 0, EVT_FVM, 0, 0, gadget_evex_mov, 0, 0, 0}, {1, 2, 0x7f, EVK_STORE, 2, 3, 0, EVT_FVM, 0, 0, gadget_evex_mov, 0, 0, 0},
-    {1, 3, 0x7f, EVK_STORE, 1, 0, 0, EVT_FVM, 0, 0, gadget_evex_mov, 0, 0, 0}, {1, 3, 0x7f, EVK_STORE, 2, 1, 0, EVT_FVM, 0, 0, gadget_evex_mov, 0, 0, 0},
-    {1, 0, 0x10, EVK_LOAD, 1, 2, 0, EVT_FVM, 0, 0, gadget_evex_mov, 0, 0, 0}, {1, 1, 0x10, EVK_LOAD, 2, 3, 0, EVT_FVM, 0, 0, gadget_evex_mov, 0, 0, 0},
-    {1, 0, 0x11, EVK_STORE, 1, 2, 0, EVT_FVM, 0, 0, gadget_evex_mov, 0, 0, 0}, {1, 1, 0x11, EVK_STORE, 2, 3, 0, EVT_FVM, 0, 0, gadget_evex_mov, 0, 0, 0},
-    {1, 0, 0x28, EVK_LOAD, 1, 2, 0, EVT_FVM, 1, 0, gadget_evex_mov, 0, 0, 0}, {1, 1, 0x28, EVK_LOAD, 2, 3, 0, EVT_FVM, 1, 0, gadget_evex_mov, 0, 0, 0},
-    {1, 0, 0x29, EVK_STORE, 1, 2, 0, EVT_FVM, 1, 0, gadget_evex_mov, 0, 0, 0}, {1, 1, 0x29, EVK_STORE, 2, 3, 0, EVT_FVM, 1, 0, gadget_evex_mov, 0, 0, 0},
+    {1, 1, 0x6f, EVK_LOAD, 1, 2, 0, EVT_FVM, 1, 0, gadget_evex_mov, 0, 0, 0, 0}, {1, 1, 0x6f, EVK_LOAD, 2, 3, 0, EVT_FVM, 1, 0, gadget_evex_mov, 0, 0, 0, 0},
+    {1, 2, 0x6f, EVK_LOAD, 1, 2, 0, EVT_FVM, 0, 0, gadget_evex_mov, 0, 0, 0, 0}, {1, 2, 0x6f, EVK_LOAD, 2, 3, 0, EVT_FVM, 0, 0, gadget_evex_mov, 0, 0, 0, 0},
+    {1, 3, 0x6f, EVK_LOAD, 1, 0, 0, EVT_FVM, 0, 0, gadget_evex_mov, 0, 0, 0, 0}, {1, 3, 0x6f, EVK_LOAD, 2, 1, 0, EVT_FVM, 0, 0, gadget_evex_mov, 0, 0, 0, 0},
+    {1, 1, 0x7f, EVK_STORE, 1, 2, 0, EVT_FVM, 1, 0, gadget_evex_mov, 0, 0, 0, 0}, {1, 1, 0x7f, EVK_STORE, 2, 3, 0, EVT_FVM, 1, 0, gadget_evex_mov, 0, 0, 0, 0},
+    {1, 2, 0x7f, EVK_STORE, 1, 2, 0, EVT_FVM, 0, 0, gadget_evex_mov, 0, 0, 0, 0}, {1, 2, 0x7f, EVK_STORE, 2, 3, 0, EVT_FVM, 0, 0, gadget_evex_mov, 0, 0, 0, 0},
+    {1, 3, 0x7f, EVK_STORE, 1, 0, 0, EVT_FVM, 0, 0, gadget_evex_mov, 0, 0, 0, 0}, {1, 3, 0x7f, EVK_STORE, 2, 1, 0, EVT_FVM, 0, 0, gadget_evex_mov, 0, 0, 0, 0},
+    {1, 0, 0x10, EVK_LOAD, 1, 2, 0, EVT_FVM, 0, 0, gadget_evex_mov, 0, 0, 0, 0}, {1, 1, 0x10, EVK_LOAD, 2, 3, 0, EVT_FVM, 0, 0, gadget_evex_mov, 0, 0, 0, 0},
+    {1, 0, 0x11, EVK_STORE, 1, 2, 0, EVT_FVM, 0, 0, gadget_evex_mov, 0, 0, 0, 0}, {1, 1, 0x11, EVK_STORE, 2, 3, 0, EVT_FVM, 0, 0, gadget_evex_mov, 0, 0, 0, 0},
+    {1, 0, 0x28, EVK_LOAD, 1, 2, 0, EVT_FVM, 1, 0, gadget_evex_mov, 0, 0, 0, 0}, {1, 1, 0x28, EVK_LOAD, 2, 3, 0, EVT_FVM, 1, 0, gadget_evex_mov, 0, 0, 0, 0},
+    {1, 0, 0x29, EVK_STORE, 1, 2, 0, EVT_FVM, 1, 0, gadget_evex_mov, 0, 0, 0, 0}, {1, 1, 0x29, EVK_STORE, 2, 3, 0, EVT_FVM, 1, 0, gadget_evex_mov, 0, 0, 0, 0},
     // the integer ops (vex.inc's bodies); VPSADBW takes no mask
     EVEX_INT(EVEX_ROW) EVEX_INT_UN(EVEX_ROW_UN)
-    {1, 1, 0xf6, EVK_L3, 0, 3, 0, EVT_FVM, 0, 1, gadget_evex_vi_psadbw, 0, 0, 0},
+    {1, 1, 0xf6, EVK_L3, 0, 3, 0, EVT_FVM, 0, 1, gadget_evex_vi_psadbw, 0, 0, 0, 0},
     // the compares and tests into an opmask
-    {1, 1, 0x74, EVK_TOMASK, 0, 0, 0, EVT_FVM, 0, 0, gadget_evex_pcmpeqb, 0, 0, 0},
-    {1, 1, 0x75, EVK_TOMASK, 0, 1, 0, EVT_FVM, 0, 0, gadget_evex_pcmpeqw, 0, 0, 0},
-    {1, 1, 0x76, EVK_TOMASK, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_pcmpeqd, 0, 0, 0},
-    {1, 1, 0x64, EVK_TOMASK, 0, 0, 0, EVT_FVM, 0, 0, gadget_evex_pcmpgtb, 0, 0, 0},
-    {1, 1, 0x65, EVK_TOMASK, 0, 1, 0, EVT_FVM, 0, 0, gadget_evex_pcmpgtw, 0, 0, 0},
-    {1, 1, 0x66, EVK_TOMASK, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_pcmpgtd, 0, 0, 0},
-    {2, 1, 0x29, EVK_TOMASK, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_pcmpeqq, 0, 0, 0},
-    {2, 1, 0x37, EVK_TOMASK, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_pcmpgtq, 0, 0, 0},
-    {3, 1, 0x3f, EVK_TOMASK, 1, 0, 0, EVT_FVM, 0, 0, gadget_evex_pcmpb, 0, 0, 0},
-    {3, 1, 0x3f, EVK_TOMASK, 2, 1, 0, EVT_FVM, 0, 0, gadget_evex_pcmpw, 0, 0, 0},
-    {3, 1, 0x3e, EVK_TOMASK, 1, 0, 0, EVT_FVM, 0, 0, gadget_evex_pcmpub, 0, 0, 0},
-    {3, 1, 0x3e, EVK_TOMASK, 2, 1, 0, EVT_FVM, 0, 0, gadget_evex_pcmpuw, 0, 0, 0},
-    {3, 1, 0x1f, EVK_TOMASK, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_pcmpd, 0, 0, 0},
-    {3, 1, 0x1f, EVK_TOMASK, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_pcmpq, 0, 0, 0},
-    {3, 1, 0x1e, EVK_TOMASK, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_pcmpud, 0, 0, 0},
-    {3, 1, 0x1e, EVK_TOMASK, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_pcmpuq, 0, 0, 0},
-    {2, 1, 0x26, EVK_TOMASK, 1, 0, 0, EVT_FVM, 0, 0, gadget_evex_ptestmb, 0, 0, 0},
-    {2, 1, 0x26, EVK_TOMASK, 2, 1, 0, EVT_FVM, 0, 0, gadget_evex_ptestmw, 0, 0, 0},
-    {2, 1, 0x27, EVK_TOMASK, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_ptestmd, 0, 0, 0},
-    {2, 1, 0x27, EVK_TOMASK, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_ptestmq, 0, 0, 0},
-    {2, 2, 0x26, EVK_TOMASK, 1, 0, 0, EVT_FVM, 0, 0, gadget_evex_ptestnmb, 0, 0, 0},
-    {2, 2, 0x26, EVK_TOMASK, 2, 1, 0, EVT_FVM, 0, 0, gadget_evex_ptestnmw, 0, 0, 0},
-    {2, 2, 0x27, EVK_TOMASK, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_ptestnmd, 0, 0, 0},
-    {2, 2, 0x27, EVK_TOMASK, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_ptestnmq, 0, 0, 0},
+    {1, 1, 0x74, EVK_TOMASK, 0, 0, 0, EVT_FVM, 0, 0, gadget_evex_pcmpeqb, 0, 0, 0, 0},
+    {1, 1, 0x75, EVK_TOMASK, 0, 1, 0, EVT_FVM, 0, 0, gadget_evex_pcmpeqw, 0, 0, 0, 0},
+    {1, 1, 0x76, EVK_TOMASK, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_pcmpeqd, 0, 0, 0, 0},
+    {1, 1, 0x64, EVK_TOMASK, 0, 0, 0, EVT_FVM, 0, 0, gadget_evex_pcmpgtb, 0, 0, 0, 0},
+    {1, 1, 0x65, EVK_TOMASK, 0, 1, 0, EVT_FVM, 0, 0, gadget_evex_pcmpgtw, 0, 0, 0, 0},
+    {1, 1, 0x66, EVK_TOMASK, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_pcmpgtd, 0, 0, 0, 0},
+    {2, 1, 0x29, EVK_TOMASK, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_pcmpeqq, 0, 0, 0, 0},
+    {2, 1, 0x37, EVK_TOMASK, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_pcmpgtq, 0, 0, 0, 0},
+    {3, 1, 0x3f, EVK_TOMASK, 1, 0, 0, EVT_FVM, 0, 0, gadget_evex_pcmpb, 0, 0, 0, 0},
+    {3, 1, 0x3f, EVK_TOMASK, 2, 1, 0, EVT_FVM, 0, 0, gadget_evex_pcmpw, 0, 0, 0, 0},
+    {3, 1, 0x3e, EVK_TOMASK, 1, 0, 0, EVT_FVM, 0, 0, gadget_evex_pcmpub, 0, 0, 0, 0},
+    {3, 1, 0x3e, EVK_TOMASK, 2, 1, 0, EVT_FVM, 0, 0, gadget_evex_pcmpuw, 0, 0, 0, 0},
+    {3, 1, 0x1f, EVK_TOMASK, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_pcmpd, 0, 0, 0, 0},
+    {3, 1, 0x1f, EVK_TOMASK, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_pcmpq, 0, 0, 0, 0},
+    {3, 1, 0x1e, EVK_TOMASK, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_pcmpud, 0, 0, 0, 0},
+    {3, 1, 0x1e, EVK_TOMASK, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_pcmpuq, 0, 0, 0, 0},
+    {2, 1, 0x26, EVK_TOMASK, 1, 0, 0, EVT_FVM, 0, 0, gadget_evex_ptestmb, 0, 0, 0, 0},
+    {2, 1, 0x26, EVK_TOMASK, 2, 1, 0, EVT_FVM, 0, 0, gadget_evex_ptestmw, 0, 0, 0, 0},
+    {2, 1, 0x27, EVK_TOMASK, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_ptestmd, 0, 0, 0, 0},
+    {2, 1, 0x27, EVK_TOMASK, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_ptestmq, 0, 0, 0, 0},
+    {2, 2, 0x26, EVK_TOMASK, 1, 0, 0, EVT_FVM, 0, 0, gadget_evex_ptestnmb, 0, 0, 0, 0},
+    {2, 2, 0x26, EVK_TOMASK, 2, 1, 0, EVT_FVM, 0, 0, gadget_evex_ptestnmw, 0, 0, 0, 0},
+    {2, 2, 0x27, EVK_TOMASK, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_ptestnmd, 0, 0, 0, 0},
+    {2, 2, 0x27, EVK_TOMASK, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_ptestnmq, 0, 0, 0, 0},
     // the shifts and rotates, the qword ops, VPTERNLOG, VPBLENDM, the broadcasts, the non-temporal moves
-    {1, 1, 0x71, EVK_SHI, 0, 1, 0, EVT_FVM, 0, 0, gadget_evex_shi_srlw, 3, 0, 0},
-    {1, 1, 0x71, EVK_SHI, 0, 1, 0, EVT_FVM, 0, 0, gadget_evex_shi_sraw, 5, 0, 0},
-    {1, 1, 0x71, EVK_SHI, 0, 1, 0, EVT_FVM, 0, 0, gadget_evex_shi_sllw, 7, 0, 0},
-    {1, 1, 0x72, EVK_SHI, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_rori_d, 1, 0, 0},
-    {1, 1, 0x72, EVK_SHI, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_rori_q, 1, 0, 0},
-    {1, 1, 0x72, EVK_SHI, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_roli_d, 2, 0, 0},
-    {1, 1, 0x72, EVK_SHI, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_roli_q, 2, 0, 0},
-    {1, 1, 0x72, EVK_SHI, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_shi_srld, 3, 0, 0},
-    {1, 1, 0x72, EVK_SHI, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_shi_srad, 5, 0, 0},
-    {1, 1, 0x72, EVK_SHI, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_shi_sraq, 5, 0, 0},
-    {1, 1, 0x72, EVK_SHI, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_shi_slld, 7, 0, 0},
-    {1, 1, 0x73, EVK_SHI, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_shi_srlq, 3, 0, 0},
-    {1, 1, 0x73, EVK_SHI, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_shi_sllq, 7, 0, 0},
-    {1, 1, 0x73, EVK_SHI, 0, 3, 0, EVT_FVM, 0, 1, gadget_evex_psrldq, 4, 0, 0},
-    {1, 1, 0x73, EVK_SHI, 0, 3, 0, EVT_FVM, 0, 1, gadget_evex_pslldq, 8, 0, 0},
-    {1, 1, 0xd1, EVK_L3, 0, 1, 0, EVT_FIX, 0, 0, gadget_evex_shx_srlw, 0, 1, 16},
-    {1, 1, 0xd2, EVK_L3, 1, 2, 0, EVT_FIX, 0, 0, gadget_evex_shx_srld, 0, 1, 16},
-    {1, 1, 0xd3, EVK_L3, 2, 3, 0, EVT_FIX, 0, 0, gadget_evex_shx_srlq, 0, 1, 16},
-    {1, 1, 0xe1, EVK_L3, 0, 1, 0, EVT_FIX, 0, 0, gadget_evex_shx_sraw, 0, 1, 16},
-    {1, 1, 0xe2, EVK_L3, 1, 2, 0, EVT_FIX, 0, 0, gadget_evex_shx_srad, 0, 1, 16},
-    {1, 1, 0xe2, EVK_L3, 2, 3, 0, EVT_FIX, 0, 0, gadget_evex_shx_sraq, 0, 1, 16},
-    {1, 1, 0xf1, EVK_L3, 0, 1, 0, EVT_FIX, 0, 0, gadget_evex_shx_sllw, 0, 1, 16},
-    {1, 1, 0xf2, EVK_L3, 1, 2, 0, EVT_FIX, 0, 0, gadget_evex_shx_slld, 0, 1, 16},
-    {1, 1, 0xf3, EVK_L3, 2, 3, 0, EVT_FIX, 0, 0, gadget_evex_shx_sllq, 0, 1, 16},
-    {2, 1, 0x45, EVK_L3, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_shv_srld, 0, 0, 0},
-    {2, 1, 0x45, EVK_L3, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_shv_srlq, 0, 0, 0},
-    {2, 1, 0x46, EVK_L3, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_shv_srad, 0, 0, 0},
-    {2, 1, 0x46, EVK_L3, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_shv_sraq, 0, 0, 0},
-    {2, 1, 0x47, EVK_L3, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_shv_slld, 0, 0, 0},
-    {2, 1, 0x47, EVK_L3, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_shv_sllq, 0, 0, 0},
-    {2, 1, 0x10, EVK_L3, 2, 1, 0, EVT_FVM, 0, 0, gadget_evex_shv_srlw, 0, 0, 0},
-    {2, 1, 0x11, EVK_L3, 2, 1, 0, EVT_FVM, 0, 0, gadget_evex_shv_sraw, 0, 0, 0},
-    {2, 1, 0x12, EVK_L3, 2, 1, 0, EVT_FVM, 0, 0, gadget_evex_shv_sllw, 0, 0, 0},
-    {2, 1, 0x15, EVK_L3, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_rolv_d, 0, 0, 0},
-    {2, 1, 0x15, EVK_L3, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_rolv_q, 0, 0, 0},
-    {2, 1, 0x14, EVK_L3, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_rorv_d, 0, 0, 0},
-    {2, 1, 0x14, EVK_L3, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_rorv_q, 0, 0, 0},
-    {2, 1, 0x39, EVK_L3, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_pminsq, 0, 0, 0},
-    {2, 1, 0x3b, EVK_L3, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_pminuq, 0, 0, 0},
-    {2, 1, 0x3d, EVK_L3, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_pmaxsq, 0, 0, 0},
-    {2, 1, 0x3f, EVK_L3, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_pmaxuq, 0, 0, 0},
-    {2, 1, 0x40, EVK_L3, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_pmullq, 0, 0, 0},
-    {2, 1, 0x1f, EVK_L2, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_pabsq, 0, 0, 0},
-    {3, 1, 0x25, EVK_L3, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_pternlog, 0, 8, 0},
-    {3, 1, 0x25, EVK_L3, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_pternlog, 0, 8, 0},
-    {2, 1, 0x64, EVK_L3, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_blendm, 0, 4, 0},
-    {2, 1, 0x64, EVK_L3, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_blendm, 0, 4, 0},
-    {2, 1, 0x65, EVK_L3, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_blendm, 0, 4, 0},
-    {2, 1, 0x65, EVK_L3, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_blendm, 0, 4, 0},
-    {2, 1, 0x66, EVK_L3, 1, 0, 0, EVT_FVM, 0, 0, gadget_evex_blendm, 0, 4, 0},
-    {2, 1, 0x66, EVK_L3, 2, 1, 0, EVT_FVM, 0, 0, gadget_evex_blendm, 0, 4, 0},
-    {2, 1, 0x78, EVK_BCAST, 1, 0, 0, EVT_FIX, 0, 0, gadget_evex_bcast_b, 0, 1, 1},
-    {2, 1, 0x79, EVK_BCAST, 1, 1, 0, EVT_FIX, 0, 0, gadget_evex_bcast_w, 0, 1, 2},
-    {2, 1, 0x58, EVK_BCAST, 1, 2, 0, EVT_FIX, 0, 0, gadget_evex_bcast_d, 0, 1, 4},
-    {2, 1, 0x59, EVK_BCAST, 2, 3, 0, EVT_FIX, 0, 0, gadget_evex_bcast_q, 0, 1, 8},
-    {2, 1, 0x59, EVK_BCAST, 1, 2, 0, EVT_FIX, 0, 0, gadget_evex_bcast_q, 0, 1, 8},
-    {2, 1, 0x18, EVK_BCAST, 1, 2, 0, EVT_FIX, 0, 0, gadget_evex_bcast_d, 0, 1, 4},
-    {2, 1, 0x19, EVK_BCAST, 2, 3, 0, EVT_FIX, 0, 0, gadget_evex_bcast_q, 0, 65, 8},
-    {2, 1, 0x19, EVK_BCAST, 1, 2, 0, EVT_FIX, 0, 0, gadget_evex_bcast_q, 0, 65, 8},
-    {2, 1, 0x5a, EVK_BCAST, 1, 2, 0, EVT_FIX, 0, 0, gadget_evex_mov, 0, 81, 16},
-    {2, 1, 0x5a, EVK_BCAST, 2, 3, 0, EVT_FIX, 0, 0, gadget_evex_mov, 0, 81, 16},
-    {2, 1, 0x1a, EVK_BCAST, 1, 2, 0, EVT_FIX, 0, 0, gadget_evex_mov, 0, 81, 16},
-    {2, 1, 0x1a, EVK_BCAST, 2, 3, 0, EVT_FIX, 0, 0, gadget_evex_mov, 0, 81, 16},
-    {2, 1, 0x5b, EVK_BCAST, 1, 2, 0, EVT_FIX, 0, 0, gadget_evex_mov, 0, 146, 32},
-    {2, 1, 0x5b, EVK_BCAST, 2, 3, 0, EVT_FIX, 0, 0, gadget_evex_mov, 0, 146, 32},
-    {2, 1, 0x1b, EVK_BCAST, 1, 2, 0, EVT_FIX, 0, 0, gadget_evex_mov, 0, 146, 32},
-    {2, 1, 0x1b, EVK_BCAST, 2, 3, 0, EVT_FIX, 0, 0, gadget_evex_mov, 0, 146, 32},
-    {2, 1, 0x7a, EVK_BCASTG, 1, 0, 0, EVT_FVM, 0, 0, gadget_evex_bcast_b, 0, 33, 0},
-    {2, 1, 0x7b, EVK_BCASTG, 1, 1, 0, EVT_FVM, 0, 0, gadget_evex_bcast_w, 0, 33, 0},
-    {2, 1, 0x7c, EVK_BCASTG, 1, 2, 0, EVT_FVM, 0, 0, gadget_evex_bcast_d, 0, 33, 0},
-    {2, 1, 0x7c, EVK_BCASTG, 2, 3, 0, EVT_FVM, 0, 0, gadget_evex_bcast_q, 0, 33, 0},
-    {1, 1, 0xe7, EVK_STORE, 1, 2, 0, EVT_FVM, 1, 1, gadget_evex_mov, 0, 16, 0},
-    {1, 0, 0x2b, EVK_STORE, 1, 2, 0, EVT_FVM, 1, 1, gadget_evex_mov, 0, 16, 0},
-    {1, 1, 0x2b, EVK_STORE, 2, 3, 0, EVT_FVM, 1, 1, gadget_evex_mov, 0, 16, 0},
-    {2, 1, 0x2a, EVK_LOAD, 1, 2, 0, EVT_FVM, 1, 1, gadget_evex_mov, 0, 16, 0},
+    {1, 1, 0x71, EVK_SHI, 0, 1, 0, EVT_FVM, 0, 0, gadget_evex_shi_srlw, 3, 0, 0, 0},
+    {1, 1, 0x71, EVK_SHI, 0, 1, 0, EVT_FVM, 0, 0, gadget_evex_shi_sraw, 5, 0, 0, 0},
+    {1, 1, 0x71, EVK_SHI, 0, 1, 0, EVT_FVM, 0, 0, gadget_evex_shi_sllw, 7, 0, 0, 0},
+    {1, 1, 0x72, EVK_SHI, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_rori_d, 1, 0, 0, 0},
+    {1, 1, 0x72, EVK_SHI, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_rori_q, 1, 0, 0, 0},
+    {1, 1, 0x72, EVK_SHI, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_roli_d, 2, 0, 0, 0},
+    {1, 1, 0x72, EVK_SHI, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_roli_q, 2, 0, 0, 0},
+    {1, 1, 0x72, EVK_SHI, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_shi_srld, 3, 0, 0, 0},
+    {1, 1, 0x72, EVK_SHI, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_shi_srad, 5, 0, 0, 0},
+    {1, 1, 0x72, EVK_SHI, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_shi_sraq, 5, 0, 0, 0},
+    {1, 1, 0x72, EVK_SHI, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_shi_slld, 7, 0, 0, 0},
+    {1, 1, 0x73, EVK_SHI, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_shi_srlq, 3, 0, 0, 0},
+    {1, 1, 0x73, EVK_SHI, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_shi_sllq, 7, 0, 0, 0},
+    {1, 1, 0x73, EVK_SHI, 0, 3, 0, EVT_FVM, 0, 1, gadget_evex_psrldq, 4, 0, 0, 0},
+    {1, 1, 0x73, EVK_SHI, 0, 3, 0, EVT_FVM, 0, 1, gadget_evex_pslldq, 8, 0, 0, 0},
+    {1, 1, 0xd1, EVK_L3, 0, 1, 0, EVT_FIX, 0, 0, gadget_evex_shx_srlw, 0, 1, 16, 0},
+    {1, 1, 0xd2, EVK_L3, 1, 2, 0, EVT_FIX, 0, 0, gadget_evex_shx_srld, 0, 1, 16, 0},
+    {1, 1, 0xd3, EVK_L3, 2, 3, 0, EVT_FIX, 0, 0, gadget_evex_shx_srlq, 0, 1, 16, 0},
+    {1, 1, 0xe1, EVK_L3, 0, 1, 0, EVT_FIX, 0, 0, gadget_evex_shx_sraw, 0, 1, 16, 0},
+    {1, 1, 0xe2, EVK_L3, 1, 2, 0, EVT_FIX, 0, 0, gadget_evex_shx_srad, 0, 1, 16, 0},
+    {1, 1, 0xe2, EVK_L3, 2, 3, 0, EVT_FIX, 0, 0, gadget_evex_shx_sraq, 0, 1, 16, 0},
+    {1, 1, 0xf1, EVK_L3, 0, 1, 0, EVT_FIX, 0, 0, gadget_evex_shx_sllw, 0, 1, 16, 0},
+    {1, 1, 0xf2, EVK_L3, 1, 2, 0, EVT_FIX, 0, 0, gadget_evex_shx_slld, 0, 1, 16, 0},
+    {1, 1, 0xf3, EVK_L3, 2, 3, 0, EVT_FIX, 0, 0, gadget_evex_shx_sllq, 0, 1, 16, 0},
+    {2, 1, 0x45, EVK_L3, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_shv_srld, 0, 0, 0, 0},
+    {2, 1, 0x45, EVK_L3, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_shv_srlq, 0, 0, 0, 0},
+    {2, 1, 0x46, EVK_L3, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_shv_srad, 0, 0, 0, 0},
+    {2, 1, 0x46, EVK_L3, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_shv_sraq, 0, 0, 0, 0},
+    {2, 1, 0x47, EVK_L3, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_shv_slld, 0, 0, 0, 0},
+    {2, 1, 0x47, EVK_L3, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_shv_sllq, 0, 0, 0, 0},
+    {2, 1, 0x10, EVK_L3, 2, 1, 0, EVT_FVM, 0, 0, gadget_evex_shv_srlw, 0, 0, 0, 0},
+    {2, 1, 0x11, EVK_L3, 2, 1, 0, EVT_FVM, 0, 0, gadget_evex_shv_sraw, 0, 0, 0, 0},
+    {2, 1, 0x12, EVK_L3, 2, 1, 0, EVT_FVM, 0, 0, gadget_evex_shv_sllw, 0, 0, 0, 0},
+    {2, 1, 0x15, EVK_L3, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_rolv_d, 0, 0, 0, 0},
+    {2, 1, 0x15, EVK_L3, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_rolv_q, 0, 0, 0, 0},
+    {2, 1, 0x14, EVK_L3, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_rorv_d, 0, 0, 0, 0},
+    {2, 1, 0x14, EVK_L3, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_rorv_q, 0, 0, 0, 0},
+    {2, 1, 0x39, EVK_L3, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_pminsq, 0, 0, 0, 0},
+    {2, 1, 0x3b, EVK_L3, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_pminuq, 0, 0, 0, 0},
+    {2, 1, 0x3d, EVK_L3, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_pmaxsq, 0, 0, 0, 0},
+    {2, 1, 0x3f, EVK_L3, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_pmaxuq, 0, 0, 0, 0},
+    {2, 1, 0x40, EVK_L3, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_pmullq, 0, 0, 0, 0},
+    {2, 1, 0x1f, EVK_L2, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_pabsq, 0, 0, 0, 0},
+    {3, 1, 0x25, EVK_L3, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_pternlog, 0, 8, 0, 0},
+    {3, 1, 0x25, EVK_L3, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_pternlog, 0, 8, 0, 0},
+    {2, 1, 0x64, EVK_L3, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_blendm, 0, 4, 0, 0},
+    {2, 1, 0x64, EVK_L3, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_blendm, 0, 4, 0, 0},
+    {2, 1, 0x65, EVK_L3, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_blendm, 0, 4, 0, 0},
+    {2, 1, 0x65, EVK_L3, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_blendm, 0, 4, 0, 0},
+    {2, 1, 0x66, EVK_L3, 1, 0, 0, EVT_FVM, 0, 0, gadget_evex_blendm, 0, 4, 0, 0},
+    {2, 1, 0x66, EVK_L3, 2, 1, 0, EVT_FVM, 0, 0, gadget_evex_blendm, 0, 4, 0, 0},
+    {2, 1, 0x78, EVK_BCAST, 1, 0, 0, EVT_FIX, 0, 0, gadget_evex_bcast_b, 0, 1, 1, 0},
+    {2, 1, 0x79, EVK_BCAST, 1, 1, 0, EVT_FIX, 0, 0, gadget_evex_bcast_w, 0, 1, 2, 0},
+    {2, 1, 0x58, EVK_BCAST, 1, 2, 0, EVT_FIX, 0, 0, gadget_evex_bcast_d, 0, 1, 4, 0},
+    {2, 1, 0x59, EVK_BCAST, 2, 3, 0, EVT_FIX, 0, 0, gadget_evex_bcast_q, 0, 1, 8, 0},
+    {2, 1, 0x59, EVK_BCAST, 1, 2, 0, EVT_FIX, 0, 0, gadget_evex_bcast_q, 0, 1, 8, 0},
+    {2, 1, 0x18, EVK_BCAST, 1, 2, 0, EVT_FIX, 0, 0, gadget_evex_bcast_d, 0, 1, 4, 0},
+    {2, 1, 0x19, EVK_BCAST, 2, 3, 0, EVT_FIX, 0, 0, gadget_evex_bcast_q, 0, 65, 8, 0},
+    {2, 1, 0x19, EVK_BCAST, 1, 2, 0, EVT_FIX, 0, 0, gadget_evex_bcast_q, 0, 65, 8, 0},
+    {2, 1, 0x5a, EVK_BCAST, 1, 2, 0, EVT_FIX, 0, 0, gadget_evex_mov, 0, 81, 16, 0},
+    {2, 1, 0x5a, EVK_BCAST, 2, 3, 0, EVT_FIX, 0, 0, gadget_evex_mov, 0, 81, 16, 0},
+    {2, 1, 0x1a, EVK_BCAST, 1, 2, 0, EVT_FIX, 0, 0, gadget_evex_mov, 0, 81, 16, 0},
+    {2, 1, 0x1a, EVK_BCAST, 2, 3, 0, EVT_FIX, 0, 0, gadget_evex_mov, 0, 81, 16, 0},
+    {2, 1, 0x5b, EVK_BCAST, 1, 2, 0, EVT_FIX, 0, 0, gadget_evex_mov, 0, 146, 32, 0},
+    {2, 1, 0x5b, EVK_BCAST, 2, 3, 0, EVT_FIX, 0, 0, gadget_evex_mov, 0, 146, 32, 0},
+    {2, 1, 0x1b, EVK_BCAST, 1, 2, 0, EVT_FIX, 0, 0, gadget_evex_mov, 0, 146, 32, 0},
+    {2, 1, 0x1b, EVK_BCAST, 2, 3, 0, EVT_FIX, 0, 0, gadget_evex_mov, 0, 146, 32, 0},
+    {2, 1, 0x7a, EVK_BCASTG, 1, 0, 0, EVT_FVM, 0, 0, gadget_evex_bcast_b, 0, 33, 0, 0},
+    {2, 1, 0x7b, EVK_BCASTG, 1, 1, 0, EVT_FVM, 0, 0, gadget_evex_bcast_w, 0, 33, 0, 0},
+    {2, 1, 0x7c, EVK_BCASTG, 1, 2, 0, EVT_FVM, 0, 0, gadget_evex_bcast_d, 0, 33, 0, 0},
+    {2, 1, 0x7c, EVK_BCASTG, 2, 3, 0, EVT_FVM, 0, 0, gadget_evex_bcast_q, 0, 33, 0, 0},
+    {1, 1, 0xe7, EVK_STORE, 1, 2, 0, EVT_FVM, 1, 1, gadget_evex_mov, 0, 16, 0, 0},
+    {1, 0, 0x2b, EVK_STORE, 1, 2, 0, EVT_FVM, 1, 1, gadget_evex_mov, 0, 16, 0, 0},
+    {1, 1, 0x2b, EVK_STORE, 2, 3, 0, EVT_FVM, 1, 1, gadget_evex_mov, 0, 16, 0, 0},
+    {2, 1, 0x2a, EVK_LOAD, 1, 2, 0, EVT_FVM, 1, 1, gadget_evex_mov, 0, 16, 0, 0},
+    // floating point
+    {1, 0, 0x58, EVK_L3, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_xf_addps, 0, 0, 0, 1},
+    {1, 1, 0x58, EVK_L3, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_xf_addpd, 0, 0, 0, 1},
+    {1, 2, 0x58, EVK_SCAL, 1, 2, 0, EVT_FIX, 0, 0, gadget_evex_xf_addss, 0, 0, 4, 1},
+    {1, 3, 0x58, EVK_SCAL, 2, 3, 0, EVT_FIX, 0, 0, gadget_evex_xf_addsd, 0, 0, 8, 1},
+    {1, 0, 0x59, EVK_L3, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_xf_mulps, 0, 0, 0, 1},
+    {1, 1, 0x59, EVK_L3, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_xf_mulpd, 0, 0, 0, 1},
+    {1, 2, 0x59, EVK_SCAL, 1, 2, 0, EVT_FIX, 0, 0, gadget_evex_xf_mulss, 0, 0, 4, 1},
+    {1, 3, 0x59, EVK_SCAL, 2, 3, 0, EVT_FIX, 0, 0, gadget_evex_xf_mulsd, 0, 0, 8, 1},
+    {1, 0, 0x5c, EVK_L3, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_xf_subps, 0, 0, 0, 1},
+    {1, 1, 0x5c, EVK_L3, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_xf_subpd, 0, 0, 0, 1},
+    {1, 2, 0x5c, EVK_SCAL, 1, 2, 0, EVT_FIX, 0, 0, gadget_evex_xf_subss, 0, 0, 4, 1},
+    {1, 3, 0x5c, EVK_SCAL, 2, 3, 0, EVT_FIX, 0, 0, gadget_evex_xf_subsd, 0, 0, 8, 1},
+    {1, 0, 0x5e, EVK_L3, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_xf_divps, 0, 0, 0, 1},
+    {1, 1, 0x5e, EVK_L3, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_xf_divpd, 0, 0, 0, 1},
+    {1, 2, 0x5e, EVK_SCAL, 1, 2, 0, EVT_FIX, 0, 0, gadget_evex_xf_divss, 0, 0, 4, 1},
+    {1, 3, 0x5e, EVK_SCAL, 2, 3, 0, EVT_FIX, 0, 0, gadget_evex_xf_divsd, 0, 0, 8, 1},
+    {1, 0, 0x5d, EVK_L3, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_xf_minps, 0, 0, 0, 2},
+    {1, 1, 0x5d, EVK_L3, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_xf_minpd, 0, 0, 0, 2},
+    {1, 2, 0x5d, EVK_SCAL, 1, 2, 0, EVT_FIX, 0, 0, gadget_evex_xf_minss, 0, 0, 4, 2},
+    {1, 3, 0x5d, EVK_SCAL, 2, 3, 0, EVT_FIX, 0, 0, gadget_evex_xf_minsd, 0, 0, 8, 2},
+    {1, 0, 0x5f, EVK_L3, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_xf_maxps, 0, 0, 0, 2},
+    {1, 1, 0x5f, EVK_L3, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_xf_maxpd, 0, 0, 0, 2},
+    {1, 2, 0x5f, EVK_SCAL, 1, 2, 0, EVT_FIX, 0, 0, gadget_evex_xf_maxss, 0, 0, 4, 2},
+    {1, 3, 0x5f, EVK_SCAL, 2, 3, 0, EVT_FIX, 0, 0, gadget_evex_xf_maxsd, 0, 0, 8, 2},
+    {1, 0, 0x51, EVK_L2, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_xf_sqrtps, 0, 0, 0, 1},
+    {1, 1, 0x51, EVK_L2, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_xf_sqrtpd, 0, 0, 0, 1},
+    {1, 2, 0x51, EVK_SCAL, 1, 2, 0, EVT_FIX, 0, 0, gadget_evex_xf_sqrtss, 0, 0, 4, 1},
+    {1, 3, 0x51, EVK_SCAL, 2, 3, 0, EVT_FIX, 0, 0, gadget_evex_xf_sqrtsd, 0, 0, 8, 1},
+    {1, 0, 0xc2, EVK_TOMASK, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_xf_cmpps, 0, 0, 0, 2},
+    {1, 1, 0xc2, EVK_TOMASK, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_xf_cmppd, 0, 0, 0, 2},
+    {1, 2, 0xc2, EVK_TOMASKS, 1, 2, 0, EVT_FIX, 0, 0, gadget_evex_xf_cmpss, 0, 0, 4, 2},
+    {1, 3, 0xc2, EVK_TOMASKS, 2, 3, 0, EVT_FIX, 0, 0, gadget_evex_xf_cmpsd, 0, 0, 8, 2},
+    // the lane-crossing ops (evex_full) and the in-lane shuffles
+    {2, 1, 0x36, EVK_FULL, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_permd, 0, 64, 0, 0},
+    {2, 1, 0x36, EVK_FULL, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_permq, 0, 64, 0, 0},
+    {2, 1, 0x16, EVK_FULL, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_permd, 0, 64, 0, 0},
+    {2, 1, 0x16, EVK_FULL, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_permq, 0, 64, 0, 0},
+    {2, 1, 0x8d, EVK_FULL, 1, 0, 0, EVT_FVM, 0, 0, gadget_evex_permb, 0, 0, 0, 0},
+    {2, 1, 0x8d, EVK_FULL, 2, 1, 0, EVT_FVM, 0, 0, gadget_evex_permw, 0, 0, 0, 0},
+    {3, 1, 0x00, EVK_FULL1, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_permqi, 0, 64, 0, 0},
+    {3, 1, 0x01, EVK_FULL1, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_permqi, 0, 64, 0, 0},
+    {2, 1, 0x75, EVK_FULL, 1, 0, 0, EVT_FVM, 0, 0, gadget_evex_permi2b, 0, 0, 0, 0},
+    {2, 1, 0x75, EVK_FULL, 2, 1, 0, EVT_FVM, 0, 0, gadget_evex_permi2w, 0, 0, 0, 0},
+    {2, 1, 0x7d, EVK_FULL, 1, 0, 0, EVT_FVM, 0, 0, gadget_evex_permt2b, 0, 0, 0, 0},
+    {2, 1, 0x7d, EVK_FULL, 2, 1, 0, EVT_FVM, 0, 0, gadget_evex_permt2w, 0, 0, 0, 0},
+    {2, 1, 0x76, EVK_FULL, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_permi2d, 0, 0, 0, 0},
+    {2, 1, 0x76, EVK_FULL, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_permi2q, 0, 0, 0, 0},
+    {2, 1, 0x77, EVK_FULL, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_permi2d, 0, 0, 0, 0},
+    {2, 1, 0x77, EVK_FULL, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_permi2q, 0, 0, 0, 0},
+    {2, 1, 0x7e, EVK_FULL, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_permt2d, 0, 0, 0, 0},
+    {2, 1, 0x7e, EVK_FULL, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_permt2q, 0, 0, 0, 0},
+    {2, 1, 0x7f, EVK_FULL, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_permt2d, 0, 0, 0, 0},
+    {2, 1, 0x7f, EVK_FULL, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_permt2q, 0, 0, 0, 0},
+    {3, 1, 0x03, EVK_FULL, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_alignd, 0, 0, 0, 0},
+    {3, 1, 0x03, EVK_FULL, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_alignq, 0, 0, 0, 0},
+    {3, 1, 0x43, EVK_FULL, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_shuf4, 0, 64, 0, 0},
+    {3, 1, 0x43, EVK_FULL, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_shuf4, 0, 64, 0, 0},
+    {3, 1, 0x23, EVK_FULL, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_shuf4, 0, 64, 0, 0},
+    {3, 1, 0x23, EVK_FULL, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_shuf4, 0, 64, 0, 0},
+    {3, 1, 0x38, EVK_FULL, 1, 2, 0, EVT_FIX, 0, 0, gadget_evex_insert, 0, 64, 16, 0},
+    {3, 1, 0x38, EVK_FULL, 2, 3, 0, EVT_FIX, 0, 0, gadget_evex_insert, 0, 64, 16, 0},
+    {3, 1, 0x18, EVK_FULL, 1, 2, 0, EVT_FIX, 0, 0, gadget_evex_insert, 0, 64, 16, 0},
+    {3, 1, 0x18, EVK_FULL, 2, 3, 0, EVT_FIX, 0, 0, gadget_evex_insert, 0, 64, 16, 0},
+    {3, 1, 0x3a, EVK_FULL8, 1, 2, 0, EVT_FIX, 0, 0, gadget_evex_insert, 0, 128, 32, 0},
+    {3, 1, 0x3a, EVK_FULL8, 2, 3, 0, EVT_FIX, 0, 0, gadget_evex_insert, 0, 128, 32, 0},
+    {3, 1, 0x1a, EVK_FULL8, 1, 2, 0, EVT_FIX, 0, 0, gadget_evex_insert, 0, 128, 32, 0},
+    {3, 1, 0x1a, EVK_FULL8, 2, 3, 0, EVT_FIX, 0, 0, gadget_evex_insert, 0, 128, 32, 0},
+    {3, 1, 0x39, EVK_EXTRACT, 1, 2, 0, EVT_FIX, 0, 0, gadget_evex_extract, 0, 64, 16, 0},
+    {3, 1, 0x39, EVK_EXTRACT, 2, 3, 0, EVT_FIX, 0, 0, gadget_evex_extract, 0, 64, 16, 0},
+    {3, 1, 0x19, EVK_EXTRACT, 1, 2, 0, EVT_FIX, 0, 0, gadget_evex_extract, 0, 64, 16, 0},
+    {3, 1, 0x19, EVK_EXTRACT, 2, 3, 0, EVT_FIX, 0, 0, gadget_evex_extract, 0, 64, 16, 0},
+    {3, 1, 0x3b, EVK_EXTRACT8, 1, 2, 0, EVT_FIX, 0, 0, gadget_evex_extract, 0, 128, 32, 0},
+    {3, 1, 0x3b, EVK_EXTRACT8, 2, 3, 0, EVT_FIX, 0, 0, gadget_evex_extract, 0, 128, 32, 0},
+    {3, 1, 0x1b, EVK_EXTRACT8, 1, 2, 0, EVT_FIX, 0, 0, gadget_evex_extract, 0, 128, 32, 0},
+    {3, 1, 0x1b, EVK_EXTRACT8, 2, 3, 0, EVT_FIX, 0, 0, gadget_evex_extract, 0, 128, 32, 0},
+    {1, 1, 0x70, EVK_L2, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_pshufd, 0, 0, 0, 0},
+    {1, 2, 0x70, EVK_L2, 0, 1, 0, EVT_FVM, 0, 0, gadget_evex_pshufhw, 0, 0, 0, 0},
+    {1, 3, 0x70, EVK_L2, 0, 1, 0, EVT_FVM, 0, 0, gadget_evex_pshuflw, 0, 0, 0, 0},
+    {1, 0, 0xc6, EVK_L3, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_shufps, 0, 0, 0, 0},
+    {1, 1, 0xc6, EVK_L3, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_shufpd, 0, 0, 0, 0},
+    {3, 1, 0x04, EVK_L2, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_pshufd, 0, 0, 0, 0},
+    {3, 1, 0x05, EVK_L2, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_permilpd_i, 0, 0, 0, 0},
+    {2, 1, 0x0c, EVK_L3, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_permilps_v, 0, 0, 0, 0},
+    {2, 1, 0x0d, EVK_L3, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_permilpd_v, 0, 0, 0, 0},
+    {3, 1, 0x0f, EVK_L3, 0, 0, 0, EVT_FVM, 0, 0, gadget_evex_palignr, 0, 0, 0, 0},
+    {1, 0, 0x14, EVK_L3, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_vi_punpckldq, 0, 0, 0, 0},
+    {1, 0, 0x15, EVK_L3, 1, 2, 2, EVT_FV, 0, 0, gadget_evex_vi_punpckhdq, 0, 0, 0, 0},
+    {1, 1, 0x14, EVK_L3, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_vi_punpcklqdq, 0, 0, 0, 0},
+    {1, 1, 0x15, EVK_L3, 2, 3, 3, EVT_FV, 0, 0, gadget_evex_vi_punpckhqdq, 0, 0, 0, 0},
 };
 struct evex_insn {
     unsigned map, pp, op, w, vvvv, reg, rm, ll, aaa;
@@ -10942,14 +11042,17 @@ static bool evex_plan(const struct evex_insn *v, struct evex_plan *p) {
     memset(p, 0, sizeof(*p));
     p->ud = true;
     p->gpr_stage = -1;
-    unsigned bytes = 16u << v->ll;
+    bool scalar = e->kind == EVK_SCAL || e->kind == EVK_TOMASKS;
+    bool round = v->b && !v->mem && e->fp != 0;   // {er} or {sae}: L'L is no length
+    unsigned ll = round || scalar ? (scalar ? 0 : 2) : v->ll;
+    unsigned bytes = 16u << ll;
     if (((e->flags & EVF_MEMONLY) && !v->mem) || ((e->flags & EVF_REGONLY) && v->mem) ||
             ((e->flags & EVF_MIN256) && v->ll == 0) || ((e->flags & EVF_MIN512) && v->ll < 2))
         return true;
-    if (v->ll == 3 || (v->z && v->aaa == 0) || (e->nomask && (v->aaa != 0 || v->z)))
+    if ((v->ll == 3 && !round) || (v->z && v->aaa == 0) || (e->nomask && (v->aaa != 0 || v->z)))
         return true;
-    if (v->b && (!v->mem || e->bcast == 0))
-        return true;                            // no rounding control here, no broadcast for this op
+    if (v->b && (v->mem ? e->bcast == 0 : e->fp == 0))
+        return true;                            // no broadcast for this op, or no rounding control
     unsigned dst = v->reg, s1 = v->vvvv, s2 = v->rm;
     bool stage = v->mem, to_stage = false;
     unsigned aaa = v->aaa;
@@ -10972,6 +11075,35 @@ static bool evex_plan(const struct evex_insn *v, struct evex_plan *p) {
         p->gpr_w = v->w;
         stage = true;
         break;
+    case EVK_SCAL:
+    case EVK_FULL:
+    case EVK_FULL8:
+        break;
+    case EVK_FULL1:
+        if (v->vvvv != 0 || v->vvvv_hi)
+            return true;
+        s1 = 0;
+        break;
+    case EVK_EXTRACT:
+    case EVK_EXTRACT8:
+        if (v->vvvv != 0 || v->vvvv_hi)
+            return true;
+        s1 = v->reg;
+        if (v->mem) {
+            if (v->z)
+                return true;                    // zeroing into memory
+            stage = false;
+            to_stage = true;
+            p->st_bytes = e->kind == EVK_EXTRACT8 ? 32 : 16;
+            p->st_masked = v->aaa != 0;
+            aaa = 0;
+            z = false;
+            dst = 0;
+        } else {
+            dst = v->rm;
+        }
+        break;
+    case EVK_TOMASKS:
     case EVK_TOMASK:
         if (v->z || v->reg > 7)
             return true;                        // zeroing is the only kind; EVEX.R/R' on a k register (SDE)
@@ -11012,9 +11144,16 @@ static bool evex_plan(const struct evex_insn *v, struct evex_plan *p) {
     }
     p->ud = false;
     p->word = (dst & 31) | (unsigned long) (s1 & 31) << 5 | (unsigned long) (s2 & 31) << 10 |
-            (stage ? 1ul << 15 : 0) | (unsigned long) v->ll << 16 | (unsigned long) (aaa & 7) << 18 |
+            (stage ? 1ul << 15 : 0) | (unsigned long) ll << 16 | (unsigned long) (aaa & 7) << 18 |
             (z ? 1ul << 21 : 0) | (unsigned long) e->esz << 22 | (unsigned long) v->imm << 24 |
-            (to_stage ? 1ul << 32 : 0) | (unsigned long) (e->flags & 15) << 33;
+            (to_stage ? 1ul << 32 : 0) | (unsigned long) (e->flags & 15) << 33 |
+            (e->fp ? 1ul << 37 : 0) | (scalar ? 1ul << 38 : 0);
+    if (e->kind == EVK_EXTRACT || e->kind == EVK_EXTRACT8)   // the result's VL, the source's at 52-53
+        p->word = (p->word & ~(3ul << 16)) | (e->kind == EVK_EXTRACT8 ? 1ul << 16 : 0) | (unsigned long) ll << 52;
+    if (e->kind == EVK_FULL8 || e->kind == EVK_EXTRACT8)
+        p->word |= 1ul << 39;
+    if (round)                                  // {sae}; {er} sets the rounding too
+        p->word |= 1ul << 51 | (e->fp == 1 ? 1ul << 48 | (unsigned long) v->ll << 49 : 0);
     // the store gadget's own word: the mask and element size
     if (p->st_masked)
         p->word |= (unsigned long) (v->aaa & 7) << 40 | (unsigned long) e->esz << 44;

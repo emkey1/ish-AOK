@@ -6356,12 +6356,12 @@ amd64_gen_maskmov maskmovdqu, 16
     dup  \m\().2d, x9
 .endif
 .endm
-.macro xf_lanebits_sign m, t             /* every lane's sign bit */
-.ifc \t,s
+.macro xf_lanebits_sign m, t             /* every lane's sign bit. Clobbers x15 (not x9: */
+.ifc \t,s                                /* both callers hold MXCSR there) */
     movi \m\().4s, 0x80, lsl 24
 .else
-    mov  x9, 0x8000000000000000
-    dup  \m\().2d, x9
+    mov  x15, 0x8000000000000000
+    dup  \m\().2d, x15
 .endif
 .endm
 

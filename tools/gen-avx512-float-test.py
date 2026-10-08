@@ -24,7 +24,10 @@
 # 1.0 in the enabled ones: a masked-off lane must raise no flag. The
 # destination's 64 bytes, k1, MXCSR (control and flags) and the signal are
 # hashed per form and checked against Intel SDE's (`sde64 -ptr-raise -spr
-# -- ./test hashes` on camd, passed back with --answers). Forms are keyed
+# -- ./test hashes` on camd, passed back with --answers); a zero-masked
+# form's masked-off elements are checked to be 0 by the harness itself and
+# hashed as 0 (SDE writes -0.0 there for VSUBPS/PD under round-down at 256
+# and 512 bits; the SDM sets them to 0). Forms are keyed
 # and seeded by name, so the i386 test (zmm0-7, no 16-31 forms) takes the
 # amd64 answers. "dump" prints every case.
 import sys
@@ -47,9 +50,19 @@ RC = ['rn', 'rd', 'ru', 'rz']
 CMP_FEW = [0x00, 0x01, 0x03, 0x04, 0x0d, 0x11, 0x1c]
 CMP_SAE = [0x00, 0x01, 0x11, 0x1f]
 DBL = {'ps': 0, 'pd': 1, 'ss': 0, 'sd': 1}
-F = []   # (name, asm, flags: 1 double, 2 a compare, 4 the zmm16-31 registers)
+F = []   # (name, asm, flags: 1 double, 2 a compare, 4 the zmm16-31 registers, 8 zero-masked (the
+         #  elements it masks at bits 4-8))
 def add(name, asm, t, cmp=False, hi=False):
-    F.append((name, asm, DBL[t] | (2 if cmp else 0) | (4 if hi else 0)))
+    fl = DBL[t] | (2 if cmp else 0) | (4 if hi else 0)
+    if '%{z%}' in asm and not cmp:
+        # SDE writes -0.0 into zero-masked VSUBPS/PD elements under round-down at
+        # 256 and 512 bits (it appears to compute 0 - 0 there; its 128-bit form
+        # writes +0); the SDM sets them to 0. So the harness checks those
+        # elements are 0 itself and hashes them as 0.
+        L = 128 if ' 128 ' in name else 256 if ' 256 ' in name else 512
+        n = 1 if t in ('ss', 'sd') else L // (64 if DBL[t] else 32)
+        fl |= 8 | n << 4
+    F.append((name, asm, fl))
 # packed arithmetic (sqrt's packed form is unary: its vvvv must be 1111b)
 for op in ARITH:
     for t in ('ps', 'pd'):
@@ -144,7 +157,7 @@ UD = {
 }
 if not I386:
     UD.update({"vsqrtps V'": '62 f1 7c 40 51 cb', "vcmpps R'": '62 e1 6c 48 c2 cb 01',
-               'vcmpps R': '62 71 6c 48 c2 cb 01', "vaddps V' mem": '62 f1 6c 40 58 08'})
+               'vcmpps R': '62 71 6c 48 c2 cb 01', "vaddps V' mem": '62 f1 34 40 58 08'})   # (V' and vvvv 1001: s1 = zmm25, which LOAD sets)
 for k, b in UD.items():
     F.append((f'ud {k}', 'ud:' + ', '.join('0x' + x for x in b.split()), 0))
 R = 'e' if I386 else 'r'
@@ -300,6 +313,17 @@ int main(int argc, char **argv) {
             t.kout = 0;
             memset(t.out, 0, 64);
             int sg = run(forms[fi].fn, &t);
+            if ((forms[fi].fl & 8) && sg == 0) {          /* zero-masked: those elements must be 0 */
+                int n = forms[fi].fl >> 4, es = dbl ? 8 : 4, nz = 0;
+                for (int i = 0; i < n; i++) {
+                    if (t.k >> i & 1)
+                        continue;
+                    for (int b = 0; b < es; b++) nz |= t.out[i * es + b];
+                    memset(t.out + i * es, 0, es);
+                }
+                if (nz && !print && !dump && bad++ < 40)
+                    printf("FAIL %s (case %d): a zero-masked element is not 0\n", forms[fi].name, c);
+            }
             for (int i = 0; i < 64; i++) h = (h ^ t.out[i]) * 0x100000001b3ull;
             for (int b = 0; b < 8; b++) h = (h ^ ((t.kout >> (8 * b)) & 0xff)) * 0x100000001b3ull;
             h = (h ^ (t.mxo & 0xffff)) * 0x100000001b3ull;

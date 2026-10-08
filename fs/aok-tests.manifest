@@ -437,6 +437,7 @@ x86/amd64_avx512_int.c
 x86/amd64_avx512_cmp.c
 x86/amd64_avx512_misc.c
 x86/amd64_avx512_float.c
+x86/amd64_avx512_perm.c
 x86/amd64_incdec.c
 x86/amd64_ff_indirect.c
 x86/amd64_odd_shapes.c
@@ -479,6 +480,7 @@ x86/i386_avx512_int.c
 x86/i386_avx512_cmp.c
 x86/i386_avx512_misc.c
 x86/i386_avx512_float.c
+x86/i386_avx512_perm.c
 x86/i386_vex_vvvv3.c
 x86/amd64_jit_guest_bench.sh
 setup-regressions.sh

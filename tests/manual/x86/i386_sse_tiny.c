@@ -217,29 +217,29 @@ static const struct { const char *name; void (*fn)(struct st *); char k; int lan
 #define NO 23
 static const unsigned modes[] = {0x1f80, 0x3f80, 0x5f80, 0x7f80, 0x9f80, 0xbf80, 0xdf80, 0xff80};
 static const uint64_t want[NO][8] = {
-    {0x83b70d89e2d3260aull, 0xdc76ce549aa0f650ull, 0x4d3de2a6e6003358ull, 0xe1a7267523eaf745ull, 0xfbccb249349b22fdull, 0x6b9c663f224c306dull, 0xa4ee639e6b785b3dull, 0x2dad9796ceef961dull},
-    {0x83ca09ee59c1e652ull, 0x33c1d99565b0ee98ull, 0xc1d63528552710c0ull, 0x26e4e2395fe61c85ull, 0x7b34236062c80ebdull, 0x5c04616097d63d8dull, 0xc940d1f9a3f77bddull, 0x8c2bd0623e3cbd9dull},
-    {0x3f388d1b9074f94aull, 0x18ba6931aa06dad0ull, 0xd2677c2a2367ce58ull, 0xf25bcd6f542f3445ull, 0x50aaef4514505dfdull, 0x1befb54aef470e6dull, 0x3ad13402862da0bdull, 0x28fe7751363bf19dull},
-    {0x5191dd6a322bf98aull, 0x4cfcb9d9b975dbd0ull, 0x52e9a6b456165258ull, 0x22138b4922e3c845ull, 0x944105af14067bfdull, 0xf2ba5d33c2f6aeedull, 0xf0c6b51099237ebdull, 0x9fb9ed30db4afe9dull},
-    {0xabfa450c43b1f0d2ull, 0x1e382435a61f0518ull, 0x1eccbc8c6e689c0ull, 0x2ed4fb9b4cb8de85ull, 0xea6e95d1c1ac9dbdull, 0xc739f97d9c1e0c0dull, 0xf56999477cbc215dull, 0xf8a9ebbbcfb8b1dull},
-    {0xe52a02433fcbc58aull, 0x83bcb8dc9a3a46d0ull, 0xd4c80a6ee2871958ull, 0x7747ed5b274f1245ull, 0xdb51cf46d9ac5ffdull, 0x9af51677d3849edull, 0xcf78b3cd4e687fbdull, 0x1720f607831c629dull},
-    {0x8235e51535649014ull, 0xf1a4449fced09e7aull, 0xf130e69910c8beceull, 0x53d6bb3e83a39cddull, 0x7cd2774c44b5fe25ull, 0x19feff0c374c52f5ull, 0xe0dabbbddc344e5ull, 0x86d0120c527e6685ull},
-    {0xbad8348028d97c54ull, 0x3bb0317de49e583aull, 0xa18bb650291ab48eull, 0xdcd7eb5a834bc2ddull, 0x41a5f026500d1225ull, 0x3ddb241295cc0df5ull, 0x9b3792016e2e5be5ull, 0x86d0120c527e6685ull},
-    {0x461340c09748aae5ull, 0x461340c09748aae5ull, 0xb0c9f40df7e1feb5ull, 0x461340c09748aae5ull, 0x66399d8fb16054b5ull, 0x66399d8fb16054b5ull, 0x66399d8fb16054b5ull, 0x66399d8fb16054b5ull},
-    {0x10535e10cf77cae5ull, 0x10535e10cf77cae5ull, 0x1ea889a96858dab5ull, 0x10535e10cf77cae5ull, 0x41a03083b1b563b5ull, 0x41a03083b1b563b5ull, 0x41a03083b1b563b5ull, 0x41a03083b1b563b5ull},
-    {0xe0ed5bda39a8cae5ull, 0xe0ed5bda39a8cae5ull, 0xdfe0c1a136378035ull, 0xe0ed5bda39a8cae5ull, 0xbe1d277945c62035ull, 0xbe1d277945c62035ull, 0xbe1d277945c62035ull, 0xbe1d277945c62035ull},
-    {0x8689f1af4dcefae5ull, 0x8689f1af4dcefae5ull, 0xcd695d319b050b35ull, 0x8689f1af4dcefae5ull, 0x93f33fec4d86ae35ull, 0x93f33fec4d86ae35ull, 0x93f33fec4d86ae35ull, 0x93f33fec4d86ae35ull},
-    {0xcd7d30057b97e703ull, 0xc427cac7e487e4eaull, 0x439a6ea43361368aull, 0xa722dcc77fc52865ull, 0x4c3b6d4d4c7f8075ull, 0xd00649a6cde0fbb5ull, 0x202c0dfb0c70ae95ull, 0xddfd4da8f9eb1235ull},
-    {0x8c809e9215e7bc43ull, 0xfbe5e7b0a110a3daull, 0x40312c9bdef9e1daull, 0xb40026b137913165ull, 0x89d757c572fe19d5ull, 0x88eb6e5050c134f5ull, 0x42c62cb4d3ceff15ull, 0xb49a4019026caeb5ull},
-    {0x76b150e14e717c83ull, 0x40167776321712baull, 0x20dcc4b07e9415daull, 0x4b725a9b2d12b965ull, 0x40f55ed565bc1dd5ull, 0x4cefac8772bce575ull, 0x98f9d823b46abf95ull, 0xabd7717783854135ull},
-    {0x1e061b211bfbc6d7ull, 0x24a9721dd08cd4acull, 0x1cb5d6c41d1358d0ull, 0x48961ec73acec9b5ull, 0x9899727186990985ull, 0x4f8a462f65d2a825ull, 0x7e91ebdcd2897965ull, 0xa923980d6a802c65ull},
-    {0x8d9f8b662c31dc15ull, 0x8d9f8b662c31dc15ull, 0xd0b06c39edf8bb51ull, 0x8d9f8b662c31dc15ull, 0x91a8ce2b2bb47471ull, 0x91a8ce2b2bb47471ull, 0x91a8ce2b2bb47471ull, 0x91a8ce2b2bb47471ull},
-    {0xfec4d141bba95c15ull, 0xfec4d141bba95c15ull, 0x9f3753529764e711ull, 0xfec4d141bba95c15ull, 0xc5f965366ba4bbf1ull, 0xc5f965366ba4bbf1ull, 0xc5f965366ba4bbf1ull, 0xc5f965366ba4bbf1ull},
-    {0x1bb1adbb49e84b95ull, 0x1bb1adbb49e84b95ull, 0xa6d6a7743662f051ull, 0x1bb1adbb49e84b95ull, 0x18f918cd1cf816f1ull, 0x18f918cd1cf816f1ull, 0x18f918cd1cf816f1ull, 0x18f918cd1cf816f1ull},
-    {0x895a79fcb0b9fc71ull, 0x4cf349550e21e37full, 0x1cd6b471e5d5a99full, 0xd3acbb21ca34ccfull, 0x52fdd61dae251bdull, 0xbdf772ce9e5542bdull, 0x3cb5456d34c2cbfdull, 0xb4ced6ba688ab05dull},
-    {0x2be02446ec2fbd0bull, 0x5ff85c0e69ccc47dull, 0xeb26f77306d61d3dull, 0x7ddca068489c43fdull, 0x9c131a6c06a0375full, 0xd568e8aee8ff577full, 0x3e52ae42c607137full, 0xaa107c92705a989full},
-    {0x7ae9e333f0b6e08bull, 0x6ff3c5c47a3d63ddull, 0xcaa795c7e9207d5dull, 0x7fc6ed60b681bc1dull, 0xe0827d81fc7756bfull, 0x2de8108d9dfbbaffull, 0x5f7e46d173d280bfull, 0x170c2001e077cf1full},
-    {0xc77794265cd3fab1ull, 0x376c616c11f6fdfull, 0xa6eea74a811c4ffull, 0xbeaf6a90eb0ac52full, 0x49c222601cae50ddull, 0x6c975c4b3bce1f5dull, 0x3a6760b4aa2fe71dull, 0xe721e512e2d1df7dull},
+    {0x9b33d8a9821ed95cull, 0xa16928895bb0178cull, 0x8a62b53114f9471cull, 0xa3cb81d43bbca7e5ull, 0x616e4aad47f24aa5ull, 0x5ae1d349040e915ull, 0xf33601b675de5485ull, 0xc62daecdac2f08e5ull},
+    {0x76c170d0c8f70de4ull, 0x902f4532b9d9274ull, 0x53a17c8ba2b98084ull, 0x1049820536e7865ull, 0xa442c733d0a84765ull, 0x939334c230400e75ull, 0x3a187a2a91a9de65ull, 0x5eca225cdf7c00e5ull},
+    {0x8dc182e6cb67a01cull, 0xb060d2726cac78cull, 0xc99855c7621ed69cull, 0x4ea0ee55d079abe5ull, 0x7ddacf9977090a5ull, 0xe84903b07b007c95ull, 0x4ef4c91ada5a485ull, 0xf6ecf09305e625e5ull},
+    {0xf42071a2f16d35dcull, 0x8bba4089abe7b70cull, 0x1a6619b64cf7821cull, 0x9749cdfdfefc00e5ull, 0xc964951303741ba5ull, 0x46ec831e4f1a9a15ull, 0xe6d8a8f261590385ull, 0xd3fd9767000763e5ull},
+    {0x85e3e6a597a72864ull, 0xfa92aef4ae65d7f4ull, 0xa264915cd2bf7c84ull, 0x6fe0589015817365ull, 0x2286f751c8782c65ull, 0x673c8491b734f175ull, 0xffd5d14ddeadb65ull, 0x5edeabeb3a626de5ull},
+    {0xb5c5890afe31bcdcull, 0xb08ff31da31ade0cull, 0xb336e291522e41cull, 0xcf83b17e6a128de5ull, 0xa3a6c3996d4a70a5ull, 0x44e13bb5fbfcd015ull, 0xbf167680d2941a85ull, 0xb5a682a4100cb3e5ull},
+    {0x7ac7b45b498a58e2ull, 0x41df536e09c5951eull, 0xc97d8d6d32dfe32aull, 0x7dc06e05b83f3205ull, 0xbe8402c4483d8ea5ull, 0x1c69bf79e7d81e95ull, 0xa569eeafab21eb85ull, 0xabdd747279d563e5ull},
+    {0xa238e95854041fa2ull, 0xd1c806a30f66aadeull, 0x8bcaee18f8090deaull, 0xc05f5d45d9422605ull, 0xd421d5f78fab1a5ull, 0xaca86adf567ee595ull, 0x78734bd5be64b85ull, 0xabdd747279d563e5ull},
+    {0xf5a9e9e7d51bfca5ull, 0x4ada7f9b8120cea5ull, 0xe89858fcd2bbc2a5ull, 0xe718f0603be9d0a5ull, 0x170cafc874cfe8a5ull, 0x33aea67cd4a086a5ull, 0xe85952ea749f12a5ull, 0xdefd069b7d7af6a5ull},
+    {0x22d9d1885bec74a5ull, 0xb5b2df047a4b16a5ull, 0x3cdbed46399636a5ull, 0xaa0da0b8e29230a5ull, 0x236e924515928a5ull, 0xcaae14ee8462fea5ull, 0x595ab310046280a5ull, 0x81bf1db6cec86ea5ull},
+    {0x63d10687b21a3aa5ull, 0x23fd5ee337c6a6a5ull, 0xd8d03b28510250a5ull, 0xd19216152c86b2a5ull, 0x8cefe1656e70a0a5ull, 0x5d9c5d5ad655faa5ull, 0xb7bf21771ffa48a5ull, 0xa9b4317ab5874aa5ull},
+    {0xde8db29c202529a5ull, 0x5b5a868b882417a5ull, 0x44049fb39ce9f7a5ull, 0x821bff46301b1ba5ull, 0x8577fc0884b180a5ull, 0x25b4ef3ccb13cca5ull, 0xa87168076af9c6a5ull, 0xbc2a0c71599ed2a5ull},
+    {0x77a06da44466865ull, 0xc28824db7eb347b0ull, 0xb03e046a65e55ad0ull, 0x39cea627d30d3a25ull, 0xc866ba0f4626d925ull, 0xb089f2134c4bdf25ull, 0xebe05937d5a41245ull, 0xf949046ec8fbb325ull},
+    {0x12066182151e9865ull, 0x30492b4b51919600ull, 0x4dbd942444488860ull, 0x6cd1cac8dfc65325ull, 0x51f743d430ab6625ull, 0x2bafdc83a1ad0325ull, 0x6d38e6a958293da5ull, 0x7c9d4eb658300c25ull},
+    {0xa97b96c2d6e14e65ull, 0xc8d2e9a3f9bec020ull, 0xbcd2a5aea1077ec0ull, 0x76658ff0069c0325ull, 0x7a48ef932355e325ull, 0x6fa7174881fb0a25ull, 0x13575b760e64d625ull, 0xa2f18a83afa3f725ull},
+    {0x68699558204a2f3dull, 0x7562c068be392d36ull, 0x6c89a5ad494091aaull, 0xa3020df7b1cd69a5ull, 0xfb9f8560effbcce5ull, 0x65f8b58f6c4d37a5ull, 0xd6655fccc6f8f5c5ull, 0x3ef80bf2f7f2ea5ull},
+    {0x725ee5e03a1df845ull, 0x830cd05fb4f805ull, 0x32c1504fb48d6545ull, 0x262b78305b603b85ull, 0xce404d22b9c7ff45ull, 0x95e3ce89fca41805ull, 0x5951b46bc71fe845ull, 0xae7de9b39fd81f85ull},
+    {0xc8efad6ccf2333c5ull, 0x258a73247795f545ull, 0x9de3d42bb0072b45ull, 0xcade9a0a2ae46e45ull, 0xa977ed060d24c245ull, 0xd27a61af4dcd205ull, 0xf4f3a884ad1161c5ull, 0x70b905ca4a5f6405ull},
+    {0x83808e634c834545ull, 0xa8a511afe8e2b805ull, 0x478f40c348927f45ull, 0x8949be5098c7a505ull, 0xf1eae8deaaec1c45ull, 0x9b92d35385a63705ull, 0x4c0faa3abf323945ull, 0x1b9fd0290f9ce685ull},
+    {0xf914c36767183a35ull, 0x11fac77812f81dc5ull, 0x49b14c73ff6a7445ull, 0x3dcf4daa24fdc725ull, 0xb8fd16b2acb97575ull, 0xa333759a9bbd9935ull, 0xab5bfcf5af41e075ull, 0xa461a9dd554dde15ull},
+    {0x87b2ef6b88172f35ull, 0xd605b65da1fec815ull, 0xf055d00357d9b9b5ull, 0x158ff8d7a2f46575ull, 0x85be6074f4e74475ull, 0xed0030d6932d2d75ull, 0x227c91e864803e75ull, 0xb5da6f370d8f5355ull},
+    {0x413f3c4077b8aa15ull, 0xaab64d3add325f55ull, 0x11092d1d6b7d87f5ull, 0x9e16af2fed41e6b5ull, 0x15282ddf52a0f575ull, 0x7820402da37616d5ull, 0xa71e8be6a3968755ull, 0xdf4bbcdfaf751435ull},
+    {0xdbe052f47af7aff5ull, 0xc78f72ea7a4eab45ull, 0x936bb1ecc7e96f45ull, 0x7e0ce6c450d69025ull, 0xb8be415fd632935ull, 0xea6d23ffcb82fb75ull, 0xf182d4c2ea352cb5ull, 0x18883fd38e7a31d5ull},
 };
 
 int main(int argc, char **argv) {
@@ -261,9 +261,9 @@ int main(int argc, char **argv) {
                 else { uint32_t a = cases[c].a, b = cases[c].b; memcpy(t.x + 4 * L, &a, 4); memcpy(t.y + 4 * L, &b, 4); }
                 t.mx = modes[mi];
                 ops[oi].fn(&t);
-                unsigned f = t.st & 0x3f;
+                unsigned f = t.st;                   /* all of MXCSR: a gadget once lost its controls */
                 for (int i = 0; i < 32; i++) h = (h ^ t.o[i]) * 0x100000001b3ull;
-                h = (h ^ f) * 0x100000001b3ull;
+                for (int i = 0; i < 4; i++) h = (h ^ ((f >> (8 * i)) & 0xff)) * 0x100000001b3ull;
                 if (dump) {
                     printf("%s %#x %d:", ops[oi].name, modes[mi], c);
                     for (int i = 31; i >= 0; i--) printf("%02x", t.o[i]);

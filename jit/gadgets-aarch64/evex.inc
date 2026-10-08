@@ -18,7 +18,12 @@
 #        EVEX_STAGE, unmasked, for a store (32) | s2 always its quarter 0
 #        (a shift count, a broadcast) (33) | s2's quarter q & 1 (a 256-bit
 #        broadcast) (34) | merge from s1, not the destination (VPBLENDM) (35)
-#        | the destination's old quarter in q2 too (VPTERNLOG) (36)], gret 1.
+#        | the destination's old quarter in q2 too (VPTERNLOG) (36) | a float
+#        op: masked-off lanes of q0-q2 are 1.0 for the body, so they raise
+#        nothing (37) | scalar: only element 0 is masked, the rest are the
+#        body's (s1's) (38) | {er}: the rounding below for the op (48) | its
+#        x86 RC (49-50) | {sae}: the op's flags (MXCSR, FPSR) discarded
+#        (51)], gret 1.
 # ===========================================================================
 
 #define EVEX_STAGE VEX_STAGE                 /* (64 bytes there) */
@@ -93,6 +98,15 @@
     ldr  q30, [x17]
     cmtst \vd\().16b, v31.16b, v30.16b
 .Lekm_done\@:
+    tbz  x8, 38, .Lekm_end\@                /* scalar: element 0 only, the rest on */
+    ubfx w9, w8, 22, 2
+    movi v31.2d, 0xffffffffffffffff
+    mov  x11, 0xffffffff00000000
+    cmp  w9, 3
+    csel x11, xzr, x11, eq               /* (a qword element: all of the low half) */
+    mov  v31.d[0], x11
+    orr  \vd\().16b, \vd\().16b, v31.16b
+.Lekm_end\@:
 .endm
 
 # The body's result (v\res) to quarter w13 of the destination, masked; or,
@@ -147,10 +161,71 @@
 .Lefi_done\@:
 .endm
 
+# {er} and {sae} around a float op: the host's rounding set from the word's
+# RC, and the flags (FPSR, MXCSR) put back after, at EVEX_STAGE + 80..
+.macro evx_fp_enter
+    tbz  x8, 51, .Lefe_rc\@
+    mrs  x9, fpsr
+    mov  x10, (EVEX_STAGE + 80)
+    str  x9, [_cpu, x10]
+    ldr  w9, [_cpu, CPU_mxcsr]
+    mov  x10, (EVEX_STAGE + 88)
+    str  w9, [_cpu, x10]
+.Lefe_rc\@:
+    tbz  x8, 48, .Lefe_done\@
+    mrs  x9, fpcr
+    mov  x10, (EVEX_STAGE + 96)
+    str  x9, [_cpu, x10]
+    ubfx x11, x8, 49, 2                  /* x86 RC (N D U Z) to RMode (N P M Z) */
+    lsl  w10, w11, 1
+    orr  w11, w10, w11, lsr 1
+    and  w11, w11, 3
+    bfi  x9, x11, 22, 2
+    msr  fpcr, x9
+.Lefe_done\@:
+.endm
+.macro evx_fp_exit
+    tbz  x8, 48, .Lefx_sae\@
+    mov  x10, (EVEX_STAGE + 96)
+    ldr  x9, [_cpu, x10]
+    msr  fpcr, x9
+.Lefx_sae\@:
+    tbz  x8, 51, .Lefx_done\@
+    mov  x10, (EVEX_STAGE + 80)
+    ldr  x9, [_cpu, x10]
+    msr  fpsr, x9
+    mov  x10, (EVEX_STAGE + 88)
+    ldr  w9, [_cpu, x10]
+    str  w9, [_cpu, CPU_mxcsr]
+.Lefx_done\@:
+.endm
+# A float op's masked-off lanes: 1.0 in q0, q1 (and q2 with bit 36) for the
+# body. Clobbers x9, x11, x15-x17, v28-v31.
+.macro evx_fp_lanes
+    tbz  x8, 37, .Lefl_done\@
+    ubfx w9, w8, 18, 3
+    cbz  w9, .Lefl_done\@
+    evx_kmask v28, w13
+    ubfx w9, w8, 22, 2
+    cmp  w9, 3
+    b.eq .Lefl_d\@
+    fmov v29.4s, 1.0
+    b    .Lefl_set\@
+.Lefl_d\@:
+    fmov v29.2d, 1.0
+.Lefl_set\@:
+    bif  v0.16b, v29.16b, v28.16b
+    bif  v1.16b, v29.16b, v28.16b
+    tbz  x8, 36, .Lefl_done\@
+    bif  v2.16b, v29.16b, v28.16b
+.Lefl_done\@:
+.endm
+
 # dst = s1 OP s2, quarter by quarter (lane-local ops).
 .macro evex_l3 name, res, body, args:vararg
 .gadget evex_\name
     ldr  x8, [_ip]
+    evx_fp_enter
     mov  w13, 0
 .Lel3_loop\@:
     ubfx w9, w8, 5, 5
@@ -175,7 +250,8 @@
     and  w9, w8, 31
     evx_qaddr x14, w9, w13
     ldr  q2, [x14]
-3:  ubfx w12, w8, 24, 8
+3:  evx_fp_lanes
+    ubfx w12, w8, 24, 8
     \body \args
     evx_put \res
     add  w13, w13, 1
@@ -184,6 +260,7 @@
     lsl  w10, w10, w9
     cmp  w13, w10
     b.lo .Lel3_loop\@
+    evx_fp_exit
     evx_finish
     gret 1
 .endm
@@ -194,6 +271,11 @@ evex_kbits:                              /* each lane's bit of the mask, by elem
     .hword 1, 2, 4, 8, 16, 32, 64, 128
     .word 1, 2, 4, 8
     .quad 1, 2
+evex_elem_iota:                          /* each lane's element number, by element size */
+    .byte 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15
+    .hword 0, 1, 2, 3, 4, 5, 6, 7
+    .word 0, 1, 2, 3
+    .quad 0, 1
 
 # A 64-byte aligned operand (VMOVDQA32 zmm and its kind): i386 [orig_ip],
 # gret 1 (vex.inc's vec_align16/32 for the others).
@@ -650,6 +732,7 @@ evex_ldbm 8
 .macro evex_tomask name, esz, body, args:vararg
 .gadget evex_\name
     ldr  x8, [_ip]
+    evx_fp_enter
     mov  x9, (EVEX_STAGE + 72)
     str  xzr, [_cpu, x9]
     mov  w13, 0
@@ -667,6 +750,7 @@ evex_ldbm 8
     evx_qaddr x14, w9, w13
 .Letm_s2\@:
     ldr  q1, [x14]
+    evx_fp_lanes
     ubfx w12, w8, 24, 8
     \body \args
     evx_lanebits \esz
@@ -683,6 +767,7 @@ evex_ldbm 8
     lsl  w10, w10, w9
     cmp  w13, w10
     b.lo .Letm_loop\@
+    evx_fp_exit
     mov  x10, (EVEX_STAGE + 72)
     ldr  x11, [_cpu, x10]
     mov  x14, CPU_avx512_k
@@ -965,3 +1050,574 @@ evex_l3 bcast_b, 0, evb_bcast, 16b, b
 evex_l3 bcast_w, 0, evb_bcast, 8h, h
 evex_l3 bcast_d, 0, evb_bcast, 4s, s
 evex_l3 bcast_q, 0, evb_bcast, 2d, d
+
+# ---- floating point: math.S's xf bodies (x86's NaNs, DAZ/FTZ/DE, the
+# tininess fix), quarter by quarter; scalar forms compute element 0 and keep
+# s1's others (word bit 38 masks only element 0) ----
+.irp op, add, sub, mul
+evex_l3 xf_\op\()ps, 2, xf_body_arith, f\op, s, 4s, 1, 0
+evex_l3 xf_\op\()pd, 2, xf_body_arith, f\op, d, 2d, 1, 0
+evex_l3 xf_\op\()ss, 2, xf_body_arith, f\op, s, 4s, 0, 0
+evex_l3 xf_\op\()sd, 2, xf_body_arith, f\op, d, 2d, 0, 0
+.endr
+evex_l3 xf_divps, 2, xf_body_arith, fdiv, s, 4s, 1, 1
+evex_l3 xf_divpd, 2, xf_body_arith, fdiv, d, 2d, 1, 1
+evex_l3 xf_divss, 2, xf_body_arith, fdiv, s, 4s, 0, 1
+evex_l3 xf_divsd, 2, xf_body_arith, fdiv, d, 2d, 0, 1
+evex_l3 xf_minps, 2, xf_body_minmax, 0, s, 4s, 1
+evex_l3 xf_minpd, 2, xf_body_minmax, 0, d, 2d, 1
+evex_l3 xf_minss, 2, xf_body_minmax, 0, s, 4s, 0
+evex_l3 xf_minsd, 2, xf_body_minmax, 0, d, 2d, 0
+evex_l3 xf_maxps, 2, xf_body_minmax, 1, s, 4s, 1
+evex_l3 xf_maxpd, 2, xf_body_minmax, 1, d, 2d, 1
+evex_l3 xf_maxss, 2, xf_body_minmax, 1, s, 4s, 0
+evex_l3 xf_maxsd, 2, xf_body_minmax, 1, d, 2d, 0
+evex_l3 xf_sqrtps, 2, xf_body_sqrt, s, 4s, 1
+evex_l3 xf_sqrtpd, 2, xf_body_sqrt, d, 2d, 1
+evex_l3 xf_sqrtss, 2, xf_body_sqrt, s, 4s, 0
+evex_l3 xf_sqrtsd, 2, xf_body_sqrt, d, 2d, 0
+# VCMPPS/PD/SS/SD into an opmask: the 32 predicates (vex.inc's body); a
+# scalar compare is element 0 only
+.macro evb_fcmp t, a, p
+    /* SDE (every model) raises no DE for the constant predicates in EVEX
+       form -- FALSE_OQ, TRUE_UQ, FALSE_OS, TRUE_US: imm8 & 0x0b == 0x0b --
+       though it does in VEX form, as an AMD Ryzen does; IE for a NaN under
+       the signalling two stays. So DE is put back as it was for those. */
+    ldr  w9, [_cpu, CPU_mxcsr]
+    mov  x10, (EVEX_STAGE + 104)
+    str  w9, [_cpu, x10]
+    xf_body_cmp32 \t, \a, \p
+    mov  w9, 0x0b
+    and  w9, w12, w9
+    cmp  w9, 0x0b
+    b.ne .Lefc_de\@
+    mov  x10, (EVEX_STAGE + 104)
+    ldr  w9, [_cpu, x10]
+    ldr  w10, [_cpu, CPU_mxcsr]
+    and  w9, w9, 2                       /* DE (bit 1) as before the op */
+    bic  w10, w10, 2
+    orr  w10, w10, w9
+    str  w10, [_cpu, CPU_mxcsr]
+.Lefc_de\@:
+    mov  v0.16b, v2.16b
+.if !\p
+  .ifc \t,s
+    movi v1.2d, 0
+    mov  v1.s[0], v0.s[0]
+  .else
+    movi v1.2d, 0
+    mov  v1.d[0], v0.d[0]
+  .endif
+    mov  v0.16b, v1.16b
+.endif
+.endm
+evex_tomask xf_cmpps, 2, evb_fcmp, s, 4s, 1
+evex_tomask xf_cmppd, 3, evb_fcmp, d, 2d, 1
+evex_tomask xf_cmpss, 2, evb_fcmp, s, 4s, 0
+evex_tomask xf_cmpsd, 3, evb_fcmp, d, 2d, 0
+
+# ===========================================================================
+# Lane-crossing ops: the whole vector at once. s1 in v16-v19, s2 (or
+# EVEX_STAGE) in v20-v23, the destination's old value in v24-v27, a quarter
+# past VL zero; the body leaves the result's quarters in v0-v3 (it may use
+# v4-v7 and x9-x12, x14-x17, and reads w12 = imm8); each is then masked as
+# evx_put does and the destination zeroed past VL. NEON's tbl takes four
+# consecutive registers as one 64-byte table, so a whole zmm permutes in one.
+# Word: as the frames' above.
+# ===========================================================================
+.macro evf_ld n, field, q                /* v\n = quarter \q of the register in the word's \field (or zero past VL) */
+    ubfx w9, w8, 16, 2
+    mov  w10, 1
+    lsl  w10, w10, w9
+    cmp  w10, \q
+    b.ls .Lefl_zero\@
+    mov  w13, \q
+.ifc \field,stage
+    tbz  x8, 15, .Lefl_reg\@
+    mov  x14, (EVEX_STAGE + 16 * \q)
+    ldr  q\n, [_cpu, x14]
+    b    .Lefl_done\@
+.Lefl_reg\@:
+    ubfx w9, w8, 10, 5
+.else
+    ubfx w9, w8, \field, 5
+.endif
+    evx_qaddr x14, w9, w13
+    ldr  q\n, [x14]
+    b    .Lefl_done\@
+.Lefl_zero\@:
+    movi v\n\().16b, 0
+.Lefl_done\@:
+.endm
+.macro evf_put1 vres, vold, q            /* quarter \q of the result (\vres), masked against \vold */
+    ubfx w9, w8, 16, 2
+    mov  w10, 1
+    lsl  w10, w10, w9
+    cmp  w10, \q
+    b.ls .Lefp_done\@
+    mov  w13, \q
+    mov  v29.16b, \vres\().16b
+    tbz  x8, 32, .Lefp_reg\@
+    mov  x14, (EVEX_STAGE + 16 * \q)
+    str  q29, [_cpu, x14]
+    b    .Lefp_done\@
+.Lefp_reg\@:
+    ubfx w9, w8, 18, 3
+    cbz  w9, .Lefp_st\@
+    evx_kmask v28, w13
+    tbnz x8, 21, .Lefp_z\@
+    bif  v29.16b, \vold\().16b, v28.16b
+    b    .Lefp_st\@
+.Lefp_z\@:
+    and  v29.16b, v29.16b, v28.16b
+.Lefp_st\@:
+    and  w9, w8, 31
+    evx_qaddr x14, w9, w13
+    str  q29, [x14]
+.Lefp_done\@:
+.endm
+.macro evex_full name, body, args:vararg
+.gadget evex_\name
+    ldr  x8, [_ip]
+    evf_ld 16, 5, 0
+    evf_ld 17, 5, 1
+    evf_ld 18, 5, 2
+    evf_ld 19, 5, 3
+    evf_ld 20, stage, 0
+    evf_ld 21, stage, 1
+    evf_ld 22, stage, 2
+    evf_ld 23, stage, 3
+    evf_ld 24, 0, 0
+    evf_ld 25, 0, 1
+    evf_ld 26, 0, 2
+    evf_ld 27, 0, 3
+    ubfx w12, w8, 24, 8
+    \body \args
+    evf_put1 v0, v24, 0
+    evf_put1 v1, v25, 1
+    evf_put1 v2, v26, 2
+    evf_put1 v3, v27, 3
+    evx_finish
+    gret 1
+.endm
+
+# Element indices to byte indices for tbl: \vd = (\vs & \vm) << esz, each
+# element's bytes counting up (\vm: the index mask, dup'd at the size).
+.macro evf_bidx vd, vs, vm, esz
+    and  \vd\().16b, \vs\().16b, \vm\().16b
+.if \esz == 1
+    shl  \vd\().8h, \vd\().8h, 1
+    mov  w11, 0x0101
+    dup  v6.8h, w11
+    mul  \vd\().8h, \vd\().8h, v6.8h
+    mov  w11, 0x0100
+    dup  v6.8h, w11
+    add  \vd\().8h, \vd\().8h, v6.8h
+.elseif \esz == 2
+    shl  \vd\().4s, \vd\().4s, 2
+    mov  w11, 0x01010101
+    dup  v6.4s, w11
+    mul  \vd\().4s, \vd\().4s, v6.4s
+    movz w11, 0x0100
+    movk w11, 0x0302, lsl 16
+    dup  v6.4s, w11
+    add  \vd\().4s, \vd\().4s, v6.4s
+.elseif \esz == 3
+    shl  \vd\().2d, \vd\().2d, 3
+    trn1 \vd\().4s, \vd\().4s, \vd\().4s     /* the low word into both halves */
+    mov  w11, 0x01010101
+    dup  v6.4s, w11
+    mul  \vd\().4s, \vd\().4s, v6.4s
+    movz x11, 0x0100
+    movk x11, 0x0302, lsl 16
+    movk x11, 0x0504, lsl 32
+    movk x11, 0x0706, lsl 48
+    dup  v6.2d, x11
+    add  \vd\().16b, \vd\().16b, v6.16b
+.endif
+.endm
+.macro evf_dupmask vm, esz, n            /* \vm = register \n's value in every element */
+.if \esz == 0
+    dup  \vm\().16b, w\n
+.elseif \esz == 1
+    dup  \vm\().8h, w\n
+.elseif \esz == 2
+    dup  \vm\().4s, w\n
+.else
+    dup  \vm\().2d, x\n
+.endif
+.endm
+# w9 = the elements in the vector: (16 << VL) >> esz
+.macro evf_nelem esz
+    ubfx w9, w8, 16, 2
+    mov  w10, (16 >> \esz)
+    lsl  w9, w10, w9
+.endm
+
+# VPERMB/W/D/Q, VPERMPS/PD: dst[i] = s2[s1[i] mod n] (the table is s2)
+.macro evfb_perm1q vd, vidx, esz         /* one quarter (v5: the index mask) */
+    evf_bidx v4, \vidx, v5, \esz
+    tbl  \vd\().16b, {v20.16b, v21.16b, v22.16b, v23.16b}, v4.16b
+.endm
+.macro evfb_perm1 esz
+    evf_nelem \esz
+    sub  w9, w9, 1
+    evf_dupmask v5, \esz, 9
+    evfb_perm1q v0, v16, \esz
+    evfb_perm1q v1, v17, \esz
+    evfb_perm1q v2, v18, \esz
+    evfb_perm1q v3, v19, \esz
+.endm
+evex_full permb, evfb_perm1, 0
+evex_full permw, evfb_perm1, 1
+evex_full permd, evfb_perm1, 2
+evex_full permq, evfb_perm1, 3
+# VPERMQ/PD imm8: each 256-bit half's four qwords picked by imm8's 2-bit
+# fields; qword j of the result is qword ((j & 4) | field(j & 3)) of s2.
+.macro evfb_permqi_qw j                  /* v4.d[j & 1]: qword j's byte indices */
+    ubfx w9, w12, (2 * (\j & 3)), 2
+    add  w9, w9, (\j & 4)
+    lsl  w9, w9, 3
+    mov  w11, 0x01010101
+    mul  w9, w9, w11
+    orr  x9, x9, x9, lsl 32
+    movz x11, 0x0100
+    movk x11, 0x0302, lsl 16
+    movk x11, 0x0504, lsl 32
+    movk x11, 0x0706, lsl 48
+    add  x9, x9, x11
+    mov  v4.d[\j & 1], x9
+.endm
+.macro evfb_permqi
+    evfb_permqi_qw 0
+    evfb_permqi_qw 1
+    tbl  v0.16b, {v20.16b, v21.16b, v22.16b, v23.16b}, v4.16b
+    evfb_permqi_qw 2
+    evfb_permqi_qw 3
+    tbl  v1.16b, {v20.16b, v21.16b, v22.16b, v23.16b}, v4.16b
+    evfb_permqi_qw 4
+    evfb_permqi_qw 5
+    tbl  v2.16b, {v20.16b, v21.16b, v22.16b, v23.16b}, v4.16b
+    evfb_permqi_qw 6
+    evfb_permqi_qw 7
+    tbl  v3.16b, {v20.16b, v21.16b, v22.16b, v23.16b}, v4.16b
+.endm
+evex_full permqi, evfb_permqi
+
+# VPERMI2*/VPERMT2*: two n-element tables, the index's bit log2(n) picking
+# one. I2: index = the destination, tables s1 (low) and s2 (high); T2:
+# index = s1, tables the destination (low) and s2 (high). v5: the index
+# mask (n - 1), v6/v7 scratch (evf_bidx), the select bit n in x/w15.
+.macro evfb_perm2_one vd, vidx, i2, esz  /* one quarter */
+    evf_bidx v4, \vidx, v5, \esz
+.if \i2
+    tbl  \vd\().16b, {v16.16b, v17.16b, v18.16b, v19.16b}, v4.16b
+.else
+    tbl  \vd\().16b, {v24.16b, v25.16b, v26.16b, v27.16b}, v4.16b
+.endif
+    tbl  v6.16b, {v20.16b, v21.16b, v22.16b, v23.16b}, v4.16b
+    evf_dupmask v7, \esz, 15
+.if \esz == 0
+    cmtst v7.16b, \vidx\().16b, v7.16b
+.elseif \esz == 1
+    cmtst v7.8h, \vidx\().8h, v7.8h
+.elseif \esz == 2
+    cmtst v7.4s, \vidx\().4s, v7.4s
+.else
+    cmtst v7.2d, \vidx\().2d, v7.2d
+.endif
+    bit  \vd\().16b, v6.16b, v7.16b
+.endm
+.macro evfb_perm2 i2, esz
+    evf_nelem \esz
+    mov  w15, w9
+    sub  w9, w9, 1
+    evf_dupmask v5, \esz, 9
+.if \i2
+    evfb_perm2_one v0, v24, 1, \esz
+    evfb_perm2_one v1, v25, 1, \esz
+    evfb_perm2_one v2, v26, 1, \esz
+    evfb_perm2_one v3, v27, 1, \esz
+.else
+    evfb_perm2_one v0, v16, 0, \esz
+    evfb_perm2_one v1, v17, 0, \esz
+    evfb_perm2_one v2, v18, 0, \esz
+    evfb_perm2_one v3, v19, 0, \esz
+.endif
+.endm
+evex_full permi2b, evfb_perm2, 1, 0
+evex_full permi2w, evfb_perm2, 1, 1
+evex_full permi2d, evfb_perm2, 1, 2
+evex_full permi2q, evfb_perm2, 1, 3
+evex_full permt2b, evfb_perm2, 0, 0
+evex_full permt2w, evfb_perm2, 0, 1
+evex_full permt2d, evfb_perm2, 0, 2
+evex_full permt2q, evfb_perm2, 0, 3
+
+# VALIGND/Q: (s1:s2 as one 2n-element vector, s1 high) >> imm8 mod n
+# elements: element i = i + count, from s2 below n and s1 above.
+.macro evfb_align_one vd, q, esz         /* v5: n - 1, w15: count, w14: n */
+    adr  x9, evex_elem_iota
+    ldr  q4, [x9, (\esz * 16)]           /* each lane's element number in a quarter */
+    mov  w9, ((16 >> \esz) * \q)
+    add  w9, w9, w15
+    evf_dupmask v6, \esz, 9
+.if \esz == 2
+    add  v4.4s, v4.4s, v6.4s             /* i + count */
+.else
+    add  v4.2d, v4.2d, v6.2d
+.endif
+    mov  v7.16b, v4.16b                  /* (kept: the select is bit log2(n)) */
+    evf_bidx v4, v7, v5, \esz
+    tbl  \vd\().16b, {v20.16b, v21.16b, v22.16b, v23.16b}, v4.16b
+    tbl  v6.16b, {v16.16b, v17.16b, v18.16b, v19.16b}, v4.16b
+    evf_dupmask v4, \esz, 14
+.if \esz == 2
+    cmtst v4.4s, v7.4s, v4.4s
+.else
+    cmtst v4.2d, v7.2d, v4.2d
+.endif
+    bit  \vd\().16b, v6.16b, v4.16b
+.endm
+.macro evfb_align esz
+    evf_nelem \esz
+    mov  w14, w9
+    sub  w9, w9, 1
+    and  w15, w12, w9                    /* the count: imm8 mod n */
+    evf_dupmask v5, \esz, 9
+    evfb_align_one v0, 0, \esz
+    evfb_align_one v1, 1, \esz
+    evfb_align_one v2, 2, \esz
+    evfb_align_one v3, 3, \esz
+.endm
+evex_full alignd, evfb_align, 2
+evex_full alignq, evfb_align, 3
+
+# VSHUFI32x4/64x2, VSHUFF32x4/64x2: the result's 128-bit lanes from s1's
+# (the lower half of them) and s2's (the upper), imm8 picking: 512 bits,
+# 2-bit fields; 256, a bit each.
+.macro evfb_lane_pick vd, tab, lane_w    /* \vd = 128-bit lane \lane_w of the table (v16 or v20 group) */
+    adr  x9, vex_iota16
+    ldr  q4, [x9]
+    lsl  w9, \lane_w, 4
+    dup  v6.16b, w9
+    add  v4.16b, v4.16b, v6.16b
+.ifc \tab,s1
+    tbl  \vd\().16b, {v16.16b, v17.16b, v18.16b, v19.16b}, v4.16b
+.else
+    tbl  \vd\().16b, {v20.16b, v21.16b, v22.16b, v23.16b}, v4.16b
+.endif
+.endm
+.macro evfb_shuf4
+    ubfx w9, w8, 16, 2
+    cmp  w9, 2
+    b.ne .Lefs_256\@
+    ubfx w10, w12, 0, 2
+    evfb_lane_pick v0, s1, w10
+    ubfx w10, w12, 2, 2
+    evfb_lane_pick v1, s1, w10
+    ubfx w10, w12, 4, 2
+    evfb_lane_pick v2, s2, w10
+    ubfx w10, w12, 6, 2
+    evfb_lane_pick v3, s2, w10
+    b    .Lefs_done\@
+.Lefs_256\@:
+    ubfx w10, w12, 0, 1
+    evfb_lane_pick v0, s1, w10
+    ubfx w10, w12, 1, 1
+    evfb_lane_pick v1, s2, w10
+.Lefs_done\@:
+.endm
+evex_full shuf4, evfb_shuf4
+
+# VINSERTI/F32x4/64x2 (word bit 39 clear) and 32x8/64x4 (set): s1 with the
+# 128-bit lane (or 256-bit half) imm8 picks replaced by s2's low one(s).
+.macro evfb_insert
+    mov  v0.16b, v16.16b
+    mov  v1.16b, v17.16b
+    mov  v2.16b, v18.16b
+    mov  v3.16b, v19.16b
+    tbnz x8, 39, .Lefi_8\@
+    ubfx w9, w8, 16, 2                   /* the lanes: 2 or 4 */
+    mov  w10, 1
+    lsl  w10, w10, w9
+    sub  w10, w10, 1
+    and  w10, w12, w10
+    cmp  w10, 1
+    b.lo .Lefi_l0\@
+    b.eq .Lefi_l1\@
+    cmp  w10, 3
+    b.lo .Lefi_l2\@
+    mov  v3.16b, v20.16b
+    b    .Lefi_done\@
+.Lefi_l2\@:
+    mov  v2.16b, v20.16b
+    b    .Lefi_done\@
+.Lefi_l1\@:
+    mov  v1.16b, v20.16b
+    b    .Lefi_done\@
+.Lefi_l0\@:
+    mov  v0.16b, v20.16b
+    b    .Lefi_done\@
+.Lefi_8\@:
+    tbnz w12, 0, .Lefi_hi\@
+    mov  v0.16b, v20.16b
+    mov  v1.16b, v21.16b
+    b    .Lefi_done\@
+.Lefi_hi\@:
+    mov  v2.16b, v20.16b
+    mov  v3.16b, v21.16b
+.Lefi_done\@:
+.endm
+evex_full insert, evfb_insert
+# VEXTRACTI/F32x4/64x2 (bit 39 clear) and 32x8/64x4 (set): the lane (half)
+# imm8 picks of s1, by the source's VL in word bits 52-53 (the word's VL is
+# the result's: 128 or 256 bits; bits 40-45 are a masked store's).
+.macro evfb_extract                     /* (the frame loaded s1 only to the result's VL: read the source itself) */
+    ubfx x9, x8, 52, 2                   /* the source's VL */
+    ubfx w11, w8, 5, 5                   /* the source register */
+    tbnz x8, 39, .Lefe_8\@
+    mov  w10, 1
+    lsl  w10, w10, w9
+    sub  w10, w10, 1
+    and  w10, w12, w10
+    evx_qaddr x14, w11, w10
+    ldr  q0, [x14]
+    b    .Lefe_done\@
+.Lefe_8\@:
+    and  w10, w12, 1
+    lsl  w10, w10, 1
+    evx_qaddr x14, w11, w10
+    ldr  q0, [x14]
+    add  w10, w10, 1
+    evx_qaddr x14, w11, w10
+    ldr  q1, [x14]
+.Lefe_done\@:
+.endm
+evex_full extract, evfb_extract
+
+# ---- the in-lane shuffles with an imm8: tbl indices built from it (VEX's
+# take theirs from the code stream; these from w12). q0 = s1, q1 = s2; the
+# quarter in w13. ----
+.macro evb_dsel lane, sh, base           /* v5.s[\lane] = the dword (imm8 >> \sh) & 3 picks, plus \base bytes */
+    ubfx w9, w12, \sh, 2
+    lsl  w9, w9, 2
+    add  w9, w9, \base
+    mov  w10, 0x01010101
+    mul  w9, w9, w10
+    movz w10, 0x0100
+    movk w10, 0x0302, lsl 16
+    add  w9, w9, w10
+    mov  v5.s[\lane], w9
+.endm
+.macro evb_pshufd                        /* VPSHUFD, VPERMILPS imm8: s2's dwords */
+    evb_dsel 0, 0, 0
+    evb_dsel 1, 2, 0
+    evb_dsel 2, 4, 0
+    evb_dsel 3, 6, 0
+    tbl  v0.16b, {v1.16b}, v5.16b
+.endm
+.macro evb_shufps                        /* VSHUFPS: two dwords of s1, then two of s2 */
+    evb_dsel 0, 0, 0
+    evb_dsel 1, 2, 0
+    evb_dsel 2, 4, 16
+    evb_dsel 3, 6, 16
+    tbl  v0.16b, {v0.16b, v1.16b}, v5.16b
+.endm
+.macro evb_wsel lane, sh, base           /* v5.h[\lane]: the word (imm8 >> \sh) & 3 picks, plus \base bytes */
+    ubfx w9, w12, \sh, 2
+    lsl  w9, w9, 1
+    add  w9, w9, \base
+    mov  w10, 0x0101
+    mul  w9, w9, w10
+    add  w9, w9, 0x100
+    mov  v5.h[\lane], w9
+.endm
+.macro evb_pshufhw hi                    /* VPSHUFHW/LW: four words of s2's half, the other half kept */
+    adr  x9, vex_iota16
+    ldr  q5, [x9]
+.if \hi
+    evb_wsel 4, 0, 8
+    evb_wsel 5, 2, 8
+    evb_wsel 6, 4, 8
+    evb_wsel 7, 6, 8
+.else
+    evb_wsel 0, 0, 0
+    evb_wsel 1, 2, 0
+    evb_wsel 2, 4, 0
+    evb_wsel 3, 6, 0
+.endif
+    tbl  v0.16b, {v1.16b}, v5.16b
+.endm
+.macro evb_shufpd                        /* VSHUFPD: s1's qword by imm8 bit 2q, s2's by bit 2q+1 */
+    lsl  w9, w13, 1
+    lsr  w10, w12, w9
+    and  w11, w10, 1
+    and  w10, w10, 2
+    lsr  w10, w10, 1
+    mov  v5.16b, v0.16b
+    cbz  w11, 1f
+    mov  v0.d[0], v5.d[1]
+    b    2f
+1:  mov  v0.d[0], v5.d[0]
+2:  cbz  w10, 3f
+    mov  v0.d[1], v1.d[1]
+    b    4f
+3:  mov  v0.d[1], v1.d[0]
+4:
+.endm
+.macro evb_permilpd_i                    /* VPERMILPD imm8: s2's qwords by imm8 bits 2q and 2q+1 */
+    lsl  w9, w13, 1
+    lsr  w10, w12, w9
+    and  w11, w10, 1
+    and  w10, w10, 2
+    cbz  w11, 1f
+    mov  v0.d[0], v1.d[1]
+    b    2f
+1:  mov  v0.d[0], v1.d[0]
+2:  cbz  w10, 3f
+    mov  v0.d[1], v1.d[1]
+    b    4f
+3:  mov  v0.d[1], v1.d[0]
+4:
+.endm
+.macro evb_permilps_v                    /* VPERMILPS var: s1's dwords by s2's (low two bits) */
+    movi v5.4s, 3
+    and  v5.16b, v1.16b, v5.16b
+    shl  v5.4s, v5.4s, 2
+    mov  w9, 0x01010101
+    dup  v6.4s, w9
+    mul  v5.4s, v5.4s, v6.4s
+    movz w9, 0x0100
+    movk w9, 0x0302, lsl 16
+    dup  v6.4s, w9
+    add  v5.4s, v5.4s, v6.4s
+    tbl  v0.16b, {v0.16b}, v5.16b
+.endm
+.macro evb_permilpd_v                    /* VPERMILPD var: s1's qwords by bit 1 of s2's */
+    ushr v5.2d, v1.2d, 1
+    shl  v5.2d, v5.2d, 63
+    cmlt v5.2d, v5.2d, 0                 /* all ones where bit 1 is set */
+    dup  v6.2d, v0.d[0]
+    dup  v7.2d, v0.d[1]
+    bsl  v5.16b, v7.16b, v6.16b
+    mov  v0.16b, v5.16b
+.endm
+.macro evb_palignr                       /* VPALIGNR: (s1:s2 in the lane) >> imm8 bytes; past 31 zero */
+    adr  x9, vex_iota16
+    ldr  q5, [x9]
+    dup  v6.16b, w12
+    uqadd v5.16b, v5.16b, v6.16b         /* (saturating: imm8 + i stays >= 32 -> zero) */
+    mov  v3.16b, v1.16b                  /* the table: s2's bytes, then s1's */
+    mov  v4.16b, v0.16b
+    tbl  v0.16b, {v3.16b, v4.16b}, v5.16b
+.endm
+evex_l3 pshufd, 0, evb_pshufd
+evex_l3 shufps, 0, evb_shufps
+evex_l3 pshufhw, 0, evb_pshufhw, 1
+evex_l3 pshuflw, 0, evb_pshufhw, 0
+evex_l3 shufpd, 0, evb_shufpd
+evex_l3 permilpd_i, 0, evb_permilpd_i
+evex_l3 permilps_v, 0, evb_permilps_v
+evex_l3 permilpd_v, 0, evb_permilpd_v
+evex_l3 palignr, 0, evb_palignr

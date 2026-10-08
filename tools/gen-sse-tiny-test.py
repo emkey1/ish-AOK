@@ -130,9 +130,9 @@ int main(int argc, char **argv) {
                 else { uint32_t a = cases[c].a, b = cases[c].b; memcpy(t.x + 4 * L, &a, 4); memcpy(t.y + 4 * L, &b, 4); }
                 t.mx = modes[mi];
                 ops[oi].fn(&t);
-                unsigned f = t.st & 0x3f;
+                unsigned f = t.st;                   /* all of MXCSR: a gadget once lost its controls */
                 for (int i = 0; i < 32; i++) h = (h ^ t.o[i]) * 0x100000001b3ull;
-                h = (h ^ f) * 0x100000001b3ull;
+                for (int i = 0; i < 4; i++) h = (h ^ ((f >> (8 * i)) & 0xff)) * 0x100000001b3ull;
                 if (dump) {
                     printf("%s %#x %d:", ops[oi].name, modes[mi], c);
                     for (int i = 31; i >= 0; i--) printf("%02x", t.o[i]);
