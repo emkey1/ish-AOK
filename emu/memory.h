@@ -821,6 +821,9 @@ bool pt_is_hole(struct mem *mem, page_t start, pages_t pages);
 // the first hole. mprotect changes that many; see sys_mprotect_guest.
 pages_t pt_mapped_prefix(struct mem *mem, page_t start, pages_t pages);
 page_t pt_find_hole(struct mem *mem, pages_t size);
+// The lowest hole of `size` pages within [lo, hi), or BAD_PAGE: MAP_32BIT's
+// search (kernel/mmap.c).
+page_t pt_find_hole_in(struct mem *mem, pages_t size, page_t lo, page_t hi);
 
 // Map memory + offset into fake memory, unmapping existing mappings.
 //

@@ -2474,6 +2474,19 @@ page_t pt_find_hole(struct mem *mem, pages_t size) {
     return best;
 }
 
+page_t pt_find_hole_in(struct mem *mem, pages_t size, page_t lo, page_t hi) {
+    if (size == 0 || hi <= lo)
+        return BAD_PAGE;
+    page_t start = lo;
+    while (start < hi && hi - start >= size) {
+        page_t next = next_mapped_page_with_reservation(mem, start);
+        if (next == BAD_PAGE || next >= start + size)
+            return start;
+        start = next_unmapped_page_with_reservation(mem, next + 1);
+    }
+    return BAD_PAGE;
+}
+
 bool pt_is_hole(struct mem *mem, page_t start, pages_t pages) {
     if (!mem_page_range_valid(mem, start, pages))
         return false;

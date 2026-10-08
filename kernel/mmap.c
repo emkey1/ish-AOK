@@ -488,6 +488,9 @@ struct mmap_lock {
     uint8_t lock;
 };
 
+#define MMAP_32BIT_START 0x40000000ull
+#define MMAP_32BIT_END 0x80000000ull
+
 static guest_addr_t do_mmap(guest_addr_t addr, qword_t len, dword_t prot, dword_t flags, fd_t fd_no, qword_t offset,
         const struct vm_limits *lim, const struct mmap_lock *lock) {
     int err;
@@ -505,6 +508,11 @@ static guest_addr_t do_mmap(guest_addr_t addr, qword_t len, dword_t prot, dword_
     // answer is EPERM.
     if (fixed && addr == 0)
         return _EPERM;
+    // MAP_32BIT (x86-64): Linux's find_start_end places it in [1 GB, 2 GB),
+    // the lowest hole first (the legacy bottom-up search), and takes a hint
+    // only if the mapping fits below 2 GB. It was ignored: the mapping went
+    // anywhere, and a program that then used it as a 32-bit address faulted.
+    bool low32 = !fixed && (flags & MMAP_32BIT) && current->abi == GUEST_ABI_AMD64;
     if (addr != 0) {
         // A non-FIXED address is only a hint: Linux rounds an unaligned value
         // down to a page boundary rather than rejecting it. MAP_FIXED and
@@ -517,7 +525,10 @@ static guest_addr_t do_mmap(guest_addr_t addr, qword_t len, dword_t prot, dword_
         if (!guest_abi_range_valid(current->abi, addr, len))
             return _ENOMEM;
         page = PAGE(addr);
-        if (!fixed && !pt_is_hole(current->mem, page, pages)) {
+        if (low32 && addr + len > MMAP_32BIT_END) {
+            // a hint MAP_32BIT cannot honour: placed in its range instead
+            addr = 0;
+        } else if (!fixed && !pt_is_hole(current->mem, page, pages)) {
             // hint region is occupied -> let the kernel place it anywhere
             addr = 0;
         } else if ((flags & MMAP_FIXED_NOREPLACE) && !pt_is_hole(current->mem, page, pages)) {
@@ -526,7 +537,8 @@ static guest_addr_t do_mmap(guest_addr_t addr, qword_t len, dword_t prot, dword_
         }
     }
     if (addr == 0) {
-        page = pt_find_hole(current->mem, pages);
+        page = low32 ? pt_find_hole_in(current->mem, pages, PAGE(MMAP_32BIT_START), PAGE(MMAP_32BIT_END))
+                     : pt_find_hole(current->mem, pages);
         if (page == BAD_PAGE)
             return _ENOMEM;
     }

@@ -52,6 +52,11 @@ amd64_vxpage_\id:
     ldr  x14, [_ip, 16]
     add  x9, x9, x14
 7003:
+    /* AMD64_JIT_MEM_ADDR32 (bit 45): a 0x67 address, 32 bits, zero-extended
+       before any segment base. */
+    tbz  x8, 45, 7009f
+    mov  w9, w9
+7009:
     /* AMD64_JIT_MEM_FS (bit 33): an %fs-relative address, which in long mode is
        just a flat base added to the effective address. Without this every
        FS-prefixed memory instruction had to bridge -- and that is nearly all of

@@ -89,6 +89,10 @@ enum amd64_jit_mem_meta {
     AMD64_JIT_MEM_ALIGN32 = 1ul << 38,
     // An EVEX.512 one that must be 64-byte aligned.
     AMD64_JIT_MEM_ALIGN64 = 1ul << 39,
+    // A 32-bit effective address (0x67): base + index * scale + disp, or
+    // rip + disp, truncated to 32 bits before a segment base is added
+    // (amd64_vmem_addr, the LEA gadgets). (40-42 are MOVZX/MOVSX's.)
+    AMD64_JIT_MEM_ADDR32 = 1ul << 45,
 };
 
 static inline byte_t amd64_modrm_mod(byte_t modrm) {
@@ -1163,8 +1167,8 @@ __attribute__((unused)) static bool gen_amd64_m16_operand(struct gen_state *stat
     bool has_base = (meta & AMD64_JIT_MEM_HAS_BASE) != 0;
     bool has_index = (meta & AMD64_JIT_MEM_HAS_INDEX) != 0;
     bool rip_rel = (meta & AMD64_JIT_MEM_RIP_REL) != 0;
-    if (insn->address_size_prefix)
-        return false;
+    if (insn->address_size_prefix || (meta & AMD64_JIT_MEM_ADDR32))
+        return false;                           // (a 32-bit address: the generic gadgets truncate it)
     if (meta & (AMD64_JIT_MEM_FS | AMD64_JIT_MEM_GS)) {
         // %fs:disp / %gs:disp alone: x3 = the segment base, then base 17.
         // A segment with a base or index register stays generic.
@@ -8941,17 +8945,11 @@ static bool gen_amd64_decode_mem_meta(struct gen_state *state, struct tlb *tlb,
     bool rip_relative = false;
     int32_t disp = 0;
 
-    // A 0x67 address-size prefix is refused for every consumer that actually
-    // DEREFERENCES the address, because none of them truncate it to 32 bits.
-    // LEA is the exception and the only one: it computes an address and never
-    // touches memory, and under 0x67 the low 32 bits of the truncated
-    // computation equal the low 32 bits of the untruncated one (addition and
-    // left-shift are congruent mod 2^32). With the operand size below 64 the
-    // destination write keeps only those bits and zero-extends, so the result
-    // is bit-identical. REX.W would genuinely differ and stays refused.
-    bool lea_addr32_ok = insn->opcode == 0x8d && !insn->two_byte_opcode &&
-        !insn->rex.w;
-    if (mod == 3 || (insn->address_size_prefix && !lea_addr32_ok))
+    // A 0x67 that reaches here as a prefix is one gen_step64 left on the
+    // instruction because it changes more than the address (the string
+    // instructions and their kind): those arms do not come here. An effective
+    // address of 32 bits is state->amd64_addr32, marked in the meta word.
+    if (mod == 3 || insn->address_size_prefix)
         return false;
 
     if (rm_low == 4) {
@@ -9012,6 +9010,8 @@ static bool gen_amd64_decode_mem_meta(struct gen_state *state, struct tlb *tlb,
         *meta_out |= AMD64_JIT_MEM_GS;
     if (insn->rex.present)
         *meta_out |= AMD64_JIT_MEM_REX_PRESENT;
+    if (state->amd64_addr32)
+        *meta_out |= AMD64_JIT_MEM_ADDR32;
     // Every 128-bit operand this reaches is legacy SSE (VEX has its own
     // path), and legacy SSE requires it 16-byte aligned -- #GP(0) otherwise,
     // as Linux reports it (camd; tests/manual/x86/sse_align_gp.c) -- except
@@ -9077,14 +9077,26 @@ static void gen_amd64_helper_tlb_1_retint(struct gen_state *state, void *helper,
     gen(state, arg0);
 }
 
-// #UD at the instruction, ending the block. Returns false, for `return`.
-__attribute__((unused)) static bool gen_amd64_ud(struct gen_state *state) {
+// An exception raised at rip -- the instruction's for a fault, past it for a
+// trap -- ending the block (math.S amd64_raise). Returns false, for `return`.
+static void gen_amd64_raise_gadget(struct gen_state *state, int interrupt, guest_addr_t rip) {
+    extern void gadget_amd64_raise(void);
+    gen(state, (unsigned long) gadget_amd64_raise);
+    gen(state, (unsigned long) interrupt);
+    gen(state, (unsigned long) rip);
+}
+static bool gen_amd64_raise(struct gen_state *state, int interrupt, guest_addr_t rip) {
     state->amd64_ip = state->amd64_orig_ip;
     gen_amd64_flush_reg_cache(state);
     gen_amd64_flush_rip(state);
-    gen_amd64_helper_tlb_1_retint(state, amd64_jit_ud2, (unsigned long) state->amd64_orig_ip);
+    gen_amd64_raise_gadget(state, interrupt, rip);
     gen_exit(state);
     return false;
+}
+
+// #UD at the instruction, ending the block. Returns false, for `return`.
+__attribute__((unused)) static bool gen_amd64_ud(struct gen_state *state) {
+    return gen_amd64_raise(state, INT_UNDEFINED, state->amd64_orig_ip);
 }
 
 // ---------------------------------------------------------------------------
@@ -9186,7 +9198,7 @@ static int gen_amd64_alu_mem_x(struct gen_state *state, struct tlb *tlb,
         state->amd64_ip = state->amd64_orig_ip;
         gen_amd64_flush_reg_cache(state);
         gen_amd64_flush_rip(state);
-        gen_amd64_helper_tlb_1_retint(state, amd64_jit_ud2, (unsigned long) state->amd64_orig_ip);
+        gen_amd64_raise_gadget(state, INT_UNDEFINED, (unsigned long) state->amd64_orig_ip);
         gen_exit(state);
         return 0;
     }
@@ -9258,7 +9270,7 @@ static bool gen_amd64_unary(struct gen_state *state, struct tlb *tlb,
         state->amd64_ip = state->amd64_orig_ip;
         gen_amd64_flush_reg_cache(state);
         gen_amd64_flush_rip(state);
-        gen_amd64_helper_tlb_1_retint(state, amd64_jit_ud2, (unsigned long) state->amd64_orig_ip);
+        gen_amd64_raise_gadget(state, INT_UNDEFINED, (unsigned long) state->amd64_orig_ip);
         gen_exit(state);
         return false;
     }
@@ -11956,6 +11968,77 @@ static int gen_amd64_evex(struct gen_state *state, struct tlb *tlb, const struct
 #endif
 
 #if defined(__aarch64__)
+// Whether a 0x67 prefix on this instruction is inert: it changes only an
+// effective address's size, so it does nothing to an instruction without one.
+// Toolchains put it where it does nothing on purpose -- the linker relaxes
+// `call *foo@GOTPCREL(%rip)` to `addr32 call foo` (libcrypt has 220 of them),
+// and OpenSSL's perlasm pads register-only instructions with it -- and the
+// arms below refuse any 0x67, so each of those sent its block to the
+// interpreter. Not inert: a memory operand (ModRM mod != 3), the string
+// instructions, XLAT, MOV moffs, LOOP/JrCXZ, and MASKMOVQ/MASKMOVDQU (and
+// VMASKMOVDQU), whose register form stores to [rDI]; 0F 01's register forms
+// (MONITOR and its kind take rAX as an address) are left as they were.
+static bool amd64_addr32_is_inert(struct gen_state *state, struct tlb *tlb,
+        const struct amd64_jit_insn *insn) {
+    byte_t m;
+    if (!insn->two_byte_opcode) {
+        byte_t op = insn->opcode;
+        if (op == 0xc4 || op == 0xc5 || op == 0x62) {        // VEX, EVEX: the ModRM after the payload
+            unsigned skip = op == 0xc5 ? 1 : op == 0xc4 ? 2 : 3;
+            byte_t b1, opc;
+            if (!tlb_read(tlb, state->amd64_ip, &b1, 1) || !tlb_read(tlb, state->amd64_ip + skip, &opc, 1))
+                return false;
+            unsigned map = op == 0xc5 ? 1 : b1 & (op == 0x62 ? 7 : 0x1f);
+            if (map == 1 && opc == 0x77)                     // VZEROUPPER/VZEROALL: no ModRM
+                return true;
+            if (map == 1 && opc == 0xf7)                     // VMASKMOVDQU: [rDI]
+                return false;
+            return tlb_read(tlb, state->amd64_ip + skip + 1, &m, 1) && (m >> 6) == 3;
+        }
+        if (insn->has_modrm)
+            return amd64_modrm_mod(insn->modrm) == 3;
+        return !((op >= 0xa0 && op <= 0xa7) || (op >= 0xaa && op <= 0xaf) || (op >= 0x6c && op <= 0x6f) ||
+                op == 0xd7 || (op >= 0xe0 && op <= 0xe3));
+    }
+    if (insn->op2 == 0x38 || insn->op2 == 0x3a)              // the ModRM after op3
+        return tlb_read(tlb, state->amd64_ip + 1, &m, 1) && (m >> 6) == 3;
+    if (insn->op2 == 0xf7 || insn->op2 == 0x01)
+        return false;
+    if (insn->has_modrm)
+        return amd64_modrm_mod(insn->modrm) == 3;
+    return true;
+}
+
+// Whether an effective 0x67 changes only a ModRM memory operand's address:
+// any instruction with one but the string/XLAT/moffs/LOOP family (no ModRM),
+// MASKMOV* and 0F 01 (implicit addresses), and VSIB gathers/scatters (VEX
+// map 2 0x90-0x93, EVEX map 2 0x90-0x93 and 0xa0-0xa3, whose element
+// addresses are 32-bit too).
+static bool amd64_addr32_is_plain_ea(struct gen_state *state, struct tlb *tlb,
+        const struct amd64_jit_insn *insn) {
+    if (!insn->two_byte_opcode) {
+        byte_t op = insn->opcode;
+        if (op == 0xc4 || op == 0xc5 || op == 0x62) {
+            unsigned skip = op == 0xc5 ? 1 : op == 0xc4 ? 2 : 3;
+            byte_t b1, opc;
+            if (!tlb_read(tlb, state->amd64_ip, &b1, 1) || !tlb_read(tlb, state->amd64_ip + skip, &opc, 1))
+                return false;
+            unsigned map = op == 0xc5 ? 1 : b1 & (op == 0x62 ? 7 : 0x1f);
+            if (map == 1 && (opc == 0xf7 || opc == 0x77))
+                return false;
+            if (map == 2 && ((opc >= 0x90 && opc <= 0x93) || (op == 0x62 && opc >= 0xa0 && opc <= 0xa3)))
+                return false;
+            if (op == 0x62 && map == 2 && opc == 0xc6)       // the gather/scatter prefetches
+                return false;
+            return true;
+        }
+        return insn->has_modrm;
+    }
+    if (insn->op2 == 0xf7 || insn->op2 == 0x01)
+        return false;
+    return insn->has_modrm || insn->op2 == 0x38 || insn->op2 == 0x3a;
+}
+
 static int gen_step64(struct gen_state *state, struct tlb *tlb) {
     struct amd64_jit_insn insn;
     int8_t rel8;
@@ -11980,6 +12063,24 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
         return false;
     }
 
+    // 0x67 where it changes nothing comes off; where it changes only the
+    // effective address of a ModRM memory operand, it comes off too and
+    // state->amd64_addr32 carries it to the meta word, so every arm that
+    // takes its address from gen_amd64_decode_mem_meta handles it. It stays
+    // on what it changes more of -- the string instructions, XLAT, MOV
+    // moffs, LOOP/JrCXZ, MASKMOV*, 0F 01 -- and on VSIB gathers and scatters,
+    // whose element addresses it would truncate too: their own arms (or the
+    // interpreter) take those.
+    state->amd64_addr32 = false;
+    if (insn.address_size_prefix) {
+        if (amd64_addr32_is_inert(state, tlb, &insn)) {
+            insn.address_size_prefix = false;
+        } else if (amd64_addr32_is_plain_ea(state, tlb, &insn)) {
+            insn.address_size_prefix = false;
+            state->amd64_addr32 = true;
+        }
+    }
+
     state->amd64_fallback_opcode = insn.opcode;
     state->amd64_fallback_op2 = insn.op2;
     state->amd64_fallback_flags =
@@ -12001,8 +12102,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
             state->amd64_ip = state->amd64_orig_ip;
             gen_amd64_flush_reg_cache(state);
             gen_amd64_flush_rip(state);
-            gen_amd64_helper_tlb_1_retint(state, amd64_jit_ud2,
-                    (unsigned long) state->amd64_orig_ip);
+            gen_amd64_raise_gadget(state, INT_UNDEFINED, (unsigned long) state->amd64_orig_ip);
             gen_exit(state);
             return false;
         }
@@ -12146,8 +12246,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
         amd64_jit_debug("ud2 ip=%llx", (unsigned long long) state->amd64_orig_ip);
         gen_amd64_flush_reg_cache(state);
         gen_amd64_flush_rip(state);
-        gen_amd64_helper_tlb_1_retint(state, amd64_jit_ud2,
-                (unsigned long) state->amd64_orig_ip);
+        gen_amd64_raise_gadget(state, INT_UNDEFINED, (unsigned long) state->amd64_orig_ip);
         gen_exit(state);
         return false;
     }
@@ -12233,7 +12332,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
                 state->amd64_ip = state->amd64_orig_ip;
                 gen_amd64_flush_reg_cache(state);
                 gen_amd64_flush_rip(state);
-                gen_amd64_helper_tlb_1_retint(state, amd64_jit_ud2, (unsigned long) state->amd64_orig_ip);
+                gen_amd64_raise_gadget(state, INT_UNDEFINED, (unsigned long) state->amd64_orig_ip);
                 gen_exit(state);
                 return false;
             }
@@ -12257,7 +12356,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
             state->amd64_ip = state->amd64_orig_ip;
             gen_amd64_flush_reg_cache(state);
             gen_amd64_flush_rip(state);
-            gen_amd64_helper_tlb_1_retint(state, amd64_jit_ud2, (unsigned long) state->amd64_orig_ip);
+            gen_amd64_raise_gadget(state, INT_UNDEFINED, (unsigned long) state->amd64_orig_ip);
             gen_exit(state);
             return false;
         }
@@ -12573,10 +12672,51 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
         // The imm8 of the e4-e7 forms is deliberately not consumed: the fault
         // reports the instruction's own address, so nothing after the opcode
         // is ever needed.
-        gen_amd64_helper_tlb_1_retint(state, amd64_jit_port_io,
-                (unsigned long) insn.start_ip);
-        gen_exit(state);
-        return false;
+        return gen_amd64_raise(state, INT_PRIV, insn.start_ip);
+    }
+
+    // HLT (F4): #GP(0) at the instruction, as CLI and STI. INT3 (CC): the
+    // breakpoint trap, reported past it. INT imm8 (CD): Linux's 64-bit IDT lets
+    // user mode through only the #BP (3) and #OF (4) gates, as traps past the
+    // instruction; every other vector is #GP with error code vector * 8 + 2
+    // at it (camd; tests/manual/x86/gpf_siginfo.c) -- but INT 0x80, the 32-bit
+    // compat syscall gate on a Linux built with it, which AOK does not
+    // provide: #UD, as the interpreter has it. LOCK makes each #UD.
+    if (!insn.two_byte_opcode && (insn.opcode == 0xf4 || insn.opcode == 0xcc || insn.opcode == 0xcd)) {
+        if (insn.lock_prefix)
+            return gen_amd64_ud(state);
+        if (insn.opcode == 0xf4)
+            return gen_amd64_raise(state, INT_PRIV, insn.start_ip);
+        if (insn.opcode == 0xcc)
+            return gen_amd64_raise(state, INT_BREAKPOINT, state->amd64_ip);
+        byte_t vector;
+        if (!tlb_read(tlb, state->amd64_ip, &vector, 1)) {
+            state->amd64_ip = state->amd64_orig_ip;
+            state->amd64_fallback_to_interp = true;
+            return false;
+        }
+        if (vector == 3 || vector == 4)
+            return gen_amd64_raise(state, vector == 3 ? INT_BREAKPOINT : INT_OVERFLOW, state->amd64_ip + 1);
+        if (vector == 0x80)
+            return gen_amd64_raise(state, INT_UNDEFINED, insn.start_ip);
+        return gen_amd64_raise(state, INT_GPF_CODE(vector * 8 + 2), insn.start_ip);
+    }
+
+    // XLAT (D7): math.S amd64_xlat; 0x67 makes it EBX + AL, truncated.
+    if (!insn.two_byte_opcode && insn.opcode == 0xd7) {
+        if (insn.lock_prefix)
+            return gen_amd64_ud(state);
+        extern void gadget_amd64_xlat(void);
+        unsigned long flags = (insn.address_size_prefix ? 1ul : 0) |
+                (insn.seg_prefix == AMD64_SEG_FS ? AMD64_JIT_MEM_FS : 0) |
+                (insn.seg_prefix == AMD64_SEG_GS ? AMD64_JIT_MEM_GS : 0);
+        guest_addr_t xnext = state->amd64_ip;
+        gen_amd64_flush_reg_cache(state);
+        gen_amd64_flush_rip(state);
+        gen(state, (unsigned long) gadget_amd64_xlat);
+        gen(state, flags);
+        gen_amd64_defer_rip(state, xnext);
+        return true;
     }
 
     // Ring-0 two-byte instructions: #GP(0) at the instruction, as Linux
@@ -12616,10 +12756,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
         if (priv) {
             amd64_jit_debug("priv-gpf ip=%llx op2=%02x",
                     (unsigned long long) insn.start_ip, (unsigned) insn.op2);
-            gen_amd64_helper_tlb_1_retint(state, amd64_jit_port_io,
-                    (unsigned long) insn.start_ip);
-            gen_exit(state);
-            return false;
+            return gen_amd64_raise(state, INT_PRIV, insn.start_ip);
         }
     }
 
@@ -12812,7 +12949,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
             state->amd64_ip = state->amd64_orig_ip;
             gen_amd64_flush_reg_cache(state);
             gen_amd64_flush_rip(state);
-            gen_amd64_helper_tlb_1_retint(state, amd64_jit_ud2, (unsigned long) state->amd64_orig_ip);
+            gen_amd64_raise_gadget(state, INT_UNDEFINED, (unsigned long) state->amd64_orig_ip);
             gen_exit(state);
             return false;
         }
@@ -13193,7 +13330,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
             state->amd64_ip = state->amd64_orig_ip;
             gen_amd64_flush_reg_cache(state);
             gen_amd64_flush_rip(state);
-            gen_amd64_helper_tlb_1_retint(state, amd64_jit_ud2, (unsigned long) state->amd64_orig_ip);
+            gen_amd64_raise_gadget(state, INT_UNDEFINED, (unsigned long) state->amd64_orig_ip);
             gen_exit(state);
             return false;
         }
@@ -13514,7 +13651,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
                 state->amd64_fallback_to_interp = true;
                 return false;
             }
-            gen_amd64_helper_tlb_1_retint(state, amd64_jit_ud2, (unsigned long) state->amd64_orig_ip);
+            gen_amd64_raise_gadget(state, INT_UNDEFINED, (unsigned long) state->amd64_orig_ip);
             gen_exit(state);
             return false;
         }
@@ -13579,8 +13716,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
             amd64_jit_debug("prefetch-ud ip=%llx", (unsigned long long) state->amd64_orig_ip);
             gen_amd64_flush_reg_cache(state);
             gen_amd64_flush_rip(state);
-            gen_amd64_helper_tlb_1_retint(state, amd64_jit_ud2,
-                    (unsigned long) state->amd64_orig_ip);
+            gen_amd64_raise_gadget(state, INT_UNDEFINED, (unsigned long) state->amd64_orig_ip);
             gen_exit(state);
             return false;
         }
@@ -13966,7 +14102,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
             state->amd64_ip = state->amd64_orig_ip;
             gen_amd64_flush_reg_cache(state);
             gen_amd64_flush_rip(state);
-            gen_amd64_helper_tlb_1_retint(state, amd64_jit_ud2, (unsigned long) state->amd64_orig_ip);
+            gen_amd64_raise_gadget(state, INT_UNDEFINED, (unsigned long) state->amd64_orig_ip);
             gen_exit(state);
             return false;
         }
@@ -14128,7 +14264,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
             state->amd64_ip = state->amd64_orig_ip;
             gen_amd64_flush_reg_cache(state);
             gen_amd64_flush_rip(state);
-            gen_amd64_helper_tlb_1_retint(state, amd64_jit_ud2, (unsigned long) state->amd64_orig_ip);
+            gen_amd64_raise_gadget(state, INT_UNDEFINED, (unsigned long) state->amd64_orig_ip);
             gen_exit(state);
             return false;
         }
@@ -14230,7 +14366,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
                 state->amd64_ip = state->amd64_orig_ip;
                 gen_amd64_flush_reg_cache(state);
                 gen_amd64_flush_rip(state);
-                gen_amd64_helper_tlb_1_retint(state, amd64_jit_ud2, (unsigned long) state->amd64_orig_ip);
+                gen_amd64_raise_gadget(state, INT_UNDEFINED, (unsigned long) state->amd64_orig_ip);
                 gen_exit(state);
                 return false;
             }
@@ -14425,7 +14561,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
             state->amd64_ip = state->amd64_orig_ip;
             gen_amd64_flush_reg_cache(state);
             gen_amd64_flush_rip(state);
-            gen_amd64_helper_tlb_1_retint(state, amd64_jit_ud2, (unsigned long) state->amd64_orig_ip);
+            gen_amd64_raise_gadget(state, INT_UNDEFINED, (unsigned long) state->amd64_orig_ip);
             gen_exit(state);
             return false;
         }
@@ -14863,7 +14999,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
             state->amd64_ip = state->amd64_orig_ip;
             gen_amd64_flush_reg_cache(state);
             gen_amd64_flush_rip(state);
-            gen_amd64_helper_tlb_1_retint(state, amd64_jit_ud2, (unsigned long) state->amd64_orig_ip);
+            gen_amd64_raise_gadget(state, INT_UNDEFINED, (unsigned long) state->amd64_orig_ip);
             gen_exit(state);
             return false;
         }
@@ -14951,7 +15087,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
             state->amd64_ip = state->amd64_orig_ip;
             gen_amd64_flush_reg_cache(state);
             gen_amd64_flush_rip(state);
-            gen_amd64_helper_tlb_1_retint(state, amd64_jit_ud2, (unsigned long) state->amd64_orig_ip);
+            gen_amd64_raise_gadget(state, INT_UNDEFINED, (unsigned long) state->amd64_orig_ip);
             gen_exit(state);
             return false;
         }
@@ -15020,7 +15156,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
         state->amd64_ip = state->amd64_orig_ip;
         gen_amd64_flush_reg_cache(state);
         gen_amd64_flush_rip(state);
-        gen_amd64_helper_tlb_1_retint(state, amd64_jit_ud2, (unsigned long) state->amd64_orig_ip);
+        gen_amd64_raise_gadget(state, INT_UNDEFINED, (unsigned long) state->amd64_orig_ip);
         gen_exit(state);
         return false;
     }
@@ -15463,7 +15599,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
                 state->amd64_ip = state->amd64_orig_ip;
                 gen_amd64_flush_reg_cache(state);
                 gen_amd64_flush_rip(state);
-                gen_amd64_helper_tlb_1_retint(state, amd64_jit_ud2, (unsigned long) state->amd64_orig_ip);
+                gen_amd64_raise_gadget(state, INT_UNDEFINED, (unsigned long) state->amd64_orig_ip);
                 gen_exit(state);
                 return false;
             }
@@ -15759,7 +15895,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
         state->amd64_ip = state->amd64_orig_ip;
         gen_amd64_flush_reg_cache(state);
         gen_amd64_flush_rip(state);
-        gen_amd64_helper_tlb_1_retint(state, amd64_jit_ud2, (unsigned long) state->amd64_orig_ip);
+        gen_amd64_raise_gadget(state, INT_UNDEFINED, (unsigned long) state->amd64_orig_ip);
         gen_exit(state);
         return false;
     }
@@ -16153,7 +16289,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
             state->amd64_ip = state->amd64_orig_ip;
             gen_amd64_flush_reg_cache(state);
             gen_amd64_flush_rip(state);
-            gen_amd64_helper_tlb_1_retint(state, amd64_jit_ud2, (unsigned long) state->amd64_orig_ip);
+            gen_amd64_raise_gadget(state, INT_UNDEFINED, (unsigned long) state->amd64_orig_ip);
             gen_exit(state);
             return false;
         }
@@ -16485,7 +16621,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
         state->amd64_ip = state->amd64_orig_ip;
         gen_amd64_flush_reg_cache(state);
         gen_amd64_flush_rip(state);
-        gen_amd64_helper_tlb_1_retint(state, amd64_jit_ud2, (unsigned long) state->amd64_orig_ip);
+        gen_amd64_raise_gadget(state, INT_UNDEFINED, (unsigned long) state->amd64_orig_ip);
         gen_exit(state);
         return false;
     }
@@ -16745,8 +16881,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
             state->amd64_ip = state->amd64_orig_ip;
             gen_amd64_flush_reg_cache(state);
             gen_amd64_flush_rip(state);
-            gen_amd64_helper_tlb_1_retint(state, amd64_jit_ud2,
-                    (unsigned long) state->amd64_orig_ip);
+            gen_amd64_raise_gadget(state, INT_UNDEFINED, (unsigned long) state->amd64_orig_ip);
             gen_exit(state);
             return false;
         }
@@ -19274,7 +19409,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
         state->amd64_ip = state->amd64_orig_ip;
         gen_amd64_flush_reg_cache(state);
         gen_amd64_flush_rip(state);
-        gen_amd64_helper_tlb_1_retint(state, amd64_jit_ud2, (unsigned long) state->amd64_orig_ip);
+        gen_amd64_raise_gadget(state, INT_UNDEFINED, (unsigned long) state->amd64_orig_ip);
         gen_exit(state);
         return false;
     }

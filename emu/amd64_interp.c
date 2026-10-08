@@ -12741,33 +12741,6 @@ int amd64_jit_vmcall(struct cpu_state *cpu, struct tlb *tlb,
     return intr;
 }
 
-// Port I/O: IN/OUT (e4/e5 imm8, e6/e7 imm8, ec/ed dx, ee/ef dx). These are
-// ring-0 instructions -- a user-mode process needs IOPL(3) or an ioperm bitmap
-// bit, neither of which iSH grants -- so the only correct outcome is the same
-// one real hardware gives: #GP(0), which Linux turns into SIGSEGV/SI_KERNEL.
-//
-// This matters because probing for a hypervisor by faulting is a real,
-// deliberate userspace idiom, not a bug in the guest. util-linux's lscpu
-// detects VMware with the "VMXh"/port-0x5658 backdoor: it arms a SIGSEGV
-// handler, runs `in eax, dx`, and siglongjmps out of the fault to conclude
-// "not VMware". Falling through to the generic unrecognized-opcode path gave
-// SIGILL instead, which lscpu does not catch, so `lscpu` died outright on the
-// amd64 guest rather than printing a single line of output.
-//
-// rip stays AT the faulting instruction (not past it): a fault, unlike a trap,
-// reports the instruction that caused it, and the interpreter's own INT_PRIV
-// path rewinds to amd64_current_insn_rip for exactly this reason.
-//
-// JIT-side only, deliberately -- see the XGETBV gadget (math.S amd64_xgetbv) for why the
-// interpreter is not the place for this.
-int amd64_jit_port_io(struct cpu_state *cpu, struct tlb *tlb,
-        unsigned long insn_ip) {
-    (void) tlb;
-    cpu->amd64_rip = (qword_t) insn_ip;
-    amd64_sync_legacy_regs(cpu);
-    return INT_PRIV;
-}
-
 enum amd64_jit_mem_meta {
     AMD64_JIT_MEM_OPCODE_SHIFT = 0,
     AMD64_JIT_MEM_REG_SHIFT = 8,
@@ -14559,18 +14532,6 @@ amd64_jit_sse3_pf:
     cpu->amd64_rip = saved_rip;
     amd64_sync_legacy_regs(cpu);
     return INT_PF;
-}
-
-// UD2 (0F 0B). Its entire architectural job is to raise #UD, and it is emitted
-// deliberately -- glibc, the kernel's BUG(), and __builtin_trap() all use it.
-// It had no arm, so a compiler-inserted trap threw away the whole block it
-// terminated. Raising the interrupt from a bridge keeps that block compiled.
-int amd64_jit_ud2(struct cpu_state *cpu, struct tlb *tlb,
-        unsigned long start_ip) {
-    (void) tlb;
-    cpu->amd64_rip = (qword_t) start_ip;
-    amd64_sync_legacy_regs(cpu);
-    return INT_UNDEFINED;
 }
 
 int cpu_run_to_interrupt_amd64(struct cpu_state *cpu, struct tlb *tlb) {

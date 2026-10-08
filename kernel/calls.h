@@ -95,6 +95,9 @@ guest_addr_t sys_brk_guest(guest_addr_t new_brk);
 #define PROT_SEM_ 0x8
 #define MMAP_FIXED 0x10
 #define MMAP_ANONYMOUS 0x20
+// x86-64's only (arch/x86 uapi): the mapping in the first 2 GB, as JITs that
+// keep 32-bit pointers or rel32 branches into it ask for (kernel/mmap.c).
+#define MMAP_32BIT 0x40
 // The same value on every guest architecture (asm-generic, which x86 shares).
 #define MMAP_LOCKED 0x2000
 #define MMAP_FIXED_NOREPLACE 0x100000

@@ -3087,6 +3087,9 @@ def_amd64_cached_logic_reg_reg _nf
     ldr x14, [_ip, 16]
     add x9, x9, x14
 3:
+    tbz x8, 45, 6f                       /* a 0x67 address: 32 bits */
+    mov w9, w9
+6:
     cmp x11, 64
     b.eq 4f
     cmp x11, 32
@@ -3124,6 +3127,9 @@ def_amd64_cached_logic_reg_reg _nf
     ldr x14, [_ip, 16]
     add x9, x9, x14
 3:
+    tbz x8, 45, 6f                       /* a 0x67 address: 32 bits */
+    mov w9, w9
+6:
     amd64_write_low_or_mem x10, x9, x11
     gret 3
 
@@ -8804,6 +8810,43 @@ amd64_gen_string \op, 8, 64, 3
     str  x14, [x15, 2*8]
     str  x12, [x15, 3*8]
     gret 1
+# An exception the instruction raises: [interrupt][rip] -- rip the
+# instruction's for a fault (#UD, #GP), past it for a trap (INT3, INT 3/4).
+# What the kernel delivers (kernel/calls.c) reads amd64_rip; no fault
+# address.
+.gadget amd64_raise
+    ldr  x8, [_ip, 8]
+    str  x8, [_cpu, CPU_amd64_rip]
+    str  xzr, [_cpu, CPU_segfault_addr]
+    strb wzr, [_cpu, CPU_segfault_was_write]
+    strb wzr, [_cpu, CPU_segfault_reported]
+    ldr  x0, [_ip]
+    b    jit_exit
+
+# XLAT (D7): AL = [RBX + AL zero-extended] -- [EBX + AL] truncated to 32 bits
+# with 0x67 (bit 0) -- plus FS's or GS's base (bits 33, 36, as meta has
+# them). [flags], gret 1; rip flushed to the instruction for a fault.
+.gadget amd64_xlat
+    ldr  x8, [_ip]
+    add  x11, _cpu, CPU_amd64_regs
+    ldr  x9, [x11, 3 * 8]
+    ldrb w10, [x11]
+    add  x9, x9, x10
+    tbz  x8, 0, 1f
+    mov  w9, w9
+1:  tbz  x8, 33, 2f
+    ldr  x14, [_cpu, CPU_tls_ptr]
+    add  x9, x9, x14
+2:  tbz  x8, 36, 3f
+    ldr  x14, [_cpu, CPU_amd64_gs_base]
+    add  x9, x9, x14
+3:  amd64_vread_prep 1, xlat
+    ldrb w12, [x9]
+    add  x11, _cpu, CPU_amd64_regs
+    strb w12, [x11]
+    gret 1
+    amd64_vread_bullshit 1, xlat
+
 .gadget amd64_xgetbv
     add  x14, _cpu, CPU_amd64_regs
     ldr  w9, [x14, 1*8]

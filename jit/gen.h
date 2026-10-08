@@ -44,6 +44,9 @@ struct gen_state {
     // bcond_nf_* family and skip the serializing `msr nzcv` reload.
     bool arm64_flags_live;
     bool amd64_fallback_to_interp;
+    // This instruction's effective address is 32 bits (an effective 0x67,
+    // taken off the prefixes): gen_amd64_decode_mem_meta marks the meta word.
+    bool amd64_addr32;
     bool amd64_abort_block_to_interp;
     bool amd64_deferred_rip_valid;
     bool amd64_reg_cache_valid;

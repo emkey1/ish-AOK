@@ -448,6 +448,7 @@ x86/amd64_evex_ud.c
 x86/amd64_incdec.c
 x86/amd64_ff_indirect.c
 x86/amd64_odd_shapes.c
+x86/amd64_addr32.c
 x86/amd64_cmpxchg16b.c
 x86/amd64_0fae.c
 x86/amd64_iret.c
