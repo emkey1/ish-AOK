@@ -111,7 +111,7 @@ static void format_cpuid_flags(char *buf, size_t size) {
     };
     static const char *const leaf7_ecx_names[32] = {
         [1] = "avx512vbmi", [6] = "avx512_vbmi2", [8] = "gfni", [9] = "vaes", [10] = "vpclmulqdq",
-        [11] = "avx512_vnni", [12] = "avx512_bitalg", [14] = "avx512_vpopcntdq",
+        [11] = "avx512_vnni", [12] = "avx512_bitalg", [14] = "avx512_vpopcntdq", [22] = "rdpid",
     };
     dword_t eax = 1, ebx = 0, ecx = 0, edx = 0;
 

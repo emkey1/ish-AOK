@@ -247,7 +247,8 @@ static inline dword_t cpuid_leaf7_ecx_features(void) {
         | (1u << 10)    // vpclmulqdq
         | (1u << 11)    // avx512_vnni
         | (1u << 12)    // avx512_bitalg
-        | (1u << 14);   // avx512_vpopcntdq
+        | (1u << 14)    // avx512_vpopcntdq
+        | (1u << 22);   // rdpid
 #endif
 }
 
@@ -318,6 +319,9 @@ static inline dword_t cpuid_leaf80000001_edx_features(void) {
     if (cpuid_guest_supports_long_mode()) {
         features |= (1 << 11); // syscall/sysret
         features |= (1 << 29); // lm
+#if CPUID_ADVERTISE_VECTOR_STATE
+        features |= (1 << 27); // rdtscp (gadgets on aarch64 hosts; IA32_TSC_AUX is getcpu's CPU)
+#endif
     }
     return features;
 }

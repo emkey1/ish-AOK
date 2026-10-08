@@ -364,6 +364,20 @@ static int p_lzcnt(void) {
 }
 #endif
 
+static int p_rdpid(void) {
+    unsigned long r = 0;
+    __asm__ volatile("rdpid %0" : "+r"(r));
+    return 0;
+}
+
+#ifdef __x86_64__
+static int p_rdtscp(void) {
+    unsigned a, d, c;
+    __asm__ volatile("rdtscp" : "=a"(a), "=d"(d), "=c"(c));
+    return 0;
+}
+#endif
+
 static int p_fma(void) {
     __asm__ volatile("vfmadd231ps %%xmm0,%%xmm0,%%xmm0" : : : "memory");
     return 0;
@@ -494,6 +508,7 @@ static const struct feature features[] = {
     { "avx512_vnni",        7, 0, 'c', 11, p_avx512_vnni,        0 },
     { "avx512_bitalg",      7, 0, 'c', 12, p_avx512_bitalg,      0 },
     { "avx512_vpopcntdq",   7, 0, 'c', 14, p_avx512_vpopcntdq,   0 },
+    { "rdpid",              7, 0, 'c', 22, p_rdpid,              0 },
     // leaf 7 subleaf 1, eax
     { "avx_vnni",           7, 1, 'a',  4, p_avx_vnni,           0 },
     { "avx512_bf16",        7, 1, 'a',  5, p_avx512_bf16,        0 },
@@ -503,6 +518,7 @@ static const struct feature features[] = {
     // leaf 0x80000001, ecx
     { "lahf_lm",   0x80000001, 0, 'c',  0, p_lahf,       F_AMD64_ONLY },
     { "abm",       0x80000001, 0, 'c',  5, p_lzcnt,      F_AMD64_ONLY },
+    { "rdtscp",    0x80000001, 0, 'd', 27, p_rdtscp,     F_AMD64_ONLY },
 #endif
 };
 

@@ -12835,11 +12835,17 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
             gen_amd64_defer_rip(state, next_ip);
             return true;
         }
-        // RDTSCP (0f 01 f9): not advertised (CPUID 0x80000001 EDX bit 27: the
-        // TSC_AUX it reads, getcpu's CPU number, lives in kernel state no
-        // gadget sees yet), so #UD, as on a CPU without it.
-        if (modrm == 0xf9)
-            return gen_amd64_ud(state);
+        // RDTSCP (0f 01 f9): RDTSC and ECX = IA32_TSC_AUX, getcpu's CPU
+        // number (math.S amd64_rdtscp; emu/cpu.h tsc_aux).
+        if (modrm == 0xf9) {
+            next_ip = state->amd64_ip + sizeof(modrm);
+            state->amd64_ip = next_ip;
+            extern void gadget_amd64_rdtscp(void);
+            gen_amd64_flush_reg_cache(state);
+            gen(state, (unsigned long) gadget_amd64_rdtscp);
+            gen_amd64_defer_rip(state, next_ip);
+            return true;
+        }
         // VMCALL (0f 01 c1): AOK_VCLOCK, the clock read AOK's vDSO makes
         // (vdso/amd64/vdso.S) -- see amd64_vmcall.
         if (modrm == 0xc1) {
@@ -14535,6 +14541,22 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
         }
     }
 #endif
+
+    // RDPID r64 (F3 0F C7 /7, register form): IA32_TSC_AUX, zero-extended
+    // (math.S amd64_rdpid). The operand size is 64 whatever 0x66 or REX.W say.
+    if (insn.two_byte_opcode && insn.has_modrm && insn.op2 == 0xc7 && insn.rep_mode == amd64_jit_repz &&
+            amd64_modrm_reg(insn.modrm) == 7 && amd64_modrm_mod(insn.modrm) == 3) {
+        if (insn.lock_prefix)
+            return gen_amd64_ud(state);
+        next_ip = state->amd64_ip + 1;
+        state->amd64_ip = next_ip;
+        extern void gadget_amd64_rdpid(void);
+        gen_amd64_flush_reg_cache(state);
+        gen(state, (unsigned long) gadget_amd64_rdpid);
+        gen(state, (unsigned long) (amd64_modrm_rm(insn.modrm) | (insn.rex.b ? 8 : 0)));
+        gen_amd64_defer_rip(state, next_ip);
+        return true;
+    }
 
     // imul reg, rm (0F AF): memory / 16-bit forms bridge to the helper.
     // 0F C7 /1 CMPXCHG8B / CMPXCHG16B, memory operand: math.S's
@@ -21071,8 +21093,13 @@ void helper_aad(struct cpu_state *cpu, uint32_t base);
 void helper_rdtsc(struct cpu_state *cpu);
 #if defined(__aarch64__)
 #define RDTSC g(rdtsc)
+// RDTSCP: RDTSC and ECX = IA32_TSC_AUX; RDPID: _tmp = TSC_AUX, stored (misc.S)
+#define RDTSCP() g(rdtscp)
+#define RDPID(dst) do { g(rdpid_tmp); store(dst, 32); } while (0)
 #else
 #define RDTSC h(helper_rdtsc)
+#define RDTSCP() UNDEFINED                      // (advertised on aarch64 hosts only)
+#define RDPID(dst) UNDEFINED
 #endif
 #if defined(__aarch64__)
 #define CPUID() gg(cpuid, (unsigned long) &cpuid_tables[0])

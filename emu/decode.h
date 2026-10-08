@@ -239,6 +239,9 @@ restart:
                                PRIV();
                                break;
                            }
+                           if (modrm.type == modrm_reg && modrm.opcode == 7 && modrm.base == reg_ecx) {
+                               RDTSCP(); break;      // (0f 01 f9)
+                           }
                            if (modrm.type != modrm_reg || modrm.opcode != 2 || modrm.base != reg_eax)
                                UNDEFINED;
                            XGETBV(); break;
@@ -2141,6 +2144,13 @@ restart:
 
                         case 0xc2: TRACEI("cmpss xmm:modrm, xmm, imm8");
                                    READMODRM; READIMM8; V_OP_IMM(single_fcmp, xmm_modrm_val, xmm_modrm_reg,32); break;
+
+                        // RDPID r32 (F3 0F C7 /7, register form): IA32_TSC_AUX
+                        case 0xc7: TRACEI("rdpid modrm");
+                                   READMODRM;
+                                   if (modrm.type != modrm_reg || modrm.opcode != 7)
+                                       UNDEFINED;
+                                   RDPID(modrm_val); break;
 
                         default: TRACE("undefined"); UNDEFINED;
                     }

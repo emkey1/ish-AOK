@@ -5,6 +5,7 @@
 #include "app/DiagnosticsBridge.h"
 #include "jit/jit.h"
 #include "kernel/calls.h"
+#include "kernel/rseq.h"
 #include "kernel/seccomp.h"
 #include "kernel/acct.h"
 #include "kernel/checkpoint.h"
@@ -7378,6 +7379,9 @@ void handle_interrupt(int interrupt) {
     // An interrupt sent while a stop above held the task is owed from the
     // moment that stop ends, as Linux's get_signal loops back to look again.
     ptrace_trap_stop_if_pending();
+    // RDTSCP's and RDPID's IA32_TSC_AUX: getcpu's CPU number, which only a
+    // syscall can have changed (emu/cpu.h).
+    current->cpu.tsc_aux = (dword_t) task_current_cpu(current);
 }
 
 

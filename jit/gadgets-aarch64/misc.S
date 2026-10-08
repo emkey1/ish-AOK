@@ -10,6 +10,19 @@
     mov  edx, w8
     gret
 
+# RDTSCP: RDTSC, and ECX = IA32_TSC_AUX (cpu_state tsc_aux). RDPID r32's
+# value into _tmp, which gen.c's store puts in the register.
+.gadget rdtscp
+    host_counter_ns x8, x9, x10, x11
+    mov  eax, w8
+    lsr  x8, x8, 32
+    mov  edx, w8
+    ldr  ecx, [_cpu, CPU_tsc_aux]
+    gret
+.gadget rdpid_tmp
+    ldr  _tmp, [_cpu, CPU_tsc_aux]
+    gret
+
 .gadget cpuid
     ldr  x10, [_ip]                  /* cpuid_tables[0] */
     mov  w8, eax

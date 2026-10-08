@@ -461,6 +461,13 @@ struct cpu_state {
     // fault that raised a signal. Linux keeps it per thread (thread.cr2) and
     // writes it into EVERY later frame, a #GP's included; fork copies it.
     guest_addr_t pf_cr2;
+
+    // x86 IA32_TSC_AUX as RDTSCP and RDPID read it: Linux's (node << 12) |
+    // cpu, the CPU number getcpu reports (kernel/rseq.c task_current_cpu).
+    // The kernel keeps it current: after every interrupt it handles (a
+    // syscall can register rseq, exec, change the CPU count) and for a task
+    // clone or exec starts (rseq_fork, rseq_exec).
+    dword_t tsc_aux;
 };
 
 #define AMD64_SREG_ES 0

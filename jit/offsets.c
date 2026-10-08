@@ -53,6 +53,7 @@ void cpu() {
     OFFSET(CPU, cpu_state, avx512_k);
     OFFSET(CPU, cpu_state, mm);
     OFFSET(CPU, cpu_state, mxcsr);
+    OFFSET(CPU, cpu_state, tsc_aux);
     MACRO(XCR0_X87_);
     MACRO(XCR0_SSE_);
     MACRO(XCR0_YMM_);

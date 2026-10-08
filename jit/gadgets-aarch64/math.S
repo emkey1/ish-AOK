@@ -8092,6 +8092,26 @@ amd64_xm_store store32, 4
     str  x8, [x14, 2*8]
     gret
 
+# RDTSCP (0F 01 F9): RDTSC, and ECX = IA32_TSC_AUX (cpu_state tsc_aux,
+# getcpu's CPU number); the upper halves zeroed. RDPID r64 (F3 0F C7 /7):
+# [reg], the register = TSC_AUX, zero-extended.
+.gadget amd64_rdtscp
+    host_counter_ns x8, x9, x10, x11
+    add  x14, _cpu, CPU_amd64_regs
+    mov  w9, w8
+    str  x9, [x14]
+    lsr  x8, x8, 32
+    str  x8, [x14, 2*8]
+    ldr  w9, [_cpu, CPU_tsc_aux]
+    str  x9, [x14, 1*8]
+    gret
+.gadget amd64_rdpid
+    ldr  x8, [_ip]
+    ldr  w9, [_cpu, CPU_tsc_aux]
+    add  x14, _cpu, CPU_amd64_regs
+    str  x9, [x14, x8, lsl 3]
+    gret 1
+
 .gadget amd64_ldmxcsr_m
     ldr  x8, [_ip]
     ldr  x9, [_ip, 8]

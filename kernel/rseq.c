@@ -203,6 +203,7 @@ void rseq_fork(struct task *child, bool shares_mm) {
     // new address space holds.
     if (shares_mm) {
         rseq_forget(child);
+        child->cpu.tsc_aux = (dword_t) task_current_cpu(child);
         return;
     }
     // The copied address space inherited the parent's counts along with
@@ -211,12 +212,14 @@ void rseq_fork(struct task *child, bool shares_mm) {
         atomic_store(&child->mm->rseq_cpu_users[i], 0);
     if (child->rseq_area != 0 && child->rseq_cpu >= 0 && child->rseq_cpu < 64)
         atomic_store(&child->mm->rseq_cpu_users[child->rseq_cpu], 1);
+    child->cpu.tsc_aux = (dword_t) task_current_cpu(child);
 }
 
 void rseq_exec(struct task *task) {
     if (task->rseq_area != 0)
         rseq_slot_give(task->mm, task->rseq_cpu);
     rseq_forget(task);
+    task->cpu.tsc_aux = (dword_t) task_current_cpu(task);
 }
 
 void rseq_exit(struct task *task) {
