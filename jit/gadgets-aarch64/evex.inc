@@ -2989,3 +2989,960 @@ evex_l3 reduceps, 2, evb_rndscale, s, 4s, 1, 1
 evex_l3 reducepd, 2, evb_rndscale, d, 2d, 1, 1
 evex_l3 reducess, 2, evb_rndscale, s, 4s, 0, 1
 evex_l3 reducesd, 2, evb_rndscale, d, 2d, 0, 1
+
+# ---- VSCALEF: s1 * 2^floor(s2) (scalar: s1 the upper elements too), {er}.
+# The SDM's special cases first (a NaN propagated as a two-operand op's,
+# but a QNaN s1 with s2 +inf is +inf and with -inf +0;
+# s2 +inf: s1's sign's inf, or the default NaN (IE) for s1 0; s2 -inf: 0 of
+# s1's sign, or the default NaN (IE) for s1 inf; s1 0 or inf: itself), into
+# EVEX_STAGE + 128 (the lanes) and + 144 (their values). The others as
+# musl's scalbn: the scale floored and clamped, then up to two exact steps
+# (by 2^emax, or by 2^(emin + mant + 1), which keeps a later rounding
+# single), and one multiply by the rest, rounded once, and FTZ (exact at
+# an unbounded exponent, its tininess is the same before rounding or
+# after: no xf_tiny). DAZ, or DE, as a two-operand op. ----
+.macro evf_scstep t, a, p                /* v4 *= the step v6 (n) calls for; n adjusted */
+.ifc \t,s
+    mov  w9, 127
+    dup  v20.4s, w9
+    mov  w9, -126
+    dup  v21.4s, w9
+.else
+    mov  x9, 1023
+    dup  v20.2d, x9
+    mov  x9, -1022
+    dup  v21.2d, x9
+.endif
+    cmgt v22.\a, v6.\a, v20.\a           /* above emax */
+    cmgt v23.\a, v21.\a, v6.\a           /* below emin */
+    xf_pow2 v24, \t, 0
+.ifc \t,s
+    xf_pow2 v25, s, 127
+    bit  v24.16b, v25.16b, v22.16b
+    xf_pow2 v25, s, -102
+    bit  v24.16b, v25.16b, v23.16b
+    mov  w9, 127
+    dup  v25.4s, w9
+    and  v25.16b, v25.16b, v22.16b
+    sub  v6.4s, v6.4s, v25.4s
+    mov  w9, 102
+    dup  v25.4s, w9
+    and  v25.16b, v25.16b, v23.16b
+    add  v6.4s, v6.4s, v25.4s
+.else
+    xf_pow2 v25, d, 1023
+    bit  v24.16b, v25.16b, v22.16b
+    xf_pow2 v25, d, -969
+    bit  v24.16b, v25.16b, v23.16b
+    mov  x9, 1023
+    dup  v25.2d, x9
+    and  v25.16b, v25.16b, v22.16b
+    sub  v6.2d, v6.2d, v25.2d
+    mov  x9, 969
+    dup  v25.2d, x9
+    and  v25.16b, v25.16b, v23.16b
+    add  v6.2d, v6.2d, v25.2d
+.endif
+    xc fmul, 4, 4, 24, \t, \a, \p
+.endm
+.macro evb_scalef t, a, p
+    xf_consts \t
+    xf_lanes \t, \p
+    mov  v4.16b, v0.16b                  /* v4 s1, v5 s2: DAZ'd; DE for s1 only, */
+    mov  v5.16b, v1.16b                  /* and only where s2 is finite (as SDE) */
+    xf_denorm v3, v0, \a, v2
+    xf_denorm v6, v1, \a, v2
+    orr  v2.16b, v3.16b, v6.16b
+    and  v2.16b, v2.16b, v7.16b
+    xf_any v2, .Lsf_pre\@
+    ldr  w9, [_cpu, CPU_mxcsr]
+    tbz  w9, 6, .Lsf_de\@
+    orr  v18.16b, v16.16b, v17.16b
+    and  v3.16b, v3.16b, v18.16b
+    and  v6.16b, v6.16b, v18.16b
+    bic  v4.16b, v4.16b, v3.16b
+    bic  v5.16b, v5.16b, v6.16b
+    b    .Lsf_pre\@
+.Lsf_de\@:
+    and  v3.16b, v3.16b, v7.16b
+    evf_expfield v2, v1, \t
+    evf_dupc v6, \t, 255, 2047
+    cmeq v2.\a, v2.\a, v6.\a             /* s2 inf or NaN */
+    bic  v3.16b, v3.16b, v2.16b
+    xf_any v3, .Lsf_pre\@
+    ldr  w9, [_cpu, CPU_mxcsr]           /* (evf_dupc took w9) */
+    orr  w9, w9, 2
+    str  w9, [_cpu, CPU_mxcsr]
+.Lsf_pre\@:
+    xc fcmeq, 21, 4, 4, \t, \a, \p       /* IE for an SNaN */
+    xc fcmeq, 21, 5, 5, \t, \a, \p
+    xf_isnan v20, v4, \a
+    xf_isnan v21, v5, \a
+    orr  v20.16b, v20.16b, v21.16b       /* v20: a NaN */
+    shl  v21.\a, v4.\a, 1
+    cmeq v21.\a, v21.\a, 0               /* v21: s1 0 */
+    evf_dupc v23, \t, 255, 2047
+    evf_expfield v22, v4, \t
+    cmeq v22.\a, v22.\a, v23.\a
+    bic  v22.16b, v22.16b, v20.16b       /* v22: s1 inf */
+    evf_expfield v24, v5, \t
+    cmeq v24.\a, v24.\a, v23.\a
+    bic  v24.16b, v24.16b, v20.16b       /* v24: s2 inf */
+    cmlt v25.\a, v5.\a, 0                /* v25: s2 negative */
+    bic  v26.16b, v21.16b, v25.16b
+    and  v26.16b, v26.16b, v24.16b       /* +inf * 2^... of 0 */
+    and  v27.16b, v22.16b, v25.16b
+    and  v27.16b, v27.16b, v24.16b       /* inf * 2^-inf */
+    orr  v26.16b, v26.16b, v27.16b       /* v26: invalid */
+    mov  v28.16b, v4.16b                 /* v28: the values; s1 by default */
+    orr  v29.16b, v16.16b, v17.16b
+    bic  v29.16b, v4.16b, v29.16b        /* s1's sign */
+    bic  v30.16b, v16.16b, v25.16b
+    orr  v29.16b, v29.16b, v30.16b       /* s2 inf: inf or 0, s1's sign */
+    orr  v30.16b, v21.16b, v22.16b
+    bic  v30.16b, v24.16b, v30.16b
+    bit  v28.16b, v29.16b, v30.16b
+    xf_defnan \t
+    orr  v30.16b, v20.16b, v26.16b
+    bit  v28.16b, v18.16b, v30.16b       /* (a NaN: xf_nanfix's later) */
+    xf_isnan v29, v4, \a                 /* the SDM's: a QNaN s1, s2 +inf: +inf; -inf: +0 */
+    and  v29.16b, v29.16b, v4.16b
+    cmtst v29.\a, v29.\a, v19.\a         /* (s1 a QNaN) */
+    shl  v31.\a, v5.\a, 1
+    shl  v27.\a, v16.\a, 1
+    cmeq v31.\a, v31.\a, v27.\a          /* (s2 inf) */
+    and  v29.16b, v29.16b, v31.16b
+    bic  v31.16b, v16.16b, v25.16b
+    bit  v28.16b, v31.16b, v29.16b
+    and  v26.16b, v26.16b, v7.16b
+    xf_any v26, .Lsf_ie\@
+    ldr  w9, [_cpu, CPU_mxcsr]
+    orr  w9, w9, 1
+    str  w9, [_cpu, CPU_mxcsr]
+.Lsf_ie\@:
+    orr  v30.16b, v20.16b, v21.16b
+    orr  v30.16b, v30.16b, v22.16b
+    orr  v30.16b, v30.16b, v24.16b       /* v30: special */
+    mov  x9, (EVEX_STAGE + 128)
+    add  x9, _cpu, x9
+    stp  q30, q28, [x9]
+    /* the others: n = floor(s2), clamped */
+    bic  v4.16b, v4.16b, v30.16b
+    bic  v6.16b, v5.16b, v30.16b
+    and  v6.16b, v6.16b, v7.16b
+    frintm v6.\a, v6.\a
+.ifc \t,s
+    mov  w9, 0x43c80000                  /* 400.0 */
+    dup  v20.4s, w9
+.else
+    mov  x9, 0x40b0000000000000          /* 4096.0 */
+    dup  v20.2d, x9
+.endif
+    fminnm v6.\a, v6.\a, v20.\a
+    fneg v20.\a, v20.\a
+    fmaxnm v6.\a, v6.\a, v20.\a
+    fcvtzs v6.\a, v6.\a
+    evf_scstep \t, \a, \p
+    evf_scstep \t, \a, \p
+    cmgt v22.\a, v6.\a, v20.\a           /* (v20, v21: emax, emin) clamped */
+    bit  v6.16b, v20.16b, v22.16b
+    cmgt v22.\a, v21.\a, v6.\a
+    bit  v6.16b, v21.16b, v22.16b
+    evf_dupc v20, \t, 127, 1023
+    add  v6.\a, v6.\a, v20.\a
+.ifc \t,s
+    shl  v5.4s, v6.4s, 23
+.else
+    shl  v5.2d, v6.2d, 52
+.endif
+    xc fmul, 2, 4, 5, \t, \a, \p          /* (exact but for the exponent's range, so tiny */
+    xf_ftz \a                            /* before rounding is tiny after it: no xf_tiny) */
+    mov  x9, (EVEX_STAGE + 128)
+    add  x9, _cpu, x9
+    ldp  q30, q28, [x9]
+    bit  v2.16b, v28.16b, v30.16b
+    xf_nanfix \t, \a, 2
+    xf_merge \t, \p
+.endm
+evex_l3 scalefps, 2, evb_scalef, s, 4s, 1
+evex_l3 scalefpd, 2, evb_scalef, d, 2d, 1
+evex_l3 scalefss, 2, evb_scalef, s, 4s, 0
+evex_l3 scalefsd, 2, evb_scalef, d, 2d, 0
+
+# ---- VRANGE: of s1 and s2 (scalar: s1 the upper elements), imm8 bits 1-0
+# min, max, the smaller magnitude, the larger (equal magnitudes: the
+# smaller, or larger, signed value); bits 3-2 the result's sign: s1's, the
+# selected one's, +, -. -0 orders below +0. As SDE has it, a QNaN operand
+# is passed over for the other one; an SNaN gives itself quieted (IE),
+# before a QNaN, and no sign control; two QNaNs s1's (with it). DAZ, or DE. ----
+.macro evf_ordkey d, x, t                /* \d: \x's bits as a signed integer that orders as the floats */
+.ifc \t,s
+    sshr \d\().4s, \x\().4s, 31
+    ushr \d\().4s, \d\().4s, 1
+.else
+    sshr \d\().2d, \x\().2d, 63
+    ushr \d\().2d, \d\().2d, 1
+.endif
+    eor  \d\().16b, \d\().16b, \x\().16b
+.endm
+.macro evf_abskey d, x, t                /* \d: 2|x| + (x positive), unsigned */
+.ifc \t,s
+    shl  \d\().4s, \x\().4s, 1
+    ushr v31.4s, \x\().4s, 31
+    movi v30.4s, 1
+.else
+    shl  \d\().2d, \x\().2d, 1
+    ushr v31.2d, \x\().2d, 63
+    mov  x9, 1
+    dup  v30.2d, x9
+.endif
+    eor  v31.16b, v31.16b, v30.16b
+    orr  \d\().16b, \d\().16b, v31.16b
+.endm
+.macro evb_range t, a, p
+    xf_consts \t
+    xf_lanes \t, \p
+    mov  v4.16b, v0.16b                  /* v4 s1, v5 s2: DAZ'd; DE (beside a QNaN */
+    mov  v5.16b, v1.16b                  /* too, not an SNaN, as SDE) */
+    xf_denorm v3, v0, \a, v2
+    xf_denorm v6, v1, \a, v2
+    orr  v2.16b, v3.16b, v6.16b
+    and  v2.16b, v2.16b, v7.16b
+    xf_any v2, .Lrg_pre\@
+    ldr  w9, [_cpu, CPU_mxcsr]
+    tbz  w9, 6, .Lrg_de\@
+    orr  v18.16b, v16.16b, v17.16b
+    and  v3.16b, v3.16b, v18.16b
+    and  v6.16b, v6.16b, v18.16b
+    bic  v4.16b, v4.16b, v3.16b
+    bic  v5.16b, v5.16b, v6.16b
+    b    .Lrg_pre\@
+.Lrg_de\@:
+    xf_isnan v3, v0, \a                  /* (not where either is an SNaN) */
+    cmtst v6.\a, v0.\a, v19.\a
+    bic  v3.16b, v3.16b, v6.16b
+    bic  v2.16b, v2.16b, v3.16b
+    xf_isnan v3, v1, \a
+    cmtst v6.\a, v1.\a, v19.\a
+    bic  v3.16b, v3.16b, v6.16b
+    bic  v2.16b, v2.16b, v3.16b
+    xf_any v2, .Lrg_pre\@
+    orr  w9, w9, 2
+    str  w9, [_cpu, CPU_mxcsr]
+.Lrg_pre\@:
+    xc fcmeq, 21, 4, 4, \t, \a, \p       /* IE for an SNaN */
+    xc fcmeq, 21, 5, 5, \t, \a, \p
+    xf_isnan v24, v4, \a
+    cmtst v26.\a, v4.\a, v19.\a
+    and  v25.16b, v24.16b, v26.16b       /* v25: s1 a QNaN */
+    bic  v24.16b, v24.16b, v26.16b       /* v24: s1 an SNaN */
+    xf_isnan v26, v5, \a
+    cmtst v27.\a, v5.\a, v19.\a
+    and  v28.16b, v26.16b, v27.16b       /* v28: s2 a QNaN */
+    bic  v26.16b, v26.16b, v27.16b       /* v26: s2 an SNaN */
+    mov  v6.16b, v4.16b                  /* v6, v3: a QNaN passed over */
+    bit  v6.16b, v5.16b, v25.16b
+    mov  v3.16b, v5.16b
+    bit  v3.16b, v4.16b, v28.16b
+    tbnz w12, 1, .Lrg_abs\@
+    evf_ordkey v20, v6, \t
+    evf_ordkey v21, v3, \t
+    cmgt v22.\a, v20.\a, v21.\a          /* s1 above s2 */
+    tbz  w12, 0, .Lrg_sel\@
+    cmgt v22.\a, v21.\a, v20.\a
+    b    .Lrg_sel\@
+.Lrg_abs\@:
+    evf_abskey v20, v6, \t
+    evf_abskey v21, v3, \t
+    cmhi v22.\a, v20.\a, v21.\a
+    tbz  w12, 0, .Lrg_sel\@
+    cmhi v22.\a, v21.\a, v20.\a
+.Lrg_sel\@:
+    mov  v2.16b, v6.16b
+    bit  v2.16b, v3.16b, v22.16b         /* min: s2 where s1 is above; max: where below */
+    and  v30.16b, v25.16b, v28.16b       /* two QNaNs: s1's (signed as the rest) */
+    bit  v2.16b, v4.16b, v30.16b
+    orr  v23.16b, v16.16b, v17.16b       /* (all but the sign) */
+    ubfx w9, w12, 2, 2
+    cbz  w9, .Lrg_s1\@
+    cmp  w9, 2
+    b.lo .Lrg_sdone\@                    /* the selected one's */
+    and  v2.16b, v2.16b, v23.16b         /* + */
+    b.eq .Lrg_sdone\@
+    mvn  v27.16b, v23.16b
+    orr  v2.16b, v2.16b, v27.16b         /* - */
+    b    .Lrg_sdone\@
+.Lrg_s1\@:
+    and  v2.16b, v2.16b, v23.16b
+    bic  v27.16b, v4.16b, v23.16b
+    orr  v2.16b, v2.16b, v27.16b
+.Lrg_sdone\@:
+    orr  v27.16b, v4.16b, v19.16b        /* an SNaN: s1's, else s2's, quieted, no sign control */
+    orr  v29.16b, v5.16b, v19.16b
+    bit  v2.16b, v29.16b, v26.16b
+    bit  v2.16b, v27.16b, v24.16b
+    xf_merge \t, \p
+.endm
+evex_l3 rangeps, 2, evb_range, s, 4s, 1
+evex_l3 rangepd, 2, evb_range, d, 2d, 1
+evex_l3 rangess, 2, evb_range, s, 4s, 0
+evex_l3 rangesd, 2, evb_range, d, 2d, 0
+
+# ---- VFPCLASS: k = s2's elements in any category imm8 selects: bit 0 a
+# QNaN, 1 +0, 2 -0, 3 +inf, 4 -inf, 5 a denormal, 6 negative finite, 7 an
+# SNaN. No flags; DAZ applied (as SDE has it: a denormal is then a zero). ----
+.macro evf_fpc_or bit, m                 /* v0 |= \m if imm8 bit \bit */
+    tbz  w12, \bit, .Lfpc\@
+    orr  v0.16b, v0.16b, \m\().16b
+.Lfpc\@:
+.endm
+.macro evb_fpclass t, a, p
+    xf_consts \t
+    xf_lanes \t, \p
+    xf_daz \a                            /* v5: s2, DAZ'd */
+    mov  v1.16b, v5.16b
+    movi v0.2d, 0
+    xf_isnan v20, v1, \a
+    cmtst v21.\a, v1.\a, v19.\a
+    and  v22.16b, v20.16b, v21.16b       /* QNaN */
+    evf_fpc_or 0, v22
+    bic  v22.16b, v20.16b, v21.16b       /* SNaN */
+    evf_fpc_or 7, v22
+    cmeq v22.\a, v1.\a, 0                /* +0 */
+    evf_fpc_or 1, v22
+    orr  v23.16b, v16.16b, v17.16b
+    mvn  v23.16b, v23.16b                /* (the sign bit) */
+    cmeq v22.\a, v1.\a, v23.\a           /* -0 */
+    evf_fpc_or 2, v22
+    cmeq v22.\a, v1.\a, v16.\a           /* +inf */
+    evf_fpc_or 3, v22
+    orr  v24.16b, v16.16b, v23.16b
+    cmeq v22.\a, v1.\a, v24.\a           /* -inf */
+    evf_fpc_or 4, v22
+    xf_denorm v22, v1, \a, v24           /* a denormal */
+    evf_fpc_or 5, v22
+    cmlt v22.\a, v1.\a, 0                /* negative finite: sign, exponent not all ones, not -0 */
+    and  v24.16b, v1.16b, v16.16b
+    cmeq v24.\a, v24.\a, v16.\a
+    bic  v22.16b, v22.16b, v24.16b
+    shl  v24.\a, v1.\a, 1
+    cmeq v24.\a, v24.\a, 0
+    bic  v22.16b, v22.16b, v24.16b
+    evf_fpc_or 6, v22
+    and  v0.16b, v0.16b, v7.16b          /* (scalar: element 0 only) */
+.endm
+evex_tomask fpclassps, 2, evb_fpclass, s, 4s, 1
+evex_tomask fpclasspd, 3, evb_fpclass, d, 2d, 1
+evex_tomask fpclassss, 2, evb_fpclass, s, 4s, 0
+evex_tomask fpclasssd, 3, evb_fpclass, d, 2d, 0
+
+# ---- VFIXUPIMM: each element of s1 (DAZ'd) classed as a token -- QNaN,
+# SNaN, 0, +1, -inf, +inf, negative, positive (0-7); DAZ keeps the sign
+# -- picks a 4-bit
+# response from s2's element (bits 4j+3..4j): keep the destination's, s1,
+# s1 with the quiet NaN bits set (whatever it was), the default NaN, -inf, +inf, inf of s1's sign, -0, +0, -1, +1,
+# 1/2, 90, pi/2, max, -max. imm8 raises ZE/IE by the token (in the enabled
+# elements only): 0: bits 0/1, +1: bits 2/3, SNaN: 4 (IE), -inf: 5,
+# negative: 6, +inf: 7. A scalar loop over EVEX_STAGE + 128 (s1), + 144
+# (s2), + 160 (the destination, then the result), + 176 (the enabled
+# lanes). ----
+.balign 8
+evex_fixup_s:
+    .word 0, 0, 0, 0xffc00000, 0xff800000, 0x7f800000, 0, 0x80000000
+    .word 0, 0xbf800000, 0x3f800000, 0x3f000000, 0x42b40000, 0x3fc90fdb, 0x7f7fffff, 0xff7fffff
+evex_fixup_d:
+    .quad 0, 0, 0, 0xfff8000000000000, 0xfff0000000000000, 0x7ff0000000000000, 0, 0x8000000000000000
+    .quad 0, 0xbff0000000000000, 0x3ff0000000000000, 0x3fe0000000000000, 0x4056800000000000
+    .quad 0x3ff921fb54442d18, 0x7fefffffffffffff, 0xffefffffffffffff
+.macro evb_fixupimm t, p
+    evx_kmask v28, w13
+    mov  x9, (EVEX_STAGE + 128)
+    add  x9, _cpu, x9
+    stp  q0, q1, [x9]
+    stp  q2, q28, [x9, 32]
+    mov  w10, 0                          /* the element */
+.Lfx_loop\@:
+.ifc \t,s
+    cmp  w10, (4 * \p + 1 - \p)          /* (4 elements, or 1) */
+.else
+    cmp  w10, (2 * \p + 1 - \p)
+.endif
+    b.hs .Lfx_done\@
+    mov  x9, (EVEX_STAGE + 128)
+    add  x9, _cpu, x9
+.ifc \t,s
+    ldr  w14, [x9, x10, lsl 2]           /* s1 */
+    add  x15, x9, 16
+    ldr  w15, [x15, x10, lsl 2]          /* the table */
+    ubfx w16, w14, 23, 8
+    ubfx w17, w14, 0, 23
+    cbnz w16, 1f
+    ldr  w11, [_cpu, CPU_mxcsr]
+    tbz  w11, 6, 1f
+    and  w14, w14, 0x80000000            /* DAZ: 0 of its sign */
+    mov  w17, 0
+1:  cmp  w16, 0xff
+    b.ne 3f
+    cbz  w17, 2f
+    ubfx w11, w14, 22, 1
+    eor  w11, w11, 1                     /* QNaN 0, SNaN 1 */
+    b    7f
+2:  lsr  w11, w14, 31
+    eor  w11, w11, 1
+    add  w11, w11, 4                     /* -inf 4, +inf 5 */
+    b    7f
+3:  lsl  w11, w14, 1
+    cbnz w11, 4f
+    mov  w11, 2                          /* 0 */
+    b    7f
+4:  mov  w11, 0x3f800000
+    cmp  w14, w11
+    b.ne 5f
+    mov  w11, 3                          /* +1 */
+    b    7f
+5:  lsr  w11, w14, 31
+    eor  w11, w11, 1
+    add  w11, w11, 6                     /* negative 6, positive 7 */
+7:  lsl  w16, w11, 2
+    lsr  w15, w15, w16
+    and  w15, w15, 15                    /* the response */
+    cbz  w15, 9f                         /* (keep the destination's) */
+    cmp  w15, 1
+    b.ne 10f
+    mov  w17, w14
+    b    8f
+10: cmp  w15, 2
+    b.ne 11f
+    orr  w17, w14, 0x7fc00000            /* (a NaN made of anything) */
+    b    8f
+11: cmp  w15, 6
+    b.ne 12f
+    tst  w14, 0x80000000
+    mov  w17, 0x7f800000
+    mov  w16, 0xff800000
+    csel w17, w16, w17, ne
+    b    8f
+12: adr  x16, evex_fixup_s
+    ldr  w17, [x16, x15, lsl 2]
+8:  add  x16, x9, 32
+    str  w17, [x16, x10, lsl 2]
+9:  add  x16, x9, 48
+    ldr  w16, [x16, x10, lsl 2]          /* enabled? */
+.else
+    ldr  x14, [x9, x10, lsl 3]
+    add  x15, x9, 16
+    ldr  x15, [x15, x10, lsl 3]
+    ubfx x16, x14, 52, 11
+    ubfx x17, x14, 0, 52
+    cbnz x16, 1f
+    ldr  w11, [_cpu, CPU_mxcsr]
+    tbz  w11, 6, 1f
+    and  x14, x14, 0x8000000000000000
+    mov  x17, 0
+1:  cmp  x16, 0x7ff
+    b.ne 3f
+    cbz  x17, 2f
+    ubfx x11, x14, 51, 1
+    eor  w11, w11, 1
+    b    7f
+2:  lsr  x11, x14, 63
+    eor  w11, w11, 1
+    add  w11, w11, 4
+    b    7f
+3:  lsl  x11, x14, 1
+    cbnz x11, 4f
+    mov  w11, 2
+    b    7f
+4:  mov  x11, 0x3ff0000000000000
+    cmp  x14, x11
+    b.ne 5f
+    mov  w11, 3
+    b    7f
+5:  lsr  x11, x14, 63
+    eor  w11, w11, 1
+    add  w11, w11, 6
+7:  lsl  w16, w11, 2
+    lsr  w15, w15, w16
+    and  w15, w15, 15
+    cbz  w15, 9f
+    cmp  w15, 1
+    b.ne 10f
+    mov  x17, x14
+    b    8f
+10: cmp  w15, 2
+    b.ne 11f
+    orr  x17, x14, 0x7ff8000000000000
+    b    8f
+11: cmp  w15, 6
+    b.ne 12f
+    tst  x14, 0x8000000000000000
+    mov  x17, 0x7ff0000000000000
+    mov  x16, 0xfff0000000000000
+    csel x17, x16, x17, ne
+    b    8f
+12: adr  x16, evex_fixup_d
+    ldr  x17, [x16, x15, lsl 3]
+8:  add  x16, x9, 32
+    str  x17, [x16, x10, lsl 3]
+9:  add  x16, x9, 48
+    ldr  x16, [x16, x10, lsl 3]
+.endif
+    cbz  x16, .Lfx_next\@                /* the flags: enabled elements only */
+    mov  w15, 0                          /* (ZE in bit 2, IE in bit 0) */
+    cmp  w11, 2
+    b.ne 13f
+    tst  w12, 1
+    csinc w15, w15, wzr, eq
+    lsl  w15, w15, 2
+    tst  w12, 2
+    cinc w15, w15, ne
+    b    14f
+13: cmp  w11, 3
+    b.ne 15f
+    tst  w12, 4
+    csinc w15, w15, wzr, eq
+    lsl  w15, w15, 2
+    tst  w12, 8
+    cinc w15, w15, ne
+    b    14f
+15: cmp  w11, 1                          /* SNaN 4, -inf 5, negative 6, +inf 7 */
+    b.ne 16f
+    ubfx w15, w12, 4, 1
+    b    14f
+16: cmp  w11, 4
+    b.ne 17f
+    ubfx w15, w12, 5, 1
+    b    14f
+17: cmp  w11, 6
+    b.ne 18f
+    ubfx w15, w12, 6, 1
+    b    14f
+18: cmp  w11, 5
+    b.ne 14f
+    ubfx w15, w12, 7, 1
+14: cbz  w15, .Lfx_next\@
+    ldr  w16, [_cpu, CPU_mxcsr]
+    orr  w16, w16, w15
+    str  w16, [_cpu, CPU_mxcsr]
+.Lfx_next\@:
+    add  w10, w10, 1
+    b    .Lfx_loop\@
+.Lfx_done\@:
+    mov  x9, (EVEX_STAGE + 160)
+    ldr  q2, [_cpu, x9]
+.if \p == 0                              /* scalar: the upper elements s1's */
+    mov  x9, (EVEX_STAGE + 128)
+    ldr  q0, [_cpu, x9]
+  .ifc \t,s
+    mov  v0.s[0], v2.s[0]
+  .else
+    mov  v0.d[0], v2.d[0]
+  .endif
+    mov  v2.16b, v0.16b
+.endif
+.endm
+evex_l3 fixupimmps, 2, evb_fixupimm, s, 1
+evex_l3 fixupimmpd, 2, evb_fixupimm, d, 1
+evex_l3 fixupimmss, 2, evb_fixupimm, s, 0
+evex_l3 fixupimmsd, 2, evb_fixupimm, d, 0
+
+# ---- conversions between floats and integers of the same width (lane by
+# lane): VCVT(U)DQ2PS, VCVT(U)QQ2PD rounded as the FPCR is ({er}); and
+# VCVT(T)PS2(U)DQ, VCVT(T)PD2(U)QQ: DAZ, rounded to an integral value (no
+# flag), out of range or a NaN the integer indefinite (signed: the sign bit
+# alone; unsigned: all ones) and IE, else PE if it moved. ----
+.macro evb_cvt_i2f a, uns
+.if \uns
+    ucvtf v2.\a, v1.\a
+.else
+    scvtf v2.\a, v1.\a
+.endif
+.endm
+.macro evb_cvt_f2i t, a, uns, trunc, w32=0     /* (w32: doubles to dwords, narrowed) */
+    xf_consts \t
+    xf_lanes \t, 1
+    xf_daz \a                            /* v5: s2, DAZ'd */
+.if \trunc
+    frintz v6.\a, v5.\a
+.else
+    frinti v6.\a, v5.\a
+.endif
+.ifc \t,s
+  .if \uns
+    evf_dupc v20, s, 0x4f800000, 0       /* 2^32 */
+  .else
+    evf_dupc v20, s, 0x4f000000, 0       /* 2^31 */
+    evf_dupc v21, s, 0xcf000000, 0       /* -2^31 */
+  .endif
+.elseif \w32
+  .if \uns
+    evf_dupc v20, d, 0, 0x41f0000000000000
+  .else
+    evf_dupc v20, d, 0, 0x41e0000000000000
+    evf_dupc v21, d, 0, 0xc1e0000000000000
+  .endif
+.else
+  .if \uns
+    evf_dupc v20, d, 0, 0x43f0000000000000
+  .else
+    evf_dupc v20, d, 0, 0x43e0000000000000
+    evf_dupc v21, d, 0, 0xc3e0000000000000
+  .endif
+.endif
+    xf_isnan v22, v5, \a
+    fcmge v23.\a, v6.\a, v20.\a          /* (IE for a NaN, which is invalid anyway) */
+    orr  v22.16b, v22.16b, v23.16b
+.if \uns
+    fcmlt v23.\a, v6.\a, 0               /* (-0 is not below) */
+.else
+    fcmgt v23.\a, v21.\a, v6.\a
+.endif
+    orr  v22.16b, v22.16b, v23.16b       /* v22: invalid: IE (the host's conversion may */
+    and  v23.16b, v22.16b, v7.16b        /* not see it: a double past 2^32 to a dword) */
+    xf_any v23, .Lcfi_ie\@
+    ldr  w9, [_cpu, CPU_mxcsr]
+    orr  w9, w9, 1
+    str  w9, [_cpu, CPU_mxcsr]
+.Lcfi_ie\@:
+.if \uns
+    fcvtzu v2.\a, v6.\a
+    movi v23.16b, 0xff
+.else
+    fcvtzs v2.\a, v6.\a
+  .if \w32
+    evf_dupc v23, d, 0, 0x80000000
+  .else
+    evf_dupc v23, \t, 0x80000000, 0x8000000000000000
+  .endif
+.endif
+    bit  v2.16b, v23.16b, v22.16b
+    cmeq v23.\a, v6.\a, v5.\a            /* PE: moved, and valid */
+    orr  v23.16b, v23.16b, v22.16b
+    mvn  v23.16b, v23.16b
+    xf_any v23, .Lcfi_pe\@
+    ldr  w9, [_cpu, CPU_mxcsr]
+    orr  w9, w9, 0x20
+    str  w9, [_cpu, CPU_mxcsr]
+.Lcfi_pe\@:
+.if \w32
+    xtn  v2.2s, v2.2d
+.endif
+.endm
+evex_l3 cvtdq2ps, 2, evb_cvt_i2f, 4s, 0
+evex_l3 cvtudq2ps, 2, evb_cvt_i2f, 4s, 1
+evex_l3 cvtqq2pd, 2, evb_cvt_i2f, 2d, 0
+evex_l3 cvtuqq2pd, 2, evb_cvt_i2f, 2d, 1
+evex_l3 cvtps2dq, 2, evb_cvt_f2i, s, 4s, 0, 0
+evex_l3 cvttps2dq, 2, evb_cvt_f2i, s, 4s, 0, 1
+evex_l3 cvtps2udq, 2, evb_cvt_f2i, s, 4s, 1, 0
+evex_l3 cvttps2udq, 2, evb_cvt_f2i, s, 4s, 1, 1
+evex_l3 cvtpd2qq, 2, evb_cvt_f2i, d, 2d, 0, 0
+evex_l3 cvttpd2qq, 2, evb_cvt_f2i, d, 2d, 0, 1
+evex_l3 cvtpd2uqq, 2, evb_cvt_f2i, d, 2d, 1, 0
+evex_l3 cvttpd2uqq, 2, evb_cvt_f2i, d, 2d, 1, 1
+
+# ---- conversion frames: the widening ones (VCVTPS2PD, VCVT(U)DQ2PD,
+# VCVT(T)PS2(U)QQ: each destination quarter from half a source quarter,
+# s2's quarter q >> 1, its low or high half by q's parity) and the narrowing
+# ones (VCVTPD2PS, VCVT(U)QQ2PS, VCVT(T)PD2(U)DQ: each destination quarter
+# from two source quarters, 2q and 2q + 1, of the source's VL in word bits
+# 52-53; at VL 128 the destination's upper half is zeroed, word bit 47).
+# The body takes v1's low two (widening) or both (narrowing) source elements
+# into v2's low 64 bits. Masked-off source elements are \benign first (a
+# float 1.0, the integer 1, or as is), so they raise nothing. ----
+.macro evf_benign v, m, t, benign        /* \v's elements where \m is 0: 1.0 (1), or the integer 1 (2) */
+.if \benign == 1
+  .ifc \t,h
+    mov  w9, 0x3c00
+    dup  v29.8h, w9
+  .else
+    evf_dupc v29, \t, 0x3f800000, 0x3ff0000000000000
+  .endif
+    bif  \v\().16b, v29.16b, \m\().16b
+.elseif \benign == 2
+    evf_dupc v29, \t, 1, 1
+    bif  \v\().16b, v29.16b, \m\().16b
+.endif
+.endm
+.macro evex_cvtw name, st, benign, body, args:vararg
+.gadget evex_\name
+    ldr  x8, [_ip]
+    evx_fp_enter
+    mov  w13, 0
+.Lecw_loop\@:
+    lsr  w11, w13, 1
+    tbz  x8, 15, .Lecw_reg\@
+    mov  x14, EVEX_STAGE
+    add  x14, x14, x11, lsl 4
+    add  x14, _cpu, x14
+    b    .Lecw_s2\@
+.Lecw_reg\@:
+    ubfx w9, w8, 10, 5
+    evx_qaddr x14, w9, w11
+.Lecw_s2\@:
+    ldr  q1, [x14]
+    tbz  w13, 0, 1f
+    ext  v1.16b, v1.16b, v1.16b, 8
+1:  ubfx w9, w8, 18, 3
+    cbz  w9, 2f
+    evx_kmask v28, w13                   /* (the destination's elements) */
+.ifc \st,h
+    xtn  v28.4h, v28.4s
+.else
+    xtn  v28.2s, v28.2d
+.endif
+    evf_benign v1, v28, \st, \benign
+2:  ubfx w12, w8, 24, 8
+    \body \args
+    evx_put 2
+    add  w13, w13, 1
+    ubfx w9, w8, 16, 2
+    mov  w10, 1
+    lsl  w10, w10, w9
+    cmp  w13, w10
+    b.lo .Lecw_loop\@
+    evx_fp_exit
+    evx_finish
+    gret 1
+.endm
+.macro evf_cvtn_half j, st, benign, body, args:vararg
+    lsl  w11, w13, 1
+    add  w11, w11, \j                    /* the source quarter */
+    ubfx x9, x8, 52, 2
+    mov  w10, 1
+    lsl  w10, w10, w9
+    movi v1.2d, 0
+    cmp  w11, w10
+    b.hs .Lecn_ld\@
+    tbz  x8, 15, .Lecn_reg\@
+    mov  x14, EVEX_STAGE
+    add  x14, x14, x11, lsl 4
+    add  x14, _cpu, x14
+    ldr  q1, [x14]
+    b    .Lecn_ld\@
+.Lecn_reg\@:
+    ubfx w9, w8, 10, 5
+    evx_qaddr x14, w9, w11
+    ldr  q1, [x14]
+.Lecn_ld\@:
+    ubfx w9, w8, 18, 3
+    cbz  w9, .Lecn_nk\@
+    evx_kmask v28, w13                   /* (the destination's elements) */
+.ifc \st,s
+  .if \j
+    sxtl2 v28.4s, v28.8h
+  .else
+    sxtl v28.4s, v28.4h
+  .endif
+.else
+  .if \j
+    sxtl2 v28.2d, v28.4s
+  .else
+    sxtl v28.2d, v28.2s
+  .endif
+.endif
+    evf_benign v1, v28, \st, \benign
+.Lecn_nk\@:
+    ubfx w12, w8, 24, 8
+    \body \args
+    mov  x14, (EVEX_STAGE + 192 + 8 * \j)
+    str  d2, [_cpu, x14]
+.endm
+.macro evex_cvtn name, st, benign, body, args:vararg
+.gadget evex_\name
+    ldr  x8, [_ip]
+    evx_fp_enter
+    mov  w13, 0
+.Lecn_loop\@:
+    evf_cvtn_half 0, \st, \benign, \body, \args
+    evf_cvtn_half 1, \st, \benign, \body, \args
+    mov  x14, (EVEX_STAGE + 192)
+    ldr  q2, [_cpu, x14]
+    evx_put 2
+    add  w13, w13, 1
+    ubfx w9, w8, 16, 2
+    mov  w10, 1
+    lsl  w10, w10, w9
+    cmp  w13, w10
+    b.lo .Lecn_loop\@
+    evx_fp_exit
+    tbz  x8, 47, 3f                      /* VL 128: 64 bits of result, the rest 0 */
+    and  w9, w8, 31
+    mov  w10, 0
+    evx_qaddr x14, w9, w10
+    str  xzr, [x14, 8]
+3:  evx_finish
+    gret 1
+.endm
+.macro evb_cvtudq2pd
+    uxtl v2.2d, v1.2s
+    ucvtf v2.2d, v2.2d
+.endm
+.macro evb_cvtps2qq uns, trunc           /* DAZ as singles, then as doubles (exact) */
+    xf_consts s
+    xf_daz 4s
+    fcvtl v1.2d, v5.2s
+    evb_cvt_f2i d, 2d, \uns, \trunc
+.endm
+.macro evb_cvtqq2ps uns                  /* int64 -> single, rounded once */
+    fmov x9, d1
+    mov  x10, v1.d[1]
+.if \uns
+    ucvtf s2, x9
+    ucvtf s3, x10
+.else
+    scvtf s2, x9
+    scvtf s3, x10
+.endif
+    mov  v2.s[1], v3.s[0]
+.endm
+evex_cvtw cvtps2pd, s, 1, xfb_cvtps2pd
+evex_cvtw cvtdq2pd, s, 0, xfb_cvtdq2pd
+evex_cvtw cvtudq2pd, s, 0, evb_cvtudq2pd
+evex_cvtw cvtps2qq, s, 1, evb_cvtps2qq, 0, 0
+evex_cvtw cvttps2qq, s, 1, evb_cvtps2qq, 0, 1
+evex_cvtw cvtps2uqq, s, 1, evb_cvtps2qq, 1, 0
+evex_cvtw cvttps2uqq, s, 1, evb_cvtps2qq, 1, 1
+evex_cvtn cvtpd2ps, d, 1, xfb_cvtpd2ps
+evex_cvtn cvtqq2ps, d, 2, evb_cvtqq2ps, 0
+evex_cvtn cvtuqq2ps, d, 2, evb_cvtqq2ps, 1
+evex_cvtn cvtpd2dq, d, 1, xfb_cvtpd2dq
+evex_cvtn cvttpd2dq, d, 1, xfb_cvttpd2dq
+evex_cvtn cvtpd2udq, d, 1, evb_cvt_f2i, d, 2d, 1, 0, 1
+evex_cvtn cvttpd2udq, d, 1, evb_cvt_f2i, d, 2d, 1, 1, 1
+
+# ---- conversions to and from general registers: VCVT(T)SS/SD2SI and
+# 2USI to amd64_regs[g] (amd64: the register; i386: slot 0, which gen.c
+# copies out), from s2's low element (a register, or EVEX_STAGE); and
+# VCVTSI/USI2SS/SD from the staged integer into s1's low element. Word:
+# [g (0-3) | s2 (10-14) | staged (15) | {er}/{sae} as the frames' (48-51)]. ----
+.macro evf_f2u_scalar t, iw, trunc       /* v5 (DAZ'd) -> x12, unsigned; out of range or a NaN: all ones, IE */
+.ifc \t,s
+  .if \iw == 32
+    mov  w9, 0x4f800000                  /* 2^32 */
+  .else
+    mov  w9, 0x5f800000                  /* 2^64 */
+  .endif
+    fmov s4, w9
+.else
+  .if \iw == 32
+    mov  x9, 0x41f0000000000000
+  .else
+    mov  x9, 0x43f0000000000000
+  .endif
+    fmov d4, x9
+.endif
+.if \trunc
+    frintz \t\()3, \t\()5
+.else
+    frinti \t\()3, \t\()5
+.endif
+    fcmp \t\()3, \t\()3
+    b.vs 8f                              /* NaN */
+    fcmp \t\()3, \t\()4
+    b.ge 7f
+    fcmp \t\()3, #0.0
+    b.lt 7f                              /* (-0 is not below) */
+.if \trunc == 0
+    frintx \t\()3, \t\()5
+.else
+    fmov \t\()3, \t\()5
+.endif
+.if \iw == 32
+    fcvtzu w12, \t\()3
+.else
+    fcvtzu x12, \t\()3
+.endif
+    b    9f
+7:  ldr  w9, [_cpu, CPU_mxcsr]           /* (IE by hand, not by a conversion that */
+    orr  w9, w9, 1                       /* could land in range and raise PE) */
+    str  w9, [_cpu, CPU_mxcsr]
+    b    6f
+8:  fcvtzu w12, \t\()5                   /* (a NaN: the host's IE) */
+6:  mov  x12, -1
+9:
+.endm
+.macro evex_cvt2gpr name, t, iw, trunc, uns, a
+.gadget evex_\name
+    ldr  x8, [_ip]
+    evx_fp_enter
+    tbz  x8, 15, 1f
+    mov  x14, EVEX_STAGE
+    ldr  q1, [_cpu, x14]
+    b    2f
+1:  ubfx w9, w8, 10, 5
+    mov  w10, 0
+    evx_qaddr x14, w9, w10
+    ldr  q1, [x14]
+2:  xf_consts \t
+    xf_daz \a
+.if \uns
+    evf_f2u_scalar \t, \iw, \trunc
+.else
+    xf_f2i_scalar \t, \iw, \trunc
+.endif
+.if \iw == 32
+    mov  w12, w12
+.endif
+    and  w9, w8, 15
+    add  x14, _cpu, CPU_amd64_regs
+    str  x12, [x14, x9, lsl 3]
+    evx_fp_exit
+    gret 1
+.endm
+.irp u, 0, 1
+evex_cvt2gpr cvtss2si32_\u, s, 32, 0, \u, 4s
+evex_cvt2gpr cvtss2si64_\u, s, 64, 0, \u, 4s
+evex_cvt2gpr cvttss2si32_\u, s, 32, 1, \u, 4s
+evex_cvt2gpr cvttss2si64_\u, s, 64, 1, \u, 4s
+evex_cvt2gpr cvtsd2si32_\u, d, 32, 0, \u, 2d
+evex_cvt2gpr cvtsd2si64_\u, d, 64, 0, \u, 2d
+evex_cvt2gpr cvttsd2si32_\u, d, 32, 1, \u, 2d
+evex_cvt2gpr cvttsd2si64_\u, d, 64, 1, \u, 2d
+.endr
+.macro evb_cvtsi t, iw, uns              /* the staged integer (s2) into s1's low element */
+.if \iw == 32
+    fmov w12, s1
+  .if \uns
+    ucvtf \t\()2, w12
+  .else
+    scvtf \t\()2, w12
+  .endif
+.else
+    fmov x12, d1
+  .if \uns
+    ucvtf \t\()2, x12
+  .else
+    scvtf \t\()2, x12
+  .endif
+.endif
+    mov  v0.\t[0], v2.\t[0]
+    mov  v2.16b, v0.16b
+.endm
+evex_l3 cvtsi2ss32, 2, evb_cvtsi, s, 32, 0
+evex_l3 cvtsi2ss64, 2, evb_cvtsi, s, 64, 0
+evex_l3 cvtsi2sd32, 2, evb_cvtsi, d, 32, 0
+evex_l3 cvtsi2sd64, 2, evb_cvtsi, d, 64, 0
+evex_l3 cvtusi2ss32, 2, evb_cvtsi, s, 32, 1
+evex_l3 cvtusi2ss64, 2, evb_cvtsi, s, 64, 1
+evex_l3 cvtusi2sd32, 2, evb_cvtsi, d, 32, 1
+evex_l3 cvtusi2sd64, 2, evb_cvtsi, d, 64, 1
+# VCVTSS2SD / VCVTSD2SS: math.S's bodies (s1's upper elements); a masked-off
+# element 0 is benign whole (the frame's 1.0 is at the result's size)
+.macro evb_cvtss2sd
+    xfb_cvtss2sd
+.endm
+.macro evb_cvtsd2ss
+    ubfx w9, w8, 18, 3
+    cbz  w9, 1f
+    evx_kmask v28, w13
+    sxtl v28.2d, v28.2s
+    evf_benign v1, v28, d, 1
+1:  xfb_cvtsd2ss
+.endm
+evex_l3 cvtss2sd, 2, evb_cvtss2sd
+evex_l3 cvtsd2ss, 2, evb_cvtsd2ss
+# VCVTPH2PS / VCVTPS2PH: vex.inc's F16C bodies on the conversion frames (the
+# latter's destination r/m: a register, or memory through EVEX_STAGE)
+evex_cvtw cvtph2ps, h, 1, xfb_cvtph2ps
+evex_cvtn cvtps2ph, s, 1, xfb_cvtps2ph

@@ -6913,11 +6913,12 @@ amd64_xf hsubpd, hadd, d, 2d, 1, 1
     fcvtzs x12, \t\()3
 .endif
     b    9f
-7:  ldr  w9, [_cpu, CPU_mxcsr]           /* out of range: IE by hand */
-    orr  w9, w9, 1
-    str  w9, [_cpu, CPU_mxcsr]
+7:  ldr  w9, [_cpu, CPU_mxcsr]           /* out of range: IE by hand (not the host's */
+    orr  w9, w9, 1                       /* conversion: truncating, it can land in range, */
+    str  w9, [_cpu, CPU_mxcsr]           /* inexact, and raise PE) */
+    b    6f
 8:  fcvtzs w12, \t\()5                   /* a NaN: the host raises IE (result unused) */
-    mov  x12, 0x8000000000000000
+6:  mov  x12, 0x8000000000000000
 .if \iw == 32
     mov  w12, 0x80000000
 .endif

@@ -55,22 +55,33 @@ DBL = {'ps': 0, 'pd': 1, 'ss': 0, 'sd': 1}
 F = []   # (name, asm, flags: 1 double, 2 a compare, 4 the zmm16-31 registers, 8 zero-masked (the
          #  elements it masks at bits 4-8), 1024 the destination is an operand too (FMA),
          #  2048 VL 128 with 1.0 in every element past it, 4096 PE and DE checked clear here and
-         #  hashed clear)
-def add(name, asm, t, cmp=False, hi=False, dst=False):
-    fl = DBL[t] | (2 if cmp else 0) | (4 if hi else 0) | (1024 if dst else 0)
+         #  hashed clear, 8192 VSCALEF: see below, 16384 s2 random bits (a VFIXUPIMM table, an
+         #  integer source), 32768 s2 seeded with floats at the integer ranges' edges, 65536 the asm
+         #  uses eax/rax)
+def add(name, asm, t, cmp=False, hi=False, dst=False, table=False, ibound=False, zchk=True, gpr=False):
+    fl = DBL[t] | (2 if cmp else 0) | (4 if hi else 0) | (1024 if dst else 0) | (16384 if table else 0) | \
+        (32768 if ibound else 0) | (65536 if gpr else 0)
     m = re.match(r'vrndscale[ps]d \$(0x[0-9a-f]+)', name)
     if m and int(m.group(1), 16) & 8:
         # SDE raises PE (and DE for a denormal) for VRNDSCALEPD/SD with imm8
         # bit 3, which suppresses PE (VRNDSCALEPS/SS and ROUNDSD honour it;
         # with bit 3 clear it raises no DE): the harness checks both clear
         fl |= 4096
+    if name.startswith('vscalef'):
+        # SDE's VSCALEF raises no OE, UE or PE under DAZ (it does without),
+        # and no DE for a denormal s1 under FTZ or when the result overflows
+        # or underflows. The SDM's pseudo-code is a multiply (DAZ on both
+        # sources, DE for s1) and AOK sets flags as a multiply does; with no
+        # AVX-512 hardware here to settle it, those flags are hashed clear
+        # in those cases
+        fl |= 8192
     if dst and ' 128 ' in name:
         # SDE evaluates an EVEX.128 FMA's elements 128-255 too, and raises
         # their flags (a denormal in element 5 of a VFMADD231PS xmm{k}
         # raises DE whatever k; VADDPS does not, nor VL 256 past 256): 1.0
         # there, which no hardware reads, keeps them out of MXCSR
         fl |= 2048
-    if '%{z%}' in asm and not cmp:
+    if '%{z%}' in asm and not cmp and zchk:
         # SDE writes -0.0 into zero-masked VSUBPS/PD elements under round-down at
         # 256 and 512 bits (it appears to compute 0 - 0 there; its 128-bit form
         # writes +0); the SDM sets them to 0. So the harness checks those
@@ -208,6 +219,205 @@ unary('getmant', [f'${i:#x}' for i in range(16)])
 RND = [0x00, 0x01, 0x02, 0x03, 0x04, 0x08, 0x0b, 0x0c, 0x10, 0x21, 0x32, 0x43, 0x5c, 0x88, 0xf0, 0xff]
 unary('rndscale', [f'${i:#x}' for i in RND])
 unary('reduce', [f'${i:#x}' for i in RND])
+# VSCALEF: as the arithmetic ({er})
+for t in ('ps', 'pd'):
+    bc = 4 if t == 'ps' else 8
+    for L, x in VL:
+        for mk, mn in MK:
+            add(f'vscalef{t} {L} reg{mn}', f'vscalef{t} %%{x}3, %%{x}2, %%{x}1{mk}', t)
+            add(f'vscalef{t} {L} mem{mn}', f'vscalef{t} (%1), %%{x}2, %%{x}1{mk}', t)
+            add(f'vscalef{t} {L} bcst{mn}', f'vscalef{t} (%1)%{{1to{L // (8 * bc)}%}}, %%{x}2, %%{x}1{mk}', t)
+    for rc in RC:
+        for mk, mn in MK:
+            add(f'vscalef{t} {{{rc}-sae}} 512 reg{mn}', f'vscalef{t} %{{{rc}-sae%}}, %%zmm3, %%zmm2, %%zmm1{mk}', t)
+    if not I386:
+        add(f'vscalef{t} 512 reg m hi', f'vscalef{t} %%zmm30, %%zmm25, %%zmm17%{{%%k1%}}', t, hi=True)
+for t in ('ss', 'sd'):
+    for mk, mn in MK:
+        add(f'vscalef{t} reg{mn}', f'vscalef{t} %%xmm3, %%xmm2, %%xmm1{mk}', t)
+        add(f'vscalef{t} mem{mn}', f'vscalef{t} (%1), %%xmm2, %%xmm1{mk}', t)
+        for rc in RC:
+            add(f'vscalef{t} {{{rc}-sae}} reg{mn}', f'vscalef{t} %{{{rc}-sae%}}, %%xmm3, %%xmm2, %%xmm1{mk}', t)
+    if not I386:
+        add(f'vscalef{t} reg m hi', f'vscalef{t} %%xmm30, %%xmm25, %%xmm17%{{%%k1%}}', t, hi=True)
+# VRANGE: two sources and an imm8 (all 16), {sae}
+for i in range(16):
+    imm = f'${i:#x}'
+    for t in ('ps', 'pd'):
+        bc = 4 if t == 'ps' else 8
+        n = f'vrange{t}'
+        for L, x in VL:
+            for mk, mn in MK:
+                add(f'{n} {imm} {L} reg{mn}', f'{n} {imm}, %%{x}3, %%{x}2, %%{x}1{mk}', t)
+            add(f'{n} {imm} {L} mem m', f'{n} {imm}, (%1), %%{x}2, %%{x}1%{{%%k1%}}', t)
+            add(f'{n} {imm} {L} bcst z', f'{n} {imm}, (%1)%{{1to{L // (8 * bc)}%}}, %%{x}2, %%{x}1%{{%%k1%}}%{{z%}}', t)
+        add(f'{n} {imm} {{sae}} 512 reg', f'{n} {imm}, %{{sae%}}, %%zmm3, %%zmm2, %%zmm1', t)
+        if not I386:
+            add(f'{n} {imm} 512 reg m hi', f'{n} {imm}, %%zmm30, %%zmm25, %%zmm17%{{%%k1%}}', t, hi=True)
+    for t in ('ss', 'sd'):
+        n = f'vrange{t}'
+        for mk, mn in MK:
+            add(f'{n} {imm} reg{mn}', f'{n} {imm}, %%xmm3, %%xmm2, %%xmm1{mk}', t)
+        add(f'{n} {imm} mem m', f'{n} {imm}, (%1), %%xmm2, %%xmm1%{{%%k1%}}', t)
+        add(f'{n} {imm} {{sae}} reg', f'{n} {imm}, %{{sae%}}, %%xmm3, %%xmm2, %%xmm1', t)
+# VFPCLASS into k1 (k2 masking it): each category alone, and a few together
+for imm in [f'${1 << i:#x}' for i in range(8)] + ['$0x0', '$0x81', '$0x66', '$0xff', '$0x3c']:
+    for t in ('ps', 'pd'):
+        bc = 4 if t == 'ps' else 8
+        sfx = {128: 'x', 256: 'y', 512: 'z'}   # (memory forms need the size: vfpclasspsx)
+        for L, x in VL:
+            for mk, mn in CMK:
+                add(f'vfpclass{t} {imm} {L} reg{mn}', f'vfpclass{t} {imm}, %%{x}3, %%k1{mk}', t, cmp=True)
+            add(f'vfpclass{t} {imm} {L} mem', f'vfpclass{t}{sfx[L]} {imm}, (%1), %%k1', t, cmp=True)
+            add(f'vfpclass{t} {imm} {L} bcst m', f'vfpclass{t} {imm}, (%1)%{{1to{L // (8 * bc)}%}}, %%k1%{{%%k2%}}', t, cmp=True)
+    for t in ('ss', 'sd'):
+        for mk, mn in CMK:
+            add(f'vfpclass{t} {imm} reg{mn}', f'vfpclass{t} {imm}, %%xmm3, %%k1{mk}', t, cmp=True)
+        add(f'vfpclass{t} {imm} mem', f'vfpclass{t} {imm}, (%1), %%k1', t, cmp=True)
+# VFIXUPIMM: s1 the float, s2 (and memory) a table of random bits, the
+# destination an operand; imm8 a spread, {sae}
+for imm in ('$0x0', '$0x1', '$0x2', '$0x4', '$0x8', '$0x10', '$0x20', '$0x40', '$0x80', '$0xff', '$0x5a'):
+    for t in ('ps', 'pd'):
+        bc = 4 if t == 'ps' else 8
+        n = f'vfixupimm{t}'
+        for L, x in VL:
+            for mk, mn in MK:
+                add(f'{n} {imm} {L} reg{mn}', f'{n} {imm}, %%{x}3, %%{x}2, %%{x}1{mk}', t, dst=True, table=True)
+            add(f'{n} {imm} {L} mem m', f'{n} {imm}, (%1), %%{x}2, %%{x}1%{{%%k1%}}', t, dst=True, table=True)
+            add(f'{n} {imm} {L} bcst z', f'{n} {imm}, (%1)%{{1to{L // (8 * bc)}%}}, %%{x}2, %%{x}1%{{%%k1%}}%{{z%}}', t,
+                dst=True, table=True)
+        add(f'{n} {imm} {{sae}} 512 reg', f'{n} {imm}, %{{sae%}}, %%zmm3, %%zmm2, %%zmm1', t, dst=True, table=True)
+        if not I386:
+            add(f'{n} {imm} 512 reg m hi', f'{n} {imm}, %%zmm30, %%zmm25, %%zmm17%{{%%k1%}}', t, hi=True, dst=True,
+                table=True)
+    for t in ('ss', 'sd'):
+        n = f'vfixupimm{t}'
+        for mk, mn in MK:
+            add(f'{n} {imm} reg{mn}', f'{n} {imm}, %%xmm3, %%xmm2, %%xmm1{mk}', t, dst=True, table=True)
+        add(f'{n} {imm} mem m', f'{n} {imm}, (%1), %%xmm2, %%xmm1%{{%%k1%}}', t, dst=True, table=True)
+        add(f'{n} {imm} {{sae}} reg', f'{n} {imm}, %{{sae%}}, %%xmm3, %%xmm2, %%xmm1', t, dst=True, table=True)
+# conversions of the same width: integers to floats ({er}) from random bits,
+# floats to integers ({er}, or {sae} for the truncating) with the ranges' edges
+def cvt_same(op, t, er, **kw):
+    bc = 4 if t in ('ps', 'dq') else 8
+    tt = 'pd' if bc == 8 else 'ps'
+    for L, x in VL:
+        for mk, mn in MK:
+            add(f'{op} {L} reg{mn}', f'{op} %%{x}3, %%{x}1{mk}', tt, **kw)
+            add(f'{op} {L} mem{mn}', f'{op} (%1), %%{x}1{mk}', tt, **kw)
+            add(f'{op} {L} bcst{mn}', f'{op} (%1)%{{1to{L // (8 * bc)}%}}, %%{x}1{mk}', tt, **kw)
+    for rc in (RC if er else ['sae']):
+        r = f'{rc}-sae' if er else 'sae'
+        for mk, mn in MK:
+            add(f'{op} {{{r}}} 512 reg{mn}', f'{op} %{{{r}%}}, %%zmm3, %%zmm1{mk}', tt, **kw)
+    if not I386:
+        add(f'{op} 512 reg m hi', f'{op} %%zmm30, %%zmm17%{{%%k1%}}', tt, hi=True, **kw)
+for op in ('vcvtdq2ps', 'vcvtudq2ps'):
+    cvt_same(op, 'dq', True, table=True)
+for op in ('vcvtqq2pd', 'vcvtuqq2pd'):
+    cvt_same(op, 'qq', True, table=True)
+for op, t in (('vcvtps2dq', 'ps'), ('vcvtps2udq', 'ps'), ('vcvtpd2qq', 'pd'), ('vcvtpd2uqq', 'pd')):
+    cvt_same(op, t, True, ibound=True)
+for op, t in (('vcvttps2dq', 'ps'), ('vcvttps2udq', 'ps'), ('vcvttpd2qq', 'pd'), ('vcvttpd2uqq', 'pd')):
+    cvt_same(op, t, False, ibound=True)
+# conversions that widen (the source VL / 2) or narrow (the destination VL /
+# 2): t the source's type (for the fill); no zero-masked check (the sizes
+# differ; the hash has those elements)
+HALF = {128: 'xmm', 256: 'xmm', 512: 'ymm'}
+SFX = {128: 'x', 256: 'y', 512: ''}
+def cvt_wn(op, t, widen, rnd, **kw):
+    bc = 4 if t in ('ps', 'dq') else 8
+    tt = 'pd' if bc == 8 else 'ps'
+    for L, x in VL:
+        s, d = (HALF[L], x) if widen else (x, HALF[L])
+        n = L // 64 if widen else L // (8 * bc)
+        sfx = '' if widen else SFX[L]
+        for mk, mn in MK:
+            add(f'{op} {L} reg{mn}', f'{op} %%{s}3, %%{d}1{mk}', tt, zchk=False, **kw)
+            add(f'{op} {L} mem{mn}', f'{op}{sfx} (%1), %%{d}1{mk}', tt, zchk=False, **kw)
+            add(f'{op} {L} bcst{mn}', f'{op} (%1)%{{1to{n}%}}, %%{d}1{mk}', tt, zchk=False, **kw)
+    if rnd:
+        s, d = ('ymm', 'zmm') if widen else ('zmm', 'ymm')
+        for r in (['sae'] if rnd == 'sae' else [f'{c}-sae' for c in RC]):
+            for mk, mn in MK:
+                add(f'{op} {{{r}}} 512 reg{mn}', f'{op} %{{{r}%}}, %%{s}3, %%{d}1{mk}', tt, zchk=False, **kw)
+    if not I386:
+        s, d = ('ymm', 'zmm') if widen else ('zmm', 'ymm')
+        add(f'{op} 512 reg m hi', f'{op} %%{s}30, %%{d}17%{{%%k1%}}', tt, hi=True, zchk=False, **kw)
+cvt_wn('vcvtps2pd', 'ps', True, 'sae')
+cvt_wn('vcvtdq2pd', 'dq', True, None, table=True)
+cvt_wn('vcvtudq2pd', 'dq', True, None, table=True)
+for op in ('vcvtps2qq', 'vcvtps2uqq'):
+    cvt_wn(op, 'ps', True, 'er', ibound=True)
+for op in ('vcvttps2qq', 'vcvttps2uqq'):
+    cvt_wn(op, 'ps', True, 'sae', ibound=True)
+cvt_wn('vcvtpd2ps', 'pd', False, 'er')
+cvt_wn('vcvtqq2ps', 'qq', False, 'er', table=True)
+cvt_wn('vcvtuqq2ps', 'qq', False, 'er', table=True)
+for op in ('vcvtpd2dq', 'vcvtpd2udq'):
+    cvt_wn(op, 'pd', False, 'er', ibound=True)
+for op in ('vcvttpd2dq', 'vcvttpd2udq'):
+    cvt_wn(op, 'pd', False, 'sae', ibound=True)
+# scalar conversions to a general register (the result moved to xmm1 for
+# the hash) and from one (loaded from the memory buffer); r64 amd64 only
+for t in ('ss', 'sd'):
+    for tr in ('', 't'):
+        for u in ('', 'u'):
+            op = f'vcvt{tr}{t}2{u}si'
+            for gw, g in ((32, 'eax'), (64, 'rax')):
+                if gw == 64 and I386:
+                    continue
+                mv = f'\\n vmov{"q" if gw == 64 else "d"} %%{g}, %%xmm1'
+                add(f'{op} r{gw} reg', f'{op} %%xmm3, %%{g}{mv}', t, gpr=True, ibound=True)
+                add(f'{op} r{gw} mem', f'{op} (%1), %%{g}{mv}', t, gpr=True, ibound=True)
+                add(f'{op} r{gw} evex reg', f'%{{evex%}} {op} %%xmm3, %%{g}{mv}', t, gpr=True, ibound=True)
+                add(f'{op} r{gw} evex mem', f'%{{evex%}} {op} (%1), %%{g}{mv}', t, gpr=True, ibound=True)
+                for r in (['sae'] if tr else [f'{c}-sae' for c in RC]):
+                    add(f'{op} r{gw} {{{r}}}', f'{op} %{{{r}%}}, %%xmm3, %%{g}{mv}', t, gpr=True, ibound=True)
+    for u in ('', 'u'):
+        op = f'vcvt{u}si2{t}'
+        for gw, g, sfx in ((32, 'eax', 'l'), (64, 'rax', 'q')):
+            if gw == 64 and I386:
+                continue
+            ld = f'mov (%1), %%{g}\\n '
+            add(f'{op} r{gw} reg', f'{ld}{op} %%{g}, %%xmm2, %%xmm1', t, gpr=True, table=True)
+            add(f'{op} r{gw} mem', f'{op}{sfx} (%1), %%xmm2, %%xmm1', t, table=True)
+            add(f'{op} r{gw} evex reg', f'{ld}%{{evex%}} {op} %%{g}, %%xmm2, %%xmm1', t, gpr=True, table=True)
+            add(f'{op} r{gw} evex mem', f'%{{evex%}} {op}{sfx} (%1), %%xmm2, %%xmm1', t, table=True)
+            if not (t == 'sd' and gw == 32):
+                for c in RC:
+                    add(f'{op} r{gw} {{{c}-sae}}', f'{ld}{op} %%{g}, %{{{c}-sae%}}, %%xmm2, %%xmm1', t, gpr=True,
+                        table=True)                 # (gas: the rounding after the GPR)
+for op, t, r in (('vcvtss2sd', 'ss', ['sae']), ('vcvtsd2ss', 'sd', [f'{c}-sae' for c in RC])):
+    for mk, mn in MK:
+        add(f'{op} reg{mn}', f'{op} %%xmm3, %%xmm2, %%xmm1{mk}', t, zchk=False)
+        add(f'{op} mem{mn}', f'{op} (%1), %%xmm2, %%xmm1{mk}', t, zchk=False)
+        for rr in r:
+            add(f'{op} {{{rr}}} reg{mn}', f'{op} %{{{rr}%}}, %%xmm3, %%xmm2, %%xmm1{mk}', t, zchk=False)
+    if not I386:
+        add(f'{op} reg m hi', f'{op} %%xmm30, %%xmm25, %%xmm17%{{%%k1%}}', t, hi=True, zchk=False)
+# VCVTPH2PS (halves of random bits) and VCVTPS2PH (imm8 roundings; to a
+# register, or to memory, which is then read back into zmm1 for the hash)
+for L, x in VL:
+    h = HALF[L]
+    for mk, mn in MK:
+        add(f'vcvtph2ps {L} reg{mn}', f'vcvtph2ps %%{h}3, %%{x}1{mk}', 'ps', table=True, zchk=False)
+        add(f'vcvtph2ps {L} mem{mn}', f'vcvtph2ps (%1), %%{x}1{mk}', 'ps', table=True, zchk=False)
+for mk, mn in MK:
+    add(f'vcvtph2ps {{sae}} 512 reg{mn}', f'vcvtph2ps %{{sae%}}, %%ymm3, %%zmm1{mk}', 'ps', table=True, zchk=False)
+for imm in ('$0x0', '$0x1', '$0x2', '$0x3', '$0x4', '$0xf8'):
+    for L, x in VL:
+        h = HALF[L]
+        for mk, mn in MK:
+            add(f'vcvtps2ph {imm} {L} reg{mn}', f'vcvtps2ph {imm}, %%{x}3, %%{h}1{mk}', 'ps', zchk=False)
+        for mk, mn in MK[:2]:
+            add(f'vcvtps2ph {imm} {L} st{mn}', f'vcvtps2ph {imm}, %%{x}3, (%1){mk}\\n vmovdqu64 (%1), %%zmm1', 'ps',
+                zchk=False)
+    for mk, mn in MK:
+        add(f'vcvtps2ph {imm} {{sae}} 512 reg{mn}', f'vcvtps2ph {imm}, %{{sae%}}, %%zmm3, %%ymm1{mk}', 'ps', zchk=False)
+if not I386:
+    add('vcvtph2ps 512 reg m hi', 'vcvtph2ps %%ymm30, %%zmm17%{%%k1%}', 'ps', hi=True, table=True, zchk=False)
+    add('vcvtps2ph $0x0 512 reg m hi', 'vcvtps2ph $0x0, %%zmm30, %%ymm17%{%%k1%}', 'ps', hi=True, zchk=False)
 # 62 P0 P1 P2 op modrm [imm]: vaddps zmm1, zmm2, zmm3 is 62 f1 6c 48 58 cb, and
 # a memory operand is [eax]/[rax] = the memory buffer
 UD = {
@@ -277,8 +487,9 @@ for i, (name, asm, fl) in enumerate(F):
 }}''')
     else:
         out = 'zmm17' if fl & 4 else 'zmm1'   # (zmm16-31: gcc does not use them here)
+        gx = f', "{R}ax"' if fl & 65536 else ''
         w(f'''__attribute__((noinline)) static void f{i}(struct st *t) {{
-    __asm__ volatile(LOAD "{asm}" SAVE("{out}") :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3");
+    __asm__ volatile(LOAD "{asm}" SAVE("{out}") :: "r"(t), "r"(t->m) : "memory", "xmm1", "xmm2", "xmm3"{gx});
 }}''')
 w('static const struct { const char *name; void (*fn)(struct st *); int fl; } forms[] = {')
 for i, (name, asm, fl) in enumerate(F):
@@ -388,6 +599,31 @@ int main(int argc, char **argv) {
             fill(&t, dbl);
             t.k = rnd();
             if (j == 1) quiet_lanes(&t, dbl, mode, forms[fi].fl & 1024);
+            if (forms[fi].fl & 16384)                     /* a VFIXUPIMM table: random bits */
+                for (int i = 0; i < 64; i += 8) {
+                    uint64_t r = rnd();
+                    memcpy(t.b + i, &r, 8);
+                    r = rnd();
+                    memcpy(t.m + i, &r, 8);
+                }
+            if (forms[fi].fl & 32768)                     /* the integer ranges' edges */
+                for (int i = 0; i < (dbl ? 8 : 16); i++) {
+                    static const uint32_t fe[] = {0x4f000000, 0xcf000000, 0x4effffff, 0xcf000001, 0x4f800000, 0x4f7fffff,
+                                                  0x5f000000, 0xdf000000, 0x5effffff, 0x5f800000, 0x5f7fffff, 0x3f000000,
+                                                  0xbf000000, 0xbf800000, 0xbf7fffff, 0x3fc00000, 0xbfc00000, 0x40200000};
+                    static const uint64_t de[] = {0x41e0000000000000ull, 0xc1e0000000000000ull, 0x41dfffffffffffffull,
+                                                  0x41dfffffffe00000ull, 0xc1e0000000100000ull, 0x41efffffffe00000ull,
+                                                  0x41f0000000000000ull, 0x43e0000000000000ull, 0xc3e0000000000000ull,
+                                                  0x43dfffffffffffffull, 0x43f0000000000000ull, 0x43efffffffffffffull,
+                                                  0x3fe0000000000000ull, 0xbfe0000000000000ull, 0xbff0000000000000ull,
+                                                  0xbfefffffffffffffull, 0x41dfffffffd00000ull, 0xc1e00000001fffffull};
+                    uint64_t r = rnd();
+                    if (r & 1)
+                        continue;
+                    uint64_t v = dbl ? de[(r >> 8) % 18] : fe[(r >> 8) % 18];
+                    put(t.b, dbl, i, v);
+                    put(t.m, dbl, i, v);
+                }
             if (forms[fi].fl & 2048)
                 for (int i = 16 >> (2 + dbl); i < (dbl ? 8 : 16); i++) {
                     uint64_t one = dbl ? 0x3ff0000000000000ull : 0x3f800000;
@@ -418,6 +654,12 @@ int main(int argc, char **argv) {
                 if ((t.mxo & 0x22) && !print && !dump && bad++ < 40)
                     printf("FAIL %s (case %d): PE or DE raised (MXCSR %#x)\n", forms[fi].name, c, t.mxo);
                 t.mxo &= ~0x22u;
+            }
+            if ((forms[fi].fl & 8192) && sg == 0) {      /* VSCALEF: see the generator */
+                if (t.mx & 0x40)
+                    t.mxo &= ~0x38u;
+                if ((t.mx & 0x8000) || (t.mxo & 0x18))
+                    t.mxo &= ~0x02u;
             }
             for (int i = 0; i < 64; i++) h = (h ^ t.out[i]) * 0x100000001b3ull;
             for (int b = 0; b < 8; b++) h = (h ^ ((t.kout >> (8 * b)) & 0xff)) * 0x100000001b3ull;

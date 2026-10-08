@@ -1047,15 +1047,23 @@ build_one() {
         cache_store "$cached" "$work_dir/bin/$name"
         return
     fi
+    # The generated AVX-512 tests are thousands of tiny asm functions: gcc's
+    # -O2 takes ~10x as long as -O1 on them (68s against 6s natively for
+    # avx512_float; an hour in the guest). -O1 is what their answers were made
+    # with anyway.
+    opt=-O2
+    case $name in
+        *_avx512_*) opt=-O1 ;;
+    esac
     if [ "$gas_imm_reg_workaround" -eq 0 ]; then
-        cc -O2 -pthread -I"$src_dir" -o "$work_dir/bin/$name" "$src_file" -lm -ldl || return
+        cc $opt -pthread -I"$src_dir" -o "$work_dir/bin/$name" "$src_file" -lm -ldl || return
         cache_store "$cached" "$work_dir/bin/$name"
         return
     fi
 
     asm=$work_dir/$name.s
     fixed_asm=$work_dir/$name.gas-workaround.s
-    cc -O2 -pthread -I"$src_dir" -S -o "$asm" "$src_file"
+    cc $opt -pthread -I"$src_dir" -S -o "$asm" "$src_file"
     awk -f "$work_dir/rewrite-gas-imm-reg.awk" "$asm" >"$fixed_asm"
     cc -pthread -o "$work_dir/bin/$name" "$fixed_asm" -lm -ldl || return
     cache_store "$cached" "$work_dir/bin/$name"
