@@ -25,7 +25,7 @@
 #       TARGET_USER=mke                # primary login to set up (else prompted)
 #       NEW_HOSTNAME=                  # hostname to set (else prompted)
 #       NATIVE_LINKS=1                 # 0 = skip linking /AOK/native (native-links.sh)
-#       SUDO_NOPASSWD=0                # 1 = passwordless %wheel sudo
+#       SUDO_NOPASSWD=1                # 0 = %wheel sudo asks for a password (else prompted)
 #
 # EXPERIMENTAL / not officially supported (see kBundledRootDisplayNameKey in
 # app/Roots.m): Arch ships real util-linux login + PAM (unlike Alpine/
@@ -46,7 +46,7 @@ note() { printf '    %s\n' "$*"; }
 
 # ---- config (env overrides; prompts interactively when run on a TTY) ------
 NEW_HOSTNAME="${NEW_HOSTNAME:-}"
-SUDO_NOPASSWD="${SUDO_NOPASSWD:-0}"
+SUDO_NOPASSWD="${SUDO_NOPASSWD:-}"
 
 # Defaults offered at the prompts. The timezone offered is the device's own, as
 # the app reports it; a build too old to report one offers the old default.
@@ -80,6 +80,10 @@ ask() {
 ask TZ_NAME     "Timezone (e.g. America/New_York, UTC)" "$DEF_TZ"
 ask TARGET_USER "Primary login username to set up"      "$DEF_USER"
 ask NEW_HOSTNAME "Hostname"                              "$DEF_HOSTNAME"
+# Passwordless unless you say otherwise: the login above is created with no
+# password, so a rule that asks for one would leave it unable to use sudo.
+ask SUDO_NOPASSWD "Passwordless sudo for ${TARGET_USER:-the admin group}? (y/n)" "y"
+case "$SUDO_NOPASSWD" in [Yy]*|1) SUDO_NOPASSWD=1 ;; *) SUDO_NOPASSWD=0 ;; esac
 
 # ArchLinuxARM's official aarch64 minirootfs (unlike the plain x86_64
 # archlinux.org tarball) ships a pre-created 'alarm' user out of the box: uid
@@ -386,7 +390,7 @@ if [ "$SUDO_NOPASSWD" = 1 ]; then
     note "passwordless sudo for %wheel"
 else
     echo '%wheel ALL=(ALL:ALL) ALL' > /etc/sudoers.d/00-aok-wheel
-    note "%wheel sudo (password required; set SUDO_NOPASSWD=1 for passwordless)"
+    note "%wheel sudo (password required -- the login needs one: passwd ${TARGET_USER:-<user>})"
 fi
 chmod 0440 /etc/sudoers.d/00-aok-wheel
 if command -v visudo >/dev/null 2>&1 && ! visudo -cf /etc/sudoers.d/00-aok-wheel >/dev/null 2>&1; then
