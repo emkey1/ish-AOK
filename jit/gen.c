@@ -9083,10 +9083,17 @@ static void gen_amd64_helper_tlb_1_retint(struct gen_state *state, void *helper,
 // An exception raised at rip -- the instruction's for a fault, past it for a
 // trap -- ending the block (math.S amd64_raise). Returns false, for `return`.
 static void gen_amd64_raise_gadget(struct gen_state *state, int interrupt, guest_addr_t rip) {
+#if defined(__aarch64__)
     extern void gadget_amd64_raise(void);
     gen(state, (unsigned long) gadget_amd64_raise);
     gen(state, (unsigned long) interrupt);
     gen(state, (unsigned long) rip);
+#else
+    (void) state;
+    (void) interrupt;
+    (void) rip;
+    assert(!"gadget_amd64_raise is only available on __aarch64__");
+#endif
 }
 static bool gen_amd64_raise(struct gen_state *state, int interrupt, guest_addr_t rip) {
     state->amd64_ip = state->amd64_orig_ip;
