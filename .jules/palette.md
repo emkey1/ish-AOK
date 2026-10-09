@@ -47,3 +47,6 @@
 ## 2024-09-26 - Add VoiceOver hints to file manager navigation buttons
 **Learning:** Icon-only navigation buttons in toolbars (like Back, Forward, Up, More Actions) often only have short `accessibilityLabel`s which lack context for screen readers. In iOS, these buttons can benefit greatly from an `accessibilityHint` to provide clearer action descriptions.
 **Action:** When evaluating toolbars with icon-only buttons, ensure an `accessibilityHint` is provided alongside the `accessibilityLabel` if the label alone is not sufficiently descriptive of the resulting action (e.g., "Navigates to the previously visited folder." instead of just "Back").
+## 2024-10-09 - Accessibility hints for scrollback find bar
+**Learning:** Icon-only navigation and interaction buttons often lack context for screen readers. In iOS, elements like search fields and find previous/next buttons benefit from an `accessibilityHint` to provide clearer action descriptions so VoiceOver users know exactly what will happen when they activate them.
+**Action:** When evaluating toolbars with icon-only buttons or text fields, ensure an `accessibilityHint` is provided alongside the `accessibilityLabel` if the label alone is not sufficiently descriptive of the resulting action or purpose.

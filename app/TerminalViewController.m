@@ -794,6 +794,7 @@ static const CGFloat kFindBarHeight = 44;
     field.translatesAutoresizingMaskIntoConstraints = NO;
     field.placeholder = NSLocalizedString(@"Find in scrollback", @"Find bar field placeholder");
     field.accessibilityLabel = NSLocalizedString(@"Find in scrollback", @"Find bar field placeholder");
+    field.accessibilityHint = NSLocalizedString(@"Enter text to search in the terminal scrollback history.", @"Accessibility hint for the find bar text field");
     field.borderStyle = UITextBorderStyleNone;
     field.clearButtonMode = UITextFieldViewModeWhileEditing;
     field.returnKeyType = UIReturnKeySearch;
@@ -823,12 +824,17 @@ static const CGFloat kFindBarHeight = 44;
     self.findPreviousButton = [self _findBarButtonWithSymbol:@"chevron.up" fallback:@"↑"
                                                       action:@selector(findPrevious:)
                                           accessibilityLabel:NSLocalizedString(@"Previous match", @"Find bar button")];
+    self.findPreviousButton.accessibilityHint = NSLocalizedString(@"Finds the previous occurrence of the search text.", @"Accessibility hint for the find bar previous button");
+
     self.findNextButton = [self _findBarButtonWithSymbol:@"chevron.down" fallback:@"↓"
                                                   action:@selector(findNext:)
                                       accessibilityLabel:NSLocalizedString(@"Next match", @"Find bar button")];
+    self.findNextButton.accessibilityHint = NSLocalizedString(@"Finds the next occurrence of the search text.", @"Accessibility hint for the find bar next button");
+
     self.findCloseButton = [self _findBarButtonWithSymbol:@"xmark" fallback:@"✕"
                                                    action:@selector(hideFindBar:)
                                        accessibilityLabel:NSLocalizedString(@"Close find bar", @"Find bar button")];
+    self.findCloseButton.accessibilityHint = NSLocalizedString(@"Closes the scrollback find bar.", @"Accessibility hint for the find bar close button");
     for (UIButton *button in @[self.findPreviousButton, self.findNextButton, self.findCloseButton]) {
         [bar.contentView addSubview:button];
     }
