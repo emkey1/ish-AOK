@@ -5824,13 +5824,67 @@ static bool amd64_addr_canonical(guest_addr_t addr) {
     return (guest_addr_t) ((int64_t) ((uint64_t) addr << 16) >> 16) == addr;
 }
 
+// The kernel log lines Linux 5.10 writes when a task runs SGDT, SIDT, SMSW,
+// SLDT or STR on a UMIP processor, which it then spoofs (arch/x86/kernel/
+// umip.c: umip_printk, two lines an instruction, through one ratelimit of 5
+// lines per 2 minutes, which reports what it dropped when the next window
+// opens -- ___ratelimit). The JIT's gadgets call this, then store the spoofed
+// value themselves (math.S x86_umip_put, misc.S umip_*). inst is umip.c's
+// UMIP_INST_* number.
+static bool umip_ratelimit(void) {
+    static lock_t rl_lock = LOCK_INITIALIZER;
+    static struct timespec begin;
+    static int printed, missed;
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    bool ok;
+    lock(&rl_lock, 0);
+    if (begin.tv_sec == 0 && begin.tv_nsec == 0)
+        begin = now;
+    if (now.tv_sec - begin.tv_sec > 2 * 60 ||
+            (now.tv_sec - begin.tv_sec == 2 * 60 && now.tv_nsec > begin.tv_nsec)) {
+        if (missed != 0) {
+            printk("umip_printk: %d callbacks suppressed\n", missed);
+            missed = 0;
+        }
+        begin = now;
+        printed = 0;
+    }
+    ok = printed < 5;
+    if (ok)
+        printed++;
+    else
+        missed++;
+    unlock(&rl_lock);
+    return ok;
+}
+
+void x86_umip_warn(struct cpu_state *cpu, unsigned inst, qword_t ip, qword_t sp) {
+    (void) cpu;
+    static const char *const names[] = {"SGDT", "SIDT", "SMSW", "SLDT", "STR"};
+    if (inst >= sizeof(names) / sizeof(names[0]))
+        return;
+    if (umip_ratelimit())
+        printk("umip: %s[%d] ip:%llx sp:%llx: %s instruction cannot be used by applications.\n",
+               current->comm, current->pid, (unsigned long long) ip, (unsigned long long) sp,
+               names[inst]);
+    if (umip_ratelimit())
+        printk("umip: %s[%d] ip:%llx sp:%llx: For now, expensive software emulation returns the result.\n",
+               current->comm, current->pid, (unsigned long long) ip, (unsigned long long) sp);
+}
+
 void handle_page_fault_interrupt(struct cpu_state *cpu) {
+    // A UMIP-spoofed store's fault (emu/cpu.h umip_report): consumed here,
+    // whatever happens next.
+    bool umip = cpu->umip_report;
+    cpu->umip_report = false;
     // A data access to a non-canonical address is not a page fault on the
     // hardware but #GP(0), before any translation: SIGSEGV with si_code
     // SI_KERNEL and no address, REG_TRAPNO 13 (camd, Linux 6.12, a load and a
     // store at 0x8000000000001000 and at 0x0000900000001000). It came out as
-    // SEGV_MAPERR at the address.
-    if (current->abi == GUEST_ABI_AMD64 && !amd64_addr_canonical(cpu->segfault_addr)) {
+    // SEGV_MAPERR at the address. (A spoofed store is Linux's copy_to_user,
+    // which fails there like anywhere else.)
+    if (!umip && current->abi == GUEST_ABI_AMD64 && !amd64_addr_canonical(cpu->segfault_addr)) {
         handle_general_protection_interrupt(cpu, 0);
         return;
     }
@@ -5903,6 +5957,14 @@ void handle_page_fault_interrupt(struct cpu_state *cpu) {
             .code = mem_segv_reason(current->mem, cpu->segfault_addr),
             .fault.addr = cpu->segfault_addr,
         };
+        // force_sig_info_umip_fault: SEGV_MAPERR at the operand, CR2 that
+        // address and the error code a user write's.
+        if (umip) {
+            info.code = SEGV_MAPERR_;
+            info.fault.addr = cpu->umip_report_addr;
+            cpu->segfault_addr = cpu->umip_report_addr;
+            cpu->segfault_was_write = true;
+        }
         dump_stack(8);
         deliver_signal(current, SIGSEGV_, info);
     }

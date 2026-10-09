@@ -9095,6 +9095,304 @@ amd64_str_fill:
     ldp  x29, x30, [sp], 96
     ret
 
+# ---- the system-descriptor instructions -----------------------------------
+# x86_seg_desc: what LAR, LSL, VERR and VERW find for a selector in the GDT a
+# task on Linux 5.10 x86_64 sees (emu/i386_sreg.c has the table): entry 4
+# 0x23 (32-bit code), 5 0x2b (data), 6 0x33 (64-bit code), 12-14 the TLS
+# entries set_thread_area fills (fill_ldt's descriptor: type 1 | !read_exec_
+# only << 1 | contents << 2, DPL 3, P = !seg_not_present, AVL = useable, D =
+# seg_32bit, G = limit_in_pages), and 15 0x7b CPUNODE (read-only data, D, the
+# limit getcpu's (node << 12) | cpu). Everything else -- null, the LDT (no
+# task has one), the kernel's, TSS and LDT descriptors (DPL 0, which CPL 3
+# never passes), past entry 15, an empty TLS entry -- is not found.
+# In: w0 = selector, x1 = cpu. Out: w0 = 1 found / 0 not; w4 = LAR's result,
+# descriptor bits 8-23 -- limit 19:16 included, which the SDM leaves undefined
+# and hardware returns (camd); w5 = LSL's limit (scaled by G). Leaf; clobbers
+# x6, x7.
+.global.name x86_seg_desc
+    tbnz w0, 2, 9f
+    ubfx w6, w0, 3, 13
+    cmp  w6, 4
+    b.eq 4f
+    cmp  w6, 5
+    b.eq 5f
+    cmp  w6, 6
+    b.eq 6f
+    cmp  w6, 15
+    b.eq 7f
+    sub  w6, w6, 12
+    cmp  w6, 3
+    b.hs 9f
+    mov  w7, 12                      /* sizeof(struct i386_tls_desc) */
+    mul  w6, w6, w7
+    add  x6, x1, x6
+    mov  x7, CPU_i386_tls
+    add  x6, x6, x7
+    ldr  w7, [x6, 8]                 /* flags; 0 = empty */
+    cbz  w7, 9f
+    ldr  w5, [x6, 4]                 /* limit */
+    and  w4, w5, 0xf0000             /* limit 19:16 */
+    ubfx w6, w7, 1, 2                /* contents */
+    lsl  w6, w6, 2
+    orr  w6, w6, 1                   /* accessed */
+    tst  w7, 0x08                    /* read_exec_only */
+    b.ne 1f
+    orr  w6, w6, 2
+1:  orr  w4, w4, w6, lsl 8
+    orr  w4, w4, 0x7000              /* S, DPL 3 */
+    tst  w7, 0x20                    /* seg_not_present */
+    b.ne 1f
+    orr  w4, w4, 0x8000
+1:  tst  w7, 0x40                    /* useable */
+    b.eq 1f
+    orr  w4, w4, 0x100000
+1:  tst  w7, 0x01                    /* seg_32bit */
+    b.eq 1f
+    orr  w4, w4, 0x400000
+1:  tst  w7, 0x10                    /* limit_in_pages */
+    b.eq 1f
+    orr  w4, w4, 0x800000
+    lsl  w5, w5, 12
+    orr  w5, w5, 0xfff
+1:  mov  w0, 1
+    ret
+4:  mov  w4, 0xfb00                  /* __USER32_CS */
+    movk w4, 0xcf, lsl 16
+    b    8f
+5:  mov  w4, 0xf300                  /* __USER_DS */
+    movk w4, 0xcf, lsl 16
+    b    8f
+6:  mov  w4, 0xfb00                  /* __USER_CS */
+    movk w4, 0xaf, lsl 16
+8:  mov  w5, -1
+    mov  w0, 1
+    ret
+7:  ldr  w5, [x1, CPU_tsc_aux]       /* CPUNODE */
+    and  w4, w5, 0xf0000
+    mov  w6, 0xf500
+    orr  w4, w4, w6
+    orr  w4, w4, 0x400000
+    mov  w0, 1
+    ret
+9:  mov  w0, 0
+    ret
+
+# ZF for each of the four, from x86_seg_desc's answer (w0, w4): LAR and LSL
+# a found descriptor; VERR one that is data, or readable code; VERW writable
+# data. (Every found one passes the privilege check: DPL 3, and nothing here
+# is conforming code.) In: w0, w4, w6 = 0 LAR, 1 LSL, 2 VERR, 3 VERW.
+# Out: w16 = ZF. Leaf; clobbers x7.
+.global.name x86_seg_zf
+    mov  w16, w0
+    cmp  w6, 2
+    b.lo 1f
+    ubfx w7, w4, 8, 4                /* type: bit 3 code, bit 1 R (code) / W (data) */
+    b.ne 2f
+    tbz  w7, 3, 1f                   /* VERR: data is readable */
+    tbnz w7, 1, 1f                   /* readable code */
+    mov  w16, 0
+    ret
+2:  tbnz w7, 3, 3f                   /* VERW: never code */
+    tbnz w7, 1, 1f                   /* writable data */
+3:  mov  w16, 0
+1:  ret
+
+# int x86_umip_put(struct cpu_state *cpu, struct tlb *tlb, guest_addr_t addr,
+#     qword_t lo, qword_t hi, unsigned size)
+#
+# The spoofed result of SGDT, SIDT, SMSW, SLDT or STR with a memory operand:
+# size (2, 6 or 10) bytes of hi:lo, little-endian, at addr -- copy_to_user in
+# Linux's fixup_umip_exception, so the bytes on the first page are written
+# even when the next page fails. Returns 0, or INT_PF with segfault_addr the
+# byte that failed and umip_report set to report the operand's first byte
+# (emu/cpu.h).
+.global.name x86_umip_put
+    stp  x29, x30, [sp, -80]!
+    mov  x29, sp
+    stp  x19, x20, [sp, 16]
+    stp  x21, x22, [sp, 32]
+    stp  x23, x24, [sp, 48]
+    str  x25, [sp, 64]
+    mov  x19, x0
+    mov  x20, x1
+    mov  x21, x2
+    mov  x22, x3
+    mov  x23, x4
+    mov  w24, w5
+    mov  x0, x20
+    mov  x1, x21
+    bl   NAME(tlb_write_ptr_slow)
+    cbz  x0, 8f
+    and  x9, x21, 0xfff
+    mov  x25, 0x1000
+    sub  x25, x25, x9                /* bytes to the page's end */
+    cmp  x25, x24
+    csel x25, x25, x24, lo           /* those on the first page */
+    mov  x12, 0
+    bl   1f
+    cmp  x25, x24
+    b.eq 7f
+    mov  x0, x20
+    add  x1, x21, x25
+    bl   NAME(tlb_write_ptr_slow)
+    cbz  x0, 9f
+    sub  x0, x0, x25                 /* so [x0 + i] is byte i */
+    mov  x12, x25
+    mov  x25, x24
+    bl   1f
+7:  mov  w0, 0
+    b    99f
+    /* bytes x12 .. x25 - 1 to x0 + i */
+1:  cmp  x12, 8
+    b.hs 2f
+    lsl  x13, x12, 3
+    lsr  x13, x22, x13
+    b    3f
+2:  sub  x13, x12, 8
+    lsl  x13, x13, 3
+    lsr  x13, x23, x13
+3:  strb w13, [x0, x12]
+    add  x12, x12, 1
+    cmp  x12, x25
+    b.lo 1b
+    ret
+8:  mov  x1, x21                     /* the first byte failed */
+    b    90f
+9:  add  x1, x21, x25                /* the second page's */
+90: str  x1, [x20, TLB_segfault_addr]
+    str  x1, [x19, CPU_segfault_addr]
+    mov  w0, 1
+    strb w0, [x19, CPU_segfault_was_write]
+    mov  x9, CPU_umip_report
+    strb w0, [x19, x9]
+    mov  x9, CPU_umip_report_addr
+    str  x21, [x19, x9]
+    mov  w0, INT_PF
+99: ldr  x25, [sp, 64]
+    ldp  x23, x24, [sp, 48]
+    ldp  x21, x22, [sp, 32]
+    ldp  x19, x20, [sp, 16]
+    ldp  x29, x30, [sp], 80
+    ret
+
+# SGDT/SIDT (0F 01 /0, /1), SMSW (0F 01 /4), SLDT and STR (0F 00 /0, /1) with
+# a memory operand, as Linux 5.10 spoofs them on a UMIP processor (umip.c):
+# the warning, then [size bytes of hi:lo] at the address. gen.c makes the
+# value: a zero limit and 0xfffffffffffe0000 (GDT) or 0xffffffffffff0000
+# (IDT) for SGDT/SIDT; two bytes of CR0_STATE 0x80050033, of 0, or of
+# GDT_ENTRY_TSS * 8 = 0x40 for the others. A fault: SIGSEGV/SEGV_MAPERR at
+# the operand (the instruction not done). The rip was flushed to the
+# instruction. [meta][disp][next_ip][lo][hi][size | inst << 8][ip], gret 7.
+.gadget amd64_umip_mem
+    ldr  x8, [_ip]
+    ldr  x9, [_ip, 8]
+    amd64_vmem_addr
+    mov  x19, x9
+    save_c
+    add  x14, _cpu, CPU_amd64_regs
+    ldr  x3, [x14, 4 * 8]            /* rsp */
+    ldr  x2, [_ip, 48]
+    ldr  x9, [_ip, 40]
+    lsr  w9, w9, 8
+    mov  x0, _cpu
+    mov  w1, w9
+    bl   NAME(x86_umip_warn)
+    restore_c
+    save_c
+    ldr  x3, [_ip, 24]
+    ldr  x4, [_ip, 32]
+    ldr  x5, [_ip, 40]
+    and  w5, w5, 0xff
+    mov  x0, _cpu
+    sub  x1, _tlb, TLB_entries
+    mov  x2, x19
+    bl   NAME(x86_umip_put)
+    mov  x19, x0
+    restore_c
+    cbnz w19, 1f
+    gret 7
+1:  mov  x0, x19
+    b    jit_exit
+
+# SMSW, SLDT and STR with a register operand: the warning, then the operand
+# size's bytes of the value into the register -- Linux memcpys them into the
+# saved register, so a 32-bit result leaves the upper half as it was, unlike
+# the hardware's own 32-bit write. [reg][value][bytes | inst << 8][ip], gret 4.
+.gadget amd64_umip_reg
+    save_c
+    add  x14, _cpu, CPU_amd64_regs
+    ldr  x3, [x14, 4 * 8]
+    ldr  x2, [_ip, 24]
+    ldr  x9, [_ip, 16]
+    lsr  w9, w9, 8
+    mov  x0, _cpu
+    mov  w1, w9
+    bl   NAME(x86_umip_warn)
+    restore_c
+    ldr  x9, [_ip]
+    ldr  x10, [_ip, 8]
+    ldr  x11, [_ip, 16]
+    and  w11, w11, 0xff
+    add  x14, _cpu, CPU_amd64_regs
+    add  x14, x14, x9, lsl 3
+    cmp  w11, 2
+    b.ne 1f
+    strh w10, [x14]
+    gret 4
+1:  cmp  w11, 4
+    b.ne 2f
+    str  w10, [x14]
+    gret 4
+2:  str  x10, [x14]
+    gret 4
+
+# LAR (0F 02), LSL (0F 03), VERR and VERW (0F 00 /4, /5): the selector from a
+# 16-bit register or memory operand, x86_seg_desc's answer, ZF (nothing else);
+# LAR and LSL write the access rights or limit only when ZF is set -- 16 bits
+# (the upper bits kept) or 32 and 64 (zero-extended). [meta][disp][next_ip]
+# [kind], gret 4: kind bits 0-1 the instruction (LAR, LSL, VERR, VERW), bit 2
+# a memory operand, 4-7 the source register, 8-11 the destination, 12-15 its
+# size in bytes.
+.gadget amd64_seg_desc
+    ldr  x15, [_ip, 24]
+    tbz  x15, 2, 1f
+    ldr  x8, [_ip]
+    ldr  x9, [_ip, 8]
+    amd64_vmem_addr
+    amd64_vread_prep 2, seg_desc
+    ldrh w0, [x9]
+    b    2f
+1:  ubfx x9, x15, 4, 4
+    add  x14, _cpu, CPU_amd64_regs
+    add  x14, x14, x9, lsl 3
+    ldrh w0, [x14]
+2:  ldr  x15, [_ip, 24]
+    bl   NAME(x86_seg_desc)
+    and  w6, w15, 3
+    bl   NAME(x86_seg_zf)
+    cbz  w16, 5f
+    cmp  w6, 1
+    b.hi 5f
+    csel w4, w5, w4, eq              /* LSL: the limit */
+    ubfx x9, x15, 8, 4
+    ubfx x10, x15, 12, 4
+    add  x14, _cpu, CPU_amd64_regs
+    add  x14, x14, x9, lsl 3
+    cmp  w10, 2
+    b.ne 4f
+    strh w4, [x14]
+    b    5f
+4:  str  x4, [x14]                   /* w4 written: zero-extended */
+5:  ldrb w11, [_cpu, CPU_flags_res]  /* ZF alone (amd64_set_zf_only, below) */
+    bic  w11, w11, ZF_RES
+    strb w11, [_cpu, CPU_flags_res]
+    ldr  w11, [_cpu, CPU_eflags]
+    bic  w11, w11, ZF_FLAG
+    orr  w11, w11, w16, lsl 6
+    str  w11, [_cpu, CPU_eflags]
+    gret 4
+    amd64_vread_bullshit 2, seg_desc
+
 .irp op, movs,stos,lods,scas,cmps
 amd64_gen_string \op, 1, 8, 0
 amd64_gen_string \op, 2, 16, 1

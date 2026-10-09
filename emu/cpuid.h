@@ -236,11 +236,20 @@ static inline dword_t cpuid_leaf7_ebx_features(void) {
 #endif
 }
 
+// UMIP (bit 2): SGDT, SIDT, SMSW, SLDT and STR behave as on a UMIP processor
+// under Linux 5.10, which spoofs them (jit/gen.c UMIP_MEM) -- the JIT's
+// gadgets on an aarch64 host; elsewhere they are #UD.
+#if defined(__aarch64__)
+#define CPUID_LEAF7_ECX_UMIP (1u << 2)
+#else
+#define CPUID_LEAF7_ECX_UMIP 0u
+#endif
 static inline dword_t cpuid_leaf7_ecx_features(void) {
 #if !CPUID_ADVERTISE_VECTOR_STATE
-    return 0;
+    return CPUID_LEAF7_ECX_UMIP;
 #else
-    return (1u << 1)    // avx512_vbmi
+    return CPUID_LEAF7_ECX_UMIP
+        | (1u << 1)     // avx512_vbmi
         | (1u << 6)     // avx512_vbmi2
         | (1u << 8)     // gfni
         | (1u << 9)     // vaes

@@ -9102,6 +9102,87 @@ __attribute__((unused)) static bool gen_amd64_ud(struct gen_state *state) {
     return gen_amd64_raise(state, INT_UNDEFINED, state->amd64_orig_ip);
 }
 
+#if defined(__aarch64__)
+// 0f 00 /0 /1 /4 /5 /6 /7, 0f 01 /0 /1 /4, 0f 02 and 0f 03 (the arm in
+// gen_step64 says what they do); m is the ModRM. -1: not one of these.
+static int gen_amd64_sys_desc(struct gen_state *state, struct tlb *tlb,
+        const struct amd64_jit_insn *insn, byte_t m) {
+    unsigned reg = (m >> 3) & 7, mod = m >> 6;
+    int kind;                                   // 0-4 UMIP_INST_*, 5-8 LAR LSL VERR VERW
+    if (insn->op2 == 0x01)
+        kind = mod != 3 && reg <= 1 ? (int) reg : reg == 4 ? 2 : -1;
+    else if (insn->op2 == 0x00)
+        kind = reg <= 1 ? (int) reg + 3 : reg == 4 ? 7 : reg == 5 ? 8 : reg >= 6 ? 9 : -1;
+    else
+        kind = insn->op2 == 0x02 ? 5 : 6;
+    // In 0f 01, XGETBV (d0), VMCALL (c1) and RDTSCP (f9) have their own arms
+    // and the ring-0 forms raised #GP above; every other form -- MONITOR,
+    // MWAIT, CLAC, STAC, XEND, XTEST, SERIALIZE, RDPKRU/WRPKRU, the VMX, SVM
+    // and AMD-only ones, /5 -- is #UD on the processor CPUID describes (none
+    // is advertised; the AMD ones are not Intel's).
+    if (kind < 0)
+        return insn->op2 == 0x01 && m != 0xc1 && m != 0xd0 && m != 0xf9 ? gen_amd64_ud(state) : -1;
+    if (kind == 9)
+        return gen_amd64_ud(state);
+    unsigned bytes = insn->rex.w ? 8 : insn->operand_size_prefix ? 2 : 4;
+    struct amd64_jit_insn mi = *insn;
+    mi.modrm = m;
+    mi.has_modrm = true;
+    unsigned long meta = 0, disp = 0;
+    guest_addr_t next_ip = state->amd64_ip + 1;
+    if (mod != 3 && !gen_amd64_decode_mem_meta(state, tlb, &mi, 16, &meta, &disp, &next_ip))
+        return -1;
+    if (mod == 3 && insn->address_size_prefix)
+        return -1;
+    unsigned rm_reg = (m & 7) | (insn->rex.b ? 8 : 0);
+    unsigned r_reg = reg | (insn->rex.r ? 8 : 0);
+    state->amd64_ip = next_ip;
+    gen_amd64_flush_reg_cache(state);
+    gen_amd64_flush_rip(state);
+    if (kind <= 4) {
+        static const qword_t values[] = {0, 0, 0x80050033, 0, 0x40};
+        if (mod != 3) {
+            extern void gadget_amd64_umip_mem(void);
+            qword_t lo, hi = 0;
+            unsigned size = 2;
+            if (kind <= 1) {                    // a zero limit and the 64-bit base
+                qword_t base = kind == 0 ? 0xfffffffffffe0000ull : 0xffffffffffff0000ull;
+                lo = base << 16;
+                hi = base >> 48;
+                size = 10;
+            } else {
+                lo = values[kind] & 0xffff;
+            }
+            gen(state, (unsigned long) gadget_amd64_umip_mem);
+            gen(state, meta);
+            gen(state, disp);
+            gen(state, (unsigned long) next_ip);
+            gen(state, (unsigned long) lo);
+            gen(state, (unsigned long) hi);
+            gen(state, (unsigned long) (size | (unsigned) kind << 8));
+            gen(state, (unsigned long) insn->start_ip);
+        } else {
+            extern void gadget_amd64_umip_reg(void);
+            gen(state, (unsigned long) gadget_amd64_umip_reg);
+            gen(state, rm_reg);
+            gen(state, (unsigned long) values[kind]);
+            gen(state, (unsigned long) (bytes | (unsigned) kind << 8));
+            gen(state, (unsigned long) insn->start_ip);
+        }
+    } else {
+        extern void gadget_amd64_seg_desc(void);
+        gen(state, (unsigned long) gadget_amd64_seg_desc);
+        gen(state, meta);
+        gen(state, disp);
+        gen(state, (unsigned long) next_ip);
+        gen(state, (unsigned long) ((kind - 5) | (mod != 3 ? 4 : 0) | rm_reg << 4 |
+                                    r_reg << 8 | bytes << 12));
+    }
+    gen_amd64_defer_rip(state, next_ip);
+    return true;
+}
+#endif
+
 // ---------------------------------------------------------------------------
 // Bridge inventory. Every gen_amd64_helper_* emission is a place where a
 // compiled amd64 block calls back into emu/amd64_interp.c's semantics rather
@@ -12012,6 +12093,8 @@ static bool amd64_addr32_is_inert(struct gen_state *state, struct tlb *tlb,
     if (insn->op2 == 0x01)                    // MONITOR, MONITORX, CLZERO: rAX is an address
         return tlb_read(tlb, state->amd64_ip, &m, 1) && (m >> 6) == 3 &&   // (the decoder takes no ModRM here)
                 m != 0xc8 && m != 0xfa && m != 0xfc;
+    if (insn->op2 == 0x00 || insn->op2 == 0x02 || insn->op2 == 0x03)      // (nor here)
+        return tlb_read(tlb, state->amd64_ip, &m, 1) && (m >> 6) == 3;
     if (insn->has_modrm)
         return amd64_modrm_mod(insn->modrm) == 3;
     return true;
@@ -12019,8 +12102,7 @@ static bool amd64_addr32_is_inert(struct gen_state *state, struct tlb *tlb,
 
 // Whether an effective 0x67 changes only a ModRM memory operand's address:
 // any instruction with one but the string/XLAT/moffs/LOOP family (no ModRM),
-// MASKMOV* and 0F 01 (implicit addresses: MASKMOV's arms take 0x67
-// themselves), and VSIB gathers/scatters (VEX map 2 0x90-0x93, EVEX map 2
+// MASKMOV* (an implicit address: its arms take 0x67 themselves), and VSIB gathers/scatters (VEX map 2 0x90-0x93, EVEX map 2
 // 0x90-0x93 and 0xa0-0xa3) with a segment override -- without one, their
 // gadgets truncate each element's base + index + disp.
 static bool amd64_addr32_is_plain_ea(struct gen_state *state, struct tlb *tlb,
@@ -12043,8 +12125,12 @@ static bool amd64_addr32_is_plain_ea(struct gen_state *state, struct tlb *tlb,
         }
         return insn->has_modrm;
     }
-    if (insn->op2 == 0xf7 || insn->op2 == 0x01)
+    if (insn->op2 == 0xf7)
         return false;
+    if (insn->op2 <= 0x03) {                  // 0F 00-03: no ModRM in the generic decode
+        byte_t m;
+        return tlb_read(tlb, state->amd64_ip, &m, 1) && (m >> 6) != 3;
+    }
     return insn->has_modrm || insn->op2 == 0x38 || insn->op2 == 0x3a;
 }
 
@@ -12733,7 +12819,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
     // tests/manual/x86/priv_gp.c). They fell through to the unhandled-opcode
     // path, which is SIGILL. CLTS, INVD, WBINVD, MOV to/from CR and DR,
     // WRMSR, RDMSR, RDPMC; in 0f 00, LLDT and LTR; in 0f 01, LGDT/LIDT/INVLPG
-    // (memory forms of /2, /3, /7), LMSW (/6) and XSETBV (d1). The group
+    // (memory forms of /2, /3, /7), LMSW (/6), XSETBV (d1) and SWAPGS (f8). The group
     // members a user may run (SLDT, XGETBV, RDTSCP, RDPKRU, ...) are left to
     // their own arms. The ModRM is read here rather than by the generic
     // decode, which does not take one for these two groups.
@@ -12757,7 +12843,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
             if (insn.op2 == 0x00)
                 priv = reg == 2 || reg == 3;
             else
-                priv = reg == 6 || m == 0xd1 ||
+                priv = reg == 6 || m == 0xd1 || m == 0xf8 ||      // (f8 SWAPGS)
                     (mod != 3 && (reg == 2 || reg == 3 || reg == 7));
             break;
         }
@@ -12767,6 +12853,26 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
                     (unsigned long long) insn.start_ip, (unsigned) insn.op2);
             return gen_amd64_raise(state, INT_PRIV, insn.start_ip);
         }
+    }
+
+    // The system-descriptor instructions a user may run, as on i386 (UMIP_MEM
+    // and SEG_DESC): SGDT/SIDT (0f 01 /0, /1, memory) and SMSW (/4), SLDT and
+    // STR (0f 00 /0, /1) spoofed as Linux 5.10 does on a UMIP processor --
+    // 64-bit bases 0xfffffffffffe0000 / 0xffffffffffff0000, ten bytes -- and
+    // VERR, VERW (0f 00 /4, /5), LAR (0f 02) and LSL (0f 03) from Linux's GDT
+    // (math.S amd64_umip_mem, amd64_umip_reg, amd64_seg_desc). 0f 00 /6 and /7
+    // are #UD. The generic decode takes no ModRM for these opcodes.
+    if (insn.two_byte_opcode && !insn.lock_prefix && insn.rep_mode == amd64_jit_rep_none &&
+            insn.op2 <= 0x03) {
+        byte_t m;
+        if (!tlb_read(tlb, state->amd64_ip, &m, sizeof(m))) {
+            state->amd64_ip = state->amd64_orig_ip;
+            state->amd64_fallback_to_interp = true;
+            return false;
+        }
+        int r = gen_amd64_sys_desc(state, tlb, &insn, m);
+        if (r >= 0)
+            return r;
     }
 
     if (amd64_jit_plain_prefixes(&insn) && insn.two_byte_opcode &&
@@ -21101,6 +21207,35 @@ void helper_rdtsc(struct cpu_state *cpu);
 #define RDTSCP() UNDEFINED                      // (advertised on aarch64 hosts only)
 #define RDPID(dst) UNDEFINED
 #endif
+// The system-descriptor instructions a user may run. Linux 5.10 on a UMIP
+// processor (which CPUID says this is) traps SGDT, SIDT, SMSW, SLDT and STR
+// and spoofs them (arch/x86/kernel/umip.c): a warning in the kernel log, then
+// for SGDT/SIDT a zero limit and a 32-bit base of 0xfffe0000 / 0xffff0000
+// (six bytes); for the rest CR0_STATE 0x80050033, 0 (no LDT) or 0x40 --
+// two bytes to memory, the operand size's to a register (misc.S umip_*).
+// LAR, LSL, VERR and VERW are not trapped: misc.S seg_desc answers from
+// Linux's GDT. inst is umip.c's UMIP_INST_*.
+#if defined(__aarch64__)
+#define UMIP_MEM(inst, lo, size) do { g_addr(); g(umip_mem); GEN(state->orig_ip); GEN(lo); GEN(0); \
+        GEN((size) | (inst) << 8); } while (0)
+#define UMIP_TABLE(which) UMIP_MEM(which, ((which) == 0 ? 0xfffe0000ul : 0xffff0000ul) << 16, 6)
+#define UMIP_STORE(inst, value) do { \
+    if (modrm.type == modrm_reg) { \
+        ggg(umip_warn, state->orig_ip, (inst) << 8); \
+        imm = (value); \
+        load(imm, oz); \
+        store(modrm_val, oz); \
+    } else { \
+        UMIP_MEM(inst, (value) & 0xffff, 2); \
+    } \
+} while (0)
+#define SEG_DESC(kind) do { load(modrm_val, 16); gg(seg_desc, (kind) | modrm.opcode << 8 | (oz / 8) << 12); } while (0)
+#else
+#define UMIP_TABLE(which) UNDEFINED
+#define UMIP_STORE(inst, value) UNDEFINED
+#define SEG_DESC(kind) UNDEFINED
+#endif
+
 #if defined(__aarch64__)
 #define CPUID() gg(cpuid, (unsigned long) &cpuid_tables[0])
 #define XGETBV() ggg(xgetbv, (unsigned long) xcr0_value(), state->orig_ip)

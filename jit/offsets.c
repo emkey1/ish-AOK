@@ -54,6 +54,8 @@ void cpu() {
     OFFSET(CPU, cpu_state, mm);
     OFFSET(CPU, cpu_state, mxcsr);
     OFFSET(CPU, cpu_state, tsc_aux);
+    OFFSET(CPU, cpu_state, umip_report);
+    OFFSET(CPU, cpu_state, umip_report_addr);
     MACRO(XCR0_X87_);
     MACRO(XCR0_SSE_);
     MACRO(XCR0_YMM_);

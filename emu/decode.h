@@ -106,16 +106,25 @@ restart:
                 case 0x30: TRACEI("wrmsr"); PRIV(); break;
                 case 0x32: TRACEI("rdmsr"); PRIV(); break;
                 case 0x33: TRACEI("rdpmc"); PRIV(); break;
-                // 0f 00: LLDT (/2) and LTR (/3) are ring-0. SLDT/STR/VERR/VERW
-                // are user-mode and stay as they were.
+                // 0f 00: LLDT (/2) and LTR (/3) are ring-0. SLDT (/0) and STR
+                // (/1) as Linux spoofs them on a UMIP processor (0 and
+                // GDT_ENTRY_TSS * 8); VERR (/4) and VERW (/5) look the
+                // selector up in Linux's GDT (see UMIP_* and SEG_DESC in gen.c).
                 case 0x00: TRACEI("group 0f00");
                            READMODRM;
-                           if (modrm.opcode == 2 || modrm.opcode == 3) {
-                               PRIV();
-                           } else {
-                               UNDEFINED;
+                           switch (modrm.opcode) {
+                           case 0: UMIP_STORE(3, 0); break;
+                           case 1: UMIP_STORE(4, 0x40); break;
+                           case 2: case 3: PRIV(); break;
+                           case 4: SEG_DESC(2); break;
+                           case 5: SEG_DESC(3); break;
+                           default: UNDEFINED;
                            }
                            break;
+                case 0x02: TRACEI("lar modrm16, reg");
+                           READMODRM; SEG_DESC(0); break;
+                case 0x03: TRACEI("lsl modrm16, reg");
+                           READMODRM; SEG_DESC(1); break;
                 case 0x05: TRACEI("syscall");
                            SYSCALL_AMD64; break;
 
@@ -229,7 +238,7 @@ restart:
                 //
                 // The ring-0 members are #GP(0): LGDT/LIDT/INVLPG (the memory
                 // forms of /2, /3, /7), LMSW (/6, either form) and XSETBV
-                // (0f 01 d1). SGDT/SIDT/SMSW depend on UMIP and stay #UD here.
+                // (0f 01 d1). SGDT/SIDT/SMSW are spoofed, as on a UMIP processor.
                 case 0x01: TRACEI("group 0f01");
                            READMODRM;
                            if (modrm.opcode == 6 ||
@@ -241,6 +250,14 @@ restart:
                            }
                            if (modrm.type == modrm_reg && modrm.opcode == 7 && modrm.base == reg_ecx) {
                                RDTSCP(); break;      // (0f 01 f9)
+                           }
+                           // SGDT, SIDT (memory only) and SMSW, as Linux
+                           // spoofs them on a UMIP processor
+                           if (modrm.type != modrm_reg && modrm.opcode <= 1) {
+                               UMIP_TABLE(modrm.opcode); break;
+                           }
+                           if (modrm.opcode == 4) {
+                               UMIP_STORE(2, 0x80050033); break;
                            }
                            if (modrm.type != modrm_reg || modrm.opcode != 2 || modrm.base != reg_eax)
                                UNDEFINED;

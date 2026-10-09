@@ -468,6 +468,13 @@ struct cpu_state {
     // syscall can register rseq, exec, change the CPU count) and for a task
     // clone or exec starts (rseq_fork, rseq_exec).
     dword_t tsc_aux;
+    // A UMIP-spoofed SGDT/SIDT/SMSW/SLDT/STR whose store faulted (math.S
+    // x86_umip_put): Linux reports it as SIGSEGV/SEGV_MAPERR at the operand's
+    // first byte whatever failed (fixup_umip_exception). segfault_addr holds
+    // the byte that did, so a page that can be brought in is, and the
+    // instruction runs again; the page-fault handler consumes the flag.
+    bool umip_report;
+    guest_addr_t umip_report_addr;
 };
 
 #define AMD64_SREG_ES 0

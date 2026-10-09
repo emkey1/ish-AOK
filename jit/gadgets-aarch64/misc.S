@@ -23,6 +23,111 @@
     ldr  _tmp, [_cpu, CPU_tsc_aux]
     gret
 
+# SGDT/SIDT, SMSW, SLDT and STR as Linux 5.10 spoofs them for a 32-bit task
+# on a UMIP processor: the kernel-log warning (kernel/calls.c x86_umip_warn),
+# then, for a memory operand, size bytes of hi:lo at _addr (math.S
+# x86_umip_put: six for SGDT/SIDT, a limit and a 32-bit base; two for the
+# rest). A register operand's value is gen.c's ordinary store after
+# umip_warn. umip_mem: [orig_ip][lo][hi][size | inst << 8], gret 4.
+.macro umip_warn_call argw
+    save_c
+    ldr  x9, [_ip, \argw * 8]
+    lsr  w9, w9, 8
+    ldr  w10, [_ip]
+    mov  w11, esp
+    mov  x0, _cpu
+    mov  w1, w9
+    mov  w2, w10
+    mov  w3, w11
+    bl   NAME(x86_umip_warn)
+    restore_c
+.endm
+.gadget umip_mem
+    umip_warn_call 3
+    save_c
+    mov  w12, _addr
+    ldr  x13, [_ip, 8]
+    ldr  x4, [_ip, 16]
+    ldr  x5, [_ip, 24]
+    and  w5, w5, 0xff
+    mov  x0, _cpu
+    sub  x1, _tlb, TLB_entries
+    mov  w2, w12
+    mov  x3, x13
+    bl   NAME(x86_umip_put)
+    mov  x14, x0
+    restore_c
+    cbnz w14, 1f
+    gret 4
+1:  b    segfault_write                  /* tlb->segfault_addr: the byte that failed */
+# [orig_ip][inst << 8], gret 2
+.gadget umip_warn
+    umip_warn_call 1
+    gret 2
+
+# LAR, LSL, VERR, VERW on the selector in _tmp (gen.c loaded it, 16 bits):
+# math.S x86_seg_desc and x86_seg_zf, ZF alone; LAR and LSL write the access
+# rights or limit to the register only when ZF is set, 16 bits (the upper
+# half kept) or 32. [kind]: bits 0-1 the instruction, 8-10 the register,
+# 12-15 its size in bytes. gret 1.
+.gadget seg_desc
+    ldr  x15, [_ip]
+    and  w0, _tmp, 0xffff
+    bl   NAME(x86_seg_desc)
+    and  w6, w15, 3
+    bl   NAME(x86_seg_zf)
+    cbz  w16, 5f
+    cmp  w6, 1
+    b.hi 5f
+    csel w4, w5, w4, eq                  /* LSL: the limit */
+    ubfx x9, x15, 8, 3
+    ubfx x10, x15, 12, 4
+    adr  x11, 6f
+    cmp  w10, 2
+    b.ne 1f
+    adr  x11, 7f
+1:  add  x11, x11, x9, lsl 3
+    br   x11
+6:  mov  eax, w4
+    b    5f
+    mov  ecx, w4
+    b    5f
+    mov  edx, w4
+    b    5f
+    mov  ebx, w4
+    b    5f
+    mov  esp, w4
+    b    5f
+    mov  ebp, w4
+    b    5f
+    mov  esi, w4
+    b    5f
+    mov  edi, w4
+    b    5f
+7:  bfi  eax, w4, 0, 16
+    b    5f
+    bfi  ecx, w4, 0, 16
+    b    5f
+    bfi  edx, w4, 0, 16
+    b    5f
+    bfi  ebx, w4, 0, 16
+    b    5f
+    bfi  esp, w4, 0, 16
+    b    5f
+    bfi  ebp, w4, 0, 16
+    b    5f
+    bfi  esi, w4, 0, 16
+    b    5f
+    bfi  edi, w4, 0, 16
+    b    5f
+5:  ldr  w8, [_cpu, CPU_flags_res]
+    ldr  w9, [_cpu, CPU_eflags]
+    and  w8, w8, ~ZF_RES
+    bfi  w9, w16, 6, 1
+    str  w8, [_cpu, CPU_flags_res]
+    str  w9, [_cpu, CPU_eflags]
+    gret 1
+
 .gadget cpuid
     ldr  x10, [_ip]                  /* cpuid_tables[0] */
     mov  w8, eax

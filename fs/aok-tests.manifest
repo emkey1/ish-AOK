@@ -60,6 +60,7 @@ x86/x86_movbe.c
 x86/x86_rdtscp.c
 x86/x86_lock_ops.c
 x86/x86_bt_mem_index.c
+x86/x86_sys_desc.c
 x86/x86_prefetch.c
 x86/x86_signal_entry_flags.c
 x86/x86_cpuid_xgetbv.c
