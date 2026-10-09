@@ -9093,6 +9093,9 @@ static void gen_amd64_helper_tlb_1_retint(struct gen_state *state, void *helper,
     gen(state, arg0);
 }
 
+#if defined(__aarch64__)
+// amd64_raise is an aarch64 gadget (math.S); an x86_64 host's gen_step64 is
+// the interpreter-only stub, which has no use for these.
 // An exception raised at rip -- the instruction's for a fault, past it for a
 // trap -- ending the block (math.S amd64_raise). Returns false, for `return`.
 static void gen_amd64_raise_gadget(struct gen_state *state, int interrupt, guest_addr_t rip) {
@@ -9114,6 +9117,7 @@ static bool gen_amd64_raise(struct gen_state *state, int interrupt, guest_addr_t
 __attribute__((unused)) static bool gen_amd64_ud(struct gen_state *state) {
     return gen_amd64_raise(state, INT_UNDEFINED, state->amd64_orig_ip);
 }
+#endif
 
 #if defined(__aarch64__)
 // 0f 00 /0 /1 /4 /5 /6 /7, 0f 01 /0 /1 /4, 0f 02 and 0f 03 (the arm in

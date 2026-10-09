@@ -195,7 +195,7 @@ static int compare_cpus(struct cpu_state *cpu, struct tlb *tlb, int pid, int und
     fpregs.swd &= FSW_MASK;
     for (int i = 0; i < 8; i++) {
         int ii = (cpu->top + i) % 8;
-        uint64_t mm = cpu->mm[ii].qw;
+        uint64_t mm = CPU_MMX(cpu, ii).qw;
         uint64_t f_signif =  cpu->fp[ii].signif;
         uint64_t expected = *(uint64_t *) &fpregs.st_space[i * 4];
         if (f_signif != expected && mm != expected) {
