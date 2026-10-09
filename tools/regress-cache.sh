@@ -68,7 +68,10 @@ case $direction in
             tar xf - -C \"\$t\"
             as mkdir -p $device_dir
             n0=\$(ls $device_dir | wc -l)
-            as cp -pn \"\$t\"/* $device_dir/ 2>/dev/null || true
+            # \"\$t\"/. rather than \"\$t\"/*: a store of a few thousand
+            # entries is more argument text than an older build's execve took
+            # (128 KB), and cp then copied nothing at all.
+            as cp -pnR \"\$t\"/. $device_dir/ 2>/dev/null || true
             as chmod 1777 $device_dir 2>/dev/null || true
             rm -rf \"\$t\"
             echo \"pushed: \$((\$(ls $device_dir | wc -l) - n0)) new on the device, \$(ls $device_dir | wc -l) there now\""
