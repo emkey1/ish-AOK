@@ -5,13 +5,18 @@
 // FXSAVE after MMX code shows the MMX values in the ST slots, FXRSTOR's ST
 // slots are what MMX then reads, x87 code after MMX without EMMS sees them,
 // and the signal frame -- an XSAVE image -- carries them: a handler that uses
-// MMX does not change what the interrupted code has. AOK kept the MMX
-// registers apart, so none of this held. Checked on an AMD Ryzen (camd),
-// 32- and 64-bit builds.
+// MMX does not change what the interrupted code has. And an MMX instruction
+// whose memory operand faults changes none of it: the signal frame shows TOP,
+// the tags and the registers as they were. AOK kept the MMX registers apart,
+// so none of this held. Checked on an AMD Ryzen (camd), 32- and 64-bit builds.
+#define _GNU_SOURCE
+#include <setjmp.h>
 #include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/mman.h>
+#include <ucontext.h>
 
 static int failures, checks;
 #define CHECK(cond, ...) do { checks++; if (!(cond)) { if (failures++ < 40) { printf("FAIL "); printf(__VA_ARGS__); printf("\n"); } } } while (0)
@@ -50,6 +55,36 @@ static void handler(int sig) {
     MOVQ_IN(0, y); MOVQ_IN(5, y);
     __asm__ volatile("emms");
     handled = 1;
+}
+
+// The x87 state in the signal frame of a fault: TOP, the tags, and the
+// exponent of physical register 3, which is ST((3 - TOP) & 7).
+static sigjmp_buf jb;
+static void *fault_page;
+static volatile int segv_seen, frame_tag_ok;
+static volatile unsigned frame_top, frame_tag, frame_exp3;
+static void on_segv(int sig, siginfo_t *si, void *ctx) {
+    (void) sig; (void) si;
+    ucontext_t *uc = ctx;
+    segv_seen = 1;
+    // The kernel's frame layouts (struct _fpstate_64 / _fpstate_32), spelled
+    // out: glibc and musl name them differently.
+#if defined(__x86_64__)
+    struct { uint16_t cwd, swd, twd, fop; uint64_t rip, rdp; uint32_t mxcsr, mxcsr_mask;
+             struct { uint16_t sig[4], exp, pad[3]; } st[8]; } *f = (void *) uc->uc_mcontext.fpregs;
+    frame_top = (f->swd >> 11) & 7;
+    frame_tag = f->twd;                                // abridged
+    frame_tag_ok = f->twd == 0x80;
+    frame_exp3 = f->st[(3 - frame_top) & 7].exp;
+#else
+    struct __attribute__((packed)) { uint32_t cw, sw, tag, ipoff, cssel, dataoff, datasel;
+             struct __attribute__((packed)) { uint16_t sig[4], exp; } st[8]; } *f = (void *) uc->uc_mcontext.fpregs;
+    frame_top = (f->sw >> 11) & 7;
+    frame_tag = f->tag & 0xffff;                       // the full tag word
+    frame_tag_ok = (f->tag & 0xffff) == 0x3fff;        // 7 valid (00), the rest empty (11)
+    frame_exp3 = f->st[(3 - frame_top) & 7].exp;
+#endif
+    siglongjmp(jb, 1);
 }
 
 int main(void) {
@@ -137,6 +172,34 @@ int main(void) {
     CHECK(z[2] == X[2] && z[7] == X[7], "after FRSTOR: MM2 %016llx MM7 %016llx", (unsigned long long) z[2],
           (unsigned long long) z[7]);
     __asm__ volatile("emms");
+
+    // 7. an MMX load that faults changes nothing in the x87: TOP 7, only
+    // physical register 7 valid, and physical 3 (ST4) keeps its exponent
+    fault_page = mmap(NULL, 4096, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    memset(area, 0, sizeof area);
+    area[0] = 0x7f; area[1] = 0x03;                    // FCW
+    area[2] = 0; area[3] = 7 << 3;                     // FSW: TOP 7
+    area[4] = 0x80;                                    // only physical 7 valid
+    area[24] = 0x80; area[25] = 0x1f;                  // MXCSR
+    for (int i = 0; i < 8; i++) {
+        uint64_t sig = 0x8000000000000000ull | (unsigned) i;
+        memcpy(area + 32 + 16 * i, &sig, 8);
+        area[40 + 16 * i] = (unsigned char) (0x34 + i);
+        area[41 + 16 * i] = 0x12;
+    }
+    fxrstor();
+    struct sigaction sa = {0};
+    sa.sa_sigaction = on_segv;
+    sa.sa_flags = SA_SIGINFO;
+    sigaction(SIGSEGV, &sa, NULL);
+    segv_seen = 0;
+    if (sigsetjmp(jb, 1) == 0)
+        __asm__ volatile("movq (%0), %%mm3" :: "r"(fault_page) : "memory");
+    CHECK(segv_seen, "the faulting MMX load did not fault");
+    CHECK(frame_top == 7, "after a faulting MMX load: TOP %u (want 7, unchanged)", frame_top);
+    CHECK(frame_tag_ok, "after a faulting MMX load: tags %#x (want only physical 7 valid)", frame_tag);
+    CHECK(frame_exp3 == 0x1238, "after a faulting MMX load: physical 3 exponent %#x (want 0x1238)", frame_exp3);
+    __asm__ volatile("fninit");
 
     printf("x86_mmx_x87_alias: %s (%d checks, %d failures)\n", failures ? "FAIL" : "PASS", checks, failures);
     return failures != 0;

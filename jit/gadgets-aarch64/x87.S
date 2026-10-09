@@ -3358,20 +3358,24 @@ x87_i386_gp:
     strb wzr, [_cpu, CPU_x87_valid]
     gret_nomem 1
 
-# What every MMX instruction but EMMS does to the x87, before it runs (the
-# MMX registers are the x87's: emu/cpu.h CPU_MMX): a pending unmasked x87
-# exception first (#MF, nothing changed), then TOP 0 and all eight registers
-# valid, and the one it writes (the word's imm: 0-7, 8 for none) gets an
-# all-ones sign and exponent. [x87 word], gret 1.
-.gadget mmx_enter
+# What every MMX instruction but EMMS does to the x87 (the MMX registers are
+# the x87's: emu/cpu.h CPU_MMX), in two gadgets around the instruction's own.
+# Before: a pending unmasked x87 exception (#MF, nothing changed) -- mmx_wait,
+# [x87 word], gret 1. After, so that an instruction whose memory operand
+# faults changes none of it, as on the hardware: TOP 0, all eight registers
+# valid, and the one it wrote (0-7; 8 for none) an all-ones sign and exponent
+# -- mmx_touch, [register], gret 1.
+.gadget mmx_wait
     x87_wait
+    gret_nomem 1
+.gadget mmx_touch
     ldrh w8, [_cpu, CPU_fsw]
     and  w8, w8, ~0x3800
     strh w8, [_cpu, CPU_fsw]
     mov  w8, 0xff
     strb w8, [_cpu, CPU_x87_valid]
-    ldrb w9, [_ip]
-    cmp  w9, 8
+    ldr  x9, [_ip]
+    cmp  x9, 8
     b.hs 1f
     add  x10, _cpu, CPU_fp
     add  x10, x10, x9, lsl 4

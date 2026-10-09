@@ -481,7 +481,8 @@ struct cpu_state {
 // as on the hardware, so FXSAVE/XSAVE, FNSAVE/FRSTOR, the signal frame and
 // ptrace carry MMX state, and x87 code after MMX code sees it. An MMX write
 // also sets fp[n]'s sign and exponent to all ones, and every MMX instruction
-// but EMMS makes TOP 0 and all eight valid (the JIT's mmx_touch gadget).
+// but EMMS makes TOP 0 and all eight valid (the JIT's mmx_wait and mmx_touch
+// gadgets, around the instruction).
 #define CPU_MMX(cpu, n) (*(union mm_reg *) &(cpu)->fp[(n)].signif)
 
 #define AMD64_SREG_ES 0

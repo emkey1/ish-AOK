@@ -35,7 +35,8 @@ static int gen_step32(struct gen_state *state, struct tlb *tlb);
 static int gen_step16(struct gen_state *state, struct tlb *tlb);
 static int gen_step64(struct gen_state *state, struct tlb *tlb);
 #if defined(__aarch64__)
-static void gen_mmx_enter(struct gen_state *state, struct tlb *tlb, guest_addr_t ip);
+static int gen_mmx_enter(struct gen_state *state, struct tlb *tlb, guest_addr_t ip);
+static void gen_mmx_touch(struct gen_state *state, int dst);
 #endif
 
 enum amd64_jit_rep_mode {
@@ -421,7 +422,7 @@ int gen_step(struct gen_state *state, struct tlb *tlb) {
     // amd64 advances amd64_ip, i386 ip.
     guest_addr_t start = state->amd64 ? state->amd64_ip : state->ip;
 #if defined(__aarch64__)
-    gen_mmx_enter(state, tlb, start);
+    int mmx_dst = gen_mmx_enter(state, tlb, start);
 #endif
     int ret;
     if (state->amd64) {
@@ -436,6 +437,12 @@ int gen_step(struct gen_state *state, struct tlb *tlb) {
         state->vec_align128 = false;
         ret = gen_step32(state, tlb);
     }
+#if defined(__aarch64__)
+    // (An MMX instruction that ends the block -- a #UD, the interpreter's --
+    // gets no touch; one that ran is followed by it.)
+    if (mmx_dst >= 0 && ret)
+        gen_mmx_touch(state, mmx_dst);
+#endif
     guest_addr_t end = state->amd64 ? state->amd64_ip : state->ip;
     if (unlikely(state->jitprof != NULL) && end > start && end - start <= 64) {
         uint8_t bytes[64];
@@ -9659,18 +9666,28 @@ static int x86_mmx_dst(const byte_t *b, unsigned n, bool amd64) {
     return -1;
 }
 
-// mmx_enter (x87.S) ahead of an MMX instruction's gadgets.
-static void gen_mmx_enter(struct gen_state *state, struct tlb *tlb, guest_addr_t ip) {
+// mmx_wait (x87.S) ahead of an MMX instruction's gadgets; returns the register
+// it writes (x86_mmx_dst) for the mmx_touch that goes after them, or -1.
+static int gen_mmx_enter(struct gen_state *state, struct tlb *tlb, guest_addr_t ip) {
     byte_t b[16];
     unsigned n = 0;
     while (n < sizeof(b) && tlb_read(tlb, ip + n, &b[n], 1))
         n++;
     int dst = x86_mmx_dst(b, n, state->amd64);
     if (dst < 0)
-        return;
-    extern void gadget_mmx_enter(void);
-    gen(state, (unsigned long) gadget_mmx_enter);
-    gen(state, x87_word((unsigned) dst, state->amd64, state->amd64 && state->amd64_reg_cache_valid, ip));
+        return -1;
+    extern void gadget_mmx_wait(void);
+    gen(state, (unsigned long) gadget_mmx_wait);
+    gen(state, x87_word(0, state->amd64, state->amd64 && state->amd64_reg_cache_valid, ip));
+    return dst;
+}
+
+// mmx_touch after them: what the instruction did to the x87, once it has run
+// (a fault in its memory operand leaves the block before this).
+static void gen_mmx_touch(struct gen_state *state, int dst) {
+    extern void gadget_mmx_touch(void);
+    gen(state, (unsigned long) gadget_mmx_touch);
+    gen(state, (unsigned long) dst);
 }
 #endif
 
