@@ -295,7 +295,19 @@ static ssize_t proc_pread(struct fd *fd, void *buf, size_t bufsize, off_t off) {
         struct proc_data data = {buf, bufsize, bufsize};
         return fd->proc.entry.meta->pread(&fd->proc.entry, &data, off, fd->flags);
     }
-    
+
+    // A file there is nothing to read from: binfmt_misc's `register`, which
+    // only takes writes. Linux gives it a write op and no read op, so open
+    // succeeds -- for root, whatever its 0200 says -- and read(2) is EINVAL,
+    // even for zero bytes, because vfs_read refuses a file it cannot read
+    // before it looks at the count. Here it rendered nothing, left the buffer
+    // unallocated, and an assert below aborted the app -- the one regular
+    // entry with neither show nor pread, so the only way the assert could
+    // fire, and what build 557's Organizer crash on iPhone14,5 (an arm64
+    // guest's read of a /proc file) points at.
+    if (fd->proc.entry.meta->show == NULL && S_ISREG(proc_entry_mode(&fd->proc.entry)))
+        return _EINVAL;
+
     // seq_read_iter returns before it even takes the seq_file's lock when
     // there is nothing to copy into, so an empty read renders nothing and
     // moves nothing. Rendering here would throw away the pass's snapshot for
@@ -307,11 +319,12 @@ static ssize_t proc_pread(struct fd *fd, void *buf, size_t bufsize, off_t off) {
     if (err < 0)
         return err;
 
+    // No buffer is a rendering with nothing in it: an empty read, not a
+    // reason to take the app down.
     const char *data = fd->proc.data.data;
-    assert(data != NULL);
 
     size_t remaining = 0;
-    if (off >= 0 && (size_t) off <= fd->proc.data.size)
+    if (data != NULL && off >= 0 && (size_t) off <= fd->proc.data.size)
         remaining = fd->proc.data.size - (size_t) off;
     size_t n = bufsize;
     if (n > remaining)
