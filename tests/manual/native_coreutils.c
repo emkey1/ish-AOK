@@ -19,6 +19,7 @@
 #include <fcntl.h>
 #include <grp.h>
 #include <pwd.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1207,6 +1208,7 @@ static int run_case(const struct cu_case *c, char *out, size_t out_size, size_t 
         close(inp[1]);
         close(outp[0]);
         setenv("LC_ALL", "C.UTF-8", 1);
+        signal(SIGPIPE, SIG_DFL);   // (the harness ignores it; the applet must not)
         execv(applet, (char *const *)argv);
         _exit(127);
     }
@@ -1312,6 +1314,10 @@ int main(int argc, char **argv) {
         return 0;
     }
     alarm(test_watchdog_secs(180));
+    // An applet may exit without reading the input it was given (head -c):
+    // writing it then is EPIPE, not a reason for the harness to die -- which
+    // it did under a loaded suite, when the applet won the race.
+    signal(SIGPIPE, SIG_IGN);
     mkdir(TDIR, 0755);
     mkdir(TDIR "/bin", 0755);
     static const char *const applets[] = {"head", "tail", "wc", "rm", "sort", "xargs", "find", "grep", "cp", "mv", "date", "sudo", "chmod", "ls", "diff", "cmp", "sed", "uniq", "tr", "nl", "seq", "touch", "stat", "realpath", "readlink", "env", "sum", "rmdir", "cat", "fold", "tac", "dd", "od", "split", "du", "gzip", "gunzip", "zcat", "tar", "awk"};
