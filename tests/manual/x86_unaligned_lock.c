@@ -19,6 +19,7 @@
 // x86 only: an arm64 or riscv64 exclusive on a misaligned address faults on
 // real hardware too.
 #define _GNU_SOURCE
+#include <limits.h>
 #include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -98,18 +99,22 @@ static void *storer(void *p) {
     uint64_t step = j->bits == 16 ? 0x100 : j->bits == 32 ? 0x100000 : 0x10000000000ull;
     uint64_t limit = j->bits == 16 ? 0xf000 : j->bits == 32 ? 0xf0000000u : 0xf000000000000000ull;
     uint64_t marker = step;
+    // How many increments may land between the store and a read before the
+    // counter can have wrapped round to just under the marker: past that a
+    // read proves nothing (a 16-bit counter wraps in 65536 increments, which
+    // a storer descheduled for a few milliseconds under load lets through).
+    long wrap = j->bits == 16 ? 0x10000 - 2 * (long) step : LONG_MAX;
     while (!stop) {
+        long before = *(volatile long *) &j->increments;
         plain_store(j, marker);
         j->stores++;
         for (int i = 0; i < 64; i++) {
             // A lost store leaves what was there before it: the previous marker
-            // plus a few increments, so within one step below this marker. A
-            // 16-bit counter can also wrap past 0xffff while this thread is
-            // descheduled for a few milliseconds (~4k increments from the top
-            // marker); that reads far lower and is not a lost store.
+            // plus a few increments, so within one step below this marker.
             uint64_t got = plain_load(j);
             if (got < marker && marker - got <= step) {
-                j->lost++;
+                if (*(volatile long *) &j->increments - before < wrap)
+                    j->lost++;
                 break;
             }
         }
