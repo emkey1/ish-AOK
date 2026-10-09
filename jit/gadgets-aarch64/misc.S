@@ -125,14 +125,21 @@ cpuid_lookup:
         write_bullshit \size, cmpxchg\size\()_mem
 
     .gadget atomic_cmpxchg\size\()_mem
-        .if \size != 8   // on the guest address, before write_prep
+        # Misaligned (on the guest address, before write_prep):
+        # x86_lock_rmw does the compare-exchange, and the body runs once on
+        # the old value for the flags and EAX, x15 set so it stores nothing.
+        .if \size != 8
             tst _addr, (\size/8)-1
             b.eq 9f
-            ua_slow UA_CMPXCHG, \size, 1
+            ua_rmw UA_CMPXCHG, \size/8, aux=xax
+            mov w11, w12
+            mov x15, 1
+            b 1f
         9:
         .endif
         write_prep \size, atomic_cmpxchg\size\()_mem
         dmb ish
+        mov x15, 0
         mov w12, eax
         ldr\s w11, [_xaddr]
     1:
@@ -153,6 +160,7 @@ cpuid_lookup:
         # all that setf stuff writes to memory which means instead of just using
         # ldaxr and stlxr we now have to do *another* compare-and-exchange
     2:
+        cbnz x15, 4f
         ldaxr\s w10, [_xaddr]
         cmp w10, w11
         b.ne 3f
@@ -168,6 +176,8 @@ cpuid_lookup:
         mov w11, w10
         mov eax, w12
         b 1b
+    4:
+        gret 1
 .endm
 
 .irp size, SIZE_LIST
@@ -218,29 +228,27 @@ cpuid_lookup:
     gret 1
     write_bullshit 64, atomic_cmpxchg8b
 
-2:  # Unaligned LOCK CMPXCHG8B: the ARM exclusive load above needs 8-byte
-    # alignment, but x86 permits unaligned LOCK operands (and the i386 ABI
-    # aligns int64 to only 4 bytes, so glibc/Python 64-bit atomics land here).
-    # Spill the host-cached GP regs, then run a software-atomic compare-exchange
-    # under the global atomic lock via a C helper (cross-page + #PF safe).
-    # Returns 0 = ok (reload EAX/EDX, continue), 1 = fault (segfault_write).
-    str eax, [_cpu, CPU_eax]
-    str ebx, [_cpu, CPU_ebx]
-    str ecx, [_cpu, CPU_ecx]
-    str edx, [_cpu, CPU_edx]
-    save_c
-    mov x0, _cpu
-    sub x1, _tlb, TLB_entries
-    mov w2, _addr
-    bl NAME(helper_atomic_cmpxchg8b)
-    mov x19, x0
-    restore_c
-    ldr eax, [_cpu, CPU_eax]
-    ldr edx, [_cpu, CPU_edx]
-    cbnz x19, 5f
+2:  # Misaligned LOCK CMPXCHG8B: the ARM exclusive load above needs 8-byte
+    # alignment, but x86 permits any (and the i386 ABI aligns int64 to only 4
+    # bytes, so glibc/Python 64-bit atomics land here). x86_lock_rmw does the
+    # compare-exchange; ZF, and EDX:EAX on a mismatch, as above.
+    mov w10, eax
+    bfi x10, xdx, 32, 32
+    mov w11, ebx
+    bfi x11, xcx, 32, 32
+    ua_rmw UA_CMPXCHG, 8, rhs=x11, aux=x10
+    cmp x12, x10
+    cset w11, eq
+    b.eq 6f
+    ubfx xax, x12, 0, 32
+    ubfx xdx, x12, 32, 32
+6:  ldr w8, [_cpu, CPU_flags_res]
+    ldr w9, [_cpu, CPU_eflags]
+    and w8, w8, ~ZF_RES
+    bfi w9, w11, 6, 1
+    str w8, [_cpu, CPU_flags_res]
+    str w9, [_cpu, CPU_eflags]
     gret 1
-5:
-    b segfault_write
 
 
 .gadget cmpxchg8b

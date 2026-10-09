@@ -268,9 +268,12 @@ static int x86_atomic_split_retry(struct cpu_state *cpu, struct tlb *tlb, guest_
     return x86_atomic_fault(cpu, tlb);
 }
 
-static int x86_atomic_split(struct cpu_state *cpu, struct tlb *tlb,
-        guest_addr_t addr, unsigned size_bytes, x86_atomic_step step, void *ctx,
-        qword_t *old_out, qword_t *new_out) {
+// The split path's two halves. begin makes both pages present and writable
+// and takes the lock: 0, with the operand's first out[2] bytes at out[0] and
+// the rest at out[1]; or INT_PF with nothing held -- a fault, or a retry. end
+// lets go. jit/gadgets-aarch64's x86_lock_rmw does the operation in between.
+int x86_lock_split_begin(struct cpu_state *cpu, struct tlb *tlb,
+        guest_addr_t addr, unsigned size_bytes, uintptr_t out[3]) {
     struct mem *mem = container_of(tlb->mmu, struct mem, mmu);
     guest_addr_t last = addr + size_bytes - 1;
     unsigned first = PAGE_SIZE - PGOFFSET(addr);
@@ -311,7 +314,27 @@ static int x86_atomic_split(struct cpu_state *cpu, struct tlb *tlb,
     }
     // The part on the second page, if the operand reaches one.
     unsigned second = size_bytes - first;
-    char *hi_start = second != 0 ? hi - (second - 1) : NULL;
+    out[0] = (uintptr_t) lo;
+    out[1] = second != 0 ? (uintptr_t) (hi - (second - 1)) : 0;
+    out[2] = first;
+    return 0;
+}
+
+void x86_lock_split_end(struct tlb *tlb) {
+    struct mem *mem = container_of(tlb->mmu, struct mem, mmu);
+    write_to_read_lock(&mem->lock);
+    unlock(&x86_split_lock);
+}
+
+static int x86_atomic_split(struct cpu_state *cpu, struct tlb *tlb,
+        guest_addr_t addr, unsigned size_bytes, x86_atomic_step step, void *ctx,
+        qword_t *old_out, qword_t *new_out) {
+    uintptr_t at[3];
+    int err = x86_lock_split_begin(cpu, tlb, addr, size_bytes, at);
+    if (err != 0)
+        return err;
+    char *lo = (char *) at[0], *hi_start = (char *) at[1];
+    unsigned first = (unsigned) at[2], second = size_bytes - first;
     qword_t old = 0, val = 0;
     memcpy(&old, lo, first);
     if (second != 0)
@@ -322,8 +345,7 @@ static int x86_atomic_split(struct cpu_state *cpu, struct tlb *tlb,
         if (second != 0)
             memcpy(hi_start, (char *) &val + first, second);
     }
-    write_to_read_lock(&mem->lock);
-    unlock(&x86_split_lock);
+    x86_lock_split_end(tlb);
     *old_out = old;
     *new_out = store ? val : old;
     return 0;
@@ -429,50 +451,6 @@ int x86_atomic_cas(struct cpu_state *cpu, struct tlb *tlb, guest_addr_t addr,
     }
 #undef X86_CAS_AT
     return 0;
-}
-
-// LOCK XADD, for the XADD gadget's misaligned operands (an aligned one is a
-// host exclusive loop in the gadget): [addr] += rhs, *old_out = what it held.
-struct x86_xadd_ctx { qword_t rhs, mask; };
-static qword_t x86_xadd_fn(qword_t old, void *ctx) {
-    struct x86_xadd_ctx *c = ctx;
-    return (old + c->rhs) & c->mask;
-}
-int x86_atomic_xadd(struct cpu_state *cpu, struct tlb *tlb, guest_addr_t addr,
-                    unsigned size_bytes, qword_t rhs, qword_t *old_out) {
-    struct x86_xadd_ctx c = { rhs, size_bytes == 8 ? ~(qword_t) 0 : ((qword_t) 1 << (size_bytes * 8)) - 1 };
-    qword_t neu;
-    return x86_atomic_rmw(cpu, tlb, addr, size_bytes, x86_xadd_fn, &c, old_out, &neu);
-}
-
-// LOCK <alu> [mem] for the ALU gadget's misaligned operands (an aligned one is
-// a host exclusive loop in the gadget): op is the x86 group number (0 add,
-// 1 or, 2 adc, 3 sbb, 4 and, 5 sub, 6 xor), cin the carry for adc/sbb.
-// *old_out = what [mem] held; the gadget computes the flags from it.
-struct x86_alu_ctx { unsigned op; qword_t rhs, cin, mask; };
-static qword_t x86_alu_fn(qword_t old, void *ctx) {
-    struct x86_alu_ctx *c = ctx;
-    qword_t r;
-    switch (c->op) {
-        case 0: r = old + c->rhs; break;
-        case 1: r = old | c->rhs; break;
-        case 2: r = old + c->rhs + c->cin; break;
-        case 3: r = old - c->rhs - c->cin; break;
-        case 4: r = old & c->rhs; break;
-        case 5: r = old - c->rhs; break;
-        case 10: r = -old; break;          // NEG
-        case 11: r = ~old; break;          // NOT
-        default: r = old ^ c->rhs; break;
-    }
-    return r & c->mask;
-}
-int x86_atomic_alu(struct cpu_state *cpu, struct tlb *tlb, guest_addr_t addr,
-                   unsigned size_bytes, unsigned op, qword_t rhs, qword_t cin,
-                   qword_t *old_out) {
-    struct x86_alu_ctx c = { op, rhs, cin,
-        size_bytes == 8 ? ~(qword_t) 0 : ((qword_t) 1 << (size_bytes * 8)) - 1 };
-    qword_t neu;
-    return x86_atomic_rmw(cpu, tlb, addr, size_bytes, x86_alu_fn, &c, old_out, &neu);
 }
 
 // LOCK CMPXCHG16B. The instruction already requires 16-byte alignment (the

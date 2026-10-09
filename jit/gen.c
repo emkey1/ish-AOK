@@ -15017,7 +15017,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
 #if defined(__aarch64__)
     // Native BT/BTS/BTR/BTC: 0F BA /4-/7 (imm8 index) and 0F A3/AB/B3/BB (register
     // index), 16/32/64, register and memory operands, LOCK on the memory RMW forms
-    // (an exclusive loop, or emu/tlb.c's x86_atomic_alu when misaligned). CF is the
+    // (an exclusive loop, or math.S's x86_lock_rmw when misaligned). CF is the
     // bit; nothing else changes. The memory forms stride by the element part of
     // the sign-extended index; the imm8 form addresses the operand only.
     if (!insn.address_size_prefix &&

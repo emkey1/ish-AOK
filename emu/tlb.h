@@ -124,22 +124,19 @@ int arm64_stxp(struct cpu_state *cpu, struct tlb *tlb, guest_addr_t addr,
                unsigned sz, uint64_t desired_lo, uint64_t desired_hi,
                uint32_t *status_out);
 
-// x86 LOCK-prefixed read-modify-write with real host atomics (emu/tlb.c).
-// Aligned accesses run as one host atomic on the resolved host pointer, so
-// they interlock both with other guest threads and with the kernel's own
-// C11 atomics on guest memory; misaligned ones (legal on x86, and able to
-// straddle a page) fall back to the global atomic_l_lock. `fn` MUST be pure:
-// the aligned path re-runs it on every compare-exchange retry. All return
-// 0 or INT_PF with cpu->segfault_addr/was_write set.
+// x86 LOCK-prefixed read-modify-write with real host atomics (emu/tlb.c), for
+// the amd64 interpreter. Aligned accesses run as one host atomic on the
+// resolved host pointer, so they interlock both with other guest threads and
+// with the kernel's own C11 atomics on guest memory; misaligned ones (legal
+// on x86, and able to straddle a page) take "Misaligned LOCK" in emu/tlb.c.
+// `fn` MUST be pure: the aligned path re-runs it on every compare-exchange
+// retry. All return 0 or INT_PF with cpu->segfault_addr/was_write set. The
+// JIT's gadgets do their own (jit/gadgets-aarch64/math.S x86_lock_rmw), with
+// the split lock from x86_lock_split_begin/_end.
 typedef qword_t (*x86_atomic_fn)(qword_t old, void *ctx);
 int x86_atomic_rmw(struct cpu_state *cpu, struct tlb *tlb, guest_addr_t addr,
                    unsigned size_bytes, x86_atomic_fn fn, void *ctx,
                    qword_t *old_out, qword_t *new_out);
-int x86_atomic_alu(struct cpu_state *cpu, struct tlb *tlb, guest_addr_t addr,
-                   unsigned size_bytes, unsigned op, qword_t rhs, qword_t cin,
-                   qword_t *old_out);
-int x86_atomic_xadd(struct cpu_state *cpu, struct tlb *tlb, guest_addr_t addr,
-                    unsigned size_bytes, qword_t rhs, qword_t *old_out);
 int x86_atomic_cas(struct cpu_state *cpu, struct tlb *tlb, guest_addr_t addr,
                    unsigned size_bytes, qword_t expected, qword_t desired,
                    qword_t *old_out, bool *swapped);
@@ -148,6 +145,9 @@ int x86_atomic_cas16b(struct cpu_state *cpu, struct tlb *tlb, guest_addr_t addr,
                       qword_t old_out[2], bool *swapped);
 int x86_atomic_xchg(struct cpu_state *cpu, struct tlb *tlb, guest_addr_t addr,
                     unsigned size_bytes, qword_t value, qword_t *old_out);
+int x86_lock_split_begin(struct cpu_state *cpu, struct tlb *tlb,
+                         guest_addr_t addr, unsigned size_bytes, uintptr_t out[3]);
+void x86_lock_split_end(struct tlb *tlb);
 
 forceinline __no_instrument void *__tlb_read_ptr(struct tlb *tlb, guest_addr_t addr) {
     if (unlikely(tlb->mem_changes != atomic_load_explicit(&tlb->mmu->changes, memory_order_relaxed)))

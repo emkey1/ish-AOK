@@ -222,7 +222,12 @@ write, so it was atomic against other locked instructions and nothing else: a pl
 store from another thread could land in between, and
 `tests/manual/x86_unaligned_lock` lost up to 60% of them on amd64. It now uses a
 16-byte host compare-exchange when the operand sits inside one 16-byte block,
-and the address space's writer lock when it straddles two.
+and the address space's writer lock when it straddles two. Since 2026-10-09
+the JIT does both in gadgets (`x86_lock_rmw`, jit/gadgets-aarch64/math.S): only
+taking and releasing that lock is C, and the amd64 interpreter keeps
+`emu/tlb.c`'s version. `tests/manual/x86/x86_lock_ops.c` checks every locked form
+at every block offset and across a page against what the unlocked form does,
+and against camd's hash.
 
 **Its i386 twin closed later in the same cycle** (`ce74598e`). The i386 JIT's
 locked gadgets for 16- and 32-bit operands checked alignment and then ignored

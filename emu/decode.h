@@ -344,8 +344,10 @@ restart:
         default: UNDEFINED; \
     }
 
+                // the imm8 index is taken mod the operand width: unlike a
+                // register index, it never moves the address
                 case 0xba: TRACEI("grp8 imm8, modrm");
-                           READMODRM; READIMM8; GRP8(imm, modrm_val,oz); break;
+                           READMODRM; READIMM8; imm &= OP_SIZE - 1; GRP8(imm, modrm_val,oz); break;
 
 #undef GRP8
 
@@ -1850,7 +1852,7 @@ restart:
         default: UNDEFINED; \
     }
                         case 0xba: TRACEI("lock grp8 imm8, modrm");
-                                   READMODRM; READIMM8; GRP8_ATOMIC(imm, modrm_val,oz); break;
+                                   READMODRM; READIMM8; imm &= OP_SIZE - 1; GRP8_ATOMIC(imm, modrm_val,oz); break;
 #undef GRP8_ATOMIC
 
                         case 0xb0: TRACEI("lock cmpxchg reg8, modrm8");

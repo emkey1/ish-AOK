@@ -3891,7 +3891,9 @@ def_amd64_arith_reg_imm _nf
             .if \size != 8   // on the guest address, before write_prep
                 tst _addr, (\size/8)-1
                 b.eq 9f
-                ua_slow UA_XCHG, \size
+                ua_rmw UA_XCHG, \size/8
+                mov _tmp, w12
+                gret 1
             9:
             .endif
             write_prep \size, \op\size\()_mem
@@ -4185,26 +4187,34 @@ def_amd64_arith_reg_imm _nf
         # There's so much stuff going on inside most of these operations that
         # the implementation is a compare-and-swap loop, instead of just ldaxr/stlxr
         # Alignment first, on the GUEST address: write_prep replaces _addr
-        # with the host pointer.
+        # with the host pointer. Misaligned, x86_lock_rmw does the operation
+        # and the body below runs once on the old value for the flags (and
+        # xadd's register), with x15 set so it stores nothing.
         .if \size != 8
             tst _addr, (\size/8)-1
             b.eq 9f
-            .ifc \op,add N ua_slow UA_ADD, \size N .endif
-            .ifc \op,sub N ua_slow UA_SUB, \size N .endif
-            .ifc \op,adc N ua_slow UA_ADC, \size N .endif
-            .ifc \op,sbc N ua_slow UA_SBB, \size N .endif
-            .ifc \op,and N ua_slow UA_AND, \size N .endif
-            .ifc \op,orr N ua_slow UA_OR, \size N .endif
-            .ifc \op,eor N ua_slow UA_XOR, \size N .endif
-            .ifc \op,inc N ua_slow UA_INC, \size N .endif
-            .ifc \op,dec N ua_slow UA_DEC, \size N .endif
-            .ifc \op,xadd N ua_slow UA_XADD, \size N .endif
-            .ifc \op,not N ua_slow UA_NOT, \size N .endif
-            .ifc \op,neg N ua_slow UA_NEG, \size N .endif
+            .ifc \op,add N ua_rmw UA_ADD, \size/8 N .endif
+            .ifc \op,sub N ua_rmw UA_SUB, \size/8 N .endif
+            .ifc \op,adc N ua_rmw UA_ADC, \size/8 N .endif
+            .ifc \op,sbc N ua_rmw UA_SBB, \size/8 N .endif
+            .ifc \op,and N ua_rmw UA_AND, \size/8 N .endif
+            .ifc \op,orr N ua_rmw UA_OR, \size/8 N .endif
+            .ifc \op,eor N ua_rmw UA_XOR, \size/8 N .endif
+            .ifc \op,inc N ua_rmw UA_INC, \size/8 N .endif
+            .ifc \op,dec N ua_rmw UA_DEC, \size/8 N .endif
+            .ifc \op,xadd N ua_rmw UA_ADD, \size/8 N .endif
+            .ifc \op,not N ua_rmw UA_NOT, \size/8 N .endif
+            .ifc \op,neg N ua_rmw UA_NEG, \size/8 N .endif
+            .ifin(\op, adc,sbc)
+                ldrb w14, [_cpu, CPU_cf]
+            .endifin
+            mov x15, 1
+            b 1f
         9:
         .endif
         write_prep \size, atomic_\opname\size\()_mem
         dmb ish
+        mov x15, 0
         ldr\s w12, [_xaddr]
         .ifin(\op, adc,sbc)
             # CF is an INPUT to adc/sbb -- but do_add below OVERWRITES CPU_cf
@@ -4306,6 +4316,7 @@ def_amd64_arith_reg_imm _nf
         .endif
 
     2:
+        cbnz x15, 4f
         ldaxr\s w13, [_xaddr]
         cmp w12, w13
         b.ne 3f
@@ -4322,6 +4333,11 @@ def_amd64_arith_reg_imm _nf
         dmb ish
         mov w12, w13
         b 1b
+    4:
+        .ifc \op,xadd
+            mov _tmp, w9
+        .endif
+        gret 1
 .endm
 
 .irp op, add,sub,adc,sbb,and,or,xor,inc,dec,xadd,not,neg
@@ -8818,6 +8834,267 @@ amd64_str_fill:
     b    4b
 5:  ret
 
+# ---- misaligned LOCK -------------------------------------------------------
+# x86_lock_rmw's parts. The block is x17:x16 (high:low), x15 the operand's
+# bit offset in it (0-120), x14 its mask. A shift by 64 - n is done as
+# (v >> 1) >> (63 - n) -- or << -- which is right at n = 0 too, where a single
+# shift would take the count mod 64.
+.macro x86_lock_extract              /* x9 = the operand */
+    cmp  x15, 64
+    b.hs 1f
+    lsr  x9, x16, x15
+    lsl  x0, x17, 1
+    mov  x1, 63
+    sub  x1, x1, x15
+    lsl  x0, x0, x1
+    orr  x9, x9, x0
+    b    2f
+1:  sub  x1, x15, 64
+    lsr  x9, x17, x1
+2:  and  x9, x9, x14
+.endm
+.macro x86_lock_insert               /* x4:x3 = the block with x10 put in */
+    cmp  x15, 64
+    b.hs 1f
+    lsl  x0, x14, x15
+    bic  x3, x3, x0
+    lsl  x0, x10, x15
+    orr  x3, x3, x0
+    mov  x1, 63
+    sub  x1, x1, x15
+    lsr  x0, x14, 1
+    lsr  x0, x0, x1
+    bic  x4, x4, x0
+    lsr  x0, x10, 1
+    lsr  x0, x0, x1
+    orr  x4, x4, x0
+    b    2f
+1:  sub  x1, x15, 64
+    lsl  x0, x14, x1
+    bic  x4, x4, x0
+    lsl  x0, x10, x1
+    orr  x4, x4, x0
+2:
+.endm
+# x14 = the operand mask; x12 = rhs + carry-in (ADC/SBB); x13 = the bit
+# (BTS/BTR/BTC); aux masked, for CMPXCHG's compare. After the C calls, which
+# may clobber x9-x15. Clobbers x0, x1.
+.macro x86_lock_consts
+    mov  x14, -1
+    cmp  w22, 8
+    b.eq 1f
+    lsl  w0, w22, 3
+    mov  x1, 1
+    lsl  x1, x1, x0
+    sub  x14, x1, 1
+1:  and  x25, x25, x14
+    add  x12, x24, x25
+    lsl  w0, w22, 3
+    sub  w0, w0, 1
+    and  x0, x24, x0
+    mov  x13, 1
+    lsl  x13, x13, x0
+.endm
+.macro x86_lock_apply                /* x10 = op w23 on the operand x9 */
+    adr  x11, 1f
+    add  x11, x11, x23, lsl 4
+    br   x11
+    .balign 16
+1:  add  x10, x9, x24                /* 0 ADD */
+    b    2f
+    nop N nop
+    orr  x10, x9, x24                /* 1 OR */
+    b    2f
+    nop N nop
+    add  x10, x9, x12                /* 2 ADC: rhs + carry-in */
+    b    2f
+    nop N nop
+    sub  x10, x9, x12                /* 3 SBB */
+    b    2f
+    nop N nop
+    and  x10, x9, x24                /* 4 AND */
+    b    2f
+    nop N nop
+    sub  x10, x9, x24                /* 5 SUB */
+    b    2f
+    nop N nop
+    eor  x10, x9, x24                /* 6 XOR */
+    b    2f
+    nop N nop
+    add  x10, x9, 1                  /* 7 INC */
+    b    2f
+    nop N nop
+    sub  x10, x9, 1                  /* 8 DEC */
+    b    2f
+    nop N nop
+    mov  x10, x9                     /* 9: none */
+    b    2f
+    nop N nop
+    neg  x10, x9                     /* 10 NEG */
+    b    2f
+    nop N nop
+    mvn  x10, x9                     /* 11 NOT */
+    b    2f
+    nop N nop
+    mov  x10, x24                    /* 12 XCHG */
+    b    2f
+    nop N nop
+    cmp  x9, x25                     /* 13 CMPXCHG */
+    csel x10, x24, x9, eq
+    b    2f
+    nop
+    orr  x10, x9, x13                /* 14 BTS */
+    b    2f
+    nop N nop
+    bic  x10, x9, x13                /* 15 BTR */
+    b    2f
+    nop N nop
+    eor  x10, x9, x13                /* 16 BTC */
+    b    2f
+    nop N nop
+2:  and  x10, x10, x14
+.endm
+
+# int x86_lock_rmw(struct cpu_state *cpu, struct tlb *tlb, guest_addr_t addr,
+#     unsigned size, unsigned op, qword_t rhs, qword_t aux, qword_t *old_out)
+#
+# A LOCK read-modify-write of `size` bytes (2, 4 or 8) at a misaligned guest
+# address, which the gadgets' ldaxr/stlxr cannot take (a misaligned exclusive
+# faults the host). x86 makes it atomic all the same, against every access to
+# those bytes, and the i386 ABI makes it ordinary: it aligns 64-bit fields to
+# 4 bytes (Python 3.14's atomics sit at block offset 4 in steady state). Two
+# ways, as the comment over "Misaligned LOCK" in emu/tlb.c explains:
+#   * inside one 16-byte block: a compare-exchange of the whole block that
+#     changes only the operand's bytes (ldaxp/stlxp), atomic against plain
+#     stores, host atomics and other processes alike;
+#   * straddling two blocks (maybe two pages): emu/tlb.c's split lock, this
+#     address space's lock taken as a writer (x86_lock_split_begin/_end),
+#     with the operation done here in between.
+# The operation (op, x86's group numbering where it has one): 0 ADD, 1 OR,
+# 2 ADC, 3 SBB, 4 AND, 5 SUB, 6 XOR, 7 INC, 8 DEC, 10 NEG, 11 NOT, 12 XCHG
+# (store rhs), 13 CMPXCHG (store rhs where the operand equals aux, else
+# store it back), 14 BTS, 15 BTR, 16 BTC (bit rhs mod the width); aux is the
+# carry-in for ADC/SBB. *old_out = what the operand held (zero-extended):
+# callers take the flags from it. Returns 0, or INT_PF with cpu->segfault_*
+# set -- a fault, or a split that could not get the lock in time, which
+# resolves to nothing and runs the instruction again.
+.global.name x86_lock_rmw
+    stp  x29, x30, [sp, -96]!
+    mov  x29, sp
+    stp  x19, x20, [sp, 16]
+    stp  x21, x22, [sp, 32]
+    stp  x23, x24, [sp, 48]
+    stp  x25, x26, [sp, 64]
+    str  x27, [sp, 80]
+    mov  x19, x0                     /* cpu */
+    mov  x20, x1                     /* tlb */
+    mov  x21, x2                     /* addr */
+    mov  w22, w3                     /* size */
+    mov  w23, w4                     /* op */
+    mov  x24, x5                     /* rhs */
+    mov  x25, x6                     /* aux */
+    mov  x26, x7                     /* old_out */
+    cmp  w23, 16
+    mov  w0, 9                       /* an unknown op stores the operand back */
+    csel w23, w0, w23, hi
+    dmb  ish
+    and  x0, x21, 15
+    add  x0, x0, x22
+    cmp  x0, 16
+    b.hi 50f
+
+    /* one 16-byte block: on one page, as is its host copy */
+    mov  x0, x20
+    and  x1, x21, ~15
+    bl   NAME(tlb_write_ptr_slow)
+    cbz  x0, 90f
+    mov  x27, x0                     /* the block */
+    x86_lock_consts
+    ubfiz x15, x21, 3, 4             /* the operand's bit offset in it */
+    ldp  x16, x17, [x27]             /* a guess: a wrong one fails the exchange */
+10: x86_lock_extract
+    x86_lock_apply
+    mov  x3, x16
+    mov  x4, x17
+    x86_lock_insert
+20: ldaxp x5, x6, [x27]
+    cmp  x5, x16
+    ccmp x6, x17, 0, eq
+    b.ne 21f
+    stlxp w0, x3, x4, [x27]
+    cbz  w0, 30f
+21: clrex
+    mov  x16, x5
+    mov  x17, x6
+    b    10b
+30: dmb  ish
+    str  x9, [x26]
+    mov  w0, 0
+    b    99f
+
+    /* straddling: the split lock, held from begin to end */
+50: sub  sp, sp, 32
+    mov  x0, x19
+    mov  x1, x20
+    mov  x2, x21
+    mov  w3, w22
+    mov  x4, sp
+    bl   NAME(x86_lock_split_begin)
+    cbnz w0, 59f
+    ldp  x16, x17, [sp]              /* the bytes on the first page; the rest */
+    ldr  x3, [sp, 16]                /* how many are on the first page */
+    x86_lock_consts
+    mov  x9, 0
+    mov  x2, 0
+51: cmp  x2, x3
+    b.hs 52f
+    ldrb w4, [x16, x2]
+    b    53f
+52: sub  x5, x2, x3
+    ldrb w4, [x17, x5]
+53: lsl  x5, x2, 3
+    lsl  x4, x4, x5
+    orr  x9, x9, x4
+    add  x2, x2, 1
+    cmp  x2, x22
+    b.lo 51b
+    x86_lock_apply
+    mov  x2, 0
+54: lsl  x5, x2, 3
+    lsr  x4, x10, x5
+    cmp  x2, x3
+    b.hs 55f
+    strb w4, [x16, x2]
+    b    56f
+55: sub  x5, x2, x3
+    strb w4, [x17, x5]
+56: add  x2, x2, 1
+    cmp  x2, x22
+    b.lo 54b
+    mov  x27, x9                     /* the old value, across the call */
+    mov  x0, x20
+    bl   NAME(x86_lock_split_end)
+    add  sp, sp, 32
+    dmb  ish
+    str  x27, [x26]
+    mov  w0, 0
+    b    99f
+59: add  sp, sp, 32                  /* INT_PF, cpu->segfault_* set */
+    b    99f
+
+90: ldr  x0, [x20, TLB_segfault_addr]
+    str  x0, [x19, CPU_segfault_addr]
+    mov  w0, 1
+    strb w0, [x19, CPU_segfault_was_write]
+    mov  w0, INT_PF
+99: ldr  x27, [sp, 80]
+    ldp  x25, x26, [sp, 64]
+    ldp  x23, x24, [sp, 48]
+    ldp  x21, x22, [sp, 32]
+    ldp  x19, x20, [sp, 16]
+    ldp  x29, x30, [sp], 96
+    ret
+
 .irp op, movs,stos,lods,scas,cmps
 amd64_gen_string \op, 1, 8, 0
 amd64_gen_string \op, 2, 16, 1
@@ -10351,8 +10628,8 @@ amd64_gen_mov_imm_mem mov_imm_mem64, 8
 # CMPXCHG [mem], reg (0F B0, 0F B1), 8/16/32/64 -- the atomic compare-exchange
 # every mutex and lock-free structure is built on. Aligned (the case compilers
 # produce, and every byte): a host exclusive compare-and-swap at the
-# write-prepped host address (ARMv8.0: ldaxr/stlxr). Misaligned: x86_atomic_cas
-# (emu/tlb.c), the shared misaligned-LOCK primitive -- a 16-byte block CAS, or
+# write-prepped host address (ARMv8.0: ldaxr/stlxr). Misaligned: x86_lock_rmw
+# (below), the shared misaligned-LOCK primitive -- a 16-byte block CAS, or
 # this address space's split lock for an operand that straddles blocks. Either
 # way the result is the old value; the flags are CMP rax, old; a failed
 # compare loads it into the accumulator (AL/AX keep the rest of RAX, EAX
@@ -10420,26 +10697,21 @@ amd64_gen_mov_imm_mem mov_imm_mem64, 8
 5:  gret 4
 
 .if \vbytes > 1
-8:  /* misaligned: x86_atomic_cas(cpu, tlb, addr, size, expected, desired,
-       &old, &swapped). _cpu is x1 and _tlb x2: read them before they are
+8:  /* misaligned: x86_lock_rmw(cpu, tlb, addr, size, CMPXCHG, desired,
+       expected, &old). _cpu is x1 and _tlb x2: read them before they are
        argument registers. */
     amd64_meta_reg_value \vbytes, 5
     add  x14, _cpu, CPU_amd64_regs
-    ldr  x4, [x14]
-.if \vbytes == 2
-    and  x4, x4, 0xffff
-.elseif \vbytes == 4
-    mov  w4, w4
-.endif
+    ldr  x6, [x14]                   /* expected: rax (the engine masks it) */
     sub  sp, sp, 16
-    mov  x6, sp                      /* &old: this slot, above save_c's frame */
-    add  x7, sp, 8                   /* &swapped */
+    mov  x7, sp                      /* &old: this slot, above save_c's frame */
     save_c
     mov  x0, _cpu
     sub  x1, _tlb, TLB_entries
     mov  x2, x9
     mov  x3, \vbytes
-    bl   NAME(x86_atomic_cas)
+    mov  x4, 13
+    bl   NAME(x86_lock_rmw)
     mov  x19, x0
     restore_c
     ldr  x13, [sp]
@@ -10743,7 +11015,7 @@ amd64_gen_iret 2, 0
 # CMPXCHG8B (0F C7 /1): compare EDX:EAX with the 8-byte operand; equal, store
 # ECX:EBX there and set ZF; else load it into EDX:EAX (each half
 # zero-extended) and clear ZF. No other flag changes; atomic, LOCK or not --
-# an exclusive CAS when aligned, x86_atomic_cas (emu/tlb.c) when not.
+# an exclusive CAS when aligned, x86_lock_rmw when not.
 # Operands: [meta][disp][next_ip]. gret 3.
 .gadget amd64_cmpxchg8b_mem
     ldr  x8, [_ip]
@@ -10776,24 +11048,24 @@ amd64_gen_iret 2, 0
     lsr  x15, x13, 32
     str  x15, [x14, 16]              /* rdx = the high half */
 5:  gret 3
-8:  /* misaligned: x86_atomic_cas(cpu, tlb, addr, 8, expected, desired, &old,
-       &swapped), as amd64_cmpxchg_mem64 does */
+8:  /* misaligned: x86_lock_rmw(cpu, tlb, addr, 8, CMPXCHG, desired,
+       expected, &old), as amd64_cmpxchg_mem64 does */
     add  x14, _cpu, CPU_amd64_regs
-    ldr  w4, [x14]
+    ldr  w6, [x14]
     ldr  w12, [x14, 16]
-    orr  x4, x4, x12, lsl 32
+    orr  x6, x6, x12, lsl 32
     ldr  w5, [x14, 24]
     ldr  w12, [x14, 8]
     orr  x5, x5, x12, lsl 32
     sub  sp, sp, 16
-    mov  x6, sp
-    add  x7, sp, 8
+    mov  x7, sp
     save_c
     mov  x0, _cpu
     sub  x1, _tlb, TLB_entries
     mov  x2, x9
     mov  x3, 8
-    bl   NAME(x86_atomic_cas)
+    mov  x4, 13
+    bl   NAME(x86_lock_rmw)
     mov  x19, x0
     restore_c
     ldr  x13, [sp]
@@ -10845,7 +11117,7 @@ amd64_gen_iret 2, 0
 
 # XADD [mem], reg (0F C0, 0F C1), 8/16/32/64, with or without LOCK (atomic
 # either way): [mem] += reg, reg = the old value, the flags those of the ADD.
-# Aligned: a host exclusive add loop; misaligned: x86_atomic_xadd (emu/tlb.c).
+# Aligned: a host exclusive add loop; misaligned: x86_lock_rmw.
 # Operands: [meta][disp][next_ip]. gret 3.
 .macro amd64_gen_xadd_mem name, vbytes, bits
 .gadget amd64_\name
@@ -10882,15 +11154,18 @@ amd64_gen_iret 2, 0
     gret 3
 
 .if \vbytes > 1
-8:  amd64_meta_reg_value \vbytes, 4
+8:  /* misaligned: x86_lock_rmw(cpu, tlb, addr, size, ADD, reg, 0, &old) */
+    amd64_meta_reg_value \vbytes, 5
     sub  sp, sp, 16
-    mov  x5, sp                      /* &old */
+    mov  x7, sp                      /* &old */
     save_c
     mov  x0, _cpu
     sub  x1, _tlb, TLB_entries
     mov  x2, x9
     mov  x3, \vbytes
-    bl   NAME(x86_atomic_xadd)
+    mov  x4, 0
+    mov  x6, 0
+    bl   NAME(x86_lock_rmw)
     mov  x19, x0
     restore_c
     ldr  x13, [sp]
@@ -10912,7 +11187,7 @@ amd64_gen_xadd_mem xadd_mem64, 8, 64
 # amd64 ALU with a memory operand, every width and form the narrower native
 # families leave out: ADD OR ADC SBB AND SUB XOR CMP, and TEST (op 8), on
 # r/m, reg / reg, r/m / r/m, imm, 8/16/32/64 bits, with LOCK on the RMW
-# directions (an exclusive loop, or x86_atomic_alu when misaligned). The
+# directions (an exclusive loop, or x86_lock_rmw when misaligned). The
 # flags are computed at the operand width: the operands go at the top of 64
 # bits so the host's carry and overflow are the width's; ADC fills the bits
 # below with ones so its carry-in ripples into the operand (SBB's borrow
@@ -11119,7 +11394,7 @@ amd64_gen_xadd_mem xadd_mem64, 8, 64
     cbnz w12, 61b
     gret 5
 .if \vb > 1
-70: /* misaligned LOCK: x86_atomic_alu(cpu, tlb, addr, size, op, rhs, cin, &old) */
+70: /* misaligned LOCK: x86_lock_rmw(cpu, tlb, addr, size, op, rhs, cin, &old) */
     sub  sp, sp, 16
     mov  x7, sp
     save_c
@@ -11130,7 +11405,7 @@ amd64_gen_xadd_mem xadd_mem64, 8, 64
     and  x4, x24, 0xf
     mov  x5, x25
     mov  x6, x26
-    bl   NAME(x86_atomic_alu)
+    bl   NAME(x86_lock_rmw)
     mov  x19, x0
     restore_c
     ldr  x13, [sp]
@@ -11327,7 +11602,7 @@ amd64_gen_xadd_rr xadd_rr64, 8, 64
 
 # XCHG reg, [mem] (86, 87), 8/16/32/64 -- implicitly locked whether or not
 # the prefix is written, so the spinlock-release idiom. Aligned: a host
-# exclusive swap; misaligned: x86_atomic_xchg (emu/tlb.c). The old value goes
+# exclusive swap; misaligned: x86_lock_rmw. The old value goes
 # to the register (8/16 keep the rest, AH..BH for a byte; 32 zero-extends).
 # [meta][disp][next_ip], gret 3.
 .macro amd64_gen_xchg_mem name, vb
@@ -11361,16 +11636,18 @@ amd64_gen_xadd_rr xadd_rr64, 8, 64
     amd64_meta_reg_write \vb, 7
     gret 3
 .if \vb > 1
-8:  /* misaligned: x86_atomic_xchg(cpu, tlb, addr, size, value, &old) */
-    amd64_meta_reg_value \vb, 4
+8:  /* misaligned: x86_lock_rmw(cpu, tlb, addr, size, XCHG, value, 0, &old) */
+    amd64_meta_reg_value \vb, 5
     sub  sp, sp, 16
-    mov  x5, sp
+    mov  x7, sp
     save_c
     mov  x0, _cpu
     sub  x1, _tlb, TLB_entries
     mov  x2, x9
     mov  x3, \vb
-    bl   NAME(x86_atomic_xchg)
+    mov  x4, 12
+    mov  x6, 0
+    bl   NAME(x86_lock_rmw)
     mov  x19, x0
     restore_c
     ldr  x7, [sp]
@@ -13345,7 +13622,7 @@ amd64_gen_bt_mem bt_mem64, 8
 # rides in the top byte of x0 next to the (48-bit) guest address, and CF in
 # the top byte of x10 next to the result across the write prep. gret 4.
 # packed bit 0 = LOCK: an exclusive loop on the host word, or, misaligned,
-# emu/tlb.c's x86_atomic_alu (OR / AND NOT / XOR with the bit).
+# x86_lock_rmw (OR / AND NOT / XOR with the bit).
 .macro amd64_gen_btx_mem name, vbytes
 .gadget amd64_\name
     ldr  x8, [_ip]
@@ -13408,7 +13685,7 @@ amd64_gen_bt_mem bt_mem64, 8
     cbnz w12, 61b
     amd64_set_cf_only
     gret 4
-70: /* misaligned LOCK: x86_atomic_alu(cpu, tlb, addr, size, op, mask, 0, &old) */
+70: /* misaligned LOCK: x86_lock_rmw(cpu, tlb, addr, size, op, mask, 0, &old) */
     mov  x16, 1
     lsl  x5, x16, x11
     ubfx x12, x8, 4, 2
@@ -13429,7 +13706,7 @@ amd64_gen_bt_mem bt_mem64, 8
     mov  x2, x9
     mov  x3, \vbytes
     mov  x6, 0
-    bl   NAME(x86_atomic_alu)
+    bl   NAME(x86_lock_rmw)
     mov  x19, x0
     restore_c
     ldr  x13, [sp]

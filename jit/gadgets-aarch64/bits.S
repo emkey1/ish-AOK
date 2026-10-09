@@ -264,10 +264,22 @@
     .endif
 .endm
 
+# A register bit index reaches past the operand: the address moves by the
+# signed index's whole operands (a 16-bit index is the register's low half,
+# sign-extended). An imm8 index is already reduced mod the width (decode.h).
+.macro bt_index_addr size
+    .if \size == 16
+        sxth w8, _tmp
+        and w8, w8, ~15
+    .else
+        and w8, _tmp, ~31
+    .endif
+    add _addr, _addr, w8, asr 3
+.endm
+
 .macro do_bt op, size, s
     .gadget \op\size\()_mem
-        and w8, _tmp, ~(\size-1)
-        add _addr, _addr, w8, lsr 3
+        bt_index_addr \size
         # hell {{{
         .ifin(\op, bt)
             read_prep \size, \op\size\()_mem
@@ -312,13 +324,17 @@
 
 .macro do_bt_atomic op, size, s
     .gadget atomic_\op\size\()_mem
-        and w8, _tmp, ~(\size-1)
-        add _addr, _addr, w8, lsr 3
+        bt_index_addr \size
         tst _addr, (\size/8)-1   // on the guest address, before write_prep
         b.eq 9f
-        .ifc \op,bts N ua_slow UA_BTS, \size N .endif
-        .ifc \op,btr N ua_slow UA_BTR, \size N .endif
-        .ifc \op,btc N ua_slow UA_BTC, \size N .endif
+        .ifc \op,bts N ua_rmw UA_BTS, \size/8 N .endif
+        .ifc \op,btr N ua_rmw UA_BTR, \size/8 N .endif
+        .ifc \op,btc N ua_rmw UA_BTC, \size/8 N .endif
+        and w9, _tmp, \size-1     // CF = the bit as it was
+        lsr w8, w12, w9
+        and w8, w8, 1
+        strb w8, [_cpu, CPU_cf]
+        gret 1
     9:
         write_prep \size, atomic_\op\size\()_mem
         dmb ish

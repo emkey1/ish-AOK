@@ -87,12 +87,23 @@
     setf_c
 .endm
 
+# A register bit index reaches past the operand: the address moves by the
+# signed index's whole operands (a 16-bit index sign-extended). An imm8 index
+# is already reduced mod the width (decode.h).
+.macro bt_index_addr size
+    .if \size == 16
+        movswl %tmpw, %r14d
+    .else
+        movl %tmpd, %r14d
+    .endif
+    andl $~(\size-1), %r14d
+    sarl $3, %r14d
+    addl %r14d, %_addr
+.endm
+
 .macro do_bt op, size, s, ss
     .gadget \op\size\()_mem
-        mov\ss %tmp\s, %r14\s
-        andl $~(\size-1), %r14d
-        shrl $3, %r14d
-        addl %r14d, %_addr
+        bt_index_addr \size
         # bt only reads its memory operand; btc/bts/btr modify it in place and
         # so need write_prep/write_done, exactly as the aarch64 host's copy of
         # this macro has always done (jit/gadgets-aarch64/bits.S). read_prep
@@ -133,10 +144,7 @@
 
 .macro do_bt_atomic op, size, s, ss
     .gadget atomic_\op\size\()_mem
-        mov\ss %tmp\s, %r14\s
-        andl $~(\size-1), %r14d
-        shrl $3, %r14d
-        addl %r14d, %_addr
+        bt_index_addr \size
         write_prep \size, atomic_\op\size\()_mem
         and\ss $(\size-1), %tmp\s
         lock \op\ss %tmp\s, (%_addrq)

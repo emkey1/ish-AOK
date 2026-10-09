@@ -191,7 +191,7 @@ int main(int argc, char **argv) {
     run_case("qword_across_page", page + 4092, 64);
     // 32- and 16-bit: misaligned inside a block, and across a 16-byte boundary.
     // Both engines take these through the same exact path as the 64-bit ones
-    // (on i386, helper_atomic_unaligned in jit/helpers.c; before it the i386
+    // (jit/gadgets-aarch64/math.S's x86_lock_rmw; before it the i386
     // gadgets ran an exclusive load on the misaligned address and the host
     // faulted).
     run_case("dword_at_2", base + 2, 32);

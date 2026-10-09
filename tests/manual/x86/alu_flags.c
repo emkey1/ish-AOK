@@ -120,8 +120,8 @@ static uint32_t vals[] = {0, 1, 2, 0xf, 0x10, 0x7f, 0x80, 0xff, 0x100, 0x7fff, 0
     }
 
 // Locked, misaligned memory destination: the i386 JIT runs these through
-// helper_atomic_unaligned (jit/helpers.c), whose flag deposit must match the
-// gadgets'. Offsets 1 (inside a 16-byte block) and 15 (straddling two).
+// math.S's x86_lock_rmw and takes the flags from the old value, which must
+// match what the aligned gadgets deposit. Offsets 1 (inside a 16-byte block) and 15 (straddling two).
 static unsigned char lockbuf[64] __attribute__((aligned(64)));
 #define LOCK_MIS(OPE, INSN, SFX, BITS, R2) \
     for (unsigned i = 0; i < NV; i++) for (unsigned j = 0; j < NV; j++) for (unsigned cin = 0; cin < 2; cin++) \

@@ -2,9 +2,9 @@
 // read-modify-write form, at an offset inside a 16-byte block (1, 8) and one
 // straddling two (15), must produce the right memory value -- and must not
 // take the host down. The JIT's fast path is an ARM exclusive pair, which
-// faults the HOST on a misaligned address; before helper_atomic_unaligned
-// (jit/helpers.c) the first `lock addl` here killed the whole process with a
-// bus error. Then four threads increment one straddling word, which must come
+// faults the HOST on a misaligned address; before the gadgets sent a
+// misaligned one elsewhere (now math.S's x86_lock_rmw) the first `lock addl`
+// here killed the whole process with a bus error. Then four threads increment one straddling word, which must come
 // out exact. Flags of the same forms are checked by alu_flags.c; values
 // verified natively on camd (gcc -m32).
 #define _GNU_SOURCE
