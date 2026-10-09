@@ -97,6 +97,30 @@ amd64_vxpage_\id:
 7008:
 .endm
 
+# The FS or GS base meta x8 names (bits 33, 36), else 0, into \rd.
+.macro amd64_vseg_base rd
+    mov  \rd, 0
+    tbz  x8, 33, 7101f
+    ldr  \rd, [_cpu, CPU_tls_ptr]
+7101:
+    tbz  x8, 36, 7102f
+    ldr  \rd, [_cpu, CPU_amd64_gs_base]
+7102:
+.endm
+
+# A VSIB element address with 0x67 (meta bit 45): x9 came from amd64_vmem_addr
+# (base + disp truncated, then the segment base) plus the scaled index; the
+# element address is base + disp + index truncated to 32 bits, then the
+# segment base. Clobbers x15.
+.macro amd64_vsib_addr32
+    tbz  x8, 45, 7103f
+    amd64_vseg_base x15
+    sub  x9, x9, x15
+    mov  w9, w9
+    add  x9, x9, x15
+7103:
+.endm
+
 # 64-bit TLB write fast path: x9 = guest addr in -> writable host ptr out (or the
 # cross-page staging buffer, flushed by amd64_vwrite_done). Mirrors the 32-bit
 # write_prep: a TLB-staleness / host-page-mirroring check routes to the slow C

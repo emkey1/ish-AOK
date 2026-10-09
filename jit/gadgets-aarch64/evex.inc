@@ -2432,9 +2432,7 @@ evex_l3 gf2p8affineinvqb, 2, evb_gf2p8affine, 1
     ldr  x9, [_ip, 8]
     amd64_vmem_addr
     add  x9, x9, x13
-    tbz  x8, 45, .Legx_a32_0
-    mov  w9, w9                          /* a 0x67 element address: 32 bits (no segment: gen.c) */
-.Legx_a32_0:
+    amd64_vsib_addr32                    /* a 0x67 element address: 32 bits, then the segment */
     ldr  x8, [_ip, 24]
     tbnz w8, 12, .Lega_q
     amd64_vread_prep 4, evex_gather_amd64_4
@@ -2465,9 +2463,7 @@ evex_l3 gf2p8affineinvqb, 2, evb_gf2p8affine, 1
     ldr  x9, [_ip, 8]
     amd64_vmem_addr
     add  x9, x9, x13
-    tbz  x8, 45, .Legx_a32_1
-    mov  w9, w9                          /* a 0x67 element address: 32 bits (no segment: gen.c) */
-.Legx_a32_1:
+    amd64_vsib_addr32                    /* a 0x67 element address: 32 bits, then the segment */
     ldr  x8, [_ip, 24]
     tbnz w8, 12, .Lesa_q
     amd64_vwrite_prep 4, evex_scatter_amd64_4

@@ -5,13 +5,18 @@
 // base register, `(%k1)`, is how gas spells it on a memory operand)
 // and OpenSSL's perlasm pads register-only instructions with it. Where there
 // is one, the address is computed in 32 bits and zero-extended: a pointer
-// with junk above bit 31 reaches the low 4 GB. Checked on an AMD Ryzen
-// (camd).
+// with junk above bit 31 reaches the low 4 GB, and a segment base is added
+// after the truncation. Checked on an AMD Ryzen (camd); the EVEX forms
+// under SDE (camd has no AVX-512).
 #define _GNU_SOURCE
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <sys/syscall.h>
+#include <unistd.h>
+#include <cpuid.h>
+#include <asm/prctl.h>
 
 static int failures, checks;
 #define CHECK(cond, ...) do { checks++; if (!(cond)) { failures++; printf("FAIL "); printf(__VA_ARGS__); printf("\n"); } } while (0)
@@ -103,6 +108,35 @@ int main(void) {
     __asm__ volatile("vmovdqu %1, %%ymm7\n vpcmpeqd %%ymm8, %%ymm8, %%ymm8\n vpgatherdd %%ymm8, 512(%k2,%%ymm7,4), %%ymm9\n"
                      " vmovdqu %%ymm9, %0\n vzeroupper" : "=m"(gout) : "m"(gidx), "r"(junk) : "xmm7", "xmm8", "xmm9", "memory");
     CHECK(gout[0] == 100 && gout[7] == 107, "addr32 vpgatherdd: %u %u", gout[0], gout[7]);
+    // ... and with a segment override: the 32-bit truncation comes first, then
+    // the segment base (GS here, set by arch_prctl): base + index * scale +
+    // disp wraps at 4 GB, and the base is added to that
+    unsigned long gsb = 0x1000;
+    if (syscall(SYS_arch_prctl, ARCH_SET_GS, gsb) == 0) {
+        unsigned long gbase = 0x3333000000000000ul | (uint32_t) ((uintptr_t) low - gsb);
+        uint32_t gout2[8] = {0};
+        __asm__ volatile("vmovdqu %1, %%ymm7\n vpcmpeqd %%ymm8, %%ymm8, %%ymm8\n vpgatherdd %%ymm8, %%gs:512(%k2,%%ymm7,4), %%ymm9\n"
+                         " vmovdqu %%ymm9, %0\n vzeroupper" : "=m"(gout2) : "m"(gidx), "r"(gbase) : "xmm7", "xmm8", "xmm9", "memory");
+        CHECK(gout2[0] == 100 && gout2[7] == 107, "addr32 gs: vpgatherdd: %u %u", gout2[0], gout2[7]);
+        unsigned has512;
+        { unsigned a7, b7, c7, d7; __cpuid_count(7, 0, a7, b7, c7, d7); has512 = (b7 >> 16) & 1; }
+        if (has512) {
+            uint32_t eout[8] = {0}, sval[8] = {9, 8, 7, 6, 5, 4, 3, 2};
+            __asm__ volatile("vmovdqu %1, %%ymm7\n kxnorb %%k0, %%k0, %%k1\n vpgatherdd %%gs:512(%k2,%%ymm7,4), %%ymm9%{%%k1%}\n"
+                             " vmovdqu %%ymm9, %0\n vzeroupper" : "=m"(eout) : "m"(gidx), "r"(gbase) : "xmm7", "xmm9", "memory");   // (k1: unused without -mavx512f)
+            CHECK(eout[0] == 100 && eout[7] == 107, "addr32 gs: evex vpgatherdd: %u %u", eout[0], eout[7]);
+            __asm__ volatile("vmovdqu %0, %%ymm7\n vmovdqu %1, %%ymm9\n kxnorb %%k0, %%k0, %%k1\n"
+                             " vpscatterdd %%ymm9, %%gs:768(%k2,%%ymm7,4)%{%%k1%}\n vzeroupper"
+                             :: "m"(gidx), "m"(sval), "r"(gbase) : "xmm7", "xmm9", "memory");   // (k1: unused without -mavx512f)
+            uint32_t sv0, sv7;
+            memcpy(&sv0, low + 768, 4);
+            memcpy(&sv7, low + 768 + 28, 4);
+            CHECK(sv0 == 9 && sv7 == 2, "addr32 gs: evex vpscatterdd: %u %u", sv0, sv7);
+        }
+        syscall(SYS_arch_prctl, ARCH_SET_GS, 0ul);
+    } else {
+        CHECK(0, "arch_prctl(ARCH_SET_GS) failed");
+    }
     // 0F 01's register forms: 0x67 inert (XGETBV)
     unsigned xlo, xhi;
     __asm__ volatile(".byte 0x67, 0x0f, 0x01, 0xd0" : "=a"(xlo), "=d"(xhi) : "c"(0));

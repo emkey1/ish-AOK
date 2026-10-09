@@ -12101,10 +12101,10 @@ static bool amd64_addr32_is_inert(struct gen_state *state, struct tlb *tlb,
 }
 
 // Whether an effective 0x67 changes only a ModRM memory operand's address:
-// any instruction with one but the string/XLAT/moffs/LOOP family (no ModRM),
-// MASKMOV* (an implicit address: its arms take 0x67 themselves), and VSIB gathers/scatters (VEX map 2 0x90-0x93, EVEX map 2
-// 0x90-0x93 and 0xa0-0xa3) with a segment override -- without one, their
-// gadgets truncate each element's base + index + disp.
+// any instruction with one but the string/XLAT/moffs/LOOP family (no ModRM)
+// and MASKMOV* (an implicit address: its arms take 0x67 themselves). VSIB
+// gathers and scatters are plain too: their gadgets truncate each element's
+// base + index + disp before any segment base (amd64_vsib_addr32).
 static bool amd64_addr32_is_plain_ea(struct gen_state *state, struct tlb *tlb,
         const struct amd64_jit_insn *insn) {
     if (!insn->two_byte_opcode) {
@@ -12117,8 +12117,8 @@ static bool amd64_addr32_is_plain_ea(struct gen_state *state, struct tlb *tlb,
             unsigned map = op == 0xc5 ? 1 : b1 & (op == 0x62 ? 7 : 0x1f);
             if (map == 1 && (opc == 0xf7 || opc == 0x77))
                 return false;
-            if (map == 2 && ((opc >= 0x90 && opc <= 0x93) || (op == 0x62 && opc >= 0xa0 && opc <= 0xa3)))
-                return insn->seg_prefix == AMD64_SEG_NONE;   // (the gadgets truncate base + index; a segment base comes after)
+            // (VSIB: the gadgets truncate base + disp + index, then add the
+            // segment base -- amd64_vsib_addr32)
             if (op == 0x62 && map == 2 && opc == 0xc6)       // the gather/scatter prefetches
                 return false;
             return true;
