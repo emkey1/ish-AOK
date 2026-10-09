@@ -211,16 +211,21 @@ fingerprints that chapter matches.
 memory-copy and memory-set instructions. A `CPYFP`/`CPYFM`/`CPYFE` triple is a
 whole `memcpy`, and glibc 2.41 resolves `memcpy`, `memmove` and `memset` to
 such triples when the bit is set. No Apple chip AOK runs on has MOPS, and it
-does not need to: to a gadget JIT the instruction is one dispatch and one call
-into C that copies page span by page span, where the NEON loop it replaces is a
-dispatch for every instruction of every 64 bytes (`jit/arm64_mops.c`; copies of
-64 bytes or less are done inside the gadget). So AOK advertises a feature the
+does not need to: to a gadget JIT the instruction is one dispatch to a gadget
+that copies page span by page span, where the NEON loop it replaces is a
+dispatch for every instruction of every 64 bytes (`jit/guest-arm64/control.S`;
+until 558 everything past 64 bytes went to C, and `jit/arm64_mops.c` now keeps
+only the model the gadget follows and the switch). So AOK advertises a feature the
 host lacks, because emulating it is cheaper than emulating what software does
 without it. `ISH_MOPS=0`, or `echo 0 > /proc/ish/arm64_mops` for programs
 started afterwards, hides it again.
 
 The riscv64 equivalent packs one bit per ISA letter, which is a pleasantly
-direct encoding for a pleasantly regular architecture.
+direct encoding for a pleasantly regular architecture — and since 558 it has a
+`v`: the vector unit is all gadgets and advertised, in `AT_HWCAP`, the
+`/proc/cpuinfo` isa line and `riscv_hwprobe`, and
+`PR_RISCV_V_SET_CONTROL` can withhold it from the next exec, which then sees no
+`v` and finds every vector instruction illegal.
 
 **`AT_SECURE`** is the security-relevant one. It tells libc that this execution
 crossed a privilege boundary — a setuid or setgid binary, or a uid/euid mismatch

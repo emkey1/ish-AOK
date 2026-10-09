@@ -164,7 +164,7 @@ sets it too):
 
 | | |
 |---|---|
-| **Run Inside Their Root** (the default) | The program runs chrooted into its own root, as if you had used `mount-root.sh`: iSH-AOK binds `/proc`, `/sys`, `/dev`, `/run` and `/AOK/native` into it first. It sees that root's `/etc`, its data files, its `/tmp` and its home directories, and everything it starts does too. |
+| **Run Inside Their Root** (the default) | The program runs chrooted into its own root, as if you had used `mount-root.sh`: iSH-AOK binds `/proc`, `/sys`, `/dev`, `/dev/pts`, `/run`, `/AOK/native`, `/AOK/docs` and `/AOK/tools` into it first. It sees that root's `/etc`, its data files, its `/tmp` and its home directories, and everything it starts does too. |
 | **Use Their Libraries Here** | The program runs here, in the native root, borrowing only its loader, libraries and locales (through `LD_LIBRARY_PATH` and `LOCPATH`, which iSH-AOK removes again for programs that do not need them; a `LOCPATH` of your own wins). It sees your files and your home. Programs that need other data files of their own -- vim's runtime, Python's library -- will not find them. |
 | **Off** | The Linux behaviour: it fails. |
 

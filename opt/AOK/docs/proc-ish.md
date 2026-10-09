@@ -5,7 +5,7 @@ the host device, your settings, the JIT's state. It is AOK's own addition to
 procfs; nothing on real Linux has it.
 
 ```sh
-cat /proc/ish/version        # iSH-AOK 1.3 (557)
+cat /proc/ish/version        # iSH-AOK 1.3 (558)
 cat /proc/ish/host_info      # the Mac or iPad underneath: OS, release, hardware
 cat /proc/ish/ips            # this device's network interfaces
 cat /proc/ish/colors         # the 16 ANSI colours, drawn -- a quick theme check
@@ -178,6 +178,10 @@ Most of `/proc/ish` is read-only. The exceptions:
 |---|---|---|
 | `workspace` | `0666` | ask the app to open a [Workspace](workspace.md) tool; writable by an ordinary user, because opening a window is not an administrative act |
 | `roots` | `0644` | the installed [root filesystems](roots.md); root-only, because switching them is |
+| `foreign_exec` | `0644` | what a program from another root runs as when its loader is not here: `root`, `libs` or `off` — Settings → Other Filesystems → **Programs From Other Roots**; see [roots.md](roots.md#running-another-roots-programs-by-path) |
+| `checkpoint` | `0644` | save or suspend the whole session; see [suspend.md](suspend.md) |
+| `snapshot` | `0644` | `echo <name>` clones the booted root to a sibling root; only with `ISH_GUEST_SNAPSHOT` set |
+| `swap`, `mem_compress` | `0644` | the pager and the compression estimate below |
 | `amd_jit`, `amd64_jit`, `<arch>_jit_fuse` | `0644` | JIT engine and instruction-fusion switches, per guest architecture |
 | `hle`, `jit_inherit`, `jit_timing`, `arm64_mops` | `0644` | the JIT switches and the translation-time counter below |
 | `i386_no_cache_comm`, `i386_single_step_comm` | `0644` | i386 debugging aids, named for the process they apply to |

@@ -157,7 +157,8 @@ process's chroot. Before `/proc/ish/arch` existed, `ktop` resolved every
 process's architecture from `/proc/<pid>/exe`'s ELF header, and that path
 genuinely could not be `open()`ed from outside the calling process's own
 chroot (unlike real Linux, where it can), so everything outside the chroot
-showed `?`. That limitation is now only the fallback path's: it can still show
-`?` for a process that `exec`'d after the current refresh's table was read, or
-in a chroot with no `/proc` mounted in it at all — narrow cases, not the
-common one.
+showed `?`. Since 558 a `/proc` link to a file outside the chroot leads to that
+file, as on Linux, so the fallback no longer has that limit either. It can
+still show `?` for a process that `exec`'d after the current refresh's table
+was read, or in a chroot with no `/proc` mounted in it at all — narrow cases,
+not the common one.

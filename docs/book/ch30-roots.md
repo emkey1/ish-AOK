@@ -67,6 +67,18 @@ knows) and `offeredRootChoices` (what it puts in front of you) in `Roots.m`.
 by download or because somebody dropped a `.tar.xz` in through the Files app
 (Chapter 31) or from the guest. Tap it and it becomes a named root.
 
+**Made on the spot.** Since 558 there is a fourth kind, which arrives no way at
+all: **iSH-AOK Native**, a root with no Linux distribution in it. Its `/bin` and
+`/usr/bin` are symlinks into `/AOK/native` (Part V), its login shell is native
+zsh, and SmallCLUE's `init` is pid 1. It is an ordinary, persistent fakefs —
+home directories and `~/.ssh` have to survive a relaunch — that starts empty,
+and `kernel/native_root.c` fills it in at *every* boot rather than once, because
+what it links is a property of the build: an update that adds an applet should
+find it on `PATH` at the next launch, and one that drops a program should not
+leave a link to nothing. The user's own files (`/etc/passwd`, `/etc/rc`) are
+written only when missing; only links that point into `/AOK/native` are ever
+re-pointed or removed. `/AOK/docs/native-mode.md` is the user's guide to it.
+
 ## 30.2 The control surface is a file
 
 The interesting design decision is that the Filesystems screen is not the root
@@ -202,11 +214,28 @@ one `/proc`, one `/sys` and one `/dev`, and they describe the single true system
 from wherever you are standing.
 
 `/AOK/tools/mount-root.sh` sets up the bind mounts a chroot needs — `/proc`,
-`/sys`, `/dev`, `/run`, plus `/AOK/tools` and `/AOK/tests` from the booted root.
+`/sys`, `/dev`, `/dev/pts`, `/run`, plus `/AOK/native`, `/AOK/docs`, `/AOK/tools`,
+`/AOK/tests` and `/AOK/fakefs` from the booted root. (`/AOK/native` joined the
+list in 558, when a native-mode root's `$SHELL` turned out to be a program the
+chroot could not see.)
 Chapter 9 met the consequence: a test running inside such a chroot sees the
 *booted* root's `/proc` while standing in a different filesystem, which is why
 `test_common.h` detects that situation and skips the tests that cross-check the
 two.
+
+Running one *program* from another root, by path, is a different question, and
+on Linux the answer is no: `/AOK/roots/Devuan6-arm64/usr/bin/tmux` names its
+loader as `/lib/ld-linux-aarch64.so.1`, which means "in the root I came from",
+and looked up from here it is not there — `ENOENT`, about a file that plainly
+exists. Native mode made that the common case, so 558 answers it
+(`kernel/foreign_exec.c`), for exactly the programs that would otherwise fail.
+By default the task is chrooted into the program's root before its loader is
+opened, with the same binds `mount-root.sh` makes; the alternative runs it here
+with its root's loader and an `LD_LIBRARY_PATH` that the next exec takes back
+out; off is Linux's behaviour. It is a runtime choice —
+`/proc/ish/foreign_exec`, `ISH_FOREIGN_EXEC` in the CLI, and Settings → Other
+Filesystems → Programs From Other Roots — because each mode is right for
+different programs.
 
 ## 30.6 One sharp edge
 

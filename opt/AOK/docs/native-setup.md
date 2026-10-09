@@ -89,15 +89,15 @@ sh /AOK/tools/native-links.sh --list
 The last lines are the summary worth reading:
 
 ```
-would link 110 applet(s) and 6 program(s), leave 0 in place, skip 20 excluded, 0 already linked, unlink 0 now-excluded
+would link 124 applet(s) and 17 program(s) into /usr/local/native-bin and /usr/local/bin, leave 0 in place, skip 40 excluded, 119 already linked, unlink 1 now-excluded
   would put /usr/local/native-bin first on PATH via /etc/profile.d/05-aok-native-bin.sh
   would make zsh read it too, via /etc/zprofile
-  nu already uses /AOK/native/bash
+  would set nu's shell: /bin/sh -> /AOK/native/zsh
 ```
 
-(captured on a build with `-Dnative_bash=enabled`; the default build has had no
-`/AOK/native/bash` since 556, so that last line and the "program(s)" count will
-differ.)
+(captured on a CLI build's Alpine test root that had been linked before; each
+count covers both directories, and the numbers depend on the build and on the
+root, so read yours rather than these.)
 
 **Do this once per root.** The links live in the root's own `/usr/local`, and
 the PATH snippet in its `/etc/profile.d`, so a second root — or one you install
@@ -131,18 +131,34 @@ with no line editing or history, which is why it is not one of the shorthands.
 The previous shell is recorded in `/etc/aok-native-shell.prev`, so `--remove`
 can put it back.
 
+**A login shell the build no longer has is repaired at boot.** An account set
+up before 556 may still name `/AOK/native/bash`, and `sshd`, `login` and `su`
+all refuse a user whose shell does not exist — which looks like a bad password
+or a bad key, not a missing shell. So at every boot of every root, each
+`/etc/passwd` shell under `/AOK/native` that this build lacks is changed to the
+root's own program of that name (a distro's `/bin/bash`), else native zsh, else
+`/bin/sh`. Nothing else in the file changes, its mode and owner are kept, and
+the kernel log says what it did:
+
+```sh
+dmesg | grep 'login shell'   # native: login shell of nu was /AOK/native/bash, ...
+```
+
+`native-links.sh` does the same for a native bash whenever it runs, pointing
+the entry at the guest's own bash, else `/bin/sh`.
+
 To check what you are actually running right now, ask the shell where it came
 from:
 
 ```sh
-echo $BASH          # bash:  /AOK/native/bash
+echo $BASH          # bash:  /bin/bash, or /AOK/native/bash on a build with it
 echo $ZSH_ARGZERO   # zsh:   /AOK/native/zsh
 ```
 
 `echo $0` works for a shell you invoked by name, but a *login* shell
 conventionally reports `-bash`, which tells you nothing about which bash it is.
-`/proc/self/exe` will not tell you either — a native program has no guest image
-of its own, so that link still points at the last guest binary the task loaded.
+`readlink /proc/$$/exe` does: a native program has no guest image of its own,
+so that link names the `/AOK/native` entry that was exec'd.
 
 ## Options
 

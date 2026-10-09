@@ -114,7 +114,7 @@ busybox does on Linux. `/AOK/tools/native-links.sh` builds the whole symlink
 farm and can undo it.
 
 A `#!` line is the other way a native program acquires a name, and it works for
-the same reason: `#!/AOK/native/bash` at the top of a script resolves to the
+the same reason: `#!/AOK/native/zsh` at the top of a script resolves to the
 same node and dispatches to the same entry point. That took a fix — the
 question used to be asked only where a program was *typed*, not everywhere one
 is *chosen*, and a script naming native bash quietly ran under dash instead.

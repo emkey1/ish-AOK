@@ -15,10 +15,11 @@ Testflight: https://testflight.apple.com/join/X1flyiqE
   - Bundle root `app.ish.iSH-AOK`
 - **四种客户机架构**，全部基于 JIT：`i386`、`amd64`（x86_64）、`arm64`（aarch64）和 `riscv64`。
 - **原生程序**：zsh、dash（预配置脚本会让它成为 `sh`），以及携带 OpenSSH（`ssh`、`scp`、`sftp`、`ssh-keygen`、`ssh-copy-id`）、Nextvi 编辑器和与 GNU 兼容的 `sed`、`grep`、`find`、`ls`、`tar`、`gzip`、`diff`、`awk` 及大部分 coreutils 的 SmallCLUE busybox 风格工具箱，都作为宿主代码编译进应用，并由客户机的 `execve` 经 `/AOK/native/<名称>` 分发。它们是运行在客户机任务线程上的宿主函数，而不是客户机二进制，因此以全速运行，无需逐条指令翻译。bash 拥有同样的原生实现，但自 556 起发布的构建不再包含它——参见[原生 bash 与许可证](#原生-bash-与许可证)。
+- **原生模式**（558）：完全没有 Linux 发行版的根文件系统。它的 `/bin` 和 `/usr/bin` 就是原生程序——约 140 个日常命令、ssh、git、curl、编辑器——由 SmallCLUE 的 `init` 作为 pid 1 运行 runit 式的服务，登录 shell 是原生 zsh。无需下载任何东西：在“官方发行版”下选择 **iSH-AOK Native** 即可。需要包管理器时，在它旁边再安装一个发行版。参见 `/AOK/docs/native-mode.md`。
 - `/AOK`，一个只读的应用内文件系统（`/AOK/docs`、`/AOK/tools`、`/AOK/tests`、`/AOK/native`），在构建时通过 `fs/aok-*.manifest` 和 `tools/gen-aokfs.py` 从 `opt/AOK/` 嵌入。
 - 内置在应用中的根文件系统（Alpine 3.24.2 与 Devuan 6，仅 `aarch64`），以及面向 `i386`、`x86_64` 和 `riscv64` 的可下载镜像。
 - **在客户机中使用设备的 GPU**：`/dev/dri/renderD128`，一个 virtio-gpu 渲染节点，由进程内运行在 MoltenVK 之上的 virglrenderer Venus 渲染器支撑，因此 Mesa 的 Venus Vulkan 驱动（以及其上的 zink）通过 Metal 绘制。客户机一侧由 `/AOK/tools/setup-gpu.sh` 安装。参见 `/AOK/docs/workspace.md`。
-- **Wayland 桌面**（labwc、foot、waybar；自带四个桌面）：在 GPU 上合成，并通过 `/AOK/native/wl-present` 呈现到应用中——画面单向传出，键盘、指针、剪贴板和尺寸调整反向传入——VNC 作为后备。`/AOK/tools/setup-games.sh` 会安装一组经过测试的游戏。参见 `/AOK/docs/workspace.md`。
+- **Wayland 桌面**（labwc、foot、waybar；自带四个桌面——也可用 Wayfire 或 Xfce 取代 labwc）：在 GPU 上合成，并通过 `/AOK/native/wl-present` 呈现到应用中——画面单向传出，键盘、指针、剪贴板和尺寸调整反向传入——VNC 作为后备。`/AOK/tools/setup-games.sh` 会安装一组经过测试的游戏。参见 `/AOK/docs/workspace.md`。
 - **LLM Chat**：应用内的聊天客户端（OpenAI 兼容服务器、Anthropic、Gemini、Apple 端侧模型），可在允许/询问/拒绝的权限下读取、编辑客户机中的文件并运行命令，可使用 MCP 服务器，还能把多个聊天作为后台代理同时运行。API 密钥保存在钥匙串中。参见 `/AOK/docs/llm-chat.md`。
 - **挂起到磁盘**：把整个会话——进程、打开的文件、终端——保存下来，在应用被终止后再恢复。默认关闭。参见 `/AOK/docs/suspend.md`。
 - **中文及其他语言**：应用界面跟随设备语言，除英文外还提供简体中文、繁體中文、日语、韩语、西班牙语、法语、德语、巴西葡萄牙语和俄语。终端支持输入法输入：用中文拼音输入法和日文输入法时，正在组字的文本直接显示在光标处，候选窗口紧挨在旁边，软键盘和硬件键盘都能用；韩文则逐个音节就地输入。`/AOK/tools/setup-locale.sh` 还能让根文件系统也使用设备的语言（Devuan 自带各程序的翻译）。参见 `/AOK/docs/roots.md`。
@@ -39,10 +40,13 @@ Testflight: https://testflight.apple.com/join/X1flyiqE
 
 | 客户机 | 状态 |
 |---|---|
-| `i386` | 最初的客户机，仅 JIT |
-| `amd64` | 已支持，JIT |
+| `i386` | 最初的客户机，仅 JIT；CPUID 公布 AVX/AVX2/FMA 和 AVX-512（558） |
+| `amd64` | 已支持，JIT；CPUID 公布 x86-64-v4（含 AVX-512）（558） |
 | `arm64` | 已支持，JIT |
-| `riscv64` | 已支持，JIT |
+| `riscv64` | 已支持，JIT；RVA23，含 V 向量单元（558），因此 Ubuntu 25.10 可以运行 |
+
+各客户机向软件报告的内容——`CPUID`、`AT_HWCAP`、`riscv_hwprobe`、`/proc/cpuinfo`——
+见 `/AOK/docs/guest-cpus.md`。
 
 各客户机的回归测试套件在真机上于四种架构均能通过。解释器属于遗留实现且即将移除，新的
 工作应当以 JIT 为目标。
@@ -125,8 +129,8 @@ cd ish-AOK
 git submodule update --init --recursive
 ```
 
-请注意，`--recursive` 会包含 `deps/bash`，这会让默认构建成为 GPLv3 构建。若打算分发
-构建结果，请阅读[原生 bash 与许可证](#原生-bash-与许可证)。
+请注意，`--recursive` 也会取回 `deps/bash`，但默认构建依然不包含它。若要在分发的构建中
+启用它，请先阅读[原生 bash 与许可证](#原生-bash-与许可证)。
 
 ## 构建依赖
 
@@ -255,7 +259,10 @@ libc 符号。它是特意手动运行的，没有接进构建流程。
 > 支持：它无法写下自己的状态，因此挂起不会把它恢复到原来的位置，而是从命令行
 > 重新启动它并如实报告这一点。zsh 是唯一一个能带着你的会话原样回来的原生程序。
 > 指向 `/AOK/native/bash` 的登录 shell 会由 `native-links.sh` 自动转换为客户机自带的
-> bash，因此已经在用它的人不会因为这次变更而被挡在登录之外。
+> bash，因此已经在用它的人不会因为这次变更而被挡在登录之外。自 558 起，内核还会在
+> 每次启动时修复它们：凡是位于 `/AOK/native` 下、而本构建并不包含的登录 shell，都会改为
+> 该根文件系统自带的同名程序，没有则改为原生 zsh，再没有则改为 `/bin/sh`，并在 `dmesg`
+> 中留下一行记录——sshd、`login` 和 `su` 都会拒绝 shell 不存在的账户。
 > 参见 [docs/historical/shell_transition_plan.md](docs/historical/shell_transition_plan.md)。
 
 **libgit2**（SmallCLUE 的 `git`，自 558 起内置）采用 GPLv2，但*附带链接例外*（见其
@@ -388,7 +395,7 @@ meson test -C build
 于这种情况，因为那里根本没有可供比较的参考值。在 x86_64 宿主机上它会完整运行。
 
 客户机侧套件是主要的回归关卡。它位于 [tests/manual/](tests/manual)，在客户机内以只读
-方式提供于 `/AOK/tests`，包含约 400 个专项程序，覆盖信号、futex、进程生命周期、文件
+方式提供于 `/AOK/tests`，包含 500 多个专项程序，覆盖信号、futex、进程生命周期、文件
 系统层、JIT 以及各架构的指令行为。每个程序在失败时以非零值退出，并支持 `-v`。
 
 在客户机内：
@@ -428,6 +435,10 @@ sh /AOK/tests/setup-regressions.sh --only fs_conformance,futex_core --run
 - 应用会为每个导入的根文件系统记录客户机 ABI。
 - 所有已安装的根文件系统还会在已启动的客户机中以读写方式暴露于 `/AOK/roots/<名称>`，
   因此你可以 chroot 进入另一种架构的用户空间。
+- 按路径运行另一个根文件系统中的动态链接程序（`/AOK/roots/<名称>/usr/bin/tmux`）时，
+  默认会在它自己的根文件系统内运行，也可以借用其根文件系统的库在当前根文件系统中运行——
+  设置 → 其他文件系统 → 来自其他根文件系统的程序，`/proc/ish/foreign_exec`，CLI 中为
+  `ISH_FOREIGN_EXEC`。
 - 受管理的根文件系统会同步 File Provider 域。
 
 ## 日志与诊断

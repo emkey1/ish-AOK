@@ -157,17 +157,17 @@ rather than about care.
 The `engine` build option offers exactly one value. New work targets the JIT.
 And yet:
 
-- `emu/amd64_interp.c` is still the **largest single file in the tree** at
-  about 18,000 lines.
+- `emu/amd64_interp.c` is still about **14,600 lines**, second only to
+  `jit/gen.c` (it was the largest file in the tree, at 18,000, until 558's
+  gadget work deleted its JIT bridges).
 - It is still what runs on non-aarch64 hosts, because the amd64 JIT's gadgets
   exist only for aarch64 (Chapter 7).
-- And it is still where **most `lock`-prefixed instructions** execute. Nearly
-  every eligibility predicate in `jit/gen.c`'s amd64 front-end requires the
-  lock prefix to be absent, so a locked `xadd`, `cmpxchg`, `inc` or `neg`
-  leaves the JIT for a C helper or the interpreter. Two families no longer do:
-  since 556, `lock add/or/and/sub/xor [mem], imm` and `xchg [mem], reg` are
-  `ldaxr`/`stlxr` gadgets, as the i386 JIT's locked instructions have long
-  been.
+- And until 558 it was where **most `lock`-prefixed instructions** executed.
+  Nearly every eligibility predicate in `jit/gen.c`'s amd64 front-end required
+  the lock prefix to be absent, so a locked `xadd`, `cmpxchg`, `inc` or `neg`
+  left the JIT for a C helper or the interpreter; only `lock add/or/and/sub/xor
+  [mem], imm` and `xchg [mem], reg` were `ldaxr`/`stlxr` gadgets, from 556.
+  Since 2026-10-06 every locked form is a gadget.
 
 One bullet has come off this list. It used to say the interpreter was what GNU
 `as` executed on, behind a containment workaround for crashes nobody had
@@ -187,7 +187,7 @@ every VEX encoding of maps 1-3 and every EVEX encoding of maps 1-3, 5 and 6.
 The bridge is gone; only an instruction whose bytes cannot be read still lands
 in the interpreter, as any undecodable instruction does (Chapter 5).
 
-The locked instructions used to cost twice, and the correctness half is now
+The locked instructions used to cost twice, and both halves are now
 paid. Until 553 the interpreter serialised locked instructions on the global
 `atomic_l_lock`, which does not interlock with a host atomic — so a kernel-side
 read-modify-write on guest memory raced with an amd64 guest's own atomics.
@@ -210,10 +210,10 @@ single-threaded and a lost update is the only symptom a broken atomic has.
 (`x86_atomic_rmw` and friends in `emu/tlb.c`), `atomic_l_lock` is gone from that
 path, `kernel/futex.c` is back to a plain compare-exchange, and
 `tests/manual/x86/atomic_lock_contended.c` runs nineteen locked forms from four
-threads at once. What remains is the throughput half: apart from the two
-families above, a locked instruction still leaves the JIT for a C helper
-instead of becoming a gadget. What that costs a real workload has not been
-measured.
+threads at once. The throughput half — every other locked instruction leaving
+the JIT for a C helper — closed in 558: since 2026-10-06 the locked ALU family,
+`INC`/`DEC`/`NOT`/`NEG`, `XADD` and `CMPXCHG` are gadgets at every width, still on
+the host's atomics.
 
 The *misaligned* half closed in 557 (`4d7a6981`). A locked access that is not
 naturally aligned — which x86 allows, and which the i386 ABI makes ordinary for
@@ -234,12 +234,14 @@ locked gadgets for 16- and 32-bit operands checked alignment and then ignored
 the answer: on a misaligned operand they called a tracing helper that did
 nothing and ran `ldaxr`/`stlxr` on the misaligned host address anyway, so a
 `lock addl` on a word straddling a 16-byte boundary killed the whole app with a
-bus error. Each such gadget now sends a misaligned operand to the amd64 JIT's C
-slow path. One edge is still open, found by the release's device leg: across a
-*page* the slow path takes the address space's writer lock, which prefers
-writers, so a thread doing locked increments there can starve a thread doing
-plain stores to the same word. The fix that removed the starvation cost that
-case about 100x in throughput and was not committed; `docs/TODO.md` has it.
+bus error. Such an operand went to a C slow path, and since 2026-10-09 to the
+same `x86_lock_rmw` gadget as amd64's. One edge is still open, found by the
+release's device leg: a straddling operand takes the address space's writer
+lock, which prefers writers, so a thread doing misaligned locked operations can
+starve the process's other threads — a new thread got a block or two of start-up
+between them, and none of its stores. A quantum that fixed it cost the case where
+every thread is a splitter minutes instead of seconds, and was not committed;
+`docs/TODO.md` has the measurements.
 
 `emu/arm64_interp.c` survives for a different reason: as a bisection escape
 hatch behind `ISH_ARM64_FORCE_INTERP=1`, with a comment that is candid about
@@ -271,12 +273,13 @@ Run against a 557 build, it finds 283 host symbols referenced across every
 native archive, all of them on the pure list, and none needing work. What
 remains is the porting of programs not yet native, and the gate's `--report`
 mode enumerates that for any candidate — its third list is exactly the
-outstanding work. Three are already in the binary and only refuse: smallclue's
-`git` (built without libgit2), `dvtm` and `rsync`. Each is a port, not a flag —
-libgit2 needs an HTTPS transport in a binary that links no OpenSSL, and `dvtm`
-and `rsync` both start children, which a native program does through native
-spawn or not at all. Until then the distribution's packages do the job,
-translated.
+outstanding work. Two are already in the binary and only refuse: `dvtm` and
+`rsync`. Each is a port, not a flag — both start children, which a native
+program does through native spawn or not at all. Until then the distribution's
+packages do the job, translated. A third, smallclue's `git`, came off this list
+in 558: libgit2 needed an HTTPS transport in a binary that links no OpenSSL, and
+on Apple platforms SecureTransport is one, so libgit2 is now built in and `git`
+clones over HTTPS.
 
 **Two divergences are recorded as the shell's**: a pattern compiled at first
 use is cached in the parse tree with nothing recording the options in force at

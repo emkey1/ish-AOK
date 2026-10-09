@@ -204,6 +204,13 @@ instructions will not execute the first function it meets. That is the kind of
 detail that turns a two-week port into a two-day debugging session if it is
 discovered late.
 
+RV64GC stopped being enough in 2026: Ubuntu moved its riscv64 builds to the
+RVA23 profile from 25.10, so such a root did not run at all. 558 implements it —
+the scalar extensions (Zba/Zbb/Zbs, Zicond, Zcb, Zfa, Zfhmin, Zicbo*,
+Zimop/Zcmop, Zawrs) and the vector unit, V with Zvbb, Zvfhmin and Zvkt, every
+instruction a gadget — and reports it through `riscv_hwprobe` as Linux does.
+Pointer masking (Supm) is the one piece deliberately left out.
+
 riscv64 also brought something neither x86 guest could: a supported way to add
 instructions. The ISA permanently reserves four major opcodes — `custom-0`
 (`0x0B`), `custom-1` (`0x2B`), `custom-2` (`0x5B`), `custom-3` (`0x7B`) — and
@@ -259,9 +266,11 @@ path you would expect from reading the table.
 
 **The interpreters are legacy, and one of them is still load-bearing.** The
 `engine` build option offers exactly one value, `jit`. But `emu/amd64_interp.c`
-is still the largest single file in the tree at about 18,000 lines, it is still
-what runs on non-aarch64 hosts, and it is still where AVX semantics get executed
-for amd64. "Legacy" here means "not
+is still about 14,600 lines, second only to `jit/gen.c`, and it is still what
+runs on non-aarch64 hosts. Until 558 it was also where AVX semantics got executed
+for amd64; now the JIT runs every VEX and EVEX instruction as gadgets, and on
+an aarch64 host the interpreter is reached only by an instruction whose bytes
+cannot be read. "Legacy" here means "not
 where new work goes", not "dead". A reader who assumes the interpreters are
 vestigial will misread both the amd64 story and the AVX one.
 

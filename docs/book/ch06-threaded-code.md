@@ -288,15 +288,23 @@ host registers around the call:
     gret
 ```
 
-The comment `# regrettable` is doing honest work there. `cpuid` is rare, its
-semantics are a large table, and nobody wants that table in assembly — so it
-bridges to C, at the cost of a save/restore around every execution.
+The comment `# regrettable` was doing honest work there. `cpuid` is rare, its
+semantics are a large table, and nobody wanted that table in assembly — so it
+bridged to C, at the cost of a save/restore around every execution. Build 558
+retired it along with the rest of the run-time C (the project's rule became
+100% gadgets): the table is now filled once at start-up, in C, as
+`cpuid_tables` in `jit/helpers.c`, and the gadget only looks the answer up, in
+assembly (`cpuid_lookup`, `jit/gadgets-aarch64/misc.S`). C still computes the
+answer; it just no longer runs while the guest waits for it. The macros remain
+for what is genuinely the kernel's work, such as a TLB miss that has to walk
+the page table (`tlb_handle_miss`).
 
-The amd64 engine takes that trade much further, and the consequences show up in
-Chapter 7's benchmark table. Its translator emits real assembly gadgets for the
-shapes that run hot, and for the long tail it emits a bridge to a C helper that
-re-decodes the instruction at run time. The tree is clear-eyed about what that
-costs. Here is the note attached to the gadget that replaced one such bridge —
+The amd64 engine took that trade much further, and the consequences show up in
+Chapter 7's benchmark table. Its translator emitted real assembly gadgets for the
+shapes that ran hot, and for the long tail a bridge to a C helper that
+re-decoded the instruction at run time — until 558, which replaced the last
+bridges with real semantics by gadgets or #UD (`fa6fc40b`). The tree is
+clear-eyed about what a bridge costs. Here is the note attached to the gadget that replaced one such bridge —
 register-operand `INC`/`DEC`, which in long mode is *every* `incq`, because the
 one-byte `0x40+r` encodings that used to be `INC` are the REX prefixes:
 

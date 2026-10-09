@@ -69,6 +69,16 @@ exit status were recorded from the original program (`tests/manual/native_sed.c`
 `native_coreutils.c`). `native_sed` has 134 of them, and its positive control is
 the point: the old `sed` failed 101.
 
+558 asked more of it again. Native mode (Chapter 30) is a root with no
+distribution at all, so SmallCLUE had to be the system as well as its tools:
+`init` as pid 1 with runit-style supervision, `sv` and `shutdown`, `login` at
+`/bin/login`, `mount` and `umount`, `tput`, `free` and `printenv`, curl's
+`-I`/`-i`/`-f`/`-w`, and login records — `login` and `init` write the guest's
+own `utmp` and `wtmp` layout, which is two layouts (glibc's `struct utmp` is 384
+bytes on x86 and 400 on aarch64 and riscv64), and `who` and `users` read them.
+And `git` stopped refusing: libgit2 is built in, with SecureTransport as its
+HTTPS transport (Chapter 41).
+
 ## 25.2 OpenSSH: re-enabling, not porting
 
 `ssh`, `scp`, `sftp`, `ssh-keygen` and `ssh-copy-id` are applets of SmallCLUE,

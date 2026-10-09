@@ -125,6 +125,19 @@ slower with it on, and musl and riscv64 programs gained up to 18%.
 counts translation time from the start, as writing `1` to
 `/proc/ish/jit_timing` does later.
 
+## App settings, for the CLI
+
+The standalone CLI has no Settings screen, so these stand in for the switches
+the app has:
+
+| variable | the app's setting | what it does |
+| --- | --- | --- |
+| `ISH_CRYPTO_ACCEL=1` | **Crypto Accel** | host-native AEAD for arm64/riscv64 ssh — see [crypto-accel.md](crypto-accel.md); off by default |
+| `ISH_PIX_ACCEL=1` | **Pixman Accel** | host-native fill/copy/composite for the guest's pixman shim; off by default, and on only once its self-test passes |
+| `ISH_FOREIGN_EXEC` | **Programs From Other Roots** | `root`, `libs` or `off`: how a program from another root runs when its loader is not here — see [roots.md](roots.md#running-another-roots-programs-by-path); the same as writing `/proc/ish/foreign_exec` at boot |
+| `ISH_NATIVE_ROOT=1` | a [native-mode](native-mode.md) root | treats the root as native mode, provisioning it as the app does at every boot of one |
+| `ISH_NATIVE_USER`, `ISH_NATIVE_PASSWORD` | the first-start prompt | with `ISH_NATIVE_ROOT=1`, the everyday account to create (password optional) on a root that has none yet |
+
 ## `ISH_BOOT_ROOT`
 
 For the app rather than the CLI: boots the named root for **this launch only**,

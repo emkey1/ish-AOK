@@ -184,13 +184,18 @@ awkward part:
 | dash | BSD-3-Clause (its GPL `mksignames.c` replaced) |
 | virglrenderer (GPU render node, since 557) | MIT |
 | MoltenVK (GPU render node, since 557) | Apache-2.0 |
-| helix | MPL-2.0 (build option, default off) |
+| helix | MPL-2.0 (build option: on in the app, off by default in the CLI) |
+| libgit2 (SmallCLUE's `git`, since 558) | GPLv2 with a linking exception |
 | bash, readline, GNU termcap | **GPLv3** (build option) |
 | iSH-AOK itself | GPLv3, plus GPLv2 for post-relicensing contributions |
 
 Nothing else in the binary is third-party GPL. That sentence is checkable, and
 it is checkable in the way this book keeps recommending: `ar t` on the archive,
 and the allowlist gate of Chapter 23 for what those objects reference.
+libgit2's licence carries the word, but its linking exception permits linking
+the compiled library into any program and distributing the result without the
+GPL's conditions applying to it — the permission bash lacks, and the reason it
+ships.
 
 ## 26.8 The principle
 

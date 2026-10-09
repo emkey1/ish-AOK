@@ -46,7 +46,11 @@ question you are answering when you delete some.
 **Delete a Saved Session…**, on the same start screen, lists every saved
 session and removes the one you pick, without resuming it — previously the
 only way to free a slot was to resume a session you did not want ("Resume and
-Delete") or one this build could no longer load at all.
+Delete") or one this build could no longer load at all. With only one saved
+session the button reads **Delete Saved Session…** and skips the list: it asks
+"Delete this saved session?", and **Delete and Start New** removes it and boots
+a fresh session, as if there had been none; **Cancel** goes back to the
+resume picker.
 
 The control underneath is a `/proc` file, like every other AOK knob:
 
@@ -196,12 +200,12 @@ the picker no longer offers a resume that is certain to fail. When a restore
 does refuse, it says why, naming the check that failed or the pid it was
 rebuilding.
 
-**A session saved on build 556 will not restore on 557.** Even apart from the
-build check, the image carries a format version number, which moved again in
-557 (to 23, so an executable that is a memfd comes back as one); a save whose
-version does not match this build's is refused the same as one from a different
-build entirely. This happens most releases that change what a checkpoint needs
-to carry — check `/proc/ish/checkpoint` after an update if a saved session you
+**A session saved on an earlier build will not restore on this one** — one
+from 557 does not resume on 558. Even apart from the build check, the image
+carries a format version number (23 since 557, so an executable that is a memfd
+comes back as one); a save whose version does not match this build's is refused
+the same as one from a different build entirely. The version moves most
+releases that change what a checkpoint needs to carry — check `/proc/ish/checkpoint` after an update if a saved session you
 expected to see does not resume.
 
 ## What it is not

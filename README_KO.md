@@ -16,10 +16,11 @@ Testflight: https://testflight.apple.com/join/X1flyiqE
   - 번들 루트 `app.ish.iSH-AOK`
 - **네 가지 게스트 아키텍처**, 모두 JIT 기반: `i386`, `amd64`(x86_64), `arm64`(aarch64), `riscv64`.
 - **네이티브 프로그램**: zsh, dash(프로비저닝이 이를 `sh` 로 만듭니다), 그리고 OpenSSH(`ssh`, `scp`, `sftp`, `ssh-keygen`, `ssh-copy-id`), Nextvi 편집기, GNU 호환 `sed`, `grep`, `find`, `ls`, `tar`, `gzip`, `diff`, `awk` 및 coreutils 대부분을 품고 있는 SmallCLUE 의 busybox 스타일 도구 모음이 호스트 코드로 앱에 컴파일되어 들어가며, 게스트의 `execve` 에서 `/AOK/native/<이름>` 을 통해 디스패치됩니다. 이들은 게스트 바이너리가 아니라 게스트 태스크 스레드 위에서 도는 호스트 함수이므로, 명령어 단위로 변환되지 않고 전속력으로 실행됩니다. bash 도 동일한 네이티브 구현이 있지만, 배포되는 빌드에는 556 부터 포함되지 않습니다 — [네이티브 bash와 라이선스](#네이티브-bash와-라이선스) 참고.
+- **네이티브 모드**(558): 리눅스 배포판이 전혀 없는 루트입니다. `/bin` 과 `/usr/bin` 은 네이티브 프로그램들 — 일상 명령 약 140개, ssh, git, curl, 편집기 — 이고, SmallCLUE 의 `init` 이 pid 1 로서 runit 방식의 서비스를 돌리며, 로그인 셸은 네이티브 zsh 입니다. 아무것도 내려받지 않습니다: 공식 배포판 아래에서 **iSH-AOK Native** 를 고르면 됩니다. 패키지 관리자가 필요하면 배포판을 그 옆에 설치하십시오. `/AOK/docs/native-mode.md` 참고.
 - `/AOK`, 읽기 전용 인앱 파일시스템(`/AOK/docs`, `/AOK/tools`, `/AOK/tests`, `/AOK/native`). `fs/aok-*.manifest` 와 `tools/gen-aokfs.py` 를 통해 빌드 시점에 `opt/AOK/` 에서 만들어 넣습니다.
 - 앱 빌드에 번들된 루트 파일시스템(Alpine 3.24.2와 Devuan 6, `aarch64` 전용), 그리고 `i386`, `x86_64`, `riscv64` 용 다운로드 이미지.
 - **게스트에서 쓰는 기기의 GPU**: `/dev/dri/renderD128`, 프로세스 안에서 MoltenVK 위의 virglrenderer Venus 렌더러가 뒷받침하는 virtio-gpu 렌더 노드입니다. 그래서 Mesa 의 Venus Vulkan 드라이버(와 그 위의 zink)가 Metal 로 그립니다. 게스트 쪽은 `/AOK/tools/setup-gpu.sh` 가 설치합니다. `/AOK/docs/workspace.md` 참고.
-- **Wayland 데스크톱**(labwc, foot, waybar; 자체 데스크톱 네 개): GPU 에서 합성되고, `/AOK/native/wl-present` 를 통해 앱에 전달됩니다 — 한쪽으로는 프레임이, 다른 쪽으로는 키보드, 포인터, 클립보드, 크기 변경이 오가며, VNC 는 대체 경로입니다. `/AOK/tools/setup-games.sh` 는 검증된 게임 묶음을 설치합니다. `/AOK/docs/workspace.md` 참고.
+- **Wayland 데스크톱**(labwc, foot, waybar; 자체 데스크톱 네 개 — labwc 대신 Wayfire 나 Xfce 도 가능): GPU 에서 합성되고, `/AOK/native/wl-present` 를 통해 앱에 전달됩니다 — 한쪽으로는 프레임이, 다른 쪽으로는 키보드, 포인터, 클립보드, 크기 변경이 오가며, VNC 는 대체 경로입니다. `/AOK/tools/setup-games.sh` 는 검증된 게임 묶음을 설치합니다. `/AOK/docs/workspace.md` 참고.
 - **LLM Chat**: 앱 내장 채팅 클라이언트(OpenAI 호환 서버, Anthropic, Gemini, Apple 온디바이스 모델). 허용/확인/거부 권한 아래에서 게스트의 파일을 읽고 고치고 명령을 실행할 수 있으며, MCP 서버를 쓰고, 여러 채팅을 백그라운드 에이전트로 동시에 돌립니다. API 키는 키체인에 보관됩니다. `/AOK/docs/llm-chat.md` 참고.
 - **디스크로 서스펜드**: 프로세스, 열린 파일, 터미널까지 세션 전체를 저장했다가 앱이 종료된 뒤에도 이어서 재개합니다. 기본값은 꺼짐. `/AOK/docs/suspend.md` 참고.
 - **한국어와 다른 언어**: 앱 인터페이스가 기기 언어를 따르며, 영어 외에 한국어, 간체·번체 중국어, 일본어, 스페인어, 프랑스어, 독일어, 브라질 포르투갈어, 러시아어를 지원합니다. 터미널은 입력기 입력을 받습니다. 한글은 음절을 그 자리에서 조합해 입력하고, 중국어 병음과 일본어는 조합 중인 글자를 커서 위치에 표시하며 후보 창을 그 옆에 띄웁니다. 화상 키보드와 하드웨어 키보드 모두 해당됩니다. `/AOK/tools/setup-locale.sh` 는 루트 파일시스템에도 기기 언어를 설정합니다(프로그램 번역은 Devuan 에 들어 있습니다). `/AOK/docs/roots.md` 참고.
@@ -41,10 +42,13 @@ Testflight: https://testflight.apple.com/join/X1flyiqE
 
 | 게스트 | 상태 |
 |---|---|
-| `i386` | 최초의 게스트, JIT 전용 |
-| `amd64` | 지원됨, JIT |
+| `i386` | 최초의 게스트, JIT 전용. AVX/AVX2/FMA 와 AVX-512 를 CPUID 에 표시(558) |
+| `amd64` | 지원됨, JIT. x86-64-v4(AVX-512 포함)를 CPUID 에 표시(558) |
 | `arm64` | 지원됨, JIT |
-| `riscv64` | 지원됨, JIT |
+| `riscv64` | 지원됨, JIT. V 벡터 유닛을 포함한 RVA23(558) — Ubuntu 25.10 이 실행됩니다 |
+
+각 게스트가 소프트웨어에 알리는 내용 — `CPUID`, `AT_HWCAP`, `riscv_hwprobe`,
+`/proc/cpuinfo` — 은 `/AOK/docs/guest-cpus.md` 에 있습니다.
 
 게스트별 회귀 테스트 스위트는 기기에서 네 아키텍처 모두 통과합니다. 인터프리터는
 레거시이며 제거될 예정이므로, 새 작업은 JIT를 대상으로 해야 합니다.
@@ -131,8 +135,8 @@ cd ish-AOK
 git submodule update --init --recursive
 ```
 
-`--recursive` 는 `deps/bash` 를 포함하므로 기본 빌드가 GPLv3 빌드가 된다는 점에
-유의하세요. 결과물을 배포할 생각이라면
+`--recursive` 는 `deps/bash` 도 받아 온다는 점에 유의하세요. 그래도 기본 빌드는
+이를 넣지 않습니다. 배포하는 빌드에서 켜기 전에
 [네이티브 bash와 라이선스](#네이티브-bash와-라이선스) 를 읽어 보십시오.
 
 ## 빌드 요구 사항
@@ -224,6 +228,7 @@ ninja -C build
 | `/AOK/native/smallclue` | busybox 스타일 멀티콜 도구 모음, `argv[0]` 으로 애플릿 선택. 배포판 도구를 대신하는 애플릿은 GNU 의 것과(`awk` 는 mawk 와) 대조해 검증됩니다 |
 | `ssh`, `scp`, `sftp`, `ssh-keygen`, `ssh-copy-id` | OpenSSH, SmallCLUE 의 애플릿 (OpenSSL 없이 빌드) |
 | `vi` | Nextvi 편집기, SmallCLUE 의 애플릿 |
+| `git` | libgit2 기반 SmallCLUE 의 git (558+; HTTPS 는 SecureTransport 경유, OpenSSL 없음) |
 | `/AOK/native/motepad` | 모드가 없는 터미널 텍스트 편집기, Workspace 의 MotePad 애플릿에 대응 |
 | `/AOK/native/bmm`, `/AOK/native/bmt` | `/AOK/tools` 의 벤치마크를 호스트 코드로 컴파일해 넣은 것. 같은 작업을 에뮬레이션이 있을 때와 없을 때로 재어 볼 수 있습니다 (`kernel/native_bench.c`) |
 | `/AOK/native/hx` | [helix](https://helix-editor.com), 구문 강조를 지원하는 모달 편집기. MPL-2.0 이라 bash 처럼 빌드 스위치(`-Dnative_helix`)가 있으며, 문법 파일은 `/AOK/native/libs` 에 있습니다 |
@@ -270,8 +275,16 @@ ninja -C build
 > zsh 하나뿐입니다. `/AOK/native/bash` 를
 > 가리키는 로그인 셸은 `native-links.sh` 가 게스트 자체의 bash 로 자동
 > 변환하므로, 이미 그것을 쓰던 사람이 이번 변경으로 로그인하지 못하게 되는
-> 일은 없습니다.
+> 일은 없습니다. 558 부터는 커널이 부팅할 때마다 이를 고치기도 합니다: 빌드에
+> 없는 `/AOK/native` 아래의 로그인 셸은 루트 자신의 같은 이름 프로그램으로, 없으면
+> 네이티브 zsh, 그것도 없으면 `/bin/sh` 로 바뀌고 `dmesg` 에 한 줄이 남습니다 —
+> sshd, `login`, `su` 는 모두 셸이 없는 계정을 거부하기 때문입니다.
 > [docs/historical/shell_transition_plan.md](docs/historical/shell_transition_plan.md) 을 참고하십시오.
+
+**libgit2**(SmallCLUE 의 `git`, 558 부터 내장)는 *링크 예외가 붙은* GPLv2 입니다
+(`COPYING` 참고). 저작자들은 컴파일된 라이브러리를 어떤 프로그램에든 링크하고 그
+결과물을 GPL 의 조건 없이 배포하는 것을 허락합니다. bash 에 없는 바로 그 허락이므로,
+이것은 함께 출시됩니다.
 
 bash 는 네이티브 프로그램으로 앱에 컴파일해 넣을 수 있지만(`-Dnative_bash=enabled`),
 배포되는 빌드에는 556 부터 포함되지 않습니다. 컴파일해 넣었을 때의 이득은 fork 가
@@ -419,7 +432,7 @@ x86_64 호스트에서는 전부 실행됩니다.
 
 게스트 측 스위트가 주된 회귀 게이트입니다. [tests/manual/](tests/manual)에 있으며
 게스트 안에서는 `/AOK/tests`에 읽기 전용으로 제공됩니다. 시그널, futex, 프로세스
-라이프사이클, 파일시스템 계층, JIT, 아키텍처별 명령어 동작을 다루는 약 400개의
+라이프사이클, 파일시스템 계층, JIT, 아키텍처별 명령어 동작을 다루는 500개가 넘는
 프로그램으로 구성되어 있습니다. 각 프로그램은 실패 시 0이 아닌 값으로 종료하며 `-v`를
 지원합니다.
 
@@ -462,6 +475,10 @@ PSCAL + SmallCLUE 는 앱 안에서 내려받을 수 있으며, 카탈로그는
 - 앱은 가져온 루트마다 게스트 ABI를 기록합니다.
 - 설치된 모든 루트는 부팅된 게스트에서 `/AOK/roots/<이름>`에 읽기·쓰기로 노출되므로,
   다른 아키텍처의 userland로 chroot할 수 있습니다.
+- 다른 루트의 동적 링크 프로그램을 경로로 실행하면(`/AOK/roots/<이름>/usr/bin/tmux`)
+  기본적으로 그 프로그램의 루트 안에서 실행되고, 그 루트의 라이브러리를 써서 지금
+  루트에서 실행할 수도 있습니다 — 설정 → 다른 파일 시스템 → 다른 루트의 프로그램,
+  `/proc/ish/foreign_exec`, CLI 에서는 `ISH_FOREIGN_EXEC`.
 - 관리되는 루트에 대해 File Provider 도메인이 동기화됩니다.
 
 ## 로깅과 진단

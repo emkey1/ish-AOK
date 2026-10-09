@@ -13,10 +13,11 @@ This fork is not just a rebrand. It carries fork-specific behavior, bundled root
   - bundle root `app.ish.iSH-AOK`
 - **Four guest architectures**, all JIT: `i386`, `amd64` (x86_64), `arm64` (aarch64), and `riscv64`.
 - **Native programs**: zsh, dash (which provisioning makes `sh`) and SmallCLUE's busybox-style toolbox — which carries OpenSSH (`ssh`, `scp`, `sftp`, `ssh-keygen`, `ssh-copy-id`), the Nextvi editor, and GNU-compatible `sed`, `grep`, `find`, `ls`, `tar`, `gzip`, `diff`, `awk` and most of coreutils — are compiled into the app as host code and dispatched from guest `execve` through `/AOK/native/<name>`. They are host functions on a guest task's thread, not guest binaries, so they run at full speed instead of being translated instruction by instruction. bash has the same native implementation, but the shipped build has not included it since 556 — see [Native bash and licensing](#native-bash-and-licensing).
+- **Native mode** (558): a root with no Linux distribution at all. Its `/bin` and `/usr/bin` are the native programs — about 140 everyday commands, ssh, git, curl, editors — with SmallCLUE's `init` as pid 1, runit-style services, and native zsh as the login shell. Nothing is downloaded: pick **iSH-AOK Native** under Official Distributions. Install a distribution beside it when you need a package manager. See `/AOK/docs/native-mode.md`.
 - `/AOK`, a read-only in-app filesystem (`/AOK/docs`, `/AOK/tools`, `/AOK/tests`, `/AOK/native`) embedded at build time from `opt/AOK/` via `fs/aok-*.manifest` and `tools/gen-aokfs.py`.
 - Bundled root filesystems in the app build (Alpine 3.24.2 and Devuan 6, `aarch64` only), plus downloadable images for `i386`, `x86_64` and `riscv64`.
 - **The device's GPU in the guest**: `/dev/dri/renderD128`, a virtio-gpu render node backed in-process by virglrenderer's Venus renderer over MoltenVK, so Mesa's Venus Vulkan driver (and zink on top of it) draws on Metal. `/AOK/tools/setup-gpu.sh` installs the guest side. See `/AOK/docs/workspace.md`.
-- **A Wayland desktop** (labwc, foot, waybar; four desktops of its own) that composites on the GPU and reaches the app through `/AOK/native/wl-present` — frames one way, keyboard, pointer, clipboard and resize the other — with VNC as the fallback. `/AOK/tools/setup-games.sh` adds a tested set of games. See `/AOK/docs/workspace.md`.
+- **A Wayland desktop** (labwc, foot, waybar; four desktops of its own — or Wayfire or Xfce in labwc's place) that composites on the GPU and reaches the app through `/AOK/native/wl-present` — frames one way, keyboard, pointer, clipboard and resize the other — with VNC as the fallback. `/AOK/tools/setup-games.sh` adds a tested set of games. See `/AOK/docs/workspace.md`.
 - **LLM Chat**: an in-app chat client (OpenAI-compatible servers, Anthropic, Gemini, Apple's on-device model) that can read, edit and run commands in the guest under allow/ask/deny permissions, use MCP servers, and run several chats as background agents. Keys live in the Keychain. See `/AOK/docs/llm-chat.md`.
 - **Suspend to disk**: the whole session — processes, open files, terminals — saved and resumed across the app being killed. Off by default. See `/AOK/docs/suspend.md`.
 - **Chinese and other languages**: the app's interface follows the device's language, in Simplified and Traditional Chinese, Japanese, Korean, Spanish, French, German, Brazilian Portuguese and Russian as well as English. The terminal takes input-method typing — Chinese Pinyin and Japanese draw the text being composed at the cursor, with the candidate window next to it, on the software or a hardware keyboard; Korean types each syllable in place. `/AOK/tools/setup-locale.sh` gives a root the device's language as well (Devuan carries the program translations). See `/AOK/docs/roots.md`.
@@ -38,10 +39,13 @@ each gadget's body cheaper, not free.
 
 | guest | status |
 |---|---|
-| `i386` | the original guest, JIT only |
-| `amd64` | supported, JIT |
+| `i386` | the original guest, JIT only; AVX/AVX2/FMA and AVX-512 advertised (558) |
+| `amd64` | supported, JIT; x86-64-v4 (AVX-512 included) advertised (558) |
 | `arm64` | supported, JIT |
-| `riscv64` | supported, JIT |
+| `riscv64` | supported, JIT; RVA23 with the V vector unit (558), so Ubuntu 25.10 runs |
+
+What each guest reports to software — `CPUID`, `AT_HWCAP`, `riscv_hwprobe`,
+`/proc/cpuinfo` — is in `/AOK/docs/guest-cpus.md`.
 
 The per-guest regression suites pass on all four on device. Note that the
 interpreters are legacy and are being retired: new work should target the JIT.
@@ -130,9 +134,9 @@ If you already cloned without submodules:
 git submodule update --init --recursive
 ```
 
-Note that `--recursive` includes `deps/bash`, which makes the default build a
-GPLv3 one. See [Native bash and licensing](#native-bash-and-licensing) if you
-intend to distribute the result.
+Note that `--recursive` also fetches `deps/bash`. The default build leaves it
+out all the same; see [Native bash and licensing](#native-bash-and-licensing)
+before turning it on in anything you distribute.
 
 ## Build Requirements
 
@@ -268,7 +272,10 @@ build.
 > with your session still in it.
 > Login shells naming `/AOK/native/bash` are converted to the guest's own bash
 > automatically by `native-links.sh`, so nobody already using it was locked out
-> by the change.
+> by the change. Since 558 the kernel also repairs them at every boot: a login
+> shell under `/AOK/native` that the build lacks becomes the root's own program
+> of that name, else native zsh, else `/bin/sh`, with a line in `dmesg` — sshd,
+> `login` and `su` all refuse an account whose shell is missing.
 > See [docs/historical/shell_transition_plan.md](docs/historical/shell_transition_plan.md).
 
 **libgit2** (SmallCLUE's `git`, built in since 558) is GPLv2 *with a linking
@@ -428,7 +435,7 @@ in full on an x86_64 host.
 
 The guest-side suite is the primary regression gate. It lives in
 [tests/manual/](tests/manual) and is served read-only inside the guest at
-`/AOK/tests`, with roughly 400 focused programs covering signals, futexes,
+`/AOK/tests`, with more than 500 focused programs covering signals, futexes,
 process lifecycle, the filesystem layer, the JIT, and per-architecture
 instruction behavior. Each exits non-zero on failure and accepts `-v`.
 
@@ -473,6 +480,10 @@ Notes:
 - The app records the guest ABI per imported root.
 - Every installed root is also exposed read-write at `/AOK/roots/<name>` in the
   booted guest, so you can chroot into another architecture's userland.
+- A dynamically linked program run by path from another root
+  (`/AOK/roots/<name>/usr/bin/tmux`) runs inside its own root by default, or in
+  this one with its root's libraries — Settings → Other Filesystems → Programs
+  From Other Roots, `/proc/ish/foreign_exec`, `ISH_FOREIGN_EXEC` in the CLI.
 - File Provider domains are synchronized for managed roots.
 
 ## Logging and Diagnostics

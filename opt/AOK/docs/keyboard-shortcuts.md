@@ -187,6 +187,14 @@ These are labwc's keys as `start-wayland.sh` sets them up (in
 | ⌥⇧R | reload labwc's configuration |
 | ⌥⇧E | leave the desktop |
 
+The other desktops `select-desktop.sh` offers keep the same Alt keys, with
+small differences. **Wayfire** (`~/.config/wayfire.ini`) has ⌥Return, ⌥Tab
+(⌥⇧Tab goes back), ⌥⇧Q, ⌥⇧D, ⌥⇧E and the ⌃⌥ arrows, but no ⌃⌥ digits and no
+⌥⇧R; it adds ⌥⇧W for expo (every desktop at once), ⌃⌥ with a drag to turn the
+desktop cube, and ⌥ with a left or right drag to move or resize a window.
+**Xfce** runs labwc with its own config (`~/.config/xfce4/labwc/rc.xml`): the
+table above less the ⌃⌥ digits and ⌥⇧R.
+
 In foot, the terminal, ⌃⇧C and ⌃⇧V copy and paste, as foot does everywhere.
 
 ## Programs with their own keys

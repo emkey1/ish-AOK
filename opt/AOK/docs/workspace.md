@@ -158,7 +158,7 @@ sh /AOK/tools/start-wayland.sh        # the applet runs this for you
 ```
 
 `labwc` is the default compositor and `foot` the first app; `sway` is installed
-as an alternative. Two fuller desktops can take labwc's place (see **Other
+as an alternative (`sudo sh /AOK/tools/select-desktop.sh sway` picks it). Two fuller desktops can take labwc's place (see **Other
 desktops**, below). `start-wayland.sh` also honours `WAYVNC_PORT`,
 `ISH_DISPLAY_READY_FILE`, and `WAYLAND_COMPOSITOR_CMD`, which overrides the
 chosen desktop.
@@ -322,8 +322,8 @@ The desktop draws on the device's GPU when the guest has what that takes: the
 GPU device (`/dev/dri/renderD128`) and Mesa's Vulkan driver for it, with zink.
 One script installs them, with vulkaninfo, vkcube and the Mesa demos, adds a
 `gpu-run` command, and checks the result (Devuan 6, Alpine 3.24 and Arch Linux
-ARM carry the packages; arm64 and amd64 roots; Alpine 3.23 has no GPU driver,
-and the script says so):
+ARM carry the packages — Devuan on all four guest architectures, Alpine on arm64
+and amd64 only; Alpine 3.23 has no GPU driver, and the script says so):
 
 ```sh
 sudo sh /AOK/tools/setup-gpu.sh            # add --demos for glmark2
@@ -344,8 +344,11 @@ before.
 
 On Devuan the desktop runs the VNC server iSH-AOK carries in `/AOK/bundled`,
 wayvnc 0.10.2, rather than Devuan's 0.9.1, which can crash when the app takes
-the desktop over. `setup-wayland.sh` installs the libraries it needs; until
-it has, the desktop uses Devuan's, and starts it again if it crashes.
+the desktop over. It is built for aarch64, x86_64 and riscv64, and the aarch64
+one is tried first on any Devuan root that has arm64's libraries.
+`setup-wayland.sh` installs the libraries it needs; until it has, the desktop
+uses Devuan's, and starts it again if it crashes. `ISH_DISPLAY_BUNDLED_WAYVNC=0`
+keeps Devuan's.
 
 **OpenGL on the GPU needs Mesa older than 25.2, which today means Devuan 6.**
 Mesa 25.2 and later -- Alpine 3.24's 26.1, and Arch's -- refuse to start zink

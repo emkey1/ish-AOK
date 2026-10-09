@@ -135,9 +135,9 @@ A static program under `/AOK/roots/<name>` runs from anywhere. A dynamic one
 different root (or a [native-mode](native-mode.md) root) does not have, and on
 Linux such an exec fails with "no such file or directory". **Settings → Other
 Filesystems → Programs From Other Roots** decides what happens instead, from
-the next program on: run it **inside its root** (chrooted there, with `/proc`,
-`/dev` and `/AOK/native` bound in, as `mount-root.sh` would; the default), run
-it **here with its libraries**, or **off**. `/proc/ish/foreign_exec` reads and
+the next program on: **Run Inside Their Root** (chrooted there, with `/proc`,
+`/dev` and `/AOK/native` bound in, as `mount-root.sh` would; the default),
+**Use Their Libraries Here**, or **Off**. `/proc/ish/foreign_exec` reads and
 sets the same thing (`root`, `libs`, `off`); [native-mode.md](native-mode.md)
 has the trade-offs. A program that already works -- a static one, or a script
 whose interpreter exists here -- is never touched.
@@ -179,6 +179,11 @@ possible at all. `/AOK/fakefs` is there for the suite's compiled-test cache:
 without it a per-architecture run falls back to that root's own `/tmp`, which
 init clears on restart, so every run recompiles every test. Root names are
 sanity-checked to reject `/`, `.`, and `..`.
+
+A bare `chroot /AOK/roots/<name>`, without `mount-root.sh`, has none of those
+binds — so when `$SHELL` (native zsh, say) does not exist in the new root,
+SmallCLUE's `chroot` falls back to `/bin/sh` rather than failing with "cannot
+execute".
 
 Because there's only one real kernel underneath, a process started inside
 a `mount-root.sh` chroot is a completely ordinary process from the outer
@@ -333,9 +338,13 @@ iSH-AOK build older than the script. Its tunables are `TARGET_USER`,
 `AUTHORIZED_KEY`; note that `/AOK/persist` is host-backed, so the stash puts
 private host keys somewhere outside the guest — `PERSIST_SSH=0` opts out.
 
-The other three are the package-installing kind, and prompt for a timezone
-and a target username unless you set `TZ_NAME` / `TARGET_USER` (and
-optionally `NEW_HOSTNAME`, `SUDO_NOPASSWD`) in the environment first.
+The other three are the package-installing kind, and prompt for a timezone,
+a target username, a hostname and whether sudo should ask for a password,
+unless you set `TZ_NAME` / `TARGET_USER` / `NEW_HOSTNAME` / `SUDO_NOPASSWD`
+in the environment first. Sudo is **passwordless by default** — the login the
+script creates has no password, so a rule that asked for one would leave it
+unable to use sudo at all. Answer `n` (or set `SUDO_NOPASSWD=0`) only after
+giving the login a password with `passwd`.
 The timezone offered is the device's own; accept it and the root keeps
 [following the device](#the-time-zone-following-the-device), while a zone you
 type or put in `TZ_NAME` stays put. Each one:
@@ -346,8 +355,14 @@ type or put in `TZ_NAME` stays put. Each one:
   fastfetch, and more.
 - Sets the timezone and a `C.UTF-8` locale, and generates a machine ID.
 - Creates (or configures) the target user, adds them to the sudo group
-  (`wheel` on Alpine, `sudo` on Devuan), and switches login shells to
-  bash.
+  (`wheel` on Alpine and Arch, `sudo` on Devuan), and switches root's and
+  their login shell to the distribution's bash.
+- Authorises that group in a sudoers fragment named to sort **first** —
+  `00-wheel` (Alpine), `00-aok-sudo` (Devuan), `00-aok-wheel` (Arch) — because
+  sudo reads `/etc/sudoers.d` in name order and the last matching rule wins, so
+  a `NOPASSWD` file of your own (`010-me`, `90-me`) overrides it. Re-running
+  removes the older-named fragment (`wheel`, `aok-sudo`, `aok-wheel`) only if
+  it still holds exactly the line the script wrote.
 - Writes a MOTD, a colored prompt, an fzf/dircolors profile snippet, and a
   themed `tmux.conf` plus a dependency-free Neovim starter config
   (including OSC52 clipboard support on Neovim 0.10+).

@@ -10,6 +10,32 @@ all ship real ones) or a one-off you're using to experiment.
 The reference implementation lives in `jit/riscv64_vendor_ext.c`. Read this
 document and that file side by side — if one changes, the other should.
 
+## What the ratified ISA already covers
+
+Check here before reaching for a vendor instruction: what you want may already
+be standard. The riscv64 guest runs RV64GC plus the RVA23 extensions, all as
+gadgets:
+
+- **Scalar:** Zba, Zbb, Zbs, Zicond, Zcb, Zfa, Zfhmin, Zicbom/Zicbop/Zicboz
+  (`cbo.zero` really zeroes its 64-byte block), Zimop/Zcmop, Zawrs, Zihintntl
+  and Zihintpause.
+- **Vector:** V, with Zvbb, Zvkb, Zvkt and Zvfhmin — and it is **advertised**,
+  so software that picks a vector path at run time (OpenSSL's ChaCha20, for
+  one) takes it.
+
+A program finds them the way it would on Linux: `riscv_hwprobe` (syscall 258),
+`AT_HWCAP` (`v` included), and the `isa` line of `/proc/cpuinfo`:
+
+```sh
+grep -m1 '^isa' /proc/cpuinfo    # rv64imafdcv_zicbom_..._zvkb_zvkt
+```
+
+`PR_RISCV_V_SET_CONTROL`/`PR_RISCV_V_GET_CONTROL` behave as in Linux's
+`arch/riscv/kernel/vector.c`: V reads as on, a running program cannot turn it
+off (`EPERM`), but it can set what its next `exec` gets and whether that is
+inherited. A program exec'd with V off sees no `v` in `AT_HWCAP`, and every
+vector instruction is illegal to it.
+
 ## Why this is safe: the opcode-space rule
 
 The RISC-V ISA permanently reserves four major opcodes for non-standard
@@ -99,8 +125,8 @@ real vendor's silicon.** T-Head, Andes, SiFive, and others all ship real
 custom-0..3 extensions, but this project has no way to verify a
 hand-transcribed encoding against actual hardware, so it makes no claim of
 bit-compatibility with any of them. They are `Zbb`'s `clz`, `ctz`, `cpop`
-and `rev8` under other encodings, which is what a vendor instruction mapped
-onto the ratified ISA looks like. Swap in a real, verified encoding here if
+and `rev8` under other encodings — Zbb itself runs directly too — which is
+what a vendor instruction mapped onto the ratified ISA looks like. Swap in a real, verified encoding here if
 you're targeting actual hardware; the mechanism doesn't care what bit
 pattern you choose, only that it lives in the reserved space.
 
@@ -142,6 +168,9 @@ bit set before custom instructions are legal to issue.
 ```sh
 ISH_RISCV64_VENDOR_EXT=1 ish -r / your-binary
 ```
+
+Any value turns it on — the check is only whether the variable is set, so
+`ISH_RISCV64_VENDOR_EXT=0` enables it too; unset it to turn the pack off.
 
 This is checked once per process (a cached `getenv`, the same idiom used
 throughout this codebase — see e.g. `jit/jit.c`'s `ISH_AMD64_CC1_TRACE`

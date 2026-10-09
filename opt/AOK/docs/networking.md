@@ -15,6 +15,12 @@ An unprivileged guest process — the UID 1000 user, an `ssh` login as a normal
 user — is refused a step earlier still, by the emulated kernel itself; see
 "What is *not* affected" below.
 
+**Not every host refuses.** Everything below happens only when the host bind
+fails; a recent iOS has been seen to let the app bind a privileged wildcard
+port outright (an M4 iPad Pro in August 2026), and then the listener is real and
+reachable like any other. Which one you got is not something to guess at, so a port ≥ 1024
+stays the advice: it works the same everywhere.
+
 When a guest daemon binds a privileged port on the IPv4 wildcard address
 (`0.0.0.0`), iSH-AOK doesn't fail the call. It quietly rebinds the socket to
 `127.0.0.1` on an ephemeral port and reports success. The daemon starts
@@ -125,7 +131,7 @@ service like `dhclient` or `resolvconf` — **Settings → Custom DNS Servers**
 has a **Don't Manage** choice, alongside the usual field for a list of
 nameserver IPs. Choosing it shows "Off (guest manages)" and the periodic
 refresh returns without touching the file at all from then on; it also stops
-the DNS relay described below. Setting a custom server list and choosing
+the DNS relay described above. Setting a custom server list and choosing
 Don't Manage are mutually exclusive — saving one clears the other.
 
 Both are also reachable from inside the guest through

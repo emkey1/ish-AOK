@@ -124,6 +124,13 @@ That is why the quarter-of-RAM ceiling exists.
 cat /proc/ish/zswap          # what it holds, the ratio, and the flash it saved
 ```
 
+The command-line build sets the pool with `ISH_GUEST_ZSWAP_MB`, read on a
+launch that also sets `ISH_GUEST_SWAP_MB`:
+
+```sh
+ISH_GUEST_SWAP_MB=512 ISH_GUEST_ZSWAP_MB=128 ./ish -f build/alpine /bin/sh
+```
+
 ## Seeing what it is doing
 
 The guest sees swap the way it sees anything else:

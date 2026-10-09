@@ -329,6 +329,13 @@ Both measured against Linux 6.12."
 That is a small correction with a large symptom: a system console that stopped
 producing a login prompt and never recovered.
 
+**A hangup is the session leader's to hear.** On a pty hangup Linux's
+`tty_signal_session_leader` sends `SIGHUP` and `SIGCONT` to the session leader
+alone; the foreground group hears about it only when the leader exits. Until
+558 AOK signalled the whole foreground group, which killed a leader's child that
+Linux leaves running for the leader to deal with
+(`tests/manual/tty_hangup_leader_only.c`).
+
 ## 12.8 ptrace, and the same bug twice
 
 `ptrace` is where the process model, the signal model, and the scheduler all

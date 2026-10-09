@@ -149,6 +149,18 @@ wording. That matters because [native-setup.md](native-setup.md) puts them
 ahead of your distro's tools on `PATH`, so package scripts run them too — and
 that page is also where the escape hatches are, if one still differs.
 
+Two pattern-matching details worth knowing, both since 558:
+
+- **Native programs match wildcards as glibc does, not as Darwin does.**
+  `fnmatch` is routed to `kernel/native_fnmatch.c`, which follows glibc's, so
+  a `[` that opens no bracket expression matches itself and a trailing lone `\`
+  is handled glibc's way. Darwin's refused both: `find -name 'a[b'` found
+  nothing, and `ls -I`, `grep --include`, `diff -x`, `tar --wildcards`, `git`
+  and `scp` failed on such a name.
+- **Native dash uses its own pattern matcher.** `case`, `${var#pattern}` and
+  the rest go through dash's `pmatch`, so `${t#socket:[}` strips what it
+  should — matching Devuan's dash line for line.
+
 ## `su`, `sudo` and `passwd`: the only setuid-root native programs
 
 `ls -l /AOK/native/sudo` shows `-rwsr-xr-x`; every other native program is

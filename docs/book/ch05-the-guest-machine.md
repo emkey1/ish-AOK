@@ -452,20 +452,37 @@ all three precisions (`emu/float80-fast-test.c`, millions of random and edge
 operand pairs). A deliberately wrong tie-break makes it fail thousands of
 times, which is how it is known to be looking.
 
+In 558 the JIT stopped calling any of it. Every x87 instruction, the
+transcendentals included, is now a gadget on both x86 guests
+(`jit/gadgets-aarch64/x87.S`): 80-bit arithmetic in integer registers through
+one rounder that honours rounding and precision control, with a real tag word,
+and every edge — NaN choice, pseudo-denormals, `FPREM`'s partial remainder,
+unmasked exceptions — taken case by case from an AMD Ryzen rather than from the
+SDM's prose. The transcendentals are correctly rounded, which is *better* than
+the hardware: the Ryzen itself is one ulp off in about 2% of cases. `float80`
+in C remains what the interpreter and the x86_64-host backend run, and the
+model the gadgets were checked against.
+
 ## 5.9 Vectors
 
-`union mm_reg mm[8]` and `union xmm_reg xmm[16]` cover MMX and SSE. The arm64
-guest's `V0`–`V31` reuse `union xmm_reg` directly rather than duplicating an
-identical 128-bit union under a new name.
+`union xmm_reg xmm[16]` covers SSE, and the arm64 guest's `V0`–`V31` reuse
+`union xmm_reg` directly rather than duplicating an identical 128-bit union
+under a new name. MMX has no array of its own any more: since 558 `MMn` is the
+significand of x87 register `fp[n]`, one storage as on the hardware, so
+`FXSAVE`, `FNSAVE` and a signal frame see what MMX code wrote, and x87 code that
+follows MMX code without `EMMS` sees the stack it should (`CPU_MMX` in
+`emu/cpu.h`).
 
-AVX is the more interesting piece, because of where it lives. The semantics of
-every VEX and EVEX instruction are implemented in `emu/avx.c` over *flat byte
-buffers*: the functions know nothing about CPU state, the TLB, modrm, or which
-guest is executing. That leaves exactly one implementation of each
-instruction's meaning, shared by two front-ends that decode very differently —
-the amd64 interpreter, which decodes and executes directly, and i386, which is
-JIT-only, decodes at translation time in `jit/gen.c`, and reaches the same
-functions through vector-helper gadgets.
+AVX is the more interesting piece, because of where it has lived. Its semantics
+were first written once, in `emu/avx.c`, over *flat byte buffers*: functions
+that know nothing about CPU state, the TLB, modrm, or which guest is executing,
+shared by the amd64 interpreter and by i386's vector-helper gadgets. In 558 the
+JIT took them over: every VEX and EVEX instruction is now gadgets
+(`jit/gadgets-aarch64/vex.inc`, `evex.inc`) or #UD, in both x86 guests, and
+`emu/avx.c` remains the semantics for the amd64 interpreter and the x86_64-host
+backend. The vector state is advertised accordingly — AVX, AVX2, FMA and the
+AVX-512 families in `CPUID`, carried through signal frames, `ptrace` and `exec`
+as Linux's XSAVE image (`emu/cpuid.h`, `emu/xsave.h`).
 
 The lane rule is the part worth remembering when reading that code: helpers
 that are lane-local (shuffles, packs, unpacks) iterate 128-bit lanes

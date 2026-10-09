@@ -41,6 +41,18 @@ shim's `uname` already answered as the guest kernel, but SmallCLUE's applet
 replaced the machine with the host's own `hw.machine`, so `uname -m` printed
 `iPad17,3` where `/bin/uname` said `aarch64` (#622).
 
+558 found the question's quieter form: a function with no machine in it at all,
+whose answer depends on whose *libc* wrote it. `fnmatch` reads no state, and
+Darwin's refuses a pattern holding a `[` that opens no bracket expression, where
+glibc matches the `[` as itself — so SmallCLUE's `find -name 'a[b'` found
+nothing, and `ls -I`, `grep --include`, `diff -x` and `tar --wildcards` failed
+the same way; over a 14,960-case table the two disagreed on 2,340. The guest
+expects glibc's answer, so the shim now routes `fnmatch` to
+`kernel/native_fnmatch.c`, which follows glibc's `fnmatch_loop` and agrees with
+glibc 2.41 on every case of that table. Native dash had the same bug one layer
+up and takes the other way out: it is built without `HAVE_FNMATCH`, so it uses
+its own matcher, as Debian's dash does.
+
 ## 23.2 Force-include, and the order that matters
 
 The mechanism is a header, `kernel/native_libc.h`, force-included into every

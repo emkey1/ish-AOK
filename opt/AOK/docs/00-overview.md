@@ -37,6 +37,9 @@ Everything else under `/AOK` is baked into the app at build time:
 /AOK/fixes/               canned fixes for known upstream problems (Devuan, Arch, Codex)
 /AOK/native/              programs compiled into the app -- exec'ing one runs host
                           code instead of translated guest code (native-programs.md)
+/AOK/bundled/             guest programs and libraries built ahead of time, per distro
+                          or libc and CPU, which the setup scripts link in instead
+                          of compiling on the device
 /AOK/persist/             writable, host-backed, survives everything (see persist.md)
 /AOK/fakefs/              writable, survives everything, keeps full Linux metadata
 /AOK/roots/               other installed roots, exposed read-write (see roots.md)
@@ -53,9 +56,12 @@ at runtime:
 - Test sources live under `tests/manual/`.
 - Native-program support files live under `deps/helix/runtime/`, and are
   served at `/AOK/native/libs`.
+- Prebuilt guest binaries live under `opt/AOK/bundled/` (built by
+  `tools/build-bundled.sh`), and are served at `/AOK/bundled`.
 
-Four manifest files (`fs/aok-docs.manifest`, `fs/aok-tools.manifest`,
-`fs/aok-tests.manifest`, and `fs/aok-libs.manifest` for `/AOK/native/libs`)
+Manifest files (`fs/aok-docs.manifest`, `fs/aok-tools.manifest`,
+`fs/aok-tests.manifest`, `fs/aok-libs.manifest` for `/AOK/native/libs`, and
+`fs/aok-bundled.manifest` for `/AOK/bundled`, among others)
 list exactly which files get shipped. At build time, `tools/gen-aokfs.py`
 reads each manifest and embeds the listed files' contents directly into the
 compiled emulator as C string tables, which `fs/aok.c` then serves at
@@ -70,6 +76,11 @@ A couple of things fall out of that:
 - If you're building iSH-AOK from source and want to see a new doc or tool
   show up under `/AOK`, it has to be listed in the matching manifest file,
   or it won't be embedded.
+- Files under `/AOK` can be mapped, the way `ld.so` maps every library — an
+  `LD_PRELOAD` of a library in `/AOK/bundled` works. An embedded file maps as
+  a private copy, so a writable shared mapping of one is `EACCES`. Exec of a
+  program on a filesystem that cannot be mapped at all fails with `ENOEXEC`,
+  as on Linux, rather than crashing.
 
 `/AOK/native` is different again: its program entries have no manifest. Each is
 one program compiled into the app and registered in `kernel/native.c`, and
@@ -173,5 +184,6 @@ browser is exactly who it was written for. Start at
 | file | what it covers |
 | --- | --- |
 | [proc-ish.md](proc-ish.md) | `/proc/ish` — the build, the settings, the JIT switches, the app's own memory, and the guest-side preference surface |
+| [guest-cpus.md](guest-cpus.md) | what each guest CPU reports to software — x86's AVX and AVX-512, arm64's MOPS, riscv64's RVA23 and vector unit |
 | [fuse.md](fuse.md) | the FUSE implementation, `/dev/fuse`, and what it supports |
 | [riscv64-vendor-extensions.md](riscv64-vendor-extensions.md) | how non-standard riscv64 vendor extensions are handled |
