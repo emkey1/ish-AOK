@@ -127,6 +127,7 @@ mount_bind_getpath.c
 inotify_bind_alias.c
 mount_bind_busy.c
 chroot_dotdot.c
+proc_link_chroot_escape.c
 proc_net_socket_ids.c
 mount_lazy_detached.c
 exec_link_by_fd.c
@@ -160,6 +161,7 @@ jit_fork_inherit.c
 namespace_errno.c
 fcntl_getfl_flags.c
 fuse_basic.c
+fuse_fsopen.c
 fuse_threaded_daemon.c
 sysfs_dev_ns.c
 native_stdio_lock.c
@@ -233,6 +235,7 @@ sock_nosignal.c
 signal_restart_coverage.c
 signal_stop_restart.c
 utimensat_omit.c
+stat_time_range.c
 creds_groups_access.c
 sock_optlen.c
 inotify_events.c
@@ -378,6 +381,7 @@ epoll_dup_add.c
 inotify_mount_paths.c
 inotify_fionread.c
 procfd_reopen.c
+opath_proc_nameless.c
 proc_link_deleted.c
 opath_open_flags.c
 scm_rights_pidfd.c

@@ -241,7 +241,7 @@ static void tmpfs_update_atime_relatime(struct tmp_inode *inode) {
     struct timespec now = timespec_now(CLOCK_REALTIME);
     if (inode->stat.atime > inode->stat.mtime &&
             inode->stat.atime > inode->stat.ctime &&
-            (uint64_t) now.tv_sec < (uint64_t) inode->stat.atime + TMPFS_RELATIME_DAY)
+            (int64_t) now.tv_sec < inode->stat.atime + TMPFS_RELATIME_DAY)
         return;
     inode->stat.atime = now.tv_sec;
     inode->stat.atime_nsec = now.tv_nsec;

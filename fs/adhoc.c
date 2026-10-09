@@ -135,9 +135,9 @@ bool is_adhoc_fd(struct fd *fd) {
 // on Linux; mirror that on the fd's fake stat so fstat reflects the update.
 // (stress-ng --sockabuse futimens()es a socket fd in a loop.)
 static int adhoc_futime(struct fd *fd, struct timespec atime, struct timespec mtime) {
-    fd->stat.atime = (dword_t) atime.tv_sec;
+    fd->stat.atime = atime.tv_sec;
     fd->stat.atime_nsec = (dword_t) atime.tv_nsec;
-    fd->stat.mtime = (dword_t) mtime.tv_sec;
+    fd->stat.mtime = mtime.tv_sec;
     fd->stat.mtime_nsec = (dword_t) mtime.tv_nsec;
     return 0;
 }

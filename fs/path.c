@@ -188,6 +188,20 @@ static int __path_normalize(const char *root_path, const char *at_path, const ch
                     return _ELOOP;
                 // readlink does not null terminate
                 c[res] = '\0';
+                // A procfs link to a file outside the caller's root reads
+                // "(unreachable)<global path>" (fs_rebase_readlink_path): its
+                // global path, walked inside the chroot, would name a different
+                // file. Linux jumps straight to the file (nd_jump_link), so a
+                // chrooted process reaches a descriptor it holds from outside
+                // -- /bin/sh /dev/fd/3/script in a chroot. So walk that global
+                // path from the real root; the process's root still bounds
+                // `..` and anchors any absolute link met further on.
+                static const char unreachable[] = "(unreachable)";
+                bool jump_real_root = magic &&
+                    strncmp(c, unreachable, sizeof(unreachable) - 1) == 0 &&
+                    c[sizeof(unreachable) - 1] == '/';
+                if (jump_real_root)
+                    memmove(c, c + sizeof(unreachable) - 1, strlen(c) - (sizeof(unreachable) - 1) + 1);
                 // If the symlink target is absolute, it must be re-anchored at the
                 // calling process's root (root_path -- e.g. a chroot), not the real
                 // filesystem root. Previously this dropped the accumulated `out`
@@ -236,7 +250,7 @@ static int __path_normalize(const char *root_path, const char *at_path, const ch
                     expanded_path[out_len] = '/';
                     expanded_path[out_len + 1] = '\0';
                 }
-                const char *next_at_path = absolute_target ? root_path : NULL;
+                const char *next_at_path = absolute_target && !jump_real_root ? root_path : NULL;
                 // The target is walked again from the top, through
                 // MOUNT_STAGING_DIR when it is in a detached mount (see the
                 // entry rule above). A relative target in one is: `..` cannot

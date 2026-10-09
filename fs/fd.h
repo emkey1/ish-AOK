@@ -98,6 +98,13 @@ struct fd {
             struct mount *mount;
             char *path;
         } opath_link;
+        // An O_PATH handle opened through a /proc link on what has no name to
+        // reopen by -- a pipe, a socket, an anonymous inode, a directory
+        // removed while held (fs/generic.c procfd_open_path). Holds the
+        // description; fstat and the /proc link text are the target's.
+        struct {
+            struct fd *target;
+        } opath_held;
         struct {
             int domain;
             int type;

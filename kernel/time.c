@@ -236,8 +236,10 @@ int read_guest_timeval_abi(enum guest_abi abi, guest_addr_t addr, struct timeval
         struct timeval_ guest;
         if (user_get(addr, guest))
             return _EFAULT;
-        out->tv_sec = guest.sec;
-        out->tv_usec = guest.usec;
+        // compat_timeval's fields are signed 32-bit: a time before 1970 (and a
+        // negative timeout, which callers refuse) keeps its sign
+        out->tv_sec = (sdword_t) guest.sec;
+        out->tv_usec = (sdword_t) guest.usec;
     }
     return 0;
 }

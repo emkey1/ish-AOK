@@ -342,6 +342,8 @@ dev_t_ mount_dev(struct mount *mount);
 
 // O_PATH|O_NOFOLLOW fd referring to a symlink itself; see fs/generic.c
 bool fd_is_opath_link(struct fd *fd);
+bool fd_is_opath_held(struct fd *fd);
+struct fd *fd_opath_held_target(struct fd *fd);
 struct fd *opath_link_fd_create(struct mount *mount, const char *path);
 int opath_link_fstat(struct fd *fd, struct statbuf *stat);
 struct mount *opath_link_get_mount(struct fd *fd);

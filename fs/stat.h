@@ -14,11 +14,14 @@ struct statbuf {
     qword_t size;
     dword_t blksize;
     qword_t blocks;
-    dword_t atime;
+    // Seconds since the epoch, signed and 64-bit as Linux's kstat has them: a
+    // time before 1970 is negative, and one after 2106 fits. Each ABI's stat
+    // narrows them as Linux does (the 32-bit structures keep the low half).
+    sqword_t atime;
     dword_t atime_nsec;
-    dword_t mtime;
+    sqword_t mtime;
     dword_t mtime_nsec;
-    dword_t ctime;
+    sqword_t ctime;
     dword_t ctime_nsec;
 };
 

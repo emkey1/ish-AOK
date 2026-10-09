@@ -39,8 +39,10 @@
 // still queued is simply dropped -- and FUSE_LSEEK is asked before falling
 // back to "the whole file is data" for SEEK_DATA/SEEK_HOLE.
 //
-// Not modeled: readdirplus (it needs an attribute cache to be worth having),
-// splice, and the fsopen()-based mount API. FUSE_INIT negotiates flags = 0
+// Not modeled: readdirplus (it needs an attribute cache to be worth having)
+// and splice. The fsopen()-based mount API works: fsmount() hands back a
+// handle on the mount without asking the daemon (fs/mount.c), since a daemon
+// mounts first and serves after (tests/manual/fuse_fsopen.c). FUSE_INIT negotiates flags = 0
 // and discards the daemon's reply flags, so a daemon is never told AOK
 // supports something it does not. See docs/book/ch20-fuse.md.
 #include <stdlib.h>
@@ -924,11 +926,11 @@ static void fuse_attr_to_statbuf(const struct fuse_wire_attr *attr, struct statb
     stat->size = attr->size;
     stat->blksize = attr->blksize != 0 ? attr->blksize : 4096;
     stat->blocks = attr->blocks;
-    stat->atime = (dword_t) attr->atime;
+    stat->atime = (int64_t) attr->atime;     // (FUSE carries the sign in a u64)
     stat->atime_nsec = attr->atimensec;
-    stat->mtime = (dword_t) attr->mtime;
+    stat->mtime = (int64_t) attr->mtime;
     stat->mtime_nsec = attr->mtimensec;
-    stat->ctime = (dword_t) attr->ctime;
+    stat->ctime = (int64_t) attr->ctime;
     stat->ctime_nsec = attr->ctimensec;
 }
 

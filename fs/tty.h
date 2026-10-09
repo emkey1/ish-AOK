@@ -265,9 +265,9 @@ struct tty {
     struct termios_ termios;
     int type;
     int num;
-    dword_t atime;
-    dword_t mtime;
-    dword_t ctime;
+    sqword_t atime;
+    sqword_t mtime;
+    sqword_t ctime;
 
     // XON/XOFF output flow control. `stopped` is what actually gates writes;
     // `tco_stopped` records that tcflow(TCOOFF) was what stopped them, because

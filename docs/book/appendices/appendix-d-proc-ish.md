@@ -21,6 +21,7 @@ inventory, generated from `fs/proc/ish.c`.
 - `/proc/ish/colors` (file)
 - `/proc/ish/defaults` (directory)
 - `/proc/ish/documents` (file)
+- `/proc/ish/foreign_exec` (file)
 - `/proc/ish/hle` (file)
 - `/proc/ish/host_info` (file)
 - `/proc/ish/host_ports` (file)

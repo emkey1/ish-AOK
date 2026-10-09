@@ -393,7 +393,7 @@ static void ntz_current_key(char *key, size_t size) {
     }
     struct statbuf st;
     if (native_stat("/etc/localtime", &st, true) == 0)
-        snprintf(key, size, "/etc/localtime %llu %u %u", (unsigned long long) st.inode, st.mtime, st.mtime_nsec);
+        snprintf(key, size, "/etc/localtime %llu %lld %u", (unsigned long long) st.inode, (long long) st.mtime, st.mtime_nsec);
     else
         snprintf(key, size, "UTC");
 }

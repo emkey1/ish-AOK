@@ -218,21 +218,31 @@ static bool procfd_resolve(struct fd *at, const char *path_raw, struct fd **fd_o
 // the filesystem, as for any other open of it -- but with no permission check,
 // as for any O_PATH open (procfd_resolve's ptrace gate still stands).
 //
-// NULL leaves it to the walk, as before: a file in procfs, whose name always
-// names it, and what has no name at all -- a pipe, a socket, an anonymous
-// inode, which Linux opens too (docs/TODO.md).
+// NULL leaves it to the walk: a file in procfs, whose name always names it.
+// What has no name to reopen by -- a pipe, a socket, an anonymous inode, a
+// directory removed while held -- Linux opens too: the handle holds the
+// description (opath_held), as its walk lands on that very file. Measured on
+// Linux 6.12: an S_IFIFO handle on the pipe's inode, S_IFSOCK on a socket's,
+// an eventfd's anon inode, and the removed directory.
+static struct fd *opath_held_fd_create(struct fd *target, int flags);
 static struct fd *procfd_open_path(struct fd *fd, int flags) {
-    if (fd->mount == NULL || fd->mount->fs == &procfs || !(S_ISREG(fd->type) || S_ISDIR(fd->type)))
+    if (fd->mount == NULL || fd->mount->fs == &procfs)
         return NULL;
     if ((flags & O_DIRECTORY_) && !S_ISDIR(fd->type))
         return ERR_PTR(_ENOTDIR);
     flags &= O_PATH_FLAGS_ & ~O_CLOEXEC_;
+    if (fd_is_opath_held(fd))
+        return opath_held_fd_create(fd_retain(fd->opath_held.target), flags);
+    if (!(S_ISREG(fd->type) || S_ISDIR(fd->type)))
+        return opath_held_fd_create(fd_retain(fd), flags);
     struct fd *reopened = generic_reopen_by_path(fd, flags);
     if (reopened == NULL && S_ISREG(fd->type))
         reopened = generic_reopen_pathless(fd, flags, false);
     // Not by the walk: the name is not this file's any more, so the walk
-    // would reach nothing, or somebody else's. A directory removed while
-    // held -- which Linux still opens -- is the case left.
+    // would reach nothing, or somebody else's. A directory removed while held
+    // is held, as Linux opens it.
+    if (reopened == NULL && S_ISDIR(fd->type))
+        return opath_held_fd_create(fd_retain(fd), flags);
     if (reopened == NULL)
         return ERR_PTR(_ENOENT);
     // What F_GETFL reports: not the O_NOFOLLOW the reopen by path adds.
@@ -254,6 +264,19 @@ static struct fd *procfd_openat(struct fd *at, const char *path_raw, int flags) 
         return NULL;
     if (err < 0)
         return ERR_PTR(err);
+    // An O_PATH handle on a description, opened through its own link: what
+    // it holds is what opens, as Linux's walk lands on that file.
+    if (!(flags & O_PATH_) && fd_is_opath_held(fd)) {
+        struct fd *target = fd_retain(fd_opath_held_target(fd));
+        fd_close(fd);
+        fd = target;
+    }
+    // A socket does not open through /proc: sock_no_open, ENXIO (6.12). The
+    // description itself was handed back.
+    if (!(flags & O_PATH_) && S_ISSOCK(fd->type)) {
+        fd_close(fd);
+        return ERR_PTR(_ENXIO);
+    }
     if (flags & O_PATH_) {
         struct fd *handle = procfd_open_path(fd, flags);
         fd_close(fd);
@@ -512,6 +535,41 @@ static const struct fd_ops opath_link_ops = {
     .name = "opath_link",
     .close = opath_link_close,
 };
+
+// The O_PATH handle on a description (fd.h opath_held): fstat and getpath go
+// to the description it holds, read and write are EBADF (no ops), and an open
+// through its own /proc link opens the description (procfd_resolve).
+static int opath_held_close(struct fd *fd) {
+    fd_close(fd->opath_held.target);
+    return 0;
+}
+
+static const struct fd_ops opath_held_ops = {
+    .name = "opath_held",
+    .close = opath_held_close,
+};
+
+bool fd_is_opath_held(struct fd *fd) {
+    return fd != NULL && fd != AT_PWD && fd->ops == &opath_held_ops;
+}
+
+struct fd *fd_opath_held_target(struct fd *fd) {
+    return fd->opath_held.target;
+}
+
+// Takes over the caller's reference to `target`.
+static struct fd *opath_held_fd_create(struct fd *target, int flags) {
+    struct fd *fd = adhoc_fd_create(&opath_held_ops);
+    if (fd == NULL) {
+        fd_close(target);
+        return ERR_PTR(_ENOMEM);
+    }
+    fd->opath_held.target = target;
+    fd->type = target->type;
+    fd->stat = target->stat;
+    fd->flags = flags;
+    return fd;
+}
 
 bool fd_is_opath_link(struct fd *fd) {
     // AT_PWD (fs/path.h) is a non-dereferenceable sentinel meaning "current
@@ -1258,6 +1316,8 @@ static bool root_in_detached(const char *path, size_t staging) {
 }
 
 static int getpath_common(struct fd *fd, char *buf, enum getpath_how how, bool *unreachable) {
+    if (fd_is_opath_held(fd))
+        return getpath_common(fd->opath_held.target, buf, how, unreachable);
     struct mount *mount;
     if (fd_is_opath_link(fd)) {
         mount = fd->opath_link.mount;

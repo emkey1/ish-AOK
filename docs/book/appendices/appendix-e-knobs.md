@@ -55,6 +55,7 @@ by the app; several have app-side equivalents under `/proc/ish/defaults`
 | `ISH_FORCE_MAC_SHEETS` | `app/UIViewController+Extras.m` |
 | `ISH_FORCE_SEQPACKET_EPERM` | `fs/sock.c` |
 | `ISH_FORCE_WRITE_REVALIDATE` | `emu/memory.c` |
+| `ISH_FOREIGN_EXEC` | `main.c` |
 | `ISH_FUTEX_HEAP_WAIT` | `kernel/futex.c` |
 | `ISH_GUEST_CHECKPOINT` | `fs/proc/ish.c` |
 | `ISH_GUEST_CPU_COUNT` | `platform/darwin.c`, `platform/linux.c` |
@@ -92,6 +93,9 @@ by the app; several have app-side equivalents under `/proc/ish/defaults`
 | `ISH_MIRROR_NO_MPROTECT` | `emu/memory.c` |
 | `ISH_MOPS` | `jit/arm64_mops.c` |
 | `ISH_MULTICORE` | `main.c` |
+| `ISH_NATIVE_PASSWORD` | `main.c` |
+| `ISH_NATIVE_ROOT` | `main.c` |
+| `ISH_NATIVE_USER` | `main.c` |
 | `ISH_NETLINK_DIAG` | `fs/sock.c` |
 | `ISH_NO_ADDR_FUSE` | `jit/gen.c` |
 | `ISH_NO_ALU_FUSE` | `jit/gen.c` |
@@ -147,7 +151,7 @@ by the app; several have app-side equivalents under `/proc/ish/defaults`
 | `ISH_TRACE_AMD64_AS_SOURCE` | `kernel/fs.c` |
 | `ISH_TRACE_AMD64_AS_STDERR` | `emu/amd64_interp.c` |
 | `ISH_TRACE_AMD64_BASH` | `emu/amd64_interp.c` |
-| `ISH_TRACE_AMD64_BRIDGES` | `emu/amd64_interp.c`, `jit/gen.c` |
+| `ISH_TRACE_AMD64_BRIDGES` | `jit/gen.c` |
 | `ISH_TRACE_AMD64_CC1` | `emu/amd64_interp.c` |
 | `ISH_TRACE_AMD64_JIT` | `emu/memory.c`, `jit/gen.c`, `jit/jit.c` |
 | `ISH_TRACE_AMD64_JIT_STATS` | `emu/amd64_interp.c`, `jit/jit.c` |

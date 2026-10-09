@@ -254,7 +254,7 @@ static int stat_convert_newstat(struct statbuf stat, struct newstat *out) {
     return 0;
 }
 
-static void statx_timestamp_convert(struct statx_timestamp_ *timestamp, dword_t sec, dword_t nsec) {
+static void statx_timestamp_convert(struct statx_timestamp_ *timestamp, sqword_t sec, dword_t nsec) {
     timestamp->tv_sec = sec;
     timestamp->tv_nsec = nsec;
     timestamp->__reserved = 0;
@@ -294,6 +294,9 @@ int generic_fstat(struct fd *fd, struct statbuf *stat) {
     // O_PATH symlink fds have no backend open file; stat the link by path.
     if (fd_is_opath_link(fd))
         return opath_link_fstat(fd, stat);
+    // An O_PATH handle on a description: the description's.
+    if (fd_is_opath_held(fd))
+        return generic_fstat(fd_opath_held_target(fd), stat);
     memset(stat, 0, sizeof(*stat));
     int err = fd->mount->fs->fstat(fd, stat);
     if (err >= 0)

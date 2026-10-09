@@ -347,8 +347,6 @@ What is still absent, and visibly so:
   several of these numbers better at once.
 - **splice**, which avoids a copy on the `/dev/fuse` transfer. The transfers
   here are not copy-bound.
-- The newer **`fsopen()`-based mount API** — a whole syscall family rather than
-  anything FUSE-specific. libfuse falls back cleanly.
 - The mapping and ordinary `read`/`write` are coherent at the sync points
   above, not continuously: `read()` goes to the daemon rather than through the
   cache. Linux's page cache makes the two coherent at all times.

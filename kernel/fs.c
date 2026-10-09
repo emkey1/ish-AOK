@@ -2884,9 +2884,9 @@ dword_t sys_utime_guest(guest_addr_t path_addr, guest_addr_t times_addr) {
         } times;
         if (user_get(times_addr, times))
             return _EFAULT;
-        atime.tv_sec = times.actime;
+        atime.tv_sec = (sdword_t) times.actime;    // a 32-bit time_t is signed
         atime.tv_nsec = 0;
-        mtime.tv_sec = times.modtime;
+        mtime.tv_sec = (sdword_t) times.modtime;
         mtime.tv_nsec = 0;
     }
     return sys_utime_common(AT_FDCWD_, path_addr, atime, mtime, 0);

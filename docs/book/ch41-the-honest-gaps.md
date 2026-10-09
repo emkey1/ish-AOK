@@ -304,12 +304,11 @@ cipher out of the emulator and the cipher is what an ssh session is bound by.
 
 ## 41.6 FUSE, stated as absences — and one that stopped being one
 
-`fs/fuse.c`'s header comment names three things not modeled: `readdirplus`,
-which needs an attribute cache to be worth having; splice; and the
-`fsopen()`-based mount API. `FUSE_INIT` offers the daemon no optional features
-at all, so a daemon is never told AOK supports something it does not. Missing
-*visibly*, which Chapter 40 explains is the whole difference between an
-unfinished feature and a capability lie.
+`fs/fuse.c`'s header comment names two things not modeled: `readdirplus`,
+which needs an attribute cache to be worth having, and splice. `FUSE_INIT`
+offers the daemon no optional features at all, so a daemon is never told AOK
+supports something it does not. Missing *visibly*, which Chapter 40 explains is
+the whole difference between an unfinished feature and a capability lie.
 
 The missing cache has costs that are not absences, and `docs/TODO.md` measures
 them: every operation walks from the root with one `LOOKUP` per component, so a
@@ -320,19 +319,20 @@ One change — a real dentry and attribute cache honouring FUSE's timeouts — i
 behind all of them, and the reference accounting it needs is already asserted
 by the test.
 
-The third absence is no longer visible. The new mount API arrived for systemd
-and util-linux, generically, and it reaches FUSE: `fsopen("fuse")` succeeds,
-`fsconfig` accepts `fd`, `rootmode`, `user_id` and `group_id`, and
-`FSCONFIG_CMD_CREATE` makes the mount. Then `fsmount()` opens the new mount's
+The header used to name a third absence, the `fsopen()`-based mount API, and it
+had stopped being one without anyone noticing. The new mount API arrived for
+systemd and util-linux, generically, and it reached FUSE: `fsopen("fuse")`
+succeeded, `fsconfig` accepted `fd`, `rootmode`, `user_id` and `group_id`, and
+`FSCONFIG_CMD_CREATE` made the mount. Then `fsmount()` opened the new mount's
 root directory to hand back a descriptor — and opening a FUSE directory asks the
-daemon. A daemon mounts first and serves afterwards, so it is still waiting for
-its own mount call and never answers. Measured for this chapter:
-`tests/manual/fuse_basic.c` with its `mount(2)` swapped for that sequence hangs
-in `fsmount` until its watchdog kills it, where the unmodified test passes.
-Linux's `fsmount` returns an `O_PATH`-style descriptor for the mount, which asks
-the daemon nothing. No user has reported it — every daemon tested here mounts
-through `mount(2)` — but it is a hang where the header comment promises an
-absence, and it is queued in `docs/TODO.md`.
+daemon. A daemon mounts first and serves afterwards, so it was still waiting for
+its own mount call and never answered: `fsmount` hung, where the header promised
+an absence. Linux's `fsmount` returns an `O_PATH`-style descriptor for the
+mount, which asks the daemon nothing, and now AOK's does the same: a handle
+naming the mount's root, unopened, which is all `move_mount` wants of it. The
+daemon is first asked something after `move_mount`, when it is serving.
+`tests/manual/fuse_fsopen.c` mounts that way and times `fsmount` with no daemon
+running; the build before the fix hangs there until the test's alarm.
 
 ## 41.7 Deferred on purpose: external display
 

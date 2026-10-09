@@ -1663,6 +1663,23 @@ fd_t sys_fsmount_guest(fd_t f, dword_t flags, dword_t attr_flags) {
     struct mount *staged = mount_at_point_locked(data->point);
     if (staged != NULL)
         staged->flags |= mount_flags;
+    // A FUSE mount's root is not opened: that is a request to a daemon that,
+    // as daemons do, mounts first and serves after -- fsmount waited on it
+    // forever. Linux hands back a descriptor on the mount without asking the
+    // filesystem anything; so does this, a handle naming the mount's root
+    // (an opath_link with an empty path), which is all move_mount wants of it.
+    if (staged != NULL && staged->fs == &fusefs) {
+        staged->refcount++;             // (mount_retain, under the lock held here)
+        unlock(&mounts_lock);
+        struct fd *handle = opath_link_fd_create(staged, "");
+        if (handle == NULL) {
+            mount_release(staged);
+            return _ENOMEM;
+        }
+        handle->type = S_IFDIR;
+        handle->flags = O_PATH_;
+        return f_install(handle, O_CLOEXEC_);
+    }
     unlock(&mounts_lock);
 
     // data->point is a real-root staging path (/.ish-fsmount/<n>) that is
