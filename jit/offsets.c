@@ -51,7 +51,6 @@ void cpu() {
     OFFSET(CPU, cpu_state, zmm_hi);
     OFFSET(CPU, cpu_state, xmm_ext);
     OFFSET(CPU, cpu_state, avx512_k);
-    OFFSET(CPU, cpu_state, mm);
     OFFSET(CPU, cpu_state, mxcsr);
     OFFSET(CPU, cpu_state, tsc_aux);
     OFFSET(CPU, cpu_state, umip_report);

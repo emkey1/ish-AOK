@@ -316,7 +316,7 @@ struct cpu_state {
         byte_t flags_res;
     };
 
-    union mm_reg mm[8];
+    // (No MMX array: MMn is fp[n].signif -- see CPU_MMX below.)
     union xmm_reg xmm[16];
     // fpu
     float80 fp[8];
@@ -476,6 +476,13 @@ struct cpu_state {
     bool umip_report;
     guest_addr_t umip_report_addr;
 };
+
+// MMX register n is the significand of PHYSICAL x87 register n: one storage,
+// as on the hardware, so FXSAVE/XSAVE, FNSAVE/FRSTOR, the signal frame and
+// ptrace carry MMX state, and x87 code after MMX code sees it. An MMX write
+// also sets fp[n]'s sign and exponent to all ones, and every MMX instruction
+// but EMMS makes TOP 0 and all eight valid (the JIT's mmx_touch gadget).
+#define CPU_MMX(cpu, n) (*(union mm_reg *) &(cpu)->fp[(n)].signif)
 
 #define AMD64_SREG_ES 0
 #define AMD64_SREG_CS 1

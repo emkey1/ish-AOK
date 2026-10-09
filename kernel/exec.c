@@ -1530,9 +1530,8 @@ static intptr_t elf_exec(struct fd *fd, const char *file, struct exec_args argv,
     // Every XSAVE component in its initial configuration, as Linux's
     // start_thread leaves the FPU: x87 registers empty, nothing flagged,
     // MXCSR 1F80H, every vector and opmask register zero -- none of the old
-    // image's -- and the MMX registers with them.
+    // image's -- and the MMX registers with them (they are the x87's).
     xsave_init_state(&save->cpu);
-    memset(save->cpu.mm, 0, sizeof(save->cpu.mm));
 
     memset(save->cpu.amd64_regs, 0, sizeof(save->cpu.amd64_regs));
     // Linux's start_thread loads 0 into ES, DS, FS and GS.

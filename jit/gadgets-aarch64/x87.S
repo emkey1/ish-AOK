@@ -3358,6 +3358,27 @@ x87_i386_gp:
     strb wzr, [_cpu, CPU_x87_valid]
     gret_nomem 1
 
+# What every MMX instruction but EMMS does to the x87, before it runs (the
+# MMX registers are the x87's: emu/cpu.h CPU_MMX): a pending unmasked x87
+# exception first (#MF, nothing changed), then TOP 0 and all eight registers
+# valid, and the one it writes (the word's imm: 0-7, 8 for none) gets an
+# all-ones sign and exponent. [x87 word], gret 1.
+.gadget mmx_enter
+    x87_wait
+    ldrh w8, [_cpu, CPU_fsw]
+    and  w8, w8, ~0x3800
+    strh w8, [_cpu, CPU_fsw]
+    mov  w8, 0xff
+    strb w8, [_cpu, CPU_x87_valid]
+    ldrb w9, [_ip]
+    cmp  w9, 8
+    b.hs 1f
+    add  x10, _cpu, CPU_fp
+    add  x10, x10, x9, lsl 4
+    mov  w8, 0xffff
+    strh w8, [x10, 8]
+1:  gret_nomem 1
+
 # ===========================================================================
 # The transcendentals: F2XM1, FYL2X, FYL2XP1, FPTAN, FPATAN, FSIN, FCOS,
 # FSINCOS.

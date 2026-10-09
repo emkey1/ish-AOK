@@ -9560,7 +9560,7 @@ restart_prefix:
                     return INT_UNDEFINED;
                 if (!amd64_read_rm(cpu, tlb, &modrm, seg_prefix, rex.w ? 64 : 32, &src_scalar))
                     goto amd64_gpf_restore;
-                cpu->mm[modrm.reg].qw = rex.w ? src_scalar : (uint32_t) src_scalar;
+                CPU_MMX(cpu, modrm.reg).qw = rex.w ? src_scalar : (uint32_t) src_scalar;
             }
             break;
         }
@@ -9859,9 +9859,9 @@ restart_prefix:
                     if (modrm.reg >= 8 || (modrm.is_reg && modrm.rm >= 8))
                         return INT_UNDEFINED;
                     if (modrm.is_reg) {
-                        cpu->mm[modrm.rm] = cpu->mm[modrm.reg];
+                        CPU_MMX(cpu, modrm.rm) = CPU_MMX(cpu, modrm.reg);
                     } else if (!amd64_write_rm(cpu, tlb, &modrm, seg_prefix, 64,
-                                   cpu->mm[modrm.reg].qw)) {
+                                   CPU_MMX(cpu, modrm.reg).qw)) {
                         goto amd64_gpf_restore;
                     }
                 } else if (op2 == 0x7f && !(operand_size_prefix || rep_mode == AMD64_REPZ)) {
@@ -10331,8 +10331,8 @@ restart_prefix:
                     // here for the interpreter fallback. reg is an MMX index <8.
                     if (modrm.reg >= 8)
                         return INT_UNDEFINED;
-                    qword_t scalar = rex.w ? cpu->mm[modrm.reg].qw
-                                           : (uint32_t) cpu->mm[modrm.reg].qw;
+                    qword_t scalar = rex.w ? CPU_MMX(cpu, modrm.reg).qw
+                                           : (uint32_t) CPU_MMX(cpu, modrm.reg).qw;
                     if (!amd64_write_rm(cpu, tlb, &modrm, seg_prefix, rex.w ? 64 : 32, scalar))
                         goto amd64_gpf_restore;
                 } else {
@@ -10465,13 +10465,13 @@ restart_prefix:
                     // F3 0F D6: movq2dq xmm, mm — copy the 64-bit MMX register
                     // into the low qword of the XMM register, zero the upper
                     // qword. Register-only (gpgv SHA shuttles MMX<->XMM here).
-                    cpu->xmm[modrm.reg].qw[0] = cpu->mm[modrm.rm].qw;
+                    cpu->xmm[modrm.reg].qw[0] = CPU_MMX(cpu, modrm.rm).qw;
                     cpu->xmm[modrm.reg].qw[1] = 0;
                 } else if (rep_mode == AMD64_REPNZ && !operand_size_prefix &&
                            modrm.is_reg && modrm.reg < 8) {
                     // F2 0F D6: movdq2q mm, xmm — copy the low qword of the XMM
                     // register into the MMX register. Register-only.
-                    cpu->mm[modrm.reg].qw = cpu->xmm[modrm.rm].qw[0];
+                    CPU_MMX(cpu, modrm.reg).qw = cpu->xmm[modrm.rm].qw[0];
                 } else {
                     return INT_UNDEFINED;
                 }
@@ -10618,15 +10618,15 @@ restart_prefix:
                         return INT_UNDEFINED;
                     union mm_reg src_mm, dst_mm;
                     if (modrm.is_reg) {
-                        src_mm = cpu->mm[modrm.rm];
+                        src_mm = CPU_MMX(cpu, modrm.rm);
                     } else {
                         if (!amd64_read_rm(cpu, tlb, &modrm, seg_prefix, 64, &src_scalar))
                             goto amd64_gpf_restore;
                         src_mm.qw = src_scalar;
                     }
-                    dst_mm = cpu->mm[modrm.reg];
+                    dst_mm = CPU_MMX(cpu, modrm.reg);
                     vec_andn64(NULL, &src_mm, &dst_mm);
-                    cpu->mm[modrm.reg] = dst_mm;
+                    CPU_MMX(cpu, modrm.reg) = dst_mm;
                 } else {
                     return INT_UNDEFINED;
                 }
@@ -13088,7 +13088,7 @@ int amd64_jit_0f_vec_rm(struct cpu_state *cpu, struct tlb *tlb,
                 return INT_UNDEFINED;
             if (!amd64_read_rm(cpu, tlb, &modrm, seg_prefix, rex.w ? 64 : 32, &src_scalar))
                 goto amd64_0f_vec_rm_pf;
-            cpu->mm[modrm.reg].qw = rex.w ? src_scalar : (uint32_t) src_scalar;
+            CPU_MMX(cpu, modrm.reg).qw = rex.w ? src_scalar : (uint32_t) src_scalar;
         }
     } else {
         bool pshufw = op2 == 0x70 && !operand_size_prefix && rep_mode == AMD64_REP_NONE;
@@ -13142,13 +13142,13 @@ int amd64_jit_0f_vec_rm(struct cpu_state *cpu, struct tlb *tlb,
             return INT_UNDEFINED;
         if (mmx_extra) {
             if (modrm.is_reg) {
-                src_mm = cpu->mm[modrm.rm];
+                src_mm = CPU_MMX(cpu, modrm.rm);
             } else {
                 if (!amd64_read_rm(cpu, tlb, &modrm, seg_prefix, 64, &src_scalar))
                     goto amd64_0f_vec_rm_pf;
                 src_mm.qw = src_scalar;
             }
-            value_mm = cpu->mm[modrm.reg];
+            value_mm = CPU_MMX(cpu, modrm.reg);
             switch (op2) {
             case 0x60: vec_unpackl_bw64(NULL, &src_mm, &value_mm); break;
             case 0x61: vec_unpackl_w64(NULL, &src_mm, &value_mm); break;
@@ -13175,7 +13175,7 @@ int amd64_jit_0f_vec_rm(struct cpu_state *cpu, struct tlb *tlb,
             case 0xee: vec_maxs_w64(NULL, &src_mm, &value_mm); break;
             case 0xf6: vec_sumabs_w64(NULL, &src_mm, &value_mm); break;
             }
-            cpu->mm[modrm.reg] = value_mm;
+            CPU_MMX(cpu, modrm.reg) = value_mm;
             cpu->amd64_rip = (qword_t) next_ip;
             amd64_sync_legacy_regs(cpu);
             return INT_NONE;
@@ -13680,11 +13680,11 @@ int amd64_jit_0f_vec_rm(struct cpu_state *cpu, struct tlb *tlb,
                 cpu->xmm[modrm.reg] = value;
             } else if (movq_mm_load) {
                 if (modrm.is_reg) {
-                    cpu->mm[modrm.reg] = cpu->mm[modrm.rm];
+                    CPU_MMX(cpu, modrm.reg) = CPU_MMX(cpu, modrm.rm);
                 } else {
                     if (!amd64_read_rm(cpu, tlb, &modrm, seg_prefix, 64, &src_scalar))
                         goto amd64_0f_vec_rm_pf;
-                    cpu->mm[modrm.reg].qw = src_scalar;
+                    CPU_MMX(cpu, modrm.reg).qw = src_scalar;
                 }
             } else {
                 return INT_UNDEFINED;
@@ -13710,7 +13710,7 @@ int amd64_jit_0f_vec_rm(struct cpu_state *cpu, struct tlb *tlb,
                 cpu->xmm[modrm.reg] = value;
             } else if (pshufw) {
                 if (modrm.is_reg) {
-                    src_mm = cpu->mm[modrm.rm];
+                    src_mm = CPU_MMX(cpu, modrm.rm);
                 } else {
                     if (!amd64_read_rm(cpu, tlb, &modrm, seg_prefix, 64, &src_scalar))
                         goto amd64_0f_vec_rm_pf;
@@ -13718,7 +13718,7 @@ int amd64_jit_0f_vec_rm(struct cpu_state *cpu, struct tlb *tlb,
                 }
                 value_mm = src_mm;
                 vec_shuffle_w64(NULL, &src_mm, &value_mm, imm8);
-                cpu->mm[modrm.reg] = value_mm;
+                CPU_MMX(cpu, modrm.reg) = value_mm;
             } else {
                 return INT_UNDEFINED;
             }
@@ -13754,13 +13754,13 @@ int amd64_jit_0f_vec_rm(struct cpu_state *cpu, struct tlb *tlb,
                 cpu->xmm[modrm.reg] = value;
             } else if (pcmpeq_mm) {
                 if (modrm.is_reg) {
-                    src_mm = cpu->mm[modrm.rm];
+                    src_mm = CPU_MMX(cpu, modrm.rm);
                 } else {
                     if (!amd64_read_rm(cpu, tlb, &modrm, seg_prefix, 64, &src_scalar))
                         goto amd64_0f_vec_rm_pf;
                     src_mm.qw = src_scalar;
                 }
-                value_mm = cpu->mm[modrm.reg];
+                value_mm = CPU_MMX(cpu, modrm.reg);
                 switch (op2) {
                 case 0x74:
                     vec_compare_eqb64(NULL, &src_mm, &value_mm);
@@ -13772,7 +13772,7 @@ int amd64_jit_0f_vec_rm(struct cpu_state *cpu, struct tlb *tlb,
                     vec_compare_eqd64(NULL, &src_mm, &value_mm);
                     break;
                 }
-                cpu->mm[modrm.reg] = value_mm;
+                CPU_MMX(cpu, modrm.reg) = value_mm;
             } else {
                 return INT_UNDEFINED;
             }
@@ -13795,13 +13795,13 @@ int amd64_jit_0f_vec_rm(struct cpu_state *cpu, struct tlb *tlb,
                 cpu->xmm[modrm.reg] = value;
             } else if (pcmpgt_mm) {
                 if (modrm.is_reg) {
-                    src_mm = cpu->mm[modrm.rm];
+                    src_mm = CPU_MMX(cpu, modrm.rm);
                 } else {
                     if (!amd64_read_rm(cpu, tlb, &modrm, seg_prefix, 64, &src_scalar))
                         goto amd64_0f_vec_rm_pf;
                     src_mm.qw = src_scalar;
                 }
-                value_mm = cpu->mm[modrm.reg];
+                value_mm = CPU_MMX(cpu, modrm.reg);
                 switch (op2) {
                 case 0x64:
                     vec_compares_gtb64(NULL, &src_mm, &value_mm);
@@ -13813,7 +13813,7 @@ int amd64_jit_0f_vec_rm(struct cpu_state *cpu, struct tlb *tlb,
                     vec_compares_gtd64(NULL, &src_mm, &value_mm);
                     break;
                 }
-                cpu->mm[modrm.reg] = value_mm;
+                CPU_MMX(cpu, modrm.reg) = value_mm;
             } else {
                 return INT_UNDEFINED;
             }
@@ -13845,15 +13845,15 @@ int amd64_jit_0f_vec_rm(struct cpu_state *cpu, struct tlb *tlb,
                 cpu->xmm[modrm.reg] = value;
             } else if (punpckldq_mm) {
                 if (modrm.is_reg) {
-                    src_mm = cpu->mm[modrm.rm];
+                    src_mm = CPU_MMX(cpu, modrm.rm);
                 } else {
                     if (!amd64_read_rm(cpu, tlb, &modrm, seg_prefix, 64, &src_scalar))
                         goto amd64_0f_vec_rm_pf;
                     src_mm.qw = src_scalar;
                 }
-                value_mm = cpu->mm[modrm.reg];
+                value_mm = CPU_MMX(cpu, modrm.reg);
                 vec_unpackl_dq64(NULL, &src_mm, &value_mm);
-                cpu->mm[modrm.reg] = value_mm;
+                CPU_MMX(cpu, modrm.reg) = value_mm;
             } else {
                 return INT_UNDEFINED;
             }
@@ -13891,13 +13891,13 @@ int amd64_jit_0f_vec_rm(struct cpu_state *cpu, struct tlb *tlb,
                 cpu->xmm[modrm.reg] = value;
             } else if (packed_int_mm) {
                 if (modrm.is_reg) {
-                    src_mm = cpu->mm[modrm.rm];
+                    src_mm = CPU_MMX(cpu, modrm.rm);
                 } else {
                     if (!amd64_read_rm(cpu, tlb, &modrm, seg_prefix, 64, &src_scalar))
                         goto amd64_0f_vec_rm_pf;
                     src_mm.qw = src_scalar;
                 }
-                value_mm = cpu->mm[modrm.reg];
+                value_mm = CPU_MMX(cpu, modrm.reg);
                 switch (op2) {
                 case 0xd4:
                     vec_add_q64(NULL, &src_mm, &value_mm);
@@ -13924,7 +13924,7 @@ int amd64_jit_0f_vec_rm(struct cpu_state *cpu, struct tlb *tlb,
                     vec_add_d64(NULL, &src_mm, &value_mm);
                     break;
                 }
-                cpu->mm[modrm.reg] = value_mm;
+                CPU_MMX(cpu, modrm.reg) = value_mm;
             } else {
                 return INT_UNDEFINED;
             }
@@ -14014,13 +14014,13 @@ int amd64_jit_0f_vec_rm(struct cpu_state *cpu, struct tlb *tlb,
                 cpu->xmm[modrm.reg] = value;
             } else if (packed_shift_mm) {
                 if (modrm.is_reg) {
-                    src_mm = cpu->mm[modrm.rm];
+                    src_mm = CPU_MMX(cpu, modrm.rm);
                 } else {
                     if (!amd64_read_rm(cpu, tlb, &modrm, seg_prefix, 64, &src_scalar))
                         goto amd64_0f_vec_rm_pf;
                     src_mm.qw = src_scalar;
                 }
-                value_mm = cpu->mm[modrm.reg];
+                value_mm = CPU_MMX(cpu, modrm.reg);
                 switch (op2) {
                 case 0xd1:
                     vec_shiftr_w64(NULL, &src_mm, &value_mm);
@@ -14047,7 +14047,7 @@ int amd64_jit_0f_vec_rm(struct cpu_state *cpu, struct tlb *tlb,
                     vec_shiftl_q64(NULL, &src_mm, &value_mm);
                     break;
                 }
-                cpu->mm[modrm.reg] = value_mm;
+                CPU_MMX(cpu, modrm.reg) = value_mm;
             } else {
                 return INT_UNDEFINED;
             }
@@ -14063,18 +14063,18 @@ int amd64_jit_0f_vec_rm(struct cpu_state *cpu, struct tlb *tlb,
                 cpu->xmm[modrm.reg] = value;
             } else if (packed_mul_mm) {
                 if (modrm.is_reg) {
-                    src_mm = cpu->mm[modrm.rm];
+                    src_mm = CPU_MMX(cpu, modrm.rm);
                 } else {
                     if (!amd64_read_rm(cpu, tlb, &modrm, seg_prefix, 64, &src_scalar))
                         goto amd64_0f_vec_rm_pf;
                     src_mm.qw = src_scalar;
                 }
-                value_mm = cpu->mm[modrm.reg];
+                value_mm = CPU_MMX(cpu, modrm.reg);
                 if (op2 == 0xd5)
                     vec_mull64(NULL, &src_mm, &value_mm);
                 else
                     vec_mulu_dq64(NULL, &src_mm, &value_mm);
-                cpu->mm[modrm.reg] = value_mm;
+                CPU_MMX(cpu, modrm.reg) = value_mm;
             } else {
                 return INT_UNDEFINED;
             }
@@ -14095,13 +14095,13 @@ int amd64_jit_0f_vec_rm(struct cpu_state *cpu, struct tlb *tlb,
                 if (modrm.reg >= 8 || (modrm.is_reg && modrm.rm >= 8))
                     return INT_UNDEFINED;
                 if (modrm.is_reg) {
-                    src_mm = cpu->mm[modrm.rm];
+                    src_mm = CPU_MMX(cpu, modrm.rm);
                 } else {
                     if (!amd64_read_rm(cpu, tlb, &modrm, seg_prefix, 64, &src_scalar))
                         goto amd64_0f_vec_rm_pf;
                     src_mm.qw = src_scalar;
                 }
-                value_mm = cpu->mm[modrm.reg];
+                value_mm = CPU_MMX(cpu, modrm.reg);
                 if (op2 == 0xdb)
                     vec_and_q64(NULL, &src_mm, &value_mm);
                 else if (op2 == 0xdf)
@@ -14110,7 +14110,7 @@ int amd64_jit_0f_vec_rm(struct cpu_state *cpu, struct tlb *tlb,
                     vec_mulu64(NULL, &src_mm, &value_mm);
                 else
                     vec_or_q64(NULL, &src_mm, &value_mm);
-                cpu->mm[modrm.reg] = value_mm;
+                CPU_MMX(cpu, modrm.reg) = value_mm;
             } else {
                 if (!operand_size_prefix || rep_mode != AMD64_REP_NONE)
                     return INT_UNDEFINED;
@@ -14251,7 +14251,7 @@ int amd64_jit_0f_vec_rm(struct cpu_state *cpu, struct tlb *tlb,
                 for (int i = 0; i < 16; i++)
                     mask |= ((src_xmm.u8[i] >> 7) & 1u) << i;
             } else if (pmovmskb_mm) {
-                src_mm = cpu->mm[modrm.rm];
+                src_mm = CPU_MMX(cpu, modrm.rm);
                 for (int i = 0; i < 8; i++)
                     mask |= ((src_mm.qw >> (i * 8 + 7)) & 1u) << i;
             } else {
@@ -14280,13 +14280,13 @@ int amd64_jit_0f_vec_rm(struct cpu_state *cpu, struct tlb *tlb,
                        modrm.is_reg && modrm.rm < 8) {
                 // F3 0F D6: movq2dq xmm, mm — 64-bit MMX register into the low
                 // qword of the XMM register, upper qword zeroed. Register-only.
-                cpu->xmm[modrm.reg].qw[0] = cpu->mm[modrm.rm].qw;
+                cpu->xmm[modrm.reg].qw[0] = CPU_MMX(cpu, modrm.rm).qw;
                 cpu->xmm[modrm.reg].qw[1] = 0;
             } else if (rep_mode == AMD64_REPNZ && !operand_size_prefix &&
                        modrm.is_reg && modrm.reg < 8) {
                 // F2 0F D6: movdq2q mm, xmm — low qword of the XMM register
                 // into the MMX register. Register-only.
-                cpu->mm[modrm.reg].qw = cpu->xmm[modrm.rm].qw[0];
+                CPU_MMX(cpu, modrm.reg).qw = cpu->xmm[modrm.rm].qw[0];
             } else {
                 return INT_UNDEFINED;
             }
@@ -14298,7 +14298,7 @@ int amd64_jit_0f_vec_rm(struct cpu_state *cpu, struct tlb *tlb,
                 if (!amd64_write_xmm_rm(cpu, tlb, &modrm, seg_prefix, &value))
                     goto amd64_0f_vec_rm_pf;
             } else if (movnt_mm_store) {
-                if (!amd64_write_rm(cpu, tlb, &modrm, seg_prefix, 64, cpu->mm[modrm.reg].qw))
+                if (!amd64_write_rm(cpu, tlb, &modrm, seg_prefix, 64, CPU_MMX(cpu, modrm.reg).qw))
                     goto amd64_0f_vec_rm_pf;
             } else {
                 return INT_UNDEFINED;
@@ -14310,9 +14310,9 @@ int amd64_jit_0f_vec_rm(struct cpu_state *cpu, struct tlb *tlb,
                     goto amd64_0f_vec_rm_pf;
             } else if (movq_mm_store) {
                 if (modrm.is_reg) {
-                    cpu->mm[modrm.rm] = cpu->mm[modrm.reg];
+                    CPU_MMX(cpu, modrm.rm) = CPU_MMX(cpu, modrm.reg);
                 } else if (!amd64_write_rm(cpu, tlb, &modrm, seg_prefix, 64,
-                            cpu->mm[modrm.reg].qw)) {
+                            CPU_MMX(cpu, modrm.reg).qw)) {
                     goto amd64_0f_vec_rm_pf;
                 }
             } else {
@@ -14333,7 +14333,7 @@ int amd64_jit_0f_vec_rm(struct cpu_state *cpu, struct tlb *tlb,
                 if (modrm.reg >= 8)
                     return INT_UNDEFINED;
                 if (!amd64_write_rm(cpu, tlb, &modrm, seg_prefix, rex.w ? 64 : 32,
-                            rex.w ? cpu->mm[modrm.reg].qw : (uint32_t) cpu->mm[modrm.reg].qw))
+                            rex.w ? CPU_MMX(cpu, modrm.reg).qw : (uint32_t) CPU_MMX(cpu, modrm.reg).qw))
                     goto amd64_0f_vec_rm_pf;
             } else if (rep_mode == AMD64_REP_NONE && operand_size_prefix) {
                 if (!amd64_write_rm(cpu, tlb, &modrm, seg_prefix, rex.w ? 64 : 32,
@@ -14359,16 +14359,16 @@ int amd64_jit_0f_vec_rm(struct cpu_state *cpu, struct tlb *tlb,
             if (!logic_mm)
                 return INT_UNDEFINED;
             if (modrm.is_reg) {
-                src_mm = cpu->mm[modrm.rm];
+                src_mm = CPU_MMX(cpu, modrm.rm);
             } else {
                 if (!amd64_read_rm(cpu, tlb, &modrm, seg_prefix, 64, &src_scalar))
                     goto amd64_0f_vec_rm_pf;
                 src_mm.qw = src_scalar;
             }
             if (op2 == 0xdb)
-                cpu->mm[modrm.reg].qw &= src_mm.qw;
+                CPU_MMX(cpu, modrm.reg).qw &= src_mm.qw;
             else
-                cpu->mm[modrm.reg].qw |= src_mm.qw;
+                CPU_MMX(cpu, modrm.reg).qw |= src_mm.qw;
         } else if (op2 >= 0x54 && op2 <= 0x57) {
             if (rep_mode != AMD64_REP_NONE)
                 return INT_UNDEFINED;
@@ -14404,13 +14404,13 @@ int amd64_jit_0f_vec_rm(struct cpu_state *cpu, struct tlb *tlb,
                 cpu->xmm[modrm.reg] = value;
             } else if (logic_mm) {
                 if (modrm.is_reg) {
-                    src_mm = cpu->mm[modrm.rm];
+                    src_mm = CPU_MMX(cpu, modrm.rm);
                 } else {
                     if (!amd64_read_rm(cpu, tlb, &modrm, seg_prefix, 64, &src_scalar))
                         goto amd64_0f_vec_rm_pf;
                     src_mm.qw = src_scalar;
                 }
-                cpu->mm[modrm.reg].qw ^= src_mm.qw;
+                CPU_MMX(cpu, modrm.reg).qw ^= src_mm.qw;
             } else {
                 return INT_UNDEFINED;
             }

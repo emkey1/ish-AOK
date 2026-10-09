@@ -7073,14 +7073,14 @@ static bool amd64_try_emulate_sse2_packed_integer(guest_addr_t ip, struct cpu_st
             return false; // mm[] has 8 entries; reject an invalid MMX encoding (-> #UD)
         union mm_reg src_mm;
         if (modrm.is_reg) {
-            src_mm = cpu->mm[modrm.rm & 7];
+            src_mm = CPU_MMX(cpu, modrm.rm & 7);
         } else {
             qword_t v;
             if (!amd64_trap_read_rm(cpu, &modrm, seg_prefix, decode_ip, 64, &v))
                 return false;
             src_mm.qw = v;
         }
-        vec_madd_d64(NULL, &src_mm, &cpu->mm[modrm.reg & 7]);
+        vec_madd_d64(NULL, &src_mm, &CPU_MMX(cpu, modrm.reg & 7));
     }
 
     cpu->amd64_rip = decode_ip;

@@ -829,14 +829,15 @@ vec_ldtmp 32
 vec_ldtmp 64
 vec_ldtmp 128
 
-# MMX has no spare register: an op with a memory source parks mm[S] (S not the
-# destination) in xmm15's low half, loads the operand into mm[S], runs the
-# register form, and puts mm[S] back. Nothing between can fault but the load,
+# MMX has no spare register: an op with a memory source parks MM S (S not the
+# destination; fp[S]'s significand) in xmm15's low half, loads the operand into
+# it, runs the register form, and puts it back. Nothing between can fault but the load,
 # which leaves mm[S] as it was. [S], gret 1.
 .gadget vec_mm_stash
     ldr  x8, [_ip]
-    add  x9, _cpu, CPU_mm
-    ldr  x10, [x9, x8, lsl 3]
+    add  x9, _cpu, CPU_fp                /* MMn: fp[n]'s significand */
+    add  x9, x9, x8, lsl 4
+    ldr  x10, [x9]
     add  x11, _cpu, CPU_xmm
     str  x10, [x11, 15 * 16]
     gret 1
@@ -844,8 +845,9 @@ vec_ldtmp 128
     ldr  x8, [_ip]
     add  x11, _cpu, CPU_xmm
     ldr  x10, [x11, 15 * 16]
-    add  x9, _cpu, CPU_mm
-    str  x10, [x9, x8, lsl 3]
+    add  x9, _cpu, CPU_fp
+    add  x9, x9, x8, lsl 4
+    str  x10, [x9]
     gret 1
 
 .gadget vec_ld32z

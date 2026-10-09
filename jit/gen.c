@@ -34,6 +34,9 @@
 static int gen_step32(struct gen_state *state, struct tlb *tlb);
 static int gen_step16(struct gen_state *state, struct tlb *tlb);
 static int gen_step64(struct gen_state *state, struct tlb *tlb);
+#if defined(__aarch64__)
+static void gen_mmx_enter(struct gen_state *state, struct tlb *tlb, guest_addr_t ip);
+#endif
 
 enum amd64_jit_rep_mode {
     amd64_jit_rep_none,
@@ -417,6 +420,9 @@ int gen_step(struct gen_state *state, struct tlb *tlb) {
     state->orig_ip_extra = 0;
     // amd64 advances amd64_ip, i386 ip.
     guest_addr_t start = state->amd64 ? state->amd64_ip : state->ip;
+#if defined(__aarch64__)
+    gen_mmx_enter(state, tlb, start);
+#endif
     int ret;
     if (state->amd64) {
         struct amd64_jit_insn flag_insn;
@@ -9590,6 +9596,83 @@ __attribute__((unused)) static void (*x87_reg_gadget(bool amd64, unsigned opcode
 int gen_step_amd64(struct gen_state *state, struct tlb *tlb) {
     return gen_step64(state, tlb);
 }
+
+#if defined(__aarch64__)
+// Which MMX register an x86 instruction writes: 0-7; 8 for an MMX
+// instruction that writes none (a store, MOVD/PMOVMSKB/PEXTRW to a general
+// register, MASKMOVQ, CVTPI2PS/PD and MOVQ2DQ, which only read one); -1 for
+// an instruction that is not MMX, and for EMMS (its own gadget). From the
+// bytes, so one decision serves both guests' decoders: no 66/F2/F3 prefix and
+// 0F 60-7F, C4/C5, D1-FE, 0F 38 00-0B/1C-1E, 0F 3A 0F, 0F 2A/2C/2D; and the
+// prefixed ones that touch an MMX register -- 66 0F 2A/2C/2D (CVTPI2PD,
+// CVT(T)PD2PI) and F2/F3 0F D6 (MOVDQ2Q, MOVQ2DQ).
+static int x86_mmx_dst(const byte_t *b, unsigned n, bool amd64) {
+    unsigned i = 0;
+    bool p66 = false, pf2 = false, pf3 = false;
+    for (; i < n; i++) {
+        byte_t c = b[i];
+        if (c == 0x66) p66 = true;
+        else if (c == 0xf2) { pf2 = true; pf3 = false; }
+        else if (c == 0xf3) { pf3 = true; pf2 = false; }
+        else if (c == 0x26 || c == 0x2e || c == 0x36 || c == 0x3e || c == 0x64 || c == 0x65 ||
+                 c == 0x67 || c == 0xf0) ;
+        else if (amd64 && c >= 0x40 && c <= 0x4f) ;
+        else break;
+    }
+    if (i + 2 >= n || b[i] != 0x0f)
+        return -1;
+    byte_t op = b[i + 1];
+    unsigned at = i + 2;
+    if (op == 0x38 || op == 0x3a) {
+        if (at + 1 >= n || p66 || pf2 || pf3)
+            return -1;
+        byte_t op3 = b[at];
+        if (op == 0x38 ? !(op3 <= 0x0b || (op3 >= 0x1c && op3 <= 0x1e)) : op3 != 0x0f)
+            return -1;
+        return (b[at + 1] >> 3) & 7;
+    }
+    byte_t m = b[at];
+    unsigned reg = (m >> 3) & 7, rm = m & 7;
+    bool regform = (m >> 6) == 3;
+    if (op == 0x2a || op == 0x2c || op == 0x2d) {
+        if (pf2 || pf3)
+            return -1;                          // CVTSI2SS/SD and their kind
+        return op == 0x2a ? 8 : (int) reg;      // CVTPI2PS/PD read; CVT(T)PS/PD2PI write
+    }
+    if (op == 0xd6)
+        return pf2 && regform ? (int) reg : pf3 && regform ? 8 : -1;
+    if (p66 || pf2 || pf3)
+        return -1;
+    if (op == 0x77)
+        return -1;                              // EMMS
+    if ((op >= 0x60 && op <= 0x6b) || op == 0x6e || op == 0x6f || op == 0x70 || op == 0x74 ||
+            op == 0x75 || op == 0x76 || op == 0xc4)
+        return reg;
+    if (op >= 0x71 && op <= 0x73)
+        return regform ? (int) rm : -1;
+    if (op == 0x7f)
+        return regform ? (int) rm : 8;
+    if (op == 0x7e || op == 0xe7 || op == 0xd7 || op == 0xc5 || op == 0xf7)
+        return 8;
+    if (op >= 0xd1 && op <= 0xfe && op != 0xd6 && op != 0xe6 && op != 0xf0)
+        return reg;
+    return -1;
+}
+
+// mmx_enter (x87.S) ahead of an MMX instruction's gadgets.
+static void gen_mmx_enter(struct gen_state *state, struct tlb *tlb, guest_addr_t ip) {
+    byte_t b[16];
+    unsigned n = 0;
+    while (n < sizeof(b) && tlb_read(tlb, ip + n, &b[n], 1))
+        n++;
+    int dst = x86_mmx_dst(b, n, state->amd64);
+    if (dst < 0)
+        return;
+    extern void gadget_mmx_enter(void);
+    gen(state, (unsigned long) gadget_mmx_enter);
+    gen(state, x87_word((unsigned) dst, state->amd64, state->amd64 && state->amd64_reg_cache_valid, ip));
+}
+#endif
 
 // The tbl index for math.S's amd64_v_tbl1/tbl2 shuffle gadgets, as two
 // little-endian quadwords. kind: 0 shufps, 1 shufpd (tbl2: {dst, src}), 2
@@ -21306,7 +21389,7 @@ void helper_rdtsc(struct cpu_state *cpu);
     extern void gadget_vec_maskmov8(void), gadget_vec_maskmov16(void); \
     GEN((z) == 64 ? gadget_vec_maskmov8 : gadget_vec_maskmov16); \
     GEN(state->orig_ip); \
-    GEN((z) == 64 ? (CPU_OFFSET(mm[modrm.opcode & 7]) | ((uint64_t) CPU_OFFSET(mm[modrm.rm_opcode & 7]) << 16)) \
+    GEN((z) == 64 ? (CPU_OFFSET(fp[modrm.opcode & 7]) | ((uint64_t) CPU_OFFSET(fp[modrm.rm_opcode & 7]) << 16)) \
             : (CPU_OFFSET(xmm[modrm.opcode & 7]) | ((uint64_t) CPU_OFFSET(xmm[modrm.rm_opcode & 7]) << 16))); \
 } while (0)
 #define FWAIT() do { g(x87_fwait); GEN(x87_word(0, false, false, state->orig_ip)); } while (0)
@@ -21449,7 +21532,7 @@ static inline uint16_t cpu_reg_offset(enum arg arg, int index) {
     if (arg == arg_xmm_modrm_reg || arg == arg_xmm_modrm_val)
         return CPU_OFFSET(xmm[index]);
     if (arg == arg_mm_modrm_reg || arg == arg_mm_modrm_val)
-        return CPU_OFFSET(mm[index]);
+        return CPU_OFFSET(fp[index]);       // MMn: the x87 register's significand
     if (arg == arg_modrm_reg || arg == arg_modrm_val)
         return CPU_OFFSET(regs[index]);
     return 0;
@@ -22115,7 +22198,7 @@ static bool gen_i386_vec_mapped(struct gen_state *state, const struct i386_vec_g
             GEN(gadget_vec_mm_stash);
             GEN(t);
             s_idx = t;
-            slot = CPU_OFFSET(mm[t]);
+            slot = CPU_OFFSET(fp[t]);
         } else {
             s_idx = 0;
             slot = CPU_OFFSET(amd64_regs[0]);

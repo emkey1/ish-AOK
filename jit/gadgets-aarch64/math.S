@@ -5005,9 +5005,9 @@ amd64_vmem_segfault_write:
     ldr  x8, [_ip]
     and  x9, x8, 7
     ubfx x10, x8, 4, 3
-    add  x11, _cpu, CPU_mm
-    add  x9, x11, x9, lsl 3
-    add  x10, x11, x10, lsl 3
+    add  x11, _cpu, CPU_fp
+    add  x9, x11, x9, lsl 4
+    add  x10, x11, x10, lsl 4
     ldr  d0, [x10]
     ldr  d1, [x9]
     vi_body \kind, \op, \a8, 0
@@ -5020,8 +5020,8 @@ amd64_vmem_segfault_write:
     amd64_vmem_addr
     amd64_vread_prep 8, vi_\name\()_mm
     ldr  d1, [x9]
-    add  x14, _cpu, CPU_mm
-    add  x14, x14, x10, lsl 3
+    add  x14, _cpu, CPU_fp
+    add  x14, x14, x10, lsl 4
     ldr  d0, [x14]
     vi_body \kind, \op, \a8, 0
     str  d0, [x14]
@@ -5201,9 +5201,9 @@ amd64_vi packssdw, packwd, sqxtn, -, x
     ldr  x8, [_ip]
     and  x9, x8, 7
     ubfx x10, x8, 4, 3
-    add  x11, _cpu, CPU_mm
-    add  x9, x11, x9, lsl 3
-    add  x10, x11, x10, lsl 3
+    add  x11, _cpu, CPU_fp
+    add  x9, x11, x9, lsl 4
+    add  x10, x11, x10, lsl 4
     ldr  d0, [x10]
     ldr  d1, [x9]
     vi38_body \kind, \op, \a8, 0
@@ -5216,8 +5216,8 @@ amd64_vi packssdw, packwd, sqxtn, -, x
     amd64_vmem_addr
     amd64_vread_prep 8, vi_\name\()_mm
     ldr  d1, [x9]
-    add  x14, _cpu, CPU_mm
-    add  x14, x14, x10, lsl 3
+    add  x14, _cpu, CPU_fp
+    add  x14, x14, x10, lsl 4
     ldr  d0, [x14]
     vi38_body \kind, \op, \a8, 0
     str  d0, [x14]
@@ -5479,9 +5479,9 @@ amd64_vmovx pmovzxdq, 8, z, 2d, 2s
     and  x9, x8, 7
     ubfx x10, x8, 4, 3
     ubfx w12, w8, 8, 8
-    add  x11, _cpu, CPU_mm
-    add  x9, x11, x9, lsl 3
-    add  x10, x11, x10, lsl 3
+    add  x11, _cpu, CPU_fp
+    add  x9, x11, x9, lsl 4
+    add  x10, x11, x10, lsl 4
     ldr  d0, [x10]
     ldr  d1, [x9]
     v3a_body \kind, 0
@@ -5494,8 +5494,8 @@ amd64_vmovx pmovzxdq, 8, z, 2d, 2s
     amd64_vmem_addr
     amd64_vread_prep 8, v3a_\name\()_mm
     ldr  d1, [x9]
-    add  x14, _cpu, CPU_mm
-    add  x14, x14, x10, lsl 3
+    add  x14, _cpu, CPU_fp
+    add  x14, x14, x10, lsl 4
     ldr  d0, [x14]
     ldr  w12, [_ip, 24]
     v3a_body \kind, 0
@@ -5961,8 +5961,8 @@ amd64_s4_crc _soft
     ldr  x8, [_ip]
     and  x9, x8, 7
     ubfx x10, x8, 8, 8
-    add  x11, _cpu, CPU_mm
-    add  x9, x11, x9, lsl 3
+    add  x11, _cpu, CPU_fp
+    add  x9, x11, x9, lsl 4
     ldr  d0, [x9]
     vsh_body \kind, \L, \a8
     str  d0, [x9]
@@ -5971,9 +5971,10 @@ amd64_s4_crc _soft
     ldr  x8, [_ip]
     and  x9, x8, 7
     ubfx x11, x8, 4, 3
-    add  x12, _cpu, CPU_mm
-    ldr  x10, [x12, x9, lsl 3]
-    add  x9, x12, x11, lsl 3
+    add  x12, _cpu, CPU_fp
+    add  x16, x12, x9, lsl 4
+    ldr  x10, [x16]
+    add  x9, x12, x11, lsl 4
     ldr  d0, [x9]
     vsh_body \kind, \L, \a8
     str  d0, [x9]
@@ -5984,8 +5985,8 @@ amd64_s4_crc _soft
     ubfx x10, x8, 8, 3
     amd64_vmem_addr
     amd64_vread_prep 8, vsh_\name\()_mm
-    add  x14, _cpu, CPU_mm
-    add  x14, x14, x10, lsl 3
+    add  x14, _cpu, CPU_fp
+    add  x14, x14, x10, lsl 4
     ldr  x10, [x9]
     ldr  d0, [x14]
     vsh_body \kind, \L, \a8
@@ -6047,9 +6048,11 @@ amd64_vsh_dq pslldq, 0
     ldr  x8, [_ip]
     and  x9, x8, 7
     ubfx x10, x8, 4, 3
-    add  x11, _cpu, CPU_mm
-    ldr  x12, [x11, x9, lsl 3]
-    str  x12, [x11, x10, lsl 3]
+    add  x11, _cpu, CPU_fp
+    add  x16, x11, x9, lsl 4
+    ldr  x12, [x16]
+    add  x16, x11, x10, lsl 4
+    str  x12, [x16]
     gret 1
 
 # mm <- m64 / zero-extended m32 (MOVQ 0F 6F, MOVD/MOVQ 0F 6E). gret 3
@@ -6065,8 +6068,9 @@ amd64_vsh_dq pslldq, 0
 .else
     ldr  x12, [x9]
 .endif
-    add  x11, _cpu, CPU_mm
-    str  x12, [x11, x10, lsl 3]
+    add  x11, _cpu, CPU_fp
+    add  x16, x11, x10, lsl 4
+    str  x12, [x16]
     gret 3
     amd64_vread_bullshit \vb, mmx_\name
 .endm
@@ -6081,8 +6085,9 @@ amd64_mmx_load load64, 8
     ubfx x10, x8, 8, 3
     amd64_vmem_addr
     amd64_vwrite_prep \vb, mmx_\name
-    add  x11, _cpu, CPU_mm
-    ldr  x12, [x11, x10, lsl 3]
+    add  x11, _cpu, CPU_fp
+    add  x16, x11, x10, lsl 4
+    ldr  x12, [x16]
 .if \vb == 4
     str  w12, [x9]
 .else
@@ -6104,8 +6109,9 @@ amd64_mmx_store store64, 8
     ldr  x12, [x11, x9, lsl 3]
     tbnz x8, 8, 1f
     mov  w12, w12
-1:  add  x11, _cpu, CPU_mm
-    str  x12, [x11, x10, lsl 3]
+1:  add  x11, _cpu, CPU_fp
+    add  x16, x11, x10, lsl 4
+    str  x12, [x16]
     gret 1
 
 # MOVD/MOVQ r32/r64, mm (0F 7E mod 3): [mm (0-2) | gpr (4-7) | 64-bit (8)], gret 1
@@ -6113,8 +6119,9 @@ amd64_mmx_store store64, 8
     ldr  x8, [_ip]
     and  x9, x8, 7
     ubfx x10, x8, 4, 4
-    add  x11, _cpu, CPU_mm
-    ldr  x12, [x11, x9, lsl 3]
+    add  x11, _cpu, CPU_fp
+    add  x16, x11, x9, lsl 4
+    ldr  x12, [x16]
     tbnz x8, 8, 1f
     mov  w12, w12                    /* a 32-bit GPR write zero-extends */
 1:  add  x11, _cpu, CPU_amd64_regs
@@ -6127,8 +6134,9 @@ amd64_mmx_store store64, 8
     ldr  x8, [_ip]
     and  x9, x8, 7
     ubfx x10, x8, 4, 4
-    add  x11, _cpu, CPU_mm
-    ldr  d0, [x11, x9, lsl 3]        /* the upper half is zeroed */
+    add  x11, _cpu, CPU_fp
+    add  x16, x11, x9, lsl 4
+    ldr  d0, [x16]        /* the upper half is zeroed */
     add  x11, _cpu, CPU_xmm
     add  x11, x11, x10, lsl 4
     str  q0, [x11]
@@ -6140,8 +6148,9 @@ amd64_mmx_store store64, 8
     add  x11, _cpu, CPU_xmm
     add  x11, x11, x9, lsl 4
     ldr  x12, [x11]
-    add  x11, _cpu, CPU_mm
-    str  x12, [x11, x10, lsl 3]
+    add  x11, _cpu, CPU_fp
+    add  x16, x11, x10, lsl 4
+    str  x12, [x16]
     gret 1
 
 # PMOVMSKB r32, mm (0F D7): the eight sign bits. [mm (0-2) | gpr (4-7)], gret 1
@@ -6149,8 +6158,9 @@ amd64_mmx_store store64, 8
     ldr  x8, [_ip]
     and  x9, x8, 7
     ubfx x10, x8, 4, 4
-    add  x11, _cpu, CPU_mm
-    ldr  d0, [x11, x9, lsl 3]
+    add  x11, _cpu, CPU_fp
+    add  x16, x11, x9, lsl 4
+    ldr  d0, [x16]
     ushr v0.8b, v0.8b, 7
     usra v0.4h, v0.4h, 7
     usra v0.2s, v0.2s, 14
@@ -6166,8 +6176,8 @@ amd64_mmx_store store64, 8
     and  x9, x8, 7
     ubfx x10, x8, 4, 4
     ubfx x12, x8, 8, 2
-    add  x11, _cpu, CPU_mm
-    add  x11, x11, x9, lsl 3
+    add  x11, _cpu, CPU_fp
+    add  x11, x11, x9, lsl 4
     ldrh w13, [x11, x12, lsl 1]
     add  x11, _cpu, CPU_amd64_regs
     str  x13, [x11, x10, lsl 3]
@@ -6182,8 +6192,8 @@ amd64_mmx_store store64, 8
     ubfx x12, x8, 8, 2
     add  x11, _cpu, CPU_amd64_regs
     ldr  x13, [x11, x9, lsl 3]
-    add  x11, _cpu, CPU_mm
-    add  x11, x11, x10, lsl 3
+    add  x11, _cpu, CPU_fp
+    add  x11, x11, x10, lsl 4
     strh w13, [x11, x12, lsl 1]
     gret 1
 .gadget amd64_mmx_pinsrw_mem
@@ -6195,8 +6205,8 @@ amd64_mmx_store store64, 8
     ldrh w13, [x9]
     ldr  x12, [_ip, 24]
     and  x12, x12, 3
-    add  x11, _cpu, CPU_mm
-    add  x11, x11, x10, lsl 3
+    add  x11, _cpu, CPU_fp
+    add  x11, x11, x10, lsl 4
     strh w13, [x11, x12, lsl 1]
     gret 4
     amd64_vread_bullshit 2, mmx_pinsrw_mem
@@ -6219,9 +6229,10 @@ amd64_mmx_store store64, 8
     and  x9, x8, 7
     ubfx x10, x8, 4, 3
     ubfx x14, x8, 8, 8
-    add  x11, _cpu, CPU_mm
-    ldr  x13, [x11, x9, lsl 3]
-    add  x15, x11, x10, lsl 3
+    add  x11, _cpu, CPU_fp
+    add  x16, x11, x9, lsl 4
+    ldr  x13, [x16]
+    add  x15, x11, x10, lsl 4
     amd64_pshufw_body
     gret 1
 .gadget amd64_mmx_pshufw_mem
@@ -6232,8 +6243,8 @@ amd64_mmx_store store64, 8
     amd64_vread_prep 8, mmx_pshufw_mem
     ldr  x13, [x9]
     ldr  x14, [_ip, 24]
-    add  x11, _cpu, CPU_mm
-    add  x15, x11, x10, lsl 3
+    add  x11, _cpu, CPU_fp
+    add  x15, x11, x10, lsl 4
     amd64_pshufw_body
     gret 4
     amd64_vread_bullshit 8, mmx_pshufw_mem
@@ -6261,9 +6272,11 @@ amd64_mmx_store store64, 8
 3:
     amd64_vwrite_prep \vb, \name
 .if \vb == 8
-    add  x11, _cpu, CPU_mm
-    ldr  d0, [x11, x24, lsl 3]
-    ldr  d1, [x11, x25, lsl 3]
+    add  x11, _cpu, CPU_fp
+    add  x16, x11, x24, lsl 4
+    ldr  d0, [x16]
+    add  x16, x11, x25, lsl 4
+    ldr  d1, [x16]
     ldr  d2, [x9]
     cmlt v1.8b, v1.8b, 0
     bsl  v1.8b, v0.8b, v2.8b
@@ -7233,16 +7246,17 @@ xf_cvtsi cvtsi2sd, d
     and  x9, x8, 0xf
     ubfx x10, x8, 4, 4
 .ifc \kind,pi2
-    add  x11, _cpu, CPU_mm
-    ldr  d1, [x11, x9, lsl 3]
+    add  x11, _cpu, CPU_fp
+    add  x16, x11, x9, lsl 4
+    ldr  d1, [x16]
     add  x14, _cpu, CPU_xmm
     add  x14, x14, x10, lsl 4
 .else
     add  x11, _cpu, CPU_xmm
     add  x9, x11, x9, lsl 4
     ldr  q1, [x9]
-    add  x14, _cpu, CPU_mm
-    add  x14, x14, x10, lsl 3
+    add  x14, _cpu, CPU_fp
+    add  x14, x14, x10, lsl 4
 .endif
     xf_mmxcvt_body \name
     gret 1
@@ -7262,8 +7276,8 @@ xf_cvtsi cvtsi2sd, d
     add  x14, x14, x10, lsl 4
 .else
     and  x10, x10, 7
-    add  x14, _cpu, CPU_mm
-    add  x14, x14, x10, lsl 3
+    add  x14, _cpu, CPU_fp
+    add  x14, x14, x10, lsl 4
 .endif
     xf_mmxcvt_body \name
     gret 4
