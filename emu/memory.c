@@ -799,9 +799,14 @@ void mem_init(struct mem *mem) {
     mem->mmu.jit = jit_new(&mem->mmu);
 #endif
     // Seed each new address space with a unique change id so a per-thread TLB
-    // flushes even if malloc reuses the same mmu address after exec/exit.
+    // flushes even if malloc reuses the same mmu address after exec/exit. The
+    // id goes in the high 32 bits: the count then climbs from there by one per
+    // change, so two address spaces' counts meet only after 2^32 changes. With
+    // consecutive ids as the seed they met all the time -- A seeded 100 with 50
+    // changes and B seeded 105 with 45 both read 150 -- and a B at A's old
+    // address kept A's TLB entries (tlb_refresh compares only mmu and count).
     atomic_store_explicit(&mem->mmu.changes,
-            atomic_fetch_add_explicit(&next_mem_change_id, 1, memory_order_relaxed),
+            atomic_fetch_add_explicit(&next_mem_change_id, 1, memory_order_relaxed) << 32,
             memory_order_relaxed);
     wrlock_init(&mem->lock);
     pthread_mutex_init(&mem->pt_alloc_lock, NULL);
