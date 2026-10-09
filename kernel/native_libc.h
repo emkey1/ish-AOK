@@ -59,6 +59,7 @@
 #ifndef NATIVE_LIBC_OWN_GLOB
 #include <glob.h>
 #endif
+#include <fnmatch.h>
 #include <poll.h>
 #include <setjmp.h>
 #include <signal.h>
@@ -409,6 +410,8 @@ int nlibc_statfs(const char *path, void *buf);
 #ifndef NATIVE_LIBC_OWN_GLOB
 int nlibc_glob(const char *pattern, int flags, void *errfunc, void *pglob);
 #endif
+/* glibc's pattern rules, not Darwin's: kernel/native_fnmatch.c. */
+int nlibc_fnmatch(const char *pattern, const char *string, int flags);
 
 /* Host-global state: clock, hostname, mount table, power. See the .c. */
 struct timespec;
@@ -949,6 +952,9 @@ const char *nlibc_dlerror(void);
 #ifndef NATIVE_LIBC_OWN_GLOB
 #define glob        nlibc_glob
 #endif
+/* Darwin's refuses a `[` that opens no bracket expression, which glibc and
+ * POSIX match as itself (`find -name 'a[b'`); see kernel/native_fnmatch.c. */
+#define fnmatch     nlibc_fnmatch
 
 /* Function-like: `mount` is also a struct tag in places, and these should only
  * ever rewrite an actual call. */

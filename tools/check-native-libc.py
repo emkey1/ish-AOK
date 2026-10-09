@@ -43,7 +43,7 @@ PURE = {
     "strncmp", "strcasecmp", "strncasecmp", "strchr", "strrchr", "strstr",
     "strcasestr", "strdup", "strndup", "strspn", "strcspn", "strpbrk", "strtok",
     "strtok_r", "strsep", "strerror", "strsignal", "basename", "dirname",
-    "fnmatch", "mbrtowc", "wcwidth", "swab",
+    "mbrtowc", "wcwidth", "swab",
     # allocation
     "malloc", "calloc", "realloc", "free", "reallocf", "posix_memalign",
     "open_memstream",   # memory-backed FILE; touches nothing

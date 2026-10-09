@@ -4,7 +4,7 @@
 
 # Appendix F. The regression suite, annotated
 
-585 C programs in `tests/manual/`, of which **539 are listed in `fs/aok-tests.manifest`** and therefore reach the device at `/AOK/tests`.
+586 C programs in `tests/manual/`, of which **540 are listed in `fs/aok-tests.manifest`** and therefore reach the device at `/AOK/tests`.
 
 A row with a directory prefix is a per-architecture or accelerator test, kept
 in a subdirectory of `tests/manual/` and registered under that same prefix.
@@ -219,6 +219,7 @@ does not say what it is for.
 | `native_coreutils.c` | yes | native_coreutils.c -- SmallCLUE's ls, rm, wc, head, tail, sort, cp, mv, date, chmod, xargs, find and grep against the answers of GNU coreutils... |
 | `native_dash_patterns.c` | yes | native_dash_patterns.c -- native dash's pattern matching against Debian's dash 0.5.12 (camd, glibc). |
 | `native_exec_cloexec.c` | yes | An exec closes every descriptor marked close-on-exec. iSH-AOK's native dispatch (kernel/native.h) did not: it runs the program in place of the... |
+| `native_fnmatch_applets.c` | yes | native_fnmatch_applets.c -- SmallCLUE's pattern options against GNU's answers: find -name/-iname/-path, ls -I/--hide, grep --include/--exclude,... |
 | `native_ln.c` | yes | native_ln.c -- SmallCLUE's ln against GNU coreutils 9's behaviour. |
 | `native_ptrace_group_stop.c` | yes | A NATIVE program that group-stops must report the stop to its tracer, the same way a translated one does. |
 | `native_sed.c` | yes | native_sed.c -- SmallCLUE's sed against GNU sed 4.9's answers. |

@@ -239,6 +239,7 @@ stat_time_range.c
 anon_inode_names.c
 tty_hangup_leader_only.c
 native_dash_patterns.c
+native_fnmatch_applets.c
 creds_groups_access.c
 sock_optlen.c
 inotify_events.c

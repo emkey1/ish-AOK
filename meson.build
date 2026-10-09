@@ -628,6 +628,7 @@ src = [
     'kernel/native_root.c',
     'kernel/foreign_exec.c',
     'kernel/native_libc.c',
+    'kernel/native_fnmatch.c',
     'kernel/native_tz.c',
     'kernel/sha_crypt.c',
     'kernel/native_kqueue.c',
