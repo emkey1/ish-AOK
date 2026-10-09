@@ -111,6 +111,7 @@ struct PaletteTextFields {
     [_darkOverrideSwitch addTarget:self action:@selector(touchedOverrideSwitch:) forControlEvents:UIControlEventValueChanged];
     
     self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:NSLocalizedString(@"Duplicate", @"Theme editor button that copies the theme") style:UIBarButtonItemStylePlain target:self action:@selector(duplicate:)];
+    self.navigationItem.rightBarButtonItem.accessibilityHint = NSLocalizedString(@"Creates a copy of the current theme for editing.", @"Accessibility hint for the theme duplication button");
 }
 
 - (void)duplicate:(UIBarButtonItem *)sender {
