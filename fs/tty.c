@@ -1704,8 +1704,14 @@ struct tty_hangup_targets tty_hangup(struct tty *tty) {
     // Captured before anything else: the caller may clear these itself (the
     // session leader's own exit does), and the signal has to reflect who was
     // attached when the terminal went away.
+    // The session leader only, as Linux's tty_signal_session_leader does: not
+    // the foreground group, which hears of it when the leader exits (its
+    // tty_old_pgrp; here the tty keeps its fg_group, and exit_hangup_session_tty
+    // signals that). Measured on 6.12: su under a pty whose master closes gets
+    // SIGHUP; its child in su's own group, no job control, gets nothing and
+    // runs on. AOK signalled the foreground group too, and the child died.
     struct tty_hangup_targets targets = {
-        .fg_group = tty->fg_group,
+        .fg_group = 0,
         .session = tty->session,
     };
     tty->hung_up = true;
@@ -1732,19 +1738,21 @@ struct tty_hangup_targets tty_hangup(struct tty *tty) {
 
 // A terminal going away is how a shell learns its session is over -- an ssh
 // disconnect, a closed terminal window, the last master of a pty closing.
-// Linux signals the foreground group and the session leader with SIGHUP and
-// then SIGCONT (the SIGCONT so a stopped job runs far enough to notice the
-// SIGHUP). AOK woke every reader and poller but signalled nobody, so a shell
-// sat in its read loop on a terminal that no longer existed.
+// Linux signals the session leader with SIGHUP and then SIGCONT (the SIGCONT
+// so a stopped leader runs far enough to notice the SIGHUP); the rest of the
+// session hears when the leader goes. AOK woke every reader and poller but
+// signalled nobody, so a shell sat in its read loop on a terminal that no
+// longer existed. TIOCNOTTY by a leader names the foreground group instead.
 void tty_hangup_notify(struct tty_hangup_targets targets) {
     if (targets.fg_group != 0) {
         send_group_signal(targets.fg_group, SIGHUP_, SIGINFO_NIL);
         send_group_signal(targets.fg_group, SIGCONT_, SIGINFO_NIL);
     }
-    // The session leader too, unless the foreground group already covered it.
-    if (targets.session != 0 && targets.session != targets.fg_group) {
-        send_group_signal(targets.session, SIGHUP_, SIGINFO_NIL);
-        send_group_signal(targets.session, SIGCONT_, SIGINFO_NIL);
+    // The leader's process, not its process group (send_signal_locked to
+    // PIDTYPE_TGID): a member of the leader's group is not a leader.
+    if (targets.session != 0) {
+        send_tgid_signal(targets.session, SIGHUP_, SIGINFO_NIL);
+        send_tgid_signal(targets.session, SIGCONT_, SIGINFO_NIL);
     }
 }
 

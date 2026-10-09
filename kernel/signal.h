@@ -315,6 +315,9 @@ int_t signal_eintr_no_restart(int_t res);
 bool signal_is_ignored_or_blocked(int sig);
 // send a signal to all processes in a group, could return ESRCH
 int send_group_signal(dword_t pgid, int sig, struct siginfo_ info);
+// Signal the one process whose id is TGID, for the kernel's own senders (a
+// hangup's SIGHUP to a session leader). _ESRCH when it is gone or going.
+int send_tgid_signal(dword_t tgid, int sig, struct siginfo_ info);
 // check for and deliver pending signals on current
 // must be called without pids_lock, current->group->lock, or current->sighand->lock
 void receive_signals(void);

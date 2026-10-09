@@ -101,10 +101,9 @@ static void check_sync_files(int dmabuf, int fence_fd) {
     ck("  close-on-exec", fcntl(s.fd, F_GETFD), FD_CLOEXEC);
     char path[64], link[64] = "";
     snprintf(path, sizeof(path), "/proc/self/fd/%d", s.fd);
-    // Linux: "anon_inode:sync_file". AOK brackets every unbracketed class
-    // (docs/TODO.md, "anon_inode link names"), so either spelling passes.
+    // Linux: "anon_inode:sync_file", no brackets
     ck("  an anon_inode sync_file", readlink(path, link, sizeof(link) - 1) > 0 &&
-       (strcmp(link, "anon_inode:sync_file") == 0 || strcmp(link, "anon_inode:[sync_file]") == 0), 1);
+       strcmp(link, "anon_inode:sync_file") == 0, 1);
     struct pollfd pfd = {.fd = s.fd, .events = POLLIN};
     ck("  polls readable at once", poll(&pfd, 1, 0), 1);
     struct sync_file_info_ info = {0};

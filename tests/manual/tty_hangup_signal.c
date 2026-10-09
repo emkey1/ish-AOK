@@ -1,9 +1,10 @@
-// A terminal going away signals the session leader and foreground group.
+// A terminal going away signals its session leader.
 //
 // This is how a shell learns its session is over -- an ssh disconnect, a
 // terminal window closing, the last master of a pty being closed. Linux sends
-// SIGHUP and then SIGCONT (the SIGCONT so a stopped job runs far enough to
-// notice the SIGHUP). AOK's tty_hangup woke every reader and poller and
+// the session leader SIGHUP and then SIGCONT (the SIGCONT so a stopped leader
+// runs far enough to notice the SIGHUP); the rest of its foreground group
+// hears when the leader exits (tty_hangup_leader_only.c). AOK's tty_hangup woke every reader and poller and
 // signalled nobody, so a shell sat in its read loop on a terminal that no
 // longer existed.
 //

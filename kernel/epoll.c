@@ -510,7 +510,7 @@ static int epoll_poll(struct fd *fd) {
 
 static struct fd_ops epoll_ops = {
     .name = "epoll",
-    .anon_inode_class = "eventpoll",
+    .anon_inode_class = "[eventpoll]",
     .poll = epoll_poll,
     .close = epoll_close,
 };

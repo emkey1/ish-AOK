@@ -644,8 +644,9 @@ struct fd_ops {
     // handle F_SETFL, i.e. set O_NONBLOCK
     int (*setflags)(struct fd *fd, dword_t arg);
 
-    // For adhoc fds shown in /proc/<pid>/fd as "anon_inode:[<class>]"
-    // (eventfd, eventpoll, signalfd, timerfd, inotify). NULL when the type is
+    // For adhoc fds shown in /proc/<pid>/fd as "anon_inode:<class>", the
+    // class spelled as Linux spells it ("[eventfd]", "[timerfd]", "inotify");
+    // one beginning with '/' is shown whole ("/dmabuf:"). NULL when the type is
     // taken from stat.mode instead (sockets -> socket:, pipes -> pipe:).
     const char *anon_inode_class;
 

@@ -1182,7 +1182,7 @@ static int prime_ioctl(struct fd *fd, int cmd, void *arg) {
 
 static const struct fd_ops vgpu_prime_ops = {
     .name = "dmabuf",
-    .anon_inode_class = "dmabuf",
+    .anon_inode_class = "/dmabuf:",
     .mmap = prime_mmap,
     .lseek = prime_lseek,
     .poll = prime_poll,
@@ -1644,7 +1644,7 @@ static int input_close(struct fd *fd) {
 
 static const struct fd_ops vgpu_input_ops = {
     .name = "aok-input",
-    .anon_inode_class = "aok-input",
+    .anon_inode_class = "[aok-input]",
     .read = input_read,
     .poll = input_poll,
     .close = input_close,

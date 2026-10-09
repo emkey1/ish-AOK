@@ -754,6 +754,11 @@ static void exit_hangup_session_tty(struct task *leader, struct tty_hangup_targe
     lock(&tty->lock, 0);
     hup->fg_group = tty->fg_group;
     hup->session = 0;
+    // A terminal already hung up signalled only the leader then; its
+    // foreground group hears now, SIGHUP and SIGCONT both (Linux: the
+    // tty_old_pgrp branch of disassociate_ctty, the tty having been taken
+    // from the session by the hangup).
+    hup->exit_cont = tty->hung_up;
     tty->session = 0;
     tty->fg_group = 0;
     // Only a real terminal is hung up as a device. Doing it to a pty is what
@@ -1294,8 +1299,11 @@ noreturn void do_exit(struct task *task, int status) {
         free(sigqueue);
     }
 
-    if (tty_hup.fg_group != 0)
+    if (tty_hup.fg_group != 0) {
         send_group_signal(tty_hup.fg_group, SIGHUP_, SIGINFO_NIL);
+        if (tty_hup.exit_cont)
+            send_group_signal(tty_hup.fg_group, SIGCONT_, SIGINFO_NIL);
+    }
 
     // Each child's parent-death signal, then the orphaned-group rule for the
     // children's groups, then for our own: the order Linux's exit_notify

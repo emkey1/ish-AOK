@@ -99,8 +99,8 @@ static int adhoc_fsetattr(struct fd *fd, struct attr attr) {
 
 static int adhoc_getpath(struct fd *fd, char *buf) {
     // Render the way Linux does in /proc/<pid>/fd: sockets and pipes show their
-    // type plus inode; everything else is anon_inode:[class], where the class
-    // (eventfd, eventpoll, signalfd, ...) comes from the fd's ops. Previously
+    // type plus inode; everything else is anon_inode:<class>, where the class
+    // ("[eventfd]", "[eventpoll]", "inotify", ...) comes from the fd's ops. Previously
     // every adhoc fd reported "anon_inode:[unknown]" with a zero inode, so lsof
     // could not classify sockets/eventfds (the listener of a daemon like sshd
     // showed up as an unstattable anon_inode).
@@ -115,14 +115,17 @@ static int adhoc_getpath(struct fd *fd, char *buf) {
         ;
     else {
         const char *cls = (fd->ops != NULL && fd->ops->anon_inode_class != NULL)
-            ? fd->ops->anon_inode_class : "anon_inode";
-        // Two classes spell their own brackets -- "[pidfd]" and "[fscontext]" --
-        // and wrapping those again produced `anon_inode:[[pidfd]]', which is not
-        // what any reader expects to parse. Seen on elogind, which holds three.
-        if (cls[0] == '[')
-            snprintf(buf, MAX_PATH, "anon_inode:%s", cls);
+            ? fd->ops->anon_inode_class : "[anon_inode]";
+        // The class is printed as spelled, brackets or not, as Linux prints
+        // the name its anon_inode_getfd caller passed: "[eventfd]" but
+        // "inotify" and "sync_file" (6.12). AOK bracketed every bare class,
+        // and lsof-like readers parse these. One that begins with '/' is a
+        // pseudo-filesystem's own name, printed whole: a dma-buf is "/dmabuf:"
+        // (its d_dname, "/dmabuf:<name>", with no name set).
+        if (cls[0] == '/')
+            snprintf(buf, MAX_PATH, "%s", cls);
         else
-            snprintf(buf, MAX_PATH, "anon_inode:[%s]", cls);
+            snprintf(buf, MAX_PATH, "anon_inode:%s", cls);
     }
     return 0;
 }

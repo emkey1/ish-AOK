@@ -1811,6 +1811,9 @@ if have_dash
         # declares its own stpcpy/strtod/killpg against the real ones, and
         # cd.c uses stat64, which config.h is what maps to stat here.
         '-include', meson.current_source_dir() / dash_dir / 'config.h',
+        # ...and what of it is overridden: dash's own pattern matcher, not
+        # Darwin's fnmatch (the reasons are in the file).
+        '-include', meson.current_source_dir() / 'kernel/dash_config_aok.h',
         # THE SHIM, and dash is useless without it. A native program compiled
         # against the HOST's libc calls the host's everything: its open() writes
         # to the Mac rather than the guest, and its fork() forks the entire

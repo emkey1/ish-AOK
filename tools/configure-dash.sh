@@ -25,9 +25,11 @@
 # competing for the same descriptor. The interactive editing a user wants is
 # zsh's; dash is here to be /bin/sh.
 #
-# --disable-fnmatch and --disable-glob are NOT passed. dash's bundled versions
-# exist for platforms whose libc ones are broken, and using the shim's means one
-# implementation of the pattern rules rather than two that can disagree.
+# --disable-glob is NOT passed (dash's own expmeta is used either way). Nor is
+# --disable-fnmatch, though dash's own matcher IS what the build uses: the
+# host's fnmatch is Darwin's, which refuses an unclosed `[` that POSIX matches
+# literally, and kernel/dash_config_aok.h undefines HAVE_FNMATCH after this
+# config.h -- so an already-configured tree is right without re-running this.
 set -e
 
 if [ ! -f ./configure ] || [ ! -f ./src/aok_mksignames.c ]; then

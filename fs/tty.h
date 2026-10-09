@@ -313,12 +313,14 @@ void tty_reset_termios_to_default(struct tty *tty);
 // sending a signal takes pids_lock, and fs/tty.c's input path already
 // establishes that signals go out only after tty->lock is released.
 struct tty_hangup_targets {
-    pid_t_ fg_group;
-    pid_t_ session;
+    pid_t_ fg_group;    // SIGHUP, then SIGCONT, to this process group
+    pid_t_ session;     // SIGHUP, then SIGCONT, to this session's leader alone
+    bool exit_cont;     // a leader's exit (do_exit sends): SIGCONT after its SIGHUP
 };
 struct tty_hangup_targets tty_hangup(struct tty *tty);
-// SIGHUP (then SIGCONT, as Linux does) to the foreground group and session
-// leader of a terminal that has gone away. Call with no tty lock held.
+// SIGHUP (then SIGCONT, as Linux does) to the targets tty_hangup or TIOCNOTTY
+// named: the session leader of a terminal that has gone away, or the
+// foreground group of one its leader let go of. Call with no tty lock held.
 void tty_hangup_notify(struct tty_hangup_targets targets);
 bool tty_stat_rdev(dev_t_ rdev, struct statbuf *stat);
 

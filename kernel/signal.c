@@ -2256,7 +2256,7 @@ static int signalfd_close(struct fd *fd) {
 
 static struct fd_ops signalfd_ops = {
     .name = "signalfd",
-    .anon_inode_class = "signalfd",
+    .anon_inode_class = "[signalfd]",
     .read = signalfd_read,
     .poll = signalfd_poll,
     .close = signalfd_close,
@@ -2770,6 +2770,21 @@ retry:
     }
     if (targets != stack_targets)
         free(targets);
+    return 0;
+}
+
+int send_tgid_signal(dword_t tgid, int sig, struct siginfo_ info) {
+    complex_lockt(&pids_lock, 0);
+    struct task *task = pid_get_task(tgid);
+    if (task == NULL || task->group == NULL || task->group->leader != task ||
+            !tgroup_live_locked(task->group)) {
+        unlock(&pids_lock);
+        return _ESRCH;
+    }
+    task_ref_cnt_mod(task, 1);
+    unlock(&pids_lock);
+    send_signal_to_process(task, sig, info);
+    task_ref_cnt_mod(task, -1);
     return 0;
 }
 

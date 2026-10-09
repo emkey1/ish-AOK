@@ -4,7 +4,7 @@
 
 # Appendix F. The regression suite, annotated
 
-582 C programs in `tests/manual/`, of which **536 are listed in `fs/aok-tests.manifest`** and therefore reach the device at `/AOK/tests`.
+585 C programs in `tests/manual/`, of which **539 are listed in `fs/aok-tests.manifest`** and therefore reach the device at `/AOK/tests`.
 
 A row with a directory prefix is a per-architecture or accelerator test, kept
 in a subdirectory of `tests/manual/` and registered under that same prefix.
@@ -25,6 +25,7 @@ does not say what it is for.
 | `aio_basic.c` | yes | Linux native AIO (the io_* family), which iSH-AOK stubbed to ENOSYS until MariaDB dereferenced the nullptr that came back and crash-looped on install. |
 | `aio_threads.c` | yes | AIO under concurrency, which is the way MariaDB uses it: many threads sharing one context, and a teardown that can land while they are still... |
 | `ambient_caps.c` | yes | Ambient capabilities + SECBIT_KEEP_CAPS across a root-to-nonroot uid transition -- the exact sequence systemd's executor runs for every service... |
+| `anon_inode_names.c` | yes | anon_inode_names.c -- what readlink(/proc/self/fd/N) says for the anonymous inode family. Linux prints the name each anon_inode_getfd caller... |
 | `aokfs_mmap.c` | yes | aokfs_mmap.c — regression lock for mmap of files under /AOK. |
 | `arm64/alu_ospec.c` | yes | Scalar integer ALU on the arm64 JIT: add/sub/adds/subs/cmp/cmn immediate and register (and LSL-shifted add/sub), and/orr/eor/ands register and... |
 | `arm64/ands_bcond_fusion.c` | yes | Regression coverage for jit/guest-arm64/control.S's ANDS+B.cond gadget fusion (fused_andsi/fused_andsr, wired in gen.c's opc==3 peek-ahead in... |
@@ -216,6 +217,7 @@ does not say what it is for.
 | `name_to_handle_at.c` | yes | name_to_handle_at / open_by_handle_at must return a clean errno on amd64. |
 | `namespace_errno.c` | yes | What clone() and unshare() answer, as root, for each namespace flag. |
 | `native_coreutils.c` | yes | native_coreutils.c -- SmallCLUE's ls, rm, wc, head, tail, sort, cp, mv, date, chmod, xargs, find and grep against the answers of GNU coreutils... |
+| `native_dash_patterns.c` | yes | native_dash_patterns.c -- native dash's pattern matching against Debian's dash 0.5.12 (camd, glibc). |
 | `native_exec_cloexec.c` | yes | An exec closes every descriptor marked close-on-exec. iSH-AOK's native dispatch (kernel/native.h) did not: it runs the program in place of the... |
 | `native_ln.c` | yes | native_ln.c -- SmallCLUE's ln against GNU coreutils 9's behaviour. |
 | `native_ptrace_group_stop.c` | yes | A NATIVE program that group-stops must report the stop to its tracer, the same way a translated one does. |
@@ -408,8 +410,9 @@ does not say what it is for.
 | `tmpfs_statfs.c` | yes | tmpfs statfs: block/inode counts for tmpfs mounts (/tmp, /run, /dev/shm). |
 | `tty_canon_queue.c` | yes | What a canonical terminal says is waiting, and what it hands over. |
 | `tty_ctty_ioctls.c` | yes | Controlling-terminal ownership, and the terminal ioctls AOK never wired up. |
+| `tty_hangup_leader_only.c` | yes | tty_hangup_leader_only.c -- a pty hangup signals the session leader, not its foreground group; the group hears when the leader exits. |
 | `tty_hangup_reopen.c` | yes | A hangup is scoped to the descriptors open when it happened. Linux hands a fresh open() of the same terminal a WORKING tty; the EIO belongs to the... |
-| `tty_hangup_signal.c` | yes | A terminal going away signals the session leader and foreground group. |
+| `tty_hangup_signal.c` | yes | A terminal going away signals its session leader. |
 | `tty_job_control.c` | yes | Job control and XON/XOFF flow control: four things AOK's terminals did not do. |
 | `tty_line_discipline.c` | yes | Line-discipline editing and the non-canonical read timer. |
 | `udp_suspend_rebuild.c` | — | A bound UDP socket through an iOS suspension (fs/sockrestart.c). iOS defuncts every TCP and UDP socket of a suspended app; a defunct UDP socket... |
