@@ -5955,6 +5955,15 @@ int nlibc_sigprocmask(int how, const sigset_t *set, sigset_t *oldset) {
     (void) old;
     if (oldset != NULL)
         nlibc_sigset_from_guest(prev_prog, oldset);
+
+    // A signal this call unblocked is delivered before it returns, which is
+    // when Linux delivers it. The call's own syscall checkpointed BEFORE the
+    // change, while the signal was still blocked, so without this it would
+    // wait for whatever syscall the program happens to make next -- and a
+    // program that unblocks and then tests a flag its handler sets would act
+    // on state the handler had not updated yet.
+    if (current != NULL && (prev_prog & ~current->native_prog_blocked) != 0)
+        native_checkpoint();
     return 0;
 }
 
@@ -6163,6 +6172,20 @@ int nlibc_deliver_signals_count(void) {
         if (guest_sig != 0)
             ours |= (sigset_t_) 1 << (guest_sig - 1);
     }
+    // ...and not blocked by the PROGRAM. The kernel's mask cannot say this --
+    // every signal with a handler here is blocked there, so that it waits for
+    // a checkpoint -- so the program's own mask is native_prog_blocked, and a
+    // signal in it stays pending until the program unblocks it, as on Linux.
+    //
+    // Taking it anyway ran zsh's SIGCHLD handler inside the very section zsh
+    // had blocked SIGCHLD to protect. zwaitjob blocks it, then walks the job's
+    // descriptor list closing each one; a child that exited during the walk
+    // had its SIGCHLD delivered at that close's checkpoint, the handler found
+    // the job done and deleted it -- list and nodes freed -- and the walk went
+    // on through the freed nodes: a host bad access in pipecleanfilelist, and
+    // the whole app aborted (build 557, iPhone17,5, three times in an hour).
+    if (current != NULL)
+        ours &= ~current->native_prog_blocked;
     if (ours == 0)
         return 0;
 
@@ -8745,51 +8768,30 @@ int nlibc_execve(const char *path, char *const argv[], char *const envp[]) {
 // exited rather than collecting its status.
 int nlibc_sigsuspend(const sigset_t *mask) {
     struct timespec *forever = NULL;
-    // MASK is the program's blocked set FOR THE DURATION, and saying so to the
-    // shim is the whole point rather than bookkeeping.
-    //
-    // struct task's native_held is `shim_held & ~native_prog_blocked` -- the
-    // signals the shim is holding behind the program's back, which
-    // task_wake_blocked() subtracts so that a wait still ends for them. A
-    // signal the PROGRAM blocked is deliberately not in there: it asked not to
-    // be interrupted.
+    // MASK is the program's blocked set FOR THE DURATION, and nlibc_pselect
+    // says so to the shim as well as to the kernel. Both halves of that were
+    // found here first, as hangs:
     //
     // zsh waits for a child inside child_block(), which blocks SIGCHLD, and
     // then calls sigsuspend with an (almost) empty mask -- "unblock SIGCHLD
-    // while I sleep". Without this, native_prog_blocked still said SIGCHLD was
-    // the program's own choice, native_held did not include it, and the
-    // pselect6 the wait rides on was never interrupted by the child's exit.
-    // The shell hung after its first external command, forever, with a zombie
-    // sitting there.
-    // Deliver first, and do not block if anything was waiting.
+    // while I sleep". With native_prog_blocked still saying SIGCHLD was the
+    // program's own choice, native_held did not include it, and the pselect6
+    // the wait rides on was never interrupted by the child's exit. The shell
+    // hung after its first external command, forever, with a zombie sitting
+    // there.
     //
-    // This is the other half of the hang, and it is a sequencing problem rather
-    // than a masking one. Handlers run at a syscall CHECKPOINT, so a SIGCHLD
-    // that interrupts this wait is not delivered until the NEXT syscall the
-    // program makes -- and for zsh that next syscall is the following
-    // sigsuspend, which checkpoints (running the handler, which reaps the
-    // child and marks the job done) and then blocks anyway, on a condition
-    // that has just stopped being true and will never be signalled again.
-    //
-    // Delivering before the wait and reporting it as EINTR gives the caller its
-    // chance to re-test.
-    if (nlibc_deliver_signals_count() > 0) {
-        errno = EINTR;
-        return -1;
-    }
-    sigset_t_ saved = 0;
-    bool tracked = current != NULL;
-    if (tracked) {
-        saved = current->native_prog_blocked;
-        current->native_prog_blocked = mask != NULL ? nlibc_sigset_to_guest(mask) : 0;
-        nlibc_update_held_signals();
-    }
-    nlibc_pselect(0, NULL, NULL, NULL, forever, mask);
-    if (tracked) {
-        current->native_prog_blocked = saved;
-        nlibc_update_held_signals();
-    }
-    nlibc_deliver_signals_count();
+    // And a SIGCHLD already pending has to run BEFORE the wait, which then
+    // does not start: handlers run at a syscall checkpoint, and one taken by
+    // the checkpoint in front of the wait (reaping the child, marking the job
+    // done) was followed by a wait on a condition that had just stopped being
+    // true and would never be signalled again. nlibc_pselect reports that as
+    // EINTR, which gives the caller its chance to re-test.
+    sigset_t none;
+    sigemptyset(&none);
+    nlibc_pselect(0, NULL, NULL, NULL, forever, mask != NULL ? mask : &none);
+    // What the restored mask lets through, and the wait's own did not.
+    if (!nlibc_delivery_deferred())
+        nlibc_deliver_signals_count();
     // sigsuspend has no success return: it comes back only when a handler has
     // run, and always as -1/EINTR.
     errno = EINTR;
@@ -8801,8 +8803,43 @@ int nlibc_sigsuspend(const sigset_t *mask) {
 // select with a timespec and a signal mask. nlibc_select already goes through
 // pselect6 because that is the only one the guest has; this is the same call
 // with the two arguments select cannot express.
+static int nlibc_pselect_wait(int nfds, void *readfds, void *writefds,
+        void *errorfds, const struct timespec *timeout, const sigset_t *sigmask);
+
+// SIGMASK is the program's blocked set FOR THE DURATION, and the shim has to
+// be told so, not just the kernel: a handled signal is delivered only when the
+// program's own mask (native_prog_blocked) lets it through, and struct task's
+// native_held -- what ends the wait -- is computed from the same mask. The
+// pattern this is for is "block X; loop { pselect(..., mask without X) }":
+// zsh's sigsuspend and OpenSSH's ppoll both have it, and X has to interrupt the
+// wait and run its handler there, not wait for the program to unblock it.
+//
+// A signal the mask lets through that is ALREADY pending runs first, and the
+// wait does not start: that is what the kernel would do with it, and handlers
+// run only at checkpoints, so one taken by the checkpoint in front of the wait
+// would otherwise be followed by a wait for a condition the handler had just
+// ended.
 int nlibc_pselect(int nfds, void *readfds, void *writefds, void *errorfds,
         const struct timespec *timeout, const sigset_t *sigmask) {
+    if (sigmask == NULL || current == NULL)
+        return nlibc_pselect_wait(nfds, readfds, writefds, errorfds, timeout, sigmask);
+    sigset_t_ saved = current->native_prog_blocked;
+    current->native_prog_blocked = nlibc_sigset_to_guest(sigmask);
+    nlibc_update_held_signals();
+    int res;
+    if (!nlibc_delivery_deferred() && nlibc_deliver_signals_count() > 0)
+        res = nlibc_fail(_EINTR);
+    else
+        res = nlibc_pselect_wait(nfds, readfds, writefds, errorfds, timeout, sigmask);
+    int saved_errno = errno;
+    current->native_prog_blocked = saved;
+    nlibc_update_held_signals();
+    errno = saved_errno;
+    return res;
+}
+
+static int nlibc_pselect_wait(int nfds, void *readfds, void *writefds,
+        void *errorfds, const struct timespec *timeout, const sigset_t *sigmask) {
     NATIVE_FRAME;
     if (nfds < 0)
         return nlibc_fail(_EINVAL);
