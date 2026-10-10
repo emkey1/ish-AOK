@@ -38,7 +38,22 @@
 #include "kernel/anonfd_ckpt.h"
 #include "jit/arm64_mops.h"
 
-#define ARGV_MAX 32 * PAGE_SIZE
+// What one execve may carry, counted as Linux 5.10 counts it (fs/exec.c:
+// bprm_stack_limits, copy_strings, copy_string_kernel; the numbers are
+// include/uapi/linux/binfmts.h's and limits.h's). The argument strings, the
+// environment strings, the file name the new image is given, and one pointer
+// per argument and variable together may take a quarter of RLIMIT_STACK, but
+// never more than 3/4 of _STK_LIM and never less than ARG_MAX; and no one
+// string may be longer than MAX_ARG_STRLEN, its NUL included. Past either it
+// is E2BIG. See exec_args_check.
+//
+// This was one fixed 32-page buffer each for argv and envp, so 128 KiB of
+// arguments was E2BIG however large the stack limit -- while `getconf ARG_MAX`
+// said 2 MiB, which is what xargs and `cp ... *` size their commands to.
+#define EXEC_MAX_ARG_STRLEN (32 * PAGE_SIZE)    // MAX_ARG_STRLEN
+#define EXEC_MAX_ARG_STRINGS 0x7fffffffu        // MAX_ARG_STRINGS
+#define EXEC_ARG_MAX 131072                     // ARG_MAX, the total's floor
+#define EXEC_STK_LIM (8 * 1024 * 1024)          // _STK_LIM
 
 struct exec_args {
     // number of arguments
@@ -78,6 +93,8 @@ static inline size_t args_strings_size(struct exec_args args);
 static ssize_t user_read_exec_ptr(guest_addr_t addr, qword_t *ptr_out);
 static ssize_t read_execve_user_args(guest_addr_t argv_addr, guest_addr_t envp_addr, ssize_t *argc_out,
         char **argv_out, ssize_t *envc_out, char **envp_out);
+static size_t exec_args_limit(void);
+static int exec_args_check(const char *filename, struct exec_args argv, struct exec_args envp);
 static int read_header(struct fd *fd, struct elf_info *header);
 static int read_prg_headers(struct fd *fd, struct elf_info header, struct elf_prg_info **ph_out);
 static int load_entry(enum guest_abi abi, struct elf_prg_info ph, guest_addr_t bias, struct fd *fd);
@@ -1663,6 +1680,99 @@ static inline size_t args_strings_size(struct exec_args args) {
     return args_size(args) - 1;
 }
 
+// How many bytes of argument strings the image an exec is building may hold:
+// what exec_args_check left once the file name, the environment and the
+// pointers were paid for. A #! line or a binfmt_misc registration rewrites
+// argv, and Linux checks each string it pushes against the same bprm->argmin,
+// which bprm_stack_limits fixed from the ORIGINAL argc and envc -- a dropped
+// argv[0] gives its bytes back, and the pointers of the strings added are not
+// charged. So the argv a rewrite builds may take this many bytes, at every
+// level of the chain alike.
+static _Thread_local size_t exec_argv_room;
+
+// bprm_stack_limits: a quarter of the stack limit, at most 3/4 of _STK_LIM, at
+// least ARG_MAX. The limit is the one in force at the exec (bprm->rlim_stack,
+// the caller's).
+static size_t exec_args_limit(void) {
+    rlim_t_ stack = rlimit(RLIMIT_STACK_);
+    rlim_t_ limit = EXEC_STK_LIM / 4 * 3;
+    if (stack / 4 < limit)
+        limit = stack / 4;
+    if (limit < EXEC_ARG_MAX)
+        limit = EXEC_ARG_MAX;
+    return (size_t) limit;
+}
+
+// The bytes a block's strings take on the new stack (args_strings_size), or
+// SIZE_MAX when any one of them is longer than MAX_ARG_STRLEN.
+static size_t exec_args_measure(struct exec_args args) {
+    const char *p = args.args;
+    for (size_t i = 0; i < args.count; i++) {
+        size_t len = strlen(p) + 1;
+        if (len > EXEC_MAX_ARG_STRLEN)
+            return SIZE_MAX;
+        p += len;
+    }
+    return (size_t) (p - args.args);
+}
+
+// Whether an exec of these arguments fits, by Linux's arithmetic. The pointers
+// are paid for first, (argc + envc) of them at the kernel's pointer size -- 8
+// on the 64-bit kernels AOK presents to its 64-bit guests, 4 on the i686 one
+// its i386 guests are shown -- and then each string as copy_string_kernel and
+// copy_strings push it: the file name (bprm->filename, which tops the new
+// stack as AT_EXECFN's string), the environment, the arguments. 5.10 counts
+// argc as given; since 5.18 an empty argv counts as one pointer and one empty
+// string, and since AOK runs an empty argv as {""} the way 5.18 does, the
+// caller has made that substitution and the count follows it.
+//
+// And a second bound, which only a stack limit under 512 KiB reaches: the
+// strings are copied into the new stack's mapping as they are counted, from a
+// pointer's width below its top (bprm->p), and each page that takes is stack
+// growth, which acct_stack_growth refuses past RLIMIT_STACK -- get_arg_page
+// fails and copy_strings answers E2BIG. So the pages the strings reach may not
+// add up to more than the stack limit, ARG_MAX's floor notwithstanding.
+// Measured on 6.12 (5.10 has the same path): at a 64 KiB limit, 65528 bytes of
+// strings with a 64-bit kernel exec, 65529 are E2BIG. A command that fits so
+// tightly leaves the program no stack and Linux kills it a moment later, as
+// AOK does (elf_exec's stack writes fault past the bound); the point is the
+// E2BIG one byte further, which AOK answered with that SIGSEGV instead.
+//
+// Called before anything is opened, as do_execveat_common copies the strings
+// before bprm_execve opens the file: an over-long command is E2BIG even when
+// the file does not exist.
+static int exec_args_check(const char *filename, struct exec_args argv, struct exec_args envp) {
+    uint64_t limit = exec_args_limit();
+    size_t kernel_ptr = task_abi_desc(current).pointer_size;
+    uint64_t ptr_size = (uint64_t) (argv.count + envp.count) * kernel_ptr;
+    if (limit <= ptr_size)
+        return _E2BIG;
+    uint64_t room = limit - ptr_size;
+    rlim_t_ stack = rlimit(RLIMIT_STACK_);
+    if (stack != RLIM_INFINITY_) {
+        // The first page is there before anything is copied; growth past it
+        // is what the limit is asked about.
+        uint64_t pages_room = stack & ~(uint64_t) (PAGE_SIZE - 1);
+        if (pages_room < PAGE_SIZE)
+            pages_room = PAGE_SIZE;
+        if (pages_room - kernel_ptr < room)
+            room = pages_room - kernel_ptr;
+    }
+    size_t file_len = strlen(filename) + 1;
+    if (file_len > EXEC_MAX_ARG_STRLEN || file_len > room)
+        return _E2BIG;
+    room -= file_len;
+    size_t env_len = exec_args_measure(envp);
+    if (env_len == SIZE_MAX || env_len > room)
+        return _E2BIG;
+    room -= env_len;
+    size_t arg_len = exec_args_measure(argv);
+    if (arg_len == SIZE_MAX || arg_len > room)
+        return _E2BIG;
+    exec_argv_room = (size_t) room;
+    return 0;
+}
+
 // Copies the strings only (see args_strings_size); the stack layout in
 // elf_exec depends on nothing separating one block from the next.
 static inline guest_addr_t args_copy(guest_addr_t sp, struct exec_args args) {
@@ -1776,10 +1886,12 @@ static int binfmt_misc_exec(struct fd *fd, const char *file, struct exec_args ar
     size_t extra = interpreter_len + 1 + file_len + 1;
     if (preserve_argv0 && argv0 != NULL)
         extra += argv0_len + 1;
-    if (args_rest_size + extra >= ARGV_MAX)
+    // load_misc_binary's copy_string_kernel calls, against the room the exec
+    // started with (exec_argv_room). args_rest_size carries the terminator.
+    if (extra + args_rest_size - 1 > exec_argv_room)
         return _E2BIG;
 
-    char *new_argv_buf = malloc(ARGV_MAX);
+    char *new_argv_buf = malloc(extra + args_rest_size);
     if (new_argv_buf == NULL)
         return _ENOMEM;
     struct exec_args new_argv = {.args = new_argv_buf};
@@ -2026,10 +2138,13 @@ static int shebang_exec(struct fd *fd, const char *file, struct exec_args argv, 
     size_t extra_args_size = interpreter_len + 1 + file_len + 1;
     if (argument)
         extra_args_size += argument_len + 1;
-    if (args_rest_size + extra_args_size >= ARGV_MAX)
+    // load_script's remove_arg_zero and three copy_string_kernel calls, against
+    // the room the exec started with (exec_argv_room). args_rest_size carries
+    // the terminator.
+    if (extra_args_size + args_rest_size - 1 > exec_argv_room)
         return _E2BIG;
 
-    char *new_argv_buf = malloc(ARGV_MAX);
+    char *new_argv_buf = malloc(extra_args_size + args_rest_size);
     if (new_argv_buf == NULL)
         return _ENOMEM;
     struct exec_args new_argv = {.args = new_argv_buf};
@@ -2087,8 +2202,8 @@ static int shebang_exec(struct fd *fd, const char *file, struct exec_args argv, 
     // interpreter may itself be a #! script, which is how the placeholder at
     // /AOK/native/<name> gets to say out loud that this build does not carry
     // the program (fs/aok.c). new_argv_buf has to outlive the call because
-    // new_argv points into it, so a chain holds one ARGV_MAX buffer per level;
-    // EXEC_MAX_DEPTH is what bounds that.
+    // new_argv points into it, so a chain holds one buffer per level, each the
+    // size of its own argv; EXEC_MAX_DEPTH is what bounds how many.
     int err = exec_interpreter(interpreter_fd, &interpreter_stat, interpreter, new_argv, envp, depth + 1);
     if (err < 0)
         foreign_exec_undo(&foreign);
@@ -2699,6 +2814,12 @@ static int __do_execve_body(const struct exec_file *exe, struct exec_args argv, 
     if (argv.count == 0)
         argv = (struct exec_args) {.count = 1, .args = empty_argv};
 
+    // Whether the arguments fit the new stack, before the file is so much as
+    // looked at (exec_args_check).
+    int args_err = exec_args_check(file, argv, envp);
+    if (args_err < 0)
+        return args_err;
+
     // open_exec decides what the file IS and whether this caller may execute
     // it before opening it, which is Linux's do_open_execat order. This used
     // to open first and then ask only whether ANY execute bit was set, so a
@@ -2968,37 +3089,78 @@ int do_execve(const char *file, size_t argc, const char *argv_p, const char *env
     return do_execve_args(&exe, (struct exec_args) {.count = argc, .args = argv_p}, envp);
 }
 
-static ssize_t user_read_string_array(guest_addr_t addr, char *buf, size_t max) {
+// A guest's NULL-terminated array of string pointers, packed into a block
+// allocated here ("s1\0s2\0...\0", one more NUL ending it) that grows as it
+// fills. Each string is held to MAX_ARG_STRLEN with its NUL, as copy_strings
+// holds it, and the strings to `cap` bytes in all: past either the exec
+// cannot fit (exec_args_check), so reading stops there with E2BIG. *used_out
+// is the strings' bytes, the terminator not counted.
+//
+// A page at a time rather than a byte at a time, and never past the page the
+// string ends on, so a string that ends just before an unmapped page reads.
+static ssize_t user_read_string_array(guest_addr_t addr, size_t cap, char **buf_out,
+        size_t *used_out) {
     size_t guest_ptr_size = task_abi_desc(current).pointer_size;
+    size_t alloc = PAGE_SIZE;
+    char *buf = malloc(alloc);
+    if (buf == NULL)
+        return _ENOMEM;
     size_t i = 0;
     size_t p = 0;
-    for (;;) {
+    ssize_t err;
+    for (;; i++) {
         qword_t str_addr_q;
-        ssize_t err = user_read_exec_ptr(addr + i * guest_ptr_size, &str_addr_q);
+        err = user_read_exec_ptr(addr + i * guest_ptr_size, &str_addr_q);
         if (err < 0)
-            return err;
+            goto fail;
         if (str_addr_q == 0)
             break;
+        err = _E2BIG;
+        if (i >= EXEC_MAX_ARG_STRINGS)
+            goto fail;
+        err = _EFAULT;
         if (!guest_abi_addr_valid(current->abi, str_addr_q))
-            return _EFAULT;
+            goto fail;
         guest_addr_t str_addr = str_addr_q;
         size_t str_p = 0;
         for (;;) {
-            if (p >= max)
-                return _E2BIG;
-            if (user_get(str_addr + str_p, buf[p]))
-                return _EFAULT;
-            str_p++;
-            p++;
-            if (buf[p - 1] == '\0')
+            size_t chunk = PAGE_SIZE - (size_t) ((str_addr + str_p) & (PAGE_SIZE - 1));
+            if (chunk > EXEC_MAX_ARG_STRLEN - str_p)
+                chunk = EXEC_MAX_ARG_STRLEN - str_p;
+            // MAX_ARG_STRLEN bytes and no NUL among them.
+            err = _E2BIG;
+            if (chunk == 0)
+                goto fail;
+            if (p + chunk + 1 > alloc) {
+                while (p + chunk + 1 > alloc)
+                    alloc *= 2;
+                char *grown = realloc(buf, alloc);
+                err = _ENOMEM;
+                if (grown == NULL)
+                    goto fail;
+                buf = grown;
+            }
+            err = _EFAULT;
+            if (user_read(str_addr + str_p, buf + p, chunk))
+                goto fail;
+            char *nul = memchr(buf + p, '\0', chunk);
+            size_t take = nul != NULL ? (size_t) (nul - (buf + p)) + 1 : chunk;
+            str_p += take;
+            p += take;
+            err = _E2BIG;
+            if (p > cap)
+                goto fail;
+            if (nul != NULL)
                 break;
         }
-        i++;
     }
-    if (p >= max)
-        return _E2BIG;
     buf[p] = '\0';
-    return i;
+    *buf_out = buf;
+    *used_out = p;
+    return (ssize_t) i;
+fail:
+    free(buf);
+    return err;
 }
 
 static ssize_t user_read_exec_ptr(guest_addr_t addr, qword_t *ptr_out) {
@@ -3233,33 +3395,35 @@ out_free_args:
     return err;
 }
 
+// The strings are read to the most an exec could take (exec_args_limit), argv
+// and envp together; the exact sum, with the file name and the pointers, is
+// exec_args_check's, once the file name is known.
 static ssize_t read_execve_user_args(guest_addr_t argv_addr, guest_addr_t envp_addr, ssize_t *argc_out,
         char **argv_out, ssize_t *envc_out, char **envp_out) {
-    char *argv = malloc(ARGV_MAX);
-    if (argv == NULL)
-        return _ENOMEM;
-    ssize_t argc = user_read_string_array(argv_addr, argv, ARGV_MAX);
-    if (argc < 0) {
-        free(argv);
+    size_t cap = exec_args_limit();
+    char *argv = NULL;
+    size_t argv_used = 0;
+    ssize_t argc = user_read_string_array(argv_addr, cap, &argv, &argv_used);
+    if (argc < 0)
         return argc;
-    }
 
-    char *envp = malloc(ARGV_MAX);
-    if (envp == NULL) {
-        free(argv);
-        return _ENOMEM;
-    }
+    char *envp = NULL;
     ssize_t envc = 0;
     if (envp_addr != 0) {
-        envc = user_read_string_array(envp_addr, envp, ARGV_MAX);
+        size_t envp_used = 0;
+        envc = user_read_string_array(envp_addr, cap - argv_used, &envp, &envp_used);
         if (envc < 0) {
-            free(envp);
             free(argv);
             return envc;
         }
     } else {
         // Do not take advantage of this nonstandard and nonportable misfeature!
         // - Michael Kerrisk, execve(2)
+        envp = malloc(2);
+        if (envp == NULL) {
+            free(argv);
+            return _ENOMEM;
+        }
         envp[0] = envp[1] = '\0';
     }
 
