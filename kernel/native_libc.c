@@ -6156,6 +6156,15 @@ void nlibc_deliver_signals(void) {
 // exec, and one that execs in place never returns to clear it itself.
 static __thread bool nlibc_delivering;
 
+// Counted when a handler RETURNS, per thread and never reset: see
+// native_syscall_wait for the one reader. A handler that execs or longjmps
+// away is not counted, and has no wait to come back to.
+static __thread unsigned long nlibc_handlers_run_count;
+
+unsigned long nlibc_handlers_run(void) {
+    return nlibc_handlers_run_count;
+}
+
 int nlibc_deliver_signals_count(void) {
     int ran = 0;
     if (nlibc_delivering)
@@ -6261,6 +6270,7 @@ int nlibc_deliver_signals_count(void) {
                 nlibc_update_held_signals();
             }
             ran++;
+            nlibc_handlers_run_count++;
         }
     }
     nlibc_delivering = false;
@@ -8890,7 +8900,14 @@ static int nlibc_pselect_wait(int nfds, void *readfds, void *writefds,
             return nlibc_fail(_ENOMEM);
     }
 
-    sqword_t res = native_syscall(NATIVE_SYS_pselect6, nfds, guest_sets[0],
+    // With a mask, armed: a handler the mask let through, run by the
+    // checkpoint in front of the call, ends the wait before it starts. Without
+    // one the program has no way to have closed that window either, on Linux
+    // or here, and the call is issued whatever ran before it.
+    sqword_t res = sigmask != NULL
+        ? native_syscall_wait(NATIVE_SYS_pselect6, nfds, guest_sets[0],
+            guest_sets[1], guest_sets[2], guest_ts, guest_sig)
+        : native_syscall(NATIVE_SYS_pselect6, nfds, guest_sets[0],
             guest_sets[1], guest_sets[2], guest_ts, guest_sig);
     if (res < 0)
         return nlibc_fail((int) res);

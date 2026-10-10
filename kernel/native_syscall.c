@@ -218,7 +218,7 @@ int native_scratch_get(void *dst, guest_addr_t src, size_t size) {
 // guest gets. Everything specific to a native caller is here: the signal
 // checkpoint, and restarting.
 
-sqword_t native_syscall_args(unsigned num, const qword_t args[6]) {
+static sqword_t native_syscall_issue(unsigned num, const qword_t args[6], bool wait) {
     if (!native_have_task())
         return _EFAULT;
 
@@ -233,8 +233,24 @@ sqword_t native_syscall_args(unsigned num, const qword_t args[6]) {
         // a shim call which has already checkpointed, and receive_signals may
         // not return -- exiting from inside the allocator would leave the
         // frame it was called from unreleased.
+        unsigned long handlers_run = nlibc_handlers_run();
         if (num != NATIVE_SYS_mmap && num != NATIVE_SYS_munmap)
             native_checkpoint();
+        // A wait the caller has armed (native_syscall_wait) does not start
+        // once that checkpoint has run a handler: the handler was the event
+        // being waited for. This is the only place that can say so. The
+        // caller checks for a pending signal before it gets here, and the
+        // kernel checks again as the wait begins, but a signal landing
+        // between the two is taken by the checkpoint above -- which is neither
+        // -- and the kernel then finds nothing pending and sleeps on a
+        // condition the handler has already consumed. That covers the
+        // re-issue of a restarted call as well: it comes back round to this
+        // same checkpoint.
+        if (wait && nlibc_handlers_run() != handlers_run) {
+            current->sleep_restart_valid = false;
+            current->poll_restart_valid = false;
+            return _EINTR;
+        }
 
         sqword_t result = syscall_dispatch_native(num, args);
         // A syscall cut short by a signal: run the handler BEFORE the program
@@ -266,4 +282,12 @@ sqword_t native_syscall_args(unsigned num, const qword_t args[6]) {
             return _EINTR;
         }
     }
+}
+
+sqword_t native_syscall_args(unsigned num, const qword_t args[6]) {
+    return native_syscall_issue(num, args, false);
+}
+
+sqword_t native_syscall_wait_args(unsigned num, const qword_t args[6]) {
+    return native_syscall_issue(num, args, true);
 }

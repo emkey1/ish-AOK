@@ -70,6 +70,19 @@ sqword_t native_syscall_args(unsigned num, const qword_t args[6]);
     native_syscall_args((num), (const qword_t[6]) { (qword_t) (a), (qword_t) (b), \
             (qword_t) (c), (qword_t) (d), (qword_t) (e), (qword_t) (f) })
 
+// The same, for a wait entered with a signal mask of its own (pselect6, and
+// through it sigsuspend): "sleep until one of the signals this mask lets
+// through has been handled". If the checkpoint in front of the call runs a
+// handler, the call is not issued and the result is _EINTR -- the handler was
+// what the caller was waiting for, and the kernel, finding nothing pending any
+// more, would otherwise sleep for good.
+sqword_t native_syscall_wait_args(unsigned num, const qword_t args[6]);
+#define native_syscall_wait(...) \
+    native_syscall_wait_pad_(__VA_ARGS__, 0, 0, 0, 0, 0, 0)
+#define native_syscall_wait_pad_(num, a, b, c, d, e, f, ...) \
+    native_syscall_wait_args((num), (const qword_t[6]) { (qword_t) (a), (qword_t) (b), \
+            (qword_t) (c), (qword_t) (d), (qword_t) (e), (qword_t) (f) })
+
 // ------------------------------------------------------------ the marshalling
 //
 // A frame bounds the lifetime of everything marshalled inside one shim call.

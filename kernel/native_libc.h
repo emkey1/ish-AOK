@@ -313,6 +313,10 @@ bool nlibc_stdio_defer_fatal(void);
 bool nlibc_delivery_deferred(void);
 /* The same, reporting how many handlers ran -- see nlibc_sigsuspend. */
 int nlibc_deliver_signals_count(void);
+// How many handlers this thread has run, ever. It only counts up, so two
+// readings tell a caller whether a handler ran in between -- which is what a
+// wait about to start has to know (native_syscall_wait).
+unsigned long nlibc_handlers_run(void);
 
 /* Session and process group: plain kernel state, so plain syscalls. */
 pid_t nlibc_setsid(void);
