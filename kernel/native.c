@@ -951,11 +951,10 @@ int native_env_set(const char *name, const char *value, bool overwrite) {
             strchr(name, '=') != NULL)
         return _EINVAL;
 
-    size_t size = strlen(name) + strlen(value) + 2;
-    char *entry = malloc(size);
+    char *entry = malloc(strlen(name) + strlen(value) + 2);
     if (entry == NULL)
         return _ENOMEM;
-    snprintf(entry, size, "%s=%s", name, value);
+    sprintf(entry, "%s=%s", name, value);
 
     ssize_t at = native_env_find(name);
     if (at >= 0) {
