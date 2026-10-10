@@ -11,6 +11,7 @@
 //     (or set) comes out right -- the progress-in-registers design --
 //     including a backward CPY, and a fault on the destination side;
 //   - a "negative" count does nothing; SET from XZR stores zeros;
+//   - SET whose every page takes the TLB's slow path fills every byte;
 //   - 600 random lengths, alignments and overlaps against memmove/memset.
 // The instructions are .inst words, so any assembler builds this. SKIPs
 // unless arm64 with HWCAP2_MOPS.
@@ -105,6 +106,7 @@ static size_t first_diff(const uint8_t *a, const uint8_t *b, size_t n) {
 }
 
 static long pg;
+static uint8_t mops_bss[64 * 4096];  // the slow-path SET rounds fill this
 static uint8_t *hole;           // the page the fault tests leave unmapped
 static volatile uintptr_t fault_pc, fault_addr;
 static volatile uint64_t fault_x7;
@@ -360,6 +362,34 @@ int main(int argc, char **argv) {
     r = run_setz(b + 3000, 5000);
     ck("set xzr: zeros across a page", first_diff(b, want, area), area);
     ck("set xzr: end Xd", r.d, (uint64_t) (b + 8000));
+
+    // SET while every page of the fill re-enters the TLB through its slow
+    // path, a C call: the address space changes before each round, so the
+    // cached translations are stale. The bytes after such a call must still
+    // be the byte asked for. (The 64-byte blocks came from a vector register
+    // set before the first page and not kept across the call. On an A10X
+    // host the call now and then left 0x00000d4d00000000 there: about one
+    // round in six of this loop had eight wrong bytes, and gcc, whose zeroed
+    // tables held that as a pointer, died one compile in five.)
+    bad = 0;
+    for (int round = 0; round < 100 && bad == 0; round++) {
+        uint8_t v = (uint8_t) (0x11 + round);
+        void *x = mmap(NULL, pg, PROT_READ, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (x != MAP_FAILED)
+            munmap(x, pg);
+        r = run_set(mops_bss, sizeof mops_bss, v);
+        for (size_t i = 0; i < sizeof mops_bss; i++) {
+            if (mops_bss[i] != v) {
+                if (bad < 3)
+                    test_logf("  set after a change, round %d: byte %zu is %#x, want %#x\n", round, i,
+                              mops_bss[i], v);
+                bad++;
+            }
+        }
+        if (r.d != (uint64_t) (mops_bss + sizeof mops_bss) || r.n != 0)
+            bad++;
+    }
+    ck("set with a TLB slow path per page: every byte, 100 rounds", bad, 0);
 
     // Random cases against memmove/memset: lengths to three pages, any
     // alignment, CPY overlapping either way, CPYF without overlap.

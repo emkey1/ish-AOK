@@ -534,8 +534,12 @@ mops_copy_back:
     b 3b
 4:  ret
 
-// x5 bytes at host x3 set to the byte in v0 (all lanes) and x25 (all 8).
+// x5 bytes at host x3 set to the byte x25 holds eight times. The vector copy
+// is made here, per span: the caller's a64_xlate_w may have called C on a TLB
+// miss, and save_c keeps no vector register across that -- a pattern left in
+// v0 from before the loop came back as whatever the call left there.
 mops_fill:
+    dup v0.2d, x25
 1:  cmp x5, #64
     b.lo 2f
     stp q0, q0, [x3]
