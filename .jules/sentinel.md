@@ -53,7 +53,7 @@
 **Vulnerability:** None in practice: the buffer is sized as `sizeof("TERM=") + strlen(term)`, exactly what the `sprintf` writes. Hardening only -- the bound now travels with the call, so a later change to the sizing cannot silently overrun.
 **Learning:** Hardcoding string formatting directly into fixed-size structures without using bounded functions like `snprintf` creates critical security risks.
 **Prevention:** Always use `snprintf` combined with explicit buffer length parameters when formatting strings into dynamically allocated buffers.
-## 2024-05-24 - [Replace sprintf with snprintf for memory safety]
-**Vulnerability:** Found uses of `sprintf` which can lead to buffer overflow vulnerabilities if the source strings are unexpectedly large, allowing an attacker to write past the allocated buffer bounds.
-**Learning:** Legacy codebase patterns often use `sprintf` where dynamic allocation lengths may not perfectly bound subsequent concatenation.
-**Prevention:** Always use `snprintf` explicitly passing the bounds of the destination buffer to prevent any chance of memory corruption.
+## 2024-05-24 - [Revert sprintf patches on exact buffers]
+**Vulnerability:** Attempted to replace `sprintf` with truncating `snprintf`.
+**Learning:** If a buffer is exactly sized from the input strings (e.g. `foreign_exec_env` and `native_env_set`), using `sprintf` is safe. Replacing it with a truncating `snprintf` is counter-productive because it hides underlying logic/sizing bugs rather than exposing them.
+**Prevention:** Verify if a buffer allocation is exactly tailored to the strings it receives before converting `sprintf` to `snprintf`.
