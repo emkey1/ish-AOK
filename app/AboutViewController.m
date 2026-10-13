@@ -141,14 +141,19 @@ static const CGFloat kDiagnosticsBottomSlack = 16;
     [self applyReportFont];
     [self.view addSubview:_textView];
 
-    self.navigationItem.rightBarButtonItems = @[
-        [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemAction
-                                                      target:self
-                                                      action:@selector(exportDiagnostics:)],
-        [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemRefresh
-                                                      target:self
-                                                      action:@selector(refreshDiagnostics:)],
-    ];
+    UIBarButtonItem *exportButton = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemAction
+                                                                                  target:self
+                                                                                  action:@selector(exportDiagnostics:)];
+    exportButton.accessibilityLabel = NSLocalizedString(@"Share", @"Accessibility label for the share button");
+    exportButton.accessibilityHint = NSLocalizedString(@"Exports the diagnostic logs.", @"Accessibility hint for the export diagnostics button");
+
+    UIBarButtonItem *refreshButton = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemRefresh
+                                                                                   target:self
+                                                                                   action:@selector(refreshDiagnostics:)];
+    refreshButton.accessibilityLabel = NSLocalizedString(@"Refresh", @"Accessibility label for the refresh button");
+    refreshButton.accessibilityHint = NSLocalizedString(@"Refreshes the diagnostic logs.", @"Accessibility hint for the refresh diagnostics button");
+
+    self.navigationItem.rightBarButtonItems = @[exportButton, refreshButton];
 
     // DELIBERATELY NOT observing ISHDiagnosticsStoreDidUpdateNotification.
     //

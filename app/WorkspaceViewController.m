@@ -10890,6 +10890,13 @@ static NSString *const ISHWorkspaceLauncherRowReuseIdentifier = @"launcher.row";
     icon.tintColor = [self launcherColorForKey:@"secondary" fallback:UIColor.secondaryLabelColor];
     icon.contentMode = UIViewContentModeCenter;
     icon.frame = CGRectMake(0, 0, 28, 28);
+
+    // Explicitly disabling accessibility on the image view to prevent VoiceOver
+    // from focusing the reorder icon. The system already provides standard
+    // reorder actions ("Swipe up or down to select a custom action") and the
+    // image view is just a visual indicator.
+    icon.isAccessibilityElement = NO;
+
     return icon;
 }
 
