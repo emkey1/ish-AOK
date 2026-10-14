@@ -50,8 +50,21 @@
 //                 what a load or store body keeps across the prep macros
 //                 besides x8 and x17: registers the host's prep and its slow
 //                 path preserve (here the callee-saved x19 and x21-x25)
+//   F_WAY_WORDS, branch_leave OFF, pc_param REG
+//                 how a block is left, as in guest-riscv64's frag.h: a way
+//                 out is F_WAY_WORDS parameter words, branch_leave OFF leaves
+//                 by the one at [_ip, #OFF] and does not come back (give each
+//                 its own indirect branch), and pc_param REG turns a parameter
+//                 that is a guest code address as the translator wrote it
+//                 into the address
+//   f_leave_to REG
+//                 leave for the guest code address in REG (br, blr, ret: a
+//                 register's value)
+//   F_X0          the offset of X0 in the guest state, X1-X30 and SP after it
+//                 eight bytes apart: the compare-and-branch bodies' operands
+//                 are register numbers
 //
-// A body uses x8-x14, x16, x17 and those, reads its operands through _ip,
+// A body uses x8-x17 and those, reads its operands through _ip,
 // and reaches guest state only as [_cpu, slot]. The last parameter word of a
 // load or store belongs to the host (here the instruction's address, for the
 // fault paths).
@@ -527,6 +540,202 @@
 .endm
 .macro f_stp_wb_stub id, last, bits, bytes, str_reg1, str_reg2, pre, fn=_, fm=_
     f_write_bullshit \last, \bits, \id
+.endm
+
+// ---- Branches (control.S) ------------------------------------------------
+// A branch ends its block, so it is only ever the second of a pair, and its
+// `last` is always 1. The ways out are parameters it does not read itself
+// (branch_leave's). Each conditional form has two layouts, picked by the
+// translator from the branch's direction: the plain one keeps the
+// fallthrough straight-line (forward branches, mostly not taken), _bk the
+// taken path (backward ones, loops). Whichever path jumps inside the gadget
+// costs ~1.3 ns more on the A10X (measured on guest-riscv64's twins).
+
+#ifndef A64_GADGET_HOST
+// iSH-AOK: a way out is one word, the next block's code (or the dispatch's
+// tagged word), and a guest address in the stream is the address.
+#define F_WAY_WORDS 1
+#define F_X0 CPU_x0
+.macro branch_leave off
+    ldr _ip, [_ip, #\off]
+    branch_dispatch
+.endm
+.macro pc_param reg
+.endm
+.macro f_leave_to reg
+    ret_cache_dispatch \reg
+.endm
+#endif
+
+// [way]
+.macro f_b_body id, last, a1, a2, a3, a4, a5, fn=_, fm=_
+    branch_leave 0
+.endm
+.macro f_b_stub id, last, a1, a2, a3, a4, a5, fn=_, fm=_
+.endm
+
+// [way][return address]
+.macro f_bl_body id, last, a1, a2, a3, a4, a5, fn=_, fm=_
+    ldr x9, [_ip, #(F_WAY_WORDS * 8)]
+    pc_param x9
+    add x10, _cpu, #F_X0
+    str x9, [x10, #(30*8)]  // X30 = return address
+    branch_leave 0
+.endm
+.macro f_bl_stub id, last, a1, a2, a3, a4, a5, fn=_, fm=_
+.endm
+
+// BR, and RET, which is BR X30 with a different hint. [n_off]
+.macro f_br_cached_body id, last, a1, a2, a3, a4, a5, fn=_, fm=_
+.ifc \fn,_
+    ldr x8, [_ip]             // the register's offset (the translator: never XZR)
+    ldr x10, [_cpu, x8]
+.else
+    mov x10, x\fn            // the target, from the pair's first half
+.endif
+    f_leave_to x10
+.endm
+.macro f_br_cached_stub id, last, a1, a2, a3, a4, a5, fn=_, fm=_
+.endm
+
+// [n_off][return address]
+.macro f_blr_cached_body id, last, a1, a2, a3, a4, a5, fn=_, fm=_
+.ifc \fn,_
+    ldr x8, [_ip]
+    ldr x10, [_cpu, x8]
+.else
+    mov x10, x\fn
+.endif
+    ldr x11, [_ip, #8]      // return address
+    pc_param x11
+    str x11, [_cpu, #(F_X0 + 30*8)]  // X30 = return address, AFTER the target is read
+    f_leave_to x10
+.endm
+.macro f_blr_cached_stub id, last, a1, a2, a3, a4, a5, fn=_, fm=_
+.endm
+
+// CBZ/CBNZ: [rt_off][taken][fallthrough]; reg, jmp (jmp_bk for _bk)
+.macro f_cb_body id, last, reg, jmp, a3, a4, a5, fn=_, fm=_
+.ifc \fn,_
+    ldr x9, [_ip]
+    ldr x9, [_cpu, x9]
+.else
+    mov x9, x\fn
+.endif
+    \jmp \reg, 1f
+    branch_leave (8+F_WAY_WORDS*8)      // fallthrough
+1:  branch_leave 8                          // taken
+.endm
+.macro f_cb_stub id, last, reg, jmp, a3, a4, a5, fn=_, fm=_
+.endm
+.macro f_cb_bk_body id, last, reg, jmp_bk, a3, a4, a5, fn=_, fm=_
+.ifc \fn,_
+    ldr x9, [_ip]
+    ldr x9, [_cpu, x9]
+.else
+    mov x9, x\fn
+.endif
+    \jmp_bk \reg, 1f
+    branch_leave 8                          // taken
+1:  branch_leave (8+F_WAY_WORDS*8)      // fallthrough
+.endm
+.macro f_cb_bk_stub id, last, reg, jmp_bk, a3, a4, a5, fn=_, fm=_
+.endm
+
+// TBZ/TBNZ: [rt_off][bit mask][taken][fallthrough]; jmp (jmp_bk for _bk)
+.macro f_tb_body id, last, jmp, a2, a3, a4, a5, fn=_, fm=_
+    ldp x9, x10, [_ip]       // rt_off, mask
+    f_src 9, x9, \fn
+    and x9, x9, x10
+    \jmp x9, 1f
+    branch_leave (16+F_WAY_WORDS*8)     // fallthrough
+1:  branch_leave 16                         // taken
+.endm
+.macro f_tb_stub id, last, jmp, a2, a3, a4, a5, fn=_, fm=_
+.endm
+.macro f_tb_bk_body id, last, jmp_bk, a2, a3, a4, a5, fn=_, fm=_
+    ldp x9, x10, [_ip]
+    f_src 9, x9, \fn
+    and x9, x9, x10
+    \jmp_bk x9, 1f
+    branch_leave 16                         // taken
+1:  branch_leave (16+F_WAY_WORDS*8)     // fallthrough
+.endm
+.macro f_tb_bk_stub id, last, jmp_bk, a2, a3, a4, a5, fn=_, fm=_
+.endm
+
+// B.cond: [taken][fallthrough]; cc
+.macro f_bcond_body id, last, cc, a2, a3, a4, a5, fn=_, fm=_
+    load_flags
+    b.\cc 1f
+    branch_leave (F_WAY_WORDS*8)
+1:  branch_leave 0
+.endm
+.macro f_bcond_stub id, last, cc, a2, a3, a4, a5, fn=_, fm=_
+.endm
+
+// B.cond without the flags' reload, straight after a gadget that set them:
+// the host's NZCV is still live from that gadget's adds/subs/ands, because
+// nothing in its tail (store_flags) nor in a dispatch writes flags. `msr
+// nzcv` is serializing on Apple cores, so skipping it (and the flags' load)
+// is the biggest single saving in a compare-and-branch loop. The translator
+// picks these only when the instruction before, in the same block, set the
+// flags with such a gadget.
+.macro f_bcond_nf_body id, last, cc, a2, a3, a4, a5, fn=_, fm=_
+    b.\cc 1f
+    branch_leave (F_WAY_WORDS*8)
+1:  branch_leave 0
+.endm
+.macro f_bcond_nf_stub id, last, cc, a2, a3, a4, a5, fn=_, fm=_
+.endm
+
+// A compare and the B.cond after it, one gadget: the compare runs natively,
+// the guest's NZCV is still stored (a later instruction may read it), and
+// the branch tests the live host flags. Operands are register numbers (F_X0).
+//   fused_cmpi: [rn][imm][taken][fallthrough]; cmpop, zr, r15, r11, cc
+//   fused_cmpr: [rn | rm<<8][taken][fallthrough]; cmpop, zr, r15, r13, cc
+.macro f_fused_cmpi_body id, last, cmpop, zr, r15, r11, cc, fn=_, fm=_
+    ldr x10, [_ip]
+    ldr x11, [_ip, #8]
+    add _ip, _ip, #16
+.ifc \fn,_
+    add x14, _cpu, #F_X0
+    ldr x15, [x14, x10, lsl #3]
+.else
+    mov x15, x\fn
+.endif
+    \cmpop \zr, \r15, \r11
+    store_flags
+    b.\cc 1f
+    branch_leave (F_WAY_WORDS*8)
+1:  branch_leave 0
+.endm
+.macro f_fused_cmpi_stub id, last, cmpop, zr, r15, r11, cc, fn=_, fm=_
+.endm
+
+.macro f_fused_cmpr_body id, last, cmpop, zr, r15, r13, cc, fn=_, fm=_
+    ldr x8, [_ip]
+    add _ip, _ip, #8
+    and x10, x8, #0x1f
+    ubfx x16, x8, #8, #5      // (not x12: a pair's first half may have left its result there)
+    add x14, _cpu, #F_X0
+.ifc \fm,_
+    ldr x13, [x14, x16, lsl #3]
+.else
+    mov x13, x\fm
+.endif
+.ifc \fn,_
+    ldr x15, [x14, x10, lsl #3]
+.else
+    mov x15, x\fn
+.endif
+    \cmpop \zr, \r15, \r13
+    store_flags
+    b.\cc 1f
+    branch_leave (F_WAY_WORDS*8)
+1:  branch_leave 0
+.endm
+.macro f_fused_cmpr_stub id, last, cmpop, zr, r15, r13, cc, fn=_, fm=_
 .endm
 
 // A standalone gadget from a family, and a fused pair of two -- and, when the
