@@ -53,3 +53,7 @@
 **Vulnerability:** None in practice: the buffer is sized as `sizeof("TERM=") + strlen(term)`, exactly what the `sprintf` writes. Hardening only -- the bound now travels with the call, so a later change to the sizing cannot silently overrun.
 **Learning:** Hardcoding string formatting directly into fixed-size structures without using bounded functions like `snprintf` creates critical security risks.
 **Prevention:** Always use `snprintf` combined with explicit buffer length parameters when formatting strings into dynamically allocated buffers.
+## 2026-10-14 - Buffer Overflow Prevention in environment variable construction
+**Vulnerability:** Unbounded `sprintf` usage in `kernel/native.c` (`native_env_set`) and `kernel/foreign_exec.c` (`foreign_exec_env`) when formatting environment variable strings `%s=%s` into dynamically allocated buffers.
+**Learning:** Hardcoding string formatting directly into dynamically allocated structures without using bounded functions like `snprintf` creates security risks, even if the buffer allocation calculation is technically correct, because future changes to the allocation logic or format string could introduce silent heap buffer overflows.
+**Prevention:** Always use `snprintf` combined with explicitly passed buffer length parameters when formatting strings into dynamically allocated buffers, ensuring safety bounds travel with the write operation.

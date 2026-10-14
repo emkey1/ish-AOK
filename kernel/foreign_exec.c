@@ -405,12 +405,17 @@ char *foreign_exec_env(const struct foreign_exec *fx, const char *envp, size_t e
     for (size_t r = 0; r < ENV_RULES; r++) {
         if (value[r] == NULL)
             continue;
-        at += (size_t) sprintf(out + at, "%s%s", env_rules[r].var, value[r]) + 1;
+        size_t n1 = strlen(env_rules[r].var) + strlen(value[r]) + 1;
+        snprintf(out + at, n1, "%s%s", env_rules[r].var, value[r]);
+        at += n1;
         count++;
         // The marker only for a value this exec chose, and only its own part;
         // a value that is purely the user's is theirs to keep.
         if (marked[r]) {
-            at += (size_t) sprintf(out + at, "%s%s", env_rules[r].marker, rule_ours(fx, r)) + 1;
+            const char *ours = rule_ours(fx, r);
+            size_t n2 = strlen(env_rules[r].marker) + strlen(ours) + 1;
+            snprintf(out + at, n2, "%s%s", env_rules[r].marker, ours);
+            at += n2;
             count++;
         }
         free(value[r]);
