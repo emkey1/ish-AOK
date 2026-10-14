@@ -1,118 +1,14 @@
 #!/bin/sh
-# vm-update.sh -- bring an AOK VM machine's AOK tools up to the repository's, in place: a "Devuan Ultimate"
-# machine, or one of the base machines (iSH-AOK's Alpine or Devuan root as a machine of its own, aok-vm's
-# aok/images). In the machine, as root:
-#     wget -qO- https://raw.githubusercontent.com/emkey1/ish-AOK/working/tests/bench-utm/utm/vm-update.sh | sudo sh
-# (a machine built after 2026-10-12 has it as `aok-update`, with sudo where there is a user).
-#
-# From its first boot a machine's disk is its user's (a password, keys, packages), so a fix to the scripts
-# cannot reach it as a new image. This fetches the scripts of /AOK/tools again, replaces one only if what
-# arrived parses, and repeats what later images set outside /AOK/tools (the power key is ignored; Mesa's
-# Vulkan drivers are installed).
-# AOK_UPDATE_URL names another place to fetch from, laid out like the repository.
+# vm-update.sh -- AOK VM's aok-update lives in its own repository since 2026-10-14
+# (emkey1/aok-vm, aok/machine/aok-update), with the /AOK/tools scripts its machines carry. A machine
+# made before that runs this, as its aok-update brings it: this fetches that one and runs it, and it
+# replaces /usr/local/bin/aok-update with itself.
 set -e
-[ "$(id -u)" = 0 ] || { echo "aok-update: run it as root (sudo)"; exit 1; }
-[ -d /proc/ish ] && { echo "aok-update: for a VM; an AOK root has /AOK/tools from the app"; exit 1; }
-base=${AOK_UPDATE_URL:-https://raw.githubusercontent.com/emkey1/ish-AOK/working}
-# The distribution's own provisioning script: Alpine's or Devuan's.
-os=devuan; [ -f /etc/alpine-release ] && os=alpine
-# (setup-wayland.sh names setup-wayland-extras.sh, setup-xfce.sh and setup-wayfire.sh as what comes next)
-tools="start-wayland.sh setup-wayland.sh setup-wayland-extras.sh setup-xfce.sh setup-wayfire.sh select-desktop.sh
-       provision-ultimate-$os.sh setup-games.sh aok-sdl-game"
-t=$(mktemp -d)
-trap 'rm -rf "${t:?}"' EXIT
-for f in $tools vm-update.sh; do
-    case $f in vm-update.sh) u=$base/tests/bench-utm/utm/$f ;; *) u=$base/opt/AOK/tools/$f ;; esac
-    if ! wget -q -O "$t/$f" "$u" || ! [ -s "$t/$f" ] || ! sh -n "$t/$f" 2> /dev/null; then
-        echo "aok-update: could not fetch a sound $f from $base; nothing was changed"
-        exit 1
-    fi
-done
-mkdir -p /AOK/tools
-put() {     # put FILE DEST: replace DEST if FILE differs
-    if cmp -s "$1" "$2"; then
-        echo "  $2: current"
-    else
-        install -m 755 "$1" "$2" && echo "  $2: updated"
-    fi
-}
-for f in $tools; do put "$t/$f" "/AOK/tools/$f"; done
-newer=; cmp -s "$t/vm-update.sh" /usr/local/bin/aok-update || newer=1
-put "$t/vm-update.sh" /usr/local/bin/aok-update
-# Run as the installed command and replaced by a newer one: the rest is the newer one's to do, or what it
-# added would wait for a second run.
-if [ -n "$newer" ] && [ "${0##*/}" = aok-update ] && [ -z "$AOK_UPDATE_AGAIN" ]; then
-    echo "  (aok-update itself was updated: going on with the new one)"
-    rm -rf "${t:?}"; trap - EXIT
-    AOK_UPDATE_AGAIN=1 exec sh /usr/local/bin/aok-update
+u=${AOK_UPDATE_URL:-https://raw.githubusercontent.com/emkey1/aok-vm/aok-vm}/aok/machine/aok-update
+t=$(mktemp)
+trap 'rm -f "$t"' EXIT
+if ! wget -q -O "$t" "$u" || ! [ -s "$t" ] || ! sh -n "$t" 2> /dev/null; then
+    echo "aok-update: could not fetch a sound aok-update from $u; nothing was changed"
+    exit 1
 fi
-# An iPad keyboard's power key reaches the guest as one, and elogind's default is to power off.
-k=/etc/elogind/logind.conf.d/50-aok-vm-keys.conf
-if [ -d /etc/elogind ] && ! [ -f "$k" ]; then
-    mkdir -p /etc/elogind/logind.conf.d
-    cat > "$k" <<'L'
-[Login]
-HandlePowerKey=ignore
-HandleSuspendKey=ignore
-HandleHibernateKey=ignore
-L
-    echo "  $k: written (in force from the next boot)"
-fi
-# Which engine runs the machine (2026-10-13: the AOK gadget engine says so; `aok-engine`, and a line at login).
-cat > "$t/aok-engine" <<'E'
-#!/bin/sh
-# aok-engine -- which engine runs this machine's CPU. The AOK gadget engine says so itself: in the device
-# tree (/chosen, "aok,engine") where the machine has one, and in a fw_cfg file that rc.local copies to
-# /run/aok-engine at boot. Neither is there under QEMU's own engine.
-if [ -d /proc/ish ]; then echo "iSH-AOK"; exit 0; fi
-e=$(tr -d '\000' 2> /dev/null < /proc/device-tree/chosen/aok,engine)   # (2> first: a failed < is reported to it)
-[ -n "$e" ] || e=$(cat /run/aok-engine 2> /dev/null)
-echo "${e:-QEMU, without the AOK gadgets}"
-E
-put "$t/aok-engine" /usr/local/bin/aok-engine
-cat > "$t/aok-engine.sh" <<'E'
-# (aok-engine) one line at login: which engine this machine runs on
-case $- in *i*) command -v aok-engine > /dev/null 2>&1 && printf '  engine: \033[1m%s\033[0m\n' "$(aok-engine)" ;; esac
-E
-if ! cmp -s "$t/aok-engine.sh" /etc/profile.d/aok-engine.sh; then
-    install -m 644 "$t/aok-engine.sh" /etc/profile.d/aok-engine.sh && echo "  /etc/profile.d/aok-engine.sh: written"
-fi
-if [ -f /etc/rc.local ] && ! grep -q "(aok-engine)" /etc/rc.local; then
-    cat > "$t/rc-hook" <<'E'
-# (aok-engine) the engine's fw_cfg file, for machines with no device tree
-modprobe -q qemu_fw_cfg 2> /dev/null
-cat /sys/firmware/qemu_fw_cfg/by_name/opt/aok/engine/raw > /run/aok-engine 2> /dev/null || rm -f /run/aok-engine
-E
-    # (after the #! line: rc.local ends in "exit 0")
-    { sed -n 1p /etc/rc.local; cat "$t/rc-hook"; sed 1d /etc/rc.local; } > "$t/rc.local" &&
-        install -m 755 "$t/rc.local" /etc/rc.local && echo "  /etc/rc.local: reads the engine's name at boot"
-fi
-echo "  this machine runs on: $(/usr/local/bin/aok-engine)"
-# iSH-AOK's /AOK/persist (2026-10-14): AOK VM gives a machine the app's shared directory when its Sharing
-# setting "Share /AOK/persist" is on, as the VirtFS tag aokpersist, its files reported as the user's own.
-# Mounted at boot from now on, and now if the machine has it; nofail, so a machine without it boots as before.
-if ! grep -q '[[:space:]]/AOK/persist[[:space:]]' /etc/fstab; then
-    printf 'aokpersist /AOK/persist 9p trans=virtio,version=9p2000.L,nofail 0 0\n' >> /etc/fstab &&
-        echo "  /etc/fstab: mounts iSH-AOK's /AOK/persist when the machine is given it"
-fi
-mkdir -p /AOK/persist
-if ! mountpoint -q /AOK/persist; then
-    if mount /AOK/persist 2> /dev/null; then
-        echo "  /AOK/persist: iSH-AOK's, mounted"
-    else
-        echo "  /AOK/persist: not given to this machine (AOK VM: the machine's settings, Sharing)"
-    fi
-fi
-# Vulkan: the engine offers it since 2026-10-13 (venus); the guest's half is Mesa's virtio driver, which
-# images before that did not carry.
-if [ "$os" = devuan ] && ! dpkg -s mesa-vulkan-drivers vulkan-tools > /dev/null 2>&1; then
-    echo "  mesa-vulkan-drivers, vulkan-tools: installing (Vulkan in the guest) ..."
-    export DEBIAN_FRONTEND=noninteractive
-    if apt-get update -qq > /dev/null 2>&1 &&
-       apt-get install -y -qq --no-install-recommends mesa-vulkan-drivers vulkan-tools > /dev/null 2>&1; then
-        echo "  mesa-vulkan-drivers, vulkan-tools: installed"
-    else
-        echo "  mesa-vulkan-drivers, vulkan-tools: NOT installed (apt failed; run aok-update again)"
-    fi
-fi
-echo "aok-update: done. A desktop that is running keeps its old script until it is started again."
+AOK_UPDATE_AGAIN=1 sh "$t" "$@"
