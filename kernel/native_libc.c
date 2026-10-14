@@ -46,6 +46,7 @@
 #include "kernel/native_libc.h"
 #include "kernel/native_syscall.h"
 #include "kernel/task.h"
+#include <net/if.h>
 #include "fs/tty.h"
 #include "fs/tty-real.h"
 #include "kernel/uts.h"
