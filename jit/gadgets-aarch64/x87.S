@@ -10,11 +10,10 @@
 # The arithmetic, the stack, the register forms and the transcendentals are
 # not this file: they are x87-arith.S, x87-stack.S, x87-reg.S and x87-trans.S,
 # and what a memory form does once it has its operand is x87-mem.S's macros,
-# all of which the QEMU plug-in's x86 front end builds too. Those are the
-# aok-gadgets repository's (x87/), kept here as copies: edit them there
-# (its tools/sync.sh brings them here; x87-arith.S has the contract). What is
-# here is this engine's side of that contract, and the forms that reach
-# guest memory, which each engine does its own way.
+# whose contract (what a host gives them) is in x87-arith.S. They were
+# shared with AOK VM's QEMU engine until 2026-10-14; it took copies, and
+# each tree owns its own since. What is here is this engine's side of that
+# contract, and the forms that reach guest memory.
 #
 # State: cpu->fp[8] (16 bytes each: the 64-bit significand, then sign and
 # exponent), TOP in fsw bits 11-13, the abridged tag in cpu->x87_valid (bit i

@@ -2,14 +2,12 @@
 # check-shared-gadgets.sh -- do the riscv64 gadget sources still keep the
 # contract a second host builds them under?
 #
-# These files, jit/guest-arm64's two and jit/gadgets-aarch64/x87-*.S are the
-# aok-gadgets repository's (emkey1/aok-gadgets), kept here as copies: a change
-# is made there and brought here by its tools/sync.sh, whose --check says
-# whether the copies are in step. Its tools/check.sh is this script and the
-# x87's; this one stays for a tree that has no checkout of it beside it.
+# These files were shared with AOK VM's QEMU engine until 2026-10-14, when
+# it took copies; each tree owns its own since. The check stays because the
+# contract keeps the bodies free of this engine's own state.
 #
-# jit/guest-riscv64/alu.S, frag.h and pairs.h are also the QEMU plug-in's
-# source (frag.h, "A second host"). This assembles alu.S the way a second
+# jit/guest-riscv64/alu.S, frag.h and pairs.h keep the contract of a second
+# host (frag.h, "A second host"). This assembles alu.S the way a second
 # host does, with stand-in definitions of everything the contract makes the
 # host's (registers deliberately not AOK's, a memory model and a way out of
 # a block of its own), and fails if the shared code

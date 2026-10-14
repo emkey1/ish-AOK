@@ -27,12 +27,12 @@
 // (alu_spec.S, memory.S, simd_spec.S, math.S), so a pair cannot drift from
 // the instructions it is made of.
 //
-// A second host. These bodies, alu_spec.S and pairs.h are also the source of
-// the arm64 front end of the QEMU plug-in (qemu-aok, target/arm/tcg/aok),
-// which assembles copies of them unchanged, as it does guest-riscv64's
-// (frag.h there has the longer account). A host that is not iSH-AOK defines
-// A64_GADGET_HOST, and before including a shared file supplies what
-// gadgets.h supplies here:
+// A second host. These bodies, alu_spec.S and pairs.h were also the source
+// of the arm64 front end of AOK VM's QEMU engine until 2026-10-14, when it
+// took copies; each tree owns its own since, and nothing keeps them in step.
+// The contract stays, since it keeps the bodies free of this engine's own
+// state. A host that is not iSH-AOK defines A64_GADGET_HOST, and before
+// including a shared file supplies what gadgets.h supplies here:
 //
 //   _cpu, _ip     the guest state every slot offset is relative to, and the
 //                 stream pointer

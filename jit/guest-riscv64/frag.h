@@ -14,11 +14,12 @@
 
 // A second host. The bodies here and in alu.S -- the ALU family, mov_const
 // and addi, the loads and stores, the branches -- and the pairs made of them
-// are built by another translator as well as by AOK's: the QEMU plug-in
-// (tests/bench-utm, docs/utm_engine_study.md), which copies alu.S, this file
-// and pairs.h and assembles them with its own definitions in place of
-// gadgets.h. It defines RV_GADGET_HOST, and what the shared code may assume
-// of either host is no more than this:
+// were built by another translator as well as by AOK's until 2026-10-14: AOK
+// VM's QEMU engine (emkey1/qemu), which took copies then and owns them
+// since; nothing keeps the two in step. The contract stays, since it keeps
+// the bodies free of this engine's own state. A host that is not AOK defines
+// RV_GADGET_HOST, and what the shared code may assume of either host is no
+// more than this:
 //
 //   _cpu, _ip     the guest state and the stream pointer (.req)
 //   .gadget NAME  begins a gadget; gret N ends one, past N parameter words
