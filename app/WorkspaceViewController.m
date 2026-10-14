@@ -3207,6 +3207,7 @@ static NSString *ISHTerminalTabTitleForRole(NSString *role, Terminal *terminal) 
     UIButton *add = [UIButton buttonWithType:UIButtonTypeSystem];
     [add setImage:[UIImage systemImageNamed:@"plus"] forState:UIControlStateNormal];
     add.accessibilityLabel = NSLocalizedString(@"New Tab", @"accessibility label for new terminal tab button");
+    add.accessibilityHint = NSLocalizedString(@"Opens a new terminal tab.", @"accessibility hint for new terminal tab button");
     [add addTarget:self action:@selector(newTab) forControlEvents:UIControlEventTouchUpInside];
     [add.widthAnchor constraintEqualToConstant:30].active = YES;
     [_strip addArrangedSubview:add];
