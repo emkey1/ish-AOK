@@ -544,7 +544,6 @@ emu_src += [
     gadgets+'/entry.S',
     gadgets+'/memory.S',
     gadgets+'/control.S',
-    gadgets+'/math.S',
     gadgets+'/bits.S',
     gadgets+'/string.S',
     gadgets+'/misc.S',
@@ -594,7 +593,20 @@ if jit_cpu_family == 'aarch64' and guest_archs.contains('riscv64')
     ]
 endif
 
-libish_emu = library('ish_emu', emu_src, include_directories: includes)
+# math.S is assembled without debug information. It is the x86 guests' ALU,
+# SSE, AVX and AVX-512 gadgets: 17,500 lines of macros that expand to 6.6 MB
+# of code and 119,000 symbols. With -g the assembler also writes a line table
+# and a DWARF label for every one of them, and that took it 195 s on an M4
+# Mac, against 31 s without (2026-10-14) -- the longest step of every build,
+# Xcode's included, by 170 s; everything else was done at 118 s. Its symbols
+# are kept, so a backtrace or lldb still names the gadget; what goes is
+# stepping through it by source line. Its objects are folded into
+# libish_emu.a (link_whole), because the Xcode project links that archive by
+# name; tools/gadget-vreg-audit.py reads this library's directory too.
+libish_emu_math = static_library('ish_emu_math', [gadgets+'/math.S', offsets],
+    include_directories: includes, c_args: ['-g0'])
+libish_emu = library('ish_emu', emu_src, include_directories: includes,
+    link_whole: libish_emu_math)
 
 libfakefs = library('fakefs',
     ['fs/fake-db.c', 'fs/fake-migrate.c', 'fs/fake-rebuild.c', 'fs/fake-conn.c', 'fs/fake-snapshot.c',
@@ -2066,7 +2078,8 @@ if not meson.is_cross_build()
         gadget_vreg_audit = files('tools/gadget-vreg-audit.py')
         test('gadget_vreg_selftest', python, args: [gadget_vreg_audit, '--self-test'])
         test('gadget_vreg_audit', python,
-            args: [gadget_vreg_audit, meson.current_build_dir() / 'libish_emu.a.p'],
+            args: [gadget_vreg_audit, meson.current_build_dir() / 'libish_emu.a.p',
+                meson.current_build_dir() / 'libish_emu_math.a.p'],
             depends: [libish_emu], timeout: 300)
     endif
 

@@ -35,5 +35,5 @@ mv "$tmp_dep" "$dep"
 
 if [ "$changed" -ne 0 ]; then
     builddir=$(cd "$(dirname "$compile_commands")" && pwd)
-    rm -f "$builddir"/libish_emu.a.p/jit_gadgets-*.S.o
+    rm -f "$builddir"/libish_emu.a.p/jit_gadgets-*.S.o "$builddir"/libish_emu_math.a.p/jit_gadgets-*.S.o
 fi
