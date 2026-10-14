@@ -57,12 +57,15 @@
 //                 its own indirect branch), and pc_param REG turns a parameter
 //                 that is a guest code address as the translator wrote it
 //                 into the address
-//   f_leave_to REG
-//                 leave for the guest code address in REG (br, blr, ret: a
-//                 register's value)
 //   F_X0          the offset of X0 in the guest state, X1-X30 and SP after it
 //                 eight bytes apart: the compare-and-branch bodies' operands
 //                 are register numbers
+//
+// The indirect branches (br_cached, blr_cached, ret_cached) are a host's
+// own, since how a host finds the code for an address is: one that has them
+// defines f_br_cached_body and f_blr_cached_body (and their _stub), taking a
+// forwarded target as the families here take a forwarded operand, and gets
+// the pairs that end in them.
 //
 // A body uses x8-x17 and those, reads its operands through _ip,
 // and reaches guest state only as [_cpu, slot]. The last parameter word of a
@@ -562,8 +565,36 @@
 .endm
 .macro pc_param reg
 .endm
-.macro f_leave_to reg
-    ret_cache_dispatch \reg
+
+// The indirect branches, by the return cache (control.S's
+// ret_cache_dispatch).
+// BR, and RET, which is BR X30 with a different hint. [n_off]
+.macro f_br_cached_body id, last, a1, a2, a3, a4, a5, fn=_, fm=_
+.ifc \fn,_
+    ldr x8, [_ip]             // the register's offset (the translator: never XZR)
+    ldr x10, [_cpu, x8]
+.else
+    mov x10, x\fn            // the target, from the pair's first half
+.endif
+    ret_cache_dispatch x10
+.endm
+.macro f_br_cached_stub id, last, a1, a2, a3, a4, a5, fn=_, fm=_
+.endm
+
+// [n_off][return address]
+.macro f_blr_cached_body id, last, a1, a2, a3, a4, a5, fn=_, fm=_
+.ifc \fn,_
+    ldr x8, [_ip]
+    ldr x10, [_cpu, x8]
+.else
+    mov x10, x\fn
+.endif
+    ldr x11, [_ip, #8]      // return address
+    pc_param x11
+    str x11, [_cpu, #(F_X0 + 30*8)]  // X30 = return address, AFTER the target is read
+    ret_cache_dispatch x10
+.endm
+.macro f_blr_cached_stub id, last, a1, a2, a3, a4, a5, fn=_, fm=_
 .endm
 #endif
 
@@ -583,35 +614,6 @@
     branch_leave 0
 .endm
 .macro f_bl_stub id, last, a1, a2, a3, a4, a5, fn=_, fm=_
-.endm
-
-// BR, and RET, which is BR X30 with a different hint. [n_off]
-.macro f_br_cached_body id, last, a1, a2, a3, a4, a5, fn=_, fm=_
-.ifc \fn,_
-    ldr x8, [_ip]             // the register's offset (the translator: never XZR)
-    ldr x10, [_cpu, x8]
-.else
-    mov x10, x\fn            // the target, from the pair's first half
-.endif
-    f_leave_to x10
-.endm
-.macro f_br_cached_stub id, last, a1, a2, a3, a4, a5, fn=_, fm=_
-.endm
-
-// [n_off][return address]
-.macro f_blr_cached_body id, last, a1, a2, a3, a4, a5, fn=_, fm=_
-.ifc \fn,_
-    ldr x8, [_ip]
-    ldr x10, [_cpu, x8]
-.else
-    mov x10, x\fn
-.endif
-    ldr x11, [_ip, #8]      // return address
-    pc_param x11
-    str x11, [_cpu, #(F_X0 + 30*8)]  // X30 = return address, AFTER the target is read
-    f_leave_to x10
-.endm
-.macro f_blr_cached_stub id, last, a1, a2, a3, a4, a5, fn=_, fm=_
 .endm
 
 // CBZ/CBNZ: [rt_off][taken][fallthrough]; reg, jmp (jmp_bk for _bk)
