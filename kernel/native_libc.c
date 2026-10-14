@@ -29,6 +29,7 @@
 #include <sys/utsname.h>
 #include <unistd.h>
 #include <utmpx.h>
+#include <net/if.h>
 
 #include "fs/net_vif.h"
 #include "kernel/net_ns.h"
