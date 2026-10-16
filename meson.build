@@ -1949,9 +1949,14 @@ if have_gpu
     # duplicates its Objective-C classes once -ObjC loads them.
     meson.override_dependency('vulkan', declare_dependency(
         include_directories: moltenvk.get_variable('vulkan_inc')))
+    # render-server-mode=thread: fs/virtgpu.c calls vkr_renderer_* itself, so
+    # the standalone virgl_render_server is never used, and it cannot link
+    # (no Vulkan, and no MoltenVK for its pitch hook). Thread mode does not
+    # build it; the macro it sets reaches only the proxy, which libish omits.
     virgl = subproject('virglrenderer', default_options: [
         'default_library=static', 'vrend=false', 'venus=true', 'vulkan-dload=false',
-        'render-server-worker=thread', 'tests=false', 'werror=false', 'warning_level=0',
+        'render-server-mode=thread', 'render-server-worker=thread',
+        'tests=false', 'werror=false', 'warning_level=0',
     ])
     virgl_libs = [virgl.get_variable('libvirgl'), virgl.get_variable('libmesa'),
                   moltenvk.get_variable('libmoltenvk')]
