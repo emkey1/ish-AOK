@@ -1231,6 +1231,126 @@
         }
       }
     },
+    "In a sandbox (namespaces of its own), which a saved session cannot carry: %s. Save anyway and everything else is saved, but what is sandboxed keeps running now, and will be missing from a resume of this save." : {
+      "comment" : "Sandbox warning before saving; %s names one or more programs",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "In einer Sandbox (mit eigenen Namespaces), die eine gesicherte Sitzung nicht mitnehmen kann: %s. Trotzdem sichern, und alles andere wird gesichert, aber was in der Sandbox läuft, läuft jetzt weiter und fehlt, wenn diese Sicherung fortgesetzt wird."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "En un entorno aislado (con sus propios espacios de nombres), que una sesión guardada no puede conservar: %s. Si guardas de todos modos, se guarda todo lo demás, pero lo aislado sigue ejecutándose ahora y faltará al reanudar este guardado."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dans un bac à sable (avec ses propres espaces de noms), qu'une session enregistrée ne peut pas conserver : %s. Enregistrez quand même et tout le reste est enregistré, mais ce qui est dans le bac à sable continue de tourner maintenant et manquera à la reprise de cet enregistrement."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "サンドボックス内（独自の名前空間）で動作しており、保存したセッションには含められません: %s。それでも保存すると、ほかはすべて保存されますが、サンドボックス内のものは今は動き続け、この保存から再開したときにはありません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "샌드박스(자체 네임스페이스) 안에 있어 저장된 세션에 담을 수 없습니다: %s. 그래도 저장하면 나머지는 모두 저장되지만, 샌드박스 안의 것은 지금은 계속 실행되고 이 저장본에서 재개할 때는 없습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Em uma sandbox (com namespaces próprios), que uma sessão salva não consegue levar: %s. Salve mesmo assim e todo o resto é salvo, mas o que está na sandbox continua rodando agora e não estará em uma retomada deste salvamento."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "В песочнице (со своими пространствами имён), которую сохранённый сеанс не может перенести: %s. Если всё равно сохранить, всё остальное сохранится, но то, что в песочнице, продолжит работать сейчас и будет отсутствовать при возобновлении из этого сохранения."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "处于沙盒中（拥有自己的命名空间），已保存的会话无法包含：%s。仍然保存，其余一切都会保存，但沙盒中的内容现在会继续运行，从此保存恢复时将不存在。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "處於沙盒中（擁有自己的命名空間），已儲存的工作階段無法包含：%s。仍然儲存，其餘一切都會儲存，但沙盒中的內容現在會繼續執行，從此儲存恢復時將不存在。"
+          }
+        }
+      }
+    },
+    "In a sandbox (namespaces of its own), which a saved session cannot carry: %s. Suspend anyway and everything else is saved, but what is sandboxed will be gone when the session resumes." : {
+      "comment" : "Sandbox warning before suspending; %s names one or more programs",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "In einer Sandbox (mit eigenen Namespaces), die eine gesicherte Sitzung nicht mitnehmen kann: %s. Trotzdem pausieren, und alles andere wird gesichert, aber was in der Sandbox läuft, ist nach dem Fortsetzen der Sitzung weg."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "En un entorno aislado (con sus propios espacios de nombres), que una sesión guardada no puede conservar: %s. Si suspendes de todos modos, se guarda todo lo demás, pero lo aislado habrá desaparecido cuando se reanude la sesión."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dans un bac à sable (avec ses propres espaces de noms), qu'une session enregistrée ne peut pas conserver : %s. Suspendez quand même et tout le reste est enregistré, mais ce qui est dans le bac à sable aura disparu à la reprise de la session."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "サンドボックス内（独自の名前空間）で動作しており、保存したセッションには含められません: %s。それでもサスペンドすると、ほかはすべて保存されますが、サンドボックス内のものはセッションの再開時になくなります。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "샌드박스(자체 네임스페이스) 안에 있어 저장된 세션에 담을 수 없습니다: %s. 그래도 일시 중단하면 나머지는 모두 저장되지만, 샌드박스 안의 것은 세션을 재개할 때 사라집니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Em uma sandbox (com namespaces próprios), que uma sessão salva não consegue levar: %s. Suspenda mesmo assim e todo o resto é salvo, mas o que está na sandbox não estará lá quando a sessão for retomada."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "В песочнице (со своими пространствами имён), которую сохранённый сеанс не может перенести: %s. Если всё равно приостановить, всё остальное сохранится, но то, что в песочнице, исчезнет при возобновлении сеанса."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "处于沙盒中（拥有自己的命名空间），已保存的会话无法包含：%s。仍然暂停，其余一切都会保存，但沙盒中的内容在会话恢复时将不复存在。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "處於沙盒中（擁有自己的命名空間），已儲存的工作階段無法包含：%s。仍然暫停，其餘一切都會儲存，但沙盒中的內容在工作階段恢復時將不復存在。"
+          }
+        }
+      }
+    },
     "Install with Both Panels" : {
       "comment" : "Desktop setup: Wayfire with the fast wf-panel and waybar",
       "extractionState" : "manual",
@@ -2067,6 +2187,66 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "分享診斷報告。"
+          }
+        }
+      }
+    },
+    "Some programs can't be saved" : {
+      "comment" : "Sandbox warning alert title, before a save or suspend",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Einige Programme können nicht gesichert werden"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Algunos programas no se pueden guardar"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Certains programmes ne peuvent pas être enregistrés"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保存できないプログラムがあります"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "일부 프로그램은 저장할 수 없습니다"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alguns programas não podem ser salvos"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Некоторые программы нельзя сохранить"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "部分程序无法保存"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "部分程式無法儲存"
           }
         }
       }

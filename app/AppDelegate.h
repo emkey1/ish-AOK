@@ -98,7 +98,8 @@ bool ISHGuestHalted(void);
 int ISHSuspendSessionSuspendAndExit(BOOL leaveOutGPU);
 
 // Before a Save or Suspend the user asked for: when the Wayland desktop or
-// another GPU program is running, which cannot be saved, say so and ask --
+// another GPU program is running, or a process is in a sandbox (namespaces of
+// its own), none of which can be saved, say so and ask --
 // "Suspend Anyway" calls `proceed(YES)` (save everything else), Cancel does
 // nothing. With nothing on the GPU, `proceed(NO)` straight away. `verb` is the
 // button's word: @"Suspend" or @"Save". Main thread.

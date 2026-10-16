@@ -71,6 +71,7 @@
 #include <unistd.h>
 
 #include "kernel/ipc_ns.h"
+#include "kernel/mnt_ns.h"
 #include "fs/proc.h"
 #include "kernel/calls.h"
 #include "kernel/checkpoint.h"
@@ -1312,6 +1313,34 @@ unsigned checkpoint_gpu_holders(char *names, size_t size) {
     return count;
 }
 
+// In a mount, user, pid or network namespace of its own: a sandbox (bwrap,
+// codex), or a systemd service with PrivateTmp= and the like. None of the
+// four is in an image, and the writer refuses such a task (ckpt_write_task);
+// a leave-out save leaves it out instead, like a GPU program.
+static bool ckpt_task_sandboxed(const struct task *t) {
+    return t->mnt_ns != NULL || t->user_ns != NULL || t->pid_ns != NULL ||
+            t->pid_ns_for_children != NULL || t->net_ns != NULL;
+}
+
+unsigned checkpoint_sandboxed(char *names, size_t size) {
+    if (names != NULL && size != 0)
+        names[0] = '\0';
+    struct task_snapshot snap = {0};
+    if (task_snapshot_collect(&snap, true) < 0)
+        return 0;
+    unsigned count = 0;
+    for (unsigned i = 0; i < snap.count; i++) {
+        struct task *t = snap.tasks[i];
+        if (t->zombie || !ckpt_task_sandboxed(t))
+            continue;
+        count++;
+        if (names != NULL && size != 0)
+            ckpt_note_name(names, size, t->comm);
+    }
+    task_snapshot_release(&snap);
+    return count;
+}
+
 static int ckpt_classify_fd(int num, struct fd *fd, char *path, size_t path_size) {
     // Descriptors with no file behind them, identified by what they ARE rather
     // than by what they look like. Before this they reached the standard-
@@ -1910,6 +1939,11 @@ static int ckpt_tmpfs_save(struct ckpt_writer *w, struct task *as,
                 mount->detached || mount->lazy_umount)
             continue;
         if (mount->point == NULL || mount->point_len > MAX_PATH)
+            continue;
+        // A mount namespace's tmpfs (a service's PrivateTmp=) is its own: its
+        // tasks are not in the image, and restored in the initial tree it
+        // would be a mount nobody can reach.
+        if (!mnt_ns_has_point(&init_mnt_ns, mount->point))
             continue;
         if (n_points >= CKPT_TMPFS_MAX_MOUNTS)
             break;
@@ -3237,13 +3271,15 @@ static bool ckpt_task_as_killed(struct task *t) {
 }
 
 // Whether anything a task holds would refuse the save: the GPU or the Wayland
-// view's input, a memfd too large to carry, or a descriptor with no restore
-// rule. Asked while frozen, before anything is written. The descriptors are
+// view's input, a memfd too large to carry, a descriptor with no restore
+// rule, or a namespace of its own (ckpt_task_sandboxed). Asked while frozen, before anything is written. The descriptors are
 // gathered with a reference and the table lock dropped before any is asked,
 // as the writer does (asking one can walk every task's table). A refusal the
 // classifier records while answering is put back: this is a question, not the
 // save.
 static bool ckpt_task_unsaveable(struct task *task) {
+    if (ckpt_task_sandboxed(task))
+        return true;
     struct fdtable *files = task->files;
     if (files == NULL)
         return false;
@@ -3442,7 +3478,10 @@ static int ckpt_save(const char *host_path, unsigned flags) {
     char covered_at[MAX_PATH] = "";
     struct mount *covered;
     list_for_each_entry(&mounts, covered, mounts) {
-        if (covered->covered_by != 0 && !covered->lazy_umount && covered->covered_point != NULL) {
+        // The initial namespace's tree only: a mount namespace's own region
+        // goes with its tasks, which are refused or left out below.
+        if (covered->covered_by != 0 && !covered->lazy_umount && covered->covered_point != NULL &&
+                covered->point != NULL && mnt_ns_has_point(&init_mnt_ns, covered->point)) {
             snprintf(covered_at, sizeof(covered_at), "%s", covered->covered_point);
             break;
         }

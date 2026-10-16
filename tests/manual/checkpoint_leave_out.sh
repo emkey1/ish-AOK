@@ -17,8 +17,15 @@
 # nothing. The whole group goes, not only the holder -- a kept wayvnc and
 # start-wayland.sh used to linger after a resume and refuse every new
 # desktop as "already running".
-# After the restore: G, its child, M and all of J are gone, K is alive, and
-# the shell's waits return instead of hanging.  (Needs gcc in the root.)
+# And S, a process in a mount namespace of its own -- a sandbox, or a systemd
+# service with PrivateTmp= -- with a private tmpfs on /tmp and two stacked on
+# /mnt (a covered mount, in its namespace only). None of a namespace is in an
+# image; a plain save refused it, and so did a leave-out one, so a systemd
+# root could not be saved at all. Now it is left out like a GPU program, and
+# none of its mounts comes back in the initial tree.
+# After the restore: G, its child, M, all of J and S are gone, K is alive, and
+# the shell's waits return instead of hanging.  (Needs gcc and unshare in the
+# root.)
 set -e
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
 ISH=${ISH:-$REPO/build/ish}
@@ -47,14 +54,24 @@ G=$!
 M=$!
 setsid sh -c '( exec 5<>/dev/dri/renderD128; sleep 303 ) & sleep 302 & wait' &
 J=$!
+unshare -m --propagation private sh -c 'mount -t tmpfs aok-sandbox /tmp && touch /tmp/inside &&
+    mount -t tmpfs aok-under /mnt && mount -t tmpfs aok-over /mnt && exec sleep 304' &
+S=$!
 sleep 301 &
 K=$!
 # J's children exist before the checkpoint, or the save lands first and the
 # restored shell starts them afresh.
 n=0
-while [ "$(ps -e -o args= | grep -c -E '^sleep 30[23]$')" -lt 2 ] && [ $n -lt 100 ]; do
+while [ "$(ps -e -o args= | grep -c -E '^sleep 30[234]$')" -lt 3 ] && [ $n -lt 100 ]; do
     sleep 0.1; n=$((n+1))
 done
+# The sandbox has its mounts before the save, or the test proves nothing.
+n=0
+while ! grep -q aok-over /proc/$S/mountinfo 2>/dev/null && [ $n -lt 100 ]; do
+    sleep 0.1; n=$((n+1))
+done
+grep -q aok-over /proc/$S/mountinfo 2>/dev/null && echo "OK sbsetup: in its namespace, with its mounts" \
+    || echo "FAIL sbsetup: the sandbox never mounted"
 touch /realmnt/ready
 sleep 6
 # Only the restored guest gets here: the save run is killed once the image exists.
@@ -65,12 +82,21 @@ n300=$(ps -e -o args= | grep -c '^sleep 300$' || true)
 if kill -0 $M 2>/dev/null; then echo "FAIL memfd: still here"; else echo "OK memfd: left out"; fi
 n302=$(ps -e -o args= | grep -c -E '^sleep 30[23]$' || true)
 [ "$n302" -eq 0 ] && echo "OK group: left out whole" || echo "FAIL group: $n302 of the job left"
+if kill -0 $S 2>/dev/null; then echo "FAIL sandbox: still here"; else echo "OK sandbox: left out"; fi
+if grep -q -E 'aok-(sandbox|under|over)' /proc/self/mountinfo; then
+    echo "FAIL sbmounts: $(grep -E 'aok-(sandbox|under|over)' /proc/self/mountinfo | tr '\n' ' ')"
+else
+    echo "OK sbmounts: none of the sandbox's mounts came back"
+fi
+[ -e /tmp/inside ] && echo "FAIL sbfile: its private /tmp leaked into the root" || echo "OK sbfile: not in the root's /tmp"
 wait $G
 echo "OK wait: returned $?"
 wait $M
 echo "OK waitm: returned $?"
 wait $J
 echo "OK waitj: returned $?"
+wait $S
+echo "OK waits: returned $?"
 kill $K
 EOF
 
@@ -89,7 +115,7 @@ save() {   # <extra env assignment or empty>
 fail=0
 # The control: without the option, the save refuses and says why.
 save ""
-if [ -s "$WORK/img" ] || ! grep -q 'Wayland desktop or GPU program' "$WORK/img.log" 2>/dev/null; then
+if [ -s "$WORK/img" ] || ! grep -q -E 'Wayland desktop or GPU program|namespace of its own' "$WORK/img.log" 2>/dev/null; then
     echo "  FAIL    | a plain save did not refuse: $(cat "$WORK/img.log" 2>/dev/null)"; fail=1
 else
     echo "  OK refused: $(cat "$WORK/img.log")"
@@ -97,10 +123,13 @@ fi
 
 save ISH_CHECKPOINT_LEAVE_OUT=1
 [ -s "$WORK/img" ] || { echo "FAIL: no image written: $(cat "$WORK/img.log" 2>/dev/null)"; exit 1; }
+# Printed before the save, so by the run that saved.
+grep -E '^(OK|FAIL) sbsetup' "$WORK/save.out" | sed 's/^/  /'
+grep -q '^OK sbsetup' "$WORK/save.out" || { echo "  FAIL    | sbsetup"; fail=1; }
 out=$(ISH_REAL_MNT=$WORK ISH_RESTORE="$WORK/img" perl -e 'alarm 60; exec @ARGV' "$ISH" -f "$ROOT" < /dev/null 2>&1 || true)
 echo "$out" | grep -E '^(OK|FAIL)' | sed 's/^/  /'
-for k in holder memfd group kept descendants wait waitm waitj; do
+for k in holder memfd group sandbox sbmounts sbfile kept descendants wait waitm waitj waits; do
     echo "$out" | grep -q "^OK $k" || { echo "  FAIL    | $k"; fail=1; }
 done
 [ $fail -eq 0 ] || { echo "FAIL"; exit 1; }
-echo "PASS: the GPU holder, its children and the big memfd were left out; the rest came back"
+echo "PASS: the GPU holder, its children, the big memfd and the sandbox were left out; the rest came back"

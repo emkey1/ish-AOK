@@ -137,10 +137,11 @@ refusal names the process and the reason, in `/proc/ish/checkpoint`:
 - **A process in a namespace of its own** (559) — a bubblewrap or `codex
   sandbox` sandbox, anything under `unshare`, or a systemd service with
   private mounts such as `PrivateTmp=`. Restored outside its namespaces it
-  would no longer be confined, so the save is refused instead, and so is one
-  while a mount has another mounted over it. **Save Anyway** does not leave
-  these out, and the automatic save refuses too, so on a root running systemd
-  with sandboxed services a session cannot be saved at all yet. See
+  would no longer be confined, so a plain save is refused. Since 562 the app
+  asks first, as it does for the GPU: **Save Anyway** (or **Suspend Anyway**)
+  saves everything else and leaves each sandboxed process out, with its process
+  group and its children, and the automatic save does the same. Its mounts --
+  a service's private `/tmp`, say -- are not in the image either. See
   [namespaces.md](namespaces.md).
 
 - **The Wayland desktop, or any program using the GPU.** What stands behind

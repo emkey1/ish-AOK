@@ -72,9 +72,10 @@ for either, which is how `bwrap --unshare-all` and systemd know to skip them.
 - **A sandbox counts against your process limit.** `RLIMIT_NPROC` (`ulimit
   -u`) is charged at every level up to the machine, against the limit the
   sandbox's creator had, so raising it inside buys nothing.
-- **A session with a sandbox in it cannot be saved.** Suspend to disk refuses
-  while any process is in a namespace of its own — that includes a systemd
-  root whose services use private mounts. See [suspend.md](suspend.md).
+- **A sandbox is not in a saved session.** A plain save refuses while any
+  process is in a namespace of its own — that includes a systemd root whose
+  services use private mounts. **Save Anyway**, and the automatic save, leave
+  such processes out and save the rest (562). See [suspend.md](suspend.md).
 - **`/AOK/fixes/codex` now undoes itself.** Before 559 it turned Codex's
   sandbox off; run on a newer build it takes that line out again. See
   [roots.md](roots.md).

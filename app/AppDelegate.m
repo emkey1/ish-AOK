@@ -3763,7 +3763,12 @@ void ISHSuspendSessionConfirmGPUThen(UIViewController *host, NSString *verb,
                                      void (^proceed)(BOOL leaveOutGPU)) {
     char names[192];
     unsigned holders = checkpoint_gpu_holders(names, sizeof(names));
-    if (holders == 0 || host == nil) {
+    // A process in a namespace of its own (a sandbox, or a systemd service's
+    // private mounts) cannot be saved either, and a plain save refuses it; on
+    // a systemd root there is always one. The same choice, in its own words.
+    char sandboxed[192];
+    unsigned sandboxes = holders == 0 ? checkpoint_sandboxed(sandboxed, sizeof(sandboxed)) : 0;
+    if ((holders == 0 && sandboxes == 0) || host == nil) {
         proceed(NO);
         return;
     }
@@ -3771,7 +3776,18 @@ void ISHSuspendSessionConfirmGPUThen(UIViewController *host, NSString *verb,
     // text: each combination is a whole sentence so it can be translated.
     BOOL suspending = [verb isEqualToString:@"Suspend"];
     NSString *format;
-    if (suspending) {
+    NSString *title = NSLocalizedString(@"The Wayland desktop can't be saved", @"GPU warning alert title");
+    if (holders == 0) {
+        title = NSLocalizedString(@"Some programs can't be saved", @"Sandbox warning alert title, before a save or suspend");
+        format = suspending
+            ? NSLocalizedString(@"In a sandbox (namespaces of its own), which a saved session cannot carry: %s. "
+                                @"Suspend anyway and everything else is saved, but what is sandboxed will be gone when the session resumes.",
+                                @"Sandbox warning before suspending; %s names one or more programs")
+            : NSLocalizedString(@"In a sandbox (namespaces of its own), which a saved session cannot carry: %s. "
+                                @"Save anyway and everything else is saved, but what is sandboxed keeps running now, and will be missing from a resume of this save.",
+                                @"Sandbox warning before saving; %s names one or more programs");
+        memcpy(names, sandboxed, sizeof(names));
+    } else if (suspending) {
         format = holders == 1
             ? NSLocalizedString(@"%s is using the GPU, and what it holds there lives in the app, outside the session. "
                                 @"Suspend anyway and everything else is saved, but the Wayland desktop and "
@@ -3794,7 +3810,7 @@ void ISHSuspendSessionConfirmGPUThen(UIViewController *host, NSString *verb,
     }
     NSString *message = [NSString stringWithFormat:format, names];
     UIAlertController *alert =
-        [UIAlertController alertControllerWithTitle:NSLocalizedString(@"The Wayland desktop can't be saved", @"GPU warning alert title")
+        [UIAlertController alertControllerWithTitle:title
                                             message:message
                                      preferredStyle:UIAlertControllerStyleAlert];
     [alert addAction:[UIAlertAction actionWithTitle:suspending ? NSLocalizedString(@"Suspend Anyway", @"GPU warning button")

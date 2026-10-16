@@ -68,6 +68,10 @@ int checkpoint_save_external_flags(const char *host_path, unsigned flags);
 // their names ("labwc, wl-present"), so a caller can ask before a save that
 // would leave them out. Not frozen: an answer for a question, not an image.
 unsigned checkpoint_gpu_holders(char *names, size_t size);
+// The same for processes in a mount, user, pid or network namespace of their
+// own (a sandbox, or a service's private mounts): a save refuses them, and
+// CKPT_SAVE_LEAVE_OUT leaves them out.
+unsigned checkpoint_sandboxed(char *names, size_t size);
 void checkpoint_run_pending(void);
 
 // The session file the entry point was given, if any: restored at startup and
