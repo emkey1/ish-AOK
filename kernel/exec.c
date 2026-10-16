@@ -3437,9 +3437,19 @@ static ssize_t read_execve_user_args(guest_addr_t argv_addr, guest_addr_t envp_a
     size_t cap = exec_args_limit();
     char *argv = NULL;
     size_t argv_used = 0;
-    ssize_t argc = user_read_string_array(argv_addr, cap, &argv, &argv_used);
-    if (argc < 0)
-        return argc;
+    ssize_t argc = 0;
+    if (argv_addr != 0) {
+        argc = user_read_string_array(argv_addr, cap, &argv, &argv_used);
+        if (argc < 0)
+            return argc;
+    } else {
+        // A NULL argv is an empty one, as Linux's count() has it (not
+        // EFAULT); the exec then runs it as {""}, like any empty argv.
+        argv = malloc(2);
+        if (argv == NULL)
+            return _ENOMEM;
+        argv[0] = argv[1] = '\0';
+    }
 
     char *envp = NULL;
     ssize_t envc = 0;

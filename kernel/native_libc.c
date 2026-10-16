@@ -3480,6 +3480,19 @@ long nlibc_sysconf(int name) {
             }
             return (long) (ram / 4096);
         }
+        case _SC_ARG_MAX: {
+            // glibc's answer: a quarter of the stack limit, never below the
+            // old fixed ARG_MAX (sysdeps/unix/sysv/linux/sysconf.c). The
+            // kernel also caps it at 3/4 of _STK_LIM (kernel/exec.c
+            // exec_args_limit); glibc does not report that, so nor do we.
+            struct rlimit rl;
+            if (nlibc_getrlimit(RLIMIT_STACK, &rl) < 0)
+                return 131072;
+            // Unlimited is the guest's ~0, so glibc's quarter of it.
+            uint64_t quarter = rl.rlim_cur == RLIM_INFINITY ?
+                    UINT64_MAX / 4 : (uint64_t) rl.rlim_cur / 4;
+            return quarter > 131072 ? (long) quarter : 131072;
+        }
         default:
             errno = EINVAL;
             return -1;
