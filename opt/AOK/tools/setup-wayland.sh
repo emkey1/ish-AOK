@@ -143,6 +143,7 @@ elif command -v apk >/dev/null 2>&1; then
     # window title, menu and foot terminal was drawn in Font Awesome.
     # wlr-randr sets the output scale the Display applet's UI-scale setting
     # asks for; labwc has no output configuration of its own.
+    log "installing labwc, sway, wofi, foot, wayvnc, wlr-randr"
     apk_add labwc sway wofi foot wayvnc font-dejavu wlr-randr || die "apk add failed -- see output above"
 
 else

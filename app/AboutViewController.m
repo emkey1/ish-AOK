@@ -1429,7 +1429,7 @@ static dispatch_queue_t ISHDesktopSetupQueue(void) {
 }
 
 // Runs one script as root in the guest and shows its output as it comes.
-@interface ISHDesktopScriptViewController : UIViewController
+@interface ISHDesktopScriptViewController : UIViewController <UITextViewDelegate>
 - (instancetype)initWithTitle:(NSString *)title command:(NSString *)command completion:(void (^_Nullable)(BOOL succeeded))completion;
 @end
 
@@ -1442,6 +1442,17 @@ static dispatch_queue_t ISHDesktopSetupQueue(void) {
     BOOL _started, _running, _stopRequested;
     NSMutableData *_pending; // bytes read and not yet a whole line
     BOOL _idleTimerWasDisabled;
+    // Progress (GH #646), read from what the script prints: the step from its
+    // "==>" lines, and a bar for the package transaction under way.
+    UILabel *_stepLabel, *_countLabel;
+    UIProgressView *_progressView;
+    NSInteger _apkDone, _apkTotal;
+    NSString *_apkVerb;
+    BOOL _apkDownloaded; // this transaction downloaded first (apk 3's --cache-predownload)
+    NSInteger _aptInstall, _aptRemove, _aptGets, _aptUnpacks, _aptSetups, _aptRemoves;
+    // The output follows what is printed until the person scrolls up, and
+    // again once they scroll back to the end.
+    BOOL _scrolledAway;
 }
 
 - (instancetype)initWithTitle:(NSString *)title command:(NSString *)command completion:(void (^)(BOOL))completion {
@@ -1464,9 +1475,45 @@ static dispatch_queue_t ISHDesktopSetupQueue(void) {
     _textView.alwaysBounceVertical = YES;
     _textView.font = [UIFont monospacedSystemFontOfSize:12 weight:UIFontWeightRegular];
     _textView.textContainerInset = UIEdgeInsetsMake(10, 8, 10, 8);
+    _textView.delegate = self;
     [self.view addSubview:_textView];
+
+    // How far along it is: the script's own step, and how many packages of
+    // the transaction under way are done. A script runs several transactions,
+    // so the bar fills once for each; the step line says which.
+    _stepLabel = [UILabel new];
+    _stepLabel.font = [UIFont preferredFontForTextStyle:UIFontTextStyleHeadline];
+    _stepLabel.adjustsFontForContentSizeCategory = YES;
+    _stepLabel.numberOfLines = 2;
+    _stepLabel.text = NSLocalizedString(@"Starting…", @"Wayland display status text");
+    _countLabel = [UILabel new];
+    _countLabel.font = [UIFont preferredFontForTextStyle:UIFontTextStyleFootnote];
+    _countLabel.adjustsFontForContentSizeCategory = YES;
+    _countLabel.textColor = UIColor.secondaryLabelColor;
+    _countLabel.hidden = YES;
+    _progressView = [[UIProgressView alloc] initWithProgressViewStyle:UIProgressViewStyleDefault];
+    UIStackView *progress = [[UIStackView alloc] initWithArrangedSubviews:@[_stepLabel, _progressView, _countLabel]];
+    progress.axis = UILayoutConstraintAxisVertical;
+    progress.spacing = 6;
+    progress.translatesAutoresizingMaskIntoConstraints = NO;
+    progress.layoutMarginsRelativeArrangement = YES;
+    progress.directionalLayoutMargins = NSDirectionalEdgeInsetsMake(12, 16, 10, 16);
+    progress.accessibilityElements = @[_stepLabel, _countLabel];
+    [self.view addSubview:progress];
+    UIView *rule = [UIView new];
+    rule.translatesAutoresizingMaskIntoConstraints = NO;
+    rule.backgroundColor = UIColor.separatorColor;
+    [self.view addSubview:rule];
+
     [NSLayoutConstraint activateConstraints:@[
-        [_textView.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor],
+        [progress.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor],
+        [progress.leadingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.leadingAnchor],
+        [progress.trailingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.trailingAnchor],
+        [rule.topAnchor constraintEqualToAnchor:progress.bottomAnchor],
+        [rule.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
+        [rule.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
+        [rule.heightAnchor constraintEqualToConstant:1.0 / UIScreen.mainScreen.scale],
+        [_textView.topAnchor constraintEqualToAnchor:rule.bottomAnchor],
         [_textView.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
         [_textView.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
         [_textView.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
@@ -1510,14 +1557,30 @@ static dispatch_queue_t ISHDesktopSetupQueue(void) {
 - (void)appendOutput:(NSString *)text {
     if (text.length == 0)
         return;
-    BOOL atEnd = _textView.contentOffset.y + _textView.bounds.size.height >= _textView.contentSize.height - 40.0;
     NSAttributedString *more = [[NSAttributedString alloc] initWithString:text attributes:@{
         NSFontAttributeName: _textView.font ?: [UIFont monospacedSystemFontOfSize:12 weight:UIFontWeightRegular],
         NSForegroundColorAttributeName: UIColor.labelColor,
     }];
     [_textView.textStorage appendAttributedString:more];
-    if (atEnd)
+    if (!_scrolledAway)
         [_textView scrollRangeToVisible:NSMakeRange(_textView.textStorage.length, 0)];
+}
+
+- (BOOL)outputIsAtEnd {
+    return _textView.contentOffset.y + _textView.bounds.size.height >= _textView.contentSize.height - 40.0;
+}
+
+- (void)scrollViewWillBeginDragging:(UIScrollView *)scrollView {
+    _scrolledAway = YES;
+}
+
+- (void)scrollViewDidEndDragging:(UIScrollView *)scrollView willDecelerate:(BOOL)decelerate {
+    if (!decelerate)
+        _scrolledAway = ![self outputIsAtEnd];
+}
+
+- (void)scrollViewDidEndDecelerating:(UIScrollView *)scrollView {
+    _scrolledAway = ![self outputIsAtEnd];
 }
 
 // What the scripts print is made for a terminal: colour sequences, and
@@ -1597,6 +1660,102 @@ static NSString *ISHDesktopPlainText(NSString *text) {
     });
 }
 
+// Reads one line of output for the progress header. The scripts' own steps
+// are "==> ..." (log() in each setup script). apk numbers each package of a
+// transaction, "(12/345) Installing foo"; apt says how many first ("3
+// upgraded, 40 newly installed, 0 to remove") and then names each package as
+// it is downloaded (Get:), unpacked and set up, or removed.
+- (void)noteProgressLine:(NSString *)line {
+    static NSRegularExpression *apkLine, *aptSummary;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        apkLine = [NSRegularExpression regularExpressionWithPattern:@"^\\(\\s*(\\d+)/(\\d+)\\)\\s+(\\S+)" options:0 error:nil];
+        aptSummary = [NSRegularExpression regularExpressionWithPattern:@"^(\\d+) upgraded, (\\d+) newly installed, (\\d+) to remove" options:0 error:nil];
+    });
+    NSRange all = NSMakeRange(0, line.length);
+    if ([line hasPrefix:@"==> "]) {
+        _stepLabel.text = [[line substringFromIndex:4] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
+        _apkTotal = 0;
+        _apkDownloaded = NO;
+        _aptInstall = _aptRemove = 0;
+        [self showProgress];
+        return;
+    }
+    NSTextCheckingResult *m = [apkLine firstMatchInString:line options:0 range:all];
+    if (m != nil) {
+        _apkDone = [line substringWithRange:[m rangeAtIndex:1]].integerValue;
+        _apkTotal = [line substringWithRange:[m rangeAtIndex:2]].integerValue;
+        _apkVerb = [line substringWithRange:[m rangeAtIndex:3]];
+        if ([_apkVerb isEqualToString:@"Downloading"])
+            _apkDownloaded = YES;
+        [self showProgress];
+        return;
+    }
+    m = [aptSummary firstMatchInString:line options:0 range:all];
+    if (m != nil) {
+        _aptInstall = [line substringWithRange:[m rangeAtIndex:1]].integerValue + [line substringWithRange:[m rangeAtIndex:2]].integerValue;
+        _aptRemove = [line substringWithRange:[m rangeAtIndex:3]].integerValue;
+        _aptGets = _aptUnpacks = _aptSetups = _aptRemoves = 0;
+        _apkTotal = 0;
+        [self showProgress];
+        return;
+    }
+    if (_aptInstall + _aptRemove == 0)
+        return;
+    if ([line hasPrefix:@"Get:"])
+        _aptGets++;
+    else if ([line hasPrefix:@"Unpacking "])
+        _aptUnpacks++;
+    else if ([line hasPrefix:@"Setting up "])
+        _aptSetups++;
+    else if ([line hasPrefix:@"Removing "])
+        _aptRemoves++;
+    else
+        return;
+    [self showProgress];
+}
+
+- (void)showProgress {
+    NSString *count = @"";
+    float fraction = 0;
+    if (_apkTotal > 0) {
+        // apk 3 with --cache-predownload numbers the downloads first, then
+        // the installs: each takes half the bar.
+        NSInteger done = MIN(_apkDone, _apkTotal);
+        fraction = (float) done / (float) _apkTotal;
+        NSString *format;
+        if ([_apkVerb isEqualToString:@"Downloading"]) {
+            format = NSLocalizedString(@"Downloading %1$ld of %2$ld packages", @"Desktop setup progress; %1$ld packages done, %2$ld in all");
+            fraction /= 2;
+        } else if ([_apkVerb isEqualToString:@"Purging"] || [_apkVerb isEqualToString:@"Deleting"]) {
+            format = NSLocalizedString(@"Removing %1$ld of %2$ld packages", @"Desktop setup progress; %1$ld packages done, %2$ld in all");
+        } else {
+            format = NSLocalizedString(@"Installing %1$ld of %2$ld packages", @"Desktop setup progress; %1$ld packages done, %2$ld in all");
+            if (_apkDownloaded)
+                fraction = 0.5f + fraction / 2;
+        }
+        count = [NSString localizedStringWithFormat:format, (long) done, (long) _apkTotal];
+    } else if (_aptInstall + _aptRemove > 0) {
+        // Each package to install is downloaded, unpacked and set up: three
+        // steps; one to remove is one. A package already downloaded skips
+        // its Get:, so the bar can end a little short of full.
+        NSInteger gets = MIN(_aptGets, _aptInstall), unpacks = MIN(_aptUnpacks, _aptInstall);
+        NSInteger setups = MIN(_aptSetups, _aptInstall), removes = MIN(_aptRemoves, _aptRemove);
+        fraction = (float) (gets + unpacks + setups + removes) / (float) (3 * _aptInstall + _aptRemove);
+        if (removes > 0 || _aptInstall == 0)
+            count = [NSString localizedStringWithFormat:NSLocalizedString(@"Removing %1$ld of %2$ld packages", @"Desktop setup progress; %1$ld packages done, %2$ld in all"), (long) removes, (long) _aptRemove];
+        else if (setups > 0)
+            count = [NSString localizedStringWithFormat:NSLocalizedString(@"Setting up %1$ld of %2$ld packages", @"Desktop setup progress; %1$ld packages done, %2$ld in all"), (long) setups, (long) _aptInstall];
+        else if (unpacks > 0)
+            count = [NSString localizedStringWithFormat:NSLocalizedString(@"Unpacking %1$ld of %2$ld packages", @"Desktop setup progress; %1$ld packages done, %2$ld in all"), (long) unpacks, (long) _aptInstall];
+        else
+            count = [NSString localizedStringWithFormat:NSLocalizedString(@"Downloading %1$ld of %2$ld packages", @"Desktop setup progress; %1$ld packages done, %2$ld in all"), (long) gets, (long) _aptInstall];
+    }
+    _countLabel.text = count;
+    _countLabel.hidden = count.length == 0;
+    [_progressView setProgress:fraction animated:fraction > _progressView.progress];
+}
+
 // Whole lines only, so that a multi-byte character split across two reads is
 // never decoded in halves, and the status line is seen whole.
 - (void)consumeOutput:(NSData *)chunk atEnd:(BOOL)atEnd {
@@ -1615,6 +1774,8 @@ static NSString *ISHDesktopPlainText(NSString *text) {
             status = [line substringFromIndex:ISHDesktopScriptDoneMarker.length].intValue;
             continue;
         }
+        for (NSString *part in [ISHDesktopPlainText(line) componentsSeparatedByString:@"\n"])
+            [self noteProgressLine:part];
         [text appendString:line];
         [text appendString:@"\n"];
     }
@@ -1675,6 +1836,10 @@ static NSString *ISHDesktopPlainText(NSString *text) {
     else
         summary = [NSString stringWithFormat:NSLocalizedString(@"The script failed (status %d). What went wrong is in its output above.", @"Desktop setup result; %d is an exit status"), status];
     [self appendOutput:[NSString stringWithFormat:@"\n%@\n", summary]];
+    _stepLabel.text = summary;
+    _countLabel.hidden = YES;
+    if (succeeded)
+        [_progressView setProgress:1.0f animated:YES];
     [_textView scrollRangeToVisible:NSMakeRange(_textView.textStorage.length, 0)];
     UIAccessibilityPostNotification(UIAccessibilityAnnouncementNotification, summary);
     void (^completion)(BOOL) = _completion;
@@ -1730,13 +1895,12 @@ static NSString *ISHDesktopTitle(NSString *name) {
     return @"Sway";
 }
 
-// The script that installs each. labwc and sway come together; Wayfire is
-// told which panel, so that it has nothing to ask.
+// The script that installs each. labwc and sway come together. Wayfire is
+// told which panel the person chose (wayfirePanelSheet), so that it has
+// nothing to ask.
 static NSString *ISHDesktopInstallCommand(NSString *name) {
     if ([name isEqualToString:@"xfce"])
         return @"sh /AOK/tools/setup-xfce.sh";
-    if ([name isEqualToString:@"wayfire"])
-        return @"sh /AOK/tools/setup-wayfire.sh --panel stock";
     return @"sh /AOK/tools/setup-wayland.sh";
 }
 
@@ -1833,7 +1997,9 @@ static NSString *ISHDesktopInstallCommand(NSString *name) {
     if (section == ISHDesktopSetupSectionDesktops) {
         if (_probeFailed)
             return NSLocalizedString(@"The Linux system did not answer. It has to be running for a desktop to be installed in it.", @"Desktop setup footer when the guest cannot be asked");
-        return NSLocalizedString(@"Tap a desktop to install it in the filesystem that is running, or to make it the one the Wayland display starts. Installing downloads packages and takes several minutes; keep iSH-AOK open until it finishes. Wayfire needs Devuan and the GPU.", @"Desktop setup footer");
+        return [NSString stringWithFormat:@"%@ %@",
+                NSLocalizedString(@"Tap a desktop to install it in the filesystem that is running, or to make it the one the Wayland display starts. Installing downloads packages and takes several minutes; keep iSH-AOK open until it finishes. Wayfire needs Devuan and the GPU.", @"Desktop setup footer"),
+                NSLocalizedString(@"To remove an installed desktop, swipe left on it, or touch and hold it.", @"Desktop setup footer, second sentence")];
     }
     return NSLocalizedString(@"Programs for the desktop's Applications menu, and the drivers that let the desktop and its programs use the GPU.", @"Desktop setup footer for the extra programs");
 }
@@ -1875,14 +2041,94 @@ static NSString *ISHDesktopInstallCommand(NSString *name) {
     [sheet addActionWithTitle:NSLocalizedString(@"Install", @"Desktop setup: confirm button")
                         style:UIAlertActionStyleDefault
                       handler:^(__unused UIAlertAction *action) {
-        typeof(self) strongSelf = weakSelf;
-        if (strongSelf == nil)
-            return;
-        ISHDesktopScriptViewController *runner = [[ISHDesktopScriptViewController alloc] initWithTitle:title command:command completion:nil];
-        [strongSelf.navigationController pushViewController:runner animated:YES];
+        [weakSelf pushScript:title command:command];
     }];
     [sheet addActionWithTitle:NSLocalizedString(@"Cancel", @"Action sheet button") style:UIAlertActionStyleCancel handler:nil];
     [sheet presentFromViewController:self sourceView:cell sourceRect:cell.bounds];
+}
+
+- (void)pushScript:(NSString *)title command:(NSString *)command {
+    ISHDesktopScriptViewController *runner = [[ISHDesktopScriptViewController alloc] initWithTitle:title command:command completion:nil];
+    [self.navigationController pushViewController:runner animated:YES];
+}
+
+// Wayfire comes with a choice of panel (setup-wayfire.sh --panel). The
+// install asks it here, in place of the confirmation the others get.
+- (void)wayfirePanelSheetFromCell:(UITableViewCell *)cell {
+    ISHActionSheet *sheet = [ISHActionSheet actionSheetWithTitle:ISHDesktopTitle(@"wayfire")
+                                                         message:NSLocalizedString(@"Choose Wayfire's panel. This downloads packages into the filesystem that is running and takes several minutes; keep iSH-AOK open until it finishes. With both, select-desktop.sh --panel switches between them later.", @"Desktop setup: Wayfire install, the panel choice")];
+    NSArray<NSArray<NSString *> *> *panels = @[
+        @[NSLocalizedString(@"Install with the Fast Panel", @"Desktop setup: Wayfire with the faster wf-panel"), @"fast"],
+        @[NSLocalizedString(@"Install with Waybar", @"Desktop setup: Wayfire with waybar as its panel"), @"waybar"],
+        @[NSLocalizedString(@"Install with Both Panels", @"Desktop setup: Wayfire with the fast wf-panel and waybar"), @"both"],
+        @[NSLocalizedString(@"Install with the Packaged Panel", @"Desktop setup: Wayfire with the distribution's own wf-panel"), @"stock"],
+    ];
+    __weak typeof(self) weakSelf = self;
+    for (NSArray<NSString *> *panel in panels) {
+        NSString *command = [@"sh /AOK/tools/setup-wayfire.sh --panel " stringByAppendingString:panel[1]];
+        [sheet addActionWithTitle:panel[0] style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
+            [weakSelf pushScript:ISHDesktopTitle(@"wayfire") command:command];
+        }];
+    }
+    [sheet addActionWithTitle:NSLocalizedString(@"Cancel", @"Action sheet button") style:UIAlertActionStyleCancel handler:nil];
+    [sheet presentFromViewController:self sourceView:cell sourceRect:cell.bounds];
+}
+
+// Removing a desktop takes out its own packages (select-desktop.sh --remove,
+// GH #646); what the other desktops and programs use stays.
+- (BOOL)canRemoveDesktopAtIndexPath:(NSIndexPath *)indexPath {
+    return indexPath.section == ISHDesktopSetupSectionDesktops && _installed != nil
+        && [_installed containsObject:ISHDesktopNames()[(NSUInteger) indexPath.row]];
+}
+
+- (void)confirmRemovingDesktopAtIndexPath:(NSIndexPath *)indexPath {
+    NSString *name = ISHDesktopNames()[(NSUInteger) indexPath.row];
+    UITableViewCell *cell = [self.tableView cellForRowAtIndexPath:indexPath];
+    ISHActionSheet *sheet = [ISHActionSheet actionSheetWithTitle:[NSString stringWithFormat:NSLocalizedString(@"Remove %@?", @"Desktop setup: confirmation title; %@ is the desktop's name"), ISHDesktopTitle(name)]
+                                                         message:NSLocalizedString(@"This removes the desktop's own packages from the filesystem that is running. Whatever other desktops and programs still use stays installed.", @"Desktop setup: confirmation before removing a desktop")];
+    __weak typeof(self) weakSelf = self;
+    [sheet addActionWithTitle:NSLocalizedString(@"Remove", @"Desktop setup: button that removes a desktop")
+                        style:UIAlertActionStyleDestructive
+                      handler:^(__unused UIAlertAction *action) {
+        [weakSelf pushScript:[NSString stringWithFormat:NSLocalizedString(@"Remove %@", @"Desktop setup: title of the page that removes a desktop; %@ is its name"), ISHDesktopTitle(name)]
+                     command:[@"sh /AOK/tools/select-desktop.sh --remove " stringByAppendingString:name]];
+    }];
+    [sheet addActionWithTitle:NSLocalizedString(@"Cancel", @"Action sheet button") style:UIAlertActionStyleCancel handler:nil];
+    if (cell != nil)
+        [sheet presentFromViewController:self sourceView:cell sourceRect:cell.bounds];
+    else
+        [sheet presentFromViewController:self sourceView:self.tableView sourceRect:self.tableView.bounds];
+}
+
+- (UISwipeActionsConfiguration *)tableView:(UITableView *)tableView trailingSwipeActionsConfigurationForRowAtIndexPath:(NSIndexPath *)indexPath {
+    if (![self canRemoveDesktopAtIndexPath:indexPath])
+        return nil;
+    __weak typeof(self) weakSelf = self;
+    UIContextualAction *remove = [UIContextualAction contextualActionWithStyle:UIContextualActionStyleDestructive
+                                                                         title:NSLocalizedString(@"Remove", @"Desktop setup: button that removes a desktop")
+                                                                       handler:^(__unused UIContextualAction *action, __unused UIView *view, void (^done)(BOOL)) {
+        done(YES);
+        [weakSelf confirmRemovingDesktopAtIndexPath:indexPath];
+    }];
+    UISwipeActionsConfiguration *configuration = [UISwipeActionsConfiguration configurationWithActions:@[remove]];
+    configuration.performsFirstActionWithFullSwipe = NO;
+    return configuration;
+}
+
+- (UIContextMenuConfiguration *)tableView:(UITableView *)tableView contextMenuConfigurationForRowAtIndexPath:(NSIndexPath *)indexPath point:(CGPoint)point {
+    if (![self canRemoveDesktopAtIndexPath:indexPath])
+        return nil;
+    __weak typeof(self) weakSelf = self;
+    return [UIContextMenuConfiguration configurationWithIdentifier:nil previewProvider:nil actionProvider:^UIMenu *(__unused NSArray<UIMenuElement *> *suggested) {
+        UIAction *remove = [UIAction actionWithTitle:NSLocalizedString(@"Remove…", @"Desktop setup: menu item that removes a desktop")
+                                               image:[UIImage systemImageNamed:@"trash"]
+                                          identifier:nil
+                                             handler:^(__unused UIAction *action) {
+            [weakSelf confirmRemovingDesktopAtIndexPath:indexPath];
+        }];
+        remove.attributes = UIMenuElementAttributesDestructive;
+        return [UIMenu menuWithChildren:@[remove]];
+    }];
 }
 
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
@@ -1897,7 +2143,10 @@ static NSString *ISHDesktopInstallCommand(NSString *name) {
         return; // not known yet, or the guest did not answer
     NSString *name = ISHDesktopNames()[(NSUInteger) indexPath.row];
     if (![_installed containsObject:name]) {
-        [self confirmRunning:ISHDesktopTitle(name) command:ISHDesktopInstallCommand(name) fromCell:cell];
+        if ([name isEqualToString:@"wayfire"])
+            [self wayfirePanelSheetFromCell:cell];
+        else
+            [self confirmRunning:ISHDesktopTitle(name) command:ISHDesktopInstallCommand(name) fromCell:cell];
         return;
     }
     if ([name isEqualToString:_selected])

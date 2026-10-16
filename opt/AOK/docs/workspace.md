@@ -173,9 +173,14 @@ is also in the display's own **···** menu — where its "not found" message
 appears when a filesystem has no desktop yet. The page lists the desktops with
 what is installed and which one starts; tapping one that is not installed runs
 its setup script and shows what it prints, and tapping one that is makes it the
-desktop the next session starts. **More Programs** installs the games, tools,
-X11 support and GPU drivers described below. It installs into the filesystem
-that is running, takes several minutes, and needs iSH-AOK left open meanwhile.
+desktop the next session starts. While a script runs, the page shows its
+current step, a progress bar for the packages being installed, and how many are
+done. Installing Wayfire asks which panel it should have. To remove an installed
+desktop, swipe left on it or touch and hold it: that removes the desktop's own
+packages, and keeps what another desktop or program still uses. **More
+Programs** installs the games, tools, X11 support and GPU drivers described
+below. It installs into the filesystem that is running, takes several minutes,
+and needs iSH-AOK left open meanwhile.
 
 The same scripts can be run by hand:
 
@@ -282,6 +287,7 @@ sudo sh /AOK/tools/setup-wayfire.sh   # Wayfire, composited on the GPU
 sudo sh /AOK/tools/setup-xfce.sh      # the Xfce 4.20 desktop
 sh /AOK/tools/select-desktop.sh       # which one starts, and what is installed
 sudo sh /AOK/tools/select-desktop.sh labwc   # back to the default
+sudo sh /AOK/tools/select-desktop.sh --remove sway   # remove a desktop's own packages
 ```
 
 Each setup script installs the base desktop first if it is missing, and makes

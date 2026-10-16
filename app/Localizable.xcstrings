@@ -991,6 +991,126 @@
         }
       }
     },
+    "Choose Wayfire's panel. This downloads packages into the filesystem that is running and takes several minutes; keep iSH-AOK open until it finishes. With both, select-desktop.sh --panel switches between them later." : {
+      "comment" : "Desktop setup: Wayfire install, the panel choice",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wähle die Leiste von Wayfire. Dabei werden Pakete in das laufende Dateisystem geladen, was einige Minuten dauert; lass iSH-AOK bis zum Ende geöffnet. Mit beiden wechselt select-desktop.sh --panel später zwischen ihnen."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Elige el panel de Wayfire. Esto descarga paquetes en el sistema de archivos en ejecución y tarda varios minutos; mantén iSH-AOK abierto hasta que termine. Con ambos, select-desktop.sh --panel cambia entre ellos más tarde."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choisissez le panneau de Wayfire. Des paquets sont téléchargés dans le système de fichiers en cours d'exécution, ce qui prend plusieurs minutes ; gardez iSH-AOK ouvert jusqu'à la fin. Avec les deux, select-desktop.sh --panel permet ensuite de passer de l'un à l'autre."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wayfire のパネルを選んでください。実行中のファイルシステムにパッケージをダウンロードするため数分かかります。終わるまで iSH-AOK を開いたままにしてください。両方を入れた場合は、あとで select-desktop.sh --panel で切り替えられます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wayfire의 패널을 선택하십시오. 실행 중인 파일 시스템에 패키지를 다운로드하므로 몇 분이 걸립니다. 끝날 때까지 iSH-AOK를 열어 두십시오. 둘 다 설치하면 나중에 select-desktop.sh --panel로 전환할 수 있습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Escolha o painel do Wayfire. Isso baixa pacotes para o sistema de arquivos em execução e leva vários minutos; mantenha o iSH-AOK aberto até terminar. Com os dois, select-desktop.sh --panel alterna entre eles depois."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Выберите панель Wayfire. Пакеты загружаются в работающую файловую систему, это займёт несколько минут; не закрывайте iSH-AOK до завершения. Если установить обе, позже между ними можно переключаться через select-desktop.sh --panel."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选择 Wayfire 的面板。这会将软件包下载到正在运行的文件系统中，需要几分钟；完成前请保持 iSH-AOK 打开。若两者都安装，之后可用 select-desktop.sh --panel 在它们之间切换。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "選擇 Wayfire 的面板。這會將套件下載到正在執行的檔案系統中，需要幾分鐘；完成前請保持 iSH-AOK 開啟。若兩者都安裝，之後可用 select-desktop.sh --panel 在它們之間切換。"
+          }
+        }
+      }
+    },
+    "Could not start /AOK/tools/start-wayland.sh: %@\n\nIf no desktop is installed yet, choose Install a Desktop… from this window's ··· menu, or run 'sudo sh /AOK/tools/setup-wayland.sh' in a terminal." : {
+      "comment" : "Wayland display error; %@ is the error description",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "/AOK/tools/start-wayland.sh konnte nicht gestartet werden: %@\n\nFalls noch kein Desktop installiert ist, wähle „Desktop installieren …“ im ···-Menü dieses Fensters oder führe 'sudo sh /AOK/tools/setup-wayland.sh' in einem Terminal aus."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo iniciar /AOK/tools/start-wayland.sh: %@\n\nSi aún no hay ningún escritorio instalado, elige «Instalar un escritorio…» en el menú ··· de esta ventana, o ejecuta 'sudo sh /AOK/tools/setup-wayland.sh' en una terminal."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Impossible de lancer /AOK/tools/start-wayland.sh : %@\n\nSi aucun bureau n'est encore installé, choisissez « Installer un bureau… » dans le menu ··· de cette fenêtre, ou exécutez 'sudo sh /AOK/tools/setup-wayland.sh' dans un terminal."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "/AOK/tools/start-wayland.sh を開始できませんでした: %@\n\nデスクトップがまだインストールされていない場合は、このウインドウの ··· メニューから「デスクトップをインストール…」を選ぶか、ターミナルで 'sudo sh /AOK/tools/setup-wayland.sh' を実行してください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "/AOK/tools/start-wayland.sh를 시작할 수 없음: %@\n\n아직 데스크톱이 설치되지 않았다면 이 윈도우의 ··· 메뉴에서 '데스크탑 설치…'를 선택하거나 터미널에서 'sudo sh /AOK/tools/setup-wayland.sh'를 실행하십시오."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não foi possível iniciar /AOK/tools/start-wayland.sh: %@\n\nSe ainda não houver um desktop instalado, escolha \"Instalar um Desktop…\" no menu ··· desta janela, ou execute 'sudo sh /AOK/tools/setup-wayland.sh' em um terminal."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не удалось запустить /AOK/tools/start-wayland.sh: %@\n\nЕсли рабочий стол ещё не установлен, выберите «Установить рабочий стол…» в меню ··· этого окна или выполните 'sudo sh /AOK/tools/setup-wayland.sh' в терминале."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法启动 /AOK/tools/start-wayland.sh：%@\n\n如果尚未安装桌面，请从此窗口的 ··· 菜单中选择“安装桌面…”，或在终端中运行 'sudo sh /AOK/tools/setup-wayland.sh'。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法啟動 /AOK/tools/start-wayland.sh：%@\n\n如果尚未安裝桌面，請從此視窗的 ··· 選單中選擇「安裝桌面⋯」，或在終端機中執行 'sudo sh /AOK/tools/setup-wayland.sh'。"
+          }
+        }
+      }
+    },
     "Creates a copy of the current theme for editing." : {
       "comment" : "Accessibility hint for the theme duplication button",
       "extractionState" : "manual",
@@ -1047,6 +1167,366 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "建立此主題的可編輯副本。"
+          }
+        }
+      }
+    },
+    "Downloading %1$ld of %2$ld packages" : {
+      "comment" : "Desktop setup progress; %1$ld packages done, %2$ld in all",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lade Paket %1$ld von %2$ld herunter"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Descargando %1$ld de %2$ld paquetes"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Téléchargement de %1$ld paquets sur %2$ld"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%2$ld 個中 %1$ld 個のパッケージをダウンロード中"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "패키지 %2$ld개 중 %1$ld개 다운로드 중"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Baixando %1$ld de %2$ld pacotes"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Загрузка пакетов: %1$ld из %2$ld"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在下载软件包 %1$ld/%2$ld"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在下載套件 %1$ld/%2$ld"
+          }
+        }
+      }
+    },
+    "Install with Both Panels" : {
+      "comment" : "Desktop setup: Wayfire with the fast wf-panel and waybar",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mit beiden Leisten installieren"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Instalar con ambos paneles"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Installer avec les deux panneaux"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "両方のパネルでインストール"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "두 패널 모두 설치"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Instalar com os dois painéis"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Установить обе панели"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "同时安装两种面板"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "同時安裝兩種面板"
+          }
+        }
+      }
+    },
+    "Install with Waybar" : {
+      "comment" : "Desktop setup: Wayfire with waybar as its panel",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mit Waybar installieren"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Instalar con Waybar"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Installer avec Waybar"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Waybar でインストール"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Waybar로 설치"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Instalar com o Waybar"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Установить с Waybar"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用 Waybar 安装"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用 Waybar 安裝"
+          }
+        }
+      }
+    },
+    "Install with the Fast Panel" : {
+      "comment" : "Desktop setup: Wayfire with the faster wf-panel",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mit der schnellen Leiste installieren"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Instalar con el panel rápido"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Installer avec le panneau rapide"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "高速パネルでインストール"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "빠른 패널로 설치"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Instalar com o painel rápido"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Установить с быстрой панелью"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用快速面板安装"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用快速面板安裝"
+          }
+        }
+      }
+    },
+    "Install with the Packaged Panel" : {
+      "comment" : "Desktop setup: Wayfire with the distribution's own wf-panel",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mit der Leiste der Distribution installieren"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Instalar con el panel de la distribución"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Installer avec le panneau de la distribution"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ディストリビューションのパネルでインストール"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "배포판 패널로 설치"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Instalar com o painel da distribuição"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Установить с панелью из дистрибутива"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用发行版自带的面板安装"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用發行版內建的面板安裝"
+          }
+        }
+      }
+    },
+    "Installing %1$ld of %2$ld packages" : {
+      "comment" : "Desktop setup progress; %1$ld packages done, %2$ld in all",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Installiere Paket %1$ld von %2$ld"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Instalando %1$ld de %2$ld paquetes"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Installation de %1$ld paquets sur %2$ld"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%2$ld 個中 %1$ld 個のパッケージをインストール中"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "패키지 %2$ld개 중 %1$ld개 설치 중"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Instalando %1$ld de %2$ld pacotes"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Установка пакетов: %1$ld из %2$ld"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在安装软件包 %1$ld/%2$ld"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在安裝套件 %1$ld/%2$ld"
           }
         }
       }
@@ -1171,6 +1651,246 @@
         }
       }
     },
+    "Remove" : {
+      "comment" : "Desktop setup: button that removes a desktop",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Entfernen"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Eliminar"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Supprimer"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "削除"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "제거"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remover"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Удалить"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "移除"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "移除"
+          }
+        }
+      }
+    },
+    "Remove %@?" : {
+      "comment" : "Desktop setup: confirmation title; %@ is the desktop's name",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ entfernen?"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "¿Eliminar %@?"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Supprimer %@ ?"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ を削除しますか？"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@을(를) 제거하시겠습니까?"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remover %@?"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Удалить %@?"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "移除 %@？"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "移除 %@？"
+          }
+        }
+      }
+    },
+    "Remove…" : {
+      "comment" : "Desktop setup: menu item that removes a desktop",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Entfernen …"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Eliminar…"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Supprimer…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "削除…"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "제거…"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remover…"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Удалить…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "移除…"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "移除…"
+          }
+        }
+      }
+    },
+    "Removing %1$ld of %2$ld packages" : {
+      "comment" : "Desktop setup progress; %1$ld packages done, %2$ld in all",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Entferne Paket %1$ld von %2$ld"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Eliminando %1$ld de %2$ld paquetes"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Suppression de %1$ld paquets sur %2$ld"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%2$ld 個中 %1$ld 個のパッケージを削除中"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "패키지 %2$ld개 중 %1$ld개 제거 중"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Removendo %1$ld de %2$ld pacotes"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Удаление пакетов: %1$ld из %2$ld"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在移除软件包 %1$ld/%2$ld"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在移除套件 %1$ld/%2$ld"
+          }
+        }
+      }
+    },
     "Restores the default application font." : {
       "comment" : "Accessibility hint for the font reset button",
       "extractionState" : "manual",
@@ -1231,6 +1951,66 @@
         }
       }
     },
+    "Setting up %1$ld of %2$ld packages" : {
+      "comment" : "Desktop setup progress; %1$ld packages done, %2$ld in all",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Richte Paket %1$ld von %2$ld ein"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Configurando %1$ld de %2$ld paquetes"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Configuration de %1$ld paquets sur %2$ld"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%2$ld 個中 %1$ld 個のパッケージを設定中"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "패키지 %2$ld개 중 %1$ld개 설정 중"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Configurando %1$ld de %2$ld pacotes"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Настройка пакетов: %1$ld из %2$ld"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在配置软件包 %1$ld/%2$ld"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在設定套件 %1$ld/%2$ld"
+          }
+        }
+      }
+    },
     "Shares the diagnostics report." : {
       "comment" : "Accessibility hint for the export diagnostics button",
       "extractionState" : "manual",
@@ -1287,6 +2067,246 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "分享診斷報告。"
+          }
+        }
+      }
+    },
+    "This removes the desktop's own packages from the filesystem that is running. Whatever other desktops and programs still use stays installed." : {
+      "comment" : "Desktop setup: confirmation before removing a desktop",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dies entfernt die eigenen Pakete des Desktops aus dem laufenden Dateisystem. Was andere Desktops und Programme noch verwenden, bleibt installiert."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esto elimina los paquetes propios del escritorio del sistema de archivos en ejecución. Lo que aún usen otros escritorios y programas sigue instalado."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cela supprime les paquets propres au bureau du système de fichiers en cours d'exécution. Ce qu'utilisent encore d'autres bureaux et programmes reste installé."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "実行中のファイルシステムから、このデスクトップ固有のパッケージを削除します。ほかのデスクトップやプログラムが使っているものは残ります。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "실행 중인 파일 시스템에서 이 데스크톱 고유의 패키지를 제거합니다. 다른 데스크톱과 프로그램이 아직 사용하는 것은 설치된 채로 남습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Isso remove os pacotes próprios do desktop do sistema de arquivos em execução. O que outros desktops e programas ainda usam continua instalado."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Будут удалены собственные пакеты этого рабочего стола из работающей файловой системы. То, что ещё используют другие рабочие столы и программы, останется установленным."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这会从正在运行的文件系统中移除该桌面自己的软件包。其他桌面和程序仍在使用的内容会保留。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "這會從正在執行的檔案系統中移除該桌面自己的套件。其他桌面和程式仍在使用的內容會保留。"
+          }
+        }
+      }
+    },
+    "Timed out waiting for the Wayland compositor to start.\n\nIf no desktop is installed yet, choose Install a Desktop… from this window's ··· menu, then Reconnect." : {
+      "comment" : "Wayland display error",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zeitüberschreitung beim Warten auf den Start des Wayland-Compositors.\n\nFalls noch kein Desktop installiert ist, wähle „Desktop installieren …“ im ···-Menü dieses Fensters und dann „Neu verbinden“."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se agotó el tiempo de espera para que se iniciara el compositor de Wayland.\n\nSi aún no hay ningún escritorio instalado, elige «Instalar un escritorio…» en el menú ··· de esta ventana y luego «Reconectar»."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Délai dépassé en attendant le démarrage du compositeur Wayland.\n\nSi aucun bureau n'est encore installé, choisissez « Installer un bureau… » dans le menu ··· de cette fenêtre, puis « Reconnecter »."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wayland コンポジタの起動待ちがタイムアウトしました。\n\nデスクトップがまだインストールされていない場合は、このウインドウの ··· メニューから「デスクトップをインストール…」を選び、その後「再接続」してください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wayland 컴포지터가 시작되기를 기다리는 중 시간이 초과되었습니다.\n\n아직 데스크톱이 설치되지 않았다면 이 윈도우의 ··· 메뉴에서 '데스크탑 설치…'를 선택한 다음 '다시 연결'하십시오."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tempo esgotado aguardando o compositor Wayland iniciar.\n\nSe ainda não houver um desktop instalado, escolha \"Instalar um Desktop…\" no menu ··· desta janela e depois \"Reconectar\"."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Истекло время ожидания запуска композитора Wayland.\n\nЕсли рабочий стол ещё не установлен, выберите «Установить рабочий стол…» в меню ··· этого окна, затем «Переподключить»."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "等待 Wayland 合成器启动超时。\n\n如果尚未安装桌面，请从此窗口的 ··· 菜单中选择“安装桌面…”，然后点“重新连接”。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "等待 Wayland 合成器啟動逾時。\n\n如果尚未安裝桌面，請從此視窗的 ··· 選單中選擇「安裝桌面⋯」，然後點「重新連線」。"
+          }
+        }
+      }
+    },
+    "To remove an installed desktop, swipe left on it, or touch and hold it." : {
+      "comment" : "Desktop setup footer, second sentence",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Um einen installierten Desktop zu entfernen, wische darauf nach links oder halte ihn gedrückt."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Para eliminar un escritorio instalado, desliza hacia la izquierda sobre él o mantenlo pulsado."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pour supprimer un bureau installé, balayez-le vers la gauche ou maintenez le doigt dessus."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "インストール済みのデスクトップを削除するには、左にスワイプするか長押しします。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "설치된 데스크톱을 제거하려면 왼쪽으로 쓸어넘기거나 길게 누르십시오."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Para remover um desktop instalado, deslize-o para a esquerda ou toque nele e mantenha pressionado."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Чтобы удалить установленный рабочий стол, смахните его влево или нажмите и удерживайте."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要移除已安装的桌面，请在其上向左轻扫，或按住它。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "若要移除已安裝的桌面，請在其上向左滑動，或按住它。"
+          }
+        }
+      }
+    },
+    "Unpacking %1$ld of %2$ld packages" : {
+      "comment" : "Desktop setup progress; %1$ld packages done, %2$ld in all",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Entpacke Paket %1$ld von %2$ld"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Desempaquetando %1$ld de %2$ld paquetes"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Décompression de %1$ld paquets sur %2$ld"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%2$ld 個中 %1$ld 個のパッケージを展開中"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "패키지 %2$ld개 중 %1$ld개 압축 해제 중"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Desempacotando %1$ld de %2$ld pacotes"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Распаковка пакетов: %1$ld из %2$ld"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在解包软件包 %1$ld/%2$ld"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在解開套件 %1$ld/%2$ld"
           }
         }
       }
@@ -23715,66 +24735,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "無法還原"
-          }
-        }
-      }
-    },
-    "Could not start /AOK/tools/start-wayland.sh: %@\n\nIf labwc/foot/wayvnc aren't installed yet, run 'sudo sh /AOK/tools/setup-wayland.sh' in a terminal first." : {
-      "comment" : "Wayland display error; %@ is the error description",
-      "extractionState" : "manual",
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "/AOK/tools/start-wayland.sh konnte nicht gestartet werden: %@\n\nFalls labwc/foot/wayvnc noch nicht installiert sind, führe zuerst 'sudo sh /AOK/tools/setup-wayland.sh' in einem Terminal aus."
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "No se pudo iniciar /AOK/tools/start-wayland.sh: %@\n\nSi labwc/foot/wayvnc aún no están instalados, ejecuta primero 'sudo sh /AOK/tools/setup-wayland.sh' en una terminal."
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Impossible de lancer /AOK/tools/start-wayland.sh : %@\n\nSi labwc/foot/wayvnc ne sont pas encore installés, exécutez d'abord 'sudo sh /AOK/tools/setup-wayland.sh' dans un terminal."
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "/AOK/tools/start-wayland.sh を開始できませんでした: %@\n\nlabwc/foot/wayvnc がまだインストールされていない場合は、まずターミナルで 'sudo sh /AOK/tools/setup-wayland.sh' を実行してください。"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "/AOK/tools/start-wayland.sh를 시작할 수 없음: %@\n\nlabwc/foot/wayvnc가 아직 설치되지 않았다면 먼저 터미널에서 'sudo sh /AOK/tools/setup-wayland.sh'를 실행하십시오."
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Não foi possível iniciar /AOK/tools/start-wayland.sh: %@\n\nSe labwc/foot/wayvnc ainda não estiverem instalados, execute 'sudo sh /AOK/tools/setup-wayland.sh' em um terminal primeiro."
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Не удалось запустить /AOK/tools/start-wayland.sh: %@\n\nЕсли labwc/foot/wayvnc ещё не установлены, сначала выполните 'sudo sh /AOK/tools/setup-wayland.sh' в терминале."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "无法启动 /AOK/tools/start-wayland.sh：%@\n\n如果尚未安装 labwc/foot/wayvnc，请先在终端中运行 'sudo sh /AOK/tools/setup-wayland.sh'。"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "無法啟動 /AOK/tools/start-wayland.sh：%@\n\n如果尚未安裝 labwc/foot/wayvnc，請先在終端機中執行 'sudo sh /AOK/tools/setup-wayland.sh'。"
           }
         }
       }
@@ -81842,66 +82802,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "連線至 wayvnc 逾時"
-          }
-        }
-      }
-    },
-    "Timed out waiting for the Wayland compositor to start.\n\nIf labwc/foot/wayvnc aren't installed, run 'sudo sh /AOK/tools/setup-wayland.sh' in a terminal, then Reconnect." : {
-      "comment" : "Wayland display error",
-      "extractionState" : "manual",
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Zeitüberschreitung beim Warten auf den Start des Wayland-Compositors.\n\nFalls labwc/foot/wayvnc nicht installiert sind, führe 'sudo sh /AOK/tools/setup-wayland.sh' in einem Terminal aus und tippe dann auf „Neu verbinden“."
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Tiempo de espera agotado mientras se esperaba a que se iniciara el compositor de Wayland.\n\nSi labwc/foot/wayvnc no están instalados, ejecuta 'sudo sh /AOK/tools/setup-wayland.sh' en una terminal y luego Reconectar."
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Délai dépassé en attendant le démarrage du compositeur Wayland.\n\nSi labwc/foot/wayvnc ne sont pas installés, exécutez 'sudo sh /AOK/tools/setup-wayland.sh' dans un terminal, puis Reconnecter."
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Wayland コンポジタの起動待ちがタイムアウトしました。\n\nlabwc/foot/wayvnc がインストールされていない場合は、ターミナルで 'sudo sh /AOK/tools/setup-wayland.sh' を実行してから再接続してください。"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Wayland 컴포지터가 시작되기를 기다리다 시간이 초과되었습니다.\n\nlabwc/foot/wayvnc가 설치되지 않았다면 터미널에서 'sudo sh /AOK/tools/setup-wayland.sh'를 실행한 후 다시 연결하십시오."
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Tempo esgotado aguardando o compositor Wayland iniciar.\n\nSe labwc/foot/wayvnc não estiverem instalados, execute 'sudo sh /AOK/tools/setup-wayland.sh' em um terminal e depois Reconectar."
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Истекло время ожидания запуска композитора Wayland.\n\nЕсли labwc/foot/wayvnc не установлены, выполните 'sudo sh /AOK/tools/setup-wayland.sh' в терминале, затем нажмите «Переподключить»."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "等待 Wayland 合成器启动超时。\n\n如果尚未安装 labwc/foot/wayvnc，请在终端中运行 'sudo sh /AOK/tools/setup-wayland.sh'，然后“重新连接”。"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "等待 Wayland 合成器啟動逾時。\n\n如果尚未安裝 labwc/foot/wayvnc，請在終端機中執行 'sudo sh /AOK/tools/setup-wayland.sh'，然後「重新連線」。"
           }
         }
       }

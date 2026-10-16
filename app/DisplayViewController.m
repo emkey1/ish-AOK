@@ -926,7 +926,7 @@ static void DisplayParkSession(Terminal *terminal, int pid, NSString *_Nullable 
     }
     if (err < 0) {
         [self failWithMessage:[NSString stringWithFormat:
-            NSLocalizedString(@"Could not start /AOK/tools/start-wayland.sh: %@\n\nIf labwc/foot/wayvnc aren't installed yet, run 'sudo sh /AOK/tools/setup-wayland.sh' in a terminal first.", @"Wayland display error; %@ is the error description"),
+            NSLocalizedString(@"Could not start /AOK/tools/start-wayland.sh: %@\n\nIf no desktop is installed yet, choose Install a Desktop… from this window's ··· menu, or run 'sudo sh /AOK/tools/setup-wayland.sh' in a terminal.", @"Wayland display error; %@ is the error description"),
             [AppDelegate descriptionForISHErrno:err]]];
         return;
     }
@@ -951,7 +951,7 @@ static void DisplayParkSession(Terminal *terminal, int pid, NSString *_Nullable 
     if (_readyPollDeadline == nil)
         _readyPollDeadline = [NSDate dateWithTimeIntervalSinceNow:DisplayReadyTimeout];
     if (_readyPollDeadline.timeIntervalSinceNow < 0) {
-        [self failWithMessage:NSLocalizedString(@"Timed out waiting for the Wayland compositor to start.\n\nIf labwc/foot/wayvnc aren't installed, run 'sudo sh /AOK/tools/setup-wayland.sh' in a terminal, then Reconnect.", @"Wayland display error")];
+        [self failWithMessage:NSLocalizedString(@"Timed out waiting for the Wayland compositor to start.\n\nIf no desktop is installed yet, choose Install a Desktop… from this window's ··· menu, then Reconnect.", @"Wayland display error")];
         return;
     }
     __weak typeof(self) weakSelf = self;
