@@ -387,6 +387,21 @@ ck rc-knob-absent  "[]"     'mkdir -p /tmp/aokrc2; rm -f /tmp/aokrc2/zshrc; prin
 ck rc-script-none  "[]"     'mkdir -p /tmp/aokrc3; print -r -- "typeset -g AOK_RC=MARK" > /tmp/aokrc3/zshrc; print -r -- "print -n \"[\$AOK_RC]\"" > /tmp/aokrc3/p.zsh; print -r -- $(AOK_ZSH_ETCDIR=/tmp/aokrc3 /AOK/native/zsh /tmp/aokrc3/p.zsh 2>/dev/null)'
 ck rc-norcs-none   "[]"     'mkdir -p /tmp/aokrc4; print -r -- "typeset -g AOK_RC=MARK" > /tmp/aokrc4/zshrc; print -r -- "print -n \"[\$AOK_RC]\"" > /tmp/aokrc4/p.zsh; print -r -- $(AOK_ZSH_ETCDIR=/tmp/aokrc4 /AOK/native/zsh -f -i /tmp/aokrc4/p.zsh 2>/dev/null)'
 
+echo "== a command too long for argv =="
+# A subshell is spawned as `zsh -f -c -- <command>`, and a simple command's
+# expanded words were that ONE argument -- over MAX_ARG_STRLEN (128 KB) it was
+# E2BIG, "subshell failed: argument list too long", where a fork execs
+# nothing: `rm *` in a directory of a few thousand files, in the login shell.
+# Past 64 KB the command now travels in the state. And `$_`, the previous
+# command's last word, rides in one environment string, held to the same
+# limit, so it travels the same way. 100,000 words also overflowed the
+# child's stack in the parser (copy_ecstr recursed once per word: the strings
+# tree is a chain when the hashes rise with the words), which killed the app.
+ck long-words-30k      30000    'a=$(seq 1 30000); /bin/sh -c "echo \$#" sh ${=a}'
+ck long-words-100k     100000   'a=$(seq 1 100000); /bin/sh -c "echo \$#" sh ${=a}'
+ck long-glob           5000     'd=$(mktemp -d); cd $d; for i in {1..5000}; do : > file-with-a-rather-longer-name-than-before-$i; done; /bin/sh -c "echo \$#" sh *; /bin/rm -f *; cd /; rmdir $d'
+ck long-underscore     [168893] ': "$(seq 1 30000)"; print -r -- "[$(print -rn -- ${#_})]"'
+
 echo
 echo "  passed=$pass failed=$fail"
 [ "$fail" -eq 0 ]
