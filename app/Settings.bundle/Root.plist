@@ -77,26 +77,6 @@ The sizes offered here do not know how much room this device actually has. If th
 			<string>PSToggleSwitchSpecifier</string>
 		</dict>
 		<dict>
-			<key>FooterText</key>
-			<string>Save the whole session when iSH-AOK goes to the background, and bring it back on the next launch. iOS ends this app routinely -- memory pressure, or a swipe away -- and without this that always loses the session.
-
-Off by default, because it spends storage and is not free of limits. A session running something iSH-AOK cannot describe is not saved: it says so, and the next launch starts normally. "cat /proc/ish/checkpoint" in the guest reports what the last attempt did and, if it refused, why.</string>
-			<key>Title</key>
-			<string>Suspend to Disk</string>
-			<key>Type</key>
-			<string>PSGroupSpecifier</string>
-		</dict>
-		<dict>
-			<key>DefaultValue</key>
-			<false/>
-			<key>Key</key>
-			<string>Suspend To Disk</string>
-			<key>Title</key>
-			<string>Suspend to Disk</string>
-			<key>Type</key>
-			<string>PSToggleSwitchSpecifier</string>
-		</dict>
-		<dict>
 			<key>DefaultValue</key>
 			<integer>0</integer>
 			<key>Key</key>
@@ -127,6 +107,26 @@ Off by default, because it spends storage and is not free of limits. A session r
 				<integer>8192</integer>
 				<integer>16384</integer>
 			</array>
+		</dict>
+		<dict>
+			<key>FooterText</key>
+			<string>Save the whole session when iSH-AOK goes to the background, and bring it back on the next launch. iOS ends this app routinely -- memory pressure, or a swipe away -- and without this that always loses the session.
+
+Off by default, because it spends storage and is not free of limits. A session running something iSH-AOK cannot describe is not saved: it says so, and the next launch starts normally. "cat /proc/ish/checkpoint" in the guest reports what the last attempt did and, if it refused, why.</string>
+			<key>Title</key>
+			<string>Suspend to Disk</string>
+			<key>Type</key>
+			<string>PSGroupSpecifier</string>
+		</dict>
+		<dict>
+			<key>DefaultValue</key>
+			<false/>
+			<key>Key</key>
+			<string>Suspend To Disk</string>
+			<key>Title</key>
+			<string>Suspend to Disk</string>
+			<key>Type</key>
+			<string>PSToggleSwitchSpecifier</string>
 		</dict>
 		<dict>
 			<key>FooterText</key>
