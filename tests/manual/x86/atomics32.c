@@ -1,3 +1,5 @@
+// The 32-bit LOCK instructions together: CMPXCHG8B, XADD and CMPXCHG, each for
+// its result and flags and under contention from several threads.
 #include <pthread.h>
 #include "atomic_common.h"
 

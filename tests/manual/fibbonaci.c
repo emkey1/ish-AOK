@@ -1,3 +1,5 @@
+// Recursive Fibonacci of the number given: a small CPU-bound workload for
+// timing the JIT.
 #include <stdio.h>
 #include <stdlib.h>
 

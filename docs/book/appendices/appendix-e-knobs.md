@@ -118,6 +118,7 @@ by the app; several have app-side equivalents under `/proc/ish/defaults`
 | `ISH_QUIESCE_STATS` | `main.c` |
 | `ISH_RANDOMIZE_VA_SPACE` | `kernel/exec.c` |
 | `ISH_RCACHE_TEST_OFF` | `tests/manual/riscv64/rcache_run.c` |
+| `ISH_REALFS_NOFOLLOW_ANY` | `fs/real.c` |
 | `ISH_REAL_MNT` | `main.c` |
 | `ISH_REAL_MNT_SHARED` | `main.c` |
 | `ISH_RESTORE` | `xX_main_Xx.h` |

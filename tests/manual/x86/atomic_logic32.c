@@ -1,3 +1,5 @@
+// LOCK OR, AND and XOR on 32 bits: the memory result and flags, and a branch on
+// the flags they leave.
 #include <inttypes.h>
 #include <stdint.h>
 #include <stdio.h>

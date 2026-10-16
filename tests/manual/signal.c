@@ -1,3 +1,5 @@
+// A SIGILL handler with SA_SIGINFO catches a ud2 and prints the signal, its
+// code and its address.
 #include <signal.h>
 #include <unistd.h>
 #include <stdio.h>

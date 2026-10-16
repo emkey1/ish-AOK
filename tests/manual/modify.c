@@ -1,3 +1,6 @@
+// Self-modifying code: a function patched after it has run returns the new
+// value, in .data made executable and in an mmap'd page, and a call into the
+// unmapped page faults.
 #include <stdio.h>
 #include <string.h>
 #include <sys/mman.h>

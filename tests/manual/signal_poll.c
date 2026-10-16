@@ -1,3 +1,6 @@
+// Signals interrupting poll, select, pselect and ppoll on a waiter thread, the
+// masks pselect and ppoll install, and a pipe's write readiness through select
+// and pselect.
 #define _GNU_SOURCE
 
 #include <errno.h>

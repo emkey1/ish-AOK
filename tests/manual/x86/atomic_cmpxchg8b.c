@@ -1,3 +1,5 @@
+// LOCK CMPXCHG8B: the result and flags for each case, random vectors, and a
+// multi-threaded 64-bit counter.
 #include <inttypes.h>
 #include <pthread.h>
 #include <stdint.h>

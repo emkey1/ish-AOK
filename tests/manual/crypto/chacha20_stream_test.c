@@ -1,3 +1,5 @@
+// The ChaCha20 stream accelerator (system call 0xacc0) against OpenSSL's
+// EVP_chacha20 on 200 random keys, nonces and lengths, and the two timed.
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>

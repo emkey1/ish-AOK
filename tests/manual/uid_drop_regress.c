@@ -1,3 +1,5 @@
+// Dropping uid and gid as root sticks: setuid, seteuid, setgid and setegid
+// cannot get the old ids back, with or without PR_SET_KEEPCAPS.
 #define _GNU_SOURCE
 #include <errno.h>
 #include <sys/syscall.h>

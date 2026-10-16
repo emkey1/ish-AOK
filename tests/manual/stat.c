@@ -1,3 +1,5 @@
+// fstat64 on stdout, with its access, modification and change times printed in
+// hex.
 #define _LARGEFILE64_SOURCE
 #include <stdio.h>
 #include <unistd.h>

@@ -1,3 +1,4 @@
+// Real-time signals queued with sigqueue arrive in order, each with its value.
 #define _GNU_SOURCE
 
 #include <errno.h>

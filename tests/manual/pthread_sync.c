@@ -1,3 +1,6 @@
+// pthread synchronisation: pthread_once, a mutex handed between threads, timed
+// lock and condition-variable timeouts, condvar signal, and readers then a
+// writer on an rwlock.
 #define _GNU_SOURCE
 
 #include <errno.h>

@@ -1,3 +1,6 @@
+// Core signal delivery: kill to self with its siginfo, sigpending and
+// sigtimedwait, signalfd, sigsuspend resuming, and tgkill reaching the thread
+// it names.
 #define _GNU_SOURCE
 
 #include <errno.h>

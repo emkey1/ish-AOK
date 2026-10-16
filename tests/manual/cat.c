@@ -1,3 +1,5 @@
+// A minimal cat: a file named on the command line, or stdin, copied to stdout
+// through stdio.
 #include <stdio.h>
 
 int main(int argc, const char *argv[]) {

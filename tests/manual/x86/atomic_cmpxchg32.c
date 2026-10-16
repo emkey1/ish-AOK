@@ -1,3 +1,5 @@
+// LOCK CMPXCHG on 32 bits: the result and flags for each case, a branch on its
+// ZF, random vectors, and a multi-threaded counter.
 #include <inttypes.h>
 #include <pthread.h>
 #include <stdint.h>

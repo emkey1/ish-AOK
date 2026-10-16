@@ -1,3 +1,5 @@
+// The current directory's raw getdents64 records written to stdout, to compare
+// their layout byte for byte.
 #define _GNU_SOURCE
 #include <unistd.h>
 #include <fcntl.h>

@@ -1,3 +1,6 @@
+// A signal interrupting a blocked eventfd read or poll: EINTR without
+// SA_RESTART, the read restarted with it, on the main thread and on a waiter
+// thread.
 #define _GNU_SOURCE
 
 #include <errno.h>

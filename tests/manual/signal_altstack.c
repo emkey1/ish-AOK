@@ -1,3 +1,5 @@
+// A handler installed with SA_ONSTACK runs on the stack sigaltstack set up, not
+// on the thread's own.
 #define _GNU_SOURCE
 
 #include <errno.h>

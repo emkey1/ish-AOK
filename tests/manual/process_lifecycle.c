@@ -1,3 +1,6 @@
+// fork and exec bookkeeping: exit and signal statuses, WNOHANG, the signal mask
+// a child inherits, and which handlers, ignores, masks, argv and environment
+// survive an exec.
 #define _GNU_SOURCE
 
 #include <errno.h>

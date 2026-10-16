@@ -1,3 +1,4 @@
+// One detached thread created and left to print: the smallest pthread_create.
 #include <stdio.h>
 #include <pthread.h>
 

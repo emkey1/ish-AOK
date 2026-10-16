@@ -1,3 +1,5 @@
+// fork, exec the command given in the child, wait for it in the parent: the
+// smallest fork, exec and wait round trip.
 #include <unistd.h>
 #include <sys/wait.h>
 #include <stdio.h>

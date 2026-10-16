@@ -1,3 +1,5 @@
+// LOCK XADD on 32 bits: the exchanged register, memory and flags, random
+// vectors, and a multi-threaded sum.
 #include <inttypes.h>
 #include <pthread.h>
 #include <stdint.h>

@@ -1,3 +1,6 @@
+// amd64 regressions: a store across a page, COW atomics after fork, ELF loader
+// edge cases, an fcntl lock racing close, PUSH/POP order, CMOV's zero
+// extension, and cc1 compiling under stress.
 #define _GNU_SOURCE
 
 #include <errno.h>

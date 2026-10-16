@@ -1,3 +1,5 @@
+// SA_RESTART on a blocked read and a blocked waitpid: EINTR without it, the
+// call restarted with it.
 #define _GNU_SOURCE
 
 #include <errno.h>

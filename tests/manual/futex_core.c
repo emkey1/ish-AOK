@@ -1,3 +1,6 @@
+// FUTEX_WAIT and FUTEX_WAKE: EAGAIN on a changed word, timeouts, single and
+// counted wakes, FUTEX_WAKE_OP, and signals interrupting a wait with and
+// without SA_RESTART.
 #define _GNU_SOURCE
 
 #include <errno.h>

@@ -1,3 +1,5 @@
+// An empty loop of 100 million iterations: the JIT's cost per instruction on a
+// tight loop.
 #include <unistd.h>
 #include <stdio.h>
 
