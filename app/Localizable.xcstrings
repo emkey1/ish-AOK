@@ -1051,6 +1051,126 @@
         }
       }
     },
+    "Chooses the model and server the chat talks to." : {
+      "comment" : "Accessibility hint for the chat toolbar's Model menu",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wählt das Modell und den Server, mit denen der Chat spricht."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Elige el modelo y el servidor con los que habla el chat."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choisit le modèle et le serveur avec lesquels la discussion communique."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "チャットが使うモデルとサーバーを選びます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "채팅이 사용할 모델과 서버를 선택합니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Escolhe o modelo e o servidor com que o chat conversa."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Выбирает модель и сервер, с которыми работает чат."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选择聊天使用的模型和服务器。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "選擇聊天使用的模型和伺服器。"
+          }
+        }
+      }
+    },
+    "Closes the Workspace windows iPadOS is keeping in the background." : {
+      "comment" : "Accessibility hint for the Desktops tool's Close Hidden Windows button",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Schließt die Workspace-Fenster, die iPadOS im Hintergrund hält."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cierra las ventanas de Workspace que iPadOS mantiene en segundo plano."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ferme les fenêtres Workspace qu'iPadOS garde en arrière-plan."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "iPadOS がバックグラウンドに保持している Workspace ウインドウを閉じます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "iPadOS가 백그라운드에 유지하고 있는 Workspace 윈도우를 닫습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fecha as janelas do Workspace que o iPadOS mantém em segundo plano."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Закрывает окна Workspace, которые iPadOS держит в фоне."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "关闭 iPadOS 在后台保留的 Workspace 窗口。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "關閉 iPadOS 在背景保留的 Workspace 視窗。"
+          }
+        }
+      }
+    },
     "Could not start /AOK/tools/start-wayland.sh: %@\n\nIf no desktop is installed yet, choose Install a Desktop… from this window's ··· menu, or run 'sudo sh /AOK/tools/setup-wayland.sh' in a terminal." : {
       "comment" : "Wayland display error; %@ is the error description",
       "extractionState" : "manual",
@@ -1711,6 +1831,186 @@
         }
       }
     },
+    "Opens another Workspace window." : {
+      "comment" : "Accessibility hint for the Desktops tool's New Workspace button",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Öffnet ein weiteres Workspace-Fenster."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Abre otra ventana de Workspace."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ouvre une autre fenêtre Workspace."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "別の Workspace ウインドウを開きます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "다른 Workspace 윈도우를 엽니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Abre outra janela do Workspace."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Открывает ещё одно окно Workspace."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开另一个 Workspace 窗口。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打開另一個 Workspace 視窗。"
+          }
+        }
+      }
+    },
+    "Opens the LLM settings." : {
+      "comment" : "Accessibility hint for the chat toolbar's Settings button",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Öffnet die LLM-Einstellungen."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Abre los ajustes del LLM."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ouvre les réglages du LLM."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "LLM の設定を開きます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "LLM 설정을 엽니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Abre os ajustes do LLM."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Открывает настройки LLM."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开 LLM 设置。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打開 LLM 設定。"
+          }
+        }
+      }
+    },
+    "Prompts that use the terminal's output, and saved prompt templates." : {
+      "comment" : "Accessibility hint for the chat toolbar's Actions button",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Prompts, die die Ausgabe des Terminals nutzen, und gesicherte Prompt-Vorlagen."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Prompts que usan la salida del terminal y plantillas de prompts guardadas."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Des prompts qui utilisent la sortie du terminal, et des modèles de prompts enregistrés."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ターミナルの出力を使うプロンプトと、保存したプロンプトテンプレートです。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "터미널 출력을 사용하는 프롬프트와 저장된 프롬프트 템플릿입니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Prompts que usam a saída do terminal e modelos de prompt salvos."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Запросы, использующие вывод терминала, и сохранённые шаблоны запросов."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用终端输出的提示，以及已保存的提示模板。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用終端機輸出的提示，以及已儲存的提示範本。"
+          }
+        }
+      }
+    },
     "Reloads the diagnostics report." : {
       "comment" : "Accessibility hint for the refresh diagnostics button",
       "extractionState" : "manual",
@@ -2071,6 +2371,186 @@
         }
       }
     },
+    "Restores the saved workspace layout." : {
+      "comment" : "Accessibility hint for the Desktops tool's Restore button",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stellt die gesicherte Anordnung des Workspace wieder her."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Restaura la disposición guardada del Workspace."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Restaure la disposition enregistrée du Workspace."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保存した Workspace のレイアウトを復元します。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "저장된 Workspace 레이아웃을 복원합니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Restaura o layout salvo do Workspace."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Восстанавливает сохранённую раскладку Workspace."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "恢复已保存的 Workspace 布局。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "還原已儲存的 Workspace 佈局。"
+          }
+        }
+      }
+    },
+    "Saves the current workspace layout." : {
+      "comment" : "Accessibility hint for the Desktops tool's Save button",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sichert die aktuelle Anordnung des Workspace."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Guarda la disposición actual del Workspace."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enregistre la disposition actuelle du Workspace."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "現在の Workspace のレイアウトを保存します。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "현재 Workspace 레이아웃을 저장합니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Salva o layout atual do Workspace."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Сохраняет текущую раскладку Workspace."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保存当前的 Workspace 布局。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "儲存目前的 Workspace 佈局。"
+          }
+        }
+      }
+    },
+    "Saves the session now, or suspends iSH-AOK and exits." : {
+      "comment" : "Accessibility hint for the Desktops tool's Session button",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sichert die Sitzung jetzt oder pausiert iSH-AOK und beendet es."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Guarda la sesión ahora, o suspende iSH-AOK y sale."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enregistre la session maintenant, ou suspend iSH-AOK et le quitte."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "今すぐセッションを保存するか、iSH-AOK をサスペンドして終了します。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "지금 세션을 저장하거나, iSH-AOK를 일시 중단하고 종료합니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Salva a sessão agora, ou suspende o iSH-AOK e sai."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Сохраняет сеанс сейчас или приостанавливает iSH-AOK и выходит."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "立即保存会话，或暂停 iSH-AOK 并退出。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "立即儲存工作階段，或暫停 iSH-AOK 並結束。"
+          }
+        }
+      }
+    },
     "Setting up %1$ld of %2$ld packages" : {
       "comment" : "Desktop setup progress; %1$ld packages done, %2$ld in all",
       "extractionState" : "manual",
@@ -2247,6 +2727,66 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "部分程式無法儲存"
+          }
+        }
+      }
+    },
+    "Starts a new chat, or opens one you had before." : {
+      "comment" : "Accessibility hint for the chat toolbar's Chats menu",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Beginnt einen neuen Chat oder öffnet einen früheren."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Empieza un chat nuevo o abre uno anterior."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Commence une nouvelle discussion ou en ouvre une précédente."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新しいチャットを始めるか、以前のチャットを開きます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "새 채팅을 시작하거나 이전 채팅을 엽니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Inicia um novo chat ou abre um anterior."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Начинает новый чат или открывает прежний."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "开始新聊天，或打开以前的聊天。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "開始新聊天，或打開以前的聊天。"
           }
         }
       }

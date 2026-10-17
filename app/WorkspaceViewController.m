@@ -15018,15 +15018,15 @@ static NSURL *ISHWorkspaceBrowserURLFromInput(NSString *input) {
 
     if (!ISHWorkspaceUsesModernStyle()) {
         _newWorkspaceButton = [self workspacesActionButtonWithTitle:NSLocalizedString(@"New Workspace", @"Desktops tool button") action:@selector(openNewWorkspaceFromApplet:)];
-        _newWorkspaceButton.accessibilityHint = NSLocalizedString(@"Creates a new empty workspace desktop.", @"Accessibility hint for new workspace button");
+        _newWorkspaceButton.accessibilityHint = NSLocalizedString(@"Opens another Workspace window.", @"Accessibility hint for the Desktops tool's New Workspace button");
         [_contentStack addArrangedSubview:_newWorkspaceButton];
         _closeHiddenButton = [self workspacesActionButtonWithTitle:NSLocalizedString(@"Close Hidden Windows", @"Desktops tool button") action:@selector(confirmCloseHiddenWindows:)];
-        _closeHiddenButton.accessibilityHint = NSLocalizedString(@"Closes windows that are not visible in any workspace.", @"Accessibility hint for close hidden windows button");
+        _closeHiddenButton.accessibilityHint = NSLocalizedString(@"Closes the Workspace windows iPadOS is keeping in the background.", @"Accessibility hint for the Desktops tool's Close Hidden Windows button");
         [_contentStack addArrangedSubview:_closeHiddenButton];
         _sessionButton = [self workspacesIconButtonWithSymbol:@"arrow.down.doc"
                                                      fallback:NSLocalizedString(@"Session", @"Desktops tool session button label")
                                                        action:@selector(sessionActionsFromApplet:)];
-        _sessionButton.accessibilityHint = NSLocalizedString(@"Shows session options like export or import.", @"Accessibility hint for session options button");
+        _sessionButton.accessibilityHint = NSLocalizedString(@"Saves the session now, or suspends iSH-AOK and exits.", @"Accessibility hint for the Desktops tool's Session button");
         [_contentStack addArrangedSubview:_sessionButton];
     } else {
         // Modern folds the Layout Manager into this applet as two icons.
@@ -15054,7 +15054,7 @@ static NSURL *ISHWorkspaceBrowserURLFromInput(NSString *input) {
         _sessionButton = [self workspacesIconButtonWithSymbol:@"arrow.down.doc"
                                                      fallback:NSLocalizedString(@"Session", @"Desktops tool session button label")
                                                        action:@selector(sessionActionsFromApplet:)];
-        _sessionButton.accessibilityHint = NSLocalizedString(@"Shows session options like export or import.", @"Accessibility hint for session options button");
+        _sessionButton.accessibilityHint = NSLocalizedString(@"Saves the session now, or suspends iSH-AOK and exits.", @"Accessibility hint for the Desktops tool's Session button");
         [layoutRow addArrangedSubview:_sessionButton];
         [_contentStack addArrangedSubview:layoutRow];
     }

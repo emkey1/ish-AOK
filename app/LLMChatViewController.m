@@ -583,13 +583,13 @@ static const CGFloat kISHLLMMaximumTextScale = 3.0;
     // fifth crushes the labels on a narrow iPhone.
 
     _chatsButton = [self toolbarButtonWithTitle:NSLocalizedString(@"Chats", @"chat toolbar button") action:NULL];
-    _chatsButton.accessibilityHint = NSLocalizedString(@"Shows a list of all your chats.", @"Accessibility hint for chat toolbar button");
+    _chatsButton.accessibilityHint = NSLocalizedString(@"Starts a new chat, or opens one you had before.", @"Accessibility hint for the chat toolbar's Chats menu");
 
     _destinationButton = [self toolbarButtonWithTitle:NSLocalizedString(@"Model", @"chat toolbar button") action:NULL];
-    _destinationButton.accessibilityHint = NSLocalizedString(@"Shows a list of all configured models.", @"Accessibility hint for chat model toolbar button");
+    _destinationButton.accessibilityHint = NSLocalizedString(@"Chooses the model and server the chat talks to.", @"Accessibility hint for the chat toolbar's Model menu");
 
     UIButton *actionsButton = [self toolbarButtonWithTitle:NSLocalizedString(@"Actions", @"chat toolbar button") action:@selector(showPromptActions:)];
-    actionsButton.accessibilityHint = NSLocalizedString(@"Shows a menu of actions for the current chat.", @"Accessibility hint for chat actions toolbar button");
+    actionsButton.accessibilityHint = NSLocalizedString(@"Prompts that use the terminal's output, and saved prompt templates.", @"Accessibility hint for the chat toolbar's Actions button");
 
     UIButton *settingsButton = [self toolbarButtonWithTitle:NSLocalizedString(@"Settings", @"chat toolbar button") action:@selector(showLLMSettings:)];
     settingsButton.accessibilityHint = NSLocalizedString(@"Opens the LLM settings.", @"Accessibility hint for chat settings toolbar button");
@@ -597,16 +597,16 @@ static const CGFloat kISHLLMMaximumTextScale = 3.0;
 
 
     _chatsBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:NSLocalizedString(@"Chats", @"chat toolbar button") style:UIBarButtonItemStylePlain target:nil action:NULL];
-    _chatsBarButtonItem.accessibilityHint = NSLocalizedString(@"Shows a list of all your chats.", @"Accessibility hint for chat toolbar button");
+    _chatsBarButtonItem.accessibilityHint = NSLocalizedString(@"Starts a new chat, or opens one you had before.", @"Accessibility hint for the chat toolbar's Chats menu");
 
     _destinationBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:NSLocalizedString(@"Model", @"chat toolbar button") style:UIBarButtonItemStylePlain target:nil action:NULL];
-    _destinationBarButtonItem.accessibilityHint = NSLocalizedString(@"Shows a list of all configured models.", @"Accessibility hint for chat model toolbar button");
+    _destinationBarButtonItem.accessibilityHint = NSLocalizedString(@"Chooses the model and server the chat talks to.", @"Accessibility hint for the chat toolbar's Model menu");
 
     UIBarButtonItem *settingsBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:NSLocalizedString(@"Settings", @"chat toolbar button") style:UIBarButtonItemStylePlain target:self action:@selector(showLLMSettings:)];
     settingsBarButtonItem.accessibilityHint = NSLocalizedString(@"Opens the LLM settings.", @"Accessibility hint for chat settings toolbar button");
 
     UIBarButtonItem *actionsBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:NSLocalizedString(@"Actions", @"chat toolbar button") style:UIBarButtonItemStylePlain target:self action:@selector(showPromptActions:)];
-    actionsBarButtonItem.accessibilityHint = NSLocalizedString(@"Shows a menu of actions for the current chat.", @"Accessibility hint for chat actions toolbar button");
+    actionsBarButtonItem.accessibilityHint = NSLocalizedString(@"Prompts that use the terminal's output, and saved prompt templates.", @"Accessibility hint for the chat toolbar's Actions button");
 
     self.navigationItem.rightBarButtonItems = @[
         settingsBarButtonItem,
