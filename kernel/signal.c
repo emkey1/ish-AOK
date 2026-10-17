@@ -311,6 +311,68 @@ struct rt_sigframe_riscv64 {
 static_assert(offsetof(struct rt_sigframe_riscv64, uc) == 128, "riscv64 frame uc offset");
 static_assert(offsetof(struct rt_sigframe_riscv64, v) == 128 + 960, "riscv64 V record follows the ucontext");
 
+
+// ppc64 signal frame (arch/powerpc/kernel/signal_64.c, uapi asm/ucontext.h
+// and asm/sigcontext.h). sys_rt_sigreturn finds the ucontext at r1, so it is
+// first; the 512-byte gap at the end keeps the frame off the red zone below
+// the interrupted r1.
+struct ppc64_sigcontext_ {
+    qword_t unused[4];
+    int_t signal;
+    int_t pad0;
+    qword_t handler;
+    qword_t oldmask;
+    qword_t regs;           // -> gp_regs
+    // pt_regs: gpr[32], nip, msr, orig_gpr3, ctr, link, xer, ccr, softe,
+    // trap, dar, dsisr, result, and four spare
+    qword_t gp_regs[48];
+    qword_t fp_regs[33];    // f0-f31, fpscr
+    qword_t v_regs;         // -> vmx_reserve, rounded up to 16
+    // VR0-31, VSCR (its word first, little-endian), VRSAVE (likewise), then
+    // the second doubleword of VSR0-31
+    qword_t vmx_reserve[34 + 34 + 1 + 32];
+};
+static_assert(sizeof(struct ppc64_sigcontext_) == 1528, "ppc64 sigcontext size");
+
+struct ppc64_ucontext_ {
+    qword_t flags;
+    qword_t link;
+    struct amd64_stack_t_marshaled stack;
+    sigset_t_ sigmask;
+    sigset_t_ unused_masks[15];
+    struct ppc64_sigcontext_ mcontext;
+};
+static_assert(sizeof(struct ppc64_ucontext_) == 1696, "ppc64 ucontext size");
+
+struct rt_sigframe_ppc64 {
+    struct ppc64_ucontext_ uc;
+    // Linux's uc_transact (CONFIG_PPC_TRANSACTIONAL_MEM, as distribution
+    // kernels for POWER8 have): nothing here has TM, so it stays zero.
+    struct ppc64_ucontext_ uc_transact;
+    qword_t unused[2];
+    dword_t tramp[7];
+    qword_t pinfo;
+    qword_t puc;
+    struct amd64_siginfo_ info;
+    char abigap[512];
+} __attribute__((aligned(16)));
+
+#define PPC64_PT_NIP 32
+#define PPC64_PT_MSR 33
+#define PPC64_PT_ORIG_GPR3 34
+#define PPC64_PT_CTR 35
+#define PPC64_PT_LINK 36
+#define PPC64_PT_XER 37
+#define PPC64_PT_CCR 38
+#define PPC64_PT_SOFTE 39
+#define PPC64_PT_TRAP 40
+// The MSR a 64-bit little-endian user thread runs with on POWER8: SF, VEC,
+// VSX, EE, PR, FP, ME, IR, DR, RI, LE.
+#define PPC64_USER_MSR 0x800000000280f033ull
+#define PPC64_MSR_VEC (1ull << 25)
+#define PPC64_MSR_VSX (1ull << 23)
+#define PPC64_SIGNAL_FRAMESIZE 128
+
 static int sigaction_from_user(struct task *task, guest_addr_t user_addr, struct sigaction_ *action) {
     // arm64 shares the amd64 marshaling: aarch64's struct sigaction is the
     // same {handler, flags, restorer, mask} qword layout (arm64 defines
@@ -508,6 +570,8 @@ static guest_addr_t current_user_sp(struct task *task) {
         return task->cpu.arm64_sp;
     if (task->abi == GUEST_ABI_RISCV64)
         return task->cpu.riscv64_regs[riscv64_sp];
+    if (task->abi == GUEST_ABI_PPC64)
+        return task->cpu.ppc64_gpr[1];
     return task->cpu.esp;
 }
 
@@ -3387,6 +3451,139 @@ qword_t sys_rt_sigreturn_riscv64(void) {
     return cpu->riscv64_regs[riscv64_a0];
 }
 
+// XER and CR as one register each, from and to the words the gadgets keep
+// (emu/cpu.h): XER's SO 31, OV 30, CA 29, OV32 19, CA32 18 and the rest as
+// written; CR field n in bits 31-4n down to 28-4n.
+qword_t ppc64_xer_get(const struct cpu_state *cpu) {
+    return (qword_t) ((cpu->ppc64_so & 1) << 31 | (cpu->ppc64_ov & 1) << 30 |
+            (cpu->ppc64_ca & 1) << 29 | (cpu->ppc64_ov32 & 1) << 19 |
+            (cpu->ppc64_ca32 & 1) << 18 | (cpu->ppc64_xer_rest & ~0xe00c0000u));
+}
+
+void ppc64_xer_set(struct cpu_state *cpu, qword_t xer) {
+    cpu->ppc64_so = (xer >> 31) & 1;
+    cpu->ppc64_ov = (xer >> 30) & 1;
+    cpu->ppc64_ca = (xer >> 29) & 1;
+    cpu->ppc64_ov32 = (xer >> 19) & 1;
+    cpu->ppc64_ca32 = (xer >> 18) & 1;
+    cpu->ppc64_xer_rest = (dword_t) xer & ~0xe00c0000u;
+}
+
+dword_t ppc64_cr_get(const struct cpu_state *cpu) {
+    dword_t cr = 0;
+    for (int i = 0; i < 8; i++)
+        cr |= (cpu->ppc64_cr[i] & 0xf) << (28 - 4 * i);
+    return cr;
+}
+
+void ppc64_cr_set(struct cpu_state *cpu, dword_t cr) {
+    for (int i = 0; i < 8; i++)
+        cpu->ppc64_cr[i] = (cr >> (28 - 4 * i)) & 0xf;
+}
+
+// The register state into a sigcontext whose guest address is mc_addr
+// (regs and v_regs point into it there).
+static void ppc64_mcontext_save(struct ppc64_sigcontext_ *mc, guest_addr_t mc_addr,
+        const struct cpu_state *cpu) {
+    for (int i = 0; i < 32; i++)
+        mc->gp_regs[i] = cpu->ppc64_gpr[i];
+    mc->gp_regs[PPC64_PT_NIP] = cpu->ppc64_pc;
+    mc->gp_regs[PPC64_PT_MSR] = PPC64_USER_MSR;
+    mc->gp_regs[PPC64_PT_ORIG_GPR3] = cpu->ppc64_orig_gpr3;
+    mc->gp_regs[PPC64_PT_CTR] = cpu->ppc64_ctr;
+    mc->gp_regs[PPC64_PT_LINK] = cpu->ppc64_lr;
+    mc->gp_regs[PPC64_PT_XER] = ppc64_xer_get(cpu);
+    mc->gp_regs[PPC64_PT_CCR] = ppc64_cr_get(cpu);
+    mc->gp_regs[PPC64_PT_SOFTE] = 1;
+    mc->regs = mc_addr + offsetof(struct ppc64_sigcontext_, gp_regs);
+    for (int i = 0; i < 32; i++)
+        mc->fp_regs[i] = cpu->ppc64_vsr[i].qw[1];
+    mc->fp_regs[32] = cpu->ppc64_fpscr;
+    guest_addr_t vmx = mc_addr + offsetof(struct ppc64_sigcontext_, vmx_reserve);
+    guest_addr_t vregs = (vmx + 15) & ~(guest_addr_t) 15;
+    mc->v_regs = vregs;
+    char *v = (char *) mc->vmx_reserve + (vregs - vmx);
+    memcpy(v, &cpu->ppc64_vsr[32], 32 * 16);
+    memcpy(v + 32 * 16, &cpu->ppc64_vscr, 4);
+    memcpy(v + 33 * 16, &cpu->ppc64_vrsave, 4);
+    for (int i = 0; i < 32; i++)
+        memcpy(v + 34 * 16 + i * 8, &cpu->ppc64_vsr[i].qw[0], 8);
+}
+
+static void ppc64_mcontext_restore(const struct ppc64_sigcontext_ *mc, guest_addr_t mc_addr,
+        struct cpu_state *cpu) {
+    for (int i = 0; i < 32; i++)
+        cpu->ppc64_gpr[i] = mc->gp_regs[i];
+    cpu->ppc64_pc = mc->gp_regs[PPC64_PT_NIP];
+    cpu->ppc64_ctr = mc->gp_regs[PPC64_PT_CTR];
+    cpu->ppc64_lr = mc->gp_regs[PPC64_PT_LINK];
+    ppc64_xer_set(cpu, mc->gp_regs[PPC64_PT_XER]);
+    ppc64_cr_set(cpu, (dword_t) mc->gp_regs[PPC64_PT_CCR]);
+    for (int i = 0; i < 32; i++)
+        cpu->ppc64_vsr[i].qw[1] = mc->fp_regs[i];
+    cpu->ppc64_fpscr = (dword_t) mc->fp_regs[32];
+    // The vector registers come from where v_regs points, as Linux reads
+    // them, and only when the saved MSR says they were saved.
+    qword_t msr = mc->gp_regs[PPC64_PT_MSR];
+    guest_addr_t vmx = mc_addr + offsetof(struct ppc64_sigcontext_, vmx_reserve);
+    if (mc->v_regs >= vmx && mc->v_regs + 34 * 16 + 32 * 8 <= vmx + sizeof(mc->vmx_reserve)) {
+        const char *v = (const char *) mc->vmx_reserve + (mc->v_regs - vmx);
+        if (msr & PPC64_MSR_VEC) {
+            memcpy(&cpu->ppc64_vsr[32], v, 32 * 16);
+            memcpy(&cpu->ppc64_vscr, v + 32 * 16, 4);
+            memcpy(&cpu->ppc64_vrsave, v + 33 * 16, 4);
+        }
+        if (msr & PPC64_MSR_VSX)
+            for (int i = 0; i < 32; i++)
+                memcpy(&cpu->ppc64_vsr[i].qw[0], v + 34 * 16 + i * 8, 8);
+    }
+}
+
+static void setup_rt_sigframe_ppc64(struct siginfo_ *info, struct rt_sigframe_ppc64 *frame,
+        guest_addr_t frame_addr) {
+    struct cpu_state *cpu = &current->cpu;
+    memset(frame, 0, sizeof(*frame));
+    siginfo_to_amd64_user(&frame->info, info);
+    frame->uc.stack = (struct amd64_stack_t_marshaled) {
+        .stack = current->altstack,
+        .flags = current_altstack_flags(current),
+        .size = current->altstack_size,
+    };
+    frame->uc.sigmask = sigmask_to_save();
+    struct ppc64_sigcontext_ *mc = &frame->uc.mcontext;
+    mc->signal = info->sig;
+    mc->oldmask = frame->uc.sigmask;
+    ppc64_mcontext_save(mc, frame_addr + offsetof(struct rt_sigframe_ppc64, uc.mcontext), cpu);
+    frame->pinfo = frame_addr + offsetof(struct rt_sigframe_ppc64, info);
+    frame->puc = frame_addr + offsetof(struct rt_sigframe_ppc64, uc);
+    // Linux's setup_trampoline, for a process with no [sigpage]
+    frame->tramp[0] = 0x4e800421u; // bctrl
+    frame->tramp[1] = 0x38210080u; // addi r1, r1, 128
+    frame->tramp[2] = 0x380000acu; // li r0, 172
+    frame->tramp[3] = 0x44000002u; // sc
+}
+
+qword_t sys_rt_sigreturn_ppc64(void) {
+    struct cpu_state *cpu = &current->cpu;
+    // The trampoline popped the handler's dummy frame: r1 is the frame, whose
+    // first member is the ucontext.
+    guest_addr_t uc_addr = cpu->ppc64_gpr[1];
+    struct ppc64_ucontext_ uc;
+    if (user_get(uc_addr, uc)) {
+        deliver_signal(current, SIGSEGV_, SIGINFO_NIL);
+        return _EFAULT;
+    }
+    ppc64_mcontext_restore(&uc.mcontext, uc_addr + offsetof(struct ppc64_ucontext_, mcontext), cpu);
+
+    lock(&current->sighand->lock, 0);
+    restore_altstack(uc_addr, uc.stack.stack, uc.stack.size, uc.stack.flags);
+    sigmask_set(uc.sigmask);
+    unlock(&current->sighand->lock);
+    // Every register is the frame's, r3 and CR0 with them: nothing is
+    // written back as a result.
+    return 0;
+}
+
 // The mask a handler runs with, as Linux's signal_delivered sets it: the mask
 // in force as it is set up -- a sigsuspend-like call's temporary one, for the
 // first handler after such a call -- plus the handler's sa_mask, plus the
@@ -3583,6 +3780,50 @@ static void receive_signal(struct sighand *sighand, struct siginfo_ *info) {
 
         if (user_write(sp, &frame, sizeof(frame))) {
             printk("WARNING: failed to install riscv64 frame for %d at %#llx, killing\n",
+                   info->sig, (unsigned long long) sp);
+            unlock(&sighand->lock);
+            do_exit_group(SIGSEGV_);
+        }
+
+        if (action->flags & SA_RESETHAND_)
+            *action = (struct sigaction_) {.handler = SIG_DFL_};
+        return;
+    }
+
+    if (current->abi == GUEST_ABI_PPC64) {
+        struct rt_sigframe_ppc64 frame;
+        sp -= sizeof(frame);
+        sp &= ~0xfull;
+        setup_rt_sigframe_ppc64(info, &frame, sp);
+        // handle_rt_signal64: a dummy caller frame below, whose back chain is
+        // the interrupted r1; the handler is reached through the trampoline's
+        // bctrl, with CTR and (ELFv2) r12 its address.
+        guest_addr_t newsp = sp - PPC64_SIGNAL_FRAMESIZE;
+        qword_t back_chain = current->cpu.ppc64_gpr[1];
+        current->cpu.ppc64_gpr[1] = newsp;
+        current->cpu.ppc64_gpr[3] = info->sig;
+        if (action->flags & SA_SIGINFO_) {
+            current->cpu.ppc64_gpr[4] = sp + offsetof(struct rt_sigframe_ppc64, info);
+            current->cpu.ppc64_gpr[5] = sp + offsetof(struct rt_sigframe_ppc64, uc);
+            current->cpu.ppc64_gpr[6] = sp;
+        } else {
+            current->cpu.ppc64_gpr[4] = sp + offsetof(struct rt_sigframe_ppc64, uc.mcontext);
+        }
+        current->cpu.ppc64_ctr = action->handler;
+        current->cpu.ppc64_gpr[12] = action->handler;
+        current->cpu.ppc64_pc = current->mm->vdso != 0 ? current->mm->vdso
+                : sp + offsetof(struct rt_sigframe_ppc64, tramp);
+        // a handler starts with FPSCR's modes as Linux leaves them: cleared
+        current->cpu.ppc64_fpscr = 0;
+
+        signal_handler_mask_set(action, info->sig);
+
+        // Not the abigap: it is the interrupted code's red zone (288 bytes
+        // below r1, where a leaf function keeps the registers it saves --
+        // musl's pthread_sigmask its r31), reserved and never written.
+        if (user_write(sp, &frame, offsetof(struct rt_sigframe_ppc64, abigap)) ||
+                user_put(newsp, back_chain)) {
+            printk("WARNING: failed to install ppc64 frame for %d at %#llx, killing\n",
                    info->sig, (unsigned long long) sp);
             unlock(&sighand->lock);
             do_exit_group(SIGSEGV_);

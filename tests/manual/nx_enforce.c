@@ -68,6 +68,9 @@ static const unsigned char NOP[] = {0x1f, 0x20, 0x03, 0xd5};
 #elif defined(__riscv)
 static const unsigned char RET[] = {0x67, 0x80, 0x00, 0x00}; // jalr x0, 0(ra)
 static const unsigned char NOP[] = {0x13, 0x00, 0x00, 0x00}; // addi x0, x0, 0
+#elif defined(__powerpc64__) && defined(__LITTLE_ENDIAN__)
+static const unsigned char RET[] = {0x20, 0x00, 0x80, 0x4e}; // blr
+static const unsigned char NOP[] = {0x00, 0x00, 0x00, 0x60}; // ori 0, 0, 0
 #else
 #error "unknown architecture"
 #endif

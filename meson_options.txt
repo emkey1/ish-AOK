@@ -26,8 +26,8 @@ option('log_handler', type: 'string', value: 'dprintf')
 option('engine', type: 'combo', choices: ['jit'], value: 'jit')
 option('jit_cpu_family', type: 'string', value: '')
 option('guest_archs', type: 'array',
-       choices: ['i386', 'amd64', 'arm64', 'riscv64'],
-       value: ['i386', 'amd64', 'arm64', 'riscv64'],
+       choices: ['i386', 'amd64', 'arm64', 'riscv64', 'ppc64'],
+       value: ['i386', 'amd64', 'arm64', 'riscv64', 'ppc64'],
        description: 'Guest architectures this build can execute (at least one required)')
 
 option('arm64_gret', type: 'combo', choices: ['ldar', 'dmb'], value: 'dmb',

@@ -95,6 +95,11 @@ typedef Elf64_Word HashWord;
 #define VDSO_GETTIME "__kernel_clock_gettime"
 #define VDSO_GETTOD "__kernel_gettimeofday"
 #define VDSO_GETRES "__kernel_clock_getres"
+#elif defined(__powerpc64__)
+#define VDSO_VERSION "LINUX_2.6.15"
+#define VDSO_GETTIME "__kernel_clock_gettime"
+#define VDSO_GETTOD "__kernel_gettimeofday"
+#define VDSO_GETRES "__kernel_clock_getres"
 #elif defined(__riscv)
 #define VDSO_VERSION "LINUX_4.15"
 #define VDSO_GETTIME "__vdso_clock_gettime"
@@ -232,6 +237,27 @@ static void *vdso_sym(const char *vername, const char *name) {
 
 static void *vdso_gettime_fn, *vdso_gettod_fn, *vdso_getres_fn;
 
+// A call into the vDSO with two arguments. powerpc's return as system calls
+// do -- an errno with CR0[SO] set, which glibc tests after the call -- so
+// there the call is made by hand and the errno negated as the others give it.
+static int vdso_call2(void *fn, void *a, void *b) {
+#if defined(__powerpc64__)
+    register void *r3 __asm__("r3") = a;
+    register void *r4 __asm__("r4") = b;
+    register void *r12 __asm__("r12") = fn;
+    unsigned long cr;
+    __asm__ volatile("mtctr 12\n\tbctrl\n\tmfcr %2"
+        : "+r"(r3), "+r"(r4), "=&r"(cr), "+r"(r12)
+        :
+        : "r0", "r5", "r6", "r7", "r8", "r9", "r10", "r11", "ctr", "lr",
+          "cr0", "cr1", "cr5", "cr6", "cr7", "xer", "memory");
+    long r = (long) r3;
+    return (int) (cr & 0x10000000 ? -r : r);
+#else
+    return ((int (*)(void *, void *)) fn)(a, b);
+#endif
+}
+
 // The i386 vDSO's clock_gettime takes the 32-bit timespec; every 64-bit one
 // takes the 64-bit one, which is also the C library's there.
 static int vdso_gettime(clockid_t clock, int64_t *ns) {
@@ -242,7 +268,7 @@ static int vdso_gettime(clockid_t clock, int64_t *ns) {
         *ns = (int64_t) t.sec * 1000000000 + t.nsec;
 #else
     struct kts64 t = {-1, -1};
-    int r = ((int (*)(clockid_t, struct kts64 *)) vdso_gettime_fn)(clock, &t);
+    int r = vdso_call2(vdso_gettime_fn, (void *) (intptr_t) clock, &t);
     if (r == 0) {
         if (t.nsec < 0 || t.nsec >= 1000000000)
             return -1000;   // not a timespec at all
@@ -260,7 +286,7 @@ static int vdso_getres(clockid_t clock, int64_t *ns) {
         *ns = (int64_t) t.sec * 1000000000 + t.nsec;
 #else
     struct kts64 t = {-1, -1};
-    int r = ((int (*)(clockid_t, struct kts64 *)) vdso_getres_fn)(clock, &t);
+    int r = vdso_call2(vdso_getres_fn, (void *) (intptr_t) clock, &t);
     if (r == 0)
         *ns = kts64_ns(t);
 #endif
@@ -268,7 +294,7 @@ static int vdso_getres(clockid_t clock, int64_t *ns) {
 }
 
 static int vdso_gettod(struct ktv *tv, void *tz) {
-    return ((int (*)(struct ktv *, void *)) vdso_gettod_fn)(tv, tz);
+    return vdso_call2(vdso_gettod_fn, tv, tz);
 }
 
 // Whether this C library reads the clock through the vDSO at all. glibc does

@@ -171,6 +171,27 @@ static long raw_syscall6(long nr, long a1, long a2, long a3, long a4, long a5, l
         : "memory");
     return x10;
 }
+#elif defined(__powerpc64__)
+static long raw_syscall6(long nr, long a1, long a2, long a3, long a4, long a5, long a6) {
+    // sc: an error is the positive errno with CR0[SO] set; as the kernel's
+    // negative value, as raw_syscall_status() decodes it
+    register long r0 __asm__("r0") = nr;
+    register long r3 __asm__("r3") = a1;
+    register long r4 __asm__("r4") = a2;
+    register long r5 __asm__("r5") = a3;
+    register long r6 __asm__("r6") = a4;
+    register long r7 __asm__("r7") = a5;
+    register long r8 __asm__("r8") = a6;
+    __asm__ volatile(
+        "sc\n\t"
+        "bns+ 1f\n\t"
+        "neg %1, %1\n"
+        "1:"
+        : "+r"(r0), "+r"(r3), "+r"(r4), "+r"(r5), "+r"(r6), "+r"(r7), "+r"(r8)
+        :
+        : "memory", "cr0", "r9", "r10", "r11", "r12", "ctr", "xer");
+    return r3;
+}
 #else
 static long raw_syscall6(long nr, long a1, long a2, long a3, long a4, long a5, long a6) {
     return syscall(nr, a1, a2, a3, a4, a5, a6);

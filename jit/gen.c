@@ -440,6 +440,14 @@ int gen_step(struct gen_state *state, struct tlb *tlb) {
         riscv64_pair_fuse(state, emitted_from);
         return ret;
     }
+    if (state->ppc64) {
+        unsigned emitted_from = state->size;
+        int ret = gen_step_ppc64(state, tlb);
+        if (unlikely(state->jitprof != NULL) && state->size > emitted_from)
+            jitprof_note_step(state->jitprof, state->block->code[emitted_from],
+                    (unsigned) (state->size - emitted_from), 1);
+        return ret;
+    }
     state->orig_ip = state->ip;
     state->orig_ip_extra = 0;
     // amd64 advances amd64_ip, i386 ip.
@@ -1291,6 +1299,9 @@ bool gen_start(guest_addr_t addr, struct gen_state *state) {
     state->jitprof = NULL;
     state->riscv64_ip = addr;
     state->riscv64_orig_ip = addr;
+    state->ppc64 = false; // the same bug class again
+    state->ppc64_ip = addr;
+    state->ppc64_orig_ip = addr;
     state->amd64 = false;
     state->amd64_fallback_to_interp = false;
     state->amd64_abort_block_to_interp = false;
@@ -6579,6 +6590,24 @@ int gen_step_arm64(struct gen_state *state, struct tlb *tlb) {
 }
 
 #endif // ISH_JIT_ARM64_GUEST
+
+// ---- ppc64 guest: jit/gen_ppc64.c, built only with its aarch64 gadgets ------
+#ifndef ISH_JIT_PPC64_GUEST
+bool gen_start_ppc64(guest_addr_t addr, struct gen_state *state) {
+    (void) addr;
+    (void) state;
+    die("ppc64 guest block on a host without the ppc64 guest JIT");
+}
+int gen_step_ppc64(struct gen_state *state, struct tlb *tlb) {
+    (void) state;
+    (void) tlb;
+    die("ppc64 guest block on a host without the ppc64 guest JIT");
+}
+void gen_exit_ppc64(struct gen_state *state) {
+    (void) state;
+    die("ppc64 guest block on a host without the ppc64 guest JIT");
+}
+#endif
 
 // ---- RISC-V guest code generator -----------------------------------------
 // Same host restriction and stub arrangement as the arm64 section above:
@@ -19995,6 +20024,11 @@ void gen_end(struct gen_state *state) {
             block->end_addr = state->riscv64_ip - 1;
         else
             block->end_addr = block->addr;
+    } else if (state->ppc64) {
+        if (block->addr != state->ppc64_ip)
+            block->end_addr = state->ppc64_ip - 1;
+        else
+            block->end_addr = block->addr;
     } else if (block->addr != state->ip)
         block->end_addr = state->ip - 1;
     else
@@ -20041,6 +20075,10 @@ void gen_exit(struct gen_state *state) {
 #else
         die("riscv64 guest block on a host without the riscv64 guest JIT");
 #endif
+    }
+    if (state->ppc64) {
+        gen_exit_ppc64(state);
+        return;
     }
     if (state->amd64) {
         gen_amd64_flush_reg_cache(state);

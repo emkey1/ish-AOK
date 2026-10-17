@@ -54,6 +54,7 @@
 #define AUDIT_ARCH_X86_64_  0xc000003eu
 #define AUDIT_ARCH_AARCH64_ 0xc00000b7u
 #define AUDIT_ARCH_RISCV64_ 0xc00000f3u
+#define AUDIT_ARCH_PPC64LE_ 0xc0000015u
 
 #define BPF_MAXINSNS_ 4096
 // Linux's MAX_INSNS_PER_PATH: every filter a call runs through, counted with
@@ -313,6 +314,7 @@ static uint32_t seccomp_arch(enum guest_abi abi) {
         case GUEST_ABI_AMD64: return AUDIT_ARCH_X86_64_;
         case GUEST_ABI_ARM64: return AUDIT_ARCH_AARCH64_;
         case GUEST_ABI_RISCV64: return AUDIT_ARCH_RISCV64_;
+        case GUEST_ABI_PPC64: return AUDIT_ARCH_PPC64LE_;
         case GUEST_ABI_I386:
         default: return AUDIT_ARCH_I386_;
     }
@@ -328,6 +330,8 @@ static bool strict_allowed(enum guest_abi abi, int nr) {
         case GUEST_ABI_ARM64:
         case GUEST_ABI_RISCV64:
             return nr == 63 || nr == 64 || nr == 93 || nr == 139;
+        case GUEST_ABI_PPC64:
+            return nr == 3 || nr == 4 || nr == 1 || nr == 172;
         case GUEST_ABI_I386:
         default:
             return nr == 3 || nr == 4 || nr == 1 || nr == 119;

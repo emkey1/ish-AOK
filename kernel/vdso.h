@@ -14,5 +14,7 @@ extern const char vdso_arm64_image[] __asm__("vdso_arm64_image");
 extern const char vdso_arm64_image_end[] __asm__("vdso_arm64_image_end");
 extern const char vdso_riscv64_image[] __asm__("vdso_riscv64_image");
 extern const char vdso_riscv64_image_end[] __asm__("vdso_riscv64_image_end");
+extern const char vdso_ppc64_image[] __asm__("vdso_ppc64_image");
+extern const char vdso_ppc64_image_end[] __asm__("vdso_ppc64_image_end");
 
 #endif

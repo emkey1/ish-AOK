@@ -475,6 +475,46 @@ struct cpu_state {
     // instruction runs again; the page-fault handler consumes the flag.
     bool umip_report;
     guest_addr_t umip_report_addr;
+
+    // 64-bit little-endian PowerPC (ppc64le) guest state, a sibling block like
+    // arm64's and riscv64's, and last so that the x86 fields keep their small
+    // offsets (docs/ppc64le_guest_plan.md). Operands reach the gadgets
+    // (jit/guest-ppc64/) as byte offsets into this struct; ppc64_zero is the
+    // word an `(rA|0)` operand reads when rA is 0, and is never written.
+    // r1 is the stack pointer and r13 the thread pointer: no out-of-band SP
+    // or TLS register.
+    qword_t ppc64_gpr[32];
+    qword_t ppc64_zero;
+    qword_t ppc64_pc;
+    qword_t ppc64_lr;
+    qword_t ppc64_ctr;
+    // The condition register as QEMU keeps it, a word per field holding the
+    // field's four bits: LT 8, GT 4, EQ 2, SO 1. A compare writes one word.
+    dword_t ppc64_cr[8];
+    // XER's SO, OV, CA, OV32 and CA32, a word each (0 or 1), and the rest of
+    // it (the byte count of lswx/stswx) as it was written.
+    dword_t ppc64_so;
+    dword_t ppc64_ov;
+    dword_t ppc64_ca;
+    dword_t ppc64_ov32;
+    dword_t ppc64_ca32;
+    dword_t ppc64_xer_rest;
+    dword_t ppc64_fpscr;
+    dword_t ppc64_vscr;
+    dword_t ppc64_vrsave;
+    // The larx/stcx. reservation: riscv64's design (address, the value read,
+    // and its size in bytes). res_addr == UINT64_MAX: none.
+    dword_t ppc64_res_size;
+    qword_t ppc64_res_addr;
+    qword_t ppc64_res_val;
+    qword_t ppc64_res_val_hi;
+    // r3 as the system call in progress found it (pt_regs.orig_gpr3): r3 is
+    // both its first argument and its result, and a restart puts it back.
+    qword_t ppc64_orig_gpr3;
+    // VSR 0-63 as the host's 128-bit value, big-endian element 0 the most
+    // significant: FPR n is VSR n's high doubleword (byte offset 8), VR n is
+    // VSR 32+n.
+    union xmm_reg ppc64_vsr[64];
 };
 
 // MMX register n is the significand of PHYSICAL x87 register n: one storage,

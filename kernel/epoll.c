@@ -61,7 +61,8 @@ struct epoll_event_arm64 {
 static bool epoll_event_aligned(void) {
     if (current == NULL)
         return false;
-    return current->abi == GUEST_ABI_ARM64 || current->abi == GUEST_ABI_RISCV64;
+    return current->abi == GUEST_ABI_ARM64 || current->abi == GUEST_ABI_RISCV64 ||
+           current->abi == GUEST_ABI_PPC64;
 }
 
 #define EPOLL_CTL_ADD_ 1

@@ -93,6 +93,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#define TEST_WANT_RAW_VFORK   // musl powerpc64: the system call, not a fork
 #include "test_common.h"
 
 /* The interrupting signal, or the stop, lands this far in. */

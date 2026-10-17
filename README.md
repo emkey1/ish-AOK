@@ -4,18 +4,18 @@ iSH-AOK is a fork of [ish-app/ish](https://github.com/ish-app/ish) with local pr
 
 Testflight: https://testflight.apple.com/join/X1flyiqE
 
-This fork is not just a rebrand. It carries fork-specific behavior, bundled roots, diagnostics work, File Provider integration, and support for four guest architectures. If you want upstream iSH, use `ish-app/ish`. If you are working in this repository, this README is the relevant one.
+This fork is not just a rebrand. It carries fork-specific behavior, bundled roots, diagnostics work, File Provider integration, and support for five guest architectures. If you want upstream iSH, use `ish-app/ish`. If you are working in this repository, this README is the relevant one.
 
 ## What This Fork Adds
 
 - Fork-specific app identity:
   - product name `iSH-AOK`
   - bundle root `app.ish.iSH-AOK`
-- **Four guest architectures**, all JIT: `i386`, `amd64` (x86_64), `arm64` (aarch64), and `riscv64`.
+- **Five guest architectures**, all JIT: `i386`, `amd64` (x86_64), `arm64` (aarch64), `riscv64`, and `ppc64le` (64-bit little-endian PowerPC).
 - **Native programs**: zsh, dash (which provisioning makes `sh`) and SmallCLUE's busybox-style toolbox — which carries OpenSSH (`ssh`, `scp`, `sftp`, `ssh-keygen`, `ssh-copy-id`), the Nextvi editor, and GNU-compatible `sed`, `grep`, `find`, `ls`, `tar`, `gzip`, `diff`, `awk` and most of coreutils — are compiled into the app as host code and dispatched from guest `execve` through `/AOK/native/<name>`. They are host functions on a guest task's thread, not guest binaries, so they run at full speed instead of being translated instruction by instruction. bash has the same native implementation, but the shipped build has not included it since 556 — see [Native bash and licensing](#native-bash-and-licensing).
 - **Native mode** (558): a root with no Linux distribution at all. Its `/bin` and `/usr/bin` are the native programs — about 140 everyday commands, ssh, git, curl, editors — with SmallCLUE's `init` as pid 1, runit-style services, and native zsh as the login shell. Nothing is downloaded: pick **iSH-AOK Native** under Official Distributions. Install a distribution beside it when you need a package manager. See `/AOK/docs/native-mode.md`.
 - `/AOK`, a read-only in-app filesystem (`/AOK/docs`, `/AOK/tools`, `/AOK/tests`, `/AOK/native`) embedded at build time from `opt/AOK/` via `fs/aok-*.manifest` and `tools/gen-aokfs.py`.
-- Bundled root filesystems in the app build (Alpine 3.24.2 and Devuan 6, `aarch64` only), plus downloadable images for `i386`, `x86_64` and `riscv64`.
+- Bundled root filesystems in the app build (Alpine 3.24.2 and Devuan 6, `aarch64` only), plus downloadable images for `i386`, `x86_64`, `riscv64` and `ppc64le`.
 - **The device's GPU in the guest**: `/dev/dri/renderD128`, a virtio-gpu render node backed in-process by virglrenderer's Venus renderer over MoltenVK, so Mesa's Venus Vulkan driver (and zink on top of it) draws on Metal. `/AOK/tools/setup-gpu.sh` installs the guest side. See `/AOK/docs/workspace.md`.
 - **A Wayland desktop** (labwc, foot, waybar; four desktops of its own — or Wayfire or Xfce in labwc's place) that composites on the GPU and reaches the app through `/AOK/native/wl-present` — frames one way, keyboard, pointer, clipboard and resize the other — with VNC as the fallback. `/AOK/tools/setup-games.sh` adds a tested set of games. See `/AOK/docs/workspace.md`.
 - **LLM Chat**: an in-app chat client (OpenAI-compatible servers, Anthropic, Gemini, Apple's on-device model) that can read, edit and run commands in the guest under allow/ask/deny permissions, use MCP servers, and run several chats as background agents. Keys live in the Keychain. See `/AOK/docs/llm-chat.md`.
@@ -33,7 +33,7 @@ This fork is not just a rebrand. It carries fork-specific behavior, bundled root
 
 ## Guest Architectures
 
-All four guests are supported and run through the gadget JIT. None of them runs
+All five guests are supported and run through the gadget JIT. None of them runs
 natively: an `arm64` guest instruction on an ARM host is still one gadget
 dispatch, exactly like a `riscv64` one. Being the host's own ISA family makes
 each gadget's body cheaper, not free.
@@ -44,6 +44,7 @@ each gadget's body cheaper, not free.
 | `amd64` | supported, JIT; x86-64-v4 (AVX-512 included) advertised (558) |
 | `arm64` | supported, JIT |
 | `riscv64` | supported, JIT; RVA23 with the V vector unit (558), so Ubuntu 25.10 runs |
+| `ppc64le` | new in 562, JIT; POWER8 (ISA 2.07) with VMX and VSX, so Alpine's `ppc64le` runs ([plan](docs/ppc64le_guest_plan.md)) |
 
 What each guest reports to software — `CPUID`, `AT_HWCAP`, `riscv_hwprobe`,
 `/proc/cpuinfo` — is in `/AOK/docs/guest-cpus.md`.

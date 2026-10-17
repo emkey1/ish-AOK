@@ -7,12 +7,14 @@
 #include "kernel/abi/amd64.h"
 #include "kernel/abi/arm64.h"
 #include "kernel/abi/riscv64.h"
+#include "kernel/abi/ppc64.h"
 
 enum guest_abi {
     GUEST_ABI_I386 = 0,
     GUEST_ABI_AMD64 = 1,
     GUEST_ABI_ARM64 = 2,
     GUEST_ABI_RISCV64 = 3,
+    GUEST_ABI_PPC64 = 4,
 };
 
 struct guest_abi_desc {
@@ -57,6 +59,16 @@ static inline struct guest_abi_desc guest_abi_desc(enum guest_abi abi) {
             .word_size = sizeof(riscv64_guest_word_t),
             .reg_size = sizeof(riscv64_guest_reg_t),
         };
+    case GUEST_ABI_PPC64:
+        return (struct guest_abi_desc) {
+            .abi = abi,
+            .name = "ppc64",
+            .uname_machine = "ppc64le",
+            .elf_platform = "power8",
+            .pointer_size = sizeof(ppc64_guest_addr_t),
+            .word_size = sizeof(ppc64_guest_word_t),
+            .reg_size = sizeof(ppc64_guest_reg_t),
+        };
     case GUEST_ABI_I386:
     default:
         return (struct guest_abi_desc) {
@@ -98,6 +110,9 @@ static inline qword_t guest_abi_user_addr_max(enum guest_abi abi) {
         // for Sv39-sized VA). Revisit (Sv48 = 1<<47) only if a workload
         // needs more; see docs/historical/riscv64_guest_plan.md.
         return (qword_t) 1 << 38;
+    case GUEST_ABI_PPC64:
+        // TASK_SIZE_USER64 with 4 KiB pages: 128 TiB.
+        return (qword_t) 1 << 47;
     case GUEST_ABI_I386:
     default:
         return (qword_t) 1 << 32;
@@ -163,6 +178,18 @@ static inline struct guest_vm_layout guest_abi_vm_layout(enum guest_abi abi) {
             // because most syscall pointer marshalling is still 32-bit.
             .mmap_floor = (page_t) 0x1000,
             .mmap_ceiling = ((page_t) 1 << 26) - 0x2000,
+            .user_addr_max = guest_abi_user_addr_max(abi),
+            .stack_page = (page_t) 0xffffe,
+            .stack_pointer = 0xfffff000u,
+        };
+    case GUEST_ABI_PPC64:
+        return (struct guest_vm_layout) {
+            .abi = abi,
+            // 128 TiB (47-bit VA) in 4 KiB guest pages, amd64's window, with
+            // the initial stack kept low for the same reason as the others.
+            .page_limit = (page_t) 1 << 35,
+            .mmap_floor = (page_t) 0x1000,
+            .mmap_ceiling = ((page_t) 1 << 35) - 0x2000,
             .user_addr_max = guest_abi_user_addr_max(abi),
             .stack_page = (page_t) 0xffffe,
             .stack_pointer = 0xfffff000u,

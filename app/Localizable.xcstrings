@@ -2851,6 +2851,66 @@
         }
       }
     },
+    "This root is marked ppc64le, but the boot command is not a supported ppc64le executable or script. Check Settings -> Boot Command or reimport the filesystem." : {
+      "comment" : "Boot failure recovery advice",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dieser Root ist als ppc64le markiert, aber der Bootbefehl ist keine unterstützte ppc64le-Programmdatei bzw. kein unterstütztes Skript. Prüfe Einstellungen -> Bootbefehl oder importiere das Dateisystem erneut."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Este sistema raíz está marcado como ppc64le, pero el comando de arranque no es un ejecutable o script ppc64le compatible. Revisa Ajustes -> Comando de arranque o vuelve a importar el sistema de archivos."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cette racine est marquée ppc64le, mais la commande de démarrage n'est pas un exécutable ou un script ppc64le pris en charge. Vérifiez Réglages -> Commande de démarrage ou réimportez le système de fichiers."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このルートは ppc64le とされていますが、ブートコマンドがサポートされている ppc64le の実行ファイルまたはスクリプトではありません。「設定」->「ブートコマンド」を確認するか、ファイルシステムを再インポートしてください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 루트는 ppc64le로 표시되어 있지만 부팅 명령이 지원되는 ppc64le 실행 파일 또는 스크립트가 아닙니다. 설정 -> 부팅 명령을 확인하거나 파일 시스템을 다시 가져오십시오."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta raiz está marcada como ppc64le, mas o comando de inicialização não é um executável ou script ppc64le compatível. Verifique Ajustes -> Comando de Inicialização ou reimporte o sistema de arquivos."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Эта корневая ФС помечена как ppc64le, но команда загрузки не является поддерживаемым исполняемым файлом или скриптом ppc64le. Проверьте Настройки -> Команда загрузки или повторно импортируйте файловую систему."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此根文件系统标记为 ppc64le，但引导命令不是受支持的 ppc64le 可执行文件或脚本。请检查“设置 -> 引导命令”或重新导入文件系统。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此根檔案系統標示為 ppc64le，但開機指令不是支援的 ppc64le 執行檔或指令碼。請檢查「設定」->「開機指令」或重新匯入檔案系統。"
+          }
+        }
+      }
+    },
     "Timed out waiting for the Wayland compositor to start.\n\nIf no desktop is installed yet, choose Install a Desktop… from this window's ··· menu, then Reconnect." : {
       "comment" : "Wayland display error",
       "extractionState" : "manual",
@@ -3027,6 +3087,66 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "正在解開套件 %1$ld/%2$ld"
+          }
+        }
+      }
+    },
+    "ppc64le (POWER) guest rootfs." : {
+      "comment" : "Distribution row subtitle: architecture",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ppc64le (POWER) Gast-rootfs."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rootfs invitado ppc64le (POWER)."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rootfs invité ppc64le (POWER)."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ppc64le（POWER）ゲストルートファイルシステム。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ppc64le(POWER) 게스트 rootfs."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rootfs convidado ppc64le (POWER)."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Гостевая rootfs для ppc64le (POWER)."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ppc64le（POWER）客户机根文件系统。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ppc64le（POWER）客體 rootfs。"
           }
         }
       }

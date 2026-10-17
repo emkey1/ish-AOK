@@ -81,8 +81,13 @@
 #define NLM_F_DUMP_ 0x300
 /* The kernel's option numbers, not libc's: SO_RCVTIMEO is either, depending on
  * the libc's time_t, and these tests mean one layout in particular. */
+#if defined(__powerpc__)
+#define SO_RCVTIMEO_OLD_ 18    /* powerpc has 16-21 in another order */
+#define SO_SNDTIMEO_OLD_ 19
+#else
 #define SO_RCVTIMEO_OLD_ 20
 #define SO_SNDTIMEO_OLD_ 21
+#endif
 #define SO_RCVTIMEO_NEW_ 66
 #define RTM_NEWLINK_ 16
 #define RTM_DELLINK_ 17

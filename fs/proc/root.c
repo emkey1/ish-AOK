@@ -239,6 +239,43 @@ static int proc_show_cpuinfo(struct proc_entry *UNUSED(entry), struct proc_data 
         return 0;
     }
 
+    // ppc64 guests get POWER's format. "timebase" is the frequency mftb
+    // counts at, which glibc's __ppc_get_timebase_freq reads from here: the
+    // gadgets read the host's virtual counter (jit/guest-ppc64/alu.S mftb).
+    // The CPU line agrees with AT_PLATFORM "power8" and AT_HWCAP's altivec.
+    if (abi == GUEST_ABI_PPC64) {
+        char *ppc_host_architecture = copyHostArchitecture();
+        char *ppc_host_machine_identifier = copyHostMachineIdentifier();
+        char *ppc_host_device_name = copyHostDeviceName();
+        char *ppc_host_core_topology = copyHostCoreTopology();
+        uint64_t timebase = 1000000000;
+#if defined(__aarch64__)
+        __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(timebase));
+#endif
+        int ppc_cpu_count = get_cpu_count();
+        for (int cpu = 0; cpu < ppc_cpu_count; cpu++) {
+            proc_printf(buf, "processor\t: %d\n", cpu);
+            proc_printf(buf, "cpu\t\t: POWER8 (raw), altivec supported\n");
+            proc_printf(buf, "clock\t\t: 1066.000000MHz\n");
+            proc_printf(buf, "revision\t: 2.1 (pvr 004d 0201)\n");
+            proc_printf(buf, "host arch\t: %s\n", ppc_host_architecture);
+            proc_printf(buf, "host machine\t: %s\n", ppc_host_machine_identifier);
+            proc_printf(buf, "host device\t: %s\n", ppc_host_device_name);
+            proc_printf(buf, "host cores\t: %s\n", ppc_host_core_topology);
+            proc_printf(buf, "\n");
+        }
+        proc_printf(buf, "timebase\t: %llu\n", (unsigned long long) timebase);
+        proc_printf(buf, "platform\t: iSH-AOK\n");
+        proc_printf(buf, "model\t\t: iSH-AOK ppc64le guest\n");
+        proc_printf(buf, "machine\t\t: iSH-AOK\n");
+        proc_printf(buf, "MMU\t\t: Hash\n");
+        free(ppc_host_architecture);
+        free(ppc_host_machine_identifier);
+        free(ppc_host_device_name);
+        free(ppc_host_core_topology);
+        return 0;
+    }
+
     do_cpuid(&eax, &ebx, &ecx, &edx); // Get vendor_id
 
     char vendor_id[13] = { 0 };

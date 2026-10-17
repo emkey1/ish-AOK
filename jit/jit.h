@@ -381,14 +381,16 @@ void jit_xcache_set_enabled(bool on);
 
 // Block translation time, per guest architecture (i386, amd64, arm64, riscv64):
 // ISH_JIT_TIMING at start-up, or /proc/ish/jit_timing at run time.
+// One per guest architecture: i386, amd64, arm64, riscv64, ppc64.
+#define JIT_TIMING_ARCHS 5
 struct jit_timing_stats {
     bool enabled;
     unsigned long long bytes;
-    const char *arch[4];
-    unsigned long long ns[4];
-    unsigned long blocks[4];
+    const char *arch[JIT_TIMING_ARCHS];
+    unsigned long long ns[JIT_TIMING_ARCHS];
+    unsigned long blocks[JIT_TIMING_ARCHS];
     // Of those, how many were copied from the parent (jit_fork).
-    unsigned long inherited[4];
+    unsigned long inherited[JIT_TIMING_ARCHS];
 };
 void jit_timing_set(bool on);
 void jit_timing_get(struct jit_timing_stats *stats);

@@ -10,7 +10,7 @@ __asm__(".data\n"
         ".incbin \"vdso/libvdso.so.elf\"\n"
         ".skip "str(VDSO_PAGES)" * (1 << 12) - (. - vdso_data)\n");
 
-// The 64-bit images (vdso/amd64, arm64 and riscv64/vdso.S). Copied into each
+// The 64-bit images (vdso/amd64, arm64, riscv64 and ppc64/vdso.S). Copied into each
 // process rather than mapped in place, so they need no padding -- only the
 // alignment their ELF structures are read at.
 __asm__(".data\n"
@@ -31,7 +31,13 @@ __asm__(".data\n"
         "vdso_riscv64_image:\n"
         ".incbin \"vdso/libvdso-riscv64.so.elf\"\n"
         ".global vdso_riscv64_image_end\n"
-        "vdso_riscv64_image_end:\n");
+        "vdso_riscv64_image_end:\n"
+        ".p2align 4\n"
+        ".global vdso_ppc64_image\n"
+        "vdso_ppc64_image:\n"
+        ".incbin \"vdso/libvdso-ppc64.so.elf\"\n"
+        ".global vdso_ppc64_image_end\n"
+        "vdso_ppc64_image_end:\n");
 
 int vdso_symbol(const char *name) {
     struct elf_header *header = (void *) vdso_data;

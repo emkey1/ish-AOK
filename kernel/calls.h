@@ -279,6 +279,7 @@ fd_t sys_openat2_guest(fd_t at, guest_addr_t path_addr, guest_addr_t how_addr, d
 // (see the comment there for the four relocated O_ constants). Exported for
 // sys_openat2_guest's arm64 open_how.flags translation.
 dword_t arm64_open_flags_to_internal(qword_t flags);
+dword_t ppc64_open_flags_to_internal(qword_t flags);
 dword_t sys_close(fd_t fd);
 dword_t sys_link(addr_t src_addr, addr_t dst_addr);
 dword_t sys_link_guest(guest_addr_t src_addr, guest_addr_t dst_addr);

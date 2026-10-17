@@ -272,6 +272,42 @@ static void riscv64_fold(struct cpu_state *cpu, uint64_t f) {
 
 // The CSR reads and writes do the same in asm (jit/guest-riscv64/fp.S csr_fp).
 
+// ---- ppc64: FPSCR -------------------------------------------------------------
+
+#define PPC_FX     (1u << 31)
+#define PPC_VX     (1u << 29)
+#define PPC_OX     (1u << 28)
+#define PPC_UX     (1u << 27)
+#define PPC_ZX     (1u << 26)
+#define PPC_XX     (1u << 25)
+#define PPC_VXSOFT (1u << 10)
+#define PPC_NI     (1u << 2)
+
+static uint64_t ppc64_control(const struct cpu_state *cpu) {
+    // RN: nearest, toward zero, toward +inf, toward -inf. NI, non-IEEE mode,
+    // is the host's flush to zero. NaNs propagate as PowerPC's do: no DN.
+    static const uint8_t rmode[4] = {RMODE_RN, RMODE_RZ, RMODE_RP, RMODE_RM};
+    uint64_t bits = (uint64_t) rmode[cpu->ppc64_fpscr & 3] << FPCR_RMODE_SHIFT;
+    if (cpu->ppc64_fpscr & PPC_NI)
+        bits |= FPCR_FZ;
+    return bits;
+}
+
+// The host does not say which invalid operation it was: VXSOFT stands for
+// all of them, as for a software-raised one. jit/guest-ppc64/fp.S's
+// fpscr_take does the same in asm.
+static void ppc64_fold(struct cpu_state *cpu, uint64_t f) {
+    dword_t m = 0;
+    if (f & FPSR_IOC) m |= PPC_VX | PPC_VXSOFT;
+    if (f & FPSR_DZC) m |= PPC_ZX;
+    if (f & FPSR_OFC) m |= PPC_OX;
+    if (f & FPSR_UFC) m |= PPC_UX;
+    if (f & FPSR_IXC) m |= PPC_XX;
+    if (m & ~cpu->ppc64_fpscr)
+        m |= PPC_FX;
+    cpu->ppc64_fpscr |= m;
+}
+
 void fpenv_raise_invalid(void) {
 #if defined(__aarch64__)
     host_fpsr_write(host_fpsr_read() | FPSR_IOC);
@@ -306,6 +342,13 @@ static uint64_t guest_flags_as_host(const struct cpu_state *cpu, int abi) {
             if (cpu->riscv64_fcsr & RV_UF) f |= FPSR_UFC;
             if (cpu->riscv64_fcsr & RV_NX) f |= FPSR_IXC;
             break;
+        case GUEST_ABI_PPC64:
+            if (cpu->ppc64_fpscr & PPC_VX) f |= FPSR_IOC;
+            if (cpu->ppc64_fpscr & PPC_ZX) f |= FPSR_DZC;
+            if (cpu->ppc64_fpscr & PPC_OX) f |= FPSR_OFC;
+            if (cpu->ppc64_fpscr & PPC_UX) f |= FPSR_UFC;
+            if (cpu->ppc64_fpscr & PPC_XX) f |= FPSR_IXC;
+            break;
     }
     return f;
 }
@@ -334,6 +377,9 @@ void fpenv_enter(struct cpu_state *cpu, int abi) {
         case GUEST_ABI_RISCV64:
             host_install(riscv64_control(cpu));
             break;
+        case GUEST_ABI_PPC64:
+            host_install(ppc64_control(cpu));
+            break;
     }
     uint64_t live = host_fpsr_read();
     if (live & FPSR_FLAGS & ~guest_flags_as_host(cpu, abi))
@@ -357,6 +403,9 @@ void fpenv_exit(struct cpu_state *cpu, int abi) {
                 break;
             case GUEST_ABI_RISCV64:
                 riscv64_fold(cpu, f);
+                break;
+            case GUEST_ABI_PPC64:
+                ppc64_fold(cpu, f);
                 break;
         }
     }

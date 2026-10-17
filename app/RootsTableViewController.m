@@ -99,6 +99,8 @@ static void RootConfirmAndDelete(UIViewController *host, NSString *rootName,
         subtitle = NSLocalizedString(@"arm64 (native AArch64) guest rootfs.", @"Distribution row subtitle: architecture");
     } else if ([choice[@"guestABI"] isEqualToString:@"riscv64"]) {
         subtitle = NSLocalizedString(@"riscv64 (RISC-V) guest rootfs.", @"Distribution row subtitle: architecture");
+    } else if ([choice[@"guestABI"] isEqualToString:@"ppc64"]) {
+        subtitle = NSLocalizedString(@"ppc64le (POWER) guest rootfs.", @"Distribution row subtitle: architecture");
     } else {
         subtitle = NSLocalizedString(@"i386 guest rootfs.", @"Distribution row subtitle: architecture");
     }
@@ -316,6 +318,8 @@ static void RootConfirmAndDelete(UIViewController *host, NSString *rootName,
         label = @"arm64";
     } else if ([abi isEqualToString:@"riscv64"]) {
         label = @"riscv64";
+    } else if ([abi isEqualToString:@"ppc64"]) {
+        label = @"ppc64le";
     } else {
         label = @"i386";
     }
@@ -636,6 +640,8 @@ static UIColor *RootRowInUseAccentColor(void) {
                 NSString *abi = choice[@"guestABI"];
                 if ([abi isEqualToString:@"amd64"])
                     [archLabels addObject:@"x86_64"];
+                else if ([abi isEqualToString:@"ppc64"])
+                    [archLabels addObject:@"ppc64le"];
                 else if (abi.length != 0)
                     [archLabels addObject:abi];
                 else

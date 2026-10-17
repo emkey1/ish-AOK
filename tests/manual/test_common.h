@@ -106,4 +106,30 @@ static int finish_suite(const char *suite_name) {
     return 0;
 }
 
+// musl has no powerpc64 vfork: its vfork() is a plain fork, so a test of the
+// kernel's vfork would test nothing there. A test that defines
+// TEST_WANT_RAW_VFORK before including this gets vfork() as the system call
+// itself, made the way glibc's powerpc64 vfork.S makes it: a leaf with no
+// stack frame, so the child, running on the parent's stack, returns through
+// LR alone.
+#if defined(TEST_WANT_RAW_VFORK) && defined(__powerpc64__) && !defined(__GLIBC__)
+#include <errno.h>
+#include <sys/types.h>
+__attribute__((used)) static long test_vfork_failed(long err) {
+    errno = (int) err;
+    return -1;
+}
+pid_t test_raw_vfork(void);
+__asm__(".text\n"
+        ".globl test_raw_vfork\n"
+        ".type test_raw_vfork, @function\n"
+        "test_raw_vfork:\n"
+        "    li 0, 189\n"          // __NR_vfork
+        "    sc\n"
+        "    bnslr+\n"
+        "    b test_vfork_failed\n"
+        ".size test_raw_vfork, . - test_raw_vfork\n");
+#define vfork test_raw_vfork
+#endif
+
 #endif

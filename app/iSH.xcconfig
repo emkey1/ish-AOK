@@ -50,6 +50,6 @@ AOK_RUST_FEATURES =
 
 // Guest architectures the emulator supports (comma-separated; at least one).
 // Default is everything. Trim to e.g. "arm64" for a smaller/faster build.
-ISH_GUEST_ARCHS = i386,amd64,arm64,riscv64
+ISH_GUEST_ARCHS = i386,amd64,arm64,riscv64,ppc64
 
 ROOTFS_URL = github.com/ish-app/roots/releases/download/g5739cf3df9f8bd3acb82b59c2397cb3daead19c4/appstore-apk.tar.gz

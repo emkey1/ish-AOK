@@ -331,8 +331,10 @@ static void test_persistence(void) {
     expect_u64("after sigreturn mode", "", (uint64_t) s.mode, FE_UPWARD);
     expect_flags("after sigreturn flags", s.flags, want_flags);
     expect_u64("after sigreturn 1/3", "", s.third, third[1]);
-#if defined(__i386__) || defined(__x86_64__)
-    // Linux x86 enters a handler with the FPU reset to its init state.
+#if defined(__i386__) || defined(__x86_64__) || defined(__powerpc64__)
+    // Linux x86 enters a handler with the FPU reset to its init state, and
+    // powerpc with FPSCR zeroed (handle_rt_signal64: "Make sure signal
+    // handler doesn't get spurious FP exceptions").
     expect_u64("handler entry mode", "", (uint64_t) handler_saw.mode, FE_TONEAREST);
     expect_flags("handler entry flags", handler_saw.flags, 0);
 #else

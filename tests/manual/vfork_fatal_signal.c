@@ -45,6 +45,7 @@
 #include <time.h>
 #include <unistd.h>
 #include <sys/wait.h>
+#define TEST_WANT_RAW_VFORK   // musl powerpc64: the system call, not a fork
 #include "test_common.h"
 
 // The vfork child naps this long before finishing. The fatal-signal trial

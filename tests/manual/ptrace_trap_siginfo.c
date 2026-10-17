@@ -74,6 +74,10 @@
 #define GUEST_IS_X86 0
 #define BREAKPOINT_INSN() __asm__ __volatile__("ebreak")
 #define BREAKPOINT_NAME "ebreak"
+#elif defined(__powerpc64__)
+#define GUEST_IS_X86 0
+#define BREAKPOINT_INSN() __asm__ __volatile__("trap")
+#define BREAKPOINT_NAME "trap"
 #else
 #define NO_BREAKPOINT_INSN 1
 #endif

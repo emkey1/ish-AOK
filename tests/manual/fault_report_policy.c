@@ -183,6 +183,8 @@ int main(void) {
             __asm__ volatile(".inst 0x00000000"); // udf #0
 #elif defined(__riscv)
             __asm__ volatile(".4byte 0x00000000"); // defined illegal
+#elif defined(__powerpc64__)
+            __asm__ volatile(".long 0x00000000"); // primary opcode 0: illegal
 #else
             raise(SIGILL);
 #endif

@@ -540,6 +540,7 @@ static const char *gp_abi_name(uint32_t abi) {
         case GUEST_ABI_AMD64:   return "amd64";
         case GUEST_ABI_ARM64:   return "arm64";
         case GUEST_ABI_RISCV64: return "riscv64";
+        case GUEST_ABI_PPC64:   return "ppc64";
         default:                return "?";
     }
 }

@@ -154,6 +154,8 @@ struct psi {
 #define EXPECTED_ARCH 0xc00000b7u
 #elif defined(__riscv) && __riscv_xlen == 64
 #define EXPECTED_ARCH 0xc00000f3u
+#elif defined(__powerpc64__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+#define EXPECTED_ARCH 0xc0000015u   /* AUDIT_ARCH_PPC64LE */
 #else
 #define EXPECTED_ARCH 0u
 #endif

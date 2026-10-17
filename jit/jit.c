@@ -47,10 +47,10 @@ extern int current_pid(struct task *task);
 static atomic_ullong jit_timing_ns_total;
 static atomic_ulong jit_timing_count_total;
 static atomic_ullong jit_timing_bytes_total; // sum of compiled code[] sizes, in bytes -- estimates what an on-disk cache would need to store
-static atomic_ullong jit_timing_ns_by_arch[4];
-static atomic_ulong jit_timing_count_by_arch[4];
-static atomic_ulong jit_timing_inherited_by_arch[4]; // of those, copied from the parent (jit_fork)
-static const char *const jit_timing_arch_names[4] = {"i386", "amd64", "arm64", "riscv64"};
+static atomic_ullong jit_timing_ns_by_arch[JIT_TIMING_ARCHS];
+static atomic_ulong jit_timing_count_by_arch[JIT_TIMING_ARCHS];
+static atomic_ulong jit_timing_inherited_by_arch[JIT_TIMING_ARCHS]; // of those, copied from the parent (jit_fork)
+static const char *const jit_timing_arch_names[JIT_TIMING_ARCHS] = {"i386", "amd64", "arm64", "riscv64", "ppc64"};
 
 // -1 until the first compile reads ISH_JIT_TIMING; /proc/ish/jit_timing can
 // turn it on and off at run time (the app has no environment to set).
@@ -89,7 +89,7 @@ void jit_timing_set(bool on) {
         atomic_store_explicit(&jit_timing_ns_total, 0, memory_order_relaxed);
         atomic_store_explicit(&jit_timing_count_total, 0, memory_order_relaxed);
         atomic_store_explicit(&jit_timing_bytes_total, 0, memory_order_relaxed);
-        for (unsigned i = 0; i < 4; i++) {
+        for (unsigned i = 0; i < JIT_TIMING_ARCHS; i++) {
             atomic_store_explicit(&jit_timing_ns_by_arch[i], 0, memory_order_relaxed);
             atomic_store_explicit(&jit_timing_count_by_arch[i], 0, memory_order_relaxed);
             atomic_store_explicit(&jit_timing_inherited_by_arch[i], 0, memory_order_relaxed);
@@ -101,7 +101,7 @@ void jit_timing_set(bool on) {
 void jit_timing_get(struct jit_timing_stats *stats) {
     stats->enabled = jit_timing_enabled();
     stats->bytes = atomic_load_explicit(&jit_timing_bytes_total, memory_order_relaxed);
-    for (unsigned i = 0; i < 4; i++) {
+    for (unsigned i = 0; i < JIT_TIMING_ARCHS; i++) {
         stats->arch[i] = jit_timing_arch_names[i];
         stats->ns[i] = atomic_load_explicit(&jit_timing_ns_by_arch[i], memory_order_relaxed);
         stats->blocks[i] = atomic_load_explicit(&jit_timing_count_by_arch[i], memory_order_relaxed);
@@ -123,7 +123,7 @@ void jit_timing_dump(void) {
     dprintf(jit_timing_stats_fd,
             "jit-timing: %lu blocks compiled, %llu.%03llu ms total, %llu bytes of code[]\n",
             total_count, total_ns / 1000000ULL, (total_ns / 1000ULL) % 1000ULL, total_bytes);
-    for (unsigned i = 0; i < 4; i++) {
+    for (unsigned i = 0; i < JIT_TIMING_ARCHS; i++) {
         unsigned long count = atomic_load_explicit(&jit_timing_count_by_arch[i], memory_order_relaxed);
         if (count == 0)
             continue;
@@ -2029,7 +2029,7 @@ static struct jit_block *jit_lookup_shared(struct jit *jit, guest_addr_t addr) {
 }
 
 static struct jit_block *jit_block_compile_common(guest_addr_t ip, struct tlb *tlb,
-        bool amd64, bool arm64, bool riscv64, bool *fallback_to_interp) {
+        bool amd64, bool arm64, bool riscv64, bool ppc64, bool *fallback_to_interp) {
     struct gen_state state;
     TRACE("%d %08llx --- compiling:\n", current_pid(current), (unsigned long long) ip);
     if (amd64)
@@ -2044,6 +2044,7 @@ static struct jit_block *jit_block_compile_common(guest_addr_t ip, struct tlb *t
 
     bool started = arm64 ? gen_start_arm64(ip, &state)
                  : riscv64 ? gen_start_riscv64(ip, &state)
+                 : ppc64 ? gen_start_ppc64(ip, &state)
                  : amd64 ? gen_start_amd64(ip, &state)
                  : (gen_start(ip, &state) && (gen_start_x86_profile(ip, &state), true));
     if (!started)
@@ -2082,6 +2083,7 @@ static struct jit_block *jit_block_compile_common(guest_addr_t ip, struct tlb *t
         // TODO refuse to decode instructions longer than 15 bytes
         guest_addr_t consumed = arm64 ? state.arm64_ip - ip
                               : riscv64 ? state.riscv64_ip - ip
+                              : ppc64 ? state.ppc64_ip - ip
                               : amd64 ? state.amd64_ip - ip
                               : state.ip - ip;
         if (consumed >= PAGE_SIZE - 15) {
@@ -2113,6 +2115,8 @@ static struct jit_block *jit_block_compile_common(guest_addr_t ip, struct tlb *t
         assert(state.arm64_ip - ip <= PAGE_SIZE);
     else if (riscv64)
         assert(state.riscv64_ip - ip <= PAGE_SIZE);
+    else if (ppc64)
+        assert(state.ppc64_ip - ip <= PAGE_SIZE);
     else if (amd64)
         assert(state.amd64_ip - ip <= PAGE_SIZE);
     else
@@ -2469,7 +2473,7 @@ static void jit_xcache_store(const struct jit_block *block, struct tlb *tlb) {
 // The per-arch compile wrappers below: the parent's block if there is one,
 // else a translation.
 static struct jit_block *jit_block_inherit_or_compile(guest_addr_t ip, struct tlb *tlb,
-        unsigned arch_idx, bool amd64, bool arm64, bool riscv64, bool *fallback_to_interp) {
+        unsigned arch_idx, bool amd64, bool arm64, bool riscv64, bool ppc64, bool *fallback_to_interp) {
     bool timing = jit_timing_enabled();
     unsigned long long start = timing ? jit_timing_now_ns() : 0;
     struct jit_block *block = jit_inherit(tlb->mmu->jit, ip);
@@ -2483,8 +2487,8 @@ static struct jit_block *jit_block_inherit_or_compile(guest_addr_t ip, struct tl
             atomic_fetch_add_explicit(&jit_timing_inherited_by_arch[arch_idx], 1, memory_order_relaxed);
         jit_donate(tlb->mmu->jit, block);
     } else {
-        block = jit_block_compile_common(ip, tlb, amd64, arm64, riscv64, fallback_to_interp);
-        if (block != NULL && (arm64 || riscv64))
+        block = jit_block_compile_common(ip, tlb, amd64, arm64, riscv64, ppc64, fallback_to_interp);
+        if (block != NULL && (arm64 || riscv64 || ppc64))
             jit_donate(tlb->mmu->jit, block);
         if (block != NULL && arm64 && jit_xcache_enabled())
             jit_xcache_store(block, tlb);
@@ -2504,20 +2508,42 @@ static struct jit_block *jit_block_inherit_or_compile(guest_addr_t ip, struct tl
 // lazy getenv on the first call) so this couldn't itself skew the measurement
 // it's trying to take.
 static struct jit_block *jit_block_compile(addr_t ip, struct tlb *tlb) {
-    return jit_block_inherit_or_compile(ip, tlb, 0, false, false, false, NULL);
+    return jit_block_inherit_or_compile(ip, tlb, 0, false, false, false, false, NULL);
 }
 
 static struct jit_block *jit_block_compile_amd64(guest_addr_t ip, struct tlb *tlb,
         bool *fallback_to_interp) {
-    return jit_block_inherit_or_compile(ip, tlb, 1, true, false, false, fallback_to_interp);
+    return jit_block_inherit_or_compile(ip, tlb, 1, true, false, false, false, fallback_to_interp);
 }
 
 static struct jit_block *jit_block_compile_arm64(guest_addr_t ip, struct tlb *tlb) {
-    return jit_block_inherit_or_compile(ip, tlb, 2, false, true, false, NULL);
+    return jit_block_inherit_or_compile(ip, tlb, 2, false, true, false, false, NULL);
 }
 
 static struct jit_block *jit_block_compile_riscv64(guest_addr_t ip, struct tlb *tlb) {
-    return jit_block_inherit_or_compile(ip, tlb, 3, false, false, true, NULL);
+    return jit_block_inherit_or_compile(ip, tlb, 3, false, false, true, false, NULL);
+}
+
+static struct jit_block *jit_block_compile_ppc64(guest_addr_t ip, struct tlb *tlb) {
+    return jit_block_inherit_or_compile(ip, tlb, 4, false, false, false, true, NULL);
+}
+
+static FILE *ppc64_trace_file(void) {
+    static FILE *f;
+    static int init;
+    if (!init) {
+        init = 1;
+        const char *path = getenv("ISH_PPC64_TRACE");
+        if (path != NULL)
+            f = fopen(path, "w");
+    }
+    return f;
+}
+
+// The pc of the two guests whose run loop and single step are shared below:
+// riscv64's and ppc64's frontends differ in nothing else.
+static inline guest_addr_t *jit_gadget64_pc(struct cpu_state *cpu, bool ppc64) {
+    return ppc64 ? &cpu->ppc64_pc : &cpu->riscv64_pc;
 }
 
 // Unpatch and unlink every predecessor still on block's jumps_from[i]
@@ -3691,7 +3717,7 @@ static int cpu_single_step_arm64(struct cpu_state *cpu, struct tlb *tlb) {
 // translate"), gen_exit already knows how to emit a riscv64 continuation, and
 // poked_ptr is set by the dispatch before either frontend is entered. If a
 // fourth copy of this ever appears, factor it.
-static int cpu_single_step_riscv64(struct cpu_state *cpu, struct tlb *tlb) {
+static int cpu_single_step_gadget64(struct cpu_state *cpu, struct tlb *tlb, bool ppc64) {
     struct jit *jit = cpu->mmu->jit;
 
     jit_host_fault_thread_init();
@@ -3706,7 +3732,8 @@ static int cpu_single_step_riscv64(struct cpu_state *cpu, struct tlb *tlb) {
         tlb_refresh(tlb, cpu->mmu);
 
     struct gen_state state;
-    if (!gen_start_riscv64(cpu->riscv64_pc, &state))
+    if (!(ppc64 ? gen_start_ppc64(cpu->ppc64_pc, &state)
+               : gen_start_riscv64(cpu->riscv64_pc, &state)))
         return INT_GPF; // OOM allocating the block
     state.oom_active = true;
     state.single_step = true; // one instruction: no lookahead fusions
@@ -3747,7 +3774,7 @@ static int cpu_single_step_riscv64(struct cpu_state *cpu, struct tlb *tlb) {
     jit_crash_frame = frame;
     jit_crash_cpu = cpu;
     jit_crash_interrupt = INT_GPF;
-    jit_crash_addr = frame->cpu.riscv64_pc;
+    jit_crash_addr = *jit_gadget64_pc(&frame->cpu, ppc64);
     if (sigsetjmp(jit_crash_unwind_buf, 0) != 0) {
         if (jit_crash_cpu != NULL && jit_crash_frame != NULL)
             *jit_crash_cpu = jit_crash_frame->cpu;
@@ -3779,12 +3806,20 @@ static int cpu_single_step_riscv64(struct cpu_state *cpu, struct tlb *tlb) {
     return interrupt;
 }
 
+static int cpu_single_step_riscv64(struct cpu_state *cpu, struct tlb *tlb) {
+    return cpu_single_step_gadget64(cpu, tlb, false);
+}
+
+static int cpu_single_step_ppc64(struct cpu_state *cpu, struct tlb *tlb) {
+    return cpu_single_step_gadget64(cpu, tlb, true);
+}
+
 // riscv64 frontend: a mechanical clone of cpu_step_to_interrupt_arm64
 // above with the pc field and compile function swapped — same jetsam,
 // crash-unwind, cache, and chaining behavior. Kept separate like the
 // amd64 frontend rather than parameterized; if a third copy ever
 // appears, factor the loop.
-static int cpu_step_to_interrupt_riscv64(struct cpu_state *cpu, struct tlb *tlb) {
+static int cpu_step_to_interrupt_gadget64(struct cpu_state *cpu, struct tlb *tlb, bool ppc64) {
     struct jit *jit = cpu->mmu->jit;
 
     jit_host_fault_thread_init();
@@ -3819,13 +3854,13 @@ static int cpu_step_to_interrupt_riscv64(struct cpu_state *cpu, struct tlb *tlb)
     // so a mid-run flip of the knob only takes effect for newly compiled blocks
     // regardless -- publishing per-entry keeps the OFF arm free of the store
     // instead of making it pay for a cache nothing reads.
-    const bool publish_ret_cache =
+    const bool publish_ret_cache = !ppc64 &&
         (riscv64_jit_fuse_mask() & JIT_FUSE_RV_RETCACHE) != 0;
 
     jit_crash_frame = frame;
     jit_crash_cpu = cpu;
     jit_crash_interrupt = INT_GPF;
-    jit_crash_addr = frame->cpu.riscv64_pc;
+    jit_crash_addr = *jit_gadget64_pc(&frame->cpu, ppc64);
     // volatile: lives across the sigsetjmp/siglongjmp crash unwind below; a
     // register copy rolled back by longjmp would defeat the retry cap.
     volatile unsigned unmapped_retries = 0;
@@ -3891,7 +3926,7 @@ rearm_riscv64:
             jit_frame_sync_out(cpu, frame);
             break;
         }
-        guest_addr_t ip = frame->cpu.riscv64_pc;
+        guest_addr_t ip = *jit_gadget64_pc(&frame->cpu, ppc64);
         if (unlikely(guestprof_on))
             guestprof_pc(ip, 0);
         size_t cache_index = jit_cache_hash(ip);
@@ -3917,7 +3952,7 @@ rearm_riscv64:
                     goto done_unlocked_riscv64;
                 }
 
-                block = jit_block_compile_riscv64(ip, tlb);
+                block = ppc64 ? jit_block_compile_ppc64(ip, tlb) : jit_block_compile_riscv64(ip, tlb);
                 if (block == NULL) {
                     atomic_fetch_add_explicit(&jit->write_wanted, 1, memory_order_seq_cst);
                     if (jetsam_write_lock_timed(jit)) {
@@ -3938,7 +3973,7 @@ rearm_riscv64:
                         jit_frame_sync_out(cpu, frame);
                         goto done_unlocked_riscv64;
                     }
-                    block = jit_block_compile_riscv64(ip, tlb);
+                    block = ppc64 ? jit_block_compile_ppc64(ip, tlb) : jit_block_compile_riscv64(ip, tlb);
                     if (block == NULL) {
                         // per-block sync gone, *cpu is otherwise stale here.
                         jit_frame_sync_out(cpu, frame);
@@ -4056,6 +4091,13 @@ rearm_riscv64:
             frame->ret_cache[LINKREG_RET_CACHE_HASH(block->addr)] = (long) block->code;
         }
         frame->chain_budget = 8192; // see jit_frame.chain_budget
+        // ISH_PPC64_TRACE=<file>: every block entered, its guest address as 8
+        // bytes, for a diff against an emulator's trace; chaining is off, so
+        // that every block comes through here.
+        if (ppc64 && unlikely(ppc64_trace_file() != NULL)) {
+            fwrite(&block->addr, sizeof(block->addr), 1, ppc64_trace_file());
+            frame->chain_budget = 1;
+        }
         interrupt = jit_enter(block, frame, tlb);
         if (interrupt == INT_NONE && jit_should_yield(jit, cpu))
             interrupt = INT_TIMER;
@@ -4087,6 +4129,14 @@ done_unlocked_riscv64:
     jit_crash_frame = NULL;
     jit_crash_cpu = NULL;
     return interrupt;
+}
+
+static int cpu_step_to_interrupt_riscv64(struct cpu_state *cpu, struct tlb *tlb) {
+    return cpu_step_to_interrupt_gadget64(cpu, tlb, false);
+}
+
+static int cpu_step_to_interrupt_ppc64(struct cpu_state *cpu, struct tlb *tlb) {
+    return cpu_step_to_interrupt_gadget64(cpu, tlb, true);
 }
 
 static int cpu_single_step(struct cpu_state *cpu, struct tlb *tlb) {
@@ -4674,6 +4724,11 @@ static int cpu_run_engine_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
         cpu->poked_ptr = &cpu->_poked;
         return cpu->tf ? cpu_single_step_riscv64(cpu, tlb)
                        : cpu_step_to_interrupt_riscv64(cpu, tlb);
+    }
+    if (current != NULL && current->abi == GUEST_ABI_PPC64) {
+        cpu->poked_ptr = &cpu->_poked;
+        return cpu->tf ? cpu_single_step_ppc64(cpu, tlb)
+                       : cpu_step_to_interrupt_ppc64(cpu, tlb);
     }
     if (current != NULL && current->abi == GUEST_ABI_AMD64) {
         if (!amd64_jit_is_enabled())

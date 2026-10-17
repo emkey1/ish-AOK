@@ -41,13 +41,24 @@
 #include "test_common.h"
 
 /* linux/random.h ioctls. Standard asm-generic _IOC encoding, identical for the
- * i386 and amd64 ABIs (the rand_pool_info header is two 32-bit ints on both). */
+ * i386 and amd64 ABIs (the rand_pool_info header is two 32-bit ints on both).
+ * powerpc encodes _IOC its own way: three direction bits (none 1, read 2,
+ * write 4) above a 13-bit size. */
+#if defined(__powerpc64__)
+#define RNDGETENTCNT_   0x40045200 /* _IOR('R',0x00,int)        get entropy count   */
+#define RNDADDTOENTCNT_ 0x80045201 /* _IOW('R',0x01,int)        credit entropy      */
+#define RNDADDENTROPY_  0x80085203 /* _IOW('R',0x03,int[2]+buf) add + credit        */
+#define RNDZAPENTCNT_   0x20005204 /* _IO('R',0x04)             zero entropy count  */
+#define RNDCLEARPOOL_   0x20005206 /* _IO('R',0x06)             clear pool          */
+#define RNDRESEEDCRNG_  0x20005207 /* _IO('R',0x07)             reseed CRNG         */
+#else
 #define RNDGETENTCNT_   0x80045200 /* _IOR('R',0x00,int)        get entropy count   */
 #define RNDADDTOENTCNT_ 0x40045201 /* _IOW('R',0x01,int)        credit entropy      */
 #define RNDADDENTROPY_  0x40085203 /* _IOW('R',0x03,int[2]+buf) add + credit        */
 #define RNDZAPENTCNT_   0x00005204 /* _IO('R',0x04)             zero entropy count  */
 #define RNDCLEARPOOL_   0x00005206 /* _IO('R',0x06)             clear pool          */
 #define RNDRESEEDCRNG_  0x00005207 /* _IO('R',0x07)             reseed CRNG         */
+#endif
 
 static void check(const char *label, long got, long exp) {
     int bad = got != exp;

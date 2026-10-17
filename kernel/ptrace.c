@@ -667,6 +667,12 @@ static size_t ptrace_regset_slot(const struct task *child, qword_t note_type) {
                 case NT_RISCV_VECTOR_: return 4;
             }
             return 0;
+        case GUEST_ABI_PPC64:
+            switch (note_type) {
+                case NT_PRSTATUS_: case NT_PRFPREG_: case 0x102: return 8;  // NT_PPC_VSX
+                case 0x100: return 16;                                       // NT_PPC_VMX
+            }
+            return 0;
         case GUEST_ABI_I386:
         default:
             switch (note_type) {
@@ -675,6 +681,270 @@ static size_t ptrace_regset_slot(const struct task *child, qword_t note_type) {
             }
             return 0;
     }
+}
+
+// ---- ppc64 ------------------------------------------------------------------
+//
+// ppc64 Linux has the old requests as well as the regsets: PTRACE_GETREGS
+// and SETREGS (pt_regs), GETFPREGS and SETFPREGS (f0-f31, fpscr), GETVRREGS
+// and SETVRREGS (vr0-31, vscr, vrsave), GETVSRREGS and SETVSRREGS (the
+// second doublewords of vs0-31), PEEKUSER and POKEUSER of a pt_regs or FPR
+// slot -- strace and gdb use them. pt_regs: gpr[32], nip, msr, orig_gpr3,
+// ctr, link, xer, ccr, softe, trap, dar, dsisr, result; the regset is the
+// same padded to 48 slots.
+
+#define PPC64_PTRACE_GETVRREGS_ 18
+#define PPC64_PTRACE_SETVRREGS_ 19
+#define PPC64_PTRACE_GETREGS64_ 22
+#define PPC64_PTRACE_SETREGS64_ 23
+#define PPC64_PTRACE_GETVSRREGS_ 27
+#define PPC64_PTRACE_SETVSRREGS_ 28
+#define PPC64_NREGS 44
+#define PPC64_PT_FPR0 48
+#define PPC64_PT_FPSCR 80
+#define PPC64_USER_MSR 0x800000000280f033ull
+
+static void get_user_regs_ppc64(struct task *task, qword_t regs[48]) {
+    const struct cpu_state *cpu = &task->cpu;
+    memset(regs, 0, 48 * sizeof(qword_t));
+    for (int i = 0; i < 32; i++)
+        regs[i] = cpu->ppc64_gpr[i];
+    regs[32] = cpu->ppc64_pc;
+    regs[33] = PPC64_USER_MSR;
+    regs[34] = cpu->ppc64_orig_gpr3;
+    regs[35] = cpu->ppc64_ctr;
+    regs[36] = cpu->ppc64_lr;
+    regs[37] = ppc64_xer_get(cpu);
+    regs[38] = ppc64_cr_get(cpu);
+    regs[39] = 1;
+    // trap: 0xc00, a system call, at a syscall stop (gdb and strace ask)
+    regs[40] = task->ptrace.syscall_stopped ? 0xc00 : 0x700;
+}
+
+static void set_user_regs_ppc64(struct task *task, const qword_t regs[48]) {
+    struct cpu_state *cpu = &task->cpu;
+    for (int i = 0; i < 32; i++)
+        cpu->ppc64_gpr[i] = regs[i];
+    cpu->ppc64_pc = regs[32];
+    cpu->ppc64_orig_gpr3 = regs[34];
+    cpu->ppc64_ctr = regs[35];
+    cpu->ppc64_lr = regs[36];
+    ppc64_xer_set(cpu, regs[37]);
+    ppc64_cr_set(cpu, (dword_t) regs[38]);
+    if (task->ptrace.syscall_stopped)
+        task->ptrace.syscall = (int) regs[0];
+}
+
+static void get_user_fpregs_ppc64(const struct cpu_state *cpu, qword_t fp[33]) {
+    for (int i = 0; i < 32; i++)
+        fp[i] = cpu->ppc64_vsr[i].qw[1];
+    fp[32] = cpu->ppc64_fpscr;
+}
+
+static void set_user_fpregs_ppc64(struct cpu_state *cpu, const qword_t fp[33]) {
+    for (int i = 0; i < 32; i++)
+        cpu->ppc64_vsr[i].qw[1] = fp[i];
+    cpu->ppc64_fpscr = (dword_t) fp[32];
+}
+
+// vr0-31, then VSCR in the first word of the 33rd, then VRSAVE in the first
+// word of the 34th (little-endian; Linux's vr_get)
+static void get_user_vrregs_ppc64(const struct cpu_state *cpu, uint8_t vr[34 * 16]) {
+    memset(vr, 0, 34 * 16);
+    memcpy(vr, &cpu->ppc64_vsr[32], 32 * 16);
+    memcpy(vr + 32 * 16, &cpu->ppc64_vscr, 4);
+    memcpy(vr + 33 * 16, &cpu->ppc64_vrsave, 4);
+}
+
+static void set_user_vrregs_ppc64(struct cpu_state *cpu, const uint8_t vr[34 * 16]) {
+    memcpy(&cpu->ppc64_vsr[32], vr, 32 * 16);
+    memcpy(&cpu->ppc64_vscr, vr + 32 * 16, 4);
+    memcpy(&cpu->ppc64_vrsave, vr + 33 * 16, 4);
+}
+
+static void get_user_vsrregs_ppc64(const struct cpu_state *cpu, qword_t vsx[32]) {
+    for (int i = 0; i < 32; i++)
+        vsx[i] = cpu->ppc64_vsr[i].qw[0];
+}
+
+static void set_user_vsrregs_ppc64(struct cpu_state *cpu, const qword_t vsx[32]) {
+    for (int i = 0; i < 32; i++)
+        cpu->ppc64_vsr[i].qw[0] = vsx[i];
+}
+
+// The old requests, for a ppc64 tracee that find_child returned locked.
+// Returns the request's result; unlocks.
+static int ppc64_ptrace_request(struct task *child, dword_t request, guest_addr_t addr, guest_addr_t data) {
+    int err = 0;
+    switch (request) {
+        case PTRACE_GETREGS_:
+        case PPC64_PTRACE_GETREGS64_: {
+            qword_t regs[48];
+            get_user_regs_ppc64(child, regs);
+            if (user_write(data, regs, PPC64_NREGS * sizeof(qword_t)))
+                err = _EFAULT;
+            break;
+        }
+        case PTRACE_SETREGS_:
+        case PPC64_PTRACE_SETREGS64_: {
+            qword_t regs[48];
+            get_user_regs_ppc64(child, regs);
+            if (user_read(data, regs, PPC64_NREGS * sizeof(qword_t)))
+                err = _EFAULT;
+            else
+                set_user_regs_ppc64(child, regs);
+            break;
+        }
+        case PTRACE_GETFPREGS_: {
+            qword_t fp[33];
+            get_user_fpregs_ppc64(&child->cpu, fp);
+            if (user_write(data, fp, sizeof(fp)))
+                err = _EFAULT;
+            break;
+        }
+        case PTRACE_SETFPREGS_: {
+            qword_t fp[33];
+            if (user_read(data, fp, sizeof(fp)))
+                err = _EFAULT;
+            else
+                set_user_fpregs_ppc64(&child->cpu, fp);
+            break;
+        }
+        case PPC64_PTRACE_GETVRREGS_: {
+            uint8_t vr[34 * 16];
+            get_user_vrregs_ppc64(&child->cpu, vr);
+            // 33 vectors and VRSAVE's word: Linux copies 33 * 16 + 4
+            if (user_write(data, vr, 33 * 16 + 4))
+                err = _EFAULT;
+            break;
+        }
+        case PPC64_PTRACE_SETVRREGS_: {
+            uint8_t vr[34 * 16];
+            get_user_vrregs_ppc64(&child->cpu, vr);
+            if (user_read(data, vr, 33 * 16 + 4))
+                err = _EFAULT;
+            else
+                set_user_vrregs_ppc64(&child->cpu, vr);
+            break;
+        }
+        case PPC64_PTRACE_GETVSRREGS_: {
+            qword_t vsx[32];
+            get_user_vsrregs_ppc64(&child->cpu, vsx);
+            if (user_write(data, vsx, sizeof(vsx)))
+                err = _EFAULT;
+            break;
+        }
+        case PPC64_PTRACE_SETVSRREGS_: {
+            qword_t vsx[32];
+            if (user_read(data, vsx, sizeof(vsx)))
+                err = _EFAULT;
+            else
+                set_user_vsrregs_ppc64(&child->cpu, vsx);
+            break;
+        }
+        case PTRACE_PEEKUSER_:
+        case PTRACE_POKEUSER_: {
+            // addr is a byte offset of a doubleword slot: pt_regs, then the
+            // FPRs and FPSCR from slot 48
+            if (addr & 7) {
+                err = _EIO;
+                break;
+            }
+            qword_t slot = addr / 8;
+            qword_t regs[48], fp[33];
+            get_user_regs_ppc64(child, regs);
+            get_user_fpregs_ppc64(&child->cpu, fp);
+            qword_t *where;
+            if (slot < PPC64_NREGS)
+                where = &regs[slot];
+            else if (slot >= PPC64_PT_FPR0 && slot <= PPC64_PT_FPSCR)
+                where = &fp[slot - PPC64_PT_FPR0];
+            else {
+                err = _EIO;
+                break;
+            }
+            if (request == PTRACE_PEEKUSER_) {
+                if (user_put(data, *where))
+                    err = _EFAULT;
+            } else {
+                *where = data;
+                set_user_regs_ppc64(child, regs);
+                set_user_fpregs_ppc64(&child->cpu, fp);
+            }
+            break;
+        }
+        default:
+            err = _EIO;
+    }
+    unlock(&child->ptrace.lock);
+    return err;
+}
+
+// The regsets: NT_PRSTATUS, NT_PRFPREG, NT_PPC_VMX (0x100), NT_PPC_VSX (0x102).
+#define NT_PPC_VMX_ 0x100
+#define NT_PPC_VSX_ 0x102
+static int ppc64_getregset(struct task *tracer, struct task *child, guest_addr_t iov_addr, qword_t note_type) {
+    switch (note_type) {
+        case NT_PRSTATUS_: {
+            qword_t regs[48];
+            get_user_regs_ppc64(child, regs);
+            return ptrace_getregset_write(tracer, iov_addr, regs, sizeof(regs));
+        }
+        case NT_PRFPREG_: {
+            qword_t fp[33];
+            get_user_fpregs_ppc64(&child->cpu, fp);
+            return ptrace_getregset_write(tracer, iov_addr, fp, sizeof(fp));
+        }
+        case NT_PPC_VMX_: {
+            uint8_t vr[34 * 16];
+            get_user_vrregs_ppc64(&child->cpu, vr);
+            return ptrace_getregset_write(tracer, iov_addr, vr, sizeof(vr));
+        }
+        case NT_PPC_VSX_: {
+            qword_t vsx[32];
+            get_user_vsrregs_ppc64(&child->cpu, vsx);
+            return ptrace_getregset_write(tracer, iov_addr, vsx, sizeof(vsx));
+        }
+    }
+    return _EINVAL;
+}
+
+static int ppc64_setregset(struct task *tracer, struct task *child, guest_addr_t iov_addr, qword_t note_type) {
+    switch (note_type) {
+        case NT_PRSTATUS_: {
+            qword_t regs[48];
+            get_user_regs_ppc64(child, regs);
+            int err = ptrace_setregset_read(tracer, iov_addr, regs, sizeof(regs));
+            if (err >= 0)
+                set_user_regs_ppc64(child, regs);
+            return err;
+        }
+        case NT_PRFPREG_: {
+            qword_t fp[33];
+            get_user_fpregs_ppc64(&child->cpu, fp);
+            int err = ptrace_setregset_read(tracer, iov_addr, fp, sizeof(fp));
+            if (err >= 0)
+                set_user_fpregs_ppc64(&child->cpu, fp);
+            return err;
+        }
+        case NT_PPC_VMX_: {
+            uint8_t vr[34 * 16];
+            get_user_vrregs_ppc64(&child->cpu, vr);
+            int err = ptrace_setregset_read(tracer, iov_addr, vr, sizeof(vr));
+            if (err >= 0)
+                set_user_vrregs_ppc64(&child->cpu, vr);
+            return err;
+        }
+        case NT_PPC_VSX_: {
+            qword_t vsx[32];
+            get_user_vsrregs_ppc64(&child->cpu, vsx);
+            int err = ptrace_setregset_read(tracer, iov_addr, vsx, sizeof(vsx));
+            if (err >= 0)
+                set_user_vsrregs_ppc64(&child->cpu, vsx);
+            return err;
+        }
+    }
+    return _EINVAL;
 }
 
 static int ptrace_regset_check(struct task *tracer, struct task *child, guest_addr_t iov_addr,
@@ -838,6 +1108,8 @@ static int ptrace_getregset(struct task *tracer, struct task *child, guest_addr_
     int check = ptrace_regset_check(tracer, child, iov_addr, note_type);
     if (check < 0)
         return check;
+    if (child->abi == GUEST_ABI_PPC64)
+        return ppc64_getregset(tracer, child, iov_addr, note_type);
     switch (note_type) {
         case NT_PRSTATUS_: {
             if (child->abi == GUEST_ABI_ARM64) {
@@ -966,6 +1238,8 @@ static int ptrace_setregset(struct task *tracer, struct task *child, guest_addr_
     int check = ptrace_regset_check(tracer, child, iov_addr, note_type);
     if (check < 0)
         return check;
+    if (child->abi == GUEST_ABI_PPC64)
+        return ppc64_setregset(tracer, child, iov_addr, note_type);
     switch (note_type) {
         case NT_PRSTATUS_: {
             if (child->abi == GUEST_ABI_ARM64) {
@@ -1131,6 +1405,7 @@ static dword_t ptrace_audit_arch(const struct task *task) {
         case GUEST_ABI_AMD64: return 0xc000003e;    // AUDIT_ARCH_X86_64
         case GUEST_ABI_ARM64: return 0xc00000b7;    // AUDIT_ARCH_AARCH64
         case GUEST_ABI_RISCV64: return 0xc00000f3;  // AUDIT_ARCH_RISCV64
+        case GUEST_ABI_PPC64: return 0xc0000015;    // AUDIT_ARCH_PPC64LE
         case GUEST_ABI_I386:
         default: return 0x40000003;                 // AUDIT_ARCH_I386
     }
@@ -1158,6 +1433,11 @@ static void ptrace_syscall_args(const struct task *task, qword_t args[6]) {
             for (int i = 0; i < 6; i++)
                 args[i] = cpu->riscv64_regs[riscv64_a0 + i];
             break;
+        case GUEST_ABI_PPC64:
+            args[0] = cpu->ppc64_orig_gpr3;
+            for (int i = 1; i < 6; i++)
+                args[i] = cpu->ppc64_gpr[3 + i];
+            break;
         case GUEST_ABI_I386:
         default:
             args[0] = cpu->ebx;
@@ -1179,6 +1459,7 @@ static qword_t ptrace_syscall_nr_reg(const struct task *task) {
         case GUEST_ABI_AMD64: return cpu->amd64_regs[amd64_rax];
         case GUEST_ABI_ARM64: return cpu->arm64_regs[arm64_x8];
         case GUEST_ABI_RISCV64: return cpu->riscv64_regs[riscv64_a7];
+        case GUEST_ABI_PPC64: return cpu->ppc64_gpr[0];
         case GUEST_ABI_I386:
         default: return cpu->eax;
     }
@@ -1192,6 +1473,9 @@ static sqword_t ptrace_syscall_rval(const struct task *task) {
         case GUEST_ABI_AMD64: return (sqword_t) cpu->amd64_regs[amd64_rax];
         case GUEST_ABI_ARM64: return (sqword_t) cpu->arm64_regs[arm64_x0];
         case GUEST_ABI_RISCV64: return (sqword_t) cpu->riscv64_regs[riscv64_a0];
+        // the errno is positive in r3, CR0[SO] saying it is one
+        case GUEST_ABI_PPC64:
+            return (cpu->ppc64_cr[0] & 1) ? -(sqword_t) cpu->ppc64_gpr[3] : (sqword_t) cpu->ppc64_gpr[3];
         case GUEST_ABI_I386:
         default: return (sqword_t) (sdword_t) cpu->eax;
     }
@@ -1211,6 +1495,10 @@ static void ptrace_syscall_pointers(const struct task *task, qword_t *ip, qword_
         case GUEST_ABI_RISCV64:
             *ip = cpu->riscv64_pc;
             *sp = cpu->riscv64_regs[riscv64_sp];
+            break;
+        case GUEST_ABI_PPC64:
+            *ip = cpu->ppc64_pc;
+            *sp = cpu->ppc64_gpr[1];
             break;
         case GUEST_ABI_I386:
         default:
@@ -1471,7 +1759,9 @@ void ptrace_syscall_stop(struct cpu_state *cpu) {
             current->abi == GUEST_ABI_ARM64 ?
             (int) cpu->arm64_regs[arm64_x8] :
             current->abi == GUEST_ABI_RISCV64 ?
-            (int) cpu->riscv64_regs[riscv64_a7] : (int) cpu->eax;
+            (int) cpu->riscv64_regs[riscv64_a7] :
+            current->abi == GUEST_ABI_PPC64 ?
+            (int) cpu->ppc64_gpr[0] : (int) cpu->eax;
     current->ptrace.syscall_stopped = entry;
     unlock(&current->ptrace.lock);
 
@@ -1570,6 +1860,22 @@ dword_t sys_ptrace(dword_t request, dword_t pid, addr_t addr, dword_t data) {
 }
 
 dword_t sys_ptrace_guest(dword_t request, dword_t pid, guest_addr_t addr, guest_addr_t data) {
+    // ppc64's register requests (ppc64_ptrace_request)
+    switch (request) {
+        case PTRACE_PEEKUSER_: case PTRACE_POKEUSER_:
+        case PTRACE_GETREGS_: case PTRACE_SETREGS_:
+        case PTRACE_GETFPREGS_: case PTRACE_SETFPREGS_:
+        case PPC64_PTRACE_GETVRREGS_: case PPC64_PTRACE_SETVRREGS_:
+        case PPC64_PTRACE_GETREGS64_: case PPC64_PTRACE_SETREGS64_:
+        case PPC64_PTRACE_GETVSRREGS_: case PPC64_PTRACE_SETVSRREGS_: {
+            struct task *child = find_child(pid);
+            if (child != NULL && child->abi == GUEST_ABI_PPC64)
+                return ppc64_ptrace_request(child, request, addr, data);
+            if (child != NULL)
+                unlock(&child->ptrace.lock);
+            break;
+        }
+    }
     switch (request) {
         case PTRACE_TRACEME_: {
             STRACE("ptrace(PTRACE_TRACEME, %d, %#llx, %#llx)", pid,

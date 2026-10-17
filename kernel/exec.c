@@ -119,6 +119,8 @@ static bool elf_abi_detect(byte_t bitness, uint16_t machine, enum guest_abi *abi
         abi = GUEST_ABI_ARM64;
     } else if (ISH_GUEST_RISCV64 && bitness == ELF_64BIT && machine == ELF_RISCV) {
         abi = GUEST_ABI_RISCV64;
+    } else if (ISH_GUEST_PPC64 && bitness == ELF_64BIT && machine == ELF_PPC64) {
+        abi = GUEST_ABI_PPC64;
     } else if (ISH_GUEST_I386 && bitness == ELF_32BIT && machine == ELF_X86) {
         abi = GUEST_ABI_I386;
     } else {
@@ -382,11 +384,20 @@ static int map_sigpage(struct task *task, enum guest_abi abi) {
     uint8_t *code = (uint8_t *) entry->data->data + entry->offset;
     static const uint32_t arm64_code[] = {0xd2801168u, 0xd4000001u};  // movz x8, #139; svc #0
     static const uint32_t riscv64_code[] = {0x08b00893u, 0x00000073u}; // li a7, 139; ecall
+    // Linux's ppc64 __kernel_start_sigtramp_rt64: signal delivery starts
+    // here with CTR the handler, and the handler returns past the bctrl with
+    // r1 __SIGNAL_FRAMESIZE below the frame; rt_sigreturn finds the frame at
+    // r1. libgcc's unwinder matches the last three words.
+    static const uint32_t ppc64_code[] = {0x4e800421u,  // bctrl
+                                          0x38210080u,  // addi r1, r1, 128
+                                          0x380000acu,  // li r0, 172
+                                          0x44000002u}; // sc
     static const uint8_t amd64_code[] = {0x48, 0xc7, 0xc0, 0x0f, 0x00, 0x00, 0x00, // mov $15, %rax
                                          0x0f, 0x05};                            // syscall
     switch (abi) {
         case GUEST_ABI_ARM64: memcpy(code, arm64_code, sizeof(arm64_code)); break;
         case GUEST_ABI_RISCV64: memcpy(code, riscv64_code, sizeof(riscv64_code)); break;
+        case GUEST_ABI_PPC64: memcpy(code, ppc64_code, sizeof(ppc64_code)); break;
         case GUEST_ABI_AMD64: memcpy(code, amd64_code, sizeof(amd64_code)); break;
         default: break;
     }
@@ -418,7 +429,7 @@ static int map_vdso_copy(struct task *task, const void *image, size_t size,
 }
 
 // The vDSO a 64-bit guest's C library reads the clock through, from
-// vdso/amd64, arm64 or riscv64/vdso.S (the arm64 one says what it is for).
+// vdso/amd64, arm64, riscv64 or ppc64/vdso.S (the arm64 one says what it is for).
 // Its address lives only in the aux vector, which is where the C library and
 // gdb look for it; a checkpoint carries the pages and the aux vector like any
 // others.
@@ -433,6 +444,7 @@ static int map_vdso64(struct task *task, enum guest_abi abi, guest_addr_t *base)
         case GUEST_ABI_AMD64: image = vdso_amd64_image; end = vdso_amd64_image_end; break;
         case GUEST_ABI_ARM64: image = vdso_arm64_image; end = vdso_arm64_image_end; break;
         case GUEST_ABI_RISCV64: image = vdso_riscv64_image; end = vdso_riscv64_image_end; break;
+        case GUEST_ABI_PPC64: image = vdso_ppc64_image; end = vdso_ppc64_image_end; break;
         default: return 0;
     }
     const char *knob = getenv("ISH_VDSO");
@@ -1476,12 +1488,21 @@ static intptr_t elf_exec(struct fd *fd, const char *file, struct exec_args argv,
             if (riscv64_v_enabled(current))
                 hwcap |= 1u << ('v' - 'a');
         }
+        // ppc64: PPC_FEATURE_32|64|ALTIVEC|FPU|MMU|ARCH_2_05|ARCH_2_06|VSX|
+        // TRUE_LE, and in AT_HWCAP2 ARCH_2_07|ISEL: a POWER8 without DFP, HTM,
+        // the crypto ops, TAR, EBB or scv, which the gadgets do not have.
+        if (current->abi == GUEST_ABI_PPC64)
+            hwcap = 0x80000000u | 0x40000000u | 0x10000000u | 0x08000000u |
+                    0x04000000u | 0x00001000u | 0x00000100u | 0x00000080u |
+                    0x00000002u;
         // AT_HWCAP2: MOPS(43) on aarch64, the CPY/CPYF/SET memcpy and memset
         // instructions (jit/arm64_mops.c); glibc then picks __memcpy_mops
         // and friends. Matches ID_AA64ISAR2.MOPS in gen.c. ISH_MOPS=0 hides it.
         qword_t hwcap2 = 0;
         if (current->abi == GUEST_ABI_ARM64 && arm64_mops_advertised())
             hwcap2 = 1ull << 43;
+        if (current->abi == GUEST_ABI_PPC64)
+            hwcap2 = 0x80000000u | 0x08000000u;
         struct aux64_ent aux[] = {
             // First, where Linux's ARCH_DLINFO puts it, and left out entirely
             // when there is no vDSO rather than handed over as 0.
@@ -1504,15 +1525,31 @@ static intptr_t elf_exec(struct fd *fd, const char *file, struct exec_args argv,
             {AX_HWCAP2, hwcap2},
             {AX_EXECFN, file_addr},
             {AX_PLATFORM, platform_addr},
+            // ppc64's ARCH_DLINFO: the cache block sizes, which glibc's
+            // memset reads to use dcbz (a POWER8's 128 bytes)
+            {AX_DCACHEBSIZE, 128},
+            {AX_ICACHEBSIZE, 128},
+            {AX_UCACHEBSIZE, 0},
             {AX_MINSIGSTKSZ, x86_sigframe_max_size(false)},   // (amd64's only: dropped below for the others)
             {0, 0}
         };
-        if (current->abi != GUEST_ABI_AMD64)
-            aux[sizeof(aux) / sizeof(aux[0]) - 2] = (struct aux64_ent) {0, 0};
-        const struct aux64_ent *aux_from = vdso64_base != 0 ? aux : aux + 1;
-        size_t aux_size = sizeof(aux) - (size_t) (aux_from - aux) * sizeof(aux[0]);
-        if (current->abi != GUEST_ABI_AMD64)
-            aux_size -= sizeof(aux[0]);         // one terminator, not two
+        // Leave out what this ABI's Linux does not write: the vDSO's entry
+        // when there is none, the cache sizes but on ppc64, AT_MINSIGSTKSZ
+        // but on amd64.
+        size_t aux_n = 0;
+        for (size_t i = 0; i < sizeof(aux) / sizeof(aux[0]); i++) {
+            qword_t type = aux[i].type;
+            if (type == AX_SYSINFO_EHDR && vdso64_base == 0)
+                continue;
+            if ((type == AX_DCACHEBSIZE || type == AX_ICACHEBSIZE || type == AX_UCACHEBSIZE) &&
+                    current->abi != GUEST_ABI_PPC64)
+                continue;
+            if (type == AX_MINSIGSTKSZ && current->abi != GUEST_ABI_AMD64)
+                continue;
+            aux[aux_n++] = aux[i];
+        }
+        const struct aux64_ent *aux_from = aux;
+        size_t aux_size = aux_n * sizeof(aux[0]);
         sp -= vector_bytes;
         sp -= aux_size;
         sp = align_stack(sp);
@@ -1628,6 +1665,28 @@ static intptr_t elf_exec(struct fd *fd, const char *file, struct exec_args argv,
     save->cpu.riscv64_vstart = 0;
     save->cpu.riscv64_vxrm = 0;
     save->cpu.riscv64_vxsat = 0;
+
+    // ppc64, the same. Linux's start_thread for an ELFv2 image: r1 the stack,
+    // r12 the entry (its global entry point computes the TOC from r12), the
+    // rest 0, FPSCR and VSCR 0 but VSCR[NJ], which a fresh POWER8 thread has.
+    memset(save->cpu.ppc64_gpr, 0, sizeof(save->cpu.ppc64_gpr));
+    save->cpu.ppc64_gpr[1] = sp;
+    save->cpu.ppc64_gpr[12] = entry;
+    save->cpu.ppc64_zero = 0;
+    save->cpu.ppc64_pc = entry;
+    save->cpu.ppc64_lr = 0;
+    save->cpu.ppc64_ctr = 0;
+    memset(save->cpu.ppc64_cr, 0, sizeof(save->cpu.ppc64_cr));
+    save->cpu.ppc64_so = save->cpu.ppc64_ov = save->cpu.ppc64_ca = 0;
+    save->cpu.ppc64_ov32 = save->cpu.ppc64_ca32 = 0;
+    save->cpu.ppc64_xer_rest = 0;
+    save->cpu.ppc64_fpscr = 0;
+    save->cpu.ppc64_vscr = 0x10000;
+    save->cpu.ppc64_vrsave = 0;
+    save->cpu.ppc64_res_addr = UINT64_MAX;
+    save->cpu.ppc64_res_size = 0;
+    save->cpu.ppc64_res_val = save->cpu.ppc64_res_val_hi = 0;
+    memset(save->cpu.ppc64_vsr, 0, sizeof(save->cpu.ppc64_vsr));
 
     err = 0;
 out_free_interp:

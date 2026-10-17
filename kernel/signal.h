@@ -469,6 +469,13 @@ dword_t sys_rt_sigreturn(void);
 qword_t sys_rt_sigreturn_amd64(void);
 qword_t sys_rt_sigreturn_arm64(void);
 qword_t sys_rt_sigreturn_riscv64(void);
+qword_t sys_rt_sigreturn_ppc64(void);
+// ppc64's XER and CR as the single registers a frame, ptrace and a core hold
+struct cpu_state;
+qword_t ppc64_xer_get(const struct cpu_state *cpu);
+void ppc64_xer_set(struct cpu_state *cpu, qword_t xer);
+dword_t ppc64_cr_get(const struct cpu_state *cpu);
+void ppc64_cr_set(struct cpu_state *cpu, dword_t cr);
 dword_t sys_sigreturn(void);
 
 #define SIG_BLOCK_ 0

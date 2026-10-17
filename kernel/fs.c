@@ -9,6 +9,7 @@
 #include "kernel/errno.h"
 #include "kernel/task.h"
 #include "kernel/fs.h"
+#include "kernel/ppc64_termios.h"
 #include "kernel/inotify.h"
 #include "kernel/random.h"
 #include "kernel/xattr.h"
@@ -771,6 +772,8 @@ fd_t sys_openat2_guest(fd_t at_f, guest_addr_t path_addr, guest_addr_t how_addr,
     // (i386-derived) values.
     if (current->abi == GUEST_ABI_ARM64)
         flags = arm64_open_flags_to_internal(flags);
+    else if (current->abi == GUEST_ABI_PPC64)
+        flags = ppc64_open_flags_to_internal(flags);
     // openat2 is strict where openat drops: O_PATH with any flag it does not
     // keep is EINVAL.
     if ((flags & O_PATH_) && (flags & ~O_PATH_FLAGS_))
@@ -2092,11 +2095,148 @@ static int set_nonblock(struct fd *fd, guest_addr_t nb_addr) {
     return fd_setflags(fd, flags);
 }
 
+// ---- ppc64: powerpc's tty ioctls ----------------------------------------------
+//
+// powerpc numbers its tty ioctls its own way (most as _IOR/_IOW('t', ...)),
+// encodes every _IOC with three direction bits and thirteen size bits where
+// the generic encoding has two and fourteen, and has a struct termios of its
+// own -- the speeds included, c_cc before c_line -- with its own flag values
+// and c_cc indices. kernel/ppc64_termios.h has the two side by side.
+
+struct ppc64_termios_ {
+    dword_t iflag, oflag, cflag, lflag;
+    byte_t cc[19];
+    byte_t line;
+    dword_t ispeed, ospeed;
+};
+static_assert(sizeof(struct ppc64_termios_) == 44, "ppc64 termios");
+
+static dword_t ppc64_map_bits(dword_t x, const struct ppc64_pair *t, size_t n, bool to_gen) {
+    dword_t out = 0;
+    for (size_t i = 0; i < n; i++)
+        if (x & (to_gen ? t[i].ppc : t[i].gen))
+            out |= to_gen ? t[i].gen : t[i].ppc;
+    return out;
+}
+
+static dword_t ppc64_map_field(dword_t x, const struct ppc64_field *f, bool to_gen) {
+    dword_t v = x & (to_gen ? f->mask.ppc : f->mask.gen);
+    for (unsigned i = 0; i < f->count; i++)
+        if (v == (to_gen ? f->values[i].ppc : f->values[i].gen))
+            return to_gen ? f->values[i].gen : f->values[i].ppc;
+    return 0;
+}
+
+// A baud code: powerpc's 0-31 run on where the generic ones set CBAUDEX
+// (B57600 is 16 there, CBAUDEX | 1 here).
+static dword_t ppc64_baud_to_gen(dword_t code) {
+    return code < 16 ? code : GEN_CBAUDEX | (code - 15);
+}
+static dword_t gen_baud_to_ppc64(dword_t code) {
+    return code & GEN_CBAUDEX ? (code & ~GEN_CBAUDEX) + 15 : code;
+}
+
+static void ppc64_termios_to_gen(const struct ppc64_termios_ *p, struct termios2_ *g) {
+    memset(g, 0, sizeof(*g));
+    g->iflags = ppc64_map_bits(p->iflag, ppc64_iflags, sizeof(ppc64_iflags) / sizeof(ppc64_iflags[0]), true);
+    g->oflags = ppc64_map_bits(p->oflag, ppc64_oflags, sizeof(ppc64_oflags) / sizeof(ppc64_oflags[0]), true);
+    for (size_t i = 0; i < sizeof(ppc64_ofields) / sizeof(ppc64_ofields[0]); i++)
+        g->oflags |= ppc64_map_field(p->oflag, &ppc64_ofields[i], true);
+    g->cflags = ppc64_map_bits(p->cflag, ppc64_cflags, sizeof(ppc64_cflags) / sizeof(ppc64_cflags[0]), true) |
+            ppc64_map_field(p->cflag, &ppc64_csize, true) |
+            ppc64_baud_to_gen(p->cflag & PPC64_CBAUD) |
+            ppc64_baud_to_gen((p->cflag & PPC64_CIBAUD) >> 16) << 16;
+    g->lflags = ppc64_map_bits(p->lflag, ppc64_lflags, sizeof(ppc64_lflags) / sizeof(ppc64_lflags[0]), true);
+    for (int i = 0; i < 19; i++)
+        if (ppc64_cc_to_gen[i] >= 0)
+            g->cc[ppc64_cc_to_gen[i]] = p->cc[i];
+    g->line = p->line;
+    g->ispeed = p->ispeed;
+    g->ospeed = p->ospeed;
+}
+
+static void gen_termios_to_ppc64(const struct termios2_ *g, struct ppc64_termios_ *p) {
+    memset(p, 0, sizeof(*p));
+    p->iflag = ppc64_map_bits(g->iflags, ppc64_iflags, sizeof(ppc64_iflags) / sizeof(ppc64_iflags[0]), false);
+    p->oflag = ppc64_map_bits(g->oflags, ppc64_oflags, sizeof(ppc64_oflags) / sizeof(ppc64_oflags[0]), false);
+    for (size_t i = 0; i < sizeof(ppc64_ofields) / sizeof(ppc64_ofields[0]); i++)
+        p->oflag |= ppc64_map_field(g->oflags, &ppc64_ofields[i], false);
+    p->cflag = ppc64_map_bits(g->cflags, ppc64_cflags, sizeof(ppc64_cflags) / sizeof(ppc64_cflags[0]), false) |
+            ppc64_map_field(g->cflags, &ppc64_csize, false) |
+            gen_baud_to_ppc64(g->cflags & GEN_CBAUD) |
+            gen_baud_to_ppc64((g->cflags & GEN_CIBAUD) >> 16) << 16;
+    p->lflag = ppc64_map_bits(g->lflags, ppc64_lflags, sizeof(ppc64_lflags) / sizeof(ppc64_lflags[0]), false);
+    for (int i = 0; i < 19; i++)
+        if (ppc64_cc_to_gen[i] >= 0)
+            p->cc[i] = g->cc[ppc64_cc_to_gen[i]];
+    p->line = g->line;
+    p->ispeed = g->ispeed;
+    p->ospeed = g->ospeed;
+}
+
+// A powerpc request as the generic one: the tty ones from the table, any
+// other _IOC re-encoded (direction NONE 1, READ 2, WRITE 4 against NONE 0,
+// WRITE 1, READ 2; the size from 13 bits to 14), the rest as they are.
+static dword_t ppc64_ioctl_to_gen(dword_t cmd) {
+    for (size_t i = 0; i < sizeof(ppc64_tty_ioctls) / sizeof(ppc64_tty_ioctls[0]); i++)
+        if (ppc64_tty_ioctls[i].ppc == cmd)
+            return ppc64_tty_ioctls[i].gen;
+    dword_t dir = cmd >> 29;
+    if (dir != 1 && dir != 2 && dir != 4 && dir != 6)
+        return cmd;
+    dword_t gdir = (dir & 2 ? 2 : 0) | (dir & 4 ? 1 : 0);
+    return gdir << 30 | ((cmd >> 16) & 0x1fff) << 16 | (cmd & 0xffff);
+}
+
+// TCGETS and the TCSETS family through the termios2 calls, converted.
+// *handled says whether cmd was one of them.
+static int ppc64_termios_ioctl(struct fd *fd, dword_t cmd, guest_addr_t arg, bool *handled) {
+    dword_t gen;
+    switch (cmd) {
+        case PPC64_TCGETS: gen = TCGETS2_; break;
+        case PPC64_TCSETS: gen = TCSETS2_; break;
+        case PPC64_TCSETSW: gen = TCSETSW2_; break;
+        case PPC64_TCSETSF: gen = TCSETSF2_; break;
+        default:
+            *handled = false;
+            return 0;
+    }
+    *handled = true;
+    if (fd->ops->ioctl_size == NULL || fd->ops->ioctl_size(gen) != sizeof(struct termios2_))
+        return _ENOTTY;
+    struct termios2_ t2;
+    struct ppc64_termios_ pt;
+    if (gen == TCGETS2_) {
+        memset(&t2, 0, sizeof(t2));
+        int err = fd->ops->ioctl(fd, gen, &t2);
+        if (err < 0)
+            return err;
+        gen_termios_to_ppc64(&t2, &pt);
+        if (user_put(arg, pt))
+            return _EFAULT;
+        return err;
+    }
+    if (user_get(arg, pt))
+        return _EFAULT;
+    ppc64_termios_to_gen(&pt, &t2);
+    return fd->ops->ioctl(fd, gen, &t2);
+}
+
 static dword_t sys_ioctl_common(fd_t f, dword_t cmd, guest_addr_t arg) {
     STRACE("ioctl(%d, 0x%x, %#llx)", f, cmd, (unsigned long long) arg);
     struct fd *fd = f_get(f);
     if (fd == NULL)
         return _EBADF;
+    if (current->abi == GUEST_ABI_PPC64) {
+        bool handled = false;
+        int err = 0;
+        TASK_MAY_BLOCK {
+            err = ppc64_termios_ioctl(fd, cmd, arg, &handled);
+        }
+        if (handled)
+            return err;
+        cmd = ppc64_ioctl_to_gen(cmd);
+    }
 
     switch (cmd) {
         case FIONBIO_:

@@ -56,6 +56,7 @@
 #include <sys/un.h>
 #include <sys/wait.h>
 
+#define TEST_WANT_RAW_VFORK   // musl powerpc64: the system call, not a fork
 #include "test_common.h"
 
 #ifndef __WALL

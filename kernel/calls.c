@@ -5,6 +5,7 @@
 #include "app/DiagnosticsBridge.h"
 #include "jit/jit.h"
 #include "kernel/calls.h"
+#include "kernel/ppc64_syscalls.h"
 #include "kernel/rseq.h"
 #include "kernel/seccomp.h"
 #include "kernel/acct.h"
@@ -1394,6 +1395,11 @@ static inline void arm64_syscall_result(struct cpu_state *cpu, dword_t result);
 static inline qword_t riscv64_syscall_number(const struct cpu_state *cpu);
 static inline void riscv64_syscall_args(const struct cpu_state *cpu, qword_t args[6]);
 static inline void riscv64_syscall_result(struct cpu_state *cpu, dword_t result);
+static qword_t ppc64_syscall_number(const struct cpu_state *cpu);
+static qword_t ppc64_syscall_number_raw(const struct cpu_state *cpu);
+static void ppc64_syscall_args(const struct cpu_state *cpu, qword_t args[6]);
+static void ppc64_syscall_args_raw(const struct cpu_state *cpu, qword_t args[6]);
+static void ppc64_syscall_result(struct cpu_state *cpu, dword_t result);
 void handle_syscall_interrupt(struct cpu_state *cpu);
 static bool seccomp_exempt(qword_t syscall_num);
 
@@ -1405,6 +1411,14 @@ struct syscall_abi_dispatch {
     qword_t (*syscall_number)(const struct cpu_state *cpu);
     void (*syscall_args)(const struct cpu_state *cpu, qword_t args[6]);
     void (*syscall_result)(struct cpu_state *cpu, dword_t result);
+    // Whose numbers syscall_number returns, and so which table, native
+    // handler and arity rules serve them: the ABI's own but for ppc64, whose
+    // calls are translated to amd64's (kernel/ppc64_syscalls.h).
+    enum guest_abi numbering;
+    // The call as the guest made it, for seccomp and ptrace, where those
+    // differ from syscall_number and syscall_args (ppc64): NULL when not.
+    qword_t (*syscall_number_raw)(const struct cpu_state *cpu);
+    void (*syscall_args_raw)(const struct cpu_state *cpu, qword_t args[6]);
 };
 
 static syscall_t amd64_syscall_table[470] = {
@@ -2341,6 +2355,7 @@ static const struct syscall_abi_dispatch i386_syscall_dispatch = {
     .syscall_number = i386_syscall_number,
     .syscall_args = i386_syscall_args,
     .syscall_result = i386_syscall_result,
+    .numbering = GUEST_ABI_I386,
 };
 
 static const struct syscall_abi_dispatch amd64_syscall_dispatch = {
@@ -2351,6 +2366,7 @@ static const struct syscall_abi_dispatch amd64_syscall_dispatch = {
     .syscall_number = amd64_syscall_number,
     .syscall_args = amd64_syscall_args,
     .syscall_result = amd64_syscall_result,
+    .numbering = GUEST_ABI_AMD64,
 };
 
 static const struct syscall_abi_dispatch arm64_syscall_dispatch = {
@@ -2361,6 +2377,7 @@ static const struct syscall_abi_dispatch arm64_syscall_dispatch = {
     .syscall_number = arm64_syscall_number,
     .syscall_args = arm64_syscall_args,
     .syscall_result = arm64_syscall_result,
+    .numbering = GUEST_ABI_ARM64,
 };
 
 // riscv64 shares arm64's syscall table: both are asm-generic ABIs with
@@ -2377,10 +2394,32 @@ static const struct syscall_abi_dispatch riscv64_syscall_dispatch = {
     .syscall_number = riscv64_syscall_number,
     .syscall_args = riscv64_syscall_args,
     .syscall_result = riscv64_syscall_result,
+    .numbering = GUEST_ABI_ARM64,
+};
+
+// ppc64 runs on amd64's table: the two have the same legacy calls (open,
+// stat, fork, poll ...) and the same struct stat, and differ in the numbers,
+// which ppc64_syscall_number translates, and in what ppc64_syscall_args
+// reorders (clone, waitpid, send ...) or re-encodes (open, mmap and socket
+// option constants). The result goes back in r3, an error as a positive
+// errno with CR0[SO] set.
+static const struct syscall_abi_dispatch ppc64_syscall_dispatch = {
+    .abi = GUEST_ABI_PPC64,
+    .name = "ppc64",
+    .table = amd64_syscall_table,
+    .num_syscalls = sizeof(amd64_syscall_table) / sizeof(amd64_syscall_table[0]),
+    .syscall_number = ppc64_syscall_number,
+    .syscall_args = ppc64_syscall_args,
+    .syscall_result = ppc64_syscall_result,
+    .numbering = GUEST_ABI_AMD64,
+    .syscall_number_raw = ppc64_syscall_number_raw,
+    .syscall_args_raw = ppc64_syscall_args_raw,
 };
 
 static const struct syscall_abi_dispatch *syscall_dispatch_for_abi(enum guest_abi abi) {
     switch (abi) {
+    case GUEST_ABI_PPC64:
+        return &ppc64_syscall_dispatch;
     case GUEST_ABI_AMD64:
         return &amd64_syscall_dispatch;
     case GUEST_ABI_ARM64:
@@ -2411,6 +2450,8 @@ long task_blocked_syscall(struct task *task, const char **abi_name) {
         *abi_name = dispatch != NULL && dispatch->name != NULL ? dispatch->name : "?";
     if (dispatch == NULL || dispatch->syscall_number == NULL)
         return -1;
+    if (dispatch->syscall_number_raw != NULL)
+        return (long) dispatch->syscall_number_raw(&task->cpu);
     return (long) dispatch->syscall_number(&task->cpu);
 }
 
@@ -2514,6 +2555,11 @@ void cancel_syscall_restart(void) {
             cpu->riscv64_pc += 4;
             cpu->riscv64_regs[riscv64_a0] = (qword_t) (sqword_t) _EINTR;
             break;
+        case GUEST_ABI_PPC64:
+            cpu->ppc64_pc += 4;
+            cpu->ppc64_gpr[3] = (qword_t) -(sqword_t) _EINTR;
+            cpu->ppc64_cr[0] |= 1;
+            break;
         case GUEST_ABI_I386:
         default:
             cpu->eip += 2;
@@ -2528,6 +2574,15 @@ static sdword_t syscall_result_errno(dword_t result) {
 
 static void prepare_syscall_restart(struct cpu_state *cpu, const struct syscall_abi_dispatch *dispatch,
                                     qword_t syscall_num, qword_t orig_arg0) {
+    // A ppc64 call runs through amd64's cases, which name amd64's dispatch
+    // here; the task says which registers it has. r0 still holds the guest's
+    // own number (nothing writes it), and r3 is orig_gpr3 again, as Linux
+    // restores it, since a result may have been written over it.
+    if (current != NULL && current->abi == GUEST_ABI_PPC64) {
+        cpu->ppc64_gpr[3] = cpu->ppc64_orig_gpr3;
+        cpu->ppc64_pc -= 4;
+        return;
+    }
     if (dispatch->abi == GUEST_ABI_AMD64) {
         cpu->amd64_regs[amd64_rax] = syscall_num;
         cpu->eax = (dword_t) syscall_num;
@@ -2655,7 +2710,192 @@ static inline void riscv64_syscall_result(struct cpu_state *cpu, dword_t result)
         cpu->riscv64_regs[riscv64_a0] = (qword_t) result;
 }
 
+// ---- ppc64 ------------------------------------------------------------------
+//
+// sc: the number in r0, the arguments in r3-r8, the result in r3. An error is
+// the POSITIVE errno with CR0[SO] set, and success clears SO (musl: `sc; bns+
+// 1f; neg 3,3`). The numbers are powerpc's own and run on amd64's table
+// (ppc64_syscall_dispatch); the constants below are where powerpc's values
+// differ from the x86 ones the rest of the kernel uses
+// (arch/powerpc/include/uapi/asm/{fcntl,mman,socket}.h).
+
+#define PPC64_CR_SO 1u
+
+static qword_t ppc64_syscall_number_raw(const struct cpu_state *cpu) {
+    return cpu->ppc64_gpr[0];
+}
+
+// amd64's number for the call in r0. One with none (an old powerpc call, or
+// one handled before dispatch) gets a number past the end of amd64's table,
+// which answers ENOSYS and logs it; the private accelerator calls pass as
+// they are.
+static qword_t ppc64_syscall_number(const struct cpu_state *cpu) {
+    qword_t nr = cpu->ppc64_gpr[0];
+    if (nr == 0xacc0 || nr == 0xacc1)
+        return nr;
+    if (nr < PPC64_SYSCALL_COUNT && ppc64_syscall_amd64[nr] != 0)
+        return (qword_t) ppc64_syscall_amd64[nr] - 1;
+    return 0x10000 | nr;
+}
+
+static void ppc64_syscall_args_raw(const struct cpu_state *cpu, qword_t args[6]) {
+    for (int i = 0; i < 6; i++)
+        args[i] = cpu->ppc64_gpr[3 + i];
+}
+
+// powerpc's open flags to the internal (x86) ones: four constants moved, as
+// on aarch64 but with O_LARGEFILE and O_DIRECT the other way round.
+//   ppc64 O_DIRECTORY 0x04000   x86/internal 0x10000
+//   ppc64 O_NOFOLLOW  0x08000   x86/internal 0x20000
+//   ppc64 O_LARGEFILE 0x10000   x86/internal 0x08000
+//   ppc64 O_DIRECT    0x20000   x86/internal 0x04000
+dword_t ppc64_open_flags_to_internal(qword_t flags) {
+    dword_t out = (dword_t) flags & ~0x3c000u;
+    if (flags & 0x04000) out |= 0x10000;
+    if (flags & 0x08000) out |= 0x20000;
+    if (flags & 0x10000) out |= 0x08000;
+    if (flags & 0x20000) out |= 0x04000;
+    return out;
+}
+
+static dword_t internal_to_ppc64_open_flags(dword_t flags) {
+    dword_t out = flags & ~0x3c000u;
+    if (flags & 0x10000) out |= 0x04000;
+    if (flags & 0x20000) out |= 0x08000;
+    if (flags & 0x08000) out |= 0x10000;
+    if (flags & 0x04000) out |= 0x20000;
+    return out;
+}
+
+// mmap's MAP_NORESERVE is 0x40 and MAP_LOCKED 0x80 on powerpc, where x86 has
+// MAP_32BIT at 0x40 and the two at 0x4000 and 0x2000, which mean nothing on
+// powerpc. PROT_SAO (0x10, strong access ordering) is what every access here
+// has already.
+static qword_t ppc64_mmap_flags(qword_t flags) {
+    qword_t out = flags & ~(qword_t) 0x60c0;
+    if (flags & 0x40) out |= 0x4000;
+    if (flags & 0x80) out |= 0x2000;
+    return out;
+}
+
+// SOL_SOCKET options 16-21 are in another order on powerpc.
+static qword_t ppc64_sockopt(qword_t level, qword_t name) {
+    static const qword_t generic[6] = {
+        18, // SO_RCVLOWAT
+        19, // SO_SNDLOWAT
+        20, // SO_RCVTIMEO_OLD
+        21, // SO_SNDTIMEO_OLD
+        16, // SO_PASSCRED
+        17, // SO_PEERCRED
+    };
+    if (level == 1 && name >= 16 && name <= 21)
+        return generic[name - 16];
+    return name;
+}
+
+// The arguments as amd64's handler for the call takes them.
+static void ppc64_syscall_args(const struct cpu_state *cpu, qword_t args[6]) {
+    ppc64_syscall_args_raw(cpu, args);
+    qword_t r[6];
+    memcpy(r, args, sizeof(r));
+    switch (cpu->ppc64_gpr[0]) {
+        case 5: // open(path, flags, mode)
+        case 262: // mq_open(name, flags, mode, attr)
+            args[1] = ppc64_open_flags_to_internal(r[1]);
+            break;
+        case 286: // openat(dirfd, path, flags, mode)
+        case 346: // open_by_handle_at(mountfd, handle, flags)
+            args[2] = ppc64_open_flags_to_internal(r[2]);
+            break;
+        case 55: // fcntl(fd, cmd, arg): F_SETFL
+            if (r[1] == 4)
+                args[2] = ppc64_open_flags_to_internal(r[2]);
+            break;
+        case 7: // waitpid(pid, status, options) -> wait4(..., NULL)
+            args[3] = 0;
+            break;
+        case 22: // umount(path) -> umount2(path, 0)
+            args[1] = 0;
+            break;
+        case 90: // mmap(addr, len, prot, flags, fd, off)
+            args[2] = r[2] & ~(qword_t) 0x10;
+            args[3] = ppc64_mmap_flags(r[3]);
+            break;
+        case 125: // mprotect(addr, len, prot)
+            args[2] = r[2] & ~(qword_t) 0x10;
+            break;
+        case 386: // pkey_mprotect(addr, len, prot, pkey)
+            args[2] = r[2] & ~(qword_t) 0x10;
+            break;
+        case 152: // mlockall(flags): MCL_CURRENT 0x2000, FUTURE 0x4000, ONFAULT 0x8000
+            args[0] = (r[0] & ~(qword_t) 0xe000) | ((r[0] >> 13) & 7);
+            break;
+        case 120: // clone(flags, stack, ptid, tls, ctid): amd64's has ctid, tls
+            args[3] = r[4];
+            args[4] = r[3];
+            break;
+        case 252: // statfs64(path, size, buf) -> statfs(path, buf)
+        case 253: // fstatfs64(fd, size, buf) -> fstatfs(fd, buf)
+            args[1] = r[2];
+            args[2] = 0;
+            break;
+        case 308: // sync_file_range2(fd, flags, off, n) -> (fd, off, n, flags)
+            args[1] = r[2];
+            args[2] = r[3];
+            args[3] = r[1];
+            break;
+        case 334: // send(fd, buf, len, flags) -> sendto(..., NULL, 0)
+        case 336: // recv(fd, buf, len, flags) -> recvfrom(..., NULL, NULL)
+            args[4] = 0;
+            args[5] = 0;
+            break;
+        case 339: // setsockopt(fd, level, name, val, len)
+        case 340: // getsockopt(fd, level, name, val, lenp)
+            args[2] = ppc64_sockopt(r[1], r[2]);
+            break;
+    }
+}
+
+static void ppc64_syscall_result_qword(struct cpu_state *cpu, qword_t result) {
+    sqword_t signed_result = (sqword_t) result;
+    sdword_t signed_result32 = (sdword_t) (dword_t) result;
+    // amd64_syscall_result_qword's reading of an errno: 64-bit, or 32-bit
+    // from a call whose result is a dword.
+    sqword_t err = 0;
+    if (signed_result < 0 && signed_result >= -4095)
+        err = signed_result;
+    else if ((result >> 32) == 0 && signed_result32 < 0 && signed_result32 >= -4095)
+        err = signed_result32;
+    if (err != 0) {
+        cpu->ppc64_gpr[3] = (qword_t) -err;
+        cpu->ppc64_cr[0] |= PPC64_CR_SO;
+    } else {
+        cpu->ppc64_gpr[3] = result;
+        cpu->ppc64_cr[0] &= ~PPC64_CR_SO;
+    }
+}
+
+static void ppc64_syscall_result(struct cpu_state *cpu, dword_t result) {
+    if (syscall_result_is_errno(result))
+        ppc64_syscall_result_qword(cpu, (qword_t) (sqword_t) syscall_result_errno(result));
+    else
+        ppc64_syscall_result_qword(cpu, (qword_t) result);
+}
+
+// What ppc64_syscall_result_qword wrote, as amd64's handler would have left
+// it in rax.
+static qword_t ppc64_syscall_result_read(const struct cpu_state *cpu) {
+    if (cpu->ppc64_cr[0] & PPC64_CR_SO)
+        return (qword_t) -(sqword_t) cpu->ppc64_gpr[3];
+    return cpu->ppc64_gpr[3];
+}
+
 static inline void amd64_syscall_result_qword(struct cpu_state *cpu, qword_t result) {
+    // amd64's cases serve ppc64's calls too (ppc64_syscall_dispatch).
+    if (current != NULL && current->abi == GUEST_ABI_PPC64) {
+        ppc64_syscall_result_qword(cpu, result);
+        return;
+    }
     sqword_t signed_result = (sqword_t) result;
     sdword_t signed_result32 = (sdword_t) (dword_t) result;
     if (signed_result < 0 && signed_result >= -4095)
@@ -5228,6 +5468,17 @@ static void log_stub_syscall(struct cpu_state *cpu, const struct syscall_abi_dis
                (unsigned long long) cpu->arm64_regs[arm64_x3]);
         return;
     }
+    if (dispatch->abi == GUEST_ABI_PPC64) {
+        printk("ERROR: %d(%s) %s %s syscall %llu (amd64 %u) pc=0x%llx r3=0x%llx r4=0x%llx r5=0x%llx r6=0x%llx\n",
+               current->pid, current->comm, dispatch->name, kind,
+               (unsigned long long) cpu->ppc64_gpr[0], syscall_num,
+               (unsigned long long) cpu->ppc64_pc,
+               (unsigned long long) cpu->ppc64_gpr[3],
+               (unsigned long long) cpu->ppc64_gpr[4],
+               (unsigned long long) cpu->ppc64_gpr[5],
+               (unsigned long long) cpu->ppc64_gpr[6]);
+        return;
+    }
     if (dispatch->abi == GUEST_ABI_RISCV64) {
         printk("ERROR: %d(%s) %s %s syscall %u pc=0x%llx a0=0x%llx a1=0x%llx a2=0x%llx a3=0x%llx\n",
                current->pid, current->comm, dispatch->name, kind, syscall_num,
@@ -5272,6 +5523,170 @@ static void handle_arm64_syscall_interrupt(struct cpu_state *cpu) {
     // file and some code paths still read the i386 mirror fields. arm64
     // never had that history — nothing reads cpu->eax/etc for an arm64 task.
     handle_syscall_interrupt(cpu);
+}
+
+// ipc(call, first, second, third, ptr, fifth), the System V IPC multiplexer
+// powerpc's C libraries still use (musl: whenever SYS_ipc is defined), as the
+// separate call it stands for (Linux's ksys_ipc). Rewrites r0 and r3-r8 into
+// that call; *after_shmat is where a successful SHMAT's address goes, which
+// the multiplexer returns through memory. Returns false for a call it does not
+// know, or an argument it cannot read (*err).
+static bool ppc64_ipc_rewrite(struct cpu_state *cpu, guest_addr_t *after_shmat, int *err) {
+    qword_t call = cpu->ppc64_gpr[3], first = cpu->ppc64_gpr[4], second = cpu->ppc64_gpr[5];
+    qword_t third = cpu->ppc64_gpr[6], ptr = cpu->ppc64_gpr[7], fifth = cpu->ppc64_gpr[8];
+    unsigned version = (unsigned) (call >> 16);
+    qword_t n[6] = {0};
+    qword_t nr;
+    *after_shmat = 0;
+    *err = _ENOSYS;
+    switch (call & 0xffff) {
+        case 1: // SEMOP
+            nr = 392; n[0] = first; n[1] = ptr; n[2] = second; n[3] = 0;
+            break;
+        case 4: // SEMTIMEDOP
+            nr = 392; n[0] = first; n[1] = ptr; n[2] = second; n[3] = fifth;
+            break;
+        case 2: // SEMGET
+            nr = 393; n[0] = first; n[1] = second; n[2] = third;
+            break;
+        case 3: { // SEMCTL: the fourth argument is the word ptr points to
+            qword_t arg;
+            if (ptr == 0) {
+                *err = _EINVAL;
+                return false;
+            }
+            if (user_get(ptr, arg)) {
+                *err = _EFAULT;
+                return false;
+            }
+            nr = 394; n[0] = first; n[1] = second; n[2] = third; n[3] = arg;
+            break;
+        }
+        case 11: // MSGSND
+            nr = 400; n[0] = first; n[1] = ptr; n[2] = second; n[3] = third;
+            break;
+        case 12: // MSGRCV
+            nr = 401; n[0] = first; n[2] = second; n[4] = third;
+            if (version == 0) {
+                struct { qword_t msgp; sqword_t msgtyp; } kludge;
+                if (ptr == 0) {
+                    *err = _EINVAL;
+                    return false;
+                }
+                if (user_get(ptr, kludge)) {
+                    *err = _EFAULT;
+                    return false;
+                }
+                n[1] = kludge.msgp;
+                n[3] = (qword_t) kludge.msgtyp;
+            } else {
+                n[1] = ptr;
+                n[3] = fifth;
+            }
+            break;
+        case 13: // MSGGET
+            nr = 399; n[0] = first; n[1] = second;
+            break;
+        case 14: // MSGCTL
+            nr = 402; n[0] = first; n[1] = second; n[2] = ptr;
+            break;
+        case 21: // SHMAT
+            if (version == 1) {
+                *err = _EINVAL;
+                return false;
+            }
+            nr = 397; n[0] = first; n[1] = ptr; n[2] = second;
+            *after_shmat = third;
+            break;
+        case 22: // SHMDT
+            nr = 398; n[0] = ptr;
+            break;
+        case 23: // SHMGET
+            nr = 395; n[0] = first; n[1] = second; n[2] = third;
+            break;
+        case 24: // SHMCTL
+            nr = 396; n[0] = first; n[1] = second; n[2] = ptr;
+            break;
+        default:
+            return false;
+    }
+    cpu->ppc64_gpr[0] = nr;
+    for (int i = 0; i < 6; i++)
+        cpu->ppc64_gpr[3 + i] = n[i];
+    return true;
+}
+
+// `sc`. Linux's system_call_exception, as far as it is powerpc's own: the
+// number and the arguments as the guest left them are kept (orig_gpr3 for a
+// restart), the two calls whose shape is powerpc's alone are reshaped before
+// the common dispatch and put back after it.
+static void handle_ppc64_syscall_interrupt(struct cpu_state *cpu) {
+    if (current->abi != GUEST_ABI_PPC64) {
+        printk("ERROR: %d(%s) ppc64 sc in non-ppc64 task\n", current->pid, current->comm);
+        struct siginfo_ info = {
+            .code = ILL_ILLOPC_,
+            .fault.addr = current_fault_ip(cpu),
+        };
+        deliver_signal(current, SIGILL_, info);
+        return;
+    }
+    cpu->ppc64_orig_gpr3 = cpu->ppc64_gpr[3];
+    qword_t nr = cpu->ppc64_gpr[0];
+    qword_t saved[7];
+    saved[0] = cpu->ppc64_gpr[0];
+    for (int i = 0; i < 6; i++)
+        saved[1 + i] = cpu->ppc64_gpr[3 + i];
+    qword_t pc = cpu->ppc64_pc;
+
+    if (nr == 117) {
+        guest_addr_t after_shmat;
+        int err;
+        if (!ppc64_ipc_rewrite(cpu, &after_shmat, &err)) {
+            ppc64_syscall_result_qword(cpu, (qword_t) (sqword_t) err);
+            return;
+        }
+        handle_syscall_interrupt(cpu);
+        bool restarting = cpu->ppc64_pc != pc;
+        cpu->ppc64_gpr[0] = saved[0];
+        for (int i = restarting ? 0 : 1; i < 6; i++)
+            cpu->ppc64_gpr[3 + i] = saved[1 + i];
+        if (!restarting && after_shmat != 0 && !(cpu->ppc64_cr[0] & PPC64_CR_SO)) {
+            qword_t addr = cpu->ppc64_gpr[3];
+            if (user_put(after_shmat, addr))
+                ppc64_syscall_result_qword(cpu, (qword_t) (sqword_t) _EFAULT);
+            else
+                ppc64_syscall_result_qword(cpu, 0);
+        }
+        return;
+    }
+
+    // _llseek(fd, high, low, result, whence), which musl uses for lseek
+    // wherever it is defined: lseek, and the offset stored through result.
+    if (nr == 140) {
+        guest_addr_t result_addr = cpu->ppc64_gpr[6];
+        cpu->ppc64_gpr[0] = 19;
+        cpu->ppc64_gpr[4] = (saved[2] << 32) | (saved[3] & 0xffffffff);
+        cpu->ppc64_gpr[5] = saved[5];
+        handle_syscall_interrupt(cpu);
+        bool restarting = cpu->ppc64_pc != pc;
+        cpu->ppc64_gpr[0] = saved[0];
+        for (int i = restarting ? 0 : 1; i < 6; i++)
+            cpu->ppc64_gpr[3 + i] = saved[1 + i];
+        if (!restarting && !(cpu->ppc64_cr[0] & PPC64_CR_SO)) {
+            qword_t offset = cpu->ppc64_gpr[3];
+            if (user_put(result_addr, offset))
+                ppc64_syscall_result_qword(cpu, (qword_t) (sqword_t) _EFAULT);
+            else
+                ppc64_syscall_result_qword(cpu, 0);
+        }
+        return;
+    }
+
+    handle_syscall_interrupt(cpu);
+
+    // fcntl(F_GETFL) answers in powerpc's open flags.
+    if (nr == 55 && saved[2] == 3 && cpu->ppc64_pc == pc && !(cpu->ppc64_cr[0] & PPC64_CR_SO))
+        cpu->ppc64_gpr[3] = internal_to_ppc64_open_flags((dword_t) cpu->ppc64_gpr[3]);
 }
 
 static void handle_riscv64_syscall_interrupt(struct cpu_state *cpu) {
@@ -5335,6 +5750,7 @@ static qword_t syscall_insn_next_ip(const struct cpu_state *cpu, enum guest_abi 
         case GUEST_ABI_AMD64: return cpu->amd64_rip;
         case GUEST_ABI_ARM64: return cpu->arm64_pc;
         case GUEST_ABI_RISCV64: return cpu->riscv64_pc;
+        case GUEST_ABI_PPC64: return cpu->ppc64_pc;
         case GUEST_ABI_I386:
         default: return cpu->eip;
     }
@@ -5347,9 +5763,16 @@ static enum seccomp_verdict seccomp_check_guest_syscall(struct cpu_state *cpu,
         const struct syscall_abi_dispatch *dispatch, qword_t *syscall_num) {
     qword_t args[6];
     sqword_t result = 0;
-    dispatch->syscall_args(cpu, args);
+    // A filter is written for the guest's own numbers and arguments: ppc64's
+    // as it made the call, not as amd64's table takes it.
+    void (*filter_args)(const struct cpu_state *, qword_t[6]) =
+        dispatch->syscall_args_raw != NULL ? dispatch->syscall_args_raw : dispatch->syscall_args;
+    qword_t (*filter_number)(const struct cpu_state *) =
+        dispatch->syscall_number_raw != NULL ? dispatch->syscall_number_raw : dispatch->syscall_number;
+    qword_t filter_nr = filter_number(cpu);
+    filter_args(cpu, args);
     qword_t ip = syscall_insn_next_ip(cpu, dispatch->abi);
-    enum seccomp_verdict v = seccomp_syscall_enter(dispatch->abi, *syscall_num, args, ip,
+    enum seccomp_verdict v = seccomp_syscall_enter(dispatch->abi, filter_nr, args, ip,
             &result, false);
     if (v == SECCOMP_TRACED) {
         // Linux: the tracer may have changed the call, or skipped it by
@@ -5357,15 +5780,16 @@ static enum seccomp_verdict seccomp_check_guest_syscall(struct cpu_state *cpu,
         // result register stands. Otherwise the filters are asked again about
         // what it is now.
         *syscall_num = dispatch->syscall_number(cpu);
-        if ((sdword_t) *syscall_num < 0)
+        filter_nr = filter_number(cpu);
+        if ((sdword_t) filter_nr < 0)
             return SECCOMP_TRACED;
-        dispatch->syscall_args(cpu, args);
-        v = seccomp_syscall_enter(dispatch->abi, *syscall_num, args, ip, &result, true);
+        filter_args(cpu, args);
+        v = seccomp_syscall_enter(dispatch->abi, filter_nr, args, ip, &result, true);
         if (v == SECCOMP_TRACED)
             v = SECCOMP_RUN;
     }
     if (v == SECCOMP_ANSWERED) {
-        if (dispatch->abi == GUEST_ABI_AMD64)
+        if (dispatch->numbering == GUEST_ABI_AMD64)
             amd64_syscall_result_qword(cpu, (qword_t) result);
         else
             dispatch->syscall_result(cpu, (dword_t) result);
@@ -5487,8 +5911,9 @@ void handle_syscall_interrupt(struct cpu_state *cpu) {
     checkpoint_trace_syscall((unsigned long) syscall_num);
     amd64_tty2_shell_syscall_trace_enter(syscall_num, raw_args);
     amd64_tracked_proc_trace_enter(syscall_num, raw_args);
-    if (dispatch->abi == GUEST_ABI_AMD64 && syscall_num == 15) {
-        qword_t result = sys_rt_sigreturn_amd64();
+    if (dispatch->numbering == GUEST_ABI_AMD64 && syscall_num == 15) {
+        qword_t result = dispatch->abi == GUEST_ABI_PPC64 ? sys_rt_sigreturn_ppc64()
+                                                          : sys_rt_sigreturn_amd64();
         sqword_t signed_result = (sqword_t) result;
         if (signed_result < 0 && signed_result >= -4095)
             amd64_syscall_result_qword(cpu, result);
@@ -5508,9 +5933,10 @@ void handle_syscall_interrupt(struct cpu_state *cpu) {
             ptrace_syscall_stop(cpu);
         return;
     }
-    if (dispatch->abi == GUEST_ABI_AMD64 &&
+    if (dispatch->numbering == GUEST_ABI_AMD64 &&
             handle_amd64_native_memory_syscall(cpu, syscall_num, raw_args)) {
-        qword_t result = dispatch->abi == GUEST_ABI_AMD64 ? cpu->amd64_regs[amd64_rax] : cpu->eax;
+        qword_t result = dispatch->abi == GUEST_ABI_PPC64 ? ppc64_syscall_result_read(cpu)
+                                                          : cpu->amd64_regs[amd64_rax];
         // A restart code must never survive as the syscall's answer. Of the
         // ~220 cases in the handler above, only a handful run the result
         // through syscall_result_should_restart themselves; every other one
@@ -5567,7 +5993,7 @@ void handle_syscall_interrupt(struct cpu_state *cpu) {
                 current->restart_sys_pending =
                     (sqword_t) result == (sqword_t) (sdword_t) _ERESTART;
             }
-            prepare_syscall_restart(cpu, &amd64_syscall_dispatch, syscall_num, raw_args[0]);
+            prepare_syscall_restart(cpu, dispatch, syscall_num, raw_args[0]);
             if (current->ptrace.traced && current->ptrace.stop_at_syscall &&
                     current->ptrace.syscall_stopped)
                 ptrace_syscall_stop(cpu);
@@ -5596,7 +6022,7 @@ void handle_syscall_interrupt(struct cpu_state *cpu) {
             ptrace_syscall_stop(cpu);
         return;
     }
-    if (!marshal_syscall_args_legacy(dispatch->abi, syscall_num, raw_args, args)) {
+    if (!marshal_syscall_args_legacy(dispatch->numbering, syscall_num, raw_args, args)) {
         printk("ERROR: %d(%s) %s syscall %llu needs full-width args before it can be emulated "
                "(args %#llx %#llx %#llx %#llx %#llx %#llx)\n",
                current->pid, current->comm, dispatch->name, syscall_num,
@@ -5643,6 +6069,19 @@ void handle_syscall_interrupt(struct cpu_state *cpu) {
 }
 
 static void dump_opcode_window(guest_addr_t ip);
+// A ppc64 task's registers, for a fault's kernel log.
+static void dump_ppc64_regs(const struct cpu_state *cpu) {
+    for (int i = 0; i < 32; i += 4)
+        printk("  r%d=%#llx r%d=%#llx r%d=%#llx r%d=%#llx\n",
+               i, (unsigned long long) cpu->ppc64_gpr[i],
+               i + 1, (unsigned long long) cpu->ppc64_gpr[i + 1],
+               i + 2, (unsigned long long) cpu->ppc64_gpr[i + 2],
+               i + 3, (unsigned long long) cpu->ppc64_gpr[i + 3]);
+    printk("  pc=%#llx lr=%#llx ctr=%#llx cr=%08x xer=%#llx\n",
+           (unsigned long long) cpu->ppc64_pc, (unsigned long long) cpu->ppc64_lr,
+           (unsigned long long) cpu->ppc64_ctr, ppc64_cr_get(cpu),
+           (unsigned long long) ppc64_xer_get(cpu));
+}
 static void dump_addr_backing(const char *label, guest_addr_t addr);
 static void dump_amd64_regs(const struct cpu_state *cpu);
 static void dump_amd64_hlt_tls_state(const struct cpu_state *cpu);
@@ -5768,6 +6207,19 @@ static void record_guest_fault_event(const char *kind, const struct cpu_state *c
                                i % 4 == 3 ? "\n" : " ");
         fault_event_append(detail, sizeof(detail), &pos, "pc=%#llx",
                            (unsigned long long) cpu->riscv64_pc);
+    } else if (abi == GUEST_ABI_PPC64) {
+        size_t pos = 0;
+        fault_event_append(detail, sizeof(detail), &pos, "opcode window: %s\n", opcode);
+        for (int i = 0; i < 32; i++)
+            fault_event_append(detail, sizeof(detail), &pos, "r%d=%#llx%s", i,
+                               (unsigned long long) cpu->ppc64_gpr[i],
+                               i % 4 == 3 ? "\n" : " ");
+        fault_event_append(detail, sizeof(detail), &pos, "pc=%#llx lr=%#llx ctr=%#llx cr=%x%x%x%x%x%x%x%x",
+                           (unsigned long long) cpu->ppc64_pc,
+                           (unsigned long long) cpu->ppc64_lr,
+                           (unsigned long long) cpu->ppc64_ctr,
+                           cpu->ppc64_cr[0], cpu->ppc64_cr[1], cpu->ppc64_cr[2], cpu->ppc64_cr[3],
+                           cpu->ppc64_cr[4], cpu->ppc64_cr[5], cpu->ppc64_cr[6], cpu->ppc64_cr[7]);
     } else if (abi == GUEST_ABI_AMD64) {
         snprintf(detail, sizeof(detail),
                  "opcode window: %s\n"
@@ -5803,6 +6255,8 @@ static guest_addr_t current_fault_ip(const struct cpu_state *cpu) {
         return cpu->arm64_pc;
     if (current->abi == GUEST_ABI_RISCV64)
         return cpu->riscv64_pc;
+    if (current->abi == GUEST_ABI_PPC64)
+        return cpu->ppc64_pc;
     return cpu->eip;
 }
 
@@ -6057,6 +6511,8 @@ void handle_page_fault_interrupt(struct cpu_state *cpu) {
                            i + 3, (unsigned long long) cpu->riscv64_regs[i + 3]);
                 printk("  pc=%#llx\n", (unsigned long long) cpu->riscv64_pc);
             }
+            if (current->abi == GUEST_ABI_PPC64)
+                dump_ppc64_regs(cpu);
             dump_opcode_window(current_fault_ip(cpu));
             if (current->abi == GUEST_ABI_AMD64) {
                 dump_amd64_regs(cpu);
@@ -6159,6 +6615,8 @@ static void handle_general_protection_interrupt(struct cpu_state *cpu, word_t er
         }
         printk("\n");
         dump_opcode_window(ip);
+        if (current->abi == GUEST_ABI_PPC64)
+            dump_ppc64_regs(cpu);
         if (current->abi == GUEST_ABI_AMD64) {
             dump_amd64_regs(cpu);
             dump_amd64_cc1_trace(cpu);
@@ -7295,6 +7753,8 @@ void handle_illegal_instruction_interrupt(struct cpu_state *cpu) {
         }
         printk("\n");
         dump_opcode_window(ip);
+        if (current->abi == GUEST_ABI_PPC64)
+            dump_ppc64_regs(cpu);
         if (current->abi == GUEST_ABI_AMD64) {
             dump_amd64_regs(cpu);
             dump_amd64_cc1_trace(cpu);
@@ -7452,6 +7912,9 @@ void handle_interrupt(int interrupt) {
             break;
         case INT_RISCV64_ECALL:
             handle_riscv64_syscall_interrupt(cpu);
+            break;
+        case INT_PPC64_SC:
+            handle_ppc64_syscall_interrupt(cpu);
             break;
         case INT_PF:
             handle_page_fault_interrupt(cpu);
@@ -7639,6 +8102,13 @@ void dump_stack(int lines) {
                    (unsigned long long) sp,
                    (unsigned long long) current->cpu.riscv64_regs[riscv64_s0],
                    (unsigned long long) current->cpu.riscv64_pc);
+            break;
+        case GUEST_ABI_PPC64:
+            sp = current->cpu.ppc64_gpr[1];
+            printk("stack at %#llx, lr at %#llx, pc at %#llx\n",
+                   (unsigned long long) sp,
+                   (unsigned long long) current->cpu.ppc64_lr,
+                   (unsigned long long) current->cpu.ppc64_pc);
             break;
         default:
             sp = current->cpu.esp;

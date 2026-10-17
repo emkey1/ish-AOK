@@ -144,6 +144,7 @@ static char *library_path(const char *root) {
         "/lib/x86_64-linux-gnu", "/usr/lib/x86_64-linux-gnu",
         "/lib/i386-linux-gnu", "/usr/lib/i386-linux-gnu",
         "/lib/riscv64-linux-gnu", "/usr/lib/riscv64-linux-gnu",
+        "/lib/powerpc64le-linux-gnu", "/usr/lib/powerpc64le-linux-gnu",
     };
     size_t cap = 1, used = 0;
     for (size_t i = 0; i < sizeof(dirs) / sizeof(dirs[0]); i++)

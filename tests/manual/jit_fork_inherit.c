@@ -41,6 +41,9 @@ static void emit(unsigned char *p, int k) {
 #elif defined(__riscv)
     uint32_t insn[2] = { 0x00000513u | ((uint32_t) k << 20), 0x00008067u };  // li a0, k; ret
     memcpy(p, insn, sizeof insn);
+#elif defined(__powerpc64__) && defined(__LITTLE_ENDIAN__)
+    uint32_t insn[2] = { 0x38600000u | ((uint32_t) k & 0xffff), 0x4e800020u };  // li r3, k; blr
+    memcpy(p, insn, sizeof insn);
 #elif defined(__x86_64__) || defined(__i386__)
     p[0] = 0xb8;                    // mov eax, k
     memcpy(p + 1, &k, 4);

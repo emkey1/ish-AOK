@@ -202,9 +202,9 @@ endif
 # a functional gate, not yet a size optimization.
 guest_archs = get_option('guest_archs')
 if guest_archs.length() == 0
-    error('guest_archs must enable at least one guest architecture (i386, amd64, arm64, riscv64)')
+    error('guest_archs must enable at least one guest architecture (i386, amd64, arm64, riscv64, ppc64)')
 endif
-foreach garch : ['i386', 'amd64', 'arm64', 'riscv64']
+foreach garch : ['i386', 'amd64', 'arm64', 'riscv64', 'ppc64']
     add_project_arguments('-DISH_GUEST_' + garch.to_upper() + '=' + (guest_archs.contains(garch) ? '1' : '0'), language: 'c')
 endforeach
 
@@ -230,6 +230,13 @@ if jit_cpu_family == 'aarch64' and guest_archs.contains('riscv64')
 elif guest_archs.contains('riscv64')
     warning('riscv64 guest enabled but host gadget set is ' + jit_cpu_family
             + ': the riscv64 engine is aarch64-host-only, riscv64 binaries will not run')
+endif
+
+if jit_cpu_family == 'aarch64' and guest_archs.contains('ppc64')
+    add_project_arguments('-DISH_JIT_PPC64_GUEST=1', language: 'c')
+elif guest_archs.contains('ppc64')
+    warning('ppc64 guest enabled but host gadget set is ' + jit_cpu_family
+            + ': the ppc64 engine is aarch64-host-only, ppc64 binaries will not run')
 endif
 
 includes = [include_directories('.')]
@@ -592,6 +599,17 @@ if jit_cpu_family == 'aarch64' and guest_archs.contains('riscv64')
         'jit/guest-riscv64/vector.S',
     ]
 endif
+# ppc64 GUEST gadgets and their translator (docs/ppc64le_guest_plan.md).
+if jit_cpu_family == 'aarch64' and guest_archs.contains('ppc64')
+    emu_src += [
+        'jit/gen_ppc64.c',
+        'jit/guest-ppc64/core.S',
+        'jit/guest-ppc64/alu.S',
+        'jit/guest-ppc64/branch.S',
+        'jit/guest-ppc64/memory.S',
+        'jit/guest-ppc64/fp.S',
+    ]
+endif
 
 # math.S is assembled without debug information. It is the x86 guests' ALU,
 # SSE, AVX and AVX-512 gadgets: 17,500 lines of macros that expand to 6.6 MB
@@ -626,7 +644,7 @@ src = [
     'kernel/ish_accel_pix.c',
     'kernel/ish_accel_pix_kernels.c',
     'kernel/user.c',
-    'kernel/vdso.c', vdso, vdso_amd64, vdso_arm64, vdso_riscv64,
+    'kernel/vdso.c', vdso, vdso_amd64, vdso_arm64, vdso_riscv64, vdso_ppc64,
     'kernel/task.c',
     'kernel/guestprof.c',
     'kernel/group.c',

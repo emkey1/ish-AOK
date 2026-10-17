@@ -344,6 +344,23 @@ int_t sys_prctl_guest(dword_t option, qword_t arg2, qword_t arg3, qword_t arg4, 
                 default:
                     return _EINVAL;
             }
+        // powerpc's own: unaligned-access fixups, the FP exception mode and
+        // the endianness. Each GET writes an unsigned int at arg2. Only what
+        // is true here is accepted: AOK fixes up every unaligned access and
+        // takes no FP enable traps, and the guest is little-endian.
+        case 5: case 6: case 11: case 12: case 19: case 20: {
+            if (current->abi != GUEST_ABI_PPC64)
+                return _EINVAL;
+            if (option == 5 || option == 11 || option == 19) {
+                dword_t value = option == 19 ? 1 /* PR_ENDIAN_LITTLE */ : 0;
+                return user_put(arg2, value) ? _EFAULT : 0;
+            }
+            if (option == 6) // PR_SET_UNALIGN: 0, or PR_UNALIGN_NOPRINT
+                return arg2 <= 1 ? 0 : _EINVAL;
+            if (option == 12) // PR_SET_FPEXC: PR_FP_EXC_DISABLED alone
+                return arg2 == 0 ? 0 : _EINVAL;
+            return arg2 == 1 ? 0 : _EINVAL; // PR_SET_ENDIAN: PR_ENDIAN_LITTLE
+        }
         case 69: // PR_RISCV_V_SET_CONTROL
         case 70: // PR_RISCV_V_GET_CONTROL
             if (current->abi != GUEST_ABI_RISCV64)

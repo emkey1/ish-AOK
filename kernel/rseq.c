@@ -248,6 +248,8 @@ static guest_addr_t *rseq_ip(struct cpu_state *cpu, enum guest_abi abi, guest_ad
             return &cpu->arm64_pc;
         case GUEST_ABI_RISCV64:
             return &cpu->riscv64_pc;
+        case GUEST_ABI_PPC64:
+            return &cpu->ppc64_pc;
         default:
             *scratch = cpu->eip;
             return scratch;

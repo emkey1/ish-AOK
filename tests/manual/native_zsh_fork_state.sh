@@ -399,7 +399,9 @@ echo "== a command too long for argv =="
 # tree is a chain when the hashes rise with the words), which killed the app.
 ck long-words-30k      30000    'a=$(seq 1 30000); /bin/sh -c "echo \$#" sh ${=a}'
 ck long-words-100k     100000   'a=$(seq 1 100000); /bin/sh -c "echo \$#" sh ${=a}'
-ck long-glob           5000     'd=$(mktemp -d); cd $d; for i in {1..5000}; do : > file-with-a-rather-longer-name-than-before-$i; done; /bin/sh -c "echo \$#" sh *; /bin/rm -f *; cd /; rmdir $d'
+# (a fixed directory, as the glob checks above: a native root has no mktemp
+# command, and an empty $d sent cd home and rm -f * after it)
+ck long-glob           5000     'rm -rf /tmp/aoklg; mkdir -p /tmp/aoklg && cd /tmp/aoklg || exit; for i in {1..5000}; do : > file-with-a-rather-longer-name-than-before-$i; done; /bin/sh -c "echo \$#" sh *; cd /; rm -rf /tmp/aoklg'
 ck long-underscore     [168893] ': "$(seq 1 30000)"; print -r -- "[$(print -rn -- ${#_})]"'
 
 echo

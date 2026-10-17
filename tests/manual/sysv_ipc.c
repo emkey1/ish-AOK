@@ -11,8 +11,11 @@
 // across IPC_RMID, msgctl IPC_STAT counters; sem SETVAL/GETVAL/SETALL/
 // GETALL/GETPID, blocking semop woken by a child's up, wait-for-zero,
 // EAGAIN with IPC_NOWAIT, SEM_UNDO applied when a child dies holding the
-// semaphore, and EIDRM for a semop blocked across IPC_RMID. Also passes on
-// real Linux.
+// semaphore, and EIDRM for a semop blocked across IPC_RMID. And each
+// IPC_STAT's fields where the guest's libc reads them, with nothing written
+// past the structure: the layouts differ between ABIs (ppc64's shmid_ds puts
+// the size after the times, amd64's semid_ds pads where the others do not).
+// Also passes on real Linux.
 
 #define _GNU_SOURCE
 
@@ -24,6 +27,7 @@
 #include <sys/ipc.h>
 #include <sys/msg.h>
 #include <sys/sem.h>
+#include <sys/shm.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -186,7 +190,39 @@ static void test_sem_basic(void) {
     op.sem_flg = IPC_NOWAIT;
     check(semop(id, &op, 1) < 0 && errno == EAGAIN, "down 4 of 3 EAGAIN");
 
+    struct { struct semid_ds st; unsigned char guard[32]; } sb;
+    memset(&sb, 0xa5, sizeof(sb));
+    arg.buf = &sb.st;
+    check(semctl(id, 0, IPC_STAT, arg) == 0, "sem IPC_STAT");
+    check(sb.st.sem_nsems == 2, "sem IPC_STAT sem_nsems==2");
+    check((sb.st.sem_perm.mode & 0777) == 0600 && sb.st.sem_perm.uid == geteuid(),
+          "sem IPC_STAT perm mode and uid");
+    check(sb.st.sem_ctime != 0 && sb.st.sem_ctime <= time(NULL), "sem IPC_STAT ctime");
+    check(sb.guard[0] == 0xa5 && sb.guard[31] == 0xa5, "sem IPC_STAT writes nothing past semid_ds");
+
     check(semctl(id, 0, IPC_RMID) == 0, "sem IPC_RMID");
+}
+
+static void test_shm_stat(void) {
+    int id = shmget(IPC_PRIVATE, 12345, IPC_CREAT | 0640);
+    check(id >= 0, "shmget 12345 bytes");
+    if (id < 0)
+        return;
+    void *p = shmat(id, NULL, 0);
+    check(p != (void *) -1, "shmat");
+    struct { struct shmid_ds st; unsigned char guard[32]; } sb;
+    memset(&sb, 0xa5, sizeof(sb));
+    check(shmctl(id, IPC_STAT, &sb.st) == 0, "shm IPC_STAT");
+    check(sb.st.shm_segsz == 12345, "shm IPC_STAT shm_segsz==12345");
+    check(sb.st.shm_nattch == 1, "shm IPC_STAT shm_nattch==1");
+    check(sb.st.shm_cpid == getpid() && sb.st.shm_lpid == getpid(), "shm IPC_STAT cpid and lpid");
+    check(sb.st.shm_atime != 0 && sb.st.shm_atime <= time(NULL) && sb.st.shm_dtime == 0,
+          "shm IPC_STAT atime set, dtime not");
+    check((sb.st.shm_perm.mode & 0777) == 0640, "shm IPC_STAT perm mode");
+    check(sb.guard[0] == 0xa5 && sb.guard[31] == 0xa5, "shm IPC_STAT writes nothing past shmid_ds");
+    if (p != (void *) -1)
+        check(shmdt(p) == 0, "shmdt");
+    check(shmctl(id, IPC_RMID, NULL) == 0, "shm IPC_RMID");
 }
 
 static void test_sem_blocking(void) {
@@ -262,6 +298,7 @@ int main(int argc, char **argv) {
     test_msg_blocking();
     test_sem_basic();
     test_sem_blocking();
+    test_shm_stat();
 
     return finish_suite("sysv_ipc");
 }

@@ -1150,6 +1150,9 @@ static NSString *BootExecRecovery(intptr_t err, NSString *guestABI) {
         if ([guestABI isEqualToString:@"riscv64"]) {
             return NSLocalizedString(@"This root is marked riscv64, but the boot command is not a supported riscv64 executable or script. Check Settings -> Boot Command or reimport the filesystem.", @"Boot failure recovery advice");
         }
+        if ([guestABI isEqualToString:@"ppc64"]) {
+            return NSLocalizedString(@"This root is marked ppc64le, but the boot command is not a supported ppc64le executable or script. Check Settings -> Boot Command or reimport the filesystem.", @"Boot failure recovery advice");
+        }
         return NSLocalizedString(@"The configured boot command is not a supported Linux executable or script. Check Settings -> Boot Command.", @"Boot failure recovery advice");
     }
     if (err == _ENOMEM) {

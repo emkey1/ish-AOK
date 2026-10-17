@@ -1571,16 +1571,16 @@ static int proc_ish_show_jit_timing(struct proc_entry *UNUSED(e), struct proc_da
     jit_timing_get(&st);
     unsigned long long ns = 0;
     unsigned long blocks = 0;
-    for (unsigned i = 0; i < 4; i++) {
+    for (unsigned i = 0; i < JIT_TIMING_ARCHS; i++) {
         ns += st.ns[i];
         blocks += st.blocks[i];
     }
     proc_printf(buf, "enabled %d\nblocks %lu\nns %llu\nbytes %llu\n", st.enabled ? 1 : 0, blocks, ns, st.bytes);
     unsigned long inherited = 0;
-    for (unsigned i = 0; i < 4; i++)
+    for (unsigned i = 0; i < JIT_TIMING_ARCHS; i++)
         inherited += st.inherited[i];
     proc_printf(buf, "inherited %lu\n", inherited);
-    for (unsigned i = 0; i < 4; i++)
+    for (unsigned i = 0; i < JIT_TIMING_ARCHS; i++)
         if (st.blocks[i] != 0)
             proc_printf(buf, "%s %lu blocks %llu ns %lu inherited\n", st.arch[i], st.blocks[i], st.ns[i],
                         st.inherited[i]);

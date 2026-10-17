@@ -63,3 +63,7 @@ vdso_riscv64 = custom_target('vdso-riscv64', input: ['riscv64/vdso.S', 'riscv64/
     output: 'libvdso-riscv64.so.elf',
     command: [clang, '-target', 'riscv64-linux', '-march=rv64imafdc', '-mabi=lp64d',
         '-fuse-ld=lld', '-o', '@OUTPUT@', '@INPUT0@', '-Wl,-T,@INPUT1@'] + vdso64_link_args)
+vdso_ppc64 = custom_target('vdso-ppc64', input: ['ppc64/vdso.S', 'ppc64/vdso.lds'],
+    output: 'libvdso-ppc64.so.elf',
+    command: [clang, '-target', 'powerpc64le-linux', '-fuse-ld=lld', '-o', '@OUTPUT@', '@INPUT0@',
+        '-Wl,-T,@INPUT1@'] + vdso64_link_args)

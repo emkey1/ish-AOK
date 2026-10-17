@@ -2,7 +2,8 @@
 
 Every guest in iSH-AOK is emulated, so the CPU a program sees is the one
 iSH-AOK describes: through `CPUID` on x86, `AT_HWCAP` and the ID registers on
-arm64, `riscv_hwprobe` on riscv64, and `/proc/cpuinfo` on all four. Software
+arm64, `riscv_hwprobe` on riscv64, `AT_HWCAP` and `AT_HWCAP2` on ppc64le, and
+`/proc/cpuinfo` on all five. Software
 reads that description to pick its fast paths — glibc's `memcpy`, OpenSSL's
 ciphers, a codec's inner loop — so what it says matters as much as what the
 emulator can do. The rule is simple: a feature is reported only when every
@@ -104,6 +105,19 @@ with Zvbb, Zvkb, Zvkt and Zvfhmin. The `isa` line starts
 does. Pointer masking (Supm) is the one piece left out. The details, and
 iSH-AOK's hook for non-standard vendor instructions, are in
 [riscv64-vendor-extensions.md](riscv64-vendor-extensions.md).
+
+## ppc64le
+
+New in 562: the ppc64le guest is a **POWER8** (Power ISA 2.07), the baseline
+Alpine's `ppc64le` and Debian's `ppc64el` are built for. `AT_PLATFORM` is
+`power8`; `AT_HWCAP` has `ppc64`, `altivec`, `fpu`, `mmu`, `vsx`, `arch_2_05`,
+`arch_2_06` and `true_le`, and `AT_HWCAP2` has `arch_2_07` and `isel`. Left out,
+and not reported: decimal floating point, transactional memory, the vector
+crypto instructions (AES, SHA, polynomial multiply) and `scv`, so OpenSSL
+takes its VMX paths rather than the POWER8 crypto ones. `/proc/cpuinfo` is
+POWER's format, `cpu : POWER8 (raw), altivec supported`, and its `timebase`
+line is the frequency `mftb` counts at, which on iSH-AOK is the host's
+counter.
 
 ## See also
 

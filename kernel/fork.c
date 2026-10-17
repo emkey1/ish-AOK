@@ -176,6 +176,8 @@ static int copy_task(struct task *task, dword_t flags, guest_addr_t stack, guest
             task->cpu.arm64_sp = stack;
         if (task->abi == GUEST_ABI_RISCV64)
             task->cpu.riscv64_regs[riscv64_sp] = stack;
+        if (task->abi == GUEST_ABI_PPC64)
+            task->cpu.ppc64_gpr[1] = stack;
     }
 
     int err;
@@ -383,6 +385,9 @@ static int copy_task(struct task *task, dword_t flags, guest_addr_t stack, guest
             // directly; tp is an ordinary GPR (x4), not an out-of-band
             // register like arm64's TPIDR_EL0.
             task->cpu.riscv64_regs[riscv64_tp] = tls_addr;
+        } else if (task->abi == GUEST_ABI_PPC64) {
+            // On ppc64, the thread pointer is r13.
+            task->cpu.ppc64_gpr[13] = tls_addr;
         } else {
             // i386: a struct user_desc in the caller's memory for an entry
             // the child already has (Linux's do_set_thread_area with
@@ -817,6 +822,11 @@ static dword_t sys_clone_common_(dword_t flags, guest_addr_t stack, guest_addr_t
     if (task->abi == GUEST_ABI_RISCV64)
         // Same rule: the child returns 0 from clone in a0.
         task->cpu.riscv64_regs[riscv64_a0] = 0;
+    if (task->abi == GUEST_ABI_PPC64) {
+        // r3, and a success: CR0[SO] clear, whatever the parent's was.
+        task->cpu.ppc64_gpr[3] = 0;
+        task->cpu.ppc64_cr[0] &= ~1u;
+    }
 
     struct vfork_info *vfork = NULL;
     if (flags & CLONE_VFORK_) {

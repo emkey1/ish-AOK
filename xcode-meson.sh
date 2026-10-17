@@ -338,7 +338,7 @@ EOF
     # Guest architectures the app build supports; comma-separated subset of
     # i386,amd64,arm64. Set ISH_GUEST_ARCHS in iSH.xcconfig (or the scheme
     # environment) to trim the emulator; meson rejects an empty list.
-    guest_archs=${ISH_GUEST_ARCHS:-i386,amd64,arm64,riscv64}
+    guest_archs=${ISH_GUEST_ARCHS:-i386,amd64,arm64,riscv64,ppc64}
     # arm64-guest gadget dispatch: 'ldar' (default, fastest on Apple Silicon) or
     # 'dmb' (ldr + dmb ishld, expected better on ARMv8.0 devices like the A9).
     # Set ISH_ARM64_GRET=dmb as a build setting in iSH.xcconfig (NOT a scheme

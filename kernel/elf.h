@@ -15,6 +15,7 @@
 #define ELF_X86_64 62
 #define ELF_AARCH64 183
 #define ELF_RISCV 243
+#define ELF_PPC64 21
 
 struct elf_header {
     uint32_t magic;
@@ -123,6 +124,9 @@ struct aux64_ent {
 #define AX_PLATFORM 15
 #define AX_HWCAP 16
 #define AX_CLKTCK 17
+#define AX_DCACHEBSIZE 19
+#define AX_ICACHEBSIZE 20
+#define AX_UCACHEBSIZE 21
 #define AX_SECURE 23
 #define AX_RANDOM 25
 #define AX_HWCAP2 26

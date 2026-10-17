@@ -173,6 +173,27 @@ __asm__(
     "    li a0, 2\n"
     "    ret\n"
     ".option pop\n");
+#elif defined(__powerpc64__)
+__asm__(
+    ".text\n"
+    ".globl rseq_cs_spin\n"
+    ".type rseq_cs_spin, @function\n"
+    "rseq_cs_spin:\n"
+    "    std 5, 8(4)\n"
+    ".globl rseq_cs_start\n"
+    "rseq_cs_start:\n"
+    "    lwz 9, 0(3)\n"
+    "    cmpwi 9, 0\n"
+    "    beq rseq_cs_start\n"
+    ".globl rseq_cs_end\n"
+    "rseq_cs_end:\n"
+    "    li 3, 1\n"
+    "    blr\n"
+    "    .long 0x53053053\n"
+    ".globl rseq_cs_abort\n"
+    "rseq_cs_abort:\n"
+    "    li 3, 2\n"
+    "    blr\n");
 #else
 #error "no critical section for this architecture"
 #endif
@@ -320,6 +341,8 @@ static void *thread_pointer(void) {
     __asm__("mov %%fs:0, %0" : "=r"(tp));
 #elif defined(__i386__)
     __asm__("mov %%gs:0, %0" : "=r"(tp));
+#elif defined(__powerpc64__)
+    __asm__("mr %0, 13" : "=r"(tp));   // r13 (gcc has no builtin for it here)
 #else
     tp = __builtin_thread_pointer();
 #endif

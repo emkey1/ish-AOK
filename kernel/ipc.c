@@ -108,6 +108,21 @@ struct shmid_ds_amd64_ {
 };
 static_assert(sizeof(struct shmid_ds_amd64_) == 112, "amd64 shmid_ds size");
 
+// powerpc64 puts the size after the times; the rest is amd64's.
+struct shmid_ds_ppc64_ {
+    struct ipc_perm_amd64_ shm_perm;
+    sqword_t shm_atime;
+    sqword_t shm_dtime;
+    sqword_t shm_ctime;
+    qword_t shm_segsz;
+    pid_t_ shm_cpid;
+    pid_t_ shm_lpid;
+    qword_t shm_nattch;
+    qword_t __unused4;
+    qword_t __unused5;
+};
+static_assert(sizeof(struct shmid_ds_ppc64_) == 112, "ppc64 shmid_ds size");
+
 struct shm_segment {
     struct list shm_segments;
     // The IPC namespace it belongs to, held (kernel/ipc_ns.h): a detach, or
@@ -618,6 +633,19 @@ static int shmctl_internal_amd64(int id, int cmd, guest_addr_t ptr) {
         unlock(&ns->shm_lock);
         if (ptr == 0)
             return _EFAULT;
+        if (current->abi == GUEST_ABI_PPC64) {
+            struct shmid_ds_ppc64_ ppc = {
+                .shm_perm = info.shm_perm,
+                .shm_atime = info.shm_atime,
+                .shm_dtime = info.shm_dtime,
+                .shm_ctime = info.shm_ctime,
+                .shm_segsz = info.shm_segsz,
+                .shm_cpid = info.shm_cpid,
+                .shm_lpid = info.shm_lpid,
+                .shm_nattch = info.shm_nattch,
+            };
+            return user_write(ptr, &ppc, sizeof(ppc)) ? _EFAULT : 0;
+        }
         if (user_write(ptr, &info, sizeof(info)))
             return _EFAULT;
         return 0;

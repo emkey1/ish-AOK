@@ -161,3 +161,27 @@ void riscv64() {
     OFFSET(CPU, cpu_state, riscv64_vxrm);
     OFFSET(CPU, cpu_state, riscv64_vxsat);
 }
+
+// The ppc64 guest's state (jit/guest-ppc64/), the same prefixed names.
+void ppc64() {
+    OFFSET(CPU, cpu_state, ppc64_gpr);
+    OFFSET(CPU, cpu_state, ppc64_zero);
+    OFFSET(CPU, cpu_state, ppc64_pc);
+    OFFSET(CPU, cpu_state, ppc64_lr);
+    OFFSET(CPU, cpu_state, ppc64_ctr);
+    OFFSET(CPU, cpu_state, ppc64_cr);
+    OFFSET(CPU, cpu_state, ppc64_so);
+    OFFSET(CPU, cpu_state, ppc64_ov);
+    OFFSET(CPU, cpu_state, ppc64_ca);
+    OFFSET(CPU, cpu_state, ppc64_ov32);
+    OFFSET(CPU, cpu_state, ppc64_ca32);
+    OFFSET(CPU, cpu_state, ppc64_xer_rest);
+    OFFSET(CPU, cpu_state, ppc64_fpscr);
+    OFFSET(CPU, cpu_state, ppc64_vscr);
+    OFFSET(CPU, cpu_state, ppc64_vrsave);
+    OFFSET(CPU, cpu_state, ppc64_res_size);
+    OFFSET(CPU, cpu_state, ppc64_res_addr);
+    OFFSET(CPU, cpu_state, ppc64_res_val);
+    OFFSET(CPU, cpu_state, ppc64_res_val_hi);
+    OFFSET(CPU, cpu_state, ppc64_vsr);
+}

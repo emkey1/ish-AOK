@@ -101,6 +101,8 @@ struct sfprog { unsigned short len; struct sf *filter; };
 #define ARCH_NATIVE 0xc00000b7u
 #elif defined(__riscv)
 #define ARCH_NATIVE 0xc00000f3u
+#elif defined(__powerpc64__) && defined(__LITTLE_ENDIAN__)
+#define ARCH_NATIVE 0xc0000015u
 #else
 #error "unknown architecture"
 #endif

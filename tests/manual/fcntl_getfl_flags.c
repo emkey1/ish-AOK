@@ -23,6 +23,8 @@
 
 #if defined(__aarch64__)
 #define KERNEL_O_LARGEFILE 0x20000
+#elif defined(__powerpc64__)
+#define KERNEL_O_LARGEFILE 0x10000
 #else
 #define KERNEL_O_LARGEFILE 0x8000
 #endif

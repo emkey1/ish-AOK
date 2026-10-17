@@ -21,6 +21,8 @@ struct gen_state {
     guest_addr_t arm64_orig_ip;
     guest_addr_t riscv64_ip;
     guest_addr_t riscv64_orig_ip;
+    guest_addr_t ppc64_ip;
+    guest_addr_t ppc64_orig_ip;
     unsigned long orig_ip_extra;
     // Set by decode.h for a vector instruction whose 128-bit memory operand
     // is NOT alignment-checked (MOVUPS, MOVDQU, LDDQU, PCMPxSTRx) or is really
@@ -34,6 +36,7 @@ struct gen_state {
     bool amd64;
     bool arm64;
     bool riscv64;
+    bool ppc64;
     // ISH_JIT_PROFILE's record of this block (jit/jitprof.c); NULL when off.
     struct jitprof_block *jitprof;
     // True when the previous gen_step_arm64 emitted a gadget that ends
@@ -120,6 +123,7 @@ bool gen_start_amd64(guest_addr_t addr, struct gen_state *state); // returns fal
 void gen_start_x86_profile(guest_addr_t addr, struct gen_state *state);
 bool gen_start_arm64(guest_addr_t addr, struct gen_state *state); // returns false on OOM
 bool gen_start_riscv64(guest_addr_t addr, struct gen_state *state); // returns false on OOM
+bool gen_start_ppc64(guest_addr_t addr, struct gen_state *state); // returns false on OOM (jit/gen_ppc64.c)
 void gen_exit(struct gen_state *state);
 void gen_end(struct gen_state *state);
 
@@ -127,6 +131,10 @@ int gen_step(struct gen_state *state, struct tlb *tlb);
 int gen_step_amd64(struct gen_state *state, struct tlb *tlb);
 int gen_step_arm64(struct gen_state *state, struct tlb *tlb);
 int gen_step_riscv64(struct gen_state *state, struct tlb *tlb);
+int gen_step_ppc64(struct gen_state *state, struct tlb *tlb);
+// The block-end continuation of a ppc64 block that hit the size cap
+// (gen_exit), in jit/gen_ppc64.c with the rest of that translator.
+void gen_exit_ppc64(struct gen_state *state);
 
 // Append one raw code-stream word (external emitters, e.g. jit/hle.c).
 void gen_raw(struct gen_state *state, unsigned long word);
