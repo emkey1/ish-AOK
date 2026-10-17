@@ -11,6 +11,13 @@
 //     they do not move at all, and the flag survives the exec;
 //   - /proc/sys/kernel/randomize_va_space reads 2; as root, 0 stops all of
 //     it and 1 stops only the heap moving on its own (then put back to 2).
+//
+// Unless the app's "Cache Translated Code" setting is on (/proc/ish/jit_cache
+// reads 1): a cached translation is found by the address its code was loaded
+// at, so the cache turns ASLR off and holds randomize_va_space at 0 while it
+// is on (jit/jit.c). Then that is what is asserted -- 0, and nothing moving by
+// default -- and the legs that write randomize_va_space are left out. The
+// release gate's iPhone 12 leg failed six checks here with the setting on.
 #define _GNU_SOURCE
 #include <dlfcn.h>
 #include <elf.h>
@@ -150,6 +157,19 @@ static int read_va_space(void) {
     return v;
 }
 
+// The translated-code cache is on (see the header); /proc/ish/jit_cache's
+// first line is 1 or 0, and absent outside AOK.
+static int jit_cache_on(void) {
+    FILE *f = fopen("/proc/ish/jit_cache", "r");
+    int v = 0;
+    if (f != NULL) {
+        if (fscanf(f, "%d", &v) != 1)
+            v = 0;
+        fclose(f);
+    }
+    return v == 1;
+}
+
 static int write_va_space(int v) {
     FILE *f = fopen("/proc/sys/kernel/randomize_va_space", "w");
     if (f == NULL)
@@ -168,12 +188,21 @@ int main(int argc, char **argv) {
         self_path = abs_self;
 
     int va = read_va_space();
-    check("randomize_va_space is 2", va == 2, va, 2);
+    int cached = jit_cache_on();
+    if (cached)
+        check("randomize_va_space is 0 (translated-code cache on)", va == 0, va, 0);
+    else
+        check("randomize_va_space is 2", va == 2, va, 2);
     int pers = personality(0xffffffff);
     check("ADDR_NO_RANDOMIZE clear by default", (pers & ADDR_NO_RANDOMIZE) == 0, pers, 0);
 
     static const int all_move[5] = {1, 1, 1, 1, 1};
     static const int none_move[5] = {0, 0, 0, 0, 0};
+    if (cached) {
+        expect("default, translated-code cache on", none_move);
+        test_logf("translated-code cache on: randomize_va_space legs skipped\n");
+        return finish_suite("aslr_layout");
+    }
     expect("default", all_move);
 
     int old = personality(0xffffffff);
