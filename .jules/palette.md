@@ -54,3 +54,6 @@
 ## 2024-05-14 - Add accessibilityHint to New Tab button
 **Learning:** Icon-only buttons with an `accessibilityLabel` benefit from an `accessibilityHint` to clarify the action. Screen reader users hear the label ("New Tab") and then the hint ("Opens a new terminal tab.") to explain the outcome. This is especially important for buttons that have complex actions or lack visual text.
 **Action:** When adding or verifying accessibility labels for icon-only buttons, especially those using system icons, always ensure there is an accompanying `accessibilityHint` to provide full context on what the button will do.
+## 2024-10-16 - Contextual Accessibility Hints for Vague Terminology
+**Learning:** Toolbar buttons using terse or ambiguous labels like "Model" or "Chats" may not clearly convey their function to screen reader users, even if visually apparent from the context.
+**Action:** Always provide an `accessibilityHint` to clarify the outcome of activating the button when its label uses vague terminology (e.g., "Shows a list of all configured models." for a "Model" button).

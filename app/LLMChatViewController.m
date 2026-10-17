@@ -581,19 +581,40 @@ static const CGFloat kISHLLMMaximumTextScale = 3.0;
     // in one tap, which is the whole point of the row. Saving extracts moved
     // under Actions and clearing under Chats to keep the count at four; a
     // fifth crushes the labels on a narrow iPhone.
+
     _chatsButton = [self toolbarButtonWithTitle:NSLocalizedString(@"Chats", @"chat toolbar button") action:NULL];
+    _chatsButton.accessibilityHint = NSLocalizedString(@"Shows a list of all your chats.", @"Accessibility hint for chat toolbar button");
+
     _destinationButton = [self toolbarButtonWithTitle:NSLocalizedString(@"Model", @"chat toolbar button") action:NULL];
-    [self toolbarButtonWithTitle:NSLocalizedString(@"Actions", @"chat toolbar button") action:@selector(showPromptActions:)];
-    [self toolbarButtonWithTitle:NSLocalizedString(@"Settings", @"chat toolbar button") action:@selector(showLLMSettings:)];
+    _destinationButton.accessibilityHint = NSLocalizedString(@"Shows a list of all configured models.", @"Accessibility hint for chat model toolbar button");
+
+    UIButton *actionsButton = [self toolbarButtonWithTitle:NSLocalizedString(@"Actions", @"chat toolbar button") action:@selector(showPromptActions:)];
+    actionsButton.accessibilityHint = NSLocalizedString(@"Shows a menu of actions for the current chat.", @"Accessibility hint for chat actions toolbar button");
+
+    UIButton *settingsButton = [self toolbarButtonWithTitle:NSLocalizedString(@"Settings", @"chat toolbar button") action:@selector(showLLMSettings:)];
+    settingsButton.accessibilityHint = NSLocalizedString(@"Opens the LLM settings.", @"Accessibility hint for chat settings toolbar button");
+
+
 
     _chatsBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:NSLocalizedString(@"Chats", @"chat toolbar button") style:UIBarButtonItemStylePlain target:nil action:NULL];
+    _chatsBarButtonItem.accessibilityHint = NSLocalizedString(@"Shows a list of all your chats.", @"Accessibility hint for chat toolbar button");
+
     _destinationBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:NSLocalizedString(@"Model", @"chat toolbar button") style:UIBarButtonItemStylePlain target:nil action:NULL];
+    _destinationBarButtonItem.accessibilityHint = NSLocalizedString(@"Shows a list of all configured models.", @"Accessibility hint for chat model toolbar button");
+
+    UIBarButtonItem *settingsBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:NSLocalizedString(@"Settings", @"chat toolbar button") style:UIBarButtonItemStylePlain target:self action:@selector(showLLMSettings:)];
+    settingsBarButtonItem.accessibilityHint = NSLocalizedString(@"Opens the LLM settings.", @"Accessibility hint for chat settings toolbar button");
+
+    UIBarButtonItem *actionsBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:NSLocalizedString(@"Actions", @"chat toolbar button") style:UIBarButtonItemStylePlain target:self action:@selector(showPromptActions:)];
+    actionsBarButtonItem.accessibilityHint = NSLocalizedString(@"Shows a menu of actions for the current chat.", @"Accessibility hint for chat actions toolbar button");
+
     self.navigationItem.rightBarButtonItems = @[
-        [[UIBarButtonItem alloc] initWithTitle:NSLocalizedString(@"Settings", @"chat toolbar button") style:UIBarButtonItemStylePlain target:self action:@selector(showLLMSettings:)],
-        [[UIBarButtonItem alloc] initWithTitle:NSLocalizedString(@"Actions", @"chat toolbar button") style:UIBarButtonItemStylePlain target:self action:@selector(showPromptActions:)],
+        settingsBarButtonItem,
+        actionsBarButtonItem,
         _destinationBarButtonItem,
         _chatsBarButtonItem,
     ];
+
 
     // Status panel: what the agent is doing, for how long, against what,
     // how full its context is, and whether other chats need attention -- so
