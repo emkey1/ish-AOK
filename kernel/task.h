@@ -1029,6 +1029,17 @@ struct tgroup {
     // copy, as Linux's dup_mm copies it. At the end for the reason given
     // above traced_zombies.
     _Atomic bool undumpable;
+    // The process's CPU time (user + system, ns) as last read, for a POSIX
+    // timer on CLOCK_PROCESS_CPUTIME_ID: its clock source reads this, with no
+    // lock, because the timer thread asks its clock with timer->lock held and
+    // timer_settime arms with group->lock held, and summing the group's CPU
+    // takes pids_lock and group->lock. Only ever raised (a reading is a past
+    // value, so the timer fires late by at most one refresh and never early);
+    // refreshed where no such lock is held -- timer_settime and timer_gettime
+    // before they take group->lock, and the CPU sampler's tick while such a
+    // timer is armed (kernel/time.c, posix_timer_process_cpu_refresh). A fork
+    // starts it at 0: the child's CPU is its own. At the end, as above.
+    _Atomic uint64_t cpu_clock_published_ns;
 };
 
 // Is this thread group the leader of its session? Linux keeps this as a

@@ -305,6 +305,10 @@ static void *timer_thread(void *param) {
             // one raised since the unlock above.
             timer_wake_wait(wake_fd, nap);
             lock(&timer->lock, 0);
+            // Not once the timer is freed or disarmed: its clock source's data
+            // (a POSIX timer's process or thread) can be gone by then.
+            if (!timer->active)
+                break;
             remaining = timespec_subtract(timer->end, timer_now(timer));
         }
         if (!timer->active)
@@ -390,6 +394,13 @@ static void *timer_thread(void *param) {
     else
         unlock(&timer->lock);
     return NULL;
+}
+
+void timer_poke(struct timer *timer) {
+    lock(&timer->lock, 0);
+    if (timer->thread_running)
+        timer_wake_raise(timer->wake_fd);
+    unlock(&timer->lock);
 }
 
 int timer_set(struct timer *timer, struct timer_spec spec, struct timer_spec *oldspec) {

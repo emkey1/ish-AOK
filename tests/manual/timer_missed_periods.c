@@ -23,6 +23,14 @@
  *   process CPU clock  a CLOCK_PROCESS_CPUTIME_ID timer, with four threads
  *                      spinning: the clock runs four times faster than the
  *                      thread sleeping on it, and three periods in four went.
+ *   busy siblings      the same timer, one thread of this process spinning
+ *                      beside two other processes that spin too. The timer
+ *                      ran on the host's process clock -- the whole
+ *                      emulator's, theirs included -- so it counted their
+ *                      CPU as this process's: on the Mac, 1745 expiries for
+ *                      1150ms. It counts this process's own now, from a
+ *                      reading published for it (kernel/time.c,
+ *                      posix_timer_process_cpu_refresh).
  *   the host stopped   iOS suspending the app, or the Mac's kill -STOP: every
  *                      timer thread stops with it. Run as `timer_missed_periods
  *                      host-stop` by timer_missed_periods.sh, which stops the
@@ -86,6 +94,7 @@
 /* The CPU clocks: how long to spin, and how many spinners on the process one. */
 #define SPIN_MS 300
 #define SPINNERS 4
+#define SIBLINGS 2
 
 #define SIG_MONO SIGUSR1
 #define SIG_PCPU SIGUSR2
@@ -340,7 +349,19 @@ static void *spinner(void *arg) {
 /* One CPU-clock timer, 1ms periodic, its signal blocked; `spin` does the
  * work. Returns the signal's expiries (1 + si_overrun), bracketed by `clock`
  * readings. */
-static void cpu_scenario(const char *label, clockid_t clock, int sig, int spinners) {
+static void cpu_scenario(const char *label, clockid_t clock, int sig, int spinners,
+        int siblings) {
+    /* Other processes, busy for the whole scenario: CPU that is not ours. */
+    pid_t sib[SIBLINGS] = {0};
+    for (int i = 0; i < siblings; i++) {
+        sib[i] = fork();
+        if (sib[i] == 0) {
+            for (;;)
+                ;
+        }
+    }
+    if (siblings > 0)
+        sleep_ms(20);
     timer_t t = make_timer(clock, sig);
     struct itimerspec its = {.it_value = ts_of(PERIOD_NS), .it_interval = ts_of(PERIOD_NS)};
     int64_t w0 = clock_ns(CLOCK_MONOTONIC);
@@ -362,6 +383,16 @@ static void cpu_scenario(const char *label, clockid_t clock, int sig, int spinne
     for (int i = 0; i < spinners; i++)
         pthread_join(th[i], NULL);
     int64_t wall = clock_ns(CLOCK_MONOTONIC) - w0;
+    /* Their CPU over the same stretch, from the outside: how much faster than
+     * ours the emulator's clock ran, which is what the old timer counted. */
+    int64_t sib_cpu = 0;
+    for (int i = 0; i < siblings; i++) {
+        clockid_t c;
+        if (clock_getcpuclockid(sib[i], &c) == 0)
+            sib_cpu += clock_ns(c);
+        kill(sib[i], SIGKILL);
+        waitpid(sib[i], NULL, 0);
+    }
 
     sigset_t one;
     sigemptyset(&one);
@@ -381,6 +412,15 @@ static void cpu_scenario(const char *label, clockid_t clock, int sig, int spinne
 
     int64_t cpu = after - c0a;
     test_logf("%s: %.1fms of CPU in %.1fms\n", label, cpu / 1e6, wall / 1e6);
+    if (siblings > 0)
+        test_logf("%s: the other processes ran %.1fms beside it\n", label, sib_cpu / 1e6);
+    /* Without CPU of their own beside ours the old clock ran no faster than
+     * this one, and the case proves nothing. */
+    if (siblings > 0 && sib_cpu < cpu / 2) {
+        printf("%s: not checked -- the other processes ran %.0fms beside our %.0fms, "
+               "no parallelism to be had\n", label, sib_cpu / 1e6, cpu / 1e6);
+        return;
+    }
     if (spinners > 1 && cpu < wall * 3 / 2) {
         /* Nothing ran in parallel, so the clock never got ahead of the timer:
          * this says nothing either way. */
@@ -405,15 +445,13 @@ static void cpu_scenario(const char *label, clockid_t clock, int sig, int spinne
     int64_t first = c0b + PERIOD_NS;
     int64_t lo = expiries_by(first, before) - late - expiries_by(first, before) / 20;
     int64_t hi = expiries_by(c0a + PERIOD_NS, after);
-    /* AOK's process timer runs on the emulator's whole CPU time, of which the
-     * guest's is most: a little over. Counting a period twice would be far
-     * over that. The thread timer gets nothing: its arming is anchored after
-     * c0a and its clock never reads ahead of this thread's own, so no expiry
-     * can be counted before its time. (It read the CPU time in 10ms steps,
-     * the arming included, and could run ten periods ahead: see
-     * timer_thread_cpu_early.c.) */
-    if (clock == CLOCK_PROCESS_CPUTIME_ID)
-        hi += hi / 5 + LATE_PERIODS;
+    /* No allowance over, for either clock: each timer's arming is anchored
+     * after c0a, and its clock never reads ahead of the process's (or the
+     * thread's) own, so no expiry can be counted before its time. The process
+     * timer used to get a fifth more and a few periods, because it ran on the
+     * emulator's whole CPU; with other processes busy that was far over. (The
+     * thread clock read its CPU in 10ms steps, the arming included, and could
+     * run ten periods ahead: see timer_thread_cpu_early.c.) */
     int64_t n = 1 + (int64_t) si.si_overrun;
     if (n < lo || n > hi) {
         printf("FAIL %s: %lld expiries counted, want %lld..%lld (a 1ms timer on a clock "
@@ -449,7 +487,9 @@ int main(int argc, char **argv) {
     }
     stop_scenario(PAST);
     stop_scenario(PROCESS_STOP);
-    cpu_scenario("thread CPU clock", CLOCK_THREAD_CPUTIME_ID, SIG_TCPU, 0);
-    cpu_scenario("process CPU clock", CLOCK_PROCESS_CPUTIME_ID, SIG_PCPU, SPINNERS);
+    cpu_scenario("thread CPU clock", CLOCK_THREAD_CPUTIME_ID, SIG_TCPU, 0, 0);
+    cpu_scenario("process CPU clock", CLOCK_PROCESS_CPUTIME_ID, SIG_PCPU, SPINNERS, 0);
+    cpu_scenario("process CPU clock, busy siblings", CLOCK_PROCESS_CPUTIME_ID, SIG_PCPU, 1,
+                 SIBLINGS);
     return finish_suite("timer_missed_periods");
 }

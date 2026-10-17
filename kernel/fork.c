@@ -94,6 +94,9 @@ static struct tgroup *tgroup_copy(struct tgroup *old_group) {
     // a timer the parent still owned -> double free / use-after-free of the
     // running timer thread. Clear the array so the child inherits no timers.
     memset(group->posix_timers, 0, sizeof(group->posix_timers));
+    // The child's CPU clock starts from its own nothing, not the parent's sum:
+    // inherited, a process-clock timer the child armed fired that much early.
+    atomic_store(&group->cpu_clock_published_ns, 0);
     group->doing_group_exit = false;
     // The parent's unreaped traced threads are the parent's. Inherited, a
     // child forked while one was outstanding could never be reaped: its exit

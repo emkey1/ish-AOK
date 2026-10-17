@@ -127,6 +127,10 @@ struct timer *timer_new(clockid_t clockid, timer_callback_t callback, void *data
 // Override where this timer reads the current time from. Must be called before
 // the timer is armed.
 void timer_set_clock_source(struct timer *timer, timer_clock_fn fn, void *data);
+// Wake the timer's thread to look at its clock again now, rather than when the
+// nap it took on the wall clock ends: for a clock source whose time can run
+// faster than the wall's (a process's CPU, on several threads at once).
+void timer_poke(struct timer *timer);
 void timer_free(struct timer *timer);
 // value is how long to wait until the next fire; negative, how long ago it was
 // due (an absolute arming in the past, a timer_read of one overdue), which

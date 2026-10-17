@@ -1194,6 +1194,59 @@ static struct timespec cpu_time_now_of(struct tgroup *group, bool include_system
     return cpu_time_of(rusage_get_group_cpu_of(group), include_system);
 }
 
+// CLOCK_PROCESS_CPUTIME_ID for a POSIX timer: the process's CPU, published in
+// group->cpu_clock_published_ns (kernel/task.h says why it is published rather
+// than read when asked). It used to have no clock source at all, so the timer
+// ran on the host's process CPU clock -- the whole emulator's, every guest
+// process and the app -- and with anything else busy it ran fast: on the Mac,
+// beside two `while :` shells, a 1 ms timer counted 1745 expiries while the
+// process's own clock ran 1150 ms.
+//
+// The refresh reads the group's CPU (pids_lock, then group->lock), so it is
+// called with neither held, and with no timer->lock: timer_settime and
+// timer_gettime before they lock, a restore before it arms, and the CPU
+// sampler's tick (itimer_vprof_sampler_notify) while such a timer is armed.
+static uint64_t posix_timer_process_cpu_refresh(struct tgroup *group) {
+    struct timespec now = cpu_time_now_of(group, true);
+    uint64_t ns = (uint64_t) now.tv_sec * 1000000000ull + (uint64_t) now.tv_nsec;
+    uint64_t seen = atomic_load(&group->cpu_clock_published_ns);
+    while (ns > seen && !atomic_compare_exchange_weak(&group->cpu_clock_published_ns, &seen, ns))
+        ;
+    return ns > seen ? ns : seen;
+}
+
+static struct timespec posix_timer_process_cpu_ts(struct tgroup *group) {
+    uint64_t ns = atomic_load(&group->cpu_clock_published_ns);
+    return (struct timespec) {
+        .tv_sec = (time_t) (ns / 1000000000ull),
+        .tv_nsec = (long) (ns % 1000000000ull),
+    };
+}
+
+// The timer's clock source: lock-free, as the timer thread and timer_set ask
+// it with timer->lock held (and timer_settime with group->lock as well).
+static struct timespec posix_timer_process_cpu_now(void *data) {
+    return posix_timer_process_cpu_ts(data);
+}
+
+static bool posix_timer_on_process_cpu(const struct posix_timer *pt) {
+    return pt->timer != NULL && pt->timer->clockid == CLOCK_PROCESS_CPUTIME_ID;
+}
+
+// Refresh the reading if the caller's timer `id` is on the process's clock:
+// asked of the slot under group->lock, read after letting go of it. Only
+// those, because an event loop re-arms its ordinary timers all the time and
+// the reading walks every thread. The timer may be deleted in between; the
+// caller looks again under the lock.
+static void posix_timer_refresh_if_process_cpu(dword_t id) {
+    struct tgroup *group = current->group;
+    lock(&group->lock, 0);
+    bool process_cpu = posix_timer_on_process_cpu(&group->posix_timers[id]);
+    unlock(&group->lock);
+    if (process_cpu)
+        posix_timer_process_cpu_refresh(group);
+}
+
 // Must be called with group->lock held.
 static bool itimer_vprof_maybe_fire(struct cpu_itimer_state *state, struct timespec cpu_now) {
     if (!state->armed)
@@ -1224,6 +1277,29 @@ static long itimer_vprof_tick_ns(struct tgroup *group) {
         if (interval / ncpu < tick)
             tick = interval / ncpu;
     }
+    // And each POSIX timer armed on the process's CPU clock, whose expiries
+    // are only as prompt as the reading it is given (posix_timer_process_cpu_
+    // refresh): its period, or for a one-shot what is left of it.
+    struct timespec cpu_now = posix_timer_process_cpu_ts(group);
+    for (unsigned i = 0; i < TIMERS_MAX; i++) {
+        struct posix_timer *pt = &group->posix_timers[i];
+        if (!posix_timer_on_process_cpu(pt))
+            continue;
+        lock(&pt->timer->lock, 0);
+        // A fired one-shot is left `active` by the thread that fired it, which
+        // then exits: thread_running is what says an expiry is still to come
+        // (timer_read). Without it the sampler stayed at 1ms for good.
+        bool active = pt->timer->active && pt->timer->thread_running;
+        struct timespec period = timespec_positive(pt->timer->interval)
+            ? pt->timer->interval : timespec_subtract(pt->timer->end, cpu_now);
+        unlock(&pt->timer->lock);
+        if (!active)
+            continue;
+        long long ns = timespec_positive(period)
+            ? (long long) period.tv_sec * 1000000000LL + period.tv_nsec : 0;
+        if (ns / ncpu < tick)
+            tick = ns / ncpu;
+    }
     if (tick < ITIMER_VPROF_MIN_TICK_NS)
         tick = ITIMER_VPROF_MIN_TICK_NS;
     return (long) tick;
@@ -1233,6 +1309,8 @@ static long itimer_vprof_tick_ns(struct tgroup *group) {
 // SIGPROF are process-directed too.
 // Only a tick: what is due is decided from the CPU clocks, not from how many
 // ticks there were.
+static long itimer_vprof_sampler_start_locked(struct tgroup *group);
+
 static void itimer_vprof_sampler_notify(void *data, uint64_t UNUSED(expirations)) {
     struct tgroup *group = data;
 
@@ -1241,12 +1319,34 @@ static void itimer_vprof_sampler_notify(void *data, uint64_t UNUSED(expirations)
     struct timespec cpu_user = cpu_time_of(usage, false);
     struct timespec cpu_total = cpu_time_of(usage, true);
 
+    // The process-clock POSIX timers' reading, from the same sample.
+    uint64_t total_ns = (uint64_t) cpu_total.tv_sec * 1000000000ull + (uint64_t) cpu_total.tv_nsec;
+    uint64_t seen = atomic_load(&group->cpu_clock_published_ns);
+    while (total_ns > seen &&
+            !atomic_compare_exchange_weak(&group->cpu_clock_published_ns, &seen, total_ns))
+        ;
+
     lock(&group->lock, 0);
     bool fire_virtual = itimer_vprof_maybe_fire(&group->itimer_virtual, cpu_user);
     bool fire_prof = itimer_vprof_maybe_fire(&group->itimer_prof, cpu_total);
     // RLIMIT_CPU, on the same clock as ITIMER_PROF: user plus system.
-    int limit_sig = rlimit_cpu_due_locked(group,
-            (uint64_t) cpu_total.tv_sec * 1000000000ull + (uint64_t) cpu_total.tv_nsec);
+    int limit_sig = rlimit_cpu_due_locked(group, total_ns);
+    // Each process-clock POSIX timer looks at the new reading now, rather than
+    // when the nap it took on the wall clock ends: with several threads busy,
+    // the process's CPU runs faster than the wall.
+    for (unsigned i = 0; i < TIMERS_MAX; i++)
+        if (posix_timer_on_process_cpu(&group->posix_timers[i]))
+            timer_poke(group->posix_timers[i].timer);
+    // Back to the relaxed tick once nothing needs the fast one (a one-shot
+    // that has fired, say); timer_set is safe from a timer's own callback.
+    if (group->itimer_vprof_sampler != NULL) {
+        long want = itimer_vprof_tick_ns(group);
+        lock(&group->itimer_vprof_sampler->lock, 0);
+        long have = group->itimer_vprof_sampler->interval.tv_nsec;
+        unlock(&group->itimer_vprof_sampler->lock);
+        if (want != have)
+            itimer_vprof_sampler_start_locked(group);
+    }
     unlock(&group->lock);
 
     if (fire_virtual)
@@ -2017,6 +2117,10 @@ static int_t sys_timer_create_guest_abi(dword_t clock, guest_addr_t sigevent_add
         timer->cpu_clock_pid = current->pid;
         timer_set_clock_source(timer->timer, posix_timer_thread_cpu_now, timer);
     }
+    // And the process CPU clock is not the host's either: that is the whole
+    // emulator's. See posix_timer_process_cpu_refresh.
+    if (real_clockid == CLOCK_PROCESS_CPUTIME_ID)
+        timer_set_clock_source(timer->timer, posix_timer_process_cpu_now, group);
     timer->signal = sigev.signo;
     timer->sig_value = sigev.value;
     timer->tgroup = NULL;
@@ -2050,6 +2154,9 @@ static int_t sys_timer_gettime_common(dword_t timer_id, guest_addr_t curr_value_
     if (timer_id >= TIMERS_MAX)
         return _EINVAL;
 
+    // A fresh reading of the process's CPU, before group->lock: see
+    // posix_timer_process_cpu_refresh.
+    posix_timer_refresh_if_process_cpu(timer_id);
     lock(&current->group->lock, 0);
     struct posix_timer *timer = &current->group->posix_timers[timer_id];
     if (timer->timer == NULL) {
@@ -2061,8 +2168,12 @@ static int_t sys_timer_gettime_common(dword_t timer_id, guest_addr_t curr_value_
     lock(&timer->timer->lock, 0);
     spec.interval = timer->timer->interval;
     if (timer->timer->active) {
-        struct timespec remaining = timespec_subtract(timer->timer->end,
-            timespec_now(timer->timer->clockid));
+        // On the timer's own clock: a CPU clock's source when it has one
+        // (process and thread), not the host clock under it.
+        struct timespec now = timer->timer->clock_now != NULL
+            ? timer->timer->clock_now(timer->timer->clock_data)
+            : timespec_now(timer->timer->clockid);
+        struct timespec remaining = timespec_subtract(timer->timer->end, now);
         if (timespec_positive(remaining))
             spec.value = remaining;
     }
@@ -2132,17 +2243,24 @@ static int_t sys_timer_settime_common(dword_t timer_id, int_t flags, guest_addr_
     if (!timespec_is_valid(spec.value) || !timespec_is_valid(spec.interval))
         return _EINVAL;
 
+    // The arming's "now" for a process-clock timer, read before group->lock
+    // (posix_timer_process_cpu_refresh). Fresh, so the deadline is never
+    // anchored to an older reading -- which would fire it early.
+    posix_timer_refresh_if_process_cpu(timer_id);
     lock(&current->group->lock, 0);
     struct posix_timer *timer = &current->group->posix_timers[timer_id];
     if (timer->timer == NULL) {
         unlock(&current->group->lock);
         return _EINVAL;
     }
+    bool process_cpu = posix_timer_on_process_cpu(timer);
     struct timer_spec old_spec;
     if (flags & TIMER_ABSTIME_) {
         // Guest deadline minus guest now; the interval that comes out is what
         // the host-clock timer thread arms on. See clock_nanosleep above.
-        struct timespec now = guest_clock_now(timer->clock, timer->timer->clockid);
+        struct timespec now = process_cpu
+            ? posix_timer_process_cpu_ts(current->group)
+            : guest_clock_now(timer->clock, timer->timer->clockid);
         spec.value = timespec_subtract(spec.value, now);
     }
     // Remembered because the arming itself is not: see posix_timer.abstime.
@@ -2151,6 +2269,10 @@ static int_t sys_timer_settime_common(dword_t timer_id, int_t flags, guest_addr_
     // latched (Linux's common_timer_set; 0 after either, measured on 6.12).
     timer->last_overrun = 0;
     int err = timer_set(timer->timer, spec, &old_spec);
+    // The sampler that keeps its reading fresh, at the tick it now needs (and
+    // back to the relaxed one when this disarmed the last of them).
+    if (err >= 0 && process_cpu)
+        err = (int) itimer_vprof_sampler_start_locked(current->group);
     unlock(&current->group->lock);
     if (err < 0)
         return err;
@@ -2765,12 +2887,30 @@ unsigned group_timers_ckpt_arm(struct tgroup *group, const struct group_timers_c
         // posix_timer_thread_cpu_now for why a thread's CPU clock needs one.
         if (r->real_clockid == (uint32_t) CLOCK_THREAD_CPUTIME_ID)
             timer_set_clock_source(t, posix_timer_thread_cpu_now, pt);
+        bool process_cpu = r->real_clockid == (uint32_t) CLOCK_PROCESS_CPUTIME_ID;
+        if (process_cpu)
+            timer_set_clock_source(t, posix_timer_process_cpu_now, group);
         pt->tgroup = signals ? group : NULL;
         pt->timer = t;
         unlock(&group->lock);
-        // Outside group->lock: a thread CPU clock's sampler takes pids_lock.
+        // Outside group->lock: a thread CPU clock's sampler takes pids_lock,
+        // and the process clock's reading takes it and group->lock. Read from
+        // the group, not the restoring thread (group_cpu_now says why).
+        if (process_cpu) {
+            struct timespec cpu = group_cpu_now(group, true);
+            uint64_t ns = (uint64_t) cpu.tv_sec * 1000000000ull + (uint64_t) cpu.tv_nsec;
+            uint64_t seen = atomic_load(&group->cpu_clock_published_ns);
+            while (ns > seen && !atomic_compare_exchange_weak(&group->cpu_clock_published_ns, &seen, ns))
+                ;
+        }
         if (r->t.armed && timer_set(t, timer_ckpt_spec(&r->t), NULL) < 0)
             failed++;
+        if (r->t.armed && process_cpu) {
+            lock(&group->lock, 0);
+            if (itimer_vprof_sampler_start_locked(group) < 0)
+                failed++;
+            unlock(&group->lock);
+        }
     }
     return failed;
 }
