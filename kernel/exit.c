@@ -477,7 +477,9 @@ static void release_thread_locked(struct task *thread, struct exit_notes *notes)
     struct tgroup *group = thread->group;
     task_unlink_locked(thread);
     list_add(&notes->dead, &thread->ptrace_siblings);
-    if (--group->traced_zombies == 0 && group->exit_notify_deferred)
+    // Not while its accounting record is still being written: do_exit
+    // announces it then (tgroup.acct_unwritten).
+    if (--group->traced_zombies == 0 && group->exit_notify_deferred && !group->acct_unwritten)
         exit_notify_process_locked(group->leader, notes);
 }
 
@@ -1266,6 +1268,7 @@ noreturn void do_exit(struct task *task, int status) {
         }
         unlock(&task->group->lock);
         struct task *parent = leader->parent;
+        task->group->acct_unwritten = acct_pending;
         // A pid namespace's init died: the namespace goes with it. Nothing
         // more is forked into it, and every process still inside -- in it
         // or in one made inside it -- is killed (zap_pid_ns_processes).
@@ -1287,6 +1290,11 @@ noreturn void do_exit(struct task *task, int status) {
             // can attach to it -- but it is announced, and becomes reapable,
             // only when the last of them is released.
             leader->zombie = true;
+            task->group->exit_notify_deferred = true;
+        } else if (acct_pending) {
+            // Its accounting record goes first, below, and then the exit is
+            // announced (tgroup.acct_unwritten): reaped before the record was
+            // written, a process was missing from the file its parent read.
             task->group->exit_notify_deferred = true;
         } else {
             // POSIX/Linux autoreap happens in here too: a parent that has
@@ -1318,9 +1326,19 @@ noreturn void do_exit(struct task *task, int status) {
     unlock(&pids_lock);
 
     // The first point past the locked region, so the append cannot deadlock
-    // against anything do_exit was holding.
-    if (acct_pending)
+    // against anything do_exit was holding. Then the exit it held back is
+    // announced, into the same notes, settled below with the rest -- unless
+    // a thread zombie still holds it, whose release announces it.
+    if (acct_pending) {
         acct_write(&acct_rec);
+        complex_lockt(&pids_lock, 0);
+        struct tgroup *dead_group = leader->group;
+        dead_group->acct_unwritten = false;
+        if (dead_group->exit_notify_deferred && dead_group->traced_zombies == 0 &&
+                leader->parent != NULL)
+            exit_notify_process_locked(leader, &notes);
+        unlock(&pids_lock);
+    }
     if (cgroup_left != NULL) {
         cgroup2_note_membership_change(cgroup_left);
         free(cgroup_left);

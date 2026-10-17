@@ -1040,6 +1040,14 @@ struct tgroup {
     // timer is armed (kernel/time.c, posix_timer_process_cpu_refresh). A fork
     // starts it at 0: the child's CPU is its own. At the end, as above.
     _Atomic uint64_t cpu_clock_published_ns;
+    // The process has exited and its accounting record (BSD acct) is not
+    // written yet: do_exit writes it once its locks are gone, and until then
+    // the exit is not announced -- no SIGCHLD, no zombie to reap -- as on
+    // Linux, where acct_process runs before exit_notify. Announced first, a
+    // parent could reap the process and turn accounting off before its record
+    // was there: tests/manual/acct_records' namespace case lost it 4 runs in
+    // 5 on an iPhone 12. Lock: pids_lock. At the end, as above.
+    bool acct_unwritten;
 };
 
 // Is this thread group the leader of its session? Linux keeps this as a
