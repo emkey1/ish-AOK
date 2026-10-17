@@ -15018,12 +15018,15 @@ static NSURL *ISHWorkspaceBrowserURLFromInput(NSString *input) {
 
     if (!ISHWorkspaceUsesModernStyle()) {
         _newWorkspaceButton = [self workspacesActionButtonWithTitle:NSLocalizedString(@"New Workspace", @"Desktops tool button") action:@selector(openNewWorkspaceFromApplet:)];
+        _newWorkspaceButton.accessibilityHint = NSLocalizedString(@"Creates a new empty workspace desktop.", @"Accessibility hint for new workspace button");
         [_contentStack addArrangedSubview:_newWorkspaceButton];
         _closeHiddenButton = [self workspacesActionButtonWithTitle:NSLocalizedString(@"Close Hidden Windows", @"Desktops tool button") action:@selector(confirmCloseHiddenWindows:)];
+        _closeHiddenButton.accessibilityHint = NSLocalizedString(@"Closes windows that are not visible in any workspace.", @"Accessibility hint for close hidden windows button");
         [_contentStack addArrangedSubview:_closeHiddenButton];
         _sessionButton = [self workspacesIconButtonWithSymbol:@"arrow.down.doc"
                                                      fallback:NSLocalizedString(@"Session", @"Desktops tool session button label")
                                                        action:@selector(sessionActionsFromApplet:)];
+        _sessionButton.accessibilityHint = NSLocalizedString(@"Shows session options like export or import.", @"Accessibility hint for session options button");
         [_contentStack addArrangedSubview:_sessionButton];
     } else {
         // Modern folds the Layout Manager into this applet as two icons.
@@ -15034,8 +15037,11 @@ static NSURL *ISHWorkspaceBrowserURLFromInput(NSString *input) {
         _saveDesktopsButton = [self workspacesIconButtonWithSymbol:@"square.and.arrow.down"
                                                           fallback:NSLocalizedString(@"Save", @"Desktops tool save button label")
                                                             action:@selector(saveLayoutFromApplet:)];
+        _saveDesktopsButton.accessibilityHint = NSLocalizedString(@"Saves the current workspace layout.", @"Accessibility hint for save workspace layout button");
         [layoutRow addArrangedSubview:_saveDesktopsButton];
-        [layoutRow addArrangedSubview:[self workspacesIconButtonWithSymbol:@"arrow.clockwise" fallback:NSLocalizedString(@"Restore", @"Desktops tool restore button label") action:@selector(restoreLayoutFromApplet:)]];
+        UIButton *restoreButton = [self workspacesIconButtonWithSymbol:@"arrow.clockwise" fallback:NSLocalizedString(@"Restore", @"Desktops tool restore button label") action:@selector(restoreLayoutFromApplet:)];
+        restoreButton.accessibilityHint = NSLocalizedString(@"Restores the saved workspace layout.", @"Accessibility hint for restore workspace layout button");
+        [layoutRow addArrangedSubview:restoreButton];
         // In the row, as asked. The SAME symbol the shell-mode terminal uses for
         // its session control (arrow.down.doc, TerminalViewController's save
         // button), so the two modes say "session" the same way.
@@ -15048,6 +15054,7 @@ static NSURL *ISHWorkspaceBrowserURLFromInput(NSString *input) {
         _sessionButton = [self workspacesIconButtonWithSymbol:@"arrow.down.doc"
                                                      fallback:NSLocalizedString(@"Session", @"Desktops tool session button label")
                                                        action:@selector(sessionActionsFromApplet:)];
+        _sessionButton.accessibilityHint = NSLocalizedString(@"Shows session options like export or import.", @"Accessibility hint for session options button");
         [layoutRow addArrangedSubview:_sessionButton];
         [_contentStack addArrangedSubview:layoutRow];
     }

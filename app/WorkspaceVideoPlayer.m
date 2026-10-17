@@ -209,8 +209,10 @@ static BOOL ISHVideoURLLooksLikePlaylist(NSURL *url) {
 // here, above the picture, where they stay reachable while it plays.
 - (void)buildBar {
     _openURLButton = [self barButtonWithTitle:NSLocalizedString(@"Open URL", @"Video player toolbar button") symbol:@"link" action:@selector(openURLTapped)];
+    _openURLButton.accessibilityLabel = NSLocalizedString(@"Open URL", @"Accessibility label for the Open URL button");
     _openURLButton.accessibilityHint = NSLocalizedString(@"Plays a video stream or an .m3u playlist from a web address.", @"Accessibility hint for the Open URL button");
     _channelsButton = [self barButtonWithTitle:NSLocalizedString(@"Channels", @"Video player toolbar button: list playlist entries") symbol:@"list.bullet" action:@selector(channelsTapped)];
+    _channelsButton.accessibilityLabel = NSLocalizedString(@"Channels", @"Accessibility label for the Channels button");
     _channelsButton.accessibilityHint = NSLocalizedString(@"Lists the entries of the loaded playlist.", @"Accessibility hint for the Channels button");
     _channelsButton.hidden = YES;
     UIView *spacer = [UIView new];

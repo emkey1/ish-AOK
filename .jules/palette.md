@@ -57,3 +57,7 @@
 ## 2024-10-16 - Contextual Accessibility Hints for Vague Terminology
 **Learning:** Toolbar buttons using terse or ambiguous labels like "Model" or "Chats" may not clearly convey their function to screen reader users, even if visually apparent from the context.
 **Action:** Always provide an `accessibilityHint` to clarify the outcome of activating the button when its label uses vague terminology (e.g., "Shows a list of all configured models." for a "Model" button).
+
+## $(date +%Y-%m-%d) - Add accessibility hints and labels to Workspace applets
+**Learning:** In iOS UI development, `UIButton` instances configured with a symbol using `barButtonWithTitle` or similar methods may not have their titles reliably announced by VoiceOver, depending on the view hierarchy or system version. Additionally, symbols used for layout management (like `arrow.clockwise` for restore or `arrow.down.doc` for session) are not always self-explanatory to visually impaired users.
+**Action:** When adding icon buttons or buttons with a complex combination of title and symbol, always explicitly set the `accessibilityLabel`. Furthermore, for actions where the visual icon doesn't completely explain the result (like workspace layout management), always provide an `accessibilityHint` that concisely describes the outcome (e.g., "Saves the current workspace layout.").
