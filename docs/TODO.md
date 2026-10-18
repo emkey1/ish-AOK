@@ -145,6 +145,20 @@ freeze (2026-09-25); their full text is in
 
 ## Diagnosed, not fixed
 
+### The arm64 JIT's MOPS end state is not the architecture's, and arm64_mops checks it
+
+Found 2026-10-18 running `tests/manual/arm64_mops.c` in AOK VM's guests (aok-vm aok/cputest), where QEMU fails it with `-cpu max` and the M5 under HVF has no MOPS to answer.
+
+**Established.** QEMU implements the Arm ARM's option A, and the Arm ARM's CPYP/CPYM/CPYE text was read for both options. `jit/arm64_mops.c`'s comment claims that after the triple Xd and Xs have always advanced by the original Xn, "the same under both of the architecture's register options". That is true of a forward copy only.
+- **Backward CPY.** Option A leaves Xd and Xs unchanged, at the start addresses, while Xn counts down. Option B moves them down to the start. Either way they end at the start; our gadget (`control.S`, "Xd and Xs advance once everything is done") ends at start + n.
+- **A count with bit 63 set.** The prologue saturates it to 0x7FFFFFFFFFFFFFFF, so the copy or set runs until it faults. Ours does nothing and leaves Xn 0.
+- **Xn mid-operation.** Option A's forward Xn is negative (-remaining). The test's "cpyf fault: Xn is what is left from the hole" assumes a positive count, which is option B's format.
+- **The test's cpuinfo read.** It reads `/proc/cpuinfo` 512 bytes per `fgets`, so " mops" past byte 512 of a long Features line (QEMU max's is over 600) is not seen.
+
+Nothing reads the end registers after a triple (glibc keeps its own copy of the destination), so no program is known to be affected. A program passing a negative size would fault on hardware and silently do nothing here.
+
+**Next step.** Make the gadget end a backward CPY with Xd and Xs at the start, and saturate a negative count. Then make `arm64_mops.c` check the architecture: the end registers by direction, Xn's magnitude, and a fault for the negative count (or drop that case). Read cpuinfo with a larger buffer or by Features token. AOK VM's copy of the test changes with it.
+
 ### A native bash ignored SIGKILL (unconfirmed, seen once)
 
 While reproducing the above, a `/AOK/native/bash` at pid 16 survived
