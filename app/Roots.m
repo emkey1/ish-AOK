@@ -538,6 +538,38 @@ static void WriteRootMetadata(NSURL *rootURL, NSDictionary<NSString *, id> *meta
     }
 }
 
+// A deleted root's directory between its rename aside and its removal; see
+// destroyRootNamed:. RootNameIsValid refuses a leading '.', so no root can
+// have such a name.
+static NSString *const kRootsTrashPrefix = @".trash-";
+
+// What a delete left: trash that its removal did not finish, and a directory
+// holding nothing but ish-root.plist, which no root ever is (one such was left
+// by the half-failed deletes this replaces). Removed in the background, so a
+// big one costs the launch nothing.
+static void SweepRootsTrash(NSURL *rootsDir, NSArray<NSString *> *entries) {
+    NSMutableArray<NSURL *> *sweep = [NSMutableArray array];
+    for (NSString *entry in entries) {
+        NSURL *url = [rootsDir URLByAppendingPathComponent:entry];
+        if ([entry hasPrefix:kRootsTrashPrefix]) {
+            [sweep addObject:url];
+            continue;
+        }
+        NSArray<NSString *> *contents = [NSFileManager.defaultManager contentsOfDirectoryAtPath:url.path error:nil];
+        if (contents.count == 1 && [contents.firstObject isEqualToString:kRootMetadataFileName])
+            [sweep addObject:url];
+    }
+    if (sweep.count == 0)
+        return;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        for (NSURL *url in sweep) {
+            NSError *error = nil;
+            if (![NSFileManager.defaultManager removeItemAtURL:url error:&error])
+                NSLog(@"Could not sweep %@ from the roots directory: %@", url.lastPathComponent, error);
+        }
+    });
+}
+
 static BOOL RootURLLooksValid(NSURL *url) {
     if (url == nil)
         return NO;
@@ -907,7 +939,10 @@ static NSString *PreferredDefaultRootName(NSOrderedSet<NSString *> *roots) {
             if (error != nil) {
                 NSLog(@"Roots: couldn't list roots: %@", error);
             }
+            SweepRootsTrash(rootsDir, rootNames);
             for (NSString *rootName in rootNames) {
+                if ([rootName hasPrefix:@"."])
+                    continue;   // trash (see destroyRootNamed:), or the system's
                 if (RootURLLooksValid([self rootUrl:rootName])) {
                     [roots addObject:rootName];
                 } else {
@@ -1054,6 +1089,18 @@ static NSString *PreferredDefaultRootName(NSOrderedSet<NSString *> *roots) {
     return [RootsDir() URLByAppendingPathComponent:name];
 }
 
+// BASE, or BASE_2, BASE_3...: the first that is neither an installed root nor
+// anything else already in the roots directory, which a move into it would
+// collide with. ('_', not a space, so the name also passes RootNameIsValid.)
+- (NSString *)unusedRootNameFrom:(NSString *)base {
+    NSString *name = base;
+    unsigned suffix = 2;
+    while ([self.roots containsObject:name] ||
+           [NSFileManager.defaultManager fileExistsAtPath:[self rootUrl:name].path])
+        name = [NSString stringWithFormat:@"%@_%u", base, suffix++];
+    return name;
+}
+
 // The guest ABI of a root's own programs, from the ELF header of the first of
 // its usual binaries that is a real file: a root imported from a tarball (or
 // renamed, or made by hand) records none, and its name says nothing reliable.
@@ -1095,6 +1142,23 @@ static NSString *GuestABIOfRootBinaries(NSURL *rootURL) {
     return nil;
 }
 
+// What GuestABIOfRootBinaries found, by root name, for this run of the app.
+// Kept in memory and never written back into the root: a lookup runs whenever
+// the list redraws, which is also while a delete is taking the root apart, and
+// a write then put ish-root.plist back into a directory half removed -- the
+// delete's last rmdir failed and left it behind (bip, 2026-10-18). Imports
+// record the ABI in the root's metadata, at a moment nothing else touches it.
+static os_unfair_lock gDetectedABILock = OS_UNFAIR_LOCK_INIT;
+static NSMutableDictionary<NSString *, NSString *> *gDetectedABIs;
+
+static void ForgetDetectedABI(NSString *name) {
+    if (name == nil)
+        return;
+    os_unfair_lock_lock(&gDetectedABILock);
+    [gDetectedABIs removeObjectForKey:name];
+    os_unfair_lock_unlock(&gDetectedABILock);
+}
+
 - (nullable NSString *)guestABIForRootNamed:(NSString *)name {
     NSURL *rootURL = [self rootUrl:name];
     NSDictionary<NSString *, id> *metadata = ReadRootMetadata(rootURL);
@@ -1103,14 +1167,22 @@ static NSString *GuestABIOfRootBinaries(NSURL *rootURL) {
         return guestABI;
 
     // What the root's programs are, ahead of what its name matches in the
-    // catalogue; recorded, so it is read once.
-    NSString *found = GuestABIOfRootBinaries(rootURL);
-    if (found != nil) {
-        NSMutableDictionary<NSString *, id> *updated = [metadata mutableCopy] ?: [NSMutableDictionary dictionary];
-        updated[kRootMetadataGuestABIKey] = found;
-        WriteRootMetadata(rootURL, updated);
-        return found;
+    // catalogue; looked at once a run.
+    os_unfair_lock_lock(&gDetectedABILock);
+    NSString *found = gDetectedABIs[name];
+    os_unfair_lock_unlock(&gDetectedABILock);
+    if (found == nil && RootURLLooksValid(rootURL)) {
+        found = GuestABIOfRootBinaries(rootURL);
+        if (found != nil) {
+            os_unfair_lock_lock(&gDetectedABILock);
+            if (gDetectedABIs == nil)
+                gDetectedABIs = [NSMutableDictionary dictionary];
+            gDetectedABIs[name] = found;
+            os_unfair_lock_unlock(&gDetectedABILock);
+        }
     }
+    if (found != nil)
+        return found;
 
     NSString *choiceGuestABI = BundledRootChoiceMatchingName(name)[kBundledRootGuestABIKey];
     return choiceGuestABI.length != 0 ? choiceGuestABI : nil;
@@ -1369,13 +1441,7 @@ static BOOL ISHFileProviderUnavailableOnThisPlatform(void) {
         return NO;
     }
 
-    NSString *baseName = selectedChoice[kBundledRootImportNameKey];
-    NSString *importName = baseName;
-    unsigned suffix = 2;
-    while ([self.roots containsObject:importName]) {
-        // Use '_' (not a space) so the deduped name also passes RootNameIsValid.
-        importName = [NSString stringWithFormat:@"%@_%u", baseName, suffix++];
-    }
+    NSString *importName = [self unusedRootNameFrom:selectedChoice[kBundledRootImportNameKey]];
 
     BOOL ok = [self importRootFromArchive:archive
                                      name:importName
@@ -1397,11 +1463,7 @@ static BOOL ISHFileProviderUnavailableOnThisPlatform(void) {
 // Everything in it is the kernel's to provision at boot (kernel/native_root.c),
 // so there is no archive, no progress to report and nothing to cancel.
 - (BOOL)createNativeRootFromChoice:(NSDictionary<NSString *, NSString *> *)choice error:(NSError **)error {
-    NSString *baseName = choice[kBundledRootImportNameKey];
-    NSString *name = baseName;
-    unsigned suffix = 2;
-    while ([self.roots containsObject:name])
-        name = [NSString stringWithFormat:@"%@_%u", baseName, suffix++];
+    NSString *name = [self unusedRootNameFrom:choice[kBundledRootImportNameKey]];
     if (!RootNameIsValid(name, error))
         return NO;
     NSURL *destination = [self rootUrl:name];
@@ -1523,6 +1585,11 @@ void root_progress_callback(void *cookie, double progress, const char *message, 
         [NSFileManager.defaultManager removeItemAtURL:tempDestination error:nil];
         return NO;
     }
+    // What its programs are, recorded before anything can see the root (a
+    // catalogue install overwrites this with the catalogue's answer after).
+    NSString *detectedABI = GuestABIOfRootBinaries(destination);
+    if (detectedABI != nil)
+        WriteRootMetadata(destination, @{kRootMetadataGuestABIKey: detectedABI});
 
     [self mutateRoots:^(NSMutableOrderedSet<NSString *> *roots) {
         [roots addObject:name];
@@ -1738,17 +1805,30 @@ static BOOL RootIsInstalled(Roots *roots, NSString *name, NSError **error) {
         return NO;
     // Before it goes: afterwards there is no directory left to name it by.
     uint64_t sessionRoot = ISHSessionRootIdentityNamed(name);
-    if (![NSFileManager.defaultManager removeItemAtURL:[self rootUrl:name] error:error]) {
+    // Out of the way in one rename, then removed: a removal that stops part
+    // way -- an entry it may not delete, or something writing into the tree
+    // meanwhile -- used to leave a directory that was no longer a root (its
+    // meta.db already gone) but still held the name, so the next install of
+    // that name failed ("an item with the same name already exists"). A
+    // rename either happens or does not, and whatever of the trash survives
+    // its removal is swept at the next launch (SweepRootsTrash).
+    NSURL *trash = [RootsDir() URLByAppendingPathComponent:
+        [kRootsTrashPrefix stringByAppendingString:NSUUID.UUID.UUIDString]];
+    if (trash == nil || ![NSFileManager.defaultManager moveItemAtURL:[self rootUrl:name] toURL:trash error:error]) {
         // The store is still there, so put the guest's view of it back rather
         // than leaving a root that is installed but no longer reachable.
         [self exposeRootNamed:name];
         return NO;
     }
+    ForgetDetectedABI(name);
     ISHSessionsDeleteForRoot(sessionRoot);
     [self removeExposedMountPointForRootNamed:name];
     [self mutateRoots:^(NSMutableOrderedSet<NSString *> *roots) {
         [roots removeObject:name];
     }];
+    NSError *removeError = nil;
+    if (![NSFileManager.defaultManager removeItemAtURL:trash error:&removeError])
+        NSLog(@"Deleted %@, but its files are not all gone (swept at the next launch): %@", name, removeError);
     return YES;
 }
 
@@ -1797,6 +1877,8 @@ static BOOL RootIsInstalled(Roots *roots, NSString *name, NSError **error) {
     // rest of the session -- reading a data/ and meta.db that had been moved
     // away underneath it -- and the name the app now showed named nothing at
     // all, so there was no renamed entry to chroot into.
+    ForgetDetectedABI(name);
+    ForgetDetectedABI(newName);
     [self exposeRootNamed:newName];
     return YES;
 }
