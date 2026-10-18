@@ -4,9 +4,10 @@ Date: 2026-10-17. Target: build 562.
 
 ## Status (2026-10-18)
 
-Patches 1-7 and 9 are in, 8 for Alpine, and 10 but for a device run.
-Alpine 3.24.2 ppc64le runs on the Mac CLI (apk over HTTPS, gcc, Python,
-strace); the manual suite runs on it; the differential tests in
+Patches 1-7, 9 and 10 are in, and 8 for Alpine. Alpine 3.24.2 ppc64le
+runs on the Mac CLI and as a device's booted root (the M4 iPad, iOS 27,
+2026-10-18: apk over HTTPS, gcc, Python, strace; the manual suite 366
+passed, none failed); the manual suite passes on the Mac too; the differential tests in
 `tests/ppc64/` match qemu-ppc64le except where qemu is wrong (their headers
 say where). There is no core dump writer for any guest, and a checkpoint
 copies `cpu_state` whole, so 7's last two items needed nothing. The
