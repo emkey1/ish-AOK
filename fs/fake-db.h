@@ -43,6 +43,9 @@ struct fakefs_db {
         sqlite3_stmt *xattr_remove;
         sqlite3_stmt *xattr_drop_inode;
         sqlite3_stmt *try_cleanup_xattrs;
+        // The persistent allocation mark, meta.next_inode (schema version 10).
+        sqlite3_stmt *next_inode_get;
+        sqlite3_stmt *next_inode_put;
     } stmt;
     // Whether this mount may hold a security.capability anywhere. Nearly no
     // root has one, and every file's first write asks (the killpriv in

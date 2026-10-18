@@ -209,11 +209,31 @@ static inode_t fakefs_next_inode_init(struct fakefs_db *fs);
 // Seen in the field as a gcc temporary, /tmp/ccKNBeAg.o, wearing the mode of
 // the directory /rbind, which aborted every in-guest build that reused the name.
 //
-// next_inode is a per-fakefs_db counter seeded once from max(stats.inode) and
-// then kept in memory, so a second allocator on the same meta.db -- another ish
-// process on the same root, or that root mounted twice -- hands out the very
-// numbers this one is working through. Take the constraint failure as the
-// signal it is: re-seed from the database and try again.
+// next_inode is a per-fakefs_db counter kept in memory, so a second allocator
+// on the same meta.db -- another ish process on the same root, or that root
+// mounted twice -- hands out the very numbers this one is working through.
+// Take the constraint failure as the signal it is: re-seed from the database
+// and try again.
+//
+// A number is also never handed out twice, even after its file is gone. It
+// used to be: the counter was seeded from max(stats.inode) + 1, so deleting the
+// newest file freed its number for the next file or directory -- at the next
+// boot, or within seconds in the Files extension, which remounts after a few
+// idle seconds. The Files app names items by these numbers and keeps the names
+// for days, so a delete, save, or move of a gone file landed on whatever had
+// the number now (/run, recreated at every boot, was a likely heir). So every
+// allocation also starts at, and advances, meta.next_inode -- in the same
+// transaction as the stats row, and across every allocator on the root.
+static inode_t next_inode_mark(struct fakefs_db *fs) {
+    // select next_inode from meta
+    inode_t mark = 0;
+    if (sqlite3_step(fs->stmt.next_inode_get) == SQLITE_ROW)
+        mark = (inode_t) sqlite3_column_int64(fs->stmt.next_inode_get, 0);
+    sqlite3_reset(fs->stmt.next_inode_get);
+    // Past 32 bits the mount compacts (fakefs_inode_namespace_needs_compaction)
+    return mark > UINT32_MAX ? 0 : mark;
+}
+
 inode_t path_create(struct fakefs_db *fs, const char *path, struct ish_stat *stat) {
     inode_t inode = 0;
     bool created = false;
@@ -221,6 +241,9 @@ inode_t path_create(struct fakefs_db *fs, const char *path, struct ish_stat *sta
     // again to a writer that committed in between; a couple of rounds is
     // already generous.
     for (int attempt = 0; attempt < 8; attempt++) {
+        inode_t mark = next_inode_mark(fs);
+        if (fakefs_db_shared(fs)->next_inode < mark)
+            fakefs_db_shared(fs)->next_inode = mark;
         inode = fakefs_db_shared(fs)->next_inode++;
         // insert into stats (inode, stat) values (?, ?)
         sqlite3_bind_int64(fs->stmt.path_create_stat, 1, inode);
@@ -243,6 +266,9 @@ inode_t path_create(struct fakefs_db *fs, const char *path, struct ish_stat *sta
         printk("ERROR: fakefs path_create(%s): could not claim a free inode\n", path);
         return 0;
     }
+    // update meta set next_inode = max(coalesce(next_inode, 0), ?)
+    sqlite3_bind_int64(fs->stmt.next_inode_put, 1, inode + 1);
+    db_exec_reset(fs, fs->stmt.next_inode_put);
     // insert or replace into paths values (?, ?)
     bind_path(fs->stmt.path_create_path, 1, path);
     sqlite3_bind_int64(fs->stmt.path_create_path, 2, inode);
@@ -430,7 +456,9 @@ static void sqlite_func_change_prefix(sqlite3_context *context, int argc, sqlite
 }
 
 static bool fakefs_inode_namespace_needs_compaction(struct fakefs_db *fs) {
-    sqlite3_stmt *statement = db_prepare(fs, "select max(inode) from stats");
+    // meta.next_inode only ever grows, so it reaches the limit first.
+    sqlite3_stmt *statement = db_prepare(fs, "select max(coalesce((select max(inode) from stats), 0), "
+                                             "coalesce((select next_inode from meta), 0) - 1)");
     bool needs_compaction = false;
     if (sqlite3_step(statement) == SQLITE_ROW && sqlite3_column_type(statement, 0) != SQLITE_NULL) {
         uint64_t max_inode = (uint64_t) sqlite3_column_int64(statement, 0);
@@ -441,7 +469,8 @@ static bool fakefs_inode_namespace_needs_compaction(struct fakefs_db *fs) {
 }
 
 static inode_t fakefs_next_inode_init(struct fakefs_db *fs) {
-    sqlite3_stmt *statement = db_prepare(fs, "select coalesce(max(inode), 0) from stats");
+    sqlite3_stmt *statement = db_prepare(fs, "select max(coalesce((select max(inode) from stats), 0), "
+                                             "coalesce((select next_inode from meta), 0) - 1)");
     inode_t next_inode = 1;
     if (sqlite3_step(statement) == SQLITE_ROW)
         next_inode = (inode_t) sqlite3_column_int64(statement, 0) + 1;
@@ -508,6 +537,8 @@ static void db_prepare_statements(struct fakefs_db *fs) {
     fs->stmt.xattr_remove = db_prepare(fs, "delete from xattrs where inode = ? and name = ?");
     fs->stmt.xattr_drop_inode = db_prepare(fs, "delete from xattrs where inode = ?");
     fs->stmt.try_cleanup_xattrs = db_prepare(fs, "delete from xattrs where inode = ?1 and not exists (select 1 from paths where inode = ?1)");
+    fs->stmt.next_inode_get = db_prepare(fs, "select next_inode from meta");
+    fs->stmt.next_inode_put = db_prepare(fs, "update meta set next_inode = max(coalesce(next_inode, 0), ?)");
 }
 
 // Session pragmas. journal_mode is a property of the database file, not of the
@@ -687,6 +718,8 @@ void fake_db_finalize_statements(struct fakefs_db *fs) {
     sqlite3_finalize(fs->stmt.xattr_remove);
     sqlite3_finalize(fs->stmt.xattr_drop_inode);
     sqlite3_finalize(fs->stmt.try_cleanup_xattrs);
+    sqlite3_finalize(fs->stmt.next_inode_get);
+    sqlite3_finalize(fs->stmt.next_inode_put);
     memset(&fs->stmt, 0, sizeof(fs->stmt));
 }
 

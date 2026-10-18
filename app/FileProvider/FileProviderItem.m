@@ -7,6 +7,8 @@
 
 #import <MobileCoreServices/MobileCoreServices.h>
 #include <sys/stat.h>
+#include <sys/mount.h>
+#include <copyfile.h>
 #include <dirent.h>
 #import "../AppGroup.h"
 #import "FileProviderExtension.h"
@@ -95,6 +97,11 @@ NSFileProviderItemIdentifier ISHFileProviderInnerIdentifier(NSFileProviderItemId
 @property (readonly) NSFileProviderItemIdentifier identifier;
 @property (readonly) int fd;
 @property (readonly) BOOL isRoot;
+// The guest path the descriptor was opened by, from the db row that named the
+// inode. A descriptor's own path (F_GETPATH) is only a name: once the file is
+// unlinked or replaced it still reports where the file WAS, which may now be
+// another file entirely.
+@property (readonly, nullable) NSString *openedPath;
 
 @end
 
@@ -183,8 +190,10 @@ NSFileProviderItemIdentifier ISHFileProviderInnerIdentifier(NSFileProviderItemId
                 // on the fallback covers the same hazard for every other type.
                 fd = openat(self.mount->root_fd, fix_path(host_path), O_RDONLY | O_NONBLOCK);
             }
-            if (fd != -1)
+            if (fd != -1) {
+                _openedPath = [NSFileManager.defaultManager stringWithFileSystemRepresentation:path length:strlen(path)];
                 break;   // stop at the first path that opens
+            }
             if (errno != ENOENT)
                 break;   // a real error: report it rather than trying more rows
         }
@@ -211,6 +220,8 @@ NSFileProviderItemIdentifier ISHFileProviderInnerIdentifier(NSFileProviderItemId
         return @"";
     if (self.isVirtualItem)
         return self.virtualPath;
+    if (self.openedPath != nil)
+        return self.openedPath;
     char path[PATH_MAX] = "";
     int err = fcntl(_fd, F_GETPATH, path);
     [self handleError:err inFunction:@"getpath"];
@@ -265,6 +276,8 @@ NSFileProviderItemIdentifier ISHFileProviderInnerIdentifier(NSFileProviderItemId
     return ISHFileProviderComposeIdentifier(self.rootName, _identifier);
 }
 - (NSFileProviderItemIdentifier)parentItemIdentifier {
+    if (self.parentIdentifierOverride != nil)
+        return self.parentIdentifierOverride;
     if (self.isDomainRoot)
         return NSFileProviderRootContainerItemIdentifier;
     if (self.isRoot) {
@@ -445,27 +458,58 @@ static const unsigned ISHFileProviderChildItemCountCap = 2000;
     }
 }
 
+// Writes an edited copy back into the root. Only ever one regular file onto
+// one regular file, and in place: this used to remove the item's host path and
+// copy the new one in, and -removeItemAtURL: is recursive -- so an identifier
+// that resolved to a directory emptied it (Files materializes whole folders,
+// so a folder's copy coming back through here replaced the folder with a
+// snapshot of it -- or with as much of the snapshot as had been copied before
+// the disk filled), and a file whose copy failed was simply gone.
 - (void)saveFromURL:(NSURL *)url {
-    NSURL *itemURL = self.URL;
-    // Same nil-URL guard as loadToURL: (see there) -- itemURL is the copy
-    // DESTINATION here, so a nil value would throw on that side instead.
-    if (itemURL == nil) {
-        NSLog(@"saveFromURL: called on an item with no backing URL (path=%@); ignoring", self.path);
+    if (self.isDomainRoot || self.isRoot || self.isVirtualItem || !S_ISREG(self.ishStat.mode)) {
+        NSLog(@"saveFromURL: %@ is not a regular file in a root; not writing it", self.itemIdentifier);
         return;
     }
     NSLog(@"copying %@ from %@", self.path, url);
-    NSError *err;
+    int src = open(url.fileSystemRepresentation, O_RDONLY | O_NOFOLLOW);
+    struct stat srcStat;
+    if (src < 0 || fstat(src, &srcStat) < 0 || !S_ISREG(srcStat.st_mode)) {
+        NSLog(@"saveFromURL: %@ is not a readable regular file", url);
+        if (src >= 0)
+            close(src);
+        return;
+    }
     int rootLockFd = ISHAppGroupAcquireNamedLock(@"root", self.mountOwner.rootName ?: @"", YES, nil);
     [self.mountOwner.ioLock lock];
-    [NSFileManager.defaultManager removeItemAtURL:itemURL error:nil];
-    BOOL success = [NSFileManager.defaultManager copyItemAtURL:url
-                                                         toURL:itemURL
-                                                         error:&err];
+    // Write through the item's own descriptor's file, reopened for writing by
+    // the name it was opened under, and only if that name still reaches it.
+    char host_path[PATH_MAX * 3 + 2];
+    int dst = -1;
+    struct stat itemStat, dstStat;
+    if (fstat(_fd, &itemStat) == 0 &&
+        fake_path_to_host(self.path.fileSystemRepresentation, host_path, sizeof(host_path)) != NULL)
+        dst = openat(self.mount->root_fd, fix_path(host_path), O_WRONLY | O_NOFOLLOW);
+    NSString *failure = nil;
+    if (dst < 0 || fstat(dst, &dstStat) < 0)
+        failure = [NSString stringWithFormat:@"open: %s", strerror(errno)];
+    else if (dstStat.st_dev != itemStat.st_dev || dstStat.st_ino != itemStat.st_ino)
+        failure = @"the item's name now reaches a different file";
+    else {
+        // APFS writes copy on write, so the new contents need their own room;
+        // without it the copy would stop part way through the original.
+        struct statfs fs;
+        if (fstatfs(dst, &fs) == 0 && (uint64_t) fs.f_bavail * fs.f_bsize < (uint64_t) srcStat.st_size)
+            failure = @"not enough free space";
+        else if (fcopyfile(src, dst, NULL, COPYFILE_DATA) < 0 || ftruncate(dst, srcStat.st_size) < 0)
+            failure = [NSString stringWithFormat:@"copy: %s", strerror(errno)];
+    }
+    if (dst >= 0)
+        close(dst);
+    close(src);
     [self.mountOwner.ioLock unlock];
     ISHAppGroupReleaseLock(rootLockFd);
-    if (!success) {
-        NSLog(@"error copying to %@: %@", url, err);
-    }
+    if (failure != nil)
+        NSLog(@"saveFromURL: not saving %@ from %@: %@", self.path, url, failure);
 }
 
 - (void)dealloc {

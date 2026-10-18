@@ -137,6 +137,11 @@ int fakefs_rebuild(struct fakefs_db *fs, int root_fd) {
         }
     }
 
+    // The numbers start again from 1, so the allocation mark (path_create in
+    // fs/fake-db.c) follows them down.
+    char *set_mark = sqlite3_mprintf("update meta set next_inode = %lld", (long long) next_inode);
+    EXEC_RET(set_mark);
+    sqlite3_free(set_mark);
     EXEC_RET("drop table paths_old");
     EXEC_RET("drop table stats_old");
     EXEC_RET("drop table xattrs_old");

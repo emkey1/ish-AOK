@@ -180,6 +180,9 @@ static NSNumber *ISHFileProviderEnumeratorDurationMilliseconds(NSTimeInterval st
             errno = 0;
             continue;
         }
+        // Files files each item under its parentItemIdentifier, so it must be
+        // the identifier this folder was enumerated by.
+        item.parentIdentifierOverride = _item.itemIdentifier;
         [items addObject:item];
         errno = 0;
     }

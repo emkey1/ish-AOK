@@ -837,7 +837,8 @@ static void ISHFileProviderRetireOnMac(void) {
     ino_t inode;
     int rootLockFd = ISHFileProviderAcquireRootLock(rootName, YES);
     [mountOwner.ioLock lock];
-    BOOL worked = [self doCreateDirectoryAt:[parentPath stringByAppendingFormat:@"/%@", directoryName] mount:mountOwner.mount inode:&inode error:&error];
+    NSString *newPath = [parentPath stringByAppendingFormat:@"/%@", directoryName];
+    BOOL worked = [self doCreateDirectoryAt:newPath mount:mountOwner.mount inode:&inode error:&error];
     [mountOwner.ioLock unlock];
     ISHAppGroupReleaseLock(rootLockFd);
     if (!worked) {
@@ -900,7 +901,8 @@ static void ISHFileProviderRetireOnMac(void) {
     ino_t inode;
     int rootLockFd = ISHFileProviderAcquireRootLock(rootName, YES);
     [mountOwner.ioLock lock];
-    BOOL worked = [self doCreateFileAt:[parentPath stringByAppendingFormat:@"/%@", fileURL.lastPathComponent]
+    NSString *newPath = [parentPath stringByAppendingFormat:@"/%@", fileURL.lastPathComponent];
+    BOOL worked = [self doCreateFileAt:newPath
                             importFrom:fileURL
                                  mount:mountOwner.mount
                                  inode:&inode
@@ -920,6 +922,17 @@ static void ISHFileProviderRetireOnMac(void) {
         completionHandler(nil, error);
     else
         completionHandler(item, nil);
+}
+
+// Files is told what each item allows (-capabilities), but the actions below
+// are reached by identifier and never asked. A root folder, a virtual item
+// (an entry with no db row), or a path that is a root's own "/" is never
+// deleted, renamed, or moved, whatever the request says.
+static BOOL ISHFileProviderItemIsChangeable(FileProviderItem *item, NSFileProviderItemCapabilities needed) {
+    if ((item.capabilities & needed) != needed)
+        return NO;
+    NSString *path = item.path;
+    return path.length > 1 && [path hasPrefix:@"/"];
 }
 
 - (NSString *)pathFromURL:(NSURL *)url mount:(struct fakefs_mount *)mount {
@@ -972,11 +985,16 @@ static void ISHFileProviderRetireOnMac(void) {
         completionHandler(error);
         return;
     }
-    NSString *path = [self pathOfItemWithIdentifier:itemIdentifier error:&error];
-    if (path == nil) {
+    FileProviderItem *item = [self itemForIdentifier:itemIdentifier error:&error];
+    if (item == nil) {
         completionHandler(error);
         return;
     }
+    if (!ISHFileProviderItemIsChangeable(item, NSFileProviderItemCapabilitiesAllowsDeleting)) {
+        completionHandler([NSError errorWithDomain:NSCocoaErrorDomain code:NSFileWriteNoPermissionError userInfo:nil]);
+        return;
+    }
+    NSString *path = item.path;
     int rootLockFd = ISHFileProviderAcquireRootLock(rootName, YES);
     [mountOwner.ioLock lock];
     BOOL worked = [self doDelete:path mount:mountOwner.mount itemIdentifier:itemIdentifier error:&error];
@@ -1020,6 +1038,10 @@ static void ISHFileProviderRetireOnMac(void) {
         completionHandler(nil, error);
         return;
     }
+    if (!ISHFileProviderItemIsChangeable(item, NSFileProviderItemCapabilitiesAllowsRenaming)) {
+        completionHandler(nil, [NSError errorWithDomain:NSCocoaErrorDomain code:NSFileWriteNoPermissionError userInfo:nil]);
+        return;
+    }
     NSString *dstPath = [item.path.stringByDeletingLastPathComponent stringByAppendingPathComponent:itemName];
     int rootLockFd = ISHFileProviderAcquireRootLock(rootName, YES);
     [mountOwner.ioLock lock];
@@ -1057,11 +1079,20 @@ static void ISHFileProviderRetireOnMac(void) {
         completionHandler(nil, error);
         return;
     }
+    if (!ISHFileProviderItemIsChangeable(item, NSFileProviderItemCapabilitiesAllowsReparenting)) {
+        completionHandler(nil, [NSError errorWithDomain:NSCocoaErrorDomain code:NSFileWriteNoPermissionError userInfo:nil]);
+        return;
+    }
     if (newName == nil)
         newName = item.path.lastPathComponent;
+    // Join with an explicit slash: a root folder's path is "", and
+    // -stringByAppendingPathComponent: on "" gives a RELATIVE "name", which
+    // went into the db as a path no guest lookup can reach -- the moved file
+    // vanished from the guest while its host file sat in the root's top folder.
+    NSString *dstPath = [NSString stringWithFormat:@"%@/%@", parent.path, newName];
     int rootLockFd = ISHFileProviderAcquireRootLock(rootName, YES);
     [mountOwner.ioLock lock];
-    BOOL worked = [self doRename:item.path to:[parent.path stringByAppendingPathComponent:newName] mount:mountOwner.mount itemIdentifier:itemIdentifier error:&error];
+    BOOL worked = [self doRename:item.path to:dstPath mount:mountOwner.mount itemIdentifier:itemIdentifier error:&error];
     [mountOwner.ioLock unlock];
     ISHAppGroupReleaseLock(rootLockFd);
     if (!worked) {
@@ -1130,12 +1161,14 @@ static void ISHFileProviderRetireOnMac(void) {
     }
 }
 
-// Dead code, leaving it here just in case
+// The system does call this, when it evicts a materialized copy. It must not
+// write that copy back: edits already arrived through -itemChangedAtURL:, so
+// all a write-back can do is put an old copy over what the guest has written
+// since -- or, for a materialized folder, replace the folder with its snapshot.
 - (void)stopProvidingItemAtURL:(NSURL *)url {
     FileProviderItem *item = [self itemForIdentifier:[self persistentIdentifierForItemAtURL:url] error:nil];
     if (item == nil)
         return;
-    [item saveFromURL:url];
     [[NSFileManager defaultManager] removeItemAtURL:url error:nil];
     [NSFileProviderManager writePlaceholderAtURL:[NSFileProviderManager placeholderURLForURL:url]
                                     withMetadata:item

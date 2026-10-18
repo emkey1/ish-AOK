@@ -1584,6 +1584,12 @@ static struct migration {
     {
         FAKEFS_XATTRS_SCHEMA
     },
+    // version 10: the inode allocation mark, so a number is never reused
+    // (path_create in fs/fake-db.c). A build without it ignores the column.
+    {
+        "alter table meta add column next_inode integer;"
+        "update meta set next_inode = (select coalesce(max(inode), 0) + 1 from stats);"
+    },
 };
 
 int fakefs_migrate(struct fakefs_db *fs, int root_fd) {

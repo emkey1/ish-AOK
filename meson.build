@@ -2078,6 +2078,12 @@ if not meson.is_cross_build()
         include_directories: includes)
     test('zpool', zpool_test)
 
+    # fakefs never hands out an inode number twice on a root -- the Files
+    # extension names items by these numbers. See the test's header.
+    fakefs_inode_reuse_test = executable('fakefs_inode_reuse_test', ['fs/fake-inode-reuse-test.c'],
+        include_directories: includes, link_with: libfakefs)
+    test('fakefs_inode_reuse', fakefs_inode_reuse_test)
+
     # riscv64 decode.h check: RVC expansion + immediate reassembly against
     # llvm-mc-derived vectors (tests/riscv64/decode_vectors.h, checked in).
     # SHA-crypt ($5$/$6$) against the published vectors. An implementation that

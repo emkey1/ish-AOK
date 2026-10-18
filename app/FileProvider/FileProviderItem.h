@@ -38,6 +38,8 @@ FOUNDATION_EXPORT NSFileProviderItemIdentifier ISHFileProviderInnerIdentifier(NS
 - (int)openNewFDWithError:(NSError *_Nullable *)err;
 
 @property (readonly) NSString *path;
+// When set, -parentItemIdentifier returns this instead of computing one.
+@property (nullable, copy) NSFileProviderItemIdentifier parentIdentifierOverride;
 @property (readonly) ISHFileProviderMount *mountOwner;
 @property (readonly) struct fakefs_mount *mount;
 
