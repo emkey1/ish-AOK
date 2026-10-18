@@ -212,6 +212,12 @@ static inline const char *guest_abi_name(enum guest_abi abi) {
     return guest_abi_desc(abi).name;
 }
 
+// Whether this build runs programs of the guest ABI named NAME (its
+// guest_abi_desc name: "i386", "amd64", "arm64", "riscv64", "ppc64"): the
+// meson -Dguest_archs choice, which only the meson-built sources can see, so
+// the app asks here before offering a root it could not boot. kernel/exec.c.
+bool guest_abi_built(const char *name);
+
 static inline bool guest_abi_is_64bit(enum guest_abi abi) {
     return guest_abi_desc(abi).pointer_size == sizeof(amd64_guest_addr_t);
 }

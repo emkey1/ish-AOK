@@ -75,6 +75,11 @@ static NSString *const kBundledRootArchiveNameKey = @"archiveName";
 static NSString *const kBundledRootImportNameKey = @"importName";
 static NSString *const kBundledRootInitialWindowKey = @"initialWindow";
 static NSString *const kBundledRootGuestABIKey = @"guestABI";
+// An architecture added after build 561 is named by "guestArch" in place of
+// guestABI. Builds before it require guestABI, so they skip such an entry
+// instead of offering a root they cannot boot (560 labels an ABI it does not
+// know "i386"); this one reads either, and folds guestArch into guestABI.
+static NSString *const kBundledRootGuestArchKey = @"guestArch";
 // Groups arch variants of the same distro together in the picker UI (e.g. the
 // four Alpine entries below share family "alpine3233") so RootsTableViewController
 // can show one row per distro and offer architecture as a sub-choice, instead of
@@ -162,6 +167,12 @@ static NSArray<NSDictionary<NSString *, NSString *> *> *ParseRootManifest(NSData
             continue;
         }
         NSDictionary<NSString *, NSString *> *entry = rawEntry;
+        if (entry[kBundledRootGuestABIKey] == nil && [entry[kBundledRootGuestArchKey] isKindOfClass:NSString.class]) {
+            NSMutableDictionary<NSString *, NSString *> *fixedUp = [entry mutableCopy];
+            fixedUp[kBundledRootGuestABIKey] = entry[kBundledRootGuestArchKey];
+            [fixedUp removeObjectForKey:kBundledRootGuestArchKey];
+            entry = fixedUp;
+        }
         BOOL valid = YES;
         for (NSString *key in RequiredManifestKeys()) {
             id value = entry[key];
@@ -173,6 +184,13 @@ static NSArray<NSDictionary<NSString *, NSString *> *> *ParseRootManifest(NSData
         }
         if (!valid)
             continue;
+        // A root this build cannot boot is not offered: an architecture newer
+        // than the build, or one a trimmed build (ISH_GUEST_ARCHS) left out.
+        if (!guest_abi_built(entry[kBundledRootGuestABIKey].UTF8String)) {
+            NSLog(@"rootfs manifest (%@): entry '%@' is for %@, which this build does not run, skipping",
+                  source, entry[kBundledRootIdentifierKey], entry[kBundledRootGuestABIKey]);
+            continue;
+        }
         // The manifest can now arrive over the network, so the URL it hands the
         // downloader has to be one worth following. https only: a plain-http
         // entry would let anyone on the path choose the root filesystem a user
@@ -1036,11 +1054,63 @@ static NSString *PreferredDefaultRootName(NSOrderedSet<NSString *> *roots) {
     return [RootsDir() URLByAppendingPathComponent:name];
 }
 
+// The guest ABI of a root's own programs, from the ELF header of the first of
+// its usual binaries that is a real file: a root imported from a tarball (or
+// renamed, or made by hand) records none, and its name says nothing reliable.
+// A fakefs symlink is a small text file, so it is passed over, not followed.
+// Names as guest_abi_desc gives them; nil for none found, or an ELF this
+// emulator does not run (big-endian PowerPC, say).
+static NSString *GuestABIOfRootBinaries(NSURL *rootURL) {
+    static NSArray<NSString *> *candidates;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        candidates = @[@"bin/busybox", @"usr/bin/busybox", @"bin/bash", @"usr/bin/bash",
+                       @"usr/bin/coreutils", @"bin/ls", @"usr/bin/ls", @"usr/bin/env",
+                       @"bin/sh", @"usr/bin/dash", @"sbin/init", @"usr/lib/systemd/systemd"];
+    });
+    NSURL *data = [rootURL URLByAppendingPathComponent:@"data" isDirectory:YES];
+    for (NSString *path in candidates) {
+        NSFileHandle *file = [NSFileHandle fileHandleForReadingFromURL:[data URLByAppendingPathComponent:path] error:nil];
+        NSData *header = [file readDataUpToLength:20 error:nil];
+        [file closeAndReturnError:nil];
+        if (header.length < 20)
+            continue;
+        const uint8_t *h = header.bytes;
+        if (h[0] != 0x7f || h[1] != 'E' || h[2] != 'L' || h[3] != 'F')
+            continue;
+        BOOL is64 = h[4] == 2, littleEndian = h[5] == 1;
+        uint16_t machine = littleEndian ? (uint16_t) (h[18] | h[19] << 8) : (uint16_t) (h[18] << 8 | h[19]);
+        if (!is64 && littleEndian && machine == 3)
+            return @"i386";
+        if (is64 && littleEndian && machine == 62)
+            return @"amd64";
+        if (is64 && littleEndian && machine == 183)
+            return @"arm64";
+        if (is64 && littleEndian && machine == 243)
+            return @"riscv64";
+        if (is64 && littleEndian && machine == 21)
+            return @"ppc64";
+        return nil;
+    }
+    return nil;
+}
+
 - (nullable NSString *)guestABIForRootNamed:(NSString *)name {
-    NSDictionary<NSString *, id> *metadata = ReadRootMetadata([self rootUrl:name]);
+    NSURL *rootURL = [self rootUrl:name];
+    NSDictionary<NSString *, id> *metadata = ReadRootMetadata(rootURL);
     NSString *guestABI = metadata[kRootMetadataGuestABIKey];
     if ([guestABI isKindOfClass:NSString.class] && guestABI.length != 0)
         return guestABI;
+
+    // What the root's programs are, ahead of what its name matches in the
+    // catalogue; recorded, so it is read once.
+    NSString *found = GuestABIOfRootBinaries(rootURL);
+    if (found != nil) {
+        NSMutableDictionary<NSString *, id> *updated = [metadata mutableCopy] ?: [NSMutableDictionary dictionary];
+        updated[kRootMetadataGuestABIKey] = found;
+        WriteRootMetadata(rootURL, updated);
+        return found;
+    }
 
     NSString *choiceGuestABI = BundledRootChoiceMatchingName(name)[kBundledRootGuestABIKey];
     return choiceGuestABI.length != 0 ? choiceGuestABI : nil;

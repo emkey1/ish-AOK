@@ -107,6 +107,19 @@ static void amd64_trace_exec_attempt(const char *file, const char *argv);
 static void amd64_trace_exec_loader_failure(const char *stage, const char *file, enum guest_abi abi,
         struct elf_prg_info *ph, guest_addr_t bias, struct fd *fd, int err, const char *interp_name);
 
+bool guest_abi_built(const char *name) {
+    if (name == NULL)
+        return false;
+    static const struct { const char *name; bool built; } abis[] = {
+        {"i386", ISH_GUEST_I386}, {"amd64", ISH_GUEST_AMD64}, {"arm64", ISH_GUEST_ARM64},
+        {"riscv64", ISH_GUEST_RISCV64}, {"ppc64", ISH_GUEST_PPC64},
+    };
+    for (size_t i = 0; i < sizeof(abis) / sizeof(abis[0]); i++)
+        if (strcmp(abis[i].name, name) == 0)
+            return abis[i].built;
+    return false;
+}
+
 // Guest arches can be compiled out with meson -Dguest_archs=... (the
 // ISH_GUEST_* defines). This is the master gate: an ELF for a disabled arch
 // is simply not recognized, so every exec of one fails with ENOEXEC and no

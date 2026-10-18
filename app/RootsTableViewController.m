@@ -621,6 +621,19 @@ static UIColor *RootRowInUseAccentColor(void) {
     ISHWorkspaceRescaleTableView(self.tableView, ISHWorkspaceTextScaleForViewController(self));
 }
 
+// An installed root's architecture as the catalogue rows name it, or nil when
+// it cannot be told.
+- (nullable NSString *)_installedRootArchLabel:(NSString *)rootName {
+    if ([Roots.instance isNativeRootNamed:rootName])
+        return NSLocalizedString(@"native", @"Installed filesystem's architecture: the native root, which runs host programs");
+    NSString *abi = [Roots.instance guestABIForRootNamed:rootName];
+    if ([abi isEqualToString:@"amd64"])
+        return @"x86_64";
+    if ([abi isEqualToString:@"ppc64"])
+        return @"ppc64le";
+    return abi.length != 0 ? abi : nil;
+}
+
 - (UITableViewCell *)unscaledTableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
     if ([self sectionShowsOfficialChoices:indexPath.section] || [self sectionShowsCommunityChoices:indexPath.section]) {
         UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"BundledRootChoice"];
@@ -680,7 +693,11 @@ static UIColor *RootRowInUseAccentColor(void) {
         ident = @"Default Root";
     NSString *rootName = Roots.instance.roots[indexPath.row];
     UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:ident forIndexPath:indexPath];
-    cell.textLabel.text = rootName;
+    // The architecture beside the name, since a name is whatever the root was
+    // called when it was made or renamed and says nothing reliable about what
+    // its programs are (Roots guestABIForRootNamed: asks its binaries).
+    NSString *arch = [self _installedRootArchLabel:rootName];
+    cell.textLabel.text = arch != nil ? [NSString stringWithFormat:@"%@ (%@)", rootName, arch] : rootName;
 
     // "Mounted at <point>", and deliberately NOTHING when the root did not
     // mount. A root can pass every validity check the list is built from --
