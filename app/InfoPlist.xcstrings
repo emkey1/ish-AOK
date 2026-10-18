@@ -284,6 +284,71 @@
           }
         }
       }
+    },
+    "NSPhotoLibraryAddUsageDescription" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "iSH-AOK speichert Bilder in deiner Fotomediathek, wenn du „Bild sichern“ wählst."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "iSH-AOK saves images to your photo library when you choose Save Image."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "iSH-AOK guarda imágenes en tu fototeca cuando eliges Guardar imagen."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "iSH-AOK enregistre des images dans votre photothèque lorsque vous choisissez Enregistrer l’image."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「画像を保存」を選ぶと、iSH-AOK が画像を写真ライブラリに保存します。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이미지 저장을 선택하면 iSH-AOK가 이미지를 사진 보관함에 저장합니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O iSH-AOK salva imagens na sua fototeca quando você escolhe Salvar Imagem."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "iSH-AOK сохраняет изображения в вашу медиатеку, когда вы выбираете «Сохранить изображение»."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "当你选择“存储图像”时，iSH-AOK 会将图像存储到你的照片图库。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "當你選擇「儲存影像」時，iSH-AOK 會將影像儲存到你的照片圖庫。"
+          }
+        }
+      }
     }
   },
   "version" : "1.0"

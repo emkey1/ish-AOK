@@ -73,6 +73,8 @@
 	<string>Programs running in iSH will be allowed to track your location in the background.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>Programs running in iSH will be allowed to see your location.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>iSH-AOK saves images to your photo library when you choose Save Image.</string>
 	<key>NSUserActivityTypes</key>
 	<array>
 		<string>app.ish.scene</string>
