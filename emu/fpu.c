@@ -116,8 +116,16 @@ void fpu_ldm64(struct cpu_state *cpu, float64 *f) {
     fpush(FPU_M(*f));
     FPU_END();
 }
+// f points into guest memory, at the operand's 10 bytes. `*f` copies the
+// whole struct, 16 bytes, and an operand in the last 16 bytes of a page read
+// up to 6 bytes of whatever host memory followed it: a host fault when that
+// was unmapped (cc1's `fld tbyte [ebp-0x64]` at offset 0xff4, 2026-10-04,
+// taken for a stale TLB after exec). The read-prep gadget stages a crossing
+// operand, so only the 10 bytes are the guest's to read.
 void fpu_ldm80(struct cpu_state *cpu, float80 *f) {
-    fpush(*f);
+    float80 value = {0};
+    memcpy(&value, f, 10);
+    fpush(value);
 }
 
 // stores

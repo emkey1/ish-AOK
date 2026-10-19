@@ -18,7 +18,7 @@ drawn from the queue on 2026-10-19: what to keep, cut or add is yours.
 |---|---|---|
 | 1 | A 64-bit result read as -errno; a call through NULL reported as SI_KERNEL | **DONE** (15a1fb543): both fixed, i386's NULL call too; suite clean on five roots, ppc64 checked |
 | 2 | `list_remove` leaves a NULL node that a walk faults on | **DONE, a different fix** (2026-10-19): the audit ruled out re-initing; walks now treat a never-initialised head as empty, which is what crashed |
-| 3 | Exec hands a task stale TLB entries | open: healed by a retry, cause not found |
+| 3 | Exec hands a task stale TLB entries | **DONE: it never did** (2026-10-19): the heals were an x87 80-bit load reading 16 bytes for 10, off the end of a host page; gone from Apple hosts since the 10-06 gadget port, fixed for x86_64 hosts now |
 | 4 | Native programs share the host C library's static state | open: basename and four others done in 559; ten more names and the tz cache left |
 | 5 | Shortcuts Run Command: output over 256 KB, non-UTF-8 output, a reap timeout | open: fixes known to the line; proof needs a signed device build |
 | 6 | `signal_process_wake_one` late on the A10X | open: decide whether it is the device or a wake path |
@@ -94,24 +94,42 @@ Shortcuts users see (4, 5), then the release gate's one device failure (6).
 
 ## 3. Exec hands a task stale TLB entries
 
-**Why.** `concurrent_exec_tlb` (8-way fork+exec of cc1, 32 rounds) takes about
-one unmapped guest-execution fault per run on the i386 CLI (36 in 40 runs,
-2026-10-04). `jit_unmapped_guest_fault`'s flush-and-retry heals each one, and
-on the CLI too since 1342669c8, but a heal is not a cure: something gives a
-running task TLB entries for pages its new mm does not have.
+**Done 2026-10-19: exec never left stale TLB entries.** The heals were a
+different bug, already fixed on Apple hosts and fixed today for x86_64 ones.
 
-**Established:** `tlb_refresh` skips the flush when `tlb->mmu` and its change
-count match -- the #469 shape, a new mm at the old one's address with a
-colliding count. On 2026-10-09 48 runs gave no unwinding heal, so the rate
-has moved since 10-04, and one cause was closed then (TODO, *Stale TLB after
-exec*).
-
-**Next step.** Re-measure the rate at head. If it still happens, log the mmu
-pointer and change count at each unwind and whether the task had just
-exec'd.
-
-**Prove.** Zero heals over the same 40 runs, with the printk counted, and
-the cause named in the commit.
+- *Re-measured at head* (4d5fb4f57, MBP5, i386 root, printk on fd 555 with
+  the descriptor limit raised -- under ssh it is 256 there, and fd 555 then
+  fails to open, so the first "no heals" was the instrument): 40 runs of
+  `concurrent_exec_tlb` alone and 20 of four at once, **0 heals**.
+- *Control:* 1342669c8, where 36 runs in 40 healed on 2026-10-04, built from a
+  scratch clone, on a copy of the same root: **1 run in 40** on MBP5, nine
+  unwinds for one cc1 at one host address, 0x10decc000 -- the retry cap, so
+  eight flushes did not cure it. Not a race, then.
+- *The cause:* cc1's `fld tbyte [ebp-0x64]` (db 6d 9c), operand at
+  0xfffe3ff4, page offset 0xff4. The x87 m80 load then went through a C
+  helper, `fpu_ldm80(cpu, float80 *f)`, which copied `*f` whole: 16 bytes
+  (`ldr x1, [x8]; ldr x2, [x8, #8]` in the control binary). The read-prep
+  gadget staged a copy only for an operand whose 10 bytes cross, so at
+  offsets 0xff1-0xff6 the helper read 1-6 bytes of the next host page; the
+  operand at host 0x10decbff4 makes the second load fault at exactly
+  0x10decc000. The x87 gadget port (2026-10-06) took aarch64 hosts off that
+  helper, which is why the heals stopped before dc5d53ae6, whose change-count
+  fix was real but was never what they were.
+- *Still live on x86_64 hosts* (Linux CI, camd), which run every x87 m80 load
+  through `fpu_ldm80`. It copies the operand's 10 bytes now.
+- **Proved:** `meson test fpu_m80` (emu/fpu-m80-test.c) calls the helpers
+  against a host page whose successor is PROT_NONE: before the fix it faults
+  at exactly offsets 0xff1-0xff6 (0x3ff1-0x3ff6 with a Mac's 16 KB pages), on
+  the Mac with clang and on camd with GCC; after, it passes on both. A guest
+  test cannot reach this -- the host page after a guest page's backing is not
+  the guest's to choose -- so `x86/x87_page_edge` pins the guest-visible
+  contract instead: FLD/FSTP and FBLD/FBSTP m80, FLDENV/FNSTENV and
+  FRSTOR/FNSAVE at every offset up to a page end, loads beside PROT_NONE,
+  stores leaving the next page alone, with a crossing load that must fault as
+  control; 113 checks pass on i386 and amd64.
+- *Corrected:* jit/jit.c's comment that named this crash as the stale-TLB
+  race. *Found on the way:* FBLD/FBSTP are SIGILL on an x86_64 host (added to
+  the TODO's x86_64-host entry).
 
 ## 4. Native programs share the host C library's static state
 

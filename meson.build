@@ -2084,6 +2084,13 @@ if not meson.is_cross_build()
         include_directories: includes)
     test('list', list_test)
 
+    # emu/fpu.c's m80 helpers touch the operand's 10 bytes and no more. An
+    # x86_64-host build runs every x87 m80 load through them.
+    fpu_m80_test = executable('fpu_m80_test',
+        ['emu/fpu-m80-test.c', 'emu/fpu.c', 'emu/float80.c', 'emu/fpenv.c'],
+        include_directories: includes, dependencies: [libm])
+    test('fpu_m80', fpu_m80_test)
+
     # fakefs never hands out an inode number twice on a root -- the Files
     # extension names items by these numbers. See the test's header.
     fakefs_inode_reuse_test = executable('fakefs_inode_reuse_test', ['fs/fake-inode-reuse-test.c'],

@@ -995,11 +995,13 @@ static void jit_host_sigbus_handler(int sig, siginfo_t *info, void *uctx) {
 // already released, which the handler's jit_unmapped_guest_fault branch heals
 // by flushing and re-executing (55afb69d1). With only SIGBUS routed here that
 // branch was unreachable on the CLI -- the device's Mach handler sees every
-// EXC_BAD_ACCESS -- and the race killed the whole emulator instead:
-// concurrent_exec_tlb took the CLI down about one run in ten, in fpu_ldm80
-// under fhelper_read80 (an x87 load in cc1's startup). A fault outside guest
-// execution is still reported, the default restored, and re-raised, so a real
-// emulator bug crashes as loudly as before.
+// EXC_BAD_ACCESS -- and any such fault killed the whole emulator instead.
+// (The one that showed it -- concurrent_exec_tlb taking the CLI down about one
+// run in ten, in fpu_ldm80 under fhelper_read80 -- was not this race at all:
+// fpu_ldm80 read 16 bytes for a 10-byte operand, off the end of a host page,
+// and no flush could heal it. Fixed in emu/fpu.c, 2026-10-19.) A fault
+// outside guest execution is still reported, the default restored, and
+// re-raised, so a real emulator bug crashes as loudly as before.
 static void jit_install_host_fault_sigaction(void) {
     struct sigaction sa = {0};
     sa.sa_sigaction = jit_host_sigbus_handler;
