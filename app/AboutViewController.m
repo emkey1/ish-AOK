@@ -144,10 +144,12 @@ static const CGFloat kDiagnosticsBottomSlack = 16;
     UIBarButtonItem *exportButton = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemAction
                                                                                   target:self
                                                                                   action:@selector(exportDiagnostics:)];
+    exportButton.accessibilityLabel = NSLocalizedString(@"Export", @"Accessibility label for the export diagnostics button");
     exportButton.accessibilityHint = NSLocalizedString(@"Shares the diagnostics report.", @"Accessibility hint for the export diagnostics button");
     UIBarButtonItem *refreshButton = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemRefresh
                                                                                    target:self
                                                                                    action:@selector(refreshDiagnostics:)];
+    refreshButton.accessibilityLabel = NSLocalizedString(@"Refresh", @"Accessibility label for the refresh diagnostics button");
     refreshButton.accessibilityHint = NSLocalizedString(@"Reloads the diagnostics report.", @"Accessibility hint for the refresh diagnostics button");
     self.navigationItem.rightBarButtonItems = @[exportButton, refreshButton];
 
