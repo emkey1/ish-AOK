@@ -66,8 +66,8 @@ looks (the `get*id` and `set*id` calls, `stat`, `chown`, signal senders,
 `/proc/<pid>/status`, socket peer credentials, System V `ipc_perm`, and
 the ids a FUSE daemon is told and tells back). A mount namespace made in one
 has its inherited mounts locked, and takes only tmpfs, proc, sysfs, devpts
-and FUSE (Chapter 20) as new filesystems. A session with a process in one is
-refused a save.
+and FUSE (Chapter 20) as new filesystems. What a session save does with a
+process in one is below.
 
 A pid namespace here numbers its processes from 1 as Linux does, and differs
 in one place: `/proc` shows what the *reader's* namespace holds whichever
@@ -87,11 +87,17 @@ average counts the machine, which on Linux it does too.
 A mount namespace here is not everything Linux's is. Propagation is real
 (559): peer groups, slaves, and mounts and unmounts repeated through them,
 across namespaces and into mounts that something else covers — but
-`mountinfo` has no `propagate_from`. A session
-with a process in a mount namespace of its own cannot be saved (the save is
-refused, and says which process). And on its own it confines nothing — a
-process in one is still root over the one machine, which is why a sandbox
-asks for a user namespace as well.
+`mountinfo` has no `propagate_from`. A process in a mount, user, pid or
+network namespace of its own cannot be saved. Since 559 a plain Save refuses
+and says which process; until 562 Save Anyway and the automatic save refused
+too, so on a systemd root, where logind and other services run with
+`PrivateTmp=` and its kin, no session could be saved at all. Now a sandboxed
+process is unsaveable the way a GPU program is (Section 41.9): the app asks
+first ("Some programs can't be saved"), and Save Anyway or the automatic save
+leaves it out with its process group and descendants, and the namespace's
+region of the mount table goes with them. And on its own a mount namespace
+confines nothing — a process in one is still root over the one machine, which
+is why a sandbox asks for a user namespace as well.
 
 Cgroup and time are the kinds with no `/proc/<pid>/ns` file, as on a Linux
 kernel built without them: what is listed there can be made. systemd and
@@ -516,8 +522,9 @@ the same place:
   believes it has a GPU. So a save refuses in words ("a Wayland desktop or GPU
   program is running … close it, then suspend"), and Save Anyway, or the
   automatic save as the app goes to the background, leaves out every job
-  holding the GPU or anything else unsaveable — the whole desktop, from the
-  shell that started it down — and keeps the rest. To a kept parent a left-out
+  holding the GPU or anything else unsaveable (since 562, a sandbox too) —
+  the whole desktop, from the shell that started it down — and keeps the
+  rest. To a kept parent a left-out
   child is a process killed by `SIGKILL`, which is what it is after a resume.
 - **Bounded by the distributions.** Alpine builds no virgl GL driver at all, so
   GL goes through zink on top of Venus — and zink here is GL 2.1 and GLES 2.0,
@@ -552,7 +559,8 @@ regression.
 x86 support; the conductor's oracle cells are Rosetta and an x86 Linux VM. The
 newest and fastest guests are the least differentially verified, and the
 lockstep harness that could fix that on an Apple silicon host has not been
-built.
+built. ppc64le (562) is diffed against `qemu-ppc64le`, which is itself wrong in
+three places, and has not yet met a POWER machine.
 
 **And the GPU stops when the app is not in front.** iOS refuses GPU command
 buffers from an app in the background, and the refusal is not advisory:

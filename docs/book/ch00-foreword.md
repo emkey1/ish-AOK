@@ -73,7 +73,7 @@ Discord server for its name. All upstream. All still here.
 Counted crudely: of the 255 source files in `emu/`, `jit/`, `kernel/`, `fs/`,
 `util/` and `platform/`, 149 were created upstream and 106 by this fork. 
 But that count understates the debt rather than measuring it, because
-the fork's files are mostly *additions* — three more guest architectures, native
+the fork's files are mostly *additions* — four more guest architectures, native
 programs, accelerators — while the inherited ones are the load-bearing ones. The
 line counts point the other way for the same reason: `kernel/calls.c` is
 overwhelmingly fork code today, because it grew from one syscall table to four.
@@ -164,7 +164,7 @@ with a licensing discussion attached, and not a default.)
 ## What this fork did, and how to tell the difference
 
 None of the above diminishes the work in the rest of this book. iSH-AOK added
-three more guest architectures and the ABI infrastructure to hold them; native
+four more guest architectures and the ABI infrastructure to hold them; native
 programs and the libc shim that makes them answer questions about the guest;
 `/AOK`; FUSE; the accelerators; the File Provider and Workspace and Shortcuts
 integrations; and several years' worth of conformance work of the kind Part III

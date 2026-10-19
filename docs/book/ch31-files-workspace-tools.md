@@ -42,6 +42,37 @@ A crash before any of your own code runs is the worst possible failure to
 diagnose from a report, because nothing in your logs happened. Declining to
 register is the honest version.
 
+> **The bug that taught us this**
+>
+> A report on Discord: after moving a large file out of `/root` with the Files
+> app, most of `/root` was gone.
+>
+> Files *materializes* whole folders: asked for a directory, the extension
+> deep-copies it into File Provider storage, a multi-gigabyte disk image
+> included. When that copy came back — through `itemChangedAtURL:`, or through
+> `stopProvidingItemAtURL:` on eviction, which wrote every evicted copy back —
+> `saveFromURL:` removed the item's host path, **recursively**, and copied the
+> snapshot in. A stale snapshot dropped everything made since; one cut short by
+> a full disk left only what had been copied.
+>
+> 562 narrows every step. `saveFromURL:` writes one regular file onto one
+> regular file, in place (`fcopyfile`), only through the name the item was
+> opened by and only if that name still reaches the same file, and not without
+> room for the copy. Eviction writes nothing back; edits have already arrived
+> through `itemChangedAtURL:`. An item's path comes from the database row it was
+> opened by, not `F_GETPATH`, which for an unlinked or replaced file names
+> whatever has the name now. Delete, rename and move honour the capabilities
+> the item declared, and never act on a root folder, a virtual item or `/`. A
+> move into a root's top folder, which had written the relative path `name`
+> into the database so that the file vanished from the guest, writes `/name`.
+> And fakefs stopped reusing inode numbers (Chapter 17), because Files names
+> items by them for days, and a stale identifier had been able to reach a new
+> file.
+>
+> The general form: **a write-back must never be able to delete what it
+> replaces.** Remove-then-copy is two operations, and every way the second one
+> fails is data lost.
+
 ## 31.2 One queue was the wrong number
 
 Underneath the file surfaces sits `GuestFileBridge`, the app's route into the
@@ -174,8 +205,9 @@ travels with the app rather than with any root (Chapter 21).
 
 Its reason to exist is one column:
 
-> iSH-AOK can run i386, amd64, arm64, and riscv64 binaries side by side in one
-> booted session … Stock `top`/`htop` have no way to show that architecture mix.
+> iSH-AOK can run i386, amd64, arm64, riscv64 and ppc64le binaries side by side
+> in the same booted guest … Stock `top`/`htop` have no way to show that
+> architecture mix.
 > `ktop`'s one real differentiator is an **ARCH** column.
 
 That column used to be read straight from each process's ELF header via

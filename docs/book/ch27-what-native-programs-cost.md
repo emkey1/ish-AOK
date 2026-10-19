@@ -211,7 +211,7 @@ measurement closed the question rather than a preference closing it.
 ## 27.7 The ledger
 
 **What it buys.** Roughly 16x on shell interpretation, and 38–46x on the ceiling
-for time spent inside bash. One implementation serving all four guest
+for time spent inside bash. One implementation serving all five guest
 architectures, which is worth most to the slowest of them. An editor, an `ssh`
 client and a toolbox that respond at native speed on a ten-year-old device.
 

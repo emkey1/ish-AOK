@@ -214,7 +214,7 @@ mechanism the platform leaves standing.
 
 Upstream iSH took the third road in May 2017, and spent six years on the tail.
 iSH-AOK's whole 2026 can be read as a campaign against the price: the gadget
-JIT and its four guest translators (Chapters 6 and 7), high-level emulation that
+JIT and its five guest translators (Chapters 6 and 7), high-level emulation that
 skips the interpreter entirely for functions it recognizes (Chapter 8), and — in
 the most interesting reversal in the project — native programs, which
 reintroduce the second approach *inside* the third, as a fast path over a
@@ -344,7 +344,7 @@ out why. Appendix F annotates them.
 tripled in size.
 
 **Part II** is the execution engine — the guest CPU model, the threaded-code
-JIT, the four guest architectures, high-level emulation, and how any of it is
+JIT, the five guest architectures, high-level emulation, and how any of it is
 proven correct. It is the most self-contained part of the book and the one to
 read first if you only read one.
 

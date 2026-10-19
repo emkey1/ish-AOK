@@ -48,6 +48,20 @@ the path is what makes hard links work — several paths, one inode row — and 
 is why the schema was redesigned in January 2018, six months into upstream iSH's
 life, once hard links stopped being optional.
 
+The numbers themselves have one rule, and it took until 562 to keep it: **an
+inode number is never handed out twice on a root**, even after its file is
+gone. The counter used to be seeded from `max(stats.inode) + 1` at every mount,
+so deleting the newest file freed its number for the next file or directory —
+at the next boot, where `/run`, recreated every boot, was a likely heir, or
+within seconds in the Files extension, which remounts after a few idle
+seconds. Inside one guest that is harmless; Linux reuses inode numbers too. It
+stops being harmless the moment something outside holds a number for longer
+than the file lives, and the Files app names its items by these numbers for
+days (Chapter 31). Every allocation now starts at, and advances,
+`meta.next_inode`, in the same transaction as the stats row and across every
+allocator on the root (`path_create` in `fs/fake-db.c`); a rebuild resets it,
+and `fs/fake-inode-reuse-test.c` fails on the old seeding.
+
 Everything else in this chapter follows from the split. Device nodes are inodes
 whose mode says `S_IFCHR` and whose `rdev` says 1:3 — no host file is involved at
 all. A setuid binary is a mode with `S_ISUID` in it, and it means exactly as much
@@ -209,7 +223,9 @@ contents, and it cannot recover ownership or device nodes that only ever existed
 in the database.
 
 `fs/fake-migrate.c` upgrades an existing root when the schema changes, which has
-happened several times over the project's life. The operational lesson recorded
+happened several times over the project's life — most recently in 562, when
+schema version 10 added `meta.next_inode`, seeded once from the highest number
+in use. The operational lesson recorded
 alongside it is that "flattened" roots — ones whose metadata was lost to an
 older bug or an unlucky export — need reinstalling rather than migrating.
 Migration assumes the metadata was once right.
@@ -263,6 +279,7 @@ this project is what the platform forbids.
 [fs/fake-db.h](../../fs/fake-db.h), [fs/fake-conn.c](../../fs/fake-conn.c),
 [fs/fake-path.h](../../fs/fake-path.h), [fs/fake-rebuild.c](../../fs/fake-rebuild.c),
 [fs/fake-migrate.c](../../fs/fake-migrate.c),
+[fs/fake-inode-reuse-test.c](../../fs/fake-inode-reuse-test.c),
 [fs/fake-lockstats.h](../../fs/fake-lockstats.h),
 [tools/fakefsify.c](../../tools/fakefsify.c), [kernel/fs.c](../../kernel/fs.c)
 (`fd_copy_range`), `app/AppDelegate.m` (the suspension gate),

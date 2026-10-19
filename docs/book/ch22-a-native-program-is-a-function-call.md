@@ -17,7 +17,7 @@ exit status, and `ps` shows what it expects to show.
 
 This is the fork's central idea, and Part V is about everything that follows
 from it — the good (interpretation at native speed, one implementation across
-four guest architectures) and the difficult (a program that cannot fork, a libc
+five guest architectures) and the difficult (a program that cannot fork, a libc
 that answers questions about the wrong machine, and a set of failure modes that
 do not exist for ordinary programs because ordinary programs get a fresh address
 space every time they start).

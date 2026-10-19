@@ -159,7 +159,9 @@ asks for both suites plus the JVM on a single guest. Before a tag, the full
 guest regression suite runs on **all five roots** — the four musl guests
 (i386, amd64, arm64 and riscv64) plus a fifth leg on glibc, aarch64 — on the
 Mac and again on real hardware, with the end-to-end suite and the JVM smoke
-test. The device leg boots each root in turn, relaunching the app with
+test. 562's new guest ran beside that gate rather than inside it: the Alpine
+ppc64le root (Chapter 7), on its own, on the Mac and on both iPads, the M4 and
+the A10X. The device leg boots each root in turn, relaunching the app with
 `ISH_BOOT_ROOT` (Chapter 30). Until 557 it booted only the glibc root and
 reached the four musl roots through `mount-root.sh`'s chroot, which proved
 chroot behaviour at least as much as each root booted on its own — a

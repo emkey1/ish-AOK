@@ -6,18 +6,18 @@ iSH-AOK 是 [ish-app/ish](https://github.com/ish-app/ish) 的一个分支（fork
 
 Testflight: https://testflight.apple.com/join/X1flyiqE
 
-这个分支不只是改个名字。它包含了分支专属的行为、内置的根文件系统、诊断相关工作、File Provider 集成，以及对四种客户机架构的支持。如果你想要上游的 iSH，请使用 `ish-app/ish`。如果你正在这个仓库中进行开发，这份 README 才是你需要参考的文档。
+这个分支不只是改个名字。它包含了分支专属的行为、内置的根文件系统、诊断相关工作、File Provider 集成，以及对五种客户机架构的支持。如果你想要上游的 iSH，请使用 `ish-app/ish`。如果你正在这个仓库中进行开发，这份 README 才是你需要参考的文档。
 
 ## 本分支新增的内容
 
 - 分支专属的应用标识:
   - 产品名 `iSH-AOK`
   - Bundle root `app.ish.iSH-AOK`
-- **四种客户机架构**，全部基于 JIT：`i386`、`amd64`（x86_64）、`arm64`（aarch64）和 `riscv64`。
+- **五种客户机架构**，全部基于 JIT：`i386`、`amd64`（x86_64）、`arm64`（aarch64）、`riscv64` 和 `ppc64le`（64 位小端 PowerPC）。
 - **原生程序**：zsh、dash（预配置脚本会让它成为 `sh`），以及携带 OpenSSH（`ssh`、`scp`、`sftp`、`ssh-keygen`、`ssh-copy-id`）、Nextvi 编辑器和与 GNU 兼容的 `sed`、`grep`、`find`、`ls`、`tar`、`gzip`、`diff`、`awk` 及大部分 coreutils 的 SmallCLUE busybox 风格工具箱，都作为宿主代码编译进应用，并由客户机的 `execve` 经 `/AOK/native/<名称>` 分发。它们是运行在客户机任务线程上的宿主函数，而不是客户机二进制，因此以全速运行，无需逐条指令翻译。bash 拥有同样的原生实现，但自 556 起发布的构建不再包含它——参见[原生 bash 与许可证](#原生-bash-与许可证)。
 - **原生模式**（558）：完全没有 Linux 发行版的根文件系统。它的 `/bin` 和 `/usr/bin` 就是原生程序——约 140 个日常命令、ssh、git、curl、编辑器——由 SmallCLUE 的 `init` 作为 pid 1 运行 runit 式的服务，登录 shell 是原生 zsh。无需下载任何东西：在“官方发行版”下选择 **iSH-AOK Native** 即可。需要包管理器时，在它旁边再安装一个发行版。参见 `/AOK/docs/native-mode.md`。
 - `/AOK`，一个只读的应用内文件系统（`/AOK/docs`、`/AOK/tools`、`/AOK/tests`、`/AOK/native`），在构建时通过 `fs/aok-*.manifest` 和 `tools/gen-aokfs.py` 从 `opt/AOK/` 嵌入。
-- 内置在应用中的根文件系统（Alpine 3.24.2 与 Devuan 6，仅 `aarch64`），以及面向 `i386`、`x86_64` 和 `riscv64` 的可下载镜像。
+- 内置在应用中的根文件系统（Alpine 3.24.2 与 Devuan 6，仅 `aarch64`），以及面向 `i386`、`x86_64`、`riscv64` 和 `ppc64le` 的可下载镜像。
 - **在客户机中使用设备的 GPU**：`/dev/dri/renderD128`，一个 virtio-gpu 渲染节点，由进程内运行在 MoltenVK 之上的 virglrenderer Venus 渲染器支撑，因此 Mesa 的 Venus Vulkan 驱动（以及其上的 zink）通过 Metal 绘制。客户机一侧由 `/AOK/tools/setup-gpu.sh` 安装。参见 `/AOK/docs/workspace.md`。
 - **Wayland 桌面**（labwc、foot、waybar；自带四个桌面——也可用 Wayfire 或 Xfce 取代 labwc）：在 GPU 上合成，并通过 `/AOK/native/wl-present` 呈现到应用中——画面单向传出，键盘、指针、剪贴板和尺寸调整反向传入——VNC 作为后备。`/AOK/tools/setup-games.sh` 会安装一组经过测试的游戏。参见 `/AOK/docs/workspace.md`。
 - **LLM Chat**：应用内的聊天客户端（OpenAI 兼容服务器、Anthropic、Gemini、Apple 端侧模型），可在允许/询问/拒绝的权限下读取、编辑客户机中的文件并运行命令，可使用 MCP 服务器，还能把多个聊天作为后台代理同时运行。API 密钥保存在钥匙串中。参见 `/AOK/docs/llm-chat.md`。
@@ -35,7 +35,7 @@ Testflight: https://testflight.apple.com/join/X1flyiqE
 
 ## 客户机架构
 
-四种客户机都受支持，且都通过 gadget JIT 运行。没有任何一种是原生执行的：在 ARM 宿主机
+五种客户机都受支持，且都通过 gadget JIT 运行。没有任何一种是原生执行的：在 ARM 宿主机
 上，一条 `arm64` 客户机指令同样是一次 gadget 分派，和 `riscv64` 完全一样。与宿主机同属
 一个 ISA 家族只会让每个 gadget 的主体更便宜，而不会让它免费。
 
@@ -45,11 +45,12 @@ Testflight: https://testflight.apple.com/join/X1flyiqE
 | `amd64` | 已支持，JIT；CPUID 公布 x86-64-v4（含 AVX-512）（558） |
 | `arm64` | 已支持，JIT |
 | `riscv64` | 已支持，JIT；RVA23，含 V 向量单元（558），因此 Ubuntu 25.10 可以运行 |
+| `ppc64le` | 562 新增，JIT；POWER8（ISA 2.07），含 VMX 和 VSX，因此 Alpine 的 `ppc64le` 可以运行（[计划](docs/ppc64le_guest_plan.md)） |
 
 各客户机向软件报告的内容——`CPUID`、`AT_HWCAP`、`riscv_hwprobe`、`/proc/cpuinfo`——
 见 `/AOK/docs/guest-cpus.md`。
 
-各客户机的回归测试套件在真机上于四种架构均能通过。解释器属于遗留实现且即将移除，新的
+各客户机的回归测试套件在真机上于五种架构均能通过。解释器属于遗留实现且即将移除，新的
 工作应当以 JIT 为目标。
 
 相关文件：
@@ -497,7 +498,7 @@ ISH_LOG = verbose strace
 
 - `working` 是默认分支，也是活跃的集成分支。缺陷修复、功能开发和发布候选都先进入这里。
 - `amd64`、`aarch64` 和 `riscv` 原本是各客户机的初期开发分支。这些工作已经合并进
-  `working`，而 `working` 会构建全部四种客户机。
+  `working`，而 `working` 会构建全部五种客户机。
 
 ## 与上游的关系
 

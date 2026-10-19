@@ -143,6 +143,16 @@ backwards: **the target is not the parent's state, it is the state a real
 that means reading what the shell does on the child side of a fork, not just
 what it holds on the parent side.
 
+Size is the other thing that cannot cross the obvious way. A re-launched child
+is a fresh program, so its command arrives in `argv` and has the limits any
+exec has, where a forked child copies nothing. `rm *` over a few thousand files
+in a native zsh login shell failed with `subshell failed: argument list too
+long`, an error real zsh never gives there: one argument may be at most
+128 KB, and the command text was one argument. Since 562 a command and `$_` too
+long for `argv` travel inside the state instead, and the parser copies the
+strings it reads without recursing, because a command of 100,000 words had
+overflowed the child's task stack and taken the app down with it.
+
 ## 24.5 Where the cost actually was
 
 Once it worked, a subshell cost 8.3 ms, which is too slow. The obvious suspects

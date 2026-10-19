@@ -239,6 +239,14 @@ direct encoding for a pleasantly regular architecture — and since 558 it has a
 `PR_RISCV_V_SET_CONTROL` can withhold it from the next exec, which then sees no
 `v` and finds every vector instruction illegal.
 
+ppc64le's (562) describes a POWER8, `AT_PLATFORM` `power8`: `AT_HWCAP` has
+AltiVec, VSX and the 2.05 and 2.06 architecture levels, `AT_HWCAP2` has 2.07
+and `isel`, and what the gadgets lack — decimal floating point, transactional
+memory, the vector crypto instructions, `scv` — is left out, so OpenSSL takes
+its VMX paths rather than POWER8's crypto ones. It is also the one guest whose
+aux vector carries cache block sizes, as Linux's powerpc does: glibc's
+`memset` reads `AT_DCACHEBSIZE` to clear with `dcbz`, 128 bytes at a time.
+
 **`AT_SECURE`** is the security-relevant one. It tells libc that this execution
 crossed a privilege boundary — a setuid or setgid binary, or a uid/euid mismatch
 — and that it must therefore ignore `LD_PRELOAD`, `LD_LIBRARY_PATH` and every
@@ -283,8 +291,8 @@ making a system call. Under AOK the system call is the expensive part of reading
 the clock: leaving the JIT, dispatching, checking seccomp, ptrace and pending
 signals, and coming back cost about 700 ns on an arm64 guest — the price of
 `getppid` — where the host reads its own clock in 30. Every guest has one: i386
-always did, and amd64, arm64 and riscv64 (`vdso/<arch>/vdso.S`) now do, under
-the names and versions their C libraries look up.
+always did, and amd64, arm64, riscv64 and ppc64le (`vdso/<arch>/vdso.S`) now
+do, under the names and versions their C libraries look up.
 
 Linux's vDSO computes the time itself, from a hardware counter and numbers the
 kernel publishes on a `[vvar]` page. AOK's cannot, because the numbers under a
@@ -295,7 +303,8 @@ be stale until something noticed, and in that window the guest could read a time
 earlier than a file the kernel had just stamped. So the vDSO asks the JIT
 instead, through one private instruction per architecture — an `mrs` of an
 implementation-defined system register on arm64, a custom CSR on riscv64,
-`vmcall` on x86_64 — which runs `vdso_clock_ns` in `kernel/time.c`, the same
+an `mfspr` of an SPR no POWER processor has (777) on ppc64le, `vmcall` on
+x86_64 — which runs `vdso_clock_ns` in `kernel/time.c`, the same
 computation `clock_gettime` runs. The two cannot drift apart because they are
 one computation, and `tests/manual/vdso_clock.c` holds them to it by bracketing
 every vDSO read between two system calls. What changes for the guest is what a

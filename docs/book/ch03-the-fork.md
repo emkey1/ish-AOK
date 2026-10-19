@@ -90,7 +90,7 @@ and eventually its own README, because upstream's had stopped being true here.
 The project's own summary of the divergence, from that README:
 
 > This fork is not just a rebrand. It carries fork-specific behavior, bundled
-> roots, diagnostics work, File Provider integration, and support for four guest
+> roots, diagnostics work, File Provider integration, and support for five guest
 > architectures. If you want upstream iSH, use `ish-app/ish`.
 
 The inventory as of build 551 is the table of contents of Parts II through VI:

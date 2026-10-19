@@ -405,6 +405,13 @@ specifically — the option of running a program under the retired interpreter
 (`ISH_ARM64_FORCE_INTERP=1`) to A/B a suspected JIT semantics bug against a
 second implementation in the same binary.
 
+ppc64le, the newest guest (562), sits between the two. Its differential tests
+in `tests/ppc64/` are generated programs whose output is diffed against
+`qemu-ppc64le` — an instruction-level comparison, though not a lockstep one —
+and the oracle turned out to be wrong in three places (Chapter 7), which the
+test headers name so that nobody "fixes" AOK to match it. Nothing in that port
+has yet been checked against a POWER machine.
+
 That is a genuinely weaker position than i386 enjoys, and it is worth stating
 plainly rather than leaving a reader to infer that every guest is verified to
 the same depth. The strongest available oracle for an arm64 guest instruction is

@@ -95,7 +95,7 @@ was one.
 > a decision, and the default is always wrong.
 
 One small detail in `copy_task` is worth noticing because it is the only place
-in this chapter where the four guests appear:
+in this chapter where the five guests appear:
 
 ```c
 if (stack != 0) {
@@ -103,11 +103,12 @@ if (stack != 0) {
     if (task->abi == GUEST_ABI_AMD64)   task->cpu.amd64_regs[amd64_rsp] = stack;
     if (task->abi == GUEST_ABI_ARM64)   task->cpu.arm64_sp = stack;
     if (task->abi == GUEST_ABI_RISCV64) task->cpu.riscv64_regs[riscv64_sp] = stack;
+    if (task->abi == GUEST_ABI_PPC64)   task->cpu.ppc64_gpr[1] = stack;
 }
 ```
 
 `clone` with a stack argument means "the new thread runs on this stack", and the
-register that means "stack pointer" has four different names. Chapter 11's rule
+register that means "stack pointer" has five different names. Chapter 11's rule
 about second copies starts here.
 
 ## 10.3 What `clone` actually supports
@@ -346,6 +347,16 @@ orders the wait and notify on `stopped_cond`.
 only supports `CLOCK_MONOTONIC` and `CLOCK_REALTIME`. Rather than reporting the
 feature absent — which Chapter 40 explains is the worst available option — a
 single periodic monotonic sampler drives both, armed lazily on first use.
+Since 562 it also keeps POSIX timers on `CLOCK_PROCESS_CPUTIME_ID` honest.
+Those had no clock source of their own and ran on the host's process CPU
+clock — the whole emulator's, every guest process and the app — so with
+anything else busy they ran fast: on the A10X with the Wayland desktop up, a
+1 ms timer counted 930–958 expiries while the process's own clock advanced
+593–645 ms. The process's CPU cannot be summed where the timer asks for it,
+under locks the sum would need, so it is *published* instead
+(`group->cpu_clock_published_ns`, only ever raised) by the sampler's tick and
+by `timer_settime` and `timer_gettime` before they lock. A reading is a past
+value, so a timer fires late by at most one tick and never early.
 
 And one field is a small case study in why a guest's *reported* state matters as
 much as its real one:

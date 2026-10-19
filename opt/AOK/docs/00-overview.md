@@ -3,7 +3,7 @@
 `/AOK` is not a copy of files sitting on disk inside your Linux root. It's a
 small, synthetic, read-only filesystem (`aokfs`, see `fs/aok.c`) that
 iSH-AOK mounts at `/AOK` on every boot, regardless of which root filesystem
-(Alpine, Devuan, i386/amd64/arm64/riscv64) you're currently running. Because
+(Alpine, Devuan, i386/amd64/arm64/riscv64/ppc64le) you're currently running. Because
 it isn't part of any root, it shows up the same way no matter which
 filesystem you booted or chrooted into, and it can't be deleted or corrupted
 by anything that happens inside a guest root.

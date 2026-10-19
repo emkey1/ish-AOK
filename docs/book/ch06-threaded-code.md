@@ -426,10 +426,10 @@ empty one, and an
 for its parent's block at the same address and copies it, provided every page
 the block covers is still the same memory in both (the same `struct data` at
 the same offset -- a store by either side breaks the copy-on-write sharing and
-with it the match). On arm64 and riscv64 guests a block the child translates
-goes back to the parent too, so its later children find the fork-return and
-exit paths it never runs itself. A subshell (`( : )`, `$(...)`) then translates
-almost nothing: 14-20% less time on the M4 and A10X. `jit_fork` in `jit/jit.c`
+with it the match). On the arm64, riscv64 and ppc64le guests a block the child
+translates goes back to the parent too, so its later children find the
+fork-return and exit paths it never runs itself. A subshell (`( : )`,
+`$(...)`) then translates almost nothing: 14-20% less time on the M4 and A10X. `jit_fork` in `jit/jit.c`
 has the rules; `/proc/ish/jit_inherit` switches it off.
 
 An `execve` gets the same help since 559, from a cache that outlives the
@@ -669,6 +669,7 @@ That is instruction fusion, and each guest has its own families:
 | arm64 | `BCOND` (compare + branch), `LDST` (load/store RMW), `LDCMP` (load + compare), `RETCACHE`, `VSPEC`/`OSPEC`/`LSPEC` (SIMD, scalar ALU and writeback or register-offset load/store gadgets fed precomputed register offsets), `BTFN`, `PAIR` and `FWD` (below) |
 | riscv64 | `FOLD` (`lui`/`auipc` + `addi`/load), `JAL` (link write + branch in one), `RETCACHE`, `PAIR` (`ld`/`sd` pairs), `ALU` (`slli` + shift/`add`, `add` + load), `BR` (`li`/`andi` + branch), `BTFN` (backward branches keep the taken path straight-line), `RCACHE` (register-cached runs; off by default), `FUSE2` and `FWD` (below) |
 | amd64 | `INCDEC_REG`, and native-versus-bridge switches for whole families |
+| ppc64le | none yet: since 562, one guest instruction is one gadget |
 
 The first amd64 entry is the gadget from Section 6.6 — the one that replaced a
 bridge costing three dispatches and a re-decode — and the rest of its bits

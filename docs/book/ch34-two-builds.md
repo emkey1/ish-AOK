@@ -67,7 +67,7 @@ reading as documentation of what this system can be:
 
 | option | what it decides |
 |---|---|
-| `guest_archs` | which of `i386`, `amd64`, `arm64`, `riscv64` this build can execute |
+| `guest_archs` | which of `i386`, `amd64`, `arm64`, `riscv64`, `ppc64` this build can execute |
 | `engine` | `jit` — the interpreters are no longer selectable (Chapter 7) |
 | `arm64_gret` | `dmb` or `ldar` dispatch (Chapter 6's 2.04x regression) |
 | `native_bash` | GPLv3 in the binary or not (Chapter 26) |

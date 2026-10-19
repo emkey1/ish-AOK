@@ -13,7 +13,7 @@ tree; every measurement quoted was re-run on `working` at drafting time.
 | 4 | [2026: the year the tree tripled](ch04-the-year-the-tree-tripled.md) | draft |
 | 5 | [The guest machine](ch05-the-guest-machine.md) | draft |
 | 6 | [Threaded code: the JIT that is not a JIT](ch06-threaded-code.md) | draft |
-| 7 | [Four guests](ch07-four-guests.md) | draft |
+| 7 | [Five guests](ch07-four-guests.md) | draft |
 | 8 | [High-level emulation](ch08-high-level-emulation.md) | draft |
 | 9 | [Proving an emulator right](ch09-proving-it-right.md) | draft |
 | 10 | [Processes, threads, and the task table](ch10-processes-and-threads.md) | draft |

@@ -212,7 +212,7 @@ which is why this outline is worth trusting:
 *Story:* the cross-page `write_prep` ordering corruption — a gadget that was
 correct in isolation and wrong at a page boundary.
 
-## Chapter 7. Four guests
+## Chapter 7. Five guests
 
 - Why more than one guest architecture at all: 64-bit userlands, distro
   availability, and the fact that most Linux software stopped being tested on i386.

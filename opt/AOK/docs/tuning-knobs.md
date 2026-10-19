@@ -48,7 +48,7 @@ does on Linux: `0` disables it, `1` randomizes the mmap base, PIE base and
 heap start, `2` (the default, whether or not the variable is set) is the
 same plus a randomized stack top. An invalid value falls back to `2`. It
 moves where the loader, shared libraries, the vDSO/sigpage, a dynamic
-`arm64`/`riscv64` PIE, and any mapping made without an address land — not
+`arm64`/`riscv64`/`ppc64le` PIE, and any mapping made without an address land — not
 just the stack.
 
 ASLR is off regardless for a process exec'd with `ADDR_NO_RANDOMIZE`
@@ -67,8 +67,8 @@ long as the switch is on, and puts the old value back when it goes off. See
 
 ## `ISH_VDSO`
 
-64-bit guests (`amd64`, `arm64`, `riscv64`) read the clock through a vDSO
-mapped into every process — `vdso/amd64`, `arm64` or `riscv64/vdso.S` — rather
+64-bit guests (`amd64`, `arm64`, `riscv64`, `ppc64le`) read the clock through a vDSO
+mapped into every process — `vdso/amd64`, `arm64`, `riscv64` or `ppc64` — rather
 than making a system call for `clock_gettime` and friends. `ISH_VDSO=0` in
 the host environment leaves it out entirely: no page is mapped, no
 `AT_SYSINFO_EHDR` goes in the aux vector, and the C library falls back to the

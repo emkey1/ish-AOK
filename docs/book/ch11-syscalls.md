@@ -21,6 +21,7 @@ void handle_interrupt(int interrupt) {
         case INT_AMD64_SYSCALL:  handle_amd64_syscall_interrupt(cpu); break;
         case INT_ARM64_SVC:      handle_arm64_syscall_interrupt(cpu); break;
         case INT_RISCV64_ECALL:  handle_riscv64_syscall_interrupt(cpu); break;
+        case INT_PPC64_SC:       handle_ppc64_syscall_interrupt(cpu); break;
         case INT_PF:             handle_page_fault_interrupt(cpu); break;
         case INT_GPF:            handle_general_protection_interrupt(cpu); break;
         case INT_BUS:            handle_bus_interrupt(cpu); break;
@@ -35,9 +36,9 @@ void handle_interrupt(int interrupt) {
 ```
 
 Chapter 6 described how execution leaves translated code; this is where it
-arrives. The four syscall cases correspond to four instructions — i386's
-`int $0x80`, amd64's `syscall`, arm64's `svc`, riscv64's `ecall` — and they
-converge almost immediately.
+arrives. The five syscall cases correspond to five instructions — i386's
+`int $0x80`, amd64's `syscall`, arm64's `svc`, riscv64's `ecall`, ppc64le's
+`sc` — and they converge almost immediately.
 
 Each per-ABI entry point does one thing before converging, and it is worth
 noticing because it is cheap and catches a whole bug class:
@@ -264,11 +265,11 @@ on to:
 
 > **A syscall often has a second copy.**
 
-Four guest ABIs share most handlers, but not all. Some syscalls have a per-ABI
+Five guest ABIs share most handlers, but not all. Some syscalls have a per-ABI
 body — `sys_getitimer_amd64` sits beside the generic one — because the structure
 layouts differ. Some have a 32-bit and a 64-bit form. Some are reached through
 two dispatch paths, the legacy table and the native full-width intercept. The
-`clone` stack write in Chapter 10 sets four different registers because four
+`clone` stack write in Chapter 10 sets five different registers because five
 different architectures spell "stack pointer" differently.
 
 A fix applied to the copy you found is a fix missing from the copies you did

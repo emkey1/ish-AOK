@@ -7,7 +7,7 @@ Source: `/AOK/tools/ktop/ktop.c` (also `Makefile`, `build.sh`,
 
 ## Why iSH-AOK needs its own
 
-iSH-AOK can run i386, amd64, arm64, and riscv64 binaries side by side in
+iSH-AOK can run i386, amd64, arm64, riscv64 and ppc64le binaries side by side in
 one booted session — most usefully by chrooting into another installed
 root with [`mount-root.sh`](roots.md). Stock `top`/`htop` have no way to
 show that architecture mix. `ktop`'s one real differentiator versus a

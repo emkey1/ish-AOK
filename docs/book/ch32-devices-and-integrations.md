@@ -31,7 +31,7 @@ without a wrapper, a protocol, or a library. And **needing no binary** means it
 works in every root: Alpine, Devuan, Arch, i386 or riscv64, freshly installed or
 years old, with nothing to install and nothing to keep in step with the app.
 
-A guest-side command would have needed compiling for four architectures,
+A guest-side command would have needed compiling for five architectures,
 shipping into every root, and updating whenever the app changed. A device node
 needs a line in `fs/dev.c`.
 

@@ -166,14 +166,14 @@ lost, it goes on a channel that counts.
 > safety argument is "the wake signals are blocked here".** Guard on state the
 > thread itself sets, not on the mask.
 
-## 12.5 Delivering: four ABIs, four signal frames
+## 12.5 Delivering: five ABIs, five signal frames
 
 Running a handler means building a stack frame the guest's libc will recognize,
 because `sigreturn` is implemented *by the guest* — the handler returns into a
 trampoline that makes a `sigreturn` syscall, and that syscall reads back the
 frame the kernel wrote. Every field has to be where the guest expects it.
 
-Four guests means four layouts, and `kernel/signal.c` pins them at compile time:
+Five guests means five layouts, and `kernel/signal.c` pins them at compile time:
 
 ```c
 static_assert(sizeof(struct amd64_siginfo_) == 128, "amd64 siginfo layout mismatch");
@@ -182,6 +182,8 @@ static_assert(sizeof(struct arm64_fpsimd_context_) == 528, "arm64 fpsimd_context
 static_assert(sizeof(struct riscv64_mcontext_) == 784, "riscv64 sigcontext size");
 static_assert(sizeof(struct riscv64_ucontext_) == 960, "riscv64 ucontext size");
 static_assert(offsetof(struct rt_sigframe_riscv64, uc) == 128, "riscv64 frame uc offset");
+static_assert(sizeof(struct ppc64_sigcontext_) == 1528, "ppc64 sigcontext size");
+static_assert(sizeof(struct ppc64_ucontext_) == 1696, "ppc64 ucontext size");
 ```
 
 These are the cheapest tests in the project. A structure that drifts by four
@@ -191,7 +193,7 @@ catches it at build time, in the right file, with a message naming the
 structure.
 
 The conversion functions around them (`siginfo_to_i386_user`,
-`siginfo_to_amd64_user`, and their riscv64 and arm64 equivalents) are the
+`siginfo_to_amd64_user`, and their riscv64, arm64 and ppc64 equivalents) are the
 per-ABI second copies Chapter 11 warned about, and they are exactly the case
 where a shared body is impossible: the structures genuinely differ.
 

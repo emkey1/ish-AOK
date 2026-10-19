@@ -162,7 +162,7 @@ It ran Alpine. People used it.
 
 What it did not have is the list Chapter 3 is about — and the useful thing to
 notice, before that chapter starts, is how much of what follows was *reachable*
-from this foundation rather than requiring it to be replaced. Four guest
+from this foundation rather than requiring it to be replaced. Five guest
 architectures needed the ABI split, but not a new memory model. Native programs
 needed an `execve` branch, not a new process model. The accelerators needed a
 private syscall number.

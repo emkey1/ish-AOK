@@ -55,6 +55,28 @@ Because the extension opens the same on-disk, SQLite-backed root your
 running guest uses, changes made from Files app are visible to the guest
 immediately (and vice versa) — there's no separate sync step.
 
+## Editing, moving, and what Files never does
+
+- **An edit made in another app is saved into the same file**, in place. If
+  there isn't room on the device for the new contents, the save is refused
+  and the old file is left as it was rather than half overwritten.
+- **Files makes copies of whole folders** — when you open one in the Move
+  sheet's **Recently Used**, for example. Such a copy is a snapshot for
+  reading. From build 562 nothing in it is ever written back over the folder
+  in your root. Before 562 a stale or incomplete copy could replace the
+  folder, which is how a `/root` lost most of its files after a large disk
+  image was moved out of it.
+- **Moving within one filesystem** renames the file in place, into a
+  sub-folder or into the filesystem's top folder. Moving to another location
+  (On My iPhone, iCloud Drive) is a copy in current iOS; delete the original
+  afterwards if you no longer want it in the guest.
+- **A filesystem's own folder can't be deleted, renamed or moved** from Files.
+  Remove a whole filesystem from Settings → Filesystems instead.
+- **Every item keeps its own identity.** Files remembers items by number for
+  days, and a number now always names the same file. A deleted file's number
+  is never given to another. Before 562 a new file or folder could inherit it,
+  and a later action on the old item reached the new one.
+
 ## A sideloaded copy has no Files location
 
 The extension reads your filesystems out of the app's shared App Group

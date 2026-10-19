@@ -257,8 +257,8 @@ nothing got slower -- PSCAL included -- so HLE is now on by default.
 
 ## 8.6 Where it does not apply
 
-HLE is gated to the arm64 and riscv64 guests. `ISH_HLE=1` on an i386 or amd64
-guest silently does nothing.
+HLE is gated to the arm64 and riscv64 guests. `ISH_HLE=1` on an i386, amd64 or
+ppc64le guest silently does nothing.
 
 The reason is that those are the guests whose remaining cost is dominated by
 dispatch rather than by the semantic work inside each gadget (Chapter 7). On

@@ -1,11 +1,11 @@
 /*
  * ktop -- a small, dependency-free htop-style process viewer with one extra
- * column: the CPU architecture (arm64 / x86_64 / x86 / riscv64) of each
+ * column: the CPU architecture (arm64 / x86_64 / x86 / riscv64 / ppc64le) of each
  * process's binary, read straight from its ELF header via /proc/<pid>/exe --
  * or, for a natively-dispatched program, the host's architecture, since that
  * is what it was compiled for.
  *
- * Built for iSH-AOK: a single guest can run i386, amd64, arm64 and riscv64
+ * Built for iSH-AOK: a single guest can run i386, amd64, arm64, riscv64 and ppc64le
  * binaries side by side (e.g. a chroot into another installed root via
  * /AOK/tools/mount-root.sh), and stock top/htop have no way to show that mix.
  *
@@ -140,6 +140,8 @@ static const char *arch_from_machine(const char *machine) {
         return arch_intern("x86_64");
     if (strcmp(machine, "riscv64") == 0)
         return arch_intern("riscv64");
+    if (strcmp(machine, "ppc64le") == 0)
+        return arch_intern("ppc64le");
     if (machine[0] == 'i' && strstr(machine, "86") != NULL)
         return arch_intern("x86");
     if (strncmp(machine, "arm", 3) == 0)
@@ -348,6 +350,7 @@ static const char *detect_arch(pid_t pid, bool kernel_thread) {
             case 183: return arch_intern("arm64");  // EM_AARCH64
             case 40:  return arch_intern("arm");    // EM_ARM (32-bit, just in case)
             case 243: return arch_intern("riscv64"); // EM_RISCV
+            case 21:  return arch_intern(little_endian ? "ppc64le" : "ppc64"); // EM_PPC64
             default:  return arch_intern("?");
         }
     }

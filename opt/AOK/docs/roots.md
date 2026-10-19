@@ -1,12 +1,12 @@
 # Filesystems, /AOK/roots, and chrooting between architectures
 
 iSH-AOK can have several Linux root filesystems installed at once — Alpine
-or Devuan, in i386, amd64, arm64, or riscv64 flavors — and can run
-processes from more than one of them at the same time, in the same booted
-session, via `chroot`. This document covers the on-device mechanics; the
-in-app "Filesystems" screen is where you install, download, and delete
-roots in the first place, and `/AOK/tools/manage-roots.sh` does the same
-things from a shell.
+or Devuan, in i386, amd64, arm64, riscv64 or (experimentally) ppc64le
+flavors — and can run processes from more than one of them at the same time,
+in the same booted session, via `chroot`. This document covers the on-device
+mechanics; the in-app "Filesystems" screen is where you install, download, and
+delete roots in the first place, and `/AOK/tools/manage-roots.sh` does the
+same things from a shell.
 
 ## `manage-roots.sh`: installing and switching from the command line
 
@@ -74,14 +74,20 @@ echo op=remove >&3; echo name=Experiment >&3; echo confirm=yes >&3; echo run >&3
 The **Filesystems** screen — in app settings, and the same screen as the **Boot
 Images** applet in Workspace — lists four groups:
 
-- **Installed Filesystems** — the roots you already have. The one currently
+- **Installed Filesystems** — the roots you already have, each shown as
+  "name (architecture)" from 562: the name is only what the root was called
+  when it was made, so `Devuan6_2` can be an i386 root. A root that recorded no
+  architecture is asked its own programs. The one currently
   running as `/` is tinted and bold, and reads "● IN USE — mounted at / ·
   can't be deleted"; the others read "Mounted at `/AOK/roots/<name>`", or
   carry no subtitle at all if their mount failed. The root set to boot next
   is usually that same row but need not be; when it is another one, that row
   begins "Boots next". Neither of those two can be deleted or renamed. Delete
   any other root by swiping its row, or from its detail screen; rename it
-  there. **Boot From This Filesystem** on the detail screen asks when:
+  there. A delete removes the whole root or none of it: from 562 the root is
+  set aside first, so one that stops part way no longer leaves a fragment
+  holding its name, and what is left of one is swept up at the next launch.
+  **Boot From This Filesystem** on the detail screen asks when:
   **Next Launch** keeps everything running and switches the next time
   iSH-AOK opens, and **Quit Now** closes iSH-AOK, ending every running
   program, so that the root boots when you open it again. iOS does not let an
@@ -101,9 +107,11 @@ Images** applet in Workspace — lists four groups:
   **iSH-AOK Native** is listed here too: no distribution at all, only the
   programs built into the app, and nothing to download -- it is created on the
   spot. See [native-mode.md](native-mode.md).
-- **Community Distributions** — PSCAL + SmallCLUE (arm64) and Arch Linux
-  (`x86_64` and ARM `aarch64`). Contributed or experimental, without the same
-  support guarantees as the official images.
+- **Community Distributions** — PSCAL + SmallCLUE (arm64), Arch Linux
+  (`x86_64` and ARM `aarch64`), and from 562 Alpine 3.24.2 `ppc64le`, marked
+  Experimental (see [guest-cpus.md](guest-cpus.md)). Contributed or
+  experimental, without the same support guarantees as the official images.
+  A build too old for an entry's architecture doesn't list it.
 
 Root names become the mount "source" string guest tools like `mount` and
 `df` will show, so names are restricted to `[A-Za-z0-9._-]`, can't start

@@ -108,6 +108,8 @@ by the app; several have app-side equivalents under `/proc/ish/defaults`
 | `ISH_PIXMAN_SHIM_OFF` | `opt/AOK/tools/pixman/ish_pixman_shim.c` |
 | `ISH_PIXMAN_STATS` | `opt/AOK/tools/pixman/ish_pixman_shim.c` |
 | `ISH_PIX_ACCEL` | `main.c` |
+| `ISH_PPC64_ONE_PER_BLOCK` | `jit/gen_ppc64.c` |
+| `ISH_PPC64_TRACE` | `jit/jit.c` |
 | `ISH_PRESENT_DISPLAY` | `main.c` |
 | `ISH_PRESENT_DUMP` | `main.c` |
 | `ISH_PRESENT_INPUT` | `main.c` |

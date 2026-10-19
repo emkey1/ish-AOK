@@ -171,26 +171,25 @@ def gen_d():
 
 def gen_e():
     envs = {}
-    for dirpath, dirnames, filenames in os.walk(ROOT):
-        # Skip build trees, vendored code, and any dot-directory: another
-        # session's git worktrees live under .claude/ and would otherwise be
-        # scanned as though they were part of this checkout.
-        dirnames[:] = [d for d in dirnames
-                       if not d.startswith(".")
-                       and d not in {"build", "deps", "e2e_out", "subprojects"}
-                       and not d.startswith("build-")]
-        for fn in filenames:
-            if not fn.endswith((".c", ".m", ".h", ".mm", ".swift")):
-                continue
-            path = os.path.join(dirpath, fn)
-            rel = os.path.relpath(path, ROOT)
-            try:
-                with open(path, errors="replace") as f:
-                    text = f.read()
-            except OSError:
-                continue
-            for m in re.finditer(r'getenv\(\s*"(ISH_[A-Z0-9_]+)"', text):
-                envs.setdefault(m.group(1), set()).add(rel)
+    # Tracked files only: a walk of the directory also read whatever else was
+    # lying in the checkout -- other sessions' worktrees under .claude/, and an
+    # untracked copy of opt/AOK that put a second, bogus source path beside two
+    # knobs. Build trees, vendored code and dot-directories stay out as before.
+    listed = subprocess.run(["git", "-C", ROOT, "ls-files", "-z", "--",
+                             "*.c", "*.m", "*.h", "*.mm", "*.swift"],
+                            capture_output=True, check=True).stdout.decode()
+    for rel in filter(None, listed.split("\0")):
+        top = rel.split("/", 1)[0]
+        if top.startswith(".") or top in {"build", "deps", "e2e_out", "subprojects"} \
+                or top.startswith("build-"):
+            continue
+        try:
+            with open(os.path.join(ROOT, rel), errors="replace") as f:
+                text = f.read()
+        except OSError:
+            continue
+        for m in re.finditer(r'getenv\(\s*"(ISH_[A-Z0-9_]+)"', text):
+            envs.setdefault(m.group(1), set()).add(rel)
 
     opts = []
     for m in re.finditer(r"option\('([a-z0-9_]+)'[^)]*?type: *'([a-z]+)'"

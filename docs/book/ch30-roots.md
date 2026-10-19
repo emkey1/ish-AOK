@@ -16,9 +16,14 @@ A root is a fakefs (Chapter 17): a `data/` directory of escaped host files and a
 running a rootfs tarball through `fakefsify`, which extracts through libarchive
 and writes both halves.
 
-The app can hold several at once, in any of the four guest architectures, and
+The app can hold several at once, in any of the five guest architectures, and
 records the guest ABI per root — which is how it knows to boot an x86_64 image
-as an amd64 guest and an aarch64 image as an arm64 one.
+as an amd64 guest and an aarch64 image as an arm64 one. A root with nothing
+recorded is asked instead: the ABI is read from the ELF header of the first of
+its usual programs that is a real file. Since 562 the installed list, which is
+also the boot menu, shows each root as `name (arch)`, because a name is only
+what the root was called when it was made or renamed — on one test device
+`Devuan6_2` was i386, and so was `Alpine3.23.3`.
 
 They arrive three ways:
 
@@ -29,9 +34,10 @@ the i386 and x86_64 ones from Resources, so those two are the only roots present
 before anything is downloaded.
 
 **From the catalogue.** The same two distributions for `i386`, `x86_64` and
-`riscv64` (Alpine as both 3.24.2 and 3.23.3), plus community images — Arch Linux (`x86_64` and `aarch64`) and
-PSCAL + SmallCLUE — downloaded on demand into `/AOK/persist/roots` and imported
-from there. The catalogue itself is `deps/rootfs-manifest`.
+`riscv64` (Alpine as both 3.24.2 and 3.23.3), plus community images — Arch Linux (`x86_64` and `aarch64`),
+PSCAL + SmallCLUE, and since 562 Alpine 3.24.2 for `ppc64le`, marked
+Experimental (Chapter 7) — downloaded on demand into `/AOK/persist/roots` and
+imported from there. The catalogue itself is `deps/rootfs-manifest`.
 
 The catalogue is **downloaded**, and the copy inside the app is the fallback.
 That distinction is load-bearing: the app bundles a snapshot of `manifest.json`
@@ -51,6 +57,15 @@ fetched and from where; `downloadURL` must be `https`.
 The other half of that rule lives in the rootfs repo: an entry may be dropped
 from the manifest, but **an archive may never be deleted**, because installs
 that still hold an older manifest keep asking for it.
+
+A downloaded manifest is also read by builds older than its newest entries,
+which is why the ppc64le entry names its architecture as `guestArch` where
+every other says `guestABI`. Builds 556–561 require `guestABI`, so they skip
+the entry rather than offer it as an i386 root they could not boot; 562 reads
+either. It also skips an entry for an architecture it was built without
+(`guest_abi_built` in `kernel/exec.c`, the `guest_archs` choice of Chapter 34,
+which the app cannot otherwise see). A new architecture is a new key, not a
+new value, whenever an old reader would misread the value.
 
 A catalogue entry may also carry a `series` and a `version`. That is for images
 this project builds itself from sources that keep moving, rather than a
@@ -139,7 +154,13 @@ different one and then acting on the running root walked straight past it.
 `/proc/ish/roots` reports both: `default name=` (and `root default=1`) for the
 next launch, `booted name=` for this one. Any other root can be deleted from
 its own screen, and since 557 by swiping its row in the list too, where a user
-looked for it first and found nothing (#575).
+looked for it first and found nothing (#575). Since 562 a delete removes the
+whole root or none of it: the root is renamed to `roots/.trash-<uuid>` first,
+then unregistered, then removed, and launch sweeps any trash a removal left
+behind. Before, a removal that stopped part way left a directory holding the
+name — on the A10X, the architecture lookup above had written its answer back
+into a root half deleted, the last `rmdir` failed, and the leftover collided
+with the next install of that name. The lookup now writes nothing.
 
 **Choosing the next root asks when.** The screen's Boot From This Filesystem
 used to set the default and quit on the spot: one tap, every running program

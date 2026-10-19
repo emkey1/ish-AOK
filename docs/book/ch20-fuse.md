@@ -24,10 +24,10 @@ descriptor and answers with a write.
 
 AOK implements protocol version **7.31**, which covers both libfuse2 and
 libfuse3 daemons. The structures are `linux/fuse.h`'s, with fixed layouts on
-every guest architecture — which is worth a sentence given Chapter 12's four
+every guest architecture — which is worth a sentence given Chapter 12's five
 different signal frames. FUSE's ABI is explicitly sized, so the same wire format
-serves i386, amd64, arm64 and riscv64 without per-guest translation. Somebody
-thought about that when they designed it.
+serves i386, amd64, arm64, riscv64 and ppc64le without per-guest translation.
+Somebody thought about that when they designed it.
 
 The operation set is the familiar one: `LOOKUP`, `GETATTR`, `SETATTR`,
 `READLINK`, `SYMLINK`, `MKNOD`, `MKDIR`, `UNLINK`, `RMDIR`, `RENAME`, `LINK`,

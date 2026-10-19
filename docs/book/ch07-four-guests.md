@@ -1,4 +1,4 @@
-# 7. Four guests
+# 7. Five guests
 
 Upstream iSH ran one guest architecture: i386. That was the right choice in
 2017 and it aged badly, for reasons that have nothing to do with the emulator.
@@ -7,14 +7,14 @@ does not ship a modern one; a growing amount of software simply is not built for
 it any more. A guest architecture is only as useful as the userland available
 for it, and i386's was quietly shrinking.
 
-iSH-AOK runs four: `i386`, `amd64`, `arm64` and `riscv64`, all through the same
-gadget JIT. This chapter is about what it took to get from one to four, what
-each addition actually taught, and the two traps that catch everybody reading
-this code for the first time.
+iSH-AOK runs five: `i386`, `amd64`, `arm64`, `riscv64` and, since 562,
+`ppc64le`, all through the same gadget JIT. This chapter is about what it took
+to get from one to five, what each addition actually taught, and the two traps
+that catch everybody reading this code for the first time.
 
 ## 7.1 The ABI is a field on the task
 
-The mechanism that makes four guests possible is small enough to quote. The
+The mechanism that makes five guests possible is small enough to quote. The
 first member of `struct task` is:
 
 ```c
@@ -35,12 +35,13 @@ struct syscall_abi_dispatch {
 };
 ```
 
-Four instances of that struct — one per guest — are all that stands between an
-`int 0x80` and an `svc #0`. The number comes from `eax` or `x8` or `a7`; the
-arguments come from `ebx/ecx/edx/esi/edi/ebp` or `x0–x5` or `a0–a5`; the result
-goes back to `eax` or `x0` or `a0`. Everything past that point is shared.
+Five instances of that struct — one per guest — are all that stands between an
+`int 0x80` and an `svc #0`. The number comes from `eax` or `x8` or `a7` or `r0`;
+the arguments come from `ebx/ecx/edx/esi/edi/ebp` or `x0–x5` or `a0–a5` or
+`r3–r8`; the result goes back to `eax` or `x0` or `a0` or `r3`. Everything past
+that point is shared.
 
-One of those instances is not like the others:
+Two of those instances are not like the others. The first:
 
 ```c
 // riscv64 shares arm64's syscall table: both are asm-generic ABIs with
@@ -56,6 +57,15 @@ shared by both architectures with identical numbering, so a second copy would
 be a second thing to keep in sync and nothing else. The comment states the
 condition under which that decision gets revisited, which is the difference
 between a shortcut and a design.
+
+The second borrows from the other side. powerpc is not an asm-generic ABI: its
+numbers are its own, close to i386's, and it kept the legacy calls (`open`,
+`stat`, `fork`, `poll`) that asm-generic dropped — which is amd64's set. So
+`ppc64_syscall_dispatch` points at `amd64_syscall_table`, and
+`ppc64_syscall_number` maps each powerpc number onto the amd64 handler of the
+same name through a generated table (`kernel/ppc64_syscalls.h`, written by
+`tools/gen-ppc64-syscalls.py`). Matching by name rather than by number is what
+makes sharing a table possible between two ABIs that number nothing alike.
 
 ## 7.2 amd64, and the assumptions of nine years
 
@@ -77,7 +87,7 @@ actually means in a codebase that has only ever had one:
 - TLS, signals, ptrace and the VDSO are all i386-specific.
 
 Every one of those is an assumption that was true and harmless for nine years.
-The amd64 port is mostly the work of removing them, and the reason the two
+The amd64 port is mostly the work of removing them, and the reason the three
 later ports were dramatically cheaper is that this one paid for the
 infrastructure: a per-task ABI enum, a 64-bit-capable MM, ELF64 loading, and a
 second syscall table mechanism.
@@ -189,7 +199,7 @@ guests whose remaining cost is dominated by dispatch rather than by translation.
 riscv64 landed nine days after arm64, and the plan says why it was cheap: this
 was the third 64-bit asm-generic-ABI guest and the second gadget engine, so
 nearly every kernel-layer decision was already made. The porting rule it states
-is the most practical sentence in any of the three documents:
+is the most practical sentence in any of the port plans:
 
 > grep `GUEST_ABI_ARM64` and mirror every site
 
@@ -224,21 +234,92 @@ example, written so that someone implementing a T-Head or Andes extension — or
 an experiment of their own — has a path that does not involve forking the
 engine.
 
-## 7.6 The bring-up recipe
+## 7.6 ppc64le, from a sibling's gadgets
 
-Three ports in four months produced a repeatable shape, and it is the same
-order every time:
+The fifth guest, in 562, is 64-bit little-endian PowerPC: ELFv2, the userland
+Alpine ships as `ppc64le` and Debian as `ppc64el`. Its occasion was a set of
+gadgets that already existed. AOK VM, the project's QEMU-based sibling, had
+grown PowerPC gadgets for a Mac OS guest on an emulated G4, and the plan
+records that they were written so that this port could take them: operands
+are byte offsets into a CPU state, the condition register is a word per
+field, XER's SO, OV and CA a word each. They were 32-bit and big-endian, so the
+port widened them to 64 bits, dropped the byte reversal — a little-endian
+guest's memory is the host's — and added what a Linux userland needs that a G4
+never did: the doubleword operations, the 64-bit rotates, VSX, and POWER8's
+additions. What came across is this tree's own now (`jit/guest-ppc64/`, with
+`jit/gen_ppc64.c` as its translator); as of 562 no gadget source here is kept in
+step with AOK VM's.
+
+The target is **POWER8**, Power ISA 2.07, because that is the baseline both
+distributions compile for: Alpine 3.24's busybox and musl already use `lxvd2x`,
+`mtfprd`, `lwa` and `ldbrx`. The riscv64 port was the template — the same patch
+order, the same "grep the riscv64 site and mirror it", and gadgets only, with
+no interpreter and no C core. The order of work came from what real binaries
+executed rather than from the manual: an instruction with no gadget logs its
+encoding and raises `SIGILL` at that address, which is the whole bring-up
+tool, and musl plus busybox turned out to be 263 mnemonics, mostly integer.
+
+What the gadgets cover is the integer unit, the rotates, CR and XER (with the
+`OE` forms and ISA 2.06's extended divides), branches, every load and store
+form, and `larx`/`stcx.`; scalar floating point with FPSCR, kept by the same
+lazy model riscv64's `fflags` use (`emu/fpenv.c`); and VSX and VMX, where VMX's
+float operations round to nearest and flush under `VSCR[NJ]`, and a NaN operand
+is chosen in POWER's order, never negated.
+
+The kernel side is where powerpc is not like anything already here. Section
+7.1 showed the numbers going by name onto amd64's handlers; what the names do
+not settle is converted on the way through. powerpc's open flags, `mmap` and
+`mlockall` flags and socket option numbers are its own. Its ioctl encoding has
+three direction bits where everyone else has two, so every `_IOC` number is
+re-encoded. Its `struct termios` has its own layout, flag values, `c_cc`
+indices and request numbers (`kernel/ppc64_termios.h`). And an error comes back
+the way Linux's powerpc returns one: a *positive* errno in `r3` with CR0's
+summary-overflow bit set, which musl tests with `bns+` before negating — and
+a restart backs the program counter up over the `sc` and puts back `r3`, as
+Linux does. Around that sits the rest of a Linux process: ppc64's signal frames
+and `sigreturn`, `ptrace` with powerpc's register sets, seccomp as
+`AUDIT_ARCH_PPC64LE`, `rseq`, a `/proc/cpuinfo` in POWER's format, `AT_HWCAP`
+(Chapter 15), and a vDSO.
+
+The oracle had bugs of its own. The differential tests in `tests/ppc64/` run
+the same generated programs under `qemu-ppc64le` and the AOK guest, and qemu is
+the one that is wrong in three places: it misses the signed overflow of a
+`divde` quotient past 2⁶³, its `vexptefp` is a Taylor series about zero that
+drifts for large operands, and its `fnmadd` and `fnmsub` round wrongly under
+directed rounding. The test headers say where, and AOK follows the ISA.
+Chapter 9's rule — check the oracle before claiming a defect — cuts both ways.
+The suite needed teaching too: tests that had assumed x86's ioctl and socket
+option numbers learned powerpc's, and the `vfork` tests learned that musl's
+powerpc64 `vfork()` is a plain `fork()`, so they make the system call
+themselves (`TEST_WANT_RAW_VFORK` in `test_common.h`).
+
+Alpine 3.24.2 ppc64le runs `apk` over HTTPS, `gcc`, Python and `strace`, and the
+manual suite passes on it: 362 on the Mac, and 366 with none failing on the M4
+iPad and on the A10X. The catalogue offers it under Community, marked
+Experimental (Chapter 30). What it does not have yet is any speed work — no
+fused pairs, no HLE, no specialised gadgets, one guest instruction to one
+gadget — nor anything of ISA 3.0, so a distribution built for POWER9 (RHEL 9,
+Ubuntu 24.04 and later) dies on `SIGILL`. The vector crypto instructions are
+missing too, and withheld from `AT_HWCAP2`, so OpenSSL takes its VMX paths. And
+everything was checked against qemu; nothing has yet met a POWER machine.
+
+## 7.7 The bring-up recipe
+
+Three ports in four months produced a repeatable shape, and the fourth, in
+October, followed it patch for patch. It is the same order every time:
 
 1. **ABI scaffolding.** Add the enum value, the `syscall_abi_dispatch`
    instance, and the register plumbing. Nothing executes yet.
 2. **The syscall table.** Either a new one, or — for an asm-generic guest —
-   point at the existing one and mirror the decision points.
+   point at the existing one and mirror the decision points, or — for
+   ppc64le — map the guest's numbers by name onto one that exists.
 3. **ELF and process setup.** Loading, auxv, stack layout, TLS, signal frames.
 4. **The gadget set.** One `.S` file per instruction family, brought up against
    hand-written assembly tests: `tests/arm64/*.s` and `tests/riscv64/*.s` are
    exactly that — `arm64_hello.s`, `arm64_atomics.s`, `arm64_fp.s`,
    `riscv64_fib.s`, `riscv64_signal.s`, and a `decode_check.c` driven by
-   machine-generated decode vectors.
+   machine-generated decode vectors — and `tests/ppc64/` adds generated
+   differential programs run against `qemu-ppc64le`.
 5. **A real userland.** Boot a distribution rootfs and run the guest-side
    regression suite (Chapter 9) on it.
 
@@ -247,7 +328,7 @@ the infrastructure. Step 4 is where the time goes. Step 5 is where the
 surprises are, because a real rootfs uses instructions and syscalls in
 combinations no test thought to try.
 
-## 7.7 Two traps
+## 7.8 Two traps
 
 **A table entry is not a reachable syscall.** This catches everyone. Reading
 `arm64_syscall_table` and finding an entry for syscall 229 does not mean a guest
@@ -275,11 +356,11 @@ cannot be read. "Legacy" here means "not
 where new work goes", not "dead". A reader who assumes the interpreters are
 vestigial will misread both the amd64 story and the AVX one.
 
-## 7.8 What four guests cost, and what they buy
+## 7.9 What five guests cost, and what they buy
 
 The cost is a multiplier on every decision point in the kernel. Chapter 11's
 rule — *a syscall often has a second copy* — is a direct consequence: per-ABI
-duplicate bodies exist, and a fix applied to one is a fix missing from three.
+duplicate bodies exist, and a fix applied to one is a fix missing from four.
 The test matrix multiplies too, and not evenly: some tests only exist for one
 architecture, and some bugs only exist in one engine.
 
@@ -295,8 +376,8 @@ nowhere else — which is why the old i386 e2e rootfs is the one to reach for
 whenever i386 codegen changes. Alpine roots are musl and Devuan roots are
 glibc, and the two libcs generate syscall sequences differently: glibc's
 hand-written stubs pass registers in ways musl's do not, which is precisely how
-the marshaller bug that killed `uv` with `SIGSYS` was found. Four guests times
-two libcs is a lot of ways to be wrong in only one of them.
+the marshaller bug that killed `uv` with `SIGSYS` was found. Five guests and
+two libcs are a lot of ways to be wrong in only one of them.
 
 And it buys the thing the chapter opened with: a hedge against a distribution
 dropping your architecture. i386's userland is shrinking. arm64's is not.
@@ -304,13 +385,17 @@ dropping your architecture. i386's userland is shrinking. arm64's is not.
 ---
 
 *Anchors:* [kernel/calls.c](../../kernel/calls.c) (`syscall_abi_dispatch`, the
-four tables), [kernel/task.h](../../kernel/task.h), [kernel/abi/](../../kernel/abi),
+five dispatches), [kernel/task.h](../../kernel/task.h), [kernel/abi/](../../kernel/abi),
 [jit/guest-arm64/](../../jit/guest-arm64), [jit/guest-riscv64/](../../jit/guest-riscv64),
+[jit/guest-ppc64/](../../jit/guest-ppc64), [jit/gen_ppc64.c](../../jit/gen_ppc64.c),
+[kernel/ppc64_syscalls.h](../../kernel/ppc64_syscalls.h),
+[kernel/ppc64_termios.h](../../kernel/ppc64_termios.h),
 [jit/riscv64_vendor_ext.c](../../jit/riscv64_vendor_ext.c),
 [main.c](../../main.c) (`configure_standalone_amd64_jit`),
 [docs/historical/amd64_port_plan.md](../../docs/historical/amd64_port_plan.md),
 [docs/aarch64_guest_plan.md](../../docs/aarch64_guest_plan.md),
 [docs/historical/riscv64_guest_plan.md](../../docs/historical/riscv64_guest_plan.md),
+[docs/ppc64le_guest_plan.md](../../docs/ppc64le_guest_plan.md),
 [docs/CREDITS-aarch64.md](../../docs/CREDITS-aarch64.md),
 [docs/guest_architecture_benchmarks.md](../../docs/guest_architecture_benchmarks.md),
-`tests/arm64/`, `tests/riscv64/`.
+`tests/arm64/`, `tests/riscv64/`, `tests/ppc64/`.

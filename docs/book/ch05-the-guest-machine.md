@@ -28,7 +28,7 @@ That is a deliberate trade: a union would save a few hundred bytes per task and
 would make every access go through a discriminator that the JIT would then have
 to prove constant. Memory is not the scarce resource here; dispatch is. The
 comment in the tree says as much, and Chapter 7 explains what "the guest ABI is
-a field on the task" buys when four architectures have to coexist in one
+a field on the task" buys when five architectures have to coexist in one
 address space.
 
 The i386 file is the one piece with real structure to it, and it is structure

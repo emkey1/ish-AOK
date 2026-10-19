@@ -7,18 +7,18 @@ iSH-AOK는 [ish-app/ish](https://github.com/ish-app/ish)의 포크로, 이 트�
 
 Testflight: https://testflight.apple.com/join/X1flyiqE
 
-이 포크는 단순한 리브랜딩이 아닙니다. 포크 전용 동작, 번들된 루트 파일시스템, 진단 작업, File Provider 통합, 그리고 네 가지 게스트 아키텍처 지원을 포함하고 있습니다. 업스트림 iSH를 원한다면 `ish-app/ish`를 사용하세요. 이 저장소에서 작업 중이라면, 이 README가 참고해야 할 문서입니다.
+이 포크는 단순한 리브랜딩이 아닙니다. 포크 전용 동작, 번들된 루트 파일시스템, 진단 작업, File Provider 통합, 그리고 다섯 가지 게스트 아키텍처 지원을 포함하고 있습니다. 업스트림 iSH를 원한다면 `ish-app/ish`를 사용하세요. 이 저장소에서 작업 중이라면, 이 README가 참고해야 할 문서입니다.
 
 ## 이 포크가 추가한 것
 
 - 포크 전용 앱 아이덴티티:
   - 제품명 `iSH-AOK`
   - 번들 루트 `app.ish.iSH-AOK`
-- **네 가지 게스트 아키텍처**, 모두 JIT 기반: `i386`, `amd64`(x86_64), `arm64`(aarch64), `riscv64`.
+- **다섯 가지 게스트 아키텍처**, 모두 JIT 기반: `i386`, `amd64`(x86_64), `arm64`(aarch64), `riscv64`, `ppc64le`(64비트 리틀 엔디언 PowerPC).
 - **네이티브 프로그램**: zsh, dash(프로비저닝이 이를 `sh` 로 만듭니다), 그리고 OpenSSH(`ssh`, `scp`, `sftp`, `ssh-keygen`, `ssh-copy-id`), Nextvi 편집기, GNU 호환 `sed`, `grep`, `find`, `ls`, `tar`, `gzip`, `diff`, `awk` 및 coreutils 대부분을 품고 있는 SmallCLUE 의 busybox 스타일 도구 모음이 호스트 코드로 앱에 컴파일되어 들어가며, 게스트의 `execve` 에서 `/AOK/native/<이름>` 을 통해 디스패치됩니다. 이들은 게스트 바이너리가 아니라 게스트 태스크 스레드 위에서 도는 호스트 함수이므로, 명령어 단위로 변환되지 않고 전속력으로 실행됩니다. bash 도 동일한 네이티브 구현이 있지만, 배포되는 빌드에는 556 부터 포함되지 않습니다 — [네이티브 bash와 라이선스](#네이티브-bash와-라이선스) 참고.
 - **네이티브 모드**(558): 리눅스 배포판이 전혀 없는 루트입니다. `/bin` 과 `/usr/bin` 은 네이티브 프로그램들 — 일상 명령 약 140개, ssh, git, curl, 편집기 — 이고, SmallCLUE 의 `init` 이 pid 1 로서 runit 방식의 서비스를 돌리며, 로그인 셸은 네이티브 zsh 입니다. 아무것도 내려받지 않습니다: 공식 배포판 아래에서 **iSH-AOK Native** 를 고르면 됩니다. 패키지 관리자가 필요하면 배포판을 그 옆에 설치하십시오. `/AOK/docs/native-mode.md` 참고.
 - `/AOK`, 읽기 전용 인앱 파일시스템(`/AOK/docs`, `/AOK/tools`, `/AOK/tests`, `/AOK/native`). `fs/aok-*.manifest` 와 `tools/gen-aokfs.py` 를 통해 빌드 시점에 `opt/AOK/` 에서 만들어 넣습니다.
-- 앱 빌드에 번들된 루트 파일시스템(Alpine 3.24.2와 Devuan 6, `aarch64` 전용), 그리고 `i386`, `x86_64`, `riscv64` 용 다운로드 이미지.
+- 앱 빌드에 번들된 루트 파일시스템(Alpine 3.24.2와 Devuan 6, `aarch64` 전용), 그리고 `i386`, `x86_64`, `riscv64`, `ppc64le` 용 다운로드 이미지.
 - **게스트에서 쓰는 기기의 GPU**: `/dev/dri/renderD128`, 프로세스 안에서 MoltenVK 위의 virglrenderer Venus 렌더러가 뒷받침하는 virtio-gpu 렌더 노드입니다. 그래서 Mesa 의 Venus Vulkan 드라이버(와 그 위의 zink)가 Metal 로 그립니다. 게스트 쪽은 `/AOK/tools/setup-gpu.sh` 가 설치합니다. `/AOK/docs/workspace.md` 참고.
 - **Wayland 데스크톱**(labwc, foot, waybar; 자체 데스크톱 네 개 — labwc 대신 Wayfire 나 Xfce 도 가능): GPU 에서 합성되고, `/AOK/native/wl-present` 를 통해 앱에 전달됩니다 — 한쪽으로는 프레임이, 다른 쪽으로는 키보드, 포인터, 클립보드, 크기 변경이 오가며, VNC 는 대체 경로입니다. `/AOK/tools/setup-games.sh` 는 검증된 게임 묶음을 설치합니다. `/AOK/docs/workspace.md` 참고.
 - **LLM Chat**: 앱 내장 채팅 클라이언트(OpenAI 호환 서버, Anthropic, Gemini, Apple 온디바이스 모델). 허용/확인/거부 권한 아래에서 게스트의 파일을 읽고 고치고 명령을 실행할 수 있으며, MCP 서버를 쓰고, 여러 채팅을 백그라운드 에이전트로 동시에 돌립니다. API 키는 키체인에 보관됩니다. `/AOK/docs/llm-chat.md` 참고.
@@ -36,7 +36,7 @@ Testflight: https://testflight.apple.com/join/X1flyiqE
 
 ## 게스트 아키텍처
 
-네 가지 게스트 모두 지원되며 gadget JIT를 통해 실행됩니다. 어느 것도 네이티브로
+다섯 가지 게스트 모두 지원되며 gadget JIT를 통해 실행됩니다. 어느 것도 네이티브로
 실행되지 않습니다. ARM 호스트에서 `arm64` 게스트 명령어 하나는 `riscv64`의 경우와
 똑같이 gadget 디스패치 하나입니다. 호스트와 같은 ISA 계열이라는 점은 각 gadget의
 본체를 저렴하게 만들 뿐, 공짜로 만들지는 않습니다.
@@ -47,11 +47,12 @@ Testflight: https://testflight.apple.com/join/X1flyiqE
 | `amd64` | 지원됨, JIT. x86-64-v4(AVX-512 포함)를 CPUID 에 표시(558) |
 | `arm64` | 지원됨, JIT |
 | `riscv64` | 지원됨, JIT. V 벡터 유닛을 포함한 RVA23(558) — Ubuntu 25.10 이 실행됩니다 |
+| `ppc64le` | 562 에서 새로 추가, JIT. VMX 와 VSX 를 갖춘 POWER8(ISA 2.07) — Alpine 의 `ppc64le` 이 실행됩니다([계획](docs/ppc64le_guest_plan.md)) |
 
 각 게스트가 소프트웨어에 알리는 내용 — `CPUID`, `AT_HWCAP`, `riscv_hwprobe`,
 `/proc/cpuinfo` — 은 `/AOK/docs/guest-cpus.md` 에 있습니다.
 
-게스트별 회귀 테스트 스위트는 기기에서 네 아키텍처 모두 통과합니다. 인터프리터는
+게스트별 회귀 테스트 스위트는 기기에서 다섯 아키텍처 모두 통과합니다. 인터프리터는
 레거시이며 제거될 예정이므로, 새 작업은 JIT를 대상으로 해야 합니다.
 
 관련 파일:
@@ -542,7 +543,7 @@ Ruby/Bundler/Fastlane 환경과 서명 및 인증 시크릿이 필요합니다.
 - `working`이 기본 브랜치이자 활성 통합 브랜치입니다. 버그 수정, 기능 작업, 릴리스
   후보가 여기로 들어옵니다.
 - `amd64`, `aarch64`, `riscv`는 원래 게스트별 초기 구현 브랜치였습니다. 그 작업은
-  `working`에 병합되었고, `working`이 네 게스트를 모두 빌드합니다.
+  `working`에 병합되었고, `working`이 다섯 게스트를 모두 빌드합니다.
 
 ## 업스트림과의 관계
 

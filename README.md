@@ -49,7 +49,7 @@ each gadget's body cheaper, not free.
 What each guest reports to software — `CPUID`, `AT_HWCAP`, `riscv_hwprobe`,
 `/proc/cpuinfo` — is in `/AOK/docs/guest-cpus.md`.
 
-The per-guest regression suites pass on all four on device. Note that the
+The per-guest regression suites pass on all five on device. Note that the
 interpreters are legacy and are being retired: new work should target the JIT.
 
 Relevant files:
@@ -550,7 +550,7 @@ differently named tag produces no release build.
 - `working` is the default branch and the active integration branch. Bug fixes,
   feature work, and release candidates land here.
 - `amd64`, `aarch64` and `riscv` were the original per-guest bring-up branches.
-  That work is merged into `working`, which builds all four guests.
+  That work is merged into `working`, which builds all five guests.
 
 ## Upstream Relationship
 
