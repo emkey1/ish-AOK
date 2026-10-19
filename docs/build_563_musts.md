@@ -126,7 +126,8 @@ different bug, already fixed on Apple hosts and fixed today for x86_64 ones.
   contract instead: FLD/FSTP and FBLD/FBSTP m80, FLDENV/FNSTENV and
   FRSTOR/FNSAVE at every offset up to a page end, loads beside PROT_NONE,
   stores leaving the next page alone, with a crossing load that must fault as
-  control; 113 checks pass on i386 and amd64.
+  control; 113 checks pass on i386 and amd64. MBP5 suite at 7e485a22a: five
+  roots, 385-475 passes, 0 failures; the Xcode device build has it.
 - *Corrected:* jit/jit.c's comment that named this crash as the stale-TLB
   race. *Found on the way:* FBLD/FBSTP are SIGILL on an x86_64 host (added to
   the TODO's x86_64-host entry).
