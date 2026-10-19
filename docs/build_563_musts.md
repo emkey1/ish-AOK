@@ -22,7 +22,7 @@ drawn from the queue on 2026-10-19: what to keep, cut or add is yours.
 | 4 | Native programs share the host C library's static state | open: basename and four others done in 559; ten more names and the tz cache left |
 | 5 | Shortcuts Run Command: output over 256 KB, non-UTF-8 output, a reap timeout | open: fixes known to the line; proof needs a signed device build |
 | 6 | `signal_process_wake_one` late on the A10X | open: decide whether it is the device or a wake path |
-| 7 | Issues and the TODO's own state | open: #646 to close, the issue table stale, 27 done entries in the queue |
+| 7 | Issues and the TODO's own state | open: #646 to close, the issue table stale, 34 done entries in the queue |
 | 8 | Decisions due at the start of a release | open: #540, the two unlanded branches |
 
 Order: crash classes first (2, 3), then correctness native programs and
@@ -171,7 +171,7 @@ was made named.
   #631, #639 and #640 as open; GitHub has them closed. #648 (an apt `W:`
   line on Devuan, answered 2026-10-17, waiting on the reporter) is not in it.
   Open on GitHub today: #540, #646, #647, #648.
-- **The queue holds 27 entries marked Done or Settled.** The queue's own rule
+- **The queue holds 34 entries whose headline says Done, Fixed or Settled.** The queue's own rule
   is that a landed item's bullet is deleted, the commit being the record.
   Delete them, after checking that none carries an open "Not done" tail that
   should become its own bullet.
