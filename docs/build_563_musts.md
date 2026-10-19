@@ -89,7 +89,8 @@ Shortcuts users see (4, 5), then the release gate's one device failure (6).
 - **Proved:** `meson test list` (util/list-test.c): every walk form over a
   zeroed global and a calloc'd head, a populated control, and the
   removed-node contract the readers rely on. Built against the old header it
-  dies of SIGSEGV. Suite on five roots: see the commit.
+  dies of SIGSEGV. MBP5 suite on five roots at 306c895ed: 385-474 passes,
+  0 failures; the Xcode device build has it.
 
 ## 3. Exec hands a task stale TLB entries
 
@@ -229,4 +230,8 @@ Not musts. Each is in docs/TODO.md's queue.
 
 ## Done beside the musts
 
-(Empty.)
+- **kernel/native.c builds without warnings** (4d5fb4f57). Ten in every build
+  since e459ac19f: nine positional entries in `native_programs[]` that left
+  out `setuid_root` (every entry now names `.name` and `.main`, the lesson of
+  the native zsh setuid accident), and the dead seam-probe placeholder that
+  stood in for SmallCLUE, with its four applets. Suite clean on five roots.
