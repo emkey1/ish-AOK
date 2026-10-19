@@ -17,7 +17,7 @@ drawn from the queue on 2026-10-19: what to keep, cut or add is yours.
 | § | item | state |
 |---|---|---|
 | 1 | A 64-bit result read as -errno; a call through NULL reported as SI_KERNEL | **DONE** (15a1fb543): both fixed, i386's NULL call too; suite clean on five roots, ppc64 checked |
-| 2 | `list_remove` leaves a NULL node that a walk faults on | open: audit `list_null()` readers, then pick the class fix |
+| 2 | `list_remove` leaves a NULL node that a walk faults on | **DONE, a different fix** (2026-10-19): the audit ruled out re-initing; walks now treat a never-initialised head as empty, which is what crashed |
 | 3 | Exec hands a task stale TLB entries | open: healed by a retry, cause not found |
 | 4 | Native programs share the host C library's static state | open: basename and four others done in 559; ten more names and the tz cache left |
 | 5 | Shortcuts Run Command: output over 256 KB, non-UTF-8 output, a reap timeout | open: fixes known to the line; proof needs a signed device build |
@@ -57,25 +57,39 @@ Shortcuts users see (4, 5), then the release gate's one device failure (6).
 
 ## 2. `list_remove` leaves a NULL node that a walk faults on
 
-**Why.** A crash class with a device report behind it. `list_remove`
-(util/list.h) sets a node's `next` and `prev` to NULL, `list_init` makes it
-point at itself, and `list_for_each_entry` stops only on reaching the head,
-with no NULL check: a removed node still reachable from a list faults the
-walk at `0xfffffffffffffff8`.
+**Done 2026-10-19, and not with the one-line fix the queue proposed.**
 
-**Established** (TODO, *Diagnosed, not fixed*): 94 bare `list_remove` calls
-against 14 `list_remove_safe`; only the two `alive_pids_list` sites, the one
-with the crash report, re-init after removing. The one-line class fix
-(re-init instead of NULL) changes what `list_null()` means at every call
-site, and `list_empty()` and `list_null()` disagree about a NULL node.
-
-**Next step.** Audit every `list_null()` reader, then choose between the
-one-line change and converting the remaining bare removes to a re-initing
-form.
-
-**Prove.** The audit's list in the commit; the full suite on five roots; a
-test that walks a list after a remove, if one can be made to reach the
-state without a race.
+- *What crashed.* Not a removed node: the device crash behind this entry was
+  `alive_pids_list`, a bare global, walked before the guest booted -- a head
+  that was never initialised, whose `next` is NULL. `list_empty()` has always
+  called such a head empty; the walk macros faulted on it.
+- *The audit.* 27 `list_null()` readers. 17 are heads set up lazily (jit's
+  block hashes, the inode hash, net_emul_binds, the abstract-socket hash),
+  untouched by `list_remove`. 10 are nodes whose owner asks "has it been
+  removed?": the futex waiter learns it was woken that way (kernel/futex.c,
+  three sites, one of them lock-free), and fifo close, a fuse request's
+  interrupt, kmsg and proc close, inotify's instance count, tmpfs's readdir
+  resume and sockrestart's re-add gate decide on it. A re-initing
+  `list_remove` makes every one of those read a removed node as still
+  linked: a woken futex waiter would sleep on, and sockrestart would never
+  re-add a listener.
+- *Why not re-init anyway, with a new predicate.* A walk whose cursor is on a
+  node another thread removed would then spin on that node for ever with its
+  lock held -- the shape of the sockrestart hang (a node linked to itself) --
+  where NULL faults at once, at a signature the crash notes already name.
+  Linux poisons removed nodes for the same reason.
+- *The fix.* util/list.h's four walk macros start at `list_walk_start()`: the
+  first node, or the head itself when its `next` is NULL, so a walk over a
+  never-initialised head runs no iterations. One `csel` per walk.
+  `list_remove` is unchanged, with the reasons above in a comment. The
+  file-scope heads without an initializer (inodes_hash, mmap_cache_hash,
+  net_emul_binds, abstract_hash, futex_hash) were already covered by a
+  constructor or a lazy init; the walk guard covers the heads in structs that
+  grep cannot find.
+- **Proved:** `meson test list` (util/list-test.c): every walk form over a
+  zeroed global and a calloc'd head, a populated control, and the
+  removed-node contract the readers rely on. Built against the old header it
+  dies of SIGSEGV. Suite on five roots: see the commit.
 
 ## 3. Exec hands a task stale TLB entries
 

@@ -1356,39 +1356,6 @@ why ~20 earlier attempts found nothing.
 booted, so it refuses cleanly rather than relying on the scope check; and the
 `list_remove`/`list_for_each_entry` NULL class below.
 
-### list_remove leaves a NULL node and the walk macro has no NULL check
-
-**The class behind the alive_pids_list crash above, and it is wider than that
-one list.** `list_remove` (util/list.h:69) sets a node's `next` and `prev` to
-**NULL**; `list_init` leaves a node pointing at **itself**; and
-`list_for_each_entry` terminates only on `&item->member != (list)`, with no
-NULL check. So any node that is reachable from a list while holding a NULL
-`next` faults the walk at the `container_of` subtraction --
-`ldur x28, [x24, #-0x8]`, address `0xfffffffffffffff8`.
-
-Measured spread in kernel/ and fs/:
-
-- **94** bare `list_remove(` calls vs **14** `list_remove_safe(`.
-- Unguarded `list_for_each_entry` walks per list head: `mounts` 19,
-  `group->threads` 9, `pid->pgroup` 7, `alive_pids_list` 6, `sighand->queue` 4,
-  `poll->poll_fds` 4, and a long tail.
-- `list_for_each_entry_safe` caches `next` one step ahead but has the same
-  termination test, so it is not immune either.
-
-**Fixed so far: only the two `alive_pids_list` sites** (`task_unlink_locked`,
-`kernel/exec.c`'s exec unlink), which now `list_init` after removing. That is
-the list with an actual device crash report behind it.
-
-**The class fix would be one line** -- have `list_remove` re-init instead of
-NULLing -- but it changes the meaning of `list_null()` for 94 call sites, and
-`list_empty()` treats NULL and self-pointing as the same thing while
-`list_null()` does not. That needs its own audit of every `list_null` reader
-before it is safe, which is why it was not bundled into a checkpoint fix.
-
-**Next step.** Audit `list_null()` callers, then decide between the one-line
-`list_remove` change and converting the remaining bare removes to a re-initing
-form.
-
 ### The Desktops applet's default height under-counts its action buttons
 
 Noticed 2026-09-12 while adding the Session button, and **pre-existing** -- left

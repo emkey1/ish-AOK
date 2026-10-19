@@ -2078,6 +2078,12 @@ if not meson.is_cross_build()
         include_directories: includes)
     test('zpool', zpool_test)
 
+    # util/list.h: a never-initialised head walks as empty, and a removed node
+    # stays NULL. See the test's header for why each is load-bearing.
+    list_test = executable('list_test', ['util/list-test.c'],
+        include_directories: includes)
+    test('list', list_test)
+
     # fakefs never hands out an inode number twice on a root -- the Files
     # extension names items by these numbers. See the test's header.
     fakefs_inode_reuse_test = executable('fakefs_inode_reuse_test', ['fs/fake-inode-reuse-test.c'],
