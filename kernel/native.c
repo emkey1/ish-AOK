@@ -22,14 +22,6 @@
 #include "debug.h"
 #include "util/lockstats.h"
 
-// Everything a native program prints has to go through iSH's fd layer, not the
-// host's stdio -- see the libc warning in kernel/native.h.
-static void native_write_str(fd_t fd_no, const char *s) {
-    if (s == NULL)
-        return;
-    native_write(fd_no, s, strlen(s));
-}
-
 // The applet a multicall binary was invoked as: the basename of argv[0], which
 // the caller supplies independently of the path exec resolved. That separation
 // is the whole point -- /usr/local/bin/df and /AOK/native/smallclue resolve to
@@ -47,187 +39,6 @@ static size_t native_envp_count(char *const envp[]) {
         while (envp[n] != NULL)
             n++;
     return n;
-}
-
-static const char *native_getenv(char *const envp[], const char *name) {
-    if (envp == NULL)
-        return NULL;
-    size_t len = strlen(name);
-    for (size_t i = 0; envp[i] != NULL; i++)
-        if (strncmp(envp[i], name, len) == 0 && envp[i][len] == '=')
-            return envp[i] + len + 1;
-    return NULL;
-}
-
-// cat: the smallest applet that proves the filesystem seam end to end -- guest
-// path resolution against the task's cwd, a real read through iSH's VFS, and
-// output onto the guest's own stdout.
-static int native_applet_cat(int argc, char *const argv[]) {
-    if (argc < 2) {
-        native_write_str(2, "cat: reading stdin is not implemented yet\n");
-        return 1;
-    }
-    int rc = 0;
-    for (int i = 1; i < argc; i++) {
-        struct fd *fd = NULL;
-        int err = native_open(argv[i], O_RDONLY_, &fd);
-        if (err < 0) {
-            native_printf(2, "cat: %s: cannot open (errno %d)\n", argv[i], -err);
-            rc = 1;
-            continue;
-        }
-        char buf[4096];
-        for (;;) {
-            ssize_t n = native_read(fd, buf, sizeof(buf));
-            if (n < 0) {
-                native_printf(2, "cat: %s: read error (errno %d)\n", argv[i], (int) -n);
-                rc = 1;
-                break;
-            }
-            if (n == 0)
-                break;
-            native_write(1, buf, (size_t) n);
-        }
-        native_close(fd);
-    }
-    return rc;
-}
-
-// ls: proves directory iteration, which is the other half of the seam. One
-// name per line, unsorted -- this is a seam probe, not a coreutils replacement.
-static int native_applet_ls(int argc, char *const argv[]) {
-    const char *path = argc > 1 ? argv[1] : ".";
-    struct fd *fd = NULL;
-    int err = native_open(path, O_RDONLY_, &fd);
-    if (err < 0) {
-        native_printf(2, "ls: %s: cannot open (errno %d)\n", path, -err);
-        return 1;
-    }
-    if (fd->ops->readdir_begin != NULL)
-        fd->ops->readdir_begin(fd);
-    struct dir_entry entry;
-    int rc = 0;
-    for (;;) {
-        int res = native_readdir(fd, &entry);
-        if (res < 0) {
-            native_printf(2, "ls: %s: readdir error (errno %d)\n", path, -res);
-            rc = 1;
-            break;
-        }
-        if (res == 0)
-            break;
-        native_printf(1, "%s\n", entry.name);
-    }
-    if (fd->ops->readdir_end != NULL)
-        fd->ops->readdir_end(fd);
-    native_close(fd);
-    return rc;
-}
-
-// pwd/stat: the remaining two seam primitives, so all of them have a caller.
-static int native_applet_pwd(void) {
-    char buf[MAX_PATH];
-    int err = native_getcwd(buf);
-    if (err < 0) {
-        native_printf(2, "pwd: cannot determine cwd (errno %d)\n", -err);
-        return 1;
-    }
-    native_printf(1, "%s\n", buf[0] != '\0' ? buf : "/");
-    return 0;
-}
-
-static int native_applet_stat(int argc, char *const argv[]) {
-    if (argc < 2) {
-        native_write_str(2, "stat: missing operand\n");
-        return 1;
-    }
-    int rc = 0;
-    for (int i = 1; i < argc; i++) {
-        struct statbuf st = {};
-        int err = native_stat(argv[i], &st, true);
-        if (err < 0) {
-            native_printf(2, "stat: %s: cannot stat (errno %d)\n", argv[i], -err);
-            rc = 1;
-            continue;
-        }
-        native_printf(1, "%s size=%llu mode=%o uid=%u gid=%u\n", argv[i],
-                (unsigned long long) st.size, st.mode & 07777, st.uid, st.gid);
-    }
-    return rc;
-}
-
-// Placeholder standing in for the real SmallCLUE, which is not yet part of this
-// build. The applets here are deliberately a seam probe rather than a coreutils
-// implementation: between them they exercise every part of the path SmallCLUE
-// will need -- resolved-path matching, argv[0] applet selection, env handoff,
-// exit status, and now guest filesystem access through kernel/native_io.h.
-// Replacing this with SmallCLUE's own multicall entry point is a change to this
-// function and nothing else.
-static int smallclue_native_main(int argc, char *const argv[], char *const envp[]) {
-    const char *applet = native_applet_name(argc, argv);
-
-    if (strcmp(applet, "true") == 0)
-        return 0;
-    if (strcmp(applet, "false") == 0)
-        return 1;
-
-    if (strcmp(applet, "echo") == 0) {
-        for (int i = 1; i < argc; i++) {
-            if (i > 1)
-                native_write_str(1, " ");
-            native_write_str(1, argv[i]);
-        }
-        native_write_str(1, "\n");
-        return 0;
-    }
-
-    if (strcmp(applet, "cat") == 0)
-        return native_applet_cat(argc, argv);
-    if (strcmp(applet, "ls") == 0)
-        return native_applet_ls(argc, argv);
-    if (strcmp(applet, "pwd") == 0)
-        return native_applet_pwd();
-    if (strcmp(applet, "stat") == 0)
-        return native_applet_stat(argc, argv);
-
-    // Invoked by its own name: report what this build can do. Also the
-    // verification surface for the dispatch path, hence the argv/env dump.
-    if (strcmp(applet, "smallclue") == 0) {
-        if (argc > 1 && strcmp(argv[1], "--selftest") == 0) {
-            native_printf(1, "native: ok\n");
-            native_printf(1, "argc: %d\n", argc);
-            for (int i = 0; i < argc; i++)
-                native_printf(1, "argv[%d]: %s\n", i, argv[i]);
-            native_printf(1, "envp count: %zu\n", native_envp_count(envp));
-            const char *path = native_getenv(envp, "PATH");
-            native_printf(1, "envp PATH: %s\n", path != NULL ? path : "<unset>");
-            native_write_str(2, "native: this line went to fd 2\n");
-            return 0;
-        }
-        // Explicit applet form: `smallclue ls -l` means the same as `ls -l`,
-        // the way busybox works. Without this, the only way to reach an applet
-        // is through a symlink, which is a surprise for anyone who invokes the
-        // multicall binary by name to try one out. Shifting argv rather than
-        // special-casing keeps argv[0] meaning the same thing to the applet.
-        if (argc > 1 && argv[1][0] != '-')
-            return smallclue_native_main(argc - 1, argv + 1, envp);
-
-        native_write_str(1,
-                "smallclue (native placeholder, built into iSH-AOK)\n"
-                "\n"
-                "Runs as host code -- not translated -- so it costs the same on every\n"
-                "guest architecture.\n"
-                "\n"
-                "Applets in this build: true, false, echo, cat, ls, pwd, stat\n"
-                "\n"
-                "Run one directly:      smallclue ls /etc\n"
-                "or via a symlink:      ln -s /AOK/native/smallclue /usr/local/bin/ls\n"
-                "Self-test:             smallclue --selftest\n");
-        return 0;
-    }
-
-    native_printf(2, "smallclue: applet '%s' not built into this iSH-AOK\n", applet);
-    return 127;
 }
 
 // SmallCLUE proper, compiled in from deps/smallclue (meson.build). Its
@@ -342,38 +153,38 @@ int native_bmt_main(int argc, char *const argv[], char *const envp[]);
 int native_ktop_main(int argc, char *const argv[], char *const envp[]);
 
 static const struct native_program native_programs[] = {
-    { "smallclue", smallclue_real_main },
+    { .name = "smallclue", .main = smallclue_real_main },
     // Setuid-root, unlike the multicall entry above -- see native_suid_applet
     // for why that is safe here and would not be there.
-    { "sudo", native_sudo_main, .setuid_root = true },
-    { "su", native_su_main, .setuid_root = true },
-    { "passwd", native_passwd_main, .setuid_root = true },
-    { "motepad", native_motepad_main },
+    { .name = "sudo", .main = native_sudo_main, .setuid_root = true },
+    { .name = "su", .main = native_su_main, .setuid_root = true },
+    { .name = "passwd", .main = native_passwd_main, .setuid_root = true },
+    { .name = "motepad", .main = native_motepad_main },
     // Same program as /AOK/tools/ktop, compiled as host code. Measured 2.7x
     // faster per refresh on an i386 guest -- worthwhile rather than dramatic,
     // because most of a refresh is kernel-side /proc work that was never
     // emulated to begin with. See ktop_glue.c.
-    { "ktop", native_ktop_main },
-    { "wl-present", native_wlpresent_main },
+    { .name = "ktop", .main = native_ktop_main },
+    { .name = "wl-present", .main = native_wlpresent_main },
     // The /AOK/tools benchmarks, so the same workload can be timed with and
     // without emulation. kernel/native_bench.c explains what that comparison
     // is, and what it is not.
-    { "bmm", native_bmm_main },
-    { "bmt", native_bmt_main },
+    { .name = "bmm", .main = native_bmm_main },
+    { .name = "bmt", .main = native_bmt_main },
 #ifdef ISH_NATIVE_RUST
     // Rust, reached by rewriting its libc imports onto the shim rather than by
     // the #define redirection that only covers what AOK compiles. See
     // tools/gen-nlibc-renames.py and deps/rust-native-probe.
-    { "rust-probe", rust_native_probe_main },
+    { .name = "rust-probe", .main = rust_native_probe_main },
 #endif
 #ifdef ISH_NATIVE_HELIX
     // Registered as `hx`, which is what helix calls itself and what a user
     // types. deps/helix-native is the staticlib wrapper; deps/helix is the
     // editor.
-    { "hx", helix_native_main },
+    { .name = "hx", .main = helix_native_main },
 #endif
 #ifdef ISH_NATIVE_BASH
-    { "bash", native_bash_main },
+    { .name = "bash", .main = native_bash_main },
 #endif
 #ifdef ISH_NATIVE_ZSH
     // zsh is the one native program that can describe itself completely: its
@@ -391,14 +202,14 @@ static const struct native_program native_programs[] = {
     // crash was an instruction fetch at an unaligned address inside
     // __cstring, every time the app was backgrounded with a native zsh
     // running. -w hid all three diagnostics.
-    { "zsh", native_zsh_main, .ckpt_dump = native_zsh_ckpt_dump,
+    { .name = "zsh", .main = native_zsh_main, .ckpt_dump = native_zsh_ckpt_dump,
       .ckpt_state_var = "AOK_ZSH_STATE_FD" },
-    { "zsh-multio", native_zsh_multio_main, .ckpt_dump = native_zsh_ckpt_dump,
+    { .name = "zsh-multio", .main = native_zsh_multio_main, .ckpt_dump = native_zsh_ckpt_dump,
       .ckpt_state_var = "AOK_ZSH_STATE_FD" },
 #endif
 #ifdef ISH_NATIVE_DASH
-    { "dash", native_dash_main },
-    { "sh", native_dash_main },
+    { .name = "dash", .main = native_dash_main },
+    { .name = "sh", .main = native_dash_main },
 #endif
 };
 
