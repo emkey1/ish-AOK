@@ -76,6 +76,12 @@
     ldr x8, [_ip, #16]
     str x8, [_cpu, #CPU_segfault_addr]
     strb wzr, [_cpu, #CPU_segfault_was_write]
+    // An INT_GPF from here is a fetch from an unmapped page, and its address
+    // is the fault's even when it is 0 (a call through NULL): reported, so
+    // the kernel delivers SEGV_MAPERR at it rather than SI_KERNEL.
+    cmp _tmp, #INT_GPF
+    cset w8, eq
+    strb w8, [_cpu, #CPU_segfault_reported]
     b jit_exit
 
 // B, BL — unconditional branch (target is compile-time-known, computed by

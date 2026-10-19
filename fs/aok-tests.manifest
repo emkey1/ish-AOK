@@ -225,6 +225,8 @@ cgroup2_live.c
 unix_peercred_before_accept.c
 mmap_truncate_sigbus.c
 null_page_fault.c
+null_call_siginfo.c
+lseek_errno_window.c
 signalfd_epoll_deadlock.c
 pidfd_epoll_deadlock.c
 pidfd_zombie.c

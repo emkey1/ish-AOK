@@ -20178,7 +20178,7 @@ typedef void (*gadget_t)(void);
 #define h_read_bits(h, z, bits) do { g_addr(); ggg(helper_read##bits, state->orig_ip, h##z); } while (0)
 #define h_write_bits(h, z, bits) do { g_addr(); ggg(helper_write##bits, state->orig_ip, h##z); } while (0)
 #define UNDEFINED do { gggg(interrupt, INT_UNDEFINED, state->orig_ip, state->orig_ip); return false; } while (0)
-#define SEGFAULT do { gggg(interrupt, tlb->fetch_denied ? INT_PF_EXEC : INT_GPF, state->orig_ip, tlb->segfault_addr); return false; } while (0)
+#define SEGFAULT do { gggg(fetch_fault, tlb->fetch_denied ? INT_PF_EXEC : INT_GPF, state->orig_ip, tlb->segfault_addr); return false; } while (0)
 #define SYSCALL_AMD64 do { gggg(interrupt, INT_AMD64_SYSCALL, state->ip, 0); return false; } while (0)
 
 static inline int sz(int size) {

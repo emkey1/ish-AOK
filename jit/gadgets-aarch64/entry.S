@@ -104,6 +104,22 @@ jit_exit:
     strb wzr, [_cpu, CPU_segfault_reported]
     b jit_exit
 
+// gen.c's SEGFAULT: an instruction fetch from an unmapped or unexecutable
+// page, with the stream laid out as interrupt's. An INT_GPF from here has
+// the fault's address even when it is 0 (a call through NULL): reported, so
+// the kernel delivers SEGV_MAPERR at it rather than SI_KERNEL. interrupt
+// itself cannot say so, since PORT_IO's and PRIV's INT_GPF are real #GPs.
+.gadget fetch_fault
+    ldr _tmp, [_ip]
+    ldr w8, [_ip, 16]
+    str x8, [_cpu, CPU_segfault_addr]
+    ldr eip, [_ip, 8]
+    strb wzr, [_cpu, CPU_segfault_was_write]
+    cmp _tmp, #INT_GPF
+    cset w8, eq
+    strb w8, [_cpu, CPU_segfault_reported]
+    b jit_exit
+
 .gadget exit
     ldr eip, [_ip]
     b jit_ret

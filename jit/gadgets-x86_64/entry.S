@@ -80,6 +80,17 @@ jit_exit:
     movb $0, CPU_segfault_reported(%_cpu)
     jmp jit_exit
 
+# gen.c's SEGFAULT: an instruction fetch that faulted. See the aarch64 copy.
+.gadget fetch_fault
+    movl (%_ip), %_tmp
+    movl 16(%_ip), %r14d
+    movq %r14, CPU_segfault_addr(%_cpu)
+    movl 8(%_ip), %_eip
+    movb $0, CPU_segfault_was_write(%_cpu)
+    cmpl $INT_GPF, %_tmp
+    sete CPU_segfault_reported(%_cpu)
+    jmp jit_exit
+
 .gadget exit
     movl (%_ip), %_eip
     jmp jit_ret
