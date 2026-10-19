@@ -7,6 +7,8 @@ iSH-AOK는 [ish-app/ish](https://github.com/ish-app/ish)의 포크로, 이 트�
 
 Testflight: https://testflight.apple.com/join/X1flyiqE
 
+AOK VM, 자매 앱(완전한 가상 머신: QEMU 와 AOK gadget 엔진으로 만든 UTM SE 포크): TestFlight https://testflight.apple.com/join/wzDUq3rP
+
 이 포크는 단순한 리브랜딩이 아닙니다. 포크 전용 동작, 번들된 루트 파일시스템, 진단 작업, File Provider 통합, 그리고 다섯 가지 게스트 아키텍처 지원을 포함하고 있습니다. 업스트림 iSH를 원한다면 `ish-app/ish`를 사용하세요. 이 저장소에서 작업 중이라면, 이 README가 참고해야 할 문서입니다.
 
 ## 이 포크가 추가한 것

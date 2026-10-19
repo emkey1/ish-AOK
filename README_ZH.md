@@ -6,6 +6,8 @@ iSH-AOK 是 [ish-app/ish](https://github.com/ish-app/ish) 的一个分支（fork
 
 Testflight: https://testflight.apple.com/join/X1flyiqE
 
+AOK VM，姊妹应用（完整的虚拟机：基于 QEMU 与 AOK gadget 引擎的 UTM SE 分支）：TestFlight https://testflight.apple.com/join/wzDUq3rP
+
 这个分支不只是改个名字。它包含了分支专属的行为、内置的根文件系统、诊断相关工作、File Provider 集成，以及对五种客户机架构的支持。如果你想要上游的 iSH，请使用 `ish-app/ish`。如果你正在这个仓库中进行开发，这份 README 才是你需要参考的文档。
 
 ## 本分支新增的内容

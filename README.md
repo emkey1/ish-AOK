@@ -4,6 +4,8 @@ iSH-AOK is a fork of [ish-app/ish](https://github.com/ish-app/ish) with local pr
 
 Testflight: https://testflight.apple.com/join/X1flyiqE
 
+AOK VM, the sibling app (a full virtual machine: a fork of UTM SE built around QEMU with the AOK gadget engine): TestFlight https://testflight.apple.com/join/wzDUq3rP
+
 This fork is not just a rebrand. It carries fork-specific behavior, bundled roots, diagnostics work, File Provider integration, and support for five guest architectures. If you want upstream iSH, use `ish-app/ish`. If you are working in this repository, this README is the relevant one.
 
 ## What This Fork Adds
