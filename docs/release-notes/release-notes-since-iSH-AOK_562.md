@@ -1,6 +1,6 @@
 # Release Notes Since `builds/iSH-AOK_560`
 
-36 commits. This build adds a fifth guest architecture, 64-bit
+41 commits. This build adds a fifth guest architecture, 64-bit
 little-endian PowerPC (ppc64le), as an experimental download. It fixes a
 data loss in the Files app: moving a large file out of a folder could empty
 most of that folder. Install a Desktop shows its progress and can remove a
@@ -117,8 +117,9 @@ decompressed there, the result was moved out with the Files app, and most of
   name. The root is now set aside first, and anything left is cleared at the
   next launch.
 - **VoiceOver** hints for the LLM Chat toolbar and the Workspace applets say
-  what each button does, in all nine languages (from the bot PRs #649 and
-  #650, corrected where they described something the button does not do).
+  what each button does, and the About screen's diagnostics buttons are named
+  Export and Refresh, in all nine languages (from the bot PRs #649, #650 and
+  #651, corrected where they described something the button does not do).
 - **Settings**: the Swap Size picker sits under Simulated Swap, where it
   belongs, not under Suspend to Disk.
 - **ktop** names ppc64le processes in its ARCH column.
