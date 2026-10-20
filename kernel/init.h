@@ -46,9 +46,14 @@ struct guest_command_result {
     int exit_code;      // exit status when exited==1
     int term_signal;    // terminating signal when exited==0 (e.g. SIGKILL on timeout)
     int timed_out;      // 1 if killed because timeout_ms elapsed
-    int truncated;      // 1 if output was capped at max_output
+    int truncated;      // 1 if output was capped at max_output (the rest was
+                        // read and dropped; the command ran to its end)
     char *output;       // merged stdout+stderr, NUL-terminated; caller frees
     size_t output_len;  // bytes in output (excluding the terminating NUL)
+    int status_unknown; // 1 if no exit status could be had at all: neither
+                        // exited nor term_signal says anything. Recorded
+                        // whoever reaps (kernel/exit.c, exit-status watches),
+                        // so only a child no one reaped in 3 s after SIGKILL
 };
 
 // Run `/bin/sh -c command` as a fresh child of init, capturing merged

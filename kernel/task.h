@@ -803,6 +803,12 @@ struct task {
     _Atomic uint64_t split_lock_stamp;
     bool split_lock_wait;
     uint64_t split_lock_stood_aside;
+
+    // A headless command's watch on this process's exit status
+    // (kernel/exit.c, exit_watch_begin): its slot plus one, 0 for none, and the
+    // slot's generation when it was taken. Not inherited.
+    unsigned exit_watch;
+    uint64_t exit_watch_gen;
 };
 // whether the riscv64 V extension is on for this task (PR_RISCV_V_*)
 static inline bool riscv64_v_enabled(struct task *task) {

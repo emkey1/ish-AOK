@@ -527,7 +527,8 @@ int run_guest_command_capture_user(const char *user, const char *command,
 
 static int spawn_guest_child(const char *const *args, int argc, const char *env,
                              int fd0, int fd1, int fd2,
-                             dword_t *pid_out, bool *own_pgroup_out);
+                             dword_t *pid_out, bool *own_pgroup_out,
+                             struct exit_watch_ticket *watch);
 
 // A long-lived guest process with host ends of its stdio; see init.h.
 static int pipe_pair_nosigpipe(int fds[2], bool writer_is_host) {
@@ -575,7 +576,7 @@ int guest_process_spawn_user(const char *user, const char *command, const char *
     bool own_pgroup = false;
     // The guest's ends (in[0], out[1], err[1]) are consumed by the spawn.
     rc = spawn_guest_child(as_user ? su_args : shell_args, as_user ? 5 : 3, env,
-                           in[0], out[1], err[1], &pid, &own_pgroup);
+                           in[0], out[1], err[1], &pid, &own_pgroup, NULL);
     if (rc < 0) {
         int host[] = {in[1], out[0], err[0]};
         spawn_guest_child_close_all(host, 3);
@@ -692,7 +693,8 @@ collected:
 // thread, not a guest task thread: it temporarily repoints `current`.
 static int spawn_guest_child(const char *const *args, int argc, const char *env,
                              int fd0, int fd1, int fd2,
-                             dword_t *pid_out, bool *own_pgroup_out) {
+                             dword_t *pid_out, bool *own_pgroup_out,
+                             struct exit_watch_ticket *watch) {
     struct task *saved = current;
 
     intptr_t spawn_err = become_new_init_child();
@@ -767,6 +769,9 @@ static int spawn_guest_child(const char *const *args, int argc, const char *env,
     if (out_fd == NULL && fd1 >= 0) close(fd1);
     if (err_fd == NULL && fd2 >= 0) close(fd2);
 
+    // Before it can run, so before it can exit and be reaped.
+    if (watch != NULL)
+        exit_watch_begin(child, watch);
     if (task_start(child) < 0) {
         // Host thread limit/memory: the child never ran. Its fdtable owns the
         // wrapped descriptors, so the release inside task_never_ran_destroy
@@ -810,8 +815,10 @@ static int run_guest_command_capture_argv(const char *const *args, int argc,
 
     dword_t child_pid = 0;
     bool own_pgroup = false;
-    int spawn_err = spawn_guest_child(args, argc, env, null_fd, write_fd, write_fd2, &child_pid, &own_pgroup);
+    struct exit_watch_ticket watch = {0};
+    int spawn_err = spawn_guest_child(args, argc, env, null_fd, write_fd, write_fd2, &child_pid, &own_pgroup, &watch);
     if (spawn_err < 0) {
+        exit_watch_end(&watch, NULL);
         close(read_fd);
         if (spawn_err == _EAGAIN)
             printk("ERROR: could not start host thread for command child\n");
@@ -822,8 +829,15 @@ static int run_guest_command_capture_argv(const char *const *args, int argc,
     // Drain the pipe until EOF (guest exit closes both write ends), bounding total
     // bytes and wall-clock time. On timeout, SIGKILL the child's process group and
     // keep draining briefly so any final buffered output is still captured.
+    //
+    // Past max_output the rest is read and dropped, to EOF: the command runs to
+    // its end and its exit status is real. It used to be killed at the cap,
+    // which made any command printing more than that a failure ("killed by
+    // signal 9" from the Shortcuts action) and stopped whatever it was doing
+    // half way. The timeout still bounds it.
     size_t cap = 4096;
     char *buf = malloc(cap);
+    char sink[4096];
     size_t len = 0;
     int killed = 0;
     int got_eof = 0;
@@ -858,21 +872,25 @@ static int run_guest_command_capture_argv(const char *const *args, int argc,
         }
         if (!(pfd.revents & (POLLIN | POLLHUP | POLLERR)))
             continue;
-        if (cap - len < 2) { // keep at least one spare byte for the trailing NUL
-            size_t newcap = cap < max_output ? cap * 2 : cap;
-            if (newcap > max_output + 1)
-                newcap = max_output + 1;
-            if (newcap <= cap) {
-                result->truncated = 1;
-                break;
+        char *dst = sink;
+        size_t room = sizeof(sink);
+        if (len < max_output) {
+            if (cap - len < 2) { // keep at least one spare byte for the trailing NUL
+                size_t newcap = cap * 2;
+                if (newcap > max_output + 1)
+                    newcap = max_output + 1;
+                char *grown = realloc(buf, newcap);
+                if (grown == NULL)
+                    break;
+                buf = grown;
+                cap = newcap;
             }
-            char *grown = realloc(buf, newcap);
-            if (grown == NULL)
-                break;
-            buf = grown;
-            cap = newcap;
+            dst = buf + len;
+            room = cap - len - 1;
+            if (room > max_output - len)
+                room = max_output - len;
         }
-        ssize_t n = read(read_fd, buf + len, cap - len - 1);
+        ssize_t n = read(read_fd, dst, room);
         if (n < 0) {
             if (errno == EINTR)
                 continue;
@@ -882,11 +900,10 @@ static int run_guest_command_capture_argv(const char *const *args, int argc,
             got_eof = 1;
             break; // EOF: every write end is closed, the guest is done writing
         }
-        len += (size_t) n;
-        if (len >= max_output) {
-            result->truncated = 1;
-            break;
-        }
+        if (dst == sink)
+            result->truncated = 1; // a byte past max_output, dropped
+        else
+            len += (size_t) n;
     }
     close(read_fd);
     if (buf != NULL) {
@@ -930,6 +947,14 @@ static int run_guest_command_capture_argv(const char *const *args, int argc,
         }
         current = saved;
         task_ref_cnt_mod(init, -1);
+        // Reaped by someone else -- the guest's own init, usually -- the
+        // status is still the watch's.
+        int watched = 0;
+        bool have = exit_watch_end(&watch, &watched);
+        if (reaped <= 0 && have) {
+            status = watched;
+            reaped = 1;
+        }
         if (reaped > 0) {
             if ((status & 0x7f) == 0) {
                 result->exited = 1;
@@ -937,7 +962,12 @@ static int run_guest_command_capture_argv(const char *const *args, int argc,
             } else {
                 result->term_signal = status & 0x7f;
             }
+        } else {
+            result->status_unknown = 1;
         }
+    } else {
+        exit_watch_end(&watch, NULL);
+        result->status_unknown = 1;
     }
     return 0;
 }

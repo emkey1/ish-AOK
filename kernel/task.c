@@ -1638,6 +1638,8 @@ static struct task *task_create_pid_(struct task *parent, pid_t_ want_pid) {
     atomic_store_explicit(&task->split_lock_stamp, 0, memory_order_relaxed);
     task->split_lock_wait = false;
     task->split_lock_stood_aside = 0;
+    task->exit_watch = 0;
+    task->exit_watch_gen = 0;
     task->exit_arch = NULL;
     memset(task->ptrace_debugreg, 0, sizeof(task->ptrace_debugreg));
     task->ptrace_singlestep = false;

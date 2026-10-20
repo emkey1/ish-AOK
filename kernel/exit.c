@@ -1640,6 +1640,9 @@ static bool process_has_threads_locked(struct task *task) {
 }
 
 // returns false if the task cannot be reaped and true if the task was reaped
+// See "exit-status watches" below.
+static void exit_watch_note(struct task *task, int status);
+
 static bool reap_if_zombie(struct task *task, struct siginfo_ *info_out, struct rusage_ *rusage_out,
         int options, struct exit_notes *notes) {
     if (!task->zombie)
@@ -1678,6 +1681,8 @@ static bool reap_if_zombie(struct task *task, struct siginfo_ *info_out, struct 
     // WNOWAIT means don't destroy the child, instead leave it so it could be waited for again.
     if (options & WNOWAIT_)
         return true;
+
+    exit_watch_note(task, info_out->child.status);
 
     // Detach the group from global session/pgroup membership now so wait/reap
     // semantics stay Linux-like, but defer freeing the group object itself
@@ -2176,6 +2181,74 @@ dword_t sys_wait4_guest(pid_t_ id, guest_addr_t status_addr, dword_t options, gu
     if (rusage_addr != 0 && write_guest_rusage_abi(current->abi, rusage_addr, &rusage))
         return _EFAULT;
     return info.child.pid;
+}
+
+// ---- exit-status watches -----------------------------------------------------
+//
+// run_guest_command_capture starts its command as a child of init and waits
+// for it by pid. On a root with a real init, init usually reaps it first, the
+// wait finds nothing, and the exit status was lost: the Shortcuts action's
+// "Fail on Non-Zero Exit" passed every failing command, and the LLM tool and
+// the desktop installer printed their status into the output to get it back.
+// So the capture marks its child before it runs, and whoever reaps the child
+// writes its wait status here. A slot is reused only under a new generation,
+// so a reap after the capture gave up writes nothing to the next one's slot.
+#define EXIT_WATCHES 16
+static lock_t exit_watch_lock = LOCK_INITIALIZER;
+static struct {
+    bool used, done;
+    uint64_t gen;
+    int status;
+} exit_watches[EXIT_WATCHES];
+static uint64_t exit_watch_next_gen;
+
+bool exit_watch_begin(struct task *task, struct exit_watch_ticket *ticket) {
+    ticket->slot = 0;
+    ticket->gen = 0;
+    lock(&exit_watch_lock, 0);
+    for (unsigned i = 0; i < EXIT_WATCHES; i++) {
+        if (exit_watches[i].used)
+            continue;
+        exit_watches[i].used = true;
+        exit_watches[i].done = false;
+        exit_watches[i].gen = ++exit_watch_next_gen;
+        ticket->slot = i + 1;
+        ticket->gen = exit_watches[i].gen;
+        task->exit_watch = ticket->slot;
+        task->exit_watch_gen = ticket->gen;
+        break;
+    }
+    unlock(&exit_watch_lock);
+    return ticket->slot != 0;
+}
+
+static void exit_watch_note(struct task *task, int status) {
+    if (task->exit_watch == 0 || task->exit_watch > EXIT_WATCHES)
+        return;
+    lock(&exit_watch_lock, 0);
+    unsigned i = task->exit_watch - 1;
+    if (exit_watches[i].used && exit_watches[i].gen == task->exit_watch_gen) {
+        exit_watches[i].done = true;
+        exit_watches[i].status = status;
+    }
+    unlock(&exit_watch_lock);
+    task->exit_watch = 0;
+}
+
+bool exit_watch_end(const struct exit_watch_ticket *ticket, int *status_out) {
+    if (ticket->slot == 0 || ticket->slot > EXIT_WATCHES)
+        return false;
+    bool done = false;
+    lock(&exit_watch_lock, 0);
+    unsigned i = ticket->slot - 1;
+    if (exit_watches[i].used && exit_watches[i].gen == ticket->gen) {
+        done = exit_watches[i].done;
+        if (done && status_out != NULL)
+            *status_out = exit_watches[i].status;
+        exit_watches[i].used = false;
+    }
+    unlock(&exit_watch_lock);
+    return done;
 }
 
 // Host-side reap of a single child by pid, returning the raw wait(2) status word

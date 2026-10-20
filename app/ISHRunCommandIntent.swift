@@ -58,11 +58,22 @@ struct ISHRunCommandIntent: AppIntent {
         if !outcome.exited && outcome.termSignal != 0 {
             throw ISHRunCommandError.killed(signal: Int(outcome.termSignal), partialOutput: Self.trimmed(outcome.output))
         }
+        if failOnNonzeroExit && outcome.statusUnknown {
+            throw ISHRunCommandError.statusUnknown(output: Self.trimmed(outcome.output))
+        }
         if failOnNonzeroExit && outcome.exited && outcome.exitCode != 0 {
             throw ISHRunCommandError.nonzeroExit(code: Int(outcome.exitCode), output: Self.trimmed(outcome.output))
         }
+        // Past the cap the command still ran to its end; what it printed after
+        // was dropped, and the result says so on a line of its own.
+        if outcome.truncated {
+            return .result(value: outcome.output + "\n[iSH-AOK: output truncated at \(Self.outputLimitKB) KB]")
+        }
         return .result(value: outcome.output)
     }
+
+    // GuestCommandRunner.m's kISHShortcutOutputLimitKB.
+    private static let outputLimitKB = 256
 
     // Output can be up to 256 KB; error messages get a short excerpt only.
     private static func trimmed(_ output: String, limit: Int = 1024) -> String {
@@ -78,6 +89,7 @@ enum ISHRunCommandError: Error, CustomLocalizedStringResourceConvertible {
     case timedOut(seconds: Int, partialOutput: String)
     case killed(signal: Int, partialOutput: String)
     case nonzeroExit(code: Int, output: String)
+    case statusUnknown(output: String)
 
     var localizedStringResource: LocalizedStringResource {
         switch self {
@@ -99,6 +111,10 @@ enum ISHRunCommandError: Error, CustomLocalizedStringResourceConvertible {
             return output.isEmpty
                 ? "The command exited with status \(code)."
                 : "The command exited with status \(code). Output: \(output)"
+        case .statusUnknown(let output):
+            return output.isEmpty
+                ? "The command's exit status could not be determined, so Fail on Non-Zero Exit cannot vouch for it."
+                : "The command's exit status could not be determined, so Fail on Non-Zero Exit cannot vouch for it. Output: \(output)"
         }
     }
 }

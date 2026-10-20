@@ -24,6 +24,7 @@ static const NSInteger kISHShortcutOutputLimitKB = 256;
 @property (nonatomic, readwrite) int termSignal;
 @property (nonatomic, readwrite) BOOL timedOut;
 @property (nonatomic, readwrite) BOOL truncated;
+@property (nonatomic, readwrite) BOOL statusUnknown;
 @property (nonatomic, readwrite, copy) NSString *output;
 @property (nonatomic, readwrite, copy) NSString *shell;
 @property (nonatomic, readwrite, copy, nullable) NSString *failureReason;
@@ -50,6 +51,64 @@ static dispatch_queue_t ISHShortcutCommandQueue(void) {
         queue = dispatch_queue_create("aok.shortcuts.guest-shell", DISPATCH_QUEUE_SERIAL);
     });
     return queue;
+}
+
+// The output as text. UTF-8 when it is; otherwise UTF-8 with U+FFFD for each
+// bad sequence, rather than nothing -- one stray byte used to return the whole
+// output as empty text. A cut at the size cap can split a character, so a
+// truncated output first loses the incomplete sequence at its end.
+static NSString *ISHCommandOutputText(const char *bytes, size_t len, BOOL truncated) {
+    if (truncated && len > 0) {
+        size_t start = len;
+        // Back to the start of the last sequence (at most 3 continuation bytes).
+        while (start > 0 && len - start < 4 && ((unsigned char) bytes[start - 1] & 0xc0) == 0x80)
+            start--;
+        if (start > 0) {
+            unsigned char lead = (unsigned char) bytes[start - 1];
+            size_t want = lead >= 0xf0 ? 4 : lead >= 0xe0 ? 3 : lead >= 0xc0 ? 2 : 1;
+            if (len - (start - 1) < want)
+                len = start - 1;
+        }
+    }
+    NSString *text = [[NSString alloc] initWithBytes:bytes length:len encoding:NSUTF8StringEncoding];
+    if (text != nil)
+        return text;
+    // Each well-formed sequence kept (Unicode's table 3-7: no overlong forms,
+    // no surrogates, nothing past U+10FFFF), each ill-formed one a U+FFFD --
+    // what Swift's String(decoding:as:) does. Foundation's lossy detection
+    // dropped everything after the first bad byte.
+    NSMutableData *clean = [NSMutableData dataWithCapacity:len + 16];
+    static const unsigned char replacement[] = {0xef, 0xbf, 0xbd};
+    const unsigned char *p = (const unsigned char *) bytes;
+    size_t i = 0;
+    while (i < len) {
+        unsigned char c = p[i];
+        size_t want = c < 0x80 ? 1 : (c >= 0xc2 && c <= 0xdf) ? 2 : (c >= 0xe0 && c <= 0xef) ? 3
+                    : (c >= 0xf0 && c <= 0xf4) ? 4 : 0;
+        // How much of the sequence is well formed: all of it, or a prefix
+        // (the "maximal subpart", which one U+FFFD stands for).
+        size_t good = want != 0 ? 1 : 0;
+        while (good != 0 && good < want && i + good < len) {
+            unsigned char lo = 0x80, hi = 0xbf;
+            if (good == 1) {
+                if (c == 0xe0) lo = 0xa0;
+                if (c == 0xed) hi = 0x9f;
+                if (c == 0xf0) lo = 0x90;
+                if (c == 0xf4) hi = 0x8f;
+            }
+            if (p[i + good] < lo || p[i + good] > hi)
+                break;
+            good++;
+        }
+        if (good != 0 && good == want) {
+            [clean appendBytes:p + i length:want];
+            i += want;
+        } else {
+            [clean appendBytes:replacement length:sizeof(replacement)];
+            i += good != 0 ? good : 1;
+        }
+    }
+    return [[NSString alloc] initWithData:clean encoding:NSUTF8StringEncoding] ?: @"";
 }
 
 @implementation ISHGuestCommandRunner
@@ -151,11 +210,9 @@ static dispatch_queue_t ISHShortcutCommandQueue(void) {
     outcome.termSignal = result.term_signal;
     outcome.timedOut = result.timed_out != 0;
     outcome.truncated = result.truncated != 0;
-    if (result.output != NULL && result.output_len > 0) {
-        outcome.output = [[NSString alloc] initWithBytes:result.output
-                                                  length:result.output_len
-                                                encoding:NSUTF8StringEncoding] ?: @"";
-    }
+    outcome.statusUnknown = result.status_unknown != 0;
+    if (result.output != NULL && result.output_len > 0)
+        outcome.output = ISHCommandOutputText(result.output, result.output_len, outcome.truncated);
     free(result.output);
     if (!outcome.launched && outcome.failureReason == nil)
         outcome.failureReason = NSLocalizedString(@"The command could not be started.", @"Shortcuts Run Command failure");

@@ -692,6 +692,63 @@ static void *cli_present_input(void *arg) {
     }
 }
 
+// The ISH_TEST_GUEST_CMD harness below, as a function: it may run inline,
+// before the guest's pid 1, or on a thread of its own after pid 1 has started.
+static void test_guest_cmd_run(const char *test_cmd) {
+    // With ISH_TEST_QUIESCE set, exercise the suspension quiesce gate
+    // against the guest command's live filesystem traffic: engage it while
+    // transactions are in flight, confirm the drain reaches zero, then lift
+    // it and confirm the guest still finishes. A deadlock or a lost wakeup
+    // shows up as this never completing. See fs/fake-db.h.
+    pthread_t quiesce_thread;
+    bool quiesce_test = getenv("ISH_TEST_QUIESCE") != NULL;
+    if (quiesce_test)
+        pthread_create(&quiesce_thread, NULL, quiesce_test_thread, NULL);
+
+    // With ISH_TEST_GUEST_USER also set, run as that account via the su
+    // path (run_guest_command_capture_user) -- the primitive behind "Open
+    // Everything as Default User" for the app's headless command surfaces.
+    // Optional ISH_TEST_GUEST_TIMEOUT_MS overrides the 10 s cap, for
+    // exercising the process-group timeout kill.
+    const char *test_user = getenv("ISH_TEST_GUEST_USER");
+    const char *timeout_str = getenv("ISH_TEST_GUEST_TIMEOUT_MS");
+    int timeout_ms = timeout_str != NULL ? atoi(timeout_str) : 10000;
+    // ISH_TEST_GUEST_MAX_KB caps the output, as the app's callers do (the
+    // Shortcuts action's 256); 0 or unset is the 64 KiB default.
+    const char *max_kb_str = getenv("ISH_TEST_GUEST_MAX_KB");
+    size_t max_output = max_kb_str != NULL ? (size_t) atoi(max_kb_str) * 1024 : 0;
+    struct guest_command_result r;
+    int rc = run_guest_command_capture_user(test_user, test_cmd, NULL, timeout_ms, max_output, &r);
+    if (quiesce_test)
+        pthread_join(quiesce_thread, NULL);
+    fprintf(stderr,
+            "[guest-cmd] rc=%d launched=%d exited=%d code=%d sig=%d timed_out=%d truncated=%d status_unknown=%d len=%zu\n",
+            rc, r.launched, r.exited, r.exit_code, r.term_signal,
+            r.timed_out, r.truncated, r.status_unknown, r.output_len);
+    fprintf(stderr, "[guest-cmd] ---output---\n%s\n[guest-cmd] ---end---\n",
+            r.output != NULL ? r.output : "(null)");
+    free(r.output);
+    // ISH_TEST_GUEST_LINGER_MS keeps the emulator alive after the capture
+    // returns, so a process that wrongly survived the timeout kill has time
+    // to leave observable evidence (e.g. touch a marker file) before
+    // everything dies with the host process.
+    const char *linger_str = getenv("ISH_TEST_GUEST_LINGER_MS");
+    if (linger_str != NULL)
+        usleep((useconds_t) atoi(linger_str) * 1000);
+    sock_host_dir_cleanup();
+    _exit(0);
+    }
+
+static void *test_guest_cmd_thread(void *arg) {
+    const char *delay_str = getenv("ISH_TEST_GUEST_CMD_DELAY_MS");
+    int ms = delay_str != NULL ? atoi(delay_str) : 0;
+    struct timespec delay = {ms / 1000, (ms % 1000) * 1000000};
+    nanosleep(&delay, NULL);
+    test_guest_cmd_run(arg);
+    return NULL;
+}
+
+
 int main(int argc, char *const argv[]) {
     if (getenv("ISH_PRESENT_DUMP") != NULL)
         virtgpu_set_present_hook(0, &cli_present_ops, getenv("ISH_PRESENT_DUMP"));
@@ -876,45 +933,16 @@ int main(int argc, char *const argv[]) {
     // to validate the primitive against a local fakefs without the iOS app.
     // e.g. ISH_TEST_GUEST_CMD='echo out; echo err >&2; exit 7' ./ish -f alpinex86 /bin/sh
     const char *test_cmd = getenv("ISH_TEST_GUEST_CMD");
-    if (test_cmd != NULL) {
-        // With ISH_TEST_QUIESCE set, exercise the suspension quiesce gate
-        // against the guest command's live filesystem traffic: engage it while
-        // transactions are in flight, confirm the drain reaches zero, then lift
-        // it and confirm the guest still finishes. A deadlock or a lost wakeup
-        // shows up as this never completing. See fs/fake-db.h.
-        pthread_t quiesce_thread;
-        bool quiesce_test = getenv("ISH_TEST_QUIESCE") != NULL;
-        if (quiesce_test)
-            pthread_create(&quiesce_thread, NULL, quiesce_test_thread, NULL);
-
-        // With ISH_TEST_GUEST_USER also set, run as that account via the su
-        // path (run_guest_command_capture_user) -- the primitive behind "Open
-        // Everything as Default User" for the app's headless command surfaces.
-        // Optional ISH_TEST_GUEST_TIMEOUT_MS overrides the 10 s cap, for
-        // exercising the process-group timeout kill.
-        const char *test_user = getenv("ISH_TEST_GUEST_USER");
-        const char *timeout_str = getenv("ISH_TEST_GUEST_TIMEOUT_MS");
-        int timeout_ms = timeout_str != NULL ? atoi(timeout_str) : 10000;
-        struct guest_command_result r;
-        int rc = run_guest_command_capture_user(test_user, test_cmd, NULL, timeout_ms, 0, &r);
-        if (quiesce_test)
-            pthread_join(quiesce_thread, NULL);
-        fprintf(stderr,
-                "[guest-cmd] rc=%d launched=%d exited=%d code=%d sig=%d timed_out=%d truncated=%d len=%zu\n",
-                rc, r.launched, r.exited, r.exit_code, r.term_signal,
-                r.timed_out, r.truncated, r.output_len);
-        fprintf(stderr, "[guest-cmd] ---output---\n%s\n[guest-cmd] ---end---\n",
-                r.output != NULL ? r.output : "(null)");
-        free(r.output);
-        // ISH_TEST_GUEST_LINGER_MS keeps the emulator alive after the capture
-        // returns, so a process that wrongly survived the timeout kill has time
-        // to leave observable evidence (e.g. touch a marker file) before
-        // everything dies with the host process.
-        const char *linger_str = getenv("ISH_TEST_GUEST_LINGER_MS");
-        if (linger_str != NULL)
-            usleep((useconds_t) atoi(linger_str) * 1000);
-        sock_host_dir_cleanup();
-        _exit(0);
+    // With ISH_TEST_GUEST_CMD_DELAY_MS, the command runs that long after the
+    // guest's pid 1 has started, as the app's do: a pid 1 that reaps its
+    // children then races the capture for this one, which is how a booted
+    // root's init took the exit status (kernel/exit.c, exit-status watches).
+    if (test_cmd != NULL && getenv("ISH_TEST_GUEST_CMD_DELAY_MS") != NULL) {
+        pthread_t thread;
+        pthread_create(&thread, NULL, test_guest_cmd_thread, (void *) test_cmd);
+        pthread_detach(thread);
+    } else if (test_cmd != NULL) {
+        test_guest_cmd_run(test_cmd);
     }
 
     // Dev harness for guest_process_spawn_user, the persistent guest process

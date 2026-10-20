@@ -18,7 +18,9 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, readonly) int exitCode;
 @property (nonatomic, readonly) int termSignal;   // terminating signal when exited == NO
 @property (nonatomic, readonly) BOOL timedOut;
-@property (nonatomic, readonly) BOOL truncated;   // output hit the size cap
+@property (nonatomic, readonly) BOOL truncated;   // output hit the size cap; the rest was dropped
+// No exit status could be had: neither exited nor termSignal says anything.
+@property (nonatomic, readonly) BOOL statusUnknown;
 @property (nonatomic, readonly, copy) NSString *output; // merged stdout+stderr
 @property (nonatomic, readonly, copy) NSString *shell;  // shell that ran (or was last attempted)
 // Human-readable reason when launched == NO (boot failure, exec failure, ...).

@@ -79,6 +79,14 @@ dword_t sys_exit_group(dword_t status);
 dword_t sys_wait4(pid_t_ pid, addr_t status_addr, dword_t options, addr_t rusage_addr);
 dword_t sys_wait4_guest(pid_t_ pid, guest_addr_t status_addr, dword_t options, guest_addr_t rusage_addr);
 int wait_child_status(pid_t_ pid, int *status_out, bool nonblock);
+// A process's exit status, recorded by whoever reaps it (kernel/exit.c). Begin
+// before the task first runs; end once, whether or not it was reaped.
+struct exit_watch_ticket {
+    unsigned slot;      // 0: no watch was taken
+    uint64_t gen;
+};
+bool exit_watch_begin(struct task *task, struct exit_watch_ticket *ticket);
+bool exit_watch_end(const struct exit_watch_ticket *ticket, int *status_out);
 dword_t sys_waitid(int_t idtype, pid_t_ id, addr_t info_addr, int_t options);
 dword_t sys_waitid_guest(int_t idtype, pid_t_ id, guest_addr_t info_addr, int_t options);
 dword_t sys_waitpid(pid_t_ pid, addr_t status_addr, dword_t options);
