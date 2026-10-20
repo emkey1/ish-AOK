@@ -30,6 +30,7 @@
 #include <time.h>
 
 #include "kernel/fs.h"
+#include "kernel/task.h"
 #include "kernel/native_io.h"
 #include "kernel/native_libc.h"
 #include "fs/stat.h"
@@ -64,11 +65,37 @@ struct ntz_zone {
     struct ntz_rule rule;
 };
 
+// Every native program is a thread of this one process, and each may have its
+// own zone: its own TZ, or its own root (a chroot, a mount namespace) with its
+// own /etc/localtime. So zones are cached by what identifies them, a few at
+// once, and the "nothing can have changed" shortcut is per program, not
+// global. It was global, and for a second after any program looked, every
+// other program got that program's zone without looking: two chroots' dates
+// both printed the first one's zone, and so did a date run straight after
+// /etc/localtime was replaced. Under ntz_lock.
+#define NTZ_KEY_MAX 512
+#define NTZ_CACHE 4
+struct ntz_entry {
+    bool valid;
+    uint64_t used;
+    char key[NTZ_KEY_MAX];
+    struct ntz_zone zone;
+};
 static pthread_mutex_t ntz_lock = PTHREAD_MUTEX_INITIALIZER;
-static struct ntz_zone ntz_zone;
-static char ntz_key[512];
-static bool ntz_loaded;
-static time_t ntz_checked;
+static struct ntz_entry ntz_cache[NTZ_CACHE];
+static uint64_t ntz_clock;
+
+// What this thread's program resolved last, and when: the key is reused only
+// for the same program, in the same second, with the same TZ. Per host thread,
+// which is per program (a program's own threads each keep one).
+static __thread struct {
+    const struct task *task;
+    pid_t_ pid;
+    time_t second;
+    bool has_tz;
+    char tz[256];
+    char key[NTZ_KEY_MAX];
+} ntz_mine;
 
 // tm_zone must outlive the call, as it does in every libc: abbreviations are
 // interned for the life of the process. Zones have a handful each.
@@ -383,25 +410,30 @@ static bool ntz_load_file(const char *path, struct ntz_zone *z) {
     return true;
 }
 
-// The identity of the zone in force now, cheaply: TZ's value, or the
-// /etc/localtime file's inode and mtime.
-static void ntz_current_key(char *key, size_t size) {
-    const char *tz = nlibc_getenv("TZ");
+// The identity of the zone in force now: TZ's value and the root it is read
+// in (a zone name is a file under that root's /usr/share/zoneinfo), or the
+// /etc/localtime file's device, inode and mtime. The device matters: two
+// roots' files can share an inode number.
+static void ntz_current_key(const char *tz, char *key, size_t size) {
+    struct statbuf st;
     if (tz != NULL) {
-        snprintf(key, size, "TZ=%s", tz);
+        if (native_stat("/", &st, true) != 0)
+            memset(&st, 0, sizeof(st));
+        snprintf(key, size, "/ %llu %llu TZ=%s", (unsigned long long) st.dev,
+                 (unsigned long long) st.inode, tz);
         return;
     }
-    struct statbuf st;
     if (native_stat("/etc/localtime", &st, true) == 0)
-        snprintf(key, size, "/etc/localtime %llu %lld %u", (unsigned long long) st.inode, (long long) st.mtime, st.mtime_nsec);
+        snprintf(key, size, "/etc/localtime %llu %llu %lld %u", (unsigned long long) st.dev,
+                 (unsigned long long) st.inode, (long long) st.mtime, st.mtime_nsec);
     else
         snprintf(key, size, "UTC");
 }
 
-static void ntz_load(const char *key) {
-    struct ntz_zone *z = &ntz_zone;
-    if (!strncmp(key, "TZ=", 3)) {
-        const char *tz = key + 3;
+static void ntz_load(const char *key, struct ntz_zone *z) {
+    const char *tz_at = strstr(key, " TZ=");
+    if (!strncmp(key, "/ ", 2) && tz_at != NULL) {
+        const char *tz = tz_at + 4;
         if (*tz == ':')
             tz++;
         // An empty TZ is glibc's "Universal": that zoneinfo file if there is
@@ -440,26 +472,55 @@ static void ntz_load(const char *key) {
     ntz_utc(z, ntz_intern("UTC", 3));
 }
 
-// Make ntz_zone current. Caller holds ntz_lock.
-static void ntz_refresh(bool force) {
-    // /etc/localtime is re-checked at most once a second; TZ every call, as
-    // reading it costs nothing and each program may set its own.
+// The zone in force for the calling program. Caller holds ntz_lock; the zone
+// stays valid while it does. force (tzset) looks again and reloads the file
+// even when its identity is unchanged, as glibc's tzset does.
+static const struct ntz_zone *ntz_current(bool force) {
+    const char *tz = nlibc_getenv("TZ");
     time_t now = time(NULL);
-    if (ntz_loaded && !force && now == ntz_checked && strncmp(ntz_key, "TZ=", 3) && nlibc_getenv("TZ") == NULL)
-        return;
-    char key[sizeof(ntz_key)];
-    ntz_current_key(key, sizeof(key));
-    ntz_checked = now;
-    if (ntz_loaded && !force && !strcmp(key, ntz_key))
-        return;
-    snprintf(ntz_key, sizeof(ntz_key), "%s", key);
-    ntz_load(key);
-    ntz_loaded = true;
+    bool same = !force && ntz_mine.task == current && current != NULL &&
+            ntz_mine.pid == current->pid && ntz_mine.second == now &&
+            ntz_mine.has_tz == (tz != NULL) &&
+            (tz == NULL || !strncmp(ntz_mine.tz, tz, sizeof(ntz_mine.tz)));
+    if (!same) {
+        ntz_current_key(tz, ntz_mine.key, sizeof(ntz_mine.key));
+        ntz_mine.task = current;
+        ntz_mine.pid = current != NULL ? current->pid : 0;
+        ntz_mine.second = now;
+        ntz_mine.has_tz = tz != NULL;
+        snprintf(ntz_mine.tz, sizeof(ntz_mine.tz), "%s", tz != NULL ? tz : "");
+    }
+    struct ntz_entry *slot = NULL;
+    for (int i = 0; i < NTZ_CACHE; i++) {
+        struct ntz_entry *e = &ntz_cache[i];
+        if (e->valid && !strcmp(e->key, ntz_mine.key)) {
+            slot = e;
+            break;
+        }
+    }
+    if (slot == NULL || force) {
+        if (slot == NULL) {
+            // The least recently used, an empty one first.
+            slot = &ntz_cache[0];
+            for (int i = 0; i < NTZ_CACHE; i++) {
+                if (!ntz_cache[i].valid) {
+                    slot = &ntz_cache[i];
+                    break;
+                }
+                if (ntz_cache[i].used < slot->used)
+                    slot = &ntz_cache[i];
+            }
+        }
+        snprintf(slot->key, sizeof(slot->key), "%s", ntz_mine.key);
+        ntz_load(slot->key, &slot->zone);
+        slot->valid = true;
+    }
+    slot->used = ++ntz_clock;
+    return &slot->zone;
 }
 
 // The offset, DST flag and abbreviation in force at UTC instant t.
-static void ntz_at(int64_t t, int32_t *off, bool *dst, const char **abbr) {
-    const struct ntz_zone *z = &ntz_zone;
+static void ntz_at(const struct ntz_zone *z, int64_t t, int32_t *off, bool *dst, const char **abbr) {
     if (z->ntypes == 0) {
         ntz_rule_at(&z->rule, t, off, dst, abbr);
         return;
@@ -498,11 +559,11 @@ static void ntz_at(int64_t t, int32_t *off, bool *dst, const char **abbr) {
     *abbr = z->abbr_of_type[z->trans_type[lo]];
 }
 
-static struct tm *ntz_fill(int64_t t, struct tm *out) {
+static struct tm *ntz_fill(const struct ntz_zone *z, int64_t t, struct tm *out) {
     int32_t off;
     bool dst;
     const char *abbr;
-    ntz_at(t, &off, &dst, &abbr);
+    ntz_at(z, t, &off, &dst, &abbr);
     time_t shifted = (time_t) (t + off);
     if (gmtime_r(&shifted, out) == NULL)
         return NULL;
@@ -520,8 +581,7 @@ struct tm *nlibc_localtime_r(const time_t *t, struct tm *out) {
         return NULL;
     }
     pthread_mutex_lock(&ntz_lock);
-    ntz_refresh(false);
-    struct tm *r = ntz_fill(*t, out);
+    struct tm *r = ntz_fill(ntz_current(false), *t, out);
     pthread_mutex_unlock(&ntz_lock);
     if (r == NULL)
         errno = EOVERFLOW;
@@ -535,7 +595,7 @@ struct tm *nlibc_localtime(const time_t *t) {
 
 void nlibc_tzset(void) {
     pthread_mutex_lock(&ntz_lock);
-    ntz_refresh(true);
+    ntz_current(true);
     pthread_mutex_unlock(&ntz_lock);
 }
 
@@ -556,12 +616,12 @@ time_t nlibc_mktime(struct tm *tm) {
         return (time_t) -1;
     }
     pthread_mutex_lock(&ntz_lock);
-    ntz_refresh(false);
+    const struct ntz_zone *z = ntz_current(false);
     int32_t offs[2];
     bool dsts[2];
     const char *abbr;
-    ntz_at((int64_t) local - 86400, &offs[0], &dsts[0], &abbr);
-    ntz_at((int64_t) local + 86400, &offs[1], &dsts[1], &abbr);
+    ntz_at(z, (int64_t) local - 86400, &offs[0], &dsts[0], &abbr);
+    ntz_at(z, (int64_t) local + 86400, &offs[1], &dsts[1], &abbr);
     int64_t pick = 0;
     bool found = false;
     if (tm->tm_isdst < 0) {
@@ -573,7 +633,7 @@ time_t nlibc_mktime(struct tm *tm) {
         for (int probe = 0; probe < 6; probe++) {
             int32_t off;
             bool dst;
-            ntz_at(t, &off, &dst, &abbr);
+            ntz_at(z, t, &off, &dst, &abbr);
             int64_t next = (int64_t) local - off;
             if (next == t) {
                 pick = t;
@@ -589,7 +649,7 @@ time_t nlibc_mktime(struct tm *tm) {
         int64_t t = (int64_t) local - offs[i];
         int32_t off;
         bool dst;
-        ntz_at(t, &off, &dst, &abbr);
+        ntz_at(z, t, &off, &dst, &abbr);
         if (off != offs[i])
             continue;               // that offset does not hold there
         if (!found || (tm->tm_isdst > 0 ? dst : !dst)) {
@@ -604,7 +664,7 @@ time_t nlibc_mktime(struct tm *tm) {
         // the difference, glibc's reading of a caller's hint.
         int32_t off;
         bool dst;
-        ntz_at(pick, &off, &dst, &abbr);
+        ntz_at(z, pick, &off, &dst, &abbr);
         if ((tm->tm_isdst > 0) != dst && offs[0] != offs[1]) {
             int32_t other = offs[0] == off ? offs[1] : offs[0];
             pick += off - other;
@@ -612,7 +672,7 @@ time_t nlibc_mktime(struct tm *tm) {
     }
 fill:;
     struct tm out;
-    struct tm *ok = ntz_fill(pick, &out);
+    struct tm *ok = ntz_fill(z, pick, &out);
     pthread_mutex_unlock(&ntz_lock);
     if (ok == NULL) {
         errno = EOVERFLOW;
