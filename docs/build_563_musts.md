@@ -170,7 +170,9 @@ different bug, already fixed on Apple hosts and fixed today for x86_64 ones.
   old build fails all four copies in each of three runs (diverging from the
   first draw); the new passes 6 runs in 6 on arm64 and amd64 roots. The
   conversion state and signgam have no test a program can drive reliably;
-  they rest on the two-thread host probes.
+  they rest on the two-thread host probes. MBP5 suite at 06e977258 (which
+  carries the tz fix too): five roots, 387-477 passes, 0 failures, both new
+  tests passing on each; the Xcode device build and GCC on camd build it.
 
 ## 5. Shortcuts Run Command: output over 256 KB, non-UTF-8 output, a reap timeout
 
