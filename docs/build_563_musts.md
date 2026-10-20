@@ -19,7 +19,7 @@ drawn from the queue on 2026-10-19: what to keep, cut or add is yours.
 | 1 | A 64-bit result read as -errno; a call through NULL reported as SI_KERNEL | **DONE** (15a1fb543): both fixed, i386's NULL call too; suite clean on five roots, ppc64 checked |
 | 2 | `list_remove` leaves a NULL node that a walk faults on | **DONE, a different fix** (2026-10-19): the audit ruled out re-initing; walks now treat a never-initialised head as empty, which is what crashed |
 | 3 | Exec hands a task stale TLB entries | **DONE: it never did** (2026-10-19): the heals were an x87 80-bit load reading 16 bytes for 10, off the end of a host page; gone from Apple hosts since the 10-06 gadget port, fixed for x86_64 hosts now |
-| 4 | Native programs share the host C library's static state | open: basename and four others done in 559; ten more names and the tz cache left |
+| 4 | Native programs share the host C library's static state | **DONE** (2026-10-20): the tz cache was wrong across roots and after a change; an `nm -u` audit found five more kinds of shared state, all per thread now |
 | 5 | Shortcuts Run Command: output over 256 KB, non-UTF-8 output, a reap timeout | open: fixes known to the line; proof needs a signed device build |
 | 6 | `signal_process_wake_one` late on the A10X | open: decide whether it is the device or a wake path |
 | 7 | Issues and the TODO's own state | open: #646 to close, the issue table stale, 34 done entries in the queue |
@@ -134,28 +134,43 @@ different bug, already fixed on Apple hosts and fixed today for x86_64 ones.
 
 ## 4. Native programs share the host C library's static state
 
-**Why.** Native programs are threads of one host process, so a libc function
-that keeps its answer in one static buffer is shared between them. 559
-proved it with basename (an applet starting beside another ran under the
-other's name) and made basename, dirname, strtok, gmtime and asctime per
-thread.
+**Done 2026-10-20.**
 
-**Established** (TODO queue, *what the basename fix left*): not done are
-`inet_ntoa` (SmallCLUE calls it twice), `strsignal`, `strerror` for an
-unknown number, `ether_ntoa`, `devname`, `getbsize`, `nl_langinfo`,
-`tmpnam`, `rand`/`random` (one stream for every program), and
-kernel/native_tz.c's one-zone cache (`ntz_zone`, `ntz_key`), which two
-programs with different TZ values overwrite.
-
-**Next step.** `nm -u` each native archive (libsmallclue, libzsh, libdash,
-libopenssh, libgit2, libnextvi, libmotepad, libktop) for imports the shim
-does not route; check each against Darwin's man page; route the unsafe ones
-per thread. Fix the tz cache first: it is the one with a visible wrong
-answer.
-
-**Prove.** A `native_applet_race`-style test for the tz cache (two programs,
-two zones, many rounds); the `nm -u` list in the commit, with each name's
-verdict.
+- *The time zone* (958e93787). Not the two-TZ case the queue named -- that
+  was right, if slow (two programs evicted each other's zone, reparsing under
+  a lock all native programs share). The wrong answer was the once-a-second
+  shortcut, which was global: for a second after any program looked, every
+  program with no TZ took its zone. A native `date` in a chroot whose
+  /etc/localtime is BBB printed another chroot's AAA, 150 times in 150, and a
+  date straight after /etc/localtime was replaced printed the old zone. Zones
+  are cached by identity now, four at once (device, inode and mtime; a TZ
+  value with the root it resolves in), and the shortcut holds only for the
+  same program, second and TZ. `native_tz_roots` (root): the old code fails
+  4 checks, the new passes.
+- *The audit.* `nm -u` over every native archive (smallclue, zsh, dash,
+  openssh, git2, nextvi, motepad, ktop, wl-present), less everything the
+  build defines: 285 names reach the host's libc. Each candidate was checked
+  on the host by calling it from two threads. Shared: `inet_ntoa` (one
+  buffer; SmallCLUE's traceroute, zsh/tcp), `rand`/`srand` (one stream;
+  zsh's `$RANDOM`), the conversion state behind `mbrtowc`/`mbrlen`/`wcrtomb`
+  with a NULL state and behind `mbtowc`/`wctomb` (a half-read character was
+  finished by another thread's byte), and `signgam`, which zsh/mathfunc's
+  gamma reads straight after `lgamma`. Per thread already or harmless:
+  `strsignal` (per thread on Darwin), `nl_langinfo` (read-only locale data),
+  `erand48`, `regerror`, errno. The queue's other names -- `strerror`,
+  `ether_ntoa`, `devname`, `getbsize`, `tmpnam`, `random` -- do not reach the
+  host at all.
+- *The fix.* All of the shared ones are per thread in kernel/native_libc.c
+  (`rand_r` is Darwin's own generator: 100,000 draws agree, so a seeded
+  sequence is unchanged), and a new image starts them as a new process
+  would (`nlibc_image_start`, beside the FPU reset in kernel/native.c).
+  After: 275 names reach the host, none of these; check-native-libc clean.
+- **Proved:** `native_libc_state`: one native zsh's `RANDOM=42` and 3000
+  draws alone, then four at once, each of which must print it exactly. The
+  old build fails all four copies in each of three runs (diverging from the
+  first draw); the new passes 6 runs in 6 on arm64 and amd64 roots. The
+  conversion state and signgam have no test a program can drive reliably;
+  they rest on the two-thread host probes.
 
 ## 5. Shortcuts Run Command: output over 256 KB, non-UTF-8 output, a reap timeout
 

@@ -186,6 +186,7 @@ native_ln.c
 native_coreutils.c
 native_applet_race.c
 native_tz_roots.c
+native_libc_state.c
 native_abort.c
 native_net_options.c
 unaligned_page_edge.c

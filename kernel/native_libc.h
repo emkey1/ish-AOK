@@ -229,6 +229,7 @@ int nlibc_fileno(FILE *stream);
  * name the host does not have -- C.UTF-8 exists on Linux and macOS but not on
  * iOS. See the .c. */
 #include <locale.h>
+#include <wchar.h>
 char *nlibc_setlocale(int category, const char *name);
 
 /* The host's exit() would end the whole app; a native program is a task. */
@@ -426,6 +427,30 @@ char *nlibc_ctime(const time_t *t);
 char *nlibc_strtok(char *str, const char *sep);
 struct tm *nlibc_gmtime(const time_t *t);
 char *nlibc_asctime(const struct tm *tm);
+/* The rest of that kind, found by `nm -u` over every native archive and
+ * checked on the host by calling each from two threads (2026-10-20):
+ * inet_ntoa answers in one buffer; rand and srand are one stream, so two
+ * native zshes' $RANDOM draws interleaved and `RANDOM=42` stopped being
+ * reproducible; mbrtowc, mbrlen and wcrtomb with a NULL state, and mbtowc and
+ * wctomb, keep one conversion state, so a half-read character could be
+ * finished by another program's bytes; and lgamma writes its sign into one
+ * signgam, which zsh/mathfunc's gamma reads straight after. strsignal is per
+ * thread on Darwin already, and nl_langinfo answers from read-only locale
+ * data. A new image starts with all of it reset (nlibc_image_start). */
+char *nlibc_inet_ntoa(struct in_addr in);
+int nlibc_rand(void);
+void nlibc_srand(unsigned seed);
+size_t nlibc_mbrtowc(wchar_t *pwc, const char *s, size_t n, mbstate_t *ps);
+size_t nlibc_mbrlen(const char *s, size_t n, mbstate_t *ps);
+size_t nlibc_wcrtomb(char *s, wchar_t wc, mbstate_t *ps);
+int nlibc_mbtowc(wchar_t *pwc, const char *s, size_t n);
+int nlibc_wctomb(char *s, wchar_t wc);
+double nlibc_lgamma(double x);
+/* signgam is a variable: the macro below makes it the thread's. Darwin's
+ * <math.h> says `extern int signgam;`, which the macro turns into a matching
+ * declaration of this function, so it may be included before or after. */
+int *nlibc_signgam_location(void);
+void nlibc_image_start(void);
 #ifdef __APPLE__
 /* glibc's two, the GNU one and libgen's, work in the caller's own string. */
 char *nlibc_basename(char *path);
@@ -969,6 +994,16 @@ const char *nlibc_dlerror(void);
 #define gmtime      nlibc_gmtime
 #define asctime     nlibc_asctime
 #define strtok      nlibc_strtok
+#define inet_ntoa   nlibc_inet_ntoa
+#define rand        nlibc_rand
+#define srand       nlibc_srand
+#define mbrtowc     nlibc_mbrtowc
+#define mbrlen      nlibc_mbrlen
+#define wcrtomb     nlibc_wcrtomb
+#define mbtowc      nlibc_mbtowc
+#define wctomb      nlibc_wctomb
+#define lgamma      nlibc_lgamma
+#define signgam     (*nlibc_signgam_location())
 #ifdef __APPLE__
 #define basename    nlibc_basename
 #define dirname     nlibc_dirname

@@ -3313,6 +3313,94 @@ struct tm *nlibc_gmtime(const time_t *t) {
     return gmtime_r(t, &result);
 }
 
+// One stream per program, as each process has its own. rand_r runs the same
+// generator as Darwin's rand (checked: 100,000 draws agree), so a seeded
+// sequence is the one it always was -- which zsh's relaunch replay of
+// $RANDOM (deps/zsh/Src/aok_fork.c) depends on.
+static __thread unsigned nlibc_rand_state = 1;
+
+int nlibc_rand(void) {
+    return rand_r(&nlibc_rand_state);
+}
+
+void nlibc_srand(unsigned seed) {
+    nlibc_rand_state = seed;
+}
+
+char *nlibc_inet_ntoa(struct in_addr in) {
+    static __thread char buf[INET_ADDRSTRLEN];
+    return (char *) inet_ntop(AF_INET, &in, buf, sizeof(buf));
+}
+
+// The conversion state a NULL mbstate_t stands for, and mbtowc's and
+// wctomb's own, each the thread's. mbtowc and wctomb answer as Darwin's
+// (FreeBSD's) do: a NULL string resets the state and says the encoding has
+// none, and an incomplete character is EILSEQ with its bytes kept.
+static __thread mbstate_t nlibc_mbrtowc_state, nlibc_mbrlen_state, nlibc_wcrtomb_state;
+static __thread mbstate_t nlibc_mbtowc_state, nlibc_wctomb_state;
+
+size_t nlibc_mbrtowc(wchar_t *pwc, const char *s, size_t n, mbstate_t *ps) {
+    return mbrtowc(pwc, s, n, ps != NULL ? ps : &nlibc_mbrtowc_state);
+}
+
+size_t nlibc_mbrlen(const char *s, size_t n, mbstate_t *ps) {
+    return mbrlen(s, n, ps != NULL ? ps : &nlibc_mbrlen_state);
+}
+
+size_t nlibc_wcrtomb(char *s, wchar_t wc, mbstate_t *ps) {
+    return wcrtomb(s, wc, ps != NULL ? ps : &nlibc_wcrtomb_state);
+}
+
+int nlibc_mbtowc(wchar_t *pwc, const char *s, size_t n) {
+    if (s == NULL) {
+        memset(&nlibc_mbtowc_state, 0, sizeof(nlibc_mbtowc_state));
+        return 0;
+    }
+    size_t r = mbrtowc(pwc, s, n, &nlibc_mbtowc_state);
+    if (r == (size_t) -2) {
+        errno = EILSEQ;
+        return -1;
+    }
+    if (r == (size_t) -1)
+        return -1;
+    return (int) r;
+}
+
+int nlibc_wctomb(char *s, wchar_t wc) {
+    if (s == NULL) {
+        memset(&nlibc_wctomb_state, 0, sizeof(nlibc_wctomb_state));
+        return 0;
+    }
+    size_t r = wcrtomb(s, wc, &nlibc_wctomb_state);
+    return r == (size_t) -1 ? -1 : (int) r;
+}
+
+static __thread int nlibc_signgam_value;
+
+// Declared here: Darwin's <math.h> has it only under _REENTRANT, glibc's under
+// _DEFAULT_SOURCE, and the prototype is the same on both.
+double lgamma_r(double x, int *sign);
+
+int *nlibc_signgam_location(void) {
+    return &nlibc_signgam_value;
+}
+
+double nlibc_lgamma(double x) {
+    return lgamma_r(x, &nlibc_signgam_value);
+}
+
+// A new image, by exec or a first start on a thread that ran another: the
+// per-thread state above starts as a new process's would.
+void nlibc_image_start(void) {
+    nlibc_rand_state = 1;
+    memset(&nlibc_mbrtowc_state, 0, sizeof(nlibc_mbrtowc_state));
+    memset(&nlibc_mbrlen_state, 0, sizeof(nlibc_mbrlen_state));
+    memset(&nlibc_wcrtomb_state, 0, sizeof(nlibc_wcrtomb_state));
+    memset(&nlibc_mbtowc_state, 0, sizeof(nlibc_mbtowc_state));
+    memset(&nlibc_wctomb_state, 0, sizeof(nlibc_wctomb_state));
+    nlibc_signgam_value = 0;
+}
+
 char *nlibc_asctime(const struct tm *tm) {
     static __thread char buf[64];
     return asctime_r(tm, buf);

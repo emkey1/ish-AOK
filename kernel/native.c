@@ -577,6 +577,9 @@ static void native_exec_run_one(struct native_exec_pending *pending) {
     // A new image starts in the default floating-point environment, and the
     // guest image this replaced left its own on the host FPU (emu/fpenv.c).
     fpenv_host_default();
+    // And the C library's per-program state (srand(1), the conversion
+    // states): the thread may have run another image.
+    nlibc_image_start();
     native_run_restored = restored;
     if (sigsetjmp(landing.env, 0) == 0) {
         native_landing = &landing;
