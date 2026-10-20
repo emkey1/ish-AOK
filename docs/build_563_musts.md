@@ -22,7 +22,7 @@ drawn from the queue on 2026-10-19: what to keep, cut or add is yours.
 | 4 | Native programs share the host C library's static state | **DONE** (2026-10-20): the tz cache was wrong across roots and after a change; an `nm -u` audit found five more kinds of shared state, all per thread now |
 | 5 | Shortcuts Run Command: output over 256 KB, non-UTF-8 output, a reap timeout | **DONE** (2026-10-20, de2f52f93): the lost exit status was every root with a real init, not a timeout; the action itself not yet run from Shortcuts |
 | 6 | `signal_process_wake_one` late on the A10X | **DONE: the device** (2026-10-20): the test ran 14 scenario processes on 2 CPUs; batched by CPU count it passes 8 of 8 there |
-| 7 | Issues and the TODO's own state | open: #646 to close, the issue table stale, 34 done entries in the queue |
+| 7 | Issues and the TODO's own state | **DONE** (2026-10-20): #646 closed; issue table current (3 open); 31 done entries out of the queue, their 6 open tails kept as bullets |
 | 8 | Decisions due at the start of a release | open: #540, the two unlanded branches |
 
 Order: crash classes first (2, 3), then correctness native programs and
@@ -239,18 +239,22 @@ different bug, already fixed on Apple hosts and fixed today for x86_64 ones.
 
 ## 7. Issues and the TODO's own state
 
-- **#646** ("Install a Desktop" feedback): done for 562 and answered
-  2026-10-16, "close when 562 ships". 562 shipped on 2026-10-19.
-- **The TODO's issue table is stale.** It lists #577, #616, #620, #625, #628,
-  #631, #639 and #640 as open; GitHub has them closed. #648 (an apt `W:`
-  line on Devuan, answered 2026-10-17, waiting on the reporter) is not in it.
-  Open on GitHub today: #540, #646, #647, #648.
-- **The queue holds 34 entries whose headline says Done, Fixed or Settled.** The queue's own rule
-  is that a landed item's bullet is deleted, the commit being the record.
-  Delete them, after checking that none carries an open "Not done" tail that
-  should become its own bullet.
+**Done 2026-10-20.**
 
-Closing an issue and commenting on one are the maintainer's to approve.
+- **#646** closed with a note that it shipped in 562 (progress, Remove,
+  Wayfire's panel choice).
+- **The issue table** lists what GitHub has open: #540, #647 and #648
+  (#648 added: answered 2026-10-17, waiting on the reporter). #577, #616,
+  #620, #625, #628, #631, #639 and #640 had been closed on 2026-10-14.
+- **The queue.** Of the 35 headlines saying Done, Fixed or Settled, 31 were
+  finished work and are gone; the commits are the record. Four were not
+  (finger/w/last, the Shortcuts wording, the GNU applet audit, the Chinese
+  follow-ups) and stay. Six open tails inside deleted entries became bullets
+  of their own: host descriptors held per mapped library, `/proc/<pid>/maps`
+  device and inode, what nullDescriptor has not been tried on (and Mesa's
+  stale shader cache), pixman's OVER from x8r8g8b8, the App Group in the
+  diagnostics report, and the File Provider's name seen in Files. 74 open
+  entries remain.
 
 ## 8. Decisions due at the start of a release
 
