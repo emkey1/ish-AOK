@@ -21,7 +21,7 @@ drawn from the queue on 2026-10-19: what to keep, cut or add is yours.
 | 3 | Exec hands a task stale TLB entries | **DONE: it never did** (2026-10-19): the heals were an x87 80-bit load reading 16 bytes for 10, off the end of a host page; gone from Apple hosts since the 10-06 gadget port, fixed for x86_64 hosts now |
 | 4 | Native programs share the host C library's static state | **DONE** (2026-10-20): the tz cache was wrong across roots and after a change; an `nm -u` audit found five more kinds of shared state, all per thread now |
 | 5 | Shortcuts Run Command: output over 256 KB, non-UTF-8 output, a reap timeout | **DONE** (2026-10-20, de2f52f93): the lost exit status was every root with a real init, not a timeout; the action itself not yet run from Shortcuts |
-| 6 | `signal_process_wake_one` late on the A10X | open: decide whether it is the device or a wake path |
+| 6 | `signal_process_wake_one` late on the A10X | **DONE: the device** (2026-10-20): the test ran 14 scenario processes on 2 CPUs; batched by CPU count it passes 8 of 8 there |
 | 7 | Issues and the TODO's own state | open: #646 to close, the issue table stale, 34 done entries in the queue |
 | 8 | Decisions due at the start of a release | open: #540, the two unlanded branches |
 
@@ -212,20 +212,29 @@ different bug, already fixed on Apple hosts and fixed today for x86_64 ones.
 
 ## 6. `signal_process_wake_one` late on the A10X
 
-**Why.** The one failure in 562's device legs. On bip it fails 4 runs in 5
-alone and once in each full leg: a restarted call ends 2506-2703 ms after the
-start, against 2000 + 500 ms of slack. Every correctness check holds and it
-passes with `ISH_TEST_WATCHDOG_SCALE=2`. The 560 tag fails the same way, so
-it predates 562; the M4 passes.
+**Done 2026-10-20: the device, and the test's own load on it.**
 
-**Next step.** Decide which it is: time the wake path on bip (thirteen parked
-threads taking 0.5-0.7 s to run again), and compare with the same test's
-timing on the SE 2 and the iPhone 12. If it is the device, the test's slack
-should scale with the host, as `ISH_TEST_WATCHDOG_SCALE` already does for
-watchdogs; if it is a wake path, fix that.
-
-**Prove.** bip passes 5 of 5 alone and in a full leg, with whichever change
-was made named.
+- *What was late.* 562's bip leg: "lost the race, read (round 3):
+  nanosleep = 0 at 2506ms, want it to run to ~2000ms" -- a waiter nothing
+  signalled, a plain 2 s sleep ending half a second late. Not a lost wake.
+- *Where the time went* (this build on bip, verbose, three runs). The wake
+  itself is prompt: in each scenario run on its own, the first of its 13
+  waiters ends 1-2 ms after 2000. Lateness grows with how many threads want
+  a CPU at once: one process alone, at most ~75 ms; the racing scenarios,
+  which ran side by side -- 14 processes, ~180 waiters released together, on
+  a guest with 2 CPUs (`nproc` on bip) -- up to 700 ms, in every kind of
+  wait (nanosleep, ppoll, futex, sigsuspend).
+- *A/B on bip:* the test as it was failed 4 runs in 5 (and 3 in 3 verbose);
+  the same scenarios one at a time passed 5 of 5.
+- *The fix* (tests/manual/signal_process_wake_one.c): the racing scenarios
+  run side by side as before, but no more at once than there are online
+  CPUs. Same scenarios, same checks, same slack. bip 8 of 8 (20 s a run);
+  the M4 (6 CPUs) 5 of 5 before and after (11 s, now 13 s); the Mac CLI
+  (4) passes (17 s). No kernel change.
+- *Ruled out on the way:* a `taskpolicy -b` run on MBP5 made
+  `clock_nanosleep` late by up to 140 ms while `nanosleep` stayed on time;
+  that is background QoS coalescing timers, which no device run has, not
+  the A10X's behaviour.
 
 ## 7. Issues and the TODO's own state
 

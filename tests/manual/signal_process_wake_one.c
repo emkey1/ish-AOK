@@ -1128,24 +1128,45 @@ int main(int argc, char **argv) {
     scenario_start(&slot, "fatal", scenario_fatal, SIGALRM);
     scenario_finish(&slot);
 
-    /* The rest wait on other threads, not on each other: side by side. */
+    /* The rest wait on other threads, not on each other, so they run side by
+     * side -- but no more of them at once than there are CPUs. Each wakes
+     * thirteen waiters at its 2000ms, and fourteen at once on a guest with
+     * two CPUs (the A10X) is some 180 threads wanting a CPU in the same
+     * moment: the last ended 500-700ms late, past the slack, in four runs of
+     * five (2026-10-20). One at a time, five of five passed there. The wake
+     * itself was prompt; the queue for the CPU was the lateness. */
+    static const struct {
+        const char *name;
+        void (*fn)(const char *label);
+        bool rounds;
+    } racing[] = {
+        {"unblocked later (sigprocmask)", scenario_unblocked_later_sigprocmask, false},
+        {"unblocked later (sigsuspend)", scenario_unblocked_later_sigsuspend, false},
+        {"handed on", scenario_handed_on, true},
+        {"lost the race, read", scenario_lost_race_read, true},
+        {"lost the race, sigsuspend", scenario_lost_race_sigsuspend, true},
+    };
+    long cpus = sysconf(_SC_NPROCESSORS_ONLN);
+    size_t batch = cpus > 0 ? (size_t) cpus : 1;
     struct run_slot slots[2 + 3 * RACE_ROUNDS];
-    size_t n = 0;
-    scenario_start(&slots[n++], "unblocked later (sigprocmask)",
-                   scenario_unblocked_later_sigprocmask, 0);
-    scenario_start(&slots[n++], "unblocked later (sigsuspend)",
-                   scenario_unblocked_later_sigsuspend, 0);
+    char labels[2 + 3 * RACE_ROUNDS][64];
+    size_t n = 0, finished = 0;
     for (int r = 0; r < RACE_ROUNDS; r++) {
-        char label[64];
-        snprintf(label, sizeof(label), "handed on (round %d)", r + 1);
-        scenario_start(&slots[n++], label, scenario_handed_on, 0);
-        snprintf(label, sizeof(label), "lost the race, read (round %d)", r + 1);
-        scenario_start(&slots[n++], label, scenario_lost_race_read, 0);
-        snprintf(label, sizeof(label), "lost the race, sigsuspend (round %d)", r + 1);
-        scenario_start(&slots[n++], label, scenario_lost_race_sigsuspend, 0);
+        for (size_t k = 0; k < sizeof(racing) / sizeof(racing[0]); k++) {
+            if (!racing[k].rounds && r > 0)
+                continue;
+            if (racing[k].rounds)
+                snprintf(labels[n], sizeof(labels[n]), "%s (round %d)", racing[k].name, r + 1);
+            else
+                snprintf(labels[n], sizeof(labels[n]), "%s", racing[k].name);
+            if (n - finished == batch)
+                scenario_finish(&slots[finished++]);
+            scenario_start(&slots[n], labels[n], racing[k].fn, 0);
+            n++;
+        }
     }
-    for (size_t i = 0; i < n; i++)
-        scenario_finish(&slots[i]);
+    while (finished < n)
+        scenario_finish(&slots[finished++]);
 
     return finish_suite("signal_process_wake_one");
 }
