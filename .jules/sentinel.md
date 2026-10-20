@@ -58,3 +58,8 @@
 **Vulnerability:** None in practice: `native_env_set` (`kernel/native.c`) and `foreign_exec_env` (`kernel/foreign_exec.c`) size each `%s=%s` entry as exactly what the `sprintf` writes. Hardening only -- the bound now travels with the call.
 **Learning:** Hardcoding string formatting directly into dynamically allocated structures without using bounded functions like `snprintf` lets a later change to the sizing overrun silently.
 **Prevention:** Always use `snprintf` combined with explicitly passed buffer length parameters when formatting strings into dynamically allocated buffers.
+
+## 2026-10-20 - Buffer Overflow in fakefs_mount
+**Vulnerability:** In `fs/fake.c`, `fakefs_mount` calculated the length of `db_path` using `memcpy` and an unverified length (`dir_len + sizeof("meta.db") > sizeof(db_path)`). However, an overly long path constructed manually could still overflow the 4096-byte `db_path` stack buffer because of an incorrect bound check logic.
+**Learning:** Manual length checks paired with `memcpy` for constructing paths are error-prone and can lead to stack buffer overflows.
+**Prevention:** Always use `snprintf` to format paths into fixed-size buffers, as it guarantees null-termination and bounds checking. Check the return value to ensure truncation didn't occur.

@@ -977,10 +977,9 @@ static int fakefs_mount(struct mount *mount) {
     // truncated path names a different database.
     char db_path[PATH_MAX];
     size_t dir_len = (size_t) (slash + 1 - mount->source);
-    if (dir_len + sizeof("meta.db") > sizeof(db_path))
+    int n = snprintf(db_path, sizeof(db_path), "%.*smeta.db", (int)dir_len, mount->source);
+    if (n < 0 || n >= sizeof(db_path))
         return _ENAMETOOLONG;
-    memcpy(db_path, mount->source, dir_len);
-    memcpy(db_path + dir_len, "meta.db", sizeof("meta.db"));
 
     // do this now so rebuilding can use root_fd
     int err = realfs.mount(mount);
