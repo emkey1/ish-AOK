@@ -20,7 +20,7 @@ drawn from the queue on 2026-10-19: what to keep, cut or add is yours.
 | 2 | `list_remove` leaves a NULL node that a walk faults on | **DONE, a different fix** (2026-10-19): the audit ruled out re-initing; walks now treat a never-initialised head as empty, which is what crashed |
 | 3 | Exec hands a task stale TLB entries | **DONE: it never did** (2026-10-19): the heals were an x87 80-bit load reading 16 bytes for 10, off the end of a host page; gone from Apple hosts since the 10-06 gadget port, fixed for x86_64 hosts now |
 | 4 | Native programs share the host C library's static state | **DONE** (2026-10-20): the tz cache was wrong across roots and after a change; an `nm -u` audit found five more kinds of shared state, all per thread now |
-| 5 | Shortcuts Run Command: output over 256 KB, non-UTF-8 output, a reap timeout | open: fixes known to the line; proof needs a signed device build |
+| 5 | Shortcuts Run Command: output over 256 KB, non-UTF-8 output, a reap timeout | **DONE** (2026-10-20, de2f52f93): the lost exit status was every root with a real init, not a timeout; the action itself not yet run from Shortcuts |
 | 6 | `signal_process_wake_one` late on the A10X | open: decide whether it is the device or a wake path |
 | 7 | Issues and the TODO's own state | open: #646 to close, the issue table stale, 34 done entries in the queue |
 | 8 | Decisions due at the start of a release | open: #540, the two unlanded branches |
@@ -176,26 +176,39 @@ different bug, already fixed on Apple hosts and fixed today for x86_64 ones.
 
 ## 5. Shortcuts Run Command: output over 256 KB, non-UTF-8 output, a reap timeout
 
-**Why.** Defects in a shipped feature, found on 2026-10-02 while documenting
-it and not fixed since. Three of the seven matter to a user (TODO queue,
-*Shortcuts Run Command: seven defects*):
+**Done 2026-10-20 (de2f52f93).**
 
-- Output over 256 KB fails the action with "killed by signal 9" instead of
-  returning it: `outcome.truncated` (GuestCommandRunner.m) is set and read
-  nowhere. Check it first and return the output with a truncation note.
-- Output that is not valid UTF-8 comes back as empty text, and a 256 KB cut
-  through a multibyte character produces exactly that. Decode lossily.
-- A reap that gives up after 3 s leaves exited=0 and termSignal=0
-  (kernel/init.c), which counts as success even with Fail on Non-Zero Exit
-  on.
-
-The other four (root when no uid-1000 account exists, su's error text, a
-failed headless boot cached until relaunch, resume without asking) are
-wording or documented behaviour: fix the text where it is wrong.
-
-**Prove.** Run from the Shortcuts app on a signed device build (an unsigned
-simulator cannot resolve the intent's metadata): `seq 1 200000` (over
-256 KB), `head -c 300000 /dev/urandom`, and a command that outlives the reap.
+- *Over 256 KB.* The capture killed the command at the cap, so the action
+  failed with "killed by signal 9". It now reads and drops the rest to EOF:
+  the command runs to its end with its real status, and the action returns
+  the first 256 KB and a line `[iSH-AOK: output truncated at 256 KB]`.
+- *Not UTF-8.* One bad byte returned the whole output as empty text. Each
+  ill-formed sequence is now a U+FFFD (maximal subparts, as Swift's
+  `String(decoding:)`; Foundation's lossy detection dropped everything after
+  the first bad byte), and a truncated output first loses a split character.
+- *The exit status.* Bigger than "a reap that gives up": the command is a
+  child of the guest's pid 1, and on any root with a real init, init usually
+  reaps it first. The capture's wait then found nothing, and "Fail on
+  Non-Zero Exit" passed failing commands. Exit-status watches
+  (kernel/exit.c): the capture marks its child before it runs, and whoever
+  reaps it records the status, in a slot under a generation. Still none
+  (no reap within 3 s of SIGKILL) is `status_unknown`, which fails the
+  action when Fail on Non-Zero Exit is on. The LLM tool and the desktop
+  installer, which print their status into the output for the same reason,
+  get the status this way too.
+- **Proved:** main.c's capture harness, which now takes a cap and can run
+  after pid 1 starts. 300 KB then `exit 3`: before, signal 9; after, exit 3,
+  262144 bytes, and the command's last step ran. Under a pid 1 that reaps
+  every child at once, `exit 7`: without the watch 5 runs in 10 lost the
+  status, with it 10 in 10 (and a SIGTERM death reads 15). The decoder
+  against ten byte strings, five compared with Swift's. The Xcode device
+  build has it; MBP5 suite at de2f52f93: five roots, 387-477 passes, 0
+  failures. *Not run:* the action from the
+  Shortcuts app, which needs a signed device build.
+- *Left* (TODO): (3) root when no uid-1000 account exists, (4) su's error
+  text, (6) a cached boot failure's text, and `_EAGAIN` (waiting for the
+  session choice) reported as "could not boot". All wording, in nine
+  languages.
 
 ## 6. `signal_process_wake_one` late on the A10X
 

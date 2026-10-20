@@ -141,12 +141,12 @@ the app first for long jobs.
 
 ### Output
 
-- Output is capped at **256 KB**. A command that reaches the cap is stopped
-  there and killed, so the action usually fails with "The command was killed
-  by signal 9". You do not get the first 256 KB. For big output, write it to
-  a file and return a summary.
-- The output must be valid **UTF-8**. If it is not (binary data, or text in
-  another encoding), the action returns empty text.
+- Output is capped at **256 KB**. A command that prints more still runs to
+  its end, and its exit status counts as usual; the action returns the first
+  256 KB followed by a line `[iSH-AOK: output truncated at 256 KB]`. For big
+  output, write it to a file and return a summary.
+- Output that is not valid **UTF-8** (binary data, or text in another
+  encoding) comes back with each bad byte sequence replaced by `�`.
 - Error messages include at most the first 1024 characters of output,
   followed by "…".
 
@@ -175,8 +175,9 @@ The action fails, stopping the shortcut, with one of these messages:
 | Could not start the command (error N). Is the guest system booted? | neither `/AOK/native/zsh` nor `/bin/sh` could be started |
 | Could not start the command as user "NAME" (error N). The "Open Everything as Default User" setting runs commands via /bin/su -- if su is missing or that account cannot log in, disable the setting or fix the account. | Open Everything as Default User is on and `/bin/su` could not be started |
 | The command timed out after N seconds. Partial output: … | the timeout ran out |
-| The command was killed by signal N. Partial output: … | the command was killed by a signal. Signal 9 usually means it hit the 256 KB output cap |
+| The command was killed by signal N. Partial output: … | the command was killed by a signal |
 | The command exited with status N. Output: … | Fail on Non-Zero Exit is on and the status was not 0 |
+| The command's exit status could not be determined, so Fail on Non-Zero Exit cannot vouch for it. Output: … | Fail on Non-Zero Exit is on and the command's status was lost (rare: it did not end within 3 seconds of being killed) |
 
 The "Partial output" and "Output" parts are left out when there was no
 output. The error numbers are negative errno values, as in Linux: -2 means
@@ -457,12 +458,11 @@ paths, or set what you need in the command itself. As the default user,
 (raise it, up to 120 seconds), or it started a background job that still holds the
 output (redirect that job's output, as shown in [Output](#output)).
 
-**"The command was killed by signal 9."** Usually the output reached the
-256 KB cap. Send the output to a file and return less of it.
+**The result ends with "[iSH-AOK: output truncated at 256 KB]".** The output
+reached the cap. Send it to a file and return less of it.
 
-**The result is empty but the command printed something.** The output was
-not valid UTF-8. Pipe it through something that produces text, such as
-`base64` or `od -c`.
+**The result is full of `�`.** The output was not valid UTF-8. Pipe it
+through something that produces text, such as `base64` or `od -c`.
 
 **Colours or escape codes in the result.** The output goes to a pipe, not a
 terminal, and `TERM` is `dumb`, so most programs do not colour it. Those that colour regardless need
