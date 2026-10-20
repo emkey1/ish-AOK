@@ -230,7 +230,8 @@ different bug, already fixed on Apple hosts and fixed today for x86_64 ones.
   run side by side as before, but no more at once than there are online
   CPUs. Same scenarios, same checks, same slack. bip 8 of 8 (20 s a run);
   the M4 (6 CPUs) 5 of 5 before and after (11 s, now 13 s); the Mac CLI
-  (4) passes (17 s). No kernel change.
+  (4) passes (17 s). No kernel change. MBP5 suite at 32b160a5d: five
+  roots, 0 failures.
 - *Ruled out on the way:* a `taskpolicy -b` run on MBP5 made
   `clock_nanosleep` late by up to 140 ms while `nanosleep` stayed on time;
   that is background QoS coalescing timers, which no device run has, not
