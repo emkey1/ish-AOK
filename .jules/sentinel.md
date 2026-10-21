@@ -59,7 +59,7 @@
 **Learning:** Hardcoding string formatting directly into dynamically allocated structures without using bounded functions like `snprintf` lets a later change to the sizing overrun silently.
 **Prevention:** Always use `snprintf` combined with explicitly passed buffer length parameters when formatting strings into dynamically allocated buffers.
 
-## 2026-10-20 - Buffer Overflow in fakefs_mount
-**Vulnerability:** In `fs/fake.c`, `fakefs_mount` calculated the length of `db_path` using `memcpy` and an unverified length (`dir_len + sizeof("meta.db") > sizeof(db_path)`). However, an overly long path constructed manually could still overflow the 4096-byte `db_path` stack buffer because of an incorrect bound check logic.
-**Learning:** Manual length checks paired with `memcpy` for constructing paths are error-prone and can lead to stack buffer overflows.
-**Prevention:** Always use `snprintf` to format paths into fixed-size buffers, as it guarantees null-termination and bounds checking. Check the return value to ensure truncation didn't occur.
+## 2026-10-20 - Non-Vulnerability in fakefs_mount length check
+**Vulnerability:** None in practice. The code `dir_len + sizeof("meta.db") > sizeof(db_path)` with two sequential `memcpy` calls appears susceptible to an integer overflow or off-by-one error at first glance. However, `sizeof("meta.db")` is exactly 8 (including the null terminator), so the check properly accounts for the trailing NUL, ensuring that the two `memcpy` calls always strictly fit within `db_path`. Replacing this with `snprintf` is redundant and can even introduce signed/unsigned comparison warnings.
+**Learning:** Be careful when analyzing manual length checks in legacy C code, as `sizeof("string literal")` includes the null terminator, which can sometimes provide implicit bounds safety.
+**Prevention:** Verify if existing custom bounds checks already adequately protect the buffer before attempting to replace them with safer alternatives like `snprintf`, to avoid introducing unnecessary churn or compiler warnings.
