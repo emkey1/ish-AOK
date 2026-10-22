@@ -301,14 +301,17 @@ static void ISHSnippetConfigureAsShellInput(id<UITextInputTraits> input) {
     [super viewDidLoad];
     self.view.backgroundColor = UIColor.systemGroupedBackgroundColor;
     self.title = _original == nil ? NSLocalizedString(@"New Snippet", @"Snippet editor title") : NSLocalizedString(@"Edit Snippet", @"Snippet editor title");
-    self.navigationItem.leftBarButtonItem =
-        [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemCancel
-                                                      target:self
-                                                      action:@selector(cancel:)];
-    self.navigationItem.rightBarButtonItem =
-        [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemSave
-                                                      target:self
-                                                      action:@selector(save:)];
+    UIBarButtonItem *cancelButton = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemCancel
+                                                                                  target:self
+                                                                                  action:@selector(cancel:)];
+    cancelButton.accessibilityHint = NSLocalizedString(@"Discards changes to this snippet.", @"Accessibility hint for the cancel button");
+    self.navigationItem.leftBarButtonItem = cancelButton;
+
+    UIBarButtonItem *saveButton = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemSave
+                                                                                target:self
+                                                                                action:@selector(save:)];
+    saveButton.accessibilityHint = NSLocalizedString(@"Saves the snippet.", @"Accessibility hint for the save button");
+    self.navigationItem.rightBarButtonItem = saveButton;
 
     _nameField = [UITextField new];
     _nameField.placeholder = NSLocalizedString(@"Name", @"Snippet editor name field placeholder");
@@ -465,14 +468,20 @@ static void ISHSnippetConfigureAsShellInput(id<UITextInputTraits> input) {
     // than let the first tap be the explanation.
     if (self.delegate == nil)
         self.navigationItem.prompt = NSLocalizedString(@"No terminal window open — tap a snippet to read or edit it.", @"Snippets list prompt when no terminal can receive a snippet");
-    self.navigationItem.leftBarButtonItem =
-        [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemDone
-                                                      target:self
-                                                      action:@selector(done:)];
+    UIBarButtonItem *doneButton = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemDone
+                                                                                target:self
+                                                                                action:@selector(done:)];
+    doneButton.accessibilityHint = NSLocalizedString(@"Dismisses the snippets list.", @"Accessibility hint for the done button");
+    self.navigationItem.leftBarButtonItem = doneButton;
+
+    UIBarButtonItem *addButton = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemAdd
+                                                                               target:self
+                                                                               action:@selector(addSnippet:)];
+    addButton.accessibilityLabel = NSLocalizedString(@"New Snippet", @"Accessibility label for the add snippet button");
+    addButton.accessibilityHint = NSLocalizedString(@"Creates a new snippet.", @"Accessibility hint for the add snippet button");
+
     self.navigationItem.rightBarButtonItems = @[
-        [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemAdd
-                                                      target:self
-                                                      action:@selector(addSnippet:)],
+        addButton,
         self.editButtonItem,
     ];
     [self.tableView registerClass:UITableViewCell.class forCellReuseIdentifier:@"snippet"];
