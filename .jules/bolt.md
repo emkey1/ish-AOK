@@ -44,3 +44,7 @@
 **Learning:** When performing tests involving `ninja` in the iSH project, the build can inadvertently dirty the `deps/dash` git submodule. If this dirty state is committed, or if attempts to wipe and re-clone the directory directly from GitHub are executed, the build suite can break or throw authentication errors ("terminal prompts disabled").
 
 **Action:** Always verify `git status` prior to final submission. If `deps/dash` is dirtied, explicitly clean and reset it (using `cd deps/dash && git clean -fdx && git reset --hard`). Never attempt to manually clone submodules from GitHub. Instead, use standard git submodule restoration techniques (e.g. `git restore --staged deps/dash && git checkout deps/dash && git submodule update --init deps/dash`).
+
+## 2025-02-23 - Performance: Defer strlen in VFS readdir
+**Learning:** In VFS directory iteration loops (like `readdir`), executing O(N) calculations like `strlen()` on every entry prematurely, especially for highly frequent special entries like `.` and `..`, causes unnecessary CPU overhead.
+**Action:** When implementing or optimizing `readdir` logic or similar directory iterations, first explicitly check for common `.` and `..` directory entries using short-circuited character array comparisons (e.g., `entry->name[0] == '.' && entry->name[1] == '.' && entry->name[2] == '\0'`). This safely defers O(N) length calculations until necessary, reducing overhead.

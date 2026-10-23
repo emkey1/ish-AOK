@@ -895,13 +895,17 @@ retry:
     // this is annoying
     char entry_path[MAX_PATH + 1];
     realfs_getpath(fd, entry_path);
-    // Cache strlen to avoid redundant calculations in bounds checking and loops
-    size_t name_len = strlen(entry->name);
-    if (name_len == 2 && entry->name[0] == '.' && entry->name[1] == '.') {
+    // Defer strlen() to avoid O(N) calculations for the most frequent entries
+    size_t name_len;
+    if (entry->name[0] == '.' && entry->name[1] == '.' && entry->name[2] == '\0') {
+        name_len = 2;
         if (entry_path[0] != '\0') {
             *strrchr(entry_path, '/') = '\0';
         }
-    } else if (!(name_len == 1 && entry->name[0] == '.')) {
+    } else if (entry->name[0] == '.' && entry->name[1] == '\0') {
+        name_len = 1;
+    } else {
+        name_len = strlen(entry->name);
         size_t path_len = strlen(entry_path);
         // god I don't know what to do if this would overflow
         if (path_len + 1 + name_len >= sizeof(entry_path))
