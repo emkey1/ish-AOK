@@ -23,7 +23,8 @@ drawn from the queue on 2026-10-19: what to keep, cut or add is yours.
 | 5 | Shortcuts Run Command: output over 256 KB, non-UTF-8 output, a reap timeout | **DONE** (2026-10-20, de2f52f93): the lost exit status was every root with a real init, not a timeout; the action itself not yet run from Shortcuts |
 | 6 | `signal_process_wake_one` late on the A10X | **DONE: the device** (2026-10-20): the test ran 14 scenario processes on 2 CPUs; batched by CPU count it passes 8 of 8 there |
 | 7 | Issues and the TODO's own state | **DONE** (2026-10-20): #646 closed; issue table current (3 open); 31 done entries out of the queue, their 6 open tails kept as bullets |
-| 8 | Decisions due at the start of a release | open: #540, the two unlanded branches |
+| 8 | Decisions due at the start of a release | #540 **decided** (2026-10-23): in 563, iPhone only; the #523 branch still open |
+| 9 | External display on real hardware | **GATE: must pass before 563 is tagged** |
 
 Order: crash classes first (2, 3), then correctness native programs and
 Shortcuts users see (4, 5), then the release gate's one device failure (6).
@@ -258,12 +259,47 @@ different bug, already fixed on Apple hosts and fixed today for x86_64 ones.
 
 ## 8. Decisions due at the start of a release
 
-- **#540, external display.** Built, reverted for 546, parked; the note on it
-  says to raise it early in a release, not late. Decide whether 563 is the
-  release for it. The work is on `worktree-external-display-540` (6156597ee).
+- **#540, external display: decided 2026-10-23, 563 is the release.** Restored
+  for iPhone only: the external-display scene role is declared in
+  `UIApplicationSceneManifest~iphone`, and an iPad reads the shared manifest
+  545-562 shipped, so none of the 546 symptoms (all iPad) can come back. The
+  two reverted commits are replayed and the Wayland mirror (6156597e) is
+  ported to today's display code (direct frames, touchpad mode, the
+  surface-sized desktop of #483); the idle message is in nine languages. It
+  builds; it has not met a display yet -- §9.
 - **`claude/jovial-dhawan-96001a`** (6c0568e83): the #523 "Go heap-growth
   stall" diagnosis, which the TODO's #523 entry does not contain. Land the
   text or drop the branch.
+
+
+## 9. External display on real hardware -- a gate before tagging
+
+**Why.** #540 is in the tree untested on a display (§8). The 546 attempt was
+pulled because hardware showed what the simulator could not; 563 does not tag
+until an iPhone has driven a real external display with this build.
+
+**How.** An iPhone (the SE 2 is set up) with either a monitor on a dongle, or
+AirPlay Screen Mirroring from the phone's Control Center to a Mac with AirPlay
+Receiver on. Not macOS iPhone Mirroring: that remote-controls the phone and
+gives apps no second screen (tried 2026-10-23). Launch with
+`ISH_SESSION_RESUME=fresh`. The phone's log shows the display arrive: the
+app's `FBSDisplaySource 2` gets a config instead of `(null)`, and a second
+`sceneID` for the app appears.
+
+**Pass when:**
+- the terminal fills the external screen at its shape (not letterboxed) while
+  the phone keeps the keyboard, and typing on the phone shows there;
+- in Workspace mode, bringing a terminal window forward moves it there, and
+  with nothing able to use it the screen says "Open a terminal or the Wayland
+  Display to use this screen.";
+- the Wayland Display mirrors, with the cursor, at a landscape desktop size,
+  and touch on the phone still drives it (touchpad mode too);
+- disconnecting gives everything back to the phone, and reconnecting takes it
+  again;
+- an iPad on the same build with a monitor behaves as 562 did (Stage Manager).
+
+**If it fails:** fix it, or take #540 out of 563 again before tagging -- the
+iPhone manifest key alone switches it off.
 
 ---
 

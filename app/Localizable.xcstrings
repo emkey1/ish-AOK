@@ -55327,6 +55327,66 @@
         }
       }
     },
+    "Open a terminal or the Wayland Display to use this screen." : {
+      "comment" : "External display idle message: shown on a connected monitor while nothing that can use it is open",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Öffne ein Terminal oder das Wayland-Display, um diesen Bildschirm zu nutzen."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Abre una terminal o la Pantalla Wayland para usar este monitor."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ouvrez un terminal ou l’Écran Wayland pour utiliser ce moniteur."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この画面を使うには、ターミナルか Wayland ディスプレイを開いてください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 화면을 사용하려면 터미널이나 Wayland 디스플레이를 여십시오."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Abra um terminal ou a Tela Wayland para usar este monitor."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Откройте терминал или «Дисплей Wayland», чтобы использовать этот экран."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开终端或 Wayland 显示即可使用此屏幕。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打開終端機或 Wayland 顯示器即可使用此螢幕。"
+          }
+        }
+      }
+    },
     "Open a video from the File Manager, or a stream with Open URL." : {
       "comment" : "Video player empty-state text",
       "extractionState" : "manual",

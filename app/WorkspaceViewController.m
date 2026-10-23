@@ -2906,6 +2906,15 @@ static UIViewController *ISHCreateWorkspaceToolViewController(NSString *toolIden
     return nil;
 }
 
+WorkspaceViewController *ISHWorkspaceViewControllerForViewController(UIViewController *viewController) {
+    UIViewController *candidate = viewController;
+    if ([candidate isKindOfClass:UINavigationController.class])
+        candidate = ((UINavigationController *) candidate).topViewController ?: candidate;
+    if ([candidate isKindOfClass:WorkspaceViewController.class])
+        return (WorkspaceViewController *) candidate;
+    return nil;
+}
+
 NSString *ISHWorkspaceToolIdentifierForViewController(UIViewController *viewController) {
     if ([viewController isKindOfClass:NSClassFromString(@"LLMClientViewController")])
         return ISHWorkspaceToolLLMIdentifier;
@@ -3837,6 +3846,13 @@ static NSString *ISHTerminalTabTitleForRole(NSString *role, Terminal *terminal) 
                 [(id<WorkspaceFocusable>) contentViewController workspaceToolDidBecomeFrontmost];
             [strongSelf claimKeyboardFocusForTextScalableWindow:strongWindowView];
         }
+        // A connected external display shows whatever window is frontmost, so
+        // bringing a different capable window forward should move it there --
+        // otherwise the display keeps showing a window the user has moved on
+        // from, and merely focusing an already-open window (as opposed to
+        // opening a new one) would never hand it over at all.
+        [NSNotificationCenter.defaultCenter postNotificationName:ISHExternalDisplayContentDidBecomeAvailableNotification
+                                                          object:strongWindowView];
         [strongSelf refreshDockButtons];
     };
     return windowView;
@@ -5201,6 +5217,23 @@ static NSString *ISHWorkspaceDesktopNamesSignature(NSArray<NSString *> *names) {
         if (windowView.hidden || windowView.hostedTerminalViewController == nil)
             continue;
         return windowView;
+    }
+    return nil;
+}
+
+- (id<ISHExternalDisplayContent>)frontmostExternalDisplayContent {
+    // Front-to-back over the visible desktop windows: whichever capable window
+    // is frontmost is the one the user means. Covers both terminal windows and
+    // the Display applet, since both content controllers adopt the protocol.
+    for (UIView *view in [self.desktopSurfaceView.subviews reverseObjectEnumerator]) {
+        if (![view isKindOfClass:ISHWorkspaceContainedWindowView.class])
+            continue;
+        ISHWorkspaceContainedWindowView *windowView = (ISHWorkspaceContainedWindowView *) view;
+        if (windowView.hidden)
+            continue;
+        UIViewController *contentViewController = [self contentViewControllerForDesktopWindow:windowView];
+        if ([contentViewController conformsToProtocol:@protocol(ISHExternalDisplayContent)])
+            return (id<ISHExternalDisplayContent>) contentViewController;
     }
     return nil;
 }

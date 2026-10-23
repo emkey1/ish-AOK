@@ -116,13 +116,126 @@ types on the phone; output renders on the big screen.
 - Scene lifecycle: the external scene can connect before *or* after the
   terminal scene, and can disconnect while the app is backgrounded.
 
+## Implementation notes
+
+Implemented as designed (`ExternalDisplaySceneDelegate`, `TerminalView`'s
+external-host mode, the plist entry, the device-side placeholder). Two things
+turned out differently from the plan:
+
+- **Sizing needed no new code.** hterm re-lays out when the webView's frame
+  changes and reports the new geometry through `onTerminalResize`, which
+  `Terminal syncWindowSize` already pushes to the winsize. Re-parenting the
+  webView is enough; `stty size` follows the external display and comes back
+  when it is unplugged.
+- **The external container must be constrained, not autoresized.** Sizing it
+  from `rootViewController.view.bounds` before the window adopts the controller
+  bakes in a placeholder size, which showed up as the terminal rendering into a
+  720x480 corner of a 1080p display.
+
+Also worth knowing: iOS can stand up a replacement external scene *before*
+tearing the old one down when the display renegotiates its mode, so the restore
+path is keyed on the host view (`restoreContentFromView:`) rather than
+unconditionally pulling the terminal back to the device.
+
+## Workspace, and the idle display
+
+Declaring the external-display scene is app-wide: iOS stops mirroring the
+device whether or not the app has anything to put over there. So every mode
+needs an answer, not just the full-screen terminal.
+
+- **Workspace** hands over the frontmost desktop terminal window. Its terminals
+  are children of contained window views rather than a scene's root view
+  controller, so `WorkspaceViewController` exposes
+  `frontmostHostedTerminalViewController` for the lookup to find.
+- The lookup asks **what is frontmost first** (`ISHActivePresentationViewController`)
+  and only then falls back to `currentTerminalViewController`. Workspace is
+  usually *presented over* a terminal scene, so consulting the global first
+  handed the display a terminal that was covered up while the Workspace
+  terminal stayed in its postage-stamp window.
+- When there is nothing to hand over -- a Workspace desktop with no terminal
+  window, or the standalone Wayland Display -- the display shows an idle
+  message rather than an unexplained blank field. It comes back on its own when
+  the content leaves, and the display re-attaches to another terminal if one is
+  open.
+- Text on both the idle message and the device-side placeholder is coloured
+  from the **palette foreground**, not a system label colour: these sit on the
+  terminal's own background, and a dark theme under a light system appearance
+  (or the reverse) rendered them nearly invisible.
+
+## Wayland: mirrored, not relocated
+
+The Wayland display can't use the terminal's trick. Its `DisplayRFBView` is
+*also* the touch surface that generates the RFB pointer events (touches are
+scaled from the view's bounds into framebuffer coordinates), so it has to stay
+where the fingers are. Instead a second `DisplayRFBView` on the external screen
+renders the same framebuffer:
+
+- The mirror does **no protocol I/O**. It never reads the client's framebuffer
+  and never acknowledges — the read/acknowledge pair is what gates the next
+  update onto the wire, so a second acknowledger would let the client overwrite
+  the buffer while the other view was still uploading from it. It draws the
+  source's already-uploaded `MTLTexture`, which is legal to share because it is
+  created with the source's `MTLDevice`.
+- The source draws the mirror **synchronously**, not via `setNeedsDisplay`.
+  Both views sample one texture, and the acknowledge has already released the
+  client to send the next update: a mirror waiting for its own vsync sampled a
+  texture that was already part-way into the following frame, which tore
+  visibly on a full-framebuffer update.
+- The cursor is an overlay positioned from the pointer events we send (RFB
+  never pushes position). The mirror keeps the position in *framebuffer*
+  coordinates so it can scale into its own, differently sized, bounds.
+- `SetDesktopSize` follows the external display while mirroring: it is the
+  screen being looked at, and following a portrait phone instead would hand a
+  portrait desktop to a 16:9 display. Since #483 the desktop is sized to the
+  surface showing it (`_requestDesktopSizeForDisplay`, debounced), so the
+  mirror's size is that surface while it exists, and the mirror reports its own
+  size changes (`sizeDidChange`) for a display that renegotiates its mode.
+- Direct frames (the GPU path that pauses RFB updates) reach the mirror too:
+  `framebufferTexture` is the direct texture while they come, the source draws
+  it to the mirror in the same pass, and the mirror's cursor overlay hides with
+  the source's, since direct frames carry the cursor drawn in.
+
+Both surfaces are found and driven through one `ISHExternalDisplayContent`
+protocol, so the scene delegate doesn't care which it got. Bringing a different
+capable Workspace window to the front moves the display to it — handled on the
+next runloop turn, because the Workspace posts that from inside its own window
+setup and re-parenting views there made a freshly opened window close itself.
+
 ## Out of scope
 
 - Interactive external displays (the non-interactive role is what iOS gives
   for this hardware path).
 - Changing Stage Manager behaviour, which already works.
 
-## Status: implemented, then pulled from release 546
+## Status: restored for 563, iPhone only
+
+Restored on 2026-10-23 for 563 (GH #540): `57380ba6` and `cc0b5b21` replayed
+onto `working` (one trivial header conflict), and `6156597e` ported to today's
+Wayland display (direct frames, touchpad mode, surface-sized desktop).
+
+**iPhone only, by declaration.** The external-display scene role is declared in
+`UIApplicationSceneManifest~iphone`; the shared `UIApplicationSceneManifest`
+is exactly what 545-562 shipped, so an iPad reads it unchanged and keeps plain
+Stage Manager behaviour -- the third option in the fix list below, and the one
+that cannot reproduce any of the 546 symptoms, which were all iPad. CFBundle
+substitutes a `~iphone` key on iPhone and leaves it out elsewhere; the built
+app carries both manifests.
+
+**Not yet verified on hardware.** Builds in Xcode; not run with a real
+external display. The SE 2 test of 2026-10-23 had none attached: iOS reported
+no second display (the app's display sources 2-5 empty), and macOS iPhone
+Mirroring is not one -- it remote-controls the phone and gives apps no second
+screen. To test: a monitor on a dongle, or AirPlay Screen Mirroring from the
+phone's Control Center to a Mac with AirPlay Receiver on. Check: the terminal
+fills the external screen while the phone keeps the keyboard; the Wayland
+Display mirrors with its cursor, at a landscape desktop size; with nothing
+open the idle message shows; unplugging gives everything back.
+
+**Still open for iPad:** the hypothesis below (the declared role itself breaks
+Stage Manager) is untested. iPads without external-display Stage Manager
+(the A10X, say) get only the letterboxed mirror until it is.
+
+## History: implemented, then pulled from release 546
 
 The implementation (`57380ba6`, `cc0b5b21`) was reverted before tagging 546. It
 worked, but device testing on an M4 iPad with a real monitor found it conflicts
@@ -160,5 +273,4 @@ preference: don't claim the screen when an interactive scene already occupies
 it; put it behind a Settings toggle; or restrict it to iPhone, where
 multi-display Stage Manager is not a factor.
 
-To resume, revert the reverts -- the code is intact in history at `57380ba6`
-and `cc0b5b21`.
+Resumed for 563: see the status above.

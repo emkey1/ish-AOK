@@ -1,4 +1,5 @@
 #import <UIKit/UIKit.h>
+#import "ISHExternalDisplayContent.h"
 #import "WorkspaceViewController.h"
 
 NS_ASSUME_NONNULL_BEGIN
@@ -15,7 +16,11 @@ NS_ASSUME_NONNULL_BEGIN
 // -- but its Terminal (a plain hterm-less instance) is never shown; only the
 // DisplayRFBView is user-visible. Closing the applet hangs up that pty
 // (SIGHUP), which start-wayland.sh's trap tears the whole guest stack down on.
-@interface DisplayViewController : WorkspaceThemedToolViewController
+// ISHExternalDisplayContent: the desktop is *mirrored* to an external display
+// rather than moved there. Its Metal view is also the touch surface producing
+// the RFB pointer events, so it has to stay where the fingers are; a second
+// view on the external screen renders the same framebuffer.
+@interface DisplayViewController : WorkspaceThemedToolViewController <ISHExternalDisplayContent>
 
 // YES when this controller IS the scene's root (the "Wayland Display" startup
 // mode) rather than an applet window inside the Workspace. Adds the same

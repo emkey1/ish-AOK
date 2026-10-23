@@ -145,6 +145,12 @@ static const struct virtgpu_present_ops display_direct_ops = {
 };
 
 @interface DisplayRFBView () <MTKViewDelegate, UIKeyInput>
+// The texture the source has already uploaded this frame; what a mirror draws.
+@property (nonatomic, readonly, nullable) id<MTLTexture> framebufferTexture;
+- (void)drawTexture:(nullable id<MTLTexture>)texture;
+- (void)adoptCursorStateFromMirrorSource;
+// Shared body of both public initializers; nil source means "not a mirror".
+- (instancetype)initWithFrame:(CGRect)frameRect mirrorSource:(nullable DisplayRFBView *)sourceView;
 @end
 
 @implementation DisplayRFBView {
@@ -179,6 +185,11 @@ static const struct virtgpu_present_ops display_direct_ops = {
     BOOL _tpDragging;                // the left button is held for that drag
     NSTimeInterval _tpLastTapAt;     // when the last one-finger tap ended
     CGFloat _tpScrollX, _tpScrollY;  // two-finger travel not yet sent as wheel steps
+    // The same position in framebuffer coordinates. A mirror has no pointer
+    // input of its own and a different size, so this is what it scales into
+    // its own bounds to place the cursor overlay.
+    CGPoint _lastPointerFramebufferPoint;
+    CGSize _lastLaidOutSize; // for sizeDidChange
 
     // Accessory key strip shown above/instead of the soft keyboard (the Display
     // surface is its own first responder, so TerminalViewController's bar never
@@ -194,9 +205,20 @@ static const struct virtgpu_present_ops display_direct_ops = {
 }
 
 - (instancetype)initWithFrame:(CGRect)frameRect {
-    id<MTLDevice> device = MTLCreateSystemDefaultDevice();
+    return [self initWithFrame:frameRect mirrorSource:nil];
+}
+
+- (instancetype)initWithFrame:(CGRect)frameRect mirroringSourceView:(DisplayRFBView *)sourceView {
+    return [self initWithFrame:frameRect mirrorSource:sourceView];
+}
+
+- (instancetype)initWithFrame:(CGRect)frameRect mirrorSource:(nullable DisplayRFBView *)sourceView {
+    // The mirror must render on the SAME device as its source, or the source's
+    // texture is not legal to sample from here.
+    id<MTLDevice> device = sourceView != nil ? sourceView.device : MTLCreateSystemDefaultDevice();
     self = [super initWithFrame:frameRect device:device];
     if (self != nil) {
+        _mirrorSourceView = sourceView;
         self.translatesAutoresizingMaskIntoConstraints = NO;
         self.delegate = self;
         // Fully on-demand rendering: draw only when a frame actually
@@ -263,8 +285,27 @@ static const struct virtgpu_present_ops display_direct_ops = {
             NSError *error = nil;
             _pipelineState = [device newRenderPipelineStateWithDescriptor:pipelineDescriptor error:&error];
         }
+        if (sourceView != nil) {
+            // Purely a rendering surface: it lives on a non-interactive scene
+            // that can never be key, so it can neither be first responder nor
+            // receive touches -- and letting it try would only compete with
+            // the source view for the pointer state they share.
+            self.userInteractionEnabled = NO;
+            // Rounded corners make sense inside a Workspace window; on a
+            // display filled edge-to-edge they would just notch the desktop.
+            self.layer.cornerRadius = 0.0;
+            [self adoptCursorStateFromMirrorSource];
+        }
     }
     return self;
+}
+
+// What a mirror draws: whatever this view is showing now -- the GPU's direct
+// frames while they come, the RFB client's framebuffer otherwise.
+- (nullable id<MTLTexture>)framebufferTexture {
+    if (_directFrames)
+        return [_direct texture];
+    return _texture;
 }
 
 #pragma mark - MTKViewDelegate
@@ -274,15 +315,41 @@ static const struct virtgpu_present_ops display_direct_ops = {
     (void) size;
 }
 
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    // The cursor overlay is placed in view coordinates scaled from the
+    // framebuffer, so a size change (a resized Workspace window, or a mirror
+    // taking on the external display's geometry) invalidates its frame.
+    [self repositionCursor];
+    if (!CGSizeEqualToSize(self.bounds.size, _lastLaidOutSize)) {
+        _lastLaidOutSize = self.bounds.size;
+        if (self.sizeDidChange != nil)
+            self.sizeDidChange();
+    }
+}
+
 - (void)drawInMTKView:(MTKView *)view {
+    DisplayRFBView *mirrorSource = self.mirrorSourceView;
+    if (mirrorSource != nil) {
+        // Draw the source's texture as-is. No client read and -- crucially --
+        // no acknowledge: the source owns that handshake, and a second
+        // acknowledge would release the client to overwrite its buffer while
+        // the source was still uploading out of it.
+        [self drawTexture:mirrorSource.framebufferTexture];
+        return;
+    }
     if (_directFrames) {
         // An update already on its way when VNC was paused: dropped, but
         // acknowledged, since the client reads nothing more (clipboard,
         // cursor shapes) until it is.
         [_rfbClient acknowledgeFramebufferRead];
         id<MTLTexture> texture = [_direct texture];
-        if (texture != nil)
+        if (texture != nil) {
             [self drawTexture:texture];
+            // The same frame on the second screen, now, for the reason given
+            // below the RFB upload.
+            [self.mirrorView drawTexture:texture];
+        }
         return;
     }
     DisplayRFBClient *client = _rfbClient;
@@ -326,10 +393,18 @@ static const struct virtgpu_present_ops display_direct_ops = {
     // present below to actually finish on the GPU.
     [client acknowledgeFramebufferRead];
     [self drawTexture:_texture];
+    // Same frame, second screen -- drawn synchronously, NOT via setNeedsDisplay.
+    // The two views share one texture, and the acknowledge above has already
+    // released the client to send the next update: a mirror that waited for its own
+    // vsync would sample a texture that was already part-way into the following
+    // frame, which tears visibly (seen as a sheared image on a full-framebuffer
+    // update). Encoding here keeps its frame identical to the one just drawn
+    // locally.
+    [self.mirrorView drawTexture:_texture];
 }
 
-- (void)drawTexture:(id<MTLTexture>)texture {
-    if (_pipelineState == nil)
+- (void)drawTexture:(nullable id<MTLTexture>)texture {
+    if (_pipelineState == nil || texture == nil)
         return; // shader pipeline failed to build; keep the RFB session alive without rendering
 
     id<CAMetalDrawable> drawable = self.currentDrawable;
@@ -427,6 +502,7 @@ static const struct virtgpu_present_ops display_direct_ops = {
         _directFrames = YES;
         _rfbClient.framebufferUpdatesPaused = YES;
         _cursorView.hidden = YES;
+        [self.mirrorView adoptCursorStateFromMirrorSource];
     }
     [self setNeedsDisplay];
 }
@@ -441,6 +517,7 @@ static const struct virtgpu_present_ops display_direct_ops = {
         _cursorView.hidden = NO;
         [self repositionCursor];
     }
+    [self.mirrorView adoptCursorStateFromMirrorSource];
     [self setNeedsDisplay];
 }
 
@@ -755,7 +832,9 @@ static CGFloat DisplayTouchpadGain(CGFloat pointsPerSecond) {
     [_rfbClient sendPointerEventAtX:x y:y buttonMask:buttonMask];
     _lastPointerViewPoint = point;
     _havePointerPoint = YES;
+    _lastPointerFramebufferPoint = CGPointMake(x, y);
     [self repositionCursor];
+    [self.mirrorView repositionCursor];
 }
 
 - (void)handleHover:(UIHoverGestureRecognizer *)recognizer {
@@ -804,14 +883,35 @@ static CGFloat DisplayTouchpadGain(CGFloat pointsPerSecond) {
     _cursorImageSize = CGSizeMake(width, height);
     _cursorHotspot = CGPointMake(hotspotX, hotspotY);
     _hasCursor = YES;
-    self.cursorView.hidden = _directFrames; // direct frames have it drawn in
+    // Direct frames have it drawn in -- the source's, for a mirror, whose own
+    // view never receives any.
+    DisplayRFBView *shown = self.mirrorSourceView ?: self;
+    self.cursorView.hidden = shown->_directFrames;
+    [self repositionCursor];
+    // The shape only changes occasionally, so a mirror that missed the last
+    // one would sit cursorless until the pointer happened to enter something
+    // that changes it -- hand every update straight on.
+    [self.mirrorView updateCursorWithWidth:width height:height hotspotX:hotspotX hotspotY:hotspotY bgra:bgra];
+}
+
+// A mirror created mid-session missed every cursor update so far; copy the
+// current shape over rather than waiting for the next one.
+- (void)adoptCursorStateFromMirrorSource {
+    DisplayRFBView *source = self.mirrorSourceView;
+    if (source == nil || source->_cursorView == nil || source->_cursorView.image == nil)
+        return;
+    self.cursorView.image = source->_cursorView.image;
+    _cursorImageSize = source->_cursorImageSize;
+    _cursorHotspot = source->_cursorHotspot;
+    self.cursorView.hidden = source->_cursorView.hidden;
     [self repositionCursor];
 }
 
 - (void)repositionCursor {
     if (_cursorView == nil || _cursorView.hidden)
         return;
-    CGSize desktop = [self desktopPixelSize];
+    DisplayRFBView *source = self.mirrorSourceView ?: self;
+    CGSize desktop = [source desktopPixelSize];
     uint16_t fbWidth = (uint16_t) desktop.width;
     uint16_t fbHeight = (uint16_t) desktop.height;
     CGSize viewSize = self.bounds.size;
@@ -819,9 +919,17 @@ static CGFloat DisplayTouchpadGain(CGFloat pointsPerSecond) {
         return;
     CGFloat scaleX = viewSize.width / (CGFloat) fbWidth;
     CGFloat scaleY = viewSize.height / (CGFloat) fbHeight;
+    // Locally the touch point is used directly, which is finer-grained than
+    // the integer framebuffer coordinate it was quantized to. A mirror has no
+    // touch of its own, so it scales that framebuffer coordinate into its own
+    // (differently sized) bounds instead.
+    CGPoint pointer = source == self
+        ? _lastPointerViewPoint
+        : CGPointMake(source->_lastPointerFramebufferPoint.x * scaleX,
+                      source->_lastPointerFramebufferPoint.y * scaleY);
     CGSize viewImageSize = CGSizeMake(_cursorImageSize.width * scaleX, _cursorImageSize.height * scaleY);
-    CGPoint origin = CGPointMake(_lastPointerViewPoint.x - _cursorHotspot.x * scaleX,
-                                  _lastPointerViewPoint.y - _cursorHotspot.y * scaleY);
+    CGPoint origin = CGPointMake(pointer.x - _cursorHotspot.x * scaleX,
+                                  pointer.y - _cursorHotspot.y * scaleY);
     _cursorView.frame = CGRectMake(origin.x, origin.y, viewImageSize.width, viewImageSize.height);
 }
 

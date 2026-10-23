@@ -6,6 +6,7 @@
 //
 
 #import <UIKit/UIKit.h>
+#import "ISHExternalDisplayContent.h"
 #import "Terminal.h"
 
 typedef NS_ENUM(NSInteger, ISHFreshSessionTerminalDisplayMode) {
@@ -14,7 +15,7 @@ typedef NS_ENUM(NSInteger, ISHFreshSessionTerminalDisplayMode) {
     ISHFreshSessionTerminalDisplayModeSystemConsole,
 };
 
-@interface TerminalViewController : UIViewController
+@interface TerminalViewController : UIViewController <ISHExternalDisplayContent>
 
 @property (nonatomic) Terminal *terminal;
 @property (nonatomic) ISHFreshSessionTerminalDisplayMode freshSessionTerminalDisplayMode;
@@ -75,6 +76,10 @@ typedef NS_ENUM(NSInteger, ISHFreshSessionTerminalDisplayMode) {
 // host when its window is closed via the × so the shell doesn't keep running headless. Safe to
 // call repeatedly; a no-op once the session is already gone.
 - (void)disposeSessionForWorkspaceClose;
+
+// ISHExternalDisplayContent: relocating hands the terminal's rendering to a
+// view living on the external screen; this controller keeps the keyboard, the
+// accessory bar and first responder, so input is unaffected.
 
 @end
 
