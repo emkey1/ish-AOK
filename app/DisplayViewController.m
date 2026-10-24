@@ -1428,6 +1428,7 @@ static NSString *DisplayScaleChoiceTitle(NSString *name, NSInteger value, NSInte
             [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemDone
                                                           target:weakSelf
                                                           action:@selector(dismissDesktopSetup)];
+        root.navigationItem.leftBarButtonItem.accessibilityHint = NSLocalizedString(@"Dismisses the desktop setup window.", @"Accessibility hint for the Done button");
         [weakSelf presentViewController:setup animated:YES completion:nil];
     }];
     [sheet addActionWithTitle:NSLocalizedString(@"Reconnect", @"Wayland display menu action")

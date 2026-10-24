@@ -401,9 +401,12 @@ NSString *ISHLLMRelativeDateDescription(double timestamp) {
     self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemDone
                                                                                           target:self
                                                                                           action:@selector(done:)];
+    self.navigationItem.rightBarButtonItem.accessibilityHint = NSLocalizedString(@"Dismisses the chats list.", @"Accessibility hint for the Done button");
     self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemCompose
                                                                                           target:self
                                                                                           action:@selector(newChat:)];
+    self.navigationItem.leftBarButtonItem.accessibilityLabel = NSLocalizedString(@"New Chat", @"Accessibility label for the compose button");
+    self.navigationItem.leftBarButtonItem.accessibilityHint = NSLocalizedString(@"Starts a new chat.", @"Accessibility hint for the compose button");
     [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(reload) name:ISHLLMAgentStateDidChangeNotification object:nil];
     [self reload];
 }
@@ -871,6 +874,8 @@ typedef NS_ENUM(NSInteger, ISHLLMDestinationActionRow) {
     self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemAdd
                                                                                            target:self
                                                                                            action:@selector(addDestination:)];
+    self.navigationItem.rightBarButtonItem.accessibilityLabel = NSLocalizedString(@"Add Destination", @"Accessibility label for the add button");
+    self.navigationItem.rightBarButtonItem.accessibilityHint = NSLocalizedString(@"Adds a new chat destination.", @"Accessibility hint for the add button");
     [self reload];
 }
 
