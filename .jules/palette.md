@@ -64,7 +64,7 @@
 ## 2026-10-18 - Missing Accessibility Labels for System Bar Button Items
 **Learning:** `UIBarButtonItem` instances initialized using `initWithBarButtonSystemItem:` (like `UIBarButtonSystemItemAction` or `UIBarButtonSystemItemRefresh`) do not always inherently provide a descriptive `accessibilityLabel` that matches their visual icon (e.g., Share or Refresh), relying instead on generic system behavior which can sometimes fall back to the view's properties or just announce "button".
 **Action:** When adding or verifying system-styled bar button items, explicitly assign an `accessibilityLabel` to ensure clear and consistent VoiceOver announcements, alongside the `accessibilityHint`.
-## 2023-10-24 - Accessibility for UIBarButtonSystemItem
+## 2026-10-24 - Accessibility for UIBarButtonSystemItem
 
 **Learning:** `UIBarButtonItem` instances initialized via `initWithBarButtonSystemItem:` (like UIBarButtonSystemItemDone or UIBarButtonSystemItemAdd) automatically receive natively localized titles by Apple. However, VoiceOver may not announce *what* action the button performs in context, which can be ambiguous (e.g. "Done", but done with what?).
 **Action:** Always provide an explicit `accessibilityHint` that concisely describes the outcome of activating the element (e.g. "Dismisses the file browser") to provide VoiceOver users with clear context. For symbol-only items like Add or Compose, it may also be necessary to explicitly assign an `accessibilityLabel` (e.g. "New Chat" instead of relying on the system default).
