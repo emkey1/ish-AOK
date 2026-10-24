@@ -1430,8 +1430,12 @@ static int aokfs_readdir(struct fd *fd, struct dir_entry *entry) {
 emit:
     entry->inode = aokfs_node_inode(child);
     entry->type = dir_entry_type_for_mode(aokfs_node_mode(child));
-    strncpy(entry->name, aokfs_node_basename(child), sizeof(entry->name) - 1);
-    entry->name[sizeof(entry->name) - 1] = '\0';
+    // Using memcpy to avoid strncpy's O(MAX_NAME) zero-padding overhead
+    const char *basename = aokfs_node_basename(child);
+    size_t name_len = strlen(basename);
+    size_t copy_len = name_len < sizeof(entry->name) - 1 ? name_len : sizeof(entry->name) - 1;
+    memcpy(entry->name, basename, copy_len);
+    entry->name[copy_len] = '\0';
     return 1;
 }
 

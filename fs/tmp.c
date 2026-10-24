@@ -305,8 +305,11 @@ static int tmpfs_dir_link(struct tmp_dirent *dir, const char *name, struct tmp_i
     }
 
     tmp_dirent_init(new_dirent);
-    strncpy(new_dirent->name, name, sizeof(new_dirent->name) - 1);
-    new_dirent->name[sizeof(new_dirent->name) - 1] = '\0';
+    // Using memcpy to avoid strncpy's O(MAX_NAME) zero-padding overhead
+    size_t name_len = strlen(name);
+    size_t copy_len = name_len < sizeof(new_dirent->name) - 1 ? name_len : sizeof(new_dirent->name) - 1;
+    memcpy(new_dirent->name, name, copy_len);
+    new_dirent->name[copy_len] = '\0';
     new_dirent->inode = tmp_inode_retain(child);
     new_dirent->index = dir->next_index++;
     new_dirent->parent = tmp_dirent_retain(dir);
@@ -1208,8 +1211,11 @@ static int tmpfs_rename(struct mount *mount, const char *src, const char *dst) {
     // field; the old parent is a non-empty directory holding its own tree
     // reference, so it stays alive regardless.
     list_remove(&src_dirent->dir);
-    strncpy(src_dirent->name, dst_name, sizeof(src_dirent->name) - 1);
-    src_dirent->name[sizeof(src_dirent->name) - 1] = '\0';
+    // Using memcpy to avoid strncpy's O(MAX_NAME) zero-padding overhead
+    size_t dst_name_len = strlen(dst_name);
+    size_t copy_len = dst_name_len < sizeof(src_dirent->name) - 1 ? dst_name_len : sizeof(src_dirent->name) - 1;
+    memcpy(src_dirent->name, dst_name, copy_len);
+    src_dirent->name[copy_len] = '\0';
     if (src_dirent->parent != dst_parent) {
         struct tmp_dirent *old_parent = src_dirent->parent;
         src_dirent->parent = tmp_dirent_retain(dst_parent);
@@ -2189,8 +2195,11 @@ static int tmpfs_readdir(struct fd *fd, struct dir_entry *entry) {
     // until we advance, so reading it here is safe.
     entry->inode = dirent->inode->stat.inode;
     entry->type = dir_entry_type_for_mode(dirent->inode->stat.mode);
-    strncpy(entry->name, dirent->name, sizeof(entry->name) - 1);
-    entry->name[sizeof(entry->name) - 1] = '\0';
+    // Using memcpy to avoid strncpy's O(MAX_NAME) zero-padding overhead
+    size_t name_len = strlen(dirent->name);
+    size_t copy_len = name_len < sizeof(entry->name) - 1 ? name_len : sizeof(entry->name) - 1;
+    memcpy(entry->name, dirent->name, copy_len);
+    entry->name[copy_len] = '\0';
     res = 1;
 
     // Advance the cursor. dir_pos is retained, so it can't be freed here, but a
