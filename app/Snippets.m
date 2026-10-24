@@ -469,10 +469,14 @@ static void ISHSnippetConfigureAsShellInput(id<UITextInputTraits> input) {
         [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemDone
                                                       target:self
                                                       action:@selector(done:)];
+    self.navigationItem.leftBarButtonItem.accessibilityHint = NSLocalizedString(@"Dismisses the snippets list.", @"Accessibility hint for the Done button");
+    UIBarButtonItem *addButton = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemAdd
+                                                                               target:self
+                                                                               action:@selector(addSnippet:)];
+    addButton.accessibilityLabel = NSLocalizedString(@"Add Snippet", @"Accessibility label for the add snippet button");
+    addButton.accessibilityHint = NSLocalizedString(@"Creates a new snippet.", @"Accessibility hint for the add snippet button");
     self.navigationItem.rightBarButtonItems = @[
-        [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemAdd
-                                                      target:self
-                                                      action:@selector(addSnippet:)],
+        addButton,
         self.editButtonItem,
     ];
     [self.tableView registerClass:UITableViewCell.class forCellReuseIdentifier:@"snippet"];

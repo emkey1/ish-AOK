@@ -4380,6 +4380,7 @@ static UIView *ISHWorkspaceFindFirstResponder(UIView *view) {
             [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemDone
                                                           target:self
                                                           action:@selector(dismissSettingsToolWindow:)];
+        settingsRoot.navigationItem.leftBarButtonItem.accessibilityHint = NSLocalizedString(@"Dismisses the settings window.", @"Accessibility hint for the Done button");
     }
     if (pinnedWorkspaces)
         [self applyInitialPlacementToWorkspacesWindow:windowView];

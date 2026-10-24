@@ -119,6 +119,7 @@ NSString *ISHShellQuoteArgument(NSString *argument) {
         [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemDone
                                                       target:self
                                                       action:@selector(dismissBrowser:)];
+    self.navigationItem.leftBarButtonItem.accessibilityHint = NSLocalizedString(@"Dismisses the file browser.", @"Accessibility hint for the Done button");
     [self buildBreadcrumbBar];
     [self buildTableView];
     [self buildToolbar];
