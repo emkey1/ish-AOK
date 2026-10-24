@@ -2168,7 +2168,8 @@ static int tmpfs_readdir(struct fd *fd, struct dir_entry *entry) {
         }
         entry->inode = self->inode->stat.inode;
         entry->type = dir_entry_type_for_mode(self->inode->stat.mode);
-        strcpy(entry->name, name);
+        strncpy(entry->name, name, sizeof(entry->name) - 1);
+        entry->name[sizeof(entry->name) - 1] = '\0';
         fd->tmpfs.dots_pos++;
         res = 1;
         goto out;

@@ -58,3 +58,7 @@
 **Vulnerability:** None in practice: `native_env_set` (`kernel/native.c`) and `foreign_exec_env` (`kernel/foreign_exec.c`) size each `%s=%s` entry as exactly what the `sprintf` writes. Hardening only -- the bound now travels with the call.
 **Learning:** Hardcoding string formatting directly into dynamically allocated structures without using bounded functions like `snprintf` lets a later change to the sizing overrun silently.
 **Prevention:** Always use `snprintf` combined with explicitly passed buffer length parameters when formatting strings into dynamically allocated buffers.
+## $(date +%Y-%m-%d) - Misuse of strncpy causes zero-padding buffer overflow
+**Vulnerability:** Attempting to harden a safe `strcpy(path, "/")` by replacing it with `strncpy(path, "/", MAX_PATH)` without knowing the actual allocated size of `path`.
+**Learning:** `strncpy(dest, src, n)` does not just copy up to `n` bytes; it actively writes null bytes to pad the *entire* remainder of the buffer up to `n`. If `path` points to an array smaller than `MAX_PATH`, this zero-padding will overflow the buffer and corrupt adjacent memory.
+**Prevention:** Never blindly use a maximum possible constant size (like `MAX_PATH`) in `strncpy` if the destination buffer is passed as a pointer. Only use the true, known allocation size of the specific destination buffer. For short, known constants like `"/"`, `strcpy` is safe provided the buffer is at least two bytes.
