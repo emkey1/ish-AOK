@@ -3895,7 +3895,16 @@ static TerminalViewController *CreateTerminalViewController(void) {
 	        bootUsesNativeFakeInit = NO;
         AppDelegate *delegate = (AppDelegate *) UIApplication.sharedApplication.delegate;
         if ([delegate isKindOfClass:AppDelegate.class]) {
-            bootError = [delegate boot];
+            // Under an assertion, as the secondary mounts already are
+            // (ISHDispatchBootWork): boot mounts the root, which opens its
+            // meta.db in the shared App Group container, and an app suspended
+            // while SQLite holds that file's lock is killed with 0xdead10cc.
+            // A 561 report (iPad14,5, 2026-10-17) was exactly that: the main
+            // thread in fake_db_init under willFinishLaunching, 1.2 s after
+            // launch, before any scene existed to arm the suspend guard.
+            ISHRunHoldingBackgroundAssertion(@"boot", ^{
+                bootError = [delegate boot];
+            });
         } else {
             bootError = RecordBootFailure(_ESRCH,
                                           @"boot.delegate.missing",

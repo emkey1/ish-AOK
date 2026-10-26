@@ -332,6 +332,16 @@ Not musts. Each is in docs/TODO.md's queue.
 
 ## Done beside the musts
 
+- **562's launch crash on resuming a session with `/dev/location` open**
+  (2026-10-26, from the Organizer): the restore reopened it on the main thread
+  and `+[LocationTracker instance]` dispatch_sync'd onto the main queue.
+  Reproduced in a simulator with the user's stack, fixed, and the fixed build
+  resumes. The #631 keep-alive with Suspend To Disk is exactly that session.
+- **Boot under a background-task assertion** (2026-10-26): a 561 report was
+  0xdead10cc with the main thread in fake_db_init 1.2 s into a launch, before
+  any scene armed the suspend guard. ensureBooted now holds an assertion
+  around boot, as the secondary mounts did.
+
 - **kernel/native.c builds without warnings** (4d5fb4f57). Ten in every build
   since e459ac19f: nine positional entries in `native_programs[]` that left
   out `setuid_root` (every entry now names `.name` and `.main`, the lesson of

@@ -43,16 +43,28 @@ BOOL CLIsAuthorized(CLAuthorizationStatus status) {
 
 @implementation LocationTracker
 
+// CLLocationManager wants the main thread, so the tracker is made there. An
+// open usually comes from a guest thread, but restoring a saved session
+// reopens the guest's /dev/location from the main thread itself -- the resume
+// picker's boot -- and dispatch_sync onto the queue a thread is already
+// draining is a libdispatch trap: 562 crashed that way on launch, every time,
+// for a session saved with `cat /dev/location` running (the keep-alive #631's
+// answer recommends). Run it in place there, as Terminal.m and iOSFS.m do.
 + (LocationTracker *)instance {
     static __weak LocationTracker *tracker;
     if (tracker == nil) {
         __block LocationTracker *newTracker;
-        dispatch_sync(dispatch_get_main_queue(), ^{
-            if (tracker == nil) {
+        void (^make)(void) = ^{
+            newTracker = tracker;
+            if (newTracker == nil) {
                 newTracker = [LocationTracker new];
                 tracker = newTracker;
             }
-        });
+        };
+        if (NSThread.isMainThread)
+            make();
+        else
+            dispatch_sync(dispatch_get_main_queue(), make);
         return newTracker;
     }
     return tracker;
