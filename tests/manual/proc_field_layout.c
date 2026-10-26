@@ -268,6 +268,20 @@ out:
     return rc;
 }
 
+// One of the loopback's sysfs counter files, or -1 when it cannot be read
+// (check_sysfs_net_agrees says why).
+static long long read_sysfs_counter(const char *lo_name, const char *counter) {
+    char path[256];
+    snprintf(path, sizeof(path), "/sys/class/net/%s/statistics/%s", lo_name, counter);
+    FILE *f = fopen(path, "r");
+    if (f == NULL)
+        return -1;
+    unsigned long long value = 0;
+    int got = fscanf(f, "%llu", &value);
+    fclose(f);
+    return got == 1 ? (long long) value : -1;
+}
+
 static void check_net_dev(void) {
     struct dev_line before, after;
 
@@ -277,8 +291,18 @@ static void check_net_dev(void) {
         printf("SKIP /proc/net/dev has no loopback line; structure checked only\n");
         return;
     }
+    long long sys_before[2] = {
+        read_sysfs_counter(before.name, "rx_bytes"),
+        read_sysfs_counter(before.name, "tx_bytes"),
+    };
     if (push_loopback_traffic() < 0)
         return;
+    // Before /proc/net/dev: its read is a fresh snapshot, and would refresh
+    // the list a stale counter file was being served from.
+    long long sys_after[2] = {
+        read_sysfs_counter(before.name, "rx_bytes"),
+        read_sysfs_counter(before.name, "tx_bytes"),
+    };
     if (read_net_dev(&after, 0) < 0)
         return;
     if (!after.found) {
@@ -302,6 +326,23 @@ static void check_net_dev(void) {
             fail("/proc/net/dev loopback %s moved by %llu after %d bytes of loopback traffic, want >= %llu"
                  " (column %d is misaligned if this is a stale counter)",
                  want[i].name, d, PAYLOAD_BYTES, want[i].least, want[i].idx);
+    }
+
+    // The counter FILES have to move with it too, read fresh each time. The
+    // list of interfaces behind them is reused for a few milliseconds while a
+    // path is resolved (fs/proc/net.c, NET_IFACE_RECENT_NS), and the first
+    // version of that served the counters from it as well.
+    static const char *const sys_names[2] = {"rx_bytes", "tx_bytes"};
+    for (int i = 0; i < 2; i++) {
+        if (sys_before[i] < 0 || sys_after[i] < 0)
+            continue;   // check_sysfs_net_agrees reports an unreadable file
+        unsigned long long d = delta32((unsigned long long) sys_before[i],
+                                       (unsigned long long) sys_after[i]);
+        test_logf("  sysfs %s moved by %llu (want >= %d)\n", sys_names[i], d, PAYLOAD_BYTES);
+        if (d < PAYLOAD_BYTES)
+            fail("/sys/class/net/%s/statistics/%s moved by %llu after %d bytes of"
+                 " loopback traffic -- a stale counter", after.name, sys_names[i],
+                 d, PAYLOAD_BYTES);
     }
 
     check_sysfs_net_agrees(after.name, after.f[F_RX_BYTES]);

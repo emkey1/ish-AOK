@@ -514,6 +514,7 @@ static int netlink_append_attr_raw(char *buf, size_t cap, size_t *len_io, uint16
 }
 
 struct netlink_link_info {
+    uint32_t index;     // 0: ask if_nametoindex
     uint32_t mtu;
     uint32_t txqlen;
     uint8_t operstate;
@@ -524,8 +525,31 @@ struct netlink_link_info {
     size_t broadcast_len;
 };
 
+// An interface's index, from the AF_LINK entry the same getifaddrs list holds
+// for it. if_nametoindex gives the same number, but on Darwin it is a whole
+// getifaddrs of its own, and a dump asked it once per entry: ~80 host
+// getifaddrs for one `ip addr`, or one musl getifaddrs -- which btop makes
+// every second its net box is shown. Linux's is one ioctl.
+static uint32_t netlink_ifindex_in(const struct ifaddrs *addrs, const char *name) {
+#if defined(__APPLE__)
+    for (const struct ifaddrs *entry = addrs; entry != NULL; entry = entry->ifa_next) {
+        if (entry->ifa_name == NULL || entry->ifa_addr == NULL ||
+                entry->ifa_addr->sa_family != AF_LINK || strcmp(entry->ifa_name, name) != 0)
+            continue;
+        uint32_t index = ((const struct sockaddr_dl *) entry->ifa_addr)->sdl_index;
+        if (index != 0)
+            return index;
+        break;
+    }
+#else
+    (void) addrs;
+#endif
+    return if_nametoindex(name);
+}
+
 static void netlink_fill_link_info(const struct ifaddrs *addrs, const struct ifaddrs *cursor,
         struct netlink_link_info *info) {
+    info->index = netlink_ifindex_in(addrs, cursor->ifa_name);
     info->mtu = 1500;
     info->txqlen = 1000;
     info->operstate = (cursor->ifa_flags & IFF_RUNNING) ? IF_OPER_UP_ : IF_OPER_UNKNOWN_;
@@ -709,7 +733,7 @@ static int netlink_build_link_payload(char *payload, size_t cap, size_t *payload
     msg->ifi_type = (strcmp(ifname, "lo0") == 0 || strcmp(ifname, "lo") == 0)
         ? ARPHRD_LOOPBACK_
         : ARPHRD_ETHER_;
-    msg->ifi_index = (int32_t) if_nametoindex(ifname);
+    msg->ifi_index = (int32_t) (info->index != 0 ? info->index : if_nametoindex(ifname));
     msg->ifi_flags = netlink_linux_if_flags(ifflags);
     msg->ifi_change = 0xffffffffu;
 
@@ -880,7 +904,7 @@ static int netlink_append_route_link_get(struct fd *sock, const struct nlmsghdr_
 // (netlink_append_route_addr) and the notification path
 // (netlink_notify_route_addr) -- see netlink_build_link_payload's comment.
 static int netlink_build_addr_payload(char *payload, size_t cap, size_t *payload_len_out,
-        const struct ifaddrs *ifa) {
+        const struct ifaddrs *addrs, const struct ifaddrs *ifa) {
     size_t payload_len = sizeof(struct ifaddrmsg_);
     memset(payload, 0, cap);
     struct ifaddrmsg_ *msg = (struct ifaddrmsg_ *) payload;
@@ -888,7 +912,7 @@ static int netlink_build_addr_payload(char *payload, size_t cap, size_t *payload
     msg->ifa_prefixlen = netlink_prefixlen_from_sockaddr(ifa->ifa_netmask);
     msg->ifa_flags = 0;
     msg->ifa_scope = netlink_addr_scope(ifa);
-    msg->ifa_index = if_nametoindex(ifa->ifa_name);
+    msg->ifa_index = netlink_ifindex_in(addrs, ifa->ifa_name);
 
     if (ifa->ifa_addr->sa_family == AF_INET) {
         const struct in_addr *addr = &((const struct sockaddr_in *) ifa->ifa_addr)->sin_addr;
@@ -953,10 +977,10 @@ static int netlink_build_addr_payload(char *payload, size_t cap, size_t *payload
 }
 
 static int netlink_append_route_addr(struct fd *sock, const struct nlmsghdr_ *req_hdr,
-        const struct ifaddrs *ifa) {
+        const struct ifaddrs *addrs, const struct ifaddrs *ifa) {
     char payload[256];
     size_t payload_len = 0;
-    int err = netlink_build_addr_payload(payload, sizeof(payload), &payload_len, ifa);
+    int err = netlink_build_addr_payload(payload, sizeof(payload), &payload_len, addrs, ifa);
     if (err < 0)
         return err;
     if (payload_len == 0)
@@ -981,7 +1005,7 @@ static int netlink_append_route_addrs(struct fd *sock, const struct nlmsghdr_ *r
         if (family != AF_UNSPEC && family != 0 &&
                 netlink_guest_family_from_host(cursor->ifa_addr->sa_family) != family)
             continue;
-        err = netlink_append_route_addr(sock, req_hdr, cursor);
+        err = netlink_append_route_addr(sock, req_hdr, addrs, cursor);
         if (err < 0)
             break;
     }
@@ -1025,7 +1049,7 @@ static int netlink_notify_route_link(struct fd *sock, const char *ifname, unsign
 static int netlink_notify_route_addr(struct fd *sock, const struct ifaddrs *ifa, bool is_new) {
     char payload[256];
     size_t payload_len = 0;
-    int err = netlink_build_addr_payload(payload, sizeof(payload), &payload_len, ifa);
+    int err = netlink_build_addr_payload(payload, sizeof(payload), &payload_len, NULL, ifa);
     if (err < 0)
         return err;
     if (payload_len == 0)

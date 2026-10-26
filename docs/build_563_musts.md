@@ -353,6 +353,18 @@ Not musts. Each is in docs/TODO.md's queue.
   save was never affected unless zsh was mid-redirection, e.g. in `while ...;
   done > log`. checkpoint_restore.sh "redir" leg: three lives, fails on the
   old code at life 2.
+- **btop no longer takes a whole core with its net box shown** (2026-10-26, a
+  Discord report on Alpine 3.24.2 aarch64). Reading one
+  /sys/class/net/<if>/statistics counter took ~140 host getifaddrs: the name
+  match took a fresh interface list per candidate index, and the path is
+  resolved several times per read. One list per match now, and which
+  interfaces exist may come from a list up to 10 ms old; the counters a read
+  returns are always fresh (proc_field_layout now checks the sysfs files move
+  with loopback traffic, and fails on a version that cached them). Netlink
+  dumps take each index from their own getifaddrs list instead of
+  if_nametoindex, which on Darwin is another getifaddrs per entry. btop
+  1.4.6 on the CLI, Alpine 3.24 arm64, 15 s: 13.4 CPU-s with the net box
+  before, 0.5 after (0.12 without the box).
 
 - **kernel/native.c builds without warnings** (4d5fb4f57). Ten in every build
   since e459ac19f: nine positional entries in `native_programs[]` that left

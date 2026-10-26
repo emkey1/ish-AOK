@@ -16,6 +16,8 @@
 #include "fs/sock.h"
 #include "platform/platform.h"
 #include "fs/proc/net.h"
+#include "util/sync.h"
+#include "util/timer.h"
 
 #import <ifaddrs.h>
 #import <netinet/in.h>
@@ -56,7 +58,9 @@
 // reports the first 64 rather than growing an unbounded stack buffer.
 #define PROC_NET_DEV_MAX_IFACES 64
 
-int net_iface_snapshot(struct net_iface_stats *out, int max) {
+static int net_iface_host_snapshot(struct net_iface_stats *out, int max, bool recent);
+
+static int net_iface_snapshot_(struct net_iface_stats *out, int max, bool recent) {
     // The reader's network: in a private network namespace that is "lo" and
     // nothing of the host's (kernel/net_ns.h), then its veth and dummy links
     // (fs/net_vif.h). Up or down as the namespace has them; a veth counts
@@ -90,6 +94,18 @@ int net_iface_snapshot(struct net_iface_stats *out, int max) {
         }
         return 1 + n;
     }
+    return net_iface_host_snapshot(out, max, recent);
+}
+
+int net_iface_snapshot(struct net_iface_stats *out, int max) {
+    return net_iface_snapshot_(out, max, false);
+}
+
+int net_iface_snapshot_recent(struct net_iface_stats *out, int max) {
+    return net_iface_snapshot_(out, max, true);
+}
+
+static int net_iface_host_list(struct net_iface_stats *out, int max) {
     struct ifaddrs *addrs;
     if (getifaddrs(&addrs) != 0)
         return 0;
@@ -157,6 +173,50 @@ int net_iface_snapshot(struct net_iface_stats *out, int max) {
     if (mtu_sock >= 0)
         close(mtu_sock);
     freeifaddrs(addrs);
+    return count;
+}
+
+// The host's list, and the last one taken, which a question about WHICH
+// interfaces exist may reuse for NET_IFACE_RECENT_NS (net_iface_snapshot_recent).
+//
+// One read of one counter used to take a dozen: fs/path.c resolves
+// /sys/class/net/<iface>/statistics/rx_bytes once per prefix and again to open
+// it, every resolution finds the interface by name, and stat looks it up once
+// more. That is a getifaddrs apiece, which walks every host interface -- 1.8 ms
+// a counter on an M-series Mac with 33 of them, and btop reads two counters per
+// interface each second: a whole core while its net box was shown (Alpine 3.24
+// arm64, 2026-10-26). Ten milliseconds covers one read's resolutions and a
+// whole btop update's; an interface that comes or goes is that late at most.
+//
+// The COUNTERS are never reused. A program that reads them, sends a megabyte
+// over loopback and reads them again must see it move (proc_field_layout
+// does, and failed on a cache that served the values too), so a read of
+// /proc/net/dev or of a counter file takes a fresh list -- which then serves
+// the resolutions that follow.
+#define NET_IFACE_RECENT_NS 10000000ull
+static lock_t net_iface_cache_lock = LOCK_INITIALIZER_NAMED("net_iface_cache");
+static struct net_iface_stats net_iface_cache[PROC_NET_DEV_MAX_IFACES];
+static int net_iface_cache_count;
+static uint64_t net_iface_cache_stamp;
+static bool net_iface_cache_valid;
+
+static int net_iface_host_snapshot(struct net_iface_stats *out, int max, bool recent) {
+    struct timespec ts = timespec_now(CLOCK_MONOTONIC);
+    uint64_t now = (uint64_t) ts.tv_sec * 1000000000ull + (uint64_t) ts.tv_nsec;
+    lock(&net_iface_cache_lock, 0);
+    if (!recent || !net_iface_cache_valid ||
+            now - net_iface_cache_stamp >= NET_IFACE_RECENT_NS) {
+        net_iface_cache_count = net_iface_host_list(net_iface_cache, PROC_NET_DEV_MAX_IFACES);
+        // Only the first PROC_NET_DEV_MAX_IFACES are kept, so only they exist.
+        if (net_iface_cache_count > PROC_NET_DEV_MAX_IFACES)
+            net_iface_cache_count = PROC_NET_DEV_MAX_IFACES;
+        net_iface_cache_stamp = now;
+        net_iface_cache_valid = true;
+    }
+    int count = net_iface_cache_count;
+    if (out != NULL && max > 0)
+        memcpy(out, net_iface_cache, (size_t) (count < max ? count : max) * sizeof(*out));
+    unlock(&net_iface_cache_lock);
     return count;
 }
 

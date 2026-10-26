@@ -1896,21 +1896,25 @@ static uint64_t sysfs_cache_line_bytes(void) {
     return geometry.line_size;
 }
 
-// The interfaces, for /sys/class/net. Snapshotted per call rather than cached:
-// interfaces come and go (a VPN going up is the common case) and a stale list
-// would answer for a device that is no longer there.
+// The interfaces, for /sys/class/net. Not cached beyond a moment: interfaces
+// come and go (a VPN going up is the common case) and a stale list would answer
+// for a device that is no longer there. Which ones exist is asked of a RECENT
+// snapshot (net_iface_snapshot_recent, at most 10 ms old), because a path is
+// resolved many times over for one read and each resolution used to take its
+// own; `fresh` is for the counters a read returns, which are never reused.
 #define SYSFS_NET_MAX 64
 
 static int sysfs_net_count(void) {
-    int n = net_iface_snapshot(NULL, 0);
+    int n = net_iface_snapshot_recent(NULL, 0);
     return n > SYSFS_NET_MAX ? SYSFS_NET_MAX : n;
 }
 
-static bool sysfs_net_iface_at(int index, struct net_iface_stats *out) {
+static bool sysfs_net_iface_at(int index, struct net_iface_stats *out, bool fresh) {
     if (index < 0 || index >= SYSFS_NET_MAX)
         return false;
     struct net_iface_stats ifaces[SYSFS_NET_MAX];
-    int n = net_iface_snapshot(ifaces, SYSFS_NET_MAX);
+    int n = fresh ? net_iface_snapshot(ifaces, SYSFS_NET_MAX)
+                  : net_iface_snapshot_recent(ifaces, SYSFS_NET_MAX);
     if (n > SYSFS_NET_MAX)
         n = SYSFS_NET_MAX;
     if (index >= n)
@@ -1961,7 +1965,7 @@ static bool sysfs_node_name(struct sysfs_node node, char *buf, size_t bufsize) {
         return snprintf(buf, bufsize, "memory%d", node.cpu) >= 0;
     if (node.kind == sysfs_net_dir) {
         struct net_iface_stats iface;
-        if (!sysfs_net_iface_at(node.cpu, &iface))
+        if (!sysfs_net_iface_at(node.cpu, &iface, false))
             return false;
         return snprintf(buf, bufsize, "%s", iface.name) >= 0;
     }
@@ -2005,15 +2009,21 @@ static bool sysfs_lookup_child(struct sysfs_node parent, const char *name, size_
         }
 
         // Generated name: an interface, matched against the live list rather
-        // than parsed, since a name like "utun4" carries no index.
+        // than parsed, since a name like "utun4" carries no index. ONE list
+        // for the whole match: asking sysfs_net_iface_at for each candidate
+        // took a fresh getifaddrs per index, so finding utun9 among 33
+        // interfaces cost 34 of them -- and a path is resolved several times
+        // over for every read (each prefix's stat, the open). btop reads two
+        // counters per interface every second, and that was all of a core.
         if (desc->kind == sysfs_net_dir) {
-            int total = sysfs_net_count();
+            struct net_iface_stats ifaces[SYSFS_NET_MAX];
+            int total = net_iface_snapshot_recent(ifaces, SYSFS_NET_MAX);
+            if (total > SYSFS_NET_MAX)
+                total = SYSFS_NET_MAX;
             for (int n = 0; n < total; n++) {
-                struct net_iface_stats iface;
-                if (!sysfs_net_iface_at(n, &iface))
-                    break;
-                if (strlen(iface.name) == namelen &&
-                        strncmp(iface.name, name, namelen) == 0) {
+                const struct net_iface_stats *iface = &ifaces[n];
+                if (strlen(iface->name) == namelen &&
+                        strncmp(iface->name, name, namelen) == 0) {
                     *child_out = sysfs_node_make(desc->kind, n, parent.index);
                     return true;
                 }
@@ -2394,8 +2404,10 @@ static size_t sysfs_power_supply_file_data(struct sysfs_node node, char *buf, si
 }
 
 static size_t sysfs_net_file_data(struct sysfs_node node, char *buf, size_t bufsize) {
+    // A NULL buf is stat asking for the size, which may come from a recent
+    // snapshot; the bytes a read returns come from a fresh one.
     struct net_iface_stats iface;
-    if (!sysfs_net_iface_at(node.cpu, &iface))
+    if (!sysfs_net_iface_at(node.cpu, &iface, buf != NULL))
         return 0;
 
     // Linux reports every counter as a decimal on its own line, and 0 for one

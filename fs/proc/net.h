@@ -21,8 +21,12 @@ struct net_iface_stats {
 
 // Snapshot every interface. Fills at most `max` entries into `out` (which may
 // be NULL to count only) and returns the total number of interfaces, which can
-// exceed `max`.
+// exceed `max` -- though never 64, the most a host's list is kept to.
 int net_iface_snapshot(struct net_iface_stats *out, int max);
+// The same, but it may be the last snapshot taken if that is a few milliseconds
+// old: for which interfaces exist and in what order, never for their counters.
+// See NET_IFACE_RECENT_NS in fs/proc/net.c.
+int net_iface_snapshot_recent(struct net_iface_stats *out, int max);
 #include <stddef.h>
 #include <stdbool.h>
 
