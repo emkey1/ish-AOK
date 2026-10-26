@@ -301,14 +301,17 @@ static void ISHSnippetConfigureAsShellInput(id<UITextInputTraits> input) {
     [super viewDidLoad];
     self.view.backgroundColor = UIColor.systemGroupedBackgroundColor;
     self.title = _original == nil ? NSLocalizedString(@"New Snippet", @"Snippet editor title") : NSLocalizedString(@"Edit Snippet", @"Snippet editor title");
-    self.navigationItem.leftBarButtonItem =
-        [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemCancel
-                                                      target:self
-                                                      action:@selector(cancel:)];
-    self.navigationItem.rightBarButtonItem =
-        [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemSave
-                                                      target:self
-                                                      action:@selector(save:)];
+    UIBarButtonItem *cancelButton = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemCancel
+                                                                                  target:self
+                                                                                  action:@selector(cancel:)];
+    cancelButton.accessibilityHint = NSLocalizedString(@"Discards changes to this snippet.", @"Accessibility hint for the cancel button");
+    self.navigationItem.leftBarButtonItem = cancelButton;
+
+    UIBarButtonItem *saveButton = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemSave
+                                                                                target:self
+                                                                                action:@selector(save:)];
+    saveButton.accessibilityHint = NSLocalizedString(@"Saves the snippet.", @"Accessibility hint for the save button");
+    self.navigationItem.rightBarButtonItem = saveButton;
 
     _nameField = [UITextField new];
     _nameField.placeholder = NSLocalizedString(@"Name", @"Snippet editor name field placeholder");
