@@ -1471,6 +1471,66 @@
         }
       }
     },
+    "Discards changes to this snippet." : {
+      "comment" : "Accessibility hint for the cancel button",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Verwirft die Änderungen an diesem Snippet."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Descarta los cambios de este fragmento."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Abandonne les modifications de cet extrait."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このスニペットへの変更を破棄します。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 스니펫의 변경 사항을 버립니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Descarta as alterações deste trecho."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Отменяет изменения этого фрагмента."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "放弃对此代码片段的更改。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "放棄對此片段的變更。"
+          }
+        }
+      }
+    },
     "Dismisses the chats list." : {
       "comment" : "Accessibility hint for the Done button",
       "extractionState" : "manual",
@@ -2911,6 +2971,66 @@
         }
       }
     },
+    "Reverts this file to how it was before the change." : {
+      "comment" : "Accessibility hint for the file change revert button",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Setzt diese Datei auf den Stand vor der Änderung zurück."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Revierte este archivo a como estaba antes del cambio."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rétablit ce fichier tel qu'il était avant la modification."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このファイルを変更前の状態に戻します。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 파일을 변경 전 상태로 되돌립니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reverte este arquivo para como estava antes da alteração."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Возвращает этот файл к состоянию до изменения."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "将此文件还原为更改前的状态。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "將此檔案還原為變更前的狀態。"
+          }
+        }
+      }
+    },
     "Saves the current workspace layout." : {
       "comment" : "Accessibility hint for the Desktops tool's Save button",
       "extractionState" : "manual",
@@ -3027,6 +3147,66 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "立即儲存工作階段，或暫停 iSH-AOK 並結束。"
+          }
+        }
+      }
+    },
+    "Saves the snippet." : {
+      "comment" : "Accessibility hint for the save button",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sichert das Snippet."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Guarda el fragmento."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enregistre l'extrait."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "スニペットを保存します。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "스니펫을 저장합니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Salva o trecho."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Сохраняет фрагмент."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保存代码片段。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "儲存片段。"
           }
         }
       }
@@ -3327,6 +3507,66 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "開始新的對話。"
+          }
+        }
+      }
+    },
+    "This change has already been reverted." : {
+      "comment" : "Accessibility hint for the file change revert button, already reverted",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Diese Änderung wurde bereits zurückgesetzt."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Este cambio ya se ha revertido."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cette modification a déjà été annulée."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この変更はすでに元に戻されています。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 변경은 이미 되돌렸습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta alteração já foi revertida."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Это изменение уже отменено."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此更改已还原。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此變更已還原。"
           }
         }
       }

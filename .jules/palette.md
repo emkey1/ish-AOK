@@ -64,13 +64,13 @@
 ## 2026-10-18 - Missing Accessibility Labels for System Bar Button Items
 **Learning:** `UIBarButtonItem` instances initialized using `initWithBarButtonSystemItem:` (like `UIBarButtonSystemItemAction` or `UIBarButtonSystemItemRefresh`) do not always inherently provide a descriptive `accessibilityLabel` that matches their visual icon (e.g., Share or Refresh), relying instead on generic system behavior which can sometimes fall back to the view's properties or just announce "button".
 **Action:** When adding or verifying system-styled bar button items, explicitly assign an `accessibilityLabel` to ensure clear and consistent VoiceOver announcements, alongside the `accessibilityHint`.
-## 2024-10-22 - Missing Accessibility Labels and Hints for System Bar Button Items in Snippets
+## 2026-10-22 - Missing Accessibility Labels and Hints for System Bar Button Items in Snippets
 **Learning:** `UIBarButtonItem` instances initialized using `initWithBarButtonSystemItem:` (like `UIBarButtonSystemItemAdd`, `UIBarButtonSystemItemDone`, `UIBarButtonSystemItemCancel`, `UIBarButtonSystemItemSave`) do not always inherently provide a descriptive `accessibilityLabel` or `accessibilityHint` that accurately conveys their function to VoiceOver users, relying instead on generic system behavior.
 **Action:** When adding or verifying system-styled bar button items, explicitly assign an `accessibilityLabel` (especially for icon-only buttons like Add) and an `accessibilityHint` to ensure clear and consistent VoiceOver announcements.
 ## 2026-10-24 - Accessibility for UIBarButtonSystemItem
 
 **Learning:** `UIBarButtonItem` instances initialized via `initWithBarButtonSystemItem:` (like UIBarButtonSystemItemDone or UIBarButtonSystemItemAdd) automatically receive natively localized titles by Apple. However, VoiceOver may not announce *what* action the button performs in context, which can be ambiguous (e.g. "Done", but done with what?).
 **Action:** Always provide an explicit `accessibilityHint` that concisely describes the outcome of activating the element (e.g. "Dismisses the file browser") to provide VoiceOver users with clear context. For symbol-only items like Add or Compose, it may also be necessary to explicitly assign an `accessibilityLabel` (e.g. "New Chat" instead of relying on the system default).
-## 2024-05-23 - Add accessibility hint to file change revert button
+## 2026-10-25 - Add accessibility hint to file change revert button
 **Learning:** When using `initWithTitle:` to create a `UIBarButtonItem`, if the title itself does not clearly communicate the action's outcome (especially if the state changes dynamically, like 'Revert' vs 'Reverted'), an explicit `accessibilityHint` is critical for VoiceOver users to understand what the button will do.
 **Action:** Always provide an explicit `accessibilityHint` for context-specific buttons created with `initWithTitle:` where the resulting action isn't fully conveyed by the label alone.
