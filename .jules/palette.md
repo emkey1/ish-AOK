@@ -68,3 +68,6 @@
 
 **Learning:** `UIBarButtonItem` instances initialized via `initWithBarButtonSystemItem:` (like UIBarButtonSystemItemDone or UIBarButtonSystemItemAdd) automatically receive natively localized titles by Apple. However, VoiceOver may not announce *what* action the button performs in context, which can be ambiguous (e.g. "Done", but done with what?).
 **Action:** Always provide an explicit `accessibilityHint` that concisely describes the outcome of activating the element (e.g. "Dismisses the file browser") to provide VoiceOver users with clear context. For symbol-only items like Add or Compose, it may also be necessary to explicitly assign an `accessibilityLabel` (e.g. "New Chat" instead of relying on the system default).
+## 2024-05-23 - Add accessibility hint to file change revert button
+**Learning:** When using `initWithTitle:` to create a `UIBarButtonItem`, if the title itself does not clearly communicate the action's outcome (especially if the state changes dynamically, like 'Revert' vs 'Reverted'), an explicit `accessibilityHint` is critical for VoiceOver users to understand what the button will do.
+**Action:** Always provide an explicit `accessibilityHint` for context-specific buttons created with `initWithTitle:` where the resulting action isn't fully conveyed by the label alone.

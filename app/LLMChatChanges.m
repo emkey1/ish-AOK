@@ -113,6 +113,7 @@ NSString *ISHLLMChangeSummary(ISHLLMFileChange *change) {
                                                                style:UIBarButtonItemStylePlain
                                                               target:self
                                                               action:@selector(revert:)];
+    revert.accessibilityHint = change.reverted ? NSLocalizedString(@"This change has already been reverted.", @"Accessibility hint for the file change revert button, already reverted") : NSLocalizedString(@"Reverts this file to how it was before the change.", @"Accessibility hint for the file change revert button");
     revert.enabled = change.revertible && !change.reverted;
     self.navigationItem.rightBarButtonItem = revert;
 }
