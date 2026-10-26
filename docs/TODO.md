@@ -2202,7 +2202,7 @@ learns about.
 
 | # | Title | State |
 |---|---|---|
-| [#540](https://github.com/emkey1/ish-AOK/issues/540) | External display support (AirPlay) | **restored for 563, iPhone only** (2026-10-23): terminal relocated, Wayland display mirrored; a hardware test gates 563 (docs/build_563_musts.md). iPad keeps Stage Manager; see the queue. Comment and close when 563 ships |
+| [#540](https://github.com/emkey1/ish-AOK/issues/540) | External display support (AirPlay) | **restored for 563, iPhone only** (2026-10-23): terminal relocated, Wayland display mirrored; shipped in 563 untested on a display (the hardware gate was waived, docs/build_563_musts.md section 9). Commented 2026-10-27 asking iPhone owners to try it; open for their reports. iPad keeps Stage Manager; see the queue |
 | [#647](https://github.com/emkey1/ish-AOK/issues/647) | More commands in iSH-AOK Native | answered 2026-10-16; fastfetch/btop natively are in the queue above, nothing promised |
 | [#648](https://github.com/emkey1/ish-AOK/issues/648) | Devuan apt cannot download a package | answered 2026-10-17: the `W:` line is apt's warning about downloading as root into /root, not an error, and the .deb is there; waiting on the reporter |
 
