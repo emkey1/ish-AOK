@@ -24,7 +24,7 @@ drawn from the queue on 2026-10-19: what to keep, cut or add is yours.
 | 6 | `signal_process_wake_one` late on the A10X | **DONE: the device** (2026-10-20): the test ran 14 scenario processes on 2 CPUs; batched by CPU count it passes 8 of 8 there |
 | 7 | Issues and the TODO's own state | **DONE** (2026-10-20): #646 closed; issue table current (3 open); 31 done entries out of the queue, their 6 open tails kept as bullets |
 | 8 | Decisions due at the start of a release | **DONE**: #540 in 563, iPhone only (2026-10-23); #523's text landed and the #540 branch deleted (2026-10-26) |
-| 9 | External display on real hardware | **GATE: must pass before 563 is tagged** |
+| 9 | External display on real hardware | **WAIVED** (2026-10-26): the maintainer, travelling with no hardware, chose to ship #540 untested; the notes say so |
 
 Order: crash classes first (2, 3), then correctness native programs and
 Shortcuts users see (4, 5), then the release gate's one device failure (6).
@@ -276,6 +276,12 @@ different bug, already fixed on Apple hosts and fixed today for x86_64 ones.
 
 
 ## 9. External display on real hardware -- a gate before tagging
+
+**Waived, 2026-10-26.** The maintainer is travelling with no hardware and
+chose to ship #540 in 563 untested on a display. The release notes say so,
+and ask anyone with an iPhone and a monitor or AirPlay to report what they
+see. The test below is still the one to run; if it fails, the iPhone
+manifest key alone switches the feature off for 564.
 
 **Why.** #540 is in the tree untested on a display (§8). The 546 attempt was
 pulled because hardware showed what the simulator could not; 563 does not tag
