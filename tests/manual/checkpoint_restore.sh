@@ -412,6 +412,55 @@ case $nat_back in
        echo "  got: $nat_back"; exit 1;;
 esac
 
+# ---- a native shell that suspends by REDIRECTION ---------------------------
+#
+# The leg above asks through `exec 9>`, which hides the trap. suspend.md spells
+# it `echo suspend > /proc/ish/checkpoint`, and a shell that does that is parked
+# IN the redirection: the checkpoint file on its stdout, its real stdout moved
+# to 10 or above until the echo finishes -- which a re-launched shell never
+# does. Recorded that way, the restored shell's stdout WAS the checkpoint file
+# and every command after the resume said "write error: invalid argument". The
+# braces nest a second redirection, of stderr, for the outermost-frame rule.
+#
+# Three lives, because each re-launch also carried the last one's own
+# descriptors (SHIN here, its terminal on a device) beside the ones it opened
+# itself: one more per resume, for ever. So the shell's fds at 10 and above
+# must be the same in every life.
+rm -f "$IMG"
+RPROG='(( LIFE++ ))
+print -r -- "fds" /proc/$$/fd/<10->(N:t)
+print -u2 "life $LIFE stderr"
+(( LIFE < 3 )) && { print suspend > /proc/ish/checkpoint } 2>/dev/null
+print "life $LIFE stdout"'
+redir_all=
+for life in 1 2 3; do
+    if [ $life = 1 ]; then
+        redir_out=$(ISH_GUEST_CHECKPOINT=1 ISH_SESSION="$IMG" "$ISH" -f "$ROOT" \
+            /AOK/native/zsh -c "$RPROG" 2>&1)
+    else
+        redir_out=$(ISH_GUEST_CHECKPOINT=1 ISH_SESSION="$IMG" "$ISH" -f "$ROOT" \
+            $SH -c 'x' 2>&1)
+    fi
+    echo "$redir_out" | sed "s/^/  redir $life | /"
+    case $redir_out in
+        *"life $life stderr"*) ;;
+        *) echo "FAIL: life $life of the redirecting shell has no stderr"; exit 1;;
+    esac
+    case $life:$redir_out in
+        3:*"life 3 stdout"*) ;;
+        3:*) echo "FAIL: the shell restored after \`> /proc/ish/checkpoint\` cannot write its stdout"
+             exit 1;;
+        *:*"life $life stdout"*) echo "FAIL: life $life ran on past its suspend"; exit 1;;
+    esac
+    redir_all="$redir_all$(echo "$redir_out" | grep '^fds')
+"
+done
+if [ "$(printf '%s' "$redir_all" | sort -u | wc -l)" -ne 1 ]; then
+    echo "FAIL: a restored shell's own descriptors pile up from life to life"
+    printf '%s' "$redir_all" | sed 's/^/  /'
+    exit 1
+fi
+
 # ---- taken from OUTSIDE the guest ------------------------------------------
 #
 # The app's path. Backgrounding happens on the UI thread, which is not a guest

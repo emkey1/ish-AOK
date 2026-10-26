@@ -203,7 +203,7 @@ static const struct native_program native_programs[] = {
     // __cstring, every time the app was backgrounded with a native zsh
     // running. -w hid all three diagnostics.
     { .name = "zsh", .main = native_zsh_main, .ckpt_dump = native_zsh_ckpt_dump,
-      .ckpt_state_var = "AOK_ZSH_STATE_FD" },
+      .ckpt_state_var = "AOK_ZSH_STATE_FD", .ckpt_fds = native_zsh_ckpt_fds },
     { .name = "zsh-multio", .main = native_zsh_multio_main, .ckpt_dump = native_zsh_ckpt_dump,
       .ckpt_state_var = "AOK_ZSH_STATE_FD" },
 #endif

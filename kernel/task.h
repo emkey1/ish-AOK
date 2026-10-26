@@ -809,6 +809,14 @@ struct task {
     // slot's generation when it was taken. Not inherited.
     unsigned exit_watch;
     uint64_t exit_watch_gen;
+
+    // ckpt_native_state's companion: what the program's ckpt_fds said at the
+    // same moment, as (number, descriptor now at it) pairs -- where the image
+    // records descriptors that are only parked where they are (struct
+    // native_program). Owned and consumed with ckpt_native_state; not
+    // inherited. At the end for the reason given above native_standin_child.
+    int *ckpt_native_fds;
+    int ckpt_native_nfds;
 };
 // whether the riscv64 V extension is on for this task (PR_RISCV_V_*)
 static inline bool riscv64_v_enabled(struct task *task) {

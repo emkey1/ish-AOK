@@ -341,6 +341,18 @@ Not musts. Each is in docs/TODO.md's queue.
   0xdead10cc with the main thread in fake_db_init 1.2 s into a launch, before
   any scene armed the suspend guard. ensureBooted now holds an assertion
   around boot, as the secondary mounts did.
+- **A native zsh restored after `echo suspend > /proc/ish/checkpoint` writes
+  again** (2026-10-26, found in the simulator). The shell is parked inside its
+  own redirection -- the checkpoint file at 1, the terminal moved to 10 until
+  the echo finishes -- and a re-launched zsh never finishes it, so the image
+  gave the restored shell the checkpoint file as stdout: `write error: invalid
+  argument` on every command. zsh now links each command's save[] in a chain
+  (deps/zsh exec.c, aok_redir_top), and a new native_program hook, ckpt_fds,
+  tells the image where each descriptor belongs. Also drops zsh's own fds
+  (SHIN, SHTTY, the copies), which piled up one per resume. A backgrounding
+  save was never affected unless zsh was mid-redirection, e.g. in `while ...;
+  done > log`. checkpoint_restore.sh "redir" leg: three lives, fails on the
+  old code at life 2.
 
 - **kernel/native.c builds without warnings** (4d5fb4f57). Ten in every build
   since e459ac19f: nine positional entries in `native_programs[]` that left

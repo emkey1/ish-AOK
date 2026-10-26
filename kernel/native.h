@@ -101,13 +101,26 @@ struct native_program {
     // name.
     char *(*ckpt_dump)(void);
     const char *ckpt_state_var;
+
+    // Optional, and the rest of the description: where the program's
+    // descriptors belong. A shell parked inside `echo x > f` has its stdout
+    // at 10 or above and f at 1, and would put them back once the echo
+    // finished -- which a re-launched program never does. And the program's
+    // own, a shell's input and terminal, are opened afresh by the re-launched
+    // one, so carried into it they only leak. So the image records each where
+    // it belongs, or not at all. Pairs, number then the descriptor that
+    // belongs at it now (-1: nothing does); fills at most `max` and returns
+    // how many there are. Same thread, same moment as ckpt_dump.
+    int (*ckpt_fds)(int *pairs, int max);
 };
 
 // NULL when no native program of that name is compiled into this build. Exec
 // then falls through to the ordinary path and runs the /AOK/native stub, which
 // reports the situation loudly rather than failing with ENOEXEC.
-// zsh's self-description, for the table's ckpt_dump slot. In kernel/zsh_glue.c.
+// zsh's self-description, for the table's ckpt_dump and ckpt_fds slots. In
+// kernel/zsh_glue.c.
 char *native_zsh_ckpt_dump(void);
+int native_zsh_ckpt_fds(int *pairs, int max);
 
 const struct native_program *native_program_lookup(const char *name);
 

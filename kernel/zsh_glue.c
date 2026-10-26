@@ -476,3 +476,13 @@ char *native_zsh_ckpt_dump(void) {
     out[size] = '\0';
     return out;
 }
+
+// And where its descriptors belong: a shell parked in the middle of a
+// redirection of its own -- `echo suspend > /proc/ish/checkpoint` is always
+// parked there -- has them moved for the moment. See aok_redir_top in
+// deps/zsh/Src/exec.c. Declared here for the reason aok_write_state is.
+int aok_ckpt_fds(int *pairs, int max);
+
+int native_zsh_ckpt_fds(int *pairs, int max) {
+    return aok_ckpt_fds(pairs, max);
+}

@@ -1428,6 +1428,8 @@ static struct task *task_create_pid_(struct task *parent, pid_t_ want_pid) {
     task->ckpt_syscalls_traced = 0;
     task->native_running = NULL;
     task->ckpt_native_state = NULL;
+    task->ckpt_native_fds = NULL;
+    task->ckpt_native_nfds = 0;
 
     // Every task's poke flag is its OWN, from the moment it exists.
     //

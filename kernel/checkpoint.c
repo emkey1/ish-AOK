@@ -767,6 +767,34 @@ void checkpoint_park_if_frozen(void) {
 // stack and nothing else can see it. Declared above checkpoint_freeze_pending,
 // which reads it too.
 
+// A native program describing itself, on its own thread: its state, and where
+// its descriptors belong (struct native_program's ckpt_dump and ckpt_fds).
+// Both are the task's until ckpt_native_forget.
+static void ckpt_native_describe(const struct native_program *prog) {
+    ckpt_dumping = true;
+    current->ckpt_native_state = prog->ckpt_dump();
+    if (prog->ckpt_fds != NULL) {
+        int n = prog->ckpt_fds(NULL, 0);
+        int *pairs = n > 0 ? calloc((size_t) n, 2 * sizeof(*pairs)) : NULL;
+        if (pairs != NULL) {
+            int got = prog->ckpt_fds(pairs, n);
+            current->ckpt_native_fds = pairs;
+            current->ckpt_native_nfds = got < n ? got : n;
+        }
+    }
+    ckpt_dumping = false;
+}
+
+// Consumed, whichever way the save went: both describe a moment that has
+// passed, and left behind the next checkpoint would write them again.
+static void ckpt_native_forget(struct task *task) {
+    free(task->ckpt_native_state);
+    task->ckpt_native_state = NULL;
+    free(task->ckpt_native_fds);
+    task->ckpt_native_fds = NULL;
+    task->ckpt_native_nfds = 0;
+}
+
 void checkpoint_native_park(void) {
     // Already describing itself: neither dump again nor park. Parking here
     // would stop the program halfway through producing the very state the
@@ -799,12 +827,12 @@ void checkpoint_native_park(void) {
             // that program at all, so there is no state here to describe.
             current->native_standin_child == 0 &&
             current->ckpt_native_state == NULL) {
-        ckpt_dumping = true;
-        current->ckpt_native_state = prog->ckpt_dump();
-        ckpt_dumping = false;
-        CKPT_TRACE("native park: pid %d described itself in %zu bytes\n",
+        ckpt_native_describe(prog);
+        CKPT_TRACE("native park: pid %d described itself in %zu bytes, "
+                   "%d descriptors placed\n",
                    current->pid, current->ckpt_native_state != NULL
-                   ? strlen(current->ckpt_native_state) : 0);
+                   ? strlen(current->ckpt_native_state) : 0,
+                   current->ckpt_native_nfds);
     }
 
     checkpoint_park_if_frozen();
@@ -943,16 +971,14 @@ static void ckpt_thaw_all(void) {
             // session ends closes itself, so the windows vanish rather than
             // arriving wrong.
             //
-            // The guest path already had the rule right in its own comment --
-            // "it describes a moment that has passed, and leaving it would have
-            // the next checkpoint write a stale state" -- it simply could not
-            // reach the other tasks. Here it can: this is where every parked
-            // task is released, on every path, success or refusal.
+            // The guest path already had the rule right -- a description is
+            // of a moment that has passed (ckpt_native_forget) -- it simply
+            // could not reach the other tasks. Here it can: this is where every
+            // parked task is released, on every path, success or refusal.
             //
             // Before the broadcast below, so the owning threads are still
             // parked and none of them can be reading it.
-            free(snap.tasks[i]->ckpt_native_state);
-            snap.tasks[i]->ckpt_native_state = NULL;
+            ckpt_native_forget(snap.tasks[i]);
         }
         task_snapshot_release(&snap);
     }
@@ -2524,6 +2550,28 @@ static struct timespec ckpt_host_deadline_after(int64_t left_ns) {
 
 static bool ckpt_task_as_killed(struct task *t);   // with CKPT_SAVE_LEAVE_OUT, below
 
+// The descriptor the image records at number i of a task, or NULL for none:
+// the table's own, unless the task is a native program that said this number
+// is only borrowed for the moment (struct native_program's ckpt_fds). A shell
+// parked inside `echo suspend > /proc/ish/checkpoint` holds the checkpoint
+// file at 1 and its terminal at 10, and is RE-LAUNCHED at its prompt, where
+// nothing will ever put them back. Recorded as they were, the restored shell's
+// stdout was the checkpoint file. `moved` says the number is one of those, and
+// so comes back as a dup2 would leave it -- not close-on-exec. files->lock
+// held.
+static struct fd *ckpt_recorded_fd(const struct task *task,
+        const struct fdtable *files, unsigned i, bool *moved) {
+    for (int k = 0; k < task->ckpt_native_nfds; k++) {
+        if (task->ckpt_native_fds[2 * k] != (int) i)
+            continue;
+        int from = task->ckpt_native_fds[2 * k + 1];
+        *moved = true;
+        return from >= 0 && (unsigned) from < files->size ? files->files[from] : NULL;
+    }
+    *moved = false;
+    return files->files[i];
+}
+
 static int ckpt_save_task(struct ckpt_writer *w, struct task *task,
         struct ckpt_header *h, uint64_t *pages_out, struct ckpt_fd_ids *ids,
         const struct ckpt_shares *sh) {
@@ -2596,12 +2644,13 @@ static int ckpt_save_task(struct ckpt_writer *w, struct task *task,
         return _ENOMEM;
     }
     for (unsigned i = 0; i < files->size; i++) {
-        struct fd *fd = files->files[i];
+        bool moved;
+        struct fd *fd = ckpt_recorded_fd(task, files, i, &moved);
         if (fd == NULL)
             continue;
         saved[nfds].num = i;
         saved[nfds].fd = fd_retain(fd);
-        saved[nfds].cloexec = bit_test(i, files->cloexec) ? 1 : 0;
+        saved[nfds].cloexec = !moved && bit_test(i, files->cloexec) ? 1 : 0;
         nfds++;
     }
     unlock(&files->lock);
@@ -3289,9 +3338,11 @@ static bool ckpt_task_unsaveable(struct task *task) {
     int *nums = calloc(n != 0 ? n : 1, sizeof(*nums));
     unsigned count = 0;
     for (unsigned i = 0; i < files->size && fds != NULL && nums != NULL; i++) {
-        if (files->files[i] == NULL)
+        bool moved;
+        struct fd *fd = ckpt_recorded_fd(task, files, i, &moved);
+        if (fd == NULL)
             continue;
-        fds[count] = fd_retain(files->files[i]);
+        fds[count] = fd_retain(fd);
         nums[count++] = (int) i;
     }
     unlock(&files->lock);
@@ -6655,11 +6706,8 @@ void checkpoint_run_pending(void) {
     // place a native program comes back through.
     const struct native_program *self = native_program_running(current);
     if (self != NULL && self->ckpt_dump != NULL &&
-            current->ckpt_native_state == NULL) {
-        ckpt_dumping = true;
-        current->ckpt_native_state = self->ckpt_dump();
-        ckpt_dumping = false;
-    }
+            current->ckpt_native_state == NULL)
+        ckpt_native_describe(self);
 
     int err = checkpoint_save(path);
     if (err < 0) {
@@ -6669,14 +6717,10 @@ void checkpoint_run_pending(void) {
                    ckpt_status.last_refusal[0] ? ckpt_status.last_refusal
                                                : "(no reason recorded)");
         unlock(&ckpt_lock);
-        free(current->ckpt_native_state);
-        current->ckpt_native_state = NULL;
+        ckpt_native_forget(current);
         return;
     }
-    // Consumed, whichever way it went: it describes a moment that has passed,
-    // and leaving it would have the next checkpoint write a stale state.
-    free(current->ckpt_native_state);
-    current->ckpt_native_state = NULL;
+    ckpt_native_forget(current);
 
     if (!halt_after)
         return;

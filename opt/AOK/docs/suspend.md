@@ -75,7 +75,10 @@ program is host code on a host thread, so it cannot be photographed the way an
 emulated process can — instead it is asked to write down its own state, and zsh
 knows how. It is **re-launched** from that description rather than resumed
 mid-instruction, which for an interactive shell means a prompt with your session
-still in it.
+still in it. A command zsh was running itself when the session was saved -- a
+builtin, a function, a loop, or the `echo suspend > /proc/ish/checkpoint` that
+saved it -- does not come back, and neither do its redirections: the shell's
+output goes where it went before that command started.
 
 The terminal comes back too, and it is the one you are looking at. A terminal
 cannot be restored -- the one you had belonged to an app process that no longer
