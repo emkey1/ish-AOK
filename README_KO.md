@@ -24,6 +24,7 @@ AOK VM, 자매 앱(완전한 가상 머신: QEMU 와 AOK gadget 엔진으로 만
 - **게스트에서 쓰는 기기의 GPU**: `/dev/dri/renderD128`, 프로세스 안에서 MoltenVK 위의 virglrenderer Venus 렌더러가 뒷받침하는 virtio-gpu 렌더 노드입니다. 그래서 Mesa 의 Venus Vulkan 드라이버(와 그 위의 zink)가 Metal 로 그립니다. 게스트 쪽은 `/AOK/tools/setup-gpu.sh` 가 설치합니다. `/AOK/docs/workspace.md` 참고.
 - **Wayland 데스크톱**(labwc, foot, waybar; 자체 데스크톱 네 개 — labwc 대신 Wayfire 나 Xfce 도 가능): GPU 에서 합성되고, `/AOK/native/wl-present` 를 통해 앱에 전달됩니다 — 한쪽으로는 프레임이, 다른 쪽으로는 키보드, 포인터, 클립보드, 크기 변경이 오가며, VNC 는 대체 경로입니다. `/AOK/tools/setup-games.sh` 는 검증된 게임 묶음을 설치합니다. `/AOK/docs/workspace.md` 참고.
 - **LLM Chat**: 앱 내장 채팅 클라이언트(OpenAI 호환 서버, Anthropic, Gemini, Apple 온디바이스 모델). 허용/확인/거부 권한 아래에서 게스트의 파일을 읽고 고치고 명령을 실행할 수 있으며, MCP 서버를 쓰고, 여러 채팅을 백그라운드 에이전트로 동시에 돌립니다. API 키는 키체인에 보관됩니다. `/AOK/docs/llm-chat.md` 참고.
+- **외부 디스플레이** (563, iPhone 전용, 실제 하드웨어에서는 아직 시험하지 않음): 모니터나 AirPlay 화면 미러링으로 연결하면 터미널이 큰 화면의 비율에 맞게 화면을 채우고, 키보드는 iPhone에 남습니다. Wayland Display는 커서와 함께 그 화면에 미러링됩니다. iPad는 Stage Manager 동작을 그대로 유지합니다. `/AOK/docs/external-display.md` 를 참고하세요.
 - **디스크로 서스펜드**: 프로세스, 열린 파일, 터미널까지 세션 전체를 저장했다가 앱이 종료된 뒤에도 이어서 재개합니다. 기본값은 꺼짐. `/AOK/docs/suspend.md` 참고.
 - **한국어와 다른 언어**: 앱 인터페이스가 기기 언어를 따르며, 영어 외에 한국어, 간체·번체 중국어, 일본어, 스페인어, 프랑스어, 독일어, 브라질 포르투갈어, 러시아어를 지원합니다. 터미널은 입력기 입력을 받습니다. 한글은 음절을 그 자리에서 조합해 입력하고, 중국어 병음과 일본어는 조합 중인 글자를 커서 위치에 표시하며 후보 창을 그 옆에 띄웁니다. 화상 키보드와 하드웨어 키보드 모두 해당됩니다. `/AOK/tools/setup-locale.sh` 는 루트 파일시스템에도 기기 언어를 설정합니다(프로그램 번역은 Devuan 에 들어 있습니다). `/AOK/docs/roots.md` 참고.
 - iOS를 통해 게스트 파일을 노출하는 File Provider 지원.

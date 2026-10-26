@@ -155,6 +155,7 @@ six of them were not linked from anywhere at all.
 | file | what it covers |
 | --- | --- |
 | [workspace.md](workspace.md) | the in-app multi-window desktop, its applets and saved layouts — and the Wayland desktop, the GPU and the games set |
+| [external-display.md](external-display.md) | an iPhone on a monitor or AirPlay: the terminal on the big screen, the keyboard on the phone (new in 563, iPhone only) |
 | [file-browser.md](file-browser.md) | the quick file picker on the keyboard bar (Cmd-B) |
 | [keyboard-shortcuts.md](keyboard-shortcuts.md) | every hardware-keyboard shortcut: desktops, windows, the terminal, MotePad, the Wayland desktop |
 | [keyboard-toolbar.md](keyboard-toolbar.md) | arranging the keys above the keyboard, and adding your own |

@@ -423,7 +423,7 @@ daemon is first asked something after `move_mount`, when it is serving.
 `tests/manual/fuse_fsopen.c` mounts that way and times `fsmount` with no daemon
 running; the build before the fix hangs there until the test's alarm.
 
-## 41.7 Deferred on purpose: external display
+## 41.7 Deferred on purpose, then narrowed: external display
 
 This entry is the rarest kind, and worth holding up.
 
@@ -433,24 +433,32 @@ did ship once. It landed in July (`57380ba6`, `cc0b5b21`) and was reverted for
 fought how iPadOS already uses an external display: the app would not open
 there, dragged there it took a portrait-iPad shape, a second window on the
 built-in display pulled it back, and a terminal applet opened on it disturbed
-the primary. One further commit — mirroring the Wayland display — is left on
-`worktree-external-display-540`. It is **not merged**, it is a child of the
-reverted pair so it cannot be merged alone, and the reason is recorded
-verbatim:
+the primary. One further commit — mirroring the Wayland display — was left on
+`worktree-external-display-540`, unmerged, with the reason recorded verbatim:
 
 > Deferred to a future release by the maintainer: *"the external display work is
 > flawed"*. The commit is NOT merged and must not be swept into a release by
 > accident. Left on its branch deliberately.
 
-It was deferred again, by decision, for 556, and 557's plan does not reopen it.
-The resume plan — revert the revert, then preferably stop claiming a screen an
-interactive scene already occupies — is in `docs/external_display_plan.md`.
+It was deferred again, by decision, for 556 and 557. For 563 it came back
+narrowed rather than repaired: the pair was replayed, the Wayland mirror ported
+to the display as it now is, and the external-display scene role declared only
+in `UIApplicationSceneManifest~iphone`. Every 546 symptom was an iPad under
+Stage Manager, and an iPad now reads exactly the manifest 545-562 shipped, so
+none of them can recur there; the iPhone, the case the issue asked about, gets
+the terminal on the big screen. Its fence changed shape rather than coming
+down: the release that carries it says, in its notes and in
+`/AOK/docs/external-display.md`, that nobody had a phone and a monitor to test
+it on, and the hardware test it skipped is written out in
+`docs/build_563_musts.md` for whoever has both. The branch is gone; its one
+commit is in the tree.
 
 Most projects do one of two things with an implementation they have judged
 inadequate: merge it because it mostly works, or delete it because it does not.
 Keeping it, naming the judgement, and fencing it against accidental inclusion is
-better than either — the work is recoverable, the verdict is legible, and
-nothing is going to ship it by mistake.
+better than either — the work was recoverable, the verdict legible, and when it
+did come back it came back on purpose, smaller, with its untested state said
+out loud.
 
 ## 41.8 The open reports, and one that was not a speed problem
 
@@ -602,8 +610,8 @@ successor's *Closed in 553* section says how, which is the more useful half.
 That turns a gap into a decision, and sometimes into a fix. `PROT_EXEC` was
 never "we never got to NX" — it was a two-row table against Linux 6.12, a
 severity grade, two candidate designs and a reason, and it is closed. The
-external display is not an abandoned branch — it is a maintainer's judgement
-with a fence around it. The `F_GETFL` lie was not a mystery — it was two correct
+external display was not an abandoned branch — it was a maintainer's judgement
+with a fence around it, and it came back through the gate the judgement named. The `F_GETFL` lie was not a mystery — it was two correct
 decisions and a named seam with a scoped next step, and the step was taken. And this chapter's own
 record needed the same treatment: at 556 it still said GNU `as` ran on the
 interpreter, that a zsh divergence had a test, and that a yay failure was a

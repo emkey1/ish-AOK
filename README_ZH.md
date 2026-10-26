@@ -23,6 +23,7 @@ AOK VM，姊妹应用（完整的虚拟机：基于 QEMU 与 AOK gadget 引擎�
 - **在客户机中使用设备的 GPU**：`/dev/dri/renderD128`，一个 virtio-gpu 渲染节点，由进程内运行在 MoltenVK 之上的 virglrenderer Venus 渲染器支撑，因此 Mesa 的 Venus Vulkan 驱动（以及其上的 zink）通过 Metal 绘制。客户机一侧由 `/AOK/tools/setup-gpu.sh` 安装。参见 `/AOK/docs/workspace.md`。
 - **Wayland 桌面**（labwc、foot、waybar；自带四个桌面——也可用 Wayfire 或 Xfce 取代 labwc）：在 GPU 上合成，并通过 `/AOK/native/wl-present` 呈现到应用中——画面单向传出，键盘、指针、剪贴板和尺寸调整反向传入——VNC 作为后备。`/AOK/tools/setup-games.sh` 会安装一组经过测试的游戏。参见 `/AOK/docs/workspace.md`。
 - **LLM Chat**：应用内的聊天客户端（OpenAI 兼容服务器、Anthropic、Gemini、Apple 端侧模型），可在允许/询问/拒绝的权限下读取、编辑客户机中的文件并运行命令，可使用 MCP 服务器，还能把多个聊天作为后台代理同时运行。API 密钥保存在钥匙串中。参见 `/AOK/docs/llm-chat.md`。
+- **外接显示器**（563，仅限 iPhone，尚未在真机上测试）：连接显示器或使用 AirPlay 屏幕镜像时，终端按大屏幕的比例铺满整个屏幕，键盘仍留在 iPhone 上；Wayland Display 连同光标一起镜像到大屏幕。iPad 保持 Stage Manager 的行为不变。参见 `/AOK/docs/external-display.md`。
 - **挂起到磁盘**：把整个会话——进程、打开的文件、终端——保存下来，在应用被终止后再恢复。默认关闭。参见 `/AOK/docs/suspend.md`。
 - **中文及其他语言**：应用界面跟随设备语言，除英文外还提供简体中文、繁體中文、日语、韩语、西班牙语、法语、德语、巴西葡萄牙语和俄语。终端支持输入法输入：用中文拼音输入法和日文输入法时，正在组字的文本直接显示在光标处，候选窗口紧挨在旁边，软键盘和硬件键盘都能用；韩文则逐个音节就地输入。`/AOK/tools/setup-locale.sh` 还能让根文件系统也使用设备的语言（Devuan 自带各程序的翻译）。参见 `/AOK/docs/roots.md`。
 - 通过 iOS 系统 API 暴露客户机文件的 File Provider 支持。

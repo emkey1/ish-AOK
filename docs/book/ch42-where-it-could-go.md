@@ -59,15 +59,17 @@ the compositor on the GPU instead of through VNC (Chapter 32) — which was the
 one part the plan had not expected to need, because the cost it removed only
 became visible once everything else was fast enough to measure it.
 
-## 42.2 The display that was built and rejected
+## 42.2 The display that was built, rejected, and narrowed
 
 External display support shipped once and was reverted after testing on a
-real iPad and monitor; its last commit, mirroring the Wayland display, exists on
-a branch and is not merged, because the maintainer judged the work flawed
-(Chapter 41). It stays fenced rather than merged or deleted.
+real iPad and monitor (Chapter 41). It returned in 563 for the iPhone alone,
+where the 546 symptoms cannot occur, and shipped without a hardware test.
 
-Worth restating here only because a "future directions" chapter is exactly where
-an unmerged branch quietly becomes a promise. It is not one.
+What is left is the iPad: whether the declared external-display role is itself
+what broke Stage Manager is still a hypothesis, and iPads without Stage
+Manager's external-display support get only the letterboxed mirror until it is
+tested. That is a question with an experiment written next to it
+(`docs/external_display_plan.md`), not a promise.
 
 ## 42.3 GPU offload, past one matrix multiply
 

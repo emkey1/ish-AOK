@@ -85,7 +85,12 @@ wired into the build, and it covers the routed surface rather than proving there
 is nothing left. Local time is the most recent arrival: since 557 a native
 program converts times in the *guest's* zone — `TZ`, else `/etc/localtime`, read
 from your root's own zoneinfo — so native `ls -l` and `date` agree with the
-distro's.
+distro's. Since 563 each native program reads its own: two in different roots
+no longer briefly share one zone, and a `date` straight after `/etc/localtime`
+is replaced shows the new one. The same release gave every native program its
+own `rand()` stream (so zsh's `RANDOM=42` repeats its numbers again with other
+zshes running), its own `inet_ntoa` buffer and its own multibyte conversion
+state, which had all been one per app.
 
 ## When a program is not in this build
 
