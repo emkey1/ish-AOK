@@ -23,7 +23,7 @@ drawn from the queue on 2026-10-19: what to keep, cut or add is yours.
 | 5 | Shortcuts Run Command: output over 256 KB, non-UTF-8 output, a reap timeout | **DONE** (2026-10-20, de2f52f93): the lost exit status was every root with a real init, not a timeout; the action itself not yet run from Shortcuts |
 | 6 | `signal_process_wake_one` late on the A10X | **DONE: the device** (2026-10-20): the test ran 14 scenario processes on 2 CPUs; batched by CPU count it passes 8 of 8 there |
 | 7 | Issues and the TODO's own state | **DONE** (2026-10-20): #646 closed; issue table current (3 open); 31 done entries out of the queue, their 6 open tails kept as bullets |
-| 8 | Decisions due at the start of a release | #540 **decided** (2026-10-23): in 563, iPhone only; the #523 branch still open |
+| 8 | Decisions due at the start of a release | **DONE**: #540 in 563, iPhone only (2026-10-23); #523's text landed and the #540 branch deleted (2026-10-26) |
 | 9 | External display on real hardware | **GATE: must pass before 563 is tagged** |
 
 Order: crash classes first (2, 3), then correctness native programs and
@@ -268,8 +268,11 @@ different bug, already fixed on Apple hosts and fixed today for x86_64 ones.
   surface-sized desktop of #483); the idle message is in nine languages. It
   builds; it has not met a display yet -- §9.
 - **`claude/jovial-dhawan-96001a`** (6c0568e83): the #523 "Go heap-growth
-  stall" diagnosis, which the TODO's #523 entry does not contain. Land the
-  text or drop the branch.
+  stall" diagnosis. **Landed 2026-10-26**: the flake's entry replaces the old
+  #523 one under *Diagnosed, not fixed*, and the closed #523 record is in
+  docs/historical/todo-closed-549-550.md. The branch is left only to delete.
+- **`worktree-external-display-540`**: deleted 2026-10-26, locally and on
+  GitHub, with its worktree; its one commit is ported (6057f88a8).
 
 
 ## 9. External display on real hardware -- a gate before tagging

@@ -1902,3 +1902,49 @@ The one assert left (`tmpfs_init_regular_file`) is a creation-time invariant its
 only caller satisfies by construction.
 
 ---
+
+### #523: yay's reported failure does not reproduce -- CLOSED 2026-08-22
+
+Closed on the issue after **38 runs of the reporter's own command, across two
+environments, produced the reported symptom zero times.**
+
+|  | build | yay | runs of `yay -S <pkg>` |
+|---|---|---|---|
+| iPad (M4), the app | 1.3 (549) built 2026-08-22 | **yay-bin 13.0.1**, the upstream prebuilt aarch64 binary the reporter's package installs | 14 |
+| macOS, CLI build | same tree | yay 13.0.1 built from the AUR, Go 1.26.6 | 24: 8 x `pandoc-bin`, 8 x `yay-bin`, 8 x `paru-bin`, cached clone deleted before each |
+
+Run as an unprivileged user with sudo on Arch Linux ARM aarch64, exactly as the
+report says. `context: signal: terminated` **never appeared**. 36 of the 38
+reached `:: (1/1) Downloaded PKGBUILD`, which is the step the report dies in,
+and one `--noconfirm` run went the whole way through: fetch, source download,
+sha256 validation, extraction, into `package()`. The other 2 failed with the
+flake described under *Diagnosed, not fixed*, which is a different error.
+
+**Testing with `yay-bin` mattered and was not optional.** The report names
+`yay-bin 13.0.1` -- a binary built by yay's maintainers with their Go, not the
+Arch package's. The earlier attempt only ever ran a locally-compiled `yay`, so
+"does not reproduce" was one Go toolchain short of the claim it was making.
+Fetching the upstream release tarball straight into `/tmp` and running it from
+there tests the reporter's binary without installing anything.
+
+**What could NOT be tested.** The reporter's strace reaches the AUR over IPv6
+(`2604:cac0:a104:d::2`). Neither this Wi-Fi nor the iPad has global IPv6, so
+every run above was IPv4. If the failure is IPv6-only it is still real, and the
+issue says to reopen for exactly that.
+
+Five things had to be fixed before any of this could run, one of them ours:
+Landlock, a dangling `/etc/resolv.conf` and an empty keyring (all three now
+`/AOK/fixes/arch`, `94a31f798`); a missing `/dev/fd`, which is ours and fixed
+(`59827f5ce`); and the minirootfs stripping headers from 137 packages, so
+anything that compiles needs `pacman -S glibc linux-api-headers` first.
+
+The `poll.c` use-after-free found while chasing this (`717e6d3d`, shipped in
+545) remains a real fix and is unaffected by the close.
+
+**One gotcha found on the way, worth knowing.** Only the *booted* root gets an
+AOK-generated `/etc/resolv.conf`. A root reached through
+`/AOK/tools/mount-root.sh` keeps whatever file it was left with -- the iPad's
+Arch root still pointed at a nameserver from a network it had not seen in
+weeks, and every lookup inside the chroot failed until it was replaced.
+
+*Landed here 2026-10-26 from 6c0568e83 (2026-08-22), which never reached `working`.*

@@ -47,7 +47,7 @@ freeze (2026-09-25); their full text is in
 - **GH #631, what is left (2026-10-12).** The drop itself is iOS (the app is suspended when the screen locks, and a locked device reclaims a suspended app's TCP connections); what keeps a session is what keeps the app running, `cat /dev/location > /dev/null &` or audio, and the reporter has been told. Ours was the errno, fixed: a socket iOS took away has EBADF as its pending error, AOK read that ahead of the guest on every poll, and ssh's next read got "Bad file descriptor"; it is ECONNRESET now (fs/sock.c sock_host_so_error, tests/manual/tcp_suspend_reset.sh). Not done: such a connection polls IN|OUT|HUP with no POLLERR (measured), where Linux's tcp_poll sets POLLERR while an error is pending (from its source, not checked on a Linux box); and the keep-alive was described from the code, not timed on a locked device.
 - **README and book ch41 quote ~6.8 ns per dispatch.** That figure predates this cycle's gadget work and may be stale; re-measure before the next release's docs pass.
 - **networking.md's advice to bind ports >= 1024** rests on hosts refusing privileged binds; one M4 iPad allowed one (tests/manual/inaddr_any_iface.c). Check what iOS 26/27 devices do and narrow the advice to the evidence.
-- **Local branches with unlanded work** (sweep for 558, nothing deleted): `claude/jovial-dhawan-96001a` (6c0568e83, 2026-08-22) -- the #523 "Go heap-growth stall" diagnosis, which docs/TODO.md's #523 entry does not contain (an `alloc` probe: growing the Go heap by 256 MB took 0.2 s best, 12 s typically). `worktree-external-display-540` (6156597ee) is landed in content: its commit was ported to `working` for 563 (GH #540), so the branch and its worktree (.claude/worktrees/external-display-540) are left only to delete. Decide whether to land the #523 text.
+- **The unlanded-branch sweep of 558 is done (2026-10-26).** `claude/jovial-dhawan-96001a`'s #523 text is landed (the AUR "unexpected EOF" entry under *Diagnosed, not fixed*, and the closed #523 record in docs/historical/todo-closed-549-550.md), so that branch is left only to delete. `worktree-external-display-540` is deleted, locally and on GitHub, with its worktree: its commit was ported for 563.
 
 - **ppc64le guest, what the first port left (2026-10-17, docs/ppc64le_guest_plan.md).** Runs Alpine 3.24.2 ppc64le on the Mac CLI: apk over HTTPS, gcc in the guest, Python, strace, termios. The differential tests in tests/ppc64/ match qemu-ppc64le, but for three places where qemu 10 is the one that is wrong: fnmadd/fnmsub under directed rounding; divde/divdeo, where qemu misses the signed overflow of a quotient past 2^63 and sets no OV (AOK follows the ISA); and vexptefp, whose qemu exp2 is a Taylor series about 0 (AOK's is checked against libm). Not done: (1) *speed*: no fused pairs, no HLE, no specialised gadgets (it does have a vDSO: vdso/ppc64 answers clock_gettime through private SPR 777). *To check:* kernel/native_libc.c nlibc_utmp_next takes 400-byte utmp records on ppc64, but glibc's powerpc64 may define __WORDSIZE_TIME64_COMPAT32 (32-bit ut_tv, 384 bytes) -- matters only for a glibc ppc64el root, none published yet; verify against a ppc64el glibc build before changing it (found 2026-10-19 by the 562 book pass) -- measure 7z and the Python microbench against riscv64 first; the VMX float gadgets switch FPCR per op (RN and FZ = VSCR[NJ]), which costs while AltiVec float code runs; (2) *instructions*: vector crypto (vcipher, vncipher, vsbox, vshasigma), vpmsum[bhwd], lq/stq and lqarx/stqcx., the TAR/PPR/DSCR SPRs, and nothing of ISA 3.0 (POWER9: binaries of distros built for power9, e.g. RHEL 9 and Ubuntu 24.04+, die on SIGILL; Alpine and Debian ppc64el target POWER8). AT_HWCAP2 does not offer VEC_CRYPTO, so OpenSSL and zlib-ng do not try the first two; (3) *semantics*: VSCR[SAT] is never set (the saturating VMX ops and vctsxs/vctuxs; ARM's sq* ops set FPSR.QC, which could carry it); fmadds and its kin round in double and then to single, so a sum that lands on a single-precision tie can round twice; a single-precision op's NaN result keeps only a single's payload, where qemu keeps the double's; (4) *ptrace*: no NT_PPC_TAR/PPR/DSCR regsets; *native stty*: SmallCLUE's stty prints and reads `-g` in the asm-generic termios encoding, which round-trips with itself but is not what the distro's GNU stty on a ppc64 root prints or reads (powerpc's flag values and c_cc slots differ; kernel/fs.c has the conversion) -- tests/manual/native_stty.c leaves that check out on ppc64; (4b) *what a tracer and seccomp see* (audit 2026-10-18): the `ipc` (117) and `_llseek` (140) calls -- musl's path for every SysV IPC call and every lseek -- are rewritten into shmat/semop/... and lseek in the register file before dispatch (kernel/calls.c handle_ppc64_syscall_interrupt), so seccomp, the ptrace syscall stops and PTRACE_GET_SYSCALL_INFO see the rewritten number and arguments, not 117/140, and a tracer's writes to r0/r4-r8 at the exit stop are undone by the restore; the F_GETFL result is translated after the exit stop, so a tracer sees x86 O_ flags. Fix: decode 117 and 140 in ppc64_syscall_number/ppc64_syscall_args from the raw registers without touching them, and give the dispatch a post-result hook, run before the exit stop, for the shmat/_llseek stores and the F_GETFL translation; (4c) AT_MINSIGSTKSZ is not in a ppc64 aux vector (Linux powerpc reports it since about 5.17; unverified); prctl PR_SET_FPEXC accepts only DISABLED, since FPSCR enable traps are not modelled;
 (5) *roots*: Devuan ppc64el in the catalogue (only Alpine is published); (6) *real hardware*: everything was checked against qemu, nothing against a POWER machine.
@@ -1226,59 +1226,202 @@ non-blocking under a program that never asked is the kind of thing that
 surfaces far from here. Worth checking whether sockets and ttys answer
 `F_GETFL` the same way before fixing just the one path.
 
-### #523: yay's reported failure does not reproduce; an http2 flake does
+### The AUR "unexpected EOF" flake: a Go heap-growth stall meeting a 2s server -- 2026-08-22
 
-Reproduced the environment on 2026-08-20 -- Arch Linux ARM aarch64, yay v13.0.1
-built from AUR under emulation -- and ran `yay -S pandoc-bin` four times. **The
-reported `context: signal: terminated` never appeared.** All four got through
-the AUR fetch and downloaded sources.
+*Landed 2026-10-26 from the branch `claude/jovial-dhawan-96001a` (6c0568e83), where it was written on 2026-08-22 and never merged. Not re-measured since: the Go heap-growth numbers and the epoll_ctl divergence are as of then.*
 
-Getting there needed five things fixed first, only one of them AOK's:
 
-1. Landlock, 2. a dangling /etc/resolv.conf, 3. an empty keyring -- all three
-   now shipped as `/AOK/fixes/arch`.
-4. **`/dev/fd` was missing**, so bash process substitution was ENOENT and
-   makepkg died at "Retrieving sources". Ours, and fixed (`59827f5ce`).
-5. The minirootfs strips headers from 137 packages, so anything that compiles
-   needs `pacman -S glibc linux-api-headers` first.
+Split out of #523's entry, which had this as one bug and blamed Go's TLS
+handshake timeout. It is **two** ingredients, neither of them a timeout, and
+one of them is ours and is not about networking at all.
 
-**What DOES reproduce, about one run in four:**
+**The symptom.** Against `aur.archlinux.org`, in a share of `yay` runs that
+varies with conditions -- 3 of 24 in one batch on the Mac, 7 of 8 in another, 6
+of 9 on the iPad. yay usually retries or falls back to git and carries on; it
+was fatal to 2 of those 24:
 
-    request failed: Get "https://aur.archlinux.org/rpc?...":
-        http2: client conn could not be established
+    request failed: Get "https://aur.archlinux.org/rpc?...": unexpected EOF
+    request failed: Get "https://aur.archlinux.org/rpc?...": http2: client conn could not be established
+    fatal: unable to access 'https://aur.archlinux.org/paru-bin.git/':
+        TLS connect error: error:0A000126:SSL routines::unexpected eof while reading
 
-yay recovers -- it falls back to git and carries on -- so it is not fatal, and
-it is not what was reported. But it is a real intermittent failure of Go's
-HTTP/2 client against a host that curl reaches every time, on both HTTP/2 and
-HTTP/1.1. Ruled out already: not git (3 of 3 clones standalone), not TLS
-generally (pacman syncs fine), not concurrency (9 simultaneous TLS operations
-all succeeded).
+All three are one event: the connection is closed without a `close_notify`.
+Go's message is not a timeout -- `http2errClientConnNotEstablished` comes from
+`awaitOpenSlotForStreamLocked` only when `cc.closed && cc.nextStreamID == 1`,
+i.e. the ClientConn was built (the handshake *succeeded*) and then closed
+before its first request.
 
-**Measured 2026-08-20, and it is a latency tail, not a protocol bug.** TLS
-handshake time to the same host, 15 samples each:
+#### Ingredient one: the AUR drops slow clients, and that is not ours
 
-    host  (macOS)   min 0.09  median 0.21  max  1.15
-    guest (AOK)     min 0.21  median 0.39  max 15.32
+Measured on the macOS host with **no emulator anywhere**, using a `net/http`
+client whose `DialTLSContext` completes the handshake and then sleeps before
+returning the connection:
 
-The median is about twice the host's -- unremarkable for emulation. The TAIL is
-13x worse, and 15.3s is past Go's default TLSHandshakeTimeout of 10s, which is
-exactly how "http2: client conn could not be established" arises. The same
-stall explains the OpenSSL "unexpected eof while reading" seen from git.
+| delay after handshake | result |
+|---|---|
+| 0s | 8 of 8 ok |
+| 1s | 8 of 8 ok |
+| 1.5s | 6 of 6 ok |
+| **2s** | **0 of 8 ok**, and 0 of 6 on a re-run from a different network |
 
-**The CPU-count lie is not the cause**, though it was the obvious suspect:
-AOK reports 4 of the host's 10 logical CPUs, and Go sizes GOMAXPROCS from it.
-A Go HTTP/2 probe run at GOMAXPROCS 1, 4 and 8 (20 requests each) failed once
-in 60, at GOMAXPROCS=8, with a handshake timeout -- the same tail, not a
-scheduling effect.
+So the AUR end closes a connection whose first request has not arrived -- the
+origin or a middlebox, indistinguishable from here -- with the threshold
+between 1.5 and 2 seconds. Both runs were on the plain macOS host and the
+second was on a different uplink, so this is the endpoint, not a local network.
+`github.com` does not do it: the same guest client that fails against the AUR
+got 24 of 24 there.
 
-**Next step.** Find what stalls a socket for seconds when the median is
-sub-second. Nothing in the handshake is compute-heavy, so this is a wait that
-is not being woken promptly rather than work that is slow -- which puts it in
-the same neighbourhood as the poll/quiesce machinery. `curl` on its own shows
-the tail too, so it reproduces without Go, without yay and without the AUR:
-any repeated HTTPS handshake will do.
+#### Ingredient two: a fresh Go process stalls for seconds, and that IS ours
 
----
+Go builds the system CA pool lazily, on its first certificate verification --
+which happens **inside** the TLS handshake. In the guest, `x509.SystemCertPool()`
+in a fresh process:
+
+    GOMAXPROCS=1     0.516 0.517 0.528 0.530 0.537
+    GOMAXPROCS=4     0.572 0.576 0.619 6.729 7.177     <-- bimodal
+
+**No network is involved in that measurement at all** -- the whole probe is
+`x509.SystemCertPool()` with a stopwatch round it. The stall is a function of
+GOMAXPROCS, and AOK reports 4 CPUs:
+
+| GOMAXPROCS | n | median | max | runs >= 2s |
+|---|---|---|---|---|
+| 1 | 20 | 0.538 | 0.598 | 0 |
+| 2 | 20 | 0.537 | 0.577 | 0 |
+| 4 (the default here) | 20 | 0.581 | 12.805 | **4 (20%)** |
+| 8 | 20 | 0.798 | 37.315 | **9 (45%)** |
+
+The slow samples quantize: 6.67, 6.69, 6.85, 12.80 at 4; and 2.12, 6.77, 7.10,
+12.80, 12.85, 12.92, 18.95, 31.17, 37.31 at 8. **A step of about 6.2s**, which
+is the same quantum the network failures showed (7.4, 13.5, 19.9, 25.8).
+
+**It is not the certificates, the parsing, or the files -- it is the heap.**
+Three probes in one guest, same window, 12 runs each at the default GOMAXPROCS:
+
+| probe | what it does | min | median | max |
+|---|---|---|---|---|
+| `cpu` | pure arithmetic in GOMAXPROCS goroutines | 0.350 | 1.468 | 1.520 |
+| `files` | open+read all 363 cert files, no parsing | 0.045 | 0.050 | 0.079 |
+| **`alloc`** | **4000 x 64 KB of Go heap, nothing else** | **0.205** | **12.431** | **18.805** |
+
+Compute is steady. File I/O is fast and steady. **Growing the Go heap by 256 MB
+takes 0.2s at best and twelve seconds typically.** That is the stall, and
+`SystemCertPool` only meets it because parsing 121 certificates is what makes a
+fresh Go process grow its heap.
+
+The same GOMAXPROCS cliff, on the allocation alone (10 runs each, 256 MB):
+
+| GOMAXPROCS | min | median | max | runs >= 2s |
+|---|---|---|---|---|
+| 1 | 0.178 | **0.201** | 0.269 | 0 |
+| 2 | 0.209 | **0.247** | 0.331 | 0 |
+| 4 (the default -- AOK reports 4 CPUs) | 0.203 | **6.516** | 24.935 | 6 |
+| 8 | 0.247 | **7.219** | 38.651 | 7 |
+
+A hard cliff between 2 and 4, and a 30x regression in the median. The best case
+never moves, so nothing is *slow*: something is *waiting*.
+
+That allocation is therefore the whole reproducer -- no files, no sockets, no
+TLS, no AUR, and about a minute to run:
+
+```go
+package main
+
+import ("fmt"; "runtime"; "time")
+
+func main() {
+    t0 := time.Now()
+    var keep [][]byte
+    for i := 0; i < 4000; i++ {
+        keep = append(keep, make([]byte, 64*1024))
+    }
+    _ = keep
+    fmt.Printf("gomaxprocs=%d  256MB heap in %.3fs\n",
+        runtime.GOMAXPROCS(0), time.Since(t0).Seconds())
+}
+```
+
+```sh
+for g in 1 2 4 8; do for i in $(seq 10); do GOMAXPROCS=$g ./alloc; done; done
+```
+
+**Two obvious explanations are already refuted.** `mem_write_lock_with_pokes`
+(kernel/mmap.c:58) spins 256 `sched_yield()` then 768 `nanosleep(&lock_pause)`
+before falling back to a blocking `write_lock`, and `lock_pause` is 2000 ns
+(debug.h:6) -- but 768 of those measure **4 milliseconds** on this host, not six
+seconds, so the nap budget alone cannot be it. `futex_wait_masked`
+(kernel/futex.c:360) re-checks on a 50 ms slice, so a lost futex wake caps out
+at 50 ms. `ISH_QUIESCE_STATS` dumps its counters from main.c:138 at exit, but
+printed nothing on these runs -- worth wiring up properly, since those counters
+are exactly the ones this needs.
+
+**Next step** is the heap-growth path itself: `mem_write_lock_with_pokes` and
+the mmap growth/eviction machinery in kernel/mmap.c and emu/memory.c, with the
+allocation probe above as the metric and GOMAXPROCS as the knob. This is bigger than
+the AUR -- every Go program under AOK pays it at startup -- and it belongs with
+the lock-contention entries already in this file.
+
+An `httptrace` of a failing request confirms where the stall lands in the
+network case, entirely between `tls0` and `tls1`:
+
+    FAIL 19.252 [dns0=0.005 dns1=0.029 conn0=0.030 conn1=0.060 tls0=0.061 tls1=19.246 gotconn=19.250]
+
+...and `ISH_TRACE_POLL_WAIT` shows the guest doing **no polling at all** during
+each 6.1s gap. It is not a missed wakeup; it is work not finishing.
+
+#### What follows, and what each control says
+
+| control | result |
+|---|---|
+| Go, one long-lived process, 8 requests each | 23 of 24 ok -- the pool is built once |
+| Go, fresh process per request | 16 of 24 ok |
+| `curl` (single-threaded, one bundled CA file) | 24 of 24 ok |
+| Go, fresh process, `github.com` | 24 of 24 ok |
+| `GOMAXPROCS=1`, fresh process, AUR | **0 failures of 18** |
+| default, fresh process, AUR | 6 failures of 18 |
+| `GODEBUG=http2client=0` (HTTP/1.1) | 7 failures of 18 -- not an HTTP/2 bug |
+| Go on the macOS host, same window, paced | 0 of 60 (guest: 18 of 60) |
+| macOS host TLS handshake, 150 samples | p50 0.100s, max 0.417s, no failures |
+| `yay -S pandoc-bin`, default vs `GOMAXPROCS=1`, alternating | the error in **7 of 8** runs vs **0 of 8** |
+
+`GOMAXPROCS=1` is therefore a real workaround for anyone hitting this today,
+and it is the one offered on the issue.
+
+**A second divergence found on the way, and it is a real bug of its own.**
+AOK's `epoll_ctl(EPOLL_CTL_ADD)` **accepts regular files and directories**.
+Linux fails both with `EPERM` -- epoll_ctl(2) says so outright -- and Go's
+`internal/poll` relies on that failure to decide an fd is not pollable and to
+use ordinary blocking reads for it. Measured in a guest with a three-line
+`epoll_ctl(EPOLL_CTL_ADD)` on `/etc/hosts` and on `/etc`:
+
+    regular file epoll_ctl(ADD) -> 0 errno=0 (accepted)   [linux: -1 EPERM]
+    directory    epoll_ctl(ADD) -> 0 errno=0 (accepted)   [linux: -1 EPERM]
+
+The poll trace confirms the consequence: Go registers
+`/etc/ca-certificates/extracted/cadir/*.pem` in its epoll **with EPOLLET**,
+which cannot happen on Linux. Whether that is what stalls is not established --
+that is what the next step above is for -- but the divergence is wrong on its
+own terms, and the fix is small: reject fds whose `->poll` cannot ever change
+state, the way Linux does.
+
+**Two traps this cost most of a day.** macOS's system `curl` is LibreSSL and
+never reports `unexpected eof` at all, so comparing it against an OpenSSL guest
+manufactures a guest-only failure (22 of 200 against the host's 3, which
+inverted to 0 of 120 against 2 once both used OpenSSL). And a guest loop is
+slower than a host loop, so an unpaced pair grades different minutes of the
+network -- pace both, stamp every sample, and intersect the windows.
+
+#### The background rate, which really is the network
+
+Separately, and much smaller: with `curl` on both sides AOK is
+indistinguishable from a native client. Paced, DNS pinned, matched OpenSSL 3.x,
+same window, 320 requests each -- macOS 4 failures, camd (Debian 13, same
+Wi-Fi) 6, the AOK guest 8. Against a TLS/h2 server on the same machine the
+guest was 100 of 100, slowest 0.14s. DNS is equal too: paired `dig` at the same
+server gave 3 timeouts in 60 on both host and guest via the LAN resolver, and
+13 vs 26 in 100 via 8.8.8.8 -- a lossy uplink, not AOK. The previous entry's
+"guest max 15.32s" was a guest resolving through 8.8.8.8 while macOS used a LAN
+resolver, with musl's retry turning one lost packet into a 5-10s stall.
 
 ### FIXED: a checkpoint save before the guest booted crashed on a NULL list head
 
