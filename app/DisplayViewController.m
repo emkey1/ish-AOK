@@ -2,6 +2,7 @@
 #import "AboutViewController.h"
 #import "DisplayRFBClient.h"
 #import "DisplayRFBView.h"
+#import "ExternalDisplaySceneDelegate.h"
 #import "Terminal.h"
 #import "AppDelegate.h"
 #import "GuestFileBridge.h"
@@ -661,6 +662,10 @@ typedef NS_ENUM(NSInteger, DisplayConnectionState) {
         _startedOnce = YES;
         [self startGuestSession];
     }
+    // The standalone display is a scene's own; inside a Workspace window the
+    // Workspace asks iOS 27 for the external display instead.
+    if (self.standaloneMode)
+        ISHRegisterExternalDisplayAccessory(self);
 }
 
 // Standalone fullscreen: the desktop extends under the home indicator (see

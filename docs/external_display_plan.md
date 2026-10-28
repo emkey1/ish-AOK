@@ -235,6 +235,77 @@ open the idle message shows; unplugging gives everything back.
 Stage Manager) is untested. iPads without external-display Stage Manager
 (the A10X, say) get only the letterboxed mirror until it is.
 
+## iOS 27: the scene accessory (564)
+
+**563 did not work on iOS 27.** First hardware report, 2026-10-28 (#540): an
+iPhone 15 on iOS 27.0, with a USB-C monitor and with AirPlay to an Apple TV
+and to a Mac, got only the mirror.
+
+**Cause: iOS 27 no longer reads the plist role for an app built with its
+SDK.** Such an app gets the non-interactive external scene only through a
+*scene accessory*, `[UISceneAccessory
+externalNonInteractiveSceneAccessoryWithConfiguration:]` registered with
+`-[UIViewController registerSceneAccessory:]` (UISceneAccessory.h, new in the
+27 SDK). With nothing registered, SpringBoard registers the app on its new
+"companion scenes" path and creates no scene: a mirror on hardware, a black
+external screen in the simulator. 563 was built with Xcode 27.1. An app built
+with an older SDK, or any app on iOS 26 and earlier, still gets the scene
+from the plist role.
+
+The evidence, from a probe app (one green application scene, and a red
+external-display scene that logs its connect), on the simulator's external
+display:
+
+| probe built with | runs on | role in | accessory | external scene |
+|---|---|---|---|---|
+| iOS 26.5 SDK | iOS 26.5 | `~iphone` or shared manifest | — | yes |
+| iOS 26.5 SDK | iOS 27.0 | `~iphone` or shared manifest | — | yes |
+| iOS 27.1 SDK | iOS 27.0 | `~iphone` or shared manifest | — | **no** |
+| iOS 27.1 SDK | iOS 27.0 | `~iphone`, shared, or none | on the root controller | yes |
+| iOS 27.1 SDK | iOS 26.5 | `~iphone` | — | yes |
+
+AOK 563 itself behaved like row three: SpringBoard logged "Registering
+presentation NonInteractive" for it and never "Created new non interactive
+scene", which it logs for the probe in rows one and two. The `~iphone` key
+was not the problem: it works on both iOS versions.
+
+How a registration behaves, measured the same way:
+
+- **It counts only while its controller is in a visible window.** On a
+  controller in a hidden helper window it reports `available` and no scene
+  ever connects.
+- **A full-screen presentation over the registering controller disconnects
+  the scene**, and dismissing it connects a new one; the registration needs no
+  renewing. A page sheet over it leaves the scene alone.
+- **Two registrations in one hierarchy give one scene.**
+
+**The fix, 564.** `ISHRegisterExternalDisplayAccessory()` (ExternalDisplaySceneDelegate)
+registers the accessory with the configuration the plist names, once per
+controller, on iPhone and iOS 27 only. It is called from `viewDidAppear:` by a
+terminal that is a scene's own (no parent), the standalone Wayland display,
+and the Workspace -- whose hosted terminals do not register. The plist role
+stays for iOS 15-26. ExternalDisplaySceneDelegate is unchanged and still picks
+what to show. One difference from the plist path: a root that is none of those
+-- the filesystem picker, diagnostics, recovery -- registers nothing, so iOS 27
+mirrors while it is up rather than showing the idle message.
+
+**Verified in the simulator (iOS 27.0, 24A434), 2026-10-28:** a terminal
+relocates to a 1920x1080 external display and the phone shows the placeholder;
+`stty size` goes from 24 80 to 71 256 once hterm lays out; launched into the
+Workspace with no terminal window, the display shows the idle message. **Not
+exercised:** typing into the relocated terminal (no input access to the
+simulator in that run), the Workspace handing over a terminal window, the
+Wayland mirror, and real hardware.
+
+**Testing in the simulator** needs no Simulator.app menu:
+`xcrun simctl io <udid> screenConfig --display external power on`, then
+`... geometry 1920x1080`, and `xcrun simctl io <udid> screenshot
+--display=external out.png`. The simulator never mirrors, so a black
+external screen means no app scene -- which is all the reporter's simulator
+attempt with upstream iSH could show. MBP5's iOS 27 runtimes are betas
+(24A5370g, 24A5380i) whose external display never connects, even for the
+probe in row one; use the release runtime (24A434).
+
 ## History: implemented, then pulled from release 546
 
 The implementation (`57380ba6`, `cc0b5b21`) was reverted before tagging 546. It

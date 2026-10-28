@@ -3,6 +3,7 @@
 //  iSH
 //
 
+#import <objc/runtime.h>
 #import "ExternalDisplaySceneDelegate.h"
 #import "Diagnostics.h"
 #import "NSObject+SaneKVO.h"
@@ -14,6 +15,36 @@
 #import "WorkspaceViewController.h"
 
 NSString *const ISHExternalDisplayContentDidBecomeAvailableNotification = @"ISHExternalDisplayContentDidBecomeAvailable";
+
+static const void *kISHExternalDisplayAccessoryRegistrationKey = &kISHExternalDisplayAccessoryRegistrationKey;
+
+void ISHRegisterExternalDisplayAccessory(UIViewController *viewController) {
+#if __IPHONE_OS_VERSION_MAX_ALLOWED >= 270000
+    if (@available(iOS 27.0, *)) {
+        // iPhone only, as the plist role is (UIApplicationSceneManifest~iphone):
+        // an iPad keeps plain Stage Manager on a monitor.
+        if (UIDevice.currentDevice.userInterfaceIdiom != UIUserInterfaceIdiomPhone)
+            return;
+        // Once per controller. The registration outlives a spell out of the
+        // window -- a Workspace swapped out for the terminal and back, a
+        // full-screen presentation dismissed -- and counts again when it returns.
+        if (objc_getAssociatedObject(viewController, kISHExternalDisplayAccessoryRegistrationKey) != nil)
+            return;
+        // The configuration the plist role names, so both paths land here.
+        UISceneConfiguration *configuration =
+            [UISceneConfiguration configurationWithName:@"External Display"
+                                            sessionRole:UIWindowSceneSessionRoleExternalDisplayNonInteractive];
+        configuration.sceneClass = UIWindowScene.class;
+        configuration.delegateClass = ExternalDisplaySceneDelegate.class;
+        UISceneAccessory *accessory = [UISceneAccessory externalNonInteractiveSceneAccessoryWithConfiguration:configuration];
+        UISceneAccessoryRegistration *registration = [viewController registerSceneAccessory:accessory];
+        objc_setAssociatedObject(viewController, kISHExternalDisplayAccessoryRegistrationKey,
+                                 registration, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        [ISHDiagnosticsStore recordBreadcrumb:@"externalDisplay.registeredAccessory"
+                                      details:@{@"controller": NSStringFromClass(viewController.class)}];
+    }
+#endif
+}
 
 // Hosts the relocated webView and reports when that content comes or goes. The
 // webView can leave without anyone telling us -- closing a Workspace terminal

@@ -26,6 +26,7 @@ static os_log_t ISHSuspendLog(void) {
 #import "AboutViewController.h"
 #import "CurrentRoot.h"
 #import "Diagnostics.h"
+#import "ExternalDisplaySceneDelegate.h"
 #import "Roots.h"
 #import "NSObject+SaneKVO.h"
 #import "UIViewController+Extras.h"
@@ -1856,6 +1857,10 @@ static const void *ISHToolbarCustomKeySendsKey = &ISHToolbarCustomKeySendsKey;
         self.awaitingSessionChoice = NO;
         [self _presentSessionResumePicker];
     }
+    // A scene's own terminal asks iOS 27 for the external display; one hosted in
+    // a Workspace window leaves that to the Workspace.
+    if (self.parentViewController == nil)
+        ISHRegisterExternalDisplayAccessory(self);
     // Re-sync against the live hardware state: a keyboard connect/disconnect notification
     // could have been missed while this view wasn't visible (e.g. it was posted to a
     // different scene, or arrived during app launch before observers were registered).

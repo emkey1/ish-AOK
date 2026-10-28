@@ -6,10 +6,12 @@ screen at the big screen's shape, while the phone keeps the keyboard. Without
 this, every iOS app gets the same thing: a letterboxed copy of the phone's
 screen.
 
-**New in 563, iPhone only, and not yet tried on real hardware.** It builds and
-runs in the simulator, but nobody had a phone and a display to hand when it
-shipped. If you try it, please say what you saw on
-[#540](https://github.com/emkey1/ish-AOK/issues/540) — working or not.
+**iPhone only. New in 563; on iOS 27 it works from 564.** On iOS 27, 563
+gave only the mirror: iOS 27 changed how an app asks for the second screen,
+and 563 asked the old way. 564 asks both ways. It is tested in the simulator
+on iOS 26.5 and 27.0, not yet on a real display. If you try it, please say
+what you saw on [#540](https://github.com/emkey1/ish-AOK/issues/540) —
+working or not.
 
 ## What goes where
 
@@ -52,6 +54,10 @@ feature (546) fought Stage Manager on an iPad and was taken out.
   use the phone, or a hardware keyboard paired with it.
 - **One thing at a time.** The display shows one terminal, or the Wayland
   Display, never both.
+- **On iOS 27, only a terminal, the Workspace or the Wayland Display takes the
+  screen.** While the app shows something else full screen — choosing a
+  filesystem, or diagnostics — the display goes back to the mirror. Sheets
+  such as Settings opened over a terminal leave it on the display.
 
 ## See also
 

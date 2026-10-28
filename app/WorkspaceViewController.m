@@ -6,6 +6,7 @@
 #import "AboutViewController.h"
 #import "AppDelegate.h"
 #import "Diagnostics.h"
+#import "ExternalDisplaySceneDelegate.h"
 #import "Roots.h"
 #import "SceneDelegate.h"
 #include "fs/devices.h"
@@ -6961,6 +6962,9 @@ static UIResponder *ISHWorkspaceFirstResponderAmongViewControllers(UIViewControl
 - (void)viewDidAppear:(BOOL)animated {
     [super viewDidAppear:animated];
     ISHWorkspaceActiveController = self;
+    // For whichever of its windows is frontmost (ExternalDisplaySceneDelegate
+    // picks); a terminal it hosts doesn't ask for itself.
+    ISHRegisterExternalDisplayAccessory(self);
     // Nothing focused yet: take the keyboard, so the Workspace's shortcuts work
     // before anything is tapped. A window that claims it later still does.
     if ([self workspaceFirstResponder] == nil)
