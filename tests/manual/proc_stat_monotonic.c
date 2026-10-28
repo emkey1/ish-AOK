@@ -37,11 +37,21 @@
  * flat while busy runs ahead would keep every field monotonic and still
  * report a CPU that did two seconds of work per second.
  *
+ * And the cpuN lines' busy time has to add up to the "cpu" line's, as on
+ * Linux, where the "cpu" line is their sum. AOK's slots are only the CPUs in
+ * the affinity mask, and a slot's time past its capacity was discarded: on a
+ * 6-core iPhone with 4 in the mask, `stress-ng --cpu 6` read 86% on the "cpu"
+ * line, 100/100/85/100 on cpu0-cpu3 and 0% on cpu4 and cpu5, as though the
+ * performance cores were never used. The third phase runs one spinner more
+ * than the mask names, which puts two in one slot and asks for a CPU outside
+ * the mask; AOK now moves a full slot's overflow onto CPUs with room.
+ *
  * Also passes on real Linux (counters there are monotonic by construction).
  */
 #define _GNU_SOURCE
 
 #include <ctype.h>
+#include <sched.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -114,6 +124,11 @@ static unsigned long long line_total(const struct cpu_line *l) {
     return sum;
 }
 
+// Everything but idle and iowait.
+static unsigned long long line_busy(const struct cpu_line *l) {
+    return line_total(l) - l->f[3] - l->f[4];
+}
+
 static double now_seconds(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -178,8 +193,9 @@ static const char *line_name(int idx, char *buf, size_t size) {
 
 // Read /proc/stat as fast as it will go for `seconds`, failing on any backward
 // step in the checked fields, then check each line's total against the time
-// that passed.
-static void watch_counters(const char *phase, int seconds, int ncpu) {
+// that passed, and with check_sum the cpuN lines' busy time against the "cpu"
+// line's.
+static void watch_counters(const char *phase, int seconds, int ncpu, int check_sum) {
     static struct cpu_line first[AGG + 1], prev[AGG + 1], cur[AGG + 1];
     if (read_cpu_lines(first) <= 0) {
         failf("read /proc/stat", 0, 0, 0, 1, 0, 0);
@@ -245,6 +261,57 @@ static void watch_counters(const char *phase, int seconds, int ncpu) {
             failf(label, (uint64_t) (ratio * 100), 0, 0, 100, 0, 0);
         }
     }
+
+    if (!check_sum || !first[AGG].present || !prev[AGG].present)
+        return;
+    double sum = 0;
+    for (int i = 0; i < AGG; i++)
+        if (first[i].present && prev[i].present)
+            sum += (double) line_busy(&prev[i]) - (double) line_busy(&first[i]);
+    double agg = (double) line_busy(&prev[AGG]) - (double) line_busy(&first[AGG]);
+    test_logf("  %s: cpuN lines busy %.0f ticks, cpu line busy %.0f\n", phase, sum, agg);
+    // The spinners keep at least one CPU busy, so the ratio means something.
+    // AOK's "cpu" line is its whole process, host threads that are no guest
+    // task included, so this is not exact there; on Linux it is.
+    if (agg < expect_per_cpu / 2) {
+        test_logf("  %s: under one CPU busy; the sum is not compared\n", phase);
+        return;
+    }
+    double ratio = sum / agg;
+    if (ratio < 0.9 || ratio > 1.1) {
+        char label[96];
+        snprintf(label, sizeof(label), "%s: cpuN lines' busy time is not the cpu line's (x100)",
+                 phase);
+        failf(label, (uint64_t) (ratio * 100), 0, 0, 100, 0, 0);
+    }
+}
+
+// How many CPUs this process may run on: what nproc says.
+static int allowed_cpus(void) {
+    cpu_set_t set;
+    CPU_ZERO(&set);
+    if (sched_getaffinity(0, sizeof(set), &set) != 0)
+        return -1;
+    return CPU_COUNT(&set);
+}
+
+static int run_spinners(const char *phase, int spinners, int ncpu, int check_sum) {
+    if (spinners > MAX_CPUS)
+        spinners = MAX_CPUS;
+    pid_t spin[MAX_CPUS];
+    for (int i = 0; i < spinners; i++) {
+        spin[i] = fork();
+        if (spin[i] == 0)
+            spinner_loop(); // never returns
+        if (spin[i] < 0) {
+            perror("fork spinner");
+            stop_children(spin, i);
+            return -1;
+        }
+    }
+    watch_counters(phase, SPIN_SECONDS, ncpu, check_sum);
+    stop_children(spin, spinners);
+    return 0;
 }
 
 int main(int argc, char **argv) {
@@ -271,28 +338,26 @@ int main(int argc, char **argv) {
             return 2;
         }
     }
-    watch_counters("churn", CHURN_SECONDS, ncpu);
+    watch_counters("churn", CHURN_SECONDS, ncpu, 0);
     stop_children(churners, CHURNERS);
 
     // Phase 2: more busy loops than CPUs. At least one slot must then hold two
     // of them, and the whole set can use more cores than the kernel reports --
     // busy time outrunning the clock, which is where a derived idle falls.
-    int spinners = ncpu + 2;
-    if (spinners > MAX_CPUS)
-        spinners = MAX_CPUS;
-    pid_t spin[MAX_CPUS];
-    for (int i = 0; i < spinners; i++) {
-        spin[i] = fork();
-        if (spin[i] == 0)
-            spinner_loop(); // never returns
-        if (spin[i] < 0) {
-            perror("fork spinner");
-            stop_children(spin, i);
-            return 2;
-        }
+    if (run_spinners("saturate", ncpu + 2, ncpu, 1) != 0)
+        return 2;
+
+    // Phase 3: one busy loop more than the affinity mask names -- two share a
+    // slot, and the time that slot cannot hold has to show on a CPU outside
+    // the mask, when there is one, or on a slot with room.
+    int allowed = allowed_cpus();
+    if (allowed <= 0) {
+        perror("sched_getaffinity");
+        return 2;
     }
-    watch_counters("saturate", SPIN_SECONDS, ncpu);
-    stop_children(spin, spinners);
+    test_logf("%d CPUs online, %d in the affinity mask\n", ncpu, allowed);
+    if (run_spinners("spread", allowed + 1, ncpu, 1) != 0)
+        return 2;
 
     return finish_suite("proc_stat_monotonic");
 }

@@ -1208,6 +1208,26 @@ static void cpu_time_ledger_update(struct cpu_time_ledger *l, uint64_t capacity,
     l->idle = idle;
 }
 
+// How much more busy time cpu_time_ledger_update would take with these totals
+// before it cut any: 0 for a full ledger. The slack counts: sampled thread
+// time arrives in bursts, and a ledger that takes overflow needs the same
+// room to run ahead as one whose own tasks burst, or a burst read a moment
+// after the last is discarded.
+static uint64_t cpu_time_ledger_free(const struct cpu_time_ledger *l, uint64_t capacity,
+                                     uint64_t slack, uint64_t raw_user, uint64_t raw_system) {
+    static const struct cpu_time_ledger fresh;
+    if (capacity < l->capacity)
+        l = &fresh;   // the update will start it over
+    uint64_t user = raw_user > l->dropped_user ? raw_user - l->dropped_user : 0;
+    uint64_t system = raw_system > l->dropped_system ? raw_system - l->dropped_system : 0;
+    if (user < l->user)
+        user = l->user;
+    if (system < l->system)
+        system = l->system;
+    uint64_t limit = (capacity > l->idle ? capacity - l->idle : 0) + slack;
+    return limit > user + system ? limit - user - system : 0;
+}
+
 static void cpu_time_ledger_ticks(const struct cpu_time_ledger *l, struct cpu_usage *out) {
     out->user_ticks = l->user / NSEC_PER_TICK;
     out->system_ticks = l->system / NSEC_PER_TICK;
@@ -1240,10 +1260,19 @@ void guest_cpu_usage_total(uint64_t user_ns, uint64_t system_ns, struct cpu_usag
 // banks a task's final time so short-lived processes (compilers!) stay
 // visible in the counters. This replaces the old even split of the process
 // total, which made every cpuN line identical and diluted a busy task's usage
-// by 1/ncpu. The slot sums won't exactly match the aggregate "cpu" line
-// (which uses process-wide accounting including non-task host threads), and a
-// slot holding several busy tasks can saturate at 100%; both are acceptable
-// for what these lines are for (top/htop-style meters).
+// by 1/ncpu.
+//
+// The slots are the affinity mask's CPUs, so the CPUs outside it (iOS keeps a
+// third back for the UI) are charged nothing directly. But the mask is only
+// advice: the host runs every guest thread somewhere, and a guest that runs
+// more busy threads than the mask names really does keep more cores busy. So
+// what a slot's tasks run beyond its capacity -- two busy tasks in one slot,
+// or more busy tasks than slots -- is moved onto slots with room, the mask's
+// first and then the rest, and only what no slot has room for is discarded.
+// `stress-ng --cpu 6` on a 6-core iPhone with 4 in the mask showed cpu4 and
+// cpu5 at 0% while the "cpu" line said 86%; the cpuN lines now add up to it.
+// The sums still won't match exactly: the "cpu" line is the whole process,
+// non-task host threads included.
 
 #define CPU_SLOTS_MAX 64
 // Nanoseconds, like everything the ledgers above work in. They were ticks, and
@@ -1253,6 +1282,10 @@ void guest_cpu_usage_total(uint64_t user_ns, uint64_t system_ns, struct cpu_usag
 static _Atomic uint64_t cpu_slot_dead_user[CPU_SLOTS_MAX];
 static _Atomic uint64_t cpu_slot_dead_system[CPU_SLOTS_MAX];
 static struct cpu_time_ledger cpu_slot_ledger[CPU_SLOTS_MAX];   // under cpu_slots_lock
+// The overflow each slot has received from slots that were full; it only
+// grows, until a new boot starts the ledgers over. Under cpu_slots_lock.
+static uint64_t cpu_slot_spill_user[CPU_SLOTS_MAX], cpu_slot_spill_system[CPU_SLOTS_MAX];
+static uint64_t cpu_slot_spill_capacity;
 
 // Serializes banking against the /proc/stat reader. Without this, a task
 // exiting mid-read could be counted twice in one snapshot: sampled live
@@ -1373,16 +1406,68 @@ int get_emulated_per_cpu_usage(struct cpu_usage **cpus_usage) {
     // did not use was idle. Read after the walk, so it covers every sample the
     // walk took. The ledgers keep each field from ever running backward.
     uint64_t capacity = guest_uptime_ns();
+    int nslots = ncpu < CPU_SLOTS_MAX ? ncpu : CPU_SLOTS_MAX;
+    if (capacity < cpu_slot_spill_capacity) {
+        // A new boot: the ledgers start over, and what they received with them.
+        memset(cpu_slot_spill_user, 0, sizeof(cpu_slot_spill_user));
+        memset(cpu_slot_spill_system, 0, sizeof(cpu_slot_spill_system));
+    }
+    cpu_slot_spill_capacity = capacity;
+
+    // The full slots first: what their ledgers cut is the overflow.
+    uint64_t free_ns[CPU_SLOTS_MAX] = {0};
+    uint64_t over_user = 0, over_system = 0;
+    for (int i = 0; i < nslots; i++) {
+        busy_user[i] += atomic_load(&cpu_slot_dead_user[i]) + cpu_slot_spill_user[i];
+        busy_system[i] += atomic_load(&cpu_slot_dead_system[i]) + cpu_slot_spill_system[i];
+        struct cpu_time_ledger *l = &cpu_slot_ledger[i];
+        free_ns[i] = cpu_time_ledger_free(l, capacity, CPU_TIME_SLACK_NS,
+                                          busy_user[i], busy_system[i]);
+        if (free_ns[i] != 0)
+            continue;
+        uint64_t dropped_user = l->dropped_user, dropped_system = l->dropped_system;
+        if (capacity < l->capacity)
+            dropped_user = dropped_system = 0;   // the update starts it over
+        cpu_time_ledger_update(l, capacity, CPU_TIME_SLACK_NS, busy_user[i], busy_system[i]);
+        over_user += l->dropped_user - dropped_user;
+        over_system += l->dropped_system - dropped_system;
+    }
+    // Then the slots with room, lowest first: the mask's CPUs are 0..N-1, so
+    // the ones outside it take only what the mask's could not.
+    for (int i = 0; i < nslots; i++) {
+        if (free_ns[i] == 0)
+            continue;
+        uint64_t over = over_user + over_system;
+        if (over != 0) {
+            uint64_t take = over < free_ns[i] ? over : free_ns[i];
+            uint64_t take_user = (uint64_t) ((double) take * ((double) over_user / (double) over));
+            if (take_user > over_user)
+                take_user = over_user;
+            if (take_user > take)
+                take_user = take;
+            uint64_t take_system = take - take_user;
+            if (take_system > over_system) {
+                take_system = over_system;
+                take_user = take - take_system;
+            }
+            over_user -= take_user;
+            over_system -= take_system;
+            cpu_slot_spill_user[i] += take_user;
+            cpu_slot_spill_system[i] += take_system;
+            busy_user[i] += take_user;
+            busy_system[i] += take_system;
+        }
+        cpu_time_ledger_update(&cpu_slot_ledger[i], capacity, CPU_TIME_SLACK_NS,
+                               busy_user[i], busy_system[i]);
+    }
+    // What is left found no slot with room: discarded, as the ledgers do.
     for (int i = 0; i < ncpu; i++) {
         if (i >= CPU_SLOTS_MAX) {
-            // task_cpu_slot never charges a task here: idle all along.
+            // task_cpu_slot never charges a task here, and no spill reaches it:
+            // idle all along.
             cpus[i].idle_ticks = capacity / NSEC_PER_TICK;
             continue;
         }
-        busy_user[i] += atomic_load(&cpu_slot_dead_user[i]);
-        busy_system[i] += atomic_load(&cpu_slot_dead_system[i]);
-        cpu_time_ledger_update(&cpu_slot_ledger[i], capacity, CPU_TIME_SLACK_NS,
-                               busy_user[i], busy_system[i]);
         cpu_time_ledger_ticks(&cpu_slot_ledger[i], &cpus[i]);
     }
     unlock(&cpu_slots_lock);

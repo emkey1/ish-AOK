@@ -23,7 +23,11 @@ still online: `/proc/cpuinfo`, `/proc/stat` and `/sys/devices/system/cpu` list
 all of them, and the affinity mask and `Cpus_allowed` name the ones a program
 may run on, the way Linux looks under a cpuset or `taskset` (so glibc's
 `sysconf(_SC_NPROCESSORS_ONLN)` counts every core, as it does there). On a
-9-core M4 iPad that is 9 CPUs listed and `nproc` 6. The standalone CLI on Apple silicon does **not** do
+9-core M4 iPad that is 9 CPUs listed and `nproc` 6. The mask is advice, not a
+fence: a program that starts more busy threads than `nproc` (`stress-ng --cpu
+6` on a 6-core iPhone) really does use the reserved cores, and the per-core
+meters in `top`, `htop` and `btop` show that time on the CPUs past `nproc`.
+Within `nproc` those CPUs read idle. The standalone CLI on Apple silicon does **not** do
 that — with no override it runs a fixed 4 emulated CPUs regardless of the host's
 core count. Set `ISH_GUEST_CPU_COUNT` to override either:
 
