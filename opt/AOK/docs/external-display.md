@@ -8,8 +8,9 @@ screen.
 
 **iPhone only. New in 563; on iOS 27 it works from 564.** On iOS 27, 563
 gave only the mirror: iOS 27 changed how an app asks for the second screen,
-and 563 asked the old way. 564 asks both ways. It is tested in the simulator
-on iOS 26.5 and 27.0, not yet on a real display. If you try it, please say
+and 563 asked the old way. 564 asks both ways, and a Workspace terminal
+window now reaches the display too (in 563 it never did). It is tested in the
+simulator on iOS 27.0, not yet on a real display. If you try it, please say
 what you saw on [#540](https://github.com/emkey1/ish-AOK/issues/540) —
 working or not.
 
@@ -21,8 +22,9 @@ turn on.
 - **A terminal.** Its text is drawn on the external screen, sized to fill it.
   The phone shows a placeholder and keeps the keyboard, the keyboard bar and
   the touch input, so you type on the phone and read on the display.
-- **The Workspace.** The frontmost terminal window is the one shown. Bring
-  another terminal window to the front and the display follows it.
+- **The Workspace.** The frontmost terminal window is the one shown, at the
+  tab it is showing. Bring another terminal window to the front, or pick
+  another tab, and the display follows.
 - **The Wayland Display.** It is **mirrored**, not moved: the desktop draws on
   both screens, with the cursor, and the phone stays the touch surface — tap,
   drag and touchpad mode work as before. While the mirror exists the desktop is

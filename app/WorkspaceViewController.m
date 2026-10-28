@@ -3109,6 +3109,10 @@ static NSString *ISHTerminalTabTitleForRole(NSString *role, Terminal *terminal) 
         self.windowView.titleLabel.text = _firstTabTitle;
     [self refreshStrip];
     [tab focusTerminal];
+    // A connected display shows the selected tab of the frontmost window, so a
+    // different tab takes it over.
+    [NSNotificationCenter.defaultCenter postNotificationName:ISHExternalDisplayContentDidBecomeAvailableNotification
+                                                      object:self.windowView];
 }
 
 - (void)closeTab:(TerminalViewController *)tab {
@@ -5233,7 +5237,12 @@ static NSString *ISHWorkspaceDesktopNamesSignature(NSArray<NSString *> *names) {
         ISHWorkspaceContainedWindowView *windowView = (ISHWorkspaceContainedWindowView *) view;
         if (windowView.hidden)
             continue;
-        UIViewController *contentViewController = [self contentViewControllerForDesktopWindow:windowView];
+        // A terminal window's content is its tabs controller, which can't drive
+        // a display; the terminal showing is the selected tab, kept as the
+        // window's hosted one. Asking the content alone skipped every terminal
+        // window and left the display idle.
+        UIViewController *contentViewController = windowView.hostedTerminalViewController
+            ?: [self contentViewControllerForDesktopWindow:windowView];
         if ([contentViewController conformsToProtocol:@protocol(ISHExternalDisplayContent)])
             return (id<ISHExternalDisplayContent>) contentViewController;
     }

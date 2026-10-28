@@ -289,13 +289,25 @@ what to show. One difference from the plist path: a root that is none of those
 -- the filesystem picker, diagnostics, recovery -- registers nothing, so iOS 27
 mirrors while it is up rather than showing the idle message.
 
-**Verified in the simulator (iOS 27.0, 24A434), 2026-10-28:** a terminal
-relocates to a 1920x1080 external display and the phone shows the placeholder;
-`stty size` goes from 24 80 to 71 256 once hterm lays out; launched into the
-Workspace with no terminal window, the display shows the idle message. **Not
-exercised:** typing into the relocated terminal (no input access to the
-simulator in that run), the Workspace handing over a terminal window, the
-Wayland mirror, and real hardware.
+**The Workspace never handed a terminal window over, on any iOS.** Its
+terminal windows hold a tabs controller (`ISHWorkspaceTerminalTabsViewController`,
+newer than 546), and `frontmostExternalDisplayContent` asked that controller,
+which cannot drive a display, so it skipped every terminal window and the
+display stayed idle. It now takes the window's `hostedTerminalViewController`
+(the selected tab), and selecting a tab posts
+`ISHExternalDisplayContentDidBecomeAvailableNotification` so the display
+follows a tab switch. Closing the tab on the display already recovered through
+the container's content-changed path.
+
+**Verified in the simulator (iOS 27.0, 24A434), 2026-10-28,** typing through
+the simulator's input: a terminal relocates to a 1920x1080 external display
+and the phone shows the placeholder; `stty size` goes from 24 80 to 71 256
+once hterm lays out; text typed on the phone runs and its output shows on the
+display; Settings as a sheet leaves the terminal there; switching to the
+Workspace gives the idle message, New Terminal hands its window over (typed
+into, 71 256), New Tab moves the display to the new tab and selecting tab 1
+moves it back; switching back to the shell puts that terminal on the display.
+**Not exercised:** the Wayland mirror, and real hardware.
 
 **Testing in the simulator** needs no Simulator.app menu:
 `xcrun simctl io <udid> screenConfig --display external power on`, then
