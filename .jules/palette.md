@@ -74,3 +74,7 @@
 ## 2026-10-25 - Add accessibility hint to file change revert button
 **Learning:** When using `initWithTitle:` to create a `UIBarButtonItem`, if the title itself does not clearly communicate the action's outcome (especially if the state changes dynamically, like 'Revert' vs 'Reverted'), an explicit `accessibilityHint` is critical for VoiceOver users to understand what the button will do.
 **Action:** Always provide an explicit `accessibilityHint` for context-specific buttons created with `initWithTitle:` where the resulting action isn't fully conveyed by the label alone.
+
+## 2024-11-20 - Hide breadcrumb chevrons from VoiceOver
+**Learning:** Decorative text separators like chevrons (›) between breadcrumb buttons are read aloud by VoiceOver, causing unnecessary clutter during navigation.
+**Action:** Always set `accessibilityElementsHidden = YES` on purely decorative separators in accessibility structures.
