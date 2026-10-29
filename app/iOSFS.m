@@ -367,7 +367,6 @@ static void iosfs_trace_symlink_event(const char *stage, struct mount *mount,
 static struct fd *iosfs_open(struct mount *mount, const char *path, int flags, int mode) {
     NSURL *url = url_for_path_in_mount(mount, path);
 
-    // FIXME: this does a redundant file coordination operation
     struct statbuf stats;
     int err = iosfs_stat(mount, path, &stats);
 
@@ -495,19 +494,9 @@ static int iosfs_fsetattr(struct fd *fd, struct attr attr) {
     return realfs.fsetattr(fd, attr);
 }
 
+// Not coordinated: see iosfs_stat.
 static ssize_t iosfs_readlink(struct mount *mount, const char *path, char *buf, size_t bufsize) {
-    NSFileCoordinator *coordinator = [[NSFileCoordinator alloc] initWithFilePresenter:nil];
-    NSURL *in_url = url_for_path_in_mount(mount, path);
-
-    NSError *error;
-    __block ssize_t size;
-
-    [coordinator coordinateReadingItemAtURL:in_url options:NSFileCoordinatorReadingWithoutChanges error:&error byAccessor:^(NSURL *url) {
-        size = realfs.readlink(mount, path_for_url_in_mount(mount, url, path), buf, bufsize);
-    }];
-
-    int posix_error = posixErrorFromNSError(error);
-    return posix_error ? posix_error : size;
+    return realfs.readlink(mount, path, buf, bufsize);
 }
 
 static int iosfs_getpath(struct fd *fd, char *buf) {
@@ -569,18 +558,18 @@ static int iosfs_rmdir(struct mount *mount, const char *path) {
     return combine_error(error, err);
 }
 
+// Lookups are not coordinated: stat here and readlink above go straight to
+// realfs, as on an "unsafe" mount. The path walk makes both calls for every
+// directory on the way to a file, so a coordinated lstat three directories
+// down cost about 7 coordinations of ~2.4 ms each. rclone checking 10,000
+// photos on an SSD took 3 minutes on an iPhone against 1-2 s on a Mac, and
+// `find` over 10,000 files in the simulator took 168 s, against 0.74 s
+// uncoordinated. Coordination makes another app save its pending changes
+// before we read the bytes; a stat or a link's text has no bytes to protect,
+// and readdir was never coordinated. Opening a file and changing anything
+// still are.
 static int iosfs_stat(struct mount *mount, const char *path, struct statbuf *fake_stat) {
-    NSFileCoordinator *coordinator = [[NSFileCoordinator alloc] initWithFilePresenter:nil];
-    NSURL *in_url = url_for_path_in_mount(mount, path);
-
-    NSError *error;
-    __block int err;
-
-    [coordinator coordinateReadingItemAtURL:in_url options:NSFileCoordinatorReadingWithoutChanges error:&error byAccessor:^(NSURL *url) {
-        err = realfs.stat(mount, path_for_url_in_mount(mount, url, path), fake_stat);
-    }];
-
-    return combine_error(error, err);
+    return realfs.stat(mount, path, fake_stat);
 }
 
 static int iosfs_fstat(struct fd *fd, struct statbuf *fake_stat) {
