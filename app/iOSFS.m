@@ -494,6 +494,12 @@ static int iosfs_fsetattr(struct fd *fd, struct attr attr) {
     return realfs.fsetattr(fd, attr);
 }
 
+// Without this, futimens() of a file falls back to resolving "." against it,
+// which is ENOTDIR. GNU touch sets its times that way, on the fd it opened.
+static int iosfs_futime(struct fd *fd, struct timespec atime, struct timespec mtime) {
+    return realfs.futime(fd, atime, mtime);
+}
+
 // Not coordinated: see iosfs_stat.
 static ssize_t iosfs_readlink(struct mount *mount, const char *path, char *buf, size_t bufsize) {
     return realfs.readlink(mount, path, buf, bufsize);
@@ -630,6 +636,7 @@ const struct fs_ops iosfs = {
     .fstat = iosfs_fstat,
     .setattr = iosfs_setattr,
     .fsetattr = iosfs_fsetattr,
+    .futime = iosfs_futime,
     .utime = iosfs_utime,
     .getpath = iosfs_getpath,
     .flock = iosfs_flock,
@@ -658,6 +665,7 @@ const struct fs_ops iosfs_unsafe = {
     .fstat = realfs_fstat,
     .setattr = realfs_setattr,
     .fsetattr = realfs_fsetattr,
+    .futime = realfs_futime,
     .utime = realfs_utime,
     .getpath = realfs_getpath,
     .flock = realfs_flock,
