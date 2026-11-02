@@ -2189,8 +2189,12 @@ static int tmpfs_readdir(struct fd *fd, struct dir_entry *entry) {
     // until we advance, so reading it here is safe.
     entry->inode = dirent->inode->stat.inode;
     entry->type = dir_entry_type_for_mode(dirent->inode->stat.mode);
-    strncpy(entry->name, dirent->name, sizeof(entry->name) - 1);
-    entry->name[sizeof(entry->name) - 1] = '\0';
+    size_t name_len = strlen(dirent->name);
+    if (name_len > sizeof(entry->name) - 1)
+        name_len = sizeof(entry->name) - 1;
+    memcpy(entry->name, dirent->name, name_len);
+    entry->name[name_len] = '\0';
+    memset(entry->name + name_len + 1, 0, sizeof(entry->name) - name_len - 1);
     res = 1;
 
     // Advance the cursor. dir_pos is retained, so it can't be freed here, but a
