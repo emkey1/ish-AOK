@@ -360,6 +360,7 @@ NSString *ISHShellQuoteArgument(NSString *argument) {
             chevron.text = @"›";
             chevron.textColor = UIColor.tertiaryLabelColor;
             chevron.font = [UIFont systemFontOfSize:15];
+            chevron.accessibilityElementsHidden = YES;
             [_breadcrumbStack addArrangedSubview:chevron];
         }
         BOOL isLast = (i == titles.count - 1);
