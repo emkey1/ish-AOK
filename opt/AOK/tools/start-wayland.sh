@@ -447,6 +447,30 @@ export XDG_RUNTIME_DIR="$WL_RUNTIME_BASE/$$"
 mkdir -p "$XDG_RUNTIME_DIR"
 chmod 700 "$XDG_RUNTIME_DIR"
 
+# Alpine builds xfce4-notifyd for X11 alone (no gtk-layer-shell; Devuan's has it).
+# Under Wayland it can only show "built without support for your windowing
+# system", in a dialog, each time the session or the panel's plugin starts it,
+# and a program sending a notification waits out D-Bus's 25 s timeout. labwc brings
+# Xwayland, so it runs there. The user's own files outrank the package's two D-Bus
+# services and its autostart entry, and an edited one is left alone. Written before
+# the bus starts, since it reads these directories then.
+notifyd_bin=/usr/lib/xfce4/notifyd/xfce4-notifyd
+if [ -x "$notifyd_bin" ] && ! grep -q libgtk-layer-shell "$notifyd_bin" 2>/dev/null; then
+    notifyd_exec="/usr/bin/env GDK_BACKEND=x11 $notifyd_bin"
+    notifyd_services="${XDG_DATA_HOME:-$HOME/.local/share}/dbus-1/services"
+    notifyd_autostart="${XDG_CONFIG_HOME:-$HOME/.config}/autostart"
+    mkdir -p "$notifyd_services" "$notifyd_autostart"
+    for notifyd_service in Notifications:org.freedesktop.Notifications Notifyd:org.xfce.Notifyd; do
+        notifyd_file="$notifyd_services/org.xfce.xfce4-notifyd.${notifyd_service%%:*}.service"
+        [ -e "$notifyd_file" ] || printf '[D-BUS Service]\nName=%s\nExec=%s\n' \
+            "${notifyd_service#*:}" "$notifyd_exec" > "$notifyd_file"
+    done
+    if [ -r /etc/xdg/autostart/xfce4-notifyd.desktop ] && [ ! -e "$notifyd_autostart/xfce4-notifyd.desktop" ]; then
+        sed "s|^Exec=.*|Exec=$notifyd_exec|" /etc/xdg/autostart/xfce4-notifyd.desktop \
+            > "$notifyd_autostart/xfce4-notifyd.desktop"
+    fi
+fi
+
 # A session D-Bus for this desktop. Nothing else starts one on these roots,
 # which have no systemd user session, so GLib and Qt programs found no session
 # bus at all: waybar stopped with "Cannot autolaunch D-Bus without X11
