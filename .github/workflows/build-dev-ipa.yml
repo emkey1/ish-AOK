@@ -107,6 +107,10 @@ jobs:
           echo "ipa_name=$IPA_NAME" >> "$GITHUB_OUTPUT"
           echo "short_sha=$SHORT_SHA" >> "$GITHUB_OUTPUT"
 
+      # Updates the release in place, adding the new build before removing the old,
+      # so a failure at any point leaves something to download. This used to delete
+      # the release and create it again, and a 502 between the two (2026-11-04) left
+      # no dev-latest until the next push.
       - name: Publish dev-latest release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -114,12 +118,36 @@ jobs:
           set -euo pipefail
           IPA_NAME="${{ steps.package.outputs.ipa_name }}"
           SHORT_SHA="${{ steps.package.outputs.short_sha }}"
-          BODY="Unsigned development build from commit ${SHORT_SHA} (auto-published from \`working\`). Re-sign with AltStore, SideStore, or Sideloadly before installing. This release is overwritten on every push."
+          # The release keeps its first publication date now, so the notes say when.
+          BUILT=$(date -u '+%Y-%m-%d %H:%M UTC')
+          BODY="Unsigned development build from commit ${SHORT_SHA}, built ${BUILT} (auto-published from \`working\`). Re-sign with AltStore, SideStore, or Sideloadly before installing. This release is overwritten on every push."
+          retry() {
+            for attempt in 1 2 3; do
+              "$@" && return 0
+              echo "attempt $attempt of 3 failed: $1 $2 $3"
+              [ "$attempt" = 3 ] || sleep 30
+            done
+            return 1
+          }
           if gh release view dev-latest >/dev/null 2>&1; then
-            gh release delete dev-latest --yes --cleanup-tag
+            retry gh release upload dev-latest "$IPA_NAME" --clobber
+            # A published release's --target does not move its tag. Not fatal: the
+            # build and its title are what people use, and the next push tries again.
+            retry gh api -X PATCH "repos/${GITHUB_REPOSITORY}/git/refs/tags/dev-latest" \
+              -f sha="${{ github.sha }}" -F force=true --silent \
+              || echo "::warning::could not move the dev-latest tag to ${SHORT_SHA}"
+            retry gh release edit dev-latest \
+              --title "Development Build (${SHORT_SHA})" \
+              --notes "$BODY" \
+              --prerelease
+            gh release view dev-latest --json assets --jq '.assets[].name' \
+              | while IFS= read -r old_ipa; do
+                  [ "$old_ipa" = "$IPA_NAME" ] || retry gh release delete-asset dev-latest "$old_ipa" --yes
+                done
+          else
+            retry gh release create dev-latest "$IPA_NAME" \
+              --title "Development Build (${SHORT_SHA})" \
+              --notes "$BODY" \
+              --prerelease \
+              --target "${{ github.sha }}"
           fi
-          gh release create dev-latest "$IPA_NAME" \
-            --title "Development Build (${SHORT_SHA})" \
-            --notes "$BODY" \
-            --prerelease \
-            --target "${{ github.sha }}"
