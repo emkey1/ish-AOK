@@ -270,7 +270,7 @@ static const int kMaxScanDepth = 8;
     char buffer[65536];
     ssize_t n;
     BOOL ok = YES;
-    while ((n = fd->ops->read(fd, buffer, sizeof(buffer))) > 0) {
+    while ((n = generic_read(fd, buffer, sizeof(buffer))) > 0) {
         if (fwrite(buffer, 1, (size_t)n, out) != (size_t)n) { ok = NO; break; }
     }
     if (n < 0) ok = NO;

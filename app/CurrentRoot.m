@@ -20,7 +20,7 @@ static ssize_t read_file(const char *path, char *buf, size_t size) {
     struct fd *fd = generic_open(path, O_RDONLY_, 0);
     if (IS_ERR(fd))
         return PTR_ERR(fd);
-    ssize_t n = fd->ops->read(fd, buf, size);
+    ssize_t n = generic_read(fd, buf, size);
     fd_close(fd);
     if (n == size)
         return _ENAMETOOLONG;
@@ -31,7 +31,7 @@ static ssize_t write_file(const char *path, const char *buf, size_t size) {
     struct fd *fd = generic_open(path, O_WRONLY_|O_CREAT_|O_TRUNC_, 0644);
     if (IS_ERR(fd))
         return PTR_ERR(fd);
-    ssize_t n = fd->ops->write(fd, buf, size);
+    ssize_t n = generic_write(fd, buf, size);
     fd_close(fd);
     return n;
 }
@@ -62,7 +62,7 @@ static int copy_file_mode(const char *src, const char *dst, mode_t_ mode) {
     int err = 0;
     char buf[8192];
     for (;;) {
-        ssize_t n = src_fd->ops->read(src_fd, buf, sizeof(buf));
+        ssize_t n = generic_read(src_fd, buf, sizeof(buf));
         if (n < 0) {
             err = (int) n;
             break;
@@ -72,7 +72,7 @@ static int copy_file_mode(const char *src, const char *dst, mode_t_ mode) {
 
         size_t written = 0;
         while (written < (size_t) n) {
-            ssize_t m = dst_fd->ops->write(dst_fd, buf + written, n - written);
+            ssize_t m = generic_write(dst_fd, buf + written, n - written);
             if (m <= 0) {
                 err = m < 0 ? (int) m : _EIO;
                 goto out;

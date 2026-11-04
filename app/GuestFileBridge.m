@@ -911,7 +911,7 @@ static ISHGuestFileKind ISHGuestFileKindFromMode(mode_t mode) {
     char buffer[65536];
     ssize_t n;
     BOOL tooLarge = NO, cancelled = NO;
-    while ((n = fd->ops->read(fd, buffer, sizeof(buffer))) > 0) {
+    while ((n = generic_read(fd, buffer, sizeof(buffer))) > 0) {
         if (data.length + (NSUInteger)n > maxBytes) { tooLarge = YES; break; }
         [data appendBytes:buffer length:(NSUInteger)n];
         if (token != nil && [self isOperationCancelled:token]) { cancelled = YES; break; }
@@ -1141,7 +1141,7 @@ static ISHGuestFileKind ISHGuestFileKindFromMode(mode_t mode) {
     ssize_t n;
     int64_t written = 0;
     BOOL ok = YES, cancelled = NO;
-    while ((n = fd->ops->read(fd, buffer, kExtractionChunkSize)) > 0) {
+    while ((n = generic_read(fd, buffer, kExtractionChunkSize)) > 0) {
         if (fwrite(buffer, 1, (size_t)n, out) != (size_t)n) { ok = NO; break; }
         written += n;
         if (progress) {
@@ -1411,7 +1411,7 @@ static void ISHApplyDefaultOwnerForCreation(NSString *path) {
     const char *bytes = data.bytes;
     size_t remaining = data.length;
     while (remaining > 0) {
-        ssize_t n = fd->ops->write(fd, bytes, remaining);
+        ssize_t n = generic_write(fd, bytes, remaining);
         if (n <= 0)
             return NO;
         bytes += n;
@@ -1672,7 +1672,7 @@ static void ISHApplyDefaultOwnerForCreation(NSString *path) {
                 }
                 n = (ssize_t)got;
             } else {
-                n = guestIn->ops->read(guestIn, buffer, kExtractionChunkSize);
+                n = generic_read(guestIn, buffer, kExtractionChunkSize);
                 if (n < 0) {
                     failure = [self errorWithGuestErrno:(long)n message:NSLocalizedString(@"Failed reading source file", @"File operation error shown in the file manager")];
                     goto done;
@@ -1689,7 +1689,7 @@ static void ISHApplyDefaultOwnerForCreation(NSString *path) {
                 // Short writes are legal; keep pushing the remainder.
                 ssize_t off = 0;
                 while (off < n) {
-                    ssize_t w = guestOut->ops->write(guestOut, buffer + off, (size_t)(n - off));
+                    ssize_t w = generic_write(guestOut, buffer + off, (size_t)(n - off));
                     if (w <= 0) {
                         failure = [self errorWithGuestErrno:(long)(w < 0 ? w : -_EIO) message:NSLocalizedString(@"Failed writing destination file", @"File operation error shown in the file manager")];
                         goto done;

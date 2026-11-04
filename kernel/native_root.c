@@ -97,7 +97,7 @@ static char *read_file(const char *path, size_t *len_out) {
             buf = bigger;
             cap *= 2;
         }
-        ssize_t n = fd->ops->read(fd, buf + len, cap - 1 - len);
+        ssize_t n = generic_read(fd, buf + len, cap - 1 - len);
         if (n <= 0)
             break;
         len += (size_t) n;
@@ -127,7 +127,7 @@ static int write_file(const char *path, const char *content, mode_t_ mode,
     size_t len = strlen(content), done = 0;
     int err = 0;
     while (done < len) {
-        ssize_t n = fd->ops->write(fd, content + done, len - done);
+        ssize_t n = generic_write(fd, content + done, len - done);
         if (n <= 0) {
             err = n < 0 ? (int) n : _EIO;
             break;
