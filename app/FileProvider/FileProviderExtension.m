@@ -215,6 +215,43 @@ static NSURL *ISHFileProviderPersistMetadataURL(void) {
             URLByAppendingPathComponent:@".persist-fileprovider-meta.db" isDirectory:NO];
 }
 
+// Closes a database with the process held awake until the close is over. Idle is
+// exactly when iOS suspends an extension, so closing when idle did not by itself
+// take the close off the suspension path: 563 was killed with 0xdead10cc inside
+// sqlite3_close, in the WAL checkpoint's fsync, releasing the mounts the idle close
+// had just let go. An expiring activity is what an extension has for this, where
+// the app has a background task. Returns once the block has finished, so `db` stays
+// valid for it.
+static void ISHFileProviderCloseDatabase(struct fakefs_db *db) {
+    dispatch_group_t closed = dispatch_group_create();
+    __block BOOL started = NO;
+    dispatch_group_enter(closed);
+    [NSProcessInfo.processInfo performExpiringActivityWithReason:@"closing a fakefs database"
+                                                      usingBlock:^(BOOL expired) {
+        // iOS calls this again, with the first call still closing, when it wants
+        // to suspend the process. Returning from that call gives the activity up,
+        // and a checkpoint cannot be cut short, so it waits for the close instead.
+        BOOL again;
+        @synchronized (closed) {
+            again = started;
+            started = YES;
+        }
+        if (again) {
+            dispatch_group_wait(closed, DISPATCH_TIME_FOREVER);
+            return;
+        }
+        // Out of time before starting. What gets a suspended extension killed is
+        // a close in progress, not an open database, so this one stays open until
+        // the process ends.
+        if (expired)
+            os_log(ISHFileProviderLog(), "mount close: about to be suspended, leaving the database open");
+        else
+            fake_db_deinit(db);
+        dispatch_group_leave(closed);
+    }];
+    dispatch_group_wait(closed, DISPATCH_TIME_FOREVER);
+}
+
 @interface ISHFileProviderMount ()
 
 @property (nonatomic) struct fakefs_mount storage;
@@ -325,7 +362,7 @@ static NSURL *ISHFileProviderPersistMetadataURL(void) {
         _storage.root_fd = -1;
     }
     if (_storage.db.db != NULL)
-        fake_db_deinit(&_storage.db);
+        ISHFileProviderCloseDatabase(&_storage.db);
 }
 
 @end
@@ -349,8 +386,8 @@ static NSURL *ISHFileProviderPersistMetadataURL(void) {
 // into the database on the last connection, and doing that while being suspended
 // (still holding the database lock) is what RunningBoard kills with 0xdead10cc:
 // every one of build 546's crash reports had a thread inside sqlite3WalClose.
-// Closing while we are still running and untimed makes that checkpoint free of
-// any deadline.
+// Closing here means closing while we are still running, and
+// ISHFileProviderCloseDatabase holds the process awake until that is done.
 static const NSTimeInterval kISHFileProviderMountIdleSeconds = 3.0;
 
 #pragma mark - Retirement on a Mac
@@ -577,7 +614,11 @@ static void ISHFileProviderRetireOnMac(void) {
             return;
         if (self.mountsByRoot.count == 0)
             return;
-        closing = self.mountsByRoot.allValues;
+        // allValues is autoreleased. Left to the worker's pool, the last release
+        // of these mounts, and so the close, came after the log below said done.
+        @autoreleasepool {
+            closing = self.mountsByRoot.allValues;
+        }
         [self.mountsByRoot removeAllObjects];
     }
 
