@@ -74,3 +74,7 @@
 ## 2026-10-25 - Add accessibility hint to file change revert button
 **Learning:** When using `initWithTitle:` to create a `UIBarButtonItem`, if the title itself does not clearly communicate the action's outcome (especially if the state changes dynamically, like 'Revert' vs 'Reverted'), an explicit `accessibilityHint` is critical for VoiceOver users to understand what the button will do.
 **Action:** Always provide an explicit `accessibilityHint` for context-specific buttons created with `initWithTitle:` where the resulting action isn't fully conveyed by the label alone.
+
+## 2026-10-31 - Accessibility hints for system bar buttons
+**Learning:** When using standard text-based `UIBarButtonItem` system items (like Done or Cancel), Apple automatically handles the native localization for the `accessibilityLabel`. Explicitly overriding `accessibilityLabel` with `NSLocalizedString` breaks this behavior. However, the title alone often does not fully communicate the action's outcome (e.g., "Done" might dismiss a settings screen, or save a file).
+**Action:** Do not override `accessibilityLabel` for standard system bar button items. Instead, only provide an explicit `accessibilityHint` to give clear context for the action's outcome to VoiceOver users.
