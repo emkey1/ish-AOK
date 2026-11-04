@@ -364,8 +364,8 @@ it. What exists now:
   and `tests/manual/checkpoint_tmpfs.sh` is the tmpfs one -- it checks a held
   descriptor on a /run file too, and that nothing leaked into the rootfs.
   `checkpoint_anonfd.sh`, `checkpoint_fifo.sh`, `checkpoint_sockpair.sh`,
-  `checkpoint_threads.sh`, `checkpoint_clock.sh`, `checkpoint_timers.sh` and
-  `checkpoint_root_identity.sh` cover the rules above.
+  `checkpoint_threads.sh`, `checkpoint_clock.sh`, `checkpoint_timers.sh`,
+  `checkpoint_overlap.sh` and `checkpoint_root_identity.sh` cover the rules above.
 
 **What is still open**: descriptors in flight in an SCM_RIGHTS message when the
 image is written (the bytes travel, the descriptors cannot, and the save says

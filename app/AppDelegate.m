@@ -6004,7 +6004,11 @@ void ISHSuspendGuardEnterBackground(void) {
         // The automatic name: this is the system taking the session, not the
         // user saving it. See ISHSuspendAutomaticSessionImagePath.
         NSString *image = ISHSuspendAutomaticSessionImagePath();
-        if (image != nil) {
+        if (image != nil && atomic_exchange(&ishSessionSaveInFlight, true)) {
+            // Back and gone again within a long save. The guest has been stopped
+            // for that save, so another would describe the moment it already has.
+            os_log(ISHSuspendLog(), "session save already in progress; not starting another");
+        } else if (image != nil) {
             // OFF this thread, under an assertion of its own.
             //
             // It used to run right here, synchronously, on the reasoning that
@@ -6019,7 +6023,6 @@ void ISHSuspendGuardEnterBackground(void) {
             // after backgrounding -- but it does not extend the watchdog, so
             // buying the time and leaving this thread are two separate things
             // and both are needed.
-            atomic_store(&ishSessionSaveInFlight, true);
             __block UIBackgroundTaskIdentifier saveTask = UIBackgroundTaskInvalid;
             saveTask = [application beginBackgroundTaskWithName:@"session-save"
                                              expirationHandler:^{
