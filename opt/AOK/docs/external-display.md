@@ -9,9 +9,11 @@ screen.
 **iPhone only. New in 563; on iOS 27 it works from 564.** On iOS 27, 563
 gave only the mirror: iOS 27 changed how an app asks for the second screen,
 and 563 asked the old way. 564 asks both ways, and a Workspace terminal
-window now reaches the display too (in 563 it never did). The terminal and the
-Workspace are tested in the simulator on iOS 27.0; the Wayland mirror is not,
-and nothing is yet on a real display. If you try it, please say what you saw on [#540](https://github.com/emkey1/ish-AOK/issues/540) —
+window now reaches the display too (in 563 it never did). Testers have since
+run the terminal on real displays with 564 — over USB-C, Thunderbolt and
+AirPlay, on iOS 27. The Wayland mirror in 564 showed only its first frame and
+then stopped; 565 fixes that, tested in the simulator on iOS 27.0 but not yet
+on a real display. If you try it, please say what you saw on [#540](https://github.com/emkey1/ish-AOK/issues/540) —
 working or not.
 
 ## What goes where
@@ -36,6 +38,31 @@ turn on.
 
 Disconnect the display and everything comes back to the phone.
 
+## The Wayland desktop on a monitor
+
+The desktop is a set of guest programs, so it has to be installed once, in the
+filesystem you use:
+
+1. **Install a desktop.** **Settings → Wayland Desktop → Install a Desktop…**,
+   then tap one — labwc is the light one. It takes several minutes; leave
+   iSH-AOK open until it finishes. [workspace.md](workspace.md) describes the
+   choices.
+2. **Open the Wayland Display.** Any of: long-press the app's icon on the Home
+   Screen and pick **Wayland Display**; set **Settings → Startup Mode →
+   Wayland Display** to open on it every time; or, in the Workspace, open the
+   **Wayland** applet from the dock or the Launcher.
+3. **Connect the display**, before or after. The desktop appears on it once
+   the phone's view says *Connected*.
+4. **Turn on Touchpad Mode** in the view's **···** menu. Out of the box a
+   finger puts the pointer where it touches the phone, which only works while
+   you are looking at the phone; as a touchpad, you drag on the phone and
+   watch the pointer on the monitor. The gestures are listed in
+   [workspace.md](workspace.md).
+
+A hardware keyboard paired with the phone types into the desktop. While the
+monitor is attached, the phone's own view shows the same desktop squeezed to
+the phone's shape — it is still the touch surface, so that is expected.
+
 ## iPad
 
 iPads are left as they were in 562. An iPad with **Stage Manager** and an
@@ -54,6 +81,11 @@ feature (546) fought Stage Manager on an iPad and was taken out.
 - **The display shows; it does not take input.** iOS gives an app this kind of
   screen as non-interactive, so a mouse or touch on the monitor does nothing —
   use the phone, or a hardware keyboard paired with it.
+- **Text size is the terminal's.** ⌘+ (or ⌘=), ⌘- and ⌘0 on a hardware
+  keyboard make the text on the display larger, smaller or the default, as
+  does **Settings → Appearance → Font Size**. On a high-resolution monitor the text can
+  start out small. It is the same setting the phone uses, so it stays when you
+  unplug — except in a Workspace terminal window, which keeps its own size.
 - **One thing at a time.** The display shows one terminal, or the Wayland
   Display, never both.
 - **On iOS 27, only a terminal, the Workspace or the Wayland Display takes the
