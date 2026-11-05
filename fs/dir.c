@@ -168,7 +168,16 @@ int_t sys_getdents_common(fd_t f, guest_addr_t dirents, dword_t count,
         if (err == 0)
             break;
 
-        size_t name_len = strlen(entry.name);
+        // ⚡ Bolt: Optimize strlen for common "." and ".." entries which appear in every directory.
+        // This avoids O(N) length calculations for the most frequent entries.
+        size_t name_len;
+        if (entry.name[0] == '.' && entry.name[1] == '\0') {
+            name_len = 1;
+        } else if (entry.name[0] == '.' && entry.name[1] == '.' && entry.name[2] == '\0') {
+            name_len = 2;
+        } else {
+            name_len = strlen(entry.name);
+        }
         // Room for the largest layout plus its alignment padding.
         size_t max_reclen = sizeof(struct linux_dirent_amd64_) + name_len + 16;
         char dirent_data[max_reclen];
