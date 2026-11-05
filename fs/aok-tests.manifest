@@ -32,6 +32,7 @@ x86/x87_kat.c
 x86/x87_env.c
 x86/x87_kat_unmasked.c
 x86/x87_mf.c
+x86/x87_compare_c1.c
 x86/x87_trans.c
 x86/x87_page_edge.c
 x86/alu_flags.c

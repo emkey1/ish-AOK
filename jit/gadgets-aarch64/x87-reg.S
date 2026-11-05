@@ -79,7 +79,8 @@ x87_com_rr ucom, 0
 # [i | pop << 6]: FCOMI/FUCOMI: ZF PF CF from the compare of ST(0) with ST(i)
 # (000 greater, 001 less, 100 equal, 111 unordered), OF SF AF cleared -- the
 # true flags, in eflags and the CF/OF bytes, with none left lazy. An unmasked
-# IE still sets them (unordered) but does not pop.
+# IE still sets them (unordered) but does not pop. C1 stays as it was unless a
+# stack fault clears it, as hardware does; the SDM says it is always cleared.
 .macro x87_comi_rr name, signalling
 .gadget x87_\name\()_rr
     x87_wait
@@ -122,7 +123,11 @@ x87_com_rr ucom, 0
     add w9, w9, 1
     bfi w8, w9, 11, 3
 4:  bic w7, w7, X87_C1
-    bl x87_put_fsw
+    tst w7, X87_SF
+    b.ne 5f
+    and w10, w8, X87_C1
+    orr w7, w7, w10
+5:  bl x87_put_fsw
     gret_nomem 1
 .endm
 x87_comi_rr comi, 1
