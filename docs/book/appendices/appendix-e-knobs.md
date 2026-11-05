@@ -40,6 +40,7 @@ by the app; several have app-side equivalents under `/proc/ish/defaults`
 | `ISH_CHECKPOINT_DEBUG` | `kernel/checkpoint.c` |
 | `ISH_CHECKPOINT_LEAVE_OUT` | `main.c` |
 | `ISH_CHECKPOINT_LOSE_WAKES` | `kernel/signal.c` |
+| `ISH_CHECKPOINT_OVERLAP` | `main.c` |
 | `ISH_CHECKPOINT_TEST_FAIL_PID` | `kernel/checkpoint.c` |
 | `ISH_CLI_PTY` | `main.c` |
 | `ISH_CRYPTO_ACCEL` | `main.c` |

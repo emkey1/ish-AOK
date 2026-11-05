@@ -123,6 +123,18 @@ It is settable from Appearance and from `/proc/ish/defaults/line_height`
 (Chapter 28), because a font preference that cannot be scripted is only half a
 preference.
 
+Width has its own version of the bug, and `btop` is how it was seen: boxes and
+columns came out jagged. No monospace font iOS ships has braille, so WebKit draws
+it from a fallback font at that font's own width, 8.20 px against a 7.42 px cell
+for the default `ui-monospace` at 12 px, and hterm let a narrow glyph flow at
+whatever width it had. `btop` draws its graphs in braille, so everything to the
+right of one moved by a different amount on each row. Since 564 hterm measures
+each narrow non-ASCII character the first time it is printed, and boxes the ones
+that are not one cell wide in a span exactly one cell wide, the way it already
+boxed wide characters in two. Glyphs the font has stay in ordinary text runs. The
+check was the next section's, in the iOS 27 simulator: the right borders fall in
+one pixel column on every row of the screenshot.
+
 ## 29.5 Verifying colour by looking at pixels
 
 Themes travel a long way before they become light:

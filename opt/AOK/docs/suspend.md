@@ -156,6 +156,25 @@ refusal names the process and the reason, in `/proc/ish/checkpoint`:
 A refusal costs nothing: the session carries on exactly as it was. A save is a
 copy, and the machine is stopped only for as long as it takes to write one.
 
+**One save at a time.** A save never runs alongside another. Going away, coming
+back and going away again during a long save does not start a second automatic
+one: the guest was stopped for the first, so another would describe the same
+moment, give or take a few seconds. **Save Session**, **Suspend and Exit** and
+the ⤓ button wait their turn. A save asked for from inside the guest, by
+`suspend.sh` or a write to `/proc/ish/checkpoint`, cannot wait, because the save
+in progress may be waiting for that very process to stop, so it is refused with
+`EBUSY`:
+
+    last_err        -16
+    last_refusal    another save is still being written
+
+Nothing is written for it, and a `suspend` leaves the machine running. The write
+to the file has already returned by then, since the save happens just after it,
+so an `echo` succeeds all the same. `suspend.sh` reads the report afterwards,
+prints the reason and exits 1, as it does for any refusal. Those lines last only
+until the running save finishes and records its own result, so after an `echo`,
+see whether `last_path` names your file.
+
 **The app saves what can be saved.** When you ask it to — **Save Session**,
 **Suspend and Exit**, the ⤓ button — while the Wayland desktop or another GPU
 program is running, it asks first: "The Wayland desktop can't be saved", naming

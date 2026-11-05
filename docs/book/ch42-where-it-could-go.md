@@ -63,7 +63,9 @@ became visible once everything else was fast enough to measure it.
 
 External display support shipped once and was reverted after testing on a
 real iPad and monitor (Chapter 41). It returned in 563 for the iPhone alone,
-where the 546 symptoms cannot occur, and shipped without a hardware test.
+where the 546 symptoms cannot occur, and shipped without a hardware test. On
+iOS 27 it gave only the mirror until 564 registered a scene accessory, and that
+has run only in the simulator.
 
 What is left is the iPad: whether the declared external-display role is itself
 what broke Stage Manager is still a hypothesis, and iPads without Stage

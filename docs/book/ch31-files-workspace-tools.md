@@ -22,11 +22,22 @@ the same fakefs databases the app does, and iOS killed it inside `sqlite3_close`
 for the same reason it killed the app mid-transaction. Two processes, one
 database, one platform rule about locks and suspension.
 
+The extension's half took a second try. Closing when idle was meant to take the
+close off the suspension path, but idle is exactly when iOS suspends an extension,
+and an iPad on 563 was killed in the WAL checkpoint's `fsync`, under
+`-[ISHFileProviderMount dealloc]`. Since 564 that close runs under an expiring
+activity, the extension's equivalent of the app's background task. If the time
+has already run out before it starts, the database stays open until the process
+ends, because a close in progress is what gets a suspended extension
+killed. A real suspension during a close cannot be forced in the simulator, so
+those paths have not run.
+
 Two details are worth recording because both are choices rather than accidents.
 
-**The location is called "iSH"**, not "iSH-AOK" — the extension's display name
-was never renamed, and the documentation says so plainly rather than leaving
-somebody to wonder whether they are looking at the right app.
+**The location was called "iSH"** until 559 — the extension's display name had
+never been renamed, and the documentation said so plainly rather than leaving
+somebody to wonder whether they were looking at the right app. It is "iSH-AOK"
+now.
 
 **It is switched off on Macs**, deliberately, and the reasoning is a small model
 of how to handle a platform that will not cooperate:
@@ -72,6 +83,19 @@ register is the honest version.
 > The general form: **a write-back must never be able to delete what it
 > replaces.** Remove-then-copy is two operations, and every way the second one
 > fails is data lost.
+
+The other direction is `mount -t ios` (`app/iOSFS.m`), which puts a folder from
+the iOS picker into the guest's tree, and it shows what file coordination costs.
+`rclone` checking 10,000 photos on an SSD took 3 minutes on an iPhone against 1-2
+seconds on a Mac, because every `stat` and `readlink` went through
+`NSFileCoordinator`, about 2.4 ms each, and the path walk makes both calls for
+every directory on the way to a file. Coordination makes another app save its
+pending changes before the bytes are read; a stat or a link's text has no bytes to
+protect, and `readdir` was never coordinated. Since 564 lookups go straight to
+realfs, while opening a file and changing anything stay coordinated. `find` over
+10,000 files in the simulator went from 168 s to 0.5 s, about what the same tree
+takes on fakefs (0.55 s), and as fast as `-o unsafe`, which skips coordination
+altogether.
 
 ## 31.2 One queue was the wrong number
 
@@ -270,6 +294,7 @@ system underneath, and the surfaces are views onto it.
 ---
 
 *Anchors:* [app/FileProvider/](../../app/FileProvider),
+[app/iOSFS.m](../../app/iOSFS.m),
 [app/GuestFileBridge.m](../../app/GuestFileBridge.m),
 [app/WorkspaceViewController.m](../../app/WorkspaceViewController.m),
 [app/WorkspaceFileManager.m](../../app/WorkspaceFileManager.m),

@@ -9,9 +9,9 @@ screen.
 **iPhone only. New in 563; on iOS 27 it works from 564.** On iOS 27, 563
 gave only the mirror: iOS 27 changed how an app asks for the second screen,
 and 563 asked the old way. 564 asks both ways, and a Workspace terminal
-window now reaches the display too (in 563 it never did). It is tested in the
-simulator on iOS 27.0, not yet on a real display. If you try it, please say
-what you saw on [#540](https://github.com/emkey1/ish-AOK/issues/540) —
+window now reaches the display too (in 563 it never did). The terminal and the
+Workspace are tested in the simulator on iOS 27.0; the Wayland mirror is not,
+and nothing is yet on a real display. If you try it, please say what you saw on [#540](https://github.com/emkey1/ish-AOK/issues/540) —
 working or not.
 
 ## What goes where
