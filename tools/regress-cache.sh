@@ -45,7 +45,7 @@ case $direction in
         trap 'rm -rf "$stage"' EXIT
         ssh "$@" "cd $device_dir && tar cf - ." | tar xf - -C "$stage"
         rm -f "$stage"/.probe* "$stage"/.regress-cache-probe
-        cp -pn "$stage"/* "$store"/ 2>/dev/null || true
+        rsync -a --ignore-existing "$stage"/ "$store"/
         after=$(ls "$store" | wc -l | tr -d ' ')
         echo "pulled: $(ls "$stage" | wc -l | tr -d ' ') on the device, $((after - before)) new here, $after in $store"
         ;;
