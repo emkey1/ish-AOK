@@ -365,7 +365,8 @@ it. What exists now:
   descriptor on a /run file too, and that nothing leaked into the rootfs.
   `checkpoint_anonfd.sh`, `checkpoint_fifo.sh`, `checkpoint_sockpair.sh`,
   `checkpoint_threads.sh`, `checkpoint_clock.sh`, `checkpoint_timers.sh`,
-  `checkpoint_overlap.sh` and `checkpoint_root_identity.sh` cover the rules above.
+  `checkpoint_overlap.sh` and `checkpoint_root_identity.sh` cover the rules above,
+  and `suspend_script.sh` what `suspend.sh` reports.
 
 **What is still open**: descriptors in flight in an SCM_RIGHTS message when the
 image is written (the bytes travel, the descriptors cannot, and the save says

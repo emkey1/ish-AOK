@@ -43,6 +43,21 @@ status() {
     cat "$CONTROL"
 }
 
+# One line of that report.
+report() {
+    status | sed -n "s/^$1 *//p"
+}
+
+# A write to the file only queues the save, which runs just after the write
+# returns, so the write succeeding says nothing about the save. Past it, the
+# report says. It lasts until the next save ends, which clears a refusal.
+not_written() {
+    why=$(report last_refusal)
+    echo "${why:-another save was being written}" >&2
+    report last_err | sed 's/^/error /' >&2
+    exit 1
+}
+
 case ${1-} in
     --status|-s|status)
         status
@@ -58,14 +73,20 @@ case ${1-} in
         # A COPY: the guest carries on afterwards. The path is a HOST path --
         # somewhere on the device outside the guest filesystem -- because that
         # is where a session has to live to survive the app being killed.
-        if echo "save $2" > "$CONTROL" 2>/dev/null; then
-            echo "saved to $2"
-        else
+        if ! echo "save $2" > "$CONTROL" 2>/dev/null; then
             echo "suspend.sh: refused. Why:" >&2
-            status | sed -n 's/^last_refusal *//p' >&2
-            status | sed -n 's/^last_err *//p' | sed 's/^/error /' >&2
+            report last_refusal >&2
+            report last_err | sed 's/^/error /' >&2
             exit 1
         fi
+        # A resumed copy of this session comes back here too, on a machine that
+        # has made no saves yet, and it being here is the proof it was saved.
+        if [ -n "$(report last_err)" ] ||
+                { [ "$(report saves)" != 0 ] && [ "$(report last_path)" != "$2" ]; }; then
+            echo "suspend.sh: refused. Why:" >&2
+            not_written
+        fi
+        echo "saved to $2"
         ;;
     "")
         # A DEPARTURE: the image is written and the machine stops, so the next
@@ -78,7 +99,13 @@ case ${1-} in
             status | sed -n 's/^last_refusal */  /p' >&2
             exit 1
         fi
-        # Not reached: the machine stops inside the write above.
+        # A suspend that worked stopped the machine just after the write, so only
+        # two things get here: the resumed session, on a machine that has made no
+        # saves yet, and a machine still running because the save was refused.
+        if [ -n "$(report last_err)" ] || [ "$(report saves)" != 0 ]; then
+            echo "suspend.sh: refused, and the session is still running. Why:" >&2
+            not_written
+        fi
         ;;
     *)
         echo "suspend.sh: unknown argument '$1'" >&2
