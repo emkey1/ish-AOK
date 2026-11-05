@@ -346,9 +346,9 @@ static const struct virtgpu_present_ops display_direct_ops = {
         id<MTLTexture> texture = [_direct texture];
         if (texture != nil) {
             [self drawTexture:texture];
-            // The same frame on the second screen, now, for the reason given
+            // The same frame on the second screen, now, for the reasons given
             // below the RFB upload.
-            [self.mirrorView drawTexture:texture];
+            [self.mirrorView draw];
         }
         return;
     }
@@ -400,7 +400,14 @@ static const struct virtgpu_present_ops display_direct_ops = {
     // frame, which tears visibly (seen as a sheared image on a full-framebuffer
     // update). Encoding here keeps its frame identical to the one just drawn
     // locally.
-    [self.mirrorView drawTexture:_texture];
+    //
+    // Through -draw, not -drawTexture: directly. An MTKView replaces its
+    // currentDrawable only at the end of -draw, so a mirror that was handed
+    // frames any other way presented its first drawable again and again: the
+    // external display showed the frame from the moment it connected and never
+    // another (GH #540, iPhone 16 Plus on 564). -draw runs the mirror's own
+    // -drawInMTKView:, which samples this view's texture, now.
+    [self.mirrorView draw];
 }
 
 - (void)drawTexture:(nullable id<MTLTexture>)texture {
