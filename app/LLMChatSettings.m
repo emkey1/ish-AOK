@@ -48,6 +48,7 @@ void ISHConfigureLLMSettingsNavigationController(UINavigationController *navigat
             [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemDone
                                                           target:navigationController
                                                           action:@selector(ish_dismissLLMSettings)];
+        root.navigationItem.leftBarButtonItem.accessibilityHint = NSLocalizedString(@"Dismisses the LLM settings.", @"Accessibility hint for the Done button");
     }
 }
 
