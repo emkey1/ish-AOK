@@ -11776,10 +11776,12 @@ typedef NS_ENUM(NSInteger, MotePadBrowserMode) {
     self.navigationItem.leftBarButtonItem =
         [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemCancel
                                                       target:self action:@selector(cancel)];
+    self.navigationItem.leftBarButtonItem.accessibilityHint = NSLocalizedString(@"Dismisses the file browser without saving.", @"Accessibility hint for the cancel button");
     if (_mode == MotePadBrowserModeSave) {
         self.navigationItem.rightBarButtonItem =
             [[UIBarButtonItem alloc] initWithTitle:NSLocalizedString(@"Save Here", @"MotePad file browser save button") style:UIBarButtonItemStyleDone
                                             target:self action:@selector(saveHere)];
+        self.navigationItem.rightBarButtonItem.accessibilityHint = NSLocalizedString(@"Saves the file to the current directory.", @"Accessibility hint for the save button");
     }
     [self reload];
 }
