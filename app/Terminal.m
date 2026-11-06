@@ -561,6 +561,10 @@ struct tty *ISHOpenTerminalForRestoredSession(void) {
             return;
         int cols = dimensions[0].intValue;
         int rows = dimensions[1].intValue;
+        // The text area in device pixels, when the page reports it (see
+        // exports.getSize): image tools refuse to run without it.
+        int xpixel = dimensions.count >= 4 ? MAX(dimensions[2].intValue, 0) : 0;
+        int ypixel = dimensions.count >= 4 ? MAX(dimensions[3].intValue, 0) : 0;
         // Read the unowned back-pointer once. ios_tty_cleanup clears it from
         // the emulator thread, so re-reading self.tty for each use means the
         // NULL check guards nothing: the pointer could still be live here and
@@ -586,7 +590,8 @@ struct tty *ISHOpenTerminalForRestoredSession(void) {
         if (tty == NULL)
             return;
         lock(&tty->lock, 0);
-        tty_set_winsize(tty, (struct winsize_) {.col = cols, .row = rows});
+        tty_set_winsize(tty, (struct winsize_) {.col = cols, .row = rows,
+                                                .xpixel = xpixel, .ypixel = ypixel});
         unlock(&tty->lock);
         tty_put(tty);
     }];

@@ -204,7 +204,15 @@ exports.resync = () => {
     term.scrollPort_.resize();
     return [term.screenSize.width, term.screenSize.height];
 };
-exports.getSize = () => [term.screenSize.width, term.screenSize.height];
+// Columns and rows, then the text area's size in device pixels. Programs that
+// draw images (kitty's icat, chafa) read the pixel size from TIOCGWINSZ and
+// refuse to run when it is zero.
+exports.getSize = () => {
+    const cell = term.getCellPixelSize();
+    return [term.screenSize.width, term.screenSize.height,
+            Math.round(term.screenSize.width * cell.width),
+            Math.round(term.screenSize.height * cell.height)];
+};
 
 // selection, copying
 term.scrollPort_.screen_.contentEditable = false;
