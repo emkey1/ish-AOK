@@ -78,3 +78,7 @@
 ## 2026-11-03 - Hide decorative text separators from VoiceOver
 **Learning:** Purely decorative text separators (like '›' in breadcrumbs) are announced by VoiceOver, causing unnecessary clutter for visually impaired users.
 **Action:** Always set `isAccessibilityElement = NO` on UI elements used exclusively as visual separators.
+
+## 2024-11-10 - Add Accessibility Hints to Standard Bar Buttons
+**Learning:** `UIBarButtonItem`s initialized with system items (like `UIBarButtonSystemItemDone`, `UIBarButtonSystemItemClose`, `UIBarButtonSystemItemCancel`) provide native localization and a standard icon/text, but do not inherently provide contextual accessibility hints for VoiceOver. Users may need more context about what the 'Done' or 'Cancel' action will actually dismiss or save.
+**Action:** Explicitly set an `accessibilityHint` on system bar buttons to concisely describe the outcome of the action (e.g., 'Dismisses the settings window.') to provide clear context for VoiceOver users.
