@@ -51,3 +51,7 @@
 ## 2024-11-10 - Hoist string length calculation in library_path
 **Learning:** In `kernel/foreign_exec.c`, `library_path` calculated `strlen(root)` repeatedly inside a loop when allocating buffer capacity. Since `root` is a constant argument, recalculating its length inside a loop causes redundant O(N) evaluations, degrading performance unnecessarily.
 **Action:** Always hoist loop-invariant string length calculations like `strlen()` outside loops, particularly when iterating over constant arrays to calculate cumulative sizes.
+
+## 2024-11-11 - Hoist static string strlen calculations out of loops in environment variable matching
+**Learning:** In loops over arrays mapping environment variables, using `strlen` inside the loop causes redundant O(N) calculations of statically known lengths for every iteration of the loop across the entire environment variable set.
+**Action:** Precompute string lengths for constant configuration structures at compile time using `sizeof() - 1` and cache them in the struct, allowing loop condition checks to use O(1) lengths instead of repeatedly calling `strlen()`.

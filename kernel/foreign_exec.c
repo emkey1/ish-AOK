@@ -303,8 +303,8 @@ void foreign_exec_done(struct foreign_exec *fx) {
 
 // --------------------------------------------------------- the environment
 
-static bool env_is(const char *entry, const char *var) {
-    return strncmp(entry, var, strlen(var)) == 0;
+static bool env_is(const char *entry, const char *var, size_t var_len) {
+    return strncmp(entry, var, var_len) == 0;
 }
 
 // The variables a LIBS exec sets. Each has a marker beside it recording the
@@ -313,12 +313,16 @@ static bool env_is(const char *entry, const char *var) {
 // user's is always kept. LD_LIBRARY_PATH puts ours in front of the user's;
 // for LOCPATH the user's own, if any, wins.
 struct env_rule {
-    const char *var, *marker;
+    const char *var;
+    size_t var_len;
+    const char *marker;
+    size_t marker_len;
     bool join;
 };
+#define RULE(v, m, j) {v, sizeof(v) - 1, m, sizeof(m) - 1, j}
 static const struct env_rule env_rules[] = {
-    {"LD_LIBRARY_PATH=", "AOK_FOREIGN_LDPATH=", true},
-    {"LOCPATH=", "AOK_FOREIGN_LOCPATH=", false},
+    RULE("LD_LIBRARY_PATH=", "AOK_FOREIGN_LDPATH=", true),
+    RULE("LOCPATH=", "AOK_FOREIGN_LOCPATH=", false),
 };
 #define ENV_RULES (sizeof(env_rules) / sizeof(env_rules[0]))
 
@@ -336,10 +340,10 @@ char *foreign_exec_env(const struct foreign_exec *fx, const char *envp, size_t e
     const char *p = envp;
     for (size_t i = 0; i < envc; i++) {
         for (size_t r = 0; r < ENV_RULES; r++) {
-            if (env_is(p, env_rules[r].var))
-                current[r] = p + strlen(env_rules[r].var);
-            else if (env_is(p, env_rules[r].marker))
-                marker[r] = p + strlen(env_rules[r].marker);
+            if (env_is(p, env_rules[r].var, env_rules[r].var_len))
+                current[r] = p + env_rules[r].var_len;
+            else if (env_is(p, env_rules[r].marker, env_rules[r].marker_len))
+                marker[r] = p + env_rules[r].marker_len;
         }
         p += strlen(p) + 1;
     }
@@ -383,8 +387,8 @@ char *foreign_exec_env(const struct foreign_exec *fx, const char *envp, size_t e
         if ((ours != NULL || user != NULL) && value[r] == NULL)
             goto fail;
         if (value[r] != NULL)
-            size += strlen(env_rules[r].var) + strlen(value[r]) + 1 +
-                    (marked[r] ? strlen(env_rules[r].marker) + strlen(ours) + 1 : 0);
+            size += env_rules[r].var_len + strlen(value[r]) + 1 +
+                    (marked[r] ? env_rules[r].marker_len + strlen(ours) + 1 : 0);
     }
 
     char *out = malloc(size);
@@ -396,7 +400,7 @@ char *foreign_exec_env(const struct foreign_exec *fx, const char *envp, size_t e
         size_t len = strlen(p) + 1;
         bool drop = false;
         for (size_t r = 0; r < ENV_RULES; r++)
-            drop |= env_is(p, env_rules[r].var) || env_is(p, env_rules[r].marker);
+            drop |= env_is(p, env_rules[r].var, env_rules[r].var_len) || env_is(p, env_rules[r].marker, env_rules[r].marker_len);
         if (!drop) {
             memcpy(out + at, p, len);
             at += len;
@@ -407,7 +411,7 @@ char *foreign_exec_env(const struct foreign_exec *fx, const char *envp, size_t e
     for (size_t r = 0; r < ENV_RULES; r++) {
         if (value[r] == NULL)
             continue;
-        size_t n1 = strlen(env_rules[r].var) + strlen(value[r]) + 1;
+        size_t n1 = env_rules[r].var_len + strlen(value[r]) + 1;
         snprintf(out + at, n1, "%s%s", env_rules[r].var, value[r]);
         at += n1;
         count++;
@@ -415,7 +419,7 @@ char *foreign_exec_env(const struct foreign_exec *fx, const char *envp, size_t e
         // a value that is purely the user's is theirs to keep.
         if (marked[r]) {
             const char *ours = rule_ours(fx, r);
-            size_t n2 = strlen(env_rules[r].marker) + strlen(ours) + 1;
+            size_t n2 = env_rules[r].marker_len + strlen(ours) + 1;
             snprintf(out + at, n2, "%s%s", env_rules[r].marker, ours);
             at += n2;
             count++;
