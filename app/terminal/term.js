@@ -204,7 +204,15 @@ exports.resync = () => {
     term.scrollPort_.resize();
     return [term.screenSize.width, term.screenSize.height];
 };
-exports.getSize = () => [term.screenSize.width, term.screenSize.height];
+// Columns and rows, then the text area's size in device pixels. Programs that
+// draw images (kitty's icat, chafa) read the pixel size from TIOCGWINSZ and
+// refuse to run when it is zero.
+exports.getSize = () => {
+    const cell = term.getCellPixelSize();
+    return [term.screenSize.width, term.screenSize.height,
+            Math.round(term.screenSize.width * cell.width),
+            Math.round(term.screenSize.height * cell.height)];
+};
 
 // selection, copying
 term.scrollPort_.screen_.contentEditable = false;
@@ -318,6 +326,15 @@ hterm.ScrollPort.prototype.syncScrollHeight = function() {
     syncScroll();
 };
 term.scrollPort_.screen_.addEventListener('scroll', syncScroll);
+// Send both again whether or not they changed. One native scroll view is
+// shared by every terminal a window shows, so after a switch it still holds
+// the last terminal's height and offset, and this page, which only reports
+// changes, would leave it there: the view could not scroll, or scrolled the
+// text out of sight.
+exports.resendScroll = () => {
+    lastScrollHeight = lastScrollTop = undefined;
+    syncScroll();
+};
 
 exports.updateStyle = ({foregroundColor, backgroundColor, fontFamily, fontSize, lineHeight, colorPaletteOverrides, blinkCursor, cursorShape}) => {
     term.getPrefs().set('background-color', backgroundColor);

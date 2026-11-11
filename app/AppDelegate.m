@@ -1765,7 +1765,7 @@ static int EnsureRegularFileNonEmpty(const char *path, const char *contents, mod
     if (IS_ERR(fd))
         return (int) PTR_ERR(fd);
     if (contents != NULL && contents[0] != '\0') {
-        ssize_t written = fd->ops->write(fd, contents, strlen(contents));
+        ssize_t written = generic_write(fd, contents, strlen(contents));
         if (written < 0) {
             fd_close(fd);
             return (int) written;
@@ -1860,7 +1860,7 @@ static ssize_t ReadGuestFile(const char *path, char *buf, size_t size) {
         return (ssize_t) PTR_ERR(fd);
     size_t total = 0;
     while (total < size) {
-        ssize_t n = fd->ops->read(fd, buf + total, size - total);
+        ssize_t n = generic_read(fd, buf + total, size - total);
         if (n < 0) {
             fd_close(fd);
             return n;
@@ -1883,7 +1883,7 @@ static int WriteGuestFileReplacing(const char *path, const char *contents, mode_
     if (IS_ERR(fd))
         return (int) PTR_ERR(fd);
     size_t len = strlen(contents);
-    ssize_t written = fd->ops->write(fd, contents, len);
+    ssize_t written = generic_write(fd, contents, len);
     fd_close(fd);
     if (written < 0 || (size_t) written != len) {
         generic_unlinkat(AT_PWD, temp);
@@ -2142,7 +2142,7 @@ static void ProvisionGuestHostFiles(void) {
         struct fd *fd = generic_open("/etc/hostname", O_RDONLY_, 0);
         if (!IS_ERR(fd)) {
             char buf[256];
-            ssize_t n = fd->ops->read(fd, buf, sizeof(buf) - 1);
+            ssize_t n = generic_read(fd, buf, sizeof(buf) - 1);
             fd_close(fd);
             if (n > 0) {
                 buf[n] = '\0';
@@ -3045,7 +3045,7 @@ void ISHApplyIdleTimerPreference(void) {
     char buf[16384];
     size_t total = 0;
     while (total + 1 < sizeof(buf)) {
-        ssize_t n = fd->ops->read(fd, buf + total, sizeof(buf) - 1 - total);
+        ssize_t n = generic_read(fd, buf + total, sizeof(buf) - 1 - total);
         if (n <= 0)
             break;
         total += (size_t) n;
@@ -5267,7 +5267,7 @@ static TerminalViewController *CreateTerminalViewController(void) {
         // This arm decides the verdict: everything above it can fail, and the
         // file is only actually on disk once this write has happened.
         if (!IS_ERR(fd)) {
-            fd->ops->write(fd, resolvConf.UTF8String, [resolvConf lengthOfBytesUsingEncoding:NSUTF8StringEncoding]);
+            generic_write(fd, resolvConf.UTF8String, [resolvConf lengthOfBytesUsingEncoding:NSUTF8StringEncoding]);
             fd_close(fd);
             wrote = YES;
             [ISHDiagnosticsStore recordBreadcrumb:@"dns.refresh.wrote"
@@ -6004,7 +6004,11 @@ void ISHSuspendGuardEnterBackground(void) {
         // The automatic name: this is the system taking the session, not the
         // user saving it. See ISHSuspendAutomaticSessionImagePath.
         NSString *image = ISHSuspendAutomaticSessionImagePath();
-        if (image != nil) {
+        if (image != nil && atomic_exchange(&ishSessionSaveInFlight, true)) {
+            // Back and gone again within a long save. The guest has been stopped
+            // for that save, so another would describe the moment it already has.
+            os_log(ISHSuspendLog(), "session save already in progress; not starting another");
+        } else if (image != nil) {
             // OFF this thread, under an assertion of its own.
             //
             // It used to run right here, synchronously, on the reasoning that
@@ -6019,7 +6023,6 @@ void ISHSuspendGuardEnterBackground(void) {
             // after backgrounding -- but it does not extend the watchdog, so
             // buying the time and leaving this thread are two separate things
             // and both are needed.
-            atomic_store(&ishSessionSaveInFlight, true);
             __block UIBackgroundTaskIdentifier saveTask = UIBackgroundTaskInvalid;
             saveTask = [application beginBackgroundTaskWithName:@"session-save"
                                              expirationHandler:^{

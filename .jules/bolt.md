@@ -47,3 +47,7 @@
 ## 2026-10-21 - Optimize string concatenation in fakefs_readdir
 **Learning:** In performance-critical VFS loops like fakefs_readdir, modern C compilers already optimize `strcmp` against small string literals (like `.` and `..`) into efficient inline integer comparisons. However, calculating `strlen` indiscriminately for all directory entries adds unnecessary O(N) overhead, especially considering most entries aren't `.` or `..`. Deferring `strlen` calculations until after checking for these frequent entries using a short-circuited character array comparison helper (e.g., `is_dot_or_dotdot`) provides a safer and more performant pattern.
 **Action:** Always verify if expensive length calculations or string matching functions can be deferred or replaced by lightweight character matching logic for frequent, known-length entries. When replacing standard string functions to avoid overhead, wrap the explicit logic in helper functions to preserve readability.
+
+## 2024-11-10 - Hoist string length calculation in library_path
+**Learning:** In `kernel/foreign_exec.c`, `library_path` calculated `strlen(root)` repeatedly inside a loop when allocating buffer capacity. Since `root` is a constant argument, recalculating its length inside a loop causes redundant O(N) evaluations, degrading performance unnecessarily.
+**Action:** Always hoist loop-invariant string length calculations like `strlen()` outside loops, particularly when iterating over constant arrays to calculate cumulative sizes.

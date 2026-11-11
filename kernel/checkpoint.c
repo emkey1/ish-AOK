@@ -684,6 +684,13 @@ static _Atomic int ckpt_restoring;
 // The parking lot. A leaf lock -- nothing is ever taken under it.
 static pthread_mutex_t ckpt_park_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t ckpt_park_cond = PTHREAD_COND_INITIALIZER;
+// One save or restore at a time, from before the freeze until the image is in
+// place. A thaw is machine-wide, and the app starts a save each time it goes to the
+// background, so a second save started during a long first was frozen for no time
+// at all: the first one's thaw woke every task under it, and it walked tasks as they
+// exited. 563 crashed that way in ckpt_save_task with no thread parked. Both also
+// wrote the same temporary file.
+static pthread_mutex_t ckpt_save_lock = PTHREAD_MUTEX_INITIALIZER;
 
 // A task that will never park, because it is already leaving.
 //
@@ -2592,7 +2599,10 @@ static int ckpt_save_task(struct ckpt_writer *w, struct task *task,
 
     bool departed = ckpt_task_departed(task);
     bool as_killed = ckpt_task_as_killed(task);
-    if (task->zombie || departed || as_killed) {
+    // Frozen, a task cannot start to exit. One that is exiting now was kept as a
+    // departed leader and has since lost its last thread, without being marked a
+    // zombie yet. That is what it is about to be, and its descriptors are gone.
+    if (task->zombie || departed || as_killed || ckpt_task_is_leaving(task)) {
         // Nothing but the status its parent has not collected. No address
         // space, no descriptors, no register file -- a zombie has already run
         // its last instruction, and what makes it worth recording is that
@@ -3483,7 +3493,7 @@ static void ckpt_leave_out(struct task_snapshot *snap) {
     free(out);
 }
 
-static int ckpt_save(const char *host_path, unsigned flags) {
+static int ckpt_save_locked(const char *host_path, unsigned flags) {
     int err = ckpt_check_scope();
     if (err < 0)
         return err;
@@ -3794,6 +3804,20 @@ static int ckpt_save(const char *host_path, unsigned flags) {
     ckpt_status.bytes = (unsigned long long) pages * PAGE_SIZE;
     unlock(&ckpt_lock);
     return 0;
+}
+
+static int ckpt_save(const char *host_path, unsigned flags) {
+    if (current == NULL) {
+        pthread_mutex_lock(&ckpt_save_lock);
+    } else if (pthread_mutex_trylock(&ckpt_save_lock) != 0) {
+        // A guest task can't wait its turn: the save holding this is waiting for
+        // that task to park.
+        ckpt_refuse("another save is still being written");
+        return _EBUSY;
+    }
+    int err = ckpt_save_locked(host_path, flags);
+    pthread_mutex_unlock(&ckpt_save_lock);
+    return err;
 }
 
 // ------------------------------------------------------------------ reading
@@ -6159,7 +6183,7 @@ static void ckpt_restore_unwind(struct task **built, unsigned nbuilt,
            "%u killed, %u tmpfs unmounted\n", destroyed, killed, unmounted);
 }
 
-int checkpoint_restore(const char *host_path) {
+static int ckpt_restore_locked(const char *host_path) {
     ckpt_restore_note[0] = '\0';
     ckpt_restore_mounted_n = 0;
     FILE *f = fopen(host_path, "rb");
@@ -6604,6 +6628,13 @@ out:
     }
     free(built);
     fclose(f);
+    return err;
+}
+
+int checkpoint_restore(const char *host_path) {
+    pthread_mutex_lock(&ckpt_save_lock);
+    int err = ckpt_restore_locked(host_path);
+    pthread_mutex_unlock(&ckpt_save_lock);
     return err;
 }
 

@@ -171,6 +171,42 @@ static void *cli_sockrestart_after(void *unused) {
     fprintf(stderr, "sockrestart: rebuilt %u listener(s)\n", rebuilt);
     return NULL;
 }
+static long cli_checkpoint_now_ms(void) {
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return now.tv_sec * 1000 + now.tv_nsec / 1000000;
+}
+static void cli_checkpoint_once(const char *log_mode) {
+    long began = cli_checkpoint_now_ms();
+    // ISH_CHECKPOINT_LEAVE_OUT=1: the app's save-what-can-be-saved, which
+    // leaves out the processes that cannot be saved instead of refusing.
+    const char *leave_out = getenv("ISH_CHECKPOINT_LEAVE_OUT");
+    int err = checkpoint_save_external_flags(cli_checkpoint_path,
+            leave_out != NULL && strcmp(leave_out, "1") == 0 ? CKPT_SAVE_LEAVE_OUT : 0);
+    long ended = cli_checkpoint_now_ms();
+    // To a file beside the image, not to stderr: by the time this runs the
+    // guest may have closed the host's standard streams on its way out, and a
+    // diagnostic that vanishes is worse than none.
+    char log[PATH_MAX];
+    snprintf(log, sizeof(log), "%s.log", cli_checkpoint_path);
+    FILE *lf = fopen(log, log_mode);
+    if (lf != NULL) {
+        struct checkpoint_status ck;
+        checkpoint_get_status(&ck);
+        fprintf(lf, "%s (%d) %s\n", err == 0 ? "written" : "refused", err,
+                ck.last_refusal);
+        // Overlap's rounds: when each save was asked for and when it was over, which
+        // is how checkpoint_overlap.sh knows the two really did overlap.
+        if (log_mode[0] == 'a')
+            fprintf(lf, "time %ld %ld\n", began, ended);
+        fclose(lf);
+    }
+}
+static void *cli_checkpoint_second(void *gap_ms) {
+    usleep((useconds_t) ((intptr_t) gap_ms * 1000));
+    cli_checkpoint_once("a");
+    return NULL;
+}
 static void *cli_checkpoint_after(void *unused) {
     (void) unused;
     while (cli_checkpoint_path == NULL)
@@ -184,23 +220,23 @@ static void *cli_checkpoint_after(void *unused) {
     } else {
         usleep((useconds_t) (cli_checkpoint_delay * 1000000));
     }
-    // ISH_CHECKPOINT_LEAVE_OUT=1: the app's save-what-can-be-saved, which
-    // leaves out the processes that cannot be saved instead of refusing.
-    const char *leave_out = getenv("ISH_CHECKPOINT_LEAVE_OUT");
-    int err = checkpoint_save_external_flags(cli_checkpoint_path,
-            leave_out != NULL && strcmp(leave_out, "1") == 0 ? CKPT_SAVE_LEAVE_OUT : 0);
-    // To a file beside the image, not to stderr: by the time this runs the
-    // guest may have closed the host's standard streams on its way out, and a
-    // diagnostic that vanishes is worse than none.
-    char log[PATH_MAX];
-    snprintf(log, sizeof(log), "%s.log", cli_checkpoint_path);
-    FILE *lf = fopen(log, "w");
-    if (lf != NULL) {
-        struct checkpoint_status ck;
-        checkpoint_get_status(&ck);
-        fprintf(lf, "%s (%d) %s\n", err == 0 ? "written" : "refused", err,
-                ck.last_refusal);
-        fclose(lf);
+    // ISH_CHECKPOINT_OVERLAP=<rounds>:<ms>: that many rounds of two saves at once,
+    // the second starting <ms> into the first, as when the app goes to the
+    // background again during a long save. tests/manual/checkpoint_overlap.sh.
+    const char *overlap = getenv("ISH_CHECKPOINT_OVERLAP");
+    if (overlap == NULL) {
+        cli_checkpoint_once("w");
+        return NULL;
+    }
+    int rounds = atoi(overlap);
+    const char *gap = strchr(overlap, ':');
+    intptr_t gap_ms = gap != NULL ? atoi(gap + 1) : 0;
+    for (int i = 0; i < rounds; i++) {
+        pthread_t second;
+        pthread_create(&second, NULL, cli_checkpoint_second, (void *) gap_ms);
+        cli_checkpoint_once("a");
+        pthread_join(second, NULL);
+        usleep(200000);
     }
     return NULL;
 }

@@ -145,7 +145,7 @@ six of them were not linked from anywhere at all.
 | [persist.md](persist.md) | `/AOK/persist` and `/AOK/fakefs` — the two places that survive root switches, app updates and reinstalls |
 | [networking.md](networking.md) | reaching the device from another machine, what the guest can and cannot listen on, and the DNS relay |
 | [namespaces.md](namespaces.md) | sandboxes inside the guest — `unshare`, bubblewrap, Codex CLI's command sandbox — and what a private network is here |
-| [files-app-integration.md](files-app-integration.md) | the File Provider extension, and how iSH-AOK appears in the iOS Files app |
+| [files-app-integration.md](files-app-integration.md) | the File Provider extension, and how iSH-AOK appears in the iOS Files app — and `mount -t ios`, a Files folder inside the guest |
 | [shortcuts.md](shortcuts.md) | driving iSH-AOK from Apple's Shortcuts app |
 | [swap.md](swap.md) | the simulated swap area — turning it on, what it costs, and what it will not do |
 | [suspend.md](suspend.md) | suspend to disk — keeping the session across the app being killed |
@@ -156,6 +156,7 @@ six of them were not linked from anywhere at all.
 | --- | --- |
 | [workspace.md](workspace.md) | the in-app multi-window desktop, its applets and saved layouts — and the Wayland desktop, the GPU and the games set |
 | [external-display.md](external-display.md) | an iPhone on a monitor or AirPlay: the terminal on the big screen, the keyboard on the phone (new in 563, iPhone only) |
+| [terminal-images.md](terminal-images.md) | images in the terminal with kitty's graphics protocol: `kitten icat`, `chafa` (new in 565) |
 | [file-browser.md](file-browser.md) | the quick file picker on the keyboard bar (Cmd-B) |
 | [keyboard-shortcuts.md](keyboard-shortcuts.md) | every hardware-keyboard shortcut: desktops, windows, the terminal, MotePad, the Wayland desktop |
 | [keyboard-toolbar.md](keyboard-toolbar.md) | arranging the keys above the keyboard, and adding your own |

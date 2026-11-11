@@ -331,6 +331,12 @@ Wayland window opens.
   the icons. It runs as Xfce 4.20's Wayland session, with labwc
   drawing the windows (Xfce's own window manager is X11-only), so it needs no
   GPU, and uses it when it is there. Devuan, Alpine and Arch all carry it.
+  Alpine builds `xfce4-notifyd` for X11 alone, so there the session runs it
+  under Xwayland, which labwc brings, and Xwayland stays up for the whole
+  session (about 30 MB resident). It does that with its own copies of the
+  notifyd's two D-Bus service files and its autostart entry, in
+  `~/.local/share/dbus-1/services` and `~/.config/autostart`, and leaves a copy
+  you have edited alone.
 
 Both keep the labwc desktop's keys, since the app keeps the Command key for
 itself: Alt+Return opens a terminal, Alt+Shift+D the launcher (Xfce's app

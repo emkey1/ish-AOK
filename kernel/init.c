@@ -133,7 +133,7 @@ void ensure_root_fstab_entry(void) {
 
     // Small file by nature; a root entry past 64 KiB is not a case to serve.
     char buf[65536];
-    ssize_t n = fd->ops->read(fd, buf, sizeof(buf) - 1);
+    ssize_t n = generic_read(fd, buf, sizeof(buf) - 1);
     if (n < 0)
         n = 0;
     buf[n] = '\0';
@@ -163,11 +163,11 @@ void ensure_root_fstab_entry(void) {
         off_t_ at = n;
         if (n > 0 && buf[n - 1] != '\n') {
             fd->ops->lseek(fd, at, LSEEK_SET);
-            fd->ops->write(fd, "\n", 1);
+            generic_write(fd, "\n", 1);
             at++;
         }
         fd->ops->lseek(fd, at, LSEEK_SET);
-        fd->ops->write(fd, entry, sizeof(entry) - 1);
+        generic_write(fd, entry, sizeof(entry) - 1);
     }
     fd_close(fd);
 }

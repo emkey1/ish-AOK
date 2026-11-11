@@ -355,7 +355,7 @@ static NSString *const kPersistGuestPrefix = @"/AOK/persist/";
     NSMutableData *data = [NSMutableData data];
     char buffer[65536];
     ssize_t n;
-    while ((n = fd->ops->read(fd, buffer, sizeof(buffer))) > 0)
+    while ((n = generic_read(fd, buffer, sizeof(buffer))) > 0)
         [data appendBytes:buffer length:(NSUInteger)n];
     fd_close(fd);
     if (n < 0) {
@@ -507,7 +507,7 @@ static void MotePadApplyDefaultOwnerForCreation(NSString *path) {
     size_t remaining = data.length;
     BOOL ok = YES;
     while (remaining > 0) {
-        ssize_t n = fd->ops->write(fd, bytes, remaining);
+        ssize_t n = generic_write(fd, bytes, remaining);
         if (n <= 0) { ok = NO; break; }
         bytes += n;
         remaining -= (size_t)n;
@@ -602,7 +602,7 @@ static void MotePadApplyDefaultOwnerForCreation(NSString *path) {
     const char *bytes = data.bytes;
     size_t remaining = data.length;
     while (remaining > 0) {
-        ssize_t n = fd->ops->write(fd, bytes, remaining);
+        ssize_t n = generic_write(fd, bytes, remaining);
         if (n <= 0)
             return NO;
         bytes += n;

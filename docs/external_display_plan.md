@@ -318,6 +318,40 @@ attempt with upstream iSH could show. MBP5's iOS 27 runtimes are betas
 (24A5370g, 24A5380i) whose external display never connects, even for the
 probe in row one; use the release runtime (24A434).
 
+## On hardware, and the frozen Wayland mirror (565)
+
+**First hardware reports, 2026-11-05, on 564.** LPV412 (#540, iPhone 16 Plus,
+iOS 27.0.1, cable, external keyboard): the terminal works in any orientation;
+the Wayland mirror showed the frame from the moment it connected and never
+another until unplugged and replugged. simlay (Discord): the terminal over
+AirPlay and over Thunderbolt/USB-C, with a Bluetooth keyboard; text small on
+a 4K 30" monitor; did not know how to start the Wayland desktop.
+
+**The freeze was ours, and every build since 563 had it.** The source view
+handed the mirror each frame with `[mirror drawTexture:]`, which presents
+`mirror.currentDrawable`. MTKView replaces `currentDrawable` only at the end
+of `-draw` (MTKView.h says so), and the mirror's `-draw` never ran, so it
+presented its first drawable over and over. Now the source calls
+`[mirror draw]` at the same two points: still synchronous with its own frame,
+so the tearing reason above still holds, and the mirror's
+`-drawInMTKView:` samples the source's texture as before.
+
+**Verified in the simulator (iOS 27.0, 24A434), 2026-11-05,** with the
+Alpine desktop root (labwc, GPU direct frames) and Startup Mode Wayland, on a
+1920x1080 external display: with the fix the external screen shows the
+desktop and its panel clock moved from 19:17 to 19:19 between screenshots
+75 s apart. The control, the same tree without the fix, gave two identical
+external screenshots -- black with the cursor, the frame from before the
+desktop's first -- while the phone's view showed the desktop. Still not seen
+on a real display.
+
+**Not fixed, noted:** the phone's view keeps showing the desktop squeezed to
+its own shape while the desktop is sized for the monitor (LPV412's portrait
+"weird layout" is most likely this; not confirmed with them). The terminal's
+font size is the phone's, in points, with no allowance for a high-resolution
+monitor; ⌘+ works, and `/AOK/docs/external-display.md` now says so and how
+to start the desktop.
+
 ## History: implemented, then pulled from release 546
 
 The implementation (`57380ba6`, `cc0b5b21`) was reverted before tagging 546. It

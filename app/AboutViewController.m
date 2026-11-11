@@ -371,6 +371,7 @@ UIViewController *ISHCreateDiagnosticsNavigationController(void) {
 {
     BOOL _didPresentInitialDiagnostics;
     __weak UIBarButtonItem *_modeButton;
+    UIBarButtonItem *_doneButton;
 }
 
 - (void)viewDidLoad {
@@ -393,7 +394,16 @@ UIViewController *ISHCreateDiagnosticsNavigationController(void) {
                                                                                  target:self
                                                                                  action:@selector(exitRecovery:)];
     } else {
-        self.navigationItem.rightBarButtonItem = workspaceButton;
+        // Done stays beside it. Replacing the storyboard's Done with this
+        // button left a swipe down as the only way out, and on an iPhone in
+        // landscape the sheet is full screen and cannot be swiped away
+        // (TestFlight feedback on 564). -_updateModeButton drops Done again
+        // where nothing presented Settings, as a Workspace tool window.
+        _doneButton = self.navigationItem.rightBarButtonItem ?:
+            [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemDone
+                                                          target:self
+                                                          action:@selector(dismiss:)];
+        self.navigationItem.rightBarButtonItems = @[_doneButton, workspaceButton];
     }
     _versionLabel.text = [NSString stringWithFormat:NSLocalizedString(@"iSH-AOK %@ (Build %@)", @"Settings version label; version, then build number"),
                           [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleShortVersionString"],
@@ -430,6 +440,14 @@ UIViewController *ISHCreateDiagnosticsNavigationController(void) {
     // rather than silently guessing "shell".
     UIWindow *window = self.view.window ?: ISHActivePresentationViewController().view.window;
     modeButton.title = ISHWindowIsShowingWorkspace(window) ? NSLocalizedString(@"Shell", @"Settings button that switches to the shell") : NSLocalizedString(@"Workspace", @"Settings button that switches to the Workspace");
+    if (_doneButton != nil) {
+        // Presented itself, not merely inside something presented: the
+        // Workspace is presented over the shell, and its Settings window would
+        // otherwise get a Done that dismissed the whole Workspace.
+        UINavigationController *navigation = self.navigationController;
+        BOOL presented = navigation != nil && navigation.presentingViewController.presentedViewController == navigation;
+        self.navigationItem.rightBarButtonItems = presented ? @[_doneButton, modeButton] : @[modeButton];
+    }
 }
 
 - (void)viewDidAppear:(BOOL)animated {

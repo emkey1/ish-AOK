@@ -59,7 +59,9 @@ Eight workflows, and the interesting thing is which of them gate anything:
 
 - **`ci.yml`** — a Linux build on `ubuntu-24.04`, with a matrix of **clang and
   gcc**. This is the one that catches things.
-- **`build-dev-ipa.yml`** — the app, on `macos-15`, on push.
+- **`build-dev-ipa.yml`** — the app, on `macos-15`, on push. It updates the
+  `dev-latest` release in place, adding the new IPA before removing the old, so
+  a publish that fails part way still leaves a build to download.
 - **`build-release-ipa.yml`** — triggered by a `builds/iSH-AOK_*` tag
   (Chapter 37).
 - **`build-ktop.yml`** — cross-compiles `ktop`'s prebuilt binaries and commits

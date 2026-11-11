@@ -47,6 +47,17 @@ counter that only grows; AOK reported the current live-task count instead, so
 anything deriving a fork *rate* from it saw a flat line. It is a real counter
 now, bumped in `task_create_`.
 
+**`/proc/stat`'s `cpuN` lines did not add up to its `cpu` line**, which on Linux
+is their sum. AOK cannot see which core runs a guest thread, so it charges each
+task's time to a slot, `pid % N`, N being the CPUs in the affinity mask, and on
+iOS the mask keeps a third back for the UI. The CPUs past it were never charged,
+and a slot's time beyond its capacity was thrown away, so `stress-ng --cpu 6` on
+a 6-core iPhone showed two CPUs at 0% in `btop` beside a total of 86%, and was
+reported as the performance cores never starting. They were running. Since 564
+what a full slot runs beyond its capacity moves to slots with room, the mask's
+CPUs first and then the reserved ones, and `proc_stat_monotonic` checks the sum.
+A guest within `nproc` still leaves the reserved CPUs reading idle.
+
 **And two file modes were lies in opposite directions.**
 `/proc/self/oom_score_adj` was 0444 despite having a working write handler, so a
 process that checked the mode before writing concluded it could not. The

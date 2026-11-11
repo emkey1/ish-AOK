@@ -1436,6 +1436,28 @@ ssize_t fd_write_host_buf(fd_t fd_no, const void *buf, size_t size) {
     return res;
 }
 
+ssize_t generic_read(struct fd *fd, void *buf, size_t size) {
+    if (fd->ops->read)
+        return fd->ops->read(fd, buf, size);
+    if (fd->ops->pread == NULL)
+        return _EBADF;
+    ssize_t res = fd->ops->pread(fd, buf, size, fd->offset);
+    if (res > 0)
+        fd->ops->lseek(fd, res, LSEEK_CUR);
+    return res;
+}
+
+ssize_t generic_write(struct fd *fd, const void *buf, size_t size) {
+    if (fd->ops->write)
+        return fd->ops->write(fd, buf, size);
+    if (fd->ops->pwrite == NULL)
+        return _EBADF;
+    ssize_t res = fd->ops->pwrite(fd, buf, size, fd->offset);
+    if (res > 0)
+        fd->ops->lseek(fd, res, LSEEK_CUR);
+    return res;
+}
+
 dword_t sys_write_guest(fd_t fd_no, guest_addr_t buf_addr, dword_t size) {
     return sys_write_common(fd_no, buf_addr, size);
 }

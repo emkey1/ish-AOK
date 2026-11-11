@@ -2062,6 +2062,16 @@ static int fusefs_fsetattr(struct fd *fd, struct attr attr) {
     return fuse_setattr_from_attr(conn, file->nodeid, file->fh_valid, file->fh, attr);
 }
 
+static struct fuse_setattr_in fuse_setattr_times(struct timespec atime, struct timespec mtime) {
+    return (struct fuse_setattr_in) {
+        .valid = FATTR_ATIME | FATTR_MTIME,
+        .atime = (uint64_t) atime.tv_sec,
+        .atimensec = (uint32_t) atime.tv_nsec,
+        .mtime = (uint64_t) mtime.tv_sec,
+        .mtimensec = (uint32_t) mtime.tv_nsec,
+    };
+}
+
 static int fusefs_utime(struct mount *mount, const char *path,
         struct timespec atime, struct timespec mtime, bool follow_links) {
     (void) follow_links; // path resolution already followed what it should
@@ -2073,16 +2083,25 @@ static int fusefs_utime(struct mount *mount, const char *path,
     int err = fuse_resolve(conn, path, &nodeid, NULL);
     if (err < 0)
         return err;
-    struct fuse_setattr_in in = {
-        .valid = FATTR_ATIME | FATTR_MTIME,
-        .atime = (uint64_t) atime.tv_sec,
-        .atimensec = (uint32_t) atime.tv_nsec,
-        .mtime = (uint64_t) mtime.tv_sec,
-        .mtimensec = (uint32_t) mtime.tv_nsec,
-    };
+    struct fuse_setattr_in in = fuse_setattr_times(atime, mtime);
     err = fuse_setattr_common(conn, nodeid, &in);
     fuse_forget(conn, nodeid);
     return err;
+}
+
+// Without this, futimens() of a file falls back to resolving "." against it,
+// which is ENOTDIR. GNU touch sets its times that way, on the fd it opened.
+static int fusefs_futime(struct fd *fd, struct timespec atime, struct timespec mtime) {
+    struct fuse_file *file = fd->data;
+    struct fuse_conn *conn = fuse_mount_conn(fd->mount);
+    if (conn == NULL)
+        return _ENOTCONN;
+    struct fuse_setattr_in in = fuse_setattr_times(atime, mtime);
+    if (file->fh_valid) {
+        in.valid |= FATTR_FH;
+        in.fh = file->fh;
+    }
+    return fuse_setattr_common(conn, file->nodeid, &in);
 }
 
 static int fusefs_getpath(struct fd *fd, char *buf) {
@@ -2492,6 +2511,7 @@ const struct fs_ops fusefs = {
     .fstat = fusefs_fstat,
     .setattr = fusefs_setattr,
     .fsetattr = fusefs_fsetattr,
+    .futime = fusefs_futime,
     .utime = fusefs_utime,
     .getpath = fusefs_getpath,
 };

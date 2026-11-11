@@ -29,7 +29,11 @@ bool ISHLocationKeepsAppAlive(void) {
 + (LocationTracker *)instance;
 
 @property CLLocationManager *locationManager;
-@property (nonatomic) CLLocation *latest;
+// Atomic because LocationFile reads it without the lock, on a guest thread, while
+// the main thread replaces it. Nonatomic, that read could retain the object the
+// setter was releasing, and the app died later in objc_release: 563 did, on a
+// phone 94 minutes into reading /dev/location.
+@property CLLocation *latest;
 @property lock_t lock;
 @property cond_t updateCond;
 

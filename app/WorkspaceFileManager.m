@@ -381,6 +381,7 @@ static NSString *ISHHomeDirectoryForUID(NSData *passwdData, uid_t targetUID) {
             separator.text = @"›";
             separator.font = [UIFont systemFontOfSize:[self workspaceScaledFontSize:12.0]];
             separator.textColor = theme[@"secondary"];
+            separator.isAccessibilityElement = NO;
             [_pathStack addArrangedSubview:separator];
         }
         UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem];

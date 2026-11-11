@@ -453,6 +453,19 @@ it on, and the hardware test it skipped is written out in
 `docs/build_563_musts.md` for whoever has both. The branch is gone; its one
 commit is in the tree.
 
+The first report from hardware, an iPhone 15 on iOS 27.0 over USB-C and AirPlay,
+said 563 gave only the mirror, and the plist was not at fault. iOS 27 no longer
+creates the non-interactive scene from the Info.plist role for an app built with
+its SDK: a view controller has to register a `UISceneAccessory`. A probe app
+showed it on the simulator's external display, getting the scene when built with
+the 26.5 SDK and none when built with 27.1, until a controller registered the
+accessory. 564 registers one, on iPhone and iOS 27 only, from each surface that
+owns a scene's content, and keeps the plist role for iOS 15-26. The same work
+found that a Workspace terminal window had never reached the display, because
+since windows got tabs a window's content controller is one that cannot drive it.
+All of that is verified in the iOS 27 simulator. The Wayland mirror and real
+hardware are still untried.
+
 Most projects do one of two things with an implementation they have judged
 inadequate: merge it because it mostly works, or delete it because it does not.
 Keeping it, naming the judgement, and fencing it against accidental inclusion is
@@ -534,6 +547,13 @@ the same place:
   the whole desktop, from the shell that started it down — and keeps the
   rest. To a kept parent a left-out
   child is a process killed by `SIGKILL`, which is what it is after a resume.
+- **A bad format costs the process, not the app.** A `vkCreateRenderPass` naming
+  a format missing from MoltenVK's table used to end the whole app, in a
+  `strlen(NULL)` building the error message. Since 564 the MoltenVK fork does not
+  (`tools/vkbadformat.c` is the check), but that guest process still dies of
+  `SIGABRT`: Venus does not wait for a render pass to be created, so the guest
+  driver hears of the failure when the host declares the context fatal, and
+  aborts.
 - **Bounded by the distributions.** Alpine builds no virgl GL driver at all, so
   GL goes through zink on top of Venus — and zink here is GL 2.1 and GLES 2.0,
   so GL programs stay on llvmpipe unless told otherwise, and only the

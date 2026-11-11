@@ -25,6 +25,47 @@ NSNotificationName const TerminalLoadFailedNotification = @"TerminalLoadFailedNo
 NSNotificationName const TerminalDidLoadNotification = @"TerminalDidLoadNotification";
 NSNotificationName const TerminalRegistryDidChangeNotification = @"TerminalRegistryDidChangeNotification";
 
+// Where a byte stream stands with respect to string escape sequences (OSC,
+// DCS, APC, PM, SOS: ESC ] _ P ^ X ... ST or BEL), so trimming the head of the
+// pre-load buffer can tell when it cut into one.
+typedef NS_ENUM(uint8_t, ISHEscapeStringState) {
+    ISHEscapeStringOutside,
+    ISHEscapeStringAfterEscape,
+    ISHEscapeStringInside,
+    ISHEscapeStringInsideAfterEscape,
+};
+
+static ISHEscapeStringState ISHAdvanceEscapeStringState(ISHEscapeStringState state, uint8_t byte) {
+    switch (state) {
+        case ISHEscapeStringInside:
+            if (byte == 0x1b)
+                return ISHEscapeStringInsideAfterEscape;
+            return byte == 0x07 ? ISHEscapeStringOutside : ISHEscapeStringInside;
+        case ISHEscapeStringInsideAfterEscape:
+            if (byte == '\\')
+                return ISHEscapeStringOutside;
+            // Any other escape ends the string (hterm abandons it) and starts
+            // a sequence of its own.
+            // fallthrough
+        case ISHEscapeStringAfterEscape:
+            switch (byte) {
+                case ']': case '_': case 'P': case '^': case 'X':
+                    return ISHEscapeStringInside;
+                case 0x1b:
+                    return ISHEscapeStringAfterEscape;
+                default:
+                    return ISHEscapeStringOutside;
+            }
+        case ISHEscapeStringOutside:
+        default:
+            return byte == 0x1b ? ISHEscapeStringAfterEscape : ISHEscapeStringOutside;
+    }
+}
+
+static BOOL ISHEscapeStringStateIsInside(ISHEscapeStringState state) {
+    return state == ISHEscapeStringInside || state == ISHEscapeStringInsideAfterEscape;
+}
+
 @interface Terminal () <WKScriptMessageHandler, WKNavigationDelegate> {
     lock_t _dataLock;
     cond_t _dataConsumed;
@@ -48,6 +89,9 @@ NSNotificationName const TerminalRegistryDidChangeNotification = @"TerminalRegis
 @property (nonatomic) NSData *inFlightData;
 @property (nonatomic) NSUInteger outputGeneration;
 @property (nonatomic) CFTimeInterval outputStartedAt;
+// The escape-string state at the start of pendingData, while output is being
+// kept for a page that has not loaded (under dataLock).
+@property (nonatomic) ISHEscapeStringState pendingHeadState;
 
 @property DelayedUITask *refreshTask;
 @property DelayedUITask *scrollToBottomTask;
@@ -102,6 +146,12 @@ NSNotificationName const TerminalRegistryDidChangeNotification = @"TerminalRegis
 @synthesize webView = _webView;
 
 static const int BUF_SIZE = 1<<14;
+// Output kept for a terminal whose page has not loaded yet (see -sendOutput:).
+// Larger than BUF_SIZE because one image sent with kitty's graphics protocol
+// is a single escape string of tens or hundreds of kilobytes, and a terminal
+// opened with a command often prints before its page is ready.
+static const NSUInteger PRELOAD_BUF_SIZE = 1 << 20;
+
 
 static NSMapTable<NSNumber *, Terminal *> *terminals;
 static NSMapTable<NSUUID *, Terminal *> *terminalsByUUID;
@@ -561,6 +611,10 @@ struct tty *ISHOpenTerminalForRestoredSession(void) {
             return;
         int cols = dimensions[0].intValue;
         int rows = dimensions[1].intValue;
+        // The text area in device pixels, when the page reports it (see
+        // exports.getSize): image tools refuse to run without it.
+        int xpixel = dimensions.count >= 4 ? MAX(dimensions[2].intValue, 0) : 0;
+        int ypixel = dimensions.count >= 4 ? MAX(dimensions[3].intValue, 0) : 0;
         // Read the unowned back-pointer once. ios_tty_cleanup clears it from
         // the emulator thread, so re-reading self.tty for each use means the
         // NULL check guards nothing: the pointer could still be live here and
@@ -586,7 +640,8 @@ struct tty *ISHOpenTerminalForRestoredSession(void) {
         if (tty == NULL)
             return;
         lock(&tty->lock, 0);
-        tty_set_winsize(tty, (struct winsize_) {.col = cols, .row = rows});
+        tty_set_winsize(tty, (struct winsize_) {.col = cols, .row = rows,
+                                                .xpixel = xpixel, .ypixel = ypixel});
         unlock(&tty->lock);
         tty_put(tty);
     }];
@@ -644,6 +699,57 @@ struct tty *ISHOpenTerminalForRestoredSession(void) {
                    completionHandler:nil];
 }
 
+// Keeps at most PRELOAD_BUF_SIZE of the newest output, and never lets what is
+// kept start partway through a string escape sequence: a kitty image whose
+// head was trimmed away drew its base64 payload as a screen of text. A string
+// the trim cuts into is dropped to its end, along with any half of a UTF-8
+// character left at the front. Called with dataLock held.
+- (void)appendPreloadOutputLocked:(const uint8_t *)bytes length:(NSUInteger)len {
+    ISHEscapeStringState state = self.pendingHeadState;
+    BOOL trimmed = NO;
+
+    // Still skipping a string an earlier trim cut into.
+    if (_pendingData.length == 0) {
+        while (len > 0 && ISHEscapeStringStateIsInside(state)) {
+            state = ISHAdvanceEscapeStringState(state, *bytes++);
+            len--;
+            trimmed = YES;
+        }
+    }
+
+    // Make room, walking the state over everything discarded.
+    NSUInteger excess = _pendingData.length + len > PRELOAD_BUF_SIZE ?
+        _pendingData.length + len - PRELOAD_BUF_SIZE : 0;
+    if (excess > 0) {
+        NSUInteger fromPending = MIN(excess, _pendingData.length);
+        const uint8_t *pending = _pendingData.bytes;
+        for (NSUInteger i = 0; i < fromPending; i++)
+            state = ISHAdvanceEscapeStringState(state, pending[i]);
+        [_pendingData replaceBytesInRange:NSMakeRange(0, fromPending) withBytes:NULL length:0];
+        NSUInteger fromNew = excess - fromPending;
+        for (NSUInteger i = 0; i < fromNew; i++)
+            state = ISHAdvanceEscapeStringState(state, bytes[i]);
+        bytes += fromNew;
+        len -= fromNew;
+        trimmed = YES;
+    }
+    [_pendingData appendBytes:bytes length:len];
+
+    if (trimmed) {
+        // Drop the rest of a string the trim cut into, then any UTF-8
+        // continuation bytes the cut left at the front.
+        const uint8_t *kept = _pendingData.bytes;
+        NSUInteger drop = 0;
+        while (drop < _pendingData.length && ISHEscapeStringStateIsInside(state))
+            state = ISHAdvanceEscapeStringState(state, kept[drop++]);
+        while (drop < _pendingData.length && (kept[drop] & 0xc0) == 0x80 &&
+               !ISHEscapeStringStateIsInside(state))
+            state = ISHAdvanceEscapeStringState(state, kept[drop++]);
+        [_pendingData replaceBytesInRange:NSMakeRange(0, drop) withBytes:NULL length:0];
+    }
+    self.pendingHeadState = state;
+}
+
 - (int)sendOutput:(const void *)buf length:(int)len {
     TerminalDebugMirrorOutput(self, buf, len);
     lock(&_dataLock, 0);
@@ -653,18 +759,10 @@ struct tty *ISHOpenTerminalForRestoredSession(void) {
             // started by init) may never get a web view to drain them. Keep a
             // bounded tail of recent output instead of blocking guest writers
             // forever once the buffer fills.
-            if (len > BUF_SIZE) {
-                buf = (const char *) buf + (len - BUF_SIZE);
-                len = BUF_SIZE;
-                [_pendingData setLength:0];
-            } else {
-                NSUInteger needed = (NSUInteger) len;
-                NSUInteger available = _pendingData.length >= BUF_SIZE ? 0 : (NSUInteger) (BUF_SIZE - _pendingData.length);
-                if (needed > available) {
-                    NSUInteger discard = MIN(_pendingData.length, needed - available);
-                    [_pendingData replaceBytesInRange:NSMakeRange(0, discard) withBytes:NULL length:0];
-                }
-            }
+            [self appendPreloadOutputLocked:buf length:(NSUInteger) len];
+            [self.refreshTask schedule];
+            unlock(&_dataLock);
+            return len;
         } else {
             // The main thread is the only one that can unblock this, so sleeping
             // here would be a deadlock. The only reason for this to be called on
@@ -807,6 +905,7 @@ NSString *ISHPasteSequence(NSString *text, BOOL bracketed, BOOL execute) {
     }
     NSData *data = _pendingData;
     _pendingData = [[NSMutableData alloc] initWithCapacity:BUF_SIZE];
+    self.pendingHeadState = ISHEscapeStringOutside;
     _outputInProgress = YES;
     self.inFlightData = data;
     _outputStartedAt = now;

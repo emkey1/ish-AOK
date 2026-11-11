@@ -182,6 +182,13 @@ bool current_in_group(uid_t_ gid);
 // needs to skip that copy rather than fake one.
 ssize_t fd_write_host_buf(fd_t fd_no, const void *buf, size_t size);
 
+// Read or write an open descriptor at its offset, with a host buffer, as read(2)
+// and write(2) do. For a caller holding a struct fd, such as the app reading a
+// guest file. Don't call ->read or ->write directly: /proc has only pread and
+// pwrite, and a guest path can name anything.
+ssize_t generic_read(struct fd *fd, void *buf, size_t size);
+ssize_t generic_write(struct fd *fd, const void *buf, size_t size);
+
 // iSH-internal mount flag, NOT part of the guest mount(2) ABI. fs/mount.c's
 // sys_mount masks incoming guest flags to MS_FLAGS before calling do_mount(),
 // so a guest process can never set or clear this bit; only native do_mount()

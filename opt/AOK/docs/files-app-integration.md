@@ -93,3 +93,29 @@ mid-operation. If you also use [`/AOK/roots`](roots.md) to cross-mount that
 same root for chrooting, a root that's locked by an in-progress Files app
 operation is skipped for that boot cycle and will pick up on the next one
 once the lock clears.
+
+## The other way round: a Files folder inside the guest
+
+`mount -t ios`, as root, puts a folder the iOS folder picker can reach into the
+guest's tree:
+
+```sh
+mkdir -p /mnt/photos
+mount -t ios . /mnt/photos         # iOS asks which folder; the "." is not used
+umount /mnt/photos                 # and it stays gone on the next launch
+```
+
+The picker needs an app window to appear in: with none open the mount fails with
+`EAGAIN`, and `dmesg` says why. A mount comes back by itself on the next launch,
+until you unmount it.
+
+- **Walking a tree is cheap.** `stat`, `readlink` and listing a directory go
+  straight to the host. In the simulator, `find` over 10,000 files takes about
+  half a second, the same as on a root filesystem.
+- **Opening a file and changing anything are coordinated with other apps.** iOS
+  has another app using the file save its pending changes first, which costs a
+  couple of milliseconds each time.
+- **`-o unsafe` skips that too.** `mount -t ios -o unsafe . /mnt/photos` saves
+  time only on a job that opens or changes many files, and it can read a file
+  another app has not finished saving. It is not remembered: the mount that comes
+  back on the next launch is an ordinary one.

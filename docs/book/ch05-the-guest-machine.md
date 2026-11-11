@@ -479,7 +479,11 @@ transcendentals included, is now a gadget on both x86 guests
 one rounder that honours rounding and precision control, with a real tag word,
 and every edge — NaN choice, pseudo-denormals, `FPREM`'s partial remainder,
 unmasked exceptions — taken case by case from an AMD Ryzen rather than from the
-SDM's prose. The transcendentals are correctly rounded, which is *better* than
+SDM's prose. One got past that until 564: `FCOMI`, `FCOMIP`, `FUCOMI` and
+`FUCOMIP` cleared C1, as the SDM says they do, where the Ryzen keeps it, unordered
+operands included, and clears it only on a stack fault.
+`tests/manual/x86/x87_compare_c1.c` holds every compare form to that now. The
+transcendentals are correctly rounded, which is *better* than
 the hardware: the Ryzen itself is one ulp off in about 2% of cases. `float80`
 in C remains what the interpreter and the x86_64-host backend run, and the
 model the gadgets were checked against.

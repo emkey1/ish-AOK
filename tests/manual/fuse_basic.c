@@ -126,6 +126,8 @@ struct fuse_setattr_in {
 };
 #define FATTR_MODE_ (1 << 0)
 #define FATTR_SIZE_ (1 << 3)
+#define FATTR_ATIME_ (1 << 4)
+#define FATTR_MTIME_ (1 << 5)
 struct fuse_mkdir_in {
     uint32_t mode, umask;
 };
@@ -153,6 +155,7 @@ static struct dent {
     char data[MAXDATA];
     size_t size;
     unsigned mode;
+    uint64_t atime, mtime;
     // An entry too big for `data` -- the executable the exec check runs.
     // Served instead of `data` when set; never written to.
     char *big;
@@ -222,6 +225,8 @@ static void fill_attr(struct fuse_wire_attr *attr, uint64_t nodeid) {
     attr->mode = (d->is_dir ? S_IFDIR : S_IFREG) | d->mode;
     attr->nlink = 1;
     attr->size = d->big != NULL ? d->bigsize : d->size;
+    attr->atime = d->atime;
+    attr->mtime = d->mtime;
 }
 
 static int devfd;
@@ -329,6 +334,10 @@ static void daemon_loop(void) {
                         memset(d->data + d->size, 0, sa->size - d->size);
                     d->size = sa->size;
                 }
+                if (sa->valid & FATTR_ATIME_)
+                    d->atime = sa->atime;
+                if (sa->valid & FATTR_MTIME_)
+                    d->mtime = sa->mtime;
             }
             struct fuse_attr_out out;
             memset(&out, 0, sizeof(out));
@@ -743,6 +752,16 @@ int main(int argc, char **argv) {
     is_ok("stat.trunc", stat(p1, &st));
     check("truncate.applied", st.st_size == 4);
 
+    // SETATTR: futimens, which is how GNU touch sets a file's times, on the fd
+    // it opened. It must not resolve a path, or a file is ENOTDIR.
+    const struct timespec times[2] = {{12345, 0}, {23456, 0}};
+    fd = open(p1, O_WRONLY);
+    is_ok("open.futimens", fd);
+    is_ok("futimens", futimens(fd, times));
+    close(fd);
+    is_ok("stat.futimens", stat(p1, &st));
+    check("futimens.applied", st.st_atime == 12345 && st.st_mtime == 23456);
+
     // READDIR sees the file
     DIR *dir = opendir(mnt);
     int saw_f1 = 0;
@@ -759,6 +778,12 @@ int main(int argc, char **argv) {
     is_ok("mkdir", mkdir(pd, 0755));
     is_ok("stat.dir", stat(pd, &st));
     check("mkdir.is_dir", S_ISDIR(st.st_mode));
+    fd = open(pd, O_RDONLY | O_DIRECTORY);
+    is_ok("open.dir.futimens", fd);
+    is_ok("futimens.dir", futimens(fd, times));
+    close(fd);
+    is_ok("stat.dir.futimens", stat(pd, &st));
+    check("futimens.dir.applied", st.st_atime == 12345 && st.st_mtime == 23456);
     is_ok("rmdir", rmdir(pd));
 
     // RENAME, then the old name is a negative LOOKUP

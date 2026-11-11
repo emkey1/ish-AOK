@@ -4,7 +4,7 @@
 
 # Appendix F. The regression suite, annotated
 
-623 C programs in `tests/manual/`, of which **575 are listed in `fs/aok-tests.manifest`** and therefore reach the device at `/AOK/tests`.
+625 C programs in `tests/manual/`, of which **576 are listed in `fs/aok-tests.manifest`** and therefore reach the device at `/AOK/tests`.
 
 A row with a directory prefix is a per-architecture or accelerator test, kept
 in a subdirectory of `tests/manual/` and registered under that same prefix.
@@ -67,6 +67,7 @@ does not say what it is for.
 | `checkpoint_fpenv/witness.c` | — | checkpoint_fpenv/witness.c -- see tests/manual/checkpoint_fpenv.sh. Sets a rounding mode and raises a flag, reports them, sleeps through the save,... |
 | `checkpoint_freeze_restart.c` | — | checkpoint_freeze_restart.c -- a checkpoint freeze must be invisible to a task blocked in a syscall. Driven by checkpoint_freeze_restart.sh, which... |
 | `checkpoint_lazy_reservation.c` | yes | checkpoint_lazy_reservation.c -- reserved address space across a checkpoint. |
+| `checkpoint_overlap.c` | — | checkpoint_overlap.c -- helper for checkpoint_overlap.sh: memory an image has to carry intact, while threads and processes die as fast as they... |
 | `checkpoint_past_eof.c` | — | checkpoint_past_eof.c -- a file mapping longer than its file, across a checkpoint. Driven by checkpoint_past_eof.sh: it needs... |
 | `checkpoint_pty_owner.c` | — | checkpoint_pty_owner.c -- a pty the guest made, owned by a user, across a checkpoint. Driven by checkpoint_pty_owner.sh. |
 | `checkpoint_reopen_flags.c` | — | checkpoint_reopen_flags.c -- a restore reopens descriptors; it must not replay the side effects of the open that made them. Driven by... |
@@ -626,6 +627,7 @@ does not say what it is for.
 | `x86/x86_sys_desc.c` | yes | x86_sys_desc.c -- the system-descriptor instructions a user may run. |
 | `x86/x86_ud_siginfo.c` | yes | x86_ud_siginfo -- an x86 invalid-opcode fault (#UD) is SIGILL with si_code ILL_ILLOPN and si_addr the address of the instruction. |
 | `x86/x86_xsave.c` | yes | x86_xsave.c -- XSAVE and XRSTOR, the XSAVE state in a signal frame, ptrace's NT_X86_XSTATE, CPUID leaf 0x0D, AT_MINSIGSTKSZ and the altstack a... |
+| `x86/x87_compare_c1.c` | yes | x87_compare_c1.c -- what each x87 compare does to C1, against real hardware (an AMD Ryzen, camd, -m32 and 64-bit). FCOMI, FCOMIP, FUCOMI and... |
 | `x86/x87_env.c` | yes | x87_env.c -- the x87's environment and state images, against what real hardware (an AMD Ryzen, camd, -m32 and 64-bit) writes and reads: |
 | `x86/x87_fpu.c` | yes | x87 semantics that emulation got wrong in ways ordinary arithmetic tests miss: control-word precision, the status-word C2 bit, the memory form of... |
 | `x86/x87_fsqrt.c` | yes | FSQRT against real x87 hardware: every rounding mode x precision control (24/53/64 bits), a deterministic spread of operands (powers of two, exact... |
