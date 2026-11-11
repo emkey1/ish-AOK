@@ -441,7 +441,11 @@ UIViewController *ISHCreateDiagnosticsNavigationController(void) {
     UIWindow *window = self.view.window ?: ISHActivePresentationViewController().view.window;
     modeButton.title = ISHWindowIsShowingWorkspace(window) ? NSLocalizedString(@"Shell", @"Settings button that switches to the shell") : NSLocalizedString(@"Workspace", @"Settings button that switches to the Workspace");
     if (_doneButton != nil) {
-        BOOL presented = self.navigationController.presentingViewController != nil;
+        // Presented itself, not merely inside something presented: the
+        // Workspace is presented over the shell, and its Settings window would
+        // otherwise get a Done that dismissed the whole Workspace.
+        UINavigationController *navigation = self.navigationController;
+        BOOL presented = navigation != nil && navigation.presentingViewController.presentedViewController == navigation;
         self.navigationItem.rightBarButtonItems = presented ? @[_doneButton, modeButton] : @[modeButton];
     }
 }
