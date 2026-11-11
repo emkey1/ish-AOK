@@ -257,8 +257,11 @@ static void ISHRecordTerminalViewEvent(NSString *event, Terminal *terminal, NSDi
     [host addSubview:webView];
     [self syncTerminalFocus];
     self.imeCellRect = CGRectZero;
-    if (_terminal.loaded)
+    if (_terminal.loaded) {
         [webView evaluateJavaScript:@"exports.layoutComposition()" completionHandler:nil];
+        // The scroll view still describes whichever terminal it showed last.
+        [webView evaluateJavaScript:@"exports.resendScroll()" completionHandler:nil];
+    }
     [self.terminal requestRefresh];
     ISHRecordTerminalViewEvent(@"terminalView.install.end", _terminal, nil);
 }

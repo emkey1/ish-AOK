@@ -12,6 +12,7 @@
 @interface ScrollbarView ()
 
 @property CGPoint contentViewOrigin;
+- (void)pinContentView;
 @property ScrollbarViewDelegate *outerDelegate;
 
 @end
@@ -22,10 +23,7 @@
 @implementation ScrollbarViewDelegate
 
 - (void)scrollViewDidScroll:(ScrollbarView *)scrollView {
-    CGRect frame = scrollView.contentView.frame;
-    frame.origin.x = scrollView.contentOffset.x + scrollView.contentViewOrigin.x;
-    frame.origin.y = scrollView.contentOffset.y + scrollView.contentViewOrigin.y;
-    scrollView.contentView.frame = frame;
+    [scrollView pinContentView];
     [self.innerDelegate scrollViewDidScroll:scrollView];
 }
 
@@ -49,7 +47,36 @@
 
 - (void)setContentView:(UIView *)contentView {
     _contentView = contentView;
-    self.contentViewOrigin = contentView.frame.origin;
+    // Where the content sits relative to the visible area, not to the content
+    // space: a view installed while the scroll view is scrolled (its frame set
+    // from our bounds, whose origin IS contentOffset) used to record that
+    // offset here, and every later scroll added it again -- the terminal's web
+    // view was moved that far below the screen and the terminal drew nothing
+    // but its scroll bar. Installing happens on every tty switch and every
+    // rebuild of a reclaimed web view, so a long scrollback made it common
+    // (TestFlight feedback on 564: "the text just disappears").
+    CGPoint origin = contentView.frame.origin;
+    self.contentViewOrigin = CGPointMake(origin.x - self.contentOffset.x, origin.y - self.contentOffset.y);
+    [self pinContentView];
+}
+
+// Keep the content over the visible area. scrollViewDidScroll: does this for a
+// scroll, but not every offset change goes through it in step with a layout
+// pass (a resize, or a content size that clamps the offset).
+- (void)pinContentView {
+    UIView *contentView = self.contentView;
+    if (contentView == nil)
+        return;
+    CGRect frame = contentView.frame;
+    frame.origin.x = self.contentOffset.x + self.contentViewOrigin.x;
+    frame.origin.y = self.contentOffset.y + self.contentViewOrigin.y;
+    if (!CGRectEqualToRect(frame, contentView.frame))
+        contentView.frame = frame;
+}
+
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    [self pinContentView];
 }
 
 - (id<UIScrollViewDelegate>)delegate {

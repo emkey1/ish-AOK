@@ -326,6 +326,15 @@ hterm.ScrollPort.prototype.syncScrollHeight = function() {
     syncScroll();
 };
 term.scrollPort_.screen_.addEventListener('scroll', syncScroll);
+// Send both again whether or not they changed. One native scroll view is
+// shared by every terminal a window shows, so after a switch it still holds
+// the last terminal's height and offset, and this page, which only reports
+// changes, would leave it there: the view could not scroll, or scrolled the
+// text out of sight.
+exports.resendScroll = () => {
+    lastScrollHeight = lastScrollTop = undefined;
+    syncScroll();
+};
 
 exports.updateStyle = ({foregroundColor, backgroundColor, fontFamily, fontSize, lineHeight, colorPaletteOverrides, blinkCursor, cursorShape}) => {
     term.getPrefs().set('background-color', backgroundColor);
