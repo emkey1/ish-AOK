@@ -147,8 +147,9 @@ static char *library_path(const char *root) {
         "/lib/powerpc64le-linux-gnu", "/usr/lib/powerpc64le-linux-gnu",
     };
     size_t cap = 1, used = 0;
+    size_t root_len = strlen(root);
     for (size_t i = 0; i < sizeof(dirs) / sizeof(dirs[0]); i++)
-        cap += strlen(root) + strlen(dirs[i]) + 1;
+        cap += root_len + strlen(dirs[i]) + 1;
     char *out = malloc(cap);
     if (out == NULL)
         return NULL;
