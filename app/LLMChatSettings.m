@@ -48,6 +48,7 @@ void ISHConfigureLLMSettingsNavigationController(UINavigationController *navigat
             [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemDone
                                                           target:navigationController
                                                           action:@selector(ish_dismissLLMSettings)];
+        root.navigationItem.leftBarButtonItem.accessibilityHint = NSLocalizedString(@"Dismisses the LLM client settings.", @"Accessibility hint for the Done button");
     }
 }
 
@@ -88,6 +89,7 @@ typedef NS_ENUM(NSInteger, ISHLLMSettingsRow) {
     self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemDone
                                                                                           target:self
                                                                                           action:@selector(done:)];
+    self.navigationItem.leftBarButtonItem.accessibilityHint = NSLocalizedString(@"Dismisses the LLM client settings.", @"Accessibility hint for the Done button");
 }
 
 - (void)viewWillAppear:(BOOL)animated {
@@ -887,6 +889,7 @@ typedef NS_ENUM(NSInteger, ISHLLMDestinationActionRow) {
         self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemDone
                                                                                               target:self
                                                                                               action:@selector(done:)];
+        self.navigationItem.leftBarButtonItem.accessibilityHint = NSLocalizedString(@"Dismisses the destinations list.", @"Accessibility hint for the Done button");
     }
     [self reload];
 }

@@ -101,6 +101,7 @@ static BOOL ISHVideoURLLooksLikePlaylist(NSURL *url) {
     self.navigationItem.rightBarButtonItem =
         [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemClose
                                                       target:self action:@selector(close)];
+    self.navigationItem.rightBarButtonItem.accessibilityHint = NSLocalizedString(@"Dismisses the channels list.", @"Accessibility hint for the Close button");
     _search = [[UISearchController alloc] initWithSearchResultsController:nil];
     _search.searchResultsUpdater = self;
     _search.obscuresBackgroundDuringPresentation = NO;
