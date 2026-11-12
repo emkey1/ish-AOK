@@ -24,6 +24,8 @@ AOK VM，姊妹应用（完整的虚拟机：基于 QEMU 与 AOK gadget 引擎�
 - **Wayland 桌面**（labwc、foot、waybar；自带四个桌面——也可用 Wayfire 或 Xfce 取代 labwc）：在 GPU 上合成，并通过 `/AOK/native/wl-present` 呈现到应用中——画面单向传出，键盘、指针、剪贴板和尺寸调整反向传入——VNC 作为后备。`/AOK/tools/setup-games.sh` 会安装一组经过测试的游戏。参见 `/AOK/docs/workspace.md`。
 - **LLM Chat**：应用内的聊天客户端（OpenAI 兼容服务器、Anthropic、Gemini、Apple 端侧模型），可在允许/询问/拒绝的权限下读取、编辑客户机中的文件并运行命令，可使用 MCP 服务器，还能把多个聊天作为后台代理同时运行。API 密钥保存在钥匙串中。参见 `/AOK/docs/llm-chat.md`。
 - **外接显示器**（563，仅限 iPhone；iOS 27 上从 564 起；尚未在真机上测试）：连接显示器或使用 AirPlay 屏幕镜像时，终端（在 Workspace 中为最前面的终端窗口）按大屏幕的比例铺满整个屏幕，键盘仍留在 iPhone 上；Wayland Display 连同光标一起镜像到大屏幕。iPad 保持 Stage Manager 的行为不变。参见 `/AOK/docs/external-display.md`。
+- **终端里的图片**（565）：支持 kitty 的图形协议，`kitten icat`、`chafa`、`timg` 以及使用它的文件管理器都能显示真正的图片，终端也会以像素为单位报告自己的尺寸。参见 `/AOK/docs/terminal-images.md`。
+- **用硬件编码器转换视频**（565）：`/AOK/native/transcode` 用相机应用所用的编码器重新编码为 HEVC 或 H.264；客户机里的 `ffmpeg` 是模拟运行的，非常慢。Workspace 的 Video Converter 小程序用按钮完成同样的工作，并能从“照片”取视频、把结果存回“照片”。参见 `/AOK/docs/transcode.md`。
 - **挂起到磁盘**：把整个会话——进程、打开的文件、终端——保存下来，在应用被终止后再恢复。默认关闭。参见 `/AOK/docs/suspend.md`。
 - **中文及其他语言**：应用界面跟随设备语言，除英文外还提供简体中文、繁體中文、日语、韩语、西班牙语、法语、德语、巴西葡萄牙语和俄语。终端支持输入法输入：用中文拼音输入法和日文输入法时，正在组字的文本直接显示在光标处，候选窗口紧挨在旁边，软键盘和硬件键盘都能用；韩文则逐个音节就地输入。`/AOK/tools/setup-locale.sh` 还能让根文件系统也使用设备的语言（Devuan 自带各程序的翻译）。参见 `/AOK/docs/roots.md`。
 - 通过 iOS 系统 API 暴露客户机文件的 File Provider 支持。
@@ -222,7 +224,7 @@ ninja -C build
 原生程序是编译进应用内部的宿主代码。对 `/AOK/native` 下的路径执行 `execve`，不会去
 加载一个客户机镜像，而是直接分发到 iSH-AOK 内部的一个函数，调用方察觉不到区别。
 `/AOK/native` 中每个注册表（`kernel/native.c`）里的程序各占一项 —— `smallclue`、
-`sudo`、`su`、`passwd`、`motepad`、`ktop`、`wl-present`、`bmm`、`bmt`、`rust-probe`、
+`sudo`、`su`、`passwd`、`motepad`、`ktop`、`wl-present`、`transcode`、`bmm`、`bmt`、`rust-probe`、
 `hx`、`bash`、`zsh`、`zsh-multio`、`dash`、`sh`，各自仅在构建包含它时才存在 —— 其余全是
 指向它们的符号链接，和 busybox 一样由链接名选择 applet：
 
@@ -239,6 +241,7 @@ ninja -C build
 | `/AOK/native/sudo`、`su`、`passwd` | SmallCLUE 的这三个程序，作为独立的 **setuid-root** 程序提供；它们检查已启动根文件系统自己的 `/etc/shadow` 和 `/etc/sudoers` |
 | `/AOK/native/ktop` | 进程查看器，与 `/AOK/tools/ktop` 同一份源码 |
 | `/AOK/native/wl-present` | 不经 VNC 在应用中显示 Wayland 桌面；由 `start-wayland.sh` 运行 |
+| `/AOK/native/transcode` | 用设备的硬件编码器把视频重新编码为 HEVC 或 H.264，无论客户机是什么架构都全速运行；Workspace 的 Video Converter 小程序是它的前端。参见 `/AOK/docs/transcode.md` |
 | `/AOK/native/bash` | 见[原生 bash 与许可证](#原生-bash-与许可证) |
 | `/AOK/native/zsh` | 见[原生 zsh](#原生-zsh) |
 | `/AOK/native/dash`、`/AOK/native/sh` | dash，BSD 许可证；`native-links.sh` 让直接输入的 `sh` 指向它 |

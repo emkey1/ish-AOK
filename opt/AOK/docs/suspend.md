@@ -151,7 +151,11 @@ refusal names the process and the reason, in `/proc/ish/checkpoint`:
   `/dev/dri/renderD128` and the Wayland view — Vulkan contexts, GPU memory, the
   presenter — lives in the app and cannot be written down. The refusal says so
   in words: "a Wayland desktop or GPU program is running (fd N is
-  /dev/dri/renderD128); close it, then suspend".
+  /dev/dri/renderD128); close it, then suspend". When one of its threads is in
+  the middle of a GPU call, the message names the process instead: "(pid N,
+  wayfire:zfq0, is in a GPU call)". In the background that call cannot finish
+  until the app returns, so until 565 the automatic save could give up on it
+  and lose the session ("did not reach a syscall boundary").
 
 A refusal costs nothing: the session carries on exactly as it was. A save is a
 copy, and the machine is stopped only for as long as it takes to write one.

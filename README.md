@@ -22,6 +22,8 @@ This fork is not just a rebrand. It carries fork-specific behavior, bundled root
 - **A Wayland desktop** (labwc, foot, waybar; four desktops of its own — or Wayfire or Xfce in labwc's place) that composites on the GPU and reaches the app through `/AOK/native/wl-present` — frames one way, keyboard, pointer, clipboard and resize the other — with VNC as the fallback. `/AOK/tools/setup-games.sh` adds a tested set of games. See `/AOK/docs/workspace.md`.
 - **LLM Chat**: an in-app chat client (OpenAI-compatible servers, Anthropic, Gemini, Apple's on-device model) that can read, edit and run commands in the guest under allow/ask/deny permissions, use MCP servers, and run several chats as background agents. Keys live in the Keychain. See `/AOK/docs/llm-chat.md`.
 - **External display** (563, iPhone only; on iOS 27 from 564; untested on hardware): on a monitor or with AirPlay Screen Mirroring, the terminal (in the Workspace, the frontmost terminal window) fills the big screen at its shape while the phone keeps the keyboard; the Wayland Display is mirrored there with its cursor. iPads keep Stage Manager. See `/AOK/docs/external-display.md`.
+- **Images in the terminal** (565): kitty's graphics protocol, so `kitten icat`, `chafa`, `timg` and the file managers that use it show real pictures, and the terminal reports its size in pixels. See `/AOK/docs/terminal-images.md`.
+- **Video conversion on the hardware encoder** (565): `/AOK/native/transcode` re-encodes to HEVC or H.264 on the encoder the Camera app uses, where `ffmpeg` in the guest is emulated and very slow. The Workspace's Video Converter applet does the same with buttons, and takes videos from and puts them back in Photos. See `/AOK/docs/transcode.md`.
 - **Suspend to disk**: the whole session — processes, open files, terminals — saved and resumed across the app being killed. Off by default. See `/AOK/docs/suspend.md`.
 - **Chinese and other languages**: the app's interface follows the device's language, in Simplified and Traditional Chinese, Japanese, Korean, Spanish, French, German, Brazilian Portuguese and Russian as well as English. The terminal takes input-method typing — Chinese Pinyin and Japanese draw the text being composed at the cursor, with the candidate window next to it, on the software or a hardware keyboard; Korean types each syllable in place. `/AOK/tools/setup-locale.sh` gives a root the device's language as well (Devuan carries the program translations). See `/AOK/docs/roots.md`.
 - File Provider support for exposing guest files through iOS.
@@ -233,7 +235,7 @@ A native program is host code compiled into the app. `execve` of a path under
 `/AOK/native` dispatches to a function inside iSH-AOK rather than loading a
 guest image, and the caller cannot tell the difference. `/AOK/native` holds one
 entry per program in the registry (`kernel/native.c`) — `smallclue`, `sudo`,
-`su`, `passwd`, `motepad`, `ktop`, `wl-present`, `bmm`, `bmt`, `rust-probe`,
+`su`, `passwd`, `motepad`, `ktop`, `wl-present`, `transcode`, `bmm`, `bmt`, `rust-probe`,
 `hx`, `bash`, `zsh`, `zsh-multio`, `dash`, `sh`, each present only when the
 build includes it — and everything
 else is a symlink to one of those, the link name selecting the applet exactly as
@@ -252,6 +254,7 @@ busybox does:
 | `/AOK/native/sudo`, `su`, `passwd` | SmallCLUE's, as separate **setuid-root** programs; they check the booted root's own `/etc/shadow` and `/etc/sudoers` |
 | `/AOK/native/ktop` | the process viewer, the same source as `/AOK/tools/ktop` |
 | `/AOK/native/wl-present` | shows the Wayland desktop in the app without VNC; run by `start-wayland.sh` |
+| `/AOK/native/transcode` | re-encodes a video to HEVC or H.264 on the device's hardware encoder, at full speed whatever the guest's architecture; the Workspace's Video Converter applet is its front end. See `/AOK/docs/transcode.md` |
 | `/AOK/native/bash` | see [Native bash and licensing](#native-bash-and-licensing) |
 | `/AOK/native/zsh` | see [Native zsh](#native-zsh) |
 | `/AOK/native/dash`, `/AOK/native/sh` | dash, BSD-licensed; `native-links.sh` makes a bare `sh` mean it |
