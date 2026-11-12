@@ -475,13 +475,17 @@ static const double kInFlightSeconds = 6.0;
 
         dispatch_async(dispatch_get_main_queue(), ^{
             if (gen != self.generation) { [decoder close]; return; }
+            // Reconnect the player node to this track's processing format; the
+            // mixer resamples to the output device.
+            if (![self connectPlayerWithFormat:decoder.processingFormat]) {
+                [decoder close];
+                [self handleLoadFailure];
+                return;
+            }
             self.decoder = decoder;
             self.loadFailureStreak = 0;
             self.trackDuration = duration;
             self.currentNodeSampleRate = sampleRate;
-            // Reconnect the player node to this track's processing format; the
-            // mixer resamples to the output device.
-            [self connectPlayerWithFormat:decoder.processingFormat];
             [self postNotification:ISHAudioPlayerTrackDidChangeNotification];
 
             dispatch_async(self.decodeQueue, ^{
@@ -673,9 +677,29 @@ bool ISHAudioKeepsAppAlive(void) {
 }
 
 
-- (void)connectPlayerWithFormat:(AVAudioFormat *)format {
-    [self.avEngine connect:self.playerNode to:self.equalizerNode format:format];
-    [self.avEngine connect:self.equalizerNode to:self.avEngine.mainMixerNode format:format];
+// Connects player -> equalizer -> mixer in a track's format. AVAudioEngine
+// reports a graph it cannot reconfigure by throwing, not with an NSError, and
+// build 564 aborted that way on iOS 27.2 reconnecting for a new track while the
+// engine ran. So the connection is left alone when the format is the one
+// already connected, made with the engine stopped otherwise (play starts it
+// again), and a throw becomes NO, which the caller treats as a track that
+// would not load.
+- (BOOL)connectPlayerWithFormat:(AVAudioFormat *)format {
+    if (format == nil || format.sampleRate <= 0 || format.channelCount == 0)
+        return NO;
+    if ([[self.playerNode outputFormatForBus:0] isEqual:format] &&
+        [[self.equalizerNode outputFormatForBus:0] isEqual:format])
+        return YES;
+    if (self.avEngine.isRunning)
+        [self.avEngine stop];
+    @try {
+        [self.avEngine connect:self.playerNode to:self.equalizerNode format:format];
+        [self.avEngine connect:self.equalizerNode to:self.avEngine.mainMixerNode format:format];
+    } @catch (NSException *exception) {
+        NSLog(@"ISHAudio: cannot connect for %@: %@", format, exception.reason);
+        return NO;
+    }
+    return YES;
 }
 
 - (void)applyEqualizerSettings {
