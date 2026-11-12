@@ -327,6 +327,25 @@ static size_t venus_capset_size;
 static const struct fd_ops vgpu_fence_ops;
 static const struct fd_ops vgpu_prime_ops;
 
+// Every call into the renderer goes through these, so a task waiting for the
+// lock or blocked inside the renderer says so (task.h, ckpt_in_gpu_call). In
+// the background that wait has no end until the app returns: MoltenVK holds
+// each commit at its GPU gate, and a context's execbuffer can wait on a ring
+// whose thread is held there. On an A10X with the Wayland desktop up, every
+// session save while locked refused on "wayfire:zfq0 did not reach a syscall
+// boundary (blocked in arm64 syscall 29)" -- Mesa's flush queue in an ioctl.
+static void renderer_enter(void) {
+    if (current != NULL)
+        atomic_store_explicit(&current->ckpt_in_gpu_call, true, memory_order_release);
+    lock(&renderer_lock, 0);
+}
+
+static void renderer_exit(void) {
+    unlock(&renderer_lock);
+    if (current != NULL)
+        atomic_store_explicit(&current->ckpt_in_gpu_call, false, memory_order_release);
+}
+
 // ---- fences ----------------------------------------------------------------
 
 static bool fence_signaled(struct vgpu_fence *fence) {
@@ -528,9 +547,9 @@ static void res_release(struct vgpu_res *res) {
     blob_account(res, false);
     if (res->wctx != NULL)
         ctx_release(res->wctx);
-    lock(&renderer_lock, 0);
+    renderer_enter();
     vkr_renderer_destroy_resource(res->ctx_id, res->res_id);
-    unlock(&renderer_lock);
+    renderer_exit();
     if (res->host_map != NULL)
         munmap(res->host_map, res->host_map_size);
     if (res->host_fd >= 0)
@@ -564,9 +583,9 @@ static struct vgpu_handle *handle_add(struct vgpu_file *file, struct vgpu_res *r
 static void handle_drop(struct vgpu_file *file, struct vgpu_handle *h) {
     list_remove(&h->link);
     if (h->imported) {
-        lock(&renderer_lock, 0);
+        renderer_enter();
         vkr_renderer_destroy_resource(file->ctx->ctx_id, h->res->res_id);
-        unlock(&renderer_lock);
+        renderer_exit();
     }
     res_release(h->res);
     free(h);
@@ -580,7 +599,7 @@ static void renderer_log(int level, const char *message, void *user_data) {
 }
 
 static bool renderer_ready(void) {
-    lock(&renderer_lock, 0);
+    renderer_enter();
     if (renderer_state == 0) {
         static const struct vkr_renderer_callbacks cbs = {
             .debug_logger = renderer_log,
@@ -600,7 +619,7 @@ static bool renderer_ready(void) {
             printk("virtgpu: the Venus renderer did not start (no host Vulkan?)\n");
     }
     bool ready = renderer_state > 0;
-    unlock(&renderer_lock);
+    renderer_exit();
     return ready;
 }
 
@@ -735,9 +754,9 @@ static int ioctl_context_init(struct vgpu_file *file, struct drm_virtgpu_context
     list_init(&ctx->fences);
     if (name[0] == '\0' && current != NULL)
         snprintf(name, sizeof(name), "%s", current->comm);
-    lock(&renderer_lock, 0);
+    renderer_enter();
     bool ok = vkr_renderer_create_context(ctx->ctx_id, capset, (uint32_t) strlen(name), name);
-    unlock(&renderer_lock);
+    renderer_exit();
     if (!ok) {
         unlock(&file->lock);
         free(ctx);
@@ -764,9 +783,9 @@ static int submit_cmd(struct vgpu_ctx *ctx, uint64_t addr, uint32_t size) {
         free(buf);
         return _EFAULT;
     }
-    lock(&renderer_lock, 0);
+    renderer_enter();
     bool ok = vkr_renderer_submit_cmd(ctx->ctx_id, buf, size);
-    unlock(&renderer_lock);
+    renderer_exit();
     free(buf);
     return ok ? 0 : _EINVAL;
 }
@@ -795,10 +814,10 @@ static int ioctl_create_blob(struct vgpu_file *file, struct drm_virtgpu_resource
     int fd_type = -1, host_fd = -1;
     uint32_t map_info = 0;
     unsigned char vulkan_info[64];
-    lock(&renderer_lock, 0);
+    renderer_enter();
     bool ok = vkr_renderer_create_resource(ctx->ctx_id, res->res_id, b->blob_id, b->size,
             b->blob_flags, &fd_type, &host_fd, &map_info, vulkan_info);
-    unlock(&renderer_lock);
+    renderer_exit();
     if (!ok) {
         free(res);
         return _EINVAL;
@@ -953,9 +972,9 @@ static int ioctl_execbuffer(struct vgpu_file *file, struct drm_virtgpu_execbuffe
     for (uint32_t i = 0; i < named_count; i++)
         res_release(named[i]);
 
-    lock(&renderer_lock, 0);
+    renderer_enter();
     bool ok = vkr_renderer_submit_fence(ctx->ctx_id, VIRGL_RENDERER_FENCE_FLAG_MERGEABLE, ring, id);
-    unlock(&renderer_lock);
+    renderer_exit();
     if (!ok) {
         if (fd != NULL)
             fd_close(fd);
@@ -1258,10 +1277,10 @@ static int ioctl_prime_to_handle(struct vgpu_file *file, struct drm_prime_handle
         uint64_t size = res->size;
         if (dup_fd >= 0 && fstat(dup_fd, &st) == 0 && (uint64_t) st.st_size > size)
             size = (uint64_t) st.st_size;
-        lock(&renderer_lock, 0);
+        renderer_enter();
         imported = dup_fd >= 0 && vkr_renderer_import_resource(file->ctx->ctx_id, res->res_id,
                 VIRGL_RESOURCE_FD_SHM_, dup_fd, size);
-        unlock(&renderer_lock);
+        renderer_exit();
         // A SHM import keeps a mapping, not the descriptor.
         if (dup_fd >= 0)
             close(dup_fd);
@@ -1411,9 +1430,9 @@ static int vgpu_close(struct fd *fd) {
     struct vgpu_ctx *ctx = file->ctx;
     unlock(&file->lock);
     if (ctx != NULL) {
-        lock(&renderer_lock, 0);
+        renderer_enter();
         vkr_renderer_destroy_context(ctx->ctx_id);
-        unlock(&renderer_lock);
+        renderer_exit();
         // A fence the renderer will now never retire must not hang whoever
         // polls it.
         struct woken w = {.count = 0};

@@ -901,6 +901,12 @@ static int ckpt_freeze_all(unsigned timeout_ms, char *blame, size_t blame_size) 
                 continue;
             if (ckpt_task_is_leaving(t))
                 continue;   // see ckpt_task_is_leaving
+            // Blocked in the GPU renderer, where no poke reaches (task.h,
+            // ckpt_in_gpu_call). It holds the render node, so the save leaves
+            // its process out or refuses, and checks after the leave-out that
+            // every task it keeps did park.
+            if (atomic_load_explicit(&t->ckpt_in_gpu_call, memory_order_acquire))
+                continue;
             if (!atomic_load_explicit(&t->ckpt_frozen, memory_order_acquire)) {
                 stuck = t;
                 break;
@@ -921,6 +927,18 @@ static int ckpt_freeze_all(unsigned timeout_ms, char *blame, size_t blame_size) 
         nanosleep(&ts, NULL);
     }
 
+    // Say which tasks went through unparked: without it a save that worked
+    // cannot tell whether a GPU call was there to be passed at all.
+    if (err == 0) {
+        for (unsigned i = 0; i < snap.count; i++) {
+            struct task *t = snap.tasks[i];
+            if (t != current && !ckpt_task_is_leaving(t) &&
+                    !atomic_load_explicit(&t->ckpt_frozen, memory_order_acquire) &&
+                    atomic_load_explicit(&t->ckpt_in_gpu_call, memory_order_acquire))
+                printk("checkpoint: pid %d (%s) is blocked in a GPU call; not waited for\n",
+                       t->pid, t->comm);
+        }
+    }
     if (err != 0 && stuck != NULL && blame != NULL) {
         // WHICH syscall, when there is a guest register file to read it from.
         // The pid alone is not enough to act on: every untaught blocking path
@@ -3600,6 +3618,22 @@ static int ckpt_save_locked(const char *host_path, unsigned flags) {
     ckpt_as_killed_count = 0;
     if (flags & CKPT_SAVE_LEAVE_OUT)
         ckpt_leave_out(&snap);
+    // The freeze let a task blocked in the GPU renderer through unparked; one
+    // the image is about to describe must not still be running.
+    for (unsigned i = 0; i < snap.count; i++) {
+        struct task *t = snap.tasks[i];
+        if (t == current || t->zombie || ckpt_task_departed(t) ||
+                atomic_load_explicit(&t->ckpt_frozen, memory_order_acquire))
+            continue;
+        pid_t_ pid = t->pid;
+        char comm[sizeof(t->comm)];
+        memcpy(comm, t->comm, sizeof(comm));
+        task_snapshot_release(&snap);
+        ckpt_thaw_all();
+        ckpt_refuse("a Wayland desktop or GPU program is running (pid %d, %s, is in "
+                    "a GPU call); close it, then suspend", pid, comm);
+        return _EBUSY;
+    }
     ckpt_order_tasks(snap.tasks, snap.count);
 
     // Written to a temporary beside the target and renamed into place only when

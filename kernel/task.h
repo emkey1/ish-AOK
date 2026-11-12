@@ -213,6 +213,14 @@ struct task {
     // exiting simply never answers, which the freezer's timeout covers.
     _Atomic bool ckpt_freeze_wanted;
     _Atomic bool ckpt_frozen;
+    // Inside a call into the GPU renderer (fs/virtgpu.c), which may block on
+    // the host where no poke reaches it: in the background the app closes
+    // MoltenVK's GPU gate, a Venus ring thread waits there, and an execbuffer
+    // waiting on that ring's seqno waits with it. The freezer counts such a
+    // task as stopped -- it holds the render node, so the save either leaves
+    // its process out or refuses -- and the save checks that every task it
+    // keeps really is parked.
+    _Atomic bool ckpt_in_gpu_call;
     // This task came back from an image, and how many of its syscalls have
     // been traced. Diagnostics only (ISH_CHECKPOINT_DEBUG): a restored guest
     // that loads cleanly and then quietly falls over is this feature's usual
