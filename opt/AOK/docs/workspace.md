@@ -28,7 +28,7 @@ Terminal lists your sessions and Utils lists every applet, in five groups:
 - **Workspace** — Layout Manager, Desktops, Launcher, Quick Actions, Browser,
   Music, MotePad, File Manager, Sessions, Themes, and LLM Chat when it is
   enabled in Settings (see [llm-chat.md](llm-chat.md)).
-- **Media** — Markdown, Image Viewer, Video Player, and Wayland (see below).
+- **Media** — Markdown, Image Viewer, Video Player, Video Converter, and Wayland (see below).
 - **Status** — Clock, Monitor, Networks, Logs.
 - **Storage** — Storage, and Boot Images, which is the Filesystems screen
   described in [roots.md](roots.md).
@@ -133,6 +133,27 @@ and say whether AVFoundation can play them), and streams from the web:
   fetched relative to its web address — so open that address instead.
 - From a shell: `ws-videoplayer https://…/live.m3u8` or
   `ws-videoplayer ~/channels.m3u`.
+
+## Video Converter
+
+Converts a video to HEVC or H.264 on the device's hardware encoder, the
+Workspace side of `/AOK/native/transcode` (see [transcode.md](transcode.md)).
+
+- **Photos** picks a video from your library. The result is added to Photos
+  with the original's date and place, and **Delete Original from Photos…**
+  then frees the space: iOS asks first, and keeps the original in Recently
+  Deleted for 30 days.
+- **Files** picks one from the Files app; when it is done you choose where to
+  save the result.
+- A guest file opens from the File Manager's **Convert Video…** (long-press a
+  video) or `ws-transcode FILE`; the result is saved beside it as
+  `NAME-converted.mp4`, and **Also save to Photos** adds a copy there.
+- **Format**, **Size** (Original, 4K, 1080p, 720p, 480p) and **Quality**
+  (Smaller, Balanced, Better) set the encoder; the rate is chosen from the
+  picture and capped at the source's.
+
+The screen stays awake while it converts, since iOS stops a conversion when it
+suspends the app. Closing the window cancels it.
 
 ## The Wayland applet
 

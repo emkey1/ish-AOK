@@ -89,7 +89,7 @@ you built it in. That is the combination worth knowing about.
 `bin` also gets a small generated launcher per Workspace applet, rewritten on
 every launch so they track the app:
 
-    ws-motepad ws-filemanager ws-markdown ws-imageviewer ws-videoplayer
+    ws-motepad ws-filemanager ws-markdown ws-imageviewer ws-videoplayer ws-transcode
     ws-audio ws-music ws-equalizer ws-eq ws-browser ws-llm ws-filesystems
     ws-storage ws-monitor
     ws-networks ws-status ws-settings ws-themes ws-launcher ws-clock

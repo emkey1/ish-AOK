@@ -159,7 +159,8 @@ static int TCRun(struct transcode_job *job) {
         if (automatic) {
             // About what the phone's own camera spends per pixel at its
             // efficient settings: HEVC needs roughly two thirds of H.264.
-            bitrate = lround(outWidth * outHeight * fps * (hevc ? 0.05 : 0.08));
+            bitrate = lround(outWidth * outHeight * fps * (hevc ? 0.05 : 0.08) *
+                             (job->rate_scale > 0 ? job->rate_scale : 1));
             // Re-encoding cannot add detail, so never spend more than the
             // source did: that would only make the file bigger.
             if (video.estimatedDataRate > 0 && bitrate > video.estimatedDataRate)
@@ -176,7 +177,7 @@ static int TCRun(struct transcode_job *job) {
 
         NSString *ext = job->mov ? @"mov" : @"mp4";
         NSString *outPath = [NSTemporaryDirectory() stringByAppendingPathComponent:
-            [NSString stringWithFormat:@"transcode-%@.%@", NSUUID.UUID.UUIDString, ext]];
+            [NSString stringWithFormat:@"%s%@.%@", TRANSCODE_TEMP_PREFIX, NSUUID.UUID.UUIDString, ext]];
         strlcpy(job->out_host_path, outPath.fileSystemRepresentation, sizeof(job->out_host_path));
         AVAssetWriter *writer = [AVAssetWriter assetWriterWithURL:[NSURL fileURLWithPath:outPath]
                                                          fileType:job->mov ? AVFileTypeQuickTimeMovie : AVFileTypeMPEG4
@@ -428,6 +429,20 @@ static int TCRun(struct transcode_job *job) {
     }
 }
 
+int ISHTranscodeRun(struct transcode_job *job) {
+    return TCRun(job);
+}
+
 __attribute__((constructor)) static void TCInstall(void) {
     transcode_hook = TCRun;
+    // A job's output lives in the temporary directory until it is copied
+    // out. One the app died during leaves its file behind, and a video's
+    // worth of space is worth taking back: nothing can be running yet.
+    @autoreleasepool {
+        NSString *dir = NSTemporaryDirectory();
+        for (NSString *name in [NSFileManager.defaultManager contentsOfDirectoryAtPath:dir error:nil]) {
+            if ([name hasPrefix:@TRANSCODE_TEMP_PREFIX])
+                [NSFileManager.defaultManager removeItemAtPath:[dir stringByAppendingPathComponent:name] error:nil];
+        }
+    }
 }

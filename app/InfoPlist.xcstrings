@@ -291,61 +291,126 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "iSH-AOK speichert Bilder in deiner Fotomediathek, wenn du „Bild sichern“ wählst."
+            "value" : "iSH-AOK fügt deiner Fotomediathek etwas hinzu, wenn du „Bild sichern“ wählst oder ein konvertiertes Video in Fotos sicherst."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "iSH-AOK saves images to your photo library when you choose Save Image."
+            "value" : "iSH-AOK adds to your photo library when you choose Save Image, or save a converted video to Photos."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "iSH-AOK guarda imágenes en tu fototeca cuando eliges Guardar imagen."
+            "value" : "iSH-AOK añade a tu fototeca cuando eliges Guardar imagen o guardas un vídeo convertido en Fotos."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "iSH-AOK enregistre des images dans votre photothèque lorsque vous choisissez Enregistrer l’image."
+            "value" : "iSH-AOK ajoute à votre photothèque lorsque vous choisissez Enregistrer l’image ou enregistrez une vidéo convertie dans Photos."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "「画像を保存」を選ぶと、iSH-AOK が画像を写真ライブラリに保存します。"
+            "value" : "「イメージを保存」を選んだときや、変換したビデオを写真に保存するときに、iSH-AOK は写真ライブラリに追加します。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "이미지 저장을 선택하면 iSH-AOK가 이미지를 사진 보관함에 저장합니다."
+            "value" : "이미지 저장을 선택하거나 변환된 비디오를 사진에 저장할 때 iSH-AOK가 사진 보관함에 추가합니다."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "O iSH-AOK salva imagens na sua fototeca quando você escolhe Salvar Imagem."
+            "value" : "O iSH-AOK adiciona à sua fototeca quando você escolhe Salvar Imagem ou salva um vídeo convertido em Fotos."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "iSH-AOK сохраняет изображения в вашу медиатеку, когда вы выбираете «Сохранить изображение»."
+            "value" : "iSH-AOK добавляет в медиатеку, когда вы выбираете «Сохранить изображение» или сохраняете сконвертированное видео в Фото."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "当你选择“存储图像”时，iSH-AOK 会将图像存储到你的照片图库。"
+            "value" : "当你选择“存储图像”或将转换后的视频存储到照片时，iSH-AOK 会向你的照片图库添加内容。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "當你選擇「儲存影像」時，iSH-AOK 會將影像儲存到你的照片圖庫。"
+            "value" : "當你選擇「儲存影像」或將轉換後的影片儲存到照片時，iSH-AOK 會向你的照片圖庫加入內容。"
+          }
+        }
+      }
+    },
+    "NSPhotoLibraryUsageDescription" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "iSH-AOK löscht ein Video aus deiner Mediathek nur, wenn du im Videokonverter „Original löschen“ wählst."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "iSH-AOK deletes a video from your library only when you choose Delete Original in the Video Converter."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "iSH-AOK solo elimina un vídeo de tu fototeca cuando eliges Eliminar original en el Conversor de vídeo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "iSH-AOK ne supprime une vidéo de votre photothèque que lorsque vous choisissez Supprimer l’original dans le Convertisseur vidéo."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "iSH-AOK がライブラリからビデオを削除するのは、ビデオコンバータで「オリジナルを削除」を選んだときだけです。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "iSH-AOK는 비디오 변환기에서 원본 삭제를 선택할 때만 보관함에서 비디오를 삭제합니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O iSH-AOK só apaga um vídeo da sua fototeca quando você escolhe Apagar Original no Conversor de Vídeo."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "iSH-AOK удаляет видео из медиатеки, только когда вы выбираете «Удалить оригинал» в Конвертере видео."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "只有当你在视频转换器中选择“删除原视频”时，iSH-AOK 才会从你的图库中删除视频。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "只有當你在影片轉換器中選擇「刪除原始影片」時，iSH-AOK 才會從你的圖庫中刪除影片。"
           }
         }
       }

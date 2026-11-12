@@ -23,6 +23,7 @@
 #import "WorkspaceMarkdownViewer.h"
 #import "WorkspaceImageViewer.h"
 #import "WorkspaceVideoPlayer.h"
+#import "WorkspaceTranscoder.h"
 #import "UIApplication+OpenURL.h"
 #import "UIViewController+Extras.h"
 #import <WebKit/WebKit.h>
@@ -154,6 +155,7 @@ static NSString *const ISHWorkspaceToolFileManagerIdentifier = @"filemanager";
 static NSString *const ISHWorkspaceToolMarkdownViewerIdentifier = @"markdown";
 static NSString *const ISHWorkspaceToolImageViewerIdentifier = @"imageviewer";
 static NSString *const ISHWorkspaceToolVideoPlayerIdentifier = @"videoplayer";
+static NSString *const ISHWorkspaceToolTranscodeIdentifier = @"transcode";
 static NSString *const ISHWorkspaceToolDisplayIdentifier = @"display";
 
 // The live Workspace, for the /proc/ish/workspace bridge to reach from a guest
@@ -178,7 +180,7 @@ static NSArray<NSString *> *ISHWorkspaceOpenableToolIdentifiers(void) {
     dispatch_once(&once, ^{
         tools = @[ISHWorkspaceToolMotePadIdentifier, ISHWorkspaceToolFileManagerIdentifier,
                   ISHWorkspaceToolMarkdownViewerIdentifier, ISHWorkspaceToolImageViewerIdentifier,
-                  ISHWorkspaceToolVideoPlayerIdentifier, ISHWorkspaceToolAudioIdentifier,
+                  ISHWorkspaceToolVideoPlayerIdentifier, ISHWorkspaceToolTranscodeIdentifier, ISHWorkspaceToolAudioIdentifier,
                   ISHWorkspaceToolEqualizerIdentifier,
                   ISHWorkspaceToolBrowserIdentifier, ISHWorkspaceToolLLMIdentifier,
                   ISHWorkspaceToolFilesystemsIdentifier, ISHWorkspaceToolStorageIdentifier,
@@ -433,6 +435,8 @@ static NSString *ISHWorkspaceLauncherToolIdentifierForCommand(NSString *command)
         @"img": ISHWorkspaceToolImageViewerIdentifier,
         @"videoplayer": ISHWorkspaceToolVideoPlayerIdentifier,
         @"video": ISHWorkspaceToolVideoPlayerIdentifier,
+        @"transcode": ISHWorkspaceToolTranscodeIdentifier,
+        @"converter": ISHWorkspaceToolTranscodeIdentifier,
         @"display": ISHWorkspaceToolDisplayIdentifier,
         @"vnc": ISHWorkspaceToolDisplayIdentifier,
         @"wayland": ISHWorkspaceToolDisplayIdentifier,
@@ -1133,6 +1137,8 @@ static CGSize ISHWorkspacePreferredToolContentSize(NSString *toolIdentifier) {
             return CGSizeMake(340, 420);
         if ([toolIdentifier isEqualToString:ISHWorkspaceToolVideoPlayerIdentifier])
             return CGSizeMake(340, 260);
+        if ([toolIdentifier isEqualToString:ISHWorkspaceToolTranscodeIdentifier])
+            return CGSizeMake(340, 520);
         // Room for the status text beside its three buttons, and a 16:9
         // display under the toolbar.
         if ([toolIdentifier isEqualToString:ISHWorkspaceToolDisplayIdentifier])
@@ -1188,6 +1194,8 @@ static CGSize ISHWorkspacePreferredToolContentSize(NSString *toolIdentifier) {
         return CGSizeMake(620, 520);
     if ([toolIdentifier isEqualToString:ISHWorkspaceToolVideoPlayerIdentifier])
         return CGSizeMake(720, 460);
+    if ([toolIdentifier isEqualToString:ISHWorkspaceToolTranscodeIdentifier])
+        return CGSizeMake(440, 620);
     if ([toolIdentifier isEqualToString:ISHWorkspaceToolDisplayIdentifier])
         return CGSizeMake(680, 480);
     return CGSizeMake(720, 640);
@@ -1289,6 +1297,8 @@ static CGSize ISHWorkspaceMinimumToolContentSize(NSString *toolIdentifier) {
             return CGSizeMake(240, 240);
         if ([toolIdentifier isEqualToString:ISHWorkspaceToolVideoPlayerIdentifier])
             return CGSizeMake(240, 180);
+        if ([toolIdentifier isEqualToString:ISHWorkspaceToolTranscodeIdentifier])
+            return CGSizeMake(300, 420);
         if ([toolIdentifier isEqualToString:ISHWorkspaceToolDisplayIdentifier])
             return CGSizeMake(280, 220);
         return CGSizeMake(300, 220);
@@ -1334,6 +1344,8 @@ static CGSize ISHWorkspaceMinimumToolContentSize(NSString *toolIdentifier) {
         return CGSizeMake(320, 280);
     if ([toolIdentifier isEqualToString:ISHWorkspaceToolVideoPlayerIdentifier])
         return CGSizeMake(320, 220);
+    if ([toolIdentifier isEqualToString:ISHWorkspaceToolTranscodeIdentifier])
+        return CGSizeMake(320, 460);
     if ([toolIdentifier isEqualToString:ISHWorkspaceToolDisplayIdentifier])
         return CGSizeMake(400, 300);
     return CGSizeZero;
@@ -1407,6 +1419,8 @@ static NSString *ISHWorkspaceToolTitle(NSString *toolIdentifier) {
         return NSLocalizedString(@"Image Viewer", @"tool window title");
     if ([toolIdentifier isEqualToString:ISHWorkspaceToolVideoPlayerIdentifier])
         return NSLocalizedString(@"Video Player", @"tool window title");
+    if ([toolIdentifier isEqualToString:ISHWorkspaceToolTranscodeIdentifier])
+        return NSLocalizedString(@"Video Converter", @"tool window title");
     if ([toolIdentifier isEqualToString:ISHWorkspaceToolDisplayIdentifier])
         return @"Wayland";
     return NSLocalizedString(@"Window", @"generic window title");
@@ -2902,6 +2916,8 @@ static UIViewController *ISHCreateWorkspaceToolViewController(NSString *toolIden
         return [WorkspaceImageViewerToolViewController new];
     if ([toolIdentifier isEqualToString:ISHWorkspaceToolVideoPlayerIdentifier])
         return [WorkspaceVideoPlayerToolViewController new];
+    if ([toolIdentifier isEqualToString:ISHWorkspaceToolTranscodeIdentifier])
+        return [WorkspaceTranscoderToolViewController new];
     if ([toolIdentifier isEqualToString:ISHWorkspaceToolDisplayIdentifier])
         return [DisplayViewController new];
     return nil;
@@ -2963,6 +2979,8 @@ NSString *ISHWorkspaceToolIdentifierForViewController(UIViewController *viewCont
         return ISHWorkspaceToolImageViewerIdentifier;
     if ([viewController isKindOfClass:WorkspaceVideoPlayerToolViewController.class])
         return ISHWorkspaceToolVideoPlayerIdentifier;
+    if ([viewController isKindOfClass:WorkspaceTranscoderToolViewController.class])
+        return ISHWorkspaceToolTranscodeIdentifier;
     if ([viewController isKindOfClass:DisplayViewController.class])
         return ISHWorkspaceToolDisplayIdentifier;
     return nil;
@@ -7761,6 +7779,7 @@ static UIResponder *ISHWorkspaceFirstResponderAmongViewControllers(UIViewControl
                 @{@"title": @"Markdown", @"identifier": ISHWorkspaceToolMarkdownViewerIdentifier},
                 @{@"title": NSLocalizedString(@"Image Viewer", @"utility menu item"), @"identifier": ISHWorkspaceToolImageViewerIdentifier},
                 @{@"title": NSLocalizedString(@"Video Player", @"utility menu item"), @"identifier": ISHWorkspaceToolVideoPlayerIdentifier},
+                @{@"title": NSLocalizedString(@"Video Converter", @"utility menu item"), @"identifier": ISHWorkspaceToolTranscodeIdentifier},
                 @{@"title": @"Wayland", @"identifier": ISHWorkspaceToolDisplayIdentifier},
             ],
         },

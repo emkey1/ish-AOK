@@ -270,6 +270,7 @@
 		E02D963E8F2A7D5D58954A0D /* MarkdownRenderer.m in Sources */ = {isa = PBXBuildFile; fileRef = 57D6250B1A93D2423FF389EB /* MarkdownRenderer.m */; };
 		F8AF2E023A182D2DF0E331A0 /* DisplayRFBShaders.metal in Sources */ = {isa = PBXBuildFile; fileRef = C64EFBFD4819B3516B73356F /* DisplayRFBShaders.metal */; };
 		FF0F1FAE84EA95701F222D85 /* WorkspaceVideoPlayer.m in Sources */ = {isa = PBXBuildFile; fileRef = 01BF35C50FE269DF759E5D59 /* WorkspaceVideoPlayer.m */; };
+		D58C32B48BAE5AB61C772980 /* WorkspaceTranscoder.m in Sources */ = {isa = PBXBuildFile; fileRef = B18C2A50D6539BA2D4AD3783 /* WorkspaceTranscoder.m */; };
 		7EEDF1D9C29A2CB043AD7C96 /* Transcode.m in Sources */ = {isa = PBXBuildFile; fileRef = 0C59657915AA848729536259 /* Transcode.m */; };
 		AA10C0DE2E9A000000000002 /* Localizable.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = AA10C0DE2E9A000000000001 /* Localizable.xcstrings */; };
 		AA10C0DE2E9A000000000004 /* About.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = AA10C0DE2E9A000000000003 /* About.xcstrings */; };
@@ -410,6 +411,7 @@
 
 /* Begin PBXFileReference section */
 		01BF35C50FE269DF759E5D59 /* WorkspaceVideoPlayer.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = WorkspaceVideoPlayer.m; sourceTree = "<group>"; };
+		B18C2A50D6539BA2D4AD3783 /* WorkspaceTranscoder.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = WorkspaceTranscoder.m; sourceTree = "<group>"; };
 		0C59657915AA848729536259 /* Transcode.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = Transcode.m; sourceTree = "<group>"; };
 		04D500F4AD345B478159A9D2 /* GuestFileBridge.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = GuestFileBridge.m; sourceTree = "<group>"; };
 		0877CBCD3AD3639A48727F42 /* AudioPCMDecoder_Opus.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = AudioPCMDecoder_Opus.m; sourceTree = "<group>"; };
@@ -1225,6 +1227,7 @@
 				8C79AE703940107B279572E7 /* WorkspaceImageViewer.m */,
 				461ED952F7CB7E4FBF484A4E /* WorkspaceVideoPlayer.h */,
 				01BF35C50FE269DF759E5D59 /* WorkspaceVideoPlayer.m */,
+				B18C2A50D6539BA2D4AD3783 /* WorkspaceTranscoder.m */,
 				0C59657915AA848729536259 /* Transcode.m */,
 				46F9CCCA8673E426A3B257F5 /* DisplayViewController.h */,
 				336DFB895C466449FA941BEF /* DisplayViewController.m */,
@@ -2363,6 +2366,7 @@
 				826E8F9723237C5BAA6FDD6A /* WorkspaceMarkdownViewer.m in Sources */,
 				54D528EF4254773BF6EDC8AB /* WorkspaceImageViewer.m in Sources */,
 				FF0F1FAE84EA95701F222D85 /* WorkspaceVideoPlayer.m in Sources */,
+				D58C32B48BAE5AB61C772980 /* WorkspaceTranscoder.m in Sources */,
 				7EEDF1D9C29A2CB043AD7C96 /* Transcode.m in Sources */,
 				2E93B4EE793B2F3424392363 /* DisplayViewController.m in Sources */,
 				C3060403DA76F382061A1170 /* DisplayRFBClient.m in Sources */,

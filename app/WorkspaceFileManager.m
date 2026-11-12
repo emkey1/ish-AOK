@@ -878,6 +878,14 @@ static NSString *ISHHomeDirectoryForUID(NSData *passwdData, uid_t targetUID) {
             [weakSelf duplicateItem:item];
         }]];
     }
+    if (item.kind == ISHGuestFileKindRegular &&
+            [ISHFileManagerTranscodableExtensions() containsObject:item.name.pathExtension.lowercaseString]) {
+        UIAction *convert = [UIAction actionWithTitle:NSLocalizedString(@"Convert Video…", @"File context menu action: open the video in the Video Converter") image:[UIImage systemImageNamed:@"film.stack"]
+                                           identifier:nil handler:^(UIAction *action) {
+            [weakSelf.workspaceHostViewController openWorkspaceToolWithIdentifier:@"transcode" fileGuestPath:item.guestPath];
+        }];
+        [actions addObject:convert];
+    }
     if (item.kind == ISHGuestFileKindDirectory) {
         [actions addObject:[UIAction actionWithTitle:NSLocalizedString(@"Add Folder to Music", @"Folder context menu action: queue its audio files") image:[UIImage systemImageNamed:@"music.note.list"]
                                            identifier:nil handler:^(UIAction *action) {
@@ -1068,6 +1076,15 @@ static NSSet<NSString *> *ISHFileManagerKnownBinaryExtensions(void) {
             @"ttf", @"otf", @"woff", @"woff2",
         ]];
     });
+    return set;
+}
+
+// What AVFoundation can read, so what the Video Converter takes. Narrower
+// than the player's list: mkv, webm and avi play through other paths there.
+static NSSet<NSString *> *ISHFileManagerTranscodableExtensions(void) {
+    static NSSet<NSString *> *set;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ set = [NSSet setWithArray:@[@"mp4", @"mov", @"m4v", @"3gp"]]; });
     return set;
 }
 

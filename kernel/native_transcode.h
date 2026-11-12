@@ -25,6 +25,7 @@ struct transcode_job {
     enum transcode_codec codec;
     int max_lines;          // shorter side of the picture, 0 = keep
     long video_bitrate;     // bits per second, 0 = chosen from the picture
+    double rate_scale;      // multiplies the chosen rate (0 = 1); ignored with video_bitrate
     long audio_bitrate;     // bits per second, used only when audio is re-encoded
     bool mov;               // QuickTime rather than MPEG-4
     bool no_audio;
@@ -45,6 +46,9 @@ struct transcode_job {
 // 0 on success; -1 with job->error set; 1 when cancelled. NULL when the app
 // has not installed it (the command-line ish).
 extern int (*transcode_hook)(struct transcode_job *job);
+
+// Where the out_host_path files go, so the app can clear any a crash left.
+#define TRANSCODE_TEMP_PREFIX "transcode-"
 
 // The host path of the regular file behind guest descriptor fd, for the
 // calling task. -1 when fd is not a regular file kept in a host file (a pipe,

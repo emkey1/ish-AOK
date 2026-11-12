@@ -20,6 +20,13 @@ what it did (this one was a screen recording, with `-c h264`):
 small.mp4: 38.3 MB -> 13.6 MB (36%) in 28.1 s; H.264 1206x2622, 1.8 Mbit/s (auto), no audio
 ```
 
+## Without a terminal
+
+In Workspace, the **Video Converter** applet does the same job with buttons,
+and also takes videos straight from Photos, puts the result back there, and
+deletes the original for you when you ask. See
+[workspace.md](workspace.md#video-converter).
+
 ## Options
 
 | Option | What it does |

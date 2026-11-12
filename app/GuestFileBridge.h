@@ -183,6 +183,15 @@ typedef ISHGuestFileOperationToken ISHGuestFileExtractionToken;
     progress:(nullable void (^)(int64_t bytesWritten, int64_t totalBytes))progress
     completion:(void (^)(NSURL * _Nullable fileURL, NSError * _Nullable error))completion;
 
+// Interactive lane. The host file that holds a regular guest file's bytes,
+// with no copy: realfs and iosfs files are themselves host files, and a fakefs
+// file's data is a host file in the root's data tree. For a reader that only
+// reads (AVFoundation); writing through it would bypass fakefs. nil, with no
+// error, when the file has no host file of its own (tmpfs, /proc) -- extract
+// it instead.
+- (void)hostFileURLForGuestPath:(NSString *)guestPath
+                     completion:(void (^)(NSURL * _Nullable hostURL, NSError * _Nullable error))completion;
+
 // Cancels any operation that returned a token. Cancelling something already
 // finished, or a token from an operation that does not poll for cancellation,
 // is a no-op rather than an error.

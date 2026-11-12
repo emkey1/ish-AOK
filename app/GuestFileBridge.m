@@ -11,6 +11,7 @@
 #include <mach/mach_time.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <sys/param.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -1091,6 +1092,37 @@ static ISHGuestFileKind ISHGuestFileKindFromMode(mode_t mode) {
     }];
 
     return token;
+}
+
+- (void)hostFileURLForGuestPath:(NSString *)guestPath
+                     completion:(void (^)(NSURL * _Nullable, NSError * _Nullable))completion {
+    NSString *path = [self normalizedGuestPath:guestPath];
+    [self enqueueOnLane:ISHGuestFileLaneInteractive paths:@[path] work:^{
+        __block NSURL *result = nil;
+        __block NSError *openError = nil;
+        BOOL hadContext = [self withGuestTaskContext:^{
+            // O_NONBLOCK_ for the same reason as the extraction below: a FIFO
+            // must not wedge the lane.
+            struct fd *fd = generic_open(path.fileSystemRepresentation, O_RDONLY_ | O_NONBLOCK_, 0);
+            if (IS_ERR(fd)) {
+                openError = [self errorWithGuestErrno:(long)PTR_ERR(fd) message:NSLocalizedString(@"Cannot open guest file", @"File operation error shown in the file manager")];
+                return;
+            }
+            if (!S_ISREG(fd->type)) {
+                openError = [self errorWithCode:ISHGuestFileBridgeErrorNotRegularFile message:NSLocalizedString(@"That path is not a regular file", @"File operation error shown in the file manager")];
+            } else if (fd->real_fd >= 0) {
+                char host[MAXPATHLEN];
+                struct stat st;
+                if (fstat(fd->real_fd, &st) == 0 && S_ISREG(st.st_mode) &&
+                        fcntl(fd->real_fd, F_GETPATH, host) != -1)
+                    result = [NSURL fileURLWithFileSystemRepresentation:host isDirectory:NO relativeToURL:nil];
+            }
+            fd_close(fd);
+        }];
+        if (!hadContext)
+            openError = [self notReadyError];
+        dispatch_async(dispatch_get_main_queue(), ^{ if (completion) completion(result, openError); });
+    }];
 }
 
 // Caller must already hold a borrowed task context. O_NONBLOCK_ is load-
