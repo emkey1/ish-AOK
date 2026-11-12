@@ -253,7 +253,7 @@ static int TCRun(struct transcode_job *job) {
 
         // Audio: copied as it is when the container takes it, otherwise
         // re-encoded as AAC (newer iPhones record spatial audio, which an
-        // MPEG-4 file cannot carry as it is).
+        // MPEG-4 file cannot carry as it is). See `copyable` below.
         NSString *audioNote = @"no audio";
         if (audio != nil) {
             CMFormatDescriptionRef audioFormat =
@@ -263,7 +263,15 @@ static int TCRun(struct transcode_job *job) {
             AVAssetWriterInput *audioIn = [AVAssetWriterInput assetWriterInputWithMediaType:AVMediaTypeAudio
                                                                              outputSettings:nil
                                                                            sourceFormatHint:audioFormat];
-            BOOL copied = audioFormat != NULL && [reader canAddOutput:audioOut] && [writer canAddInput:audioIn];
+            // QuickTime carries any audio. MPEG-4 is given only AAC as it
+            // is: AVAssetWriter also accepts linear PCM there (a Live
+            // Photo's audio), and many players then cannot play the file.
+            FourCharCode audioCodec = audioFormat ? CMFormatDescriptionGetMediaSubType(audioFormat) : 0;
+            BOOL copyable = job->mov || audioCodec == kAudioFormatMPEG4AAC ||
+                audioCodec == kAudioFormatMPEG4AAC_HE || audioCodec == kAudioFormatMPEG4AAC_HE_V2 ||
+                audioCodec == kAudioFormatMPEG4AAC_LD || audioCodec == kAudioFormatMPEG4AAC_ELD;
+            BOOL copied = audioFormat != NULL && copyable &&
+                [reader canAddOutput:audioOut] && [writer canAddInput:audioIn];
             if (copied) {
                 audioNote = @"audio copied";
             } else {

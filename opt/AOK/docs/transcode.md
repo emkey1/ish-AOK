@@ -54,9 +54,11 @@ Check a few results before deleting any originals.
 - **HDR, when the output is HEVC.** An HDR video (what recent iPhones record
   by default) stays HDR, in 10 bits. H.264 has no HDR, so with `-c h264` the
   picture is tone-mapped to ordinary SDR.
-- **Audio, as it is where possible.** AAC and most other audio are copied
-  unchanged. Audio that an MPEG-4 file cannot carry as it is (newer iPhones
-  record spatial audio) is re-encoded to stereo AAC at the `-a` rate.
+- **Audio, as it is where possible.** In a `.mov`, the audio is copied
+  unchanged. In an MPEG-4 file only AAC is copied; anything else (the
+  uncompressed audio of a Live Photo, the spatial audio newer iPhones
+  record) is re-encoded to stereo AAC at the `-a` rate, so the file plays
+  everywhere.
 
 ## Limits
 

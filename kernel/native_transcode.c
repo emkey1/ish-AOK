@@ -42,7 +42,7 @@ static void tc_usage(FILE *out) {
         "  -c CODEC   hevc (default) or h264\n"
         "  -s LINES   shrink so the shorter side is at most LINES (e.g. 1080, 720)\n"
         "  -b RATE    video bitrate, e.g. 2M or 1500k (default: chosen from the size,\n"
-        "             and never above the source's)\n"
+        "             and capped at the source's)\n"
         "  -a RATE    audio bitrate when the audio has to be re-encoded (default 128k)\n"
         "  -n         drop the audio\n"
         "  -y         overwrite OUTPUT if it exists\n"
