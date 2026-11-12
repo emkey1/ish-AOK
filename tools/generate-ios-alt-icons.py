@@ -8,14 +8,33 @@ ICON_SIZES = (120, 152, 167)
 
 
 def load_icon_names(plist_path):
+    """Return (name, image) pairs for CFBundleAlternateIcons.
+
+    Each icon is listed under its own name. An icon's "aliases" are names that
+    used to exist (the alternates inherited from upstream iSH). iOS remembers
+    the chosen alternate by name, so a retired name stays registered and shows
+    the icon that replaced it: the home screen moves to the new art with no
+    prompt, and the picker maps the alias back to the icon it now shows.
+    """
     with open(plist_path, "rb") as plist:
         icons = plistlib.load(plist)
-    return [name for name in sorted(icons.keys()) if name]
+    entries = []
+    for name in sorted(icons.keys()):
+        if not name:
+            continue
+        entries.append((name, name))
+        entries.extend((alias, name) for alias in icons[name].get("aliases", []))
+    names = [name for name, _ in entries]
+    duplicates = sorted({name for name in names if names.count(name) > 1})
+    if duplicates:
+        raise SystemExit(f"duplicate alternate icon names: {', '.join(duplicates)}")
+    return sorted(entries)
 
 
 def write_info_header(icon_names, header_path):
-    def icon_entry(name):
-        files = "".join(f"<string>{name}-{size}</string>" for size in ICON_SIZES)
+    def icon_entry(entry):
+        name, image = entry
+        files = "".join(f"<string>{image}-{size}</string>" for size in ICON_SIZES)
         return (
             f"<key>{name}</key>"
             "<dict>"

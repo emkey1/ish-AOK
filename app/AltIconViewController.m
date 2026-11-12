@@ -39,16 +39,34 @@
                                            withExtension:@"plist"]];
     self.altIconNames = [self.altIcons.allKeys sortedArrayUsingSelector:@selector(compare:)];
     
-    NSString *iconName = UIApplication.sharedApplication.alternateIconName;
-    if (iconName == nil)
-        iconName = @"";
-    NSIndexPath *indexPath = [NSIndexPath indexPathForItem:[self.altIconNames indexOfObject:iconName]
-                                                inSection:0];
-    [self.collectionView selectItemAtIndexPath:indexPath
-                                      animated:NO
-                                scrollPosition:UICollectionViewScrollPositionTop];
+    NSString *iconName = [self pickerNameForIconName:UIApplication.sharedApplication.alternateIconName];
+    NSUInteger item = [self.altIconNames indexOfObject:iconName];
+    if (item == NSNotFound)
+        item = [self.altIconNames indexOfObject:@""];
+    if (item != NSNotFound) {
+        [self.collectionView selectItemAtIndexPath:[NSIndexPath indexPathForItem:item inSection:0]
+                                          animated:NO
+                                    scrollPosition:UICollectionViewScrollPositionTop];
+    }
 //    UICollectionViewFlowLayout *layout = self.collectionView.collectionViewLayout;
 //    layout.sectionFootersPinToVisibleBounds = YES;
+}
+
+// iOS keeps the chosen alternate icon by name. The alternates inherited from
+// upstream iSH were retired, but their names stay registered as aliases of the
+// AOK icon that replaced them (Icons.plist "aliases"), so someone who chose one
+// sees that icon on the home screen and selected here.
+- (NSString *)pickerNameForIconName:(NSString *)iconName {
+    if (iconName == nil)
+        return @"";
+    if (self.altIcons[iconName] != nil)
+        return iconName;
+    for (NSString *name in self.altIconNames) {
+        NSArray *aliases = self.altIcons[name][@"aliases"];
+        if ([aliases isKindOfClass:NSArray.class] && [aliases containsObject:iconName])
+            return name;
+    }
+    return @"";
 }
 
 - (NSInteger)collectionView:(UICollectionView *)collectionView numberOfItemsInSection:(NSInteger)section {
@@ -80,7 +98,7 @@
 }
 
 - (IBAction)openSubmissions:(id)sender {
-    [UIApplication openURL:@"https://github.com/tblodt/ish/issues/578"];
+    [UIApplication openURL:@"https://github.com/emkey1/ish-AOK/issues"];
 }
 
 - (CGFloat)sideInset:(UICollectionViewFlowLayout *)layout {

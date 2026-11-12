@@ -4,192 +4,164 @@
 <dict>
 	<key></key>
 	<dict>
-		<key>link</key>
-		<string>https://twitter.com/emkey1</string>
 		<key>author</key>
 		<string>@emkey1</string>
 		<key>description</key>
 		<string>Default</string>
-	</dict>
-	<key>ihash1</key>
-	<dict>
 		<key>link</key>
-		<string>https://github.com/ish-app/ish/issues/578#issuecomment-562960935</string>
-		<key>author</key>
-		<string>@01010101lzy</string>
-		<key>description</key>
-		<string>i#</string>
+		<string>https://twitter.com/emkey1</string>
 	</dict>
-	<key>uninspired</key>
+	<key>aok-amber</key>
 	<dict>
-		<key>link</key>
-		<string>https://github.com/ish-app/ish/issues/578#issuecomment-562906800</string>
 		<key>author</key>
-		<string>@saagarjha</string>
+		<string>iSH-AOK</string>
 		<key>description</key>
-		<string>uninspired</string>
+		<string>Amber Phosphor</string>
+		<key>link</key>
+		<string>https://github.com/emkey1/ish-AOK</string>
 	</dict>
-	<key>3d</key>
+	<key>aok-blueprint</key>
 	<dict>
-		<key>link</key>
-		<string>https://github.com/ish-app/ish/issues/578#issuecomment-567060974</string>
 		<key>author</key>
-		<string>@ricardohnn</string>
+		<string>iSH-AOK</string>
 		<key>description</key>
-		<string>3D</string>
+		<string>Blueprint</string>
+		<key>link</key>
+		<string>https://github.com/emkey1/ish-AOK</string>
 	</dict>
-	<key>icon1337</key>
+	<key>aok-boot</key>
 	<dict>
-		<key>link</key>
-		<string>https://github.com/ish-app/ish/issues/578#issuecomment-675671406</string>
+		<key>aliases</key>
+		<array>
+			<string>colontildehash</string>
+			<string>ishcolontildehash</string>
+			<string>icon1337</string>
+			<string>sprite64</string>
+		</array>
 		<key>author</key>
-		<string>@AudioBra4n</string>
+		<string>iSH-AOK</string>
 		<key>description</key>
-		<string>1337</string>
+		<string>Boot Log</string>
+		<key>link</key>
+		<string>https://github.com/emkey1/ish-AOK</string>
 	</dict>
-	<key>pydann2</key>
+	<key>aok-check</key>
 	<dict>
-		<key>link</key>
-		<string>https://github.com/ish-app/ish/issues/578#issuecomment-562897067</string>
+		<key>aliases</key>
+		<array>
+			<string>3d</string>
+			<string>dollarblock1</string>
+			<string>is</string>
+		</array>
 		<key>author</key>
-		<string>@PyDann</string>
+		<string>iSH-AOK</string>
 		<key>description</key>
-		<string>&gt;| Light</string>
+		<string>A-OK</string>
+		<key>link</key>
+		<string>https://github.com/emkey1/ish-AOK</string>
 	</dict>
-	<key>pydann1</key>
+	<key>aok-desktop</key>
 	<dict>
-		<key>link</key>
-		<string>https://github.com/ish-app/ish/issues/578#issuecomment-562897067</string>
 		<key>author</key>
-		<string>@PyDann</string>
+		<string>iSH-AOK</string>
 		<key>description</key>
-		<string>&gt;| Dark</string>
+		<string>Desktop</string>
+		<key>link</key>
+		<string>https://github.com/emkey1/ish-AOK</string>
 	</dict>
-	<key>colontildehash</key>
+	<key>aok-gadgets</key>
 	<dict>
-		<key>link</key>
-		<string>https://github.com/ish-app/ish/issues/578#issuecomment-566759722</string>
+		<key>aliases</key>
+		<array>
+			<string>rgb</string>
+		</array>
 		<key>author</key>
-		<string>@TechUpdateGuy</string>
+		<string>iSH-AOK</string>
 		<key>description</key>
-		<string>:~#</string>
+		<string>Gadget Chain</string>
+		<key>link</key>
+		<string>https://github.com/emkey1/ish-AOK</string>
 	</dict>
-	<key>idollarhash</key>
+	<key>aok-guests</key>
 	<dict>
-		<key>link</key>
-		<string>https://github.com/ish-app/ish/issues/578#issuecomment-566855431</string>
 		<key>author</key>
-		<string>@TechUpdateGuy</string>
+		<string>iSH-AOK</string>
 		<key>description</key>
-		<string>i$#</string>
+		<string>Three Guests</string>
+		<key>link</key>
+		<string>https://github.com/emkey1/ish-AOK</string>
 	</dict>
-	<key>iinhash</key>
+	<key>aok-mono</key>
 	<dict>
-		<key>link</key>
-		<string>https://github.com/ish-app/ish/issues/578#issuecomment-576352583</string>
+		<key>aliases</key>
+		<array>
+			<string>circular</string>
+			<string>dollarblock2</string>
+			<string>notsurewhatthisis</string>
+			<string>pydann1</string>
+			<string>uninspired</string>
+		</array>
 		<key>author</key>
-		<string>@relikd</string>
+		<string>iSH-AOK</string>
 		<key>description</key>
-		<string>i in #</string>
+		<string>Mono</string>
+		<key>link</key>
+		<string>https://github.com/emkey1/ish-AOK</string>
 	</dict>
-	<key>metal</key>
+	<key>aok-prompt</key>
 	<dict>
-		<key>link</key>
-		<string>https://github.com/ish-app/ish/issues/578#issuecomment-676845860</string>
+		<key>aliases</key>
+		<array>
+			<string>idollarhash</string>
+			<string>ihash1</string>
+			<string>iinhash</string>
+			<string>pydann2</string>
+		</array>
 		<key>author</key>
-		<string>@heronwr</string>
+		<string>iSH-AOK</string>
 		<key>description</key>
-		<string>iS̈H</string>
+		<string>Prompt</string>
+		<key>link</key>
+		<string>https://github.com/emkey1/ish-AOK</string>
 	</dict>
-	<key>notsurewhatthisis</key>
+	<key>aok-silicon</key>
 	<dict>
-		<key>link</key>
-		<string>https://github.com/ish-app/ish/issues/578#issuecomment-725585045</string>
+		<key>aliases</key>
+		<array>
+			<string>metal</string>
+		</array>
 		<key>author</key>
-		<string>@wack-inc</string>
+		<string>iSH-AOK</string>
 		<key>description</key>
-		<string>Not sure what this is</string>
+		<string>Silicon</string>
+		<key>link</key>
+		<string>https://github.com/emkey1/ish-AOK</string>
 	</dict>
-	<key>reworked</key>
+	<key>aok-sunset</key>
 	<dict>
-		<key>link</key>
-		<string>https://github.com/ish-app/ish/issues/578#issuecomment-717395400</string>
+		<key>aliases</key>
+		<array>
+			<string>freeiosterminal</string>
+		</array>
 		<key>author</key>
-		<string>@peterlewis</string>
+		<string>iSH-AOK</string>
 		<key>description</key>
-		<string>iSH: Reworked</string>
+		<string>Sunset</string>
+		<key>link</key>
+		<string>https://github.com/emkey1/ish-AOK</string>
 	</dict>
-	<key>rgb</key>
+	<key>aok-suspend</key>
 	<dict>
-		<key>link</key>
-		<string>https://github.com/ish-app/ish/issues/578#issuecomment-713075148</string>
+		<key>aliases</key>
+		<array>
+			<string>reworked</string>
+		</array>
 		<key>author</key>
-		<string>@FelixTornqvist</string>
+		<string>iSH-AOK</string>
 		<key>description</key>
-		<string>RGB</string>
-	</dict>
-	<key>sprite64</key>
-	<dict>
+		<string>Suspend</string>
 		<key>link</key>
-		<string>https://github.com/ish-app/ish/issues/578#issuecomment-716465657</string>
-		<key>author</key>
-		<string>@peterlewis</string>
-		<key>description</key>
-		<string>Sprite 64</string>
-	</dict>
-	<key>is</key>
-	<dict>
-		<key>link</key>
-		<string>https://github.com/ish-app/ish/issues/578#issuecomment-828967195</string>
-		<key>author</key>
-		<string>@MelinaCodesInMinecraft</string>
-		<key>description</key>
-		<string>iS</string>
-	</dict>
-	<key>circular</key>
-	<dict>
-		<key>link</key>
-		<string>https://github.com/ish-app/ish/issues/578#issuecomment-716465657</string>
-		<key>author</key>
-		<string>@haohailong</string>
-		<key>description</key>
-		<string>Circular</string>
-	</dict>
-	<key>dollarblock1</key>
-	<dict>
-		<key>link</key>
-		<string>https://github.com/ish-app/ish/issues/578#issuecomment-968200645</string>
-		<key>author</key>
-		<string>@omduggineni</string>
-		<key>description</key>
-		<string>$+block light</string>
-	</dict>
-	<key>dollarblock2</key>
-	<dict>
-		<key>link</key>
-		<string>https://github.com/ish-app/ish/issues/578#issuecomment-968201479</string>
-		<key>author</key>
-		<string>@omduggineni</string>
-		<key>description</key>
-		<string>$+block dark</string>
-	</dict>
-	<key>freeiosterminal</key>
-	<dict>
-		<key>link</key>
-		<string>https://github.com/ish-app/ish/issues/578#issuecomment-971898997</string>
-		<key>author</key>
-		<string>@huxl3</string>
-		<key>description</key>
-		<string>iOS iSH Free Ios Terminal</string>
-	</dict>
-	<key>ishcolontildehash</key>
-	<dict>
-		<key>link</key>
-		<string>https://github.com/ish-app/ish/issues/578#issuecomment-1038424724</string>
-		<key>author</key>
-		<string>@moontr3</string>
-		<key>description</key>
-		<string>iSH:~# dark</string>
+		<string>https://github.com/emkey1/ish-AOK</string>
 	</dict>
 </dict>
 </plist>
