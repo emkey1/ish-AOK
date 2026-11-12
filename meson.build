@@ -667,6 +667,7 @@ src = [
     'kernel/smallclue_glue.c',
     'kernel/openssh_glue.c',
     'kernel/ktop_glue.c',
+    'kernel/native_transcode_glue.c',
     'kernel/acct.c',
     'kernel/exit.c',
     'kernel/time.c',
@@ -2014,6 +2015,16 @@ libwlpresent = static_library('wlpresent', 'kernel/native_wlpresent.c',
         '-include', meson.current_source_dir() / 'kernel/native_libc.h',
     ])
 
+# transcode, on the same terms: host code doing the guest's file work through
+# the shim. Its encoder is the app's (app/Transcode.m), reached through
+# transcode_hook; kernel/native_transcode_glue.c, in src above, is the
+# shim-free half that names a guest file's host path.
+libtranscode = static_library('transcode', 'kernel/native_transcode.c',
+    include_directories: includes,
+    c_args: ish_c_args + [
+        '-include', meson.current_source_dir() / 'kernel/native_libc.h',
+    ])
+
 # ktop, on the same terms as motepad and from the SAME source file the guest
 # gets at /AOK/tools/ktop/ktop.c -- compiled a second time as host code rather
 # than copied, so /AOK/native/ktop cannot drift from the source the docs tell
@@ -2037,7 +2048,7 @@ libktop = static_library('ktop', 'opt/AOK/tools/ktop/ktop.c',
 
 libish = library('ish', src,
     objects: librustnative,
-    link_whole: [libsmallclue, libnextvi, libbash, libzsh, libdash, libopenssh, libmotepad, libktop, libwlpresent] + libopenssh_special + libcurlshim + liblibgit2 + virgl_libs,
+    link_whole: [libsmallclue, libnextvi, libbash, libzsh, libdash, libopenssh, libmotepad, libktop, libwlpresent, libtranscode] + libopenssh_special + libcurlshim + liblibgit2 + virgl_libs,
     include_directories: includes, c_args: ish_c_args)
 # SecureTransport, for libgit2's HTTPS (the app links it in app/App.xcconfig).
 libgit2_deps = have_libgit2 and not meson.is_cross_build() ? \

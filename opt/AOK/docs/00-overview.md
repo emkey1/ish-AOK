@@ -157,6 +157,7 @@ six of them were not linked from anywhere at all.
 | [workspace.md](workspace.md) | the in-app multi-window desktop, its applets and saved layouts — and the Wayland desktop, the GPU and the games set |
 | [external-display.md](external-display.md) | an iPhone on a monitor or AirPlay: the terminal on the big screen, the keyboard on the phone (new in 563, iPhone only) |
 | [terminal-images.md](terminal-images.md) | images in the terminal with kitty's graphics protocol: `kitten icat`, `chafa` (new in 565) |
+| [transcode.md](transcode.md) | `/AOK/native/transcode`: convert videos to HEVC or H.264 on the hardware encoder, to free space (new in 565) |
 | [file-browser.md](file-browser.md) | the quick file picker on the keyboard bar (Cmd-B) |
 | [keyboard-shortcuts.md](keyboard-shortcuts.md) | every hardware-keyboard shortcut: desktops, windows, the terminal, MotePad, the Wayland desktop |
 | [keyboard-toolbar.md](keyboard-toolbar.md) | arranging the keys above the keyboard, and adding your own |

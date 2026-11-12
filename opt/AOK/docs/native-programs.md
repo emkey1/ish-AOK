@@ -13,7 +13,7 @@ You reach them through `/AOK/native`:
 
 ```sh
 ls /AOK/native
-# bmm  bmt  dash  hx  ktop  motepad  passwd  rust-probe  sh  smallclue  su  sudo  wl-present  zsh  zsh-multio
+# bmm  bmt  dash  hx  ktop  motepad  passwd  rust-probe  sh  smallclue  su  sudo  transcode  wl-present  zsh  zsh-multio
 ```
 
 What is actually there depends on how the build was configured, so read the
@@ -137,6 +137,7 @@ diagnostic rather than a program.
 | `/AOK/native/rust-probe` | a probe that exercises the Rust-on-the-shim path, not a tool you have a use for. Present because the Rust support it checks is what `hx` is built on |
 | `/AOK/native/bmm`, `/AOK/native/bmt` | the CPU and thread microbenchmarks, so the same workload can be timed with and without emulation — see [benchmarks.md](benchmarks.md) |
 | `/AOK/native/wl-present` | shows the Wayland desktop in the app without VNC: it takes the compositor's frames and hands the app's keyboard, pointer, clipboard and window size back. `start-wayland.sh` runs it; see [workspace.md](workspace.md#the-gpu) |
+| `/AOK/native/transcode` | converts videos to HEVC or H.264 on the device's hardware encoder, many times faster than ffmpeg in the guest — see [transcode.md](transcode.md) |
 | `/AOK/native/su`, `/AOK/native/sudo`, `/AOK/native/passwd` | SmallCLUE's su, sudo and passwd, each shipped as its own **setuid-root** program rather than an applet of the multicall binary — see below |
 
 SmallCLUE's applets used to be *smaller* implementations that diverged from the

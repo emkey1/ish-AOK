@@ -145,6 +145,9 @@ int native_bmm_main(int argc, char *const argv[], char *const envp[]);
 // start-wayland.sh runs it when the compositor draws on the GPU.
 int native_wlpresent_main(int argc, char *const argv[], char *const envp[]);
 int native_bmt_main(int argc, char *const argv[], char *const envp[]);
+// Re-encodes a video on the hardware encoder (kernel/native_transcode.c, with
+// the encoding in app/Transcode.m). Unconditional, like motepad.
+int native_transcode_main(int argc, char *const argv[], char *const envp[]);
 
 // ktop (kernel/ktop_glue.c), compiled from the same opt/AOK/tools/ktop/ktop.c
 // that ships to the guest -- so /AOK/native/ktop and a ktop built from
@@ -166,6 +169,7 @@ static const struct native_program native_programs[] = {
     // emulated to begin with. See ktop_glue.c.
     { .name = "ktop", .main = native_ktop_main },
     { .name = "wl-present", .main = native_wlpresent_main },
+    { .name = "transcode", .main = native_transcode_main },
     // The /AOK/tools benchmarks, so the same workload can be timed with and
     // without emulation. kernel/native_bench.c explains what that comparison
     // is, and what it is not.
