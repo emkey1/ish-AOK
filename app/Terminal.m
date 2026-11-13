@@ -81,6 +81,11 @@ static BOOL ISHEscapeStringStateIsInside(ISHEscapeStringState state) {
 @property CFTimeInterval webContentTerminationWindowStart;
 @property CFTimeInterval lastWebContentTerminationAt;
 @property NSUInteger webViewRecoveryGeneration;
+// A rebuild asked for while the app was in the background, held until it is
+// active again (see -recoverTerminalWebViewWithReason:error:). Main thread only.
+@property (nonatomic) BOOL webViewRecoveryDeferred;
+@property (nonatomic, copy) NSString *deferredRecoveryReason;
+@property (nonatomic) NSError *deferredRecoveryError;
 @property (nonatomic) tty_t tty;
 // lock with dataLock for !linux and @synchronized(self) for linux
 @property (nonatomic) NSMutableData *pendingData;
@@ -409,44 +414,119 @@ static void NotifyTerminalRegistryChanged(void) {
     self.outputGeneration++;
 }
 
+// Not while the app is in the background: wait until it is active again.
+//
+// iOS reclaims a backgrounded app's web content processes, and this one keeps
+// running in the background, so a terminal's page is often killed with the
+// screen locked. Rebuilding it there builds and loads a new web view under the
+// lock screen -- drawing, as far as iOS is concerned -- and if the dead view held
+// the keyboard focus (a long press or a selection gives it to the web view),
+// taking it out of the window reloads the keyboard's input views too. Both are
+// "insecure drawing while in secure mode", and FrontBoard kills the app for it
+// (0x2BAD45EC; TestFlight 563 and 564, one iPad on iOS 26.6: the 563 log's main
+// thread is in UIKit's input-view reload under the lock screen, with the guest
+// running). In the simulator, killing the page's process with the screen locked
+// showed the rebuild running at once: a new page loaded behind the lock screen.
+//
+// Nobody can see the terminal until the app is active, so nothing is lost by
+// waiting. Output carries on into pendingData, which is capped for a page that
+// has not loaded (PRELOAD_BUF_SIZE), and the page replays it when it loads.
 - (void)recoverTerminalWebViewWithReason:(NSString *)reason error:(NSError *)error {
     dispatch_async(dispatch_get_main_queue(), ^{
-        NSUInteger pendingBytes = 0;
-        lock(&self->_dataLock, 0);
-        [self resetOutputStateAndRequeueInFlightDataLocked];
-        pendingBytes = self.pendingData.length;
-        unlock(&self->_dataLock);
-        [self recordLifecycleEvent:@"terminal.webview.recover"
-                           details:@{@"reason": reason ?: @"unknown",
-                                     @"pendingBytes": @(pendingBytes),
-                                     @"error": error.localizedDescription ?: @"unknown"}];
-        self.loaded = NO;
-        self.didReportLoadFailure = NO;
-        WKWebView *oldWebView = _webView;
-        oldWebView.navigationDelegate = nil;
-        [oldWebView stopLoading];
-        [oldWebView removeFromSuperview];
-        _webView = nil;
-        [self webView];
+        if (UIApplication.sharedApplication.applicationState == UIApplicationStateBackground) {
+            [self deferWebViewRecoveryWithReason:reason error:error];
+            return;
+        }
+        [self rebuildTerminalWebViewWithReason:reason error:error];
+    });
+}
 
-        // The rebuilt view is off-screen until it loads: TerminalView puts it
-        // back from its KVO on `loaded`. If that never arrives the terminal is
-        // really gone, and that is the point at which the user should hear about
-        // it. A later recovery invalidates this watchdog by bumping the
-        // generation, so a second termination does not produce a second report
-        // for a terminal that is being rebuilt again.
-        NSUInteger generation = ++self.webViewRecoveryGeneration;
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(ISHTerminalRecoveryReportDelay * NSEC_PER_SEC)),
-                       dispatch_get_main_queue(), ^{
-            if (self.webViewRecoveryGeneration != generation || self.loaded)
-                return;
-            [self recordLifecycleEvent:@"terminal.webview.recoverFailed"
-                               details:@{@"reason": reason ?: @"unknown"}];
-            [self reportTerminalLoadFailure:error ?:
-                [NSError errorWithDomain:WKErrorDomain
-                                    code:WKErrorWebContentProcessTerminated
-                                userInfo:@{NSLocalizedDescriptionKey: NSLocalizedString(@"the terminal's web view did not come back", @"Terminal UI failure alert message")}]];
-        });
+- (void)deferWebViewRecoveryWithReason:(NSString *)reason error:(NSError *)error {
+    // The in-flight write is requeued now, as the rebuild would, so that output
+    // arriving meanwhile queues behind it rather than waiting on a page that is
+    // gone.
+    lock(&self->_dataLock, 0);
+    [self resetOutputStateAndRequeueInFlightDataLocked];
+    NSUInteger pendingBytes = self.pendingData.length;
+    unlock(&self->_dataLock);
+    self.loaded = NO;
+    self.deferredRecoveryReason = reason;
+    self.deferredRecoveryError = error;
+    [self recordLifecycleEvent:@"terminal.webview.recoverDeferred"
+                       details:@{@"reason": reason ?: @"unknown",
+                                 @"pendingBytes": @(pendingBytes)}];
+    if (self.webViewRecoveryDeferred)
+        return;
+    self.webViewRecoveryDeferred = YES;
+    // Became ACTIVE, not will-enter-foreground: during that notification the
+    // state still reads as background. Selector observers go with the object.
+    [NSNotificationCenter.defaultCenter addObserver:self
+                                           selector:@selector(runDeferredWebViewRecovery:)
+                                               name:UIApplicationDidBecomeActiveNotification
+                                             object:nil];
+}
+
+- (void)runDeferredWebViewRecovery:(NSNotification *)notification {
+    if (!self.webViewRecoveryDeferred)
+        return;
+    self.webViewRecoveryDeferred = NO;
+    [NSNotificationCenter.defaultCenter removeObserver:self
+                                                  name:UIApplicationDidBecomeActiveNotification
+                                                object:nil];
+    NSString *reason = self.deferredRecoveryReason;
+    NSError *error = self.deferredRecoveryError;
+    self.deferredRecoveryReason = nil;
+    self.deferredRecoveryError = nil;
+    // Deferred by the watchdog, a page that was still loading may have finished
+    // since. One that is up needs nothing.
+    if (self.loaded)
+        return;
+    [self rebuildTerminalWebViewWithReason:reason error:error];
+}
+
+- (void)rebuildTerminalWebViewWithReason:(NSString *)reason error:(NSError *)error {
+    NSUInteger pendingBytes = 0;
+    lock(&self->_dataLock, 0);
+    [self resetOutputStateAndRequeueInFlightDataLocked];
+    pendingBytes = self.pendingData.length;
+    unlock(&self->_dataLock);
+    [self recordLifecycleEvent:@"terminal.webview.recover"
+                       details:@{@"reason": reason ?: @"unknown",
+                                 @"pendingBytes": @(pendingBytes),
+                                 @"error": error.localizedDescription ?: @"unknown"}];
+    self.loaded = NO;
+    self.didReportLoadFailure = NO;
+    WKWebView *oldWebView = _webView;
+    oldWebView.navigationDelegate = nil;
+    [oldWebView stopLoading];
+    [oldWebView removeFromSuperview];
+    _webView = nil;
+    [self webView];
+
+    // The rebuilt view is off-screen until it loads: TerminalView puts it
+    // back from its KVO on `loaded`. If that never arrives the terminal is
+    // really gone, and that is the point at which the user should hear about
+    // it. A later recovery invalidates this watchdog by bumping the
+    // generation, so a second termination does not produce a second report
+    // for a terminal that is being rebuilt again.
+    NSUInteger generation = ++self.webViewRecoveryGeneration;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(ISHTerminalRecoveryReportDelay * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        if (self.webViewRecoveryGeneration != generation || self.loaded)
+            return;
+        // A page cannot load while the app is in the background, and an alert
+        // there would itself be drawing under the lock screen: try again once
+        // the app is active instead.
+        if (UIApplication.sharedApplication.applicationState == UIApplicationStateBackground) {
+            [self deferWebViewRecoveryWithReason:reason error:error];
+            return;
+        }
+        [self recordLifecycleEvent:@"terminal.webview.recoverFailed"
+                           details:@{@"reason": reason ?: @"unknown"}];
+        [self reportTerminalLoadFailure:error ?:
+            [NSError errorWithDomain:WKErrorDomain
+                                code:WKErrorWebContentProcessTerminated
+                            userInfo:@{NSLocalizedDescriptionKey: NSLocalizedString(@"the terminal's web view did not come back", @"Terminal UI failure alert message")}]];
     });
 }
 
