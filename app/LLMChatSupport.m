@@ -603,6 +603,64 @@ BOOL ISHLLMUsesAppleFoundationModels(void) {
     return [ISHLLMCurrentProvider().lowercaseString containsString:@"foundation models"];
 }
 
+// MARK: - Telling the user before a chat leaves the device
+//
+// App Review guideline 5.1.2(i) asks for the user's permission before their
+// data goes to a third party, and a chat destination is as third-party as it
+// gets: the message, the rest of the thread, and -- once tools are allowed --
+// the contents of files the assistant reads and the output of commands it runs
+// in the guest. Nothing is sent when the answer comes from Apple's on-device
+// Foundation Models, or from a server on this device (LM Studio and Ollama in
+// the preset list are loopback), so those are not asked about.
+//
+// Consent is remembered per HOST, not per preset: the Custom entry can point
+// anywhere, and pointing an existing preset somewhere new is a new
+// destination. Changing the destination therefore asks again.
+
+static NSString *const kISHLLMAgreedDestinationsKey = @"LLM Agreed Destinations";
+
+// The host a chat would be sent to, or nil when nothing leaves this device.
+NSString *ISHLLMDestinationConsentHost(void) {
+    if (ISHLLMUsesAppleFoundationModels())
+        return nil;
+    NSString *server = ISHLLMCurrentServerURL();
+    if (server.length == 0)
+        return nil;
+    NSURL *url = [NSURL URLWithString:server];
+    NSString *host = url.host.lowercaseString;
+    if (host.length == 0)
+        return nil;
+    // Loopback stays on the device, whatever port or scheme it uses.
+    if ([host isEqualToString:@"localhost"] || [host isEqualToString:@"127.0.0.1"] ||
+        [host isEqualToString:@"::1"] || [host isEqualToString:@"[::1]"] ||
+        [host hasSuffix:@".localhost"])
+        return nil;
+    return host;
+}
+
+BOOL ISHLLMDestinationConsentGranted(void) {
+    NSString *host = ISHLLMDestinationConsentHost();
+    if (host == nil)
+        return YES;
+    NSArray *agreed = [NSUserDefaults.standardUserDefaults arrayForKey:kISHLLMAgreedDestinationsKey];
+    return [agreed containsObject:host];
+}
+
+void ISHLLMGrantDestinationConsent(void) {
+    NSString *host = ISHLLMDestinationConsentHost();
+    if (host == nil)
+        return;
+    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+    NSArray *agreed = [defaults arrayForKey:kISHLLMAgreedDestinationsKey] ?: @[];
+    if ([agreed containsObject:host])
+        return;
+    [defaults setObject:[agreed arrayByAddingObject:host] forKey:kISHLLMAgreedDestinationsKey];
+}
+
+void ISHLLMForgetDestinationConsents(void) {
+    [NSUserDefaults.standardUserDefaults removeObjectForKey:kISHLLMAgreedDestinationsKey];
+}
+
 AOKLLMBackend ISHLLMCurrentBackend(void) {
     return ISHLLMUsesAppleFoundationModels()
         ? AOKLLMBackendAppleFoundationModels

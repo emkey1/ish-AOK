@@ -901,6 +901,41 @@ static const CGFloat kISHLLMMaximumTextScale = 3.0;
 
 #pragma mark - Sending
 
+// Guideline 5.1.2(i): before the first message goes to a destination that is
+// not this device, say where it is going and what goes with it, and let the
+// user back out. Asked once per host (ISHLLMDestinationConsentHost), so
+// pointing the chat somewhere new asks again, and never for Apple Foundation
+// Models or a loopback server, which send nothing.
+- (void)askToSendTo:(NSString *)host then:(void (^)(void))proceed {
+    NSString *title = [NSString stringWithFormat:NSLocalizedString(@"Send this chat to %@?", @"LLM consent alert title, %@ is a host name"), host];
+    NSString *message = [NSString stringWithFormat:NSLocalizedString(
+        @"%@ is not part of iSH-AOK and is not run by its developer.\n\n"
+        @"Sending a message there sends what you type and the rest of this conversation. "
+        @"If you let the assistant use tools, it also sends the contents of files it reads "
+        @"and the output of commands it runs in your guest.\n\n"
+        @"To keep everything on this device, choose Apple Foundation Models in Settings.",
+        @"LLM consent alert body, %@ is a host name"), host];
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:title message:message preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Not Now", @"LLM consent alert, decline")
+                                              style:UIAlertActionStyleCancel handler:nil]];
+    UIAlertAction *send = [UIAlertAction actionWithTitle:NSLocalizedString(@"Send", @"LLM consent alert, agree")
+                                                   style:UIAlertActionStyleDefault
+                                                 handler:^(__unused UIAlertAction *action) {
+        ISHLLMGrantDestinationConsent();
+        proceed();
+    }];
+    [alert addAction:send];
+    alert.preferredAction = send;
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)reallySendPrompt:(NSString *)prompt {
+    // While a reply is coming in, the agent queues it for when it ends.
+    [self setPromptFieldText:@""];
+    [_agent sendPrompt:prompt];
+    [self updateSendButton];
+}
+
 - (void)sendPrompt:(id)sender {
     (void) sender;
     NSString *prompt = [_promptField.text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
@@ -936,10 +971,17 @@ static const CGFloat kISHLLMMaximumTextScale = 3.0;
         [self startNewChat];
         return;
     }
-    // While a reply is coming in, the agent queues it for when it ends.
-    [self setPromptFieldText:@""];
-    [_agent sendPrompt:prompt];
-    [self updateSendButton];
+    // Ask before the first message to a destination off this device. The typed
+    // text is left in the field until they agree, so "Not Now" loses nothing.
+    NSString *consentHost = ISHLLMDestinationConsentHost();
+    if (consentHost != nil && !ISHLLMDestinationConsentGranted()) {
+        __weak typeof(self) weakSelf = self;
+        [self askToSendTo:consentHost then:^{
+            [weakSelf reallySendPrompt:prompt];
+        }];
+        return;
+    }
+    [self reallySendPrompt:prompt];
 }
 
 // Stop while the agent works and nothing is typed; Send otherwise -- a

@@ -216,6 +216,13 @@ NSDictionary<NSString *, id> *ISHLLMCreateSession(NSString *title);
 NSString *ISHLLMDeleteSession(NSString *sessionID);
 NSString *ISHLLMChatEndpoint(void);
 BOOL ISHLLMUsesAppleFoundationModels(void);
+// Guideline 5.1.2(i). The host a chat would be sent to, or nil when the answer
+// is produced on this device (Apple Foundation Models, or a loopback server);
+// whether the user has agreed to that host; and recording that they have.
+NSString *ISHLLMDestinationConsentHost(void);
+BOOL ISHLLMDestinationConsentGranted(void);
+void ISHLLMGrantDestinationConsent(void);
+void ISHLLMForgetDestinationConsents(void);
 AOKLLMBackend ISHLLMCurrentBackend(void);
 NSString *ISHLLMAppleFoundationModelsUnavailableMessage(void);
 BOOL ISHLLMFoundationModelsReady(void);
