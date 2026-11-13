@@ -20,7 +20,7 @@ Everything below was checked in the tree at `dacf906fe` unless it says
 
 ## Must fix before submitting
 
-### 1. There is no privacy manifest
+### 1. ~~There is no privacy manifest~~ — DONE (62d1e49c7)
 
 `PrivacyInfo.xcprivacy` does not exist in the repo, for the app or for the
 File Provider extension, and none is in the 565 archive. Apple has required
@@ -35,9 +35,12 @@ one since May 2024 for the "required reason" APIs, and AOK uses several:
 
 Not used: the active-keyboards API.
 
-**Step:** add a manifest to both targets, tracking set to false. TestFlight
-uploads have never bounced for the lack of one, so enforcement is probably at
-review time or warning-only (*inferred*).
+**Done 2026-11-13** (62d1e49c7): `app/PrivacyInfo.xcprivacy` and
+`app/FileProvider/PrivacyInfo.xcprivacy`, both in their targets' Resources and
+verified in the built bundles. No tracking, no collected data, and the
+categories each target uses with the call sites named beside them. The reason
+codes came from secondary sources (Apple's own page would not render), so the
+next upload is the real check: an invalid one is ITMS-91106.
 
 ### 2. The LLM chat sends data to third parties with no consent screen
 
@@ -55,7 +58,7 @@ Every app needs one. It has to cover the LLM providers the user chooses, the
 root catalogue fetch (app/Roots.m:250), and MetricKit diagnostics, which stay
 on the device (app/AppDelegate.m:906).
 
-### 4. A private API that AOK added itself
+### 4. ~~A private API that AOK added itself~~ — DONE (8dc6a0df5)
 
 `app/AppDelegate.m:247-265` resolves `dns_configuration_copy`,
 `dns_configuration_free` and `dns_configuration_notify_key` through `dlsym`.
@@ -63,8 +66,11 @@ They are declared in `dnsinfo.h`, which is not in the SDK, and the strings are
 in the shipped 565 binary. A public fallback already exists (`res_ninit` /
 `res_getservers`, app/AppDelegate.m:5176-5194).
 
-**Step:** delete the private path. Half a day including a check that DNS still
-behaves on a device.
+**Done 2026-11-13** (8dc6a0df5): the dlsym path is gone and resolv.conf is
+always written from libresolv; `strings` on the device binary no longer finds
+`dns_configuration`. The one lost trigger is a resolver change with no network
+path change (editing DNS for the Wi-Fi you are already on) -- `nw_path_monitor`
+covers the rest. **Not yet checked on a device.**
 
 ---
 
@@ -107,9 +113,8 @@ name (*inferred*).
 `app/Info.plist:139-143` declares `location` and `audio`. Location has
 upstream precedent and is only requested when a program opens `/dev/location`
 (app/LocationDevice.m:81-87); audio is the Music player
-(app/AudioPlayerEngine.m:655). Expect a request for a demo video. Separately,
-the location usage strings still say "iSH" (app/Info.plist:69-75) — worth
-fixing whatever happens.
+(app/AudioPlayerEngine.m:655). Expect a request for a demo video. The location usage strings said "iSH";
+fixed 2026-11-13 (62d1e49c7).
 
 ### Other private API use, all inherited from upstream
 
@@ -118,10 +123,9 @@ These pass the upload scan today:
 - a WebKit C++ symbol hook (app/AccessibilityFixes.m:29, via
   `proc_regionfilename` at deps/.../hook.c:283), which only runs with VoiceOver on
 - `[app suspend]` (app/AppDelegate.m:5710), upstream since 2019
-- KVC on `UIAlertAction`'s private `handler` in app/WorkspaceTestHooks.m:263.
-  That file is compiled into Release and gated only by an environment
-  variable. **Wrap it in `#if DEBUG`** — it is the one of the three that is
-  cheap to remove.
+- ~~KVC on `UIAlertAction`'s private `handler` in app/WorkspaceTestHooks.m~~ —
+  **DONE 2026-11-13** (f0eae8e06): the body is `#if DEBUG`, and
+  `ISHWorkspaceTestHooksStart()` is a no-op in Release.
 
 Already fine: `pid_shutdown_sockets` is Mac/simulator only (fs/sockrestart.c:16),
 and MoltenVK's private Metal API is off (deps/MoltenVK/meson.build:89).
