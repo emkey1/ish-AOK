@@ -79,6 +79,7 @@ UIViewController *ISHCreateToolbarKeysViewController(void) {
 @property (weak, nonatomic) IBOutlet UITableViewCell *sendFeedback;
 @property (weak, nonatomic) IBOutlet UITableViewCell *openGithub;
 @property (weak, nonatomic) IBOutlet UITableViewCell *openDiscord;
+@property (weak, nonatomic) IBOutlet UITableViewCell *privacyPolicyCell;
 @property (weak, nonatomic) IBOutlet UITableViewCell *customDnsCell;
 
 @property (weak, nonatomic) IBOutlet UITableViewCell *upgradeApkCell;
@@ -701,6 +702,11 @@ static NSString *ISHForeignExecTitle(NSString *mode) {
         [UIApplication openURL:@"https://github.com/emkey1/ish-AOK"];
     } else if (cell == self.openDiscord) {
         [UIApplication openURL:@"https://discord.gg/RkdBXHMbgc"];
+    } else if (cell == self.privacyPolicyCell) {
+        // App Review guideline 5.1.1(i) wants the policy reachable from inside
+        // the app, not only from the App Store listing. It lives in the source
+        // repository so that its revisions are public and diffable.
+        [UIApplication openURL:@"https://github.com/emkey1/ish-AOK/blob/working/docs/privacy-policy.md"];
     } else if (cell == self.exportContainerCell) {
         // copy the files to the app container so they can be extracted from iTunes file sharing
         NSURL *container = ContainerURL();

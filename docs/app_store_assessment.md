@@ -55,11 +55,36 @@ not asked about, since nothing leaves the device. Verified in the simulator
 against OpenRouter, including that declining sends nothing. Settings' model‑list
 fetch still contacts the provider first, but sends no user content.
 
-### 3. No privacy policy URL
+### 3. ~~No privacy policy URL~~ -- DONE (pending a hosting decision)
 
 Every app needs one. It has to cover the LLM providers the user chooses, the
 root catalogue fetch (app/Roots.m:250), and MetricKit diagnostics, which stay
-on the device (app/AppDelegate.m:906).
+on the device (app/AppDelegate.m, `MetricKitDiagnosticsDirectoryURL`).
+
+**Written 2026-11-13**: [privacy-policy.md](privacy-policy.md), from an audit
+of every outbound connection rather than from this summary. It covers what the
+summary asked for plus four things it had missed: the `captive.apple.com`
+request at launch (app/AppDelegate.m:5310, there to provoke the iOS network
+prompt), the chat's tool calls -- whose results, including guest file contents
+and command output, go to the provider, with the Read category allowed by
+default -- user-added MCP servers, and Apple's own "Share With App Developers"
+path, which is the one way crash data reaches us.
+
+Verified while writing it: no analytics, crash-reporting or advertising SDK of
+any kind; no update check; no iCloud sync; API keys and MCP tokens in the
+Keychain, deliberately out of reach of the guest (app/UserPreferences.m:819);
+the LLM client defaults to off (app/UserPreferences.m:273).
+
+Also added, since 5.1.1(i) wants the policy reachable from inside the app and
+not only from the listing: a **Privacy Policy** row in Settings beside the
+GitHub and Discord links (app/AboutViewController.m, About.storyboard).
+
+**Still to decide: where it is hosted.** The in-app row and App Store Connect
+both currently point at the GitHub blob URL,
+`https://github.com/emkey1/ish-AOK/blob/working/docs/privacy-policy.md`, which
+works today and needs no setup. A `gh-pages` branch would give a cleaner
+`emkey1.github.io` URL without the repository chrome; do **not** serve Pages
+from `docs/` on `working`, which would publish this assessment along with it.
 
 ### 4. ~~A private API that AOK added itself~~ — DONE (8dc6a0df5)
 
