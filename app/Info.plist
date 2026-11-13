@@ -68,11 +68,11 @@
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>This is required for connecting to localhost and using the ping command.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-	<string>Programs running in iSH will be allowed to track your location in the background.</string>
+	<string>Programs running in iSH-AOK will be allowed to track your location in the background.</string>
 	<key>NSLocationAlwaysUsageDescription</key>
-	<string>Programs running in iSH will be allowed to track your location in the background.</string>
+	<string>Programs running in iSH-AOK will be allowed to track your location in the background.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>Programs running in iSH will be allowed to see your location.</string>
+	<string>Programs running in iSH-AOK will be allowed to see your location.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>iSH-AOK deletes a video from your library only when you choose Delete Original in the Video Converter.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>

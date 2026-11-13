@@ -256,6 +256,8 @@
 		C0A200042F2F000100000003 /* ISHRunCommandIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0A200042F2F000100000004 /* ISHRunCommandIntent.swift */; };
 		C0A200042F2F000100000005 /* GuestCommandRunner.m in Sources */ = {isa = PBXBuildFile; fileRef = C0A200042F2F000100000006 /* GuestCommandRunner.m */; };
 		C0A200042F2F0001000000A2 /* WorkspaceTestHooks.m in Sources */ = {isa = PBXBuildFile; fileRef = C0A200042F2F0001000000A1 /* WorkspaceTestHooks.m */; };
+		C0A200062F2F0003000000A2 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = C0A200062F2F0003000000A1 /* PrivacyInfo.xcprivacy */; };
+		C0A200062F2F0003000000B2 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = C0A200062F2F0003000000B1 /* PrivacyInfo.xcprivacy */; };
 		C3060403DA76F382061A1170 /* DisplayRFBClient.m in Sources */ = {isa = PBXBuildFile; fileRef = 704575CA466EF25ECC14EA7B /* DisplayRFBClient.m */; };
 		C9DC7E00D7ACBDB0B88FAE97 /* LLMChatSettings.m in Sources */ = {isa = PBXBuildFile; fileRef = 37D9BDEB8D8CF285B64CA4C9 /* LLMChatSettings.m */; };
 		DC09D58C8595F3ACD279A0D2 /* AudioPlayerEngine.m in Sources */ = {isa = PBXBuildFile; fileRef = 59516B05C7A2120D1EE19975 /* AudioPlayerEngine.m */; };
@@ -802,6 +804,8 @@
 		C0A200042F2F000100000004 /* ISHRunCommandIntent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ISHRunCommandIntent.swift; sourceTree = "<group>"; };
 		C0A200042F2F000100000006 /* GuestCommandRunner.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = GuestCommandRunner.m; sourceTree = "<group>"; };
 		C0A200042F2F0001000000A1 /* WorkspaceTestHooks.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WorkspaceTestHooks.m; sourceTree = "<group>"; };
+		C0A200062F2F0003000000A1 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		C0A200062F2F0003000000B1 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		C0A200042F2F000100000007 /* GuestCommandRunner.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = GuestCommandRunner.h; sourceTree = "<group>"; };
 		C0A200042F2F000100000008 /* ShortcutActivityBridge.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ShortcutActivityBridge.h; sourceTree = "<group>"; };
 		C100D3488E931E73E9A1AC8C /* WorkspaceImageViewer.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; path = WorkspaceImageViewer.h; sourceTree = "<group>"; };
@@ -1127,6 +1131,7 @@
 		BB792B521F96D90D00FFB7A4 /* app */ = {
 			isa = PBXGroup;
 			children = (
+				C0A200062F2F0003000000A1 /* PrivacyInfo.xcprivacy */,
 				5D9897CE28B6B953003D3670 /* AppStore.xcconfig */,
 				5D9897CF28B6B953003D3670 /* ViewController.h */,
 				BB792B531F96D90D00FFB7A4 /* AppDelegate.h */,
@@ -1423,6 +1428,7 @@
 		BB88F4912154760800A341FD /* FileProvider */ = {
 			isa = PBXGroup;
 			children = (
+				C0A200062F2F0003000000B1 /* PrivacyInfo.xcprivacy */,
 				BB88F4922154760800A341FD /* FileProviderExtension.h */,
 				BB88F4932154760800A341FD /* FileProviderExtension.m */,
 				BB88F4952154760800A341FD /* FileProviderItem.h */,
@@ -1892,6 +1898,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C0A200062F2F0003000000A2 /* PrivacyInfo.xcprivacy in Resources */,
 				BB38599627BCEE6B000A1082 /* aok-mono.png in Resources */,
 				BB3859A227BCEE6B000A1082 /* aok-desktop.png in Resources */,
 				BB38599927BCEE6B000A1082 /* aok-check.png in Resources */,
@@ -1932,6 +1939,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C0A200062F2F0003000000B2 /* PrivacyInfo.xcprivacy in Resources */,
 				AA10C0DE2E9A00000000000B /* Localizable.xcstrings in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
