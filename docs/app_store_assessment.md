@@ -42,15 +42,18 @@ categories each target uses with the call sites named beside them. The reason
 codes came from secondary sources (Apple's own page would not render), so the
 next upload is the real check: an invalid one is ITMS-91106.
 
-### 2. The LLM chat sends data to third parties with no consent screen
+### 2. ~~The LLM chat sends data to third parties with no consent screen~~ — DONE (1a8cf6f2d)
 
 `app/LLMChatSupport.m:780-786` has presets for OpenAI, Anthropic, Google, Groq
 and OpenRouter. A grep of `app/LLMChat*.m` found no disclosure or consent
 text. Guideline 5.1.2(i) wants the user told before their data leaves.
 
-**Step:** a first-use sheet per destination naming the provider and what gets
-sent — messages, file contents, tool output. The on-device Foundation Models
-option needs none of this.
+**Done 2026-11-13** (1a8cf6f2d): a sheet per destination HOST, naming it and
+what goes with a message, gating -[LLMChatViewController sendPrompt:] where
+both user paths arrive. Apple Foundation Models and the loopback presets are
+not asked about, since nothing leaves the device. Verified in the simulator
+against OpenRouter, including that declining sends nothing. Settings' model‑list
+fetch still contacts the provider first, but sends no user content.
 
 ### 3. No privacy policy URL
 
