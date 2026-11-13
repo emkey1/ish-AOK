@@ -77,10 +77,15 @@ struct rowcol {
 - (BOOL)isEmpty { return self.startPosition.offset == self.endPosition.offset; }
 @end
 
-@interface TerminalView () {
+@interface TerminalView () <UIGestureRecognizerDelegate> {
     // Every key command the terminal claims; -keyCommands narrows it while an
     // IME composition is open.
     NSMutableArray<UIKeyCommand *> *_keyCommands;
+    // Tap-to-focus for the touches the page cannot see (see -focusTapped:).
+    UITapGestureRecognizer *_focusTapRecognizer;
+    // The keyboard was in this terminal when its page went away; give it back
+    // once a page is up again.
+    BOOL _refocusWhenPageReturns;
 }
 @property (nonatomic) NSMutableArray *functionKeys;
 @property ScrollbarView *scrollbarView;
@@ -130,6 +135,28 @@ struct rowcol {
     scrollbarView.bounces = NO;
     [self addSubview:scrollbarView];
 
+    // Tap to focus, for the touches the page never sees. Everything that
+    // raises the keyboard in a terminal otherwise runs in the PAGE: term.js
+    // answers mousedown with native.focus(), and nothing on the native side
+    // does. So with no page in the way -- killed by iOS for memory and not
+    // rebuilt yet, or rebuilt and still loading -- a tap reached nothing, and
+    // a terminal that had lost the keyboard could not get it back at all:
+    // "sometimes the whole just disappears with keyboard and it wont come up
+    // so i have to close the app and re open it" (TestFlight on 564, iPhone
+    // 16 Pro, iOS 27.0.1; the same report's vanishing text was 1dcd8d04e,
+    // which displaced the page and so hid it from taps the same way).
+    //
+    // -gestureRecognizer:shouldReceiveTouch: hands every touch the page CAN
+    // see straight back to it, so this never competes with hterm's own
+    // selection and focus handling.
+    _focusTapRecognizer = [[UITapGestureRecognizer alloc] initWithTarget:self
+                                                                 action:@selector(focusTapped:)];
+    _focusTapRecognizer.cancelsTouchesInView = NO;
+    _focusTapRecognizer.delaysTouchesBegan = NO;
+    _focusTapRecognizer.delaysTouchesEnded = NO;
+    _focusTapRecognizer.delegate = self;
+    [self addGestureRecognizer:_focusTapRecognizer];
+
     UserPreferences *prefs = UserPreferences.shared;
     [prefs observe:@[@"capsLockMapping", @"optionMapping", @"backtickMapEscape", @"overrideControlSpace"]
            options:0 owner:self usingBlock:^(typeof(self) self) {
@@ -154,13 +181,65 @@ struct rowcol {
     }
 }
 
+// Does the keyboard belong to this terminal right now? Asked of the whole
+// subtree, not of this view alone: a long press or a drag-selection hands first
+// responder to the web view, and that is the case where the keyboard dies with
+// the page rather than surviving it.
+static BOOL ISHSubtreeHoldsFirstResponder(UIView *view) {
+    if (view.isFirstResponder)
+        return YES;
+    for (UIView *subview in view.subviews) {
+        if (ISHSubtreeHoldsFirstResponder(subview))
+            return YES;
+    }
+    return NO;
+}
+
 - (void)observeValueForKeyPath:(NSString *)keyPath ofObject:(id)object change:(NSDictionary<NSKeyValueChangeKey,id> *)change context:(void *)context {
     if (object == _terminal) {
         if (_terminal.loaded) {
             [self installTerminalView];
             [self _updateStyle];
+            // A page the system reclaimed took the keyboard with it when the
+            // web view held first responder. Hand it back, but only to a
+            // terminal that had it: in a workspace the other windows' pages
+            // are reclaimed too, and they must not steal it from the one
+            // being typed in.
+            if (_refocusWhenPageReturns) {
+                _refocusWhenPageReturns = NO;
+                [self takeKeyboardFocusAsked:NO];
+            }
+        } else {
+            _refocusWhenPageReturns = ISHSubtreeHoldsFirstResponder(self);
         }
     }
+}
+
+- (void)takeKeyboardFocusAsked:(BOOL)userAsked {
+    if (self.isFirstResponder)
+        return;
+    if (self.wantsKeyboardFocus != nil)
+        self.wantsKeyboardFocus(userAsked);
+    else
+        [self becomeFirstResponder];
+}
+
+- (void)focusTapped:(UITapGestureRecognizer *)recognizer {
+    [self takeKeyboardFocusAsked:YES];
+}
+
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer shouldReceiveTouch:(UITouch *)touch {
+    if (gestureRecognizer != _focusTapRecognizer)
+        return YES;
+    if (self.isFirstResponder)
+        return NO;     // the keyboard is already here
+    // A touch the page will see is the page's business -- including the ones
+    // that must NOT take focus, such as a press on a selection, which keeps
+    // the edit menu up (term.js: pressOnSelection).
+    WKWebView *webView = _terminal.webView;
+    if (webView != nil && webView.window != nil && [touch.view isDescendantOfView:webView])
+        return NO;
+    return YES;
 }
 
 static NSString *const HANDLERS[] = {@"syncFocus", @"focus", @"newScrollHeight", @"newScrollTop", @"openLink", @"findCount", @"imeRect"};

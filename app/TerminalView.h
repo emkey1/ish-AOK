@@ -42,6 +42,16 @@ enum OverrideAppearance {
 // 0-based index of the selected match, or -1 when nothing is selected yet.
 @property (nonatomic, copy) void (^findResultsDidChange)(NSInteger count, NSInteger ordinal);
 
+// MARK: Keyboard focus
+// Called on the main thread when this terminal should take the keyboard and
+// the view cannot do it for itself: a tap the page could not handle, or a
+// reclaimed page that has come back to a terminal that had the keyboard when
+// it died. TerminalViewController wires this to its own verified focus --
+// -becomeFirstResponder fails silently, see -focusTerminalAttempt:userAsked:.
+// userAsked is YES for a tap, which takes focus whatever "Show Keyboard
+// Automatically" says, exactly as a tap the page handled already does.
+@property (nonatomic, copy) void (^wantsKeyboardFocus)(BOOL userAsked);
+
 #pragma mark External display
 
 // A Terminal owns exactly one WKWebView, so it can only ever be rendered in one

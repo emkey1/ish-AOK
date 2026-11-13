@@ -423,7 +423,7 @@ static const NSInteger kMaximumTerminalFontSize = 72;
 }
 
 - (void)focusTerminal {
-    [self focusTerminalAttempt:0];
+    [self focusTerminalAttempt:0 userAsked:NO];
 }
 
 // Focus, verified -- because -becomeFirstResponder FAILS SILENTLY.
@@ -441,7 +441,11 @@ static const NSInteger kMaximumTerminalFontSize = 72;
 // So: try, check, and try again on the next runloop turns. Bounded at ~400ms,
 // because a retry loop that never gives up would fight a user who has
 // deliberately dismissed the keyboard.
-- (void)focusTerminalAttempt:(NSInteger)attempt {
+// userAsked: a tap on the terminal, which takes focus whatever the preference
+// says -- a tap the PAGE handles has always raised the keyboard (term.js
+// answers mousedown with native.focus(), unconditionally), and a tap the page
+// could not see must not behave differently.
+- (void)focusTerminalAttempt:(NSInteger)attempt userAsked:(BOOL)userAsked {
     // autoShowKeyboard is about the SOFTWARE keyboard. First-responder status
     // is what routes hardware keys too, so gating this on that preference left
     // a terminal with a hardware keyboard attached unable to receive anything
@@ -449,7 +453,7 @@ static const NSInteger kMaximumTerminalFontSize = 72;
     // unreliable" was. iOS does not raise the software keyboard for a first
     // responder while a hardware keyboard is connected, so taking focus here
     // costs the preference nothing.
-    if (!UserPreferences.shared.autoShowKeyboard && !self.hasExternalKeyboard)
+    if (!userAsked && !UserPreferences.shared.autoShowKeyboard && !self.hasExternalKeyboard)
         return;
     UIView *view = self.termView;
     if (view == nil || view.isFirstResponder)
@@ -479,7 +483,7 @@ static const NSInteger kMaximumTerminalFontSize = 72;
     __weak typeof(self) weakSelf = self;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t) (50 * NSEC_PER_MSEC)),
                    dispatch_get_main_queue(), ^{
-        [weakSelf focusTerminalAttempt:attempt + 1];
+        [weakSelf focusTerminalAttempt:attempt + 1 userAsked:userAsked];
     });
 }
 
@@ -637,6 +641,12 @@ static const NSInteger kMaximumTerminalFontSize = 72;
     [self _installCenterKeys];
     [self _installSnippetsGesture];
     [self _installFindBar];
+    // The view asks for the keyboard when it cannot take it itself: a tap the
+    // page could not see, or a reclaimed page that has come back (TerminalView).
+    __weak typeof(self) weakTerminalSelf = self;
+    self.termView.wantsKeyboardFocus = ^(BOOL userAsked) {
+        [weakTerminalSelf focusTerminalAttempt:0 userAsked:userAsked];
+    };
 
     if (UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPhone) {
         self.barHeight.constant = 36;
