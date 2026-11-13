@@ -84,6 +84,9 @@ struct rowcol {
 }
 @property (nonatomic) NSMutableArray *functionKeys;
 @property ScrollbarView *scrollbarView;
+// A status-bar tap's scroll to the top is under way: it is animated, and no
+// finger is on the view, but the page has to follow it.
+@property (nonatomic) BOOL scrollingToTop;
 @property (nonatomic) BOOL terminalFocused;
 @property (weak, nonatomic) UIView *externalHostView;
 @property (nonatomic) UILabel *externalDisplayPlaceholder;
@@ -501,10 +504,39 @@ static void ISHRecordTerminalViewEvent(NSString *event, Terminal *terminal, NSDi
     }
 }
 
+// The page scrolls itself; this view is a scroll bar laid over it, kept in step
+// by newScrollHeight and newScrollTop. So the page follows it only when the
+// USER moves it -- a drag, a trackpad or mouse wheel, the coast after either,
+// or a status-bar tap.
+//
+// Every other offset change was sent back too, and one of them is wrong: when
+// the terminal grows, UIKit clamps this view's offset to its new height before
+// the page has resized (traced: offset 1596 of 1930 at a frame of 334, sent
+// with no finger down), and the page took that stale offset. It then no longer
+// counted as scrolled to the end, so hterm did not scroll it there after the
+// resize, and a full-screen program sat a row low, a scrollback row above it
+// and its own bottom row cut off: btop in landscape, hiding the keyboard (12
+// rows to 21), where the page's bottom margin grew 9px on a 15px row. hterm
+// lost the same flag on its own as well, which deps/libapps 25c054b6 fixes;
+// both had to go. The rest -- this view echoing the offset the page itself
+// just sent -- told the page nothing it did not know.
 - (void)scrollViewDidScroll:(UIScrollView *)scrollView {
     if (!self.terminal.loaded)
         return;
+    if (!(scrollView.isTracking || scrollView.isDragging || scrollView.isDecelerating ||
+          self.scrollingToTop))
+        return;
     [self.terminal.webView evaluateJavaScript:[NSString stringWithFormat:@"exports.newScrollTop(%f)", scrollView.contentOffset.y] completionHandler:nil];
+}
+
+- (BOOL)scrollViewShouldScrollToTop:(UIScrollView *)scrollView {
+    self.scrollingToTop = YES;
+    return YES;
+}
+
+- (void)scrollViewDidScrollToTop:(UIScrollView *)scrollView {
+    [self scrollViewDidScroll:scrollView];
+    self.scrollingToTop = NO;
 }
 
 - (void)setKeyboardAppearance:(UIKeyboardAppearance)keyboardAppearance {

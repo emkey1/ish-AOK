@@ -27,6 +27,13 @@
     [self.innerDelegate scrollViewDidScroll:scrollView];
 }
 
+// UIKit asks before it calls an optional delegate method, and forwarding alone
+// does not answer that question: without this, a method only the inner
+// delegate has (TerminalView's scroll-to-top pair) is never called.
+- (BOOL)respondsToSelector:(SEL)aSelector {
+    return [super respondsToSelector:aSelector] || [self.innerDelegate respondsToSelector:aSelector];
+}
+
 - (id)forwardingTargetForSelector:(SEL)aSelector {
     if ([self.innerDelegate respondsToSelector:aSelector])
         return self.innerDelegate;
