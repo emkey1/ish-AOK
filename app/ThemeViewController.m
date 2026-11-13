@@ -345,7 +345,7 @@ enum {
 - (BOOL)validateTheme {
     BOOL validName = _nameTextField.text.length && ([_nameTextField.text isEqualToString:self.theme.name] || ![Theme themeForName:_nameTextField.text includingDefaultThemes:NO]);
     _nameTextField.textColor = validName ? nil : UIColor.systemRedColor;
-    [self.tableView reloadSections:[NSIndexSet indexSetWithIndex:NameSection] withRowAnimation:UITableViewRowAnimationNone];
+    [self refreshNameFooter];
     BOOL validColors = YES;
     BOOL (^validColor)(UITextField *) = ^(UITextField *textField) {
         BOOL valid = !![[UIColor alloc] ish_initWithHexString:textField.text];
@@ -373,8 +373,37 @@ enum {
     return validName && validColors;
 }
 
+// The duplicate-name warning under the Name field. Refreshing it used to mean
+// reloading the whole section on every keystroke, which took the Name cell --
+// and with it the text field, which this controller owns and hands to the cell
+// -- out of the view hierarchy: the field resigned, the keyboard went down, and
+// -textFieldChanged: put it straight back up. So every character typed into a
+// theme name closed and reopened the keyboard (reported on Discord, 2026-11-13;
+// the colour fields were never affected, since their sections are not reloaded).
+// The footer's own view can be written to instead, with an empty batch update to
+// re-measure its height, and no cell is touched.
+- (void)refreshNameFooter {
+    NSString *text = [self tableView:self.tableView titleForFooterInSection:NameSection];
+    UITableViewHeaderFooterView *footer = [self.tableView footerViewForSection:NameSection];
+    if (footer == nil) {
+        // While the title is nil there is no footer view to write to, so the
+        // section does have to be reloaded to grow one -- but only on the one
+        // keystroke that first makes the name a duplicate, not on every one.
+        if (text.length > 0)
+            [self.tableView reloadSections:[NSIndexSet indexSetWithIndex:NameSection] withRowAnimation:UITableViewRowAnimationNone];
+        return;
+    }
+    NSString *current = footer.textLabel.text;
+    if (current == text || [current isEqualToString:text])
+        return;
+    footer.textLabel.text = text;
+    [footer.textLabel sizeToFit];
+    [self.tableView performBatchUpdates:nil completion:nil];
+}
+
 - (void)textFieldChanged:(UITextField *)sender {
-    // Hack to keep the keyboard up across a table view update
+    // Still needed for the one reload refreshNameFooter can still do, and
+    // harmless when the field never resigned.
     UITextRange *selectedRange = sender.isFirstResponder ? sender.selectedTextRange : nil;
     [self validateTheme];
     if (selectedRange) {
