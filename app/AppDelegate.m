@@ -13,7 +13,6 @@
 #include <netdb.h>
 #include <ctype.h>
 #include <dlfcn.h>
-#include <notify.h>
 #include <pthread.h>
 #include <sys/stat.h>
 #include <sys/socket.h>
@@ -186,8 +185,6 @@ static void ISHDispatchBootWork(NSString *name, void (^work)(void)) {
 @property (strong, nonatomic) nw_path_monitor_t pathMonitor API_AVAILABLE(ios(12.0));
 @property (strong, nonatomic) dispatch_queue_t pathMonitorQueue API_AVAILABLE(ios(12.0));
 #endif
-@property int dnsNotifyToken;
-@property BOOL dnsNotifyRegistered;
 @property int localDnsServerFD;
 @property BOOL localDnsServerRunning;
 @property (strong, nonatomic) dispatch_source_t localDnsServerReadSource;
@@ -203,160 +200,11 @@ static void ISHDispatchBootWork(NSString *name, void (^work)(void)) {
 
 @end
 
-#pragma pack(push, 4)
-typedef struct {
-    struct in_addr address;
-    struct in_addr mask;
-} ish_dns_sortaddr_t;
-
-typedef struct {
-    char *domain;
-    int32_t n_nameserver;
-    struct sockaddr **nameserver;
-    uint16_t port;
-    int32_t n_search;
-    char **search;
-    int32_t n_sortaddr;
-    ish_dns_sortaddr_t **sortaddr;
-    char *options;
-    uint32_t timeout;
-    uint32_t search_order;
-    uint32_t if_index;
-    uint32_t flags;
-    uint32_t reach_flags;
-    uint32_t reserved[5];
-} ish_dns_resolver_t;
-
-typedef struct {
-    int32_t n_resolver;
-    ish_dns_resolver_t **resolver;
-    int32_t n_scoped_resolver;
-    ish_dns_resolver_t **scoped_resolver;
-    uint32_t reserved[5];
-} ish_dns_config_t;
-#pragma pack(pop)
-
-typedef ish_dns_config_t *(*ISHDnsConfigurationCopyFunc)(void);
-typedef void (*ISHDnsConfigurationFreeFunc)(ish_dns_config_t *config);
-typedef const char *(*ISHDnsConfigurationNotifyKeyFunc)(void);
-
-static ISHDnsConfigurationCopyFunc ISHDnsConfigurationCopySymbol(void) {
-    static ISHDnsConfigurationCopyFunc copyFunc;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        copyFunc = (ISHDnsConfigurationCopyFunc) dlsym(RTLD_DEFAULT, "dns_configuration_copy");
-    });
-    return copyFunc;
-}
-
-static ISHDnsConfigurationFreeFunc ISHDnsConfigurationFreeSymbol(void) {
-    static ISHDnsConfigurationFreeFunc freeFunc;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        freeFunc = (ISHDnsConfigurationFreeFunc) dlsym(RTLD_DEFAULT, "dns_configuration_free");
-    });
-    return freeFunc;
-}
-
-static ISHDnsConfigurationNotifyKeyFunc ISHDnsConfigurationNotifyKeySymbol(void) {
-    static ISHDnsConfigurationNotifyKeyFunc notifyKeyFunc;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        notifyKeyFunc = (ISHDnsConfigurationNotifyKeyFunc) dlsym(RTLD_DEFAULT, "dns_configuration_notify_key");
-    });
-    return notifyKeyFunc;
-}
-
-static ish_dns_resolver_t *ISHResolverPointerAt(ish_dns_resolver_t **resolvers, int index) {
-    ish_dns_resolver_t *resolver = NULL;
-    if (resolvers == NULL || index < 0)
-        return NULL;
-    memcpy(&resolver, resolvers + index, sizeof(resolver));
-    return resolver;
-}
-
-static struct sockaddr *ISHNameserverPointerAt(struct sockaddr **nameservers, int index) {
-    struct sockaddr *sockaddr = NULL;
-    if (nameservers == NULL || index < 0)
-        return NULL;
-    memcpy(&sockaddr, nameservers + index, sizeof(sockaddr));
-    return sockaddr;
-}
-
-static NSString *ISHResolvConfFromDnsConfiguration(void) {
-    ISHDnsConfigurationCopyFunc copyFunc = ISHDnsConfigurationCopySymbol();
-    ISHDnsConfigurationFreeFunc freeFunc = ISHDnsConfigurationFreeSymbol();
-    if (copyFunc == NULL || freeFunc == NULL)
-        return nil;
-
-    ish_dns_config_t *config = copyFunc();
-    if (config == NULL)
-        return nil;
-
-    NSMutableString *resolvConf = [NSMutableString new];
-    NSMutableOrderedSet<NSString *> *uniqueServers = [NSMutableOrderedSet orderedSet];
-    BOOL wroteSearch = NO;
-
-    for (int resolverIndex = 0; resolverIndex < config->n_resolver; resolverIndex++) {
-        ish_dns_resolver_t *resolver = ISHResolverPointerAt(config->resolver, resolverIndex);
-        if (resolver == NULL || resolver->n_nameserver <= 0)
-            continue;
-        if (resolver->options != NULL && strcmp(resolver->options, "mdns") == 0)
-            continue;
-
-        if (!wroteSearch && resolver->n_search > 0 && resolver->search != NULL) {
-            for (int searchIndex = 0; searchIndex < resolver->n_search; searchIndex++) {
-                char *searchDomain = resolver->search[searchIndex];
-                if (searchDomain == NULL || searchDomain[0] == '\0')
-                    continue;
-                if (!wroteSearch) {
-                    [resolvConf appendString:@"search"];
-                    wroteSearch = YES;
-                }
-                [resolvConf appendFormat:@" %s", searchDomain];
-            }
-            if (wroteSearch)
-                [resolvConf appendString:@"\n"];
-        }
-
-        char address[NI_MAXHOST];
-        for (int nameserverIndex = 0; nameserverIndex < resolver->n_nameserver; nameserverIndex++) {
-            struct sockaddr *sockaddr = ISHNameserverPointerAt(resolver->nameserver, nameserverIndex);
-            if (sockaddr == NULL)
-                continue;
-            sa_family_t family = sockaddr->sa_family;
-            socklen_t sockaddrLen = 0;
-            if (family == AF_INET_) {
-                sockaddrLen = sizeof(struct sockaddr_in);
-            } else if (family == AF_INET6_) {
-                struct sockaddr_in6 *addr6 = (struct sockaddr_in6 *) sockaddr;
-                if (IN6_IS_ADDR_LINKLOCAL(&addr6->sin6_addr))
-                    continue;
-                sockaddrLen = sizeof(struct sockaddr_in6);
-            } else {
-                continue;
-            }
-            int err = getnameinfo(sockaddr, sockaddrLen,
-                                  address, sizeof(address),
-                                  NULL, 0, NI_NUMERICHOST);
-            if (err != 0)
-                continue;
-            NSString *server = [NSString stringWithUTF8String:address];
-            if (server.length != 0)
-                [uniqueServers addObject:server];
-        }
-    }
-
-    for (NSString *server in uniqueServers) {
-        [resolvConf appendFormat:@"nameserver %@\n", server];
-    }
-
-    if (uniqueServers.count == 0)
-        resolvConf = nil;
-
-    freeFunc(config);
-    return resolvConf;
-}
+// The DNS servers in use used to be read with dns_configuration_copy(), resolved
+// through dlsym: a private API, declared in a dnsinfo.h that is not in the SDK.
+// It is gone, and -scheduleDnsRefresh: takes the servers from libresolv
+// (res_ninit/res_getservers) instead, which is public and was already the
+// fallback for every device where the private symbol did not resolve.
 
 static NSString *ISHDnsBreadcrumbSummary(NSString *source, NSString *reason, NSString *resolvConf) {
     NSMutableArray<NSString *> *parts = [NSMutableArray array];
@@ -5059,34 +4907,6 @@ static TerminalViewController *CreateTerminalViewController(void) {
     if (!UserPreferences.shared.shouldDisableResolvConfRewrite)
         [self ensureLocalDnsServer];
     [self scheduleDnsRefresh:@"manual"];
-    if (!self.dnsNotifyRegistered) {
-        ISHDnsConfigurationNotifyKeyFunc notifyKeyFunc = ISHDnsConfigurationNotifyKeySymbol();
-        const char *notifyKey = notifyKeyFunc != NULL ? notifyKeyFunc() : NULL;
-        if (notifyKey != NULL) {
-            dispatch_queue_t queue = dispatch_get_main_queue();
-#if __has_include(<Network/Network.h>)
-            if (@available(iOS 12.0, *)) {
-                if (self.pathMonitorQueue == nil)
-                    self.pathMonitorQueue = dispatch_queue_create("app.ish.iSH-AOK.dns-monitor", DISPATCH_QUEUE_SERIAL);
-                queue = self.pathMonitorQueue;
-            }
-#endif
-            __weak typeof(self) weakSelf = self;
-            uint32_t token = NOTIFY_TOKEN_INVALID;
-            int err = notify_register_dispatch(notifyKey, &token, queue, ^(int tokenValue) {
-                __strong typeof(weakSelf) self = weakSelf;
-                if (self == nil)
-                    return;
-                [ISHDiagnosticsStore recordBreadcrumb:@"dns.notify"
-                                              details:@{@"token": @(tokenValue)}];
-                [self scheduleDnsRefresh:@"dnsnotify"];
-            });
-            if (err == NOTIFY_STATUS_OK) {
-                self.dnsNotifyToken = (int) token;
-                self.dnsNotifyRegistered = YES;
-            }
-        }
-    }
 #if __has_include(<Network/Network.h>)
     if (@available(iOS 12.0, *)) {
         if (self.pathMonitor == nil) {
@@ -5180,8 +5000,6 @@ static TerminalViewController *CreateTerminalViewController(void) {
         }
     }
 
-    if (!customOverrideActive)
-        resolvConf = (NSMutableString *) ISHResolvConfFromDnsConfiguration();
     BOOL localDnsServerStarted = [self ensureLocalDnsServer];
     BOOL includeLocalDnsServer = customOverrideActive ? NO : localDnsServerStarted;
     if (!customOverrideActive && resolvConf == nil) {
@@ -5686,11 +5504,6 @@ static UINavigationController *CreateAboutNavigationController(BOOL recoveryMode
 - (void)dealloc {
     [self.metricKitSubscriber unregisterIfNeeded];
     [self stopLocalDnsServer];
-    if (self.dnsNotifyRegistered) {
-        notify_cancel(self.dnsNotifyToken);
-        self.dnsNotifyRegistered = NO;
-        self.dnsNotifyToken = NOTIFY_TOKEN_INVALID;
-    }
 #if __has_include(<Network/Network.h>)
     if (@available(iOS 12.0, *)) {
         if (self.pathMonitor != nil) {
