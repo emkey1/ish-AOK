@@ -680,8 +680,9 @@ static NSArray<NSNumber *> *TCSizeLines(void) {
         break;
     }
     case TCSourceFiles: {
-        _pendingExport = outURL;
-        UIDocumentPickerViewController *picker = [[UIDocumentPickerViewController alloc] initForExportingURLs:@[outURL] asCopy:NO];
+        NSURL *named = [self filesExportURLForOutput:outURL];
+        _pendingExport = named;
+        UIDocumentPickerViewController *picker = [[UIDocumentPickerViewController alloc] initForExportingURLs:@[named] asCopy:NO];
         picker.delegate = self;
         [self presentViewController:picker animated:YES completion:nil];
         break;
@@ -720,11 +721,38 @@ static NSArray<NSNumber *> *TCSizeLines(void) {
     }
 }
 
+// The export picker offers the file under its own name, and that was the
+// temporary one, transcode-<UUID>.mp4: the Save As field had to be retyped.
+// It gets the original's name instead, as a guest source's result does
+// (clip.mov -> clip-converted.mp4), in a directory of its own so two exports
+// cannot collide.
+- (NSURL *)filesExportURLForOutput:(NSURL *)outURL {
+    NSString *base = _sourceName.stringByDeletingPathExtension;
+    if (base.length == 0)
+        return outURL;
+    NSFileManager *fm = NSFileManager.defaultManager;
+    NSString *dir = [NSTemporaryDirectory() stringByAppendingPathComponent:
+                     [@"transcode-export-" stringByAppendingString:NSUUID.UUID.UUIDString]];
+    if (![fm createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil])
+        return outURL;
+    NSURL *named = [NSURL fileURLWithPath:[dir stringByAppendingPathComponent:
+                                           [base stringByAppendingString:@"-converted.mp4"]]];
+    if (![fm moveItemAtURL:outURL toURL:named error:nil]) {
+        [fm removeItemAtPath:dir error:nil];
+        return outURL;
+    }
+    return named;
+}
+
 - (void)exportFinished:(BOOL)saved {
     // initForExportingURLs:asCopy:NO moves the file when saved; when not, it
     // is still ours.
     if (!saved)
         [NSFileManager.defaultManager removeItemAtURL:_pendingExport error:nil];
+    // And the directory filesExportURLForOutput: made for it, empty either way.
+    NSURL *dir = _pendingExport.URLByDeletingLastPathComponent;
+    if ([dir.lastPathComponent hasPrefix:@"transcode-export-"])
+        [NSFileManager.defaultManager removeItemAtURL:dir error:nil];
     _pendingExport = nil;
     NSString *line = saved ? NSLocalizedString(@"Saved.", @"Video converter: export finished")
                            : NSLocalizedString(@"Not saved.", @"Video converter: export cancelled");
