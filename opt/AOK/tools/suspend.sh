@@ -18,19 +18,54 @@
 # WHAT IT CANNOT SAVE, and it says so rather than saving something that will
 # not come back:
 #
-#   - A native program that cannot describe itself. A native program is host
-#     code on a host thread, so it is asked to write down its own state rather
-#     than photographed. /AOK/native/zsh can; /AOK/native/dash cannot, because
-#     it has no way to write its shell functions back out as text.
 #   - A socket, or any other descriptor with no rule for rebuilding it.
 #     Regular files, directories, terminals, pipes and the standard streams all
 #     have one.
 #
-# In either case nothing is written, the session carries on untouched, and
-# --status names the process and the reason.
+# Then nothing is written, the session carries on untouched, and --status names
+# the process and the reason.
+#
+# A native program does not stop a save: /AOK/native/zsh describes itself, and
+# the others -- dash, which is `sh` on a root with the native links and /bin/sh
+# on the native root -- are re-launched from their command line when the
+# session comes back. This script copes with being run by one of those (see
+# RESUMED below).
 set -e
 
 CONTROL=/proc/ish/checkpoint
+SELF=$(readlink -f "$0" 2>/dev/null) || SELF=$0
+
+# Run by a NATIVE shell, this script is not continued when the session comes
+# back: the shell is re-launched from its command line, so the script runs
+# again from the top -- and without this its first act on the resumed machine
+# would be to ask for another suspend, and a resumed --save would save again
+# with its output still pointing at the control file. The shell's descriptors
+# do come back as they were at the save, so ask() leaves three for this to
+# find: 9 open on this script, which is how a re-launched run knows it is one,
+# and 7 and 6 holding the output and errors the redirect to the control file
+# had set aside.
+RESUMED=
+if [ "$(readlink "/proc/$$/fd/9" 2>/dev/null)" = "$SELF" ]; then
+    exec 1>&7 2>&6 7>&- 6>&- 9<&-
+    RESUMED=1
+fi
+
+# ask <request>: write it to the control file.
+ask() {
+    native=
+    case $(readlink "/proc/$$/exe" 2>/dev/null) in
+        /AOK/native/*) native=1 ;;
+    esac
+    if [ -n "$native" ]; then
+        exec 9<"$SELF"
+        { exec 7>&1; } 2>/dev/null || exec 7>/dev/null
+        { exec 6>&2; } 2>/dev/null || exec 6>/dev/null
+    fi
+    asked=0
+    echo "$1" > "$CONTROL" 2>/dev/null || asked=$?
+    [ -z "$native" ] || exec 9<&- 7>&- 6>&-
+    return "$asked"
+}
 
 usage() {
     sed -n '2,/^set -e$/p' "$0" | sed 's/^# \{0,1\}//; /^set -e$/d'
@@ -73,7 +108,7 @@ case ${1-} in
         # A COPY: the guest carries on afterwards. The path is a HOST path --
         # somewhere on the device outside the guest filesystem -- because that
         # is where a session has to live to survive the app being killed.
-        if ! echo "save $2" > "$CONTROL" 2>/dev/null; then
+        if [ -z "$RESUMED" ] && ! ask "save $2"; then
             echo "suspend.sh: refused. Why:" >&2
             report last_refusal >&2
             report last_err | sed 's/^/error /' >&2
@@ -91,7 +126,7 @@ case ${1-} in
     "")
         # A DEPARTURE: the image is written and the machine stops, so the next
         # launch resumes rather than boots.
-        if ! echo suspend > "$CONTROL" 2>/dev/null; then
+        if [ -z "$RESUMED" ] && ! ask suspend; then
             echo "suspend.sh: refused." >&2
             echo "  Turn on Suspend to Disk in Settings, or on the command" >&2
             echo "  line run iSH-AOK with ISH_GUEST_CHECKPOINT=1 and a" >&2

@@ -74,4 +74,33 @@ want "suspend, resumed" "$out" "first=0" "!second=" "!refused"
 out=$(guest "$S" "$TWICE")
 want "suspend, resumed again" "$out" "second=0" "!refused"
 
+# The same under a NATIVE shell, which is what a bare `sh` is on a root with the
+# native links and what /bin/sh is on the native root. A resume re-launches it
+# from its command line, so the script runs again from the top: it must know it
+# has been resumed rather than suspend again, and must put back the output its
+# own redirect to the control file was holding.
+NSH=/AOK/native/sh
+if ISH_REAL_MNT="$WORK" "$ISH" -f "$ROOT" $SH -c "[ -x $NSH ]" < /dev/null 2>/dev/null; then
+    NS="ISH_SESSION=$WORK/nsession"
+    NTWICE="$NSH /realmnt/suspend.sh; echo first=\$?; $NSH /realmnt/suspend.sh; echo second=\$?"
+    out=$(guest "$NS" "$NTWICE")
+    want "native sh: suspend" "$out" "!first=" "!refused"
+    [ -s "$WORK/nsession" ] || { echo "  FAIL | native sh: suspend: no image"; fail=1; }
+    out=$(guest "$NS" "$NTWICE")
+    want "native sh: suspend, resumed" "$out" "first=0" "!second=" "!refused" "!I/O error"
+    out=$(guest "$NS" "$NTWICE")
+    want "native sh: suspend, resumed again" "$out" "second=0" "!refused" "!I/O error"
+
+    out=$(guest "" "$NSH /realmnt/suspend.sh --save $WORK/ncopy; echo rc=\$?")
+    want "native sh: --save" "$out" "saved to $WORK/ncopy" "rc=0" "!refused"
+    before=$(ls -l "$WORK/ncopy")
+    sleep 1
+    out=$(guest "ISH_RESTORE=$WORK/ncopy" "echo this-argv-must-be-ignored")
+    want "native sh: --save, resumed" "$out" "saved to $WORK/ncopy" "rc=0" "!refused" "!I/O error" "!this-argv"
+    # The resumed copy must not have saved again over the image it came from.
+    [ "$(ls -l "$WORK/ncopy")" = "$before" ] || { echo "  FAIL | native sh: --save, resumed: saved again"; fail=1; }
+else
+    echo "  SKIP | no $NSH in $ROOT"
+fi
+
 [ "$fail" -eq 0 ] && echo "suspend_script: PASS" || { echo "suspend_script: FAIL"; exit 1; }
