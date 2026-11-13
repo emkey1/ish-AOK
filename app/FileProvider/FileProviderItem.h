@@ -38,6 +38,11 @@ FOUNDATION_EXPORT NSFileProviderItemIdentifier ISHFileProviderInnerIdentifier(NS
 - (int)openNewFDWithError:(NSError *_Nullable *)err;
 
 @property (readonly) NSString *path;
+// The path whose contents this item stands for: its own, unless it is a
+// fakefs symlink that resolved inside this root, in which case the target's.
+// Use it for listing and for building the paths of children; -path remains
+// the item's own identity, and is what a delete or a rename acts on.
+@property (readonly) NSString *contentPath;
 // When set, -parentItemIdentifier returns this instead of computing one.
 @property (nullable, copy) NSFileProviderItemIdentifier parentIdentifierOverride;
 @property (readonly) ISHFileProviderMount *mountOwner;

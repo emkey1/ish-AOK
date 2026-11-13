@@ -845,7 +845,9 @@ static void ISHFileProviderRetireOnMac(void) {
     FileProviderItem *parent = [self itemForIdentifier:identifier error:error];
     if (parent == nil)
         return nil;
-    return parent.path;
+    // What goes INTO this item lands where its contents are, which is the
+    // target when the parent is a symlinked directory.
+    return parent.contentPath;
 }
 
 #pragma mark - Actions

@@ -102,6 +102,11 @@ NSFileProviderItemIdentifier ISHFileProviderInnerIdentifier(NSFileProviderItemId
 // unlinked or replaced it still reports where the file WAS, which may now be
 // another file entirely.
 @property (readonly, nullable) NSString *openedPath;
+// Set only for a fakefs symlink that resolves, within this root, to something
+// that is not itself a link: the path whose contents this item stands for, and
+// that path's mode. nil leaves the item standing for itself.
+@property (nullable, copy) NSString *resolvedLinkPath;
+@property mode_t_ resolvedLinkMode;
 
 @end
 
@@ -120,6 +125,8 @@ NSFileProviderItemIdentifier ISHFileProviderInnerIdentifier(NSFileProviderItemId
         _fd = [self openNewFDWithError:error];
         if (_fd == -1)
             return nil;
+        // After the descriptor exists, since reading the link needs -path.
+        [self resolveFakeLink];
     }
     return self;
 }
@@ -151,7 +158,15 @@ NSFileProviderItemIdentifier ISHFileProviderInnerIdentifier(NSFileProviderItemId
 
 - (int)openNewFDWithError:(NSError *__autoreleasing  _Nullable *)error {
     int fd = -1;
-    if (self.isRoot) {
+    if (self.resolvedLinkPath != nil) {
+        // A resolved symlink: open what it points at, by path. The inode in
+        // our identifier is the link's, and opening by it would give back the
+        // marker file the link is stored as.
+        const char *host = fix_path(ISHHostPathForGuestPath(self.resolvedLinkPath).fileSystemRepresentation);
+        fd = openat(self.mount->root_fd, host, O_RDWR);
+        if (fd == -1)
+            fd = openat(self.mount->root_fd, host, O_RDONLY | O_NONBLOCK);
+    } else if (self.isRoot) {
         fd = open(self.mount->source, O_DIRECTORY | O_RDONLY);
     } else if (self.isVirtualItem) {
         NSString *path = self.virtualPath;
@@ -213,6 +228,109 @@ NSFileProviderItemIdentifier ISHFileProviderInnerIdentifier(NSFileProviderItemId
         return -1;
     }
     return fd;
+}
+
+// Collapse "." and ".." in a guest path without touching the filesystem. A
+// path that would climb above the root stops at it, so a link cannot name
+// anything outside the root it lives in. A root's own "/" is "", as the db and
+// the enumerator spell it.
+static NSString *ISHFileProviderNormalizedGuestPath(NSString *path) {
+    NSMutableArray<NSString *> *parts = [NSMutableArray new];
+    for (NSString *part in [path componentsSeparatedByString:@"/"]) {
+        if (part.length == 0 || [part isEqualToString:@"."])
+            continue;
+        if ([part isEqualToString:@".."]) {
+            [parts removeLastObject];
+            continue;
+        }
+        [parts addObject:part];
+    }
+    if (parts.count == 0)
+        return @"";
+    return [@"/" stringByAppendingString:[parts componentsJoinedByString:@"/"]];
+}
+
+// The target of the fakefs symlink at a guest path, or nil. fakefs stores a
+// symlink either as a real host symlink or, for the ones that ship inside the
+// app (Xcode will not carry a broken one), as a regular file holding the
+// target; fakefs_readlink tries both in this order, so this does too.
+- (NSString *)fakeLinkTargetAtGuestPath:(NSString *)guestPath {
+    const char *host = fix_path(ISHHostPathForGuestPath(guestPath).fileSystemRepresentation);
+    char buf[PATH_MAX + 1];
+    ssize_t n = readlinkat(self.mount->root_fd, host, buf, sizeof(buf) - 1);
+    if (n < 0 && errno == EINVAL) {
+        int fd = openat(self.mount->root_fd, host, O_RDONLY | O_NONBLOCK);
+        if (fd == -1)
+            return nil;
+        n = read(fd, buf, sizeof(buf) - 1);
+        close(fd);
+    }
+    if (n <= 0)
+        return nil;
+    buf[n] = '\0';
+    return [NSFileManager.defaultManager stringWithFileSystemRepresentation:buf length:strlen(buf)];
+}
+
+// Files has no notion of a symlink: an item typed kUTTypeSymLink arrives as a
+// file of unknown type that will not open, so /bin on a usrmerge root showed
+// as a 7-byte "?" holding the text "usr/bin", and bin, sbin and lib were all
+// dead ends. Resolve the link here and let the item stand for what it points
+// at, while keeping its own name and its own place in the tree. A link that
+// dangles, loops, or leaves this root is left as it was: better a useless item
+// than a wrong one.
+- (void)resolveFakeLink {
+    if (self.isDomainRoot || self.isRoot || self.isVirtualItem)
+        return;
+    NSString *path = self.path;
+    mode_t_ mode = self.ishStat.mode;
+    for (int hop = 0; hop < 8 && (mode & S_IFMT) == S_IFLNK; hop++) {
+        NSString *target = [self fakeLinkTargetAtGuestPath:path];
+        if (target.length == 0)
+            return;
+        NSString *joined = [target hasPrefix:@"/"]
+            ? target
+            : [[path stringByDeletingLastPathComponent] stringByAppendingPathComponent:target];
+        NSString *resolved = ISHFileProviderNormalizedGuestPath(joined);
+        struct ish_stat stat = {};
+        db_begin_read(&self.mount->db);
+        inode_t inode = path_get_inode(&self.mount->db, resolved.fileSystemRepresentation);
+        if (inode != 0)
+            inode_read_stat(&self.mount->db, inode, &stat);
+        db_commit(&self.mount->db);
+        if (inode == 0)
+            return;
+        path = resolved;
+        mode = stat.mode;
+    }
+    if ((mode & S_IFMT) == S_IFLNK)
+        return;
+    self.resolvedLinkPath = path;
+    self.resolvedLinkMode = mode;
+    // The descriptor was opened on the link's own marker file, before there was
+    // anything to resolve. Point it at the target as well, so the size and the
+    // modification date read off it are the target's too, as the type now is --
+    // otherwise a link to a file would report the few bytes of the marker. If
+    // the target will not open, take the resolution back rather than leave an
+    // item claiming to be something it cannot read.
+    int targetFD = [self openNewFDWithError:nil];
+    if (targetFD == -1) {
+        self.resolvedLinkPath = nil;
+        return;
+    }
+    close(_fd);
+    _fd = targetFD;
+}
+
+// The path whose contents this item stands for, and that path's mode: its own,
+// unless it is a symlink that resolved.
+- (NSString *)contentPath {
+    return self.resolvedLinkPath ?: self.path;
+}
+
+- (mode_t_)contentMode {
+    if (self.resolvedLinkPath != nil)
+        return self.resolvedLinkMode;
+    return self.ishStat.mode;
 }
 
 - (NSString *)path {
@@ -321,10 +439,13 @@ NSFileProviderItemIdentifier ISHFileProviderInnerIdentifier(NSFileProviderItemId
             return NSFileProviderItemCapabilitiesAllowsReading;
         return 0;
     }
+    // Deleting, renaming and reparenting act on the item itself -- on the link,
+    // not on what it points at, which is what those words mean for a symlink.
+    // Reading and enumerating act on the contents, so they follow it.
     NSFileProviderItemCapabilities caps = NSFileProviderItemCapabilitiesAllowsDeleting | NSFileProviderItemCapabilitiesAllowsRenaming | NSFileProviderItemCapabilitiesAllowsReparenting;
-    if (S_ISREG(self.ishStat.mode))
+    if (S_ISREG(self.contentMode))
         caps |= NSFileProviderItemCapabilitiesAllowsReading | NSFileProviderItemCapabilitiesAllowsWriting;
-    else if (S_ISDIR(self.ishStat.mode))
+    else if (S_ISDIR(self.contentMode))
         caps |= NSFileProviderItemCapabilitiesAllowsAddingSubItems | NSFileProviderItemCapabilitiesAllowsContentEnumerating;
     else
         return 0;
@@ -375,7 +496,7 @@ static const unsigned ISHFileProviderChildItemCountCap = 2000;
 - (NSNumber *)childItemCount {
     if (self.isDomainRoot)
         return nil; // unknown; the enumerator produces the root list
-    if (!S_ISDIR(self.ishStat.mode))
+    if (!S_ISDIR(self.contentMode))
         return @0;
     int fd = [self openNewFDWithError:nil];
     if (fd == -1)
@@ -415,7 +536,7 @@ static const unsigned ISHFileProviderChildItemCountCap = 2000;
     if (self.isDomainRoot || self.isRoot) {
         return (NSString *) kUTTypeFolder;
     }
-    mode_t_ mode = self.ishStat.mode;
+    mode_t_ mode = self.contentMode;
     if ((mode & S_IFMT) == S_IFDIR)
         return (NSString *) kUTTypeFolder;
     if ((mode & S_IFMT) == S_IFLNK)

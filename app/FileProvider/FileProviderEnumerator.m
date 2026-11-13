@@ -136,7 +136,9 @@ static NSNumber *ISHFileProviderEnumeratorDurationMilliseconds(NSTimeInterval st
         if (strcmp(dirent->d_name, ".") == 0 || strcmp(dirent->d_name, "..") == 0)
             continue;
 
-        NSString *path = _item.path;
+        // contentPath, not path: a symlinked directory enumerates what it
+        // points at, and its children's db rows are under the target.
+        NSString *path = _item.contentPath;
         // host entry names are in escaped on-disk form (fs/fake-path.h)
         NSString *name = ISHGuestPathForHostPath([NSString stringWithUTF8String:dirent->d_name]);
         // Join with an explicit leading slash so both a root folder (path == "")
