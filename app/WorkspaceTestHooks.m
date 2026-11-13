@@ -48,6 +48,15 @@
 #import "AppDelegate.h"
 #include "kernel/checkpoint.h"
 
+// Debug builds only. The `tap` verb reaches UIAlertAction's `handler`, which is
+// not public API: acceptable in a test hook driven by tests/workspace/restore_test.sh,
+// but it has no business in a shipped binary, where an App Store review scans for
+// exactly that. The file was compiled into Release and gated only by the
+// ISH_WORKSPACE_TEST environment variable, so the symbol was there to be found.
+// The entry point still exists in Release, doing nothing, so -application:
+// didFinishLaunchingWithOptions: needs no #ifdef of its own.
+#if DEBUG
+
 // The Workspace's own methods, implemented in WorkspaceViewController.m.
 @interface WorkspaceViewController (WorkspaceTestHooks)
 @property (nonatomic, strong) UIView *desktopSurfaceView;
@@ -409,3 +418,9 @@ void ISHWorkspaceTestHooksStart(void) {
                                                       encoding:NSUTF8StringEncoding
                                                          error:NULL];
 }
+
+#else
+
+void ISHWorkspaceTestHooksStart(void) {}
+
+#endif
