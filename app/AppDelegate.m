@@ -2559,6 +2559,10 @@ static NSURL *AOKSharedFakefsDirectoryURL(void) {
     summary[@"defaultRoot"] = Roots.instance.defaultRoot ?: @"";
     summary[@"bootedRoot"] = Roots.instance.bootedRoot ?: @"";
     summary[@"rootCount"] = @(Roots.instance.roots.count);
+    summary[@"appGroupShared"] = @(ContainerIsSharedAppGroup());
+    summary[@"containerPath"] = ContainerURL().path ?: @"";
+    if (Roots.instance.fileProviderDomainStatus != nil)
+        summary[@"fileProviderDomainStatus"] = Roots.instance.fileProviderDomainStatus;
     summary[@"needsInitialRootSelection"] = @(Roots.instance.needsInitialRootSelection);
     if (Roots.instance.initialBundledRootImportError != nil)
         summary[@"initialRootImportError"] = Roots.instance.initialBundledRootImportError.localizedDescription ?: @"";
@@ -2590,6 +2594,16 @@ static NSURL *AOKSharedFakefsDirectoryURL(void) {
     [report appendFormat:@"Device: %@ / %@ / %@\n", summary[@"deviceName"], summary[@"deviceModel"], summary[@"hostMachine"]];
     [report appendFormat:@"OS: iOS %@\n", summary[@"systemVersion"]];
     [report appendFormat:@"Free Space: %@\n", summary[@"freeSpace"] ?: @"unknown"];
+    // Where everything lives, and whether Files can see it (#625, #676). A copy
+    // re-signed without the App Group entitlement runs from its own private
+    // container, which the File Provider extension cannot reach, so the app
+    // keeps iSH-AOK out of Files on purpose; that used to be a guess from the
+    // symptoms.
+    [report appendFormat:@"Storage: %@\n", [summary[@"appGroupShared"] boolValue] ?
+        @"shared App Group container" :
+        @"this app's own container -- no App Group (re-signed without it?), so iSH-AOK is kept out of Files"];
+    [report appendFormat:@"Container: %@\n", summary[@"containerPath"] ?: @"(none)"];
+    [report appendFormat:@"Files: %@\n", summary[@"fileProviderDomainStatus"] ?: @"not tried yet this launch"];
     [report appendFormat:@"Default Root: %@\n", summary[@"defaultRoot"] ?: @"(none)"];
     if ([summary[@"bootedRoot"] length] != 0)
         [report appendFormat:@"Booted Root: %@\n", summary[@"bootedRoot"]];

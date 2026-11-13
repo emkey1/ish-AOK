@@ -859,6 +859,7 @@ static void EnableCaseSensitiveFilesystemLookupsIfPossible(void) {
 @property BOOL wantsVersionFile;
 @property BOOL initialBundledRootImportInProgress;
 @property (nullable) NSError *initialBundledRootImportError;
+@property (nullable, copy) NSString *fileProviderDomainStatus;
 @end
 
 // A root's name becomes a directory name and, once mounted, the filesystem
@@ -1282,10 +1283,23 @@ static BOOL ISHFileProviderUnavailableOnThisPlatform(void) {
     });
 }
 
+static NSString *ISHFileProviderErrorText(NSError *error) {
+    return [NSString stringWithFormat:@"%@ %ld: %@", error.domain, (long) error.code,
+            error.localizedDescription ?: @""];
+}
+
+- (void)noteFileProviderDomainStatus:(NSString *)status {
+    NSString *when = [NSISO8601DateFormatter stringFromDate:[NSDate date]
+                                                   timeZone:NSTimeZone.localTimeZone
+                                              formatOptions:NSISO8601DateFormatWithInternetDateTime];
+    self.fileProviderDomainStatus = [NSString stringWithFormat:@"%@ (%@)", status, when];
+}
+
 - (void)requestFileProviderDomainSync {
     if (ISHFileProviderUnavailableOnThisPlatform()) {
         [ISHDiagnosticsStore recordBreadcrumb:@"fileprovider.domainSync.unsupportedPlatform"
                                       details:@{@"reason": @"NSFileProviderExtension is unavailable on macOS"}];
+        [self noteFileProviderDomainStatus:@"not offered: the Files integration is unavailable on a Mac"];
         [self removeAllFileProviderDomains];
         return;
     }
@@ -1298,6 +1312,7 @@ static BOOL ISHFileProviderUnavailableOnThisPlatform(void) {
     if (!ContainerIsSharedAppGroup()) {
         [ISHDiagnosticsStore recordBreadcrumb:@"fileprovider.domainSync.noAppGroup"
                                       details:@{@"reason": @"no shared app group container; using the private fallback"}];
+        [self noteFileProviderDomainStatus:@"off: no shared App Group container"];
         [self removeAllFileProviderDomains];
         return;
     }
@@ -1312,6 +1327,8 @@ static BOOL ISHFileProviderUnavailableOnThisPlatform(void) {
             [ISHDiagnosticsStore recordBreadcrumb:@"fileprovider.domainSync.deferred"
                                           details:@{@"roots": @(self.roots.count),
                                                     @"generation": @(requestedGeneration)}];
+            if (self.fileProviderDomainStatus == nil)
+                [self noteFileProviderDomainStatus:@"waiting for launch to finish"];
             return;
         }
         if (self.updatingDomains) {
@@ -1329,6 +1346,14 @@ static BOOL ISHFileProviderUnavailableOnThisPlatform(void) {
                 NSLog(@"error adjusting domains: %@", error);
         };
         onError(error);
+        // These used to go only to the log, so a report of "iSH-AOK is not in
+        // Files" (#676) came with breadcrumbs saying nothing had failed.
+        if (error != nil) {
+            [ISHDiagnosticsStore recordBreadcrumb:@"fileprovider.domainSync.listFailed"
+                                          details:@{@"error": ISHFileProviderErrorText(error)}];
+            [self noteFileProviderDomainStatus:[@"could not list the registered domains: "
+                                                stringByAppendingString:ISHFileProviderErrorText(error)]];
+        }
         NSLog(@"syncing the iSH-AOK file provider domain for %lu root(s)", (unsigned long) rootsSnapshot.count);
 
         // Tell Files to re-list the roots (the domain root container) whenever the
@@ -1366,10 +1391,20 @@ static BOOL ISHFileProviderUnavailableOnThisPlatform(void) {
             pathRelativeToDocumentStorage:kISHFileProviderDomainIdentifier];
             [NSFileProviderManager addDomain:domain completionHandler:^(NSError *addError) {
                 onError(addError);
-                if (addError == nil)
+                if (addError == nil) {
+                    [ISHDiagnosticsStore recordBreadcrumb:@"fileprovider.domainSync.added"];
+                    [self noteFileProviderDomainStatus:@"registered"];
                     signalRoots(domain);
+                } else {
+                    [ISHDiagnosticsStore recordBreadcrumb:@"fileprovider.domainSync.addFailed"
+                                                  details:@{@"error": ISHFileProviderErrorText(addError)}];
+                    [self noteFileProviderDomainStatus:[@"could not register: "
+                                                        stringByAppendingString:ISHFileProviderErrorText(addError)]];
+                }
             }];
         } else {
+            if (error == nil)
+                [self noteFileProviderDomainStatus:@"registered (already there)"];
             signalRoots(ourDomain);
         }
 

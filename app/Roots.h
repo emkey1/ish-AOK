@@ -41,6 +41,12 @@ FOUNDATION_EXPORT NSNotificationName const RootsCatalogDidChangeNotification;
 @property (readonly) BOOL needsInitialRootSelection;
 @property (readonly) BOOL initialBundledRootImportInProgress;
 @property (readonly, nullable) NSError *initialBundledRootImportError;
+// What happened the last time this launch put iSH-AOK into the Files app (its
+// File Provider domain): registered, already there, could not register and
+// why, or why it was not tried. nil until the first attempt. For the
+// diagnostics report: an issue saying "iSH-AOK is not in Files" has to be able
+// to answer itself, and the breadcrumbs that also record it roll over.
+@property (readonly, nullable, copy) NSString *fileProviderDomainStatus;
 // Every choice the app knows about, including versions of a series the picker
 // no longer offers -- use this to identify where an already-imported root came
 // from, or to honour an identifier a user named explicitly.
