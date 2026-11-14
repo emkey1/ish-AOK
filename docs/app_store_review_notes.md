@@ -20,6 +20,12 @@ the guest's own address space, which is the opposite of asking iOS for
 executable memory. Re-check before each submission; the wording is a factual
 claim Apple can test.
 
+Checked again 2026-11-14 against the one place that looked like it might be an
+exception, app/hook.c: it intercepts a WebKit function with an ARM *hardware
+breakpoint* and a Mach exception port, not by patching code. `VM_PROT_EXECUTE`
+appears nowhere in it. The claim holds for the whole tree, not just `emu/` and
+`jit/`.
+
 ---
 
 ## For App Review

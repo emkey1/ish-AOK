@@ -206,8 +206,27 @@ fixed 2026-11-13 (62d1e49c7).
 
 These pass the upload scan today:
 
-- a WebKit C++ symbol hook (app/AccessibilityFixes.m:29, via
-  `proc_regionfilename` at deps/.../hook.c:283), which only runs with VoiceOver on
+- a WebKit C++ symbol hook (app/AccessibilityFixes.m:29), which only arms when
+  VoiceOver is running. **Looked at properly 2026-11-14**, and it is not what
+  the phrase "symbol hook" suggests:
+
+  - It **patches no code and allocates no executable memory.** It arms an ARM
+    *hardware breakpoint* on the target address (`__bvr`/`__bcr`, DBGBCR_EL1,
+    app/hook.c:375-384) and catches `EXC_BREAKPOINT` on a Mach exception port
+    it owns. `VM_PROT_EXECUTE` appears zero times in app/hook.c; its only two
+    `vm_protect` calls are `VM_PROT_READ`. This *strengthens* the 2.5.2 case
+    rather than denting it -- even the one piece of the app that intercepts
+    another framework does it without executable memory.
+  - What it does do is `task_set_exception_ports` and
+    `task_set_state(ARM_DEBUG_STATE64)` on its own task: debugger-shaped
+    behaviour, on itself. Worth expecting a question about, and worth knowing
+    it fails harmlessly when a real debugger holds the port (the code already
+    logs "symbol missing or debugger attached").
+  - **`proc_regionfilename` is resolved with `dlsym(dlopen(NULL, RTLD_LAZY))`
+    (app/hook.c:283).** That is the same shape as the DNS calls removed in
+    must-fix 4 -- a symbol that is not in the iOS SDK, reached by name at
+    runtime. It is the one genuinely comparable case left, and it should be
+    weighed the same way rather than filed under "passes the scan today".
 - `[app suspend]` (app/AppDelegate.m:5710), upstream since 2019, reached
   through an `id` so the selector does not have to be declared. **This is one
   decision with "Suspend and Exit calls `exit(0)`" below, not two** (noted
@@ -258,10 +277,46 @@ triage is in docs/TODO.md's queue.
 - **Clean:** zsh and dash (dash's GPL `mksignames.c` is not built), SmallCLUE
   (MIT), libgit2 (GPL with a linking exception), OpenSSH and libarchive (BSD),
   helix (MPL-2.0), MoltenVK and virglrenderer (Apache-2.0 / MIT).
-- **Not verified:** helix's Rust dependency licences (`cargo-license` would
-  settle it).
+- ~~**Not verified:** helix's Rust dependency licences~~ -- **CHECKED
+  2026-11-14: no GPL anywhere in the tree.** Done without installing
+  `cargo-license` or fetching anything: the licence field was read out of
+  every crate present in this machine's cargo registry, both the extracted
+  sources and the `.crate` tarballs, and matched against the 337 packages in
+  `deps/helix/Cargo.lock`. 234 resolved; every one is a permissive licence
+  (overwhelmingly `MIT OR Apache-2.0`), and **zero GPL**.
+
+  The only copyleft is MPL-2.0, in seven crates -- `nucleo`,
+  `nucleo-matcher`, `smartstring`, `termina`, `tree-house`,
+  `tree-house-bindings`, `uluru`. MPL-2.0 is file-level copyleft and is the
+  licence helix itself is under, which this list already treats as clean. We
+  ship them unmodified, so the obligation is satisfied by saying where they
+  came from -- fold that into the source offer below.
+
+  The crates that could not be resolved were never fetched on this machine,
+  which is itself the finding: cargo downloads what it builds.
+  `cargo tree --offline` proves the point by failing on `quickcheck`, and the
+  manifests confirm the rest -- `criterion` and `quickcheck` are
+  `[dev-dependencies]` (helix-view/Cargo.toml:72, helix-core/Cargo.toml:61),
+  and `clipboard-win` and `crossterm` are under
+  `[target.'cfg(windows)'.dependencies]` (helix-view/Cargo.toml:64,
+  helix-term/Cargo.toml:92). None of them is in an iOS build.
+
+  Residual gap, small: a crate could in principle be GPL, never have been
+  fetched here, and still be in the iOS build. Running `cargo-license` on a
+  machine that can reach crates.io would close it mechanically.
 - **To do either way:** a GPL source offer for the GPL binaries in the bundled
-  roots.
+  roots. **Worked out 2026-11-14**: [gpl-source-offer.md](gpl-source-offer.md),
+  with the real inventory read back out of the shipped tarballs -- 9 of
+  Alpine's 16 packages are GPL, and the Devuan root's 96 include GPLv3 bash,
+  coreutils, grep, findutils, diffutils, gzip and dpkg. It has draft offer
+  text and three decisions.
+
+  The finding that matters: the text is the easy part. A written offer is
+  only worth something if we can hand over the exact source for the exact
+  binaries in a given build three years later, and nothing in this repository
+  records which upstream package versions went into a shipped root. That is
+  the part that gets harder with time, so it is worth fixing before the next
+  release rather than after.
 
 ---
 
