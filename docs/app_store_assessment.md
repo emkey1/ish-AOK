@@ -504,8 +504,20 @@ Two caveats worth keeping rather than claiming more than was shown:
   carries LICENSE.IOS and they ship on the App Store themselves, so the risk is
   low; a one-line OK from them would close it.
 - **Clean:** zsh and dash (dash's GPL `mksignames.c` is not built), SmallCLUE
-  (MIT), libgit2 (GPL with a linking exception), OpenSSH and libarchive (BSD),
-  helix (MPL-2.0), MoltenVK and virglrenderer (Apache-2.0 / MIT).
+  (Apache-2.0 since 2026-11-04, MIT before that), libgit2 (GPL with a linking
+  exception), OpenSSH and libarchive (BSD), helix (MPL-2.0), MoltenVK and
+  virglrenderer (Apache-2.0 / MIT).
+
+  Two of those carry an obligation rather than just a label, and the Legal
+  screen now meets both (0614d589c, amended 2026-11-14). Apache-2.0 section
+  4(d) asks that the NOTICE travel with the work, and `deps/smallclue/NOTICE`
+  attributes SmallCLUE itself, BSD-licensed `compat/sys/queue.h`, and the
+  third-party submodules; the screen reproduces those, which is where such
+  notices normally appear. And libgit2's linking exception keeps it from
+  reaching the rest of the app, but it is still GPLv2 code compiled into
+  every Apple build, so the written offer names it. `meson.build`'s
+  configure-time licensing summary said SmallCLUE was MIT and that nothing
+  else in the binary was GPL; both were corrected in the same change.
 - ~~**Not verified:** helix's Rust dependency licences~~ -- **CHECKED
   2026-11-14: no GPL anywhere in the tree.** Done without installing
   `cargo-license` or fetching anything: the licence field was read out of
