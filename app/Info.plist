@@ -20,6 +20,25 @@
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<!-- YES because the app carries encryption that is not the operating
+	     system's. OpenSSH is configured without OpenSSL and falls back to its
+	     own ChaCha20-Poly1305 and Ed25519 (meson.build:820-832); the bundled root
+	     filesystems, which go to every user, carry OpenSSL (Alpine's
+	     libcrypto3/libssl3) and libgcrypt (Devuan); and Crypto Accel maps
+	     guest AES and SHA instructions onto the host's ARMv8 crypto
+	     extensions.
+
+	     All of it is IETF/NIST-standard, which is the middle row of Apple's
+	     table (developer.apple.com/help/app-store-connect/reference/
+	     export-compliance-documentation-for-encryption): an industry-standard
+	     algorithm not provided by the OS. No CCATS. The French encryption
+	     declaration is required because we distribute in France.
+
+	     Once Apple has accepted that declaration it issues a code; add it as
+	     ITSEncryptionExportComplianceCode beside this key and the per-build
+	     encryption questions stop. See docs/app_store_assessment.md. -->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<true/>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSAppTransportSecurity</key>

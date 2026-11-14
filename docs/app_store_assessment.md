@@ -344,16 +344,17 @@ triage is in docs/TODO.md's queue.
   the **middle row: no CCATS**. That is the useful finding -- CCATS is the
   expensive one and we do not need it.
 
-  *So the decision is a narrow one:*
-  - Set the key **YES** and upload a French declaration, if France is in
-    scope. Apple then issues a code for `ITSEncryptionExportComplianceCode`
-    and stops asking per build, and no BIS self-classification report is
-    needed ("if you use non-exempt encryption and provide documentation to
-    Apple, the self-classification report isn't necessary").
-  - Or leave France out, in which case the middle row asks for no document at
-    all -- but Apple warns that an app relying on *exempt* encryption "might
-    alternatively be required to submit a year-end self-classification report"
-    to BIS. Cheaper per build, an annual obligation instead.
+  *Decided 2026-11-14: France is in scope.* So the key is **YES** and a French
+  declaration is required. **Set in app/Info.plist**, with the reasoning in a
+  comment beside it, and verified to survive the plist preprocessing:
+  `plutil -extract ITSAppUsesNonExemptEncryption raw` on the built bundle
+  returns `true`.
+
+  A consequence worth keeping: because we are providing documentation to
+  Apple, **no BIS year-end self-classification report is needed** ("if you use
+  non-exempt encryption and provide documentation to Apple, the
+  self-classification report isn't necessary"). Leaving France out would have
+  traded this per-build paperwork for that annual obligation instead.
 
   *The stale advice.* Several write-ups point at **EAR 740.13(e)** for the
   open-source exemption. That paragraph is **[Reserved]** -- the publicly
@@ -362,9 +363,32 @@ triage is in docs/TODO.md's queue.
   the "email crypt@bis.doc.gov and enc@nsa.gov" route is a red herring for
   this app; it is not the reason we are fine, and citing it would be wrong.
 
-  *Not decided here.* It is a declaration with legal weight and it is the
-  user's to make. What is settled is that the answer is the middle row, the
-  only real choice is France or not, and CCATS is not in play.
+  *What the French declaration actually is, and who has to do it.* Not Apple's
+  form: ANSSI's. The obligation falls on the **fournisseur ou primo-importateur**
+  -- the supplier or first importer of the cryptographic means -- which is us.
+
+  - The form is annex I, *Declaration et demande d'autorisation d'operations
+    relatives a un moyen de cryptologie* (v2, 2022), on **cyber.gouv.fr**
+    (ANSSI moved off ssi.gouv.fr, so older write-ups point at a dead host).
+    Its legal basis is the *arrete du 29 janvier 2015*.
+  - It goes to **controle@ssi.gouv.fr**. There is also an online route at
+    demarche.numerique.gouv.fr, which its own page warns is still under
+    development.
+  - ANSSI returns an *attestation de declaration*. **That** acknowledgement is
+    what Apple wants uploaded as the French encryption declaration; Apple then
+    issues the code for `ITSEncryptionExportComplianceCode`, which goes beside
+    the key and stops the per-build questions.
+  - Processing is reported at about a month (*secondhand, from developer
+    write-ups; not confirmed on an ANSSI page*). Worth starting well before a
+    submission rather than beside one.
+
+  Useful precedent, not a substitute: Debian publishes its own ANSSI
+  attestation (debian.org/legal/anssi), which is the same shape of filing for
+  a distribution full of other people's crypto. It does not cover us -- we are
+  a different supplier -- but it shows the form being used for exactly this.
+
+  *Still open:* nobody has filed it. Until ANSSI's attestation is in hand, the
+  honest options are to hold the French listing or to hold the submission.
 - **Entitlements are fine.** Extended virtual addressing, the increased memory
   limit, user fonts and the app group are all self-serve and allowed. Build
   539's rejected debugging-memory entitlement is gone. ~~`iSHRelease.entitlements`
