@@ -112,19 +112,61 @@ deb.devuan.org), and `apk`/`apt` fetch guest binaries.
 What is known: upstream iSH launched without apk, used on-demand resources for
 a while, and since 1.2 pins every build to a snapshot at apk.ish.app
 (ish.app/blog/default-repository-update). AOK still carries the leftovers of
-that, unused — `ENABLE_APK_ODRS = YES` in app/AppStore.xcconfig, and a
-repositories.txt pointing at apk.ish.app that only applies to "managed" roots
-(app/CurrentRoot.m:196). Guideline 4.7 permits downloaded *games* in an
+that -- but "unused" was too kind, corrected 2026-11-14:
+
+- `ENABLE_APK_ODRS = YES` in app/AppStore.xcconfig really is dead: nothing
+  reads the variable, and no build configuration takes that file as its base
+  configuration. (The file itself is not orphaned -- fastlane/Snapfile:25
+  passes it to the screenshot build.)
+- **repositories.txt is not dead.** A build phase generates it into the app
+  bundle, and the shipped copy reads
+  `http://apk.ish.app/v3.14-2023-04-22/{main,community}` -- upstream's host,
+  over plain HTTP, pinned to a 2023 snapshot of Alpine 3.14. It is wired to a
+  live path: `FsUpdateOnlyRepositoriesFile` (app/CurrentRoot.m:196)
+  **overwrites `/etc/apk/repositories`** with it. What makes it inert is only
+  that `FsIsManaged()` is false for AOK's own roots -- Settings says "The
+  current filesystem is not managed by iSH-AOK" and greys out Upgrade
+  Repositories. Import an old upstream iSH root, which has `/ish`, and it runs.
+
+  **Decision needed:** keep it, or stop shipping the file. Dropping it makes
+  `FsUpdateOnlyRepositoriesFile` a no-op (it already returns early on nil), so
+  an imported managed root would keep the `/etc/apk/repositories` it came with
+  rather than being pointed at a 2023 snapshot on someone else's server. Left
+  alone here: it is a behaviour change a week before a release.
+
+Guideline 4.7 permits downloaded *games* in an
 emulator, and its index and age-gate rules (4.7.4, 4.7.5) cannot be met by a
 Linux distribution, so 4.7 is not the shelter here; the precedent is iSH Shell
 and UTM SE being on the store as Linux environments.
 
-**Mitigation:** review notes framing AOK as a Linux environment of that kind —
-all host code is in the binary, and the gadget JIT generates none. That last
-point was checked: no `MAP_JIT`, no `PROT_EXEC` in `jit/`, no JIT entitlement.
+**Mitigation:** review notes framing AOK as a Linux environment of that kind.
+**Written 2026-11-14**: [app_store_review_notes.md](app_store_review_notes.md),
+paste-ready but for two marked placeholders.
+
+Re-checked while writing them, and the claim is stronger than it was recorded:
+no `MAP_JIT`, no `com.apple.security.cs.allow-jit` or `dynamic-codesigning`
+entitlement, and **no host `mprotect` that adds `PROT_EXEC` anywhere in the
+tree**. Every `PROT_EXEC` in `emu/` and `jit/` is the emulator *enforcing* NX
+on the guest's address space -- the opposite of asking iOS for executable
+memory. The engine dispatches to assembly already inside the signed binary and
+builds only an array of pointers to it. Worth re-running before each
+submission: it is a factual claim a reviewer can test.
 
 **If rejected:** host pinned, dated mirrors for App Store builds. One to two
 weeks plus ongoing hosting.
+
+### NSAllowsArbitraryLoads (new, 2026-11-14)
+
+Not previously flagged here. app/Info.plist:40 sets `NSAllowsArbitraryLoads`
+true, with exception domains for localhost only. Apple asks for a
+justification whenever it is set, and an app that cannot give one gets a
+rejection or a request for information.
+
+Ours is about as strong as this justification gets, and it is written into the
+review notes: the function of a Linux environment is that the user's own
+programs reach hosts we do not know in advance, many of which -- distribution
+mirrors above all -- still serve plain HTTP. There is no narrower setting that
+leaves the app working. No change needed; it just has to be said, and now is.
 
 ### Name and branding (5.2.1, 4.1)
 
@@ -150,7 +192,14 @@ These pass the upload scan today:
 
 - a WebKit C++ symbol hook (app/AccessibilityFixes.m:29, via
   `proc_regionfilename` at deps/.../hook.c:283), which only runs with VoiceOver on
-- `[app suspend]` (app/AppDelegate.m:5710), upstream since 2019
+- `[app suspend]` (app/AppDelegate.m:5710), upstream since 2019, reached
+  through an `id` so the selector does not have to be declared. **This is one
+  decision with "Suspend and Exit calls `exit(0)`" below, not two** (noted
+  2026-11-14): the suspend is what makes the app animate away like any
+  backgrounded app before the `exit(0)` 750 ms later. Drop the private call
+  and keep the feature and the app vanishes mid-screen, which is precisely the
+  "appears to crash" that reviewers object to. Either the feature goes, or
+  both stay.
 - ~~KVC on `UIAlertAction`'s private `handler` in app/WorkspaceTestHooks.m~~ —
   **DONE 2026-11-13** (f0eae8e06): the body is `#if DEBUG`, and
   `ISHWorkspaceTestHooksStart()` is a no-op in Release.
