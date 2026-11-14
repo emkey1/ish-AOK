@@ -425,9 +425,53 @@ Two caveats worth keeping rather than claiming more than was shown:
   keeps *native* bash out over the FSF's objection to the App Store terms;
   that objection covers bash inside a tarball just as much, so the README's
   "mere aggregation" line does not obviously help (*inferred legal reading,
-  not advice*). Options: have App Store builds download Devuan from the
-  catalogue instead (1-2 days), or accept the risk. Alpine's busybox and
-  apk-tools are the same question, and upstream iSH ships them.
+  not advice*). Alpine's busybox and apk-tools are the same question, and
+  upstream iSH ships them.
+
+  **Decided 2026-11-14: download it for App Store builds.** **Blocked, and not
+  on anything in this tree** -- the option as put assumed the catalogue could
+  supply it, and it cannot:
+
+  - `https://raw.githubusercontent.com/emkey1/ish-AOK-rootfs/main/manifest.json`
+    has **no Devuan arm64 entry at all**. Its Devuan images are
+    `devuan6x86` (i386), `devuan6x8664` (amd64) and `devuan6riscv64`. Alpine
+    *does* have `alpine3242aarch64`, which is what makes the gap easy to miss.
+  - The `devuan6arm64` choice is **hardcoded** in `BuildRootChoices()`
+    (app/Roots.m:361-371) with an `archiveName` and **no `downloadURL`**. So
+    dropping the tarball from the bundle does not make it download; it makes
+    the entry unusable, since `bundledRootChoiceNeedsDownload` needs a
+    `downloadURL` to return YES.
+
+  The rest of the machinery is already right and needs no change:
+  `bundledRootChoiceNeedsDownload` (app/Roots.m:1078) treats a choice with a
+  download URL and no bundled archive as a download, and a bundled image wins
+  over a manifest entry of the same identifier -- so once the catalogue has
+  one, removing the hardcoded entry is enough.
+
+  **The order this has to happen in:**
+
+  1. Publish `devuan-minirootfs-6.0-aarch64.tar.xz` to the `ish-AOK-rootfs`
+     repository and add a manifest entry for it, with `identifier`
+     `devuan6arm64` so it replaces the hardcoded one cleanly, and `guestABI`
+     `arm64`. Its SHA-256 and package list are already recorded in
+     [root-manifests/devuan-minirootfs-6.0-aarch64.md](root-manifests/devuan-minirootfs-6.0-aarch64.md).
+     **Only the maintainer can do this**: it is a 32 MB upload to another
+     repository.
+  2. Then, in this tree: drop the `devuan6arm64` dictionary from
+     `BuildRootChoices()`, and take the tarball out of the "Download Root"
+     build phase's inputs for App Store builds.
+
+  Step 2 is perhaps twenty lines and is not worth writing before step 1,
+  because the identifier and URL it has to match do not exist yet. Note that
+  this makes **every** build download Devuan unless the phase is made
+  conditional on the configuration, which is the one real design question in
+  step 2.
+
+  Worth weighing against all that: it does **not** reduce the GPL obligation
+  by one line. We would still be distributing Devuan, just over the network
+  instead of in the bundle, so the source offer is unchanged either way. What
+  it buys is 32 MB of app size and fewer GPL binaries inside the signed
+  bundle.
 - **OpenMinis/ish-arm64 code (GPLv3) is compiled in** (docs/CREDITS-aarch64.md;
   jit/guest-arm64/*.S, emu/arm64_interp.c, kernel/calls.c:1807). Their repo
   carries LICENSE.IOS and they ship on the App Store themselves, so the risk is
