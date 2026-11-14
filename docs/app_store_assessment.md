@@ -322,16 +322,59 @@ triage is in docs/TODO.md's queue.
 
 ## Paperwork
 
-- **Export compliance.** `ITSAppUsesNonExemptEncryption` is not set in
-  app/Info.plist. OpenSSH is built `--without-openssl` and uses its own crypto
-  (meson.build:823-828), so the honest answer is "uses encryption beyond
-  Apple's". Setting the key stops the question being asked per build. France
-  wants a declaration, or leave France out (*confirm on Apple's export
-  compliance page*).
+- **Export compliance.** `ITSAppUsesNonExemptEncryption` is still not set in
+  app/Info.plist. **Worked out against primary sources 2026-11-14**; the
+  conclusion is narrower than this entry used to imply, and one piece of
+  advice circulating online is simply out of date.
+
+  *What we ship.* More than the entry said. OpenSSH built `--without-openssl`
+  falls back to its own ChaCha20-Poly1305 and Ed25519 (meson.build:820-832),
+  but the bigger exposure is the **bundled roots**, which we distribute to
+  every user: Alpine carries `libcrypto3`/`libssl3` (OpenSSL 3.5.8) and Devuan
+  carries `libgcrypt20` and `gpgv`. Crypto Accel maps guest AES and SHA
+  instructions onto the host's ARMv8 crypto extensions. (What a user installs
+  themselves with `apk add gnupg` is not ours, for the same reason it is not
+  ours under the GPL -- see [gpl-source-offer.md](gpl-source-offer.md).)
+
+  *Which Apple box that lands in.* Apple's table has three rows: encryption
+  limited to the Apple OS (nothing to upload), an **industry-standard
+  algorithm not provided by the OS** (upload the French declaration only), and
+  **proprietary algorithms** not accepted by IEEE/IETF/ITU (CCATS *and* the
+  French declaration). Everything above is IETF- or NIST-standard, so we are
+  the **middle row: no CCATS**. That is the useful finding -- CCATS is the
+  expensive one and we do not need it.
+
+  *So the decision is a narrow one:*
+  - Set the key **YES** and upload a French declaration, if France is in
+    scope. Apple then issues a code for `ITSEncryptionExportComplianceCode`
+    and stops asking per build, and no BIS self-classification report is
+    needed ("if you use non-exempt encryption and provide documentation to
+    Apple, the self-classification report isn't necessary").
+  - Or leave France out, in which case the middle row asks for no document at
+    all -- but Apple warns that an app relying on *exempt* encryption "might
+    alternatively be required to submit a year-end self-classification report"
+    to BIS. Cheaper per build, an annual obligation instead.
+
+  *The stale advice.* Several write-ups point at **EAR 740.13(e)** for the
+  open-source exemption. That paragraph is **[Reserved]** -- the publicly
+  available encryption source code provision now lives at **742.15(b)**, and
+  it only bites for **non-standard cryptography**, which nothing here is. So
+  the "email crypt@bis.doc.gov and enc@nsa.gov" route is a red herring for
+  this app; it is not the reason we are fine, and citing it would be wrong.
+
+  *Not decided here.* It is a declaration with legal weight and it is the
+  user's to make. What is settled is that the answer is the middle row, the
+  only real choice is France or not, and CCATS is not in play.
 - **Entitlements are fine.** Extended virtual addressing, the increased memory
   limit, user fonts and the app group are all self-serve and allowed. Build
-  539's rejected debugging-memory entitlement is gone. `iSHRelease.entitlements`
-  is unused (app/App.xcconfig:10).
+  539's rejected debugging-memory entitlement is gone. ~~`iSHRelease.entitlements`
+  is unused~~ -- **deleted 2026-11-14**: not in the project file, not named by
+  any xcconfig, and a stale duplicate of the entitlements that do apply.
+  `app/App.xcconfig:10` sets `CODE_SIGN_ENTITLEMENTS = app/iSH.entitlements`
+  for every configuration, so a file called "iSHRelease" that governs nothing
+  is the exact shape of the confusion behind the 539 rejection. The book's
+  anchor list (docs/book/ch37-releasing.md:241) now points at the file that
+  actually signs the app.
 - **App Privacy label.** Probably "Data Not Collected"; the conservative choice
   is to declare User Content shared with third-party AI, for app functionality,
   not linked to the user (*inferred*).

@@ -238,7 +238,7 @@ it shipped.
 [.github/workflows/build-release-ipa.yml](../../.github/workflows/build-release-ipa.yml),
 [.github/workflows/build-dev-ipa.yml](../../.github/workflows/build-dev-ipa.yml),
 [fastlane/](../../fastlane), [AppStoreExportOptions.plist](../../AppStoreExportOptions.plist),
-[iSHRelease.entitlements](../../iSHRelease.entitlements),
+[app/iSH.entitlements](../../app/iSH.entitlements),
 [app/iSH.xcconfig](../../app/iSH.xcconfig),
 [docs/release-notes/release-notes-since-iSH-AOK_549.md](../../docs/release-notes/release-notes-since-iSH-AOK_549.md),
 [opt/AOK/docs/](../../opt/AOK/docs), [fs/aok-docs.manifest](../../fs/aok-docs.manifest).
