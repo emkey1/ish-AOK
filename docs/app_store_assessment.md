@@ -14,7 +14,72 @@ can settle. Call it **2-4 days of work**, plus however long the naming
 question and one or two review round-trips take.
 
 Everything below was checked in the tree at `dacf906fe` unless it says
-*inferred*.
+*inferred*. The paragraph above is the assessment as first written, on
+2026-11-13; the table below is where it actually stands.
+
+---
+
+## Where it stands, 2026-11-14
+
+A pass through every item. **All four must-fixes are done**, and everything
+else that did not need a decision or an account has been done with it.
+
+| Item | State |
+|---|---|
+| 1. Privacy manifest | **Done** `62d1e49c7` |
+| 2. AI consent screen | **Done** `1a8cf6f2d`, verified against OpenRouter |
+| 3. Privacy policy | **Done** `b0475d6ae`, with an in-app link |
+| 4. The DNS private API | **Done** `8dc6a0df5` — *but only compile-verified* |
+| Export compliance key | **Done** `9bbe02d44`, YES, verified in the bundle |
+| App Privacy label | **Settled**: Data Not Collected |
+| Age rating | **Settled**: 16+, confirmed on Apple's page |
+| Store metadata | **Drafted**, every field inside its limit |
+| Review notes | **Drafted**, one placeholder (the name) |
+| GPL source offer | **Drafted**, with per-image manifests |
+| helix's crate licences | **Checked**: no GPL anywhere |
+| repositories.txt | **Removed**, with its whole mechanism |
+| Upstream's funding/social links | **Removed** |
+| Stability | **Done for 566** on the A10X; not on a current iPhone |
+| `NSAllowsArbitraryLoads` | **No change needed**, justified in the notes |
+
+### What is left, and who has to do it
+
+Nothing left is work I can finish; each needs the maintainer, an account, or a
+judgement that is not mine to make.
+
+**Decisions, each a one-liner to answer:**
+
+1. **Suspend and Exit.** Keep it, or replace the `exit(0)` with a "session
+   suspended" screen. This is *one* decision with the `[app suspend]` private
+   call, not two — removing the call while keeping the feature makes the app
+   vanish mid-screen, which is worse.
+2. **The bundled Devuan root.** Keep it bundled, or have App Store builds
+   download it (1-2 days). Does not change the GPL obligation either way.
+3. **Where the GPL corresponding source lives** — a per-release snapshot, a
+   reproducible recipe, or a mirror. Until this is answered the offer text
+   cannot be finished.
+4. **Where the offer text goes** — a Legal row in Settings beside Privacy
+   Policy is the obvious place, and is a small job once 3 is answered.
+5. **Privacy policy hosting.** The GitHub blob URL works and is in use; a
+   `gh-pages` branch would be cleaner. Not urgent. Do **not** serve Pages from
+   `docs/` on `working` — it would publish this document.
+
+**Actions only the maintainer can take:**
+
+6. **Send the name request** to the ish-app maintainers (drafted below), or
+   decide on a store name without "iSH".
+7. **File the ANSSI declaration** and upload the attestation. This gates a
+   French listing, and is the long pole: reported at about a month.
+8. **Take the screenshots** — iPhone 6.9" and iPad 13". Deliberately not
+   generated; see [app_store_metadata.md](app_store_metadata.md).
+9. **Answer the App Store Connect questionnaires** — age rating (including
+   the social-media questions added 2026-07-09) and the privacy label.
+
+**Worth doing before submitting, not blocking:**
+
+10. **Check `8dc6a0df5` on a device.** It is the one must-fix that changed
+    behaviour nobody has watched on hardware: write resolv.conf from libresolv
+    and confirm a name still resolves after a network change.
 
 ---
 
@@ -55,7 +120,7 @@ not asked about, since nothing leaves the device. Verified in the simulator
 against OpenRouter, including that declining sends nothing. Settings' model‑list
 fetch still contacts the provider first, but sends no user content.
 
-### 3. ~~No privacy policy URL~~ -- DONE (pending a hosting decision)
+### 3. ~~No privacy policy URL~~ -- DONE (hosting is an optional upgrade)
 
 Every app needs one. It has to cover the LLM providers the user chooses, the
 root catalogue fetch (app/Roots.m:250), and MetricKit diagnostics, which stay
@@ -545,6 +610,8 @@ Two caveats worth keeping rather than claiming more than was shown:
 
 ## Effort
 
+The original estimate, kept for the record:
+
 | | |
 |---|---|
 | Privacy manifests | 0.5 day |
@@ -555,5 +622,21 @@ Two caveats worth keeping rather than claiming more than was shown:
 | If Apple insists on pinned mirrors | +1-2 weeks, plus hosting |
 | If the Devuan root has to be downloaded instead | +1-2 days |
 
-On top of that: upstream's permission on the name, and probably one or two
-review round-trips.
+**How it actually went (2026-11-13 and 14).** The engineering came in near the
+bottom of that range, and the estimate's shape was right: the manifests, the
+consent sheet, the DNS removal, the test hook, the policy and the export key
+were each about as small as predicted.
+
+What the estimate missed is that the *paperwork* is not the slow part either
+-- the **waiting** is. The ANSSI declaration is reported at about a month and
+gates a French listing; upstream's answer on the name arrives when it arrives.
+Both are calendar time with no work in them, and neither is compressible by
+doing the engineering faster.
+
+It also missed three things that only showed up on contact with the code, all
+now fixed: the app was shipping a `repositories.txt` pointing at a 2023
+snapshot on upstream's server, `fastlane/footer.txt` had been putting
+upstream's Twitter, Discord and Patreon into every TestFlight changelog, and
+`.github/FUNDING.yml` had been soliciting for upstream's author since 2020.
+None was in the estimate because none was visible from the guidelines; they
+came out of reading the thing rather than assessing it.
