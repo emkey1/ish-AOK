@@ -3712,7 +3712,78 @@ void ISHSuspendSessionConfirmGPUThen(UIViewController *host, NSString *verb,
 // image describes the guest as it was when the freeze stopped it, while the
 // filesystem keeps changing for as long as the app is alive. Every millisecond
 // between the two is a millisecond the root can drift from the image.
-int ISHSuspendSessionSuspendAndExit(BOOL leaveOutGPU) {
+// A window above everything, with no way out of it, kept alive by the static.
+//
+// Shown when the app has nothing left to do and the person should close it.
+// Up to 566 these paths called exit(0) instead. They no longer do: Apple's
+// HIG asks apps not to terminate themselves, and a reviewer reads an app that
+// vanishes as one that crashed -- which is the entire objection, since the
+// feature is otherwise deliberate and confirmed. Closing the app is the same
+// two seconds of the person's time and none of the ambiguity.
+//
+// Its own UIWindow rather than a presented controller: at this point the
+// guest is checkpointed and its processes are gone, so every terminal, applet
+// and alert still on screen is showing a machine that no longer exists. A
+// window above UIWindowLevelAlert covers all of them without having to find
+// and dismiss each one.
+static UIWindow *ishFinalScreenWindow;
+
+void ISHPresentFinalScreen(NSString *_Nonnull title, NSString *_Nonnull message) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (ishFinalScreenWindow != nil)
+            return;
+        UIWindowScene *scene = nil;
+        for (UIScene *candidate in UIApplication.sharedApplication.connectedScenes) {
+            if (![candidate isKindOfClass:UIWindowScene.class])
+                continue;
+            if (candidate.activationState == UISceneActivationStateForegroundActive) {
+                scene = (UIWindowScene *) candidate;
+                break;
+            }
+            if (scene == nil)
+                scene = (UIWindowScene *) candidate;
+        }
+        if (scene == nil)
+            return;
+
+        UILabel *titleLabel = [UILabel new];
+        titleLabel.text = title;
+        titleLabel.font = [UIFont preferredFontForTextStyle:UIFontTextStyleTitle2];
+        titleLabel.adjustsFontForContentSizeCategory = YES;
+        titleLabel.textAlignment = NSTextAlignmentCenter;
+        titleLabel.numberOfLines = 0;
+
+        UILabel *messageLabel = [UILabel new];
+        messageLabel.text = message;
+        messageLabel.font = [UIFont preferredFontForTextStyle:UIFontTextStyleBody];
+        messageLabel.adjustsFontForContentSizeCategory = YES;
+        messageLabel.textAlignment = NSTextAlignmentCenter;
+        messageLabel.textColor = UIColor.secondaryLabelColor;
+        messageLabel.numberOfLines = 0;
+
+        UIStackView *stack = [[UIStackView alloc] initWithArrangedSubviews:@[titleLabel, messageLabel]];
+        stack.axis = UILayoutConstraintAxisVertical;
+        stack.spacing = 12;
+        stack.translatesAutoresizingMaskIntoConstraints = NO;
+
+        UIViewController *controller = [UIViewController new];
+        controller.view.backgroundColor = UIColor.systemBackgroundColor;
+        [controller.view addSubview:stack];
+        [NSLayoutConstraint activateConstraints:@[
+            [stack.centerYAnchor constraintEqualToAnchor:controller.view.centerYAnchor],
+            [stack.leadingAnchor constraintEqualToAnchor:controller.view.layoutMarginsGuide.leadingAnchor constant:16],
+            [stack.trailingAnchor constraintEqualToAnchor:controller.view.layoutMarginsGuide.trailingAnchor constant:-16],
+        ]];
+
+        UIWindow *window = [[UIWindow alloc] initWithWindowScene:scene];
+        window.windowLevel = UIWindowLevelAlert + 1;
+        window.rootViewController = controller;
+        [window makeKeyAndVisible];
+        ishFinalScreenWindow = window;
+    });
+}
+
+int ISHSuspendSessionSuspendAndStop(BOOL leaveOutGPU) {
     if (ISHGuestHalted())
         return _ESRCH;
     NSString *image = ISHSuspendSessionImagePath();
@@ -3723,8 +3794,11 @@ int ISHSuspendSessionSuspendAndExit(BOOL leaveOutGPU) {
                                              leaveOutGPU ? CKPT_SAVE_LEAVE_OUT : 0);
     if (err < 0)
         return err;
-    os_log(ISHSuspendLog(), "session suspended on request; exiting");
-    exit(0);
+    os_log(ISHSuspendLog(), "session suspended on request");
+    ISHPresentFinalScreen(NSLocalizedString(@"Session suspended", @"Final screen title after Suspend and Exit"),
+                          NSLocalizedString(@"You can close iSH-AOK now. The next launch picks this session up where you left it.",
+                                            @"Final screen message after Suspend and Exit"));
+    return 0;
 }
 
 static TerminalViewController *CreateTerminalViewController(void) {
@@ -5520,26 +5594,18 @@ static UINavigationController *CreateAboutNavigationController(BOOL recoveryMode
 }
 
 - (void)exitApp {
-    self.exiting = YES;
-    UIApplication *application = UIApplication.sharedApplication;
-    if (@available(iOS 13.0, *)) {
-        for (UIScene *scene in application.connectedScenes) {
-            UISceneSession *session = scene.session;
-            if (session == nil)
-                continue;
-            [application requestSceneSessionDestruction:session
-                                                options:nil
-                                           errorHandler:^(__unused NSError *error) {
-            }];
-        }
-    }
-    id app = application;
-    [app suspend];
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t) (750 * NSEC_PER_MSEC)),
-                   dispatch_get_main_queue(), ^{
-        if (self.exiting)
-            exit(0);
-    });
+    // Was: destroy the scenes, [app suspend] (a private selector reached
+    // through an id so it did not have to be declared), then exit(0) 750 ms
+    // later. The suspend existed only to make the exit look like an ordinary
+    // backgrounding rather than a crash -- so removing the exit removes the
+    // reason for the private call too, and both are gone.
+    //
+    // The filesystem has already been set by the caller; it takes effect on
+    // the next launch either way. The same alert also offers "Next Launch",
+    // which is this without the restart.
+    ISHPresentFinalScreen(NSLocalizedString(@"Filesystem changed", @"Final screen title after choosing to switch filesystem"),
+                          NSLocalizedString(@"Close iSH-AOK and open it again to start on the filesystem you chose.",
+                                            @"Final screen message after choosing to switch filesystem"));
 }
 
 // Assertion held from backgrounding until either suspension is imminent (its

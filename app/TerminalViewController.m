@@ -1227,8 +1227,8 @@ static const CGFloat kFindBarHeight = 44;
                           handler:^(__unused UIAlertAction *a) {
             UIAlertController *confirm = [UIAlertController
                 alertControllerWithTitle:NSLocalizedString(@"Suspend and exit?", @"Suspend and exit confirmation title")
-                                 message:NSLocalizedString(@"iSH-AOK writes this session to disk and quits. "
-                                         @"The next launch picks it up where you left it.", @"Suspend and exit confirmation message")
+                                 message:NSLocalizedString(@"iSH-AOK writes this session to disk and stops. You close it, "
+                                         @"and the next launch picks it up where you left it.", @"Suspend and exit confirmation message")
                           preferredStyle:UIAlertControllerStyleAlert];
             [confirm addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Suspend and Exit", @"Suspend and exit confirmation button")
                                                         style:UIAlertActionStyleDefault
@@ -1238,10 +1238,19 @@ static const CGFloat kFindBarHeight = 44;
                     [self _scheduleSaveProgressHUD];
                     self.saveSessionInProgress = YES;
                     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-                        // Returns only on FAILURE: on success the process is gone,
-                        // so there is no value to inspect -- the reason is read
-                        // from checkpoint_get_status below.
-                        (void) ISHSuspendSessionSuspendAndExit(leaveOutGPU);
+                        // Returns on success now too (566 and earlier exited
+                        // here instead), so the failure alert below must be
+                        // reached only when it actually failed.
+                        int err = ISHSuspendSessionSuspendAndStop(leaveOutGPU);
+                        if (err >= 0) {
+                            // The final screen is already up and covers this;
+                            // tidy the HUD state so nothing is left mid-save.
+                            dispatch_async(dispatch_get_main_queue(), ^{
+                                self.saveSessionInProgress = NO;
+                                [self _dismissSaveProgressHUDThen:nil];
+                            });
+                            return;
+                        }
                         struct checkpoint_status ck;
                         checkpoint_get_status(&ck);
                         dispatch_async(dispatch_get_main_queue(), ^{

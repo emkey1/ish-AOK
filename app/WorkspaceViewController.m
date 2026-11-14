@@ -14699,7 +14699,7 @@ static NSURL *ISHWorkspaceBrowserURLFromInput(NSString *input) {
                           handler:^(__unused UIAlertAction *a) {
             UIAlertController *confirm = [UIAlertController
                 alertControllerWithTitle:NSLocalizedString(@"Suspend and exit?", @"alert title")
-                                 message:NSLocalizedString(@"iSH-AOK writes this session to disk and quits. The next launch picks it up where you left it.", @"suspend and exit confirmation message")
+                                 message:NSLocalizedString(@"iSH-AOK writes this session to disk and stops. You close it, and the next launch picks it up where you left it.", @"suspend and exit confirmation message")
                           preferredStyle:UIAlertControllerStyleAlert];
             [confirm addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Suspend and Exit", @"alert button")
                                                         style:UIAlertActionStyleDefault
@@ -14707,9 +14707,12 @@ static NSURL *ISHWorkspaceBrowserURLFromInput(NSString *input) {
                 // The Wayland desktop and GPU programs cannot be saved: ask first.
                 ISHSuspendSessionConfirmGPUThen(self, @"Suspend", ^(BOOL leaveOutGPU) {
                     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-                        // Returns only on FAILURE: on success the process is gone.
-                        int err = ISHSuspendSessionSuspendAndExit(leaveOutGPU);
-                        (void) err;
+                        // Returns on success now too (566 and earlier exited
+                        // here instead), so the failure alert below must be
+                        // reached only when it actually failed.
+                        int err = ISHSuspendSessionSuspendAndStop(leaveOutGPU);
+                        if (err >= 0)
+                            return;
                         struct checkpoint_status after;
                         checkpoint_get_status(&after);
                         dispatch_async(dispatch_get_main_queue(), ^{

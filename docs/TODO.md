@@ -1808,21 +1808,26 @@ FIFO open.
 
 ## Deferred on purpose
 
-### Suspend and Exit terminates the app, which the HIG discourages
+### ~~Suspend and Exit terminates the app, which the HIG discourages~~ -- DECIDED 2026-11-14
 
-`ISHSuspendSessionSuspendAndExit` ends in `exit(0)`, because iOS has no public
-"quit my app" API and the feature is, precisely, to put the machine down and
-leave. It is behind an explicit, confirmed, user-initiated action in the Session
-menu -- never automatic -- and the image is fsynced and renamed into place
-before the process goes, so the session is durable rather than merely written.
+**Decided: replaced with a screen.** The maintainer chose it during the App
+Store pass; `exit(0)` is gone from both paths that had one.
 
-**The decision to make before an App Store build**: keep it, or replace the exit
-with a "session suspended" screen that leaves closing the app to the person.
-Reviewers object to apps that appear to crash; an app that quits on a button the
-user just confirmed is a weaker case against, but it is not no case. Recorded
-here so the choice is made deliberately at submission rather than discovered.
-`/AOK/tools/suspend.sh` has always ended the same way and is unaffected either
-way, since a guest-initiated halt is not the app terminating itself.
+`ISHSuspendSessionSuspendAndExit` is now `ISHSuspendSessionSuspendAndStop` and
+**returns 0 on success**, where before it did not return at all. That is the
+part worth knowing if you touch this: both call sites used to treat any return
+as failure, and both had to be rewritten.
+
+A thing that was written down wrong here and in the App Store assessment, and
+is worth not repeating: this was said to be one decision with the private
+`[app suspend]` call. It was not. `[app suspend]` lived in `-exitApp`, whose
+only caller was "Quit Now" on the Roots screen; Suspend and Exit never touched
+it and had always vanished with no animation. Both now end in
+`ISHPresentFinalScreen` instead, which also removed the private call, since it
+only existed to make an exit look like a backgrounding.
+
+`/AOK/tools/suspend.sh` is unaffected, as it always was: a guest-initiated halt
+is not the app terminating itself.
 
 ---
 

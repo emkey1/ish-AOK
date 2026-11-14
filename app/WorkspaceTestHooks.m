@@ -340,7 +340,7 @@ static void ISHWorkspaceTestRun(NSString *line) {
         // Off the main thread, as the app's own callers do: the layout capture
         // waits on the main queue for the terminals' contents.
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-            int err = exits ? ISHSuspendSessionSuspendAndExit(NO) : ISHSuspendSessionSaveNow(NO);
+            int err = exits ? ISHSuspendSessionSuspendAndStop(NO) : ISHSuspendSessionSaveNow(NO);
             // Reached only when the save failed, or for save-session.
             ISHWorkspaceTestWriteResult(seq, @{@"ok": @(err == 0), @"rc": @(err)});
         });

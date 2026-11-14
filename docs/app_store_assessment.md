@@ -348,14 +348,26 @@ These pass the upload scan today:
     must-fix 4 -- a symbol that is not in the iOS SDK, reached by name at
     runtime. It is the one genuinely comparable case left, and it should be
     weighed the same way rather than filed under "passes the scan today".
-- `[app suspend]` (app/AppDelegate.m:5710), upstream since 2019, reached
-  through an `id` so the selector does not have to be declared. **This is one
-  decision with "Suspend and Exit calls `exit(0)`" below, not two** (noted
-  2026-11-14): the suspend is what makes the app animate away like any
-  backgrounded app before the `exit(0)` 750 ms later. Drop the private call
-  and keep the feature and the app vanishes mid-screen, which is precisely the
-  "appears to crash" that reviewers object to. Either the feature goes, or
-  both stay.
+- ~~`[app suspend]`~~ -- **GONE 2026-11-14.**
+
+  **Correction to what this entry said earlier the same day.** It claimed the
+  private call and Suspend and Exit were "one decision, not two", because the
+  suspend was what made the app animate away before the `exit(0)`. That was
+  wrong on the facts, and reading the code rather than reasoning about it
+  showed why: they were **two unrelated paths**. `[app suspend]` lived in
+  `-exitApp`, whose only caller was **"Quit Now" on the Roots screen** when
+  switching filesystem. Suspend and Exit never went near it -- it called a
+  bare `exit(0)`, so it had always vanished mid-screen with no animation at
+  all.
+
+  Both are now replaced by `ISHPresentFinalScreen` (app/AppDelegate.m), a
+  window above `UIWindowLevelAlert` that says the app can be closed and leaves
+  closing it to the person. Its own window rather than a presented controller
+  because by then the guest is checkpointed and every terminal and applet on
+  screen is showing a machine that no longer exists.
+
+  Removing the exit removed the reason for the private call: the suspend
+  existed only to make the exit look like an ordinary backgrounding.
 - ~~KVC on `UIAlertAction`'s private `handler` in app/WorkspaceTestHooks.m~~ —
   **DONE 2026-11-13** (f0eae8e06): the body is `#if DEBUG`, and
   `ISHWorkspaceTestHooksStart()` is a no-op in Release.
@@ -363,10 +375,23 @@ These pass the upload scan today:
 Already fine: `pid_shutdown_sockets` is Mac/simulator only (fs/sockrestart.c:16),
 and MoltenVK's private Metal API is off (deps/MoltenVK/meson.build:89).
 
-### "Suspend and Exit" calls `exit(0)`
+### ~~"Suspend and Exit" calls `exit(0)`~~ -- DONE 2026-11-14
 
 Already flagged in docs/TODO.md:1814 as a decision due before an App Store
 build.
+
+**Decided by the maintainer: replace it with a screen.** `exit(0)` is gone
+from both paths that had one, and `ISHSuspendSessionSuspendAndExit` is now
+`ISHSuspendSessionSuspendAndStop` -- a function named "AndExit" that no longer
+exits is exactly the trap worth not leaving behind. It **returns 0 on
+success** now, where it used to not return at all, so both call sites had to
+stop treating a return as failure; that was the real hazard in the change, not
+the screen.
+
+The confirmation text said the app "quits", which is now false in nine
+languages as well as English. The English is corrected; **the translations in
+`Localizable.xcstrings` are stale and need redoing** for that string and the
+two new ones.
 
 ### 4.7.2, exposing native APIs to downloaded software
 

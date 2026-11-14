@@ -92,10 +92,21 @@ int ISHSuspendSessionSaveNow(BOOL leaveOutGPU);
 // for the rest of this launch. Nothing restarts it in place.
 bool ISHGuestHalted(void);
 
-// Save the session and terminate the app, so the next launch resumes it. Does
-// not return on success. A SAVE is a copy and the guest carries on; this is the
-// departure.
-int ISHSuspendSessionSuspendAndExit(BOOL leaveOutGPU);
+// Save the session so the next launch resumes it, then stop. A SAVE is a copy
+// and the guest carries on; this is the departure: the guest is checkpointed
+// and its processes are gone afterwards.
+//
+// Returns 0 once the session is written and the final screen is up, or a
+// negative errno if nothing was saved. Up to 566 this did not return at all on
+// success -- it called exit(0) -- so a caller written against that will treat
+// success as failure. Check the return value.
+int ISHSuspendSessionSuspendAndStop(BOOL leaveOutGPU);
+
+// Cover everything with a screen that says the app can be closed, and leave
+// closing it to the person. For the end of a road: after a suspend, or after
+// choosing a filesystem that only takes effect on the next launch. Idempotent;
+// the first call wins.
+void ISHPresentFinalScreen(NSString *_Nonnull title, NSString *_Nonnull message);
 
 // Before a Save or Suspend the user asked for: when the Wayland desktop or
 // another GPU program is running, or a process is in a sandbox (namespaces of
