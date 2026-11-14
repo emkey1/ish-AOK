@@ -194,6 +194,41 @@ notes — or a store name without "iSH". Name availability could not be checked
 from here; the existing TestFlight app record presumably already holds the
 name (*inferred*).
 
+**Draft of the ask, 2026-11-14.** Only the user can send it, and only the user
+can judge the tone against an existing relationship (there are open PRs on
+ish-app/ish). Short on purpose: it asks one question and makes it easy to say
+yes or no.
+
+> Subject: Permission to keep "iSH-AOK" as a name on the App Store
+>
+> Hi,
+>
+> I maintain iSH-AOK, the fork I've been sending PRs from. It has been on
+> TestFlight for a while and I'm looking at putting it on the App Store
+> properly.
+>
+> Apple's guideline 5.2.1 means I should have your written permission to use a
+> name derived from iSH, rather than just assert it. So: are you happy for the
+> fork to be listed as "iSH-AOK"?
+>
+> It is clearly identified as a fork of ish-app/ish in the description, the
+> README and the app itself, and I am not trying to pass it off as the
+> original. If you would rather it did not carry "iSH" at all, that is a fine
+> answer and I'll pick something else — I would just rather know now than find
+> out through a rejection.
+>
+> Either way, thanks for iSH.
+
+If the answer is no, the knock-on work is larger than renaming a string: the
+store name, the subtitle and keywords in
+[app_store_metadata.md](app_store_metadata.md), the icon's ISH badge, and the
+first line of the description. The **bundle id stays** regardless — changing
+`app.ish.iSH-AOK` would be a new app record and would strand every TestFlight
+install. A bundle id is not a public name, so 5.2.1 does not reach it.
+
+The `ish` binary, `libish.a`, `ISH_*` and `ish_printk` also stay: they are
+identifiers, not branding (see CLAUDE.md).
+
 ### Background modes (2.5.4)
 
 `app/Info.plist:139-143` declares `location` and `audio`. Location has
@@ -252,10 +287,22 @@ build.
 Could be read onto `/dev/location`, the GPU, transcode and Photos. Upstream's
 precedent predates 4.7 (*inferred: low risk*).
 
-### Stability on the reviewer's device
+### ~~Stability on the reviewer's device~~ -- done for 566
 
-Run the five-root regression on a current iPhone and iPad first. Recent crash
-triage is in docs/TODO.md's queue.
+Run the five-root regression on a current iPhone and iPad first.
+
+**Done 2026-11-13**: the full five-root device leg ran on the A10X iPad
+against the 566 tree -- **2136 PASS, 0 FAIL**, every root exit 0, and dmesg
+carried only the faults the tests raise deliberately. That is the bar this
+entry asked for.
+
+Two caveats worth keeping rather than claiming more than was shown:
+
+- It was **one device**, an A10X iPad. A current iPhone has not had the same
+  leg this cycle.
+- The DNS change in `8dc6a0df5` is still only compile-verified. Nothing has
+  watched it resolve a name on real hardware, and it is the one must-fix that
+  changed behaviour nobody has observed on a device.
 
 ---
 
@@ -322,8 +369,8 @@ triage is in docs/TODO.md's queue.
 
 ## Paperwork
 
-- **Export compliance.** `ITSAppUsesNonExemptEncryption` is still not set in
-  app/Info.plist. **Worked out against primary sources 2026-11-14**; the
+- **Export compliance.** `ITSAppUsesNonExemptEncryption` is **set to YES**
+  in app/Info.plist (`9bbe02d44`). **Worked out against primary sources 2026-11-14**; the
   conclusion is narrower than this entry used to imply, and one piece of
   advice circulating online is simply out of date.
 
@@ -457,6 +504,13 @@ triage is in docs/TODO.md's queue.
 - **Metadata.** Screenshots at iPhone 6.9" and iPad 13"; support URL (GitHub
   issues will do); a description with no TestFlight links. Do not reuse
   `fastlane/footer.txt`.
+
+  **Drafted 2026-11-14**: [app_store_metadata.md](app_store_metadata.md) has
+  the name, subtitle, promotional text, keywords, description, support and
+  marketing URLs and copyright, each checked against Apple's character limit
+  (description 2,128 of 4,000; keywords 92 of 100; subtitle 28 of 30).
+  **Screenshots are not done and should not be**: they have to be taken and
+  chosen by hand, and the file says which five shots would carry the listing.
 
   **Looked at 2026-11-14, and it was worse than "do not reuse".** That file is
   not hypothetical App Store copy: `fastlane/Fastfile:51` pastes it into the
