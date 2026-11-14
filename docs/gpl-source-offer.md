@@ -122,13 +122,31 @@ binaries in a given build, years later.
    corresponding to the bash in build 565's Devuan root, we would be
    reconstructing it from memory of which Devuan snapshot that root was built
    from.
-3. **No per-release pinning.** The roots are built by the rootfs tooling; the
-   exact upstream package versions that went into a shipped tarball are not
-   recorded anywhere in this repository.
+3. ~~**No per-release pinning.**~~ **Fixed 2026-11-14.**
+   `tools/root-manifest.py` reads a shipped image's package database straight
+   out of the tarball and writes a manifest; `docs/root-manifests/` holds one
+   for each image we currently ship. Each records the image's **SHA-256**, the
+   **archive and suite** the packages came from, and every package with its
+   **version and source-package name** -- which is exactly what a source
+   request needs:
 
-Item 3 is the one to fix first, because it is the one that gets harder with
-time. The package lists in this document were read back out of the shipped
-tarballs, which is evidence that it is recoverable -- see the commands below.
+   | | |
+   |---|---|
+   | [alpine-minirootfs-3.24.2-aarch64](root-manifests/alpine-minirootfs-3.24.2-aarch64.md) | 16 packages, with licences |
+   | [devuan-minirootfs-6.0-aarch64](root-manifests/devuan-minirootfs-6.0-aarch64.md) | 96 packages, `deb.devuan.org/merged excalibur` |
+
+   Run it for every image before a release and commit the result:
+
+   ```
+   tools/root-manifest.py *-minirootfs-*.tar.* -o docs/root-manifests
+   ```
+
+   The SHA-256 is the part that makes this worth anything: it ties a manifest
+   to one exact artifact, so "the bash in build 565" stops being a question of
+   memory. Alpine's database carries a licence per package; Debian's does not,
+   so the manifest names the source package to fetch instead.
+
+Items 1 and 2 remain. They are decisions, below.
 
 ---
 
@@ -178,15 +196,15 @@ address once decision 2 is made.
 
 ## Regenerating the inventory
 
-Both lists in this document came out of the shipped tarballs directly, with no
-network and nothing installed. The databases are plain text inside the
-archives:
+`tools/root-manifest.py` does it, with no network and nothing installed -- the
+package databases are plain text inside the archives (`lib/apk/db/installed`
+for Alpine, `var/lib/dpkg/status` for Devuan), and it reads them without
+extracting the image.
 
-- Alpine: `lib/apk/db/installed` -- `P:` name, `V:` version, `L:` licence.
-- Devuan: `var/lib/dpkg/status` -- RFC822 blocks with `Package:` and
-  `Version:`. Debian's status file carries no licence field; the licence is in
-  `/usr/share/doc/<package>/copyright` in the full package, so a licence
-  column for Devuan means reading those or the source packages.
+```
+tools/root-manifest.py *-minirootfs-*.tar.* -o docs/root-manifests
+```
 
-Do this again for each release, and keep the output with the build. That alone
-turns decision 2 from an archaeology problem into a lookup.
+**This belongs in the pre-release pass**, next to the README and `/AOK/docs`
+audit. Run it whenever an image changes and commit the manifest; it is cheap
+now and unrecoverable later.
