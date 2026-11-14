@@ -471,11 +471,18 @@ triage is in docs/TODO.md's queue.
   upstream's.** `patreon: tbodt`, `github: tbodt`,
   `custom: https://www.paypal.me/tbodt`. Last touched by upstream on
   **2020-04-24** and never updated for the fork, so github.com/emkey1/ish-AOK
-  has been showing a **Sponsor button soliciting money for upstream's author**
-  ever since. Not changed here: what this fork's funding links should be, or
-  whether it should have any, is the user's call and involves money. It wants
-  deciding either way, and unlike everything else in this document it is live
-  now rather than at submission.
+  had been showing a **Sponsor button soliciting money for upstream's author**
+  ever since. **Removed 2026-11-14** on the user's instruction, so the repo now
+  has no Sponsor button; adding the fork's own links later is a one-file
+  change whenever it is wanted.
+
+  A sweep for the same class of thing found nothing else: no other Patreon,
+  PayPal, upstream Twitter, upstream Discord or sponsor reference survives in
+  tracked files. The remaining mentions of `tbodt` are **attribution and stay
+  that way** -- a licence-text gist in LICENSE.md, and the book crediting
+  Theodore Dubois as iSH's creator (docs/book/ch00-foreword.md:13,
+  docs/book-outline.md:11). Crediting upstream is correct for a fork;
+  collecting on its behalf was not.
 - **Review notes.** What is emulated, that no code is generated, test steps for
   `/dev/location` and the Music player, and that the LLM chat works with
   on-device Foundation Models so no API key is needed.
