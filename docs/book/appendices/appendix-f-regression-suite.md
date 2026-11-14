@@ -242,6 +242,7 @@ does not say what it is for.
 | `native_fnmatch_applets.c` | yes | native_fnmatch_applets.c -- SmallCLUE's pattern options against GNU's answers: find -name/-iname/-path, ls -I/--hide, grep --include/--exclude,... |
 | `native_libc_state.c` | yes | native_libc_state.c -- native programs each have their own rand() stream. |
 | `native_ln.c` | yes | native_ln.c -- SmallCLUE's ln against GNU coreutils 9's behaviour. |
+| `native_tar_quoting.c` | yes | native_tar_quoting.c -- SmallCLUE's tar names against GNU tar 1.35's. |
 | `native_net_options.c` | yes | The native ping and wget take the options Linux scripts pass them. |
 | `native_ptrace_group_stop.c` | yes | A NATIVE program that group-stops must report the stop to its tracer, the same way a translated one does. |
 | `native_sed.c` | yes | native_sed.c -- SmallCLUE's sed against GNU sed 4.9's answers. |

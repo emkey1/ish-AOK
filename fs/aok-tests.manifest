@@ -184,6 +184,7 @@ native_stdio_lock.c
 native_sed.c
 native_stty.c
 native_ln.c
+native_tar_quoting.c
 native_coreutils.c
 native_applet_race.c
 native_tz_roots.c
