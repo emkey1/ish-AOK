@@ -399,12 +399,61 @@ triage is in docs/TODO.md's queue.
   is the exact shape of the confusion behind the 539 rejection. The book's
   anchor list (docs/book/ch37-releasing.md:241) now points at the file that
   actually signs the app.
-- **App Privacy label.** Probably "Data Not Collected"; the conservative choice
-  is to declare User Content shared with third-party AI, for app functionality,
-  not linked to the user (*inferred*).
-- **Age rating.** Unrestricted web access (curl, and the in-app browser's
-  DuckDuckGo default at app/WorkspaceViewController.m:14392) puts it at 16+ in
-  the new tiers; upstream iSH is listed 17+. Confirm in App Store Connect.
+- **App Privacy label: "Data Not Collected".** No longer inferred -- settled
+  2026-11-14 against Apple's own definitions, and the entry's "conservative
+  choice" turns out to be the wrong answer rather than the safe one.
+
+  Apple defines **collect** as transmitting data off the device "in a way that
+  allows you and/or your third-party partners to access it for a period longer
+  than what is necessary to service the transmitted request in real time", and
+  **third-party partners** as "analytics tools, advertising networks,
+  third-party SDKs, or other external vendors **whose code you've added to
+  your app**".
+
+  On that wording:
+  - **We receive nothing.** There is no server of ours. The catalogue fetch is
+    a download *from* GitHub and the `captive.apple.com` request carries no
+    payload.
+  - **An LLM provider is not a third-party partner.** We add no provider SDK:
+    the app speaks HTTP to an endpoint the user configures, with the user's own
+    API key, to a service the user has an account with. No vendor code of
+    theirs is in the app, which is exactly what Apple's definition turns on.
+    The same goes for user-added MCP servers, and for every guest program's
+    traffic.
+  - **MetricKit payloads stay on the device**, and "data that is processed only
+    on device is not 'collected'".
+
+  The one arguable item is Apple's own *Share With App Developers*, which can
+  send us crash reports. That is Apple's mechanism operating under Apple's
+  terms on data Apple gathers, not something this app's code transmits, so it
+  does not turn the label.
+
+  **The decision is in any case already half-made**: the privacy manifests
+  shipped in `62d1e49c7` declare `NSPrivacyCollectedDataTypes` as an empty
+  array. A label claiming User Content is collected would contradict the
+  manifest inside our own binary, which is a worse position than either answer
+  on its own. Over-declaring is not the cautious option here; it is a second
+  inaccuracy pointing the other way, and it makes the app look like it does
+  something it does not.
+
+  The real mitigation for a reviewer who is uneasy about an app that can send
+  text to an AI provider is the 5.1.2(i) consent sheet, which is built and
+  shipped (`1a8cf6f2d`).
+- **Age rating: 16+. Confirmed 2026-11-14** on Apple's own reference page,
+  which the guides disagreed about. The global tiers are 4+, 9+, 13+, 16+,
+  18+, and the 16+ row lists **Unrestricted web access** under Capabilities.
+  We have that unambiguously: `curl` and every other guest program, plus the
+  in-app browser with its DuckDuckGo default
+  (app/WorkspaceViewController.m:14392).
+
+  One thing not to read anything into: **upstream iSH's 17+ is the retired
+  scale.** 12+ and 17+ are gone, so that listing is not evidence of a
+  discrepancy with ours and should not be used to argue for a different
+  answer. (Some write-ups also quote 15+ for this capability; that is a
+  region-specific rating, not the global tier.)
+
+  Still to do in App Store Connect: the questionnaire itself, including the
+  social-media questions Apple added on 2026-07-09.
 - **Metadata.** Screenshots at iPhone 6.9" and iPad 13"; support URL (GitHub
   issues will do); a description with no TestFlight links. Do not reuse
   `fastlane/footer.txt` — it still advertises upstream's Twitter and Patreon.
