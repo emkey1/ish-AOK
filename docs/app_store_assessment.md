@@ -456,7 +456,26 @@ triage is in docs/TODO.md's queue.
   social-media questions Apple added on 2026-07-09.
 - **Metadata.** Screenshots at iPhone 6.9" and iPad 13"; support URL (GitHub
   issues will do); a description with no TestFlight links. Do not reuse
-  `fastlane/footer.txt` — it still advertises upstream's Twitter and Patreon.
+  `fastlane/footer.txt`.
+
+  **Looked at 2026-11-14, and it was worse than "do not reuse".** That file is
+  not hypothetical App Store copy: `fastlane/Fastfile:51` pastes it into the
+  **TestFlight changelog** of every automated build, so it has been going out
+  to testers. It carried three of upstream's links, not two: upstream's
+  Twitter, **upstream's Discord invite** (`HFAXj44`, where the app itself
+  links `RkdBXHMbgc`), and **tbodt's Patreon**. `81fa8a824` retargeted the
+  issues URL to this fork in May 2026 and left the other three lines alone.
+  **Fixed**: it is now the issues URL and AOK's own Discord, nothing else.
+
+  **Worse, and not previously flagged: `.github/FUNDING.yml` is still
+  upstream's.** `patreon: tbodt`, `github: tbodt`,
+  `custom: https://www.paypal.me/tbodt`. Last touched by upstream on
+  **2020-04-24** and never updated for the fork, so github.com/emkey1/ish-AOK
+  has been showing a **Sponsor button soliciting money for upstream's author**
+  ever since. Not changed here: what this fork's funding links should be, or
+  whether it should have any, is the user's call and involves money. It wants
+  deciding either way, and unlike everything else in this document it is live
+  now rather than at submission.
 - **Review notes.** What is emulated, that no code is generated, test steps for
   `/dev/location` and the Music player, and that the LLM chat works with
   on-device Foundation Models so no API key is needed.
