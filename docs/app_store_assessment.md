@@ -455,8 +455,31 @@ Two caveats worth keeping rather than claiming more than was shown:
      `devuan6arm64` so it replaces the hardcoded one cleanly, and `guestABI`
      `arm64`. Its SHA-256 and package list are already recorded in
      [root-manifests/devuan-minirootfs-6.0-aarch64.md](root-manifests/devuan-minirootfs-6.0-aarch64.md).
-     **Only the maintainer can do this**: it is a 32 MB upload to another
-     repository.
+     **Only the maintainer can do this**: it is a 31 MB upload to another
+     repository. Put the archive at
+     `archives/devuan-minirootfs-6.0-aarch64.tar.xz`, matching the other
+     entries, and add this to `manifest.json` -- every field but the two
+     download ones is copied from the hardcoded dictionary it replaces, so
+     nothing a user sees changes except that it downloads:
+
+     ```json
+     {
+       "identifier": "devuan6arm64",
+       "displayName": "Devuan 6 (excalibur, arm64)",
+       "archiveName": "devuan-minirootfs-6.0-aarch64",
+       "importName": "Devuan6-arm64",
+       "initialWindow": "session-shell",
+       "guestABI": "arm64",
+       "downloadURL": "https://raw.githubusercontent.com/emkey1/ish-AOK-rootfs/main/archives/devuan-minirootfs-6.0-aarch64.tar.xz",
+       "downloadSize": "~31 MB",
+       "family": "devuan6",
+       "familyDisplayName": "Devuan 6 (excalibur)",
+       "tier": "official"
+     }
+     ```
+
+     The image in this tree is 32,566,900 bytes, SHA-256
+     `e3745f4a811110c4c155d9b246ba1d8932ee2b3add076372e3e0e35d69a08eb7`.
   2. Then, in this tree: drop the `devuan6arm64` dictionary from
      `BuildRootChoices()`, and take the tarball out of the "Download Root"
      build phase's inputs for App Store builds.
