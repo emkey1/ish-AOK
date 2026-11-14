@@ -21,6 +21,10 @@ extern UIViewController *ISHCreateLLMSettingsViewController(void);
 // The page that installs a desktop for the Wayland display and chooses which
 // one it starts (GH #639). Push it, or present it in a navigation controller.
 extern UIViewController *ISHCreateDesktopSetupViewController(void);
+// The Legal screen: licence notice and the GPL written offer. The offer has
+// to accompany the binaries it covers, so it ships in the app rather than
+// living on a website. See docs/gpl-source-offer.md.
+extern UIViewController *ISHCreateLegalViewController(void);
 extern BOOL ISHLLMClientEnabled(void);
 
 typedef NS_ENUM(NSInteger, AOKLLMBackend) {

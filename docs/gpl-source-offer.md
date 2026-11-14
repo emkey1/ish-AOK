@@ -185,8 +185,16 @@ Items 1 and 2 remain. They are decisions, below.
 
    Checked on the real archive: all 66 resolved, and three files fetched and
    checksum-matched against the index.
-3. **Where the offer text goes.** At minimum a Legal row in Settings, beside
-   Privacy Policy. The App Store description is the other obvious place.
+3. ~~**Where the offer text goes.**~~ **Decided 2026-11-14: a Legal row in
+   Settings**, beside Privacy Policy. Built, and the text below is what it
+   shows.
+
+   Pushed as a screen rather than opened in Safari, which matters more than it
+   looks: the GPL requires the written offer to **accompany** the binaries it
+   covers. A link to a website does not accompany anything, and an offer that
+   needs the network to be read is no use to someone on a plane with the app
+   they were given. It also names the build number it is shown in, so a
+   request can say which one it is about.
 
 ---
 

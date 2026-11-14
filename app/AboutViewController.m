@@ -80,6 +80,7 @@ UIViewController *ISHCreateToolbarKeysViewController(void) {
 @property (weak, nonatomic) IBOutlet UITableViewCell *openGithub;
 @property (weak, nonatomic) IBOutlet UITableViewCell *openDiscord;
 @property (weak, nonatomic) IBOutlet UITableViewCell *privacyPolicyCell;
+@property (weak, nonatomic) IBOutlet UITableViewCell *legalCell;
 @property (weak, nonatomic) IBOutlet UITableViewCell *customDnsCell;
 
 @property (weak, nonatomic) IBOutlet UITableViewCell *exportContainerCell;
@@ -698,6 +699,17 @@ static NSString *ISHForeignExecTitle(NSString *mode) {
         // the app, not only from the App Store listing. It lives in the source
         // repository so that its revisions are public and diffable.
         [UIApplication openURL:@"https://github.com/emkey1/ish-AOK/blob/working/docs/privacy-policy.md"];
+    } else if (cell == self.legalCell) {
+        // Pushed rather than opened in Safari: the GPL's written offer has to
+        // accompany the binaries, and a link to a website does not.
+        UIViewController *legal = ISHCreateLegalViewController();
+        if (self.ish_canPushSubpage) {
+            [self.navigationController pushViewController:legal animated:YES];
+        } else {
+            UINavigationController *navigationController = [[UINavigationController alloc] initWithRootViewController:legal];
+            ISHConfigureLLMSettingsNavigationController(navigationController);
+            [self presentViewController:navigationController animated:YES completion:nil];
+        }
     } else if (cell == self.exportContainerCell) {
         // copy the files to the app container so they can be extracted from iTunes file sharing
         NSURL *container = ContainerURL();
@@ -2198,4 +2210,84 @@ static NSString *ISHDesktopInstallCommand(NSString *name) {
 
 UIViewController *ISHCreateDesktopSetupViewController(void) {
     return [ISHDesktopSetupViewController new];
+}
+
+#pragma mark - Legal
+
+// The GPL's written offer has to ACCOMPANY the binaries it covers, which a
+// page on a website does not do -- so it lives here, in the app, where anyone
+// who has the object code also has the offer. docs/gpl-source-offer.md is the
+// working document behind it; this is the part addressed to the user.
+//
+// Deliberately not a web view: an offer that needs the network to be read is
+// not accompanying anything.
+static NSString *ISHLegalNoticeText(void) {
+    NSString *version = NSBundle.mainBundle.infoDictionary[(__bridge NSString *) kCFBundleVersionKey] ?: @"";
+    return [NSString stringWithFormat:NSLocalizedString(
+        @"SOURCE CODE FOR THE GNU/LINUX SOFTWARE INCLUDED WITH iSH-AOK\n"
+        @"\n"
+        @"iSH-AOK includes Linux filesystem images containing software licensed "
+        @"under the GNU General Public License, versions 2 and 3, among other "
+        @"licences. In the Devuan image this includes GNU bash, coreutils, grep, "
+        @"findutils, diffutils, gzip, dpkg and apt; in the Alpine image it "
+        @"includes busybox, apk-tools and scanelf. iSH-AOK also includes code "
+        @"from the ish-arm64 project under the GPL version 3, and components "
+        @"under the Mozilla Public License 2.0.\n"
+        @"\n"
+        @"For any version of iSH-AOK, for at least three years after that "
+        @"version was distributed, we will give any third party the complete "
+        @"corresponding source code for the GPL-licensed software in it, for no "
+        @"more than our cost of physically performing the distribution.\n"
+        @"\n"
+        @"To request it, open an issue at\n"
+        @"https://github.com/emkey1/ish-AOK/issues\n"
+        @"and say which build number you have. This build is %@.\n"
+        @"\n"
+        @"Programs you install yourself, with apt or apk or by any other means, "
+        @"are not distributed by us: they travel from their own projects' "
+        @"servers to your device, and their source is available from those "
+        @"projects on their own terms.\n"
+        @"\n"
+        @"iSH-AOK is itself open source, a fork of the iSH project, and is "
+        @"developed at https://github.com/emkey1/ish-AOK where its own source "
+        @"and licence can be read in full.",
+        @"The legal notice and GPL written offer shown on the Legal screen; %@ is the build number"), version];
+}
+
+@interface ISHLegalViewController : UIViewController
+@end
+
+@implementation ISHLegalViewController {
+    UITextView *_textView;
+}
+
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.title = NSLocalizedString(@"Legal", @"Legal screen title");
+    self.view.backgroundColor = UIColor.systemBackgroundColor;
+
+    _textView = [[UITextView alloc] initWithFrame:CGRectZero];
+    _textView.editable = NO;
+    _textView.selectable = YES;
+    _textView.alwaysBounceVertical = YES;
+    _textView.backgroundColor = UIColor.clearColor;
+    _textView.font = [UIFont preferredFontForTextStyle:UIFontTextStyleFootnote];
+    _textView.adjustsFontForContentSizeCategory = YES;
+    _textView.textContainerInset = UIEdgeInsetsMake(16, 16, 32, 16);
+    _textView.dataDetectorTypes = UIDataDetectorTypeLink;
+    _textView.translatesAutoresizingMaskIntoConstraints = NO;
+    _textView.text = ISHLegalNoticeText();
+    [self.view addSubview:_textView];
+    [NSLayoutConstraint activateConstraints:@[
+        [_textView.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor],
+        [_textView.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
+        [_textView.leadingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.leadingAnchor],
+        [_textView.trailingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.trailingAnchor],
+    ]];
+}
+
+@end
+
+UIViewController *ISHCreateLegalViewController(void) {
+    return [ISHLegalViewController new];
 }

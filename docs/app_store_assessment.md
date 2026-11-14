@@ -47,22 +47,26 @@ else that did not need a decision or an account has been done with it.
 Nothing left is work I can finish; each needs the maintainer, an account, or a
 judgement that is not mine to make.
 
-**Decisions, each a one-liner to answer:**
+**Decisions — four of five answered 2026-11-14 and built:**
 
-1. **Suspend and Exit.** Keep it, or replace the `exit(0)` with a "session
-   suspended" screen. This is *one* decision with the `[app suspend]` private
-   call, not two — removing the call while keeping the feature makes the app
-   vanish mid-screen, which is worse.
-2. **The bundled Devuan root.** Keep it bundled, or have App Store builds
-   download it (1-2 days). Does not change the GPL obligation either way.
-3. **Where the GPL corresponding source lives** — a per-release snapshot, a
-   reproducible recipe, or a mirror. Until this is answered the offer text
-   cannot be finished.
-4. **Where the offer text goes** — a Legal row in Settings beside Privacy
-   Policy is the obvious place, and is a small job once 3 is answered.
-5. **Privacy policy hosting.** The GitHub blob URL works and is in use; a
-   `gh-pages` branch would be cleaner. Not urgent. Do **not** serve Pages from
-   `docs/` on `working` — it would publish this document.
+1. ~~**Suspend and Exit.**~~ **Replaced with a screen** (`02774847b`).
+   `exit(0)` is gone from both paths that had one, and the private
+   `[app suspend]` with it. (The claim that these were one decision was
+   wrong; see "Other private API use".)
+2. ~~**The bundled Devuan root.**~~ **Decided: download it** — but **blocked
+   on a step outside this tree**. The catalogue has no Devuan arm64 entry at
+   all, so the image has to be published first. See the Licensing section for
+   the order and the exact manifest entry.
+3. ~~**Where the GPL corresponding source lives.**~~ **A per-release
+   snapshot**, produced by `tools/fetch-root-source.py` (`c725506eb`): 66
+   source packages, 212 files, 340 MB for the Devuan image, resolved from the
+   archive's own index and checksum-verified.
+4. ~~**Where the offer text goes.**~~ **A Legal row in Settings**, beside
+   Privacy Policy, showing the written offer in the app — because the GPL
+   wants the offer to *accompany* the binaries, which a link does not.
+5. **Privacy policy hosting.** Still open, and not urgent: the GitHub blob URL
+   works and is in use; a `gh-pages` branch would be cleaner. Do **not** serve
+   Pages from `docs/` on `working` — it would publish this document.
 
 **Actions only the maintainer can take:**
 
