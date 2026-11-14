@@ -78,8 +78,29 @@ judgement that is not mine to make.
 **Worth doing before submitting, not blocking:**
 
 10. **Check `8dc6a0df5` on a device.** It is the one must-fix that changed
-    behaviour nobody has watched on hardware: write resolv.conf from libresolv
-    and confirm a name still resolves after a network change.
+    behaviour nobody has watched on hardware.
+
+    *Tried on 2026-11-14 and could not be done: no device was reachable.*
+    bip answered on none of its three routes (`bipt`, `bipll`, `bip`), and
+    neither did `myse`, `ip5` or the M4. It needs a device connected, not more
+    work on the tree.
+
+    The check itself, ready to run in a guest on any device:
+
+    ```
+    cat /etc/resolv.conf          # should list the device's nameservers
+    getent hosts deb.devuan.org   # should resolve
+    ```
+
+    Then change the network (Wi-Fi to cellular, or toggle Wi-Fi) and repeat
+    both: `nw_path_monitor` should have rewritten resolv.conf and resolution
+    should still work.
+
+    **The one known gap, which is expected and not a regression:** changing the
+    DNS servers for a Wi-Fi network you are *already on* produces no path
+    change, so resolv.conf will not update until something else triggers it.
+    That trigger is what `8dc6a0df5` removed with the private API. Confirm that
+    is the only gap rather than discovering a second one at review.
 
 ---
 
