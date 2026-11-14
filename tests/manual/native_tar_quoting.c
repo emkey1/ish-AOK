@@ -55,6 +55,21 @@ static const struct member members[] = {
     {"d/raw\377x", '0', ""},
     {"d/hi80\200x", '0', ""},
     {"d/hi\303\251x", '0', ""},
+    // Valid UTF-8 of each length, then the sequences RFC 3629 forbids. A
+    // UTF-8 locale passes the valid ones through and escapes the rest, and
+    // telling them apart needs the ranges, not just the lead and
+    // continuation bits: an overlong form and a surrogate both look
+    // well-formed bitwise.
+    {"d/u3\342\202\254x", '0', ""},
+    {"d/u4\360\237\220\250x", '0', ""},
+    {"d/umax\364\217\277\277x", '0', ""},
+    {"d/over2\301\201x", '0', ""},
+    {"d/over3\340\200\257x", '0', ""},
+    {"d/over4\360\200\200\257x", '0', ""},
+    {"d/surr\355\240\200x", '0', ""},
+    {"d/past\364\220\200\200x", '0', ""},
+    {"d/trunc\303x", '0', ""},
+    {"d/badcont\303\101x", '0', ""},
     {"d/sp x", '0', ""},
     {"d/dq\"x", '0', ""},
     {"d/sq'x", '0', ""},
@@ -83,6 +98,16 @@ static const char *const expect_tf =
     "d/raw\\377x\n"
     "d/hi80\\200x\n"
     "d/hi\\303\\251x\n"
+    "d/u3\\342\\202\\254x\n"
+    "d/u4\\360\\237\\220\\250x\n"
+    "d/umax\\364\\217\\277\\277x\n"
+    "d/over2\\301\\201x\n"
+    "d/over3\\340\\200\\257x\n"
+    "d/over4\\360\\200\\200\\257x\n"
+    "d/surr\\355\\240\\200x\n"
+    "d/past\\364\\220\\200\\200x\n"
+    "d/trunc\\303x\n"
+    "d/badcont\\303Ax\n"
     "d/sp x\n"
     "d/dq\"x\n"
     "d/sq'x\n"
@@ -110,6 +135,90 @@ static const char *const expect_tvf =
     "-rw-r--r-- root/root         0 2023-11-14 22:13 d/raw\\377x\n"
     "-rw-r--r-- root/root         0 2023-11-14 22:13 d/hi80\\200x\n"
     "-rw-r--r-- root/root         0 2023-11-14 22:13 d/hi\\303\\251x\n"
+    "-rw-r--r-- root/root         0 2023-11-14 22:13 d/u3\\342\\202\\254x\n"
+    "-rw-r--r-- root/root         0 2023-11-14 22:13 d/u4\\360\\237\\220\\250x\n"
+    "-rw-r--r-- root/root         0 2023-11-14 22:13 d/umax\\364\\217\\277\\277x\n"
+    "-rw-r--r-- root/root         0 2023-11-14 22:13 d/over2\\301\\201x\n"
+    "-rw-r--r-- root/root         0 2023-11-14 22:13 d/over3\\340\\200\\257x\n"
+    "-rw-r--r-- root/root         0 2023-11-14 22:13 d/over4\\360\\200\\200\\257x\n"
+    "-rw-r--r-- root/root         0 2023-11-14 22:13 d/surr\\355\\240\\200x\n"
+    "-rw-r--r-- root/root         0 2023-11-14 22:13 d/past\\364\\220\\200\\200x\n"
+    "-rw-r--r-- root/root         0 2023-11-14 22:13 d/trunc\\303x\n"
+    "-rw-r--r-- root/root         0 2023-11-14 22:13 d/badcont\\303Ax\n"
+    "-rw-r--r-- root/root         0 2023-11-14 22:13 d/sp x\n"
+    "-rw-r--r-- root/root         0 2023-11-14 22:13 d/dq\"x\n"
+    "-rw-r--r-- root/root         0 2023-11-14 22:13 d/sq'x\n"
+    "-rw-r--r-- root/root         0 2023-11-14 22:13 d/amp&x\n"
+    "-rw-r--r-- root/root         0 2023-11-14 22:13 d/star*x\n"
+    "-rw-r--r-- root/root         0 2023-11-14 22:13 d/tilde~x\n"
+    "lrw-r--r-- root/root         0 2023-11-14 22:13 d/sym\\tlink -> tgt\\\\ctl\\001x\n"
+    "hrw-r--r-- root/root         0 2023-11-14 22:13 d/hard\\\\two link to d/bsl\\\\x\n";
+
+// The same two listings in a UTF-8 locale, where a valid character goes
+// through as itself and a malformed sequence is still escaped. GNU tar 1.35
+// on the same archive, TZ=UTC LC_ALL=C.UTF-8.
+static const char *const expect_tf_utf8 =
+    "d/\n"
+    "d/plain\n"
+    "d/bsl\\\\x\n"
+    "d/bell\\ax\n"
+    "d/bs\\bx\n"
+    "d/ff\\fx\n"
+    "d/nl\\nx\n"
+    "d/cr\\rx\n"
+    "d/tab\\tx\n"
+    "d/vt\\vx\n"
+    "d/ctl\\001x\n"
+    "d/esc\\033x\n"
+    "d/del\\177x\n"
+    "d/raw\\377x\n"
+    "d/hi80\\200x\n"
+    "d/hi\303\251x\n"
+    "d/u3\342\202\254x\n"
+    "d/u4\360\237\220\250x\n"
+    "d/umax\\364\\217\\277\\277x\n"
+    "d/over2\\301\\201x\n"
+    "d/over3\\340\\200\\257x\n"
+    "d/over4\\360\\200\\200\\257x\n"
+    "d/surr\\355\\240\\200x\n"
+    "d/past\\364\\220\\200\\200x\n"
+    "d/trunc\\303x\n"
+    "d/badcont\\303Ax\n"
+    "d/sp x\n"
+    "d/dq\"x\n"
+    "d/sq'x\n"
+    "d/amp&x\n"
+    "d/star*x\n"
+    "d/tilde~x\n"
+    "d/sym\\tlink\n"
+    "d/hard\\\\two\n";
+static const char *const expect_tvf_utf8 =
+    "drwxr-xr-x root/root         0 2023-11-14 22:13 d/\n"
+    "-rw-r--r-- root/root         0 2023-11-14 22:13 d/plain\n"
+    "-rw-r--r-- root/root         0 2023-11-14 22:13 d/bsl\\\\x\n"
+    "-rw-r--r-- root/root         0 2023-11-14 22:13 d/bell\\ax\n"
+    "-rw-r--r-- root/root         0 2023-11-14 22:13 d/bs\\bx\n"
+    "-rw-r--r-- root/root         0 2023-11-14 22:13 d/ff\\fx\n"
+    "-rw-r--r-- root/root         0 2023-11-14 22:13 d/nl\\nx\n"
+    "-rw-r--r-- root/root         0 2023-11-14 22:13 d/cr\\rx\n"
+    "-rw-r--r-- root/root         0 2023-11-14 22:13 d/tab\\tx\n"
+    "-rw-r--r-- root/root         0 2023-11-14 22:13 d/vt\\vx\n"
+    "-rw-r--r-- root/root         0 2023-11-14 22:13 d/ctl\\001x\n"
+    "-rw-r--r-- root/root         0 2023-11-14 22:13 d/esc\\033x\n"
+    "-rw-r--r-- root/root         0 2023-11-14 22:13 d/del\\177x\n"
+    "-rw-r--r-- root/root         0 2023-11-14 22:13 d/raw\\377x\n"
+    "-rw-r--r-- root/root         0 2023-11-14 22:13 d/hi80\\200x\n"
+    "-rw-r--r-- root/root         0 2023-11-14 22:13 d/hi\303\251x\n"
+    "-rw-r--r-- root/root         0 2023-11-14 22:13 d/u3\342\202\254x\n"
+    "-rw-r--r-- root/root         0 2023-11-14 22:13 d/u4\360\237\220\250x\n"
+    "-rw-r--r-- root/root         0 2023-11-14 22:13 d/umax\\364\\217\\277\\277x\n"
+    "-rw-r--r-- root/root         0 2023-11-14 22:13 d/over2\\301\\201x\n"
+    "-rw-r--r-- root/root         0 2023-11-14 22:13 d/over3\\340\\200\\257x\n"
+    "-rw-r--r-- root/root         0 2023-11-14 22:13 d/over4\\360\\200\\200\\257x\n"
+    "-rw-r--r-- root/root         0 2023-11-14 22:13 d/surr\\355\\240\\200x\n"
+    "-rw-r--r-- root/root         0 2023-11-14 22:13 d/past\\364\\220\\200\\200x\n"
+    "-rw-r--r-- root/root         0 2023-11-14 22:13 d/trunc\\303x\n"
+    "-rw-r--r-- root/root         0 2023-11-14 22:13 d/badcont\\303Ax\n"
     "-rw-r--r-- root/root         0 2023-11-14 22:13 d/sp x\n"
     "-rw-r--r-- root/root         0 2023-11-14 22:13 d/dq\"x\n"
     "-rw-r--r-- root/root         0 2023-11-14 22:13 d/sq'x\n"
@@ -175,9 +284,9 @@ static int make_archive(const char *path) {
 }
 
 // Runs `tar <op> ARCHIVE` with GNU's own environment for this comparison:
-// TZ=UTC so the long listing's times are fixed, LC_ALL=C so a high byte is
-// escaped rather than passed through as part of a character.
-static int run_tar(const char *op, char *out, size_t size) {
+// TZ=UTC so the long listing's times are fixed, and whichever locale the
+// caller is checking.
+static int run_tar(const char *op, const char *locale, char *out, size_t size) {
     int p[2];
     if (pipe(p) != 0) return -1;
     pid_t pid = fork();
@@ -188,7 +297,7 @@ static int run_tar(const char *op, char *out, size_t size) {
         close(p[0]);
         close(p[1]);
         setenv("TZ", "UTC", 1);
-        setenv("LC_ALL", "C", 1);
+        setenv("LC_ALL", locale, 1);
         execl(TAR, "tar", op, ARCHIVE, (char *)NULL);
         _exit(127);
     }
@@ -244,10 +353,22 @@ int main(int argc, char **argv) {
     }
 
     static char out[8192];
-    check("tf.status", run_tar("tf", out, sizeof(out)) == 0);
+    check("tf.status", run_tar("tf", "C", out, sizeof(out)) == 0);
     compare("tf.names", out, expect_tf);
-    check("tvf.status", run_tar("tvf", out, sizeof(out)) == 0);
+    check("tvf.status", run_tar("tvf", "C", out, sizeof(out)) == 0);
     compare("tvf.names", out, expect_tvf);
+
+    // Both locales, because the C locale on its own proves too little: it
+    // escapes every byte over 0x7f, so nothing there enters the UTF-8 branch
+    // at all. A native applet that asked isprint() about a high byte was
+    // reading the HOST process's locale -- the ish CLI leaves it at C, the
+    // app calls setlocale() -- so the same name came out escaped under the
+    // CLI and raw inside the app. Every leg of the suite on a Mac goes
+    // through the CLI and passed; the device leg is what found it.
+    check("tf.utf8.status", run_tar("tf", "C.UTF-8", out, sizeof(out)) == 0);
+    compare("tf.utf8.names", out, expect_tf_utf8);
+    check("tvf.utf8.status", run_tar("tvf", "C.UTF-8", out, sizeof(out)) == 0);
+    compare("tvf.utf8.names", out, expect_tvf_utf8);
 
     unlink(ARCHIVE);
     unlink(TAR);
