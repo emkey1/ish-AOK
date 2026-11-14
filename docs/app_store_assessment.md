@@ -128,11 +128,27 @@ that -- but "unused" was too kind, corrected 2026-11-14:
   current filesystem is not managed by iSH-AOK" and greys out Upgrade
   Repositories. Import an old upstream iSH root, which has `/ish`, and it runs.
 
-  **Decision needed:** keep it, or stop shipping the file. Dropping it makes
-  `FsUpdateOnlyRepositoriesFile` a no-op (it already returns early on nil), so
-  an imported managed root would keep the `/etc/apk/repositories` it came with
-  rather than being pointed at a 2023 snapshot on someone else's server. Left
-  alone here: it is a behaviour change a week before a release.
+  **DONE 2026-11-14:** dropped, and with it the whole mechanism, since
+  nothing else used any of it. Gone: the build phase and
+  `app/gen_apk_repositories.py` that generated the file; the boot-time rewrite
+  in `FsInitialize`; `FsNeedsRepositoryUpdate`, `FsUpdateOnlyRepositoriesFile`
+  and `FsUpdateRepositories`; `fs_ish_apk_version`, `COMPATIBLE_APK_VERSION`
+  and `NEWEST_APK_VERSION`; the Upgrade Repositories row, its section footer
+  and its three outlets; `UpgradeRootViewController` and its storyboard scene;
+  the settings-button badge; and `FsUpdatedNotification`, which by then had
+  two observers and no poster.
+
+  A root now keeps the `/etc/apk/repositories` it came with. `FsIsManaged`
+  stays -- `/ish/version` is still read, for filesystem migration -- as does
+  `maybe_normalize_unmanaged_apk_repositories`, which is a different thing:
+  it rewrites https to http for `dl-cdn.alpinelinux.org` on an unmanaged root.
+
+  What is left behind on purpose: the two badge *views*. The storyboard one is
+  now `hidden="YES"` and the floating one was already created hidden, so
+  neither can appear. Tearing constraint-bearing views out of
+  Terminal.storyboard is not a release-week change, and an inert view is not
+  the kind of leftover this entry was about -- nothing writes, fires or
+  reaches the network.
 
 Guideline 4.7 permits downloaded *games* in an
 emulator, and its index and age-gate rules (4.7.4, 4.7.5) cannot be met by a

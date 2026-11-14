@@ -604,10 +604,6 @@ static const NSInteger kMaximumTerminalFontSize = 72;
                    name:GCKeyboardDidDisconnectNotification
                  object:nil];
     [center addObserver:self
-               selector:@selector(_updateBadge)
-                   name:FsUpdatedNotification
-                 object:nil];
-    [center addObserver:self
                selector:@selector(terminalDidLoad:)
                    name:TerminalDidLoadNotification
                  object:nil];
@@ -726,7 +722,6 @@ static const NSInteger kMaximumTerminalFontSize = 72;
             [self _updateFloatingSettingsButtonVisibility];
         });
     }];
-    [self _updateBadge];
 }
 
 - (void)_installFloatingSettingsButton {
@@ -2458,15 +2453,6 @@ static const NSInteger kMaxConsecutiveQuickSessionExits = 3;
 }
 - (void)_updateStyleAnimated {
     [self _updateStyleFromPreferences:YES];
-}
-
-- (void)_updateBadge {
-    BOOL showBadge = FsNeedsRepositoryUpdate();
-    self.settingsBadge.hidden = !showBadge;
-    self.floatingSettingsBadge.hidden = !showBadge;
-    NSString *badgeValue = showBadge ? NSLocalizedString(@"Update available", @"Accessibility value on the settings button") : nil;
-    self.infoButton.accessibilityValue = badgeValue;
-    self.floatingSettingsButton.accessibilityValue = badgeValue;
 }
 
 - (UIStatusBarStyle)preferredStatusBarStyle {

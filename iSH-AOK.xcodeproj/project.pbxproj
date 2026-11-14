@@ -231,7 +231,6 @@
 		BBBCE7E321D2F02200CA00B3 /* About.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = BBBCE7E521D2F02200CA00B3 /* About.storyboard */; };
 		BBBF7B5C2415CDBB00EC4C14 /* Settings.bundle in Resources */ = {isa = PBXBuildFile; fileRef = BBBF7B5B2415CDBB00EC4C14 /* Settings.bundle */; };
 		BBBFE94921C5CFF100509DD5 /* NSError+ISHErrno.m in Sources */ = {isa = PBXBuildFile; fileRef = BB13F4DD21C5770000343E17 /* NSError+ISHErrno.m */; };
-		BBC3863E276817A900CC8C2E /* UpgradeRootViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = BBA5D87D27536E7600B39D77 /* UpgradeRootViewController.m */; };
 		BBC3863F276817AD00CC8C2E /* CurrentRoot.m in Sources */ = {isa = PBXBuildFile; fileRef = BB565EA32734F1FB00C93EAE /* CurrentRoot.m */; };
 		BBD23D5F258DA450003DCB40 /* Screenshots.m in Sources */ = {isa = PBXBuildFile; fileRef = BBD23D5E258DA450003DCB40 /* Screenshots.m */; };
 		BBD23D77258DA4BC003DCB40 /* SnapshotHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBD23D76258DA4BC003DCB40 /* SnapshotHelper.swift */; };
@@ -750,8 +749,6 @@
 		BB9C7B86240A29DE00F5D4F0 /* AppGroup.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = AppGroup.h; sourceTree = "<group>"; };
 		BB9C7B88240A343400F5D4F0 /* iSH.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = iSH.xcconfig; path = app/iSH.xcconfig; sourceTree = "<group>"; };
 		BBA110ED2A1B2C3D4E5F0001 /* liblzma.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = liblzma.xcframework; path = "deps/liblzma-static/liblzma.xcframework"; sourceTree = SOURCE_ROOT; };
-		BBA5D87C27536E7600B39D77 /* UpgradeRootViewController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = UpgradeRootViewController.h; sourceTree = "<group>"; };
-		BBA5D87D27536E7600B39D77 /* UpgradeRootViewController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = UpgradeRootViewController.m; sourceTree = "<group>"; };
 		BBA8E2C0236FF5EA00515F76 /* SystemConfiguration.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SystemConfiguration.framework; path = System/Library/Frameworks/SystemConfiguration.framework; sourceTree = SDKROOT; };
 		BBAEE338249B58E80069EBB5 /* libbz2.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libbz2.tbd; path = usr/lib/libbz2.tbd; sourceTree = SDKROOT; };
 		BBAEE33A249BDADC0069EBB5 /* ProgressReportViewController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ProgressReportViewController.h; sourceTree = "<group>"; };
@@ -1513,8 +1510,6 @@
 				491C4C1627C8F84A008B1DFA /* ThemesViewController.m */,
 				491B31E42883BF22008EEFB0 /* ThemeViewController.h */,
 				491B31E52883BF22008EEFB0 /* ThemeViewController.m */,
-				BBA5D87C27536E7600B39D77 /* UpgradeRootViewController.h */,
-				BBA5D87D27536E7600B39D77 /* UpgradeRootViewController.m */,
 				8632A7BD219A59FB00F02325 /* UserPreferences.h */,
 				8632A7BE219A59FB00F02325 /* UserPreferences.m */,
 				6F681FC66C14DDED4FBD7BD6 /* AOKFoundationModelsBridge.swift */,
@@ -1670,7 +1665,6 @@
 				BB21A17826890A5B00BD19B4 /* Sources */,
 				BB792B4D1F96D90D00FFB7A4 /* Frameworks */,
 				BBF1248B1FA7BF530088FB50 /* Download Root */,
-				BB034E8C263643C10000A498 /* Generate APK Repositories File */,
 				BB4A53AC1FAA49CA00A72ACE /* Compile JavaScript */,
 				BB792B4E1F96D90D00FFB7A4 /* Resources */,
 				C0A200012F2F100100000001 /* Copy Alternate Icon Sizes */,
@@ -1961,28 +1955,6 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
-		BB034E8C263643C10000A498 /* Generate APK Repositories File */ = {
-			isa = PBXShellScriptBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			inputFileListPaths = (
-			);
-			inputPaths = (
-				"$(SRCROOT)/deps/aports/main/x86/index.txt",
-				"$(SRCROOT)/deps/aports/community/x86/index.txt",
-				"$(SRCROOT)/app/gen_apk_repositories.py",
-			);
-			name = "Generate APK Repositories File";
-			outputFileListPaths = (
-			);
-			outputPaths = (
-				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/repositories.txt",
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-			shellPath = /usr/bin/python3;
-			shellScript = "import os\ndef trim(x, start, end):\n    assert x.startswith(start)\n    assert x.endswith(end)\n    return x[len(start):-len(end)]\nrepos_file = []\nfor repo in ['main', 'community']:\n    with open(f'{os.environ[\"SRCROOT\"]}/deps/aports/{repo}/x86/index.txt') as f:\n        index_name = f.read()\n    index_name = trim(index_name, 'APKINDEX-', '.tar.gz\\n')\n    repos_file.append(f'http://apk.ish.app/{index_name}/{repo}')\nresources_dir = os.path.join(os.environ['TARGET_BUILD_DIR'], os.environ['UNLOCALIZED_RESOURCES_FOLDER_PATH'])\nos.makedirs(resources_dir, exist_ok=True)\nwith open(os.path.join(resources_dir, 'repositories.txt'), 'w') as f:\n    for line in repos_file:\n        print(line, file=f)\n";
-		};
 		BB13F813200AEFAC003D1C4D /* ShellScript */ = {
 			isa = PBXShellScriptBuildPhase;
 			alwaysOutOfDate = 1;
@@ -2292,7 +2264,6 @@
 				BB28C7BF2689799800BDC834 /* Roots.m in Sources */,
 				BB28C79A26896B1F00BDC834 /* Terminal.m in Sources */,
 				BB28C79B26896B1F00BDC834 /* FontPickerViewController.m in Sources */,
-				BBC3863E276817A900CC8C2E /* UpgradeRootViewController.m in Sources */,
 				BB28C79D26896B1F00BDC834 /* SceneDelegate.m in Sources */,
 				C0A000540254000100000003 /* ExternalDisplaySceneDelegate.m in Sources */,
 				5D7E7E152B1FD4890087F2E0 /* ro_locks.c in Sources */,

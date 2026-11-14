@@ -82,9 +82,6 @@ UIViewController *ISHCreateToolbarKeysViewController(void) {
 @property (weak, nonatomic) IBOutlet UITableViewCell *privacyPolicyCell;
 @property (weak, nonatomic) IBOutlet UITableViewCell *customDnsCell;
 
-@property (weak, nonatomic) IBOutlet UITableViewCell *upgradeApkCell;
-@property (weak, nonatomic) IBOutlet UILabel *upgradeApkLabel;
-@property (weak, nonatomic) IBOutlet UIView *upgradeApkBadge;
 @property (weak, nonatomic) IBOutlet UITableViewCell *exportContainerCell;
 @property (weak, nonatomic) IBOutlet UITableViewCell *resetMountsCell;
 
@@ -416,7 +413,6 @@ UIViewController *ISHCreateDiagnosticsNavigationController(void) {
             [self _updateUI];
         });
     }];
-    [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(_updateUI:) name:FsUpdatedNotification object:nil];
 }
 
 - (void)viewWillAppear:(BOOL)animated {
@@ -521,11 +517,6 @@ UIViewController *ISHCreateDiagnosticsNavigationController(void) {
         self.customDnsCell.detailTextLabel.text = NSLocalizedString(@"Off (guest manages)", @"Custom DNS Servers value when resolv.conf is left alone");
     else
         self.customDnsCell.detailTextLabel.text = customDnsServers.length > 0 ? customDnsServers : NSLocalizedString(@"Automatic", @"Custom DNS Servers value when none are set");
-
-    self.upgradeApkCell.userInteractionEnabled = FsNeedsRepositoryUpdate();
-    self.upgradeApkLabel.enabled = FsNeedsRepositoryUpdate();
-    self.upgradeApkBadge.hidden = !FsNeedsRepositoryUpdate();
-    self.upgradeApkCell.accessibilityValue = FsNeedsRepositoryUpdate() ? NSLocalizedString(@"Update available", @"Accessibility value on the filesystem upgrade row") : nil;
     [self.tableView reloadData];
 }
 
@@ -881,15 +872,6 @@ static NSString *ISHForeignExecTitle(NSString *mode) {
                @"Applies to programs started after the change, on arm64 filesystems. Uses up to 96 MB of memory.", @"Translated Code section footer: what the translation cache does and that it turns ASLR off");
     if (section == [self _desktopSectionIndex])
         return NSLocalizedString(@"Installs the desktop the Wayland display shows, in the filesystem that is running, and chooses which one it starts.", @"Wayland Desktop section footer in Settings");
-    if (section == 1) { // filesystems / upgrade
-        if (!FsIsManaged()) {
-            return NSLocalizedString(@"The current filesystem is not managed by iSH-AOK.", @"Filesystem section footer");
-        } else if (!FsNeedsRepositoryUpdate()) {
-            return [NSString stringWithFormat:NSLocalizedString(@"The current filesystem is using %s, which is the latest version.", @"Filesystem section footer; %s is a version"), NEWEST_APK_VERSION];
-        } else {
-            return [NSString stringWithFormat:NSLocalizedString(@"An upgrade to %s is available.", @"Filesystem section footer; %s is a version"), NEWEST_APK_VERSION];
-        }
-    }
     return [super tableView:tableView titleForFooterInSection:section];
 }
 

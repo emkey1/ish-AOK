@@ -269,44 +269,6 @@
                                             <segue destination="gsu-Hv-LDC" kind="show" id="tif-za-oNY"/>
                                         </connections>
                                     </tableViewCell>
-                                    <tableViewCell clipsSubviews="YES" contentMode="scaleToFill" preservesSuperviewLayoutMargins="YES" selectionStyle="default" accessoryType="disclosureIndicator" indentationWidth="10" id="Huf-xT-ejJ">
-                                        <rect key="frame" x="0.0" y="343" width="320" height="43.5"/>
-                                        <autoresizingMask key="autoresizingMask"/>
-                                        <tableViewCellContentView key="contentView" opaque="NO" clipsSubviews="YES" multipleTouchEnabled="YES" contentMode="center" preservesSuperviewLayoutMargins="YES" insetsLayoutMarginsFromSafeArea="NO" tableViewCell="Huf-xT-ejJ" id="44W-gn-26V">
-                                            <rect key="frame" x="0.0" y="0.0" width="293.5" height="43.5"/>
-                                            <autoresizingMask key="autoresizingMask"/>
-                                            <subviews>
-                                                <label opaque="NO" multipleTouchEnabled="YES" contentMode="left" insetsLayoutMarginsFromSafeArea="NO" text="Upgrade Repositories" textAlignment="natural" lineBreakMode="tailTruncation" baselineAdjustment="alignBaselines" adjustsFontSizeToFit="NO" translatesAutoresizingMaskIntoConstraints="NO" id="L09-wA-jCg">
-                                                    <rect key="frame" x="16" y="11.5" width="165" height="21"/>
-                                                    <fontDescription key="fontDescription" type="system" pointSize="17"/>
-                                                    <nil key="textColor"/>
-                                                    <nil key="highlightedColor"/>
-                                                </label>
-                                                <view contentMode="scaleToFill" translatesAutoresizingMaskIntoConstraints="NO" id="l5o-Y7-j4W">
-                                                    <rect key="frame" x="269.5" y="14" width="16" height="16"/>
-                                                    <color key="backgroundColor" systemColor="systemRedColor"/>
-                                                    <constraints>
-                                                        <constraint firstAttribute="height" constant="16" id="28W-HE-QpJ"/>
-                                                        <constraint firstAttribute="width" constant="16" id="iaA-gZ-0Pn"/>
-                                                    </constraints>
-                                                    <userDefinedRuntimeAttributes>
-                                                        <userDefinedRuntimeAttribute type="number" keyPath="layer.cornerRadius">
-                                                            <integer key="value" value="8"/>
-                                                        </userDefinedRuntimeAttribute>
-                                                    </userDefinedRuntimeAttributes>
-                                                </view>
-                                            </subviews>
-                                            <constraints>
-                                                <constraint firstItem="L09-wA-jCg" firstAttribute="centerY" secondItem="44W-gn-26V" secondAttribute="centerY" id="4He-R9-ToQ"/>
-                                                <constraint firstAttribute="trailingMargin" secondItem="l5o-Y7-j4W" secondAttribute="trailing" id="8b0-UB-r6d"/>
-                                                <constraint firstItem="L09-wA-jCg" firstAttribute="leading" secondItem="44W-gn-26V" secondAttribute="leadingMargin" id="l0q-Rr-W6r"/>
-                                                <constraint firstItem="l5o-Y7-j4W" firstAttribute="centerY" secondItem="44W-gn-26V" secondAttribute="centerY" id="ppV-Dx-99y"/>
-                                            </constraints>
-                                        </tableViewCellContentView>
-                                        <connections>
-                                            <segue destination="9eV-Jd-Xng" kind="show" id="R7o-uj-fFN"/>
-                                        </connections>
-                                    </tableViewCell>
                                 </cells>
                             </tableViewSection>
                             <tableViewSection footerTitle="" id="DVR-sH-TdL">
@@ -556,9 +518,6 @@
                         <outlet property="resetMountsCell" destination="Bqt-ud-CI0" id="2AS-2S-XCr"/>
                         <outlet property="sendFeedback" destination="gMm-4C-5X3" id="nhX-ZH-zyP"/>
                         <outlet property="themeCell" destination="dqn-Cd-cNm" id="dfh-et-0o7"/>
-                        <outlet property="upgradeApkBadge" destination="l5o-Y7-j4W" id="AI2-IM-NVw"/>
-                        <outlet property="upgradeApkCell" destination="Huf-xT-ejJ" id="CBX-wc-11e"/>
-                        <outlet property="upgradeApkLabel" destination="L09-wA-jCg" id="wMj-ht-DsI"/>
                         <outlet property="versionLabel" destination="Xil-tm-WGD" id="ZzC-E6-VER"/>
                     </connections>
                 </tableViewController>
@@ -938,47 +897,6 @@
                 <placeholder placeholderIdentifier="IBFirstResponder" id="wE1-cE-kl7" userLabel="First Responder" customClass="UIResponder" sceneMemberID="firstResponder"/>
             </objects>
             <point key="canvasLocation" x="1057.5" y="1132.3943661971832"/>
-        </scene>
-        <!--Upgrade-->
-        <scene sceneID="D8q-Fv-Sfr">
-            <objects>
-                <viewController title="Upgrade" id="9eV-Jd-Xng" customClass="UpgradeRootViewController" sceneMemberID="viewController">
-                    <view key="view" contentMode="scaleToFill" id="GV8-4O-0fU">
-                        <rect key="frame" x="0.0" y="0.0" width="320" height="568"/>
-                        <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
-                        <subviews>
-                            <view contentMode="scaleToFill" translatesAutoresizingMaskIntoConstraints="NO" id="6OQ-mF-Mur" customClass="TerminalView">
-                                <rect key="frame" x="0.0" y="64" width="320" height="504"/>
-                                <color key="backgroundColor" systemColor="systemBackgroundColor"/>
-                                <userDefinedRuntimeAttributes>
-                                    <userDefinedRuntimeAttribute type="boolean" keyPath="canBecomeFirstResponder" value="NO"/>
-                                </userDefinedRuntimeAttributes>
-                            </view>
-                        </subviews>
-                        <viewLayoutGuide key="safeArea" id="1GV-qG-uh7"/>
-                        <color key="backgroundColor" systemColor="systemBackgroundColor"/>
-                        <constraints>
-                            <constraint firstItem="1GV-qG-uh7" firstAttribute="trailing" secondItem="6OQ-mF-Mur" secondAttribute="trailing" id="ZCA-Q1-Odv"/>
-                            <constraint firstItem="6OQ-mF-Mur" firstAttribute="leading" secondItem="1GV-qG-uh7" secondAttribute="leading" id="gbg-DM-mLG"/>
-                            <constraint firstItem="6OQ-mF-Mur" firstAttribute="top" secondItem="1GV-qG-uh7" secondAttribute="top" id="jGK-vN-hUm"/>
-                            <constraint firstItem="1GV-qG-uh7" firstAttribute="bottom" secondItem="6OQ-mF-Mur" secondAttribute="bottom" id="mK6-ba-K1i"/>
-                        </constraints>
-                    </view>
-                    <navigationItem key="navigationItem" title="Upgrade" id="uXA-OB-CN7">
-                        <barButtonItem key="rightBarButtonItem" title="Start" style="done" id="R2f-RB-uga">
-                            <connections>
-                                <action selector="upgrade:" destination="9eV-Jd-Xng" id="LNT-XH-Qvi"/>
-                            </connections>
-                        </barButtonItem>
-                    </navigationItem>
-                    <connections>
-                        <outlet property="terminalView" destination="6OQ-mF-Mur" id="mGv-Yc-HQL"/>
-                        <outlet property="upgradeButton" destination="R2f-RB-uga" id="n2L-Vs-nDF"/>
-                    </connections>
-                </viewController>
-                <placeholder placeholderIdentifier="IBFirstResponder" id="Ncd-Qn-RO3" userLabel="First Responder" customClass="UIResponder" sceneMemberID="firstResponder"/>
-            </objects>
-            <point key="canvasLocation" x="1057.5" y="1810.5633802816901"/>
         </scene>
         <!--Appearance-->
         <scene sceneID="Sh1-9Z-h4V">
