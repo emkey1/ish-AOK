@@ -11,7 +11,8 @@
             "value" : "iSH-AOK"
           }
         }
-      }
+      },
+      "shouldTranslate" : false
     },
     "CFBundleName" : {
       "comment" : "Bundle name",
@@ -23,7 +24,8 @@
             "value" : "iSH-AOK"
           }
         }
-      }
+      },
+      "shouldTranslate" : false
     },
     "NSLocalNetworkUsageDescription" : {
       "extractionState" : "manual",
@@ -102,7 +104,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Programs running in iSH will be allowed to track your location in the background."
+            "value" : "Programs running in iSH-AOK will be allowed to track your location in the background."
           }
         },
         "es" : {
@@ -167,7 +169,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Programs running in iSH will be allowed to track your location in the background."
+            "value" : "Programs running in iSH-AOK will be allowed to track your location in the background."
           }
         },
         "es" : {
@@ -232,7 +234,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Programs running in iSH will be allowed to see your location."
+            "value" : "Programs running in iSH-AOK will be allowed to see your location."
           }
         },
         "es" : {

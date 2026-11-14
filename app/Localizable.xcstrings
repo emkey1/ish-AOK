@@ -1109,6 +1109,66 @@
         }
       }
     },
+    "%@ is not part of iSH-AOK and is not run by its developer.\n\nSending a message there sends what you type and the rest of this conversation. If you let the assistant use tools, it also sends the contents of files it reads and the output of commands it runs in your guest.\n\nTo keep everything on this device, choose Apple Foundation Models in Settings." : {
+      "comment" : "LLM consent alert body, %@ is a host name",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ ist nicht Teil von iSH-AOK und wird nicht von dessen Entwickler betrieben.\n\nEine Nachricht dorthin sendet, was du eingibst, und den restlichen Verlauf dieser Unterhaltung. Wenn du dem Assistenten Werkzeuge erlaubst, werden außerdem die Inhalte der Dateien gesendet, die er liest, und die Ausgabe der Befehle, die er in deinem Gast ausführt.\n\nUm alles auf diesem Gerät zu behalten, wähle in den Einstellungen Apple Foundation Models."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ no forma parte de iSH-AOK y no lo gestiona su desarrollador.\n\nEnviar un mensaje allí envía lo que escribes y el resto de esta conversación. Si permites que el asistente use herramientas, también envía el contenido de los archivos que lee y la salida de los comandos que ejecuta en tu sistema invitado.\n\nPara que todo se quede en este dispositivo, elige Apple Foundation Models en Ajustes."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ ne fait pas partie d'iSH-AOK et n'est pas exploité par son développeur.\n\nEnvoyer un message là-bas transmet ce que vous saisissez ainsi que le reste de cette conversation. Si vous autorisez l'assistant à utiliser des outils, cela transmet aussi le contenu des fichiers qu'il lit et la sortie des commandes qu'il exécute dans votre système invité.\n\nPour que tout reste sur cet appareil, choisissez Apple Foundation Models dans les Réglages."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ は iSH-AOK の一部ではなく、その開発者が運営しているものでもありません。\n\nそこにメッセージを送ると、入力した内容とこの会話の残りが送信されます。アシスタントにツールの使用を許可している場合は、読み取ったファイルの内容と、ゲストで実行したコマンドの出力も送信されます。\n\nすべてをこの端末内に留めるには、設定で Apple Foundation Models を選んでください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@은(는) iSH-AOK의 일부가 아니며 그 개발자가 운영하는 것도 아닙니다.\n\n거기로 메시지를 보내면 입력한 내용과 이 대화의 나머지가 함께 전송됩니다. 어시스턴트에 도구 사용을 허용하면 어시스턴트가 읽은 파일의 내용과 게스트에서 실행한 명령의 출력도 전송됩니다.\n\n모든 것을 이 기기 안에 두려면 설정에서 Apple Foundation Models를 선택하세요."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O %@ não faz parte do iSH-AOK e não é operado por seu desenvolvedor.\n\nEnviar uma mensagem para lá envia o que você digita e o restante desta conversa. Se você permitir que o assistente use ferramentas, também envia o conteúdo dos arquivos que ele lê e a saída dos comandos que ele executa no seu sistema convidado.\n\nPara manter tudo neste dispositivo, escolha Apple Foundation Models nos Ajustes."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ не входит в состав iSH-AOK, и разработчик iSH-AOK этим сервисом не управляет.\n\nОтправка сообщения туда передаёт то, что вы вводите, и остальную часть этого разговора. Если вы разрешите ассистенту использовать инструменты, он также передаст содержимое файлов, которые читает, и вывод команд, которые выполняет в вашей гостевой системе.\n\nЧтобы всё оставалось на этом устройстве, выберите в настройках Apple Foundation Models."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 不属于 iSH-AOK，也不由其开发者运营。\n\n向它发送消息会发送你输入的内容以及这段对话的其余部分。如果你允许助理使用工具，还会发送它读取的文件内容，以及它在客户机中运行命令的输出。\n\n若要让一切都留在本设备上，请在设置中选择 Apple Foundation Models。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 不屬於 iSH-AOK，也不是由其開發者營運。\n\n向它傳送訊息會送出你輸入的內容以及這段對話的其餘部分。如果你允許助理使用工具，也會送出它讀取的檔案內容，以及它在客體中執行指令的輸出。\n\n若要讓一切都留在本裝置上，請在設定中選擇 Apple Foundation Models。"
+          }
+        }
+      }
+    },
     "Add Snippet" : {
       "comment" : "Accessibility label for the add snippet button",
       "extractionState" : "manual",
@@ -1821,6 +1881,66 @@
         }
       }
     },
+    "Close iSH-AOK and open it again to start on the filesystem you chose." : {
+      "comment" : "Final screen message after choosing to switch filesystem",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Schließe iSH-AOK und öffne es erneut, um mit dem gewählten Dateisystem zu starten."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cierra iSH-AOK y vuelve a abrirlo para empezar con el sistema de archivos que elegiste."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fermez iSH-AOK puis rouvrez-le pour démarrer sur le système de fichiers que vous avez choisi."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "iSH-AOK を閉じてから開き直すと、選んだファイルシステムで起動します。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "iSH-AOK를 닫고 다시 열면 선택한 파일 시스템으로 시작합니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Feche o iSH-AOK e abra-o novamente para iniciar no sistema de arquivos que você escolheu."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Закройте iSH-AOK и откройте снова, чтобы запуститься на выбранной файловой системе."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "关闭 iSH-AOK 再重新打开，即可在你选择的文件系统上启动。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "關閉 iSH-AOK 再重新開啟，即可在你選擇的檔案系統上啟動。"
+          }
+        }
+      }
+    },
     "Closes the Workspace windows iPadOS is keeping in the background." : {
       "comment" : "Accessibility hint for the Desktops tool's Close Hidden Windows button",
       "extractionState" : "manual",
@@ -2529,6 +2649,66 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "新增片段。"
+          }
+        }
+      }
+    },
+    "Dashboard" : {
+      "comment" : "Shortcuts action short title",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dashboard"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Panel"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tableau de bord"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ダッシュボード"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "대시보드"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Painel"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Панель"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仪表板"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "儀表板"
           }
         }
       }
@@ -3251,6 +3431,66 @@
         }
       }
     },
+    "Filesystem changed" : {
+      "comment" : "Final screen title after choosing to switch filesystem",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dateisystem geändert"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sistema de archivos cambiado"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Système de fichiers modifié"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ファイルシステムを変更しました"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "파일 시스템이 변경됨"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sistema de arquivos alterado"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Файловая система изменена"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文件系统已更改"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "檔案系統已變更"
+          }
+        }
+      }
+    },
     "Format" : {
       "comment" : "Video converter: codec choice label",
       "localizations" : {
@@ -3903,6 +4143,126 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "iSH-AOK 無法在你的圖庫中看到該影片（設定 > iSH-AOK > 照片 可允許完整取用）。你可以在照片中刪除它。"
+          }
+        }
+      }
+    },
+    "iSH-AOK writes this session to disk and stops. You close it, and the next launch picks it up where you left it." : {
+      "comment" : "suspend and exit confirmation message\n   Suspend and exit confirmation message",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "iSH-AOK schreibt diese Sitzung auf den Speicher und hält an. Du schließt es, und der nächste Start setzt dort fort, wo du aufgehört hast."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "iSH-AOK escribe esta sesión en el disco y se detiene. Tú la cierras, y el próximo inicio la retoma donde la dejaste."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "iSH-AOK écrit cette session sur le disque et s'arrête. Vous le fermez, et le prochain lancement la reprend là où vous l'avez laissée."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "iSH-AOK はこのセッションをディスクに書き込んで停止します。閉じるのはあなたで、次回の起動時に中断したところから再開します。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "iSH-AOK가 이 세션을 디스크에 기록하고 멈춥니다. 닫는 것은 사용자가 하고, 다음 실행 시 중단한 곳에서 이어집니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O iSH-AOK grava esta sessão no disco e para. Você o fecha, e a próxima abertura a retoma de onde você parou."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "iSH-AOK записывает этот сеанс на диск и останавливается. Закрываете его вы, а при следующем запуске работа продолжится с того же места."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "iSH-AOK 会将此会话写入磁盘并停止。由你来关闭它，下次启动时将从你离开的地方继续。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "iSH-AOK 會將此工作階段寫入磁碟並停止。由你來關閉它，下次啟動時會從你離開的地方繼續。"
+          }
+        }
+      }
+    },
+    "Legal" : {
+      "comment" : "Legal screen title",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rechtliches"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Información legal"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mentions légales"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "法的情報"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "법적 고지"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Informações legais"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Юридическая информация"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "法律信息"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "法律資訊"
           }
         }
       }
@@ -5574,6 +5934,126 @@
         }
       }
     },
+    "Send this chat to %@?" : {
+      "comment" : "LLM consent alert title, %@ is a host name",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Diesen Chat an %@ senden?"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "¿Enviar este chat a %@?"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Envoyer cette conversation à %@ ?"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このチャットを %@ に送信しますか？"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 대화를 %@(으)로 보낼까요?"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enviar esta conversa para %@?"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Отправить этот чат на %@?"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "将此对话发送到 %@？"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "將此對話傳送至 %@？"
+          }
+        }
+      }
+    },
+    "Session suspended" : {
+      "comment" : "Final screen title after Suspend and Exit",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sitzung angehalten"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sesión suspendida"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Session suspendue"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "セッションを一時停止しました"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "세션 일시 중단됨"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sessão suspensa"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Сеанс приостановлен"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会话已暂停"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "工作階段已暫停"
+          }
+        }
+      }
+    },
     "Setting up %1$ld of %2$ld packages" : {
       "comment" : "Desktop setup progress; %1$ld packages done, %2$ld in all",
       "extractionState" : "manual",
@@ -5812,6 +6292,11 @@
           }
         }
       }
+    },
+    "SOURCE CODE FOR THE GNU/LINUX SOFTWARE INCLUDED WITH iSH-AOK\n\niSH-AOK includes Linux filesystem images containing software licensed under the GNU General Public License, versions 2 and 3, among other licences. In the Devuan image this includes GNU bash, coreutils, grep, findutils, diffutils, gzip, dpkg and apt; in the Alpine image it includes busybox, apk-tools and scanelf. iSH-AOK also includes code from the ish-arm64 project under the GPL version 3, and components under the Mozilla Public License 2.0.\n\nFor any version of iSH-AOK, for at least three years after that version was distributed, we will give any third party the complete corresponding source code for the GPL-licensed software in it, for no more than our cost of physically performing the distribution.\n\nTo request it, open an issue at\nhttps://github.com/emkey1/ish-AOK/issues\nand say which build number you have. This build is %@.\n\nPrograms you install yourself, with apt or apk or by any other means, are not distributed by us: they travel from their own projects' servers to your device, and their source is available from those projects on their own terms.\n\niSH-AOK is itself open source, a fork of the iSH project, and is developed at https://github.com/emkey1/ish-AOK where its own source and licence can be read in full." : {
+      "comment" : "The legal notice and GPL written offer shown on the Legal screen; %@ is the build number",
+      "extractionState" : "manual",
+      "shouldTranslate" : false
     },
     "Starts a new chat, or opens one you had before." : {
       "comment" : "Accessibility hint for the chat toolbar's Chats menu",
@@ -6703,6 +7188,126 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "影片轉換器"
+          }
+        }
+      }
+    },
+    "Workspace Dashboard" : {
+      "comment" : "Shortcuts destination name for the Workspace dashboard",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Workspace-Dashboard"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Panel del espacio de trabajo"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tableau de bord de l'espace de travail"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ワークスペースダッシュボード"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "워크스페이스 대시보드"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Painel do Espaço de Trabalho"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Панель рабочей области"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "工作区仪表板"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "工作區儀表板"
+          }
+        }
+      }
+    },
+    "You can close iSH-AOK now. The next launch picks this session up where you left it." : {
+      "comment" : "Final screen message after Suspend and Exit",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Du kannst iSH-AOK jetzt schließen. Der nächste Start setzt diese Sitzung dort fort, wo du aufgehört hast."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ya puedes cerrar iSH-AOK. El próximo inicio retoma esta sesión donde la dejaste."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vous pouvez fermer iSH-AOK maintenant. Le prochain lancement reprendra cette session là où vous l'avez laissée."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "iSH-AOK を閉じてかまいません。次回の起動時に、このセッションを中断したところから再開します。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이제 iSH-AOK를 닫아도 됩니다. 다음 실행 시 이 세션을 중단한 곳에서 이어갑니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Você já pode fechar o iSH-AOK. A próxima abertura retoma esta sessão de onde você parou."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Теперь iSH-AOK можно закрыть. При следующем запуске этот сеанс продолжится с того же места."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "现在可以关闭 iSH-AOK 了。下次启动时将从你离开的地方继续此会话。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "現在可以關閉 iSH-AOK 了。下次啟動時會從你離開的地方繼續此工作階段。"
           }
         }
       }
@@ -17298,66 +17903,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "一律允許讀取檔案"
-          }
-        }
-      }
-    },
-    "An upgrade to %s is available." : {
-      "comment" : "Filesystem section footer; %s is a version",
-      "extractionState" : "manual",
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Ein Upgrade auf %s ist verfügbar."
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Hay una actualización a %s disponible."
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Une mise à niveau vers %s est disponible."
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%s へのアップグレードが利用可能です。"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%s(으)로 업그레이드할 수 있습니다."
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Uma atualização para %s está disponível."
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Доступно обновление до %s."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "可升级到 %s。"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "可升級至 %s。"
           }
         }
       }
@@ -38104,66 +38649,6 @@
         }
       }
     },
-    "error %d" : {
-      "comment" : "Root upgrade start failure message; %d is the error number",
-      "extractionState" : "manual",
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Fehler %d"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "error %d"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "erreur %d"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "エラー %d"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "오류 %d"
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "erro %d"
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "ошибка %d"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "错误 %d"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "錯誤 %d"
-          }
-        }
-      }
-    },
     "Error: %@" : {
       "comment" : "Boot failure details line; %@ is an error description",
       "extractionState" : "manual",
@@ -38640,66 +39125,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "離開"
-          }
-        }
-      }
-    },
-    "exit status %d" : {
-      "comment" : "Root upgrade failure message; %d is the exit code",
-      "extractionState" : "manual",
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Exit-Status %d"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "estado de salida %d"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "code de sortie %d"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "終了ステータス %d"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "종료 상태 %d"
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "código de saída %d"
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "код завершения %d"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "退出状态 %d"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "結束狀態 %d"
           }
         }
       }
@@ -39480,66 +39905,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "無法傳送通訊協定版本"
-          }
-        }
-      }
-    },
-    "Failed to start upgrade" : {
-      "comment" : "Root upgrade alert title",
-      "extractionState" : "manual",
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Upgrade konnte nicht starten"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "No se pudo iniciar la actualización"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Échec du lancement de la mise à niveau"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "アップグレードを開始できませんでした"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "업그레이드 시작 실패"
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Falha ao iniciar a atualização"
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Не удалось начать обновление"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "无法开始升级"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "無法開始升級"
           }
         }
       }
@@ -46572,66 +46937,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "iSH-AOK 已儲存此工作階段。繼續使用，或重新開始。"
-          }
-        }
-      }
-    },
-    "iSH-AOK writes this session to disk and quits. The next launch picks it up where you left it." : {
-      "comment" : "suspend and exit confirmation message\n   Suspend and exit confirmation message",
-      "extractionState" : "manual",
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "iSH-AOK schreibt diese Sitzung auf den Speicher und wird beendet. Der nächste Start setzt dort fort, wo du aufgehört hast."
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "iSH-AOK escribe esta sesión en el disco y se cierra. El próximo inicio la retoma donde la dejaste."
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "iSH-AOK écrit cette session sur le disque et quitte. Le prochain lancement la reprend là où vous l'avez laissée."
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "iSH-AOK はこのセッションをディスクに書き込んで終了します。次回の起動時に中断したところから再開します。"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "iSH-AOK가 이 세션을 디스크에 기록하고 종료합니다. 다음 실행 시 중단한 곳에서 이어집니다."
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "O iSH-AOK grava esta sessão no disco e fecha. A próxima abertura a retoma de onde você parou."
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "iSH-AOK записывает этот сеанс на диск и завершает работу. При следующем запуске работа продолжится с того же места."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "iSH-AOK 会将此会话写入磁盘并退出。下次启动时将从你离开的地方继续。"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "iSH-AOK 會將此工作階段寫入磁碟並結束。下次啟動時會從你離開的地方繼續。"
           }
         }
       }
@@ -56580,66 +56885,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "沒有打開的終端機視窗 — 點一下片段以檢視或編輯。"
-          }
-        }
-      }
-    },
-    "No update needed. If you're seeing this message, there's a bug." : {
-      "comment" : "Root upgrade alert message",
-      "extractionState" : "manual",
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Kein Update nötig. Wenn du diese Meldung siehst, liegt ein Fehler vor."
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "No es necesario actualizar. Si ves este mensaje, hay un error."
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Aucune mise à jour nécessaire. Si vous voyez ce message, c'est un bug."
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "アップデートは必要ありません。このメッセージが表示される場合はバグです。"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "업데이트가 필요하지 않습니다. 이 메시지가 보인다면 버그입니다."
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Nenhuma atualização necessária. Se você está vendo esta mensagem, há um bug."
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Обновление не требуется. Если вы видите это сообщение, это ошибка."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "无需更新。如果你看到此消息，说明存在错误。"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "無需更新。如果你看到此訊息，代表有錯誤。"
           }
         }
       }
@@ -81153,66 +81398,6 @@
         }
       }
     },
-    "That Shouldn't Happen" : {
-      "comment" : "Root upgrade alert title",
-      "extractionState" : "manual",
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Das sollte nicht passieren"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Esto no debería ocurrir"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Cela ne devrait pas arriver"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "想定外の状態です"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "일어나서는 안 되는 일"
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Isso Não Deveria Acontecer"
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Такого быть не должно"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "这不该发生"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "不應該發生這種情況"
-          }
-        }
-      }
-    },
     "The account could not be created (%@)." : {
       "comment" : "Create Your Account error; %@ is an error description",
       "extractionState" : "manual",
@@ -81869,126 +82054,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "設定的開機指令不是支援的 Linux 執行檔或指令碼。請檢查「設定」->「開機指令」。"
-          }
-        }
-      }
-    },
-    "The current filesystem is not managed by iSH-AOK." : {
-      "comment" : "Filesystem section footer",
-      "extractionState" : "manual",
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Das aktuelle Dateisystem wird nicht von iSH-AOK verwaltet."
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "iSH-AOK no gestiona el sistema de archivos actual."
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Le système de fichiers actuel n'est pas géré par iSH-AOK."
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "現在のファイルシステムは iSH-AOK によって管理されていません。"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "현재 파일 시스템은 iSH-AOK에서 관리하지 않습니다."
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "O sistema de arquivos atual não é gerenciado pelo iSH-AOK."
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Текущая файловая система не управляется iSH-AOK."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "当前文件系统不由 iSH-AOK 管理。"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "目前的檔案系統不是由 iSH-AOK 管理。"
-          }
-        }
-      }
-    },
-    "The current filesystem is using %s, which is the latest version." : {
-      "comment" : "Filesystem section footer; %s is a version",
-      "extractionState" : "manual",
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Das aktuelle Dateisystem nutzt %s, die neueste Version."
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "El sistema de archivos actual usa %s, que es la última versión."
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Le système de fichiers actuel utilise %s, la dernière version."
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "現在のファイルシステムは最新バージョンの %s を使用しています。"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "현재 파일 시스템은 최신 버전인 %s을(를) 사용 중입니다."
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "O sistema de arquivos atual está usando %s, que é a versão mais recente."
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Текущая файловая система использует %s — это последняя версия."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "当前文件系统使用的是 %s，这是最新版本。"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "目前的檔案系統使用 %s，這是最新版本。"
           }
         }
       }
@@ -90873,66 +90938,6 @@
         }
       }
     },
-    "Update available" : {
-      "comment" : "Accessibility value on the filesystem upgrade row\n   Accessibility value on the settings button",
-      "extractionState" : "manual",
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Update verfügbar"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Actualización disponible"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Mise à jour disponible"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "アップデートあり"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "업데이트 사용 가능"
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Atualização disponível"
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Доступно обновление"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "有可用更新"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "有可用的更新"
-          }
-        }
-      }
-    },
     "Update Selected" : {
       "comment" : "Themes tool button",
       "extractionState" : "manual",
@@ -90989,126 +90994,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "更新所選項目"
-          }
-        }
-      }
-    },
-    "Upgrade failed" : {
-      "comment" : "Root upgrade alert title",
-      "extractionState" : "manual",
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Upgrade fehlgeschlagen"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Error de actualización"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Échec de la mise à niveau"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "アップグレードに失敗しました"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "업그레이드 실패"
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Falha na atualização"
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Сбой обновления"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "升级失败"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "升級失敗"
-          }
-        }
-      }
-    },
-    "Upgrade succeeded" : {
-      "comment" : "Root upgrade alert title",
-      "extractionState" : "manual",
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Upgrade erfolgreich"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Actualización completada"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Mise à niveau réussie"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "アップグレードに成功しました"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "업그레이드 성공"
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Atualização concluída"
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Обновление выполнено"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "升级成功"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "升級成功"
           }
         }
       }

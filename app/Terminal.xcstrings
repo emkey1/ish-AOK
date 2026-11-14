@@ -196,6 +196,10 @@
         }
       }
     },
+    "cJt-oG-BnW.normalTitle" : {
+      "extractionState" : "manual",
+      "shouldTranslate" : false
+    },
     "FbR-ws-Ct1.accessibilityLabel" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -391,6 +395,10 @@
         }
       }
     },
+    "IPm-l0-f25.normalTitle" : {
+      "extractionState" : "manual",
+      "shouldTranslate" : false
+    },
     "W9v-cj-FWz.accessibilityLabel" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -455,6 +463,10 @@
           }
         }
       }
+    },
+    "W9v-cj-FWz.normalTitle" : {
+      "extractionState" : "manual",
+      "shouldTranslate" : false
     }
   },
   "version" : "1.0"
