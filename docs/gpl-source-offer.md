@@ -156,13 +156,35 @@ Items 1 and 2 remain. They are decisions, below.
    was to have App Store builds fetch it from the catalogue instead (1-2 days).
    That does not remove the obligation -- we would still be distributing it --
    but it makes the shipped app smaller and the conveyance a network one.
-2. **Where the source lives.** Options, cheapest first:
-   - a dated snapshot of the `.deb`/`.apk` *source* packages for each release,
-     kept as a GitHub release asset on a separate repository;
-   - a documented, reproducible recipe plus pinned versions, with the actual
-     tarballs produced on request;
-   - mirroring Devuan's and Alpine's source archives, which is the most
-     complete and by far the most expensive.
+2. ~~**Where the source lives.**~~ **Decided 2026-11-14: a per-release
+   snapshot of the source packages.** `tools/fetch-root-source.py` produces
+   it:
+
+   ```
+   tools/fetch-root-source.py devuan-minirootfs-6.0-aarch64.tar.xz --dry-run
+   tools/fetch-root-source.py devuan-minirootfs-6.0-aarch64.tar.xz -o source/
+   ```
+
+   For the Devuan image that is **66 source packages, 212 files, 340 MB** --
+   every binary package in it resolved, none missing. That is the real number
+   to plan hosting around, and it is a GitHub release asset rather than
+   anything we have to run.
+
+   Resolution is exact rather than constructed. The tool reads the archive's
+   own `Sources` index, which gives each source package's version, its pool
+   directory and a SHA-256 per file, and verifies every download against it.
+   Guessing a URL from a binary version would have been wrong twice over: a
+   binNMU (`bash` is `5.2.37-2+b10` as a binary and `5.2.37-2` as source) and
+   anything carrying an epoch. It also handles the merged archive splitting
+   into `pool/DEBIAN/` and `pool/DEVUAN/`, which no constructed URL would.
+
+   Alpine is a different shape and the tool says so instead of pretending: an
+   apk's corresponding source is its APKBUILD in aports plus the upstream
+   tarball it fetches, so what gets recorded is the aports clone and the
+   `v3.24.2` tag.
+
+   Checked on the real archive: all 66 resolved, and three files fetched and
+   checksum-matched against the index.
 3. **Where the offer text goes.** At minimum a Legal row in Settings, beside
    Privacy Policy. The App Store description is the other obvious place.
 
