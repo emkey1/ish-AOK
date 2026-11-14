@@ -110,11 +110,17 @@ if have_zsh
 endif
 
 # Said out loud at configure time, because the consequence is a licensing one
-# and the alternative is finding out from an App Store takedown. Nothing else
-# in the binary is GPL: smallclue is MIT, OpenSSH and libarchive BSD, liblzma
-# public domain, and iSH-AOK's own GPL is what LICENSE.IOS covers.
+# and the alternative is finding out from an App Store takedown. OpenSSH and
+# libarchive are BSD, liblzma public domain, and iSH-AOK's own GPL is what
+# LICENSE.IOS covers. smallclue was MIT until 2026-11-04 and is Apache-2.0
+# from there on, which is one-way compatible with the GPLv3 this app is under;
+# its section 4(d) asks that its NOTICE travel with it, and deps/smallclue's
+# NOTICE also records that libgit2 -- compiled in on Apple hosts for the git
+# applet, see have_libgit2 below -- is GPLv2 with a linking exception. So the
+# binary does carry GPL other than AOK's own, and the written offer on the
+# Legal screen is what covers it.
 summary({'native bash': have_bash ? 'yes -- binary contains GPLv3 (bash, readline)'
-                                  : 'no -- no third-party GPL in the binary'},
+                                  : 'no -- no GPLv3; libgit2 is GPLv2 + linking exception'},
         section: 'Licensing')
 # zsh is in the OTHER column and says so, because "another shell compiled in"
 # reads like the same licensing question and is not: zsh's licence is
