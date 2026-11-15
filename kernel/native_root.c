@@ -40,6 +40,7 @@
 #include "kernel/fs.h"
 #include "kernel/native.h"
 #include "kernel/native_root.h"
+#include "kernel/guest_sshd.h"
 #include "kernel/random.h"
 #include "kernel/sha_crypt.h"
 #include "kernel/task.h"
@@ -598,6 +599,13 @@ static const struct {
     {"/usr", 0755}, {"/usr/bin", 0755},
     {"/usr/sbin", 0755}, {"/usr/local", 0755}, {"/usr/local/bin", 0755},
     {"/usr/local/sbin", 0755}, {"/usr/share", 0755}, {"/etc", 0755},
+    // /usr/libexec holds sshd-session and sshd-auth, which sshd execs by the
+    // paths compiled into it (kernel/guest_sshd.c). /var/empty is sshd's
+    // privilege-separation directory, and sshd REFUSES TO START unless it is
+    // owned by root and not group- or world-writable -- so 0755 here is not a
+    // style choice.
+    {"/usr/libexec", 0755}, {"/var/empty", 0755},
+    {"/etc/ssh", 0755}, {"/etc/ssh/sshd_config.d", 0755},
     {"/etc/profile.d", 0755}, {"/etc/rc.d", 0755}, {"/etc/service", 0755},
     {"/etc/skel", 0755}, {"/root", 0700}, {"/home", 0755},
     {"/tmp", 01777}, {"/var", 0755}, {"/var/tmp", 01777},
@@ -616,6 +624,9 @@ int native_root_make_dirs(void) {
     return 0;
 }
 
+// Defined below, where append_line() and db_has() are.
+static void write_sshd_files(void);
+
 int native_root_provision(void) {
     struct statbuf stat;
     int err = native_root_make_dirs();
@@ -632,6 +643,19 @@ int native_root_provision(void) {
     }
 
     write_etc();
+    write_sshd_files();
+
+    // The sshd binaries are 21 MB unpacked, so they are installed only for a
+    // root whose owner has asked for sshd -- and then at the first boot of
+    // each new build, which is what makes the Settings toggle take effect at
+    // the next boot rather than immediately. /etc/rc.d/S50sshd reports it if
+    // this did not work, since by then there is a shell to report to.
+    if (path_exists(GUEST_SSHD_ENABLED)) {
+        int sshd_err = guest_sshd_install(false);
+        if (sshd_err < 0)
+            printk("native: sshd is enabled but could not be installed (%d)\n",
+                   sshd_err);
+    }
 
     char *previous = read_file(LINK_RECORD, NULL);
     struct link_set made = {0};
@@ -825,4 +849,93 @@ int native_root_add_user(const char *name, const char *password) {
     generic_setattrat(AT_PWD, home, make_attr(uid, uid), false);
     generic_setattrat(AT_PWD, home, make_attr(gid, uid), false);
     return 0;
+}
+
+// --------------------------------------------------------------------- sshd
+//
+// The files sshd needs that are a root's, not a build's: its privilege-
+// separation account, its configuration, and the boot script that starts it.
+// All written only when missing, so they are the user's to edit afterwards.
+// The binaries themselves are kernel/guest_sshd.c's business.
+//
+// Two of these are HARD refusals in sshd, printed once and then exit -- not
+// warnings -- and both cost an afternoon to find:
+//   - no `sshd` account: "Privilege separation user sshd does not exist";
+//   - /var/empty not owned by root: "/var/empty must be owned by root and not
+//     group or world-writable". /var/empty is in dirs[] above for that reason.
+static void write_sshd_files(void) {
+    // uid/gid 74, which is what Alpine and Fedora use for sshd. No password
+    // field it could ever authenticate with, no shell, and /var/empty for a
+    // home: this account exists to be dropped to, never logged in as.
+    if (!db_has("/etc/group", "sshd", 74))
+        append_line("/etc/group", "sshd:x:74:\n", 0644);
+    if (!db_has("/etc/passwd", "sshd", 74))
+        append_line("/etc/passwd",
+                    "sshd:x:74:74:Privilege-separated SSH:/var/empty:/sbin/nologin\n",
+                    0644);
+    if (!db_has("/etc/shadow", "sshd", -1))
+        append_line("/etc/shadow", "sshd:!:::::::\n", 0600);
+
+    // Include comes FIRST deliberately: for most keywords sshd keeps the
+    // first value it reads, so a file in sshd_config.d can only override what
+    // is below it. That is what lets Settings set the port by writing one
+    // small file instead of rewriting a config the user may have edited.
+    write_file("/etc/ssh/sshd_config",
+               "# sshd for an iSH-AOK native root. Yours to edit: iSH-AOK writes it only\n"
+               "# when it is missing. Settings writes the port into\n"
+               "# /etc/ssh/sshd_config.d/10-aok-port.conf, which is included first and\n"
+               "# so wins over anything here.\n"
+               "Include /etc/ssh/sshd_config.d/*.conf\n"
+               "\n"
+               "Port 1022\n"
+               "HostKey /etc/ssh/ssh_host_ed25519_key\n"
+               "PidFile /run/sshd.pid\n"
+               "\n"
+               "# Native mode allows an account with NO password -- terminals open it with\n"
+               "# `login -f`, which does not authenticate -- so password authentication\n"
+               "# here would be an open door. Keys only.\n"
+               "PubkeyAuthentication yes\n"
+               "PasswordAuthentication no\n"
+               "PermitEmptyPasswords no\n"
+               "KbdInteractiveAuthentication no\n"
+               "PermitRootLogin prohibit-password\n"
+               "\n"
+               "# Built --without-openssl and --without-zlib, which means ed25519 and\n"
+               "# chacha20-poly1305 only, and no compression. RSA and ECDSA keys will not\n"
+               "# work; see deps/smallclue/third-party/openssh/README-iSH-AOK.md.\n"
+               "Subsystem sftp internal-sftp\n",
+               0644, true);
+
+    // S50sshd rather than a /etc/service/sshd/run: sshd -D under runit would
+    // be restarted whenever it exits, and a one-shot listener that forks per
+    // connection has nothing to supervise.
+    write_file("/etc/rc.d/S50sshd",
+               "#!/bin/sh\n"
+               "# Start sshd, if the owner of this root has asked for it. Yours to edit:\n"
+               "# iSH-AOK writes it only when it is missing.\n"
+               "#\n"
+               "# The flag file is what Settings' toggle writes and removes, so sshd\n"
+               "# follows the setting at the next boot. `touch` and `rm` work just as\n"
+               "# well, and so does deleting this script.\n"
+               "FLAG=/etc/aok-sshd-enabled\n"
+               "[ -e \"$FLAG\" ] || exit 0\n"
+               "\n"
+               "case \"$1\" in\n"
+               "start)\n"
+               "    if [ ! -x /usr/sbin/sshd ]; then\n"
+               "        echo \"sshd: enabled, but /usr/sbin/sshd is not installed --\" \\\n"
+               "             \"relaunch iSH-AOK, or see /AOK/docs/native-mode.md\" >&2\n"
+               "        exit 1\n"
+               "    fi\n"
+               "    # First start only: a host key the app cannot ship, because a shipped\n"
+               "    # one would be the same on every device. ssh-keygen is a native\n"
+               "    # program, so this costs nothing but the key generation itself.\n"
+               "    [ -f /etc/ssh/ssh_host_ed25519_key ] || ssh-keygen -A >/dev/null 2>&1\n"
+               "    /usr/sbin/sshd\n"
+               "    ;;\n"
+               "stop)\n"
+               "    [ -f /run/sshd.pid ] && kill \"$(cat /run/sshd.pid)\" 2>/dev/null\n"
+               "    ;;\n"
+               "esac\n"
+               "exit 0\n", 0755, true);
 }

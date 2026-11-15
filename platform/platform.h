@@ -245,4 +245,18 @@ bool host_mem_should_reclaim(void);
 // Start listening. Idempotent; safe to call from anywhere, does nothing twice.
 void host_mem_pressure_start(void);
 
+// Decompress a raw LZMA stream into a buffer malloc'd here, returning it and
+// setting *out_len; the caller frees it. NULL, with *out_len 0, on a corrupt
+// stream, on an implausibly large result, or on a platform with no decoder.
+//
+// This exists for one caller: the bundled guest sshd archive, which is LZMA so
+// that 21 MB of static aarch64 binaries cost 2.5 MB of app
+// (kernel/guest_sshd.c). The format is what `compression_tool -encode -a lzma`
+// writes -- a raw LZMA1 stream, NOT an .xz container -- which is exactly what
+// Apple's COMPRESSION_LZMA decodes, so Darwin needs no third-party
+// decompressor. Elsewhere there is no decoder and this returns NULL: the guest
+// sshd is an iOS feature, and a Linux build of the emulator simply does not
+// install it.
+void *host_lzma_decompress(const void *in, size_t in_len, size_t *out_len);
+
 #endif

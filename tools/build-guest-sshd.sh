@@ -148,8 +148,12 @@ rm -rf "$WORK"
 #
 # A plain tar inside, deliberately: the thing that unpacks these in the app
 # wants names, modes and sizes, and tar is the only archive format every host
-# in this project can already write.
-( cd "$OUT" && tar -cf guest-sshd-aarch64.tar sshd sshd-session sshd-auth )
+# in this project can already write. --format=ustar is NOT optional: bsdtar
+# defaults to pax, which interleaves 'x' extended headers, and the unpacker in
+# kernel/guest_sshd.c reads plain ustar (it skips 'x' records, but there is no
+# reason to make it rely on that).
+( cd "$OUT" && tar --format=ustar -cf guest-sshd-aarch64.tar \
+    sshd sshd-session sshd-auth )
 /usr/bin/compression_tool -encode -a lzma \
     -i "$OUT/guest-sshd-aarch64.tar" \
     -o "$OUT/guest-sshd-aarch64.tar.lzma"

@@ -251,6 +251,7 @@
 		C0A000022E00000200000004 /* tests/audio/test-tone-48k-s16le-stereo.wav in Resources */ = {isa = PBXBuildFile; fileRef = C0A000022E00000200000008 /* tests/audio/test-tone-48k-s16le-stereo.wav */; };
 		C0A000032E00000300000001 /* WorkspaceViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = C0A000032E00000300000003 /* WorkspaceViewController.m */; };
 		C0A000042E00000400000001 /* tools/iSH_benchmark.tgz in Resources */ = {isa = PBXBuildFile; fileRef = C0A000042E00000400000003 /* tools/iSH_benchmark.tgz */; };
+		C0A000052E00000500000001 /* tools/guest-sshd-aarch64.tar.lzma in Resources */ = {isa = PBXBuildFile; fileRef = C0A000052E00000500000003 /* tools/guest-sshd-aarch64.tar.lzma */; };
 		C0A200042F2F000100000001 /* ISHAppShortcuts.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0A200042F2F000100000002 /* ISHAppShortcuts.swift */; };
 		C0A200042F2F000100000003 /* ISHRunCommandIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0A200042F2F000100000004 /* ISHRunCommandIntent.swift */; };
 		C0A200042F2F000100000005 /* GuestCommandRunner.m in Sources */ = {isa = PBXBuildFile; fileRef = C0A200042F2F000100000006 /* GuestCommandRunner.m */; };
@@ -798,6 +799,7 @@
 		C0A000032E00000300000002 /* WorkspaceViewController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = WorkspaceViewController.h; sourceTree = "<group>"; };
 		C0A000032E00000300000003 /* WorkspaceViewController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WorkspaceViewController.m; sourceTree = "<group>"; };
 		C0A000042E00000400000003 /* tools/iSH_benchmark.tgz */ = {isa = PBXFileReference; lastKnownFileType = archive.gzip; path = tools/iSH_benchmark.tgz; sourceTree = SOURCE_ROOT; };
+		C0A000052E00000500000003 /* tools/guest-sshd-aarch64.tar.lzma */ = {isa = PBXFileReference; lastKnownFileType = archive; path = tools/guest-sshd-aarch64.tar.lzma; sourceTree = SOURCE_ROOT; };
 		C0A200042F2F000100000002 /* ISHAppShortcuts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ISHAppShortcuts.swift; sourceTree = "<group>"; };
 		C0A200042F2F000100000004 /* ISHRunCommandIntent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ISHRunCommandIntent.swift; sourceTree = "<group>"; };
 		C0A200042F2F000100000006 /* GuestCommandRunner.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = GuestCommandRunner.m; sourceTree = "<group>"; };
@@ -1187,6 +1189,7 @@
 				C0A000022E00000200000007 /* tests/audio/test-tone-48k-s16le-stereo.raw */,
 				C0A000022E00000200000008 /* tests/audio/test-tone-48k-s16le-stereo.wav */,
 				C0A000042E00000400000003 /* tools/iSH_benchmark.tgz */,
+				C0A000052E00000500000003 /* tools/guest-sshd-aarch64.tar.lzma */,
 				5D8CFA842B1198B300D50E57 /* RTCDevice.m */,
 				5D8CFA882B1198DB00D50E57 /* RTCDevice.h */,
 				59516B05C7A2120D1EE19975 /* AudioPlayerEngine.m */,
@@ -1932,6 +1935,7 @@
 				C0A000022E00000200000003 /* tests/audio/test-tone-48k-s16le-stereo.raw in Resources */,
 				C0A000022E00000200000004 /* tests/audio/test-tone-48k-s16le-stereo.wav in Resources */,
 				C0A000042E00000400000001 /* tools/iSH_benchmark.tgz in Resources */,
+				C0A000052E00000500000001 /* tools/guest-sshd-aarch64.tar.lzma in Resources */,
 				1A4DC4F2374508A4B1CEC666 /* manifest.json in Resources */,
 				AA10C0DE2E9A000000000002 /* Localizable.xcstrings in Resources */,
 				AA10C0DE2E9A000000000004 /* About.xcstrings in Resources */,

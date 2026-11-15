@@ -137,6 +137,39 @@ app restart itself.
 other. On the way back, init does not run `/etc/rc` again and runit takes over
 the services it was already running, so nothing starts twice.
 
+## sshd
+
+`ssh` out of a native root is a native program and always there. `sshd` --
+listening, so you can reach the root from another machine -- is a guest binary
+the app carries, because its privilege separation forks and goes on running on
+both sides, which a native program cannot do. It is emulated, so connection
+setup and file-transfer throughput are slower than the client's; the shell you
+land on is native zsh either way, so typing at a prompt feels the same.
+
+It is off until you ask for it, in **Settings -> sshd**, and it starts at the
+next launch: enabling it is what makes the app unpack the binaries, and
+`/etc/rc.d/S50sshd` starts them at the boot after that. From the shell the same
+switch is a file:
+
+```sh
+touch /etc/aok-sshd-enabled     # on at the next boot
+rm /etc/aok-sshd-enabled        # off
+/etc/rc.d/S50sshd start         # now, without waiting for a boot
+```
+
+The first start makes the host keys (`ssh-keygen -A`) -- the app cannot ship
+them, since a shipped key would be the same on every device. The default port
+is 1022, and Settings writes your choice to
+`/etc/ssh/sshd_config.d/10-aok-port.conf`, which `/etc/ssh/sshd_config`
+includes first and so wins over anything in it. That config is yours to edit
+afterwards; iSH-AOK writes it only when it is missing.
+
+**Keys only.** Password authentication is off, and deliberately: a native-mode
+account may have no password at all, because terminals open it with `login -f`,
+which does not authenticate. Put your public key in `~/.ssh/authorized_keys`
+(`ssh-copy-id` from the other machine does it). Built without OpenSSL, so
+ed25519 keys work and RSA and ECDSA do not.
+
 **Who is logged in.** Each terminal is a login, and is recorded as one:
 `login` writes it to `/var/run/utmp` and `/var/log/wtmp`, init marks it
 ended when the session's shell exits, and init records each boot and

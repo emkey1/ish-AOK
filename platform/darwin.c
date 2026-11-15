@@ -1729,3 +1729,80 @@ struct host_fd_usage host_fd_usage(void) {
     }
     return usage;
 }
+
+// ---------------------------------------------------------------- LZMA
+//
+// For the bundled guest sshd archive; see host_lzma_decompress in
+// platform/platform.h for why it is LZMA and not gzip. <compression.h> is in
+// the SDK and libcompression is part of libSystem, so this needs no extra
+// link flag and no framework.
+#include <compression.h>
+
+// A corrupt or hostile stream must not be able to allocate without bound. The
+// real archive is ~21 MB out of ~2.5 MB in; 256 MB is far above anything this
+// caller will ever see and far below trouble.
+#define LZMA_MAX_OUTPUT (256u * 1024 * 1024)
+
+void *host_lzma_decompress(const void *in, size_t in_len, size_t *out_len) {
+    *out_len = 0;
+    if (in == NULL || in_len == 0)
+        return NULL;
+
+    compression_stream stream;
+    if (compression_stream_init(&stream, COMPRESSION_STREAM_DECODE,
+                                COMPRESSION_LZMA) != COMPRESSION_STATUS_OK)
+        return NULL;
+
+    // Start at a ratio the real archive comfortably exceeds, and grow rather
+    // than guess: the stream carries no uncompressed size.
+    size_t cap = in_len * 10 + 65536;
+    char *out = malloc(cap);
+    if (out == NULL) {
+        compression_stream_destroy(&stream);
+        return NULL;
+    }
+
+    stream.src_ptr = in;
+    stream.src_size = in_len;
+    stream.dst_ptr = (uint8_t *) out;
+    stream.dst_size = cap;
+
+    for (;;) {
+        compression_status status =
+            compression_stream_process(&stream, COMPRESSION_STREAM_FINALIZE);
+        if (status == COMPRESSION_STATUS_END)
+            break;
+        if (status != COMPRESSION_STATUS_OK) {
+            free(out);
+            compression_stream_destroy(&stream);
+            return NULL;
+        }
+        // OK with no room left means there is more to come: grow and repoint,
+        // because realloc may have moved the buffer out from under dst_ptr.
+        if (stream.dst_size == 0) {
+            size_t used = cap - stream.dst_size;
+            if (cap >= LZMA_MAX_OUTPUT) {
+                free(out);
+                compression_stream_destroy(&stream);
+                return NULL;
+            }
+            size_t want = cap * 2;
+            if (want > LZMA_MAX_OUTPUT)
+                want = LZMA_MAX_OUTPUT;
+            char *bigger = realloc(out, want);
+            if (bigger == NULL) {
+                free(out);
+                compression_stream_destroy(&stream);
+                return NULL;
+            }
+            out = bigger;
+            cap = want;
+            stream.dst_ptr = (uint8_t *) out + used;
+            stream.dst_size = cap - used;
+        }
+    }
+
+    *out_len = cap - stream.dst_size;
+    compression_stream_destroy(&stream);
+    return out;
+}

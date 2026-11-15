@@ -662,6 +662,7 @@ src = [
     'kernel/native_bench.c',
     'kernel/native_io.c',
     'kernel/native_root.c',
+    'kernel/guest_sshd.c',
     'kernel/foreign_exec.c',
     'kernel/native_libc.c',
     'kernel/native_fnmatch.c',

@@ -460,4 +460,16 @@ struct host_fd_usage host_fd_usage(void) {
     return usage;
 }
 
+
+// No LZMA decoder here. The only caller is the bundled guest sshd archive,
+// which exists for iOS; a Linux build of the emulator does not install it, and
+// kernel/guest_sshd.c reports that rather than pretending. See
+// host_lzma_decompress in platform/platform.h.
+void *host_lzma_decompress(const void *in, size_t in_len, size_t *out_len) {
+    (void) in;
+    (void) in_len;
+    *out_len = 0;
+    return NULL;
+}
+
 #endif

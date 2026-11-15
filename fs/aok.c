@@ -9,6 +9,7 @@
 #include <unistd.h>
 #include "kernel/calls.h"
 #include "kernel/native.h"
+#include "kernel/guest_sshd.h"
 #include "kernel/errno.h"
 #include "kernel/fs.h"
 #include "kernel/hostinfo.h"
@@ -42,6 +43,11 @@ enum aokfs_node_kind {
     aokfs_tools_dir,
     aokfs_tools_ish_benchmark,
     aokfs_tools_setup_ish_benchmark,
+    // The guest sshd the app carries: three static aarch64 binaries in one
+    // LZMA-compressed tar, bundled rather than embedded because it is 2.5 MB
+    // of binary and generating that as a C string literal would cost every
+    // build. kernel/guest_sshd.c unpacks it into a native root.
+    aokfs_tools_guest_sshd,
     aokfs_tests_audio_dir,
     aokfs_audio_raw,
     aokfs_audio_wav,
@@ -221,7 +227,8 @@ static bool aokfs_node_is_symlink(enum aokfs_node_kind node) {
 static bool aokfs_node_is_bundled_file(enum aokfs_node_kind node) {
     return node == aokfs_audio_raw ||
         node == aokfs_audio_wav ||
-        node == aokfs_tools_ish_benchmark;
+        node == aokfs_tools_ish_benchmark ||
+        node == aokfs_tools_guest_sshd;
 }
 
 static mode_t_ aokfs_node_mode(enum aokfs_node_kind node) {
@@ -308,6 +315,8 @@ static const char *aokfs_node_path(enum aokfs_node_kind node) {
             return "/tools/iSH_benchmark.tgz";
         case aokfs_tools_setup_ish_benchmark:
             return "/tools/setup-ish-benchmark.sh";
+        case aokfs_tools_guest_sshd:
+            return "/tools/" GUEST_SSHD_ARCHIVE_NAME;
         case aokfs_tools_ktop_dir:
             return "/tools/ktop";
         case aokfs_tools_pixman_dir:
@@ -369,6 +378,7 @@ static bool aokfs_lookup_node(const char *path, enum aokfs_node_kind *node_out) 
         aokfs_tools_dir,
         aokfs_tools_ish_benchmark,
         aokfs_tools_setup_ish_benchmark,
+        aokfs_tools_guest_sshd,
         aokfs_tools_ktop_dir,
         aokfs_tools_pixman_dir,
         aokfs_tools_crypto_dir,
@@ -927,6 +937,9 @@ static int aokfs_open_backing_file(struct mount *mount, enum aokfs_node_kind nod
         case aokfs_tools_ish_benchmark:
             backing_path = "tools/iSH_benchmark.tgz";
             break;
+        case aokfs_tools_guest_sshd:
+            backing_path = "tools/" GUEST_SSHD_ARCHIVE_NAME;
+            break;
         default:
             backing_path = aokfs_node_basename(node);
             break;
@@ -1303,6 +1316,7 @@ static int aokfs_readdir(struct fd *fd, struct dir_entry *entry) {
             static const enum aokfs_node_kind tools_fixed[] = {
                 aokfs_tools_ish_benchmark,
                 aokfs_tools_setup_ish_benchmark,
+                aokfs_tools_guest_sshd,
                 aokfs_tools_ktop_dir,
                 aokfs_tools_pixman_dir,
                 aokfs_tools_crypto_dir,
