@@ -1938,11 +1938,33 @@ left as it is, deliberately. What is worth knowing: the final screen is a
 window above UIWindowLevelAlert with no way out, so coming back from the app
 switcher lands on it and needs a force quit either way.
 
-### The device table is three models behind Xcode 27 -- the gate is red on it
+### What the gate found on its first full run -- two reds
 
-`tools/check-all.py` went in on 2026-11-15 and `check-device-table.py` failed
-on its first run, which is the gate earning its place and also a decision
-waiting for somebody:
+`tools/check-all.py` went in on 2026-11-15, and running the whole set for the
+first time failed two of the seven. Both are real; neither was known.
+
+**1. `check-bash-tls.py`: two zsh globals are shared between shells.**
+
+    _aok_pending_cmdtext: mutable and shared between shells, in [deps_zsh_Src_aok_fork.c.o]
+    _aok_pending_underscore: mutable and shared between shells, in [deps_zsh_Src_aok_fork.c.o]
+
+Both are plain `static char *` in deps/zsh/Src/aok_fork.c (lines 114 and 122),
+the only two statics in that stretch, while the rest of the native port made
+this class of state `__thread` precisely so more than one native shell can be
+live at once. zsh is the device's login shell, so two of them spawning at the
+same time is the ordinary case, not a corner: one spawn's pending command text
+or `$_` can be read by the other. The checker's own options are the right ones
+-- make them `__thread`, or add them to ALLOW in tools/bash-tls-fix-externs.py
+with a reason, if the write and the read are provably the same thread inside
+one spawn. Not investigated beyond reading the declarations.
+
+Timing, since it governs where this check can sit: 170s over libbash/libzsh/
+libdash/libish, dominated by `nm -m` across the 99 MB libish.a. (A first
+measurement of "20 minutes" was this running against concurrent Xcode builds
+and is not representative.)
+
+**2. `check-device-table.py`: three models Xcode 27 knows and hostinfo.m does
+not.** The gate earning its place, and a decision waiting for somebody:
 
     iPad19,1     iPad mini (A20 Pro)                      t8160
     iPad19,2     iPad mini (A20 Pro)                      t8160
@@ -1955,9 +1977,9 @@ purpose, and a newer Xcode now calls it "iPhone Duo", which may still be a
 placeholder. Adding a device properly means three tables, not one -- the name,
 the chip (`A20 Pro`) and the core counts -- and guessing core counts for
 hardware nobody here has is how a wrong `/proc/cpuinfo` ships. So this is left
-for the maintainer to decide rather than filled in. Until it is, a
-`builds/iSH-AOK_*` tag fails at the first gate step; the alternatives are to
-add the entries, or to decide this check should not block a tag.
+for the maintainer to decide rather than filled in. Until both reds are settled a
+`builds/iSH-AOK_*` tag fails the gate; for the device table the alternatives
+are to add the entries or to decide that check should not block a tag.
 
 ## Host capabilities worth exposing
 
