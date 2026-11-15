@@ -1990,23 +1990,55 @@ on an idle machine, 170s with something else running. (A first measurement of
 representative of anything.)
 
 **2. `check-device-table.py`: three models Xcode 27 knows and hostinfo.m does
-not.** The gate earning its place, and a decision waiting for somebody:
+not.** The gate earning its place. Two added, one still open:
 
-    iPad19,1     iPad mini (A20 Pro)                      t8160
-    iPad19,2     iPad mini (A20 Pro)                      t8160
-    iPhone19,4   iPhone Duo                               t8160
+    iPad19,1     iPad mini (A20 Pro)                      t8160   added
+    iPad19,2     iPad mini (A20 Pro)                      t8160   added
+    iPhone19,4   iPhone Duo                               t8160   still out
 
-The two iPads are the same shape as iPad16,1/16,2 ("iPad mini (A17 Pro)") and
-look uncontroversial. `iPhone19,4` is not: kernel/hostinfo.m already carries a
-comment saying Xcode 27 listed it "by no name but iPhone" and leaving it out on
-purpose, and a newer Xcode now calls it "iPhone Duo", which may still be a
-placeholder. Adding a device properly means three tables, not one -- the name,
-the chip (`A20 Pro`) and the core counts -- and guessing core counts for
-hardware nobody here has is how a wrong `/proc/cpuinfo` ships. So this is left
-for the maintainer to decide rather than filled in. With the zsh one fixed this
-is the only red left, and it fails a `builds/iSH-AOK_*` tag until it is
-settled: either add the entries, or decide that this check should not block a
-tag.
+The two iPad minis are in, in all three tables -- the name, the chip (`A20
+Pro`) and the fallback core counts. The core counts were the part worth being
+careful about, and the answer was not the obvious one: the A20 Pro mini is
+**binned**. Apple specifies a 6-core CPU (2 super + 4 efficiency) on the 512 GB
+models and a 5-core (2 + 3) on the 128 and 256 GB ones. That is the same
+situation as the M4 iPad Pro two lines above it in the table, so it is recorded
+the same way -- the full part, with a comment naming the binned variant -- and
+it agrees with the A20 Pro entries already there for iPhone19,2/19,3/19,7.
+Being a *fallback* is what makes that safe: `hostCoreTopology()` prefers the
+live `hw.perflevel` sysctls on real hardware and only consults the table when
+those are absent or when the identifier is a simulator one, so a real 128 GB
+mini reports its own 5 cores regardless.
+
+Verified rather than argued. The `ish` CLI is no oracle here -- it uses
+`platform/standalone.c`, not these tables, which is why it says "host device:
+Darwin" on a Mac. An `iPad mini (A20 Pro)` simulator is not available either:
+the device type is in Xcode's database but neither installed runtime (iOS 26.5,
+27.0) supports it. What does work is that `hostMachineIdentifier()` takes
+`SIMULATOR_MODEL_IDENTIFIER` when `uname`'s machine is a simulator string --
+which on a Mac it is -- and `hostCoreTopology()` skips the live sysctls for the
+same reason, so compiling kernel/hostinfo.m against a small `main` and calling
+`copyHostDeviceName`/`copyHostArchitecture`/`copyHostCoreTopology` reaches all
+three real tables, including the fallback core path. iPad19,1 and iPad19,2 both
+answer "iPad mini (A20 Pro)", `arm64e(A20 Pro)`, `performance=2 efficiency=4`;
+iPad16,1 answers the same shape; and the controls -- iPhone19,4 and a
+nonexistent iPad99,9 -- fall through all three tables to the bare identifier
+with "unknown" cores, which is both the negative control and exactly what an
+iPhone Duo owner sees in `/proc/cpuinfo` today.
+
+`iPhone19,4` is left out, and the comment above it in kernel/hostinfo.m is
+corrected rather than removed, because what it said is no longer true: it was
+written when an older Xcode listed the model as bare "iPhone", and it is the
+**iPhone Duo**, the foldable announced 2026-09-09 and on sale from 2026-10-23.
+So it is a shipping device the table does not know, not a placeholder, and it
+fails a `builds/iSH-AOK_*` tag on its own until somebody decides -- add it
+(same chip, `t8160`, and its siblings are 2+4), or decide this check should not
+block a tag.
+
+Noticed in passing, not fixed: iPad16,8..16,11 (iPad Air M4) and
+iPad17,1..17,4 (iPad Pro M5) are in the NAME table only -- no chip and no
+fallback core entry, so `/proc/cpuinfo` on a shipping M5 iPad Pro reports no
+chip at all. The checker does not catch it because it greps the whole file for
+the identifier and any one table satisfies it.
 
 ## Host capabilities worth exposing
 

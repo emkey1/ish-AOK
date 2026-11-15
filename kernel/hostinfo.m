@@ -73,8 +73,12 @@ NSString* translateDeviceIdentifier(NSString *identifier) {
         @"iPhone18,3": @"iPhone 17",
         @"iPhone18,4": @"iPhone Air",
         @"iPhone18,5": @"iPhone 17e",
-        // iPhone19,7 is a second identifier for the Pro Max. Xcode 27 also
-        // lists an iPhone19,4 on the same chip, by no name but "iPhone".
+        // iPhone19,7 is a second identifier for the Pro Max. iPhone19,4 is on
+        // the same chip and is still absent, but no longer because it has no
+        // name: an older Xcode listed it as bare "iPhone", and it is the
+        // iPhone Duo -- the foldable announced 2026-09-09 and on sale from
+        // 2026-10-23. So it is a shipping device this table does not know, and
+        // tools/check-device-table.py fails on it until somebody decides.
         @"iPhone19,2": @"iPhone 18 Pro",
         @"iPhone19,3": @"iPhone 18 Pro Max",
         @"iPhone19,7": @"iPhone 18 Pro Max",
@@ -170,6 +174,8 @@ NSString* translateDeviceIdentifier(NSString *identifier) {
         @"iPad17,2": @"iPad Pro 11-inch (M5)",
         @"iPad17,3": @"iPad Pro 13-inch (M5)",
         @"iPad17,4": @"iPad Pro 13-inch (M5)",
+        @"iPad19,1": @"iPad mini (A20 Pro)",
+        @"iPad19,2": @"iPad mini (A20 Pro)",
         // iPod touch with 64-bit Processors
         @"iPod7,1": @"iPod touch 6th Gen",
         @"iPod9,1": @"iPod touch 7th Gen",
@@ -323,6 +329,8 @@ static NSString *hostChipIdentifier(NSString *identifier) {
         @"iPad16,4": @"M4",
         @"iPad16,5": @"M4",
         @"iPad16,6": @"M4",
+        @"iPad19,1": @"A20 Pro",
+        @"iPad19,2": @"A20 Pro",
         @"iPod7,1": @"A8",
         @"iPod9,1": @"A10",
     };
@@ -473,6 +481,16 @@ static NSDictionary<NSString *, NSNumber *> *hostFallbackCoreTopology(NSString *
         @"iPad16,4": @{@"performance": @4, @"efficiency": @6},
         @"iPad16,5": @{@"performance": @4, @"efficiency": @6},
         @"iPad16,6": @{@"performance": @4, @"efficiency": @6},
+        // The A20 Pro iPad mini is binned the same way the M4 iPad Pro above
+        // is: Apple specifies a 6-core CPU (2 super + 4 efficiency) on the
+        // 512 GB models and a 5-core (2 + 3) on the 128 and 256 GB ones. The
+        // full part is recorded here for the same reason -- on hardware the
+        // live hw.perflevel sysctls answer instead, so this is what a
+        // simulator run of these models reports and what a host with no
+        // perflevel sysctls would fall back to. It also matches the A20 Pro
+        // entries for iPhone19,2/19,3/19,7.
+        @"iPad19,1": @{@"performance": @2, @"efficiency": @4},
+        @"iPad19,2": @{@"performance": @2, @"efficiency": @4},
         // iPod touch (A8 has no efficiency cluster; A10 is a 2+2 Fusion part)
         @"iPod7,1": @{@"performance": @2, @"efficiency": @0},
         @"iPod9,1": @{@"performance": @2, @"efficiency": @2},
