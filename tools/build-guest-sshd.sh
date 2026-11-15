@@ -31,6 +31,37 @@
 # Built from the SAME vendored tree the native client comes from, so client and
 # server cannot drift to different OpenSSH versions.
 #
+# WHY THREE BINARIES AND NOT ONE
+#
+# The native client build folds four programs into one binary dispatched on
+# argv[0] (README-iSH-AOK.md, "One binary, four programs"), and the same thing
+# was tried here. It does not transfer, and the reason is worth writing down so
+# nobody spends the afternoon again.
+#
+# The three sshd roles are not four separate programs sharing a library: they
+# are three different implementations of the SAME entry points, linked against
+# one shared set of objects. Of the 23 globals that collide in a union link,
+# eight are functions that each role defines differently and that SHARED code
+# calls -- cleanup_exit (all three, 5/27/5 lines), and get_hostkey_by_index,
+# get_hostkey_index, get_hostkey_private_by_type, get_hostkey_public_by_index,
+# get_hostkey_public_by_type and mm_is_monitor between sshd-session and
+# sshd-auth. Only sshd_hostkey_sign is byte-identical in both. Folding means a
+# runtime trampoline per entry point, dispatching on which role this process
+# is, plus renaming 16 definitions and merging 15 data symbols -- and redoing
+# that audit at every OpenSSH update, against functions upstream is actively
+# diverging (get_hostkey_public_by_type is 5 lines in one file and 36 in the
+# other).
+#
+# And it buys almost nothing, because what ships is compressed:
+#
+#     three binaries, raw                21 318 144
+#     three binaries, LZMA                2 486 672   <- what a bundle costs
+#     sshd-session alone, raw             8 033 248   <- a FLOOR for any fold
+#     sshd-session alone, LZMA            1 875 548
+#
+# So the whole fold is worth at best 0.6 MB of download. Ship the three, in one
+# LZMA stream, and leave OpenSSH's own structure alone.
+#
 # Usage:
 #   tools/build-guest-sshd.sh [OUT_DIR]        # default: build/guest-sshd
 #
@@ -51,7 +82,8 @@ mkdir -p "$WORK" "$OUT"
 ( cd "$SRC" && tar -cf - --exclude='.git' . ) | ( cd "$WORK" && tar -xf - )
 cd "$WORK"
 
-# AR, RANLIB and NM must be LLVM's, NOT the host's.
+# AR and RANLIB must be LLVM's, NOT the host's. (There is no `zig nm`, and
+# OpenSSH's configure never uses NM, so nothing needs to stand in for it.)
 #
 # macOS ships cctools ar and ranlib, which only understand Mach-O. Handed an
 # aarch64 ELF object they warn once -- "archive member 'ssh_api.o' not a
@@ -67,9 +99,8 @@ cd "$WORK"
     CC="zig cc -target aarch64-linux-musl" \
     AR="zig ar" \
     RANLIB="zig ranlib" \
-    NM="zig nm" \
-    CFLAGS="-O2" \
-    LDFLAGS="-static" \
+    CFLAGS="-O2 -ffunction-sections -fdata-sections" \
+    LDFLAGS="-static -Wl,--gc-sections" \
     --without-openssl \
     --without-zlib \
     --without-pam \
@@ -109,21 +140,54 @@ for f in sshd sshd-session sshd-auth; do
 done
 rm -rf "$WORK"
 
+# One LZMA stream, which is what the app ships and what it decompresses on the
+# way into a native root. /usr/bin/compression_tool is base macOS -- no brew,
+# no xz -- and its output is exactly what Compression.framework's
+# COMPRESSION_LZMA decodes, so the app needs no third-party decompressor. The
+# ratio is the same as xz -9e (2.49 MB for the three).
+#
+# A plain tar inside, deliberately: the thing that unpacks these in the app
+# wants names, modes and sizes, and tar is the only archive format every host
+# in this project can already write.
+( cd "$OUT" && tar -cf guest-sshd-aarch64.tar sshd sshd-session sshd-auth )
+/usr/bin/compression_tool -encode -a lzma \
+    -i "$OUT/guest-sshd-aarch64.tar" \
+    -o "$OUT/guest-sshd-aarch64.tar.lzma"
+rm -f "$OUT/guest-sshd-aarch64.tar"
+
 echo "built into $OUT:"
 for f in sshd sshd-session sshd-auth; do
-    printf '  %-13s %9d bytes  %s\n' "$f" "$(wc -c < "$OUT/$f" | tr -d ' ')" \
+    printf '  %-24s %9d bytes  %s\n' "$f" "$(wc -c < "$OUT/$f" | tr -d ' ')" \
         "$(file -b "$OUT/$f" 2>/dev/null | cut -c1-54)"
 done
+printf '  %-24s %9d bytes  LZMA, for Compression.framework\n' \
+    guest-sshd-aarch64.tar.lzma \
+    "$(wc -c < "$OUT/guest-sshd-aarch64.tar.lzma" | tr -d ' ')"
 cat <<'EOF'
 
-Verified 2026-11-15 by running these in native mode under the CLI: sshd
-listened, "Accepted publickey for root", and the session landed on native zsh
-with pid 1 being native mode's own init. Privilege separation worked, which is
-the whole point of emulating rather than porting.
+Verified 2026-11-15 in native mode under the CLI, both before and after the
+gc-sections flags went in: `sshd -T` clean, "Server listening", "Accepted
+publickey for root", and the session landed on native zsh as uid 0 with pid 1
+being native mode's own init. Privilege separation worked, which is the whole
+point of emulating rather than porting.
 
-Note the size: ~22 MB for the three, stripped. They share nearly all of their
-code (libssh.a), so folding them into one binary dispatched on argv[0] -- which
-is what the native build already does for ssh/scp/sftp/ssh-keygen, see
-deps/smallclue/third-party/openssh/README-iSH-AOK.md -- would cut that to
-roughly a third.
+WHAT A ROOT NEEDS BEFORE sshd WILL EVEN START
+
+Two of these are hard refusals, printed and then exit -- not warnings:
+
+  * an `sshd` account in /etc/passwd and /etc/group ("Privilege separation
+    user sshd does not exist"), home /var/empty, shell /sbin/nologin;
+  * /var/empty, owned by root and not group- or world-writable
+    ("/var/empty must be owned by root and not group or world-writable");
+  * /etc/ssh/sshd_config, a host key (ssh-keygen is a native program, so
+    `ssh-keygen -A` works in native mode), and /run for the pid file.
+
+sshd execs its helpers by the paths compiled into it, so install them as
+/usr/sbin/sshd, /usr/libexec/sshd-session and /usr/libexec/sshd-auth, or
+override both with SshdSessionPath and SshdAuthPath in sshd_config.
+
+To reproduce the above locally, give the CLI -f (fakefs), NOT -r: -r is a
+realfs root, where chown fails, so /var/empty cannot be owned by root and sshd
+refuses to start. The app's own boot root is a fakefs (mount_root(&fakefs, ...)
+in app/AppDelegate.m), so this is a quirk of the local rig only.
 EOF
