@@ -1943,20 +1943,45 @@ switcher lands on it and needs a force quit either way.
 `tools/check-all.py` went in on 2026-11-15, and running the whole set for the
 first time failed two of the seven. Both are real; neither was known.
 
-**1. `check-bash-tls.py`: two zsh globals are shared between shells.**
+**1. `check-bash-tls.py`: two zsh globals were shared between shells. Fixed.**
 
     _aok_pending_cmdtext: mutable and shared between shells, in [deps_zsh_Src_aok_fork.c.o]
     _aok_pending_underscore: mutable and shared between shells, in [deps_zsh_Src_aok_fork.c.o]
 
-Both are plain `static char *` in deps/zsh/Src/aok_fork.c (lines 114 and 122),
-the only two statics in that stretch, while the rest of the native port made
-this class of state `__thread` precisely so more than one native shell can be
-live at once. zsh is the device's login shell, so two of them spawning at the
-same time is the ordinary case, not a corner: one spawn's pending command text
-or `$_` can be read by the other. The checker's own options are the right ones
--- make them `__thread`, or add them to ALLOW in tools/bash-tls-fix-externs.py
-with a reason, if the write and the read are provably the same thread inside
-one spawn. Not investigated beyond reading the declarations.
+Both were plain `static char *` in deps/zsh/Src/aok_fork.c -- the only two
+mutable file-scope statics in a file with thirty `__thread` ones, several
+carrying comments about why ("two native zsh shells share this address space").
+They arrived together in zsh 9ce1e21ad, 2026-10-16, with the change that lets a
+command too long for argv travel in the subshell state.
+
+Neither is state a shell MEANS to share. Each belongs to one spawn and is
+file-scope only because `aok_spawn_subshell` sets it while
+`aok_emit_epilogue`, three frames down inside `aok_write_state`, reads it.
+What makes the sharing bite is the width of that window and the fact that both
+assignments are unconditional:
+
+* `aok_write_state` writes the state down a pipe the child has to drain, so it
+  blocks for as long as the child's startup takes.
+* A short command stores NULL in `aok_pending_cmdtext`, so ANY other shell
+  spawning ANY subshell inside that window overwrites both. A shell handing
+  over a long command would find NULL and its child would run
+  `AOK_CMDTEXT_STUB` -- "zsh: the command did not arrive with the subshell
+  state", exit 126. The other order hands that child the OTHER shell's command
+  text.
+* `aok_inherit_string` frees `aok_pending_underscore` unconditionally before
+  storing, so one shell calls `zsfree` on the string another is about to emit.
+
+There is no lock in that file; zsh's port hands state over through a pipe, not
+through a shared table, so unlike dash's `aok_fork_lock`/`aok_fork_reqs` (which
+ARE in ALLOW, deliberately shared and locked) there was nothing here meant to
+cross. Both are now `__thread`, which is what the other thirty statics already
+were.
+
+Not reproduced as a timing failure -- the sharing is proved statically, and the
+interleaving above is what the code permits rather than something observed.
+`nm -m` puts both symbols in `__DATA,__bss` before the change and
+`__DATA,__thread_vars` after, and an archive holding only the pre-fix object
+fails the checker with exactly these two names, which is the positive control.
 
 Timing, since it governs where this check can sit: 170s over libbash/libzsh/
 libdash/libish, dominated by `nm -m` across the 99 MB libish.a. (A first
@@ -1977,9 +2002,10 @@ purpose, and a newer Xcode now calls it "iPhone Duo", which may still be a
 placeholder. Adding a device properly means three tables, not one -- the name,
 the chip (`A20 Pro`) and the core counts -- and guessing core counts for
 hardware nobody here has is how a wrong `/proc/cpuinfo` ships. So this is left
-for the maintainer to decide rather than filled in. Until both reds are settled a
-`builds/iSH-AOK_*` tag fails the gate; for the device table the alternatives
-are to add the entries or to decide that check should not block a tag.
+for the maintainer to decide rather than filled in. With the zsh one fixed this
+is the only red left, and it fails a `builds/iSH-AOK_*` tag until it is
+settled: either add the entries, or decide that this check should not block a
+tag.
 
 ## Host capabilities worth exposing
 
