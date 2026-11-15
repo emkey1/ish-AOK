@@ -1379,6 +1379,20 @@ static void draw_column_header(int cols) {
     char line[128];
     int len = 0;
     fputs("\033[K", stdout);
+    // Below about 20 columns even PID, %CPU and a stub of Command do not fit,
+    // and colset_for has floored cmd_width rather than go negative -- so the
+    // assembled header would be wider than the terminal. It must not be: this
+    // frame is repainted in place, and a line that wraps scrolls the whole
+    // display up by the row it added (see draw_header). The highlight escapes
+    // cannot survive a truncation by character count, so that case gets the
+    // plain text, cut to the width, as it did before the columns became
+    // selectable.
+    if (colset_fixed_width(&c) + c.cmd_width > cols) {
+        char full[160];
+        snprintf(full, sizeof(full), "%6s %5s Command", "PID", "%CPU");
+        printf("%s%-*.*s%s\n", C_HDR, cols, cols, full, C_RESET);
+        return;
+    }
     fputs(C_HDR, stdout);
     col_add(line, sizeof(line), &len, "%6s", "PID");
     if (c.user)
