@@ -45,6 +45,7 @@
 #include <limits.h>
 #include <pwd.h>
 #include <signal.h>
+#include <stdarg.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -541,6 +542,94 @@ static uid_t read_proc_uid(pid_t pid) {
 static int command_column_start(void) {
     return 6 + 1 + 8 + 1 + 3 + 1 + 3 + 1 + 7 + 1 + 7 + 1 + 1 + 1
          + 9 + 1 + 5 + 1 + 5 + 1 + 8 + 1;
+}
+
+/* ---- which columns fit ----------------------------------------------------
+ *
+ * A row used to be built at one fixed width -- command_column_start(), 73
+ * columns before Command -- and then clamped to the terminal with
+ * `if (len > cols) len = cols`. Everything to the right of the terminal's
+ * width simply fell off, and %CPU sits at columns 53-58. So on a terminal
+ * narrower than 59 columns -- an iPad running iSH-AOK at a readable font size
+ * is comfortably inside that -- ktop drew a full process list with PID, USER,
+ * PR, NI, VIRT, RES, S and ARCH and NO %CPU COLUMN AT ALL, while the per-CPU
+ * meters above it kept working, because those size themselves to the width.
+ *
+ * That reads exactly like broken CPU accounting, and it was not: the kernel's
+ * numbers were right the whole time (/proc/<pid>/stat's utime+stime rose by
+ * 206 ticks in two seconds for a process pinning one core, measured on the
+ * device). The column had simply been drawn off the side of the screen.
+ *
+ * So the columns are chosen for the width now instead of being cut from it.
+ * PID, %CPU and Command always survive -- ktop with no %CPU is not a process
+ * viewer -- and the rest drop in the order below, least useful first. ARCH is
+ * last of the optional ones on purpose: it is the column ktop exists for (see
+ * README.md), and it is the one stock top and htop cannot show.
+ */
+struct colset {
+    bool user, pr_ni, virt, res, state, arch, mem, timeplus;
+    int cmd_width;
+};
+
+#define COL_CMD_MIN 7
+
+/* Everything left of Command, each column plus the space that separates it,
+ * and the space before Command itself. With every column on this is
+ * command_column_start(), which is the assertion in main(). */
+static int colset_fixed_width(const struct colset *c) {
+    int w = 6;                          /* PID */
+    if (c->user)     w += 1 + 8;
+    if (c->pr_ni)    w += 1 + 3 + 1 + 3;
+    if (c->virt)     w += 1 + 7;
+    if (c->res)      w += 1 + 7;
+    if (c->state)    w += 1 + 1;
+    if (c->arch)     w += 1 + 9;
+    w += 1 + 5;                         /* %CPU, never dropped */
+    if (c->mem)      w += 1 + 5;
+    if (c->timeplus) w += 1 + 8;
+    return w + 1;                       /* the space before Command */
+}
+
+static struct colset colset_for(int cols) {
+    struct colset c = {true, true, true, true, true, true, true, true, 0};
+    bool *drop_order[] = {
+        &c.virt,      /* a guest's VIRT is the least informative number here */
+        &c.pr_ni,     /* nothing in AOK changes priority */
+        &c.timeplus,  /* cumulative; %CPU is the live answer */
+        &c.mem,
+        &c.res,
+        &c.user,
+        &c.state,
+        &c.arch,
+    };
+    for (size_t i = 0; i < sizeof(drop_order) / sizeof(drop_order[0]); i++) {
+        if (colset_fixed_width(&c) + COL_CMD_MIN <= cols)
+            break;
+        *drop_order[i] = false;
+    }
+    c.cmd_width = cols - colset_fixed_width(&c);
+    /* Narrower than PID, %CPU and a stub of Command: Command gets cut, which
+     * the whole-line clamp in the caller finishes. Nothing above is dropped,
+     * so %CPU survives every width. */
+    if (c.cmd_width < COL_CMD_MIN)
+        c.cmd_width = COL_CMD_MIN;
+    return c;
+}
+
+/* Append one column to a header or row being assembled, keeping the running
+ * length and never writing past the buffer. */
+static void col_add(char *buf, size_t size, int *len, const char *fmt, ...) {
+    if (*len < 0 || (size_t) *len >= size - 1)
+        return;
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(buf + *len, size - (size_t) *len, fmt, ap);
+    va_end(ap);
+    if (n < 0)
+        return;
+    *len += n;
+    if ((size_t) *len > size - 1)
+        *len = (int) size - 1;
 }
 
 static void read_proc_cmdline(pid_t pid, char *buf, size_t bufsize) {
@@ -1283,31 +1372,40 @@ static void draw_header(int cols, int ncpu,
 }
 
 static void draw_column_header(int cols) {
-    // Reproduce COL_FMT per column so the active sort column can get its own
-    // highlight color.
-    char line[64];
+    // The same column set the rows use, so the two cannot disagree about what
+    // is on screen. Every optional column is dropped whole rather than cut in
+    // half at the right edge; see colset_for.
+    struct colset c = colset_for(cols);
+    char line[128];
+    int len = 0;
     fputs("\033[K", stdout);
-    // Too narrow for the whole header: the same text, cut to the width.
-    if (cols < command_column_start() + 7) {
-        char full[160];
-        snprintf(full, sizeof(full), "%6s %-8.8s %3s %3s %7s %7s %1s %-9s %5s %5s %8s Command",
-                 "PID", "USER", "PR", "NI", "VIRT", "RES", "S", "ARCH", "%CPU", "%MEM", "TIME+");
-        printf("%s%-*.*s%s\n", C_HDR, cols, cols, full, C_RESET);
-        return;
-    }
     fputs(C_HDR, stdout);
-    snprintf(line, sizeof(line), "%6s %-8.8s %3s %3s %7s %7s %1s %-9s ",
-             "PID", "USER", "PR", "NI", "VIRT", "RES", "S", "ARCH");
+    col_add(line, sizeof(line), &len, "%6s", "PID");
+    if (c.user)
+        col_add(line, sizeof(line), &len, " %-8.8s", "USER");
+    if (c.pr_ni)
+        col_add(line, sizeof(line), &len, " %3s %3s", "PR", "NI");
+    if (c.virt)
+        col_add(line, sizeof(line), &len, " %7s", "VIRT");
+    if (c.res)
+        col_add(line, sizeof(line), &len, " %7s", "RES");
+    if (c.state)
+        col_add(line, sizeof(line), &len, " %1s", "S");
+    if (c.arch)
+        col_add(line, sizeof(line), &len, " %-9s", "ARCH");
     fputs(line, stdout);
-    printf("%s%5s%s%s %s%5s%s%s %s%8s%s%s ",
-           sort_mode == SORT_CPU ? C_HDR_SORT : "", "%CPU", C_RESET, C_HDR,
-           sort_mode == SORT_MEM ? C_HDR_SORT : "", "%MEM", C_RESET, C_HDR,
-           sort_mode == SORT_TIME ? C_HDR_SORT : "", "TIME+", C_RESET, C_HDR);
-    // Pad "Command" out to the full width so the green bar spans the line.
-    int rest = cols - command_column_start();
-    if (rest < 7)
-        rest = 7;
-    printf("%-*.*s%s\n", rest, rest, "Command", C_RESET);
+    // %CPU, %MEM and TIME+ go out separately: the active sort column takes its
+    // own highlight colour, which cannot travel inside the assembled string.
+    printf(" %s%5s%s%s", sort_mode == SORT_CPU ? C_HDR_SORT : "", "%CPU",
+           C_RESET, C_HDR);
+    if (c.mem)
+        printf(" %s%5s%s%s", sort_mode == SORT_MEM ? C_HDR_SORT : "", "%MEM",
+               C_RESET, C_HDR);
+    if (c.timeplus)
+        printf(" %s%8s%s%s", sort_mode == SORT_TIME ? C_HDR_SORT : "", "TIME+",
+               C_RESET, C_HDR);
+    // Pad "Command" out to the full width so the header bar spans the line.
+    printf(" %-*.*s%s\n", c.cmd_width, c.cmd_width, "Command", C_RESET);
 }
 
 static void draw_key_bar(int cols) {
@@ -1400,20 +1498,37 @@ static void draw_interactive(struct proc_sample *procs, int n,
         // whole-line clamp below is not enough on its own: a command longer
         // than the line buffer would otherwise be cut at an arbitrary point,
         // and the selected row's padding is computed from this length.
-        int cmd_width = cols - command_column_start();
-        if (cmd_width < 7)
-            cmd_width = 7;
+        // The same width, through the same function, as the column header: a
+        // row and the header it sits under always carry the same columns.
+        struct colset c = colset_for(cols);
 
         char cmdbuf[CMDLINE_MAX];
-        truncate_display(cmdbuf, sizeof(cmdbuf), cmd, cmd_width);
+        truncate_display(cmdbuf, sizeof(cmdbuf), cmd, c.cmd_width);
 
         char line[512];
-        int len = snprintf(line, sizeof(line),
-                           "%6d %-8.8s %3ld %3ld %7s %7s %1s %-9s %5.1f %5.1f %8s %s",
-                           (int) procs[i].pid, userbuf,
-                           procs[i].priority, procs[i].nice,
-                           virt, res, state, procs[i].arch,
-                           cpu_pct, mem_pct, timebuf, cmdbuf);
+        int len = 0;
+        col_add(line, sizeof(line), &len, "%6d", (int) procs[i].pid);
+        if (c.user)
+            col_add(line, sizeof(line), &len, " %-8.8s", userbuf);
+        if (c.pr_ni)
+            col_add(line, sizeof(line), &len, " %3ld %3ld",
+                    procs[i].priority, procs[i].nice);
+        if (c.virt)
+            col_add(line, sizeof(line), &len, " %7s", virt);
+        if (c.res)
+            col_add(line, sizeof(line), &len, " %7s", res);
+        if (c.state)
+            col_add(line, sizeof(line), &len, " %1s", state);
+        if (c.arch)
+            col_add(line, sizeof(line), &len, " %-9s", procs[i].arch);
+        col_add(line, sizeof(line), &len, " %5.1f", cpu_pct);
+        if (c.mem)
+            col_add(line, sizeof(line), &len, " %5.1f", mem_pct);
+        if (c.timeplus)
+            col_add(line, sizeof(line), &len, " %8s", timebuf);
+        col_add(line, sizeof(line), &len, " %s", cmdbuf);
+        // Still clamped: the command can be longer than the column, and a
+        // terminal too narrow for even PID and %CPU has to cut somewhere.
         if (len > cols)
             len = cols;
         if (i == selected)
@@ -1608,6 +1723,19 @@ int main(int argc, char **argv) {
     long page_kb = sysconf(_SC_PAGESIZE) / 1024;
     if (page_kb <= 0)
         page_kb = 4;
+
+    // The column table and the layout command_column_start() spells out have
+    // to agree: a column added to one and not the other shifts the header off
+    // the rows, which is the class of bug colset_for exists to end rather than
+    // to join. Cannot fire unless this file is edited wrongly, and says so
+    // plainly if it does.
+    struct colset every_column = {true, true, true, true, true, true, true, true, 0};
+    if (colset_fixed_width(&every_column) != command_column_start()) {
+        fprintf(stderr, "ktop: column layout inconsistent (%d != %d); "
+                        "colset_fixed_width and command_column_start disagree\n",
+                colset_fixed_width(&every_column), command_column_start());
+        return 2;
+    }
 
     static struct proc_sample bufs[2][MAX_PROCS];
     int counts[2] = {0, 0};
