@@ -325,7 +325,7 @@ static const double kInFlightSeconds = 6.0;
     @try {
         [self.playerNode play];
     } @catch (NSException *exception) {
-        NSLog(@"ISHAudio: player node would not start: %@", exception.reason);
+        NSLog(@"ISHAudio: player node would not start: %s", exception.reason.UTF8String);
         return NO;
     }
     return YES;
@@ -730,11 +730,37 @@ bool ISHAudioKeepsAppAlive(void) {
 // already connected, made with the engine stopped otherwise (play starts it
 // again), and a throw becomes NO, which the caller treats as a track that
 // would not load.
+// Whether the graph is really built in this format: both links present AND
+// both carrying it.
+//
+// Asking the format alone is not enough, and the way it fails is silent. An
+// attached but UNCONNECTED AVAudioPlayerNode answers -outputFormatForBus: with
+// 44100 Hz stereo -- which is exactly the standard format of ordinary music --
+// so "the format already matches" came back YES for a graph with no
+// connections in it at all. That included the very first call, the one from
+// -init with the mixer's own 44100/2 default, so the player node was never
+// connected to anything: the engine ran, the node was attached, and
+// -[AVAudioPlayerNode play] threw "player started when in a disconnected
+// state" on every 44.1 kHz track. Before 566 that exception was uncaught and
+// took the app down; once caught it became a player that stops the instant you
+// press play.
+//
+// Checked against AVFoundation itself on 2026-11-15: attach a player node and
+// nothing else, and outputFormatForBus: says 44100/2 while
+// outputConnectionPointsForNode: says zero, and play throws.
+- (BOOL)playerIsWiredForFormat:(AVAudioFormat *)format {
+    if ([self.avEngine outputConnectionPointsForNode:self.playerNode outputBus:0].count == 0)
+        return NO;
+    if ([self.avEngine outputConnectionPointsForNode:self.equalizerNode outputBus:0].count == 0)
+        return NO;
+    return [[self.playerNode outputFormatForBus:0] isEqual:format] &&
+           [[self.equalizerNode outputFormatForBus:0] isEqual:format];
+}
+
 - (BOOL)connectPlayerWithFormat:(AVAudioFormat *)format {
     if (format == nil || format.sampleRate <= 0 || format.channelCount == 0)
         return NO;
-    if ([[self.playerNode outputFormatForBus:0] isEqual:format] &&
-        [[self.equalizerNode outputFormatForBus:0] isEqual:format])
+    if ([self playerIsWiredForFormat:format])
         return YES;
     if (self.avEngine.isRunning)
         [self.avEngine stop];
@@ -742,7 +768,7 @@ bool ISHAudioKeepsAppAlive(void) {
         [self.avEngine connect:self.playerNode to:self.equalizerNode format:format];
         [self.avEngine connect:self.equalizerNode to:self.avEngine.mainMixerNode format:format];
     } @catch (NSException *exception) {
-        NSLog(@"ISHAudio: cannot connect for %@: %@", format, exception.reason);
+        NSLog(@"ISHAudio: cannot connect for %@: %s", format, exception.reason.UTF8String);
         return NO;
     }
     return YES;

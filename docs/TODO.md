@@ -1884,9 +1884,31 @@ the `@try`: AVFoundation also *traps* (EXC_BREAKPOINT) for some
 misconfigurations, which no `@catch` will save you from; the generation guard
 and the re-check are what actually prevent this one.
 
-Not reproduced on demand -- it is a race, and driving it from lldb only hits
-AVFoundation's own traps inside the expression context. The crash report is the
-evidence, and the fixed build is on the iPad for the reporter to retry.
+**It was never a race.** Guarding the exception turned the abort into a player
+that stopped the instant you pressed play, and the device log then named the
+branch: `player node would not start`, i.e. the engine *was* running and the
+node *was* attached, and `-play` threw anyway. The cause is in
+`connectPlayerWithFormat:`, from 26287d6ff: its early return asked only whether
+the format already matched. An attached but **unconnected** AVAudioPlayerNode
+answers `-outputFormatForBus:` with 44100 Hz stereo -- the standard format of
+ordinary music -- so the check said "already connected" for a graph with no
+connections in it, including on the very first call, the one from `-init` with
+the mixer's own 44100/2 default. The player node was therefore never connected
+to anything, and `-[AVAudioPlayerNode play]` threw "player started when in a
+disconnected state" on every 44.1 kHz track. Anything at another sample rate
+would have connected normally, which is why this looked like a folder problem.
+
+Checked against AVFoundation itself rather than argued (the program is in the
+2026-11-15 scratch, trivially rewritten): attach a player node and nothing
+else, and `outputFormatForBus:` says 44100/2 while
+`outputConnectionPointsForNode:` says 0 and `play` throws. The same oracle
+checks the fix -- `playerIsWiredForFormat:` requires a real connection on both
+links as well as the format, which makes `-init` connect, leaves a same-format
+track skipping the reconnect (the point of 26287d6ff), and still reconnects on
+a format change.
+
+**Lesson worth keeping:** an AVFoundation node's reported format says nothing
+about whether it is attached to anything. Ask `outputConnectionPointsForNode:`.
 
 ### Both final screens leave the guest running -- the filesystem one on purpose
 
