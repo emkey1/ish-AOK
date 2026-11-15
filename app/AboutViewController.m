@@ -369,6 +369,10 @@ UIViewController *ISHCreateDiagnosticsNavigationController(void) {
 @implementation AboutViewController
 {
     BOOL _didPresentInitialDiagnostics;
+    // See -_guestSshdEnabled: the answer is a file in the booted root, so it
+    // is read once per table reload rather than four times.
+    BOOL _guestSshdEnabledCached;
+    BOOL _guestSshdEnabledKnown;
     __weak UIBarButtonItem *_modeButton;
     UIBarButtonItem *_doneButton;
 }
@@ -502,6 +506,7 @@ UIViewController *ISHCreateDiagnosticsNavigationController(void) {
 
 - (void)_updateUI {
     NSAssert(NSThread.isMainThread, @"This method needs to be called on the main thread");
+    [self _forgetGuestSshdEnabled];
     self.disableDimmingSwitch.on = UserPreferences.shared.shouldDisableDimming;
     self.enableMulticoreSwitch.on = UserPreferences.shared.shouldEnableMulticore;
     self.enableHLESwitch.on = UserPreferences.shared.shouldEnableHLE;
@@ -551,6 +556,84 @@ UIViewController *ISHCreateDiagnosticsNavigationController(void) {
 // Installing and choosing the Wayland display's desktop (GH #639).
 - (NSInteger)_desktopSectionIndex {
     return [self _visibleStoryboardSectionCount] + 5;
+}
+
+// sshd in a native root (kernel/guest_sshd.h). Shown only while a native root
+// is booted: on a distro root sshd comes from the distribution, and a switch
+// that silently did nothing would be worse than no switch.
+- (NSInteger)_sshdSectionIndex {
+    return [self _visibleStoryboardSectionCount] + 6;
+}
+
+- (BOOL)_sshdSectionVisible {
+    return [AppDelegate bootedRootIsNative];
+}
+
+// Whether the booted root runs sshd is a file in that root, not a preference,
+// so reading it costs a guest VFS call -- and the table asks four times per
+// reload (sections, rows, the cell, the footer). Read once and remember until
+// something could have changed it.
+- (BOOL)_guestSshdEnabled {
+    if (!_guestSshdEnabledKnown) {
+        _guestSshdEnabledCached = [AppDelegate guestSshdEnabled];
+        _guestSshdEnabledKnown = YES;
+    }
+    return _guestSshdEnabledCached;
+}
+
+- (void)_forgetGuestSshdEnabled {
+    _guestSshdEnabledKnown = NO;
+}
+
+- (UITableViewCell *)_guestSshdEnabledCell {
+    UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:nil];
+    cell.selectionStyle = UITableViewCellSelectionStyleNone;
+    cell.textLabel.text = NSLocalizedString(@"Enable sshd", @"Settings switch label: turns on the ssh server in a native filesystem");
+    UISwitch *enabledSwitch = [UISwitch new];
+    enabledSwitch.on = [self _guestSshdEnabled];
+    [enabledSwitch addTarget:self action:@selector(guestSshdEnabledChanged:) forControlEvents:UIControlEventValueChanged];
+    cell.accessoryView = enabledSwitch;
+    return cell;
+}
+
+- (UITableViewCell *)_guestSshdPortCell {
+    UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1 reuseIdentifier:nil];
+    cell.textLabel.text = NSLocalizedString(@"Port", @"Settings row label: the port the ssh server listens on");
+    cell.detailTextLabel.text = [NSString stringWithFormat:@"%ld", (long) UserPreferences.shared.guestSshdPort];
+    cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+    return cell;
+}
+
+- (void)guestSshdEnabledChanged:(UISwitch *)sender {
+    [AppDelegate setGuestSshdEnabled:sender.on];
+    // Re-read rather than assume: if the write failed the switch goes back,
+    // which is the truth about the root and better than a switch that lies.
+    [self _forgetGuestSshdEnabled];
+    [self.tableView reloadData];
+}
+
+- (void)_showGuestSshdPortEditor {
+    UIAlertController *alert =
+        [UIAlertController alertControllerWithTitle:NSLocalizedString(@"sshd Port", @"Alert title: choosing the ssh server's port")
+                                            message:NSLocalizedString(@"1024 to 65535. A port below 1024 needs privileges iOS does not give the app.", @"sshd port alert message")
+                                     preferredStyle:UIAlertControllerStyleAlert];
+    [alert addTextFieldWithConfigurationHandler:^(UITextField *textField) {
+        textField.text = [NSString stringWithFormat:@"%ld", (long) UserPreferences.shared.guestSshdPort];
+        textField.placeholder = NSLocalizedString(@"e.g. 1022", @"sshd port field placeholder");
+        textField.clearButtonMode = UITextFieldViewModeWhileEditing;
+        textField.keyboardType = UIKeyboardTypeNumberPad;
+    }];
+    [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Cancel", @"Alert button") style:UIAlertActionStyleCancel handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Save", @"Alert button") style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
+        // A value out of range is clamped back to the default by
+        // UserPreferences, so nothing here has to reject it -- but re-reading
+        // the preference is what makes the row show what was actually kept.
+        UserPreferences.shared.guestSshdPort = alert.textFields.firstObject.text.integerValue;
+        if ([self _guestSshdEnabled])
+            [AppDelegate setGuestSshdEnabled:YES];
+        [self.tableView reloadData];
+    }]];
+    [self presentViewController:alert animated:YES completion:nil];
 }
 
 - (UITableViewCell *)_desktopSetupCell {
@@ -654,6 +737,12 @@ static NSString *ISHForeignExecTitle(NSString *mode) {
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
     if (indexPath.section == [self _foreignExecSectionIndex]) {
         [self _showForeignExecPickerFromCell:[tableView cellForRowAtIndexPath:indexPath]];
+        [tableView deselectRowAtIndexPath:indexPath animated:YES];
+        return;
+    }
+    if (indexPath.section == [self _sshdSectionIndex]) {
+        if (indexPath.row == 1)
+            [self _showGuestSshdPortEditor];
         [tableView deselectRowAtIndexPath:indexPath animated:YES];
         return;
     }
@@ -884,6 +973,10 @@ static NSString *ISHForeignExecTitle(NSString *mode) {
                @"Applies to programs started after the change, on arm64 filesystems. Uses up to 96 MB of memory.", @"Translated Code section footer: what the translation cache does and that it turns ASLR off");
     if (section == [self _desktopSectionIndex])
         return NSLocalizedString(@"Installs the desktop the Wayland display shows, in the filesystem that is running, and chooses which one it starts.", @"Wayland Desktop section footer in Settings");
+    if (section == [self _sshdSectionIndex])
+        return [self _guestSshdEnabled]
+            ? [NSString stringWithFormat:NSLocalizedString(@"sshd will listen on port %ld from the next launch, when iSH-AOK unpacks it and the boot scripts start it.\n\nKeys only: put your public key in ~/.ssh/authorized_keys, from the other machine with ssh-copy-id. Password authentication is off because an account here may have no password at all -- terminals open it without one. ed25519 keys work; RSA and ECDSA do not.", @"sshd section footer when on; %ld is a port number"), (long) UserPreferences.shared.guestSshdPort]
+            : NSLocalizedString(@"Lets you reach this filesystem over ssh from another machine. ssh OUT already works and needs nothing here.", @"sshd section footer when off");
     return [super tableView:tableView titleForFooterInSection:section];
 }
 
@@ -900,11 +993,13 @@ static NSString *ISHForeignExecTitle(NSString *mode) {
         return NSLocalizedString(@"Translated Code", @"Settings section header");
     if (section == [self _desktopSectionIndex])
         return NSLocalizedString(@"Wayland Desktop", @"Desktop setup page title");
+    if (section == [self _sshdSectionIndex])
+        return NSLocalizedString(@"sshd", @"Settings section header: the ssh server; a program name, the same in every language");
     return [super tableView:tableView titleForHeaderInSection:section];
 }
 
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
-    return [self _visibleStoryboardSectionCount] + 6;
+    return [self _visibleStoryboardSectionCount] + ([self _sshdSectionVisible] ? 7 : 6);
 }
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
@@ -920,6 +1015,8 @@ static NSString *ISHForeignExecTitle(NSString *mode) {
         return 1;
     if (section == [self _jitCacheSectionIndex])
         return 1;
+    if (section == [self _sshdSectionIndex])
+        return [self _guestSshdEnabled] ? 2 : 1;
     return [super tableView:tableView numberOfRowsInSection:section];
 }
 
@@ -954,6 +1051,8 @@ static NSString *ISHForeignExecTitle(NSString *mode) {
         return [self _jitCacheCell];
     if (indexPath.section == [self _desktopSectionIndex])
         return [self _desktopSetupCell];
+    if (indexPath.section == [self _sshdSectionIndex])
+        return indexPath.row == 0 ? [self _guestSshdEnabledCell] : [self _guestSshdPortCell];
     return [super tableView:tableView cellForRowAtIndexPath:indexPath];
 }
 

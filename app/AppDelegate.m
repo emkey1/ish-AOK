@@ -52,6 +52,7 @@
 #import "WorkspaceTestHooks.h"
 #include "kernel/init.h"
 #include "kernel/native_root.h"
+#include "kernel/guest_sshd.h"
 #include "kernel/foreign_exec.h"
 #include "kernel/calls.h"
 #include "kernel/task.h"
@@ -2901,6 +2902,42 @@ void ISHApplyIdleTimerPreference(void) {
 
 + (void)popCurrentTask:(struct task *)previousCurrent {
     PopCurrentTask(previousCurrent);
+}
+
++ (BOOL)bootedRootIsNative {
+    NSString *booted = Roots.instance.bootedRoot;
+    return booted != nil && [Roots.instance isNativeRootNamed:booted];
+}
+
++ (BOOL)guestSshdEnabled {
+    if (![self bootedRootIsNative])
+        return NO;
+    __block BOOL enabled = NO;
+    ISHNativeRootGuestCall(^{
+        enabled = guest_sshd_enabled();
+    });
+    return enabled;
+}
+
++ (BOOL)setGuestSshdEnabled:(BOOL)enabled {
+    if (![self bootedRootIsNative])
+        return NO;
+    unsigned port = (unsigned) UserPreferences.shared.guestSshdPort;
+    // A background assertion for the reason the DNS refresh takes one: this
+    // writes a file in the fakefs, and iOS kills an app suspended while
+    // holding a SQLite lock (RUNNINGBOARD 0xdead10cc).
+    __block int err = _EIO;
+    ISHRunHoldingBackgroundAssertion(@"guest-sshd-settings", ^{
+        if (!ISHNativeRootGuestCall(^{
+            err = guest_sshd_set_enabled(enabled, port);
+        }))
+            err = _EAGAIN;
+    });
+    [ISHDiagnosticsStore recordBreadcrumb:@"sshd.setting.applied"
+                                  details:@{@"enabled": @(enabled),
+                                            @"port": @(port),
+                                            @"error": @(err)}];
+    return err == 0;
 }
 
 // The whole /etc/passwd line for the ISHDefaultUserAccountUID account, split

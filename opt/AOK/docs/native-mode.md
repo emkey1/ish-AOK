@@ -147,9 +147,11 @@ setup and file-transfer throughput are slower than the client's; the shell you
 land on is native zsh either way, so typing at a prompt feels the same.
 
 It is off until you ask for it, in **Settings -> sshd**, and it starts at the
-next launch: enabling it is what makes the app unpack the binaries, and
-`/etc/rc.d/S50sshd` starts them at the boot after that. From the shell the same
-switch is a file:
+next launch: that boot unpacks the binaries and then runs
+`/etc/rc.d/S50sshd`, so one relaunch is enough. The switch is not an app
+setting but a file in the filesystem that is running -- so it reads as off on a
+root that has never been asked, however it is set elsewhere, and from a shell
+the same switch is:
 
 ```sh
 touch /etc/aok-sshd-enabled     # on at the next boot

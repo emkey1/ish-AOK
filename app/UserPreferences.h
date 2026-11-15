@@ -143,6 +143,12 @@ extern NSString *const kThemeBackgroundColor;
 // is their decision. Same 0-means-off rule as swapSizeMB.
 @property BOOL shouldEnableCompressedMemory;
 @property NSInteger compressedMemorySizeMB;
+// The port sshd listens on in a native root, written into that root's
+// /etc/ssh/sshd_config.d when it changes. Whether sshd runs at all is NOT a
+// preference: it is a file in the root, because it is a property of that
+// filesystem and not of the app -- see guest_sshd_enabled in
+// kernel/guest_sshd.h.
+@property NSInteger guestSshdPort;
 @property BOOL shouldEnableLLMClient;
 @property (nonatomic) NSString *llmProvider;
 @property (nonatomic) NSString *llmServerURL;

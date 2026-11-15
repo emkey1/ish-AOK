@@ -35,4 +35,22 @@ int guest_sshd_install(bool force);
 // Whether all three binaries are installed and came from this build.
 bool guest_sshd_installed(void);
 
+// Whether this root has been asked to run sshd. This, not a preference in the
+// app, is where the answer lives: it is a property of the filesystem, and a
+// user who removes the file from a shell has turned sshd off as surely as the
+// switch would.
+bool guest_sshd_enabled(void);
+
+// Write that setting into the booted root: GUEST_SSHD_ENABLED is created or
+// removed, and when enabled the port goes into
+// /etc/ssh/sshd_config.d/10-aok-port.conf, which /etc/ssh/sshd_config includes
+// before its own defaults. Nothing starts or stops here: at the next boot,
+// provisioning unpacks the binaries and then /etc/rc runs S50sshd, so one
+// relaunch is enough.
+//
+// Everything goes through the guest VFS, so the CALLER must have a usable task
+// current (+[AppDelegate pushUsableInitTaskAsCurrent:] in the app). Returns 0
+// or a negative errno.
+int guest_sshd_set_enabled(bool enabled, unsigned port);
+
 #endif

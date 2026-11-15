@@ -23,6 +23,7 @@
 #include "kernel/fs.h"
 #include "kernel/task.h"
 #include "kernel/native_root.h"
+#include "kernel/guest_sshd.h"
 #include "kernel/foreign_exec.h"
 #include "kernel/swap.h"
 #include "kernel/checkpoint.h"
@@ -443,6 +444,20 @@ static void setup_host_mounts(void) {
     native_root_repair_login_shells();
     const char *native_root = getenv("ISH_NATIVE_ROOT");
     if (native_root != NULL && strcmp(native_root, "1") == 0) {
+        // Dev-only: what the app's Settings switch does, before provisioning,
+        // so one run of the CLI both asks for sshd and installs it.
+        // ISH_GUEST_SSHD=0 turns it off; 1 turns it on at the default port; a
+        // number of 1024 or more turns it on at that port. See
+        // kernel/guest_sshd.h.
+        const char *sshd = getenv("ISH_GUEST_SSHD");
+        if (sshd != NULL && sshd[0] != '\0') {
+            long want = strtol(sshd, NULL, 10);
+            int serr = want <= 0
+                ? guest_sshd_set_enabled(false, 0)
+                : guest_sshd_set_enabled(true, want == 1 ? 1022 : (unsigned) want);
+            if (serr < 0)
+                fprintf(stderr, "ISH_GUEST_SSHD: cannot apply (%d)\n", serr);
+        }
         int nerr = native_root_provision();
         if (nerr < 0)
             fprintf(stderr, "ISH_NATIVE_ROOT: cannot provision this root (%d)\n", nerr);

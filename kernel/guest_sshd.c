@@ -161,20 +161,37 @@ static char *read_archive(const char *path, size_t *len_out) {
     return buf;
 }
 
-// Write LEN bytes to PATH with MODE, through a temporary and a rename, so a
-// reader -- or an sshd already running from the old copy -- never sees half a
-// binary. The directory is made if it is missing: /usr/libexec is not part of
-// a root's skeleton on a root provisioned by an older build.
-static int write_binary(const char *path, const char *data, size_t len,
-                        mode_t_ mode) {
+// Make every missing directory above PATH. One level is not enough: the first
+// thing this ever wrote was /etc/ssh/sshd_config.d/10-aok-port.conf into a
+// root whose /etc/ssh did not exist yet either, and a single mkdir of the leaf
+// fails with ENOENT. That happens whenever the setting is applied before
+// provisioning has built the skeleton -- which is the order the CLI's
+// ISH_GUEST_SSHD takes, so that one run can both ask for sshd and install it.
+static void ensure_parents(const char *path) {
     char dir[MAX_PATH];
     snprintf(dir, sizeof(dir), "%s", path);
     char *slash = strrchr(dir, '/');
-    if (slash != NULL && slash != dir) {
-        *slash = '\0';
+    if (slash == NULL || slash == dir)
+        return;
+    *slash = '\0';
+    for (char *p = dir + 1; *p != '\0'; p++) {
+        if (*p != '/')
+            continue;
+        *p = '\0';
         if (!path_exists(dir))
             generic_mkdirat(AT_PWD, dir, 0755);
+        *p = '/';
     }
+    if (!path_exists(dir))
+        generic_mkdirat(AT_PWD, dir, 0755);
+}
+
+// Write LEN bytes to PATH with MODE, through a temporary and a rename, so a
+// reader -- or an sshd already running from the old copy -- never sees half a
+// file.
+static int write_guest_file(const char *path, const char *data, size_t len,
+                            mode_t_ mode) {
+    ensure_parents(path);
 
     char tmp[MAX_PATH];
     snprintf(tmp, sizeof(tmp), "%s.aok-new", path);
@@ -284,7 +301,7 @@ int guest_sshd_install(bool force) {
             name[sizeof(header->name)] = '\0';
             const char *dest = dest_for_member(name);
             if (dest != NULL) {
-                err = write_binary(dest, tar + data_off, (size_t) size, 0755);
+                err = write_guest_file(dest, tar + data_off, (size_t) size, 0755);
                 if (err < 0)
                     break;
                 found++;
@@ -306,9 +323,41 @@ int guest_sshd_install(bool force) {
 
     char stamp[64];
     int len = snprintf(stamp, sizeof(stamp), "%ld\n", (long) buildTimestamp());
-    err = write_binary(GUEST_SSHD_STAMP, stamp, (size_t) len, 0644);
+    err = write_guest_file(GUEST_SSHD_STAMP, stamp, (size_t) len, 0644);
     if (err < 0)
         return err;
     printk("guest sshd: installed %zu binaries\n", GUEST_SSHD_FILE_COUNT);
     return 0;
+}
+
+bool guest_sshd_enabled(void) {
+    return path_exists(GUEST_SSHD_ENABLED);
+}
+
+int guest_sshd_set_enabled(bool enabled, unsigned port) {
+    if (!enabled) {
+        // The port file stays: it is the user's choice, and leaving it means
+        // turning sshd back on does not silently move the port.
+        int err = generic_unlinkat(AT_PWD, GUEST_SSHD_ENABLED);
+        return (err == _ENOENT) ? 0 : err;
+    }
+
+    if (port < 1024 || port > 65535)
+        return _EINVAL;
+
+    char conf[128];
+    int len = snprintf(conf, sizeof(conf),
+                       "# Written by iSH-AOK's Settings. Included before the rest of\n"
+                       "# sshd_config, so this wins.\n"
+                       "Port %u\n", port);
+    int err = write_guest_file("/etc/ssh/sshd_config.d/10-aok-port.conf", conf,
+                               (size_t) len, 0644);
+    if (err < 0)
+        return err;
+
+    static const char flag[] =
+        "# iSH-AOK starts sshd in this root while this file exists; see\n"
+        "# /etc/rc.d/S50sshd and /AOK/docs/native-mode.md. Settings writes and\n"
+        "# removes it, and so can you.\n";
+    return write_guest_file(GUEST_SSHD_ENABLED, flag, sizeof(flag) - 1, 0644);
 }

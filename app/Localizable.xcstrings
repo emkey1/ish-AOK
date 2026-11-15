@@ -1174,6 +1174,66 @@
         }
       }
     },
+    "1024 to 65535. A port below 1024 needs privileges iOS does not give the app." : {
+      "comment" : "sshd port alert message",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1024 bis 65535. Ein Port unter 1024 erfordert Rechte, die iOS der App nicht gibt."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "De 1024 a 65535. Un puerto por debajo de 1024 requiere privilegios que iOS no concede a la app."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "De 1024 à 65535. Un port inférieur à 1024 exige des privilèges qu'iOS n'accorde pas à l'app."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1024〜65535。1024 未満のポートには、iOS がアプリに与えない権限が必要です。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1024에서 65535까지. 1024 미만의 포트에는 iOS가 앱에 주지 않는 권한이 필요합니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "De 1024 a 65535. Uma porta abaixo de 1024 exige privilégios que o iOS não dá ao app."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "От 1024 до 65535. Порт ниже 1024 требует прав, которых iOS приложению не даёт."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1024 到 65535。低于 1024 的端口需要 iOS 不会授予应用的权限。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1024 到 65535。低於 1024 的連接埠需要 iOS 不會授予應用程式的權限。"
+          }
+        }
+      }
+    },
     "Add Snippet" : {
       "comment" : "Accessibility label for the add snippet button",
       "extractionState" : "manual",
@@ -3377,6 +3437,66 @@
         }
       }
     },
+    "Enable sshd" : {
+      "comment" : "Settings switch label: turns on the ssh server in a native filesystem",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "sshd aktivieren"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Activar sshd"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Activer sshd"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "sshd を有効にする"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "sshd 사용"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ativar sshd"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Включить sshd"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "启用 sshd"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "啟用 sshd"
+          }
+        }
+      }
+    },
     "Files" : {
       "comment" : "Video converter: pick a video from the Files app",
       "localizations" : {
@@ -4089,6 +4209,126 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "正在安裝套件 %1$ld/%2$ld"
+          }
+        }
+      }
+    },
+    "Lets you reach this filesystem over ssh from another machine. ssh OUT already works and needs nothing here." : {
+      "comment" : "sshd section footer when off",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Macht dieses Dateisystem per ssh von einem anderen Rechner erreichbar. ssh nach AUSSEN funktioniert schon und braucht hier nichts."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Permite acceder a este sistema de archivos por ssh desde otra máquina. ssh hacia FUERA ya funciona y no necesita nada de aquí."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Permet d'atteindre ce système de fichiers en ssh depuis une autre machine. ssh vers l'EXTÉRIEUR fonctionne déjà et n'a besoin de rien ici."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このファイルシステムに他のマシンから ssh で接続できるようにします。こちらから外へ出る ssh はすでに使えて、ここでの設定は不要です。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "다른 컴퓨터에서 ssh로 이 파일 시스템에 접속할 수 있게 합니다. 바깥으로 나가는 ssh는 이미 되고 여기서 설정할 것이 없습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Permite alcançar este sistema de arquivos por ssh de outra máquina. O ssh para FORA já funciona e não precisa de nada aqui."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Позволяет подключаться к этой файловой системе по ssh с другой машины. Исходящий ssh и так работает и ничего здесь не требует."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "让你从另一台机器通过 ssh 连接到这个文件系统。向外的 ssh 本来就能用，这里不需要设置。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "讓你從另一台機器透過 ssh 連接到這個檔案系統。向外的 ssh 本來就能用，這裡不需要設定。"
+          }
+        }
+      }
+    },
+    "Port" : {
+      "comment" : "Settings row label: the port the ssh server listens on",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Port"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Puerto"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Port"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ポート"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "포트"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Porta"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Порт"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "端口"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "連接埠"
           }
         }
       }
@@ -4893,6 +5133,66 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "無法確定指令的結束狀態，因此「非零結束碼時失敗」無法據此判斷。輸出：%@"
+          }
+        }
+      }
+    },
+    "e.g. 1022" : {
+      "comment" : "sshd port field placeholder",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "z. B. 1022"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "p. ej. 1022"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "p. ex. 1022"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "例: 1022"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "예: 1022"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ex.: 1022"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "например, 1022"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "例如 1022"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "例如 1022"
           }
         }
       }
@@ -8176,6 +8476,186 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "完成後，你可以選擇儲存轉換後影片的位置。"
+          }
+        }
+      }
+    },
+    "sshd" : {
+      "comment" : "Settings section header: the ssh server; a program name, the same in every language",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "sshd"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "sshd"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "sshd"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "sshd"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "sshd"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "sshd"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "sshd"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "sshd"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "sshd"
+          }
+        }
+      }
+    },
+    "sshd Port" : {
+      "comment" : "Alert title: choosing the ssh server's port",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "sshd-Port"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Puerto de sshd"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Port de sshd"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "sshd のポート"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "sshd 포트"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Porta do sshd"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Порт sshd"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "sshd 端口"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "sshd 連接埠"
+          }
+        }
+      }
+    },
+    "sshd will listen on port %ld from the next launch, when iSH-AOK unpacks it and the boot scripts start it.\n\nKeys only: put your public key in ~/.ssh/authorized_keys, from the other machine with ssh-copy-id. Password authentication is off because an account here may have no password at all -- terminals open it without one. ed25519 keys work; RSA and ECDSA do not." : {
+      "comment" : "sshd section footer when on; %ld is a port number",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "sshd wird ab dem nächsten Start auf Port %ld lauschen: iSH-AOK entpackt es dann, und die Boot-Skripte starten es.\n\nNur Schlüssel: Legen Sie Ihren öffentlichen Schlüssel in ~/.ssh/authorized_keys ab, vom anderen Rechner aus mit ssh-copy-id. Die Passwortanmeldung ist aus, weil ein Konto hier überhaupt kein Passwort haben kann -- Terminals öffnen es ohne. ed25519-Schlüssel funktionieren, RSA und ECDSA nicht."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "sshd escuchará en el puerto %ld a partir del próximo inicio, cuando iSH-AOK lo descomprima y los scripts de arranque lo inicien.\n\nSolo claves: pon tu clave pública en ~/.ssh/authorized_keys, desde la otra máquina con ssh-copy-id. La autenticación por contraseña está desactivada porque una cuenta aquí puede no tener ninguna contraseña: las terminales la abren sin ella. Las claves ed25519 funcionan; RSA y ECDSA no."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "sshd écoutera sur le port %ld dès le prochain lancement, quand iSH-AOK le décompressera et que les scripts de démarrage le lanceront.\n\nClés uniquement : placez votre clé publique dans ~/.ssh/authorized_keys, depuis l'autre machine avec ssh-copy-id. L'authentification par mot de passe est désactivée, car un compte ici peut n'avoir aucun mot de passe — les terminaux l'ouvrent sans. Les clés ed25519 fonctionnent, RSA et ECDSA non."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "sshd は次回の起動からポート %ld で待ち受けます。その起動で iSH-AOK が展開し、起動スクリプトが開始します。\n\n鍵のみ: 公開鍵を ~/.ssh/authorized_keys に置いてください（相手のマシンからは ssh-copy-id で）。ここのアカウントはパスワードを持たないことがあり、ターミナルもパスワードなしで開くため、パスワード認証は無効です。ed25519 鍵は使えますが、RSA と ECDSA は使えません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "sshd는 다음 실행부터 포트 %ld에서 수신합니다. 그때 iSH-AOK가 압축을 풀고 부팅 스크립트가 시작합니다.\n\n키만 사용: 공개 키를 ~/.ssh/authorized_keys에 넣으세요. 다른 컴퓨터에서 ssh-copy-id로 할 수 있습니다. 여기의 계정은 비밀번호가 아예 없을 수 있고 터미널도 비밀번호 없이 열기 때문에 비밀번호 인증은 꺼져 있습니다. ed25519 키는 되고 RSA와 ECDSA는 되지 않습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O sshd vai escutar na porta %ld a partir da próxima abertura, quando o iSH-AOK o descompacta e os scripts de inicialização o iniciam.\n\nSomente chaves: coloque sua chave pública em ~/.ssh/authorized_keys, da outra máquina com ssh-copy-id. A autenticação por senha está desligada porque uma conta aqui pode não ter senha nenhuma -- os terminais a abrem sem senha. Chaves ed25519 funcionam; RSA e ECDSA não."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "sshd будет слушать порт %ld начиная со следующего запуска: тогда iSH-AOK его распакует, а скрипты загрузки запустят.\n\nТолько ключи: положите свой открытый ключ в ~/.ssh/authorized_keys — с другой машины это делает ssh-copy-id. Вход по паролю выключен, потому что у учётной записи здесь пароля может не быть вовсе: терминалы открывают её без пароля. Ключи ed25519 работают, RSA и ECDSA — нет."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "sshd 将从下次启动起监听端口 %ld：那次启动时 iSH-AOK 会解包，启动脚本会运行它。\n\n仅用密钥：把你的公钥放进 ~/.ssh/authorized_keys，在另一台机器上用 ssh-copy-id 即可。密码登录已关闭，因为这里的账户可能完全没有密码——终端也不需要密码就能打开。ed25519 密钥可用，RSA 和 ECDSA 不可用。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "sshd 將從下次啟動起監聽連接埠 %ld：那次啟動時 iSH-AOK 會解開，啟動指令碼會執行它。\n\n僅用金鑰：把你的公開金鑰放進 ~/.ssh/authorized_keys，在另一台機器上用 ssh-copy-id 即可。密碼登入已關閉，因為這裡的帳號可能完全沒有密碼——終端機也不需要密碼就能開啟。ed25519 金鑰可用，RSA 和 ECDSA 不可用。"
           }
         }
       }

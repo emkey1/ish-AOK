@@ -25,6 +25,17 @@ struct task;
 + (intptr_t)ensureBooted;
 + (BOOL)pushUsableInitTaskAsCurrent:(struct task * _Nullable * _Nonnull)previousCurrent;
 + (void)popCurrentTask:(struct task * _Nullable)previousCurrent;
+// Whether the booted native root has been asked to run sshd. NO when no
+// native root is booted, or when the guest could not be read. The answer
+// lives in the root, not in a preference; see kernel/guest_sshd.h.
++ (BOOL)guestSshdEnabled;
+// Ask it to, or not, writing UserPreferences' port alongside. Returns whether
+// the root was written to. Nothing starts or stops: it takes effect at the
+// next launch.
++ (BOOL)setGuestSshdEnabled:(BOOL)enabled;
+// Whether the booted root is a native one, which is what decides whether the
+// sshd setting is shown at all.
++ (BOOL)bootedRootIsNative;
 // The account name whose /etc/passwd UID matches ISHDefaultUserAccountUID (see
 // UserPreferences.h), or nil if this rootfs has no such account. "Open Everything as Default
 // User" targets whatever's actually there instead of a name iSH provisions itself.

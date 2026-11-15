@@ -44,6 +44,7 @@ static NSString *const kPreferenceSwapExternalBookmarkKey = @"Swap External Book
 static NSString *const kPreferenceSwapExternalPathKey = @"Swap External Path";
 static NSString *const kPreferenceEnableCompressedMemoryKey = @"Enable Compressed Memory";
 static NSString *const kPreferenceCompressedMemorySizeMBKey = @"Compressed Memory Size MB";
+static NSString *const kPreferenceGuestSshdPortKey = @"Guest sshd Port";
 static NSString *const kPreferenceEnableLLMClientKey = @"Enable LLM Client";
 static NSString *const kPreferenceLLMProviderKey = @"LLM Provider";
 static NSString *const kPreferenceLLMServerURLKey = @"LLM Server URL";
@@ -270,6 +271,9 @@ void amd64_jit_preference_set(bool enabled) {
             // pick a number is just a foot-gun. The switch still defaults OFF;
             // this only decides what you get when you turn it on.
             kPreferenceCompressedMemorySizeMBKey: @(128),
+            // 1022, not 22: a port below 1024 is the one thing a guest here
+            // cannot bind, since iOS gives the app no privileged ports.
+            kPreferenceGuestSshdPortKey: @(1022),
             kPreferenceEnableLLMClientKey: @(NO),
             kPreferenceLLMProviderKey: @"OpenRouter Free",
             kPreferenceLLMServerURLKey: @"https://openrouter.ai/api/v1",
@@ -385,6 +389,7 @@ void amd64_jit_preference_set(bool enabled) {
             @"disable_resolv_conf_rewrite": kPreferenceDisableResolvConfRewriteKey,
             @"display_desktop_scale": kPreferenceDisplayDesktopScaleKey,
             @"display_ui_scale": kPreferenceDisplayUIScaleKey,
+            @"guest_sshd_port": kPreferenceGuestSshdPortKey,
             @"enable_llm_client": kPreferenceEnableLLMClientKey,
             @"llm_provider": kPreferenceLLMProviderKey,
             @"llm_server_url": kPreferenceLLMServerURLKey,
@@ -445,6 +450,7 @@ void amd64_jit_preference_set(bool enabled) {
             kPreferenceLineHeightKey: property(lineHeight),
             kPreferenceTerminalBottomPaddingKey: property(terminalBottomPadding),
             kPreferenceDisableDimmingKey: property(shouldDisableDimming),
+            kPreferenceGuestSshdPortKey: property(guestSshdPort),
             kPreferenceEnableLLMClientKey: property(shouldEnableLLMClient),
             kPreferenceLLMProviderKey: property(llmProvider),
             kPreferenceLLMServerURLKey: property(llmServerURL),
@@ -761,6 +767,37 @@ void amd64_jit_preference_set(bool enabled) {
 
 - (BOOL)validateShouldDisableDimming:(id *)value error:(NSError **)error {
     return [*value isKindOfClass:NSNumber.class];
+}
+
+// MARK: guestSshdPort
+//
+// Clamped on the way out as well as in, for the reason compressedMemorySizeMB
+// is: the iOS Settings pane writes this key with none of our code running, so
+// a stored 0 or 99999 would otherwise reach sshd_config as a real request.
+// The floor is 1024 because iOS gives the app no privileged ports.
+#define ISHGuestSshdPortMin 1024
+#define ISHGuestSshdPortMax 65535
+#define ISHGuestSshdPortDefault 1022
+
+static NSInteger ISHClampSshdPort(NSInteger value) {
+    if (value < ISHGuestSshdPortMin || value > ISHGuestSshdPortMax)
+        return ISHGuestSshdPortDefault;
+    return value;
+}
+
+- (NSInteger)guestSshdPort {
+    return ISHClampSshdPort([_defaults integerForKey:kPreferenceGuestSshdPortKey]);
+}
+
+- (void)setGuestSshdPort:(NSInteger)value {
+    [_defaults setInteger:ISHClampSshdPort(value) forKey:kPreferenceGuestSshdPortKey];
+}
+
+- (BOOL)validateGuestSshdPort:(id *)value error:(NSError **)error {
+    if (![*value isKindOfClass:NSNumber.class])
+        return NO;
+    NSInteger v = [*value integerValue];
+    return v >= ISHGuestSshdPortMin && v <= ISHGuestSshdPortMax;
 }
 
 // MARK: shouldEnableLLMClient
