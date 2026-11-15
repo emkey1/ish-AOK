@@ -1983,10 +1983,11 @@ interleaving above is what the code permits rather than something observed.
 `__DATA,__thread_vars` after, and an archive holding only the pre-fix object
 fails the checker with exactly these two names, which is the positive control.
 
-Timing, since it governs where this check can sit: 170s over libbash/libzsh/
-libdash/libish, dominated by `nm -m` across the 99 MB libish.a. (A first
-measurement of "20 minutes" was this running against concurrent Xcode builds
-and is not representative.)
+Timing, since it governs where this check can sit: 110-170s over libbash/
+libzsh/libdash/libish, dominated by `nm -m` across the 99 MB libish.a -- 110s
+on an idle machine, 170s with something else running. (A first measurement of
+"20 minutes" was this against two concurrent Xcode builds and is not
+representative of anything.)
 
 **2. `check-device-table.py`: three models Xcode 27 knows and hostinfo.m does
 not.** The gate earning its place, and a decision waiting for somebody:
