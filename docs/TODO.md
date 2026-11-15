@@ -1989,12 +1989,12 @@ on an idle machine, 170s with something else running. (A first measurement of
 "20 minutes" was this against two concurrent Xcode builds and is not
 representative of anything.)
 
-**2. `check-device-table.py`: three models Xcode 27 knows and hostinfo.m does
-not.** The gate earning its place. Two added, one still open:
+**2. `check-device-table.py`: three models Xcode 27 knew and hostinfo.m did
+not.** The gate earning its place. All three added; the check is green:
 
     iPad19,1     iPad mini (A20 Pro)                      t8160   added
     iPad19,2     iPad mini (A20 Pro)                      t8160   added
-    iPhone19,4   iPhone Duo                               t8160   still out
+    iPhone19,4   iPhone Duo                               t8160   added
 
 The two iPad minis are in, in all three tables -- the name, the chip (`A20
 Pro`) and the fallback core counts. The core counts were the part worth being
@@ -2025,14 +2025,18 @@ nonexistent iPad99,9 -- fall through all three tables to the bare identifier
 with "unknown" cores, which is both the negative control and exactly what an
 iPhone Duo owner sees in `/proc/cpuinfo` today.
 
-`iPhone19,4` is left out, and the comment above it in kernel/hostinfo.m is
-corrected rather than removed, because what it said is no longer true: it was
-written when an older Xcode listed the model as bare "iPhone", and it is the
-**iPhone Duo**, the foldable announced 2026-09-09 and on sale from 2026-10-23.
-So it is a shipping device the table does not know, not a placeholder, and it
-fails a `builds/iSH-AOK_*` tag on its own until somebody decides -- add it
-(same chip, `t8160`, and its siblings are 2+4), or decide this check should not
-block a tag.
+`iPhone19,4` is in too. It is the **iPhone Duo**, the foldable announced
+2026-09-09 and on sale from 2026-10-23 -- so the comment that used to sit above
+it, saying an older Xcode had listed it by no name but "iPhone", described a
+state of affairs that had stopped being true: a shipping device the table did
+not know is a different thing from a placeholder. Nothing about a folding
+screen reaches these tables, and unlike the mini the Duo takes the full
+six-core A20 Pro that Apple describes (2 super + 4 efficiency, with neural
+accelerators on all six), so it matches its 19,x siblings exactly. Verified the
+same way: `iPhone Duo`, `arm64e(A20 Pro)`, `performance=2 efficiency=4`, with a
+nonexistent iPhone99,9 still falling through all three tables as the control.
+`tools/check-device-table.py` now prints "kernel/hostinfo.m has every model
+this Xcode names (151)".
 
 Noticed in passing, not fixed: iPad16,8..16,11 (iPad Air M4) and
 iPad17,1..17,4 (iPad Pro M5) are in the NAME table only -- no chip and no

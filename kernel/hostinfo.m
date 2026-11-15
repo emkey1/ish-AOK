@@ -73,14 +73,15 @@ NSString* translateDeviceIdentifier(NSString *identifier) {
         @"iPhone18,3": @"iPhone 17",
         @"iPhone18,4": @"iPhone Air",
         @"iPhone18,5": @"iPhone 17e",
-        // iPhone19,7 is a second identifier for the Pro Max. iPhone19,4 is on
-        // the same chip and is still absent, but no longer because it has no
-        // name: an older Xcode listed it as bare "iPhone", and it is the
-        // iPhone Duo -- the foldable announced 2026-09-09 and on sale from
-        // 2026-10-23. So it is a shipping device this table does not know, and
-        // tools/check-device-table.py fails on it until somebody decides.
+        // iPhone19,7 is a second identifier for the Pro Max. iPhone19,4 is the
+        // iPhone Duo, the foldable; it was missing here for a while because an
+        // older Xcode listed it by no name but "iPhone", and a comment in this
+        // spot used to say so. Nothing about a folding screen reaches these
+        // tables: it is the same A20 Pro on the same t8160 platform as the
+        // other 19,x, with the same 2+4 cores.
         @"iPhone19,2": @"iPhone 18 Pro",
         @"iPhone19,3": @"iPhone 18 Pro Max",
+        @"iPhone19,4": @"iPhone Duo",
         @"iPhone19,7": @"iPhone 18 Pro Max",
         // iPads with 64-bit Processors
         @"iPad4,1": @"iPad Air (WiFi)",
@@ -245,6 +246,7 @@ static NSString *hostChipIdentifier(NSString *identifier) {
         @"iPhone18,5": @"A19",
         @"iPhone19,2": @"A20 Pro",
         @"iPhone19,3": @"A20 Pro",
+        @"iPhone19,4": @"A20 Pro",
         @"iPhone19,7": @"A20 Pro",
         @"iPad4,1": @"A7",
         @"iPad4,2": @"A7",
@@ -394,6 +396,7 @@ static NSDictionary<NSString *, NSNumber *> *hostFallbackCoreTopology(NSString *
         @"iPhone18,5": @{@"performance": @2, @"efficiency": @4},
         @"iPhone19,2": @{@"performance": @2, @"efficiency": @4},
         @"iPhone19,3": @{@"performance": @2, @"efficiency": @4},
+        @"iPhone19,4": @{@"performance": @2, @"efficiency": @4},
         @"iPhone19,7": @{@"performance": @2, @"efficiency": @4},
         @"iPad4,1": @{@"performance": @2, @"efficiency": @0},
         @"iPad4,2": @{@"performance": @2, @"efficiency": @0},
