@@ -168,9 +168,25 @@ afterwards; iSH-AOK writes it only when it is missing.
 
 **Keys only.** Password authentication is off, and deliberately: a native-mode
 account may have no password at all, because terminals open it with `login -f`,
-which does not authenticate. Put your public key in `~/.ssh/authorized_keys`
-(`ssh-copy-id` from the other machine does it). Built without OpenSSL, so
-ed25519 keys work and RSA and ECDSA do not.
+which does not authenticate.
+
+That rules out `ssh-copy-id`, which signs in with a password to install the key
+-- so a freshly enabled sshd listens and lets nobody in until you put a key
+there yourself. Do it from a terminal in this filesystem, with the client,
+which needs nothing set up:
+
+```sh
+mkdir -p ~/.ssh
+ssh you@your-machine 'cat ~/.ssh/id_ed25519.pub' >> ~/.ssh/authorized_keys
+chmod 700 ~/.ssh; chmod 600 ~/.ssh/authorized_keys
+```
+
+Built without OpenSSL, so ed25519 keys work and RSA and ECDSA do not.
+
+**The host key is this root's own**, made on first start. A machine that
+already knows this device by another root's sshd will refuse the new one
+("Host key for ... has changed"); drop the old line with
+`ssh-keygen -R '[host]:1022'` and accept the new one.
 
 **Who is logged in.** Each terminal is a login, and is recorded as one:
 `login` writes it to `/var/run/utmp` and `/var/log/wtmp`, init marks it

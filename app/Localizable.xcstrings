@@ -8600,62 +8600,62 @@
         }
       }
     },
-    "sshd will listen on port %ld from the next launch, when iSH-AOK unpacks it and the boot scripts start it.\n\nKeys only: put your public key in ~/.ssh/authorized_keys, from the other machine with ssh-copy-id. Password authentication is off because an account here may have no password at all -- terminals open it without one. ed25519 keys work; RSA and ECDSA do not." : {
+    "sshd will listen on port %ld from the next launch, when iSH-AOK unpacks it and the boot scripts start it.\n\nKeys only, and ssh-copy-id cannot put one here: it signs in with a password first, and password authentication is off, because an account here may have no password at all. Fetch the key with the client instead, from a terminal in this filesystem:\n\nmkdir -p ~/.ssh && ssh you@your-machine 'cat ~/.ssh/id_ed25519.pub' >> ~/.ssh/authorized_keys\n\ned25519 keys work; RSA and ECDSA do not." : {
       "comment" : "sshd section footer when on; %ld is a port number",
       "extractionState" : "manual",
       "localizations" : {
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "sshd wird ab dem nächsten Start auf Port %ld lauschen: iSH-AOK entpackt es dann, und die Boot-Skripte starten es.\n\nNur Schlüssel: Legen Sie Ihren öffentlichen Schlüssel in ~/.ssh/authorized_keys ab, vom anderen Rechner aus mit ssh-copy-id. Die Passwortanmeldung ist aus, weil ein Konto hier überhaupt kein Passwort haben kann -- Terminals öffnen es ohne. ed25519-Schlüssel funktionieren, RSA und ECDSA nicht."
+            "value" : "sshd wird ab dem nächsten Start auf Port %ld lauschen: iSH-AOK entpackt es dann, und die Boot-Skripte starten es.\n\nNur Schlüssel -- und ssh-copy-id kann hier keinen ablegen: es meldet sich zuerst mit einem Passwort an, und die Passwortanmeldung ist aus, weil ein Konto hier überhaupt kein Passwort haben kann. Holen Sie den Schlüssel stattdessen mit dem Client, aus einem Terminal in diesem Dateisystem:\n\nmkdir -p ~/.ssh && ssh you@your-machine 'cat ~/.ssh/id_ed25519.pub' >> ~/.ssh/authorized_keys\n\ned25519-Schlüssel funktionieren, RSA und ECDSA nicht."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "sshd escuchará en el puerto %ld a partir del próximo inicio, cuando iSH-AOK lo descomprima y los scripts de arranque lo inicien.\n\nSolo claves: pon tu clave pública en ~/.ssh/authorized_keys, desde la otra máquina con ssh-copy-id. La autenticación por contraseña está desactivada porque una cuenta aquí puede no tener ninguna contraseña: las terminales la abren sin ella. Las claves ed25519 funcionan; RSA y ECDSA no."
+            "value" : "sshd escuchará en el puerto %ld a partir del próximo inicio, cuando iSH-AOK lo descomprima y los scripts de arranque lo inicien.\n\nSolo claves, y ssh-copy-id no puede poner una aquí: primero inicia sesión con una contraseña, y la autenticación por contraseña está desactivada porque una cuenta aquí puede no tener ninguna. Trae la clave con el cliente, desde una terminal en este sistema de archivos:\n\nmkdir -p ~/.ssh && ssh you@your-machine 'cat ~/.ssh/id_ed25519.pub' >> ~/.ssh/authorized_keys\n\nLas claves ed25519 funcionan; RSA y ECDSA no."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "sshd écoutera sur le port %ld dès le prochain lancement, quand iSH-AOK le décompressera et que les scripts de démarrage le lanceront.\n\nClés uniquement : placez votre clé publique dans ~/.ssh/authorized_keys, depuis l'autre machine avec ssh-copy-id. L'authentification par mot de passe est désactivée, car un compte ici peut n'avoir aucun mot de passe — les terminaux l'ouvrent sans. Les clés ed25519 fonctionnent, RSA et ECDSA non."
+            "value" : "sshd écoutera sur le port %ld dès le prochain lancement, quand iSH-AOK le décompressera et que les scripts de démarrage le lanceront.\n\nClés uniquement, et ssh-copy-id ne peut pas en déposer une ici : il se connecte d'abord avec un mot de passe, et l'authentification par mot de passe est désactivée, car un compte ici peut n'avoir aucun mot de passe. Récupérez plutôt la clé avec le client, depuis un terminal dans ce système de fichiers :\n\nmkdir -p ~/.ssh && ssh you@your-machine 'cat ~/.ssh/id_ed25519.pub' >> ~/.ssh/authorized_keys\n\nLes clés ed25519 fonctionnent, RSA et ECDSA non."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "sshd は次回の起動からポート %ld で待ち受けます。その起動で iSH-AOK が展開し、起動スクリプトが開始します。\n\n鍵のみ: 公開鍵を ~/.ssh/authorized_keys に置いてください（相手のマシンからは ssh-copy-id で）。ここのアカウントはパスワードを持たないことがあり、ターミナルもパスワードなしで開くため、パスワード認証は無効です。ed25519 鍵は使えますが、RSA と ECDSA は使えません。"
+            "value" : "sshd は次回の起動からポート %ld で待ち受けます。その起動で iSH-AOK が展開し、起動スクリプトが開始します。\n\n鍵のみです。ssh-copy-id では置けません。先にパスワードでログインしますが、ここのアカウントはパスワードを持たないことがあるため、パスワード認証は無効だからです。代わりに、このファイルシステムのターミナルからクライアントで取ってきてください:\n\nmkdir -p ~/.ssh && ssh you@your-machine 'cat ~/.ssh/id_ed25519.pub' >> ~/.ssh/authorized_keys\n\ned25519 鍵は使えますが、RSA と ECDSA は使えません。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "sshd는 다음 실행부터 포트 %ld에서 수신합니다. 그때 iSH-AOK가 압축을 풀고 부팅 스크립트가 시작합니다.\n\n키만 사용: 공개 키를 ~/.ssh/authorized_keys에 넣으세요. 다른 컴퓨터에서 ssh-copy-id로 할 수 있습니다. 여기의 계정은 비밀번호가 아예 없을 수 있고 터미널도 비밀번호 없이 열기 때문에 비밀번호 인증은 꺼져 있습니다. ed25519 키는 되고 RSA와 ECDSA는 되지 않습니다."
+            "value" : "sshd는 다음 실행부터 포트 %ld에서 수신합니다. 그때 iSH-AOK가 압축을 풀고 부팅 스크립트가 시작합니다.\n\n키만 사용하며, ssh-copy-id로는 넣을 수 없습니다. 먼저 비밀번호로 로그인하는데, 여기의 계정은 비밀번호가 아예 없을 수 있어 비밀번호 인증이 꺼져 있기 때문입니다. 대신 이 파일 시스템의 터미널에서 클라이언트로 가져오세요:\n\nmkdir -p ~/.ssh && ssh you@your-machine 'cat ~/.ssh/id_ed25519.pub' >> ~/.ssh/authorized_keys\n\ned25519 키는 되고 RSA와 ECDSA는 되지 않습니다."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "O sshd vai escutar na porta %ld a partir da próxima abertura, quando o iSH-AOK o descompacta e os scripts de inicialização o iniciam.\n\nSomente chaves: coloque sua chave pública em ~/.ssh/authorized_keys, da outra máquina com ssh-copy-id. A autenticação por senha está desligada porque uma conta aqui pode não ter senha nenhuma -- os terminais a abrem sem senha. Chaves ed25519 funcionam; RSA e ECDSA não."
+            "value" : "O sshd vai escutar na porta %ld a partir da próxima abertura, quando o iSH-AOK o descompacta e os scripts de inicialização o iniciam.\n\nSomente chaves, e o ssh-copy-id não consegue colocar uma aqui: ele entra primeiro com uma senha, e a autenticação por senha está desligada porque uma conta aqui pode não ter senha nenhuma. Busque a chave com o cliente, de um terminal neste sistema de arquivos:\n\nmkdir -p ~/.ssh && ssh you@your-machine 'cat ~/.ssh/id_ed25519.pub' >> ~/.ssh/authorized_keys\n\nChaves ed25519 funcionam; RSA e ECDSA não."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "sshd будет слушать порт %ld начиная со следующего запуска: тогда iSH-AOK его распакует, а скрипты загрузки запустят.\n\nТолько ключи: положите свой открытый ключ в ~/.ssh/authorized_keys — с другой машины это делает ssh-copy-id. Вход по паролю выключен, потому что у учётной записи здесь пароля может не быть вовсе: терминалы открывают её без пароля. Ключи ed25519 работают, RSA и ECDSA — нет."
+            "value" : "sshd будет слушать порт %ld начиная со следующего запуска: тогда iSH-AOK его распакует, а скрипты загрузки запустят.\n\nТолько ключи, и ssh-copy-id сюда ключ не положит: он сначала входит по паролю, а вход по паролю выключен, потому что у учётной записи здесь пароля может не быть вовсе. Заберите ключ клиентом — из терминала в этой файловой системе:\n\nmkdir -p ~/.ssh && ssh you@your-machine 'cat ~/.ssh/id_ed25519.pub' >> ~/.ssh/authorized_keys\n\nКлючи ed25519 работают, RSA и ECDSA — нет."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "sshd 将从下次启动起监听端口 %ld：那次启动时 iSH-AOK 会解包，启动脚本会运行它。\n\n仅用密钥：把你的公钥放进 ~/.ssh/authorized_keys，在另一台机器上用 ssh-copy-id 即可。密码登录已关闭，因为这里的账户可能完全没有密码——终端也不需要密码就能打开。ed25519 密钥可用，RSA 和 ECDSA 不可用。"
+            "value" : "sshd 将从下次启动起监听端口 %ld：那次启动时 iSH-AOK 会解包，启动脚本会运行它。\n\n仅用密钥，而且 ssh-copy-id 放不进来：它要先用密码登录，而密码登录已关闭，因为这里的账户可能完全没有密码。改用客户端去取，在这个文件系统的终端里：\n\nmkdir -p ~/.ssh && ssh you@your-machine 'cat ~/.ssh/id_ed25519.pub' >> ~/.ssh/authorized_keys\n\ned25519 密钥可用，RSA 和 ECDSA 不可用。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "sshd 將從下次啟動起監聽連接埠 %ld：那次啟動時 iSH-AOK 會解開，啟動指令碼會執行它。\n\n僅用金鑰：把你的公開金鑰放進 ~/.ssh/authorized_keys，在另一台機器上用 ssh-copy-id 即可。密碼登入已關閉，因為這裡的帳號可能完全沒有密碼——終端機也不需要密碼就能開啟。ed25519 金鑰可用，RSA 和 ECDSA 不可用。"
+            "value" : "sshd 將從下次啟動起監聽連接埠 %ld：那次啟動時 iSH-AOK 會解開，啟動指令碼會執行它。\n\n僅用金鑰，而且 ssh-copy-id 放不進來：它要先用密碼登入，而密碼登入已關閉，因為這裡的帳號可能完全沒有密碼。改用用戶端去取，在這個檔案系統的終端機裡：\n\nmkdir -p ~/.ssh && ssh you@your-machine 'cat ~/.ssh/id_ed25519.pub' >> ~/.ssh/authorized_keys\n\ned25519 金鑰可用，RSA 和 ECDSA 不可用。"
           }
         }
       }
