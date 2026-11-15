@@ -1174,62 +1174,62 @@
         }
       }
     },
-    "1024 to 65535. A port below 1024 needs privileges iOS does not give the app." : {
+    "1 to 65535. Pick one nothing else on this device is listening on; 1022 is what iSH-AOK's own filesystems use." : {
       "comment" : "sshd port alert message",
       "extractionState" : "manual",
       "localizations" : {
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "1024 bis 65535. Ein Port unter 1024 erfordert Rechte, die iOS der App nicht gibt."
+            "value" : "1 bis 65535. Wählen Sie einen, auf dem sonst nichts auf diesem Gerät lauscht; 1022 ist der, den die Dateisysteme von iSH-AOK selbst verwenden."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "De 1024 a 65535. Un puerto por debajo de 1024 requiere privilegios que iOS no concede a la app."
+            "value" : "De 1 a 65535. Elige uno en el que no esté escuchando nada más en este dispositivo; 1022 es el que usan los propios sistemas de archivos de iSH-AOK."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "De 1024 à 65535. Un port inférieur à 1024 exige des privilèges qu'iOS n'accorde pas à l'app."
+            "value" : "De 1 à 65535. Choisissez-en un sur lequel rien d'autre n'écoute sur cet appareil ; 1022 est celui qu'utilisent les systèmes de fichiers d'iSH-AOK."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "1024〜65535。1024 未満のポートには、iOS がアプリに与えない権限が必要です。"
+            "value" : "1〜65535。この端末で他に待ち受けていないものを選んでください。iSH-AOK 自身のファイルシステムは 1022 を使います。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "1024에서 65535까지. 1024 미만의 포트에는 iOS가 앱에 주지 않는 권한이 필요합니다."
+            "value" : "1에서 65535까지. 이 기기에서 다른 것이 수신하고 있지 않은 포트를 고르세요. iSH-AOK 자체 파일 시스템은 1022를 씁니다."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "De 1024 a 65535. Uma porta abaixo de 1024 exige privilégios que o iOS não dá ao app."
+            "value" : "De 1 a 65535. Escolha uma em que nada mais esteja escutando neste dispositivo; 1022 é a que os próprios sistemas de arquivos do iSH-AOK usam."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "От 1024 до 65535. Порт ниже 1024 требует прав, которых iOS приложению не даёт."
+            "value" : "От 1 до 65535. Выберите тот, который на этом устройстве больше никто не слушает; собственные файловые системы iSH-AOK используют 1022."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "1024 到 65535。低于 1024 的端口需要 iOS 不会授予应用的权限。"
+            "value" : "1 到 65535。选一个本机上没有别的程序在监听的端口；iSH-AOK 自己的文件系统用 1022。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "1024 到 65535。低於 1024 的連接埠需要 iOS 不會授予應用程式的權限。"
+            "value" : "1 到 65535。選一個本機上沒有其他程式在監聽的連接埠；iSH-AOK 自己的檔案系統用 1022。"
           }
         }
       }

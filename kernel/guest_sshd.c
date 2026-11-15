@@ -342,7 +342,11 @@ int guest_sshd_set_enabled(bool enabled, unsigned port) {
         return (err == _ENOENT) ? 0 : err;
     }
 
-    if (port < 1024 || port > 65535)
+    // 1..65535, not 1024.., because AOK's roots have always used 1022. A
+    // bind that low is refused to a non-root process on macOS but not on iOS,
+    // which is where this runs; see ISHGuestSshdPortMin in
+    // app/UserPreferences.m for what assuming otherwise cost.
+    if (port < 1 || port > 65535)
         return _EINVAL;
 
     char conf[128];

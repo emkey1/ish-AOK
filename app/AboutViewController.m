@@ -615,7 +615,7 @@ UIViewController *ISHCreateDiagnosticsNavigationController(void) {
 - (void)_showGuestSshdPortEditor {
     UIAlertController *alert =
         [UIAlertController alertControllerWithTitle:NSLocalizedString(@"sshd Port", @"Alert title: choosing the ssh server's port")
-                                            message:NSLocalizedString(@"1024 to 65535. A port below 1024 needs privileges iOS does not give the app.", @"sshd port alert message")
+                                            message:NSLocalizedString(@"1 to 65535. Pick one nothing else on this device is listening on; 1022 is what iSH-AOK's own filesystems use.", @"sshd port alert message")
                                      preferredStyle:UIAlertControllerStyleAlert];
     [alert addTextFieldWithConfigurationHandler:^(UITextField *textField) {
         textField.text = [NSString stringWithFormat:@"%ld", (long) UserPreferences.shared.guestSshdPort];

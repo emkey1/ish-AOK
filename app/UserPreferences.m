@@ -271,8 +271,9 @@ void amd64_jit_preference_set(bool enabled) {
             // pick a number is just a foot-gun. The switch still defaults OFF;
             // this only decides what you get when you turn it on.
             kPreferenceCompressedMemorySizeMBKey: @(128),
-            // 1022, not 22: a port below 1024 is the one thing a guest here
-            // cannot bind, since iOS gives the app no privileged ports.
+            // 1022 by convention: it is what AOK's own roots have used for
+            // sshd all along, and high enough to stay out of the way of
+            // whatever else is listening.
             kPreferenceGuestSshdPortKey: @(1022),
             kPreferenceEnableLLMClientKey: @(NO),
             kPreferenceLLMProviderKey: @"OpenRouter Free",
@@ -774,8 +775,14 @@ void amd64_jit_preference_set(bool enabled) {
 // Clamped on the way out as well as in, for the reason compressedMemorySizeMB
 // is: the iOS Settings pane writes this key with none of our code running, so
 // a stored 0 or 99999 would otherwise reach sshd_config as a real request.
-// The floor is 1024 because iOS gives the app no privileged ports.
-#define ISHGuestSshdPortMin 1024
+//
+// The floor is 1, not 1024. A first draft said 1024 "because iOS gives the app
+// no privileged ports", which is true of macOS -- a bind to 1022 there is
+// EACCES for a non-root process -- and NOT true of iOS, where AOK's own roots
+// have run sshd on 1022 for as long as they have run it at all. The mismatch
+// was not academic: the default was 1022, so the clamp turned every fresh
+// install's port into "invalid" and the Settings switch refused to turn on.
+#define ISHGuestSshdPortMin 1
 #define ISHGuestSshdPortMax 65535
 #define ISHGuestSshdPortDefault 1022
 
