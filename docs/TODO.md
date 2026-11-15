@@ -1832,6 +1832,33 @@ only existed to make an exit look like a backgrounding.
 `/AOK/tools/suspend.sh` is unaffected, as it always was: a guest-initiated halt
 is not the app terminating itself.
 
+**Sequel, 2026-11-15: taking the exit out took the stop with it.** `exit(0)` was
+not only how the app left, it was the only thing that stopped the machine, so
+from 566 Suspend and Exit wrote the image and let the guest run straight on --
+`ISHSuspendSessionSuspendAndStop` had become `ISHSuspendSessionSaveNow` plus a
+screen, same `checkpoint_save_external_flags`, same flags, nothing halted.
+Measured on an iPad simulator with a counter ticking once a second in the
+guest: it ran from 65 to 135 over the minute after "Session suspended" went up,
+writing all the while to the root the image would be resumed onto -- exactly
+the drift the comment above `ISHSuspendSessionSuspendAndStop` argued for
+exiting immediately to avoid. Fixed with `CKPT_SAVE_AND_HALT`: `ckpt_save_locked`
+skips the thaw once the image is whole and in place, so every task stays parked
+on its condition variable (free, see the freezer notes in kernel/checkpoint.h)
+and the machine really is down. `ishGuestSuspended` in AppDelegate.m then stops
+any later save thawing it back -- the automatic background save shares the
+pinned slot with a user save (`ISHSuspendAutomaticSessionImagePath` returns
+`ishSessionCurrentSlot` when one is pinned), so without the guard a backgrounded
+app with Suspend To Disk on would have written over the moment the user chose
+and restarted the guest doing it. Verified end to end: the tick stops dead at
+the save, and the image still restores and carries on from it. Two comments
+that had gone stale with the behaviour are corrected. **Still true and not
+chased:** the filesystem-switch path (`exitApp`) leaves its guest running too,
+which is harmless because it never saved anything, and the System Halted
+alert's "Quit iSH-AOK" and `/AOK/tools/suspend.sh` both still end the process,
+so the HIG objection is answered for the two GUI paths and not for the feature.
+`applicationDidEnterBackground`'s `exit(0)` is dead twice over: nothing sets
+`self.exiting`, and UIScene means the method is never called.
+
 ---
 
 ## Host capabilities worth exposing

@@ -540,6 +540,17 @@ static void ios_handle_exit(struct task *task, int code) {
 // and to say what happened instead of looking broken.
 static atomic_bool ishGuestHalted;
 
+// Set once a Suspend has written its image and left the machine frozen. The
+// guest is not halted -- its processes are all still there, parked -- but it
+// is just as finished, and for the same reason nothing may save it again: a
+// second save would thaw what the suspend stopped and run the guest on past
+// the moment its image describes.
+static atomic_bool ishGuestSuspended;
+
+bool ISHGuestSuspended(void) {
+    return atomic_load(&ishGuestSuspended);
+}
+
 bool ISHGuestHalted(void) {
     return atomic_load(&ishGuestHalted);
 }
@@ -3611,7 +3622,8 @@ void ISHSessionPresentResumePicker(UIViewController *host,
 
 int ISHSuspendSessionSaveNow(BOOL leaveOutGPU) {
     // Nothing to save once init has exited: no machine is left to freeze.
-    if (ISHGuestHalted())
+    // Nor once a Suspend has stopped one -- see ishGuestSuspended.
+    if (ISHGuestHalted() || ISHGuestSuspended())
         return _ESRCH;
     NSString *image = ISHSuspendSessionImagePath();
     if (image == nil)
@@ -3708,10 +3720,13 @@ void ISHSuspendSessionConfirmGPUThen(UIViewController *host, NSString *verb,
 // the same exit(0) (kernel/checkpoint.c's halt path; the app's halt_hook only
 // records a flag there).
 //
-// Exiting immediately rather than after a beat, and that is deliberate: the
-// image describes the guest as it was when the freeze stopped it, while the
-// filesystem keeps changing for as long as the app is alive. Every millisecond
-// between the two is a millisecond the root can drift from the image.
+// Stopping the machine matters as much as writing the image: the image
+// describes the guest as it was when the freeze stopped it, while the root
+// keeps changing for as long as anything is running. Every millisecond the
+// guest runs on past the save is a millisecond the filesystem drifts from the
+// image that will be resumed onto it. Up to 566 exit(0) on the next line did
+// the stopping; it does not exit any more, so the stop is CKPT_SAVE_AND_HALT
+// and the guest stays frozen.
 // A window above everything, with no way out of it, kept alive by the static.
 //
 // Shown when the app has nothing left to do and the person should close it.
@@ -3721,11 +3736,12 @@ void ISHSuspendSessionConfirmGPUThen(UIViewController *host, NSString *verb,
 // feature is otherwise deliberate and confirmed. Closing the app is the same
 // two seconds of the person's time and none of the ambiguity.
 //
-// Its own UIWindow rather than a presented controller: at this point the
-// guest is checkpointed and its processes are gone, so every terminal, applet
-// and alert still on screen is showing a machine that no longer exists. A
-// window above UIWindowLevelAlert covers all of them without having to find
-// and dismiss each one.
+// Its own UIWindow rather than a presented controller: whatever brought the
+// app here, nothing on screen is live any more. After a Suspend every guest
+// task is frozen and the terminals behind this are showing a machine that has
+// stopped; after a filesystem change the root being shown is not the one the
+// next launch will use. A window above UIWindowLevelAlert covers the lot
+// without having to find and dismiss each terminal, applet and alert.
 static UIWindow *ishFinalScreenWindow;
 
 void ISHPresentFinalScreen(NSString *_Nonnull title, NSString *_Nonnull message) {
@@ -3784,17 +3800,26 @@ void ISHPresentFinalScreen(NSString *_Nonnull title, NSString *_Nonnull message)
 }
 
 int ISHSuspendSessionSuspendAndStop(BOOL leaveOutGPU) {
-    if (ISHGuestHalted())
+    if (ISHGuestHalted() || ISHGuestSuspended())
         return _ESRCH;
     NSString *image = ISHSuspendSessionImagePath();
     if (image == nil)
         return _ENOENT;
     ISHWorkspaceCaptureLayoutForSuspend(image);
+    // CKPT_SAVE_AND_HALT is what makes this a suspend rather than a save.
+    // Up to 566 the stop was exit(0) on the line after this one, so taking
+    // the exit out took the stop with it: the image was written and the guest
+    // carried straight on, ticking away behind the final screen and writing
+    // to the root the image would be resumed onto. Measured on 2026-11-15 --
+    // a counter in the guest ran from 65 to 135 over the minute after
+    // "Session suspended" went up.
     int err = checkpoint_save_external_flags(image.fileSystemRepresentation,
-                                             leaveOutGPU ? CKPT_SAVE_LEAVE_OUT : 0);
+                                             CKPT_SAVE_AND_HALT |
+                                             (leaveOutGPU ? CKPT_SAVE_LEAVE_OUT : 0));
     if (err < 0)
         return err;
-    os_log(ISHSuspendLog(), "session suspended on request");
+    atomic_store(&ishGuestSuspended, true);
+    os_log(ISHSuspendLog(), "session suspended on request; guest stopped");
     ISHPresentFinalScreen(NSLocalizedString(@"Session suspended", @"Final screen title after Suspend and Exit"),
                           NSLocalizedString(@"You can close iSH-AOK now. The next launch picks this session up where you left it.",
                                             @"Final screen message after Suspend and Exit"));
@@ -5894,7 +5919,8 @@ void ISHSuspendGuardEnterBackground(void) {
     // guest is unharmed either way -- a checkpoint is a copy -- and if it
     // refuses (a native program that cannot describe itself, a descriptor with
     // no restore rule) it says so and the next launch simply boots.
-    if (UserPreferences.shared.shouldSuspendToDisk && !ISHGuestHalted()) {
+    if (UserPreferences.shared.shouldSuspendToDisk && !ISHGuestHalted() &&
+            !ISHGuestSuspended()) {
         // The automatic name: this is the system taking the session, not the
         // user saving it. See ISHSuspendAutomaticSessionImagePath.
         NSString *image = ISHSuspendAutomaticSessionImagePath();

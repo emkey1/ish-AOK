@@ -3767,16 +3767,26 @@ static int ckpt_save_locked(const char *host_path, unsigned flags) {
         }
     }
 
-    ckpt_thaw_all();
+    // A SUSPEND stays frozen (CKPT_SAVE_AND_HALT): the machine has stopped and
+    // the image is the only thing that continues it, so nothing may run past
+    // the moment it describes. Held only while the save is still going well --
+    // every failure from here down thaws, because a guest that is still
+    // running beats one stopped with no image to show for it.
+    const bool and_halt = (flags & CKPT_SAVE_AND_HALT) != 0;
+    if (!and_halt)
+        ckpt_thaw_all();
 
     if (err != 0) {
+        if (and_halt)
+            ckpt_thaw_all();
         unlink(tmp_path);   // whatever was already at host_path is untouched
         return err;
     }
 
     // Durable before it is visible, and both steps AFTER the thaw: the guest
     // does not have to be stopped for an fsync, and on a session-sized image
-    // that is the longest part of the whole save.
+    // that is the longest part of the whole save. (A suspend is still frozen
+    // here, and that is the point -- it is not going to run again.)
     int img_fd = open(tmp_path, O_RDONLY);
     if (img_fd >= 0) {
         fsync(img_fd);
@@ -3785,6 +3795,8 @@ static int ckpt_save_locked(const char *host_path, unsigned flags) {
     t_synced = timespec_now(CLOCK_MONOTONIC);
     if (rename(tmp_path, host_path) != 0) {
         err = errno_map();
+        if (and_halt)
+            ckpt_thaw_all();
         unlink(tmp_path);
         return err;
     }

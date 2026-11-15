@@ -62,6 +62,21 @@ int checkpoint_save_external(const char *host_path);
 // with no restore rule -- together with their children and threads. They keep
 // running; a resume comes back without them. Without it such a save refuses.
 #define CKPT_SAVE_LEAVE_OUT 1u
+// CKPT_SAVE_AND_HALT turns the save into a SUSPEND: once the image is whole
+// and in place the guest is left FROZEN instead of thawed, so the machine
+// really does stop and the next launch is the one that continues it. Every
+// task parks on a condition variable and costs nothing while it waits.
+//
+// The guest-initiated suspend (/AOK/tools/suspend.sh, checkpoint_request with
+// and_halt) stops the machine by ending the host process. An app that may not
+// end its own process -- Apple's HIG asks it not to -- needs this instead, or
+// it writes an image and then lets the guest run on past the moment the image
+// describes, which is what 566 shipped.
+//
+// Only on success: every failure below the write still thaws, because a guest
+// that is still running is the better of the two outcomes. Nothing thaws it
+// again afterwards, so a caller that uses this must not ask for another save.
+#define CKPT_SAVE_AND_HALT 2u
 int checkpoint_save_external_flags(const char *host_path, unsigned flags);
 
 // How many processes hold the GPU or the Wayland view's input right now, and

@@ -91,6 +91,8 @@ int ISHSuspendSessionSaveNow(BOOL leaveOutGPU);
 // True once the guest's init has exited (reboot, poweroff, halt, or init dying)
 // for the rest of this launch. Nothing restarts it in place.
 bool ISHGuestHalted(void);
+// Whether a Suspend has written its image and left the guest frozen.
+bool ISHGuestSuspended(void);
 
 // Save the session so the next launch resumes it, then stop. A SAVE is a copy
 // and the guest carries on; this is the departure: the guest is checkpointed
