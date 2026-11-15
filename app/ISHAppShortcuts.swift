@@ -26,7 +26,13 @@ enum ISHShortcutDestination: String, AppEnum {
     case themes
     case bootImages
 
-    static var typeDisplayRepresentation: TypeDisplayRepresentation = "Destination"
+    // The key is "Shortcuts Destination" and the English it resolves to is
+    // "Destination". A bare "Destination" key is already taken by the LLM
+    // destination editor, where it means a connection target and is translated
+    // that way in all nine languages (ja 接続先, ru Подключение, zh-Hant 服務),
+    // so sharing it put the wrong word on this parameter. The catalogue's en
+    // entry carries the word shown; only the key is disambiguated.
+    static var typeDisplayRepresentation: TypeDisplayRepresentation = "Shortcuts Destination"
 
     static var caseDisplayRepresentations: [ISHShortcutDestination: DisplayRepresentation] = [
         .dashboard: "Workspace Dashboard",
@@ -49,7 +55,7 @@ struct ISHOpenShortcutIntent: AppIntent {
     // configured enum value still resolves to this default, because the
     // LinkServices registry refuses the ad-hoc bundle -- same environmental
     // cause as App Shortcut tiles failing there; both work with real signing.)
-    @Parameter(title: "Destination", default: .dashboard)
+    @Parameter(title: "Shortcuts Destination", default: .dashboard)
     var destination: ISHShortcutDestination
 
     init() {}

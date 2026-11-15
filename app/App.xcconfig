@@ -8,6 +8,13 @@ INFOPLIST_PREFIX_HEADER = $(BUILT_PRODUCTS_DIR)/infoplisticons.h
 ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon
 CODE_SIGN_ENTITLEMENTS = app/iSH.entitlements
 
+// App Intents and App Shortcuts put their user-visible text in Swift
+// properties -- `static var title: LocalizedStringResource = "Run Command"`,
+// `@Parameter(title:)`, the Siri phrases -- not in NSLocalizedString calls.
+// Without this the compiler emits no .stringsdata for any of them, nothing
+// reaches a catalogue, and Shortcuts and Siri stay English in every language.
+SWIFT_EMIT_LOC_STRINGS = YES
+
 HEADER_SEARCH_PATHS = $(inherited) $(SRCROOT) $(SRCROOT)/deps/libarchive/libarchive
 // AccessibilityFixes.m contains a static constructor that we don't want removed
 // MoltenVK, inside libish.a with the GPU render node (fs/virtgpu.c), is C++

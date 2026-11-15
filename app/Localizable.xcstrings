@@ -931,6 +931,11 @@
         }
       }
     },
+    "%@" : {
+      "comment" : "Run Command error passthrough, app/ISHRunCommandIntent.swift; the whole string is the reason text",
+      "extractionState" : "manual",
+      "shouldTranslate" : false
+    },
     "%@ → %@ in %.1f s (%@)." : {
       "comment" : "Video converter result: input size, output size, seconds, details",
       "localizations" : {
@@ -4084,6 +4089,810 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "正在安裝套件 %1$ld/%2$ld"
+          }
+        }
+      }
+    },
+    "Run ${command} in iSH-AOK" : {
+      "comment" : "Run Command parameter summary, app/ISHRunCommandIntent.swift; ${command} is filled in by Shortcuts",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "${command} in iSH-AOK ausführen"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ejecutar ${command} en iSH-AOK"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Exécuter ${command} dans iSH-AOK"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "iSH-AOK で ${command} を実行"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "iSH-AOK에서 ${command} 실행"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Executar ${command} no iSH-AOK"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Выполнить ${command} в iSH-AOK"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在 iSH-AOK 中运行 ${command}"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在 iSH-AOK 中執行 ${command}"
+          }
+        }
+      }
+    },
+    "Running commands from Shortcuts is turned off. Enable “Allow Shortcuts to Run Commands” in iSH-AOK’s settings." : {
+      "comment" : "Run Command error, app/ISHRunCommandIntent.swift",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Das Ausführen von Befehlen aus Kurzbefehlen ist deaktiviert. Aktiviere „Kurzbefehlen das Ausführen von Befehlen erlauben“ in den Einstellungen von iSH-AOK."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La ejecución de comandos desde Atajos está desactivada. Activa «Permitir que los atajos ejecuten comandos» en los ajustes de iSH-AOK."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "L’exécution de commandes depuis Raccourcis est désactivée. Activez « Autoriser les raccourcis à exécuter des commandes » dans les réglages d’iSH-AOK."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ショートカットからのコマンド実行はオフになっています。iSH-AOK の設定で「ショートカットによるコマンドの実行を許可」をオンにしてください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "단축어에서 명령 실행이 꺼져 있습니다. iSH-AOK 설정에서 “단축어가 명령을 실행하도록 허용”을 켜십시오."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A execução de comandos pelo Atalhos está desativada. Ative “Permitir que Atalhos Executem Comandos” nos ajustes do iSH-AOK."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Запуск команд из приложения «Команды» отключён. Включите в настройках iSH-AOK параметр «Разрешить запуск команд из „Команд“»."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已关闭从“快捷指令”运行命令。请在 iSH-AOK 的设置中开启“允许快捷指令运行命令”。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已關閉從「捷徑」執行指令。請在 iSH-AOK 的設定中開啟「允許捷徑執行指令」。"
+          }
+        }
+      }
+    },
+    "Runs a shell command in the iSH-AOK guest system and returns its output (stdout and stderr merged). The command runs headlessly; the app does not need to be open. It runs as root, or as the default user account when \"Open Everything as Default User\" is enabled in Settings." : {
+      "comment" : "Run Command intent description, app/ISHRunCommandIntent.swift",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Führt einen Shell-Befehl im iSH-AOK-Gastsystem aus und gibt dessen Ausgabe zurück (stdout und stderr zusammengeführt). Der Befehl läuft ohne Oberfläche; die App muss nicht geöffnet sein. Er läuft als root – oder als Standardbenutzerkonto, wenn „Alles als Standardbenutzer öffnen“ in den Einstellungen aktiviert ist."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ejecuta un comando de shell en el sistema invitado de iSH-AOK y devuelve su salida (stdout y stderr combinados). El comando se ejecuta sin interfaz; la app no necesita estar abierta. Se ejecuta como root, o como la cuenta de usuario predeterminada cuando «Abrir todo como usuario predeterminado» está activado en Ajustes."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Exécute une commande shell dans le système invité iSH-AOK et renvoie sa sortie (stdout et stderr fusionnés). La commande s’exécute sans interface ; l’app n’a pas besoin d’être ouverte. Elle s’exécute en tant que root, ou sous le compte utilisateur par défaut si « Tout ouvrir en tant qu’utilisateur par défaut » est activé dans les Réglages."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "iSH-AOK のゲストシステムでシェルコマンドを実行し、その出力（stdout と stderr を統合）を返します。コマンドは画面を使わずに実行され、アプリを開いておく必要はありません。root として実行されますが、「すべてをデフォルトユーザとして開く」が設定でオンの場合はデフォルトユーザアカウントとして実行されます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "iSH-AOK 게스트 시스템에서 셸 명령을 실행하고 그 출력(stdout과 stderr 병합)을 반환합니다. 명령은 화면 없이 실행되며 앱이 열려 있지 않아도 됩니다. root로 실행되지만, 설정에서 “모든 항목을 기본 사용자로 열기”가 켜져 있으면 기본 사용자 계정으로 실행됩니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Executa um comando do shell no sistema convidado do iSH-AOK e retorna a saída dele (stdout e stderr combinados). O comando é executado sem interface; o app não precisa estar aberto. Ele é executado como root ou como a conta de usuário padrão quando “Abrir Tudo como Usuário Padrão” está ativado nos Ajustes."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Выполняет команду оболочки в гостевой системе iSH-AOK и возвращает её вывод (stdout и stderr объединены). Команда выполняется без интерфейса, приложение не обязано быть открыто. Она выполняется от имени root — или от имени учётной записи пользователя по умолчанию, если в настройках включено «Открывать всё от имени пользователя по умолчанию»."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在 iSH-AOK 客户机系统中运行一条 Shell 命令，并返回其输出（stdout 与 stderr 已合并）。命令在无界面状态下运行，无需打开应用。它以 root 身份运行；若在设置中开启了“以默认用户打开所有内容”，则以默认用户账户身份运行。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在 iSH-AOK 客體系統中執行一行 Shell 指令，並傳回其輸出（stdout 與 stderr 已合併）。指令在無介面狀態下執行，不需要打開 App。它以 root 身分執行；若在設定中開啟「以預設使用者打開所有項目」，則以預設使用者帳號身分執行。"
+          }
+        }
+      }
+    },
+    "Shortcuts Destination" : {
+      "comment" : "Shortcuts parameter and AppEnum type name, app/ISHAppShortcuts.swift; shown as “Destination”. A key of its own because a bare “Destination” belongs to the LLM destination editor, where it means a connection target",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ziel"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Destination"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Destino"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Destination"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "移動先"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이동 위치"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Destino"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Назначение"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "目标位置"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "目標位置"
+          }
+        }
+      }
+    },
+    "The command exited with status %lld." : {
+      "comment" : "Run Command error, app/ISHRunCommandIntent.swift",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Der Befehl wurde mit Status %lld beendet."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El comando finalizó con el estado %lld."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La commande s’est terminée avec le code %lld."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "コマンドがステータス %lld で終了しました。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "명령이 상태 %lld로 종료되었습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O comando saiu com status %lld."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Команда завершилась с кодом %lld."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "命令以状态 %lld 退出。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "指令以狀態 %lld 結束。"
+          }
+        }
+      }
+    },
+    "The command exited with status %lld. Output: %@" : {
+      "comment" : "Run Command error, app/ISHRunCommandIntent.swift",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Der Befehl wurde mit Status %1$lld beendet. Ausgabe: %2$@"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The command exited with status %1$lld. Output: %2$@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El comando finalizó con el estado %1$lld. Salida: %2$@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La commande s’est terminée avec le code %1$lld. Sortie : %2$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "コマンドがステータス %1$lld で終了しました。出力: %2$@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "명령이 상태 %1$lld로 종료되었습니다. 출력: %2$@"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O comando saiu com status %1$lld. Saída: %2$@"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Команда завершилась с кодом %1$lld. Вывод: %2$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "命令以状态 %1$lld 退出。输出：%2$@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "指令以狀態 %1$lld 結束。輸出：%2$@"
+          }
+        }
+      }
+    },
+    "The command is empty." : {
+      "comment" : "Run Command error, app/ISHRunCommandIntent.swift",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Der Befehl ist leer."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El comando está vacío."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La commande est vide."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "コマンドが空です。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "명령이 비어 있습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O comando está vazio."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Команда пуста."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "命令为空。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "指令為空。"
+          }
+        }
+      }
+    },
+    "The command timed out after %lld seconds." : {
+      "comment" : "Run Command error, app/ISHRunCommandIntent.swift",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Der Befehl hat das Zeitlimit von %lld Sekunden überschritten."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El comando superó el tiempo de espera de %lld segundos."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La commande a dépassé le délai de %lld secondes."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "コマンドが %lld 秒でタイムアウトしました。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "명령이 %lld초 후 시간이 초과되었습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O comando excedeu o tempo limite de %lld segundos."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Время ожидания команды истекло через %lld с."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "命令在 %lld 秒后超时。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "指令在 %lld 秒後逾時。"
+          }
+        }
+      }
+    },
+    "The command timed out after %lld seconds. Partial output: %@" : {
+      "comment" : "Run Command error, app/ISHRunCommandIntent.swift",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Der Befehl hat das Zeitlimit von %1$lld Sekunden überschritten. Teilweise Ausgabe: %2$@"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The command timed out after %1$lld seconds. Partial output: %2$@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El comando superó el tiempo de espera de %1$lld segundos. Salida parcial: %2$@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La commande a dépassé le délai de %1$lld secondes. Sortie partielle : %2$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "コマンドが %1$lld 秒でタイムアウトしました。部分的な出力: %2$@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "명령이 %1$lld초 후 시간이 초과되었습니다. 일부 출력: %2$@"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O comando excedeu o tempo limite de %1$lld segundos. Saída parcial: %2$@"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Время ожидания команды истекло через %1$lld с. Частичный вывод: %2$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "命令在 %1$lld 秒后超时。部分输出：%2$@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "指令在 %1$lld 秒後逾時。部分輸出：%2$@"
+          }
+        }
+      }
+    },
+    "The command was killed by signal %lld." : {
+      "comment" : "Run Command error, app/ISHRunCommandIntent.swift",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Der Befehl wurde durch Signal %lld beendet."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El comando fue terminado por la señal %lld."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La commande a été arrêtée par le signal %lld."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "コマンドがシグナル %lld で終了されました。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "명령이 시그널 %lld에 의해 종료되었습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O comando foi encerrado pelo sinal %lld."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Команда завершена сигналом %lld."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "命令被信号 %lld 终止。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "指令被信號 %lld 終止。"
+          }
+        }
+      }
+    },
+    "The command was killed by signal %lld. Partial output: %@" : {
+      "comment" : "Run Command error, app/ISHRunCommandIntent.swift",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Der Befehl wurde durch Signal %1$lld beendet. Teilweise Ausgabe: %2$@"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The command was killed by signal %1$lld. Partial output: %2$@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El comando fue terminado por la señal %1$lld. Salida parcial: %2$@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La commande a été arrêtée par le signal %1$lld. Sortie partielle : %2$@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "コマンドがシグナル %1$lld で終了されました。部分的な出力: %2$@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "명령이 시그널 %1$lld에 의해 종료되었습니다. 일부 출력: %2$@"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O comando foi encerrado pelo sinal %1$lld. Saída parcial: %2$@"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Команда завершена сигналом %1$lld. Частичный вывод: %2$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "命令被信号 %1$lld 终止。部分输出：%2$@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "指令被信號 %1$lld 終止。部分輸出：%2$@"
+          }
+        }
+      }
+    },
+    "The command's exit status could not be determined, so Fail on Non-Zero Exit cannot vouch for it." : {
+      "comment" : "Run Command error, app/ISHRunCommandIntent.swift",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Der Exit-Status des Befehls ließ sich nicht ermitteln, daher kann „Bei Exit-Code ungleich null fehlschlagen“ dafür nicht bürgen."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo determinar el estado de salida del comando, por lo que «Fallar si la salida no es cero» no puede responder por él."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le code de sortie de la commande n’a pas pu être déterminé ; « Échouer si le code de sortie est non nul » ne peut donc pas s’en porter garant."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "コマンドの終了ステータスを特定できなかったため、「終了コードが 0 以外なら失敗」では判断できません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "명령의 종료 상태를 확인할 수 없어 “0이 아닌 종료 코드 시 실패”가 이를 보장할 수 없습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não foi possível determinar o status de saída do comando, então “Falhar em Saída Diferente de Zero” não pode garanti-lo."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не удалось определить код выхода команды, поэтому параметр «Ошибка при ненулевом коде выхода» не может его подтвердить."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法确定命令的退出状态，因此“退出码非零时失败”无法据此判断。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法確定指令的結束狀態，因此「非零結束碼時失敗」無法據此判斷。"
+          }
+        }
+      }
+    },
+    "The command's exit status could not be determined, so Fail on Non-Zero Exit cannot vouch for it. Output: %@" : {
+      "comment" : "Run Command error, app/ISHRunCommandIntent.swift",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Der Exit-Status des Befehls ließ sich nicht ermitteln, daher kann „Bei Exit-Code ungleich null fehlschlagen“ dafür nicht bürgen. Ausgabe: %@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo determinar el estado de salida del comando, por lo que «Fallar si la salida no es cero» no puede responder por él. Salida: %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le code de sortie de la commande n’a pas pu être déterminé ; « Échouer si le code de sortie est non nul » ne peut donc pas s’en porter garant. Sortie : %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "コマンドの終了ステータスを特定できなかったため、「終了コードが 0 以外なら失敗」では判断できません。出力: %@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "명령의 종료 상태를 확인할 수 없어 “0이 아닌 종료 코드 시 실패”가 이를 보장할 수 없습니다. 출력: %@"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não foi possível determinar o status de saída do comando, então “Falhar em Saída Diferente de Zero” não pode garanti-lo. Saída: %@"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не удалось определить код выхода команды, поэтому параметр «Ошибка при ненулевом коде выхода» не может его подтвердить. Вывод: %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法确定命令的退出状态，因此“退出码非零时失败”无法据此判断。输出：%@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法確定指令的結束狀態，因此「非零結束碼時失敗」無法據此判斷。輸出：%@"
           }
         }
       }

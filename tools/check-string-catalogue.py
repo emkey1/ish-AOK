@@ -20,6 +20,23 @@ Xcode's own extraction does not close the gap: it writes .stringsdata into the
 build directory, not back into the source catalogue, so the repository's
 catalogues are maintained by hand and need checking by hand.
 
+Swift is a third surface, and a quieter one: App Intents put their text in
+properties -- `static var title: LocalizedStringResource = "Run Command"`,
+`@Parameter(title:)`, the Siri phrases -- so there is no NSLocalizedString to
+grep for, and the keys Xcode derives from an interpolation are not the source
+text -- an interpolated `\\(seconds)` becomes `%lld`. Guessing them is how
+dead weight gets into a catalogue instead of a translation, so SWIFT_KEYS
+below is a snapshot of what the build itself extracts, and this script
+re-reads that extraction when it can find it and fails if the two have
+drifted apart. The build writes it only because SWIFT_EMIT_LOC_STRINGS is set
+in app/App.xcconfig.
+
+The Siri phrases are a fourth surface with a format of its own: a build
+refuses AppShortcuts.xcstrings below iOS 17 and this app targets 15, so the
+phrases live in app/<lang>.lproj/AppShortcuts.strings -- ten legacy tables,
+checked here against each other and against the build's AppShortcuts
+extraction.
+
 A storyboard label is the same trap wearing different clothes, and it caught
 the Privacy Policy and Legal rows: their text is in About.storyboard, so the
 catalogue behind them is About.xcstrings, and adding an NSLocalizedString of
@@ -30,15 +47,18 @@ exported with ibtool and compared with its own catalogue too.
     tools/check-string-catalogue.py
 
 Reports, and exits 1 on, strings referenced in app/ but absent from
-Localizable.xcstrings, storyboard strings absent from their catalogue, and
-strings in any catalogue that some language has no translation for. Catalogue
-keys with no caller in app/*.m are reported without failing: Swift and
-Info.plist reach the same catalogues, and LIVE_ELSEWHERE below names the ones
-that are known to. A string that genuinely should not be translated -- the
-app's own name, a key cap like the tab arrow, a placeholder the code
-overwrites -- is marked shouldTranslate: false in its catalogue, which Xcode
-shows as "Don't Translate" and this script then leaves alone.
+Localizable.xcstrings, storyboard strings absent from their catalogue, Swift
+keys that have drifted from what the build extracts, a Siri phrase table that
+disagrees with the others, and strings in any catalogue that some language has
+no translation for. Catalogue keys with no caller in app/*.m are reported
+without failing: Swift and Info.plist reach the same catalogues, and
+SWIFT_KEYS below names the ones that are known to. A string that genuinely
+should not be translated -- the app's own name, a key cap like the tab arrow,
+a placeholder the code overwrites -- is marked shouldTranslate: false in its
+catalogue, which Xcode shows as "Don't Translate" and this script then leaves
+alone.
 """
+import glob
 import json
 import os
 import re
@@ -49,20 +69,69 @@ import tempfile
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 APP = os.path.join(REPO, 'app')
 
-# Keys whose only caller is outside the sources this script reads. Swift App
-# Intents strings are literals in a property, not NSLocalizedString calls, so
-# there is nothing here to match them against; they are listed rather than
-# guessed at so that a key going stale still shows up.
-LIVE_ELSEWHERE = {
-    'Command': 'app/ISHRunCommandIntent.swift @Parameter(title:)',
-    'Dashboard': 'app/ISHAppShortcuts.swift AppShortcut(shortTitle:)',
-    'Destination': 'app/ISHAppShortcuts.swift @Parameter(title:)',
-    'Fail on Non-Zero Exit': 'app/ISHRunCommandIntent.swift @Parameter(title:)',
-    'Open iSH-AOK': 'app/ISHAppShortcuts.swift AppIntent title',
-    'Run Command': 'app/ISHRunCommandIntent.swift AppIntent title',
-    'Timeout (seconds)': 'app/ISHRunCommandIntent.swift @Parameter(title:)',
-    'Workspace Dashboard': 'app/ISHAppShortcuts.swift DisplayRepresentation',
+# Keys whose only caller is outside the sources this script reads: the Swift
+# App Intents, whose text is a literal in a property rather than an
+# NSLocalizedString call. Not typed out by hand -- this is the Localizable
+# table of the .stringsdata the build writes, which is why it holds the keys
+# Xcode derives from an interpolation (%lld, %@) rather than the Swift source
+# text. swift_keys_from_build() re-reads that extraction and reports any
+# difference, so this list cannot quietly go stale; regenerate it from the
+# paths in STRINGSDATA when it does.
+SWIFT_KEYS = {
+    '%@': 'app/ISHRunCommandIntent.swift',
+    'Boot Images': 'app/ISHAppShortcuts.swift',
+    'Browser': 'app/ISHAppShortcuts.swift',
+    'Command': 'app/ISHRunCommandIntent.swift',
+    'Dashboard': 'app/ISHAppShortcuts.swift',
+    'Fail on Non-Zero Exit': 'app/ISHRunCommandIntent.swift',
+    'Open iSH-AOK': 'app/ISHAppShortcuts.swift',
+    'Run ${command} in iSH-AOK': 'the App Shortcuts metadata extraction',
+    'Run Command': 'app/ISHRunCommandIntent.swift',
+    'Running commands from Shortcuts is turned off. Enable \u201cAllow '
+    'Shortcuts to Run Commands\u201d in iSH-AOK\u2019s settings.':
+        'app/ISHRunCommandIntent.swift',
+    'Runs a shell command in the iSH-AOK guest system and returns its output '
+    '(stdout and stderr merged). The command runs headlessly; the app does '
+    'not need to be open. It runs as root, or as the default user account '
+    'when "Open Everything as Default User" is enabled in Settings.':
+        'app/ISHRunCommandIntent.swift',
+    'Session Shell': 'app/ISHAppShortcuts.swift',
+    'Shortcuts Destination': 'app/ISHAppShortcuts.swift',
+    'System Console': 'app/ISHAppShortcuts.swift',
+    'The command exited with status %lld.': 'app/ISHRunCommandIntent.swift',
+    'The command exited with status %lld. Output: %@':
+        'app/ISHRunCommandIntent.swift',
+    'The command is empty.': 'app/ISHRunCommandIntent.swift',
+    'The command timed out after %lld seconds.':
+        'app/ISHRunCommandIntent.swift',
+    'The command timed out after %lld seconds. Partial output: %@':
+        'app/ISHRunCommandIntent.swift',
+    'The command was killed by signal %lld.': 'app/ISHRunCommandIntent.swift',
+    'The command was killed by signal %lld. Partial output: %@':
+        'app/ISHRunCommandIntent.swift',
+    "The command's exit status could not be determined, so Fail on Non-Zero "
+    "Exit cannot vouch for it.": 'app/ISHRunCommandIntent.swift',
+    "The command's exit status could not be determined, so Fail on Non-Zero "
+    "Exit cannot vouch for it. Output: %@": 'app/ISHRunCommandIntent.swift',
+    'Themes': 'app/ISHAppShortcuts.swift',
+    'Timeout (seconds)': 'app/ISHRunCommandIntent.swift',
+    'Workspace Dashboard': 'app/ISHAppShortcuts.swift',
 }
+
+# What the compiler and the App Shortcuts metadata processor write, under
+# whichever DerivedData directory this checkout last built into. Present only
+# after a build of the app; absent on a machine that has only cloned.
+STRINGSDATA = ('~/Library/Developer/Xcode/DerivedData/iSH-AOK-*/Build/'
+               'Intermediates.noindex/iSH-AOK.build/*/iSH-AOK.build/'
+               'Objects-normal/*/%s.stringsdata')
+EXTRACTORS = ('ISHAppShortcuts', 'ISHRunCommandIntent',
+              'ExtractedAppShortcutsMetadata')
+
+# The Siri phrases, one legacy .strings table per language.
+PHRASE_TABLE = 'AppShortcuts.strings'
+PHRASE_LANGS = ['en', 'de', 'es', 'fr', 'ja', 'ko', 'pt-BR', 'ru',
+                'zh-Hans', 'zh-Hant']
+APP_NAME_TOKEN = '${applicationName}'
 
 # Catalogues whose keys come from a storyboard or Info.plist, not from code.
 COVERAGE_ONLY = ['About.xcstrings', 'InfoPlist.xcstrings', 'Roots.xcstrings',
@@ -218,6 +287,112 @@ def check_storyboards():
     return bad
 
 
+def plist(path):
+    """One .strings (or any plist) as a dict."""
+    text = subprocess.run(['plutil', '-convert', 'json', '-o', '-', path],
+                          check=True, capture_output=True, text=True).stdout
+    return json.loads(text) if text.strip() else {}
+
+
+def swift_keys_from_build():
+    """{table: {key}} from the .stringsdata of the newest build, or None.
+
+    The compiler writes one file per Swift source and the App Shortcuts
+    metadata processor writes another; between them they are the whole Swift
+    surface, keys and tables exactly as the product will look them up."""
+    tables = {}
+    found = False
+    for name in EXTRACTORS:
+        paths = glob.glob(os.path.expanduser(STRINGSDATA % name))
+        if not paths:
+            continue
+        found = True
+        doc = plist(max(paths, key=os.path.getmtime))
+        for table, entries in doc.get('tables', {}).items():
+            for entry in entries:
+                tables.setdefault(table, set()).add(entry['key'])
+    return tables if found else None
+
+
+def check_swift(catalogue, build):
+    """SWIFT_KEYS against the catalogue, and against the build if there is
+    one."""
+    bad = False
+    stale = sorted(set(SWIFT_KEYS) - catalogue)
+    if stale:
+        bad = True
+        print(f'\n{len(stale)} key(s) in SWIFT_KEYS are no longer in the '
+              f'catalogue; they will show in English in every language:')
+        for key in stale:
+            print(f'  {key[:70]!r} -- {SWIFT_KEYS[key]}')
+    if build is None:
+        print('\nThe Swift keys were not checked against the build: no '
+              '.stringsdata under DerivedData. Build the iSH-AOK scheme and '
+              'run this again to compare them.')
+        return bad
+    extracted = build.get('Localizable', set())
+    for label, keys in (('are extracted by the build but not in SWIFT_KEYS',
+                         sorted(extracted - set(SWIFT_KEYS))),
+                        ('are in SWIFT_KEYS but no longer extracted',
+                         sorted(set(SWIFT_KEYS) - extracted))):
+        if keys:
+            bad = True
+            print(f'\n{len(keys)} Swift key(s) {label}; regenerate the list '
+                  f'from the .stringsdata:')
+            for key in keys:
+                print(f'  {key[:70]!r}')
+    return bad
+
+
+def check_phrases(build):
+    """The ten AppShortcuts.strings tables, against each other and the
+    build."""
+    bad = False
+    tables = {}
+    for lang in PHRASE_LANGS:
+        path = os.path.join(APP, lang + '.lproj', PHRASE_TABLE)
+        if not os.path.exists(path):
+            bad = True
+            print(f'\n{lang}.lproj/{PHRASE_TABLE} is missing: Siri will not '
+                  f'recognise an iSH-AOK phrase spoken in {lang}.')
+            continue
+        tables[lang] = plist(path)
+
+    reference = tables.get('en')
+    if reference is None:
+        return True
+    for lang, table in sorted(tables.items()):
+        missing = sorted(set(reference) - set(table))
+        extra = sorted(set(table) - set(reference))
+        if missing or extra:
+            bad = True
+            print(f'\n{lang}.lproj/{PHRASE_TABLE} does not carry the same '
+                  f'phrases as en.lproj/{PHRASE_TABLE}:')
+            for key in missing:
+                print(f'  not translated: {key!r}')
+            for key in extra:
+                print(f'  not a phrase in the source: {key!r}')
+        for key, value in sorted(table.items()):
+            if APP_NAME_TOKEN not in value:
+                bad = True
+                print(f'\n{lang}.lproj/{PHRASE_TABLE}: {value!r} has no '
+                      f'{APP_NAME_TOKEN}, so Siri cannot match it.')
+
+    if build is not None:
+        # The extraction names the FIRST phrase of each AppShortcut as the
+        # key; the rest arrive in its values, so this is a subset check, not
+        # an equality one.
+        extracted = build.get('AppShortcuts', set())
+        unknown = sorted(extracted - set(reference))
+        if unknown:
+            bad = True
+            print(f'\n{len(unknown)} phrase(s) in the source are in no '
+                  f'{PHRASE_TABLE} table:')
+            for key in unknown:
+                print(f'  {key!r}')
+    return bad
+
+
 def main():
     bad = False
     doc = load('Localizable.xcstrings')
@@ -233,23 +408,18 @@ def main():
         for key in missing:
             print(f'  {key!r}\n      {", ".join(sorted(code[key]))}')
 
-    unused = sorted(catalogue - set(code) - set(LIVE_ELSEWHERE))
+    unused = sorted(catalogue - set(code) - set(SWIFT_KEYS))
     if unused:
         print(f'\n{len(unused)} key(s) in Localizable.xcstrings with no '
               f'NSLocalizedString in app/. Check Swift, the storyboards and '
-              f'Info.plist before deleting one; add it to LIVE_ELSEWHERE if '
+              f'Info.plist before deleting one; add it to SWIFT_KEYS if '
               f'it is live:')
         for key in unused:
             print(f'  {key!r}')
 
-    stale = sorted(set(LIVE_ELSEWHERE) - catalogue)
-    if stale:
-        bad = True
-        print(f'\n{len(stale)} key(s) in LIVE_ELSEWHERE are no longer in the '
-              f'catalogue; drop them from this script:')
-        for key in stale:
-            print(f'  {key!r} -- {LIVE_ELSEWHERE[key]}')
-
+    build = swift_keys_from_build()
+    bad = check_swift(catalogue, build) or bad
+    bad = check_phrases(build) or bad
     bad = check_storyboards() or bad
 
     for name in ['Localizable.xcstrings'] + COVERAGE_ONLY:
@@ -263,9 +433,12 @@ def main():
 
     if not bad:
         print(f'Localizable.xcstrings: {len(catalogue)} keys, all of the '
-              f'{len(code)} used in app/ present. Every storyboard matches its '
-              f'catalogue, and every string is translated into all nine '
-              f'languages or marked Do Not Translate.')
+              f'{len(code)} used in app/ and all {len(SWIFT_KEYS)} the Swift '
+              f'App Intents reach present. Every storyboard matches its '
+              f'catalogue, the Siri phrases are in all '
+              f'{len(PHRASE_LANGS)} {PHRASE_TABLE} tables, and every string '
+              f'is translated into all nine languages or marked Do Not '
+              f'Translate.')
     return 1 if bad else 0
 
 

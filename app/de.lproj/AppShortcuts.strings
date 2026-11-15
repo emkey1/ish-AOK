@@ -1,0 +1,20 @@
+/* The Siri phrases of app/ISHAppShortcuts.swift.
+   AppShortcuts.xcstrings is refused below iOS 17 ("use AppShortcuts.strings
+   for previous versions") and this app targets iOS 15, so this surface is a
+   legacy .strings table per language rather than a catalogue. Every phrase
+   must keep ${applicationName}: Siri matches a phrase only when the app name
+   is in it. Keys come from the build's own extraction -- the AppShortcuts
+   table of ExtractedAppShortcutsMetadata.stringsdata. */
+
+"Open workspace in ${applicationName}" = "Workspace in ${applicationName} öffnen";
+"Show dashboard in ${applicationName}" = "Dashboard in ${applicationName} anzeigen";
+"Open session shell in ${applicationName}" = "Sitzungs-Shell in ${applicationName} öffnen";
+"Open shell in ${applicationName}" = "Shell in ${applicationName} öffnen";
+"Open system console in ${applicationName}" = "Systemkonsole in ${applicationName} öffnen";
+"Open console in ${applicationName}" = "Konsole in ${applicationName} öffnen";
+"Open browser in ${applicationName}" = "Browser in ${applicationName} öffnen";
+"Show browser in ${applicationName}" = "Browser in ${applicationName} anzeigen";
+"Open themes in ${applicationName}" = "Themes in ${applicationName} öffnen";
+"Show themes in ${applicationName}" = "Themes in ${applicationName} anzeigen";
+"Open boot images in ${applicationName}" = "Boot-Images in ${applicationName} öffnen";
+"Show boot images in ${applicationName}" = "Boot-Images in ${applicationName} anzeigen";

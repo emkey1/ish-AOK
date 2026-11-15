@@ -1,0 +1,20 @@
+/* The Siri phrases of app/ISHAppShortcuts.swift.
+   AppShortcuts.xcstrings is refused below iOS 17 ("use AppShortcuts.strings
+   for previous versions") and this app targets iOS 15, so this surface is a
+   legacy .strings table per language rather than a catalogue. Every phrase
+   must keep ${applicationName}: Siri matches a phrase only when the app name
+   is in it. Keys come from the build's own extraction -- the AppShortcuts
+   table of ExtractedAppShortcutsMetadata.stringsdata. */
+
+"Open workspace in ${applicationName}" = "${applicationName}에서 워크스페이스 열기";
+"Show dashboard in ${applicationName}" = "${applicationName}에서 대시보드 보기";
+"Open session shell in ${applicationName}" = "${applicationName}에서 세션 셸 열기";
+"Open shell in ${applicationName}" = "${applicationName}에서 셸 열기";
+"Open system console in ${applicationName}" = "${applicationName}에서 시스템 콘솔 열기";
+"Open console in ${applicationName}" = "${applicationName}에서 콘솔 열기";
+"Open browser in ${applicationName}" = "${applicationName}에서 브라우저 열기";
+"Show browser in ${applicationName}" = "${applicationName}에서 브라우저 보기";
+"Open themes in ${applicationName}" = "${applicationName}에서 테마 열기";
+"Show themes in ${applicationName}" = "${applicationName}에서 테마 보기";
+"Open boot images in ${applicationName}" = "${applicationName}에서 부팅 이미지 열기";
+"Show boot images in ${applicationName}" = "${applicationName}에서 부팅 이미지 보기";
