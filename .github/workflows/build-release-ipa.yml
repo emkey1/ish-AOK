@@ -48,6 +48,15 @@ jobs:
           sudo xcode-select -s "$LATEST_XCODE"
           xcodebuild -version
 
+      # Before anything is built, let alone published. Every tools/check-* was
+      # written the day something shipped broken and then run by nothing: the
+      # string catalogue said so in its own header while the Shortcuts strings
+      # went out untranslated, and the audio graph check exists because the
+      # music player stopped playing at all for three days. This is the gate
+      # they were always missing -- a red run here means no IPA for this tag.
+      - name: Pre-release checks (source)
+        run: tools/check-all.py --source-only
+
       - name: Install build dependencies
         run: |
           brew install llvm lld ninja libarchive
@@ -132,6 +141,14 @@ jobs:
       # decides what to ask Apple for by reading the entitlements of the app it
       # re-signs -- so it signed AOK with no App Group and the app booted with
       # nowhere to store a filesystem. See tools/adhoc-sign-app.sh.
+      # The rest of the gate: check-bash-tls.py reads the archives the build
+      # just produced, and exits 0 saying "build first" when it finds none, so
+      # running it before the build would have left it passing without looking
+      # at anything. Still ahead of packaging and publishing, which is what
+      # matters -- a failure here means this tag ships no IPA.
+      - name: Pre-release checks (build output)
+        run: tools/check-all.py --build-only
+
       - name: Embed entitlements (ad-hoc signature)
         run: |
           set -eu
