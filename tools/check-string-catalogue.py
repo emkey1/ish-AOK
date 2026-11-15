@@ -393,6 +393,71 @@ def check_phrases(build):
     return bad
 
 
+CONVERTIBLE = 'CustomLocalizedStringResourceConvertible'
+RESOURCE_PROPERTY = 'var localizedStringResource: LocalizedStringResource'
+
+
+def uncommented(text):
+    """Swift source with // and /* */ taken out, so a quote in a comment is
+    not mistaken for a string literal."""
+    out, i, n = [], 0, len(text)
+    while i < n:
+        if text.startswith('//', i):
+            j = text.find('\n', i)
+            i = n if j < 0 else j
+        elif text.startswith('/*', i):
+            j = text.find('*/', i + 2)
+            i = n if j < 0 else j + 2
+        else:
+            out.append(text[i])
+            i += 1
+    return ''.join(out)
+
+
+def check_runtime_resources():
+    """A LocalizedStringResource built from a literal and handed back to the
+    system is not localized where the user finally sees it.
+
+    App Intents turns a thrown error into an NSError and resolves the
+    description itself, in en, whatever locale the resource carries -- logged
+    2026-11-15 inside iSH-AOK's own process as CFBundle `localizationNames:
+    [en]`, microseconds after Locale.current (ja_JP), Bundle.main's preferred
+    localizations (ja) and the resource's own locale (ja_JP) all said
+    Japanese. The Run Command action's eight error messages reached a Japanese
+    iPad in English because of it, and every check above passed while they did:
+    the keys were in the catalogue, the nine translations were there and
+    correct, they just never got to the screen. Naming a bundle does not help;
+    resolving in this process with String(localized:) and wrapping the
+    finished text does. So hold the property to that -- no string literal
+    inside it.
+    """
+    bad = False
+    for path in sorted(glob.glob(os.path.join(APP, '*.swift'))):
+        with open(path, encoding='utf-8') as handle:
+            source = handle.read()
+        if CONVERTIBLE not in source or RESOURCE_PROPERTY not in source:
+            continue
+        body = uncommented(source[source.index(RESOURCE_PROPERTY):])
+        depth, started = 0, False
+        for char in body:
+            if char == '{':
+                depth, started = depth + 1, True
+            elif char == '}':
+                depth -= 1
+                if started and depth == 0:
+                    break
+            elif char == '"' and started:
+                bad = True
+                print(f'\n{path}: {RESOURCE_PROPERTY} returns a string '
+                      f'literal. App Intents resolves what this property '
+                      f'returns in en however the device is set, so the user '
+                      f'gets the English key. Resolve the text here with '
+                      f'String(localized:) -- which does honour the device '
+                      f'language -- and wrap the result.')
+                break
+    return bad
+
+
 def main():
     bad = False
     doc = load('Localizable.xcstrings')
@@ -420,6 +485,7 @@ def main():
     build = swift_keys_from_build()
     bad = check_swift(catalogue, build) or bad
     bad = check_phrases(build) or bad
+    bad = check_runtime_resources() or bad
     bad = check_storyboards() or bad
 
     for name in ['Localizable.xcstrings'] + COVERAGE_ONLY:

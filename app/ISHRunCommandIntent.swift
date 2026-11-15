@@ -92,29 +92,55 @@ enum ISHRunCommandError: Error, CustomLocalizedStringResourceConvertible {
     case statusUnknown(output: String)
 
     var localizedStringResource: LocalizedStringResource {
+        // Already-translated text, wrapped: a resource whose key is the
+        // finished string falls back to that string wherever it is displayed.
+        LocalizedStringResource(stringLiteral: message)
+    }
+
+    // Resolved here, in our own process, on purpose. App Intents hands a
+    // thrown error to Shortcuts as an NSError and resolves the description
+    // itself -- in `en`, whatever locale the resource carries. Logged on
+    // 2026-11-15 as CFBundle `localizationNames: [en]` in this very process,
+    // microseconds after Locale.current (ja_JP), Bundle.main's preferred
+    // localizations (ja) and the resource's own locale (ja_JP) all said
+    // Japanese, and String(localized:) in the same breath returned
+    // 「コマンドが空です。」 So every one of these came out in English on
+    // a Japanese iPad while the same action's title, summary and parameters --
+    // which travel in Metadata.appintents and are localized by whoever shows
+    // them -- were translated. Naming a bundle does not help: the lookup was
+    // already landing in iSH-AOK.app, just under en.lproj.
+    //
+    // Keep the English written out inside each String(localized:) call. The
+    // compiler extracts the catalogue keys from those literals, so folding
+    // them into a helper that takes the literal would put every one of them
+    // out of its reach and silently empty this surface from the catalogue
+    // again. That is also why .failed resolves "\(reason)" rather than
+    // returning `reason` directly: it keeps the extracted `%@` key, which the
+    // catalogue carries as Do Not Translate.
+    private var message: String {
         switch self {
         case .disabled:
-            return "Running commands from Shortcuts is turned off. Enable “Allow Shortcuts to Run Commands” in iSH-AOK’s settings."
+            return String(localized: "Running commands from Shortcuts is turned off. Enable “Allow Shortcuts to Run Commands” in iSH-AOK’s settings.")
         case .emptyCommand:
-            return "The command is empty."
+            return String(localized: "The command is empty.")
         case .failed(let reason):
-            return "\(reason)"
+            return String(localized: "\(reason)")
         case .timedOut(let seconds, let partialOutput):
             return partialOutput.isEmpty
-                ? "The command timed out after \(seconds) seconds."
-                : "The command timed out after \(seconds) seconds. Partial output: \(partialOutput)"
+                ? String(localized: "The command timed out after \(seconds) seconds.")
+                : String(localized: "The command timed out after \(seconds) seconds. Partial output: \(partialOutput)")
         case .killed(let signal, let partialOutput):
             return partialOutput.isEmpty
-                ? "The command was killed by signal \(signal)."
-                : "The command was killed by signal \(signal). Partial output: \(partialOutput)"
+                ? String(localized: "The command was killed by signal \(signal).")
+                : String(localized: "The command was killed by signal \(signal). Partial output: \(partialOutput)")
         case .nonzeroExit(let code, let output):
             return output.isEmpty
-                ? "The command exited with status \(code)."
-                : "The command exited with status \(code). Output: \(output)"
+                ? String(localized: "The command exited with status \(code).")
+                : String(localized: "The command exited with status \(code). Output: \(output)")
         case .statusUnknown(let output):
             return output.isEmpty
-                ? "The command's exit status could not be determined, so Fail on Non-Zero Exit cannot vouch for it."
-                : "The command's exit status could not be determined, so Fail on Non-Zero Exit cannot vouch for it. Output: \(output)"
+                ? String(localized: "The command's exit status could not be determined, so Fail on Non-Zero Exit cannot vouch for it.")
+                : String(localized: "The command's exit status could not be determined, so Fail on Non-Zero Exit cannot vouch for it. Output: \(output)")
         }
     }
 }

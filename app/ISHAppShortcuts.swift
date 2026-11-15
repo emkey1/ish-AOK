@@ -53,8 +53,11 @@ struct ISHOpenShortcutIntent: AppIntent {
     // assigning a @Parameter in a custom init() is a documented way to clobber
     // the user's configured value. (Note: on unsigned simulator builds the
     // configured enum value still resolves to this default, because the
-    // LinkServices registry refuses the ad-hoc bundle -- same environmental
-    // cause as App Shortcut tiles failing there; both work with real signing.)
+    // LinkServices registry refuses the ad-hoc bundle. That used to take the
+    // App Shortcut tiles down with it, but no longer: on an iOS 26.5 simulator
+    // all six tiles register from an ordinary ad-hoc-signed xcodebuild
+    // product, in the device language, so the Shortcuts surface can be checked
+    // there. The enum default above has not been retested since.)
     @Parameter(title: "Shortcuts Destination", default: .dashboard)
     var destination: ISHShortcutDestination
 
