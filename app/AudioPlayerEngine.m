@@ -153,7 +153,12 @@ static const double kInFlightSeconds = 6.0;
         // Connect with a default format now; we reconnect per-track to the
         // decoder's processing format when a track loads.
         AVAudioFormat *defaultFormat = [_avEngine.mainMixerNode outputFormatForBus:0];
-        [self connectPlayerWithFormat:defaultFormat];
+        // Checked, not assumed: this is the connect that silently did nothing
+        // in 565, on every launch, and left the player node attached to the
+        // engine and joined to nothing.
+        if (![self connectPlayerWithFormat:defaultFormat])
+            NSLog(@"ISHAudio: the player graph did not come up connected (%@) -- "
+                  @"nothing will play until a track reconnects it", defaultFormat);
         _avEngine.mainMixerNode.outputVolume = _volume;
 
         [self configureAudioSession];
@@ -313,6 +318,11 @@ static const double kInFlightSeconds = 6.0;
 - (BOOL)startPlayerNode {
     if (self.playerNode.engine == nil) {
         NSLog(@"ISHAudio: player node is not attached to an engine");
+        return NO;
+    }
+    if ([self.avEngine outputConnectionPointsForNode:self.playerNode outputBus:0].count == 0) {
+        NSLog(@"ISHAudio: player node is attached but joined to nothing -- "
+              @"the graph was never built");
         return NO;
     }
     if (!self.avEngine.isRunning) {
@@ -769,6 +779,19 @@ bool ISHAudioKeepsAppAlive(void) {
         [self.avEngine connect:self.equalizerNode to:self.avEngine.mainMixerNode format:format];
     } @catch (NSException *exception) {
         NSLog(@"ISHAudio: cannot connect for %@: %s", format, exception.reason.UTF8String);
+        return NO;
+    }
+    // Never report a connection that is not there. This is the invariant the
+    // 565 regression broke: it returned YES on the strength of the format
+    // alone, the graph was never built, and the only thing that ever said so
+    // was AVFoundation throwing from -play, several layers away and long
+    // afterwards. Saying YES here means wired, checked, every time.
+    if (![self playerIsWiredForFormat:format]) {
+        NSLog(@"ISHAudio: connected for %@ but the graph is still not wired "
+              @"(player %lu, equalizer %lu output connections) -- playback cannot start",
+              format,
+              (unsigned long)[self.avEngine outputConnectionPointsForNode:self.playerNode outputBus:0].count,
+              (unsigned long)[self.avEngine outputConnectionPointsForNode:self.equalizerNode outputBus:0].count);
         return NO;
     }
     return YES;

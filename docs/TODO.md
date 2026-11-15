@@ -1910,6 +1910,23 @@ a format change.
 **Lesson worth keeping:** an AVFoundation node's reported format says nothing
 about whether it is attached to anything. Ask `outputConnectionPointsForNode:`.
 
+**Guarded since, two ways.** `connectPlayerWithFormat:` now checks its own work
+-- it returns YES only after `playerIsWiredForFormat:` confirms the graph it
+just built, so "connected" cannot mean "the calls did not throw" again -- and
+`-init` says so in the log if the first connect comes up empty. On top of that,
+**`tools/check-audio-graph.py`** holds the shape in place: it reads
+app/AudioPlayerEngine.m and fails if the already-connected decision is made by
+comparing formats instead of asking the engine, or if the connect stops
+checking itself, and it runs a short AVFoundation program to confirm the
+hazard is still real on the current macOS and that the predicate is right about
+it. Its positive control needs no edit, because the broken version is in the
+history: `git show 26287d6ff:app/AudioPlayerEngine.m > /tmp/bad.m &&
+tools/check-audio-graph.py /tmp/bad.m` exits 1. Two narrower controls were
+checked by hand as well -- a predicate that only compares formats, and a
+connect that does not verify afterwards -- and both fail. Like
+check-string-catalogue.py it is run by hand and **no gate runs it**, which is
+the same open item recorded above.
+
 ### Both final screens leave the guest running -- the filesystem one on purpose
 
 Measured 2026-11-15 with a once-a-second counter in the guest. After
