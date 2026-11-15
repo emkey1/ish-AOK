@@ -296,6 +296,41 @@ static const double kInFlightSeconds = 6.0;
     [self loadAndPlayCurrentTrackFromTime:0 autoPlay:YES];
 }
 
+// -[AVAudioPlayerNode play] reports a graph it cannot start by THROWING, the
+// same way connectPlayerWithFormat: found the connect does -- and an
+// NSException nobody catches takes the app down, and the guest inside it, with
+// SIGABRT. It raises when the node's engine is not running, and the engine
+// stops under it as a matter of course: every track whose processing format
+// differs from the one connected goes through connectPlayerWithFormat:, which
+// stops the engine to reconnect it. Playing a folder is that case over and
+// over. Build 565 aborted here on an iPad Pro M4 (iOS 27.0, 2026-11-15) doing
+// exactly that, in AVAudioPlayerNodeImpl::StartImpl under
+// -[ISHAudioPlayerEngine play].
+//
+// So look again on the thread that is about to make the call, start the engine
+// if it has stopped since the caller checked, and treat a throw as a track
+// that would not play rather than as the end of the app.
+- (BOOL)startPlayerNode {
+    if (self.playerNode.engine == nil) {
+        NSLog(@"ISHAudio: player node is not attached to an engine");
+        return NO;
+    }
+    if (!self.avEngine.isRunning) {
+        NSError *error = nil;
+        if (![self.avEngine startAndReturnError:&error]) {
+            NSLog(@"ISHAudio: engine start failed: %@", error);
+            return NO;
+        }
+    }
+    @try {
+        [self.playerNode play];
+    } @catch (NSException *exception) {
+        NSLog(@"ISHAudio: player node would not start: %@", exception.reason);
+        return NO;
+    }
+    return YES;
+}
+
 - (void)play {
     if (!NSThread.isMainThread) { dispatch_async(dispatch_get_main_queue(), ^{ [self play]; }); return; }
     if (self.state == ISHAudioPlaybackStatePlaying) return;
@@ -312,6 +347,7 @@ static const double kInFlightSeconds = 6.0;
     // takes effect, then do the blocking AVAudioSession activation + engine start
     // off the main thread to avoid the UI-hang risk.
     [self setState:ISHAudioPlaybackStatePlaying];
+    uint64_t gen = self.generation;
     dispatch_async(self.sessionQueue, ^{
         BOOL ok = [self activateSession];
         if (ok && !self.avEngine.isRunning) {
@@ -320,12 +356,23 @@ static const double kInFlightSeconds = 6.0;
             if (!ok) NSLog(@"ISHAudio: engine start failed: %@", error);
         }
         dispatch_async(dispatch_get_main_queue(), ^{
+            // The generation guard that every other async path in this class
+            // carries, and the one this path was missing -- the only one, and
+            // the one that crashed. A track change during the hop above runs
+            // loadAndPlayCurrentTrackFromTime:, which stops the node and
+            // reconnects the graph in the new track's format, so what arrives
+            // here otherwise is a play for a track that is already gone, aimed
+            // at an engine that was stopped out from under it.
+            if (gen != self.generation) return;
             if (!ok) {
                 if (self.state == ISHAudioPlaybackStatePlaying) [self setState:ISHAudioPlaybackStatePaused];
                 return;
             }
             if (self.state != ISHAudioPlaybackStatePlaying) return;  // paused while activating
-            [self.playerNode play];
+            if (![self startPlayerNode]) {
+                if (self.state == ISHAudioPlaybackStatePlaying) [self setState:ISHAudioPlaybackStatePaused];
+                return;
+            }
             [self updateNowPlayingInfo];
         });
     });
@@ -388,10 +435,9 @@ static const double kInFlightSeconds = 6.0;
         [self fillBuffersForGeneration:gen];
         dispatch_async(dispatch_get_main_queue(), ^{
             if (gen != self.generation) return;
-            if (wasPlaying) {
-                if (!self.avEngine.isRunning) [self.avEngine startAndReturnError:nil];
-                [self.playerNode play];
-            }
+            if (wasPlaying && ![self startPlayerNode] &&
+                    self.state == ISHAudioPlaybackStatePlaying)
+                [self setState:ISHAudioPlaybackStatePaused];
             [self updateNowPlayingInfo];
         });
     });

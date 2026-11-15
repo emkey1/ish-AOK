@@ -1861,6 +1861,45 @@ so the HIG objection is answered for the two GUI paths and not for the feature.
 
 ---
 
+### ~~Playing a music folder aborted the app~~ -- FIXED 2026-11-15
+
+Reported from the iPad Pro M4 on iOS 27.0 and fixed the same day. The crash
+report (`iSH-AOK-2026-11-15-014648.ips`, EXC_CRASH/SIGABRT, `abort() called`)
+names it exactly: an uncaught NSException out of
+`AVAudioPlayerNodeImpl::StartImpl`, under
+`__28-[ISHAudioPlayerEngine play]_block_invoke_2`, on the main thread.
+
+`-[AVAudioPlayerNode play]` raises when its engine is not running, and
+`connectPlayerWithFormat:` *stops* the engine to reconnect whenever a track's
+processing format differs from the one connected -- which is every format
+change in a folder. `-play` was the one asynchronous path in
+ISHAudioPlayerEngine with **no generation guard**, where the other eight have
+one: it checked `avEngine.isRunning` on `sessionQueue`, hopped to the main
+queue, and called `[self.playerNode play]` there, by which time a track change
+could have stopped the engine under it. Fixed by `startPlayerNode`, which
+re-checks and restarts on the calling thread and treats a throw as a track that
+will not play -- the same way the file already treated `connect` after build
+564 aborted reconnecting a running engine. Note for anyone tempted to rely on
+the `@try`: AVFoundation also *traps* (EXC_BREAKPOINT) for some
+misconfigurations, which no `@catch` will save you from; the generation guard
+and the re-check are what actually prevent this one.
+
+Not reproduced on demand -- it is a race, and driving it from lldb only hits
+AVFoundation's own traps inside the expression context. The crash report is the
+evidence, and the fixed build is on the iPad for the reporter to retry.
+
+### Both final screens leave the guest running -- the filesystem one on purpose
+
+Measured 2026-11-15 with a once-a-second counter in the guest. After
+`exitApp` (Roots, "Quit Now") the counter ran 31 to 47 with the "Filesystem
+changed" screen up and the app alive. Unlike Suspend and Exit this is *not* a
+broken promise -- that path saves nothing and promises nothing about the
+machine, and stopping a guest with no image would destroy state that the
+automatic background save would otherwise have kept for the old root. So it is
+left as it is, deliberately. What is worth knowing: the final screen is a
+window above UIWindowLevelAlert with no way out, so coming back from the app
+switcher lands on it and needs a force quit either way.
+
 ## Host capabilities worth exposing
 
 What the iPhone and iPad hardware actually lets an app reach, and which parts
