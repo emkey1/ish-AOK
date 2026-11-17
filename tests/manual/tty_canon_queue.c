@@ -218,6 +218,59 @@ int main(int argc, char **argv) {
         tcsetattr(sfd, TCSANOW, &t);
     }
 
+    // ---- a line longer than the input buffer -----------------------------
+    // A canonical read returns nothing until a delimiter arrives, and the
+    // buffer is finite -- so a line with no newline in it that fills the
+    // buffer can never be completed, and each side waits for the other. The
+    // writer hung there, and nothing freed it.
+    //
+    // Linux's answer, measured on 6.12 over a pty: the write is taken WHOLE
+    // and the excess is thrown away. 10001 bytes offered as one line came
+    // back to the reader as 4096 -- 4095 characters and the newline, the
+    // delimiter keeping the last slot. The 5905 in between were simply gone.
+    drain();
+    {
+        size_t n = 10000;
+        char *big = malloc(n + 1);
+        if (big == NULL) {
+            ck("allocating the long line", 0, 1);
+        } else {
+            memset(big, 'a', n);
+            big[n] = '\n';
+            // Non-blocking, so a line discipline that will not take it fails
+            // this in a second rather than hanging the suite for the watchdog.
+            int flags = fcntl(mfd, F_GETFL, 0);
+            fcntl(mfd, F_SETFL, flags | O_NONBLOCK);
+            size_t off = 0;
+            for (int i = 0; i < 200 && off < n + 1; i++) {
+                ssize_t w = write(mfd, big + off, n + 1 - off);
+                if (w > 0)
+                    off += (size_t) w;
+                else if (w < 0 && errno != EAGAIN && errno != EINTR)
+                    break;
+                else
+                    usleep(10000);
+            }
+            fcntl(mfd, F_SETFL, flags);
+            ck("an over-long line is taken whole", (long) off, (long) (n + 1));
+            usleep(150000);
+
+            char *in = malloc(n + 64);
+            long got = in == NULL ? -1 : read_ready(sfd, in, n + 64, 2000);
+            ck("  and the reader gets one buffer of it", got, 4096);
+            ck("  ending in the newline",
+               got > 0 && in[got - 1] == '\n' ? 1 : 0, 1);
+            ck("  with nothing queued behind it",
+               read_ready(sfd, buf, sizeof buf, 300), -1);
+            free(in);
+            free(big);
+        }
+        // The point of all of it: the terminal still works afterwards.
+        feed("ok\n", 3);
+        ck("  and the terminal still takes a line", read_ready(sfd, buf, sizeof buf, 2000), 3);
+    }
+    drain();
+
     close_pty();
     return finish_suite("tty_canon_queue");
 }

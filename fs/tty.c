@@ -380,6 +380,45 @@ static void tty_input_wakeup(struct tty *tty) {
     tty_poll_wakeup(tty, POLL_READ);
 }
 
+static size_t tty_canon_size(struct tty *tty);
+
+// Canonical mode keeps the last slot of the buffer for a line delimiter, and
+// an ordinary character offered when that is all the room left is DISCARDED.
+// This is Linux's own answer, measured on 6.12 rather than assumed: 10001
+// bytes written to a pty master as one line took the write whole, and the
+// canonical read on the other side returned 4096 -- 4095 characters and the
+// newline. The 5905 in between were taken off the writer's hands and thrown
+// away, which is why a terminal line stops accepting input at 4095.
+//
+// It is not a nicety here. A canonical read returns nothing until a delimiter
+// arrives, so a line longer than the buffer with no newline in it can never be
+// completed: with no room for the delimiter, the reader waits for the writer
+// and the writer waits for the reader. A blocking writer -- a process writing
+// that much to a pty master -- hung there outright, and a non-blocking one
+// that keeps what it could not place, which the app's terminal now does, would
+// have queued the rest behind a wakeup that never came and taken the
+// terminal's input with it for good.
+//
+// Only when the buffer holds no delimiter at all: with one in it the reader
+// has a line to take and will make room on its own.
+static bool tty_canon_line_full(struct tty *tty) {
+    if (!(tty->termios.lflags & ICANON_))
+        return false;
+    if (tty->bufsize < sizeof(tty->buf) - 1)
+        return false;
+    return tty_canon_size(tty) == (size_t) -1;
+}
+
+// Hand the driver its input_unthrottle, if it is owed one and there is room
+// now. Called with tty->lock held, and the op is too (see the op's comment).
+static void tty_input_unthrottle(struct tty *tty) {
+    if (!tty->input_throttled || tty->bufsize >= sizeof(tty->buf))
+        return;
+    tty->input_throttled = false;
+    if (tty->driver != NULL && tty->driver->ops->input_unthrottle != NULL)
+        tty->driver->ops->input_unthrottle(tty);
+}
+
 static int tty_push_char(struct tty *tty, char ch, bool flag, int blocking) {
     while (tty->bufsize >= sizeof(tty->buf)) {
         if (!blocking)
@@ -503,8 +542,14 @@ static bool tty_send_input_signal(struct tty *tty, char ch, sigset_t_ *queue) {
         return false;
 
     if (tty->fg_group != 0) {
-        if (!(tty->termios.lflags & NOFLSH_))
+        if (!(tty->termios.lflags & NOFLSH_)) {
             tty->bufsize = 0;
+            // A ^C clears the line, so a driver that was throttled by it can
+            // go on. What it still holds is NOT discarded: on Linux the data
+            // already on its way down a pty keeps arriving after the signal,
+            // and this is the same stream seen a layer up.
+            tty_input_unthrottle(tty);
+        }
         sigset_add(queue, sig);
         if (sig == SIGINT_ || tty_trace_signal_enabled()) {
             printk("INFO: tty signal input tty=%d fg_group=%d ch=%#x sig=%d current_pid=%d comm=%s\n",
@@ -652,6 +697,11 @@ canon_wake:
             } else {
                 if (!tty_send_input_signal(tty, ch, &queue)) {
 no_special:
+                    // Taken off the caller's hands and thrown away, with no
+                    // echo, so that typing past the limit shows nothing --
+                    // see tty_canon_line_full for why it is not queued.
+                    if (tty_canon_line_full(tty))
+                        continue;
                     err = tty_push_char(tty, ch, /*flag*/false, blocking);
                     if (err < 0) {
                         done_size--;
@@ -699,6 +749,13 @@ no_special:
         if (tty->bufsize > 0)
             tty_input_wakeup(tty);
     }
+
+    // A non-blocking caller that could not place everything gets told when
+    // there is room again, rather than having the remainder disappear: this
+    // returns a SHORT count, and the driver is the only one left holding what
+    // did not fit. See the input_unthrottle op.
+    if (!blocking && err == _EAGAIN)
+        tty->input_throttled = true;
 
     pid_t_ fg_group = tty->fg_group;
     assert(tty->bufsize <= sizeof(tty->buf));
@@ -989,6 +1046,9 @@ static ssize_t tty_read(struct fd *fd, void *buf, size_t bufsize) {
     }
 
 out:
+    // This read is what makes room, so it is the natural place to let a
+    // throttled driver hand over the rest of what it was given.
+    tty_input_unthrottle(tty);
     unlock(&tty->lock);
     return bufsize + bufsize_extra;
 error:
@@ -1422,6 +1482,7 @@ static int tty_mode_ioctl(struct tty *in_tty, int cmd, void *arg) {
         case TCSETSF_:
             tty->bufsize = 0;
             notify(&tty->consumed);
+            tty_input_unthrottle(tty);
                 FALLTHROUGH;
         case TCSETSW_:
             // we have no output buffer currently
@@ -1457,6 +1518,7 @@ static int tty_mode_ioctl(struct tty *in_tty, int cmd, void *arg) {
         case TCSETSF2_:
             tty->bufsize = 0;
             notify(&tty->consumed);
+            tty_input_unthrottle(tty);
                 FALLTHROUGH;
         case TCSETSW2_:
             // we have no output buffer currently
@@ -1550,6 +1612,7 @@ static int tty_ioctl(struct fd *fd, int cmd, void *arg) {
                 case TCIOFLUSH_:
                     tty->bufsize = 0;
                     notify(&tty->consumed);
+                    tty_input_unthrottle(tty);
                     break;
                 case TCOFLUSH_:
                     break;

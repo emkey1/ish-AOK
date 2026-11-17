@@ -87,6 +87,15 @@ static BOOL ISHEscapeStringStateIsInside(ISHEscapeStringState state) {
 @property (nonatomic, copy) NSString *deferredRecoveryReason;
 @property (nonatomic) NSError *deferredRecoveryError;
 @property (nonatomic) tty_t tty;
+// Input the line discipline has not taken yet (under @synchronized(self)).
+// tty_input is a SHORT write: called non-blocking, which is what this side
+// has to do -- it runs on the main thread -- it takes what fits in the
+// terminal's 4096-byte input buffer and returns how much that was. The rest
+// is the caller's to keep. Nobody kept it, so everything past the buffer was
+// dropped, and a pasted script longer than that arrived cut off mid-line
+// (23 KB of it became 4 KB). It waits here for the kernel's
+// input_unthrottle instead; see -drainPendingInput.
+@property (nonatomic) NSMutableData *pendingInput;
 // lock with dataLock for !linux and @synchronized(self) for linux
 @property (nonatomic) NSMutableData *pendingData;
 // sending output is an asynchronous thing due to javascript, this is used to ensure it doesn't happen twice at once
@@ -106,6 +115,8 @@ static BOOL ISHEscapeStringStateIsInside(ISHEscapeStringState state) {
 @property NSNumber *terminalsKey;
 @property NSUUID *uuid;
 @property (nonatomic, copy) NSString *pendingDestroyReason;
+
+- (void)drainPendingInput;
 
 @end
 
@@ -340,16 +351,12 @@ int Terminal_debugSendInputUTF8Sync(int type, int number, const char *input) {
                                              @"firstByte": [NSString stringWithFormat:@"%#x", first]}];
         }
 
-        // A reference across the call, as -sendInput takes: terminal.tty is an
-        // unowned back-pointer that tty_release can free under us.
-        struct tty *tty = tty_lookup_ref(terminal.type, terminal.number, terminal.tty);
-        if (tty == NULL) {
-            free(copy);
-            return -3;
-        }
-        tty_input(tty, copy, length, 0);
-        tty_put(tty);
-        free(copy);
+        // Through the same queue as every other input, so that a long enough
+        // string is not truncated here either; "Sync" is about the breadcrumb
+        // and the error codes, not about the line discipline having taken all
+        // of it before this returns.
+        if (length > 0)
+            [terminal sendInput:[NSData dataWithBytesNoCopy:copy length:length freeWhenDone:YES]];
         return 0;
     }
 }
@@ -593,6 +600,10 @@ struct tty *ISHOpenTerminalForRestoredSession(void) {
 - (void)setTty:(tty_t)tty {
     @synchronized (self) {
         _tty = tty;
+        // Queued input belongs to the terminal it was typed at. A new tty
+        // here means the old one is gone and nothing will ever read it.
+        if (tty == NULL)
+            _pendingInput = nil;
     }
     dispatch_async(dispatch_get_main_queue(), ^{
         [self syncWindowSize];
@@ -901,22 +912,82 @@ NSString *ISHPasteSequence(NSString *text, BOOL bracketed, BOOL execute) {
                            details:@{@"bytes": @(input.length),
                                      @"firstByte": [NSString stringWithFormat:@"%#x", first]}];
     }
+    // Behind whatever is already waiting, so a paste and the keystrokes typed
+    // after it reach the guest in the order they were made.
+    if (input.length > 0) {
+        @synchronized (self) {
+            if (self->_pendingInput == nil)
+                self->_pendingInput = [NSMutableData dataWithCapacity:input.length];
+            [self->_pendingInput appendData:input];
+        }
+    }
+    [self drainPendingInput];
+    if (self.loaded) {
+        [self.webView evaluateJavaScript:@"exports.setUserGesture()" completionHandler:nil];
+        [self.scrollToBottomTask schedule];
+    }
+}
+
+// Give the line discipline as much of the queue as it will take. What it will
+// not take stays queued, and the kernel calls back through
+// ios_tty_input_unthrottle once a read has made room, which brings us here
+// again -- so a paste of any length arrives whole, at the speed the program
+// reading the terminal consumes it.
+//
+// Always on the main thread, which is the whole reason the queue exists: this
+// cannot block waiting for a guest to read, and it is also what serialises
+// drains against each other.
+- (void)drainPendingInput {
+    if (!NSThread.isMainThread) {
+        dispatch_async(dispatch_get_main_queue(), ^{ [self drainPendingInput]; });
+        return;
+    }
+
+    NSData *chunk;
+    tty_t tty;
+    @synchronized (self) {
+        tty = self->_tty;
+        if (tty == NULL) {
+            // Nothing will ever read it. Dropping it here is what happened to
+            // every byte before this queue existed.
+            self->_pendingInput = nil;
+            return;
+        }
+        if (self->_pendingInput.length == 0)
+            return;
+        // Hand the buffer over rather than writing through it: tty_input
+        // echoes, and an echo comes back into this object on this thread.
+        chunk = self->_pendingInput;
+        self->_pendingInput = nil;
+    }
+
     // Hold a reference across tty_input rather than dereferencing the unowned
     // back-pointer, which tty_release can free between the check above and the
     // call (see -syncWindowSize). A reference rather than holding ttys_lock
     // across the call: this runs for every keystroke, and tty_input does line
     // discipline and signal delivery.
     tty = tty_lookup_ref(self.type, self.number, tty);
-    if (tty != NULL)
-        tty_input(tty, input.bytes, input.length, 0);
-    if (self.loaded) {
-        [self.webView evaluateJavaScript:@"exports.setUserGesture()" completionHandler:nil];
-        [self.scrollToBottomTask schedule];
-    }
-    // Last, and after every use of self: if this drops the final reference,
-    // tty_release runs ios_tty_cleanup, whose CFBridgingRelease releases the
-    // tty's own strong reference to this Terminal.
+    if (tty == NULL)
+        return;
+    ssize_t done = tty_input(tty, chunk.bytes, chunk.length, 0);
+    // Last use of the tty: if this drops the final reference, tty_release runs
+    // ios_tty_cleanup, whose CFBridgingRelease releases the tty's own strong
+    // reference to this Terminal.
     tty_put(tty);
+    if (done < 0)
+        done = 0;      // _EAGAIN: the buffer was already full
+    if ((size_t) done >= chunk.length)
+        return;
+
+    // The tail goes back at the FRONT, ahead of anything that arrived while
+    // the call was running.
+    @synchronized (self) {
+        NSMutableData *rest = [NSMutableData dataWithBytes:(const char *) chunk.bytes + done
+                                                    length:chunk.length - done];
+        if (self->_pendingInput.length > 0)
+            [rest appendData:self->_pendingInput];
+        self->_pendingInput = rest;
+    }
 }
 
 - (void)requestRefresh {
@@ -1178,10 +1249,24 @@ static void ios_tty_cleanup(struct tty *tty) {
     terminal.tty = NULL;
 }
 
+// There is room in the input buffer again. Called with tty->lock held, from
+// whichever guest thread just read the terminal, so the drain itself goes to
+// the main queue: -drainPendingInput calls back into tty_input, which takes
+// that same lock.
+static void ios_tty_input_unthrottle(struct tty *tty) {
+    Terminal *terminal = (__bridge Terminal *) tty->data;
+    if (terminal == nil)
+        return;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [terminal drainPendingInput];
+    });
+}
+
 struct tty_driver_ops ios_tty_ops = {
     .init = ios_tty_init,
     .write = ios_tty_write,
     .cleanup = ios_tty_cleanup,
+    .input_unthrottle = ios_tty_input_unthrottle,
 };
 DEFINE_TTY_DRIVER(ios_console_driver, &ios_tty_ops, TTY_CONSOLE_MAJOR, 64);
 struct tty_driver ios_pty_driver = {.ops = &ios_tty_ops};

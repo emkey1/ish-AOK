@@ -217,6 +217,14 @@ struct tty_driver_ops {
     int (*write)(struct tty *tty, const void *buf, size_t len, bool blocking);
     int (*ioctl)(struct tty *tty, int cmd, void *arg);
     void (*cleanup)(struct tty *tty);
+    // There is room in the input buffer again, after a NON-BLOCKING tty_input
+    // from this driver had to stop short of the end of what it was given.
+    // Linux's unthrottle, for a driver whose input side cannot wait: the iOS
+    // app feeds its terminal from the main thread, so it keeps the remainder
+    // and comes back here instead of blocking or dropping it. Called with
+    // tty->lock held, like .write, so it must not block or re-enter the tty --
+    // the app's hands it off to the main queue.
+    void (*input_unthrottle)(struct tty *tty);
 };
 
 // indexed by major number
@@ -254,6 +262,10 @@ struct tty {
     // VLNEXT (^V) latch: the NEXT input character is taken literally, with no
     // special meaning at all. One-shot, cleared as soon as it is consumed.
     bool lnext_pending;
+    // A non-blocking tty_input ran out of buffer and the driver is owed an
+    // input_unthrottle call once there is room. One call per throttle: the
+    // flag is cleared as the call goes out.
+    bool input_throttled;
     dword_t bufsize;
     uint8_t packet_flags;
     cond_t produced;

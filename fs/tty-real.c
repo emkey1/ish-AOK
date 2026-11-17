@@ -66,7 +66,14 @@ static void *real_tty_read_thread(void *_tty) {
             real_tty_reset_term();
             raise(SIGINT);
         }
-        tty_input(tty, &ch, 1, 0);
+        // Blocking: this thread exists only to feed the console, so when the
+        // input buffer is full the right thing is to stop reading the host
+        // terminal until the guest catches up -- the host's own buffer then
+        // holds the rest, which is what back-pressure is for. Non-blocking
+        // dropped the byte instead, so a script pasted into the CLI arrived
+        // with 4 KB of it missing. The wait is a cancellation point, which is
+        // how real_tty_cleanup still reclaims this thread.
+        tty_input(tty, &ch, 1, 1);
     }
     return NULL;
 }

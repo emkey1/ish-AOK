@@ -600,7 +600,10 @@ static void *cli_pty_read_thread(void *opaque) {
             struct tty *tty = tty_lookup_ref(reader.type, reader.num, reader.tty);
             if (tty == NULL)
                 return NULL;
-            tty_input(tty, &ch, 1, 0);
+            // Blocking, as the real console's reader is: this thread does
+            // nothing but feed the terminal, so a full input buffer should
+            // stop it reading rather than make the byte disappear.
+            tty_input(tty, &ch, 1, 1);
             tty_put(tty);
             continue;
         }
