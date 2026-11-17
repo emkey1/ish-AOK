@@ -2434,6 +2434,26 @@ learns about.
 
 ## Build and test infrastructure
 
+### The `ish-cli` Xcode scheme does not compile
+
+**Established** (2026-11-17, found while building the CLI to check a tty
+change): `xcodebuild -scheme ish-cli` fails in target `ish-AOK` with
+`fs/dev.h:8:10: error: 'fs/fd.h' file not found`, from `main.c:13`. The target's
+header search paths hold only DerivedData and `.hmap` entries -- the repository
+root is not among them, so a quoted `#include "fs/fd.h"` written inside
+`fs/dev.h` resolves against `fs/` and finds nothing. Not a regression of any
+change in flight: `git show HEAD:main.c` compiled with that target's own
+response file fails identically.
+
+Nothing shipped depends on it -- the CLI everything actually uses is meson's
+`build/ish` (`ninja -C build ish`), which is what tier0, the guest regression
+suite and the local roots all run, and it builds clean. The scheme is a
+convenience that has quietly stopped working.
+
+**Next step:** add `$(SRCROOT)` to `HEADER_SEARCH_PATHS` for the `ish-AOK`
+target and see whether anything else in it has rotted meanwhile, or retire the
+scheme and say in the docs that the CLI is a meson build.
+
 ### Linux CI
 
 **Green again as of 2026-08-19**, both arms of the `[clang, gcc]` matrix.
