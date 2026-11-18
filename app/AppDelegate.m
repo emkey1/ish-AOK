@@ -5166,10 +5166,18 @@ static TerminalViewController *CreateTerminalViewController(void) {
             union res_sockaddr_union s = servers[i];
             sa_family_t family = s.sin.sin_family;
             socklen_t sockaddrLen = s.sin.sin_len;
-            if (family == AF_INET_) {
+            // The HOST's constants, because these are the host's sockaddrs.
+            // This compared against AF_INET_ and AF_INET6_, the guest's
+            // (fs/sock.h), and Linux's AF_INET6 is 10 where Darwin's is 30:
+            // every IPv6 nameserver fell through to the `continue` below. IPv4
+            // only ever worked because both systems call it 2. On a network
+            // whose resolvers are all IPv6 -- a NAT64 one, or an IPv6-only
+            // carrier -- that left no usable server, and resolv.conf was not
+            // written at all.
+            if (family == AF_INET) {
                 if (sockaddrLen == 0)
                     sockaddrLen = sizeof(s.sin);
-            } else if (family == AF_INET6_) {
+            } else if (family == AF_INET6) {
                 if (IN6_IS_ADDR_LINKLOCAL(&s.sin6.sin6_addr)) {
                     continue;
                 }
