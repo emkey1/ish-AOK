@@ -95,15 +95,10 @@ when you want the outside world to reach it.
 
 iOS suspends the app when the screen locks or you switch away, and a locked
 device takes back a suspended app's network connections. An `ssh` session left
-idle across that comes back to a dead connection. Nothing in the guest can stop
-it; what keeps a session alive is keeping the app running, and the usual way is
-to keep it busy with location updates:
-
-```sh
-cat /dev/location > /dev/null &    # the first time, iOS asks for location permission
-```
-
-How long iOS honours that on a locked device has not been measured here.
+idle across that comes back to a dead connection. Expect it rather than work
+against it: keep anything long-running on the far end inside `tmux` or
+`screen`, so the work outlives the connection and you can reattach when you
+reconnect.
 
 From build 559 such a connection reads as **reset** (`ECONNRESET`, "Connection
 reset by peer"), which is what Linux says of a connection the network took and

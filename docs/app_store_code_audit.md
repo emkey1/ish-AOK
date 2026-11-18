@@ -14,7 +14,8 @@ the assessment recorded as done or acceptable that are not quite. The rest is
 wording and hygiene. Everything the assessment said about executable memory
 and private API held up when measured.
 
-Nothing here has been fixed. Line numbers are at `15edf7fd9`.
+Findings 1 and 2 were fixed the next day, 2026-11-18; each says so below. The
+rest is as found. Line numbers are at `15edf7fd9`.
 
 ## How it was checked
 
@@ -63,12 +64,22 @@ this the only path. It is the change the assessment marked "only
 compile-verified", and it is also a regression for anyone on an IPv6-only
 mobile carrier, whatever happens with the store.
 
-**Fix:** the host constants, two tokens. **Then test on NAT64**, which a Mac
-provides (Internet Sharing with "Create NAT64 Network"): `apk update`,
-`curl https://example.com`, `ssh` to a name. What the guest does with an IPv4
-literal on such a network is untested, and there is no NAT64 handling anywhere
-in `fs/sock.c`, so expect `ping 8.8.8.8` to fail there and decide whether that
-needs an answer.
+**FIXED 2026-11-18** (`96249f2d6`): the host's constants. Verified in the simulator,
+which resolves through the Mac, whose resolver lists one IPv4 and one IPv6
+server. The build from before the change wrote a `resolv.conf` naming only the
+IPv4 one; the fixed build names both, and `nslookup` in the guest answers
+through the relay and when asked of the IPv6 server directly.
+
+**Still owed: a run on NAT64**, which nothing here could provide and a Mac can
+(Internet Sharing with "Create NAT64 Network"): `apk update`,
+`curl https://example.com`, `ssh` to a name. Two things to look for there.
+What the guest does with an IPv4 literal is untested, and there is no NAT64
+handling anywhere in `fs/sock.c`, so expect `ping 8.8.8.8` to fail and decide
+whether that needs an answer. And the loop still skips a **link-local** IPv6
+nameserver, on purpose, since the guest cannot name the interface it lives
+on; if the test network hands out only a link-local resolver, DNS will still
+be dead, and the answer is to let the relay use it while keeping it out of
+`resolv.conf`.
 
 ### 2. The shipped documentation recommends location as a keep-alive (2.5.4)
 
@@ -96,9 +107,15 @@ The code says it too, though only to someone reading source:
 bookkeeping -- the suspend guard has to know whether it is about to be
 suspended -- and renaming them buys nothing.
 
-**Fix:** delete the recommendation from `networking.md` and say what does
-happen (the connection is reset; reconnect). Reword the ch28 sentence or leave
-it; it describes behaviour rather than advising it.
+**FIXED 2026-11-18**: the recommendation is gone from `networking.md`, which
+now says to expect the drop and keep long work on the far end in `tmux` or
+`screen`. `strings` on a rebuilt Release binary no longer finds the line.
+
+Left alone, each for a reason: the ch28 sentence, which describes what the
+suspend guard does rather than advising anything; the release notes for 559
+and 563, which mention the trick and are a record of what those builds said;
+and the answer on GitHub issue #631, which recommends it and is not ours to
+edit without the maintainer saying so.
 
 ---
 

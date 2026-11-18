@@ -22,9 +22,10 @@ Everything below was checked in the tree at `dacf906fe` unless it says
 ## Checked again, 2026-11-17
 
 [app_store_code_audit.md](app_store_code_audit.md) measured this document's
-claims against the Release binary. Two new must-fixes came out of it: guest
-DNS on an IPv6-only network, which is the unverified half of must-fix 4 and is
-broken, and shipped documentation that recommends location updates as a
+claims against the Release binary. Two new must-fixes came out of it, both
+fixed on 2026-11-18: guest DNS on an IPv6-only network, which was the
+unverified half of must-fix 4 and was broken (`96249f2d6`; a NAT64 run is still
+owed), and shipped documentation that recommended location updates as a
 keep-alive. Three entries below also say more than is true: `exit(0)` survives
 in three places, the last private API is still unweighed, and the translations
 called stale have since been done.
