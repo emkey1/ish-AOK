@@ -14,8 +14,8 @@ the assessment recorded as done or acceptable that are not quite. The rest is
 wording and hygiene. Everything the assessment said about executable memory
 and private API held up when measured.
 
-Findings 1 and 2 were fixed the next day, 2026-11-18; each says so below. The
-rest is as found. Line numbers are at `15edf7fd9`.
+Findings 1, 2 and 3 were fixed the next day, 2026-11-18; each says so below.
+The rest is as found. Line numbers are at `15edf7fd9`.
 
 ## How it was checked
 
@@ -139,6 +139,43 @@ The first is the one a reviewer can reach: typing `reboot` at a Linux prompt
 is an obvious thing to try. Each is behind a button the user presses, which is
 the mild form, but the decision recorded on 2026-11-14 was to replace exits
 with `ISHPresentFinalScreen`, and these were not in view when it was made.
+
+**This audit missed a fourth, and it was the worst of them.** A suspend asked
+for from inside the guest -- `/AOK/tools/suspend.sh`, or any write of
+`suspend` to `/proc/ish/checkpoint`, which the guest may do once Suspend to
+Disk is on -- saved the image and called `exit(0)` in `kernel/checkpoint.c`.
+No button and no alert: one documented command and the app was gone. It is
+in `kernel/`, where the three above are all in `app/`; a comment in
+`AppDelegate.m` and a line in `docs/TODO.md` both already described it.
+
+**FIXED 2026-11-18** (`11f181700`), all four:
+
+| Path | Now |
+|---|---|
+| System Halted | One button, OK. The message already says to quit and reopen, and the terminal behind it shows "System halted" by itself. |
+| `exit-app` | The closing screen, "Restart requested", naming the root that boots next. The op and `--exit-app` keep their names; the script and docs say what they do. |
+| Leaving recovery mode | The switch is cleared and a closing screen says to open the app again. |
+| Guest-requested suspend | A kernel hook: the machine is left frozen, the app shows "Session suspended", and the task that asked parks for good. The CLI still ends its process. |
+
+The two dead exits are removed. `exit(0)` remains in the tree in one place
+the app can no longer reach (the CLI's ending in `kernel/checkpoint.c`), and
+`_exit(0)` in the File Provider extension, which retires itself when it finds
+it is running on a Mac; that is an extension process, not the app.
+
+The guest-requested suspend had a second fault, on the CLI as well: it thawed
+the guest before the image was synced and only then exited, so every task but
+the shell that asked ran on past the image. `tests/manual/suspend_stays.sh`
+shows both; on the old binary it fails every run.
+
+Verified in the iOS 26.5 simulator on the Debug build: for each of the four,
+the app's process is still running afterwards and the screen is the one
+described; a suspended session resumes, from the shell and from a Workspace
+terminal, with its windows. On the build from before the change the same
+`suspend.sh` ended the process. The Release configuration builds. **Not run on
+a device.**
+
+Left as it was: "Quit Now" on the Filesystems screen still says it "closes"
+the app, which since `02774847b` means the closing screen.
 
 ### 4. One private API is left, and its reason has expired
 

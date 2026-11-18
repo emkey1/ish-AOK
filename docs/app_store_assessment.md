@@ -26,9 +26,10 @@ claims against the Release binary. Two new must-fixes came out of it, both
 fixed on 2026-11-18: guest DNS on an IPv6-only network, which was the
 unverified half of must-fix 4 and was broken (`96249f2d6`; a NAT64 run is still
 owed), and shipped documentation that recommended location updates as a
-keep-alive. Three entries below also say more than is true: `exit(0)` survives
-in three places, the last private API is still unweighed, and the translations
-called stale have since been done.
+keep-alive. Three entries below also say more than is true: `exit(0)` survived
+in four places (all replaced on 2026-11-18, `11f181700`, so what decision 1
+says is true from that commit on), the last private API is still unweighed,
+and the translations called stale have since been done.
 
 ---
 
