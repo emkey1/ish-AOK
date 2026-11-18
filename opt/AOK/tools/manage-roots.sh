@@ -23,7 +23,8 @@
 #
 # Options:
 #   --default      after installing, make the new root the one that boots
-#   --exit-app     when done, quit iSH-AOK so the next launch boots the choice
+#   --exit-app     when done, have iSH-AOK ask to be closed, so the next
+#                  launch boots the choice (the app cannot quit by itself)
 #   --yes          required by remove, which does not ask twice
 #   -q, --quiet    no progress lines
 #   -h, --help     this text
@@ -183,7 +184,7 @@ name=$1"
 }
 
 exit_app() {
-    say "quitting iSH-AOK; launch it again to boot the new root"
+    say "close iSH-AOK and open it again to boot the new root"
     send "op=exit-app"
 }
 

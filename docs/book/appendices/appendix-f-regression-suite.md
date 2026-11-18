@@ -4,7 +4,7 @@
 
 # Appendix F. The regression suite, annotated
 
-625 C programs in `tests/manual/`, of which **576 are listed in `fs/aok-tests.manifest`** and therefore reach the device at `/AOK/tests`.
+626 C programs in `tests/manual/`, of which **577 are listed in `fs/aok-tests.manifest`** and therefore reach the device at `/AOK/tests`.
 
 A row with a directory prefix is a per-architecture or accelerator test, kept
 in a subdirectory of `tests/manual/` and registered under that same prefix.
@@ -242,12 +242,12 @@ does not say what it is for.
 | `native_fnmatch_applets.c` | yes | native_fnmatch_applets.c -- SmallCLUE's pattern options against GNU's answers: find -name/-iname/-path, ls -I/--hide, grep --include/--exclude,... |
 | `native_libc_state.c` | yes | native_libc_state.c -- native programs each have their own rand() stream. |
 | `native_ln.c` | yes | native_ln.c -- SmallCLUE's ln against GNU coreutils 9's behaviour. |
-| `native_tar_quoting.c` | yes | native_tar_quoting.c -- SmallCLUE's tar names against GNU tar 1.35's. |
 | `native_net_options.c` | yes | The native ping and wget take the options Linux scripts pass them. |
 | `native_ptrace_group_stop.c` | yes | A NATIVE program that group-stops must report the stop to its tracer, the same way a translated one does. |
 | `native_sed.c` | yes | native_sed.c -- SmallCLUE's sed against GNU sed 4.9's answers. |
 | `native_stdio_lock.c` | yes | native_stdio_lock.c — regression lock for the orphaned-stdio-lock wedge (second instance of the 1d8eaae0d class, found 2026-08-27 as "terminal... |
 | `native_stty.c` | yes | native_stty.c -- SmallCLUE's stty against GNU coreutils 9's answers. |
+| `native_tar_quoting.c` | yes | native_tar_quoting.c -- SmallCLUE's tar names against GNU tar 1.35's. |
 | `native_tz_roots.c` | yes | native_tz_roots.c -- native programs read their own time zone, whatever another native program read a moment before. |
 | `native_zsh_blocked_sigchld.c` | yes | native_zsh_blocked_sigchld.c -- native zsh's SIGCHLD handler never runs while zsh has SIGCHLD blocked |
 | `netlink_audit.c` | yes | netlink_audit.c — regression lock for minimal NETLINK_AUDIT support. |

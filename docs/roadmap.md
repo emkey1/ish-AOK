@@ -366,7 +366,9 @@ it. What exists now:
   `checkpoint_anonfd.sh`, `checkpoint_fifo.sh`, `checkpoint_sockpair.sh`,
   `checkpoint_threads.sh`, `checkpoint_clock.sh`, `checkpoint_timers.sh`,
   `checkpoint_overlap.sh` and `checkpoint_root_identity.sh` cover the rules above,
-  and `suspend_script.sh` what `suspend.sh` reports.
+  `suspend_script.sh` what `suspend.sh` reports, and `suspend_stays.sh` that a
+  suspend the guest asks for stops every task at the image -- and can do it
+  without ending the process, which is how the app has to.
 
 **What is still open**: descriptors in flight in an SCM_RIGHTS message when the
 image is written (the bytes travel, the descriptors cannot, and the save says

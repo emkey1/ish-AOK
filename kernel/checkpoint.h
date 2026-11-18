@@ -89,6 +89,19 @@ unsigned checkpoint_gpu_holders(char *names, size_t size);
 unsigned checkpoint_sandboxed(char *names, size_t size);
 void checkpoint_run_pending(void);
 
+// What a GUEST-requested suspend does once its image is in place and the
+// machine is frozen (`echo suspend > /proc/ish/checkpoint`, which is all that
+// /AOK/tools/suspend.sh does).
+//
+// NULL, the CLI: the host process ends, which is the CLI's way of stopping.
+//
+// Set, the app: an app may not end its own process, so it is told instead --
+// with the image's host path, on the thread of the task that asked -- and
+// when the hook returns that task parks for good beside the rest. Up to 566
+// this path ended the app with exit(0) from inside the kernel, which a person
+// reaches with one documented command once Suspend to Disk is on.
+extern void (*checkpoint_suspended_hook)(const char *host_path);
+
 // The session file the entry point was given, if any: restored at startup and
 // written at suspend. Empty means neither. kernel/checkpoint.c owns the
 // string so both halves name the same file.

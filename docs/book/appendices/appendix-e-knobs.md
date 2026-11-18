@@ -68,6 +68,7 @@ by the app; several have app-side equivalents under `/proc/ish/defaults`
 | `ISH_GUEST_PROFILE` | `kernel/guestprof.c` |
 | `ISH_GUEST_PROFILE_OUT` | `kernel/guestprof.c` |
 | `ISH_GUEST_SNAPSHOT` | `fs/proc/ish.c` |
+| `ISH_GUEST_SSHD` | `main.c` |
 | `ISH_GUEST_SWAP_FAIL_READS` | `kernel/swap.c` |
 | `ISH_GUEST_SWAP_FILE` | `kernel/swap.c` |
 | `ISH_GUEST_SWAP_MB` | `kernel/swap.c` |
@@ -133,6 +134,7 @@ by the app; several have app-side equivalents under `/proc/ish/defaults`
 | `ISH_SOCKRESTART_AFTER` | `main.c` |
 | `ISH_SOCKRESTART_TEST_DESTROY` | `fs/sockrestart.c` |
 | `ISH_STALE_JIT_PEER` | `tests/manual/vfork_exec_stale_jit.c` |
+| `ISH_SUSPEND_STAYS` | `main.c` |
 | `ISH_SWAP_NO_MADVISE` | `emu/memory.c` |
 | `ISH_SWAP_NO_MPROTECT` | `emu/memory.c` |
 | `ISH_TASK_DUMP_ALL_THREADS` | `kernel/task.c` |

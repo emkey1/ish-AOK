@@ -19,7 +19,7 @@ the same "Default Root" setting.
 sudo sh /AOK/tools/manage-roots.sh list        # installed, and which boots next
 sudo sh /AOK/tools/manage-roots.sh available   # what you can install
 
-# From the catalog, then make it the root that boots and quit the app
+# From the catalog, then make it the root that boots and ask to be closed
 sudo sh /AOK/tools/manage-roots.sh install alpine3242aarch64 --default --exit-app
 
 # From an archive already on the device, or from a URL
@@ -35,9 +35,9 @@ Three things worth knowing:
 - **Switching takes effect at the next app launch.** Which root boots is read
   once when the app starts, so nothing here disturbs the running guest. That is
   also why you can install a root from inside the root you are using.
-  `--exit-app` quits the app for you (through the same shutdown a suspension
-  takes, so nothing is left half-written), and the next launch comes up in the
-  new root.
+  `--exit-app` ends with a screen asking you to close iSH-AOK, which an iOS
+  app cannot do for itself; close it, and the next launch comes up in the new
+  root. Up to build 566 the app quit at that point.
 - **An install keeps running if you walk away.** The download and unpack belong
   to the app, not to the shell that asked for them. Ctrl-C, a dropped ssh
   session, or a second invocation of `manage-roots.sh status` all find the same

@@ -761,6 +761,25 @@ void checkpoint_park_if_frozen(void) {
     __atomic_store_n(&current->wait_interrupted, false, __ATOMIC_RELEASE);
 }
 
+void (*checkpoint_suspended_hook)(const char *host_path) = NULL;
+
+// Where the task that ASKED for a suspend stops, once the machine is frozen
+// around it and the embedder has been told (checkpoint_run_pending).
+//
+// Not checkpoint_park_if_frozen: that waits for a thaw, and a suspend has
+// none. Its own loop, so that nothing can let this task run on past the image
+// -- a thaw that should never come, or a spurious wakeup, both land back in
+// the wait. Marked parked like the others, so anything counting who has
+// stopped counts this one too. ckpt_save_lock is not held here: the save
+// returned before the hook ran.
+static _Noreturn void ckpt_park_for_good(void) {
+    pthread_mutex_lock(&ckpt_park_lock);
+    atomic_store_explicit(&current->ckpt_frozen, true, memory_order_release);
+    pthread_cond_broadcast(&ckpt_park_cond);
+    for (;;)
+        pthread_cond_wait(&ckpt_park_cond, &ckpt_park_lock);
+}
+
 // Set while this thread is inside a program's ckpt_dump.
 //
 // The dump is the program describing itself, and describing itself means
@@ -6786,7 +6805,14 @@ void checkpoint_run_pending(void) {
             current->ckpt_native_state == NULL)
         ckpt_native_describe(self);
 
-    int err = checkpoint_save(path);
+    // A suspend leaves every OTHER task frozen (CKPT_SAVE_AND_HALT), the same
+    // as the app's own Suspend. It used to take the plain save, which thaws
+    // the moment the image is written and BEFORE its fsync and rename -- so
+    // the rest of the guest ran on through the slowest part of the save and
+    // up to the exit below, writing to a root the image no longer described.
+    // A refusal still thaws, whatever was asked: a guest that carries on is
+    // the better outcome when there is no image to show for stopping it.
+    int err = ckpt_save(path, halt_after ? CKPT_SAVE_AND_HALT : 0);
     if (err < 0) {
         lock(&ckpt_lock, 0);
         ckpt_status.last_err = err;
@@ -6806,6 +6832,15 @@ void checkpoint_run_pending(void) {
     // next launch is the one that continues it. Stopping the machine rather
     // than exiting the task -- an exit would run the guest's own shutdown,
     // and the image already describes a process that is very much alive.
+    if (checkpoint_suspended_hook != NULL) {
+        // An embedder that may not end its own process. Everything else is
+        // parked already; this task is the one thing still running, and the
+        // image has it one instruction past its request, so it must not take
+        // another. See the hook's declaration.
+        CKPT_TRACE("suspending: image written, machine stopped\n");
+        checkpoint_suspended_hook(path);
+        ckpt_park_for_good();
+    }
     CKPT_TRACE("suspending: image written, halting\n");
     if (halt_hook != NULL)
         halt_hook(0);

@@ -1226,11 +1226,10 @@ static UIColor *RootRowInUseAccentColor(void) {
         [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Quit Now", @"Alert button: quit the app to switch filesystem") style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
             Roots.instance.defaultRoot = name;
             AppDelegate *appDelegate = (AppDelegate *) UIApplication.sharedApplication.delegate;
-            if ([appDelegate isKindOfClass:AppDelegate.class]) {
+            // No else. There was one, exit(0), for a delegate that is not
+            // an AppDelegate -- which this app does not have.
+            if ([appDelegate isKindOfClass:AppDelegate.class])
                 [appDelegate exitApp];
-            } else {
-                exit(0);
-            }
         }]];
     }
     [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Cancel", @"Alert button") style:UIAlertActionStyleCancel handler:nil]];

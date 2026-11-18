@@ -138,8 +138,10 @@ downloads a hundred megabytes.
 **Switching takes effect at the next launch.** Which root boots is read once,
 when the app starts, so changing it disturbs nothing that is running. That is
 also what makes the obvious paradox work: *you can install a root from inside the
-root you are using.* `--exit-app` quits the app for you, through the same
-shutdown a suspension takes (Chapter 28), so nothing is left half-written.
+root you are using.* `--exit-app` ends with a screen asking for the app to be
+closed, because an iOS app may not quit itself; closing it is an ordinary
+suspension (Chapter 28), so nothing is left half-written. Up to build 566 the
+app quit at that point by itself.
 
 **Which means "the current root" is two things, and the screen says which.** The
 root you are *running* is mounted at `/`, and the Filesystems screen draws its

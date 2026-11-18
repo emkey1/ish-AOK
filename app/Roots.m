@@ -2370,15 +2370,29 @@ static void RunInstallJob(NSDictionary<NSString *, NSString *> *fields) {
     [control finishOk:[NSString stringWithFormat:@"installed %@ (%@)", installed, abi]];
 }
 
+// op=exit-app, which manage-roots.sh sends for --exit-app.
+//
+// Up to 566 this was what its name says: the suspend guard, then exit(0)
+// 400 ms later. An app may not terminate itself (ISHPresentFinalScreen says
+// why), so it puts up the screen asking to be closed instead -- the same
+// ending "Quit Now" on the Filesystems screen has. The op keeps its name
+// because scripts already send it. Nothing is stopped: which root boots is
+// read at launch, so the running guest is not in the way, and the person
+// closing the app is the ordinary suspension the old code was imitating.
 static void RunExitApp(void) {
-    dispatch_async(dispatch_get_main_queue(), ^{
-        // Never a bare exit(): the fakefs holds SQLite state that has to be let
-        // go of first, which is the whole reason the suspend guard exists
-        // (RUNNINGBOARD 0xdead10cc). Same path a real suspension takes.
-        ISHSuspendGuardEnterBackground();
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.4 * NSEC_PER_SEC)),
-                       dispatch_get_main_queue(), ^{ exit(0); });
-    });
+    NSString *next = Roots.instance.defaultRoot;
+    if (next.length == 0) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            AppDelegate *appDelegate = (AppDelegate *) UIApplication.sharedApplication.delegate;
+            if ([appDelegate isKindOfClass:AppDelegate.class])
+                [appDelegate exitApp];
+        });
+        return;
+    }
+    ISHPresentFinalScreen(NSLocalizedString(@"Restart requested", @"Final screen title after a command in the guest asked for the app to be closed"),
+                          [NSString stringWithFormat:NSLocalizedString(@"Close iSH-AOK and open it again to boot \u201c%@\u201d.",
+                                                                       @"Final screen message after a command in the guest asked for the app to be closed; %@ is a filesystem name"),
+                           next]);
 }
 
 static int ISHRootsCommandImpl(const char *fragment) {

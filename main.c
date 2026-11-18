@@ -172,6 +172,17 @@ static void *cli_sockrestart_after(void *unused) {
     fprintf(stderr, "sockrestart: rebuilt %u listener(s)\n", rebuilt);
     return NULL;
 }
+// See ISH_SUSPEND_STAYS below.
+static const char *cli_suspend_stays_marker;
+static void cli_suspend_stays(const char *host_path) {
+    // A file, not stderr, for the reason cli_checkpoint_once gives: the guest
+    // may have closed the host's standard streams by now.
+    FILE *mf = fopen(cli_suspend_stays_marker, "w");
+    if (mf != NULL) {
+        fprintf(mf, "%s\n", host_path);
+        fclose(mf);
+    }
+}
 static long cli_checkpoint_now_ms(void) {
     struct timespec now;
     clock_gettime(CLOCK_MONOTONIC, &now);
@@ -928,6 +939,23 @@ int main(int argc, char *const argv[]) {
             pthread_t th;
             pthread_create(&th, NULL, cli_sockrestart_after, NULL);
             pthread_detach(th);
+        }
+    }
+    // ISH_SUSPEND_STAYS=<file> -- a suspend the guest asks for leaves this
+    // process RUNNING, with the machine frozen, and writes the image's path
+    // to the host file <file> once it is.
+    //
+    // The APP's ending for that request, where it can be tested: the app may
+    // not end its own process, so there the machine stops and the app stays
+    // (checkpoint_suspended_hook), while the CLI's own ending is to exit. With
+    // this set nothing ends the process -- whatever started it has to, which
+    // is the person closing the app. tests/manual/suspend_stays.sh.
+    {
+        const char *marker = getenv("ISH_SUSPEND_STAYS");
+        if (marker != NULL && *marker != '\0') {
+            cli_suspend_stays_marker = strdup(marker);
+            if (cli_suspend_stays_marker != NULL)
+                checkpoint_suspended_hook = cli_suspend_stays;
         }
     }
     // See test_detach_tree_thread.

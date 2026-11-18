@@ -180,7 +180,6 @@ static void ISHDispatchBootWork(NSString *name, void (^work)(void)) {
 
 @interface AppDelegate ()
 
-@property BOOL exiting;
 @property SCNetworkReachabilityRef reachability;
 #if __has_include(<Network/Network.h>)
 @property (strong, nonatomic) nw_path_monitor_t pathMonitor API_AVAILABLE(ios(12.0));
@@ -710,20 +709,21 @@ static void ISHPresentGuestHaltedAlert(int status, int attempt) {
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:NSLocalizedString(@"System Halted", @"Alert title after the guest shuts down")
                                                                    message:message
                                                             preferredStyle:UIAlertControllerStyleAlert];
-    [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Not Now", @"Alert button") style:UIAlertActionStyleCancel handler:nil]];
-    [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Quit iSH-AOK", @"System Halted alert button")
-                                              style:UIAlertActionStyleDefault
-                                            handler:^(__unused UIAlertAction *action) {
-        [ISHDiagnosticsStore recordBreadcrumb:@"guest.halted.quit"];
-        exit(0);
-    }]];
+    // One button. There was a second, "Quit iSH-AOK", which called exit(0):
+    // an app may not terminate itself (see ISHPresentFinalScreen), and the
+    // message above already says what to do. No final screen of its own
+    // either, unlike a suspend: the terminal behind this alert has already
+    // replaced itself with "System halted. Quit and reopen iSH-AOK to boot it
+    // again." (TerminalViewController), so that is what OK returns to.
+    [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"OK", @"Alert button") style:UIAlertActionStyleCancel handler:nil]];
     [host presentViewController:alert animated:YES completion:nil];
 }
 
 // halt_hook. Runs on init's thread with pids_lock and init's general_lock held
 // (kernel/exit.c), so it takes no locks and waits for nothing: set the flag and
-// hand the rest to the main queue. The kernel's checkpoint suspend also calls
-// it, immediately before exit(0), where this is harmless.
+// hand the rest to the main queue. A suspend the guest asks for does not come
+// here in the app: it goes to ios_handle_guest_suspend. (On the CLI it does,
+// on its way to ending the process.)
 static void ios_handle_halt(int status) {
     atomic_store(&ishGuestHalted, true);
     dispatch_async(dispatch_get_main_queue(), ^{
@@ -3753,9 +3753,8 @@ void ISHSuspendSessionConfirmGPUThen(UIViewController *host, NSString *verb,
 // two saves in a row are two photographs of a machine that never stopped. A
 // suspend is a departure -- the point is to put the machine down and have the
 // next launch be the one that continues it. Without this the only way to do
-// that was /AOK/tools/suspend.sh from inside the guest, which already ends in
-// the same exit(0) (kernel/checkpoint.c's halt path; the app's halt_hook only
-// records a flag there).
+// that was /AOK/tools/suspend.sh from inside the guest, which arrives at
+// ios_handle_guest_suspend below and ends the same way.
 //
 // Stopping the machine matters as much as writing the image: the image
 // describes the guest as it was when the freeze stopped it, while the root
@@ -3861,6 +3860,37 @@ int ISHSuspendSessionSuspendAndStop(BOOL leaveOutGPU) {
                           NSLocalizedString(@"You can close iSH-AOK now. The next launch picks this session up where you left it.",
                                             @"Final screen message after Suspend and Exit"));
     return 0;
+}
+
+// checkpoint_suspended_hook: the same ending, asked for from INSIDE the guest
+// -- /AOK/tools/suspend.sh, or anything else that writes "suspend" to
+// /proc/ish/checkpoint, which the guest may do once Suspend to Disk is on.
+// The image is in place and every other task is frozen. This runs on the
+// thread of the task that asked, which parks for good when it returns.
+//
+// Up to 566 the kernel ended the process at this point with exit(0): one
+// documented command, typed at the prompt, and the app vanished. It had also
+// thawed the guest first, so everything but the shell that asked ran on
+// until the exit (tests/manual/suspend_stays.sh).
+static void ios_handle_guest_suspend(const char *host_path) {
+    // First, and before anything that can wait: a save started now would thaw
+    // the machine this suspend has just stopped. See ishGuestSuspended.
+    atomic_store(&ishGuestSuspended, true);
+    os_log(ISHSuspendLog(), "session suspended by the guest; guest stopped");
+    // The windows, as for every other save. After the image here rather than
+    // before it, because the request came from the guest and was not known
+    // until it was done; nothing in the guest has moved since the freeze, so
+    // what the terminals show is still what the image holds. Filed under the
+    // path the image was written to, which is where a resume looks. Off the
+    // main thread, so this waits for the capture, and gives up after 5 s.
+    if (host_path != NULL && host_path[0] != '\0')
+        ISHWorkspaceCaptureLayoutForSuspend(@(host_path));
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [ISHDiagnosticsStore recordBreadcrumb:@"guest.suspended.byGuest"];
+    });
+    ISHPresentFinalScreen(NSLocalizedString(@"Session suspended", @"Final screen title after Suspend and Exit"),
+                          NSLocalizedString(@"You can close iSH-AOK now. The next launch picks this session up where you left it.",
+                                            @"Final screen message after Suspend and Exit"));
 }
 
 static TerminalViewController *CreateTerminalViewController(void) {
@@ -4484,6 +4514,7 @@ static TerminalViewController *CreateTerminalViewController(void) {
     
     exit_hook = ios_handle_exit;
     halt_hook = ios_handle_halt;
+    checkpoint_suspended_hook = ios_handle_guest_suspend;
     die_handler = ios_handle_die;
 #if !TARGET_OS_SIMULATOR
     NSString *sockTmp = [NSTemporaryDirectory() stringByAppendingString:@"ishsock"];
@@ -6080,10 +6111,7 @@ void ISHSuspendGuardEnterForeground(void) {
 }
 
 - (void)applicationDidEnterBackground:(UIApplication *)application {
-    [ISHDiagnosticsStore recordBreadcrumb:@"application.didEnterBackground"
-                                  details:@{@"exiting": @(self.exiting)}];
-    if (self.exiting)
-        exit(0);
+    [ISHDiagnosticsStore recordBreadcrumb:@"application.didEnterBackground"];
     // No suspend-guard work here on purpose: this app adopts UIScene, so UIKit
     // never calls this method and anything hung off it would silently not run.
     // SceneDelegate's sceneDidEnterBackground: drives it instead.

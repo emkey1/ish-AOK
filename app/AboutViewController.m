@@ -468,8 +468,14 @@ UIViewController *ISHCreateDiagnosticsNavigationController(void) {
 }
 
 - (void)exitRecovery:(id)sender {
+    // The switch is what leaves recovery mode; it is read once, at launch, so
+    // it takes a new launch to act on it. That used to be forced with exit(0)
+    // on the next line. An app may not terminate itself (ISHPresentFinalScreen
+    // says why), so this says what to do instead.
     [NSUserDefaults.standardUserDefaults setBool:NO forKey:@"recovery"];
-    exit(0);
+    ISHPresentFinalScreen(NSLocalizedString(@"Recovery Mode is off", @"Final screen title after leaving recovery mode"),
+                          NSLocalizedString(@"Close iSH-AOK and open it again to start normally.",
+                                            @"Final screen message after leaving recovery mode"));
 }
 
 - (void)showDiagnostics:(id)sender {
