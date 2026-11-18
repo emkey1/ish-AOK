@@ -174,8 +174,10 @@ terminal, with its windows. On the build from before the change the same
 `suspend.sh` ended the process. The Release configuration builds. **Not run on
 a device.**
 
-Left as it was: "Quit Now" on the Filesystems screen still says it "closes"
-the app, which since `02774847b` means the closing screen.
+"Quit Now" on the Filesystems screen said it "closes" the app, which since
+`02774847b` meant the closing screen. **FIXED 2026-11-18:** both of its alert
+messages, the docs and the translations now say it ends on a screen asking
+you to close iSH-AOK.
 
 ### 4. One private API is left, and its reason has expired
 

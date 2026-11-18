@@ -89,9 +89,9 @@ Images** applet in Workspace — lists four groups:
   holding its name, and what is left of one is swept up at the next launch.
   **Boot From This Filesystem** on the detail screen asks when:
   **Next Launch** keeps everything running and switches the next time
-  iSH-AOK opens, and **Quit Now** closes iSH-AOK, ending every running
-  program, so that the root boots when you open it again. iOS does not let an
-  app restart itself.
+  iSH-AOK opens, and **Quit Now** ends on a screen asking you to close
+  iSH-AOK; closing it ends every running program, and the root boots when you
+  open it again. iOS does not let an app restart itself, or quit by itself.
 - **Root Cached Filesystems (`/AOK/persist/roots`)** — any root archives
   sitting in that shared, persistent folder, whether they got there via
   automatic download or because you (or the Files app) dropped a

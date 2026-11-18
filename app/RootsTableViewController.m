@@ -1205,11 +1205,11 @@ static UIColor *RootRowInUseAccentColor(void) {
         offerQuit = NO;
     } else if (self.isDefaultRoot) {
         title = [NSString stringWithFormat:NSLocalizedString(@"\u201c%@\u201d boots next", @"Alert title; %@ is a filesystem name"), name];
-        message = NSLocalizedString(@"It boots the next time iSH-AOK opens. Quit Now closes iSH-AOK, ending every running program, so that it boots when you open it again.", @"Boot filesystem alert message");
+        message = NSLocalizedString(@"It boots the next time iSH-AOK opens. Quit Now ends on a screen asking you to close iSH-AOK. Closing it ends every running program, and this filesystem boots when you open it again.", @"Boot filesystem alert message");
         offerLater = NO;
     } else {
         title = [NSString stringWithFormat:NSLocalizedString(@"Boot \u201c%@\u201d from now on?", @"Alert title; %@ is a filesystem name"), name];
-        message = NSLocalizedString(@"iSH-AOK can't restart itself. Next Launch keeps everything running and switches the next time iSH-AOK opens. Quit Now closes it, ending every running program, and boots this filesystem when you open it again.", @"Boot filesystem alert message");
+        message = NSLocalizedString(@"iSH-AOK can't restart itself. Next Launch keeps everything running and switches the next time iSH-AOK opens. Quit Now ends on a screen asking you to close iSH-AOK. Closing it ends every running program, and this filesystem boots when you open it again.", @"Boot filesystem alert message");
     }
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:title
                                                                    message:message
@@ -1224,6 +1224,9 @@ static UIColor *RootRowInUseAccentColor(void) {
     }
     if (offerQuit) {
         [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Quit Now", @"Alert button: quit the app to switch filesystem") style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
+            // The app cannot end itself: this sets the root and puts up the
+            // closing screen. The messages above say so; up to 566 they said
+            // Quit Now closed iSH-AOK.
             Roots.instance.defaultRoot = name;
             AppDelegate *appDelegate = (AppDelegate *) UIApplication.sharedApplication.delegate;
             // No else. There was one, exit(0), for a delegate that is not

@@ -47870,62 +47870,62 @@
         }
       }
     },
-    "iSH-AOK can't restart itself. Next Launch keeps everything running and switches the next time iSH-AOK opens. Quit Now closes it, ending every running program, and boots this filesystem when you open it again." : {
+    "iSH-AOK can't restart itself. Next Launch keeps everything running and switches the next time iSH-AOK opens. Quit Now ends on a screen asking you to close iSH-AOK. Closing it ends every running program, and this filesystem boots when you open it again." : {
       "comment" : "Boot filesystem alert message",
       "extractionState" : "manual",
       "localizations" : {
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "iSH-AOK kann sich nicht selbst neu starten. „Nächster Start“ lässt alles weiterlaufen und wechselt beim nächsten Öffnen von iSH-AOK. „Jetzt beenden“ schließt die App, beendet alle laufenden Programme und bootet dieses Dateisystem beim nächsten Öffnen."
+            "value" : "iSH-AOK kann sich nicht selbst neu starten. „Nächster Start“ lässt alles weiterlaufen und wechselt beim nächsten Öffnen von iSH-AOK. „Jetzt beenden“ zeigt zum Schluss einen Bildschirm, der dich bittet, iSH-AOK zu schließen. Das Schließen beendet alle laufenden Programme, und beim nächsten Öffnen bootet dieses Dateisystem."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "iSH-AOK no puede reiniciarse a sí mismo. Próximo inicio mantiene todo en ejecución y cambia la próxima vez que se abra iSH-AOK. Salir ahora lo cierra, finalizando todos los programas en ejecución, y arranca este sistema de archivos cuando lo vuelvas a abrir."
+            "value" : "iSH-AOK no puede reiniciarse a sí mismo. Próximo inicio mantiene todo en ejecución y cambia la próxima vez que se abra iSH-AOK. Salir ahora termina en una pantalla que te pide cerrar iSH-AOK. Al cerrarlo finalizan todos los programas en ejecución, y este sistema de archivos arranca cuando lo vuelvas a abrir."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "iSH-AOK ne peut pas se redémarrer lui-même. Prochain lancement garde tout en cours d'exécution et bascule à la prochaine ouverture d'iSH-AOK. Quitter maintenant le ferme, en arrêtant tous les programmes en cours, et démarre ce système de fichiers à la prochaine ouverture."
+            "value" : "iSH-AOK ne peut pas se redémarrer lui-même. Prochain lancement garde tout en cours d'exécution et bascule à la prochaine ouverture d'iSH-AOK. Quitter maintenant se termine sur un écran qui vous demande de fermer iSH-AOK. Le fermer arrête tous les programmes en cours, et ce système de fichiers démarre lorsque vous le rouvrez."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "iSH-AOK は自分自身を再起動できません。「次回起動時」はすべてを実行したままにし、次に iSH-AOK を開いたときに切り替えます。「今すぐ終了」は実行中のすべてのプログラムを終了して iSH-AOK を閉じ、次に開いたときにこのファイルシステムからブートします。"
+            "value" : "iSH-AOK は自分自身を再起動できません。「次回起動時」はすべてを実行したままにし、次に iSH-AOK を開いたときに切り替えます。「今すぐ終了」を選ぶと、iSH-AOK を閉じるよう求める画面になります。閉じると実行中のすべてのプログラムが終了し、次に開いたときにこのファイルシステムからブートします。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "iSH-AOK는 스스로 재시작할 수 없습니다. 다음 실행 시는 모든 것을 계속 실행하고 다음에 iSH-AOK를 열 때 전환합니다. 지금 종료는 iSH-AOK를 닫아 실행 중인 모든 프로그램을 종료하고, 다시 열 때 이 파일 시스템으로 부팅합니다."
+            "value" : "iSH-AOK는 스스로 재시작할 수 없습니다. 다음 실행 시는 모든 것을 계속 실행하고 다음에 iSH-AOK를 열 때 전환합니다. 지금 종료를 누르면 iSH-AOK를 닫으라는 화면이 표시됩니다. 닫으면 실행 중인 모든 프로그램이 종료되고, 다시 열 때 이 파일 시스템으로 부팅합니다."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "O iSH-AOK não consegue se reiniciar. Próxima Abertura mantém tudo em execução e troca na próxima vez que o iSH-AOK abrir. Sair Agora o fecha, encerrando todos os programas em execução, e inicia este sistema de arquivos quando você abri-lo novamente."
+            "value" : "O iSH-AOK não consegue se reiniciar. Próxima Abertura mantém tudo em execução e troca na próxima vez que o iSH-AOK abrir. Sair Agora termina em uma tela pedindo que você feche o iSH-AOK. Fechá-lo encerra todos os programas em execução, e este sistema de arquivos inicia quando você abri-lo novamente."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "iSH-AOK не может перезапустить себя. «При следующем запуске» оставляет всё работающим и переключает систему при следующем открытии iSH-AOK. «Выйти сейчас» закрывает приложение, завершая все запущенные программы, и загружает эту файловую систему при следующем открытии."
+            "value" : "iSH-AOK не может перезапустить себя. «При следующем запуске» оставляет всё работающим и переключает систему при следующем открытии iSH-AOK. «Выйти сейчас» заканчивается экраном с просьбой закрыть iSH-AOK. Закрытие завершает все запущенные программы, а при следующем открытии загрузится эта файловая система."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "iSH-AOK 无法自行重启。“下次启动”会让一切继续运行，并在下次打开 iSH-AOK 时切换。“立即退出”会关闭它并结束所有运行中的程序，再次打开时将启动此文件系统。"
+            "value" : "iSH-AOK 无法自行重启。“下次启动”会让一切继续运行，并在下次打开 iSH-AOK 时切换。“立即退出”会停在一个请你关闭 iSH-AOK 的画面。关闭它会结束所有运行中的程序，再次打开时将启动此文件系统。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "iSH-AOK 無法自行重新啟動。「下次啟動」會讓一切繼續執行，並在下次打開 iSH-AOK 時切換。「立即結束」會關閉它並結束所有執行中的程式，再次打開時會以此檔案系統開機。"
+            "value" : "iSH-AOK 無法自行重新啟動。「下次啟動」會讓一切繼續執行，並在下次打開 iSH-AOK 時切換。「立即結束」會停在一個請你關閉 iSH-AOK 的畫面。關閉它會結束所有執行中的程式，再次打開時會以此檔案系統開機。"
           }
         }
       }
@@ -48470,62 +48470,62 @@
         }
       }
     },
-    "It boots the next time iSH-AOK opens. Quit Now closes iSH-AOK, ending every running program, so that it boots when you open it again." : {
+    "It boots the next time iSH-AOK opens. Quit Now ends on a screen asking you to close iSH-AOK. Closing it ends every running program, and this filesystem boots when you open it again." : {
       "comment" : "Boot filesystem alert message",
       "extractionState" : "manual",
       "localizations" : {
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Es bootet beim nächsten Öffnen von iSH-AOK. „Jetzt beenden“ schließt iSH-AOK und beendet alle laufenden Programme, damit es beim nächsten Öffnen bootet."
+            "value" : "Es bootet beim nächsten Öffnen von iSH-AOK. „Jetzt beenden“ zeigt zum Schluss einen Bildschirm, der dich bittet, iSH-AOK zu schließen. Das Schließen beendet alle laufenden Programme, und beim nächsten Öffnen bootet dieses Dateisystem."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Arrancará la próxima vez que se abra iSH-AOK. Salir ahora cierra iSH-AOK, finalizando todos los programas en ejecución, para que arranque cuando lo vuelvas a abrir."
+            "value" : "Arrancará la próxima vez que se abra iSH-AOK. Salir ahora termina en una pantalla que te pide cerrar iSH-AOK. Al cerrarlo finalizan todos los programas en ejecución, y este sistema de archivos arranca cuando lo vuelvas a abrir."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Il démarrera à la prochaine ouverture d'iSH-AOK. Quitter maintenant ferme iSH-AOK, en arrêtant tous les programmes en cours, pour qu'il démarre lorsque vous le rouvrirez."
+            "value" : "Il démarrera à la prochaine ouverture d'iSH-AOK. Quitter maintenant se termine sur un écran qui vous demande de fermer iSH-AOK. Le fermer arrête tous les programmes en cours, et ce système de fichiers démarre lorsque vous le rouvrez."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "次に iSH-AOK を開いたときにブートします。「今すぐ終了」は実行中のすべてのプログラムを終了して iSH-AOK を閉じ、次に開いたときにブートするようにします。"
+            "value" : "次に iSH-AOK を開いたときにブートします。「今すぐ終了」を選ぶと、iSH-AOK を閉じるよう求める画面になります。閉じると実行中のすべてのプログラムが終了し、次に開いたときにこのファイルシステムからブートします。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "다음에 iSH-AOK를 열 때 부팅됩니다. 지금 종료는 iSH-AOK를 닫아 실행 중인 모든 프로그램을 종료하므로, 다시 열 때 부팅됩니다."
+            "value" : "다음에 iSH-AOK를 열 때 부팅됩니다. 지금 종료를 누르면 iSH-AOK를 닫으라는 화면이 표시됩니다. 닫으면 실행 중인 모든 프로그램이 종료되고, 다시 열 때 이 파일 시스템으로 부팅합니다."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Ele inicia na próxima vez que o iSH-AOK abrir. Sair Agora fecha o iSH-AOK, encerrando todos os programas em execução, para que ele inicie quando você abri-lo novamente."
+            "value" : "Ele inicia na próxima vez que o iSH-AOK abrir. Sair Agora termina em uma tela pedindo que você feche o iSH-AOK. Fechá-lo encerra todos os programas em execução, e este sistema de arquivos inicia quando você abri-lo novamente."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Она загрузится при следующем открытии iSH-AOK. «Выйти сейчас» закрывает iSH-AOK, завершая все запущенные программы, чтобы она загрузилась при следующем открытии."
+            "value" : "Она загрузится при следующем открытии iSH-AOK. «Выйти сейчас» заканчивается экраном с просьбой закрыть iSH-AOK. Закрытие завершает все запущенные программы, а при следующем открытии загрузится эта файловая система."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "它将在下次打开 iSH-AOK 时启动。“立即退出”会关闭 iSH-AOK 并结束所有运行中的程序，以便再次打开时启动它。"
+            "value" : "它将在下次打开 iSH-AOK 时启动。“立即退出”会停在一个请你关闭 iSH-AOK 的画面。关闭它会结束所有运行中的程序，再次打开时将启动此文件系统。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "下次打開 iSH-AOK 時會以它開機。「立即結束」會關閉 iSH-AOK 並結束所有執行中的程式，再次打開時即以它開機。"
+            "value" : "下次打開 iSH-AOK 時會以它開機。「立即結束」會停在一個請你關閉 iSH-AOK 的畫面。關閉它會結束所有執行中的程式，再次打開時會以此檔案系統開機。"
           }
         }
       }

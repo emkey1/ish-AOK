@@ -168,8 +168,9 @@ with the next install of that name. The lookup now writes nothing.
 used to set the default and quit on the spot: one tap, every running program
 ended, under a footer promising a restart. iOS does not let an app restart
 itself, so the "restart" was the home screen. It now offers Next Launch, which
-only records the choice (the row then reads "Boots next"), or Quit Now, which is
-the old behaviour chosen on purpose.
+only records the choice (the row then reads "Boots next"), or Quit Now, which
+records it and ends on a screen asking you to close iSH-AOK. (Its alert used
+to say Quit Now closed the app; from 566 the app never ends itself.)
 
 **One launch can boot a different root without choosing it.** `ISH_BOOT_ROOT`,
 set in the app's launch environment, boots the named root for that launch and
