@@ -1,12 +1,12 @@
-# iSH-AOK: The Book — detailed outline
+# AOK-iSH: The Book — detailed outline
 
-**Working title:** *A Kernel Without a Kernel: Inside iSH-AOK*
+**Working title:** *A Kernel Without a Kernel: Inside AOK-iSH*
 **Subtitle:** How a Linux userland runs on an iPhone, from one interpreted x86
 instruction in 2017 to four JIT'd guest architectures and native host programs in 2026.
 
 ## Foreword: on standing somewhere
 
-Written before Chapter 1 and addressed to the same reader. iSH-AOK is a fork of
+Written before Chapter 1 and addressed to the same reader. AOK-iSH is a fork of
 upstream iSH, and nearly every mechanism this book describes as "how AOK works"
 was created by Theodore Dubois (`tbodt`) and the upstream contributors between
 2017 and 2023 — the emulated CPU, ptraceomatic, fakefs, the task model, the
@@ -21,7 +21,7 @@ conflict against *derived* apps.
 
 ## Premise
 
-iSH-AOK is a Linux kernel reimplemented as an ordinary iOS application. There is
+AOK-iSH is a Linux kernel reimplemented as an ordinary iOS application. There is
 no hypervisor, no container runtime, no JIT entitlement, and no privileged code
 anywhere in it. Everything a Linux program expects — processes, signals, mmap,
 futexes, ptrace, epoll, sockets, /proc, ttys — is a data structure in a userspace
@@ -51,7 +51,7 @@ x86 encoding. Each is introduced where first needed.
 
 ## Conventions used throughout
 
-- **"iSH-AOK" / "AOK"** is this project. **"upstream iSH"** is `ish-app/ish`, the
+- **"AOK-iSH" / "AOK"** is this project. **"upstream iSH"** is `ish-app/ish`, the
   project it forked from. Both names are load-bearing; the book never says bare "iSH".
 - **"Guest"** is the emulated Linux side. **"Host"** is iOS/macOS and its libc.
 - Every claim about behavior is anchored to a file and, where the history matters,

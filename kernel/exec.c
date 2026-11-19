@@ -1924,7 +1924,7 @@ static int exec_interpreter(struct fd *fd, const struct statbuf *stat, const cha
 
 // Returned by native_dispatch_exec, and propagated by every loader path that
 // can reach it, when the file turned out to be a program compiled into
-// iSH-AOK. Distinct from a plain 0 because the two mean opposite things to the
+// AOK-iSH. Distinct from a plain 0 because the two mean opposite things to the
 // caller: 0 says an image was loaded and the rest of execve's process-state
 // work is still to be done, while this says the exec is already COMMITTED --
 // exec_apply_native_process_state has done all of it -- and doing it a second

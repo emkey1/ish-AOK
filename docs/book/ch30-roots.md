@@ -1,6 +1,6 @@
 # 30. Roots
 
-Nobody uses iSH-AOK. People use Alpine, or Devuan, or Arch, and iSH-AOK is what
+Nobody uses AOK-iSH. People use Alpine, or Devuan, or Arch, and AOK-iSH is what
 those are running on.
 
 That is worth saying at the top of this chapter because it sets the stakes. The
@@ -83,7 +83,7 @@ by download or because somebody dropped a `.tar.xz` in through the Files app
 (Chapter 31) or from the guest. Tap it and it becomes a named root.
 
 **Made on the spot.** Since 558 there is a fourth kind, which arrives no way at
-all: **iSH-AOK Native**, a root with no Linux distribution in it. Its `/bin` and
+all: **AOK-iSH Native**, a root with no Linux distribution in it. Its `/bin` and
 `/usr/bin` are symlinks into `/AOK/native` (Part V), its login shell is native
 zsh, and SmallCLUE's `init` is pid 1. It is an ordinary, persistent fakefs —
 home directories and `~/.ssh` have to survive a relaunch — that starts empty,
@@ -169,7 +169,7 @@ used to set the default and quit on the spot: one tap, every running program
 ended, under a footer promising a restart. iOS does not let an app restart
 itself, so the "restart" was the home screen. It now offers Next Launch, which
 only records the choice (the row then reads "Boots next"), or Quit Now, which
-records it and ends on a screen asking you to close iSH-AOK. (Its alert used
+records it and ends on a screen asking you to close AOK-iSH. (Its alert used
 to say Quit Now closed the app; from 566 the app never ends itself.)
 
 **One launch can boot a different root without choosing it.** `ISH_BOOT_ROOT`,

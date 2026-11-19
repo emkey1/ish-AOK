@@ -3,7 +3,7 @@
 //
 // Mesa 25.2 and later start zink only on a Vulkan device with robustness2's
 // nullDescriptor, and use it: an attribute whose array is disabled, a sampler
-// with no texture bound, are VK_NULL_HANDLE to the driver. iSH-AOK's GPU
+// with no texture bound, are VK_NULL_HANDLE to the driver. AOK-iSH's GPU
 // (Venus on the MoltenVK fork) has offered the feature since build 559. This
 // draws five scenes into an FBO with no window and prints the colour at the
 // centre of each; the same lines must come out of software rendering.

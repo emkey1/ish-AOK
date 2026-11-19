@@ -26,7 +26,7 @@
 //    unmapped pointer is EFAULT.
 //  - Loading a non-null selector into GS (8E, POP GS) sets its base to 0. A
 //    null one clears it on Intel and keeps it on AMD parts without CPUID
-//    0x80000021:EAX[6] (camd keeps it; iSH-AOK reports GenuineIntel and
+//    0x80000021:EAX[6] (camd keeps it; AOK-iSH reports GenuineIntel and
 //    clears it), so that expectation follows the CPUID vendor, as in
 //    amd64_segment_regs.c.
 //  - A signal handler runs with the base, and one the handler sets survives

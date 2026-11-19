@@ -1,6 +1,6 @@
 //
 //  MarkdownRenderer.h
-//  iSH-AOK
+//  AOK-iSH
 //
 //  A small, dependency-free Markdown -> NSAttributedString renderer, shared by
 //  the LLM chat transcript and the Workspace markdown reader applet.

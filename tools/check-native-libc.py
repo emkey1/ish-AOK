@@ -3,7 +3,7 @@
 
 Why an ALLOWLIST
 ----------------
-A program compiled into iSH-AOK (kernel/native.h) links against the HOST libc,
+A program compiled into AOK-iSH (kernel/native.h) links against the HOST libc,
 so a direct open()/getuid()/socket() resolves against iOS instead of the guest
 -- and *succeeds*, returning the wrong answer. Silent wrongness, not a crash.
 

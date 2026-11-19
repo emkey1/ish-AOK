@@ -79,7 +79,7 @@ enum aokfs_node_kind {
     // /tools, minus the ktop-style subdirectory case.
     aokfs_docs_dir,
     // /native holds the entry points for programs whose implementation is
-    // compiled into iSH-AOK itself and runs as host code, never as translated
+    // compiled into AOK-iSH itself and runs as host code, never as translated
     // guest code (kernel/native.c). Exec matches on the resolved path, so a
     // symlink from anywhere -- `ln -s /AOK/native/smallclue /usr/local/bin/df`
     // -- dispatches natively while keeping argv[0] as the caller typed it.
@@ -477,7 +477,7 @@ static char aokfs_version_text[128];
 
 static void aokfs_init_version(void) {
     char *build = copyBuildVersion();
-    snprintf(aokfs_version_text, sizeof(aokfs_version_text), "iSH-AOK %s%s%s\n",
+    snprintf(aokfs_version_text, sizeof(aokfs_version_text), "AOK-iSH %s%s%s\n",
             build != NULL ? build : "unknown", ISH_BUILD_OPT_SUFFIX, ISH_BUILD_GRET_SUFFIX);
     free(build);
 }
@@ -489,16 +489,16 @@ static const char *aokfs_inline_file_data(enum aokfs_node_kind node, size_t *siz
         return g->data;
     }
     static const char readme[] =
-        "iSH-AOK support files\n"
+        "AOK-iSH support files\n"
         "\n"
-        "This is a small support filesystem provided by iSH-AOK.\n"
+        "This is a small support filesystem provided by AOK-iSH.\n"
         "It is mounted at /AOK regardless of the installed Linux rootfs.\n"
         "Most entries are read-only; /AOK/persist and /AOK/fakefs are writable and\n"
-        "survive root switches. /AOK/persist is host-backed (visible outside iSH-AOK,\n"
+        "survive root switches. /AOK/persist is host-backed (visible outside AOK-iSH,\n"
         "but does not preserve Linux ownership or device nodes); /AOK/fakefs preserves\n"
         "full Linux metadata (uid/gid, permissions, device nodes, hardlinks).\n"
         "\n"
-        "/AOK/native holds programs implemented inside iSH-AOK itself. Running one\n"
+        "/AOK/native holds programs implemented inside AOK-iSH itself. Running one\n"
         "executes host code directly instead of translating guest instructions, so it\n"
         "is the same speed on every guest architecture. Link to them from anywhere:\n"
         "  ln -s /AOK/native/smallclue /usr/local/bin/df\n"
@@ -518,7 +518,7 @@ static const char *aokfs_inline_file_data(enum aokfs_node_kind node, size_t *siz
     // a length, and stat and read have to agree on that length.
     static pthread_once_t version_once = PTHREAD_ONCE_INIT;
     static const char fixes_arch_readme[] =
-        "Arch Linux ARM under iSH-AOK\n"
+        "Arch Linux ARM under AOK-iSH\n"
         "\n"
         "Three things stop a stock Arch root from installing packages here. None of\n"
         "them is an emulator bug; all three are the root expecting a system service or\n"
@@ -561,7 +561,7 @@ static const char *aokfs_inline_file_data(enum aokfs_node_kind node, size_t *siz
 
     static const char fixes_arch_script[] =
         "#!/bin/sh\n"
-        "# Make a stock Arch Linux ARM root able to install packages under iSH-AOK.\n"
+        "# Make a stock Arch Linux ARM root able to install packages under AOK-iSH.\n"
         "# See /AOK/fixes/arch/README.txt for why each step is needed.\n"
         "set -e\n"
         "\n"
@@ -626,7 +626,7 @@ static const char *aokfs_inline_file_data(enum aokfs_node_kind node, size_t *siz
         "\n";
 
     static const char fixes_codex_readme[] =
-        "Codex CLI under iSH-AOK\n"
+        "Codex CLI under AOK-iSH\n"
         "\n"
         "Codex runs every shell command it issues inside its own sandbox. On Linux\n"
         "that sandbox is bubblewrap (bwrap), which asks the kernel for user, mount,\n"
@@ -879,7 +879,7 @@ static const char *aokfs_inline_file_data(enum aokfs_node_kind node, size_t *siz
     // fails loudly with a diagnostic instead of confusingly with ENOEXEC.
     static const char native_stub[] =
         "#!/bin/sh\n"
-        "# Placeholder for a program implemented natively inside iSH-AOK.\n"
+        "# Placeholder for a program implemented natively inside AOK-iSH.\n"
         "# Reaching this text means native dispatch did not happen for this\n"
         "# path -- see /AOK/README.txt.\n"
         "echo \"${0##*/}: native dispatch unavailable in this build\" >&2\n"

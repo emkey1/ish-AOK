@@ -1,6 +1,6 @@
 # Guest Architecture Benchmarks
 
-Performance note for the iSH-AOK 535 release cycle: a head-to-head comparison
+Performance note for the AOK-iSH 535 release cycle: a head-to-head comparison
 of the three Linux guest architectures — i386, amd64, and arm64 — run on one
 host, with the same JIT engine underneath all three. The differences below
 are purely how well each guest's generated code and kernel paths perform;
@@ -11,7 +11,7 @@ nothing else varies between the three runs.
 | | |
 |---|---|
 | Host | Apple Silicon Mac (arm64) |
-| Emulator | iSH-AOK CLI, JIT engine |
+| Emulator | AOK-iSH CLI, JIT engine |
 | Guests | i686 / x86_64 / aarch64 (musl) |
 | Trial | single run per guest (not averaged) |
 
@@ -85,7 +85,7 @@ creation is done.
 Two freestanding, no-libc test binaries — raw syscalls only, no pthread, no
 `printf` — were cross-compiled with an identical `clang -O2` invocation for
 `i686`, `x86_64`, and `aarch64` musl targets, then run unmodified through the
-iSH-AOK CLI on one host. No in-guest compiler, no libc, no cross-arch
+AOK-iSH CLI on one host. No in-guest compiler, no libc, no cross-arch
 variable other than the generated instruction stream itself.
 
 Each result above is a single run, not an average over multiple trials —

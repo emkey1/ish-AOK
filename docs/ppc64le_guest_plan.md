@@ -1,4 +1,4 @@
-# iSH-AOK ppc64le Guest Port Plan
+# AOK-iSH ppc64le Guest Port Plan
 
 Date: 2026-10-17. Target: build 562.
 

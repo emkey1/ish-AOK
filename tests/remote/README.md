@@ -1,6 +1,6 @@
-# iSH-AOK Remote Differential Test Harness
+# AOK-iSH Remote Differential Test Harness
 
-A crash-resilient, differential test harness for the iSH-AOK x86 emulator. It
+A crash-resilient, differential test harness for the AOK-iSH x86 emulator. It
 runs each test across every **(arch × engine)** the emulator offers, plus a
 **native x86 oracle**, and flags any divergence or crash — then minimizes it to
 a repro. Built to push the edges of the 32- and 64-bit JIT.

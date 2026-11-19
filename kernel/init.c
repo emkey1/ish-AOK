@@ -124,7 +124,7 @@ void ensure_dev_fd_links(void) {
 
 void ensure_root_fstab_entry(void) {
     static const char entry[] =
-        "# Added by iSH-AOK: the root, which the rootfs image did not describe.\n"
+        "# Added by AOK-iSH: the root, which the rootfs image did not describe.\n"
         "/dev/" GUEST_DISK_NAME "\t/\tfake\trw\t0 0\n";
 
     struct fd *fd = generic_open("/etc/fstab", O_RDWR_ | O_CREAT_, 0644);

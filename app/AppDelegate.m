@@ -607,7 +607,7 @@ static void ISHPresentNativeUserPrompt(int attempt, NSString *problem) {
         return;
     }
     NSString *message =
-        NSLocalizedString(@"This filesystem has no Linux distribution, only the programs built into iSH-AOK. "
+        NSLocalizedString(@"This filesystem has no Linux distribution, only the programs built into AOK-iSH. "
         @"It starts with a root account, which the Session Shell always uses.\n\n"
         @"Choose a name for your everyday account. Workspace terminals open as this user "
         @"when \"Open Everything as Default User\" is on. The password is optional; "
@@ -704,16 +704,16 @@ static void ISHPresentGuestHaltedAlert(int status, int attempt) {
     }
     NSString *message = [NSString stringWithFormat:
         NSLocalizedString(@"The Linux system has shut down (%@). That is what reboot, poweroff and halt do.\n\n"
-        @"iSH-AOK can't start it again while the app is running. Quit, then open iSH-AOK again to boot it.", @"System Halted alert message; %@ says how init ended"),
+        @"AOK-iSH can't start it again while the app is running. Quit, then open AOK-iSH again to boot it.", @"System Halted alert message; %@ says how init ended"),
         ISHGuestHaltDescription(status)];
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:NSLocalizedString(@"System Halted", @"Alert title after the guest shuts down")
                                                                    message:message
                                                             preferredStyle:UIAlertControllerStyleAlert];
-    // One button. There was a second, "Quit iSH-AOK", which called exit(0):
+    // One button. There was a second, "Quit AOK-iSH", which called exit(0):
     // an app may not terminate itself (see ISHPresentFinalScreen), and the
     // message above already says what to do. No final screen of its own
     // either, unlike a suspend: the terminal behind this alert has already
-    // replaced itself with "System halted. Quit and reopen iSH-AOK to boot it
+    // replaced itself with "System halted. Quit and reopen AOK-iSH to boot it
     // again." (TerminalViewController), so that is what OK returns to.
     [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"OK", @"Alert button") style:UIAlertActionStyleCancel handler:nil]];
     [host presentViewController:alert animated:YES completion:nil];
@@ -991,7 +991,7 @@ static NSString *BootMountRecovery(intptr_t err) {
         return NSLocalizedString(@"iOS denied access to the filesystem files. Restart the app; if it still fails, choose another filesystem or reimport this one.", @"Boot failure recovery advice");
     }
     if (err == _ENOSPC) {
-        return NSLocalizedString(@"Free storage space on the device, then restart iSH-AOK.", @"Boot failure recovery advice");
+        return NSLocalizedString(@"Free storage space on the device, then restart AOK-iSH.", @"Boot failure recovery advice");
     }
     return NSLocalizedString(@"Choose another filesystem or reimport this one.", @"Boot failure recovery advice");
 }
@@ -1016,7 +1016,7 @@ static NSString *BootExecRecovery(intptr_t err, NSString *guestABI) {
         return NSLocalizedString(@"The configured boot command is not a supported Linux executable or script. Check Settings -> Boot Command.", @"Boot failure recovery advice");
     }
     if (err == _ENOMEM) {
-        return NSLocalizedString(@"The device did not have enough memory to start init. Close other apps and restart iSH-AOK.", @"Boot failure recovery advice");
+        return NSLocalizedString(@"The device did not have enough memory to start init. Close other apps and restart AOK-iSH.", @"Boot failure recovery advice");
     }
     return NSLocalizedString(@"Check Settings -> Boot Command, or choose/reimport the filesystem.", @"Boot failure recovery advice");
 }
@@ -1858,7 +1858,7 @@ static void ProvisionGuestTimeZone(void) {
     char marker[512];
     // The same text the provision-ultimate-* scripts write.
     snprintf(marker, sizeof(marker),
-             "# /etc/localtime names this zone because it is the device's. iSH-AOK\n"
+             "# /etc/localtime names this zone because it is the device's. AOK-iSH\n"
              "# moves it along with the device, at boot, for as long as it still names\n"
              "# this zone; choose any other and it is left alone from then on. Keep this\n"
              "# file: without it a UTC /etc/localtime looks like the distribution's own.\n"
@@ -1916,7 +1916,7 @@ static void ProvisionGuestHostFiles(void) {
     // /etc/zshenv, the file native zsh falls back to, and only when the distro
     // has no /etc/zsh/zshenv of its own and nothing is there yet.
     static const char locale_sh[] =
-        "# Written by iSH-AOK: a UTF-8 locale when nothing else named one. Reaches\n"
+        "# Written by AOK-iSH: a UTF-8 locale when nothing else named one. Reaches\n"
         "# sessions PAM never touches (ssh, busybox login). Rewritten only when\n"
         "# missing or empty; to turn it off, replace this with a comment.\n"
         "[ -n \"${LANG:-}${LC_ALL:-}\" ] || export LANG=C.UTF-8\n";
@@ -1943,7 +1943,7 @@ static void ProvisionGuestHostFiles(void) {
     struct statbuf profileDir;
     if (generic_statat(AT_PWD, "/etc/profile.d", &profileDir, 0) >= 0 && S_ISDIR(profileDir.mode)) {
         EnsureRegularFileNonEmpty("/etc/profile.d/10-aok-persist-bin.sh",
-            "# Written by iSH-AOK: puts /AOK/persist/bin (your own programs, and the\n"
+            "# Written by AOK-iSH: puts /AOK/persist/bin (your own programs, and the\n"
             "# ws-* Workspace launchers) first on PATH in login shells. Rewritten only\n"
             "# when missing or empty; to turn it off, replace this with a comment.\n"
             "if [ -d /AOK/persist/bin ]; then\n"
@@ -1963,7 +1963,7 @@ static void ProvisionGuestHostFiles(void) {
         struct statbuf pacmanConf;
         if (generic_statat(AT_PWD, "/etc/pacman.conf", &pacmanConf, 0) >= 0) {
             EnsureRegularFileNonEmpty("/etc/profile.d/20-aok-arch-pacman.sh",
-                "# Written by iSH-AOK: tells an interactive login that pacman needs a\n"
+                "# Written by AOK-iSH: tells an interactive login that pacman needs a\n"
                 "# one-time setup in this root, until /AOK/fixes/arch/fix-pacman.sh has\n"
                 "# done it. Rewritten only when missing or empty; to turn it off,\n"
                 "# replace this with a comment.\n"
@@ -1973,7 +1973,7 @@ static void ProvisionGuestHostFiles(void) {
                 "                ! grep -q '^DisableSandbox' /etc/pacman.conf ||\n"
                 "                [ ! -e /etc/resolv.conf ] ||\n"
                 "                [ ! -s /etc/pacman.d/gnupg/trustdb.gpg ]; }; then\n"
-                "            echo 'iSH-AOK: pacman needs a one-time setup before it can install anything here.'\n"
+                "            echo 'AOK-iSH: pacman needs a one-time setup before it can install anything here.'\n"
                 "            echo '         As root:  sh /AOK/fixes/arch/fix-pacman.sh'\n"
                 "            echo '         Why:      /AOK/fixes/arch/README.txt'\n"
                 "        fi ;;\n"
@@ -2078,6 +2078,8 @@ static void ISHWriteWorkspaceLaunchers(NSURL *binURL) {
     // carrying this marker: /AOK/persist survives reinstalls and belongs to
     // the user, so anything of theirs that happens to share a name is left
     // alone rather than silently replaced.
+    // It keeps the app's old name, iSH-AOK: launchers written before the
+    // rename carry it, and a new marker would leave them stale forever.
     static NSString *const marker = @"# iSH-AOK Workspace launcher -- generated, edits are overwritten";
     // Launcher name -> the tool name /proc/ish/workspace takes. Mostly the
     // same word. Three applets were renamed on screen after their tool names
@@ -2154,7 +2156,7 @@ static NSURL *AOKPersistDirectoryURL(void) {
 // metadata, same on-disk layout as an installed root) instead of a realfs
 // directory. Mounted at /AOK/fakefs on every boot, shared across all
 // installed roots. Complements /AOK/persist: persist is host-backed and
-// reachable from outside iSH-AOK, but flattens Linux ownership and can't
+// reachable from outside AOK-iSH, but flattens Linux ownership and can't
 // hold device nodes; fakefs preserves full Linux metadata (uid/gid, modes,
 // device nodes, hardlinks), so cross-root trees that need real filesystem
 // semantics -- e.g. a debootstrap'd rootfs -- can durably live here.
@@ -2443,7 +2445,7 @@ static NSURL *AOKSharedFakefsDirectoryURL(void) {
 + (NSString *)diagnosticsReport {
     NSMutableString *report = [NSMutableString string];
     NSDictionary<NSString *, id> *summary = [self currentSummaryDictionary];
-    [report appendString:@"iSH-AOK Diagnostics\n\n"];
+    [report appendString:@"AOK-iSH Diagnostics\n\n"];
     // When this snapshot was taken. The pane does not refresh itself any more --
     // it would drop the reader's selection mid-copy (see rebuildReport in
     // AboutViewController.m) -- so "how old is this?" became a question the
@@ -2457,11 +2459,11 @@ static NSURL *AOKSharedFakefsDirectoryURL(void) {
     // Where everything lives, and whether Files can see it (#625, #676). A copy
     // re-signed without the App Group entitlement runs from its own private
     // container, which the File Provider extension cannot reach, so the app
-    // keeps iSH-AOK out of Files on purpose; that used to be a guess from the
+    // keeps AOK-iSH out of Files on purpose; that used to be a guess from the
     // symptoms.
     [report appendFormat:@"Storage: %@\n", [summary[@"appGroupShared"] boolValue] ?
         @"shared App Group container" :
-        @"this app's own container -- no App Group (re-signed without it?), so iSH-AOK is kept out of Files"];
+        @"this app's own container -- no App Group (re-signed without it?), so AOK-iSH is kept out of Files"];
     [report appendFormat:@"Container: %@\n", summary[@"containerPath"] ?: @"(none)"];
     [report appendFormat:@"Files: %@\n", summary[@"fileProviderDomainStatus"] ?: @"not tried yet this launch"];
     [report appendFormat:@"Default Root: %@\n", summary[@"defaultRoot"] ?: @"(none)"];
@@ -3373,7 +3375,7 @@ void ISHSessionConsumeResumedImage(NSString *path) {
 
 // Keep the saved copy, or consume it?
 //
-// A resumed image is not automatically finished with: iSH-AOK goes on writing
+// A resumed image is not automatically finished with: AOK-iSH goes on writing
 // to the slot it came from, so the copy on disk stays resumable. That is the
 // safe default and it is what people want after a crash -- but it also means
 // the same session can be resumed twice, which gives two live copies of one
@@ -3489,7 +3491,7 @@ static void ISHSessionConfirmDeleteOnly(UIViewController *host, NSDictionary *sl
     ISHActionSheet *sheet = [ISHActionSheet
         alertWithTitle:NSLocalizedString(@"Delete this saved session?", @"Alert title")
                message:[NSString stringWithFormat:NSLocalizedString(@"%@\n\nIt cannot be resumed afterwards. "
-                                                  @"iSH-AOK then starts a new session.", @"Delete saved session message; %@ describes the session"),
+                                                  @"AOK-iSH then starts a new session.", @"Delete saved session message; %@ describes the session"),
                                                   ISHSessionSlotTitle(slot, when)]];
     [sheet addActionWithTitle:NSLocalizedString(@"Delete and Start New", @"Delete saved session button")
                         style:UIAlertActionStyleDestructive
@@ -3600,8 +3602,8 @@ void ISHSessionPresentResumePicker(UIViewController *host,
     ISHActionSheet *sheet = [ISHActionSheet
         alertWithTitle:NSLocalizedString(@"Resume a session?", @"Resume picker title")
                message:slots.count == 1
-                       ? NSLocalizedString(@"iSH-AOK saved this session. Pick it up, or start fresh.", @"Resume picker message, one saved session")
-                       : NSLocalizedString(@"iSH-AOK has saved sessions. Pick one up, or start fresh.", @"Resume picker message, several saved sessions")];
+                       ? NSLocalizedString(@"AOK-iSH saved this session. Pick it up, or start fresh.", @"Resume picker message, one saved session")
+                       : NSLocalizedString(@"AOK-iSH has saved sessions. Pick one up, or start fresh.", @"Resume picker message, several saved sessions")];
 
     NSDateFormatter *when = [[NSDateFormatter alloc] init];
     when.dateStyle = NSDateFormatterShortStyle;
@@ -3857,7 +3859,7 @@ int ISHSuspendSessionSuspendAndStop(BOOL leaveOutGPU) {
     atomic_store(&ishGuestSuspended, true);
     os_log(ISHSuspendLog(), "session suspended on request; guest stopped");
     ISHPresentFinalScreen(NSLocalizedString(@"Session suspended", @"Final screen title after Suspend and Exit"),
-                          NSLocalizedString(@"You can close iSH-AOK now. The next launch picks this session up where you left it.",
+                          NSLocalizedString(@"You can close AOK-iSH now. The next launch picks this session up where you left it.",
                                             @"Final screen message after Suspend and Exit"));
     return 0;
 }
@@ -3889,7 +3891,7 @@ static void ios_handle_guest_suspend(const char *host_path) {
         [ISHDiagnosticsStore recordBreadcrumb:@"guest.suspended.byGuest"];
     });
     ISHPresentFinalScreen(NSLocalizedString(@"Session suspended", @"Final screen title after Suspend and Exit"),
-                          NSLocalizedString(@"You can close iSH-AOK now. The next launch picks this session up where you left it.",
+                          NSLocalizedString(@"You can close AOK-iSH now. The next launch picks this session up where you left it.",
                                             @"Final screen message after Suspend and Exit"));
 }
 
@@ -3939,7 +3941,7 @@ static TerminalViewController *CreateTerminalViewController(void) {
                                           @"boot.delegate.missing",
                                           NSLocalizedString(@"Boot failed before app setup", @"Boot failure alert title"),
                                           NSLocalizedString(@"The application delegate was not available when boot was requested.", @"Boot failure reason"),
-                                          NSLocalizedString(@"Restart iSH-AOK. If this repeats, open Diagnostics from recovery mode.", @"Boot failure recovery advice"),
+                                          NSLocalizedString(@"Restart AOK-iSH. If this repeats, open Diagnostics from recovery mode.", @"Boot failure recovery advice"),
                                           nil);
         }
         if (bootError < 0) {
@@ -3972,7 +3974,7 @@ static TerminalViewController *CreateTerminalViewController(void) {
         return RecordBootFailure(_ENOENT,
                                  @"boot.root.none",
                                  NSLocalizedString(@"No boot filesystem is selected", @"Boot failure alert title"),
-                                 NSLocalizedString(@"iSH-AOK cannot boot because no active filesystem is configured.", @"Boot failure reason"),
+                                 NSLocalizedString(@"AOK-iSH cannot boot because no active filesystem is configured.", @"Boot failure reason"),
                                  NSLocalizedString(@"Open Filesystems and choose or import a root filesystem.", @"Boot failure recovery advice"),
                                  @{@"rootCount": @(Roots.instance.roots.count)});
     }
@@ -4064,7 +4066,7 @@ static TerminalViewController *CreateTerminalViewController(void) {
         return RecordBootFailure(err,
                                  @"boot.root.mount.failed",
                                  NSLocalizedString(@"Boot failed while mounting the filesystem", @"Boot failure alert title"),
-                                 NSLocalizedString(@"iSH-AOK found the selected filesystem, but fakefs could not mount it.", @"Boot failure reason"),
+                                 NSLocalizedString(@"AOK-iSH found the selected filesystem, but fakefs could not mount it.", @"Boot failure reason"),
                                  BootMountRecovery(err),
                                  @{@"root": bootRoot,
                                    @"guestABI": guestABI ?: @"",
@@ -4084,8 +4086,8 @@ static TerminalViewController *CreateTerminalViewController(void) {
                                  NSLocalizedString(@"Boot failed while creating init", @"Boot failure alert title"),
                                  NSLocalizedString(@"The filesystem was mounted, but the emulator could not create the first guest process.", @"Boot failure reason"),
                                  err == _ENOMEM
-                                     ? NSLocalizedString(@"Close other apps and restart iSH-AOK.", @"Boot failure recovery advice")
-                                     : NSLocalizedString(@"Restart iSH-AOK. If this repeats, open Diagnostics from recovery mode.", @"Boot failure recovery advice"),
+                                     ? NSLocalizedString(@"Close other apps and restart AOK-iSH.", @"Boot failure recovery advice")
+                                     : NSLocalizedString(@"Restart AOK-iSH. If this repeats, open Diagnostics from recovery mode.", @"Boot failure recovery advice"),
                                  @{@"root": bootRoot,
                                    @"guestABI": guestABI ?: @""});
     }
@@ -4214,8 +4216,8 @@ static TerminalViewController *CreateTerminalViewController(void) {
         return RecordBootFailure(err,
                                  @"boot.device.clipboard.failed",
                                  NSLocalizedString(@"Boot failed while registering clipboard device", @"Boot failure alert title"),
-                                 NSLocalizedString(@"The filesystem was mounted, but iSH-AOK could not register /dev/clipboard.", @"Boot failure reason"),
-                                 NSLocalizedString(@"Restart iSH-AOK. If this repeats, open Diagnostics from recovery mode.", @"Boot failure recovery advice"),
+                                 NSLocalizedString(@"The filesystem was mounted, but AOK-iSH could not register /dev/clipboard.", @"Boot failure reason"),
+                                 NSLocalizedString(@"Restart AOK-iSH. If this repeats, open Diagnostics from recovery mode.", @"Boot failure recovery advice"),
                                  @{@"root": bootRoot,
                                    @"guestABI": guestABI ?: @"",
                                    @"path": @"/dev/clipboard"});
@@ -4227,8 +4229,8 @@ static TerminalViewController *CreateTerminalViewController(void) {
         return RecordBootFailure(err,
                                  @"boot.device.location.failed",
                                  NSLocalizedString(@"Boot failed while registering location device", @"Boot failure alert title"),
-                                 NSLocalizedString(@"The filesystem was mounted, but iSH-AOK could not register /dev/location.", @"Boot failure reason"),
-                                 NSLocalizedString(@"Restart iSH-AOK. If this repeats, open Diagnostics from recovery mode.", @"Boot failure recovery advice"),
+                                 NSLocalizedString(@"The filesystem was mounted, but AOK-iSH could not register /dev/location.", @"Boot failure reason"),
+                                 NSLocalizedString(@"Restart AOK-iSH. If this repeats, open Diagnostics from recovery mode.", @"Boot failure recovery advice"),
                                  @{@"root": bootRoot,
                                    @"guestABI": guestABI ?: @"",
                                    @"path": @"/dev/location"});
@@ -4243,8 +4245,8 @@ static TerminalViewController *CreateTerminalViewController(void) {
         return RecordBootFailure(err,
                                  @"boot.device.url.failed",
                                  NSLocalizedString(@"Boot failed while registering URL device", @"Boot failure alert title"),
-                                 NSLocalizedString(@"The filesystem was mounted, but iSH-AOK could not register /dev/url.", @"Boot failure reason"),
-                                 NSLocalizedString(@"Restart iSH-AOK. If this repeats, open Diagnostics from recovery mode.", @"Boot failure recovery advice"),
+                                 NSLocalizedString(@"The filesystem was mounted, but AOK-iSH could not register /dev/url.", @"Boot failure reason"),
+                                 NSLocalizedString(@"Restart AOK-iSH. If this repeats, open Diagnostics from recovery mode.", @"Boot failure recovery advice"),
                                  @{@"root": bootRoot,
                                    @"guestABI": guestABI ?: @"",
                                    @"path": @"/dev/url"});
@@ -4256,8 +4258,8 @@ static TerminalViewController *CreateTerminalViewController(void) {
         return RecordBootFailure(err,
                                  @"boot.device.audio.failed",
                                  NSLocalizedString(@"Boot failed while registering audio device", @"Boot failure alert title"),
-                                 NSLocalizedString(@"The filesystem was mounted, but iSH-AOK could not register /dev/dsp.", @"Boot failure reason"),
-                                 NSLocalizedString(@"Restart iSH-AOK. If this repeats, open Diagnostics from recovery mode.", @"Boot failure recovery advice"),
+                                 NSLocalizedString(@"The filesystem was mounted, but AOK-iSH could not register /dev/dsp.", @"Boot failure reason"),
+                                 NSLocalizedString(@"Restart AOK-iSH. If this repeats, open Diagnostics from recovery mode.", @"Boot failure recovery advice"),
                                  @{@"root": bootRoot,
                                    @"guestABI": guestABI ?: @"",
                                    @"path": @"/dev/dsp"});
@@ -4270,8 +4272,8 @@ static TerminalViewController *CreateTerminalViewController(void) {
         return RecordBootFailure(err,
                                  @"boot.device.rtc.failed",
                                  NSLocalizedString(@"Boot failed while registering clock device", @"Boot failure alert title"),
-                                 NSLocalizedString(@"The filesystem was mounted, but iSH-AOK could not register /dev/rtc0.", @"Boot failure reason"),
-                                 NSLocalizedString(@"Restart iSH-AOK. If this repeats, open Diagnostics from recovery mode.", @"Boot failure recovery advice"),
+                                 NSLocalizedString(@"The filesystem was mounted, but AOK-iSH could not register /dev/rtc0.", @"Boot failure reason"),
+                                 NSLocalizedString(@"Restart AOK-iSH. If this repeats, open Diagnostics from recovery mode.", @"Boot failure recovery advice"),
                                  @{@"root": bootRoot,
                                    @"guestABI": guestABI ?: @"",
                                    @"path": @"/dev/rtc0"});
@@ -4735,8 +4737,8 @@ static TerminalViewController *CreateTerminalViewController(void) {
                     return RecordBootFailure(_EAGAIN,
                                              @"boot.suspend.resume.initThreadFailed",
                                              NSLocalizedString(@"Resume failed while starting init", @"Boot failure alert title"),
-                                             NSLocalizedString(@"The suspended session was restored, but iSH-AOK could not create a thread to run it.", @"Boot failure reason"),
-                                             NSLocalizedString(@"Close other apps to free memory, then restart iSH-AOK.", @"Boot failure recovery advice"),
+                                             NSLocalizedString(@"The suspended session was restored, but AOK-iSH could not create a thread to run it.", @"Boot failure reason"),
+                                             NSLocalizedString(@"Close other apps to free memory, then restart AOK-iSH.", @"Boot failure recovery advice"),
                                              @{@"root": bootRoot});
                 }
                 // `current` is left pointing at init, exactly as the boot path
@@ -4763,7 +4765,7 @@ static TerminalViewController *CreateTerminalViewController(void) {
         return RecordBootFailure(err,
                                  @"boot.stdio.failed",
                                  NSLocalizedString(@"Boot failed while opening console", @"Boot failure alert title"),
-                                 NSLocalizedString(@"The filesystem was mounted, but iSH-AOK could not attach init to /dev/console.", @"Boot failure reason"),
+                                 NSLocalizedString(@"The filesystem was mounted, but AOK-iSH could not attach init to /dev/console.", @"Boot failure reason"),
                                  NSLocalizedString(@"The root's /dev entries may be damaged. Choose another filesystem or reimport this one.", @"Boot failure recovery advice"),
                                  @{@"root": bootRoot,
                                    @"guestABI": guestABI ?: @"",
@@ -4776,7 +4778,7 @@ static TerminalViewController *CreateTerminalViewController(void) {
         return RecordBootFailure(_EINVAL,
                                  @"boot.command.empty",
                                  NSLocalizedString(@"Boot command is empty", @"Boot failure alert title"),
-                                 NSLocalizedString(@"iSH-AOK cannot start init because the configured boot command is empty.", @"Boot failure reason"),
+                                 NSLocalizedString(@"AOK-iSH cannot start init because the configured boot command is empty.", @"Boot failure reason"),
                                  NSLocalizedString(@"Set a boot command in Settings. The default is /sbin/init.", @"Boot failure recovery advice"),
                                  @{@"root": bootRoot,
                                    @"guestABI": guestABI ?: @""});
@@ -4850,8 +4852,8 @@ static TerminalViewController *CreateTerminalViewController(void) {
             return RecordBootFailure(err,
                                      @"boot.init.supervisor.failed",
                                      NSLocalizedString(@"Boot failed while starting fallback console", @"Boot failure alert title"),
-                                     NSLocalizedString(@"The filesystem was mounted, but iSH-AOK could not start its fallback console supervisor.", @"Boot failure reason"),
-                                     NSLocalizedString(@"Restart iSH-AOK. If this repeats, choose another filesystem or reimport this one.", @"Boot failure recovery advice"),
+                                     NSLocalizedString(@"The filesystem was mounted, but AOK-iSH could not start its fallback console supervisor.", @"Boot failure reason"),
+                                     NSLocalizedString(@"Restart AOK-iSH. If this repeats, choose another filesystem or reimport this one.", @"Boot failure recovery advice"),
                                      @{@"root": bootRoot,
                                        @"guestABI": guestABI ?: @"",
                                        @"command": commandString ?: @""});
@@ -4879,8 +4881,8 @@ static TerminalViewController *CreateTerminalViewController(void) {
         return RecordBootFailure(_EAGAIN,
                                  @"boot.init.start.failed",
                                  NSLocalizedString(@"Boot failed while starting init", @"Boot failure alert title"),
-                                 NSLocalizedString(@"The boot command was loaded, but iSH-AOK could not create a thread to run it.", @"Boot failure reason"),
-                                 NSLocalizedString(@"Close other apps to free memory, then restart iSH-AOK.", @"Boot failure recovery advice"),
+                                 NSLocalizedString(@"The boot command was loaded, but AOK-iSH could not create a thread to run it.", @"Boot failure reason"),
+                                 NSLocalizedString(@"Close other apps to free memory, then restart AOK-iSH.", @"Boot failure recovery advice"),
                                  @{@"root": bootRoot,
                                    @"guestABI": guestABI ?: @"",
                                    @"command": commandString ?: @""});
@@ -5499,7 +5501,7 @@ static UINavigationController *CreateAboutNavigationController(BOOL recoveryMode
     if ([NSUserDefaults.standardUserDefaults boolForKey:@"FASTLANE_SNAPSHOT"])
         [UIView setAnimationsEnabled:NO];
 
-    NSString *ishVersion = [NSString stringWithFormat:@"iSH-AOK %@ (%@)",
+    NSString *ishVersion = [NSString stringWithFormat:@"AOK-iSH %@ (%@)",
                          [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleShortVersionString"],
                          [NSBundle.mainBundle objectForInfoDictionaryKey:(NSString *) kCFBundleVersionKey]];
     extern const char *proc_ish_version;
@@ -5705,7 +5707,7 @@ static UINavigationController *CreateAboutNavigationController(BOOL recoveryMode
     // the next launch either way. The same alert also offers "Next Launch",
     // which is this without the restart.
     ISHPresentFinalScreen(NSLocalizedString(@"Filesystem changed", @"Final screen title after choosing to switch filesystem"),
-                          NSLocalizedString(@"Close iSH-AOK and open it again to start on the filesystem you chose.",
+                          NSLocalizedString(@"Close AOK-iSH and open it again to start on the filesystem you chose.",
                                             @"Final screen message after choosing to switch filesystem"));
 }
 
@@ -5740,7 +5742,7 @@ static void ISHEndSuspendGuard(void) {
     [UIApplication.sharedApplication endBackgroundTask:claimed];
 }
 
-// What is keeping iSH-AOK running in the background, if anything. Then it is not
+// What is keeping AOK-iSH running in the background, if anything. Then it is not
 // about to be suspended, and freezing the guest's filesystem would only stall it.
 static const char *ISHBackgroundKeepAlive(void) {
     if (ISHLocationKeepsAppAlive())

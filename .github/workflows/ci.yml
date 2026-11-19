@@ -66,7 +66,7 @@ jobs:
           submodules: true
       # See build-linux. Here the missing trees cost more than coverage: the
       # IPA workflows check out the same way, so every IPA they built shipped
-      # an ssh that says "not built into this iSH-AOK" and a stub vi.
+      # an ssh that says "not built into this AOK-iSH" and a stub vi.
       - name: Check out smallclue's openssh, nextvi and libgit2
         run: git -C deps/smallclue submodule update --init third-party/openssh third-party/nextvi third-party/libgit2
       - name: Select newest available Xcode

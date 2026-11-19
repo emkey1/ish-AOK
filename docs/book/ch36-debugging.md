@@ -1,6 +1,6 @@
 # 36. Debugging a system with no debugger
 
-Attach `lldb` to iSH-AOK and you get the *host* process: Objective-C frames,
+Attach `lldb` to AOK-iSH and you get the *host* process: Objective-C frames,
 Mach threads, and — somewhere in the middle — a thread sitting in `jit_enter`
 executing an array of gadget addresses on behalf of a guest process whose state
 lives in a struct the debugger has no idea how to read.
@@ -102,7 +102,7 @@ unanswerable.
 
 It is not, on arm64. `thread_set_state(port, ARM_DEBUG_STATE64, ...)` sets
 hardware watchpoints **from inside the process**, with no entitlement and no
-debugger — and it works on *other* threads while they are running. iSH-AOK ships
+debugger — and it works on *other* threads while they are running. AOK-iSH ships
 it as `ISH_PTHREAD_WATCH`.
 
 The mechanics are small: `__wvr[i]` is the address, `__wcr[i]` encodes a

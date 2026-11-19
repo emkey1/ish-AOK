@@ -3,7 +3,7 @@ before_all do
 end
 
 PROJECT_PATH = "iSH-AOK.xcodeproj"
-APP_TARGET = "iSH-AOK"
+APP_TARGET = "AOK-iSH"
 FILE_PROVIDER_TARGET = "iSH-AOK.FileProvider"
 BUILD_TAG_PREFIX = "builds/iSH-AOK_"
 GITHUB_REPOSITORY = "emkey1/ish-AOK"

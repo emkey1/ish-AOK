@@ -1,5 +1,5 @@
 /*
- * mem_common.h — shared harness for iSH-AOK memory-management CONFORMANCE tests
+ * mem_common.h — shared harness for AOK-iSH memory-management CONFORMANCE tests
  * (mmap/munmap, mprotect, mremap, madvise, brk/sbrk, mincore, msync, and COW
  * after fork).
  *

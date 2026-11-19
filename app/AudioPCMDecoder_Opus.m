@@ -1,6 +1,6 @@
 //
 //  AudioPCMDecoder_Opus.m
-//  iSH-AOK
+//  AOK-iSH
 //
 //  Opus backend via the vendored libopusfile (open-source, public API only).
 //  Opus always decodes at 48 kHz. op_read_float yields interleaved float, which

@@ -100,7 +100,7 @@ source=nonsense" ; do
 
     # And the front end, in the place it will actually run.
     guest 'sh /AOK/tools/manage-roots.sh list 2>&1; echo "exit=$?"' > "$WORK/cli"
-    wantin "manage-roots.sh ships at /AOK/tools" "needs the iSH-AOK app" "$WORK/cli"
+    wantin "manage-roots.sh ships at /AOK/tools" "needs the AOK-iSH app" "$WORK/cli"
     wantin "and exits non-zero rather than pretending" "exit=1" "$WORK/cli"
 
     # A knob that accepts the open and then fails the write, which is what a

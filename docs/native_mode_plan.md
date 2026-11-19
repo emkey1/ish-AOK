@@ -1,4 +1,4 @@
-# Native mode (build 558): an iSH-AOK session with no Linux distribution
+# Native mode (build 558): an AOK-iSH session with no Linux distribution
 
 Status: **built**, 2026-10-02 (commits 7adaad37c through the docs commit
 that follows 4a42907af). Steps 1-7 are done; user documentation is
@@ -29,7 +29,7 @@ Native mode reverses that: the root is a tiny, AOK-generated filesystem whose
 `/bin` and `/usr/bin` point straight into `/AOK/native`, and the login shell is
 native zsh. Nothing is downloaded, nothing is emulated on the common path, and
 first launch is instant. It is offered as one more root in the Filesystems
-screen and the first-launch picker ("iSH-AOK Native: no distribution"), so
+screen and the first-launch picker ("AOK-iSH Native: no distribution"), so
 switching between it and a distro uses the machinery that already exists.
 
 ## What already works (measured by reading the code, 2026-10-02)
@@ -170,7 +170,7 @@ creates:
   file, which the CLI reaches through `ISH_NATIVE_USER=<name>`. Also
   `/etc/shells`, `/etc/profile` (PATH with `/AOK/persist/bin` first, matching
   `BootEnvironmentForCommand`), `/etc/zshrc` (a usable prompt and
-  `compinit`) and `/etc/os-release` (`ID=aok-native`, `NAME="iSH-AOK Native"`,
+  `compinit`) and `/etc/os-release` (`ID=aok-native`, `NAME="AOK-iSH Native"`,
   `VERSION_ID=<build>`).
 - **Always rewritten** (AOK-owned): `/etc/aok-native.version`, the record of
   which links the provisioner made, so the next boot can remove links it no

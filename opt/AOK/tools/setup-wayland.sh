@@ -154,7 +154,7 @@ for bin in labwc sway wofi foot wayvnc; do
     command -v "$bin" >/dev/null 2>&1 || die "install reported success but '$bin' is not on PATH"
 done
 
-# Not under iSH-AOK: a machine with a kernel and a display of its own (a
+# Not under AOK-iSH: a machine with a kernel and a display of its own (a
 # virtual machine), where start-wayland.sh puts the desktop on that display
 # instead of serving it to the app. The compositor then needs a seat to take
 # the card and the input devices through, which is seatd; a login that is to
@@ -180,7 +180,7 @@ if [ "$IN_AOK" = 0 ]; then
     fi
     # The keyboard and the pointer: libinput takes only the input devices a
     # udev daemon has recorded, and AOK VM's base machines run none (busybox's
-    # init on Alpine, and Devuan's root as iSH-AOK ships it has no eudev).
+    # init on Alpine, and Devuan's root as AOK-iSH ships it has no eudev).
     if command -v apt-get >/dev/null 2>&1; then
         DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends eudev >/dev/null 2>&1 \
             || note "warning: eudev did not install; the desktop may find no keyboard or pointer"
@@ -369,7 +369,7 @@ fi
 # the shim falls back to a copy of pixman.h vendored beside it.
 log "building pixman accelerator shim (best-effort)"
 if [ "$IN_AOK" = 0 ]; then
-    note "not under iSH-AOK: there is no accelerator to reach"
+    note "not under AOK-iSH: there is no accelerator to reach"
 elif [ "$shims_bundled" = 1 ]; then
     note "prebuilt in /AOK/bundled for this root; nothing to build"
 elif command -v cc >/dev/null 2>&1 || command -v gcc >/dev/null 2>&1; then

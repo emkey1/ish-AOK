@@ -12,10 +12,10 @@
 # and, when they are missing, the base desktop (setup-wayland.sh: foot,
 # wayvnc, wofi) and the GPU drivers (setup-gpu.sh).
 #
-# Wayfire draws everything with OpenGL ES, so it needs the GPU: iSH-AOK's
+# Wayfire draws everything with OpenGL ES, so it needs the GPU: AOK-iSH's
 # render node, Mesa's Venus driver and zink. Mesa has Venus only for aarch64
 # and x86_64 -- but the driver a process loads is of the PROCESS's
-# architecture, not the root's, and iSH-AOK runs an arm64 program in a root
+# architecture, not the root's, and AOK-iSH runs an arm64 program in a root
 # of any architecture. So on a Devuan root that is not arm64, Wayfire, its
 # shell and its settings window are installed as arm64 through multiarch,
 # with arm64's Mesa: an arm64 Wayfire composites on the GPU in a riscv64 or
@@ -91,7 +91,7 @@ else
         *) die "Wayfire needs the GPU, and Mesa has no GPU (Venus) driver for $(uname -m) roots. setup-xfce.sh works here." ;;
     esac
 fi
-[ -c /dev/dri/renderD128 ] || die "no /dev/dri/renderD128: this iSH-AOK build has no GPU device, which Wayfire needs -- update the app"
+[ -c /dev/dri/renderD128 ] || die "no /dev/dri/renderD128: this AOK-iSH build has no GPU device, which Wayfire needs -- update the app"
 
 # The base desktop: the terminal, the VNC bridge and the launcher Wayfire's
 # Alt+Shift+D opens.
@@ -113,7 +113,7 @@ fi
 # Wayfire composites with OpenGL ES, which reaches the GPU only through zink.
 # A root where zink does not start would install Wayfire and then only ever
 # start labwc, so find out first. (Mesa 25.2 and later will not start zink
-# without robustness2's nullDescriptor, which iSH-AOK's GPU -- Venus on
+# without robustness2's nullDescriptor, which AOK-iSH's GPU -- Venus on
 # MoltenVK -- has offered since build 559; Devuan 6's Mesa 25.0 never needed
 # it.)
 gles_renderer=zink
@@ -218,7 +218,7 @@ case "$PANEL" in
 esac
 # The faster wf-panel comes prebuilt in /AOK/bundled for Devuan 6's wf-shell,
 # built for arm64 -- the guest that runs fastest -- and is linked in on a root
-# of ANY architecture: iSH-AOK runs an arm64 program in an x86_64 or riscv64
+# of ANY architecture: AOK-iSH runs an arm64 program in an x86_64 or riscv64
 # root as readily as in an arm64 one, given arm64 libraries to load. On a
 # Devuan root that is not arm64 those come from Debian multiarch: arm64 is
 # added as a foreign architecture and the packages in wf-panel.depends are

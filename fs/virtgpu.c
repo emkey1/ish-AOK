@@ -1000,7 +1000,7 @@ static int ioctl_execbuffer(struct vgpu_file *file, struct drm_virtgpu_execbuffe
 // GPU and wayvnc reads the result from the same pages.
 
 // A dumb buffer's memory, with one reference.
-// MoltenVK, iSH-AOK's fork (MVKAOKGPUGate.h).
+// MoltenVK, AOK-iSH's fork (MVKAOKGPUGate.h).
 unsigned mvkAOKLinearRowAlignment(void);
 
 static int dumb_res_create(uint32_t width, uint32_t height, uint32_t bpp,
@@ -1598,7 +1598,7 @@ int virtgpu_present_fd(int buf_fd, uint32_t display, uint32_t width, uint32_t he
     return shown;
 }
 
-// MoltenVK, iSH-AOK's fork (MVKAOKGPUGate.h).
+// MoltenVK, AOK-iSH's fork (MVKAOKGPUGate.h).
 void mvkAOKSetGPUAllowed(int allowed);
 
 void virtgpu_set_background(bool background) {

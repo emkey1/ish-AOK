@@ -28,7 +28,7 @@ struct AOKShellTool: Tool {
     let name = "run_shell"
     // Apple's small model calls a tool it is told about for nearly anything
     // (arithmetic, a greeting); the description has to say when not to.
-    let description = "Run one shell command in the iSH-AOK Linux system and return its output. Use it only when the question is about this system: its files, installed programs, processes, or what a command prints. Never use it for arithmetic, general knowledge, or conversation; answer those directly."
+    let description = "Run one shell command in the AOK-iSH Linux system and return its output. Use it only when the question is about this system: its files, installed programs, processes, or what a command prints. Never use it for arithmetic, general knowledge, or conversation; answer those directly."
 
     @Generable
     struct Arguments {

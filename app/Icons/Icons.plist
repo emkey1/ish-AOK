@@ -14,7 +14,7 @@
 	<key>aok-amber</key>
 	<dict>
 		<key>author</key>
-		<string>iSH-AOK</string>
+		<string>AOK-iSH</string>
 		<key>description</key>
 		<string>Amber Phosphor</string>
 		<key>link</key>
@@ -23,7 +23,7 @@
 	<key>aok-blueprint</key>
 	<dict>
 		<key>author</key>
-		<string>iSH-AOK</string>
+		<string>AOK-iSH</string>
 		<key>description</key>
 		<string>Blueprint</string>
 		<key>link</key>
@@ -39,7 +39,7 @@
 			<string>sprite64</string>
 		</array>
 		<key>author</key>
-		<string>iSH-AOK</string>
+		<string>AOK-iSH</string>
 		<key>description</key>
 		<string>Boot Log</string>
 		<key>link</key>
@@ -54,7 +54,7 @@
 			<string>is</string>
 		</array>
 		<key>author</key>
-		<string>iSH-AOK</string>
+		<string>AOK-iSH</string>
 		<key>description</key>
 		<string>A-OK</string>
 		<key>link</key>
@@ -63,7 +63,7 @@
 	<key>aok-desktop</key>
 	<dict>
 		<key>author</key>
-		<string>iSH-AOK</string>
+		<string>AOK-iSH</string>
 		<key>description</key>
 		<string>Desktop</string>
 		<key>link</key>
@@ -76,7 +76,7 @@
 			<string>rgb</string>
 		</array>
 		<key>author</key>
-		<string>iSH-AOK</string>
+		<string>AOK-iSH</string>
 		<key>description</key>
 		<string>Gadget Chain</string>
 		<key>link</key>
@@ -85,7 +85,7 @@
 	<key>aok-guests</key>
 	<dict>
 		<key>author</key>
-		<string>iSH-AOK</string>
+		<string>AOK-iSH</string>
 		<key>description</key>
 		<string>Three Guests</string>
 		<key>link</key>
@@ -102,7 +102,7 @@
 			<string>uninspired</string>
 		</array>
 		<key>author</key>
-		<string>iSH-AOK</string>
+		<string>AOK-iSH</string>
 		<key>description</key>
 		<string>Mono</string>
 		<key>link</key>
@@ -118,7 +118,7 @@
 			<string>pydann2</string>
 		</array>
 		<key>author</key>
-		<string>iSH-AOK</string>
+		<string>AOK-iSH</string>
 		<key>description</key>
 		<string>Prompt</string>
 		<key>link</key>
@@ -131,7 +131,7 @@
 			<string>metal</string>
 		</array>
 		<key>author</key>
-		<string>iSH-AOK</string>
+		<string>AOK-iSH</string>
 		<key>description</key>
 		<string>Silicon</string>
 		<key>link</key>
@@ -144,7 +144,7 @@
 			<string>freeiosterminal</string>
 		</array>
 		<key>author</key>
-		<string>iSH-AOK</string>
+		<string>AOK-iSH</string>
 		<key>description</key>
 		<string>Sunset</string>
 		<key>link</key>
@@ -157,7 +157,7 @@
 			<string>reworked</string>
 		</array>
 		<key>author</key>
-		<string>iSH-AOK</string>
+		<string>AOK-iSH</string>
 		<key>description</key>
 		<string>Suspend</string>
 		<key>link</key>

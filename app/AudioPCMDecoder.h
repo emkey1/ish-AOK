@@ -1,6 +1,6 @@
 //
 //  AudioPCMDecoder.h
-//  iSH-AOK
+//  AOK-iSH
 //
 //  Uniform PCM decode interface for the Workspace audio player. Every supported
 //  container (MP3/AAC/M4A/ALAC/WAV/AIFF/CAF/FLAC via AVFoundation, plus Ogg

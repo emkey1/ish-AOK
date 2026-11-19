@@ -1,6 +1,6 @@
 //
 //  WorkspaceMarkdownViewer.h
-//  iSH-AOK
+//  AOK-iSH
 //
 //  A read-only Markdown reader applet for Workspace mode: renders a guest
 //  file with the shared MarkdownRenderer, follows relative document links

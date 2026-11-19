@@ -1,6 +1,6 @@
 //
 //  LLMChatMCPCore.m
-//  iSH-AOK
+//  AOK-iSH
 //
 //  See LLMChatMCPCore.h.
 //
@@ -29,7 +29,7 @@ NSDictionary *ISHLLMMCPInitializeParams(void) {
     return @{
         @"protocolVersion": kISHLLMMCPProtocolVersion,
         @"capabilities": @{},
-        @"clientInfo": @{@"name": @"iSH-AOK LLM Chat", @"version": version},
+        @"clientInfo": @{@"name": @"AOK-iSH LLM Chat", @"version": version},
     };
 }
 

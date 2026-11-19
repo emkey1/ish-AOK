@@ -128,7 +128,7 @@ paths that commit touched. These remain:
 
 | Where | Reached by |
 |---|---|
-| `app/AppDelegate.m:718` | "Quit iSH-AOK" on the System Halted alert, after `poweroff`, `halt` or `reboot` in the guest |
+| `app/AppDelegate.m:718` | "Quit AOK-iSH" on the System Halted alert, after `poweroff`, `halt` or `reboot` in the guest |
 | `app/Roots.m:2373-2381`, `:2413` | the `exit-app` roots control operation |
 | `app/AboutViewController.m:472` | leaving recovery mode |
 
@@ -177,7 +177,7 @@ a device.**
 "Quit Now" on the Filesystems screen said it "closes" the app, which since
 `02774847b` meant the closing screen. **FIXED 2026-11-18:** both of its alert
 messages, the docs and the translations now say it ends on a screen asking
-you to close iSH-AOK.
+you to close AOK-iSH.
 
 ### 4. One private API is left, and its reason has expired
 

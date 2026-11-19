@@ -1,7 +1,7 @@
 #!/bin/sh
 # provision-ultimate-pscal.sh
 # ---------------------------------------------------------------------------
-# Set up a freshly imported PSCAL rootfs running under iSH-AOK: login account,
+# Set up a freshly imported PSCAL rootfs running under AOK-iSH: login account,
 # passwords, SSH identity and native links.
 #
 # This is NOT the apt/apk twin of provision-ultimate-devuan.sh. A PSCAL rootfs
@@ -38,7 +38,7 @@
 # it entirely (at the cost of a new host identity on every image).
 #
 # It is IDEMPOTENT: safe to run repeatedly. Run as root, from either copy:
-#       sh /AOK/tools/provision-ultimate-pscal.sh    # served by iSH-AOK
+#       sh /AOK/tools/provision-ultimate-pscal.sh    # served by AOK-iSH
 #       provision-ultimate-pscal.sh                  # shipped in the image
 # The /AOK copy is whatever the installed app carries, so it is the newer of
 # the two on a current build and absent on a build older than this script;
@@ -60,7 +60,7 @@ set -u
 
 PERSIST_DIR=/AOK/persist/pscal
 
-# The stash lives in iSH-AOK's own filesystem, which is a real host-backed
+# The stash lives in AOK-iSH's own filesystem, which is a real host-backed
 # mount the app makes at startup. Decide once, here, whether it can be written
 # to, rather than letting every later mkdir and cp fail on its own -- and KEEP
 # THE REASON, because "not writable" on a directory that ls shows as drwxrwxrwx
@@ -72,13 +72,13 @@ if [ ! -d /AOK/persist ]; then
     if [ -e /AOK/persist ]; then
         PERSIST_WHY="/AOK/persist exists but is not a directory"
     elif [ -d /AOK ]; then
-        PERSIST_WHY="/AOK/persist does not exist (an iSH-AOK that does not mount it?)"
+        PERSIST_WHY="/AOK/persist does not exist (an AOK-iSH that does not mount it?)"
     else
         PERSIST_WHY="there is no /AOK here at all"
     fi
 else
     # NOT mkdir -p. /AOK itself is a read-only mount with the writable one
-    # underneath it, and an iSH-AOK that answers EROFS rather than EEXIST for
+    # underneath it, and an AOK-iSH that answers EROFS rather than EEXIST for
     # an ancestor that is already there stops -p on /AOK -- a component nobody
     # asked it to create. The parent is guaranteed by the -d test above, so the
     # final component is the only one to make.
@@ -179,7 +179,7 @@ if [ "$PERSIST_SSH" = 1 ] && [ "$PERSIST_AVAILABLE" = 0 ]; then
     PERSIST_SSH=0
 fi
 ask_yn PASSWORD_AUTH "Allow SSH password authentication"                          1
-ask_yn NATIVE_LINKS  "Also link iSH-AOK's native programs into PATH"              1
+ask_yn NATIVE_LINKS  "Also link AOK-iSH's native programs into PATH"              1
 
 case "$TARGET_USER" in
     ''|root|*[!a-z0-9_-]*)
@@ -267,7 +267,7 @@ SUDO_ASKS=0
 # Newer images ship /etc/sudoers and a wheel group; older ones predate sudo
 # reading a policy at all, and on those sudo now refuses everybody. Create what
 # is missing rather than telling someone to go and write it, so re-running this
-# after an iSH-AOK update is enough on a root that is already installed.
+# after an AOK-iSH update is enough on a root that is already installed.
 if [ ! -f /etc/sudoers ]; then
     mkdir -p /etc/sudoers.d
     chmod 750 /etc/sudoers.d

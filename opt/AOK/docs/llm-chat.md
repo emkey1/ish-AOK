@@ -1,6 +1,6 @@
 # LLM Chat: a built-in AI assistant that can work in your guest
 
-iSH-AOK includes an in-app LLM chat client that can talk to an
+AOK-iSH includes an in-app LLM chat client that can talk to an
 OpenAI-compatible API, Anthropic's Claude, Google Gemini, or (on iOS/iPadOS
 26+) Apple's on-device Foundation Models — and, if you let it, read and edit
 files and run shell commands in your guest for you, the way a coding agent

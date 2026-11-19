@@ -74,7 +74,7 @@ const NSFileCoordinatorWritingOptions NSFileCoordinatorWritingForCreating = NSFi
         // filesystem type" -- the fstype is fine, there's just nowhere to
         // show the picker right now (e.g. the app has never had a scene
         // connect yet). dmesg carries the specific reason.
-        printk("ios: mount -t ios has no active iSH-AOK window to show the folder picker in -- open the app and retry\n");
+        printk("ios: mount -t ios has no active AOK-iSH window to show the folder picker in -- open the app and retry\n");
         return _EAGAIN;
     }
 

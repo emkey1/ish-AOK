@@ -1,5 +1,5 @@
 /*
- * time_common.h — shared harness for iSH-AOK time/clock/timer CONFORMANCE
+ * time_common.h — shared harness for AOK-iSH time/clock/timer CONFORMANCE
  * tests (clock_gettime/getres, nanosleep/clock_nanosleep, POSIX timers,
  * setitimer/getitimer, timerfd, gettimeofday/time).
  *

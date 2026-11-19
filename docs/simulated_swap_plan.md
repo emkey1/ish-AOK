@@ -1,4 +1,4 @@
-# Simulated swap for iSH-AOK: feasibility, recommended design, and plan
+# Simulated swap for AOK-iSH: feasibility, recommended design, and plan
 
 Date: 2026-09-02. Tree: `/Users/mke/git/ish-AOK`, branch `working`.
 Line numbers were re-checked at `e12aeae36`; where a cited line moved since the
@@ -6,7 +6,7 @@ study began, the current number is used and the drift is noted.
 
 Host used for every "Mac" number: this machine, macOS 26.5.2 (xnu-12377.121.10),
 Apple silicon, 16 KiB host pages, APFS NVMe. Device numbers come from an M4 iPad
-Pro (8 GB, 477 GB volume at 94-95% full) running iSH-AOK 553, reached over
+Pro (8 GB, 477 GB volume at 94-95% full) running AOK-iSH 553, reached over
 `ssh m4pt`. Anything labelled **iOS-sourced** is read out of the
 `apple-oss-distributions/xnu` sources (xnu-12377 generation) and has not been
 executed on a device. Anything labelled **unverified** was neither measured nor
@@ -493,7 +493,7 @@ was a warm read wearing a cold label because `F_NOCACHE` is a retention hint, no
 `O_DIRECT`: identical file and offsets gave p50 2.29 us cached and 2.42 us with
 `F_NOCACHE`). The replacement numbers are real.
 
-**M4 iPad Pro, iSH-AOK 553, volume 94-95% full, one sample per 16 KiB slot in a
+**M4 iPad Pro, AOK-iSH 553, volume 94-95% full, one sample per 16 KiB slot in a
 random permutation over a file far larger than RAM, page-cache hits separated out:**
 
 | condition | n | p50 | p90 | p99 | p99.9 | max | over 1 ms |
@@ -1238,7 +1238,7 @@ Effort assumes one engineer who knows the memory core.
 ### Day 1: the device probe -- **RUN 2026-09-03, PASSED**
 
 Built as `/proc/ish/mem_release_probe` (commit `65bda10bf`, the engine in
-`platform/darwin.c`) and run on the M4 iPad against iSH-AOK 553. **The decisive
+`platform/darwin.c`) and run on the M4 iPad against AOK-iSH 553. **The decisive
 platform assumption of this whole document is no longer unverified.**
 
 | case | device result |
@@ -1326,7 +1326,7 @@ the `vm_map` entry count in (f) hits a device ceiling.
 ### Phase 1 gate -- **RUN 2026-09-03 on the M4 iPad, PASSED**
 
 Built as `/proc/ish/swap_evict` (commit `6d8a4268d`) and measured on device
-against iSH-AOK 553, 64 MiB region, guest frozen so nothing of its own could
+against AOK-iSH 553, 64 MiB region, guest frozen so nothing of its own could
 fault a page back:
 
 | | device |
@@ -1518,7 +1518,7 @@ A 3 GB iPhone SE reaches all of them, and what it found changes what this
 feature has to watch.
 
 **The app was jetsam-killed while every number AOK watched said it was fine.**
-JetsamEvent (bug_type 298): iSH-AOK named `largestProcess` at 122140 pages =
+JetsamEvent (bug_type 298): AOK-iSH named `largestProcess` at 122140 pages =
 **1.86 GB**, reason **`proc-thrashing`**. AOK's own arithmetic said ~382 MB of
 headroom remained and its swap area was 200 MB empty -- and it was RIGHT about
 its own limit. The DEVICE had **40 MB free**, 1.69M compressions, and dozens of
@@ -2073,7 +2073,7 @@ independent of whether swap is ever built. Line numbers are at `e12aeae36`.
 
 The honest one-sentence description of the feature, after verification, is:
 
-> iSH-AOK can page cold guest anonymous memory out to storage at about 100 to
+> AOK-iSH can page cold guest anonymous memory out to storage at about 100 to
 > 200 MiB per second per process and fault it back in about 85 microseconds, so a
 > guest can hold considerably more memory than iOS will let the app keep resident,
 > as long as most of it is cold.

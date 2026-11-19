@@ -1,6 +1,6 @@
 # Runtime tuning, resource limits, and hardening
 
-A few environment variables let you tune how iSH-AOK presents itself
+A few environment variables let you tune how AOK-iSH presents itself
 to the guest. These apply when you can control the process environment —
 building and running the standalone CLI emulator, or launching the app
 from Xcode with a custom scheme environment — rather than something an
@@ -12,10 +12,10 @@ can rely on the same way it would on Linux.
 
 ## `ISH_GUEST_CPU_COUNT`
 
-Overrides the CPU count iSH-AOK reports to the guest — `/proc/cpuinfo` and
+Overrides the CPU count AOK-iSH reports to the guest — `/proc/cpuinfo` and
 `/proc/stat`, and through them what `nproc` and `sched_getaffinity` answer.
 
-On iOS, and only on a device with more than two cores, iSH-AOK reserves roughly
+On iOS, and only on a device with more than two cores, AOK-iSH reserves roughly
 a third of them (at least one) back from the scheduler-sizing queries `nproc`
 and `sched_getaffinity`, so that `make -j$(nproc)` and programs that size
 themselves from the affinity mask leave the app some headroom. Every core is
@@ -165,7 +165,7 @@ there are, rather than quietly booting the default. `/proc/ish/roots` reports
 
 ## `ISH_GUEST_MEM_HEADROOM_MB`
 
-Sets the free-memory threshold (in MB) below which iSH-AOK stops handing the
+Sets the free-memory threshold (in MB) below which AOK-iSH stops handing the
 guest new memory: once the app's available-memory budget drops under it, `mmap`,
 `mremap` and `brk` growth are **refused** — rather than throttled — so a
 runaway guest cannot get the whole app jetsammed. `mmap` and `mremap` fail with
@@ -186,7 +186,7 @@ ISH_GUEST_MEM_HEADROOM_MB = 0
 
 ## `ISH_GUEST_MEM_BUDGET_MB`
 
-Tells iSH-AOK to behave as though the process had a memory limit of this many
+Tells AOK-iSH to behave as though the process had a memory limit of this many
 MB. It exists so the low-memory path above can be exercised anywhere, rather
 than only on a device that is genuinely close to being jetsammed — before this,
 the guard was unreachable on the CLI and so was almost impossible to test.
@@ -216,7 +216,7 @@ the only way to reach it outside the app's Settings.
 
 Swap is **off by default and stays off** unless someone asks for it: paging
 guest memory writes to the device's flash and takes container space, so it is
-opt-in, with a size the user chooses rather than one iSH-AOK picks. On iOS that
+opt-in, with a size the user chooses rather than one AOK-iSH picks. On iOS that
 choice lives in Settings; this variable is the equivalent for the standalone CLI
 and for an Xcode scheme.
 
@@ -270,7 +270,7 @@ ISH_GUEST_SWAP_MB=128 ISH_GUEST_SWAP_WRITE_BUDGET_MB=16 ./ish -f build/alpine /b
 ## `mlock` and swap
 
 `mlock(2)`, `mlockall(2)` and their `mun*` counterparts are real once swap is
-on: iSH-AOK will not page out a locked page. Eviction refuses any 16 KiB host
+on: AOK-iSH will not page out a locked page. Eviction refuses any 16 KiB host
 frame with a locked guest page in it, so one locked page keeps its three
 neighbours resident too.
 
@@ -280,7 +280,7 @@ not defensible now, because keeping a secret out of swap is the whole reason
 the call exists.
 
 **The honest scope**: this is AOK's promise, not the operating system's. iOS
-manages its own memory and can page the app out regardless; iSH-AOK has no way
+manages its own memory and can page the app out regardless; AOK-iSH has no way
 to pin host pages and never has. So a locked page will not be written to the
 swap file, and that is all `mlock` can mean here.
 

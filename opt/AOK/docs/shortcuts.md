@@ -1,19 +1,19 @@
-# Shortcuts: drive iSH-AOK from Apple's Shortcuts app
+# Shortcuts: drive AOK-iSH from Apple's Shortcuts app
 
-iSH-AOK adds two actions to Apple's Shortcuts app:
+AOK-iSH adds two actions to Apple's Shortcuts app:
 
 - **Run Command** runs a shell command in your guest system and hands its
   output to the rest of the shortcut. The app never has to come to the
   foreground, so it works from automations, Siri, the Home Screen, NFC tags
   and Back Tap.
-- **Open iSH-AOK** brings the app up on a particular screen: the Workspace,
+- **Open AOK-iSH** brings the app up on a particular screen: the Workspace,
   the Session Shell, the system console, the browser, themes or boot images.
 
 Going the other way, a guest program can open a URL, including a
 `shortcuts://` link that runs one of your shortcuts. See
 [/dev/url](#the-other-direction-devurl) below.
 
-This page is about Apple's Shortcuts app. Four other things in iSH-AOK
+This page is about Apple's Shortcuts app. Four other things in AOK-iSH
 have similar names:
 
 - hardware-keyboard shortcuts are in
@@ -30,7 +30,7 @@ have similar names:
 
 ## What you need
 
-- **iOS or iPadOS 16 or later.** iSH-AOK itself runs on iOS 15, but the
+- **iOS or iPadOS 16 or later.** AOK-iSH itself runs on iOS 15, but the
   actions and Siri phrases only exist on 16 and later.
 - **A root that has booted at least once.** Run Command boots the guest if
   it isn't running yet, but it cannot answer first-run setup for you.
@@ -39,7 +39,7 @@ have similar names:
   setting's footer says what it controls:
 
   > When enabled, the Shortcuts app's "Run Command" action can run shell
-  > commands in the guest system without opening iSH-AOK.
+  > commands in the guest system without opening AOK-iSH.
 
   It is also `/proc/ish/defaults/shortcuts_run_commands`, which root in the
   guest can read and write (see [proc-ish.md](proc-ish.md)):
@@ -49,21 +49,21 @@ have similar names:
   echo false > /proc/ish/defaults/shortcuts_run_commands
   ```
 
-  Open iSH-AOK does not depend on this setting.
+  Open AOK-iSH does not depend on this setting.
 
 To find the actions, open a shortcut in the Shortcuts app, tap **Add
-Action**, and search for "iSH-AOK" or open **Apps → iSH-AOK**.
+Action**, and search for "AOK-iSH" or open **Apps → AOK-iSH**.
 
 ## The actions at a glance
 
 | action | opens the app? | gated by the setting? | returns |
 | --- | --- | --- | --- |
 | Run Command | no; runs in the background | yes | the command's output, as text |
-| Open iSH-AOK | yes | no | nothing |
+| Open AOK-iSH | yes | no | nothing |
 
 ## Run Command
 
-The action reads **Run *Command* in iSH-AOK**. Timeout and Fail on Non-Zero
+The action reads **Run *Command* in AOK-iSH**. Timeout and Fail on Non-Zero
 Exit are in its expanded options.
 
 ### Parameters
@@ -130,7 +130,7 @@ Settings tells you which case you are in.
 
 The timeout counts from the moment the command starts, not from when the
 shortcut started, so booting the guest does not use it up. When it runs out,
-iSH-AOK kills the command and everything in its process group with SIGKILL,
+AOK-iSH kills the command and everything in its process group with SIGKILL,
 waits a fifth of a second for any last output, and the action fails with
 "The command timed out after N seconds", followed by up to the first 1024
 characters of what the command had printed.
@@ -143,7 +143,7 @@ the app first for long jobs.
 
 - Output is capped at **256 KB**. A command that prints more still runs to
   its end, and its exit status counts as usual; the action returns the first
-  256 KB followed by a line `[iSH-AOK: output truncated at 256 KB]`. For big
+  256 KB followed by a line `[AOK-iSH: output truncated at 256 KB]`. For big
   output, write it to a file and return a summary.
 - Output that is not valid **UTF-8** (binary data, or text in another
   encoding) comes back with each bad byte sequence replaced by `�`.
@@ -169,9 +169,9 @@ The action fails, stopping the shortcut, with one of these messages:
 
 | message | why |
 | --- | --- |
-| Running commands from Shortcuts is turned off. Enable "Allow Shortcuts to Run Commands" in iSH-AOK's settings. | the setting is off. Nothing ran |
+| Running commands from Shortcuts is turned off. Enable "Allow Shortcuts to Run Commands" in AOK-iSH's settings. | the setting is off. Nothing ran |
 | The command is empty. | Command was blank, or only spaces and newlines |
-| The guest system could not boot (error N). Open iSH-AOK once to finish setup. | the guest could not be started; see [Troubleshooting](#troubleshooting) |
+| The guest system could not boot (error N). Open AOK-iSH once to finish setup. | the guest could not be started; see [Troubleshooting](#troubleshooting) |
 | Could not start the command (error N). Is the guest system booted? | neither `/AOK/native/zsh` nor `/bin/sh` could be started |
 | Could not start the command as user "NAME" (error N). The "Open Everything as Default User" setting runs commands via /bin/su -- if su is missing or that account cannot log in, disable the setting or fix the account. | Open Everything as Default User is on and `/bin/su` could not be started |
 | The command timed out after N seconds. Partial output: … | the timeout ran out |
@@ -186,8 +186,8 @@ a file was not found, and -11 means try again (see
 
 ### When the app is closed, in the background, or already open
 
-- **Closed.** iOS launches iSH-AOK in the background to run the action.
-  iSH-AOK boots your default root, the same one it would boot if you opened
+- **Closed.** iOS launches AOK-iSH in the background to run the action.
+  AOK-iSH boots your default root, the same one it would boot if you opened
   the app, and then runs the command. Expect that first run to take longer.
 - **Saved sessions.** If you use [Suspend to Disk](suspend.md) and there is
   a saved session, a background boot **resumes the newest saved session
@@ -197,7 +197,7 @@ a file was not found, and -11 means try again (see
   action fails with "The guest system could not boot (error -11)". Answer
   the question and run the shortcut again.
 - **Already running.** The command runs in the guest that is already up.
-- **While it runs.** iSH-AOK asks iOS to keep it running until the command
+- **While it runs.** AOK-iSH asks iOS to keep it running until the command
   finishes. Once it has, and if the app is still in the background, iOS is
   free to suspend it again.
 
@@ -208,9 +208,9 @@ second shortcut that starts while one is running waits for the first to
 finish. Its timeout starts only when its own command starts, but iOS's
 background time limit does not wait with it.
 
-## Open iSH-AOK
+## Open AOK-iSH
 
-**Open iSH-AOK** brings the app to the foreground on the screen you choose.
+**Open AOK-iSH** brings the app to the foreground on the screen you choose.
 It has one parameter, **Destination**, which defaults to **Workspace
 Dashboard**:
 
@@ -223,9 +223,9 @@ Dashboard**:
 | Themes | the Workspace, with the Themes applet opened |
 | Boot Images | the Workspace, with the Boot Images (filesystems) applet opened |
 
-If iSH-AOK already has a window, that window changes to the destination, on
+If AOK-iSH already has a window, that window changes to the destination, on
 iPhone and iPad alike. On iPad the window used is the one in front, or if
-none is in front, the first one. Only when no window is open does iSH-AOK
+none is in front, the first one. Only when no window is open does AOK-iSH
 open a new one at the destination.
 
 Switching to the Workspace or to the terminal keeps what was there:
@@ -239,25 +239,25 @@ screens keep the window.
 
 ## Siri phrases and App Shortcuts
 
-Each destination of Open iSH-AOK is also a ready-made App Shortcut. They
-show up as tiles under iSH-AOK in the Shortcuts app and in Spotlight, with
+Each destination of Open AOK-iSH is also a ready-made App Shortcut. They
+show up as tiles under AOK-iSH in the Shortcuts app and in Spotlight, with
 no setup, and Siri understands these phrases:
 
 | App Shortcut | phrases |
 | --- | --- |
-| Dashboard | "Open workspace in iSH-AOK", "Show dashboard in iSH-AOK" |
-| Session Shell | "Open session shell in iSH-AOK", "Open shell in iSH-AOK" |
-| System Console | "Open system console in iSH-AOK", "Open console in iSH-AOK" |
-| Browser | "Open browser in iSH-AOK", "Show browser in iSH-AOK" |
-| Themes | "Open themes in iSH-AOK", "Show themes in iSH-AOK" |
-| Boot Images | "Open boot images in iSH-AOK", "Show boot images in iSH-AOK" |
+| Dashboard | "Open workspace in AOK-iSH", "Show dashboard in AOK-iSH" |
+| Session Shell | "Open session shell in AOK-iSH", "Open shell in AOK-iSH" |
+| System Console | "Open system console in AOK-iSH", "Open console in AOK-iSH" |
+| Browser | "Open browser in AOK-iSH", "Show browser in AOK-iSH" |
+| Themes | "Open themes in AOK-iSH", "Show themes in AOK-iSH" |
+| Boot Images | "Open boot images in AOK-iSH", "Show boot images in AOK-iSH" |
 
 Run Command has no built-in phrase, because it needs a command. Build a
 shortcut around it and give it a name, and Siri will run it when you say
 that name.
 
 If the tiles or phrases are missing just after you install the app, open
-iSH-AOK once. It registers them again every time it launches.
+AOK-iSH once. It registers them again every time it launches.
 
 ## Recipes
 
@@ -335,8 +335,8 @@ pgrep -x sshd >/dev/null; echo $?
 ### 5. Open the Session Shell from an NFC tag, Back Tap or the Action button
 
 - **NFC:** **Automation → New Automation → NFC**, scan the tag, then add
-  **Open iSH-AOK** with Destination **Session Shell**.
-- **Back Tap:** create a shortcut holding **Open iSH-AOK** (or use the
+  **Open AOK-iSH** with Destination **Session Shell**.
+- **Back Tap:** create a shortcut holding **Open AOK-iSH** (or use the
   ready-made **Session Shell** App Shortcut), then pick it in iOS Settings
   under Accessibility → Touch → Back Tap.
 - **Action button**, on devices that have one: choose **Shortcut** in iOS
@@ -351,7 +351,7 @@ pgrep -x sshd >/dev/null; echo $?
 
 ## The other direction: /dev/url
 
-Everything above is Shortcuts calling *into* iSH-AOK. `/dev/url` is the way
+Everything above is Shortcuts calling *into* AOK-iSH. `/dev/url` is the way
 back out: write a URL to it and iOS opens it, exactly as if you had tapped a
 link.
 
@@ -380,7 +380,7 @@ What it will tell you:
 - A URL iOS cannot parse is also `EINVAL`. Spaces are the usual cause, so
   percent-encode them: `name=Good%20Night`, not `name=Good Night`.
 - A URL longer than 8192 bytes is `EINVAL`.
-- `EPERM` means iOS refused: no installed app claims the scheme, or iSH-AOK
+- `EPERM` means iOS refused: no installed app claims the scheme, or AOK-iSH
   was not in the foreground. iOS does not allow a background app to open
   URLs, so `/dev/url` does not work from inside a Run Command action, nor
   from anything else that runs while the app is in the background.
@@ -412,18 +412,18 @@ What it will tell you:
 - **Shortcuts data in commands.** A variable inserted into the Command text
   becomes shell syntax. Encode untrusted text as in
   [recipe 2](#2-pass-text-from-a-shortcut-into-a-command).
-- **Open iSH-AOK** only changes which screen you see. It runs nothing and is
+- **Open AOK-iSH** only changes which screen you see. It runs nothing and is
   not gated.
 - **`/dev/url`** deserves the same care from the other side: anything running
   in the guest can open a URL, which means it can launch apps and trigger
-  your shortcuts. It cannot do so silently: it works only while iSH-AOK is
+  your shortcuts. It cannot do so silently: it works only while AOK-iSH is
   in the foreground, and iOS then switches to whatever it opened, so you
   always see it happen.
 
 ## Troubleshooting
 
 **The actions are not in the Shortcuts app.** You need iOS or iPadOS 16 or
-later. If you have that, open iSH-AOK once and look again.
+later. If you have that, open AOK-iSH once and look again.
 
 **"Running commands from Shortcuts is turned off."** Turn on Settings →
 Shortcuts → Allow Shortcuts to Run Commands.
@@ -434,8 +434,8 @@ again.
 
 **"The guest system could not boot" with another number.** The guest
 failed to start: no root has been set up yet, or the root is broken. Open
-iSH-AOK to see why. A failed boot stays failed until the app process ends,
-so after fixing the cause, swipe iSH-AOK away in the app switcher before
+AOK-iSH to see why. A failed boot stays failed until the app process ends,
+so after fixing the cause, swipe AOK-iSH away in the app switcher before
 trying again.
 
 **"Could not start the command (error -2)."** Neither `/AOK/native/zsh` nor
@@ -458,7 +458,7 @@ paths, or set what you need in the command itself. As the default user,
 (raise it, up to 120 seconds), or it started a background job that still holds the
 output (redirect that job's output, as shown in [Output](#output)).
 
-**The result ends with "[iSH-AOK: output truncated at 256 KB]".** The output
+**The result ends with "[AOK-iSH: output truncated at 256 KB]".** The output
 reached the cap. Send it to a file and return less of it.
 
 **The result is full of `�`.** The output was not valid UTF-8. Pipe it
@@ -469,9 +469,9 @@ terminal, and `TERM` is `dumb`, so most programs do not colour it. Those that co
 their own option, such as `--color=never`.
 
 **A long job stops partway when the app is in the background.** iOS limits
-how long a background app may run. Open iSH-AOK first, or run the job from
+how long a background app may run. Open AOK-iSH first, or run the job from
 a terminal.
 
-**Open iSH-AOK opens the app but not the destination.** The app is in
+**Open AOK-iSH opens the app but not the destination.** The app is in
 recovery mode, set to open Diagnostics at launch, or still waiting for you
 to pick a first root. Finish that, then run the shortcut again.

@@ -2,7 +2,7 @@
  * inotify_mount_paths.c — regression lock for inotify event delivery on
  * NON-ROOT mounts, and for bind() of a unix socket raising IN_CREATE.
  *
- * iSH-AOK registers inotify watches by full normalized guest path
+ * AOK-iSH registers inotify watches by full normalized guest path
  * (sys_inotify_add_watch), but every notification call site in fs/generic.c
  * used to fire with the path AFTER find_mount_and_trim_path() had rewritten
  * it to be mount-relative. On the root mount the two are identical, which

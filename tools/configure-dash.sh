@@ -1,9 +1,9 @@
 #!/bin/sh
-# Configure dash the way iSH-AOK's native build needs it. Run from deps/dash.
+# Configure dash the way AOK-iSH's native build needs it. Run from deps/dash.
 #
 #     cd deps/dash && ../../tools/configure-dash.sh
 #
-# Configure ONLY, then build iSH-AOK. The five generated sources are committed
+# Configure ONLY, then build AOK-iSH. The five generated sources are committed
 # in emkey1/dash, and they carry the thread-local conversion; config.h is not,
 # and neither is anything else configure writes -- the fork ignores all of it,
 # so a configured tree stays clean. Do not follow it with dash's own `make`:
@@ -20,7 +20,7 @@
 # reason (see meson.build's note on zsh being a CONFIGURED tree).
 #
 # NO libedit. dash's line editing is optional and off by default, and it must
-# stay off here: iSH-AOK's native programs reach the terminal through the
+# stay off here: AOK-iSH's native programs reach the terminal through the
 # shim's tty handling, and a second line editor inside the shell would be
 # competing for the same descriptor. The interactive editing a user wants is
 # zsh's; dash is here to be /bin/sh.
@@ -41,7 +41,7 @@ fi
 # that would bake the file in rather than at the next configure.
 if [ -f ./src/mksignames.c ]; then
     echo "$0: src/mksignames.c is present. It is GPL-2+ and its output is" >&2
-    echo "    linked; iSH-AOK removed it deliberately. It has probably come" >&2
+    echo "    linked; AOK-iSH removed it deliberately. It has probably come" >&2
     echo "    back through a merge from Debian -- remove it again." >&2
     exit 1
 fi

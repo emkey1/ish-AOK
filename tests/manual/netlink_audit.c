@@ -1,7 +1,7 @@
 /*
  * netlink_audit.c — regression lock for minimal NETLINK_AUDIT support.
  *
- * iSH-AOK's AF_NETLINK socket() used to allow-list only ROUTE/SOCK_DIAG/
+ * AOK-iSH's AF_NETLINK socket() used to allow-list only ROUTE/SOCK_DIAG/
  * KOBJECT_UEVENT/GENERIC, so libaudit's audit_open() — a bare
  * socket(AF_NETLINK, SOCK_RAW, NETLINK_AUDIT) — failed with EPROTONOSUPPORT.
  * Every libaudit consumer (PAM, shadow's login/su, sshd, dbus) probes the
@@ -149,7 +149,7 @@ int main(int argc, char **argv) {
      *
      * The message exchange below does need privilege: audit_netlink_ok()
      * gates control messages (AUDIT_GET/SET) on CAP_AUDIT_CONTROL and user
-     * messages on CAP_AUDIT_WRITE, returning EPERM otherwise, and iSH-AOK's
+     * messages on CAP_AUDIT_WRITE, returning EPERM otherwise, and AOK-iSH's
      * own handler approximates both as euid==0. Skip rather than fail so an
      * unprivileged run stays green -- the on-device suite runs as uid 1000.
      * Same convention as ambient_caps.c / chroot_getcwd.c. */

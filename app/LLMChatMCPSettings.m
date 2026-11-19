@@ -1,6 +1,6 @@
 //
 //  LLMChatMCPSettings.m
-//  iSH-AOK
+//  AOK-iSH
 //
 //  LLM Settings -> MCP Servers: the servers whose tools the chat offers the
 //  model. Add a remote (Streamable HTTP) server or one that runs in the
@@ -66,7 +66,7 @@ static BOOL ISHLLMMCPIsGuest(NSDictionary *server) {
             ? NSLocalizedString(@"No servers yet. A server's tools are offered to the model alongside the built-in ones, and each call asks first unless MCP Tools is set to Allow in Tool Permissions.", @"MCP servers footer")
             : NSLocalizedString(@"Tap a server to check, edit, turn off or delete it. Its tools are offered to the model alongside the built-in ones; each call follows the MCP Tools setting in Tool Permissions.", @"MCP servers footer");
     if (section == ISHLLMMCPSectionAdd)
-        return NSLocalizedString(@"A remote server is a Streamable HTTP endpoint (https://…/mcp); its token is kept in the Keychain. A guest server is a command run inside iSH-AOK as the chat's tool account, speaking MCP on its stdin and stdout -- for example \"npx -y @modelcontextprotocol/server-filesystem /root\" or \"python3 server.py\". It needs that program installed in the guest, and it is started with the first message that uses tools.", @"MCP servers footer");
+        return NSLocalizedString(@"A remote server is a Streamable HTTP endpoint (https://…/mcp); its token is kept in the Keychain. A guest server is a command run inside AOK-iSH as the chat's tool account, speaking MCP on its stdin and stdout -- for example \"npx -y @modelcontextprotocol/server-filesystem /root\" or \"python3 server.py\". It needs that program installed in the guest, and it is started with the first message that uses tools.", @"MCP servers footer");
     return nil;
 }
 

@@ -175,7 +175,7 @@ static NSUserActivity *SceneRequestedActivity(UISceneSession *session, UISceneCo
 }
 
 // ---- Home Screen quick actions (#577) -------------------------------------
-// A long press on the app's icon offers the places iSH-AOK can open, for this
+// A long press on the app's icon offers the places AOK-iSH can open, for this
 // once and over whatever Startup Mode is set to. Each is one of the
 // destinations the Shortcuts intent already has (ISHAppShortcuts.swift) and is
 // routed the same way: as that destination's activity, to the scene being

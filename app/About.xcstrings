@@ -1831,61 +1831,61 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "iSH-AOK auf GitHub"
+            "value" : "AOK-iSH auf GitHub"
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "iSH-AOK on GitHub"
+            "value" : "AOK-iSH on GitHub"
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "iSH-AOK en GitHub"
+            "value" : "AOK-iSH en GitHub"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "iSH-AOK sur GitHub"
+            "value" : "AOK-iSH sur GitHub"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "GitHub の iSH-AOK"
+            "value" : "GitHub の AOK-iSH"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "GitHub의 iSH-AOK"
+            "value" : "GitHub의 AOK-iSH"
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "iSH-AOK no GitHub"
+            "value" : "AOK-iSH no GitHub"
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "iSH-AOK на GitHub"
+            "value" : "AOK-iSH на GitHub"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "GitHub 上的 iSH-AOK"
+            "value" : "GitHub 上的 AOK-iSH"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "GitHub 上的 iSH-AOK"
+            "value" : "GitHub 上的 AOK-iSH"
           }
         }
       }
@@ -3651,61 +3651,61 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "„Bildschirm eingeschaltet lassen“ verhindert das Abdunkeln, solange iSH-AOK im Vordergrund ist."
+            "value" : "„Bildschirm eingeschaltet lassen“ verhindert das Abdunkeln, solange AOK-iSH im Vordergrund ist."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Keep Screen Turned On prevents dimming while iSH-AOK is foregrounded."
+            "value" : "Keep Screen Turned On prevents dimming while AOK-iSH is foregrounded."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Mantener la pantalla encendida evita que se atenúe mientras iSH-AOK está en primer plano."
+            "value" : "Mantener la pantalla encendida evita que se atenúe mientras AOK-iSH está en primer plano."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Garder l'écran allumé empêche l'atténuation de l'écran lorsque iSH-AOK est au premier plan."
+            "value" : "Garder l'écran allumé empêche l'atténuation de l'écran lorsque AOK-iSH est au premier plan."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "「画面を常にオン」は、iSH-AOK がフォアグラウンドにある間、画面が暗くなるのを防ぎます。"
+            "value" : "「画面を常にオン」は、AOK-iSH がフォアグラウンドにある間、画面が暗くなるのを防ぎます。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "화면 켜진 상태로 유지는 iSH-AOK가 포그라운드에 있는 동안 화면이 어두워지지 않도록 합니다."
+            "value" : "화면 켜진 상태로 유지는 AOK-iSH가 포그라운드에 있는 동안 화면이 어두워지지 않도록 합니다."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Manter a Tela Ligada evita o escurecimento enquanto o iSH-AOK está em primeiro plano."
+            "value" : "Manter a Tela Ligada evita o escurecimento enquanto o AOK-iSH está em primeiro plano."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "«Не выключать экран» предотвращает затемнение, пока iSH-AOK на переднем плане."
+            "value" : "«Не выключать экран» предотвращает затемнение, пока AOK-iSH на переднем плане."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "“保持屏幕常亮”可在 iSH-AOK 位于前台时防止屏幕变暗。"
+            "value" : "“保持屏幕常亮”可在 AOK-iSH 位于前台时防止屏幕变暗。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "「保持螢幕開啟」可在 iSH-AOK 位於前景時防止螢幕變暗。"
+            "value" : "「保持螢幕開啟」可在 AOK-iSH 位於前景時防止螢幕變暗。"
           }
         }
       }
@@ -3846,61 +3846,61 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "iSH-AOK unbekannt (Build unbekannt)"
+            "value" : "AOK-iSH unbekannt (Build unbekannt)"
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "iSH-AOK unknown (Build unknown)"
+            "value" : "AOK-iSH unknown (Build unknown)"
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "iSH-AOK desconocido (compilación desconocida)"
+            "value" : "AOK-iSH desconocido (compilación desconocida)"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "iSH-AOK inconnu (build inconnu)"
+            "value" : "AOK-iSH inconnu (build inconnu)"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "iSH-AOK 不明（ビルド 不明）"
+            "value" : "AOK-iSH 不明（ビルド 不明）"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "iSH-AOK 알 수 없음(빌드 알 수 없음)"
+            "value" : "AOK-iSH 알 수 없음(빌드 알 수 없음)"
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "iSH-AOK desconhecido (Compilação desconhecida)"
+            "value" : "AOK-iSH desconhecido (Compilação desconhecida)"
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "iSH-AOK неизвестно (сборка неизвестна)"
+            "value" : "AOK-iSH неизвестно (сборка неизвестна)"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "iSH-AOK 未知（构建 未知）"
+            "value" : "AOK-iSH 未知（构建 未知）"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "iSH-AOK 未知（建置 未知）"
+            "value" : "AOK-iSH 未知（建置 未知）"
           }
         }
       }
@@ -3911,61 +3911,61 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "iSH-AOK-Discord-Server"
+            "value" : "AOK-iSH-Discord-Server"
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "iSH-AOK Discord Server"
+            "value" : "AOK-iSH Discord Server"
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Servidor de Discord de iSH-AOK"
+            "value" : "Servidor de Discord de AOK-iSH"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Serveur Discord d'iSH-AOK"
+            "value" : "Serveur Discord d'AOK-iSH"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "iSH-AOK Discord サーバ"
+            "value" : "AOK-iSH Discord サーバ"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "iSH-AOK Discord 서버"
+            "value" : "AOK-iSH Discord 서버"
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Servidor do iSH-AOK no Discord"
+            "value" : "Servidor do AOK-iSH no Discord"
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Discord-сервер iSH-AOK"
+            "value" : "Discord-сервер AOK-iSH"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "iSH-AOK Discord 服务器"
+            "value" : "AOK-iSH Discord 服务器"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "iSH-AOK Discord 伺服器"
+            "value" : "AOK-iSH Discord 伺服器"
           }
         }
       }

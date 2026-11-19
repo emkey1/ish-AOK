@@ -15,10 +15,10 @@ permissions:
 jobs:
   build:
     # This job publishes an IPA under the dev-latest release, so it must only run
-    # in an iSH-AOK repository. A checkout whose origin has been repointed at an
+    # in an AOK-iSH repository. A checkout whose origin has been repointed at an
     # unrelated project still pushes `working`, and without this guard that repo
-    # runs THIS workflow and publishes an iSH-AOK build under someone else's name
-    # (happened 2026-08-07: a 40 MB iSH-AOK IPA appeared as a public prerelease
+    # runs THIS workflow and publishes an AOK-iSH build under someone else's name
+    # (happened 2026-08-07: a 40 MB AOK-iSH IPA appeared as a public prerelease
     # on an unrelated project).
     #
     # Matched on repository NAME, not owner/name, so a fork still builds its own
@@ -38,7 +38,7 @@ jobs:
       # submodules ship in the app: third-party/openssh (ssh, scp, sftp,
       # ssh-keygen) and third-party/nextvi (vi). Without them meson swaps in
       # stubs and says so only as a setup WARNING, so every IPA built here had
-      # an ssh that says "not built into this iSH-AOK" and a stub vi. Just
+      # an ssh that says "not built into this AOK-iSH" and a stub vi. Just
       # those two: meson uses none of smallclue's other submodules (dvtm,
       # libgit2, openrsync).
       - name: Check out smallclue's openssh, nextvi and libgit2

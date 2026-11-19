@@ -1,6 +1,6 @@
 # 34. Two builds
 
-iSH-AOK has two build systems, and only one of them matters.
+AOK-iSH has two build systems, and only one of them matters.
 
 That is not a criticism of the other. The meson build is faster, more
 configurable, runs on Linux, and is where nearly all of the emulator work in
@@ -106,7 +106,7 @@ Because that is so easy to get wrong, the build tells the guest:
 
 ```
 $ uname -a
-Linux Mac.lan 5.10.0-ish_aok iSH-AOK built 2026-08-31 10:24Z unoptimized aarch64 Linux
+Linux Mac.lan 5.10.0-ish_aok AOK-iSH built 2026-08-31 10:24Z unoptimized aarch64 Linux
 ```
 
 `unoptimized` in `uname -v`. It costs a string and it means no benchmark result

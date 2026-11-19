@@ -1,6 +1,6 @@
 # The GPL source offer
 
-iSH-AOK distributes a lot of other people's copyleft software. This is the
+AOK-iSH distributes a lot of other people's copyleft software. This is the
 working document for what that obliges us to do, what we have not done yet,
 and the text to use once the open decisions are made.
 
@@ -15,7 +15,7 @@ A photo app that displays your pictures owes nobody a copyright notice. The
 developer never copied or distributed those pictures; the app is a tool that
 opens a file somebody else supplied.
 
-**Almost everything iSH-AOK runs is exactly that case.** When a user types
+**Almost everything AOK-iSH runs is exactly that case.** When a user types
 `apt install` or `apk add`, the packages travel from Devuan's or Alpine's
 servers to that user's device. We did not convey them, we are not a party to
 it, and no source obligation of ours attaches -- however much GPL software
@@ -203,23 +203,23 @@ Items 1 and 2 remain. They are decisions, below.
 For a Legal screen in the app and for README.md. Fill in the URL and the
 address once decision 2 is made.
 
-> **Source code for the GNU/Linux software included with iSH-AOK**
+> **Source code for the GNU/Linux software included with AOK-iSH**
 >
-> iSH-AOK includes Linux filesystem images containing software licensed under
+> AOK-iSH includes Linux filesystem images containing software licensed under
 > the GNU General Public License, versions 2 and 3, among other licences --
 > including GNU bash, coreutils, grep, findutils, diffutils, gzip, dpkg and
 > apt in the Devuan image, and busybox, apk-tools and scanelf in the Alpine
 > image. It also includes code from the ish-arm64 project under the GPL
 > version 3, and crates under the Mozilla Public License 2.0.
 >
-> For any version of iSH-AOK, for at least three years after that version was
+> For any version of AOK-iSH, for at least three years after that version was
 > distributed, we will give any third party the complete corresponding source
 > code for the GPL-licensed software in it, on request, for no more than our
 > cost of physically performing the distribution. The same source is also
 > available at [URL].
 >
 > Write to [ADDRESS], or open an issue at
-> https://github.com/emkey1/ish-AOK/issues, naming the iSH-AOK build number
+> https://github.com/emkey1/ish-AOK/issues, naming the AOK-iSH build number
 > you have.
 
 ---

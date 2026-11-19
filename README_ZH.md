@@ -1,8 +1,8 @@
-# iSH-AOK
+# AOK-iSH
 
 > **翻译说明：** 本文是 [README.md](README.md) 的译文。若有出入，以英文版 README.md 为准。
 
-iSH-AOK 是 [ish-app/ish](https://github.com/ish-app/ish) 的一个分支（fork），在此基础上添加了用于日常开发的产品、工具链和平台相关改动。
+AOK-iSH 是 [ish-app/ish](https://github.com/ish-app/ish) 的一个分支（fork），在此基础上添加了用于日常开发的产品、工具链和平台相关改动。
 
 Testflight: https://testflight.apple.com/join/X1flyiqE
 
@@ -13,11 +13,11 @@ AOK VM，姊妹应用（完整的虚拟机：基于 QEMU 与 AOK gadget 引擎�
 ## 本分支新增的内容
 
 - 分支专属的应用标识:
-  - 产品名 `iSH-AOK`
+  - 产品名 `AOK-iSH`
   - Bundle root `app.ish.iSH-AOK`
 - **五种客户机架构**，全部基于 JIT：`i386`、`amd64`（x86_64）、`arm64`（aarch64）、`riscv64` 和 `ppc64le`（64 位小端 PowerPC）。
 - **原生程序**：zsh、dash（预配置脚本会让它成为 `sh`），以及携带 OpenSSH（`ssh`、`scp`、`sftp`、`ssh-keygen`、`ssh-copy-id`）、Nextvi 编辑器和与 GNU 兼容的 `sed`、`grep`、`find`、`ls`、`tar`、`gzip`、`diff`、`awk` 及大部分 coreutils 的 SmallCLUE busybox 风格工具箱，都作为宿主代码编译进应用，并由客户机的 `execve` 经 `/AOK/native/<名称>` 分发。它们是运行在客户机任务线程上的宿主函数，而不是客户机二进制，因此以全速运行，无需逐条指令翻译。bash 拥有同样的原生实现，但自 556 起发布的构建不再包含它——参见[原生 bash 与许可证](#原生-bash-与许可证)。
-- **原生模式**（558）：完全没有 Linux 发行版的根文件系统。它的 `/bin` 和 `/usr/bin` 就是原生程序——约 140 个日常命令、ssh、git、curl、编辑器——由 SmallCLUE 的 `init` 作为 pid 1 运行 runit 式的服务，登录 shell 是原生 zsh。无需下载任何东西：在“官方发行版”下选择 **iSH-AOK Native** 即可。需要包管理器时，在它旁边再安装一个发行版。参见 `/AOK/docs/native-mode.md`。
+- **原生模式**（558）：完全没有 Linux 发行版的根文件系统。它的 `/bin` 和 `/usr/bin` 就是原生程序——约 140 个日常命令、ssh、git、curl、编辑器——由 SmallCLUE 的 `init` 作为 pid 1 运行 runit 式的服务，登录 shell 是原生 zsh。无需下载任何东西：在“官方发行版”下选择 **AOK-iSH Native** 即可。需要包管理器时，在它旁边再安装一个发行版。参见 `/AOK/docs/native-mode.md`。
 - `/AOK`，一个只读的应用内文件系统（`/AOK/docs`、`/AOK/tools`、`/AOK/tests`、`/AOK/native`），在构建时通过 `fs/aok-*.manifest` 和 `tools/gen-aokfs.py` 从 `opt/AOK/` 嵌入。
 - 内置在应用中的根文件系统（Alpine 3.24.2 与 Devuan 6，仅 `aarch64`），以及面向 `i386`、`x86_64`、`riscv64` 和 `ppc64le` 的可下载镜像。
 - **在客户机中使用设备的 GPU**：`/dev/dri/renderD128`，一个 virtio-gpu 渲染节点，由进程内运行在 MoltenVK 之上的 virglrenderer Venus 渲染器支撑，因此 Mesa 的 Venus Vulkan 驱动（以及其上的 zink）通过 Metal 绘制。客户机一侧由 `/AOK/tools/setup-gpu.sh` 安装。参见 `/AOK/docs/workspace.md`。
@@ -31,9 +31,9 @@ AOK VM，姊妹应用（完整的虚拟机：基于 QEMU 与 AOK gadget 引擎�
 - 通过 iOS 系统 API 暴露客户机文件的 File Provider 支持。
 - **FUSE**：提供 `/dev/fuse` 与 `fuse` 文件系统类型（协议 7.31），因此客户机的 `libfuse2`/`libfuse3` 守护进程无需修改即可挂载并提供文件系统。以 root 身份时 libfuse 直接调用 `mount(2)`；普通用户则与 Linux 上一样，经由发行版的 `fusermount3`。参见 `/AOK/docs/fuse.md`。
 - **命名空间**（559，实验性）：user、mount、pid 与 network 命名空间，因此 `unshare`、bubblewrap 以及 Codex CLI 的命令沙箱（`codex sandbox`）能够启动并真正起到隔离作用，systemd 的 `PrivateTmp=` 等设置也是真实生效的。私有网络命名空间有自己的回环接口和 `veth`/`dummy` 链路，并且永远不会接触到宿主的网络。参见 `/AOK/docs/namespaces.md`。
-- **Apple 快捷指令（Shortcuts）操作**（iOS 16+）：无需打开应用即可通过原生 zsh 在客户机中执行命令并把输出返回给快捷指令的 "Run Command" 操作，以及带有 Siri 短语的 "Open iSH-AOK" 目标页面。参见 `/AOK/docs/shortcuts.md`。
+- **Apple 快捷指令（Shortcuts）操作**（iOS 16+）：无需打开应用即可通过原生 zsh 在客户机中执行命令并把输出返回给快捷指令的 "Run Command" 操作，以及带有 Siri 短语的 "Open AOK-iSH" 目标页面。参见 `/AOK/docs/shortcuts.md`。
 - **`/dev/url`**：一个字符设备，客户机往里写一个 URL，就把它交给 iOS 打开——包括 `shortcuts://` 链接，因此客户机脚本可以驱动一个快捷指令。参见 `app/URLDevice.m`。
-- **模拟交换空间**：可选的交换区，让大部分处于闲置状态的大型工作集无需占用真实内存即可存在——并带有 24 小时写入预算、抖动保护和挂起门控，因为它消耗的是设备的闪存。默认关闭；在 iOS“设置”App 中的 iSH-AOK → Simulated Swap 里开启（需要同时打开开关并选择大小，下次启动时生效）。客户机通过 `/proc/meminfo`、`free`、`vmstat`、`/proc/swaps` 和真实的 `/dev/aokswap0` 看到它。参见 `/AOK/docs/swap.md`。
+- **模拟交换空间**：可选的交换区，让大部分处于闲置状态的大型工作集无需占用真实内存即可存在——并带有 24 小时写入预算、抖动保护和挂起门控，因为它消耗的是设备的闪存。默认关闭；在 iOS“设置”App 中的 AOK-iSH → Simulated Swap 里开启（需要同时打开开关并选择大小，下次启动时生效）。客户机通过 `/proc/meminfo`、`free`、`vmstat`、`/proc/swaps` 和真实的 `/dev/aokswap0` 看到它。参见 `/AOK/docs/swap.md`。
 - **`binfmt_misc`**：像在 Linux 上一样，为魔数或文件扩展名注册解释器，`execve` 会遵循它。参见 `/AOK/docs/binfmt-misc.md`。
 - 加速器：用原生代码替换热点 libc 例程（默认开启），以及可选的加密与 pixman 卸载。
 - 该分支专属的额外诊断与运维相关改动。
@@ -126,7 +126,7 @@ i386 或 amd64 客户机根本不会走这条路径。
 - `jit/`: gadget JIT 及各客户机的翻译器。
 - `tests/`: 端到端测试与客户机侧回归套件。
 - `tools/`: 开发者工具与宿主机侧辅助脚本。
-- `docs/`: 设计笔记、移植计划、发布说明，以及[这本书](docs/book/README.md)——讲述 iSH-AOK 如何工作的 43 章和 8 个附录。
+- `docs/`: 设计笔记、移植计划、发布说明，以及[这本书](docs/book/README.md)——讲述 AOK-iSH 如何工作的 43 章和 8 个附录。
 
 ## 克隆
 
@@ -222,7 +222,7 @@ ninja -C build
 ## 原生程序
 
 原生程序是编译进应用内部的宿主代码。对 `/AOK/native` 下的路径执行 `execve`，不会去
-加载一个客户机镜像，而是直接分发到 iSH-AOK 内部的一个函数，调用方察觉不到区别。
+加载一个客户机镜像，而是直接分发到 AOK-iSH 内部的一个函数，调用方察觉不到区别。
 `/AOK/native` 中每个注册表（`kernel/native.c`）里的程序各占一项 —— `smallclue`、
 `sudo`、`su`、`passwd`、`motepad`、`ktop`、`wl-present`、`transcode`、`bmm`、`bmt`、`rust-probe`、
 `hx`、`bash`、`zsh`、`zsh-multio`、`dash`、`sh`，各自仅在构建包含它时才存在 —— 其余全是
@@ -290,7 +290,7 @@ bash 可以作为原生程序编译进应用（`-Dnative_bash=enabled`），但�
 自身。数据与测量方法见 [docs/bash_native_plan.md](docs/bash_native_plan.md)。这同时
 也意味着二进制里带上了 GPLv3 代码：bash 本身、随附的 readline，以及 GNU termcap。
 
-这一点对 App Store 分发很重要。iSH-AOK 本身同样是 GPLv3，但
+这一点对 App Store 分发很重要。AOK-iSH 本身同样是 GPLv3，但
 [LICENSE.IOS](LICENSE.IOS) 是*本项目*版权持有者作出的承诺，即不就 GPL 与 Apple 条款
 之间的冲突进行追究。它无法约束持有 bash 版权的 FSF，而 FSF 已经两次让 GPL 软件从
 App Store 下架 —— 2010 年的 [GNU
@@ -336,7 +336,7 @@ Comment: This file is not directly linked with dash.  However, its output is.
 License: GPL-2+
 ```
 
-**iSH-AOK 不构建该文件。** 它是一个构建期生成器，其全部输出就是一张信号名称与
+**AOK-iSH 不构建该文件。** 它是一个构建期生成器，其全部输出就是一张信号名称与
 编号的表，完全可以从平台自身的 `signal.h` 推导出来；AOK 自行生成该表，从不编译
 `mksignames.c`。若有人为了省事想把它加回来，请先读这一段 —— 那等于为了一张三十
 行就能生成的表，把 GPL 衍生内容重新放进二进制。
@@ -508,7 +508,7 @@ ISH_LOG = verbose strace
 
 ## 与上游的关系
 
-iSH-AOK 基于上游 iSH，但有意与之分化。
+AOK-iSH 基于上游 iSH，但有意与之分化。
 
 这意味着：
 

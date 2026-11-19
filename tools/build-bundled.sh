@@ -1,7 +1,7 @@
 #!/bin/sh
 # tools/build-bundled.sh -- build what /AOK/bundled serves, on a Mac.
 #
-# /AOK/bundled holds programs and libraries for the guest that iSH-AOK builds
+# /AOK/bundled holds programs and libraries for the guest that AOK-iSH builds
 # ahead of time, so that setup scripts can link them in instead of compiling on
 # the device: wf-panel's build ran an A10X iPad out of memory, and the shims
 # want a compiler most roots lack. They are built here, in the CLI's guest

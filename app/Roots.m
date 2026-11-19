@@ -69,6 +69,9 @@ static NSString *kDefaultRoot = @"Default Root";
 // of registering one domain per root (which spammed the Files sidebar). Must
 // stay in sync with the displayName shown in Files and the deep-link path.
 static NSString *const kISHFileProviderDomainIdentifier = @"iSH-AOK";
+// The identifier keeps the app's old name, so a domain registered before the
+// rename is still found as ours; only the name the Files app shows changed.
+static NSString *const kISHFileProviderDomainDisplayName = @"AOK-iSH";
 static NSString *const kBundledRootIdentifierKey = @"identifier";
 static NSString *const kBundledRootDisplayNameKey = @"displayName";
 static NSString *const kBundledRootArchiveNameKey = @"archiveName";
@@ -86,7 +89,7 @@ static NSString *const kBundledRootGuestArchKey = @"guestArch";
 // one flat row per distro_arch combination.
 static NSString *const kBundledRootFamilyKey = @"family";
 static NSString *const kBundledRootFamilyDisplayNameKey = @"familyDisplayName";
-// "official" (maintained as part of iSH-AOK's regression-tested base images) vs
+// "official" (maintained as part of AOK-iSH's regression-tested base images) vs
 // "community" (contributed/experimental, no distro-specific patching guarantees).
 static NSString *const kBundledRootTierKey = @"tier";
 static NSString *const kBundledRootTierOfficial = @"official";
@@ -349,13 +352,13 @@ static NSArray<NSDictionary<NSString *, NSString *> *> *BuildRootChoices(void) {
                 // boot. Bundled in the sense that matters (no download), and
                 // not the default: it cannot install packages.
                 kBundledRootIdentifierKey: @"aoknative",
-                kBundledRootDisplayNameKey: @"iSH-AOK Native (no distribution)",
+                kBundledRootDisplayNameKey: @"AOK-iSH Native (no distribution)",
                 kBundledRootImportNameKey: @"AOK-Native",
                 kBundledRootInitialWindowKey: @"session-shell",
                 kBundledRootGuestABIKey: @"arm64",
                 kBundledRootKindKey: kRootKindNative,
                 kBundledRootFamilyKey: @"aoknative",
-                kBundledRootFamilyDisplayNameKey: @"iSH-AOK Native",
+                kBundledRootFamilyDisplayNameKey: @"AOK-iSH Native",
                 kBundledRootTierKey: kBundledRootTierOfficial,
             },
             @{
@@ -1346,7 +1349,7 @@ static NSString *ISHFileProviderErrorText(NSError *error) {
                 NSLog(@"error adjusting domains: %@", error);
         };
         onError(error);
-        // These used to go only to the log, so a report of "iSH-AOK is not in
+        // These used to go only to the log, so a report of "AOK-iSH is not in
         // Files" (#676) came with breadcrumbs saying nothing had failed.
         if (error != nil) {
             [ISHDiagnosticsStore recordBreadcrumb:@"fileprovider.domainSync.listFailed"
@@ -1354,7 +1357,7 @@ static NSString *ISHFileProviderErrorText(NSError *error) {
             [self noteFileProviderDomainStatus:[@"could not list the registered domains: "
                                                 stringByAppendingString:ISHFileProviderErrorText(error)]];
         }
-        NSLog(@"syncing the iSH-AOK file provider domain for %lu root(s)", (unsigned long) rootsSnapshot.count);
+        NSLog(@"syncing the AOK-iSH file provider domain for %lu root(s)", (unsigned long) rootsSnapshot.count);
 
         // Tell Files to re-list the roots (the domain root container) whenever the
         // set of installed roots changes.
@@ -1369,8 +1372,9 @@ static NSString *ISHFileProviderErrorText(NSError *error) {
             }];
         };
 
-        // Keep exactly one domain ("iSH-AOK"); remove everything else, including
-        // the legacy one-domain-per-root entries from older builds.
+        // Keep exactly one domain (identifier "iSH-AOK", shown as "AOK-iSH");
+        // remove everything else, including the legacy one-domain-per-root
+        // entries from older builds.
         NSFileProviderDomain *ourDomain = nil;
         for (NSFileProviderDomain *domain in domains) {
             if (ourDomain == nil && [domain.identifier isEqualToString:kISHFileProviderDomainIdentifier]) {
@@ -1387,7 +1391,7 @@ static NSString *ISHFileProviderErrorText(NSError *error) {
         if (ourDomain == nil) {
             NSFileProviderDomain *domain = [[NSFileProviderDomain alloc]
                        initWithIdentifier:kISHFileProviderDomainIdentifier
-                              displayName:kISHFileProviderDomainIdentifier
+                              displayName:kISHFileProviderDomainDisplayName
             pathRelativeToDocumentStorage:kISHFileProviderDomainIdentifier];
             [NSFileProviderManager addDomain:domain completionHandler:^(NSError *addError) {
                 onError(addError);
@@ -1401,6 +1405,21 @@ static NSString *ISHFileProviderErrorText(NSError *error) {
                     [self noteFileProviderDomainStatus:[@"could not register: "
                                                         stringByAppendingString:ISHFileProviderErrorText(addError)]];
                 }
+            }];
+        } else if (![ourDomain.displayName isEqualToString:kISHFileProviderDomainDisplayName]) {
+            // Registered before the app was renamed: adding a domain whose
+            // identifier is already there updates its name in place, so the
+            // Files app stops showing the old one and nothing is re-indexed.
+            NSFileProviderDomain *renamed = [[NSFileProviderDomain alloc]
+                       initWithIdentifier:kISHFileProviderDomainIdentifier
+                              displayName:kISHFileProviderDomainDisplayName
+            pathRelativeToDocumentStorage:ourDomain.pathRelativeToDocumentStorage];
+            [NSFileProviderManager addDomain:renamed completionHandler:^(NSError *addError) {
+                onError(addError);
+                [ISHDiagnosticsStore recordBreadcrumb:addError == nil ?
+                    @"fileprovider.domainSync.renamed" : @"fileprovider.domainSync.renameFailed"];
+                [self noteFileProviderDomainStatus:@"registered (already there)"];
+                signalRoots(addError == nil ? renamed : ourDomain);
             }];
         } else {
             if (error == nil)
@@ -2390,7 +2409,7 @@ static void RunExitApp(void) {
         return;
     }
     ISHPresentFinalScreen(NSLocalizedString(@"Restart requested", @"Final screen title after a command in the guest asked for the app to be closed"),
-                          [NSString stringWithFormat:NSLocalizedString(@"Close iSH-AOK and open it again to boot \u201c%@\u201d.",
+                          [NSString stringWithFormat:NSLocalizedString(@"Close AOK-iSH and open it again to boot \u201c%@\u201d.",
                                                                        @"Final screen message after a command in the guest asked for the app to be closed; %@ is a filesystem name"),
                            next]);
 }

@@ -28,7 +28,7 @@ extern NSString *const ISHSceneWorkspaceToolUserInfoKey;
 UIViewController * _Nullable ISHActivePresentationViewController(void);
 
 // The menu a long press on the app's Home Screen icon shows (#577): where to
-// open iSH-AOK this time, whatever Startup Mode says. Sets the list; call once
+// open AOK-iSH this time, whatever Startup Mode says. Sets the list; call once
 // at launch, on the main thread.
 void ISHInstallHomeScreenQuickActions(void);
 

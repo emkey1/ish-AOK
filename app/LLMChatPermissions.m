@@ -1,6 +1,6 @@
 //
 //  LLMChatPermissions.m
-//  iSH-AOK
+//  AOK-iSH
 //
 //  See LLMChatPermissions.h.
 //

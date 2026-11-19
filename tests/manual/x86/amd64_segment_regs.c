@@ -30,7 +30,7 @@
 //    reported at the instruction, and a POP that faults leaves RSP alone.
 //  - Loading a non-null selector into FS sets the FS base to 0. A null one
 //    clears it on Intel and keeps it on AMD parts without CPUID
-//    0x80000021:EAX[6] (Linux's X86_BUG_NULL_SEG) -- camd keeps it, and iSH-AOK
+//    0x80000021:EAX[6] (Linux's X86_BUG_NULL_SEG) -- camd keeps it, and AOK-iSH
 //    reports GenuineIntel and clears it -- so that one expectation follows the
 //    CPUID vendor.
 //  - A signal frame's REG_CSGSFS is 0x002b000000000033 (CS and SS; the GS and

@@ -1,6 +1,6 @@
 # Benchmarks: bmm, bmt, and the amd64 JIT bench harness
 
-iSH-AOK ships a couple of small, self-contained CPU/thread microbenchmarks
+AOK-iSH ships a couple of small, self-contained CPU/thread microbenchmarks
 you can build and run from any guest root, useful for comparing performance
 across devices, guest architectures, or JIT engine changes.
 
@@ -21,7 +21,7 @@ stack-slot code paths more than an optimized build would):
 
 ### The native versions
 
-The same two workloads are also compiled into iSH-AOK and reachable as
+The same two workloads are also compiled into AOK-iSH and reachable as
 native programs, which need no compiler in the guest and work on every guest
 architecture:
 
@@ -45,7 +45,7 @@ emulation. On an M4 Mac with an arm64 guest, 20M iterations:
 
 Two things to keep in mind when reading those numbers:
 
-- The native build uses iSH-AOK's own compiler flags, so it corresponds to
+- The native build uses AOK-iSH's own compiler flags, so it corresponds to
   the `-O2` variants (`bmm2`/`bmt2`). Against the `-O0` builds it is not a
   like-for-like comparison.
 - Native `bmt` creates **host** threads, not guest tasks. That is exactly the

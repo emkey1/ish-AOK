@@ -2,7 +2,7 @@
 // asbestos/guest-arm64/gadgets-aarch64/math.S (GPLv3, see
 // /CREDITS-aarch64.md). Mechanical renames from their source: _pc -> _ip
 // (this file's gadgets.h names the code-stream pointer _ip, matching
-// iSH-AOK's i386-guest convention, not their _pc); gadget symbols get an
+// AOK-iSH's i386-guest convention, not their _pc); gadget symbols get an
 // arm64_ prefix via the .gadget macro (avoids collision with i386/amd64
 // gadget names in the same final binary). Otherwise these gadget bodies
 // are unchanged — the packed-parameter encoding in each comment matches

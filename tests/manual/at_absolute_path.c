@@ -10,7 +10,7 @@
 // dereferencing the NULL it had left behind. The SIGSEGV landed in
 // ha_maria::drop_table, nowhere near the actual mistake, so it read as a
 // MariaDB bug for weeks. mysql_install_db never completed either, so no
-// MariaDB install on iSH-AOK had ever worked.
+// MariaDB install on AOK-iSH had ever worked.
 //
 // The other half matters just as much: a RELATIVE path with a bad dirfd must
 // still be EBADF. A fix that returns success for both is worse than the bug.

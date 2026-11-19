@@ -1,4 +1,4 @@
-// An exec closes every descriptor marked close-on-exec. iSH-AOK's native
+// An exec closes every descriptor marked close-on-exec. AOK-iSH's native
 // dispatch (kernel/native.h) did not: it runs the program in place of the
 // image the ELF loader would have mapped, and returned from __do_execve before
 // reaching any of the process-state work below format_exec -- close-on-exec
@@ -374,7 +374,7 @@ int main(int argc, char **argv) {
     else
         check("close-on-exec survives an ordinary exec", r, child_errno);
 
-    // Subject: the same handshake against a program iSH-AOK runs as host code.
+    // Subject: the same handshake against a program AOK-iSH runs as host code.
     struct stat st;
     if (stat(NATIVE_SMALLCLUE, &st) != 0) {
         test_logf("  no %s here, native half skipped\n", NATIVE_SMALLCLUE);

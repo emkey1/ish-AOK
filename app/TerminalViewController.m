@@ -505,9 +505,9 @@ static const NSInteger kMaximumTerminalFontSize = 72;
 - (void)_bootAfterSessionChoice {
     intptr_t bootError = [AppDelegate ensureBooted];
     if (bootError < 0) {
-        NSString *message = [AppDelegate bootFailureTitle] ?: NSLocalizedString(@"Could not boot iSH-AOK", @"Boot failure alert title");
+        NSString *message = [AppDelegate bootFailureTitle] ?: NSLocalizedString(@"Could not boot AOK-iSH", @"Boot failure alert title");
         NSString *subtitle = [AppDelegate bootFailureMessage] ?: [AppDelegate descriptionForISHErrno:bootError];
-        NSString *overlayText = [AppDelegate bootFailureOverlayText] ?: NSLocalizedString(@"Could not boot iSH-AOK.", @"Terminal overlay on boot failure");
+        NSString *overlayText = [AppDelegate bootFailureOverlayText] ?: NSLocalizedString(@"Could not boot AOK-iSH.", @"Terminal overlay on boot failure");
         [self _showTerminalStartupFailureOverlayWithText:overlayText];
         [self showMessage:message subtitle:subtitle];
         NSLog(@"boot failed: %@", subtitle);
@@ -562,9 +562,9 @@ static const NSInteger kMaximumTerminalFontSize = 72;
     if (!Roots.instance.needsInitialRootSelection && !self.awaitingSessionChoice) {
         intptr_t bootError = [AppDelegate ensureBooted];
         if (bootError < 0) {
-            NSString *message = [AppDelegate bootFailureTitle] ?: NSLocalizedString(@"Could not boot iSH-AOK", @"Boot failure alert title");
+            NSString *message = [AppDelegate bootFailureTitle] ?: NSLocalizedString(@"Could not boot AOK-iSH", @"Boot failure alert title");
             NSString *subtitle = [AppDelegate bootFailureMessage] ?: [AppDelegate descriptionForISHErrno:bootError];
-            NSString *overlayText = [AppDelegate bootFailureOverlayText] ?: NSLocalizedString(@"Could not boot iSH-AOK.", @"Terminal overlay on boot failure");
+            NSString *overlayText = [AppDelegate bootFailureOverlayText] ?: NSLocalizedString(@"Could not boot AOK-iSH.", @"Terminal overlay on boot failure");
             [self _showTerminalStartupFailureOverlayWithText:overlayText];
             [self showMessage:message subtitle:subtitle];
             NSLog(@"boot failed: %@", subtitle);
@@ -1227,7 +1227,7 @@ static const CGFloat kFindBarHeight = 44;
                           handler:^(__unused UIAlertAction *a) {
             UIAlertController *confirm = [UIAlertController
                 alertControllerWithTitle:NSLocalizedString(@"Suspend and exit?", @"Suspend and exit confirmation title")
-                                 message:NSLocalizedString(@"iSH-AOK writes this session to disk and stops. You close it, "
+                                 message:NSLocalizedString(@"AOK-iSH writes this session to disk and stops. You close it, "
                                          @"and the next launch picks it up where you left it.", @"Suspend and exit confirmation message")
                           preferredStyle:UIAlertControllerStyleAlert];
             [confirm addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Suspend and Exit", @"Suspend and exit confirmation button")
@@ -1259,7 +1259,7 @@ static const CGFloat kFindBarHeight = 44;
                                 [self showMessage:NSLocalizedString(@"Session not suspended", @"Alert title")
                                          subtitle:ck.last_refusal[0] != '\0'
                                                   ? @(ck.last_refusal)
-                                                  : NSLocalizedString(@"iSH-AOK could not write the session.", @"Session save failure message")];
+                                                  : NSLocalizedString(@"AOK-iSH could not write the session.", @"Session save failure message")];
                             }];
                         });
                     });
@@ -1317,7 +1317,7 @@ static const CGFloat kFindBarHeight = 44;
         UIAlertController *alert = [UIAlertController
             alertControllerWithTitle:NSLocalizedString(@"Suspend to Disk is off", @"Alert title")
                              message:NSLocalizedString(@"Turn on Suspend to Disk in the iOS Settings app, under "
-                                     @"iSH-AOK. This session is then saved whenever iSH-AOK goes "
+                                     @"AOK-iSH. This session is then saved whenever AOK-iSH goes "
                                      @"to the background, and Command-S saves one on demand.", @"Alert message when Command-S is pressed with Suspend to Disk off")
                       preferredStyle:UIAlertControllerStyleAlert];
         [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Open Settings", @"Alert button that opens the iOS Settings app")
@@ -1418,7 +1418,7 @@ static const NSTimeInterval kSaveProgressDelay = 0.4;
                     [self showMessage:NSLocalizedString(@"Session not saved", @"Alert title")
                              subtitle:ck.last_refusal[0] != '\0'
                                       ? @(ck.last_refusal)
-                                      : NSLocalizedString(@"iSH-AOK could not write the session.", @"Session save failure message")];
+                                      : NSLocalizedString(@"AOK-iSH could not write the session.", @"Session save failure message")];
                 }];
             });
         });
@@ -2245,7 +2245,7 @@ static const NSInteger kMaxConsecutiveQuickSessionExits = 3;
         // run (become_new_init_child refuses). Say so instead of retrying.
         self.consecutiveQuickSessionExits = 0;
         [ISHDiagnosticsStore recordBreadcrumb:@"terminal.session.notRestarted.guestHalted"];
-        [self _showTerminalStartupFailureOverlayWithText:NSLocalizedString(@"System halted. Quit and reopen iSH-AOK to boot it again.", @"Terminal overlay after the guest halts")];
+        [self _showTerminalStartupFailureOverlayWithText:NSLocalizedString(@"System halted. Quit and reopen AOK-iSH to boot it again.", @"Terminal overlay after the guest halts")];
         return;
     }
     if (crashLooping) {
@@ -2257,7 +2257,7 @@ static const NSInteger kMaxConsecutiveQuickSessionExits = 3;
         [self _showTerminalStartupFailureOverlayWithText:NSLocalizedString(@"Session command keeps exiting immediately.", @"Terminal overlay when the session command crash-loops")];
         [self showMessage:NSLocalizedString(@"Session command keeps exiting immediately", @"Alert title when the session command crash-loops")
                   subtitle:[NSString stringWithFormat:
-                            NSLocalizedString(@"\"%@\" exited right away several times in a row, so iSH-AOK stopped auto-restarting it to avoid a restart loop.\n\nThis usually means the root filesystem's login program isn't compatible with iSH-AOK (for example, it refuses root login on this pseudo-terminal). Try changing Settings -> Launch Command to something like \"/bin/sh\", or use a different root filesystem.", @"Crash-loop alert message; %@ is the command"),
+                            NSLocalizedString(@"\"%@\" exited right away several times in a row, so AOK-iSH stopped auto-restarting it to avoid a restart loop.\n\nThis usually means the root filesystem's login program isn't compatible with AOK-iSH (for example, it refuses root login on this pseudo-terminal). Try changing Settings -> Launch Command to something like \"/bin/sh\", or use a different root filesystem.", @"Crash-loop alert message; %@ is the command"),
                             commandString ?: @""]];
         return;
     }

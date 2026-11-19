@@ -11,7 +11,7 @@
 // (nlibc_stdio_defer_fatal), and native stdin is fully buffered so the refill
 // never walks foreign streams at all.
 //
-// iSH-AOK-specific by nature (it exercises /AOK/native dispatch), so it skips
+// AOK-iSH-specific by nature (it exercises /AOK/native dispatch), so it skips
 // anywhere the native multi-call binary is missing -- including real Linux.
 #define _GNU_SOURCE
 #include <errno.h>

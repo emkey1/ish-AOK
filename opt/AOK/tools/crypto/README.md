@@ -1,6 +1,6 @@
-# iSH-AOK crypto-accelerator OpenSSL provider
+# AOK-iSH crypto-accelerator OpenSSL provider
 
-Routes OpenSSL's `AES-256-GCM` and `ChaCha20` through the iSH-AOK crypto
+Routes OpenSSL's `AES-256-GCM` and `ChaCha20` through the AOK-iSH crypto
 accelerator syscall (ISH_SYS_AEAD / kernel/ish_accel.c) so they run host-native
 instead of being emulated instruction by instruction.
 

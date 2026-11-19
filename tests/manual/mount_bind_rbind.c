@@ -8,7 +8,7 @@
 //   - MS_BIND|MS_REC replicates a submount of the source under the target
 //   - a recursive bind whose target sits inside the source subtree does not
 //     clone itself (no target/target mount — Linux's clone-then-attach order,
-//     which iSH-AOK's snapshot exclusion reproduces)
+//     which AOK-iSH's snapshot exclusion reproduces)
 //
 // Portable: all checks also pass on a real Linux kernel run as root; an
 // unprivileged run skips at the first EPERM like mount_flags.c does.

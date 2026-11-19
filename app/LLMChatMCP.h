@@ -1,6 +1,6 @@
 //
 //  LLMChatMCP.h
-//  iSH-AOK
+//  AOK-iSH
 //
 //  MCP servers as tool sources for the LLM Chat. Two kinds:
 //    remote  -- a Streamable HTTP endpoint (https://…/mcp), with an optional

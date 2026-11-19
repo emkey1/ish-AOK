@@ -7,7 +7,7 @@
 #include <stdint.h>
 #include "misc.h"
 
-// Programs whose implementation is compiled into iSH-AOK and executed as HOST
+// Programs whose implementation is compiled into AOK-iSH and executed as HOST
 // code, instead of being loaded and translated as guest instructions.
 //
 // They are reached through /AOK/native/<name> (fs/aok.c). Exec matches on the

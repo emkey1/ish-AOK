@@ -1,6 +1,6 @@
 //
 //  ShortcutActivityBridge.h
-//  iSH-AOK
+//  AOK-iSH
 //
 //  Swift-visible entry point for the App Shortcuts "open destination" intent.
 //

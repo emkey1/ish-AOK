@@ -11,7 +11,7 @@
 //
 // Everything below was measured on x86_64 Linux 6.12 (camd, AMD Zen+) with
 // gcc -m32 (glibc) and passes there unchanged. A 32-bit task on a 64-bit
-// kernel sees that kernel's GDT, which is the one iSH-AOK presents:
+// kernel sees that kernel's GDT, which is the one AOK-iSH presents:
 //
 //  - CS reads 0x23; SS, DS and ES 0x2b from exec on; FS 0; GS 0 until libc
 //    loads the TLS entry set_thread_area gave it, 12 (0x63).

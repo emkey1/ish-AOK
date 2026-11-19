@@ -265,7 +265,7 @@ static void ptrace_set_flags(struct cpu_state *cpu, dword_t value) {
 //  - A selector is its low 16 bits, EIO unless null or RPL 3; a null CS or SS
 //    is EIO. DS ES FS GS are kept. SS is not: this CPU has none to change in
 //    64-bit mode, and reports 0x2b. CS other than the 0x33 it runs under is EIO
-//    -- Linux would switch the task to 32-bit mode, which iSH-AOK cannot do
+//    -- Linux would switch the task to 32-bit mode, which AOK-iSH cannot do
 //    to a 64-bit process, and saying so beats taking it and running on as if.
 //  - eflags through PTRACE_FLAG_MASK; fs_base and gs_base below TASK_SIZE_MAX.
 static int ptrace_putreg_amd64(struct task *task, size_t offset, qword_t value) {
@@ -1078,7 +1078,7 @@ static int set_user_regs(struct task *task, struct user_regs_struct_ *user_regs_
 // DR5 are EIO; DR0-DR3 take an address -- on x86_64 EINVAL at or above
 // TASK_SIZE_MAX, leaving the register as it was, while -m32 takes any; DR6 and
 // DR7 take the value. Each reads back what was written. The one difference:
-// iSH-AOK has no hardware breakpoints, so a DR7 with an enable bit (L0-G3, the
+// AOK-iSH has no hardware breakpoints, so a DR7 with an enable bit (L0-G3, the
 // low byte) is ENOSPC, Linux's answer when every debug register is taken --
 // gdb then says "Couldn't write debug register" instead of placing a hardware
 // watchpoint that would never fire.

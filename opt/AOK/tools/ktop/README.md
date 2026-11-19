@@ -2,15 +2,15 @@
 
 A small, dependency-free `htop`-style process viewer with one extra column:
 **ARCH**, the CPU architecture (`arm64` / `x86_64` / `x86` / `riscv64` / `ppc64le`) of
-each process. iSH-AOK publishes it for every process in `/proc/ish/arch`,
-which anyone may read. Where that file is missing -- an older iSH-AOK, or real
+each process. AOK-iSH publishes it for every process in `/proc/ish/arch`,
+which anyone may read. Where that file is missing -- an older AOK-iSH, or real
 Linux -- ktop reads the ELF header behind `/proc/<pid>/exe` instead, which only
 works for your own processes (or everyone's, as root). Natively-dispatched
 programs (`/AOK/native/*`) have no ELF image of their own, so for those it
 reports the host's architecture -- which is what that code really is, and
 makes the native processes stand out at a glance.
 
-iSH-AOK can run i386, amd64, arm64, riscv64 and ppc64le binaries side by side in the
+AOK-iSH can run i386, amd64, arm64, riscv64 and ppc64le binaries side by side in the
 same booted guest -- most usefully via `chroot`ing into another installed
 root with [`/AOK/tools/mount-root.sh`](../mount-root.sh) -- and stock
 `top`/`htop` have no way to show that mix. Interactive mode is htop-flavored:
@@ -21,7 +21,7 @@ escapes and `/proc`.
 
 ## Already built in: /AOK/native/ktop
 
-ktop is also compiled into iSH-AOK from this same `ktop.c`, and runs as host
+ktop is also compiled into AOK-iSH from this same `ktop.c`, and runs as host
 code with no build step:
 
     /AOK/native/ktop
@@ -31,7 +31,7 @@ the way to build it yourself, and nothing here has been replaced.
 
 ## Prebuilt binaries (aarch64) -- source tree only
 
-`opt/AOK/tools/ktop/prebuilt/` in the iSH-AOK source repository holds
+`opt/AOK/tools/ktop/prebuilt/` in the AOK-iSH source repository holds
 `ktop-aarch64-musl` (static, works on any aarch64 guest, musl or glibc) and
 `ktop-aarch64-glibc` (dynamic, for glibc-based roots like Devuan/Debian), which
 CI rebuilds whenever `ktop.c` changes.
@@ -117,7 +117,7 @@ ktop -bn1   # run from the outer shell, NOT inside the chroot above
 it can only detect the architecture of processes reachable from that
 chroot's own root -- anything outside it (including the outer root's own
 processes) shows `?` in the ARCH column rather than failing or showing wrong
-data. This mirrors a real gap in iSH-AOK's `/proc/<pid>/exe`: opening
+data. This mirrors a real gap in AOK-iSH's `/proc/<pid>/exe`: opening
 another process's exe this way resolves through a symlink-target string
 (unlike real Linux, which opens the underlying file directly regardless of
 the caller's chroot), so a target outside the caller's chroot can't be

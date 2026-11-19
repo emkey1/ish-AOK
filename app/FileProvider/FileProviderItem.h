@@ -14,7 +14,7 @@ FOUNDATION_EXPORT NSString *ISHFileProviderVirtualIdentifierForPath(NSString *pa
 FOUNDATION_EXPORT BOOL ISHFileProviderIsVirtualIdentifier(NSString *identifier);
 FOUNDATION_EXPORT NSString * _Nullable ISHFileProviderPathForIdentifier(NSString *identifier);
 
-// Under the single "iSH-AOK" file-provider domain, every item identifier is
+// Under the single "AOK-iSH" file-provider domain, every item identifier is
 // scoped to a root: the domain root container lists the installed roots, each
 // root is a folder whose identifier is the bare root name, and items inside a
 // root are "<rootName>+<innerIdentifier>" where innerIdentifier is the existing

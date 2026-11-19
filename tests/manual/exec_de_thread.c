@@ -105,7 +105,7 @@ static pid_t spawn(const char *mode) {
         nap(20);
 }
 
-// iSH-AOK's native dispatch (kernel/native.h) runs a program as host code in
+// AOK-iSH's native dispatch (kernel/native.h) runs a program as host code in
 // place of the image the ELF loader would have mapped, and it used to return
 // from __do_execve before reaching any of this -- so a native exec killed no
 // siblings and swapped no address space. That was survivable only while the
@@ -271,7 +271,7 @@ int main(int argc, char **argv) {
         check("8 more non-leader execs, all consistent", wrong, 0);
     }
 
-    // 6. The same, for a program iSH-AOK runs as host code rather than loading.
+    // 6. The same, for a program AOK-iSH runs as host code rather than loading.
     {
         struct stat st_native;
         if (stat(NATIVE_SMALLCLUE, &st_native) != 0) {

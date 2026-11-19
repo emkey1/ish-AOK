@@ -1,4 +1,4 @@
-# iSH-AOK Performance Optimizations — July 2026
+# AOK-iSH Performance Optimizations — July 2026
 
 A record of the emulator-performance work landed on `working` between
 2026-07-19 and 2026-07-20 (commits `7532e8ea` … `6a163c2f`, plus merged

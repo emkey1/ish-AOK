@@ -6345,7 +6345,7 @@ static UIResponder *ISHWorkspaceFirstResponderAmongViewControllers(UIViewControl
     if (!UserPreferences.shared.shouldSuspendToDisk) {
         UIAlertController *alert = [UIAlertController
             alertControllerWithTitle:NSLocalizedString(@"Suspend to Disk is off", @"alert title")
-                             message:NSLocalizedString(@"Turn on Suspend to Disk in the iOS Settings app, under iSH-AOK, and this session is saved whenever iSH-AOK goes to the background -- and comes back on the next launch.", @"alert message when Suspend to Disk is off")
+                             message:NSLocalizedString(@"Turn on Suspend to Disk in the iOS Settings app, under AOK-iSH, and this session is saved whenever AOK-iSH goes to the background -- and comes back on the next launch.", @"alert message when Suspend to Disk is off")
                       preferredStyle:UIAlertControllerStyleAlert];
         [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Open Settings", @"alert button")
                                                   style:UIAlertActionStyleDefault
@@ -6382,7 +6382,7 @@ static UIResponder *ISHWorkspaceFirstResponderAmongViewControllers(UIViewControl
                     alertControllerWithTitle:NSLocalizedString(@"Session not saved", @"alert title")
                                      message:ck.last_refusal[0] != '\0'
                                              ? @(ck.last_refusal)
-                                             : NSLocalizedString(@"iSH-AOK could not write the session.", @"alert message when saving the session failed")
+                                             : NSLocalizedString(@"AOK-iSH could not write the session.", @"alert message when saving the session failed")
                               preferredStyle:UIAlertControllerStyleAlert];
                 [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"OK", @"alert button")
                                                           style:UIAlertActionStyleDefault
@@ -8424,7 +8424,7 @@ static UIResponder *ISHWorkspaceFirstResponderAmongViewControllers(UIViewControl
 // ---- text size for the navigation-controller applets -------------------------
 //
 // Settings, Diagnostics and Filesystems: UIKit screens shared with the rest of
-// iSH-AOK, in a window whose content view controller is a navigation
+// AOK-iSH, in a window whose content view controller is a navigation
 // controller. WorkspaceTextScaledPage in the header says how their pages follow
 // the window.
 //
@@ -10211,19 +10211,19 @@ static CGFloat ISHWorkspaceToolScaledFontSize(WorkspaceThemedToolViewController 
     if (_suspendInProgress) {
         text = NSLocalizedString(@"Saving…", @"session suspend status while saving");
     } else if (!on) {
-        text = NSLocalizedString(@"Off. Turn on Suspend to Disk in Settings to keep this session when iSH-AOK is closed or ends.", @"session suspend status when off");
+        text = NSLocalizedString(@"Off. Turn on Suspend to Disk in Settings to keep this session when AOK-iSH is closed or ends.", @"session suspend status when off");
     } else if (ck.last_refusal[0] != '\0') {
         text = [NSString stringWithFormat:NSLocalizedString(@"On. The last attempt was refused: %s", @"session suspend status; %s is the reason"),
                 ck.last_refusal];
     } else if (ck.saves > 0) {
         text = [NSString stringWithFormat:
                 ck.tasks == 1
-                    ? NSLocalizedString(@"On. Last saved %lu process, %.1f MB. Saved again whenever iSH-AOK goes to the background.", @"session suspend status: one process, size in MB")
-                    : NSLocalizedString(@"On. Last saved %lu processes, %.1f MB. Saved again whenever iSH-AOK goes to the background.", @"session suspend status: process count, size in MB"),
+                    ? NSLocalizedString(@"On. Last saved %lu process, %.1f MB. Saved again whenever AOK-iSH goes to the background.", @"session suspend status: one process, size in MB")
+                    : NSLocalizedString(@"On. Last saved %lu processes, %.1f MB. Saved again whenever AOK-iSH goes to the background.", @"session suspend status: process count, size in MB"),
                 ck.tasks,
                 (double) ck.bytes / (1024.0 * 1024.0)];
     } else {
-        text = NSLocalizedString(@"On. This session is saved whenever iSH-AOK goes to the background, and comes back on the next launch.", @"session suspend status when on and nothing saved yet");
+        text = NSLocalizedString(@"On. This session is saved whenever AOK-iSH goes to the background, and comes back on the next launch.", @"session suspend status when on and nothing saved yet");
     }
     _suspendLabel.text = text;
 
@@ -10269,7 +10269,7 @@ static CGFloat ISHWorkspaceToolScaledFontSize(WorkspaceThemedToolViewController 
                         alertControllerWithTitle:NSLocalizedString(@"Session not saved", @"alert title")
                                          message:ck.last_refusal[0] != '\0'
                                                  ? @(ck.last_refusal)
-                                                 : NSLocalizedString(@"iSH-AOK could not write the session.", @"alert message when saving the session failed")
+                                                 : NSLocalizedString(@"AOK-iSH could not write the session.", @"alert message when saving the session failed")
                                   preferredStyle:UIAlertControllerStyleAlert];
                     [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"OK", @"alert button")
                                                               style:UIAlertActionStyleDefault
@@ -13368,7 +13368,7 @@ static NSMutableSet<NSString *> *MotePadClaimedDraftSlots(void) {
 - (void)mpAbout {
     UIAlertController *alert =
         [UIAlertController alertControllerWithTitle:@"MotePad"
-                                            message:NSLocalizedString(@"A Notepad-style text editor for the iSH-AOK Workspace.\n\nInspired by MotePad / TinyRetroPad — reads and writes files on the guest filesystem.", @"MotePad about message")
+                                            message:NSLocalizedString(@"A Notepad-style text editor for the AOK-iSH Workspace.\n\nInspired by MotePad / TinyRetroPad — reads and writes files on the guest filesystem.", @"MotePad about message")
                                      preferredStyle:UIAlertControllerStyleAlert];
     [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"OK", @"alert button") style:UIAlertActionStyleDefault handler:nil]];
     [self presentViewController:alert animated:YES completion:nil];
@@ -14653,7 +14653,7 @@ static NSURL *ISHWorkspaceBrowserURLFromInput(NSString *input) {
                             [UIAlertController alertControllerWithTitle:NSLocalizedString(@"Session not saved", @"alert title")
                                                                 message:after.last_refusal[0] != '\0'
                                                                         ? @(after.last_refusal)
-                                                                        : NSLocalizedString(@"iSH-AOK could not write the session.", @"alert message when saving the session failed")
+                                                                        : NSLocalizedString(@"AOK-iSH could not write the session.", @"alert message when saving the session failed")
                                                          preferredStyle:UIAlertControllerStyleAlert];
                         [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"OK", @"alert button")
                                                                   style:UIAlertActionStyleCancel
@@ -14699,7 +14699,7 @@ static NSURL *ISHWorkspaceBrowserURLFromInput(NSString *input) {
                           handler:^(__unused UIAlertAction *a) {
             UIAlertController *confirm = [UIAlertController
                 alertControllerWithTitle:NSLocalizedString(@"Suspend and exit?", @"alert title")
-                                 message:NSLocalizedString(@"iSH-AOK writes this session to disk and stops. You close it, and the next launch picks it up where you left it.", @"suspend and exit confirmation message")
+                                 message:NSLocalizedString(@"AOK-iSH writes this session to disk and stops. You close it, and the next launch picks it up where you left it.", @"suspend and exit confirmation message")
                           preferredStyle:UIAlertControllerStyleAlert];
             [confirm addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Suspend and Exit", @"alert button")
                                                         style:UIAlertActionStyleDefault
@@ -14720,7 +14720,7 @@ static NSURL *ISHWorkspaceBrowserURLFromInput(NSString *input) {
                                 [UIAlertController alertControllerWithTitle:NSLocalizedString(@"Session not suspended", @"alert title")
                                                                     message:after.last_refusal[0] != '\0'
                                                                             ? @(after.last_refusal)
-                                                                            : NSLocalizedString(@"iSH-AOK could not write the session.", @"alert message when suspending the session failed")
+                                                                            : NSLocalizedString(@"AOK-iSH could not write the session.", @"alert message when suspending the session failed")
                                                              preferredStyle:UIAlertControllerStyleAlert];
                             [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"OK", @"alert button")
                                                                       style:UIAlertActionStyleCancel
@@ -15096,7 +15096,7 @@ static NSURL *ISHWorkspaceBrowserURLFromInput(NSString *input) {
         _sessionButton = [self workspacesIconButtonWithSymbol:@"arrow.down.doc"
                                                      fallback:NSLocalizedString(@"Session", @"Desktops tool session button label")
                                                        action:@selector(sessionActionsFromApplet:)];
-        _sessionButton.accessibilityHint = NSLocalizedString(@"Saves the session now, or suspends iSH-AOK and exits.", @"Accessibility hint for the Desktops tool's Session button");
+        _sessionButton.accessibilityHint = NSLocalizedString(@"Saves the session now, or suspends AOK-iSH and exits.", @"Accessibility hint for the Desktops tool's Session button");
         [_contentStack addArrangedSubview:_sessionButton];
     } else {
         // Modern folds the Layout Manager into this applet as two icons.
@@ -15124,7 +15124,7 @@ static NSURL *ISHWorkspaceBrowserURLFromInput(NSString *input) {
         _sessionButton = [self workspacesIconButtonWithSymbol:@"arrow.down.doc"
                                                      fallback:NSLocalizedString(@"Session", @"Desktops tool session button label")
                                                        action:@selector(sessionActionsFromApplet:)];
-        _sessionButton.accessibilityHint = NSLocalizedString(@"Saves the session now, or suspends iSH-AOK and exits.", @"Accessibility hint for the Desktops tool's Session button");
+        _sessionButton.accessibilityHint = NSLocalizedString(@"Saves the session now, or suspends AOK-iSH and exits.", @"Accessibility hint for the Desktops tool's Session button");
         [layoutRow addArrangedSubview:_sessionButton];
         [_contentStack addArrangedSubview:layoutRow];
     }

@@ -23,7 +23,7 @@ same things. See [00-overview.md](00-overview.md) for where both sit.
 
 ## Who owns what
 
-Every file here belongs to iSH-AOK itself on the host side, whichever Linux
+Every file here belongs to AOK-iSH itself on the host side, whichever Linux
 user made it, and the host has nowhere to record any other owner. So each
 file is shown as owned by **whoever is looking**: `ls -l` run as `mke` lists
 `mke`, run as root lists root. Every user of every root can create, change and
@@ -73,7 +73,7 @@ which root you booted**, for two separate reasons:
 
 - `/AOK/persist` is one host-backed directory shared by every root, and it
   survives root switches, app updates and reinstalls.
-- iSH-AOK picks the guest ABI from **each ELF's own header**, not from the
+- AOK-iSH picks the guest ABI from **each ELF's own header**, not from the
   root. An `aarch64` binary runs under an i386 Alpine root or a riscv64 one
   just as happily -- that is tested, not assumed.
 
@@ -136,10 +136,10 @@ Two things this directory is host-backed and therefore cannot do: hold device
 nodes, or keep a Linux owner and group (see "Who owns what" above). If you
 need those, use `/AOK/fakefs`.
 
-## Reaching them from a `PATH` iSH-AOK did not set
+## Reaching them from a `PATH` AOK-iSH did not set
 
 A login shell sets `PATH` afresh from `/etc/profile`, which has never heard of
-`/AOK/persist/bin`. So on every boot iSH-AOK writes
+`/AOK/persist/bin`. So on every boot AOK-iSH writes
 `/etc/profile.d/10-aok-persist-bin.sh` into the root, and every distro's
 `/etc/profile` reads that after setting `PATH`. That puts `/AOK/persist/bin`
 first for every login shell: the app's terminals, an `ssh` login and `su -`.

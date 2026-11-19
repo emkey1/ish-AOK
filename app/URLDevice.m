@@ -1,6 +1,6 @@
 //
 //  URLDevice.m
-//  iSH-AOK
+//  AOK-iSH
 //
 //  /dev/url: write a URL, iOS opens it.
 //

@@ -20,7 +20,7 @@
 # there is. Bind it in and the five legs share one cache, which is safe because
 # the cache key already includes the architecture and the toolchain.
 #
-# iSH-AOK is one machine, so /proc et al. always reflect the
+# AOK-iSH is one machine, so /proc et al. always reflect the
 # one true kernel state regardless of which root you bind them into -- `top`
 # run inside a chroot sees exactly the same processes as `top` run outside
 # it. Each installed root other than the booted one is auto-exposed

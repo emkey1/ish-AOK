@@ -9,7 +9,7 @@
 // from it -- with a failed copy: write(2) gives EFAULT, /proc/self/mem gives
 // EIO, and so on.
 //
-// On iSH-AOK a guest page is a host mapping of the host file, so a page past
+// On AOK-iSH a guest page is a host mapping of the host file, so a page past
 // EOF is a host page past EOF, and touching it from the host raises SIGBUS.
 // The JIT turned a GUEST access into a guest SIGBUS, but kernel C code copies
 // guest memory with memcpy, and a host fault there killed the app: rc=138 from

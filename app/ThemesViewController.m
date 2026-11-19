@@ -142,7 +142,7 @@ enum {
         case DefaultSection:
             return self->_preferUserTheme ? [NSString stringWithFormat:NSLocalizedString(@"The default theme \"%@\" is currently being overridden by a user theme.", @"Themes list footer; %@ is a theme name"), self->_theme.name] : nil;
         case ImportSection:
-            return NSLocalizedString(@"User themes are stored in the iSH-AOK documents directory, under the \"themes\" folder. You can access them within iSH-AOK by running\n\n# mount -t real \"$(cat /proc/ish/documents)/themes\" [folder]\n\nand manipulating them from there.", @"Themes list footer under Import Theme; keep the mount command unchanged");
+            return NSLocalizedString(@"User themes are stored in the AOK-iSH documents directory, under the \"themes\" folder. You can access them within AOK-iSH by running\n\n# mount -t real \"$(cat /proc/ish/documents)/themes\" [folder]\n\nand manipulating them from there.", @"Themes list footer under Import Theme; keep the mount command unchanged");
         default:
             return nil;
     }

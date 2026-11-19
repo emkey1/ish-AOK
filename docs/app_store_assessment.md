@@ -1,4 +1,4 @@
-# iSH-AOK on the public App Store: what it would take
+# AOK-iSH on the public App Store: what it would take
 
 Asked for on 2026-11-13, during the 566 cycle. This is an assessment, not a
 plan: nothing here is scheduled, and the decision to submit at all is the
@@ -229,7 +229,7 @@ that -- but "unused" was too kind, corrected 2026-11-14:
   live path: `FsUpdateOnlyRepositoriesFile` (app/CurrentRoot.m:196)
   **overwrites `/etc/apk/repositories`** with it. What makes it inert is only
   that `FsIsManaged()` is false for AOK's own roots -- Settings says "The
-  current filesystem is not managed by iSH-AOK" and greys out Upgrade
+  current filesystem is not managed by AOK-iSH" and greys out Upgrade
   Repositories. Import an old upstream iSH root, which has `/ish`, and it runs.
 
   **DONE 2026-11-14:** dropped, and with it the whole mechanism, since
@@ -290,7 +290,7 @@ leaves the app working. No change needed; it just has to be said, and now is.
 
 ### Name and branding (5.2.1, 4.1)
 
-"iSH-AOK", the ISH badge on the icon, and the `app.ish.*` bundle id all sit
+"AOK-iSH", the ISH badge on the icon, and the `app.ish.*` bundle id all sit
 next to "iSH Shell" (id1436902243) on the same store.
 
 **Step:** written permission from the ish-app maintainers, cited in the review
@@ -303,17 +303,17 @@ can judge the tone against an existing relationship (there are open PRs on
 ish-app/ish). Short on purpose: it asks one question and makes it easy to say
 yes or no.
 
-> Subject: Permission to keep "iSH-AOK" as a name on the App Store
+> Subject: Permission to keep "AOK-iSH" as a name on the App Store
 >
 > Hi,
 >
-> I maintain iSH-AOK, the fork I've been sending PRs from. It has been on
+> I maintain AOK-iSH, the fork I've been sending PRs from. It has been on
 > TestFlight for a while and I'm looking at putting it on the App Store
 > properly.
 >
 > Apple's guideline 5.2.1 means I should have your written permission to use a
 > name derived from iSH, rather than just assert it. So: are you happy for the
-> fork to be listed as "iSH-AOK"?
+> fork to be listed as "AOK-iSH"?
 >
 > It is clearly identified as a fork of ish-app/ish in the description, the
 > README and the app itself, and I am not trying to pass it off as the

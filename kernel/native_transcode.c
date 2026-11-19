@@ -248,7 +248,7 @@ static int tc_main(int argc, char *const argv[]) {
     job.mov = tc_has_suffix(out_name, ".mov");
 
     if (transcode_hook == NULL) {
-        fprintf(stderr, "transcode: needs the iSH-AOK app (the encoder is iOS's)\n");
+        fprintf(stderr, "transcode: needs the AOK-iSH app (the encoder is iOS's)\n");
         return 1;
     }
 

@@ -1,7 +1,7 @@
 // A NATIVE program that group-stops must report the stop to its tracer, the
 // same way a translated one does.
 //
-// iSH-AOK runs some programs as host code on the guest task's own thread
+// AOK-iSH runs some programs as host code on the guest task's own thread
 // (kernel/native.h), so nothing dispatches instructions for them and nothing
 // checks for signals the way the emulator's interrupt path does. They poll
 // instead, at native_checkpoint() (kernel/native.c), and that function carried
@@ -140,7 +140,7 @@ static int start_spewer(const char *path, const char *arg0, const char *arg1,
 // of resumption rather than a reading of stale bytes.
 //
 // The flags are set and cleared ABSOLUTELY rather than with the usual
-// get-modify-set dance, because on iSH-AOK the get half of that dance lies
+// get-modify-set dance, because on AOK-iSH the get half of that dance lies
 // about a pipe: fcntl(F_GETFL) reports the HOST descriptor's flags
 // (fs/real.c realfs_getflags), and realfs_read permanently forces the host
 // descriptor non-blocking the first time the guest does a blocking read on it.

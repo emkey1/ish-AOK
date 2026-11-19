@@ -1,4 +1,4 @@
-# Workspace: a native multi-window desktop for iSH-AOK
+# Workspace: a native multi-window desktop for AOK-iSH
 
 Workspace is a native, in-app multi-window "desktop" environment layered
 on top of the terminal — a windowing system with a dock, multiple virtual
@@ -201,7 +201,7 @@ desktop, swipe left on it or touch and hold it: that removes the desktop's own
 packages, and keeps what another desktop or program still uses. **More
 Programs** installs the games, tools, X11 support and GPU drivers described
 below. It installs into the filesystem that is running, takes several minutes,
-and needs iSH-AOK left open meanwhile.
+and needs AOK-iSH left open meanwhile.
 
 The same scripts can be run by hand:
 
@@ -327,7 +327,7 @@ Wayland window opens.
   and says why. It runs on Devuan 6 of **any** architecture: on a root that
   is not arm64, `setup-wayfire.sh` installs Wayfire, its shell and its
   settings window as arm64 through Debian multiarch, with arm64's GPU drivers,
-  and iSH-AOK runs that arm64 Wayfire on the GPU there -- in a riscv64 or i386
+  and AOK-iSH runs that arm64 Wayfire on the GPU there -- in a riscv64 or i386
   root, whose own Mesa has no GPU driver, as in an arm64 one. The terminal, the
   VNC bridge and the X server stay the root's own. Arch packages Wayfire, and
   from build 559 its Mesa can use the GPU for OpenGL ES (see
@@ -340,7 +340,7 @@ Wayland window opens.
   `/AOK/bundled`, built for arm64 and used on a Devuan root of any
   architecture: on one that is not arm64, setup adds arm64 as a Debian
   multiarch architecture and installs the panel's libraries for it, and
-  iSH-AOK runs the arm64 panel there as it would in an arm64 root (a
+  AOK-iSH runs the arm64 panel there as it would in an arm64 root (a
   wf-shell it was not built for builds one instead, which takes a while);
   **waybar** is the panel the labwc desktop has, with an
   **Apps** button opening wofi's application list; **both** installs the two,
@@ -403,7 +403,7 @@ and window size the same way, so the VNC server has nothing to do and stops
 copying the screen. `ISH_DISPLAY_DIRECT=0` leaves all of that to VNC, as
 before.
 
-On Devuan the desktop runs the VNC server iSH-AOK carries in `/AOK/bundled`,
+On Devuan the desktop runs the VNC server AOK-iSH carries in `/AOK/bundled`,
 wayvnc 0.10.2, rather than Devuan's 0.9.1, which can crash when the app takes
 the desktop over. It is built for aarch64, x86_64 and riscv64, and the aarch64
 one is tried first on any Devuan root that has arm64's libraries.
@@ -413,7 +413,7 @@ keeps Devuan's.
 
 **From build 559 OpenGL can use the GPU with a current Mesa too.** Mesa 25.2
 and later -- Alpine 3.24's 26.1, and Arch's -- refuse to start zink without a
-Vulkan feature (robustness2's `nullDescriptor`) that iSH-AOK's GPU did not
+Vulkan feature (robustness2's `nullDescriptor`) that AOK-iSH's GPU did not
 offer before 559, so on those roots every OpenGL program rendered in software
 and only Devuan 6's Mesa 25.0 reached the GPU. It is offered now, and
 `setup-gpu.sh --check` passes on Alpine 3.24; a full OpenGL program or

@@ -1,6 +1,6 @@
 //
 //  Snippets.m
-//  iSH-AOK
+//  AOK-iSH
 //
 
 #import <CommonCrypto/CommonDigest.h>

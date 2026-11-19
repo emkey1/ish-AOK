@@ -1,6 +1,6 @@
 //
 //  ShellFileBrowser.h
-//  iSH-AOK
+//  AOK-iSH
 //
 //  A file browser for terminal mode: a sheet over the terminal, opened with a
 //  key on the keyboard bar (or Cmd-B), so browsing the guest filesystem no

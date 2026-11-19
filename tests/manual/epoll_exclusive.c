@@ -1,7 +1,7 @@
 // EPOLLEXCLUSIVE (bit 28, 1<<28) EINVAL validation.
 //
 // kernel/epoll.c's sys_epoll_ctl_guest stores whatever event bits the guest
-// passes straight through to poll_add_fd/poll_mod_fd (iSH-AOK's internal
+// passes straight through to poll_add_fd/poll_mod_fd (AOK-iSH's internal
 // POLL_* bit values were deliberately chosen to numerically match the guest
 // EPOLLIN/EPOLLOUT/EPOLLONESHOT/EPOLLET bits, so there's no translation
 // layer) -- EPOLLEXCLUSIVE just rode along unrecognized, so none of Linux's

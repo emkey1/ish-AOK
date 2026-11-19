@@ -226,7 +226,7 @@ static void check_log_stamp_clock(double up) {
 // ONLY for dmesg's OWN stamp, which is the one at column 0. There are two
 // bracketed stamps on a line here and they are in different zones:
 //
-//   [Fri Sep 18 07:05:39 2026] [Fri Sep 18 14:05:28 2026] iSH-AOK 5.20.66 ...
+//   [Fri Sep 18 07:05:39 2026] [Fri Sep 18 14:05:28 2026] AOK-iSH 5.20.66 ...
 //    dmesg -T, LOCAL             kernel/log.c output_line(), UTC
 //
 // AOK stamps every stored line itself, and util-linux treats a leading `[` as

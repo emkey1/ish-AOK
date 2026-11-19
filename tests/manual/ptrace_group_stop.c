@@ -1,6 +1,6 @@
 // ptrace_group_stop: a SEIZE'd tracee that enters a job-control group-stop must
 // report it to the tracer (as PTRACE_EVENT_STOP) and be resumable to completion.
-// This is the regression for iSH-AOK's ptrace_group_stop() path -- before it,
+// This is the regression for AOK-iSH's ptrace_group_stop() path -- before it,
 // strace -f following a fork/clone child hung because a traced task's group-stop
 // was invisible to the tracer's wait4 and PTRACE_CONT had nothing to resume.
 //
@@ -16,7 +16,7 @@
 // The second case runs the OTHER order: the tracee is already group-stopped
 // when the tracer seizes it. Linux reports the group-stop on attach
 // (ptrace_attach() wakes a __TASK_STOPPED tracee so it can re-enter the trap);
-// iSH-AOK used to leave that tracee parked in handle_interrupt's job-control
+// AOK-iSH used to leave that tracee parked in handle_interrupt's job-control
 // wait, where nothing would wake it and nothing would notice it had become
 // traced, so the tracer's wait4 hung forever.
 //

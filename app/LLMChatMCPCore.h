@@ -1,6 +1,6 @@
 //
 //  LLMChatMCPCore.h
-//  iSH-AOK
+//  AOK-iSH
 //
 //  The transport-independent half of the LLM Chat's MCP client (Model Context
 //  Protocol, JSON-RPC 2.0): building requests, finding the reply to one in

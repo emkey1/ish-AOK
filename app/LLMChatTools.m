@@ -1,6 +1,6 @@
 //
 //  LLMChatTools.m
-//  iSH-AOK
+//  AOK-iSH
 //
 //  The tools the chat's model can call in the guest, and their limits.
 //
@@ -149,7 +149,7 @@ NSArray<NSDictionary<NSString *, id> *> *ISHLLMChatToolDefinitions(void) {
     NSString *pathNote = @"Absolute, or relative to the working directory.";
     NSArray *builtIn = @[
         ISHLLMFunctionTool(@"run_shell",
-            [NSString stringWithFormat:@"Run a command line in the local iSH-AOK Linux shell, starting in the working directory, and return its combined stdout and stderr. %@Use it to run programs, build and test, fetch web pages or APIs (curl/wget), or install packages. Prefer read_file, edit_file, write_file, grep and glob for working with files. The userland varies by distro -- it may be a minimal BusyBox/Alpine system or a full Debian/Devuan/glibc one -- so use the tools that are actually present (a per-session environment note lists what was detected) and try an alternative if a command reports 'not found'. Output is capped at %ld KB and the command is killed after %ld seconds.", identityNote, (long) ISHLLMToolOutputLimitKB(), (long) ISHLLMToolTimeoutSeconds()],
+            [NSString stringWithFormat:@"Run a command line in the local AOK-iSH Linux shell, starting in the working directory, and return its combined stdout and stderr. %@Use it to run programs, build and test, fetch web pages or APIs (curl/wget), or install packages. Prefer read_file, edit_file, write_file, grep and glob for working with files. The userland varies by distro -- it may be a minimal BusyBox/Alpine system or a full Debian/Devuan/glibc one -- so use the tools that are actually present (a per-session environment note lists what was detected) and try an alternative if a command reports 'not found'. Output is capped at %ld KB and the command is killed after %ld seconds.", identityNote, (long) ISHLLMToolOutputLimitKB(), (long) ISHLLMToolTimeoutSeconds()],
             @{@"command": ISHLLMStringParameter(@"The shell command line to execute, e.g. curl -fsSL 'https://wttr.in/Paris?format=3' (or wget -qO- on BusyBox systems)")},
             @[@"command"]),
         ISHLLMFunctionTool(@"read_file",
@@ -377,7 +377,7 @@ NSString *ISHLLMRunGuestShellCommand(NSString *command, NSString *workingDirecto
 }
 
 // Probe the guest once per chat session to learn the distro and which common
-// tools are installed, so the tool guidance is distro-accurate (iSH-AOK runs
+// tools are installed, so the tool guidance is distro-accurate (AOK-iSH runs
 // Alpine/BusyBox, Debian/Devuan, and others). Returns a system-message note, or
 // nil if the guest could not be probed. This is a fixed, read-only probe -- not a
 // model-generated command -- so it runs without the per-command confirmation.
@@ -418,7 +418,7 @@ NSString *ISHLLMDetectGuestEnvironmentNote(NSString **homeOut) {
 
     BOOL hasCurl = [tools containsObject:@"curl"];
     BOOL hasWget = [tools containsObject:@"wget"];
-    NSMutableString *note = [NSMutableString stringWithString:@"About this iSH-AOK Linux guest:"];
+    NSMutableString *note = [NSMutableString stringWithString:@"About this AOK-iSH Linux guest:"];
     if (account != nil)
         [note appendFormat:@" Commands run as the unprivileged user \"%@\" (the app's \"Open Everything as "
          @"Default User\" setting), not root -- expect permission errors from root-only operations "
@@ -434,7 +434,7 @@ NSString *ISHLLMDetectGuestEnvironmentNote(NSString **homeOut) {
     else
         [note appendString:@" Neither curl nor wget was detected; use another approach for HTTP if needed."];
 
-    // iSH-AOK never has systemd -- Alpine boots OpenRC (rc-service/rc-status),
+    // AOK-iSH never has systemd -- Alpine boots OpenRC (rc-service/rc-status),
     // Devuan boots sysvinit (service, /etc/init.d/<name>). Say this plainly so
     // the model doesn't burn a turn discovering that systemctl is absent.
     if ([tools containsObject:@"rc-service"]) {
@@ -473,10 +473,10 @@ NSString *ISHLLMClockNote(void) {
 NSString *ISHLLMToolSystemNoteWithoutClock(NSString *environmentNote, NSString *workingDirectory, BOOL fileTools) {
     NSMutableString *note = [NSMutableString string];
     if (fileTools)
-        [note appendFormat:@"You can work in this iSH-AOK Linux guest with tools: read_file, write_file, edit_file, list_directory, glob and grep for files, and run_shell for commands (combined stdout+stderr, capped at %ld KB, killed after %lds). Prefer the file tools to shell commands for reading, searching and changing files. ",
+        [note appendFormat:@"You can work in this AOK-iSH Linux guest with tools: read_file, write_file, edit_file, list_directory, glob and grep for files, and run_shell for commands (combined stdout+stderr, capped at %ld KB, killed after %lds). Prefer the file tools to shell commands for reading, searching and changing files. ",
             (long) ISHLLMToolOutputLimitKB(), (long) ISHLLMToolTimeoutSeconds()];
     else
-        [note appendFormat:@"You can run shell commands in this iSH-AOK Linux guest with the run_shell tool; it returns combined stdout+stderr (capped at %ld KB, killed after %lds). ",
+        [note appendFormat:@"You can run shell commands in this AOK-iSH Linux guest with the run_shell tool; it returns combined stdout+stderr (capped at %ld KB, killed after %lds). ",
             (long) ISHLLMToolOutputLimitKB(), (long) ISHLLMToolTimeoutSeconds()];
     if (environmentNote.length > 0)
         [note appendFormat:@"%@ ", environmentNote];
@@ -791,7 +791,7 @@ static NSUInteger ISHLLMLineCount(NSString *text) {
         return [NSString stringWithFormat:@"%@\n\n%@", [ISHLLMMCPManager.shared describeTool:_name], ISHLLMPreviewLines(text ?: @"{}", 16, @"")];
     }
     if ([_name isEqualToString:@"run_shell"])
-        return [NSString stringWithFormat:NSLocalizedString(@"The model wants to run this in the iSH-AOK shell, in %@:\n\n%@", @"approval alert message; first %@ is a directory, second the command"), _workingDirectory, _command];
+        return [NSString stringWithFormat:NSLocalizedString(@"The model wants to run this in the AOK-iSH shell, in %@:\n\n%@", @"approval alert message; first %@ is a directory, second the command"), _workingDirectory, _command];
     if ([_name isEqualToString:@"write_file"]) {
         NSString *content = ISHLLMStringArgument(_arguments, @"content") ?: @"";
         return [NSString stringWithFormat:NSLocalizedString(@"%@\n%lu lines, %lu bytes\n\n%@", @"approval alert message for writing a file; %@ path, then preview"), _path,

@@ -1,4 +1,4 @@
-// Linux native AIO (the io_* family), which iSH-AOK stubbed to ENOSYS until
+// Linux native AIO (the io_* family), which AOK-iSH stubbed to ENOSYS until
 // MariaDB dereferenced the nullptr that came back and crash-looped on install.
 //
 // Deliberately uses the RAW SYSCALLS rather than libaio, for two reasons: the

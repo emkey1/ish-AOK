@@ -1,6 +1,6 @@
 //
 //  LLMChatInternal.h
-//  iSH-AOK
+//  AOK-iSH
 //
 //  Declarations shared by the Workspace LLM Chat's files, which were one
 //  region of AboutViewController.m until 2026-09-28:

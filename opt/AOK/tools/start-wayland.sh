@@ -149,11 +149,11 @@ case "$AOK_DESKTOP" in
     *) COMPOSITOR_BIN=$AOK_DESKTOP DESKTOP_BINS=$AOK_DESKTOP DESKTOP_SETUP=setup-wayland.sh ;;
 esac
 COMPOSITOR_CMD="${WAYLAND_COMPOSITOR_CMD:-$COMPOSITOR_BIN}"
-# A machine with a display of its own -- not under iSH-AOK, and a DRM card
+# A machine with a display of its own -- not under AOK-iSH, and a DRM card
 # present: a virtual machine, say -- shows the desktop there. The compositor
 # takes the card and the input devices through its seat (seatd, which
 # setup-wayland.sh installs on such a machine), nothing is headless, and no
-# VNC bridge runs. Everything else is as under iSH-AOK: the same seeded
+# VNC bridge runs. Everything else is as under AOK-iSH: the same seeded
 # configuration, menu, theme and panel. Who composites depends on the card
 # (aok_wl_virtio_gpu below). AOK_WAYLAND_BACKEND=headless or
 # =display overrides the choice.
@@ -654,7 +654,7 @@ fi
 # without the user needing to know this environment has no GPU.
 [ "$AOK_WL_OWN_RENDERER" = 1 ] || export GSK_RENDERER=cairo
 # (Asked for /usr/bin/env, which is of the root's own architecture as the
-# programs started here are; `sh` can be iSH-AOK's native dash, no ELF at all.)
+# programs started here are; `sh` can be AOK-iSH's native dash, no ELF at all.)
 # OpenGL programs render in software unless /etc/aok-gpu.conf (written by
 # /AOK/tools/setup-gpu.sh --gl-default) says AOK_GL=gpu: zink on this GPU is
 # OpenGL 2.1 / ES 2.0 against llvmpipe's 4.5, so the GPU cannot be everyone's
@@ -730,7 +730,7 @@ while [ $# -gt 0 ]; do
     esac
 done
 [ $# -gt 0 ] || exec /usr/bin/pkexec
-# The distro's sudo, or iSH-AOK's own on a root that has none.
+# The distro's sudo, or AOK-iSH's own on a root that has none.
 AOK_PKEXEC_SUDO=$(command -v sudo 2>/dev/null || echo /AOK/native/sudo)
 export AOK_PKEXEC_SUDO
 if [ "$(id -u)" = 0 ] && [ "$user" = root ]; then
@@ -871,7 +871,7 @@ export allow_rgb10_configs="${allow_rgb10_configs:-false}"
 
 # wayvnc from /AOK/bundled on Devuan and Debian. They ship wayvnc 0.9.1, which
 # can die when the app takes a GPU desktop over (see the comment at
-# wl-present); iSH-AOK carries 0.10.2, with its own neatvnc and aml
+# wl-present); AOK-iSH carries 0.10.2, with its own neatvnc and aml
 # (opt/AOK/tools/wayland/build-wayvnc.sh), for aarch64, x86_64 and riscv64.
 # The aarch64 one is tried first on every root -- arm64 is the fastest guest,
 # and a root of another architecture runs it when its arm64 libraries are
@@ -1703,7 +1703,7 @@ WAYFIRE_INI_EOF
 autohide = false
 position = top
 # wf-shell's default right side is "volume network battery clock"; those three
-# need PulseAudio, NetworkManager and UPower, which iSH-AOK roots do not run
+# need PulseAudio, NetworkManager and UPower, which AOK-iSH roots do not run
 # (the network one only ever said "No connection").
 widgets_right = clock
 WF_SHELL_INI_EOF
@@ -2435,7 +2435,7 @@ done
 
 
 
-# On the GPU, wl-present (compiled into iSH-AOK) hands each frame the
+# On the GPU, wl-present (compiled into AOK-iSH) hands each frame the
 # compositor draws straight to the app, and takes the app's pointer, keyboard,
 # clipboard and resizes to the compositor itself. Once the app is showing its
 # frames it prints "detach": wayvnc, which otherwise screen-copies for as long

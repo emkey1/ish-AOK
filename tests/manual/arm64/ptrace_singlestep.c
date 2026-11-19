@@ -1,7 +1,7 @@
 // ptrace_singlestep (arm64-only): PTRACE_SINGLESTEP must execute exactly one
 // guest instruction and stop, not run the tracee to completion.
 //
-// iSH-AOK's arm64 JIT frontend (jit/jit.c's GUEST_ABI_ARM64 dispatch branch)
+// AOK-iSH's arm64 JIT frontend (jit/jit.c's GUEST_ABI_ARM64 dispatch branch)
 // never checked cpu->tf (the trap/single-step flag PTRACE_SINGLESTEP's
 // kernel/ptrace.c handler sets) at all -- it unconditionally called the
 // ordinary run-to-interrupt path, so single-step behaved exactly like

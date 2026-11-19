@@ -1,6 +1,6 @@
 //
 //  Snippets.h
-//  iSH-AOK
+//  AOK-iSH
 //
 //  A library of saved command lines, opened as a sheet over the terminal (long
 //  press the Paste key, or Cmd-J), so a command you run constantly is one tap

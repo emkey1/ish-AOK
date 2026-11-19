@@ -1,7 +1,7 @@
 #!/bin/sh
 # build-devuan-minirootfs.sh
 # ---------------------------------------------------------------------------
-# Build *minimal* Devuan 6 "Excalibur" rootfs tarballs for iSH-AOK, the Devuan
+# Build *minimal* Devuan 6 "Excalibur" rootfs tarballs for AOK-iSH, the Devuan
 # analog of the bundled `alpine-minirootfs-3.23.3-x86{,_64}.tar.gz` images.
 #
 # Produces (in OUT_DIR, default = repo root):
@@ -81,7 +81,7 @@ command -v docker >/dev/null 2>&1 || die "docker not found in PATH"
 docker info >/dev/null 2>&1 || die "docker daemon is not running"
 
 # --- output compression -----------------------------------------------------
-# iSH-AOK imports via libarchive (archive_read_support_filter_all in
+# AOK-iSH imports via libarchive (archive_read_support_filter_all in
 # tools/fakefs.c), which reads gzip/xz/zstd/bzip2 transparently, and the import
 # decompresses *natively* and only once -- so the smallest file wins. xz -9e is
 # ~39% smaller than gzip on this rootfs (30 MB vs 50 MB). Override with
@@ -283,7 +283,7 @@ fi
 AUTOLOGIN_HOOK='f="$1/etc/inittab"; [ -f "$f" ] || exit 0; grep -q -- "--autologin" "$f" || sed -i "s|^\(1:2345:respawn:/sbin/getty\)\( --noclear\)\{0,1\} |\1\2 --autologin root |" "$f"; true'
 [ "${NO_CONSOLE_AUTOLOGIN:-}" = 1 ] && AUTOLOGIN_HOOK='true'
 
-LOCALE_HOOK='mkdir -p "$1/etc/default" "$1/etc/profile.d"; printf "LANG=C.UTF-8\n" > "$1/etc/default/locale"; printf "%s\n" "# iSH-AOK: default to a UTF-8 locale when nothing else named one." "# Reaches sessions PAM never touches -- ssh (stock sshd has UsePAM no)." "[ -n \"\${LANG:-}\" ] || export LANG=C.UTF-8" > "$1/etc/profile.d/00-aok-locale.sh"; chmod 0644 "$1/etc/profile.d/00-aok-locale.sh"; true'
+LOCALE_HOOK='mkdir -p "$1/etc/default" "$1/etc/profile.d"; printf "LANG=C.UTF-8\n" > "$1/etc/default/locale"; printf "%s\n" "# AOK-iSH: default to a UTF-8 locale when nothing else named one." "# Reaches sessions PAM never touches -- ssh (stock sshd has UsePAM no)." "[ -n \"\${LANG:-}\" ] || export LANG=C.UTF-8" > "$1/etc/profile.d/00-aok-locale.sh"; chmod 0644 "$1/etc/profile.d/00-aok-locale.sh"; true'
 
 build_one() {  # <deb-arch>
     arch="$1"

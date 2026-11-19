@@ -2,7 +2,7 @@
 
 A snippet is a saved command line you can put on the prompt with one tap. It is
 the feature dedicated SSH clients call "snippets", and it earns its place for
-the same reason theirs do: when you are using iSH-AOK as a terminal for *other*
+the same reason theirs do: when you are using AOK-iSH as a terminal for *other*
 machines, the local shell's aliases, functions and history are all on the wrong
 side of the connection. The long command with the flags nobody remembers has to
 live on this side.

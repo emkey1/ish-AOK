@@ -1,6 +1,6 @@
 //
 //  LLMChatAnthropic.h
-//  iSH-AOK
+//  AOK-iSH
 //
 //  The LLM Chat's translation to and from Anthropic's Messages API
 //  (POST /v1/messages). The chat keeps its conversation in the OpenAI chat

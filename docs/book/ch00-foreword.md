@@ -1,6 +1,6 @@
 # Foreword: on standing somewhere
 
-This is a book about iSH-AOK, and iSH-AOK is a fork.
+This is a book about AOK-iSH, and AOK-iSH is a fork.
 
 That word does a lot of quiet work. It can mean a project that took a name and
 changed a logo, and it can mean a project that took a working system and built
@@ -153,7 +153,7 @@ tension; the iSH developers wrote down that they do not wish that tension to
 prevent "the otherwise-compliant distribution of **derived apps**" and committed
 not to pursue a violation arising solely from it.
 
-Derived apps. That is this one. iSH-AOK ships because upstream's copyright
+Derived apps. That is this one. AOK-iSH ships because upstream's copyright
 holders decided in advance to let forks ship, and said so in writing, and it is
 worth being clear that this was a choice they did not have to make.
 
@@ -163,7 +163,7 @@ with a licensing discussion attached, and not a default.)
 
 ## What this fork did, and how to tell the difference
 
-None of the above diminishes the work in the rest of this book. iSH-AOK added
+None of the above diminishes the work in the rest of this book. AOK-iSH added
 four more guest architectures and the ABI infrastructure to hold them; native
 programs and the libc shim that makes them answer questions about the guest;
 `/AOK`; FUSE; the accelerators; the File Provider and Workspace and Shortcuts

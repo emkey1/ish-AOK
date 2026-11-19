@@ -10,7 +10,7 @@
 // PROG, the same pid throughout.
 //
 // shell_case
-//   The same with each shell there is: the guest's /bin/sh, and on iSH-AOK the
+//   The same with each shell there is: the guest's /bin/sh, and on AOK-iSH the
 //   native shells, /AOK/native/zsh, /AOK/native/dash and /AOK/native/sh, which
 //   are compiled into the app and run as host code. zsh is the login shell the
 //   555 release notes recommend, and it was the user's $SHELL when gdb could

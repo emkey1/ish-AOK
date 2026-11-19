@@ -147,7 +147,7 @@ wrote a commit saying yes, over sixteen months.
 
 Alongside it sits `LICENSE.IOS`, the commitment not to enforce the GPL/App Store
 conflict against **derived apps** — which is, as the Foreword says, why
-iSH-AOK is distributable at all.
+AOK-iSH is distributable at all.
 
 ## 2.7 What upstream had built by the end
 

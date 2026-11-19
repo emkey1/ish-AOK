@@ -30,11 +30,11 @@ appears nowhere in it. The claim holds for the whole tree, not just `emu/` and
 
 ## For App Review
 
-Thank you for reviewing iSH-AOK.
+Thank you for reviewing AOK-iSH.
 
 ### 1. What this app is
 
-iSH-AOK is a Linux environment for iOS. It emulates x86, ARM, RISC-V and
+AOK-iSH is a Linux environment for iOS. It emulates x86, ARM, RISC-V and
 PowerPC processors in software and runs an ordinary Linux userland on top of
 that emulation, presented as a terminal. It is the same category of app as iSH
 Shell (id1436902243) and UTM SE, both of which are on the App Store.
@@ -122,4 +122,4 @@ already seen.
 | Settings -> Filesystems | The catalogue of Linux images |
 | `apk add` / `apt install` | Reaches the distribution's mirror |
 | LLM Chat with no key | Works on Apple Foundation Models; any other destination asks first |
-| Files app | iSH-AOK appears as a location |
+| Files app | AOK-iSH appears as a location |

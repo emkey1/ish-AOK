@@ -1,6 +1,6 @@
 //
 //  LLMChatMCP.m
-//  iSH-AOK
+//  AOK-iSH
 //
 //  See LLMChatMCP.h. One ISHLLMMCPConnection per server, each on its own
 //  serial queue, so a slow server holds up only its own calls; the manager

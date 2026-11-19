@@ -69,7 +69,7 @@ code that caused it.
 > AltStore, SideStore and Sideloadly decide what to request from Apple by
 > *reading the entitlements of the app they are re-signing*. They found none,
 > took their "App ID has no app groups, skipping assignment" path, and installed
-> iSH-AOK **with no App Group at all**.
+> AOK-iSH **with no App Group at all**.
 >
 > `containerURLForSecurityApplicationGroupIdentifier:` then returned nil, and the
 > first-launch root import died with "No filesystem storage available". The app

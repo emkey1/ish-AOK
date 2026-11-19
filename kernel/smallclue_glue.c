@@ -57,13 +57,13 @@ bool smallclueHostWasRestored(void) {
 }
 
 const char *pscal_program_version_string(void) {
-    return "smallclue (iSH-AOK native)";
+    return "smallclue (AOK-iSH native)";
 }
 
 // ------------------------------------------------- 2. unbuilt feature groups
 
 static int smallclue_not_built(const char *what) {
-    native_printf(2, "%s: not built into this iSH-AOK\n", what);
+    native_printf(2, "%s: not built into this AOK-iSH\n", what);
     return 127;
 }
 

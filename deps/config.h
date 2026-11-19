@@ -754,7 +754,7 @@
 /* #undef HAVE_LZ4_H */
 
 /* Define to 1 if you have the <lzma.h> header file. */
-/* iSH-AOK: vendored liblzma public headers live in deps/liblzma (added to the
+/* AOK-iSH: vendored liblzma public headers live in deps/liblzma (added to the
  * libarchive target's HEADER_SEARCH_PATHS); the implementation is the iOS
  * system liblzma (usr/lib/liblzma.tbd, linked by the app + FileProvider). This
  * enables libarchive's xz reader so .tar.xz bundled roots import on device. */

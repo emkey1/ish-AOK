@@ -8,7 +8,7 @@
 # The change: wf-panel 0.9 (and 0.10) throws away and rebuilds every button in
 # its application menu each time the menu opens (WayfireMenu::on_popover_shown
 # -> set_category("All") -> populate_menu_items). On a PC that is a blink; in
-# iSH-AOK, on an A10X iPad, it was ~3.5 s of CPU for ~100 applications, every
+# AOK-iSH, on an A10X iPad, it was ~3.5 s of CPU for ~100 applications, every
 # single time (bip, 2026-10-03). Patched, the menu is rebuilt only when it is
 # showing something other than "All" -- a category picked last time -- and
 # otherwise just reopens. The list is still rebuilt when applications are
@@ -20,7 +20,7 @@
 #   sudo sh /AOK/tools/wayland/build-wf-panel.sh --out DIR  build only; leave wf-panel and
 #                                                           wf-panel.source in DIR
 #
-# iSH-AOK ships this build for Devuan 6 in /AOK/bundled, and setup-wayfire.sh
+# AOK-iSH ships this build for Devuan 6 in /AOK/bundled, and setup-wayfire.sh
 # links to it, so this is the fallback: for a wf-shell the bundled one was not
 # built against. On an A10X iPad the compile ran out of memory; it needs a
 # newer device (tools/build-bundled.sh builds the bundled ones on a Mac).

@@ -1,6 +1,6 @@
 //
 //  LLMKeychain.h
-//  iSH-AOK
+//  AOK-iSH
 //
 //  The LLM Chat's API keys, in the Keychain. They used to be plain
 //  NSUserDefaults values, and every defaults key is readable by any guest

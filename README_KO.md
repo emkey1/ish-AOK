@@ -1,9 +1,9 @@
-# iSH-AOK
+# AOK-iSH
 
 > **번역 안내:** 이 문서는 [README.md](README.md)의 번역본입니다. 내용이 어긋나는
 > 경우 영어판 README.md가 정본입니다.
 
-iSH-AOK는 [ish-app/ish](https://github.com/ish-app/ish)의 포크로, 이 트리에서의 일상적인 개발을 위한 자체 제품, 툴링, 플랫폼 변경 사항을 포함하고 있습니다.
+AOK-iSH는 [ish-app/ish](https://github.com/ish-app/ish)의 포크로, 이 트리에서의 일상적인 개발을 위한 자체 제품, 툴링, 플랫폼 변경 사항을 포함하고 있습니다.
 
 Testflight: https://testflight.apple.com/join/X1flyiqE
 
@@ -14,11 +14,11 @@ AOK VM, 자매 앱(완전한 가상 머신: QEMU 와 AOK gadget 엔진으로 만
 ## 이 포크가 추가한 것
 
 - 포크 전용 앱 아이덴티티:
-  - 제품명 `iSH-AOK`
+  - 제품명 `AOK-iSH`
   - 번들 루트 `app.ish.iSH-AOK`
 - **다섯 가지 게스트 아키텍처**, 모두 JIT 기반: `i386`, `amd64`(x86_64), `arm64`(aarch64), `riscv64`, `ppc64le`(64비트 리틀 엔디언 PowerPC).
 - **네이티브 프로그램**: zsh, dash(프로비저닝이 이를 `sh` 로 만듭니다), 그리고 OpenSSH(`ssh`, `scp`, `sftp`, `ssh-keygen`, `ssh-copy-id`), Nextvi 편집기, GNU 호환 `sed`, `grep`, `find`, `ls`, `tar`, `gzip`, `diff`, `awk` 및 coreutils 대부분을 품고 있는 SmallCLUE 의 busybox 스타일 도구 모음이 호스트 코드로 앱에 컴파일되어 들어가며, 게스트의 `execve` 에서 `/AOK/native/<이름>` 을 통해 디스패치됩니다. 이들은 게스트 바이너리가 아니라 게스트 태스크 스레드 위에서 도는 호스트 함수이므로, 명령어 단위로 변환되지 않고 전속력으로 실행됩니다. bash 도 동일한 네이티브 구현이 있지만, 배포되는 빌드에는 556 부터 포함되지 않습니다 — [네이티브 bash와 라이선스](#네이티브-bash와-라이선스) 참고.
-- **네이티브 모드**(558): 리눅스 배포판이 전혀 없는 루트입니다. `/bin` 과 `/usr/bin` 은 네이티브 프로그램들 — 일상 명령 약 140개, ssh, git, curl, 편집기 — 이고, SmallCLUE 의 `init` 이 pid 1 로서 runit 방식의 서비스를 돌리며, 로그인 셸은 네이티브 zsh 입니다. 아무것도 내려받지 않습니다: 공식 배포판 아래에서 **iSH-AOK Native** 를 고르면 됩니다. 패키지 관리자가 필요하면 배포판을 그 옆에 설치하십시오. `/AOK/docs/native-mode.md` 참고.
+- **네이티브 모드**(558): 리눅스 배포판이 전혀 없는 루트입니다. `/bin` 과 `/usr/bin` 은 네이티브 프로그램들 — 일상 명령 약 140개, ssh, git, curl, 편집기 — 이고, SmallCLUE 의 `init` 이 pid 1 로서 runit 방식의 서비스를 돌리며, 로그인 셸은 네이티브 zsh 입니다. 아무것도 내려받지 않습니다: 공식 배포판 아래에서 **AOK-iSH Native** 를 고르면 됩니다. 패키지 관리자가 필요하면 배포판을 그 옆에 설치하십시오. `/AOK/docs/native-mode.md` 참고.
 - `/AOK`, 읽기 전용 인앱 파일시스템(`/AOK/docs`, `/AOK/tools`, `/AOK/tests`, `/AOK/native`). `fs/aok-*.manifest` 와 `tools/gen-aokfs.py` 를 통해 빌드 시점에 `opt/AOK/` 에서 만들어 넣습니다.
 - 앱 빌드에 번들된 루트 파일시스템(Alpine 3.24.2와 Devuan 6, `aarch64` 전용), 그리고 `i386`, `x86_64`, `riscv64`, `ppc64le` 용 다운로드 이미지.
 - **게스트에서 쓰는 기기의 GPU**: `/dev/dri/renderD128`, 프로세스 안에서 MoltenVK 위의 virglrenderer Venus 렌더러가 뒷받침하는 virtio-gpu 렌더 노드입니다. 그래서 Mesa 의 Venus Vulkan 드라이버(와 그 위의 zink)가 Metal 로 그립니다. 게스트 쪽은 `/AOK/tools/setup-gpu.sh` 가 설치합니다. `/AOK/docs/workspace.md` 참고.
@@ -32,9 +32,9 @@ AOK VM, 자매 앱(완전한 가상 머신: QEMU 와 AOK gadget 엔진으로 만
 - iOS를 통해 게스트 파일을 노출하는 File Provider 지원.
 - **FUSE**: `/dev/fuse` 와 `fuse` 파일시스템 타입(프로토콜 7.31)을 제공하므로, 게스트의 `libfuse2`/`libfuse3` 데몬이 수정 없이 파일시스템을 마운트하고 제공합니다. root 일 때 libfuse 는 `mount(2)` 를 직접 호출하고, 일반 사용자는 리눅스와 마찬가지로 배포판의 `fusermount3` 를 거칩니다. `/AOK/docs/fuse.md` 참고.
 - **네임스페이스**(559, 실험적): user, mount, pid, network 네임스페이스. 그래서 `unshare`, bubblewrap, Codex CLI 의 명령 샌드박스(`codex sandbox`)가 시작되고 실제로 격리하며, systemd 의 `PrivateTmp=` 등도 실제로 동작합니다. 비공개 네트워크 네임스페이스는 자체 루프백과 `veth`/`dummy` 링크를 가지며, 호스트의 네트워크에는 절대 닿지 않습니다. `/AOK/docs/namespaces.md` 참고.
-- **Apple 단축어(Shortcuts) 액션** (iOS 16+): 앱을 열지 않고도 네이티브 zsh로 게스트에서 명령을 실행하고 그 출력을 단축어로 돌려주는 "Run Command" 액션과, Siri 문구가 지원되는 "Open iSH-AOK" 대상들. `/AOK/docs/shortcuts.md` 참고.
+- **Apple 단축어(Shortcuts) 액션** (iOS 16+): 앱을 열지 않고도 네이티브 zsh로 게스트에서 명령을 실행하고 그 출력을 단축어로 돌려주는 "Run Command" 액션과, Siri 문구가 지원되는 "Open AOK-iSH" 대상들. `/AOK/docs/shortcuts.md` 참고.
 - **`/dev/url`**: 게스트가 URL을 써 넣으면 그 URL을 iOS가 열도록 넘겨주는 문자 장치. `shortcuts://` 링크도 되므로 게스트 스크립트가 단축어를 실행할 수 있습니다. `app/URLDevice.m` 참고.
-- **시뮬레이션 스왑**: 대부분 유휴 상태인 큰 작업 집합이 실제 메모리를 쓰지 않고도 존재할 수 있도록 하는 선택적 스왑 영역 — 기기의 플래시를 소모하므로 24시간 쓰기 예산, 스래싱 가드, 일시 중단 게이트가 함께 있습니다. 기본값은 꺼짐이며, iOS 설정 앱의 iSH-AOK → Simulated Swap에서 켭니다(스위치와 크기를 모두 지정해야 하며 다음 실행 시 적용됩니다). 게스트는 `/proc/meminfo`, `free`, `vmstat`, `/proc/swaps` 및 실제 `/dev/aokswap0`을 통해 봅니다. `/AOK/docs/swap.md` 참고.
+- **시뮬레이션 스왑**: 대부분 유휴 상태인 큰 작업 집합이 실제 메모리를 쓰지 않고도 존재할 수 있도록 하는 선택적 스왑 영역 — 기기의 플래시를 소모하므로 24시간 쓰기 예산, 스래싱 가드, 일시 중단 게이트가 함께 있습니다. 기본값은 꺼짐이며, iOS 설정 앱의 AOK-iSH → Simulated Swap에서 켭니다(스위치와 크기를 모두 지정해야 하며 다음 실행 시 적용됩니다). 게스트는 `/proc/meminfo`, `free`, `vmstat`, `/proc/swaps` 및 실제 `/dev/aokswap0`을 통해 봅니다. `/AOK/docs/swap.md` 참고.
 - **`binfmt_misc`**: 리눅스와 동일하게 매직 넘버나 파일 확장자에 인터프리터를 등록하면 `execve`가 이를 따릅니다. `/AOK/docs/binfmt-misc.md` 참고.
 - 가속기: 자주 쓰이는 libc 루틴의 네이티브 대체(기본 켜짐), 그리고 선택적인 암호화 및 pixman 오프로드.
 - 이 포크 전용의 추가 진단 및 운영 관련 변경 사항.
@@ -135,7 +135,7 @@ HLE의 영향이 가장 크지만, arm64와 riscv64 게스트에 한정됩니다
 - `jit/`: gadget JIT와 게스트별 변환기.
 - `tests/`: 엔드투엔드 테스트와 게스트 측 회귀 스위트.
 - `tools/`: 개발자 도구 및 호스트 측 헬퍼.
-- `docs/`: 설계 노트, 이식 계획, 릴리스 노트, 그리고 [책](docs/book/README.md) — iSH-AOK 의 동작을 다루는 43개 장과 8개 부록.
+- `docs/`: 설계 노트, 이식 계획, 릴리스 노트, 그리고 [책](docs/book/README.md) — AOK-iSH 의 동작을 다루는 43개 장과 8개 부록.
 
 ## 클론
 
@@ -232,7 +232,7 @@ ninja -C build
 ## 네이티브 프로그램
 
 네이티브 프로그램은 앱 안에 컴파일되어 들어간 호스트 코드입니다. `/AOK/native`
-아래의 경로를 `execve` 하면 게스트 이미지를 적재하는 대신 iSH-AOK 내부의 함수로
+아래의 경로를 `execve` 하면 게스트 이미지를 적재하는 대신 AOK-iSH 내부의 함수로
 디스패치되며, 호출한 쪽은 그 차이를 알 수 없습니다. `/AOK/native` 에는
 레지스트리(`kernel/native.c`)에 등록된 프로그램마다 항목이 하나씩 있고 —
 `smallclue`, `sudo`, `su`, `passwd`, `motepad`, `ktop`, `wl-present`, `transcode`, `bmm`,
@@ -313,7 +313,7 @@ bash 는 네이티브 프로그램으로 앱에 컴파일해 넣을 수 있지�
 바이너리에 GPLv3 코드를 넣는 일이기도 합니다. bash 자체, 함께 들어가는 readline,
 그리고 GNU termcap 입니다.
 
-이 점은 App Store 배포에서 중요합니다. iSH-AOK 역시 GPLv3 이지만,
+이 점은 App Store 배포에서 중요합니다. AOK-iSH 역시 GPLv3 이지만,
 [LICENSE.IOS](LICENSE.IOS) 는 *이 프로젝트의* 저작권자들이 GPL 과 Apple 약관 사이의
 충돌에 대해 권리를 행사하지 않겠다는 약속입니다. 이것이 bash 의 저작권을 보유한
 FSF 를 구속할 수는 없으며, FSF 는 실제로 GPL 소프트웨어를 App Store 에서 두 번
@@ -365,7 +365,7 @@ Comment: This file is not directly linked with dash.  However, its output is.
 License: GPL-2+
 ```
 
-**iSH-AOK 는 그 파일을 빌드하지 않습니다.** 이것은 빌드 시점 생성기이며, 그
+**AOK-iSH 는 그 파일을 빌드하지 않습니다.** 이것은 빌드 시점 생성기이며, 그
 출력물 전체가 시그널 이름과 번호의 테이블로서 플랫폼 자신의 `signal.h` 에서
 유도할 수 있습니다. AOK 는 그 테이블을 스스로 생성하며 `mksignames.c` 를 결코
 컴파일하지 않습니다. 편의를 위해 되살리고 싶은 사람은 이 문단을 먼저
@@ -553,7 +553,7 @@ Ruby/Bundler/Fastlane 환경과 서명 및 인증 시크릿이 필요합니다.
 
 ## 업스트림과의 관계
 
-iSH-AOK는 업스트림 iSH를 기반으로 하지만 의도적으로 분기되어 있습니다.
+AOK-iSH는 업스트림 iSH를 기반으로 하지만 의도적으로 분기되어 있습니다.
 
 즉:
 

@@ -1,6 +1,6 @@
 //
 //  RTCDevice.h
-//  iSH-AOK
+//  AOK-iSH
 //
 //  Created by Michael Miller on 11/24/23.
 //

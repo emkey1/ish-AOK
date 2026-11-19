@@ -23,7 +23,7 @@
 #
 # Options:
 #   --default      after installing, make the new root the one that boots
-#   --exit-app     when done, have iSH-AOK ask to be closed, so the next
+#   --exit-app     when done, have AOK-iSH ask to be closed, so the next
 #                  launch boots the choice (the app cannot quit by itself)
 #   --yes          required by remove, which does not ask twice
 #   -q, --quiet    no progress lines
@@ -40,7 +40,7 @@
 # read once when the app starts. Nothing here disturbs the running guest, so
 # you can install a root from inside the root you are using.
 #
-# Needs root, because /proc/ish/roots is root-writable, and needs the iSH-AOK
+# Needs root, because /proc/ish/roots is root-writable, and needs the AOK-iSH
 # app: there is no root manager in the command-line build.
 # ---------------------------------------------------------------------------
 set -eu
@@ -90,7 +90,7 @@ done
 [ $# -gt 0 ] || { usage; exit 1; }
 ARGS=$1
 
-[ -e "$KNOB" ] || die "$KNOB does not exist; this build of iSH-AOK has no root manager"
+[ -e "$KNOB" ] || die "$KNOB does not exist; this build of AOK-iSH has no root manager"
 
 status() { cat "$KNOB"; }
 
@@ -125,7 +125,7 @@ send() {  # send <command text>
 
 require_app() {
     state=$(field job state)
-    [ "$state" = "unavailable" ] && die "root management needs the iSH-AOK app; this is the command-line build"
+    [ "$state" = "unavailable" ] && die "root management needs the AOK-iSH app; this is the command-line build"
     return 0
 }
 
@@ -184,7 +184,7 @@ name=$1"
 }
 
 exit_app() {
-    say "close iSH-AOK and open it again to boot the new root"
+    say "close AOK-iSH and open it again to boot the new root"
     send "op=exit-app"
 }
 

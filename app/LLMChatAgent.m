@@ -1,6 +1,6 @@
 //
 //  LLMChatAgent.m
-//  iSH-AOK
+//  AOK-iSH
 //
 //  See LLMChatAgent.h. The reply loop here was the chat screen's until
 //  2026-09-30; it moved so that it no longer ends with the window.

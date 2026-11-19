@@ -361,7 +361,7 @@ static void record_links(const struct link_set *made) {
     if (text == NULL)
         return;
     size_t at = (size_t) snprintf(text, size,
-        "# Links iSH-AOK made into /AOK/native at the last boot. Rewritten at\n"
+        "# Links AOK-iSH made into /AOK/native at the last boot. Rewritten at\n"
         "# every boot; a path that drops out of it is removed.\n");
     for (size_t i = 0; i < made->count && at < size; i++)
         at += (size_t) snprintf(text + at, size - at, "%s\n", made->paths[i]);
@@ -487,7 +487,7 @@ static void write_etc(void) {
     snprintf(buf, sizeof(buf), "root:*:%ld:0:99999:7:::\n", days_since_epoch());
     write_file("/etc/shadow", buf, 0600, true);
     write_file("/etc/sudoers",
-               "# sudoers for an iSH-AOK native root. Read by /AOK/native/sudo.\n"
+               "# sudoers for an AOK-iSH native root. Read by /AOK/native/sudo.\n"
                "root    ALL=(ALL:ALL) ALL\n"
                "%sudo   ALL=(ALL:ALL) ALL\n"
                "%wheel  ALL=(ALL:ALL) ALL\n", 0440, true);
@@ -498,7 +498,7 @@ static void write_etc(void) {
                "127.0.0.1\tlocalhost\n"
                "::1\tlocalhost ip6-localhost ip6-loopback\n", 0644, true);
     write_file("/etc/profile",
-               "# /etc/profile -- an iSH-AOK native root. Yours to edit: iSH-AOK writes\n"
+               "# /etc/profile -- an AOK-iSH native root. Yours to edit: AOK-iSH writes\n"
                "# it only when it is missing.\n"
                "export PATH=/AOK/persist/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n"
                "export PAGER=less\n"
@@ -513,7 +513,7 @@ static void write_etc(void) {
                "# Run /etc/profile in sh emulation, as Debian's zsh does.\n"
                "emulate sh -c '. /etc/profile'\n", 0644, true);
     write_file("/etc/zshrc",
-               "# /etc/zshrc -- an iSH-AOK native root. Yours to edit: iSH-AOK writes it\n"
+               "# /etc/zshrc -- an AOK-iSH native root. Yours to edit: AOK-iSH writes it\n"
                "# only when it is missing.\n"
                "PS1='%n@%m:%~%# '\n"
                "bindkey -e\n"
@@ -525,8 +525,8 @@ static void write_etc(void) {
                "    autoload -Uz compinit && compinit -u -d ~/.zcompdump\n"
                "fi\n", 0644, true);
     write_file("/etc/os-release",
-               "NAME=\"iSH-AOK Native\"\n"
-               "PRETTY_NAME=\"iSH-AOK Native (no distribution)\"\n"
+               "NAME=\"AOK-iSH Native\"\n"
+               "PRETTY_NAME=\"AOK-iSH Native (no distribution)\"\n"
                "ID=aok-native\n"
                "HOME_URL=\"https://github.com/emkey1/ish-AOK\"\n", 0644, false);
 
@@ -535,7 +535,7 @@ static void write_etc(void) {
     // happens at boot can be read and changed; see docs/native_mode_plan.md.
     write_file("/etc/rc",
                "#!/bin/sh\n"
-               "# /etc/rc -- run once by init at boot. Yours to edit: iSH-AOK writes it\n"
+               "# /etc/rc -- run once by init at boot. Yours to edit: AOK-iSH writes it\n"
                "# only when it is missing.\n"
                "#\n"
                "# Runs every executable /etc/rc.d/S??* with `start`, in order; starts\n"
@@ -881,7 +881,7 @@ static void write_sshd_files(void) {
     // is below it. That is what lets Settings set the port by writing one
     // small file instead of rewriting a config the user may have edited.
     write_file("/etc/ssh/sshd_config",
-               "# sshd for an iSH-AOK native root. Yours to edit: iSH-AOK writes it only\n"
+               "# sshd for an AOK-iSH native root. Yours to edit: AOK-iSH writes it only\n"
                "# when it is missing. Settings writes the port into\n"
                "# /etc/ssh/sshd_config.d/10-aok-port.conf, which is included first and\n"
                "# so wins over anything here.\n"
@@ -912,7 +912,7 @@ static void write_sshd_files(void) {
     write_file("/etc/rc.d/S50sshd",
                "#!/bin/sh\n"
                "# Start sshd, if the owner of this root has asked for it. Yours to edit:\n"
-               "# iSH-AOK writes it only when it is missing.\n"
+               "# AOK-iSH writes it only when it is missing.\n"
                "#\n"
                "# The flag file is what Settings' toggle writes and removes, so sshd\n"
                "# follows the setting at the next boot. `touch` and `rm` work just as\n"
@@ -924,7 +924,7 @@ static void write_sshd_files(void) {
                "start)\n"
                "    if [ ! -x /usr/sbin/sshd ]; then\n"
                "        echo \"sshd: enabled, but /usr/sbin/sshd is not installed --\" \\\n"
-               "             \"relaunch iSH-AOK, or see /AOK/docs/native-mode.md\" >&2\n"
+               "             \"relaunch AOK-iSH, or see /AOK/docs/native-mode.md\" >&2\n"
                "        exit 1\n"
                "    fi\n"
                "    # First start only: a host key the app cannot ship, because a shipped\n"

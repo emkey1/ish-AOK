@@ -5,7 +5,7 @@ Draft copy for the App Store Connect fields, with Apple's limits noted. Written
 unread -- marketing copy is the author's voice, not a generated one.
 
 **One dependency runs through all of it:** the store name. See the assessment's
-"Name and branding" -- if the fork cannot be listed as "iSH-AOK", the name,
+"Name and branding" -- if the fork cannot be listed as "AOK-iSH", the name,
 subtitle and keywords below all change, and so does the first line of the
 description.
 
@@ -14,11 +14,11 @@ description.
 ## Name (30 characters)
 
 ```
-iSH-AOK
+AOK-iSH
 ```
 
 Seven characters, so there is room if a longer form is ever wanted. Apple
-matches on the name heavily, so "iSH-AOK: Linux Shell" (20) is the obvious
+matches on the name heavily, so "AOK-iSH: Linux Shell" (20) is the obvious
 alternative if discoverability matters more than restraint.
 
 ## Subtitle (30 characters)
@@ -48,7 +48,7 @@ and any trademark that is not ours.
 ## Description (4000 characters)
 
 ```
-iSH-AOK runs a real Linux system on your iPhone or iPad.
+AOK-iSH runs a real Linux system on your iPhone or iPad.
 
 It is not a remote terminal and not a sandbox around a few commands. A
 processor is emulated in software, a Linux userland runs on top of it, and you
@@ -94,11 +94,11 @@ device.
 
 PRIVACY
 
-iSH-AOK collects nothing. There is no account, no analytics, no advertising and
+AOK-iSH collects nothing. There is no account, no analytics, no advertising and
 no tracking of any kind. What your programs send is your business, and we never
 see it.
 
-iSH-AOK is open source, a fork of the iSH project, and is developed in the open
+AOK-iSH is open source, a fork of the iSH project, and is developed in the open
 at github.com/emkey1/ish-AOK.
 ```
 
@@ -150,7 +150,7 @@ Suggested set, in order, because the first two are what most people see:
 3. The Wayland desktop.
 4. LLM Chat mid-task, with a permission prompt visible -- it shows both the
    feature and that it asks.
-5. Files app, with iSH-AOK as a location.
+5. Files app, with AOK-iSH as a location.
 
 `fastlane/Snapfile` already exists for automating these, though it drives the
 simulator and the desktop and GPU shots may be easier taken on a device.

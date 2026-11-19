@@ -76,7 +76,7 @@ Check a few results before deleting any originals.
 - **The output is built in the app's own temporary space** and then copied
   to where you asked, so you need free space for the output (not for a
   second copy of the input).
-- **Keep iSH-AOK in the foreground** while it runs. iOS suspends apps in
+- **Keep AOK-iSH in the foreground** while it runs. iOS suspends apps in
   the background, and a conversion cannot carry on while the app is
   suspended.
 - **Ctrl-C cancels cleanly**: the encoder stops and the partial file is

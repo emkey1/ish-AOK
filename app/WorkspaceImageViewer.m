@@ -1,6 +1,6 @@
 //
 //  WorkspaceImageViewer.m
-//  iSH-AOK
+//  AOK-iSH
 //
 
 #import "WorkspaceImageViewer.h"
@@ -420,7 +420,7 @@ static NSSet<NSString *> *ISHImageViewerSupportedExtensions(void) {
     CGImageSourceRef source = CGImageSourceCreateWithData((__bridge CFDataRef)data, NULL);
     if (source == NULL) {
         [self finishDecodeOnMainQueueWithImage:nil pixelSize:CGSizeZero generation:generation
-                                   errorMessage:NSLocalizedString(@"This doesn’t look like an image iSH-AOK can display.", @"Image viewer error text")];
+                                   errorMessage:NSLocalizedString(@"This doesn’t look like an image AOK-iSH can display.", @"Image viewer error text")];
         return;
     }
 

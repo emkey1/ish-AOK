@@ -1,6 +1,6 @@
 //
 //  AudioPCMDecoder.m
-//  iSH-AOK
+//  AOK-iSH
 //
 //  Format detection + dispatch to the right decoder backend. Everything reduces
 //  to an ISHPCMDecoder so the engine never special-cases a format.

@@ -2,7 +2,7 @@
 # provision-ultimate-archlinux.sh
 # ---------------------------------------------------------------------------
 # Turn a fresh Arch Linux / Arch Linux ARM rootfs (x86_64 OR aarch64) running
-# under iSH-AOK into a full-featured, terminal-only Linux system. This is the
+# under AOK-iSH into a full-featured, terminal-only Linux system. This is the
 # Arch twin of provision-ultimate-alpine.sh / provision-ultimate-devuan.sh --
 # same end result, translated to pacman instead of apk/apt:
 #   * generous "ultimate terminal" CLI tool set
@@ -133,7 +133,7 @@ log "/dev/fd (needed for bash process substitution, e.g. diff <(...))"
 # ===========================================================================
 # Debian/Alpine base rootfs images ship /dev/fd -> /proc/self/fd (plus
 # /dev/std{in,out,err}) as static symlinks baked into the tarball. Arch
-# instead creates them via systemd-tmpfiles at boot -- which iSH-AOK never
+# instead creates them via systemd-tmpfiles at boot -- which AOK-iSH never
 # runs for any distro -- so a stock Arch/ArchLinuxARM minirootfs boots with
 # no /dev/fd at all. Any command using process substitution then fails with
 # "/dev/fd/NN: No such file or directory". /proc/self/fd itself works fine
@@ -147,7 +147,7 @@ note "linked /dev/fd, /dev/stdin, /dev/stdout, /dev/stderr -> /proc/self/fd"
 # ===========================================================================
 log "Ownership repair (roots imported from a uid-501 tarball)"
 # ===========================================================================
-# Early Arch tarballs published for iSH-AOK were repacked on macOS as an
+# Early Arch tarballs published for AOK-iSH were repacked on macOS as an
 # ordinary user, so every file imported as uid 501 instead of root. Most
 # things shrug that off, but anything with a strict ownership check breaks:
 # sshd refuses to start ("/usr/share/empty.sshd must be owned by root"),
@@ -231,7 +231,7 @@ fi
 # systemd-resolved works under iSH now (the netlink dump / link-flag /
 # sockopt conformance fixes in fs/sock.c landed 2026-07-22), so it stays
 # enabled. The rootfs ships /etc/resolv.conf as a dangling symlink to
-# resolved's stub-resolv.conf, which iSH-AOK's boot-time DNS refresh cannot
+# resolved's stub-resolv.conf, which AOK-iSH's boot-time DNS refresh cannot
 # write through; convert it to a real file. resolved then treats the
 # app-maintained file as a foreign/uplink resolv.conf and reads its
 # upstream servers from it, so the host's DNS servers feed resolved and
@@ -241,7 +241,7 @@ if [ -L /etc/resolv.conf ]; then
     printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\n' > /etc/resolv.conf
     note "replaced stub-resolv.conf symlink with a real resolv.conf (systemd-resolved reads it in uplink mode)"
 fi
-# iSH-AOK writes /etc/resolv.conf asynchronously during boot (AppDelegate's
+# AOK-iSH writes /etc/resolv.conf asynchronously during boot (AppDelegate's
 # scheduleDnsRefresh dispatches it off the boot path rather than blocking on
 # it), so a script launched right after boot can race it and see DNS lookups
 # fail ("Could not resolve host") even though resolv.conf shows up moments
@@ -309,13 +309,13 @@ log "Timezone -> $TZ_NAME"
 if [ -f "/usr/share/zoneinfo/$TZ_NAME" ]; then
     ln -sf "/usr/share/zoneinfo/$TZ_NAME" /etc/localtime
     echo "$TZ_NAME" > /etc/timezone
-    # Taking the device's own zone leaves the choice with iSH-AOK, which moves
+    # Taking the device's own zone leaves the choice with AOK-iSH, which moves
     # /etc/localtime along with the device at each boot for as long as
     # /etc/aok-localtime names the zone it holds (see /AOK/docs/roots.md). A
     # zone set in TZ_NAME, or a different one typed at the prompt, stays put.
     if [ -z "$TZ_PRESET" ] && [ "$TZ_NAME" = "$HOST_TZ" ]; then
         printf '%s\n' \
-            "# /etc/localtime names this zone because it is the device's. iSH-AOK" \
+            "# /etc/localtime names this zone because it is the device's. AOK-iSH" \
             "# moves it along with the device, at boot, for as long as it still names" \
             "# this zone; choose any other and it is left alone from then on. Keep this" \
             "# file: without it a UTC /etc/localtime looks like the distribution's own." \
@@ -417,7 +417,7 @@ log "MOTD"
 # ===========================================================================
 cat > /etc/motd <<'MOTD'
 
-   Arch Linux  .  iSH-AOK  (terminal-only userspace, EXPERIMENTAL)
+   Arch Linux  .  AOK-iSH  (terminal-only userspace, EXPERIMENTAL)
    ------------------------------------------------------------
    services :  systemd runs as init when the app boots this root
                normally; 'sudo start-aok-services' is the fallback
@@ -502,7 +502,7 @@ log "chrony config (iSH-aware: monitor only, host owns the clock)"
 # chronyc -h 127.0.0.1 tracking
 if [ -d /etc ]; then
     cat > /etc/chrony.conf <<'CHRONYCONF'
-# chrony.conf -- tuned for iSH-AOK (monitoring mode; chronyd started with -x)
+# chrony.conf -- tuned for AOK-iSH (monitoring mode; chronyd started with -x)
 pool pool.ntp.org iburst
 server time.cloudflare.com iburst
 server time.google.com iburst
@@ -749,7 +749,7 @@ write_tmux /root root
 [ -n "$TARGET_HOME" ] && write_tmux "$TARGET_HOME" "$TARGET_USER"
 
 # ===========================================================================
-log "iSH-AOK native programs"
+log "AOK-iSH native programs"
 # ===========================================================================
 # native-links.sh links the app's native programs -- SmallCLUE's applets, zsh,
 # dash as `sh`, motepad and the rest of /AOK/native -- into
@@ -762,7 +762,7 @@ if [ "${NATIVE_LINKS:-1}" = 1 ]; then
     if [ -f /AOK/tools/native-links.sh ] && [ -x /AOK/native/smallclue ]; then
         sh /AOK/tools/native-links.sh --no-shell 2>&1 | sed 's/^/    /'
     else
-        note "this iSH-AOK has no /AOK/native; native links skipped"
+        note "this AOK-iSH has no /AOK/native; native links skipped"
     fi
     if [ -f /AOK/tools/persist-links.sh ] && [ -d /AOK/persist/bin ]; then
         sh /AOK/tools/persist-links.sh 2>&1 | sed 's/^/    /'
@@ -774,7 +774,7 @@ fi
 # ===========================================================================
 log "Services"
 # ===========================================================================
-# iSH-AOK can boot this root's own systemd as PID 1 (the app's normal boot
+# AOK-iSH can boot this root's own systemd as PID 1 (the app's normal boot
 # path runs /sbin/init): console getty login, systemd-resolved, logind and
 # user@ sessions all work, and `systemctl enable/start` behaves as on real
 # Arch. When the app is configured that way, nothing below is needed at

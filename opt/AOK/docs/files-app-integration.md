@@ -1,22 +1,22 @@
 # Browsing your guest filesystem from the iOS Files app
 
-iSH-AOK ships a File Provider extension (a separate iOS extension target) that
+AOK-iSH ships a File Provider extension (a separate iOS extension target) that
 exposes your installed root filesystems through Apple's Files framework. In the
-Files app it appears as the location **iSH-AOK** (builds before 559 called it
+Files app it appears as the location **AOK-iSH** (builds before 559 called it
 **iSH**). Once set up, your guest files
 show up as a regular location in the iOS **Files** app, and in any other
 app's document picker — no `scp`, no manual export step.
 
 ## Not available on a Mac
 
-If you are running iSH-AOK on an Apple Silicon Mac (as a "Designed for iPad"
+If you are running AOK-iSH on an Apple Silicon Mac (as a "Designed for iPad"
 app), this feature is switched off and your filesystems will not appear in
 Finder. That is deliberate.
 
 The extension is built on Apple's `NSFileProviderExtension`, which their own SDK
 marks unavailable on macOS -- a Mac hosts only the newer replicated File
 Provider API. Left enabled, macOS loads the extension, finds one it cannot host,
-and kills it before any iSH-AOK code runs. So the app does not register a
+and kills it before any AOK-iSH code runs. So the app does not register a
 provider there at all; a missing feature is better than a crash you cannot act
 on.
 
@@ -32,7 +32,7 @@ like any other Files provider:
 1. Open the **Files** app.
 2. Tap **Browse**, then the **⋯** (more) button, or go to Locations at
    the top of the sidebar.
-3. Enable the **iSH-AOK** location (**iSH** on builds before 559) if it isn't
+3. Enable the **AOK-iSH** location (**iSH** on builds before 559) if it isn't
    already checked.
 
 Once enabled, it appears as a location you can browse, favorite, and use

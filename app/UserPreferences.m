@@ -660,7 +660,7 @@ void amd64_jit_preference_set(bool enabled) {
     [_defaults setObject:terminalBottomPadding forKey:kPreferenceTerminalBottomPaddingKey];
 }
 
-// Up to a quarter of the shortest screen iSH-AOK runs on: more than that is a
+// Up to a quarter of the shortest screen AOK-iSH runs on: more than that is a
 // terminal somebody cannot find, not a margin.
 - (BOOL)validateTerminalBottomPadding:(id *)value error:(NSError **)error {
     if (![*value isKindOfClass:NSNumber.class])

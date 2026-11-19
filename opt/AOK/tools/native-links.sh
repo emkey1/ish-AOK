@@ -1,11 +1,11 @@
 #!/bin/sh
-# Link iSH-AOK's native programs into a bin directory so they run natively:
+# Link AOK-iSH's native programs into a bin directory so they run natively:
 # SmallCLUE's applets, and the standalone programs beside it in /AOK/native --
 # zsh, dash (also linked as `sh`), helix (`hx`), ktop, motepad, the bmm/bmt
 # benchmarks, and the setuid-root su, sudo and passwd. (bash, when a build
 # enables it; builds from 556 on do not.)
 #
-# /AOK/native/smallclue is compiled into iSH-AOK and runs as host code rather
+# /AOK/native/smallclue is compiled into AOK-iSH and runs as host code rather
 # than translated guest instructions, so it costs the same on every guest
 # architecture. Like any multicall binary it picks its applet from argv[0], so
 # a symlink named `wc` runs the wc applet.
@@ -139,8 +139,8 @@ DO_ALSO=1
 SHELL_STATE=/etc/aok-native-shell.prev
 # Delimits the block this script owns inside a zsh startup file that may not be
 # ours, so --remove takes back exactly what it added.
-ZSH_MARK_BEGIN='# >>> iSH-AOK native-bin >>>'
-ZSH_MARK_END='# <<< iSH-AOK native-bin <<<'
+ZSH_MARK_BEGIN='# >>> AOK-iSH native-bin >>>'
+ZSH_MARK_END='# <<< AOK-iSH native-bin <<<'
 # The PATH snippet. profile.d rather than a user dotfile: it is system state
 # this script owns, so --remove can delete the whole file and be sure it has
 # left nothing behind, which editing someone's .bashrc could never promise.
@@ -223,7 +223,7 @@ probe_args() {
 probe_missing() {
     # shellcheck disable=SC2046
     case "$("$NATIVE" "$1" $(probe_args "$1") 2>&1 | head -2)" in
-        *"not built into this iSH-AOK"*|\
+        *"not built into this AOK-iSH"*|\
         *"unavailable in this build"*|\
         *"not enabled in this build"*) return 0 ;;
     esac
@@ -335,7 +335,7 @@ also_dir() {
 # applet this script links, so --help would break after installation. Same
 # reason the applet list is parsed with builtins.
 usage() {
-    echo "Link iSH-AOK's native programs into a bin directory so they run"
+    echo "Link AOK-iSH's native programs into a bin directory so they run"
     echo "natively: SmallCLUE's applets, plus the programs beside it in /AOK/native."
     echo
     echo "Usage: sh /AOK/tools/native-links.sh [options] [directory]"
@@ -387,12 +387,12 @@ while [ $# -gt 0 ]; do
 done
 
 if [ ! -x "$NATIVE" ]; then
-    echo "$0: $NATIVE not found -- this iSH-AOK has no native SmallCLUE" >&2
+    echo "$0: $NATIVE not found -- this AOK-iSH has no native SmallCLUE" >&2
     exit 1
 fi
 
 # A native-mode root (/AOK/docs/native-mode.md) has no distribution to put
-# these in front of: iSH-AOK links /usr/bin into /AOK/native itself, at every
+# these in front of: AOK-iSH links /usr/bin into /AOK/native itself, at every
 # boot, and keeps the links in step with the build. Linking again on top would
 # only make a second set to drift, and --remove would take away the root's own
 # commands. Builtins only, as everywhere in this script.
@@ -400,7 +400,7 @@ if [ -r /etc/os-release ]; then
     while IFS= read -r osline || [ -n "$osline" ]; do
         if [ "$osline" = "ID=aok-native" ]; then
             echo "$0: this is a native-mode root -- its commands are already the native"
-            echo "programs, linked by iSH-AOK at every boot. Nothing to do."
+            echo "programs, linked by AOK-iSH at every boot. Nothing to do."
             exit 0
         fi
     done < /etc/os-release
@@ -542,7 +542,7 @@ apply_path() {
     # Guarded so re-logging in, or sourcing profile twice, cannot stack the
     # directory onto PATH over and over.
     cat > "$PATH_FILE" <<PATHEOF
-# Added by native-links.sh. Puts iSH-AOK's native applet links ahead of the
+# Added by native-links.sh. Puts AOK-iSH's native applet links ahead of the
 # distro's commands, so they run as host code instead of being translated.
 # Remove with: sh /AOK/tools/native-links.sh --remove
 case ":\$PATH:" in

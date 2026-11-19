@@ -351,7 +351,7 @@ int guest_sshd_set_enabled(bool enabled, unsigned port) {
 
     char conf[128];
     int len = snprintf(conf, sizeof(conf),
-                       "# Written by iSH-AOK's Settings. Included before the rest of\n"
+                       "# Written by AOK-iSH's Settings. Included before the rest of\n"
                        "# sshd_config, so this wins.\n"
                        "Port %u\n", port);
     int err = write_guest_file("/etc/ssh/sshd_config.d/10-aok-port.conf", conf,
@@ -360,7 +360,7 @@ int guest_sshd_set_enabled(bool enabled, unsigned port) {
         return err;
 
     static const char flag[] =
-        "# iSH-AOK starts sshd in this root while this file exists; see\n"
+        "# AOK-iSH starts sshd in this root while this file exists; see\n"
         "# /etc/rc.d/S50sshd and /AOK/docs/native-mode.md. Settings writes and\n"
         "# removes it, and so can you.\n";
     return write_guest_file(GUEST_SSHD_ENABLED, flag, sizeof(flag) - 1, 0644);

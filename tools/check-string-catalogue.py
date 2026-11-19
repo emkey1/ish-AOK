@@ -84,13 +84,13 @@ SWIFT_KEYS = {
     'Command': 'app/ISHRunCommandIntent.swift',
     'Dashboard': 'app/ISHAppShortcuts.swift',
     'Fail on Non-Zero Exit': 'app/ISHRunCommandIntent.swift',
-    'Open iSH-AOK': 'app/ISHAppShortcuts.swift',
-    'Run ${command} in iSH-AOK': 'the App Shortcuts metadata extraction',
+    'Open AOK-iSH': 'app/ISHAppShortcuts.swift',
+    'Run ${command} in AOK-iSH': 'the App Shortcuts metadata extraction',
     'Run Command': 'app/ISHRunCommandIntent.swift',
     'Running commands from Shortcuts is turned off. Enable \u201cAllow '
-    'Shortcuts to Run Commands\u201d in iSH-AOK\u2019s settings.':
+    'Shortcuts to Run Commands\u201d in AOK-iSH\u2019s settings.':
         'app/ISHRunCommandIntent.swift',
-    'Runs a shell command in the iSH-AOK guest system and returns its output '
+    'Runs a shell command in the AOK-iSH guest system and returns its output '
     '(stdout and stderr merged). The command runs headlessly; the app does '
     'not need to be open. It runs as root, or as the default user account '
     'when "Open Everything as Default User" is enabled in Settings.':
@@ -354,7 +354,7 @@ def check_phrases(build):
         if not os.path.exists(path):
             bad = True
             print(f'\n{lang}.lproj/{PHRASE_TABLE} is missing: Siri will not '
-                  f'recognise an iSH-AOK phrase spoken in {lang}.')
+                  f'recognise an AOK-iSH phrase spoken in {lang}.')
             continue
         tables[lang] = plist(path)
 
@@ -420,7 +420,7 @@ def check_runtime_resources():
 
     App Intents turns a thrown error into an NSError and resolves the
     description itself, in en, whatever locale the resource carries -- logged
-    2026-11-15 inside iSH-AOK's own process as CFBundle `localizationNames:
+    2026-11-15 inside AOK-iSH's own process as CFBundle `localizationNames:
     [en]`, microseconds after Locale.current (ja_JP), Bundle.main's preferred
     localizations (ja) and the resource's own locale (ja_JP) all said
     Japanese. The Run Command action's eight error messages reached a Japanese

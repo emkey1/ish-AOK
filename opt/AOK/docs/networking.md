@@ -6,7 +6,7 @@ If you are running anything meant to accept connections from other machines
 
 ## The rule
 
-iSH-AOK never runs as root on iOS or macOS. Ports below 1024 are
+AOK-iSH never runs as root on iOS or macOS. Ports below 1024 are
 privileged: the operating system refuses to let a non-root process bind
 them. That refusal happens at the *host* level, underneath the emulated
 kernel, so there is nothing the guest's own root account can do about it —
@@ -22,7 +22,7 @@ reachable like any other. Which one you got is not something to guess at, so a p
 stays the advice: it works the same everywhere.
 
 When a guest daemon binds a privileged port on the IPv4 wildcard address
-(`0.0.0.0`), iSH-AOK doesn't fail the call. It quietly rebinds the socket to
+(`0.0.0.0`), AOK-iSH doesn't fail the call. It quietly rebinds the socket to
 `127.0.0.1` on an ephemeral port and reports success. The daemon starts
 normally, `getsockname` still answers `0.0.0.0:22`, and nothing in the daemon's
 own output looks wrong. `netstat` is the exception: its rows come straight from
@@ -34,7 +34,7 @@ only handles `AF_INET` — so a privileged `::` bind fails for real. A dual-stac
 daemon therefore logs a permission-denied bind failure for its IPv6 half and is
 left holding only the substituted IPv4 listener.
 
-But that listener is only reachable through iSH-AOK's internal guest-to-guest
+But that listener is only reachable through AOK-iSH's internal guest-to-guest
 loopback NAT. Not from your laptop. Not from another device on the same
 Wi-Fi. Not from anything outside the app.
 
@@ -57,7 +57,7 @@ same pattern: change the listen port in the service's own configuration.
 The kernel logs a warning the moment it substitutes the bind:
 
 ```
-WARNING: 947(sshd) bound 0.0.0.0:22 but iSH-AOK can't bind privileged ports as
+WARNING: 947(sshd) bound 0.0.0.0:22 but AOK-iSH can't bind privileged ports as
 non-root -- this socket is loopback-only, NOT reachable from the network.
 Use a port >=1024 for anything meant to accept external connections.
 ```
@@ -114,7 +114,7 @@ between sandboxes. See [namespaces.md](namespaces.md).
 
 ## The DNS relay at `127.0.0.53`
 
-The `/etc/resolv.conf` iSH-AOK writes lists `127.0.0.53` first, ahead of the
+The `/etc/resolv.conf` AOK-iSH writes lists `127.0.0.53` first, ahead of the
 device's own nameservers — the address systemd-resolved's stub uses on Linux.
 Behind it is a small relay in the app that passes each query, unchanged, to
 the device's nameservers in turn and hands the reply straight back, whatever
@@ -140,7 +140,7 @@ Things worth knowing:
 
 ## Letting the guest own `/etc/resolv.conf`
 
-By default iSH-AOK rewrites the guest's `/etc/resolv.conf` on every DNS
+By default AOK-iSH rewrites the guest's `/etc/resolv.conf` on every DNS
 refresh, which fires whenever the device's network path changes — on
 cellular, that can be constantly. A guest resolver that polls the file's
 modification time (some do) sees it change again and again, even though the

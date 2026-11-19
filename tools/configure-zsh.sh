@@ -1,5 +1,5 @@
 #!/bin/sh
-# Configure zsh the way iSH-AOK's native build needs it. Run from the zsh tree.
+# Configure zsh the way AOK-iSH's native build needs it. Run from the zsh tree.
 #
 # TERMCAP ONLY. The iOS SDK ships libcurses/libncurses .tbd stubs but NO
 # curses.h and NO term.h, so anything that needs terminfo cannot even compile

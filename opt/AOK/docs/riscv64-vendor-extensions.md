@@ -1,6 +1,6 @@
-# Adding RISC-V vendor/user instructions to iSH-AOK
+# Adding RISC-V vendor/user instructions to AOK-iSH
 
-This document walks through the mechanism iSH-AOK uses to run non-standard
+This document walks through the mechanism AOK-iSH uses to run non-standard
 RISC-V instructions under the JIT — no interpreter, no forked engine, and no
 risk to the ratified ISA the JIT already implements. It doubles as the
 worked example for anyone who wants to add their own instruction, whether
@@ -120,7 +120,7 @@ under custom-0 (`0x0B`), differentiated by `funct3`:
 | `ish.pcnt`  | 2 | `rd = popcount(rs1)` |
 | `ish.bswap` | 3 | `rd = byteswap64(rs1)` |
 
-**These are an iSH-AOK-invented demonstration, not a transcription of any
+**These are an AOK-iSH-invented demonstration, not a transcription of any
 real vendor's silicon.** T-Head, Andes, SiFive, and others all ship real
 custom-0..3 extensions, but this project has no way to verify a
 hand-transcribed encoding against actual hardware, so it makes no claim of

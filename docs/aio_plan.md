@@ -1,4 +1,4 @@
-# Linux native AIO for iSH-AOK
+# Linux native AIO for AOK-iSH
 
 Plan, not a change. Prompted by MariaDB 11.8, which crash-loops on install:
 `io_setup` is a stub returning ENOSYS, its thread pool does not check the

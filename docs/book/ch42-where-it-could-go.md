@@ -104,12 +104,12 @@ Metal directly.
 
 Some future directions turn out to be present tense.
 
-**A Linux build of iSH-AOK boots and runs inside the iSH-AOK guest** — proven on
+**A Linux build of AOK-iSH boots and runs inside the AOK-iSH guest** — proven on
 the arm64 CLI, two levels deep, exiting cleanly:
 
 ```
 HELLO-FROM-THE-NESTED-GUEST
-Linux ... 5.10.0-ish_aok iSH-AOK built 2026-08-31 09:32Z unoptimized aarch64 GNU/Linux
+Linux ... 5.10.0-ish_aok AOK-iSH built 2026-08-31 09:32Z unoptimized aarch64 GNU/Linux
 ```
 
 The cost is exactly what one would predict and worth having measured rather
@@ -147,7 +147,7 @@ read their probe rather than to assume the report is wrong.
 
 ## 42.6 The thought experiment
 
-`docs/wasm_browser_architecture.md` works through what a WebKit-hosted iSH-AOK
+`docs/wasm_browser_architecture.md` works through what a WebKit-hosted AOK-iSH
 would look like: a native shell app with a `WKWebView`, a terminal UI in
 JavaScript, the CPU core compiled to WebAssembly, and syscalls handled by a
 JavaScript shim that either maps onto browser storage and network APIs or

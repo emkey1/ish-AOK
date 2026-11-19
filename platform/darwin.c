@@ -1498,7 +1498,7 @@ int host_mem_release_probe(unsigned long mb, char *report, size_t report_size) {
     if (file_bytes > 16 * 1024 * 1024)
         file_bytes = 16 * 1024 * 1024;
 
-    release_probe_printf(&r, "iSH-AOK host page release probe -- docs/simulated_swap_plan.md section 7, day 1\n");
+    release_probe_printf(&r, "AOK-iSH host page release probe -- docs/simulated_swap_plan.md section 7, day 1\n");
     release_probe_printf(&r, "The question: does releasing a host page reduce the footprint iOS kills on?\n");
     release_probe_printf(&r, "RUN THIS WITH NO DEBUGGER AND NO INSTRUMENTS ATTACHED. A live mach_vm_read copy\n");
     release_probe_printf(&r, "of a region leaves its VM object copy-on-write shared, and MADV_FREE_REUSABLE on\n");

@@ -12,7 +12,7 @@ struct cpu_usage {
 struct cpu_usage get_total_cpu_usage(void);
 
 // The HOST MACHINE's memory, in bytes. Every field here describes the computer
-// iSH-AOK is running on, not the guest and not this process, so nothing in it
+// AOK-iSH is running on, not the guest and not this process, so nothing in it
 // can be handed to the guest unmodified: a guest-visible number has to be one a
 // real Linux could produce for the machine the guest thinks it is on. Use
 // get_mem_budget() for the guest-facing figures and fall back to these only
@@ -55,7 +55,7 @@ struct mem_usage get_mem_usage(void);
 
 // What the host says about THIS PROCESS's memory ceiling -- the budget the app
 // is killed at, not the size of the machine it runs on. The guest's MemTotal
-// has to come from here. iSH-AOK is one app process with a jetsam budget, and
+// has to come from here. AOK-iSH is one app process with a jetsam budget, and
 // reporting the device's RAM instead is both a number no Linux could produce
 // for a machine of that size and a promise the host will not keep: OpenJDK 21
 // in the Alpine root sized MaxHeapSize at 6442450944 -- a quarter of this Mac's

@@ -44,7 +44,7 @@
 // round below for the second defect, which is the one that actually mattered.
 //
 // A/B: fully unfixed fails the sequential sweep 3/3 on the CLI and on the
-// device (aarch64 Devuan, iSH-AOK 546), always losing both SIGKILL and SIGTERM
+// device (aarch64 Devuan, AOK-iSH 546), always losing both SIGKILL and SIGTERM
 // at the zero-delay trial, which is the window itself. With ONLY the
 // window-race fix the sweep passes but the parallel round fails immediately
 // (7 of 8 survive SIGKILL, 5 of 8 SIGTERM). With both fixes this passes

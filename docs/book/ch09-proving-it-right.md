@@ -27,7 +27,7 @@ understanding, so that its mistakes are unlikely to be your mistakes. When you
 and the oracle agree, you have learned something weak. When you disagree, you
 have learned exactly where to look.
 
-iSH-AOK has four kinds available, and uses all of them:
+AOK-iSH has four kinds available, and uses all of them:
 
 1. **Real silicon.** An x86 processor, single-stepped under `ptrace`, executing
    the same program.

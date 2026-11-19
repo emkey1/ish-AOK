@@ -40,8 +40,8 @@ set -u
 PROG=setup-locale.sh
 CONF=/etc/aok-locale
 PROFILE=/etc/profile.d/01-aok-lang.sh
-MARK_BEGIN='# >>> iSH-AOK setup-locale.sh >>>'
-MARK_END='# <<< iSH-AOK setup-locale.sh <<<'
+MARK_BEGIN='# >>> AOK-iSH setup-locale.sh >>>'
+MARK_END='# <<< AOK-iSH setup-locale.sh <<<'
 
 die() { echo "$PROG: $*" >&2; exit 1; }
 note() { echo "$PROG: $*"; }

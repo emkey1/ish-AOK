@@ -179,7 +179,7 @@ int_t sys_epoll_ctl_guest(fd_t epoll_f, int_t op, fd_t f, guest_addr_t event_add
     }
 
     // Linux enforces three EPOLLEXCLUSIVE (bit 28) EINVAL rules (man
-    // epoll_ctl(2)) that iSH-AOK's straight pass-through of guest event bits
+    // epoll_ctl(2)) that AOK-iSH's straight pass-through of guest event bits
     // never checked. Only the EINVAL validation is implemented here, not the
     // full exclusive-wakeup load-balancing behavior -- stress-ng's --epoll
     // conformance check only exercises the former.

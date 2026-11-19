@@ -1,6 +1,6 @@
 //
 //  WorkspaceTranscoder.m
-//  iSH-AOK
+//  AOK-iSH
 //
 //  The Video Converter applet. See WorkspaceTranscoder.h.
 //
@@ -780,7 +780,7 @@ static NSArray<NSNumber *> *TCSizeLines(void) {
                 if (move)
                     [NSFileManager.defaultManager removeItemAtURL:url error:nil];
                 dispatch_async(dispatch_get_main_queue(), ^{
-                    then(NO, NSLocalizedString(@"Not saved: iSH-AOK may not add to Photos (Settings > iSH-AOK > Photos).", @"Video converter: Photos access refused"));
+                    then(NO, NSLocalizedString(@"Not saved: AOK-iSH may not add to Photos (Settings > AOK-iSH > Photos).", @"Video converter: Photos access refused"));
                 });
                 return;
             }
@@ -821,7 +821,7 @@ static NSArray<NSNumber *> *TCSizeLines(void) {
                 typeof(self) s = weakSelf;
                 if (s == nil) return;
                 s->_statusLabel.text = [s->_statusLabel.text stringByAppendingFormat:@"\n%@",
-                    NSLocalizedString(@"iSH-AOK cannot see that video in your library (Settings > iSH-AOK > Photos allows full access). You can delete it in Photos.", @"Video converter: cannot delete the original")];
+                    NSLocalizedString(@"AOK-iSH cannot see that video in your library (Settings > AOK-iSH > Photos allows full access). You can delete it in Photos.", @"Video converter: cannot delete the original")];
             });
             return;
         }

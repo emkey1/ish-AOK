@@ -2,7 +2,7 @@
 # provision-ultimate-devuan.sh
 # ---------------------------------------------------------------------------
 # Turn a fresh Devuan 6 "Excalibur" minirootfs (i386 OR amd64) running under
-# iSH-AOK into a full-featured, terminal-only Linux system. (It provisions a
+# AOK-iSH into a full-featured, terminal-only Linux system. (It provisions a
 # Devuan machine with a kernel of its own as well -- a virtual machine, any
 # architecture -- leaving out what only the app can do: see IN_AOK below.)
 # This is the Devuan
@@ -44,10 +44,10 @@ fi
 log()  { printf '\n\033[1;36m==>\033[0m \033[1m%s\033[0m\n' "$*"; }
 note() { printf '    %s\n' "$*"; }
 
-# ---- under iSH-AOK, or on a kernel of its own? ----------------------------
+# ---- under AOK-iSH, or on a kernel of its own? ----------------------------
 # The same script provisions a virtual machine (the UTM images of
 # the AOK VM project ship it) or any machine running this distribution. What
-# differs there is what the app does for a root under iSH-AOK and nobody does
+# differs there is what the app does for a root under AOK-iSH and nobody does
 # for a machine: the clock is the machine's own, so chrony keeps the
 # distribution's configuration and disciplines it; nothing names the device's
 # timezone; and there are no native programs to link.
@@ -75,7 +75,7 @@ fi
 [ -n "$DEF_USER" ] || DEF_USER="aok"
 DEF_HOSTNAME="$(cat /etc/hostname 2>/dev/null)"
 [ -n "$DEF_HOSTNAME" ] && [ "$DEF_HOSTNAME" != localhost ] || DEF_HOSTNAME="devuan-ish"
-WHERE="iSH-AOK  (terminal-only userspace)"
+WHERE="AOK-iSH  (terminal-only userspace)"
 if [ "$IN_AOK" = 0 ]; then
     [ "$DEF_HOSTNAME" = "devuan-ish" ] && DEF_HOSTNAME="devuan-vm"
     WHERE="$(uname -m), on a kernel of its own"
@@ -182,13 +182,13 @@ log "Timezone -> $TZ_NAME"
 if [ -f "/usr/share/zoneinfo/$TZ_NAME" ]; then
     ln -sf "/usr/share/zoneinfo/$TZ_NAME" /etc/localtime
     echo "$TZ_NAME" > /etc/timezone
-    # Taking the device's own zone leaves the choice with iSH-AOK, which moves
+    # Taking the device's own zone leaves the choice with AOK-iSH, which moves
     # /etc/localtime along with the device at each boot for as long as
     # /etc/aok-localtime names the zone it holds (see /AOK/docs/roots.md). A
     # zone set in TZ_NAME, or a different one typed at the prompt, stays put.
     if [ -z "$TZ_PRESET" ] && [ "$TZ_NAME" = "$HOST_TZ" ]; then
         printf '%s\n' \
-            "# /etc/localtime names this zone because it is the device's. iSH-AOK" \
+            "# /etc/localtime names this zone because it is the device's. AOK-iSH" \
             "# moves it along with the device, at boot, for as long as it still names" \
             "# this zone; choose any other and it is left alone from then on. Keep this" \
             "# file: without it a UTC /etc/localtime looks like the distribution's own." \
@@ -238,7 +238,7 @@ update-locale LANG=C.UTF-8 2>/dev/null || true
 # locale forwarded by the ssh client (AcceptEnv LANG) or set by PAM wins.
 mkdir -p /etc/profile.d
 cat > /etc/profile.d/00-aok-locale.sh <<'LOCALESH'
-# iSH-AOK: default to a UTF-8 locale when nothing else named one.
+# AOK-iSH: default to a UTF-8 locale when nothing else named one.
 # Reaches sessions PAM never touches -- ssh (stock sshd has UsePAM no).
 [ -n "${LANG:-}" ] || export LANG=C.UTF-8
 LOCALESH
@@ -418,7 +418,7 @@ note "wrote /etc/profile.d/30-aok-niceties.sh and 40-aok-tools.sh"
 # needed:  chronyc -h 127.0.0.1 tracking
 if [ "$IN_AOK" = 1 ] && [ -d /etc/chrony ]; then
     cat > /etc/chrony/chrony.conf <<'CHRONYCONF'
-# chrony.conf -- tuned for iSH-AOK (monitoring mode; chronyd runs with -x)
+# chrony.conf -- tuned for AOK-iSH (monitoring mode; chronyd runs with -x)
 pool pool.ntp.org iburst
 server time.cloudflare.com iburst
 server time.google.com iburst
@@ -665,7 +665,7 @@ write_tmux /root root
 [ -n "$TARGET_HOME" ] && write_tmux "$TARGET_HOME" "$TARGET_USER"
 
 # ===========================================================================
-log "iSH-AOK native programs"
+log "AOK-iSH native programs"
 # ===========================================================================
 # native-links.sh links the app's native programs -- SmallCLUE's applets, zsh,
 # dash as `sh`, motepad and the rest of /AOK/native -- into
@@ -675,12 +675,12 @@ log "iSH-AOK native programs"
 # own /AOK/persist/bin into /usr/local/bin, for the sessions that never read
 # /etc/profile.d (`ssh host cmd`, cron, services). NATIVE_LINKS=0 skips both.
 if [ "$IN_AOK" = 0 ]; then
-    note "not under iSH-AOK: there are no native programs to link"
+    note "not under AOK-iSH: there are no native programs to link"
 elif [ "${NATIVE_LINKS:-1}" = 1 ]; then
     if [ -f /AOK/tools/native-links.sh ] && [ -x /AOK/native/smallclue ]; then
         sh /AOK/tools/native-links.sh --no-shell 2>&1 | sed 's/^/    /'
     else
-        note "this iSH-AOK has no /AOK/native; native links skipped"
+        note "this AOK-iSH has no /AOK/native; native links skipped"
     fi
     if [ -f /AOK/tools/persist-links.sh ] && [ -d /AOK/persist/bin ]; then
         sh /AOK/tools/persist-links.sh 2>&1 | sed 's/^/    /'

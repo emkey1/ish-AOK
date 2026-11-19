@@ -2,7 +2,7 @@
 //
 // ktop's ARCH column read the ELF header behind /proc/<pid>/exe. Since the
 // 2026-09-24 hardening another user's exe is refused, as on Linux, so a normal
-// user saw "?" beside every root process. iSH-AOK now publishes the answer in
+// user saw "?" beside every root process. AOK-iSH now publishes the answer in
 // its own /proc/ish/arch: "PID ARCH", then "<pid> <machine>" per live process,
 // machine being what uname(2) says inside it, or for host code the host's
 // machine marked "(n)" ("aarch64(n)").
@@ -18,8 +18,8 @@
 //     The table used to take live processes only, so ktop's ARCH column read
 //     "?" for every zombie (seen on the device in the 556 suite).
 //
-// iSH-AOK only: with no /proc/ish at all (real Linux) it skips; with /proc/ish
-// but no arch file (an iSH-AOK from before the table) it FAILS.
+// AOK-iSH only: with no /proc/ish at all (real Linux) it skips; with /proc/ish
+// but no arch file (an AOK-iSH from before the table) it FAILS.
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
@@ -81,7 +81,7 @@ int main(int argc, char **argv) {
     alarm(test_watchdog_secs(60));
     struct stat st;
     if (stat("/proc/ish", &st) != 0) {
-        printf("proc_ish_arch: SKIP (no /proc/ish, not iSH-AOK)\n");
+        printf("proc_ish_arch: SKIP (no /proc/ish, not AOK-iSH)\n");
         return 0;
     }
     check("/proc/ish/arch exists", stat("/proc/ish/arch", &st) == 0, errno, 0);

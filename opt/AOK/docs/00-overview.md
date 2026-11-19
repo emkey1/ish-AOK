@@ -2,7 +2,7 @@
 
 `/AOK` is not a copy of files sitting on disk inside your Linux root. It's a
 small, synthetic, read-only filesystem (`aokfs`, see `fs/aok.c`) that
-iSH-AOK mounts at `/AOK` on every boot, regardless of which root filesystem
+AOK-iSH mounts at `/AOK` on every boot, regardless of which root filesystem
 (Alpine, Devuan, i386/amd64/arm64/riscv64/ppc64le) you're currently running. Because
 it isn't part of any root, it shows up the same way no matter which
 filesystem you booted or chrooted into, and it can't be deleted or corrupted
@@ -48,7 +48,7 @@ Everything else under `/AOK` is baked into the app at build time:
 ## Where the content actually comes from
 
 `/AOK/docs`, `/AOK/tools`, `/AOK/tests` and `/AOK/native/libs` are generated
-from plain files in the iSH-AOK git repository, not copied onto your device
+from plain files in the AOK-iSH git repository, not copied onto your device
 at runtime:
 
 - Doc sources live under `opt/AOK/docs/` in the repo (this file included).
@@ -73,7 +73,7 @@ A couple of things fall out of that:
 
 - `/AOK` is genuinely tiny and always available, even before any root is
   imported.
-- If you're building iSH-AOK from source and want to see a new doc or tool
+- If you're building AOK-iSH from source and want to see a new doc or tool
   show up under `/AOK`, it has to be listed in the matching manifest file,
   or it won't be embedded.
 - Files under `/AOK` can be mapped, the way `ld.so` maps every library — an
@@ -97,7 +97,7 @@ derived from the listed paths rather than declared in `fs/aok.c`.
 
 ## A note on `/proc`, `/sys`, and `/dev`
 
-iSH-AOK is one machine — there's exactly one Linux kernel
+AOK-iSH is one machine — there's exactly one Linux kernel
 underneath everything, so `/proc`, `/sys`, and `/dev` always reflect the
 single true system state no matter which root or chroot you're looking at
 them from. That's what makes tools like [ktop](ktop.md) useful from outside
@@ -145,8 +145,8 @@ six of them were not linked from anywhere at all.
 | [persist.md](persist.md) | `/AOK/persist` and `/AOK/fakefs` — the two places that survive root switches, app updates and reinstalls |
 | [networking.md](networking.md) | reaching the device from another machine, what the guest can and cannot listen on, and the DNS relay |
 | [namespaces.md](namespaces.md) | sandboxes inside the guest — `unshare`, bubblewrap, Codex CLI's command sandbox — and what a private network is here |
-| [files-app-integration.md](files-app-integration.md) | the File Provider extension, and how iSH-AOK appears in the iOS Files app — and `mount -t ios`, a Files folder inside the guest |
-| [shortcuts.md](shortcuts.md) | driving iSH-AOK from Apple's Shortcuts app |
+| [files-app-integration.md](files-app-integration.md) | the File Provider extension, and how AOK-iSH appears in the iOS Files app — and `mount -t ios`, a Files folder inside the guest |
+| [shortcuts.md](shortcuts.md) | driving AOK-iSH from Apple's Shortcuts app |
 | [swap.md](swap.md) | the simulated swap area — turning it on, what it costs, and what it will not do |
 | [suspend.md](suspend.md) | suspend to disk — keeping the session across the app being killed |
 
@@ -182,7 +182,7 @@ six of them were not linked from anywhere at all.
 
 **The book**
 
-`/AOK/docs/book` is the full iSH-AOK book -- 43 chapters and 8 appendices on
+`/AOK/docs/book` is the full AOK-iSH book -- 43 chapters and 8 appendices on
 how the whole thing works, from the emulator and its four guests through the
 VFS, native programs, the iOS app, testing and releasing, to an honest account
 of what is still wrong. It ships here because a reader with a terminal and no

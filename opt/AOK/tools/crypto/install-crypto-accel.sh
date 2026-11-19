@@ -1,5 +1,5 @@
 #!/bin/sh
-# install-crypto-accel.sh -- build and install the iSH-AOK OpenSSL crypto
+# install-crypto-accel.sh -- build and install the AOK-iSH OpenSSL crypto
 # accelerator provider into this root filesystem, so ssh/scp/sftp and anything
 # else built on OpenSSL transparently use the host-native cipher instead of
 # emulating it instruction by instruction.
@@ -18,6 +18,8 @@
 set -eu
 
 TAG='ish-accel-managed'
+# The markers keep the app's old name, iSH-AOK: installs made before the
+# rename carry them, and uninstall finds the block by them.
 BEGIN='# >>> iSH-AOK crypto accelerator >>>'
 END='# <<< iSH-AOK crypto accelerator <<<'
 
@@ -164,7 +166,7 @@ esac
 TOGGLE=/proc/ish/defaults/enable_crypto_accel
 if [ -r "$TOGGLE" ]; then
     if [ "$(cat "$TOGGLE" 2>/dev/null)" != "true" ]; then
-        say "warning: 'Enable Crypto Accel' is OFF in iSH-AOK Settings."
+        say "warning: 'Enable Crypto Accel' is OFF in AOK-iSH Settings."
         say "         The provider will install, fail its self-test, and decline"
         say "         every algorithm -- OpenSSL just falls back to software, so"
         say "         nothing breaks, but you get no speedup until you turn the"
@@ -173,7 +175,7 @@ if [ -r "$TOGGLE" ]; then
         vsay "toggle     = enabled"
     fi
 else
-    say "warning: $TOGGLE not readable; are you running under iSH-AOK?"
+    say "warning: $TOGGLE not readable; are you running under AOK-iSH?"
 fi
 
 # Both the header probe and the build compile this file, so it has to be
@@ -245,7 +247,7 @@ find_openssl_include() {
 # This syntax-checks ish_provider.c itself rather than a stand-in translation
 # unit assembled here. Assembling one was wrong twice over: it could drift from
 # the real source, and it made this script's own output the thing under test.
-# That is not hypothetical -- an iSH-AOK bug (fixed alongside this) left tmpfs
+# That is not hypothetical -- an AOK-iSH bug (fixed alongside this) left tmpfs
 # ignoring O_APPEND, so the `>>` that used to finish the generated probe wrote
 # at offset 0 and overwrote the first line of it. The compiler then reported a
 # page of errors about a file this script had mangled itself and deleted on
@@ -428,7 +430,7 @@ if [ -n "$offered" ]; then
     printf '%s\n' "$offered" | sed 's/^ */  /'
 else
     say "  (none -- the provider loaded but declined every algorithm)"
-    say "  Check that 'Enable Crypto Accel' is on in iSH-AOK Settings."
+    say "  Check that 'Enable Crypto Accel' is on in AOK-iSH Settings."
 fi
 
 # A speed delta is the other half of the proof. Note that openssl speed times

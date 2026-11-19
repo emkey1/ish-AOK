@@ -1,11 +1,11 @@
 //
 //  AudioPlayerEngine.h
-//  iSH-AOK
+//  AOK-iSH
 //
 //  Native music playback for the Workspace audio player applet. Built on
 //  AVAudioEngine + AVAudioPlayerNode (public AVFoundation), fed PCM by an
 //  ISHPCMDecoder so it plays every supported format identically. Owns the
-//  AVAudioSession (.playback, so audio continues when iSH-AOK is backgrounded or
+//  AVAudioSession (.playback, so audio continues when AOK-iSH is backgrounded or
 //  the device is locked) and the lock-screen / Control Center integration via
 //  MPNowPlayingInfoCenter + MPRemoteCommandCenter.
 //
@@ -117,7 +117,7 @@ extern NSString *const ISHAudioEqualizerDidChangeNotification;
 
 @end
 
-// True while the engine is playing, which is what keeps iSH-AOK running in the
+// True while the engine is playing, which is what keeps AOK-iSH running in the
 // background (the audio background mode). The suspension guard in AppDelegate.m
 // uses it, like ISHLocationKeepsAppAlive, to tell "still running" from "about to
 // be suspended". Callable from any thread, and does not create the engine.

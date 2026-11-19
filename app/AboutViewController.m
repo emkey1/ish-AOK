@@ -196,7 +196,7 @@ static const CGFloat kDiagnosticsBottomSlack = 16;
     // now says "Next Launch", so the one-shot is stated rather than surprising.
     if ([NSUserDefaults.standardUserDefaults boolForKey:kPreferenceOpenDiagnosticsOnLaunchKey]) {
         [NSUserDefaults.standardUserDefaults setBool:NO forKey:kPreferenceOpenDiagnosticsOnLaunchKey];
-        // Straight to disk. The Settings app and iSH-AOK are different
+        // Straight to disk. The Settings app and AOK-iSH are different
         // processes sharing this domain, and the stuck state above is what a
         // lost write looks like from the outside.
         [NSUserDefaults.standardUserDefaults synchronize];
@@ -408,7 +408,7 @@ UIViewController *ISHCreateDiagnosticsNavigationController(void) {
                                                           action:@selector(dismiss:)];
         self.navigationItem.rightBarButtonItems = @[_doneButton, workspaceButton];
     }
-    _versionLabel.text = [NSString stringWithFormat:NSLocalizedString(@"iSH-AOK %@ (Build %@)", @"Settings version label; version, then build number"),
+    _versionLabel.text = [NSString stringWithFormat:NSLocalizedString(@"AOK-iSH %@ (Build %@)", @"Settings version label; version, then build number"),
                           [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleShortVersionString"],
                           [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleVersion"]];
 
@@ -474,7 +474,7 @@ UIViewController *ISHCreateDiagnosticsNavigationController(void) {
     // says why), so this says what to do instead.
     [NSUserDefaults.standardUserDefaults setBool:NO forKey:@"recovery"];
     ISHPresentFinalScreen(NSLocalizedString(@"Recovery Mode is off", @"Final screen title after leaving recovery mode"),
-                          NSLocalizedString(@"Close iSH-AOK and open it again to start normally.",
+                          NSLocalizedString(@"Close AOK-iSH and open it again to start normally.",
                                             @"Final screen message after leaving recovery mode"));
 }
 
@@ -621,7 +621,7 @@ UIViewController *ISHCreateDiagnosticsNavigationController(void) {
 - (void)_showGuestSshdPortEditor {
     UIAlertController *alert =
         [UIAlertController alertControllerWithTitle:NSLocalizedString(@"sshd Port", @"Alert title: choosing the ssh server's port")
-                                            message:NSLocalizedString(@"1 to 65535. Pick one nothing else on this device is listening on; 1022 is what iSH-AOK's own filesystems use.", @"sshd port alert message")
+                                            message:NSLocalizedString(@"1 to 65535. Pick one nothing else on this device is listening on; 1022 is what AOK-iSH's own filesystems use.", @"sshd port alert message")
                                      preferredStyle:UIAlertControllerStyleAlert];
     [alert addTextFieldWithConfigurationHandler:^(UITextField *textField) {
         textField.text = [NSString stringWithFormat:@"%ld", (long) UserPreferences.shared.guestSshdPort];
@@ -968,20 +968,20 @@ static NSString *ISHForeignExecTitle(NSString *mode) {
             ? NSLocalizedString(@"When enabled, LLM Chat appears in Switch Terminal and Workspace menus.", @"LLM Client section footer")
             : NSLocalizedString(@"Enable to show an OpenAI-compatible LLM client in terminal and Workspace menus.", @"LLM Client section footer");
     if (section == [self _shortcutsSectionIndex])
-        return NSLocalizedString(@"When enabled, the Shortcuts app's \"Run Command\" action can run shell commands in the guest system without opening iSH-AOK.", @"Shortcuts section footer");
+        return NSLocalizedString(@"When enabled, the Shortcuts app's \"Run Command\" action can run shell commands in the guest system without opening AOK-iSH.", @"Shortcuts section footer");
     if (section == [self _foreignExecSectionIndex])
         return NSLocalizedString(@"Run Inside Their Root: the program sees that filesystem's own files, as if you had chrooted into it (mount-root.sh). "
                @"Use Their Libraries Here: it sees this filesystem's files and your home, borrowing only its libraries; programs that need data files of their own may not work. "
                @"Off: it fails, as on Linux.", @"Other Filesystems section footer; option names must match their translations");
     if (section == [self _jitCacheSectionIndex])
-        return NSLocalizedString(@"Keeps the code iSH-AOK has translated after the program that needed it exits, so the next program that loads the same code starts faster. It helps scripts and builds that start many short programs (about a fifth faster in tests) and does little for one long-running program.\n\n"
+        return NSLocalizedString(@"Keeps the code AOK-iSH has translated after the program that needed it exits, so the next program that loads the same code starts faster. It helps scripts and builds that start many short programs (about a fifth faster in tests) and does little for one long-running program.\n\n"
                @"A cached translation is found by the address its code was loaded at, so while this is on, address space layout randomization (ASLR) is off in the Linux system: every program and library loads at the same addresses each time. ASLR does not prevent bugs; it makes a memory-corruption bug harder to turn into an attack, because the attacker cannot know where anything is. With it off, such a bug in a program you run here -- a network service above all -- is easier to exploit. iOS's own protection of the app is not affected.\n\n"
                @"Applies to programs started after the change, on arm64 filesystems. Uses up to 96 MB of memory.", @"Translated Code section footer: what the translation cache does and that it turns ASLR off");
     if (section == [self _desktopSectionIndex])
         return NSLocalizedString(@"Installs the desktop the Wayland display shows, in the filesystem that is running, and chooses which one it starts.", @"Wayland Desktop section footer in Settings");
     if (section == [self _sshdSectionIndex])
         return [self _guestSshdEnabled]
-            ? [NSString stringWithFormat:NSLocalizedString(@"sshd will listen on port %ld from the next launch, when iSH-AOK unpacks it and the boot scripts start it.\n\nKeys only, and ssh-copy-id cannot put one here: it signs in with a password first, and password authentication is off, because an account here may have no password at all. Fetch the key with the client instead, from a terminal in this filesystem:\n\nmkdir -p ~/.ssh && ssh you@your-machine 'cat ~/.ssh/id_ed25519.pub' >> ~/.ssh/authorized_keys\n\ned25519 keys work; RSA and ECDSA do not.", @"sshd section footer when on; %ld is a port number"), (long) UserPreferences.shared.guestSshdPort]
+            ? [NSString stringWithFormat:NSLocalizedString(@"sshd will listen on port %ld from the next launch, when AOK-iSH unpacks it and the boot scripts start it.\n\nKeys only, and ssh-copy-id cannot put one here: it signs in with a password first, and password authentication is off, because an account here may have no password at all. Fetch the key with the client instead, from a terminal in this filesystem:\n\nmkdir -p ~/.ssh && ssh you@your-machine 'cat ~/.ssh/id_ed25519.pub' >> ~/.ssh/authorized_keys\n\ned25519 keys work; RSA and ECDSA do not.", @"sshd section footer when on; %ld is a port number"), (long) UserPreferences.shared.guestSshdPort]
             : NSLocalizedString(@"Lets you reach this filesystem over ssh from another machine. ssh OUT already works and needs nothing here.", @"sshd section footer when off");
     return [super tableView:tableView titleForFooterInSection:section];
 }
@@ -2123,7 +2123,7 @@ static NSString *ISHDesktopInstallCommand(NSString *name) {
         if (_probeFailed)
             return NSLocalizedString(@"The Linux system did not answer. It has to be running for a desktop to be installed in it.", @"Desktop setup footer when the guest cannot be asked");
         return [NSString stringWithFormat:@"%@ %@",
-                NSLocalizedString(@"Tap a desktop to install it in the filesystem that is running, or to make it the one the Wayland display starts. Installing downloads packages and takes several minutes; keep iSH-AOK open until it finishes. Wayfire needs Devuan and the GPU.", @"Desktop setup footer"),
+                NSLocalizedString(@"Tap a desktop to install it in the filesystem that is running, or to make it the one the Wayland display starts. Installing downloads packages and takes several minutes; keep AOK-iSH open until it finishes. Wayfire needs Devuan and the GPU.", @"Desktop setup footer"),
                 NSLocalizedString(@"To remove an installed desktop, swipe left on it, or touch and hold it.", @"Desktop setup footer, second sentence")];
     }
     return NSLocalizedString(@"Programs for the desktop's Applications menu, and the drivers that let the desktop and its programs use the GPU.", @"Desktop setup footer for the extra programs");
@@ -2161,7 +2161,7 @@ static NSString *ISHDesktopInstallCommand(NSString *name) {
 
 - (void)confirmRunning:(NSString *)title command:(NSString *)command fromCell:(UITableViewCell *)cell {
     ISHActionSheet *sheet = [ISHActionSheet actionSheetWithTitle:title
-                                                         message:NSLocalizedString(@"This downloads packages into the filesystem that is running and takes several minutes. Keep iSH-AOK open until it finishes.", @"Desktop setup: confirmation before installing")];
+                                                         message:NSLocalizedString(@"This downloads packages into the filesystem that is running and takes several minutes. Keep AOK-iSH open until it finishes.", @"Desktop setup: confirmation before installing")];
     __weak typeof(self) weakSelf = self;
     [sheet addActionWithTitle:NSLocalizedString(@"Install", @"Desktop setup: confirm button")
                         style:UIAlertActionStyleDefault
@@ -2181,7 +2181,7 @@ static NSString *ISHDesktopInstallCommand(NSString *name) {
 // install asks it here, in place of the confirmation the others get.
 - (void)wayfirePanelSheetFromCell:(UITableViewCell *)cell {
     ISHActionSheet *sheet = [ISHActionSheet actionSheetWithTitle:ISHDesktopTitle(@"wayfire")
-                                                         message:NSLocalizedString(@"Choose Wayfire's panel. This downloads packages into the filesystem that is running and takes several minutes; keep iSH-AOK open until it finishes. With both, select-desktop.sh --panel switches between them later.", @"Desktop setup: Wayfire install, the panel choice")];
+                                                         message:NSLocalizedString(@"Choose Wayfire's panel. This downloads packages into the filesystem that is running and takes several minutes; keep AOK-iSH open until it finishes. With both, select-desktop.sh --panel switches between them later.", @"Desktop setup: Wayfire install, the panel choice")];
     NSArray<NSArray<NSString *> *> *panels = @[
         @[NSLocalizedString(@"Install with the Fast Panel", @"Desktop setup: Wayfire with the faster wf-panel"), @"fast"],
         @[NSLocalizedString(@"Install with Waybar", @"Desktop setup: Wayfire with waybar as its panel"), @"waybar"],
@@ -2329,19 +2329,19 @@ UIViewController *ISHCreateDesktopSetupViewController(void) {
 static NSString *ISHLegalNoticeText(void) {
     NSString *version = NSBundle.mainBundle.infoDictionary[(__bridge NSString *) kCFBundleVersionKey] ?: @"";
     return [NSString stringWithFormat:NSLocalizedString(
-        @"SOURCE CODE FOR THE GNU/LINUX SOFTWARE INCLUDED WITH iSH-AOK\n"
+        @"SOURCE CODE FOR THE GNU/LINUX SOFTWARE INCLUDED WITH AOK-iSH\n"
         @"\n"
-        @"iSH-AOK includes Linux filesystem images containing software licensed "
+        @"AOK-iSH includes Linux filesystem images containing software licensed "
         @"under the GNU General Public License, versions 2 and 3, among other "
         @"licences. In the Devuan image this includes GNU bash, coreutils, grep, "
         @"findutils, diffutils, gzip, dpkg and apt; in the Alpine image it "
-        @"includes busybox, apk-tools and scanelf. iSH-AOK also includes code "
+        @"includes busybox, apk-tools and scanelf. AOK-iSH also includes code "
         @"from the ish-arm64 project under the GPL version 3, components "
         @"under the Mozilla Public License 2.0, and libgit2, which is under "
         @"the GPL version 2 with a linking exception and is linked "
         @"unmodified.\n"
         @"\n"
-        @"For any version of iSH-AOK, for at least three years after that "
+        @"For any version of AOK-iSH, for at least three years after that "
         @"version was distributed, we will give any third party the complete "
         @"corresponding source code for the GPL-licensed software in it, for no "
         @"more than our cost of physically performing the distribution.\n"
@@ -2366,7 +2366,7 @@ static NSString *ISHLegalNoticeText(void) {
         @"third-party directory \u2014 dvtm, libgit2, nextvi, openrsync and "
         @"openssh \u2014 each under the licence in its own directory.\n"
         @"\n"
-        @"iSH-AOK is itself open source, a fork of the iSH project, and is "
+        @"AOK-iSH is itself open source, a fork of the iSH project, and is "
         @"developed at https://github.com/emkey1/ish-AOK where its own source "
         @"and licence can be read in full.",
         @"The legal notice and GPL written offer shown on the Legal screen; %@ is the build number"), version];

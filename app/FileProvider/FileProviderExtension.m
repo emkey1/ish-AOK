@@ -282,7 +282,7 @@ static void ISHFileProviderCloseDatabase(struct fakefs_db *db) {
         }
         // The extension may run before the main app has ever booted (and thus
         // ever created/mounted /AOK/persist) -- e.g. the very first time a
-        // fresh install is browsed from Files before iSH-AOK is launched.
+        // fresh install is browsed from Files before AOK-iSH is launched.
         [NSFileManager.defaultManager createDirectoryAtURL:_rootURL
                                 withIntermediateDirectories:YES
                                                  attributes:nil

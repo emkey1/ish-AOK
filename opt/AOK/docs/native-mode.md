@@ -1,13 +1,13 @@
-# Native mode: iSH-AOK with no Linux distribution
+# Native mode: AOK-iSH with no Linux distribution
 
 Every other root you can install is a Linux distribution: Alpine, Devuan,
 Arch, each with its own programs, all run by the emulator. **Native mode** is
 the root without one. Its `/bin` and `/usr/bin` are the programs compiled into
-iSH-AOK itself, [native programs](native-programs.md) that run as the iPad's
+AOK-iSH itself, [native programs](native-programs.md) that run as the iPad's
 own code with nothing translated, and its login shell is native zsh.
 
 Nothing is downloaded, and nothing is unpacked: the filesystem starts empty,
-and iSH-AOK fills it in at every boot. What you get is a shell, about 140
+and AOK-iSH fills it in at every boot. What you get is a shell, about 140
 everyday commands, ssh, git, curl, editors and a small service system, all
 fast. What you do not get is a package manager. When you need something
 native mode does not have, install a distribution beside it (see below).
@@ -15,7 +15,7 @@ native mode does not have, install a distribution beside it (see below).
 ## Choosing it
 
 In **Filesystems** (Settings, or the Boot Images applet), under **Official
-Distributions**, pick **iSH-AOK Native**. It is created on the spot, with no
+Distributions**, pick **AOK-iSH Native**. It is created on the spot, with no
 download. To boot it, open it under Installed Filesystems and choose **Boot
 From This Filesystem**. The first-launch picker offers it too, beside Alpine
 and Devuan; nothing is chosen for you.
@@ -31,7 +31,7 @@ As with any root, which one boots is decided when the app starts; see
 
 ## The first start
 
-A new native root has one account, `root`. The first time it boots, iSH-AOK
+A new native root has one account, `root`. The first time it boots, AOK-iSH
 asks for the name of your everyday account, and optionally a password:
 
 - **Create** makes it at uid 1000, in the groups `sudo` and `users`, with a
@@ -79,23 +79,23 @@ subshells by their re-launch command line, because a native shell cannot fork
 
 ## How the filesystem is kept
 
-iSH-AOK provisions a native root **at every boot**, so it follows the build:
+AOK-iSH provisions a native root **at every boot**, so it follows the build:
 an update that adds a command puts it on your `PATH` at the next launch, and
 one that drops a command removes its link.
 
 - `/bin` and `/sbin` are links to `usr/bin` and `usr/sbin`, as on current
   Debian. Scripts that name `/bin/echo` find it.
-- **The links are iSH-AOK's.** Each command is a symlink into `/AOK/native`,
+- **The links are AOK-iSH's.** Each command is a symlink into `/AOK/native`,
   and `/etc/aok-native.links` records the set the last boot made. A link that
   is missing is put back; a link the build no longer has is removed.
 - **Anything of yours at one of those paths is left alone.** Replace
-  `/usr/bin/date` with a script of your own and it stays. iSH-AOK only ever
+  `/usr/bin/date` with a script of your own and it stays. AOK-iSH only ever
   touches symlinks that point into `/AOK/native`.
 - **`/etc` is yours.** `passwd`, `group`, `shadow`, `sudoers`, `shells`,
   `hosts`, `profile`, `zprofile`, `zshrc`, `rc` and `rc.shutdown` are written
   only when they are missing, so edit them freely. `/etc/os-release` and
-  `/etc/aok-native.links` are iSH-AOK's and are rewritten.
-- `/usr/share/terminfo` is the terminal database iSH-AOK carries, and
+  `/etc/aok-native.links` are AOK-iSH's and are rewritten.
+- `/usr/share/terminfo` is the terminal database AOK-iSH carries, and
   `/usr/share/zoneinfo` is the iPad's own time-zone data, mounted read-only.
   `TZ` and `/etc/localtime` work as on a distribution, and the clock follows
   the device's zone.
@@ -130,7 +130,7 @@ sv up myservice
 `halt`, `poweroff` and `reboot` ask init to stop the system: it runs
 `/etc/rc.shutdown` (which stops the services, then runs the `S??*` scripts with
 `stop` in reverse order), stops every process and ends. The app then shows
-**System Halted**: quit iSH-AOK and open it again to boot. iOS does not let an
+**System Halted**: quit AOK-iSH and open it again to boot. iOS does not let an
 app restart itself.
 
 **Suspend and restore.** A native root can be [suspended](suspend.md) like any
@@ -164,7 +164,7 @@ them, since a shipped key would be the same on every device. The default port
 is 1022, and Settings writes your choice to
 `/etc/ssh/sshd_config.d/10-aok-port.conf`, which `/etc/ssh/sshd_config`
 includes first and so wins over anything in it. That config is yours to edit
-afterwards; iSH-AOK writes it only when it is missing.
+afterwards; AOK-iSH writes it only when it is missing.
 
 **Keys only.** Password authentication is off, and deliberately: a native-mode
 account may have no password at all, because terminals open it with `login -f`,
@@ -208,15 +208,15 @@ wait for it (`while [ ! -d /AOK/roots/<name>/usr ]; do sleep 1; done`).
 is a real program, but it was built against Devuan's libraries, and its first
 step is to load Devuan's dynamic loader from `/lib/...` -- which in a native
 root is not there. On Linux that exec simply fails, with a "no such file or
-directory" about a file that plainly exists. iSH-AOK can do better, and
+directory" about a file that plainly exists. AOK-iSH can do better, and
 **Settings → Other Filesystems → Programs From Other Roots** chooses how
 (it applies to the next program started; `/proc/ish/foreign_exec` reads and
 sets it too):
 
 | | |
 |---|---|
-| **Run Inside Their Root** (the default) | The program runs chrooted into its own root, as if you had used `mount-root.sh`: iSH-AOK binds `/proc`, `/sys`, `/dev`, `/dev/pts`, `/run`, `/AOK/native`, `/AOK/docs` and `/AOK/tools` into it first. It sees that root's `/etc`, its data files, its `/tmp` and its home directories, and everything it starts does too. |
-| **Use Their Libraries Here** | The program runs here, in the native root, borrowing only its loader, libraries and locales (through `LD_LIBRARY_PATH` and `LOCPATH`, which iSH-AOK removes again for programs that do not need them; a `LOCPATH` of your own wins). It sees your files and your home. Programs that need other data files of their own -- vim's runtime, Python's library -- will not find them. |
+| **Run Inside Their Root** (the default) | The program runs chrooted into its own root, as if you had used `mount-root.sh`: AOK-iSH binds `/proc`, `/sys`, `/dev`, `/dev/pts`, `/run`, `/AOK/native`, `/AOK/docs` and `/AOK/tools` into it first. It sees that root's `/etc`, its data files, its `/tmp` and its home directories, and everything it starts does too. |
+| **Use Their Libraries Here** | The program runs here, in the native root, borrowing only its loader, libraries and locales (through `LD_LIBRARY_PATH` and `LOCPATH`, which AOK-iSH removes again for programs that do not need them; a `LOCPATH` of your own wins). It sees your files and your home. Programs that need other data files of their own -- vim's runtime, Python's library -- will not find them. |
 | **Off** | The Linux behaviour: it fails. |
 
 It applies on any root, not only a native one, and only to programs that would

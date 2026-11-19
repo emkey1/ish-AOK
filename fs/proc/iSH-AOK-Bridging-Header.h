@@ -1,6 +1,6 @@
 //
 //  iSH-AOK-Bridging-Header.h
-//  iSH-AOK
+//  AOK-iSH
 //
 //  Bridging header for the app target's Swift sources (the App Intents in
 //  app/ISHAppShortcuts.swift and app/ISHRunCommandIntent.swift). Paths are

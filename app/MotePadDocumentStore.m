@@ -1,6 +1,6 @@
 //
 //  MotePadDocumentStore.m
-//  iSH-AOK
+//  AOK-iSH
 //
 
 #import "MotePadDocumentStore.h"

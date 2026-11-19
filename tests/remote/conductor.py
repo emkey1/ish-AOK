@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-conductor.py — iSH-AOK differential / crash-resilient test conductor.
+conductor.py — AOK-iSH differential / crash-resilient test conductor.
 
 Builds each corpus test three ways (i386 ELF, x86_64 ELF, x86_64 macOS Mach-O
 oracle), runs every (arch x engine) cell plus external x86 oracle(s), then does a
@@ -503,7 +503,7 @@ def device_recover(cfg):
         else:
             sh(cmd, timeout=90)
     elif cfg["recover"] == "notify":
-        print(f"\n  *** DEVICE CRASHED — relaunch iSH-AOK on the device; "
+        print(f"\n  *** DEVICE CRASHED — relaunch AOK-iSH on the device; "
               f"waiting for ssh:{cfg['port']} to return ***")
     else:
         return False
@@ -844,7 +844,7 @@ def cmd_tier0(args):
     sys.exit(1 if any_fail else 0)
 
 def main():
-    ap = argparse.ArgumentParser(description="iSH-AOK differential test conductor")
+    ap = argparse.ArgumentParser(description="AOK-iSH differential test conductor")
     sub = ap.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("run"); r.set_defaults(fn=cmd_run)
     r.add_argument("--tests"); r.add_argument("--cells")
@@ -867,7 +867,7 @@ def main():
     dv.add_argument("--device-dir", default="/tmp/ish-remote")
     dv.add_argument("--recover", choices=["devicectl", "notify", "none"], default="notify")
     dv.add_argument("--device-udid", help="device UDID (for --recover devicectl)")
-    dv.add_argument("--device-bundle", default="com.ish.iSH-AOK", help="bundle id (devicectl)")
+    dv.add_argument("--device-bundle", default="com.ish.AOK-iSH", help="bundle id (devicectl)")
     dv.add_argument("--dry-run", action="store_true",
                     help="print ssh/scp/devicectl commands without executing")
     cf = sub.add_parser("conform"); cf.set_defaults(fn=cmd_conform)

@@ -36,7 +36,7 @@ Two details are worth recording because both are choices rather than accidents.
 
 **The location was called "iSH"** until 559 — the extension's display name had
 never been renamed, and the documentation said so plainly rather than leaving
-somebody to wonder whether they were looking at the right app. It is "iSH-AOK"
+somebody to wonder whether they were looking at the right app. It is "AOK-iSH"
 now.
 
 **It is switched off on Macs**, deliberately, and the reasoning is a small model
@@ -45,7 +45,7 @@ of how to handle a platform that will not cooperate:
 > The extension is built on Apple's `NSFileProviderExtension`, which their own
 > SDK marks unavailable on macOS — a Mac hosts only the newer replicated File
 > Provider API. Left enabled, macOS loads the extension, finds one it cannot
-> host, and kills it before any iSH-AOK code runs. So the app does not register
+> host, and kills it before any AOK-iSH code runs. So the app does not register
 > a provider there at all; **a missing feature is better than a crash you cannot
 > act on**.
 
@@ -207,7 +207,7 @@ useful.
 
 A second story from the same file is a good example of fixing a bug at the level
 where the information exists. Words were running together, and a camelCase
-splitter had been added to compensate — which is why "iSH-AOK" rendered as
+splitter had been added to compensate — which is why "AOK-iSH" rendered as
 "i SH-AOK".
 
 The real cause was that the HTML converter dropped tags without putting
@@ -229,7 +229,7 @@ travels with the app rather than with any root (Chapter 21).
 
 Its reason to exist is one column:
 
-> iSH-AOK can run i386, amd64, arm64, riscv64 and ppc64le binaries side by side
+> AOK-iSH can run i386, amd64, arm64, riscv64 and ppc64le binaries side by side
 > in the same booted guest … Stock `top`/`htop` have no way to show that
 > architecture mix.
 > `ktop`'s one real differentiator is an **ARCH** column.
@@ -240,7 +240,7 @@ normal user's `open` of a root process's `exe` is now `EACCES`, as on Linux, so
 `init`, `sshd`, `login` and every other root-owned process showed `?` in the one
 column that is the entire point of running `ktop`. The check was right; the
 column's source was the wrong one. `/proc/ish/arch` now lists `<pid> <machine>`
-for every process, a zombie with what it ran before it died — readable by anyone, because which of iSH-AOK's
+for every process, a zombie with what it ran before it died — readable by anyone, because which of AOK-iSH's
 architectures a process runs is not a secret even when the process itself is —
 and `ktop` reads the whole table once per refresh, falling back to the ELF
 header only for a pid the table missed. Native programs (`zsh`, SmallCLUE's

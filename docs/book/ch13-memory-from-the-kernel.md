@@ -218,7 +218,7 @@ working set somewhere to live that is not RAM, and the working set can exist.
 
 The area is a **file**, created at boot and immediately unlinked, so it can never
 appear in the app's container and can never be swept into a backup. Its size is
-the user's decision, taken in the iOS Settings app under iSH-AOK; it is **off by
+the user's decision, taken in the iOS Settings app under AOK-iSH; it is **off by
 default**, and stays off until a size has been chosen as well as the switch
 turned on, because paging spends the write endurance of somebody's phone and
 nothing — including a default size picked here — should start doing that on

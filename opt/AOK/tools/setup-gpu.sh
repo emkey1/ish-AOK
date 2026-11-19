@@ -1,7 +1,7 @@
 #!/bin/sh
 # setup-gpu.sh
 # ---------------------------------------------------------------------------
-# Set a guest root up to draw with the device's GPU (iSH-AOK's render node,
+# Set a guest root up to draw with the device's GPU (AOK-iSH's render node,
 # /dev/dri/renderD128: Mesa's Venus Vulkan driver in the guest, Metal on the
 # host). Installs:
 #   the Venus Vulkan driver and zink  - Vulkan on the GPU, and OpenGL on top
@@ -114,7 +114,7 @@ check() {
     if [ -c /dev/dri/renderD128 ]; then
         ok "the GPU device, /dev/dri/renderD128"
     else
-        bad "no /dev/dri/renderD128 -- this iSH-AOK build has no GPU device (update the app)"
+        bad "no /dev/dri/renderD128 -- this AOK-iSH build has no GPU device (update the app)"
         return
     fi
     if ls /usr/share/vulkan/icd.d/virtio_icd*.json >/dev/null 2>&1; then
@@ -152,12 +152,12 @@ check() {
             *)
                 if printf '%s\n' "$egl_out" | grep -q 'nullDescriptor'; then
                     # Mesa 25.2 and later refuse to start zink without
-                    # robustness2's nullDescriptor. iSH-AOK's GPU (Venus on
+                    # robustness2's nullDescriptor. AOK-iSH's GPU (Venus on
                     # MoltenVK) offers it from build 559, so this is an older
                     # app build under a newer copy of this script, or a
                     # regression. Vulkan is unaffected either way.
                     info "OpenGL cannot use the GPU with this Mesa ($(mesa_version)): its zink requires the"
-                    info "  Vulkan feature nullDescriptor, which the GPU here is not offering (iSH-AOK"
+                    info "  Vulkan feature nullDescriptor, which the GPU here is not offering (AOK-iSH"
                     info "  has it from build 559). OpenGL programs run in software; Vulkan programs"
                     info "  use the GPU."
                 else
@@ -191,9 +191,9 @@ fi
 # ---- install --------------------------------------------------------------
 
 [ "$(id -u)" = 0 ] || die "must run as root:  sudo sh $0 $*"
-[ -c /dev/dri/renderD128 ] || die "no /dev/dri/renderD128: this iSH-AOK build has no GPU device -- update the app"
+[ -c /dev/dri/renderD128 ] || die "no /dev/dri/renderD128: this AOK-iSH build has no GPU device -- update the app"
 
-# Debian builds Mesa's Venus driver for every architecture iSH-AOK runs
+# Debian builds Mesa's Venus driver for every architecture AOK-iSH runs
 # (riscv64 verified on the A10X, 2026-10-03: "Virtio-GPU Venus (Apple A10X
 # GPU)", and labwc composited on it); Alpine builds it for aarch64 and x86_64
 # only, and Arch Linux ARM is aarch64.
@@ -255,7 +255,7 @@ log "installing $GPU_RUN"
 mkdir -p "$(dirname "$GPU_RUN")"
 cat > "$GPU_RUN" <<'GPU_RUN_EOF'
 #!/bin/sh
-# gpu-run PROGRAM [ARG...] -- run an OpenGL program on the GPU (iSH-AOK),
+# gpu-run PROGRAM [ARG...] -- run an OpenGL program on the GPU (AOK-iSH),
 # through zink on the Venus Vulkan driver. Installed by
 # /AOK/tools/setup-gpu.sh. zink here offers OpenGL 2.1 / OpenGL ES 2.0;
 # a program that needs more reports that it cannot get a context.

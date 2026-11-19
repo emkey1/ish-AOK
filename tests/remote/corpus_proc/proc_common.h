@@ -1,5 +1,5 @@
 /*
- * proc_common.h — shared harness for iSH-AOK process/thread-lifecycle
+ * proc_common.h — shared harness for AOK-iSH process/thread-lifecycle
  * CONFORMANCE tests (fork/vfork/clone, exec, exit, wait4/waitid, sessions and
  * process groups, ptrace).
  *

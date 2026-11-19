@@ -2,7 +2,7 @@
 # Host-side A/B for the fakefs escape migration on a CASE-SENSITIVE host
 # (fs/fake-migrate.c). The companion rig, fakefs_migrate_repair.sh, covers the
 # folding host; this one covers the damage only a case-sensitive host can take,
-# so between them they cover both kinds of host iSH-AOK stores a root on.
+# so between them they cover both kinds of host AOK-iSH stores a root on.
 #
 # v4/v5 resolve a DB path's current host entry by scanning its directory for a
 # case-insensitive match and taking the first one readdir offers. A folding host

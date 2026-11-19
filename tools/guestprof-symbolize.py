@@ -9,7 +9,7 @@ resolves that against the actual ELF.
 The ELF parsing is done here rather than shelled out to readelf/nm because
 neither is guaranteed: macOS has no binutils, and a minimal guest root often
 has no binutils either. Supports 32- and 64-bit little-endian ELF, which covers
-every guest iSH-AOK runs (i386, amd64, arm64, riscv64).
+every guest AOK-iSH runs (i386, amd64, arm64, riscv64).
 
 Usage:
     tools/guestprof-symbolize.py REPORT --libdir DIR [--top N]
