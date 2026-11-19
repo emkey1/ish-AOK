@@ -26,11 +26,7 @@ jobs:
     # tree landing in a DIFFERENTLY NAMED repo, which a fork is not. The trailing
     # slash matters, it stops `owner/not-ish-AOK` from matching.
     if: endsWith(github.repository, '/ish-AOK')
-    # Intel, not macos-15 (arm64): on 2026-11-19 GitHub's macOS arm64 runners
-    # were out of capacity and every arm64 job sat unassigned until it was
-    # cancelled. This image has the same Xcode 26.3 the arm64 builds used, and
-    # the app is cross-built for iOS either way.
-    runs-on: macos-15-intel
+    runs-on: macos-15
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
