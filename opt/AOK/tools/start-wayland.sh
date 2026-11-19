@@ -2473,6 +2473,15 @@ if [ "$WL_GPU_COMPOSITOR" = 1 ] && [ "${ISH_DISPLAY_DIRECT:-1}" != 0 ] && [ -x /
         rm -f "$WAYVNC_DETACHED_MARK"
         wayvncctl attach "$WAYLAND_DISPLAY" >/dev/null 2>&1'
     PRESENT_PID=$SPAWN_PID
+elif [ "${ISH_DISPLAY_DIRECT:-1}" != 0 ] && [ -x /AOK/native/wl-present ]; then
+    # In software the frames stay with wayvnc, but the keyboard and pointer
+    # still go through wl-present (-i): it gives any character the app sends a
+    # key of its own, where wayvnc drops what its us keymap has no key for --
+    # a Danish keyboard's ae, o-slash and a-ring, say. If it ends, the app's
+    # input goes back to wayvnc.
+    log "taking the app's input directly"
+    spawn_logged wl-present "$AOK_ENV" WAYVNC_PORT="$WAYVNC_PORT" /AOK/native/wl-present -i
+    PRESENT_PID=$SPAWN_PID
 fi
 
 echo "READY $WAYVNC_PORT"

@@ -1092,7 +1092,12 @@ static inline void rfb_write_u32(uint8_t *p, uint32_t hostValue) {
 }
 
 - (void)sendKeyEvent:(uint32_t)keysym down:(BOOL)down {
-    if (virtgpu_present_input(_guestPort, VIRTGPU_INPUT_KEY, keysym, down ? 1 : 0, NULL, 0) == 0)
+    [self sendKeyEvent:keysym down:down option:NO];
+}
+
+- (void)sendKeyEvent:(uint32_t)keysym down:(BOOL)down option:(BOOL)option {
+    uint32_t flags = (down ? VIRTGPU_KEY_DOWN : 0) | (option ? VIRTGPU_KEY_OPTION : 0);
+    if (virtgpu_present_input(_guestPort, VIRTGPU_INPUT_KEY, keysym, flags, NULL, 0) == 0)
         return;
     dispatch_async(_queue, ^{
         if (self->_connection == nil)

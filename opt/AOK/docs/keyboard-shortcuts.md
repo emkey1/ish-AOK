@@ -168,6 +168,13 @@ labwc and the programs on it get Control, Option (as Alt) and Shift as they
 would on a PC. The window's own key row has a ❖ key for Super, which a Mac
 keyboard has no key for.
 
+Any keyboard layout works: the desktop gets the character a key types, not
+where the key is, so a Danish keyboard's æ, ø and å, accented letters and other
+scripts all arrive as typed. The symbols other layouts put on Option, such as a
+Danish keyboard's { (⌥8), @ and $, arrive as those symbols, not as Alt
+shortcuts. Option stays Alt for everything else, and is always Alt when
+**Option → Meta** (in External Keyboard settings) is on.
+
 ⌘+ (or ⌘=), ⌘- and ⌘0 are the one exception: they are passed on as ⌃+, ⌃- and
 ⌃0, the zoom keys of foot and most Linux programs. No other Command chord is
 translated, so ⌘C stays copy and never becomes ⌃C.

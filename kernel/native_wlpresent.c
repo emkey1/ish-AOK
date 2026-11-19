@@ -2,7 +2,8 @@
 //
 // A native program (kernel/native.c): host code on the guest task's thread,
 // talking to the guest's compositor through the libc shim like any guest
-// client would. start-wayland.sh runs it when the compositor draws on the GPU.
+// client would. start-wayland.sh runs it when the compositor draws on the GPU,
+// and with -i, for the input alone, when it draws in software.
 //
 // Each frame, it asks the compositor (wlr-screencopy, with damage) to copy the
 // output into one of two buffers of its own -- DRM dumb buffers on the render
@@ -109,7 +110,16 @@ struct wp_head {
 struct wp_key {
     uint32_t keysym, code;
     bool shifted;               // Shift was pressed for it and goes up with it
+    uint32_t mods_clear;        // held modifiers lifted while it is the newest key
 };
+
+// Keys the us layout leaves free (F13-F24 and the rarest of the rest), lent to
+// keysyms it has no key for, in xkb's numbering (Linux key code + 8).
+static const uint8_t spare_keys[] = {
+    191, 192, 193, 194, 195, 196, 197, 198, 199, 200, 201, 202,
+    240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255,
+};
+#define SPARE_KEYS ((int) (sizeof(spare_keys) / sizeof(spare_keys[0])))
 
 struct wp {
     int sock, drm;
@@ -137,6 +147,7 @@ struct wp {
     int in_fd_count;
     bool synced, quiet;
     bool verbose;       // -v: log the app's input events (a diagnostic)
+    bool input_only;    // -i: take the app's input, leave the frames to wayvnc
     bool watched;       // the app took the last frame
     bool detached;      // wayvnc was told to let go of the compositor
     uint32_t display;   // the desktop's VNC port, naming it to the app
@@ -150,6 +161,9 @@ struct wp {
     uint32_t mods_depressed, mods_locked, mods_sent_depressed, mods_sent_locked;
     struct wp_key keys[16];
     int key_count;
+    uint32_t spare_sym[SPARE_KEYS];     // what each spare key types, or 0
+    uint32_t spare_used[SPARE_KEYS];    // when it last went down, to lend the oldest
+    uint32_t spare_clock;
 
     // the clipboard
     uint32_t dc_mgr, dc_device;
@@ -447,14 +461,19 @@ static void clip_in_read(struct wp *w) {
 
 // ---- pointer and keyboard ----------------------------------------------------
 
-// The us keymap wayvnc also uses; the compositor's xkbcommon expands it.
-static const char keymap_text[] =
+// The us keymap wayvnc also uses; the compositor's xkbcommon expands it. Any
+// other keysym the app sends -- a Danish keyboard's ae, an accented letter, a
+// symbol from another script -- is given a spare key of its own, and the
+// keymap goes over again with it (keymap_send): the app sends what the key
+// typed, not where it is, so the desktop needs no layout of its own.
+static const char keymap_head[] =
     "xkb_keymap {\n"
     "  xkb_keycodes { include \"evdev+aliases(qwerty)\" };\n"
     "  xkb_types { include \"complete\" };\n"
     "  xkb_compat { include \"complete\" };\n"
-    "  xkb_symbols { include \"pc+us+inet(evdev)\" };\n"
-    "};\n";
+    "  xkb_symbols {\n"
+    "    include \"pc+us+inet(evdev)\"\n";
+static const char keymap_tail[] = "  };\n};\n";
 
 enum { MOD_SHIFT = 1, MOD_LOCK = 2, MOD_CONTROL = 4, MOD_ALT = 8, MOD_SUPER = 64 };
 enum { KEY_LEFTSHIFT = 42, KEY_CAPSLOCK = 58 };
@@ -532,6 +551,75 @@ static bool keysym_key(uint32_t sym, uint32_t *code, bool *shift) {
     return false;
 }
 
+// The keymap, with the spare keys lent so far, goes over as a file the
+// compositor maps. Each spare key is one level: it types its keysym whatever
+// the modifiers.
+static void keymap_send(struct wp *w) {
+    char *text = NULL;
+    size_t size = 0;
+    FILE *f = open_memstream(&text, &size);
+    if (f == NULL)
+        return;
+    fputs(keymap_head, f);
+    for (int i = 0; i < SPARE_KEYS; i++)
+        if (w->spare_sym[i] != 0)
+            fprintf(f, "    replace key <I%u> { type = \"ONE_LEVEL\", symbols[Group1] = [ 0x%x ] };\n",
+                    spare_keys[i], w->spare_sym[i]);
+    fputs(keymap_tail, f);
+    if (fclose(f) != 0) {
+        free(text);
+        return;
+    }
+    char path[256];
+    const char *dir = getenv("XDG_RUNTIME_DIR");
+    snprintf(path, sizeof(path), "%s/wl-present-keymap-%d", dir != NULL ? dir : "/tmp", (int) getpid());
+    int fd = open(path, O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+    if (fd >= 0) {
+        unlink(path);
+        // with its NUL, which the size counts
+        ssize_t n = write(fd, text, size + 1);
+        if (n == (ssize_t) (size + 1)) {
+            // format XKB_V1, the descriptor (out of band), the size
+            struct msg m = {.n = 0};
+            msg_u32(&m, 1);
+            msg_u32(&m, (uint32_t) (size + 1));
+            wp_send(w, w->vkbd, VKBD_KEYMAP, &m, fd);
+        }
+        close(fd);
+    }
+    free(text);
+}
+
+// The spare key lent to keysym, lending one if it has none: a free one, or else
+// the one used longest ago that is not held. 0 when every one is held.
+static uint32_t spare_key(struct wp *w, uint32_t keysym) {
+    int slot = -1;
+    for (int i = 0; i < SPARE_KEYS && slot < 0; i++)
+        if (w->spare_sym[i] == keysym)
+            slot = i;
+    if (slot < 0) {
+        for (int i = 0; i < SPARE_KEYS; i++) {
+            bool held = false;
+            for (int k = 0; k < w->key_count; k++)
+                if (w->keys[k].code == (uint32_t) spare_keys[i] - 8)
+                    held = true;
+            if (held)
+                continue;
+            if (slot < 0 || w->spare_sym[i] == 0 ||
+                    (w->spare_sym[slot] != 0 && w->spare_used[i] < w->spare_used[slot]))
+                slot = i;
+            if (w->spare_sym[slot] == 0)
+                break;
+        }
+        if (slot < 0)
+            return 0;
+        w->spare_sym[slot] = keysym;
+        keymap_send(w);
+    }
+    w->spare_used[slot] = ++w->spare_clock;
+    return (uint32_t) spare_keys[slot] - 8;
+}
+
 static uint32_t key_modifier(uint32_t code) {
     switch (code) {
         case 42: case 54: return MOD_SHIFT;
@@ -543,13 +631,22 @@ static uint32_t key_modifier(uint32_t code) {
 }
 
 // wlroots' virtual keyboard takes the modifier state only as told, so it is
-// worked out from the keys held and sent whenever it changes.
+// worked out from the keys held and sent whenever it changes. The newest key
+// lifts what it must not be typed with: Shift for a symbol the us layout has
+// unshifted (a Danish keyboard's = is Shift+0), Alt for one typed on the Option
+// layer (its { is Option+8).
 static void mods_update(struct wp *w) {
     uint32_t depressed = 0;
     for (int i = 0; i < w->key_count; i++) {
         depressed |= key_modifier(w->keys[i].code);
         if (w->keys[i].shifted)
             depressed |= MOD_SHIFT;
+    }
+    for (int i = w->key_count - 1; i >= 0; i--) {
+        if (key_modifier(w->keys[i].code) != 0)
+            continue;
+        depressed &= ~w->keys[i].mods_clear;
+        break;
     }
     w->mods_depressed = depressed;
     if (depressed == w->mods_sent_depressed && w->mods_locked == w->mods_sent_locked)
@@ -559,7 +656,9 @@ static void mods_update(struct wp *w) {
     w->mods_sent_locked = w->mods_locked;
 }
 
-static void key_event(struct wp *w, uint32_t keysym, bool down) {
+// option: the app typed the keysym on the Option layer, so the Alt held for
+// Option is not part of it.
+static void key_event(struct wp *w, uint32_t keysym, bool down, bool option) {
     if (w->vkbd == 0)
         return;
     uint32_t t = now_ms();
@@ -582,13 +681,32 @@ static void key_event(struct wp *w, uint32_t keysym, bool down) {
     for (int i = 0; i < w->key_count; i++)
         if (w->keys[i].keysym == keysym)
             return;
+    if (w->key_count == (int) (sizeof(w->keys) / sizeof(w->keys[0])))
+        return;
     uint32_t code;
     bool shift;
-    if (!keysym_key(keysym, &code, &shift) || w->key_count == (int) (sizeof(w->keys) / sizeof(w->keys[0])))
-        return;
-    // Shift is added for a symbol that needs it, unless it is already held.
+    // Whether Shift changes what the key types: it does for the printable
+    // keys, not for Tab, the arrows and the like, which keep a held Shift.
+    bool leveled = false;
+    if (keysym_key(keysym, &code, &shift)) {
+        uint32_t sym = keysym >= 0x1000020 && keysym < 0x100007f ? keysym - 0x1000000 : keysym;
+        leveled = sym > ' ' && sym < 0x7f;
+        // Caps Lock turns the letters' level over.
+        if ((w->mods_locked & MOD_LOCK) && ((sym >= 'a' && sym <= 'z') || (sym >= 'A' && sym <= 'Z')))
+            shift = !shift;
+    } else {
+        code = spare_key(w, keysym);
+        if (code == 0)
+            return;
+        shift = false;
+    }
+    // Shift is added for a symbol that needs it, unless it is already held,
+    // and lifted from one that must not have it.
     bool add_shift = shift && !(w->mods_depressed & MOD_SHIFT);
-    w->keys[w->key_count++] = (struct wp_key) {.keysym = keysym, .code = code, .shifted = add_shift};
+    uint32_t mods_clear = (leveled && !shift ? MOD_SHIFT : 0) | (option ? MOD_ALT : 0);
+    w->keys[w->key_count++] = (struct wp_key) {
+        .keysym = keysym, .code = code, .shifted = add_shift, .mods_clear = mods_clear,
+    };
     if (code == KEY_CAPSLOCK)
         w->mods_locked ^= MOD_LOCK;
     if (add_shift)
@@ -599,7 +717,7 @@ static void key_event(struct wp *w, uint32_t keysym, bool down) {
 
 static void keys_release_all(struct wp *w) {
     while (w->key_count > 0)
-        key_event(w, w->keys[w->key_count - 1].keysym, false);
+        key_event(w, w->keys[w->key_count - 1].keysym, false, false);
 }
 
 // An RFB pointer event: position, then what the buttons did, then a frame.
@@ -649,7 +767,8 @@ static void input_read(struct wp *w) {
         const uint8_t *data = w->ibuf + at + sizeof(ev);
         if (w->verbose) {
             if (ev.type == VIRTGPU_INPUT_KEY)
-                wp_log(w, "input: key 0x%x %s", ev.a, ev.b ? "down" : "up");
+                wp_log(w, "input: key 0x%x %s%s", ev.a, ev.b & VIRTGPU_KEY_DOWN ? "down" : "up",
+                        ev.b & VIRTGPU_KEY_OPTION ? " (option)" : "");
             else if (ev.type == VIRTGPU_INPUT_POINTER)
                 wp_log(w, "input: pointer %u,%u buttons 0x%x", ev.a & 0xffff, ev.a >> 16, ev.b);
             else
@@ -660,7 +779,7 @@ static void input_read(struct wp *w) {
                 pointer_event(w, ev.a & 0xffff, ev.a >> 16, ev.b);
                 break;
             case VIRTGPU_INPUT_KEY:
-                key_event(w, ev.a, ev.b != 0);
+                key_event(w, ev.a, (ev.b & VIRTGPU_KEY_DOWN) != 0, (ev.b & VIRTGPU_KEY_OPTION) != 0);
                 break;
             case VIRTGPU_INPUT_CLIPBOARD:
                 clip_set(w, data, ev.len);
@@ -710,23 +829,7 @@ static void input_start(struct wp *w) {
     uint32_t vkbd_mgr = wp_bind(w, w->vkbd_mgr_name, "zwp_virtual_keyboard_manager_v1", 1);
     w->vkbd = w->next_id++;
     wp_send_u32(w, vkbd_mgr, VKBD_MGR_CREATE, 2, w->seat, w->vkbd);
-    // The keymap goes over as a file the compositor maps.
-    char path[256];
-    const char *dir = getenv("XDG_RUNTIME_DIR");
-    snprintf(path, sizeof(path), "%s/wl-present-keymap-%d", dir != NULL ? dir : "/tmp", (int) getpid());
-    int fd = open(path, O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
-    if (fd >= 0) {
-        unlink(path);
-        ssize_t n = write(fd, keymap_text, sizeof(keymap_text));
-        if (n == (ssize_t) sizeof(keymap_text)) {
-            // format XKB_V1, the descriptor (out of band), the size with its NUL
-            struct msg m = {.n = 0};
-            msg_u32(&m, 1);
-            msg_u32(&m, (uint32_t) sizeof(keymap_text));
-            wp_send(w, w->vkbd, VKBD_KEYMAP, &m, fd);
-        }
-        close(fd);
-    }
+    keymap_send(w);
 
     if (w->dc_mgr_name != 0) {
         w->dc_mgr = wp_bind(w, w->dc_mgr_name, "zwlr_data_control_manager_v1", 1);
@@ -1043,10 +1146,12 @@ static int wp_run(struct wp *w) {
         wp_log(w, "cannot connect to the compositor: %s", strerror(errno));
         return 1;
     }
-    w->drm = open("/dev/dri/renderD128", O_RDWR | O_CLOEXEC);
-    if (w->drm < 0 || virtgpu_presenter_attach(w->drm, w->display) != 0) {
-        wp_log(w, "no GPU render node to present from");
-        return 1;
+    if (!w->input_only) {
+        w->drm = open("/dev/dri/renderD128", O_RDWR | O_CLOEXEC);
+        if (w->drm < 0 || virtgpu_presenter_attach(w->drm, w->display) != 0) {
+            wp_log(w, "no GPU render node to present from");
+            return 1;
+        }
     }
 
     struct msg m = {.n = 0};
@@ -1058,6 +1163,23 @@ static int wp_run(struct wp *w) {
     while (!w->synced && !w->fatal)
         if (wp_dispatch(w, 5000) != 0)
             return 1;
+    // A software compositor's frames go over VNC, which is wayvnc's; its input
+    // still comes here, where any keysym can be typed (keymap_send) -- wayvnc
+    // drops what its keymap has no key for.
+    if (w->input_only) {
+        if (w->output_name == 0) {
+            wp_log(w, "the compositor has no output");
+            return 1;
+        }
+        w->output = wp_bind(w, w->output_name, "wl_output", min_u32(w->output_version, 4));
+        input_start(w);
+        if (w->input < 0)
+            return 1;
+        while (!w->fatal)
+            if (wp_dispatch(w, -1) != 0)
+                return 0;
+        return 0;
+    }
     if (w->output_name == 0 || w->screencopy_name == 0 || w->dmabuf_name == 0) {
         wp_log(w, "the compositor lacks screencopy v3 or linux-dmabuf v3");
         return 1;
@@ -1161,6 +1283,8 @@ int native_wlpresent_main(int argc, char *const argv[], char *const envp[]) {
             w.quiet = true;
         else if (!strcmp(argv[i], "-v"))
             w.verbose = true;
+        else if (!strcmp(argv[i], "-i"))
+            w.input_only = true;
     }
     // The desktop's VNC port names it to the app (fs/virtgpu.h).
     const char *port = getenv("WAYVNC_PORT");

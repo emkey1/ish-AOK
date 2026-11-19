@@ -65,9 +65,15 @@ void virtgpu_clear_present_hook(uint32_t display, void *ctx);
 // them.
 enum {
     VIRTGPU_INPUT_POINTER = 1,  // a = x | y << 16 in desktop pixels, b = RFB button mask
-    VIRTGPU_INPUT_KEY = 2,      // a = X keysym, b = 1 down / 0 up
+    VIRTGPU_INPUT_KEY = 2,      // a = X keysym, b = VIRTGPU_KEY_* flags
     VIRTGPU_INPUT_CLIPBOARD = 3,    // data = UTF-8 text for the desktop's clipboard
     VIRTGPU_INPUT_RESIZE = 4,   // a = width, b = height
+};
+// A key's flags: down (else up), and typed on the Option layer -- the Alt held
+// for Option is not applied to it (a Danish keyboard's { is Option+8).
+enum {
+    VIRTGPU_KEY_DOWN = 1,
+    VIRTGPU_KEY_OPTION = 2,
 };
 // On the presenter's descriptor, each event reads as this header and then
 // `len` bytes of data.

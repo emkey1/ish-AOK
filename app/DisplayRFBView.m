@@ -1008,11 +1008,15 @@ static CGFloat DisplayTouchpadGain(CGFloat pointsPerSecond) {
             ch = '"';
         else if (ch == 0x00A0) /* non-breaking space */
             ch = ' ';
-        // X11 keysyms equal the Unicode code point for the printable
-        // Latin-1 range, which covers normal typing; anything outside that
-        // range is out of scope for v1 (matches typing through a US/Latin-1
-        // layout, same practical coverage noVNC's default input path had).
-        uint32_t keysym = ch == '\n' ? 0xFF0D /* Return */ : (uint32_t) ch;
+        // Latin-1 keysyms are the code point; every other character is the
+        // Unicode keysym 0x01000000 + it, which the desktop's presenter gives a
+        // key of its own (kernel/native_wlpresent.c). A character outside the
+        // BMP comes as a surrogate pair.
+        uint32_t cp = ch;
+        if (CFStringIsSurrogateHighCharacter(ch) && i + 1 < text.length &&
+                CFStringIsSurrogateLowCharacter([text characterAtIndex:i + 1]))
+            cp = (uint32_t) CFStringGetLongCharacterForSurrogatePair(ch, [text characterAtIndex:++i]);
+        uint32_t keysym = cp == '\n' ? 0xFF0D /* Return */ : cp <= 0xFF ? cp : 0x01000000u + cp;
         [_rfbClient sendKeyEvent:keysym down:YES];
         [_rfbClient sendKeyEvent:keysym down:NO];
     }
@@ -1078,16 +1082,35 @@ static BOOL DisplayRFBUsageIsModifier(UIKeyboardHIDUsage usage) {
 // under Alt+Shift reached labwc as a bare letter. With Control or Option held, the character iOS
 // reports is a control code or an Option-layer symbol, so take the key's plain
 // character and apply Shift to letters only.
-static uint32_t DisplayRFBKeysymForKey(UIKey *key) {
+//
+// Except an Option-layer symbol that is ASCII: on most keyboards other than
+// the US one, Option is how { [ ] } @ $ | \ are typed (Option+8 is { on a
+// Danish one), and a US keyboard's Option layer has no ASCII at all. That goes
+// as the symbol, with *option set so the Alt held for Option is not applied to
+// it -- unless Option is set to be Meta, which keeps it Alt.
+static uint32_t DisplayRFBKeysymForKey(UIKey *key, BOOL *option) {
+    *option = NO;
     uint32_t keysym = DisplayRFBKeysymForHIDUsage(key.keyCode);
     if (keysym != 0)
         return keysym;
-    BOOL plain = !(key.modifierFlags & (UIKeyModifierControl | UIKeyModifierAlternate));
+    UIKeyModifierFlags flags = key.modifierFlags;
+    if ((flags & UIKeyModifierAlternate) && !(flags & UIKeyModifierControl) &&
+            UserPreferences.shared.optionMapping != OptionMapEsc) {
+        NSString *typed = key.characters, *plain = key.charactersIgnoringModifiers;
+        if (typed.length == 1 && ![typed isEqualToString:plain]) {
+            unichar ch = [typed characterAtIndex:0];
+            if (ch > 0x20 && ch < 0x7F) {
+                *option = YES;
+                return ch;
+            }
+        }
+    }
+    BOOL plain = !(flags & (UIKeyModifierControl | UIKeyModifierAlternate));
     NSString *text = plain ? key.characters : key.charactersIgnoringModifiers;
     if (text.length != 1)
         return 0;
     unichar ch = [text characterAtIndex:0];
-    if (!plain && (key.modifierFlags & UIKeyModifierShift) && ch >= 'a' && ch <= 'z')
+    if (!plain && (flags & UIKeyModifierShift) && ch >= 'a' && ch <= 'z')
         ch -= 'a' - 'A';
     if (ch < 0x20 || ch == 0x7F)
         return 0;
@@ -1108,7 +1131,8 @@ static uint32_t DisplayRFBKeysymForKey(UIKey *key) {
         }
         NSNumber *usage = @(key.keyCode);
         if (down) {
-            uint32_t keysym = DisplayRFBKeysymForKey(key);
+            BOOL option;
+            uint32_t keysym = DisplayRFBKeysymForKey(key, &option);
             if (keysym == 0) {
                 all = NO;
                 continue;
@@ -1116,7 +1140,7 @@ static uint32_t DisplayRFBKeysymForKey(UIKey *key) {
             if (_heldKeys == nil)
                 _heldKeys = [NSMutableDictionary new];
             _heldKeys[usage] = @(keysym);
-            [_rfbClient sendKeyEvent:keysym down:YES];
+            [_rfbClient sendKeyEvent:keysym down:YES option:option];
             if (!DisplayRFBUsageIsModifier(key.keyCode))
                 [self releaseLatchedAccessoryModifiers];
         } else {

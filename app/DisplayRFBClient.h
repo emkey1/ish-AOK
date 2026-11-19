@@ -88,6 +88,10 @@ NS_ASSUME_NONNULL_BEGIN
 // fs/virtgpu.h): it drives the compositor itself, so wayvnc can let go of it.
 - (void)sendPointerEventAtX:(uint16_t)x y:(uint16_t)y buttonMask:(uint8_t)buttonMask;
 - (void)sendKeyEvent:(uint32_t)keysym down:(BOOL)down;
+// option: the keysym was typed on the Option layer (a Danish keyboard's { is
+// Option+8), so the Alt held for Option is not applied to it. Only the
+// desktop's presenter can do that; over VNC it goes as a plain key event.
+- (void)sendKeyEvent:(uint32_t)keysym down:(BOOL)down option:(BOOL)option;
 - (void)sendCtrlAltDel;
 - (void)sendClientCutText:(NSString *)text;
 
