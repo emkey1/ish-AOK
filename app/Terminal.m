@@ -66,9 +66,24 @@ static BOOL ISHEscapeStringStateIsInside(ISHEscapeStringState state) {
     return state == ISHEscapeStringInside || state == ISHEscapeStringInsideAfterEscape;
 }
 
+// Primary Device Attributes, answered for a page that has not loaded yet (see
+// -answerDeviceAttributesLocked:length:into:). hterm's own answer, byte for
+// byte (hterm.VT.CSI['c'] in hterm_vt.js), so a program cannot tell which of
+// the two replied.
+static const char ISHDeviceAttributesReply[] = "\x1b[?1;2c";
+// Longest query held back: ESC [ and a few zeros before the c.
+#define ISH_DA_HOLD_MAX 8
+
 @interface Terminal () <WKScriptMessageHandler, WKNavigationDelegate> {
     lock_t _dataLock;
     cond_t _dataConsumed;
+    // A Device Attributes query that may be split across writes, held back
+    // while the page has not loaded; and the escape-string state of the output
+    // stream, so a query is never matched inside an OSC or DCS string. Both
+    // under dataLock.
+    uint8_t _daHold[ISH_DA_HOLD_MAX];
+    NSUInteger _daHoldLength;
+    ISHEscapeStringState _daStringState;
 }
 
 @property BOOL loaded;
@@ -612,7 +627,16 @@ struct tty *ISHOpenTerminalForRestoredSession(void) {
 
 - (void)userContentController:(WKUserContentController *)userContentController didReceiveScriptMessage:(WKScriptMessage *)message {
     if ([message.name isEqualToString:@"load"]) {
+        // From here hterm answers Device Attributes itself. Anything held
+        // back as a possible query goes out first, in order, and under the
+        // same lock as `loaded`, so no write can land between the two.
+        lock(&_dataLock, 0);
+        if (_daHoldLength > 0) {
+            [_pendingData appendBytes:_daHold length:_daHoldLength];
+            _daHoldLength = 0;
+        }
         self.loaded = YES;
+        unlock(&_dataLock);
         self.didReportLoadFailure = NO;
         [self recordLifecycleEvent:@"terminal.webview.load"
                            details:@{@"script": @"load"}];
@@ -841,18 +865,107 @@ struct tty *ISHOpenTerminalForRestoredSession(void) {
     self.pendingHeadState = state;
 }
 
+// Answers Primary Device Attributes queries (ESC [ c, ESC [ 0 c) in output
+// bound for a page that has not loaded, and leaves them out of what the page
+// will replay. Returns how many it answered; the caller sends the replies.
+//
+// hterm answers this query, but only once its page has loaded, and output
+// written before that waits in pendingData. zsh asks it as the line editor
+// loads -- from /etc/zshrc's `bindkey -e`, about a quarter of a second after
+// the app starts -- and waits half a second. A page that took longer answered
+// after zsh had given up and put the terminal back in cooked mode for the rest
+// of its rc files, so the tty echoed the answer: `^[[?1;2c#` above the first
+// prompt (the # is zsh marking a line left unfinished). Measured in the
+// simulator, zsh's wait ran 0.42-0.51 s before this and 0.05-0.06 s after.
+// Answering here, with hterm's own bytes, is answering on hterm's behalf;
+// dropping the query from the replay keeps hterm from answering it a second
+// time when the page loads.
+//
+// A query split across writes is held back in _daHold until it completes or
+// turns out to be something else. Called with dataLock held.
+- (NSUInteger)answerDeviceAttributesLocked:(const uint8_t *)bytes
+                                    length:(NSUInteger)len
+                                      into:(NSMutableData *)out {
+    NSUInteger answered = 0;
+    for (NSUInteger i = 0; i < len; i++) {
+        uint8_t b = bytes[i];
+        ISHEscapeStringState before = _daStringState;
+        _daStringState = ISHAdvanceEscapeStringState(_daStringState, b);
+
+        if (_daHoldLength > 0) {
+            // Held: ESC, then [, then any zeros, then c.
+            BOOL fits = _daHoldLength < ISH_DA_HOLD_MAX;
+            if (fits && _daHoldLength == 1 && b == '[') {
+                _daHold[_daHoldLength++] = b;
+                continue;
+            }
+            if (fits && _daHoldLength >= 2 && b == '0') {
+                _daHold[_daHoldLength++] = b;
+                continue;
+            }
+            if (_daHoldLength >= 2 && b == 'c') {
+                _daHoldLength = 0;
+                answered++;
+                continue;
+            }
+            // Something else after all: what was held goes out as it was,
+            // and this byte is looked at afresh below.
+            [out appendBytes:_daHold length:_daHoldLength];
+            _daHoldLength = 0;
+        }
+
+        if (b == 0x1b && before == ISHEscapeStringOutside) {
+            _daHold[_daHoldLength++] = b;
+            continue;
+        }
+        [out appendBytes:&b length:1];
+    }
+    return answered;
+}
+
+// Sends what -answerDeviceAttributesLocked: owes, as input from the terminal.
+// Never with dataLock held, and the drain always goes through the main queue:
+// this can be reached from an echo, inside tty_input on the main thread, and
+// draining there would re-enter it.
+- (void)sendDeviceAttributesReplies:(NSUInteger)count {
+    if (count == 0)
+        return;
+    NSMutableData *replies = [NSMutableData dataWithCapacity:count * (sizeof ISHDeviceAttributesReply - 1)];
+    for (NSUInteger i = 0; i < count; i++)
+        [replies appendBytes:ISHDeviceAttributesReply length:sizeof ISHDeviceAttributesReply - 1];
+    @synchronized (self) {
+        if (self->_pendingInput == nil)
+            self->_pendingInput = [NSMutableData dataWithCapacity:replies.length];
+        [self->_pendingInput appendData:replies];
+    }
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self drainPendingInput];
+    });
+}
+
 - (int)sendOutput:(const void *)buf length:(int)len {
     TerminalDebugMirrorOutput(self, buf, len);
     lock(&_dataLock, 0);
+    const void *bytes = buf;
+    NSUInteger count = (NSUInteger) len;
+    NSUInteger answered = 0;
+    NSMutableData *unanswered = nil;
+    if (!self.loaded) {
+        unanswered = [NSMutableData dataWithCapacity:count + ISH_DA_HOLD_MAX];
+        answered = [self answerDeviceAttributesLocked:buf length:count into:unanswered];
+        bytes = unanswered.bytes;
+        count = unanswered.length;
+    }
     if (!NSThread.isMainThread) {
         if (!self.loaded) {
             // Hidden/background consoles (for example tty2-tty6 getty instances
             // started by init) may never get a web view to drain them. Keep a
             // bounded tail of recent output instead of blocking guest writers
             // forever once the buffer fills.
-            [self appendPreloadOutputLocked:buf length:(NSUInteger) len];
+            [self appendPreloadOutputLocked:bytes length:count];
             [self.refreshTask schedule];
             unlock(&_dataLock);
+            [self sendDeviceAttributesReplies:answered];
             return len;
         } else {
             // The main thread is the only one that can unblock this, so sleeping
@@ -862,9 +975,10 @@ struct tty *ISHOpenTerminalForRestoredSession(void) {
                 wait_for_ignore_signals(&_dataConsumed, &_dataLock, NULL);
         }
     }
-    [_pendingData appendBytes:buf length:(NSUInteger) len];
+    [_pendingData appendBytes:bytes length:count];
     [self.refreshTask schedule];
     unlock(&_dataLock);
+    [self sendDeviceAttributesReplies:answered];
     return len;
 }
 
