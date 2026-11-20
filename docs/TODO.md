@@ -29,7 +29,7 @@ commit is the record. The first ten were chips not started before the 556
 freeze (2026-09-25); their full text is in
 [future-release-queue.md](future-release-queue.md).
 
-- **Find what echoes `^[[?1;2c` into a new native terminal.** Seen
+- **[in progress: Claude, 2026-11-20]** **Find what echoes `^[[?1;2c` into a new native terminal.** Seen
   2026-11-20 in the iPad 13" and iPhone 17 Pro Max simulators (build 565,
   AOK-Native root): after `simctl terminate` and relaunch, the session shell's
   first line read `^[[?1;2c#` before the prompt. That is a terminal's reply to
