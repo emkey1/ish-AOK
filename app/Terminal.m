@@ -66,8 +66,8 @@ static BOOL ISHEscapeStringStateIsInside(ISHEscapeStringState state) {
     return state == ISHEscapeStringInside || state == ISHEscapeStringInsideAfterEscape;
 }
 
-// Primary Device Attributes, answered for a page that has not loaded yet (see
-// -answerDeviceAttributesLocked:length:into:). hterm's own answer, byte for
+// Primary Device Attributes, answered by the app rather than the page (see
+// -answerDeviceAttributesLocked:length:filtered:). hterm's own answer, byte for
 // byte (hterm.VT.CSI['c'] in hterm_vt.js), so a program cannot tell which of
 // the two replied.
 static const char ISHDeviceAttributesReply[] = "\x1b[?1;2c";
@@ -78,7 +78,7 @@ static const char ISHDeviceAttributesReply[] = "\x1b[?1;2c";
     lock_t _dataLock;
     cond_t _dataConsumed;
     // A Device Attributes query that may be split across writes, held back
-    // while the page has not loaded; and the escape-string state of the output
+    // until it completes or turns out to be something else; and the escape-string state of the output
     // stream, so a query is never matched inside an OSC or DCS string. Both
     // under dataLock.
     uint8_t _daHold[ISH_DA_HOLD_MAX];
@@ -627,16 +627,7 @@ struct tty *ISHOpenTerminalForRestoredSession(void) {
 
 - (void)userContentController:(WKUserContentController *)userContentController didReceiveScriptMessage:(WKScriptMessage *)message {
     if ([message.name isEqualToString:@"load"]) {
-        // From here hterm answers Device Attributes itself. Anything held
-        // back as a possible query goes out first, in order, and under the
-        // same lock as `loaded`, so no write can land between the two.
-        lock(&_dataLock, 0);
-        if (_daHoldLength > 0) {
-            [_pendingData appendBytes:_daHold length:_daHoldLength];
-            _daHoldLength = 0;
-        }
         self.loaded = YES;
-        unlock(&_dataLock);
         self.didReportLoadFailure = NO;
         [self recordLifecycleEvent:@"terminal.webview.load"
                            details:@{@"script": @"load"}];
@@ -865,28 +856,43 @@ struct tty *ISHOpenTerminalForRestoredSession(void) {
     self.pendingHeadState = state;
 }
 
-// Answers Primary Device Attributes queries (ESC [ c, ESC [ 0 c) in output
-// bound for a page that has not loaded, and leaves them out of what the page
-// will replay. Returns how many it answered; the caller sends the replies.
+// Answers Primary Device Attributes queries (ESC [ c, ESC [ 0 c) in the
+// output and leaves them out of what the page is given. Returns how many it
+// answered; the caller sends the replies. *filtered is the output to use
+// instead, or nil when it is unchanged.
 //
-// hterm answers this query, but only once its page has loaded, and output
-// written before that waits in pendingData. zsh asks it as the line editor
-// loads -- from /etc/zshrc's `bindkey -e`, about a quarter of a second after
-// the app starts -- and waits half a second. A page that took longer answered
-// after zsh had given up and put the terminal back in cooked mode for the rest
-// of its rc files, so the tty echoed the answer: `^[[?1;2c#` above the first
-// prompt (the # is zsh marking a line left unfinished). Measured in the
-// simulator, zsh's wait ran 0.42-0.51 s before this and 0.05-0.06 s after.
-// Answering here, with hterm's own bytes, is answering on hterm's behalf;
-// dropping the query from the replay keeps hterm from answering it a second
-// time when the page loads.
+// zsh asks this as its line editor loads -- from /etc/zshrc's `bindkey -e`,
+// about a quarter of a second after the app starts -- and waits half a second.
+// A reply after that comes while the rc files run in cooked mode, so the tty
+// echoes it: `^[[?1;2c#` above the first prompt (the # is zsh marking a line
+// left unfinished).
+//
+// hterm's answer cannot be relied on to be in time. Output written before its
+// page loads waits in pendingData, and even a loaded page answers through the
+// main thread twice over (the refresh that hands it the output, the sendInput
+// message back) plus a trip through the web content process. Answering only
+// until the page loaded (5672f6955) took zsh's wait from 0.42-0.51 s to
+// 0.05-0.06 s in the simulator, but the A10X, building a Workspace at launch,
+// still echoed on every start: its main thread is busy for longer than zsh
+// waits. So the app answers every query itself, with hterm's own bytes, and
+// the reply goes in off the main thread (-sendDeviceAttributesReplies:).
 //
 // A query split across writes is held back in _daHold until it completes or
 // turns out to be something else. Called with dataLock held.
 - (NSUInteger)answerDeviceAttributesLocked:(const uint8_t *)bytes
                                     length:(NSUInteger)len
-                                      into:(NSMutableData *)out {
+                                  filtered:(NSMutableData **)filtered {
     NSUInteger answered = 0;
+    NSMutableData *out = nil;
+    // bytes[runStart, i) are passed through unchanged and not yet copied: the
+    // copy is made only once something is held back or dropped.
+    NSUInteger runStart = 0;
+#define ISH_DA_FLUSH_RUN(upto) do { \
+        if (out == nil) \
+            out = [NSMutableData dataWithCapacity:len + ISH_DA_HOLD_MAX]; \
+        [out appendBytes:bytes + runStart length:(upto) - runStart]; \
+        runStart = (upto); \
+    } while (0)
     for (NSUInteger i = 0; i < len; i++) {
         uint8_t b = bytes[i];
         ISHEscapeStringState before = _daStringState;
@@ -895,51 +901,71 @@ struct tty *ISHOpenTerminalForRestoredSession(void) {
         if (_daHoldLength > 0) {
             // Held: ESC, then [, then any zeros, then c.
             BOOL fits = _daHoldLength < ISH_DA_HOLD_MAX;
-            if (fits && _daHoldLength == 1 && b == '[') {
-                _daHold[_daHoldLength++] = b;
-                continue;
-            }
-            if (fits && _daHoldLength >= 2 && b == '0') {
-                _daHold[_daHoldLength++] = b;
-                continue;
-            }
-            if (_daHoldLength >= 2 && b == 'c') {
-                _daHoldLength = 0;
-                answered++;
+            BOOL holds = (fits && _daHoldLength == 1 && b == '[') ||
+                         (fits && _daHoldLength >= 2 && b == '0');
+            if (holds || (_daHoldLength >= 2 && b == 'c')) {
+                ISH_DA_FLUSH_RUN(i);
+                runStart = i + 1;
+                if (holds) {
+                    _daHold[_daHoldLength++] = b;
+                } else {
+                    _daHoldLength = 0;
+                    answered++;
+                }
                 continue;
             }
             // Something else after all: what was held goes out as it was,
             // and this byte is looked at afresh below.
+            ISH_DA_FLUSH_RUN(i);
             [out appendBytes:_daHold length:_daHoldLength];
             _daHoldLength = 0;
         }
 
         if (b == 0x1b && before == ISHEscapeStringOutside) {
+            ISH_DA_FLUSH_RUN(i);
+            runStart = i + 1;
             _daHold[_daHoldLength++] = b;
-            continue;
         }
-        [out appendBytes:&b length:1];
     }
+    if (out != nil)
+        ISH_DA_FLUSH_RUN(len);
+#undef ISH_DA_FLUSH_RUN
+    *filtered = out;
     return answered;
 }
 
 // Sends what -answerDeviceAttributesLocked: owes, as input from the terminal.
-// Never with dataLock held, and the drain always goes through the main queue:
-// this can be reached from an echo, inside tty_input on the main thread, and
-// draining there would re-enter it.
+// Never with dataLock held. Straight to tty_input from a queue of its own, not
+// through -drainPendingInput: that runs on the main thread, and waiting for the
+// main thread is what made the reply late (see above). Its own queue, rather
+// than inline, because this is reached from inside tty_input itself (an echo)
+// and from the guest's write with the tty locked.
 - (void)sendDeviceAttributesReplies:(NSUInteger)count {
     if (count == 0)
         return;
+    static dispatch_queue_t queue;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        queue = dispatch_queue_create("app.ish.terminal.device-attributes", DISPATCH_QUEUE_SERIAL);
+    });
     NSMutableData *replies = [NSMutableData dataWithCapacity:count * (sizeof ISHDeviceAttributesReply - 1)];
     for (NSUInteger i = 0; i < count; i++)
         [replies appendBytes:ISHDeviceAttributesReply length:sizeof ISHDeviceAttributesReply - 1];
-    @synchronized (self) {
-        if (self->_pendingInput == nil)
-            self->_pendingInput = [NSMutableData dataWithCapacity:replies.length];
-        [self->_pendingInput appendData:replies];
-    }
-    dispatch_async(dispatch_get_main_queue(), ^{
-        [self drainPendingInput];
+    dispatch_async(queue, ^{
+        tty_t tty;
+        @synchronized (self) {
+            tty = self->_tty;
+        }
+        if (tty == NULL)
+            return;
+        // As in -drainPendingInput: a reference, re-found under ttys_lock.
+        tty = tty_lookup_ref(self.type, self.number, tty);
+        if (tty == NULL)
+            return;
+        // A reply that does not fit a full input buffer is dropped, as a
+        // terminal's would be; nobody is reading the tty then anyway.
+        tty_input(tty, replies.bytes, replies.length, 0);
+        tty_put(tty);
     });
 }
 
@@ -948,13 +974,11 @@ struct tty *ISHOpenTerminalForRestoredSession(void) {
     lock(&_dataLock, 0);
     const void *bytes = buf;
     NSUInteger count = (NSUInteger) len;
-    NSUInteger answered = 0;
-    NSMutableData *unanswered = nil;
-    if (!self.loaded) {
-        unanswered = [NSMutableData dataWithCapacity:count + ISH_DA_HOLD_MAX];
-        answered = [self answerDeviceAttributesLocked:buf length:count into:unanswered];
-        bytes = unanswered.bytes;
-        count = unanswered.length;
+    NSMutableData *filtered = nil;
+    NSUInteger answered = [self answerDeviceAttributesLocked:buf length:count filtered:&filtered];
+    if (filtered != nil) {
+        bytes = filtered.bytes;
+        count = filtered.length;
     }
     if (!NSThread.isMainThread) {
         if (!self.loaded) {
@@ -981,7 +1005,6 @@ struct tty *ISHOpenTerminalForRestoredSession(void) {
     [self sendDeviceAttributesReplies:answered];
     return len;
 }
-
 
 // The control characters xterm and hterm strip out of a bracketed paste:
 // everything below 0x20 except backspace, tab, newline and carriage return.
