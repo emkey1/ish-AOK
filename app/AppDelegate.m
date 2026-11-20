@@ -590,6 +590,59 @@ static BOOL ISHNativeRootNeedsUserPrompt(void) {
     return needs;
 }
 
+// The name and two password fields both sheets ask for.
+static void ISHAddNativeUserFields(UIAlertController *alert) {
+    [alert addTextFieldWithConfigurationHandler:^(UITextField *field) {
+        field.placeholder = NSLocalizedString(@"user name", @"Create Your Account field placeholder");
+        field.autocapitalizationType = UITextAutocapitalizationTypeNone;
+        field.autocorrectionType = UITextAutocorrectionTypeNo;
+        field.spellCheckingType = UITextSpellCheckingTypeNo;
+        field.textContentType = UITextContentTypeUsername;
+    }];
+    [alert addTextFieldWithConfigurationHandler:^(UITextField *field) {
+        field.placeholder = NSLocalizedString(@"password (optional)", @"Create Your Account field placeholder");
+        field.secureTextEntry = YES;
+        field.textContentType = UITextContentTypeNewPassword;
+    }];
+    [alert addTextFieldWithConfigurationHandler:^(UITextField *field) {
+        field.placeholder = NSLocalizedString(@"password again", @"Create Your Account field placeholder");
+        field.secureTextEntry = YES;
+        field.textContentType = UITextContentTypeNewPassword;
+    }];
+}
+
+// Creates the account the fields describe (native_root_add_user: the groups,
+// sudo, the shell and the home directory). nil when it was made, or what to
+// tell the user when it was not.
+static NSString *ISHCreateNativeUserFromFields(UIAlertController *shown) {
+    NSString *name = [shown.textFields[0].text
+        stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet] ?: @"";
+    NSString *password = shown.textFields[1].text ?: @"";
+    NSString *again = shown.textFields[2].text ?: @"";
+    if (![password isEqualToString:again])
+        return NSLocalizedString(@"The two passwords were different.", @"Create Your Account error");
+    __block int err = 0;
+    __block BOOL valid = NO;
+    BOOL ran = ISHNativeRootGuestCall(^{
+        valid = native_root_user_name_valid(name.UTF8String);
+        if (valid)
+            err = native_root_add_user(name.UTF8String, password.UTF8String);
+    });
+    if (!ran)
+        return [NSString stringWithFormat:NSLocalizedString(@"The account could not be created (%@).", @"Create Your Account error; %@ is an error description"),
+                [AppDelegate descriptionForISHErrno:_EAGAIN]];
+    if (!valid)
+        return [NSString stringWithFormat:
+            NSLocalizedString(@"\"%@\" can't be used. A name starts with a lower-case letter or _, "
+            @"has at most 32 of a-z, 0-9, _ and -, and is not already taken.", @"Create Your Account error; %@ is the rejected name"), name];
+    if (err < 0)
+        return [NSString stringWithFormat:NSLocalizedString(@"The account could not be created (%@).", @"Create Your Account error; %@ is an error description"),
+                [AppDelegate descriptionForISHErrno:err]];
+    [ISHDiagnosticsStore recordBreadcrumb:@"native.user.created"
+                                  details:@{@"password": @(password.length != 0)}];
+    return nil;
+}
+
 static void ISHPresentNativeUserPrompt(int attempt, NSString *problem) {
     if (ISHGuestHalted() || !ISHNativeRootNeedsUserPrompt())
         return;
@@ -617,23 +670,7 @@ static void ISHPresentNativeUserPrompt(int attempt, NSString *problem) {
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:NSLocalizedString(@"Create Your Account", @"Alert title for creating the default user account")
                                                                    message:message
                                                             preferredStyle:UIAlertControllerStyleAlert];
-    [alert addTextFieldWithConfigurationHandler:^(UITextField *field) {
-        field.placeholder = NSLocalizedString(@"user name", @"Create Your Account field placeholder");
-        field.autocapitalizationType = UITextAutocapitalizationTypeNone;
-        field.autocorrectionType = UITextAutocorrectionTypeNo;
-        field.spellCheckingType = UITextSpellCheckingTypeNo;
-        field.textContentType = UITextContentTypeUsername;
-    }];
-    [alert addTextFieldWithConfigurationHandler:^(UITextField *field) {
-        field.placeholder = NSLocalizedString(@"password (optional)", @"Create Your Account field placeholder");
-        field.secureTextEntry = YES;
-        field.textContentType = UITextContentTypeNewPassword;
-    }];
-    [alert addTextFieldWithConfigurationHandler:^(UITextField *field) {
-        field.placeholder = NSLocalizedString(@"password again", @"Create Your Account field placeholder");
-        field.secureTextEntry = YES;
-        field.textContentType = UITextContentTypeNewPassword;
-    }];
+    ISHAddNativeUserFields(alert);
     __weak UIAlertController *weakAlert = alert;
     // Skip is an ordinary button, not the Cancel action. A Cancel-style action
     // is what Escape on a hardware keyboard -- or any other dismissal UIKit
@@ -651,34 +688,7 @@ static void ISHPresentNativeUserPrompt(int attempt, NSString *problem) {
     [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Create", @"Create Your Account button")
                                               style:UIAlertActionStyleDefault
                                             handler:^(UIAlertAction *action) {
-        UIAlertController *shown = weakAlert;
-        NSString *name = [shown.textFields[0].text
-            stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet] ?: @"";
-        NSString *password = shown.textFields[1].text ?: @"";
-        NSString *again = shown.textFields[2].text ?: @"";
-        NSString *retry = nil;
-        if (![password isEqualToString:again]) {
-            retry = NSLocalizedString(@"The two passwords were different.", @"Create Your Account error");
-        } else {
-            __block int err = 0;
-            __block BOOL valid = NO;
-            ISHNativeRootGuestCall(^{
-                valid = native_root_user_name_valid(name.UTF8String);
-                if (valid)
-                    err = native_root_add_user(name.UTF8String, password.UTF8String);
-            });
-            if (!valid) {
-                retry = [NSString stringWithFormat:
-                    NSLocalizedString(@"\"%@\" can't be used. A name starts with a lower-case letter or _, "
-                    @"has at most 32 of a-z, 0-9, _ and -, and is not already taken.", @"Create Your Account error; %@ is the rejected name"), name];
-            } else if (err < 0) {
-                retry = [NSString stringWithFormat:NSLocalizedString(@"The account could not be created (%@).", @"Create Your Account error; %@ is an error description"),
-                         [AppDelegate descriptionForISHErrno:err]];
-            } else {
-                [ISHDiagnosticsStore recordBreadcrumb:@"native.user.created"
-                                              details:@{@"password": @(password.length != 0)}];
-            }
-        }
+        NSString *retry = ISHCreateNativeUserFromFields(weakAlert);
         if (retry != nil) {
             dispatch_async(dispatch_get_main_queue(), ^{
                 ISHPresentNativeUserPrompt(0, retry);
@@ -686,6 +696,53 @@ static void ISHPresentNativeUserPrompt(int attempt, NSString *problem) {
         }
     }]];
     alert.preferredAction = alert.actions.lastObject;   // Create
+    [host presentViewController:alert animated:YES completion:nil];
+}
+
+// Settings -> Default User -> Add User: the same account the first-start
+// prompt makes -- groups, sudo, native zsh, a home directory -- at any time
+// after it, whether that prompt was answered with an account or with Skip. The
+// first account a root gets is uid 1000, the everyday one; later ones the next
+// free uid (native_root_add_user).
+static void ISHPresentNativeAddUserSheet(UIViewController *host, NSString *problem,
+                                         void (^completion)(BOOL added)) {
+    __block BOOL hasDefault = NO;
+    ISHNativeRootGuestCall(^{
+        hasDefault = native_root_has_default_user();
+    });
+    NSString *message = NSLocalizedString(@"Adds an account to this filesystem, with a home directory, "
+        @"the native zsh as its shell, and sudo (it joins the sudo group). The password is optional; "
+        @"without one, sudo works only after you set one with passwd.", @"Add a User alert message");
+    if (!hasDefault)
+        message = [NSString stringWithFormat:@"%@\n\n%@", message,
+                   NSLocalizedString(@"This filesystem has no everyday account yet, so this one becomes it: "
+                   @"Workspace terminals open as it when \"Open Everything as Default User\" is on.", @"Add a User alert message, when the account will be the default user")];
+    if (problem.length != 0)
+        message = [NSString stringWithFormat:@"%@\n\n%@", problem, message];
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:NSLocalizedString(@"Add a User", @"Alert title for adding an account to a native filesystem")
+                                                                   message:message
+                                                            preferredStyle:UIAlertControllerStyleAlert];
+    ISHAddNativeUserFields(alert);
+    __weak UIAlertController *weakAlert = alert;
+    [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Cancel", @"Alert button")
+                                              style:UIAlertActionStyleCancel
+                                            handler:^(UIAlertAction *action) {
+        if (completion)
+            completion(NO);
+    }]];
+    [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Add", @"Add a User button")
+                                              style:UIAlertActionStyleDefault
+                                            handler:^(UIAlertAction *action) {
+        NSString *retry = ISHCreateNativeUserFromFields(weakAlert);
+        if (retry != nil) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                ISHPresentNativeAddUserSheet(host, retry, completion);
+            });
+        } else if (completion) {
+            completion(YES);
+        }
+    }]];
+    alert.preferredAction = alert.actions.lastObject;   // Add
     [host presentViewController:alert animated:YES completion:nil];
 }
 
@@ -2909,6 +2966,16 @@ void ISHApplyIdleTimerPreference(void) {
 + (BOOL)bootedRootIsNative {
     NSString *booted = Roots.instance.bootedRoot;
     return booted != nil && [Roots.instance isNativeRootNamed:booted];
+}
+
++ (void)presentAddNativeUserFromViewController:(UIViewController *)host
+                                    completion:(void (^)(BOOL added))completion {
+    if (![self bootedRootIsNative] || ISHGuestHalted()) {
+        if (completion)
+            completion(NO);
+        return;
+    }
+    ISHPresentNativeAddUserSheet(host, nil, completion);
 }
 
 + (BOOL)guestSshdEnabled {

@@ -39,7 +39,8 @@ asks for the name of your everyday account, and optionally a password:
   Everything as Default User** switched on in Settings, Workspace terminals
   open as this user, the same as on a distribution root.
 - **Skip (Root Only)** leaves root alone. You will not be asked again; delete
-  `/etc/aok-native-user-skipped` to be asked at the next launch.
+  `/etc/aok-native-user-skipped` to be asked at the next launch, or use Add
+  User (below).
 
 Nothing waits for your answer. The system boots while the question is on
 screen, and the **Session Shell is always root**: you always have a root
@@ -47,6 +48,16 @@ prompt to fix things from, whatever happens to the accounts.
 
 Without a password the account still opens (terminals use `login -f`), but
 `sudo` needs one. Set it from the root Session Shell with `passwd <name>`.
+
+## More accounts later
+
+A native root has no `adduser`. **Settings → Default User → Add User…**
+(shown while a native root is booted) asks the same questions as the first
+start and makes the account the same way: the groups `sudo` and `users`, a
+0700 home directory, native zsh, and the password if you give one. The first
+account a root gets is uid 1000, and so the everyday account that Open
+Everything as Default User uses, even when you skipped the first start; later
+ones take the next free uid, 1001 and up.
 
 ## What is in it
 

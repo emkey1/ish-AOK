@@ -226,7 +226,7 @@ leg_run_native() {
         else
             ISH_NATIVE_ROOT=1 ISH_NATIVE_USER=tester "$ISH" -f "$_nroot" \
                 /bin/sh /AOK/tests/native_mode.sh --setup-reprovision
-            ISH_NATIVE_ROOT=1 "$ISH" -f "$_nroot" /bin/sh /AOK/tests/native_mode.sh
+            ISH_NATIVE_ROOT=1 ISH_NATIVE_USER=tester2 "$ISH" -f "$_nroot" /bin/sh /AOK/tests/native_mode.sh
             # Programs from another root: needs a glibc root to borrow from.
             if [ -d "$REPO/build/devuan-arm64-test" ]; then
                 ISH_FAKE_MNT2="$REPO/build/devuan-arm64-test" ISH_NATIVE_ROOT=1 \

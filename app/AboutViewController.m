@@ -696,6 +696,16 @@ static NSString *ISHForeignExecTitle(NSString *mode) {
     return cell;
 }
 
+// A native root has no adduser, and its first-start prompt asks only once:
+// this is how a later account is made (see AppDelegate's Add a User sheet).
+// Native roots only; a distribution's root has its own adduser.
+- (UITableViewCell *)_addNativeUserCell {
+    UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:nil];
+    cell.textLabel.text = NSLocalizedString(@"Add User…", @"Settings row: create an account in a native filesystem");
+    cell.textLabel.textColor = self.view.tintColor;
+    return cell;
+}
+
 - (UITableViewCell *)_llmEnabledCell {
     UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:nil];
     cell.selectionStyle = UITableViewCellSelectionStyleNone;
@@ -744,6 +754,18 @@ static NSString *ISHForeignExecTitle(NSString *mode) {
     if (indexPath.section == [self _foreignExecSectionIndex]) {
         [self _showForeignExecPickerFromCell:[tableView cellForRowAtIndexPath:indexPath]];
         [tableView deselectRowAtIndexPath:indexPath animated:YES];
+        return;
+    }
+    if (indexPath.section == [self _userAccountSectionIndex]) {
+        [tableView deselectRowAtIndexPath:indexPath animated:YES];
+        if (indexPath.row == 1) {
+            __weak typeof(self) weakSelf = self;
+            [AppDelegate presentAddNativeUserFromViewController:self completion:^(BOOL added) {
+                // The footer names the everyday account, which this may have made.
+                if (added)
+                    [weakSelf.tableView reloadData];
+            }];
+        }
         return;
     }
     if (indexPath.section == [self _sshdSectionIndex]) {
@@ -1012,7 +1034,7 @@ static NSString *ISHForeignExecTitle(NSString *mode) {
     if (section == [self _desktopSectionIndex])
         return 1;
     if (section == [self _userAccountSectionIndex])
-        return 1;
+        return [AppDelegate bootedRootIsNative] ? 2 : 1;
     if (section == [self _llmSectionIndex])
         return UserPreferences.shared.shouldEnableLLMClient ? 2 : 1;
     if (section == [self _shortcutsSectionIndex])
@@ -1043,7 +1065,7 @@ static NSString *ISHForeignExecTitle(NSString *mode) {
 
 - (UITableViewCell *)unscaledTableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
     if (indexPath.section == [self _userAccountSectionIndex])
-        return [self _loginAsDefaultUserCell];
+        return indexPath.row == 0 ? [self _loginAsDefaultUserCell] : [self _addNativeUserCell];
     if (indexPath.section == [self _llmSectionIndex]) {
         if (indexPath.row == 0)
             return [self _llmEnabledCell];

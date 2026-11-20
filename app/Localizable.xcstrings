@@ -1234,6 +1234,66 @@
         }
       }
     },
+    "Add a User" : {
+      "comment" : "Alert title for adding an account to a native filesystem",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Benutzer hinzufügen"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Añadir un usuario"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ajouter un utilisateur"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ユーザを追加"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "사용자 추가"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Adicionar um Usuário"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Добавить пользователя"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "添加用户"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "加入使用者"
+          }
+        }
+      }
+    },
     "Add Snippet" : {
       "comment" : "Accessibility label for the add snippet button",
       "extractionState" : "manual",
@@ -1290,6 +1350,66 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "加入片段"
+          }
+        }
+      }
+    },
+    "Add User…" : {
+      "comment" : "Settings row: create an account in a native filesystem",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Benutzer hinzufügen …"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Añadir usuario…"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ajouter un utilisateur…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ユーザを追加…"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "사용자 추가…"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Adicionar Usuário…"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Добавить пользователя…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "添加用户…"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "加入使用者…"
           }
         }
       }
@@ -1409,6 +1529,66 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "加入新的對話服務。"
+          }
+        }
+      }
+    },
+    "Adds an account to this filesystem, with a home directory, the native zsh as its shell, and sudo (it joins the sudo group). The password is optional; without one, sudo works only after you set one with passwd." : {
+      "comment" : "Add a User alert message",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fügt diesem Dateisystem einen Account hinzu, mit einem Home-Verzeichnis, der nativen zsh als Shell und sudo (er wird Mitglied der Gruppe sudo). Das Passwort ist optional; ohne eines funktioniert sudo erst, nachdem du mit passwd eines gesetzt hast."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Añade una cuenta a este sistema de archivos, con un directorio personal, el zsh nativo como shell y sudo (entra en el grupo sudo). La contraseña es opcional; sin ella, sudo solo funciona después de definir una con passwd."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ajoute un compte à ce système de fichiers, avec un dossier personnel, le zsh natif comme shell et sudo (il rejoint le groupe sudo). Le mot de passe est facultatif ; sans mot de passe, sudo ne fonctionne qu'après en avoir défini un avec passwd."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このファイルシステムにアカウントを追加します。ホームディレクトリ、シェルとしてネイティブの zsh、sudo(sudo グループに参加)が設定されます。パスワードは省略できます。省略した場合、sudo は passwd でパスワードを設定するまで使えません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 파일 시스템에 계정을 추가합니다. 홈 디렉터리, 셸로 네이티브 zsh, sudo(sudo 그룹에 가입)가 설정됩니다. 암호는 선택 사항이며, 없으면 passwd로 암호를 설정한 뒤에야 sudo를 쓸 수 있습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Adiciona uma conta a este sistema de arquivos, com um diretório pessoal, o zsh nativo como shell e sudo (ela entra no grupo sudo). A senha é opcional; sem ela, o sudo só funciona depois que você definir uma com passwd."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Добавляет учётную запись в эту файловую систему: домашний каталог, нативный zsh в качестве оболочки и sudo (она входит в группу sudo). Пароль необязателен; без него sudo работает только после того, как вы зададите пароль командой passwd."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "向此文件系统添加一个帐户,包括主目录、作为 shell 的原生 zsh,以及 sudo(加入 sudo 组)。密码可选;没有密码时,要先用 passwd 设置密码才能使用 sudo。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "為此檔案系統加入一個帳號,包括主目錄、作為 shell 的原生 zsh,以及 sudo(加入 sudo 群組)。密碼可省略;沒有密碼時,要先用 passwd 設定密碼才能使用 sudo。"
           }
         }
       }
@@ -8059,6 +8239,66 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "此檔案中沒有 iOS 可讀取的影片。"
+          }
+        }
+      }
+    },
+    "This filesystem has no everyday account yet, so this one becomes it: Workspace terminals open as it when \"Open Everything as Default User\" is on." : {
+      "comment" : "Add a User alert message, when the account will be the default user",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dieses Dateisystem hat noch keinen Alltags-Account, also wird es dieser: Workspace-Terminals öffnen als dieser Benutzer, wenn „Alles als Standardbenutzer öffnen“ eingeschaltet ist."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Este sistema de archivos aún no tiene cuenta de uso diario, así que esta pasa a serlo: los terminales de Workspace se abren con ella cuando «Abrir todo como usuario predeterminado» está activado."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ce système de fichiers n'a pas encore de compte de tous les jours, celui-ci le devient donc : les terminaux de Workspace s'ouvrent sous ce compte quand « Tout ouvrir en tant qu'utilisateur par défaut » est activé."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このファイルシステムにはまだ普段使いのアカウントがないため、このアカウントがそれになります。「すべてをデフォルトユーザとして開く」がオンのとき、Workspace のターミナルはこのユーザとして開きます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 파일 시스템에는 아직 일상용 계정이 없으므로 이 계정이 그 계정이 됩니다. \"모든 항목을 기본 사용자로 열기\"가 켜져 있으면 Workspace 터미널이 이 사용자로 열립니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Este sistema de arquivos ainda não tem uma conta do dia a dia, então esta passa a ser: os terminais do Workspace abrem com ela quando \"Abrir Tudo como Usuário Padrão\" está ativado."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "В этой файловой системе ещё нет повседневной учётной записи, поэтому ею станет эта: терминалы Workspace открываются от её имени, когда включено «Открывать всё от имени пользователя по умолчанию»."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此文件系统还没有日常帐户,因此这个帐户将成为日常帐户:打开\"以默认用户打开所有内容\"时,Workspace 终端会以此用户打开。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此檔案系統還沒有日常帳號,因此這個帳號會成為日常帳號:開啟「以預設使用者打開所有項目」時,Workspace 終端機會以此使用者打開。"
           }
         }
       }

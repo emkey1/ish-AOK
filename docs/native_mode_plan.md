@@ -306,6 +306,13 @@ marker.
 - **Skip** writes the marker. The root then has root only, exactly like a
   distro root with no uid 1000, so the setting below simply has no one to
   switch to.
+- **Later accounts** (2026-11-20): Settings -> Default User -> Add User...,
+  shown while a native root is booted, puts up the same fields and calls the
+  same `native_root_add_user`, which now takes uid 1000 if it is free and the
+  lowest free uid above it otherwise. So an account added after a Skip is the
+  everyday one, and a second account is 1001. `ISH_NATIVE_USER` in the CLI
+  adds an account by any name that does not exist yet (the gate adds
+  `tester2`, checked by tests/manual/native_mode.sh).
 - **Nothing waits for the sheet.** Init and `/etc/rc` boot while it is up,
   and the root Session Shell is available at once, as it always is (see below).
   A Workspace terminal opened before the account exists opens as root, which

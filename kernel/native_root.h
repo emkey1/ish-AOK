@@ -57,12 +57,14 @@ int native_root_skip_default_user(void);
 // and not one /etc/passwd or /etc/group already has.
 bool native_root_user_name_valid(const char *name);
 
-// Create the everyday account: passwd, group and shadow lines at
-// NATIVE_ROOT_USER_UID, membership of `users` and `sudo`, shell native zsh, and
-// a 0700 home directory it owns. PASSWORD is the plain text to hash ($6$), or
-// NULL/empty for no password (shadow field "!"; the account still opens through
-// `login -f`). Returns 0 or a negative errno: _EINVAL for a bad name, _EEXIST
-// when the name or the uid is taken.
+// Create an account: passwd, group and shadow lines, membership of `users` and
+// `sudo`, shell native zsh, and a 0700 home directory it owns. The first one
+// gets NATIVE_ROOT_USER_UID and so is the everyday account (the first-start
+// prompt); later ones (Settings -> Default User -> Add User) the lowest free
+// uid above it. PASSWORD is the plain text to hash ($6$), or NULL/empty for no
+// password (shadow field "!"; the account still opens through `login -f`).
+// Returns 0 or a negative errno: _EINVAL for a bad name, _EEXIST when the name
+// is taken, _ENOSPC when no uid below 60000 is free.
 int native_root_add_user(const char *name, const char *password);
 // Every boot, every root: /etc/passwd shells naming a native program this
 // build lacks are repointed. Returns how many changed, or an error.

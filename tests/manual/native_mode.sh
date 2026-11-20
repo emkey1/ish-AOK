@@ -152,6 +152,21 @@ case "$groups" in
     *) fail user_groups "$groups" ;;
 esac
 check home_mode "700 1000" "$(stat -c '%a %u' /home/tester 2>&1)"
+# A second account, as Settings -> Default User -> Add User makes one (the
+# gate's main run passes ISH_NATIVE_USER=tester2): the next uid, and the same
+# groups, home and sudo as the first.
+if grep -q '^tester2:' /etc/passwd; then
+    check user2_uid 1001 "$(id -u tester2 2>/dev/null)"
+    check user2_gid 1001 "$(id -g tester2 2>/dev/null)"
+    groups=" $(id -Gn tester2 2>/dev/null) "
+    case "$groups" in
+        *" sudo "*) case "$groups" in *" users "*) pass user2_groups ;; *) fail user2_groups "$groups" ;; esac ;;
+        *) fail user2_groups "$groups" ;;
+    esac
+    check user2_home_mode "700 1001" "$(stat -c '%a %u' /home/tester2 2>&1)"
+    check user2_shadow 1 "$(grep -c '^tester2:!:' /etc/shadow)"
+    check user1_still_default 1000 "$(id -u tester 2>/dev/null)"
+fi
 
 # ---- login, su, sudo ---------------------------------------------------------
 got=$(printf 'id -un; pwd; echo "$0"; echo "${FOO-unset}"\n' | FOO=leak login -f tester 2>&1 | tr '\n' ' ')
@@ -159,6 +174,10 @@ check login_f "tester /home/tester -zsh unset " "$got"
 got=$(su - tester -c 'id -u; echo $HOME' 2>&1 | tr '\n' ' ')
 check su_login "1000 /home/tester " "$got"
 check sudo_as_user 1000 "$(sudo -n -u tester id -u 2>&1)"
+if grep -q '^tester2:' /etc/passwd; then
+    check user2_login_f "tester2 /home/tester2" "$(printf 'id -un; pwd\n' | login -f tester2 2>&1 | tr '\n' ' ' | sed 's/ $//')"
+    check user2_sudo_as 1001 "$(sudo -n -u tester2 id -u 2>&1)"
+fi
 # The root prompt survives a broken account entry: root's shell gone.
 cp /etc/passwd /tmp/passwd.keep
 sed -i 's|^root:\(.*\):[^:]*$|root:\1:/bin/nonexistent|' /etc/passwd

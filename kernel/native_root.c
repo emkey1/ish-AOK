@@ -803,11 +803,23 @@ static int add_to_group(const char *group, const char *name) {
     return err;
 }
 
+// The uid for a new account: NATIVE_ROOT_USER_UID while nothing has it, so
+// the first account is the everyday one whatever created it, then the lowest
+// free uid above it. Free means free in both /etc/passwd and /etc/group, since
+// the account's own group takes the same number. -1 if 1000-59999 are all taken.
+static int next_free_uid(void) {
+    for (int uid = NATIVE_ROOT_USER_UID; uid < 60000; uid++)
+        if (!db_has("/etc/passwd", NULL, uid) && !db_has("/etc/group", NULL, uid))
+            return uid;
+    return -1;
+}
+
 int native_root_add_user(const char *name, const char *password) {
     if (!native_root_user_name_valid(name))
         return db_has("/etc/passwd", name, -1) ? _EEXIST : _EINVAL;
-    if (native_root_has_default_user())
-        return _EEXIST;
+    int uid = next_free_uid();
+    if (uid < 0)
+        return _ENOSPC;
 
     char hash[256] = "!";
     if (password != NULL && password[0] != '\0') {
@@ -825,7 +837,6 @@ int native_root_add_user(const char *name, const char *password) {
     }
 
     char line[512];
-    int uid = NATIVE_ROOT_USER_UID;
     snprintf(line, sizeof(line), "%s:x:%d:%d:%s:/home/%s:%s\n",
              name, uid, uid, name, name, login_shell());
     int err = append_line("/etc/passwd", line, 0644);

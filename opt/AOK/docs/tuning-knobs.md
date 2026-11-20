@@ -146,7 +146,7 @@ the app has:
 | `ISH_PIX_ACCEL=1` | **Pixman Accel** | host-native fill/copy/composite for the guest's pixman shim; off by default, and on only once its self-test passes |
 | `ISH_FOREIGN_EXEC` | **Programs From Other Roots** | `root`, `libs` or `off`: how a program from another root runs when its loader is not here — see [roots.md](roots.md#running-another-roots-programs-by-path); the same as writing `/proc/ish/foreign_exec` at boot |
 | `ISH_NATIVE_ROOT=1` | a [native-mode](native-mode.md) root | treats the root as native mode, provisioning it as the app does at every boot of one |
-| `ISH_NATIVE_USER`, `ISH_NATIVE_PASSWORD` | the first-start prompt | with `ISH_NATIVE_ROOT=1`, the everyday account to create (password optional) on a root that has none yet |
+| `ISH_NATIVE_USER`, `ISH_NATIVE_PASSWORD` | the first-start prompt, Settings' Add User | with `ISH_NATIVE_ROOT=1`, an account to create (password optional) unless one by that name exists: uid 1000 on a root with none yet, the next free uid otherwise |
 
 ## `ISH_BOOT_ROOT`
 

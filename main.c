@@ -439,8 +439,8 @@ static void setup_host_mounts(void) {
     // as a native-mode root and provisions it exactly as the app does at every
     // boot of one -- links into /AOK/native, /etc, the rc scripts -- and makes
     // init an arm64 task. ISH_NATIVE_USER=<name> (with ISH_NATIVE_PASSWORD, if
-    // wanted) answers the first-start prompt for the everyday account, on a
-    // root that does not have one yet.
+    // wanted) adds that account unless it exists: on a root with none yet it
+    // answers the first-start prompt for the everyday account.
     // ISH_FOREIGN_EXEC=root|libs|off: /proc/ish/foreign_exec, from the start.
     const char *foreign = getenv("ISH_FOREIGN_EXEC");
     if (foreign != NULL) {
@@ -474,10 +474,13 @@ static void setup_host_mounts(void) {
             fprintf(stderr, "ISH_NATIVE_ROOT: cannot provision this root (%d)\n", nerr);
         native_root_adopt_abi(current);
         native_root_mount_zoneinfo();
+        // Added unless an account by that name exists, so the first one is
+        // the everyday account (uid 1000), as the first-start prompt makes it,
+        // and a later one gets the next uid, as Settings' Add User does.
         const char *user = getenv("ISH_NATIVE_USER");
-        if (nerr == 0 && user != NULL && user[0] != '\0' && !native_root_has_default_user()) {
+        if (nerr == 0 && user != NULL && user[0] != '\0') {
             nerr = native_root_add_user(user, getenv("ISH_NATIVE_PASSWORD"));
-            if (nerr < 0)
+            if (nerr < 0 && nerr != _EEXIST)
                 fprintf(stderr, "ISH_NATIVE_USER: cannot add %s (%d)\n", user, nerr);
         }
     }

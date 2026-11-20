@@ -36,6 +36,12 @@ struct task;
 // Whether the booted root is a native one, which is what decides whether the
 // sshd setting is shown at all.
 + (BOOL)bootedRootIsNative;
+// Settings' Add User: ask for a name and an optional password and create the
+// account in the booted native root, as the first-start prompt does (sudo,
+// groups, native zsh, home directory). Calls completion with whether one was
+// added; NO at once when no native root is booted.
++ (void)presentAddNativeUserFromViewController:(UIViewController *)host
+                                    completion:(void (^ _Nullable)(BOOL added))completion;
 // The account name whose /etc/passwd UID matches ISHDefaultUserAccountUID (see
 // UserPreferences.h), or nil if this rootfs has no such account. "Open Everything as Default
 // User" targets whatever's actually there instead of a name iSH provisions itself.
