@@ -84,8 +84,8 @@ judgement that is not mine to make.
 
 **Actions only the maintainer can take:**
 
-6. **Send the name request** to the ish-app maintainers (drafted below), or
-   decide on a store name without "iSH".
+6. ~~**Send the name request**~~ Decided 2026-11-20: submit as "AOK-iSH"
+   without asking first. See "Name and branding".
 7. **File the ANSSI declaration** and upload the attestation. This gates a
    French listing, and is the long pole: reported at about a month.
 8. **Take the screenshots** — iPhone 6.9" and iPad 13". Deliberately not
@@ -297,6 +297,12 @@ next to "iSH Shell" (id1436902243) on the same store.
 notes — or a store name without "iSH". Name availability could not be checked
 from here; the existing TestFlight app record presumably already holds the
 name (*inferred*).
+
+**Decision, 2026-11-20:** submit as "AOK-iSH" without asking the ish-app
+maintainers first, and accept the risk of a 5.2.1 rejection. The review notes
+no longer have a name section. If review rejects the name, the draft below is
+still the first step, and the "if the answer is no" paragraph after it is the
+work list.
 
 **Draft of the ask, 2026-11-14.** Only the user can send it, and only the user
 can judge the tone against an existing relationship (there are open PRs on

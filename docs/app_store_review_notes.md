@@ -4,13 +4,14 @@ The text under "For App Review" below is meant to be pasted into App Store
 Connect's review-notes field as it stands. Everything outside that section is
 for us, not for Apple.
 
-Two placeholders must be settled before it is pasted:
+One placeholder is left, and it needs nothing:
 
-- **`[NAME PERMISSION]`** -- either a sentence citing written permission from
-  the ish-app maintainers, or delete the paragraph and submit under a store
-  name without "iSH". See the assessment's "Name and branding".
 - **`[DEMO ACCOUNT]`** -- nothing is needed; the line saying so is already
   written. Left here only so the omission is deliberate.
+
+The name section is gone: on 2026-11-20 the maintainer decided to submit as
+"AOK-iSH" without asking the ish-app maintainers first, so there is no
+permission to cite. See the assessment's "Name and branding".
 
 The claims about code generation in section 2 were re-checked on 2026-11-14:
 no `MAP_JIT`, no `com.apple.security.cs.allow-jit` or `dynamic-codesigning`
@@ -100,10 +101,6 @@ Privacy policy: https://github.com/emkey1/ish-AOK/blob/working/docs/privacy-poli
 
 The app includes OpenSSH, built with its own cryptography rather than
 OpenSSL, so the app uses encryption beyond what iOS provides.
-
-### 7. Name
-
-**[NAME PERMISSION]**
 
 ---
 
