@@ -164,7 +164,7 @@ if grep -q '^tester2:' /etc/passwd; then
         *) fail user2_groups "$groups" ;;
     esac
     check user2_home_mode "700 1001" "$(stat -c '%a %u' /home/tester2 2>&1)"
-    check user2_shadow 1 "$(grep -c '^tester2:!:' /etc/shadow)"
+    check user2_shadow 1 "$(grep -c '^tester2:\$6\$' /etc/shadow)"
     check user1_still_default 1000 "$(id -u tester 2>/dev/null)"
 fi
 
@@ -177,6 +177,15 @@ check sudo_as_user 1000 "$(sudo -n -u tester id -u 2>&1)"
 if grep -q '^tester2:' /etc/passwd; then
     check user2_login_f "tester2 /home/tester2" "$(printf 'id -un; pwd\n' | login -f tester2 2>&1 | tr '\n' ' ' | sed 's/ $//')"
     check user2_sudo_as 1001 "$(sudo -n -u tester2 id -u 2>&1)"
+    # sudo -S reads the password from standard input (the gate gives tester2
+    # ISH_NATIVE_PASSWORD=aok-test); -k alone is a whole command.
+    check sudo_S_right root "$(su tester2 -c 'echo aok-test | sudo -S -k id -un' 2>/dev/null)"
+    su tester2 -c 'echo wrong | sudo -S -k id -un' > /dev/null 2>&1
+    check sudo_S_wrong 1 "$?"
+    check sudo_S_eof "sudo: no password was provided" \
+        "$(su tester2 -c 'sudo -S -k id -un < /dev/null' 2>&1 | sed 's/^\[sudo\] password for tester2: //')"
+    su tester2 -c 'sudo -k' > /dev/null 2>&1
+    check sudo_k_alone 0 "$?"
 fi
 # The root prompt survives a broken account entry: root's shell gone.
 cp /etc/passwd /tmp/passwd.keep
