@@ -289,6 +289,37 @@ static void ISHRecordTerminalViewEvent(NSString *event, Terminal *terminal, NSDi
     [_terminal webView];
     [_terminal addObserver:self forKeyPath:@"loaded" options:NSKeyValueObservingOptionInitial context:nil];
     [self installTerminalView];
+    [self presetTerminalSize];
+}
+
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    [self presetTerminalSize];
+}
+
+// The size hterm will measure, estimated from the bounds and the font, for a
+// terminal whose page has not loaded yet: see -[Terminal
+// presetSizeWithColumns:rows:]. It must err narrow: narrow costs a column
+// until the page loads, wide puts zsh's unfinished-line mark back.
+- (void)presetTerminalSize {
+    Terminal *terminal = self.terminal;
+    if (terminal == nil || terminal.loaded || self.rendersOnExternalDisplay)
+        return;
+    CGSize size = self.contentHostView.bounds.size;
+    UIFont *font = [UserPreferences.shared.approximateFont fontWithSize:self.effectiveFontSize];
+    CGSize cell = [@"M" sizeWithAttributes:@{NSFontAttributeName: font}];
+    CGFloat lineHeight = ceil(font.lineHeight * MAX(UserPreferences.shared.lineHeight.doubleValue, 1.0));
+    // hterm's screen padding is 4 points a side unless the user maximised the
+    // screen (TerminalViewController's _applyScreenPadding), and hterm keeps
+    // back a little more than that: in a 1032-point simulator window the
+    // padding alone gives 97 columns, hterm measured 96. So 16 points more,
+    // which leaves the estimate a column short at most widths.
+    CGFloat inset = 2 * 4 + 16;
+    if (cell.width <= 0 || lineHeight <= 0 || size.width <= inset || size.height <= inset)
+        return;
+    int cols = (int) floor((size.width - inset) / cell.width);
+    int rows = (int) floor((size.height - inset) / lineHeight);
+    [terminal presetSizeWithColumns:cols rows:rows];
 }
 
 // Where the webView currently belongs: the external display's container while

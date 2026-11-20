@@ -1153,6 +1153,34 @@ NSString *ISHPasteSequence(NSString *text, BOOL bracketed, BOOL execute) {
     }];
 }
 
+// Until the page loads, the tty has its 80x24 default, and the shell starts
+// with that. zsh draws the first prompt on that basis: its mark for a line
+// left unfinished (PROMPT_SP: the mark, then COLUMNS-1 spaces, then "\r \r")
+// erases itself only if the spaces fit on the line. In a Workspace window
+// narrower than 80 columns they wrap, and a lone `#` (root) or `%` stayed
+// above the first prompt -- on every launch on the A10X, whose page loads
+// long after zsh's first prompt. TerminalView estimates the size from its
+// bounds and the font, a column short rather than long, and the guest gets
+// that until hterm's own measurement replaces it.
+- (void)presetSizeWithColumns:(int)cols rows:(int)rows {
+    if (self.loaded || cols <= 0 || rows <= 0)
+        return;
+    tty_t tty;
+    @synchronized (self) {
+        tty = self->_tty;
+    }
+    if (tty == NULL)
+        return;
+    // As in -syncWindowSize: re-found under ttys_lock, with a reference.
+    tty = tty_lookup_ref(self.type, self.number, tty);
+    if (tty == NULL)
+        return;
+    lock(&tty->lock, 0);
+    tty_set_winsize(tty, (struct winsize_) {.col = cols, .row = rows});
+    unlock(&tty->lock);
+    tty_put(tty);
+}
+
 - (NSString *)arrow:(char)direction {
     return [NSString stringWithFormat:@"\x1b%c%c", self.applicationCursor ? 'O' : '[', direction];
 }

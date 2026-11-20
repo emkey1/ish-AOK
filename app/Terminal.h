@@ -59,6 +59,9 @@ struct tty *ISHOpenTerminalForRestoredSession(void);
 - (void)requestRefresh;
 // Re-measure the terminal against its current bounds; see -resyncSize.
 - (void)resyncSize;
+// Tell the tty an estimated size while the page has not loaded; see
+// -presetSizeWithColumns:rows:. Ignored once the page has measured itself.
+- (void)presetSizeWithColumns:(int)cols rows:(int)rows;
 - (void)setPendingDestroyReason:(NSString *)reason;
 
 - (NSString *)arrow:(char)direction;
