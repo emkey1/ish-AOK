@@ -186,6 +186,14 @@ if grep -q '^tester2:' /etc/passwd; then
         "$(su tester2 -c 'sudo -S -k id -un < /dev/null' 2>&1 | sed 's/^\[sudo\] password for tester2: //')"
     su tester2 -c 'sudo -k' > /dev/null 2>&1
     check sudo_k_alone 0 "$?"
+    # -p sets the prompt: '' prints none (the usual scripted form), and the
+    # escapes expand as sudo(8)'s do.
+    got=$(su tester2 -c "echo aok-test | sudo -S -k -p '' id -un 2>/tmp/sudo_p.err")
+    check sudo_p_empty "root|" "$got|$(cat /tmp/sudo_p.err)"
+    check sudo_p_escapes "P[tester2 tester2 root %]" \
+        "$(su tester2 -c "echo aok-test | sudo -S -k -p 'P[%p %u %U %%]' true" 2>&1)"
+    check sudo_p_joined "Q:" "$(su tester2 -c 'echo aok-test | sudo -S -k -pQ: true' 2>&1)"
+    rm -f /tmp/sudo_p.err
 fi
 # The root prompt survives a broken account entry: root's shell gone.
 cp /etc/passwd /tmp/passwd.keep
