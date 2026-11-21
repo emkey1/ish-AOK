@@ -127,6 +127,18 @@ check bin_merged usr/bin "$(readlink /bin)"
 check sh_link /AOK/native/sh "$(readlink /usr/bin/sh)"
 check init_link /AOK/native/smallclue "$(readlink /usr/sbin/init)"
 check login_link /AOK/native/smallclue "$(readlink /usr/bin/login)"
+# ip and ifconfig are on every platform now, not the PSCAL app alone: they read
+# the host's interfaces as the kernel's netlink does, and routes from /proc/net.
+check ip_link /AOK/native/smallclue "$(readlink /usr/bin/ip)"
+check ifconfig_link /AOK/native/smallclue "$(readlink /usr/bin/ifconfig)"
+check ip_lo_addr "127.0.0.1/8" "$(ip -4 -br addr show lo0 | awk '{print $3}')"
+check ifconfig_lo_flags "lo0: flags=73<UP,LOOPBACK,RUNNING>" \
+    "$(ifconfig lo0 | head -1 | sed 's/  mtu.*//; s/,MULTICAST//; s/=4169/=73/')"
+check ip_route_is_read "yes" "$(ip route | grep -q ' dev lo0' && echo yes || echo no)"
+got=$(ifconfig lo0 down 2>&1); rc=$?
+check ifconfig_refuses "SIOCSIFFLAGS: Operation not permitted|255" "$got|$rc"
+got=$(ifconfig nosuch0 2>&1); rc=$?
+check ifconfig_missing "nosuch0: error fetching interface information: Device not found|1" "$got|$rc"
 check sudo_is_setuid_program /AOK/native/sudo "$(readlink /usr/bin/sudo)"
 check terminfo_link /AOK/native/libs/terminfo "$(readlink /usr/share/terminfo)"
 check os_release aok-native "$(. /etc/os-release; echo "$ID")"
