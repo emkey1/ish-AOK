@@ -33,6 +33,9 @@
 //    menu-save                    the root menu's Save Session, prompts and all
 //    tap <title>                  press the button of the alert on screen whose
 //                                 title starts with <title> (the resume picker)
+//    add-user                     open the Add a User sheet, as Settings' row does
+//    fill <n> <text>              set text field n of the alert on screen
+//    alert                        the alert on screen: its title and message
 //
 //  Off unless ISH_WORKSPACE_TEST=1 is in the app's environment.
 //
@@ -282,6 +285,55 @@ static void ISHWorkspaceTestRun(NSString *line) {
             [titles addObject:action.title ?: @""];
         answer(NO, alert == nil ? @"no alert on screen"
                                 : [@"no such button; have: " stringByAppendingString:[titles componentsJoinedByString:@" | "]]);
+        return;
+    }
+    if ([verb isEqualToString:@"add-user"]) {
+        // What Settings > Add User… does; its row calls exactly this.
+        UIViewController *host = nil;
+        for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+            if (![scene isKindOfClass:UIWindowScene.class])
+                continue;
+            for (UIWindow *window in ((UIWindowScene *) scene).windows) {
+                if (!window.isKeyWindow && host != nil)
+                    continue;
+                host = window.rootViewController;
+                while (host.presentedViewController != nil)
+                    host = host.presentedViewController;
+            }
+        }
+        if (host == nil) {
+            answer(NO, @"no window");
+            return;
+        }
+        [AppDelegate presentAddNativeUserFromViewController:host completion:^(BOOL added) {
+            NSLog(@"workspace-test: add-user completion added=%d", added);
+        }];
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t) (NSEC_PER_SEC / 2)), dispatch_get_main_queue(), ^{
+            UIAlertController *alert = ISHWorkspaceTestTopAlert();
+            answer(alert != nil, alert != nil ? nil : @"no sheet came up (is the booted root native?)");
+        });
+        return;
+    }
+    if ([verb isEqualToString:@"fill"] && args.count >= 1) {
+        // fill <field index> [text]: set a text field of the alert on screen.
+        UIAlertController *alert = ISHWorkspaceTestTopAlert();
+        NSInteger index = args[0].integerValue;
+        if (alert == nil || index < 0 || index >= (NSInteger) alert.textFields.count) {
+            answer(NO, alert == nil ? @"no alert on screen" : @"no such field");
+            return;
+        }
+        NSString *text = [[args subarrayWithRange:NSMakeRange(1, args.count - 1)] componentsJoinedByString:@" "];
+        alert.textFields[index].text = ISHWorkspaceTestDecode(text);
+        ISHWorkspaceTestWriteResult(seq, @{@"ok": @YES, @"title": alert.title ?: @"",
+                                           @"message": alert.message ?: @""});
+        return;
+    }
+    if ([verb isEqualToString:@"alert"]) {
+        // The alert on screen, if any: what a re-presented sheet's error says.
+        UIAlertController *alert = ISHWorkspaceTestTopAlert();
+        ISHWorkspaceTestWriteResult(seq, alert == nil ? @{@"ok": @YES, @"alert": @NO}
+                                                     : @{@"ok": @YES, @"alert": @YES, @"title": alert.title ?: @"",
+                                                         @"message": alert.message ?: @""});
         return;
     }
     if ([verb isEqualToString:@"workspace"]) {
