@@ -15,6 +15,8 @@ native-links.sh
 native-applets.conf
 persist-links.sh
 ssh-stash.sh
+wayland-root.sh
+setup-native-wayland.sh
 provision-ultimate-alpine.sh
 provision-ultimate-devuan.sh
 provision-ultimate-archlinux.sh

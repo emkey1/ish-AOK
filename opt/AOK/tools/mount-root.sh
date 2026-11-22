@@ -122,16 +122,31 @@ list_roots() {
 setup_mounts() {
     root=$1
     log "Setting up $root"
-    for d in $BIND_DIRS; do
+    for d in $BIND_DIRS $(extra_binds "$root"); do
         mount_one_dir "/$d" "$root/$d"
     done
+}
+
+# More of the booted root, when the root asks for it in its /etc/aok-binds:
+# directory names, one a line, from the same fixed set the kernel honours when
+# a program of that root is run by path (kernel/foreign_exec.c). The Wayland
+# root of a native-mode root asks for home and tmp. Builtins only.
+EXTRA_BINDS_ALLOWED="home tmp mnt media srv"
+extra_binds() {
+    [ -f "$1/etc/aok-binds" ] && [ ! -L "$1/etc/aok-binds" ] || return 0
+    while IFS= read -r want || [ -n "$want" ]; do
+        want=${want#/}; want=${want%/}
+        for ok in $EXTRA_BINDS_ALLOWED; do
+            [ "$want" = "$ok" ] && echo "$ok"
+        done
+    done < "$1/etc/aok-binds"
 }
 
 teardown_mounts() {
     root=$1
     log "Tearing down $root"
     # Reverse order: dev/pts before dev, etc.
-    for d in AOK/fakefs AOK/tests AOK/tools AOK/docs AOK/native run dev/pts dev sys proc; do
+    for d in $EXTRA_BINDS_ALLOWED AOK/fakefs AOK/tests AOK/tools AOK/docs AOK/native run dev/pts dev sys proc; do
         umount_one_dir "$root/$d"
     done
 }

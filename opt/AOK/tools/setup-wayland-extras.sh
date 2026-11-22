@@ -41,6 +41,13 @@ log()  { printf '\n\033[1;36m==>\033[0m \033[1m%s\033[0m\n' "$*"; }
 note() { printf '    %s\n' "$*"; }
 die()  { printf 'setup-wayland-extras.sh: %s\n' "$*" >&2; exit 1; }
 
+# In a native-mode root there is no distribution here: run inside its Wayland
+# filesystem instead (wayland-root.sh, setup-native-wayland.sh).
+if [ -r /AOK/tools/wayland-root.sh ]; then
+    . /AOK/tools/wayland-root.sh
+    aok_wayland_handoff setup-wayland-extras.sh install "$@" || die "$AOK_WAYLAND_PROBLEM"
+fi
+
 # apk add, with every package downloaded whole before any is installed.
 # apk-tools 3 (Alpine 3.23+) streams each package from the mirror straight into
 # extraction, so the connection is read only as fast as files are written. Under

@@ -167,6 +167,19 @@ esac
 READY_FILE="${ISH_DISPLAY_READY_FILE:-/tmp/ish-display.ready}"
 ERROR_FILE="$READY_FILE.error"
 
+# In a native-mode root there is no compositor here: the session runs inside
+# its Wayland filesystem (wayland-root.sh), which shares this root's /tmp, so
+# the ready file above is the same file on both sides. This shell stays as the
+# session's parent and passes a hang-up on. With no Wayland filesystem, the
+# applet shows how to get one.
+if [ -r /AOK/tools/wayland-root.sh ]; then
+    . /AOK/tools/wayland-root.sh
+    if ! aok_wayland_handoff start-wayland.sh report "$@"; then
+        rm -f "$READY_FILE" "$ERROR_FILE" 2>/dev/null
+        die "$AOK_WAYLAND_PROBLEM"
+    fi
+fi
+
 # ONE Wayland session at a time, and a second run refuses rather than takes
 # over. Every session binds the same WAYVNC_PORT and the same $READY_FILE, and
 # the stale-session sweep below kills labwc/foot/wayvnc by name, so a second
@@ -203,6 +216,24 @@ aok_runs_start_wayland() {
 $(tr '\0' '\n' < "/proc/$1/cmdline" 2>/dev/null)
 AOK_CMDLINE_EOF
     return $_wl_hit
+}
+# argv[0] of pid $1.
+aok_argv0() { tr '\0' '\n' < "/proc/$1/cmdline" 2>/dev/null | sed -n 1p; }
+# Is pid $1 the shell a native-mode root started this script in, which handed
+# it off to its Wayland filesystem (wayland-root.sh) and is waiting? It runs
+# start-wayland.sh by its command line but is not a session: the session is
+# its child, the same script under /AOK/roots/<name>/bin/sh, and is looked at
+# on its own. Taken for a session, it is one with no compositor under it --
+# and after 30 s the stale-session sweep below ended the live desktop.
+aok_is_handoff_wrapper() {
+    case "$(aok_argv0 "$1")" in /AOK/roots/*) return 1 ;; esac
+    for _wl_c in /proc/[0-9]*; do
+        [ "$(aok_ppid "${_wl_c#/proc/}")" = "$1" ] || continue
+        case "$(aok_argv0 "${_wl_c#/proc/}")" in
+            /AOK/roots/*/bin/sh) aok_runs_start_wayland "${_wl_c#/proc/}" && return 0 ;;
+        esac
+    done
+    return 1
 }
 # A session with no compositor under it that is past its start-up is not a
 # desktop anyone can use: what is left of one whose compositor died -- a crash,
@@ -244,6 +275,17 @@ aok_other_wayland_sessions() {
         _wl_pid=${_wl_pid%/cmdline}
         case "$_wl_mine" in *" $_wl_pid "*) continue ;; esac
         aok_runs_start_wayland "$_wl_pid" || continue
+        aok_is_handoff_wrapper "$_wl_pid" && continue
+        # A subshell of ANOTHER session is not a session either. Its command
+        # line is its parent's, it has no compositor under it, and the
+        # long-lived ones (the helper loops) are past the stale age, so a
+        # second start used to end one of the live desktop's helpers as
+        # "stale" on its way to refusing (seen 2026-11-22, Devuan arm64).
+        _wl_pp=$(aok_ppid "$_wl_pid")
+        if [ -n "$_wl_pp" ] && [ "$_wl_pp" -gt 1 ] && aok_runs_start_wayland "$_wl_pp" \
+                && ! aok_is_handoff_wrapper "$_wl_pp"; then
+            continue
+        fi
         _wl_p=$(aok_ppid "$_wl_pid")
         _wl_own=0
         while [ -n "$_wl_p" ] && [ "$_wl_p" -gt 1 ]; do

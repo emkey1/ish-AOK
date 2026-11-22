@@ -105,32 +105,82 @@ static const char *const root_binds[] = {
     "proc", "sys", "dev", "dev/pts", "run", "AOK/native", "AOK/docs", "AOK/tools",
 };
 
+// Bind the booted root's /NAME at ROOT/NAME, making the mount point if it
+// is not there. Nothing happens if /NAME is not a directory here or something
+// is already mounted at the point.
+static void bind_one(const char *root, const char *name) {
+    char source[MAX_PATH], point[MAX_PATH];
+    snprintf(source, sizeof(source), "/%s", name);
+    if (!is_dir(source))
+        return;
+    // Each component in turn: mkdir -p.
+    snprintf(point, sizeof(point), "%s/%s", root, name);
+    for (char *p = point + strlen(root) + 1; *p != '\0'; p++) {
+        if (*p == '/') {
+            *p = '\0';
+            generic_mkdirat(AT_PWD, point, 0755);
+            *p = '/';
+        }
+    }
+    generic_mkdirat(AT_PWD, point, 0755);
+    if (!mount_exists_at_point(point))
+        mount_bind_dir(source, point);
+}
+
+// More of the booted root, when the root being entered asks for it: its
+// /etc/aok-binds names directories, one a line, to bind in as well. A root
+// that is a companion to the booted one wants this -- the Wayland root of a
+// native-mode root (docs/native_wayland_plan.md) asks for home and tmp, so the
+// desktop sees the user's files and the app sees the session's ready file --
+// where a root entered to run one of its own programs does not.
+//
+// A fixed set, not any path: the file belongs to whoever is root in that
+// root, and what it can ask for is user data, never this root's /etc or the
+// other roots. mount-root.sh reads the same file.
+#define ROOT_BINDS_FILE "/etc/aok-binds"
+static const char *const root_binds_allowed[] = { "home", "tmp", "mnt", "media", "srv" };
+
+static void bind_requested(const char *root) {
+    char path[MAX_PATH];
+    snprintf(path, sizeof(path), "%s" ROOT_BINDS_FILE, root);
+    struct fd *fd = generic_open(path, O_RDONLY_ | O_NOFOLLOW_, 0);
+    if (IS_ERR(fd))
+        return;
+    char buf[512] = {};
+    ssize_t n = generic_read(fd, buf, sizeof(buf) - 1);
+    fd_close(fd);
+    if (n <= 0)
+        return;
+    buf[n] = '\0';
+    for (char *line = buf; line != NULL && *line != '\0'; ) {
+        char *end = strchr(line, '\n');
+        if (end != NULL)
+            *end = '\0';
+        while (*line == ' ' || *line == '\t' || *line == '/')
+            line++;
+        size_t len = strlen(line);
+        while (len > 0 && (line[len - 1] == ' ' || line[len - 1] == '\t' ||
+                           line[len - 1] == '\r' || line[len - 1] == '/'))
+            line[--len] = '\0';
+        for (size_t i = 0; i < sizeof(root_binds_allowed) / sizeof(root_binds_allowed[0]); i++)
+            if (strcmp(line, root_binds_allowed[i]) == 0)
+                bind_one(root, root_binds_allowed[i]);
+        line = end != NULL ? end + 1 : NULL;
+    }
+}
+
 static void bind_into_root(const char *root) {
     // The mount points may need making -- /AOK is not in a distribution's
     // tarball -- and the program's user may not be allowed to make them in a
     // root-owned tree. The kernel is doing this, not the program, so the
-    // directories are made with the filesystem identity of root.
+    // directories are made, and the root's list read, with the filesystem
+    // identity of root.
     uid_t_ fsuid = current->fsuid, fsgid = current->fsgid;
     current->fsuid = 0;
     current->fsgid = 0;
-    for (size_t i = 0; i < sizeof(root_binds) / sizeof(root_binds[0]); i++) {
-        char source[MAX_PATH], point[MAX_PATH];
-        snprintf(source, sizeof(source), "/%s", root_binds[i]);
-        if (!is_dir(source))
-            continue;
-        // Each component in turn: mkdir -p.
-        snprintf(point, sizeof(point), "%s/%s", root, root_binds[i]);
-        for (char *p = point + strlen(root) + 1; *p != '\0'; p++) {
-            if (*p == '/') {
-                *p = '\0';
-                generic_mkdirat(AT_PWD, point, 0755);
-                *p = '/';
-            }
-        }
-        generic_mkdirat(AT_PWD, point, 0755);
-        if (!mount_exists_at_point(point))
-            mount_bind_dir(source, point);
-    }
+    for (size_t i = 0; i < sizeof(root_binds) / sizeof(root_binds[0]); i++)
+        bind_one(root, root_binds[i]);
+    bind_requested(root);
     current->fsuid = fsuid;
     current->fsgid = fsgid;
 }

@@ -60,6 +60,13 @@ log()  { printf '\n\033[1;36m==>\033[0m \033[1m%s\033[0m\n' "$*"; }
 note() { printf '    %s\n' "$*"; }
 die()  { printf 'setup-games.sh: %s\n' "$*" >&2; exit 1; }
 
+# In a native-mode root there is no distribution here: run inside its Wayland
+# filesystem instead (wayland-root.sh, setup-native-wayland.sh).
+if [ -r /AOK/tools/wayland-root.sh ]; then
+    . /AOK/tools/wayland-root.sh
+    aok_wayland_handoff setup-games.sh install "$@" || die "$AOK_WAYLAND_PROBLEM"
+fi
+
 IN_AOK=0; [ -d /proc/ish ] && IN_AOK=1
 CONF=/etc/aok-games.conf
 WRAPPER=/usr/local/bin/aok-sdl-game

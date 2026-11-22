@@ -84,6 +84,16 @@ case "${1:-}" in
     check foreign_libs_locpath "$O/usr/lib/locale" "$($O/bin/sh -c 'echo $LOCPATH' 2>&1)"
     check foreign_libs_locale UTF-8 "$(LANG=C.UTF-8 $O/usr/bin/locale charmap 2>&1)"
     check foreign_libs_user_locpath /mine "$(LOCPATH=/mine $O/bin/sh -c 'echo $LOCPATH' 2>&1)"
+    # A root can ask for the booted root's /home and /tmp when it is entered:
+    # its /etc/aok-binds, from a fixed set. The Wayland root of a native root
+    # does (docs/native_wayland_plan.md). /etc is not in the set.
+    echo root > /proc/ish/foreign_exec
+    echo marker > /tmp/nm_binds_marker
+    check foreign_binds_before "" "$($O/bin/cat /tmp/nm_binds_marker 2>/dev/null)"
+    printf '# test\ntmp\netc\n' > $O/etc/aok-binds
+    check foreign_binds_tmp marker "$($O/bin/cat /tmp/nm_binds_marker 2>&1)"
+    check foreign_binds_etc_refused 0 "$($O/bin/grep -c aok-native /etc/os-release 2>/dev/null)"
+    rm -f $O/etc/aok-binds /tmp/nm_binds_marker
     echo "$saved" > /proc/ish/foreign_exec
     exit 0
     ;;

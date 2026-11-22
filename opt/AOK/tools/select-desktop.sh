@@ -36,6 +36,14 @@ CONF=/etc/aok-desktop.conf
 
 die() { printf 'select-desktop.sh: %s\n' "$*" >&2; exit 1; }
 
+# In a native-mode root the desktops live in its Wayland filesystem: run
+# there (wayland-root.sh). With none yet, a bare listing still answers --
+# nothing is installed -- and a choice says how to get one.
+if [ -r /AOK/tools/wayland-root.sh ]; then
+    . /AOK/tools/wayland-root.sh
+    aok_wayland_handoff select-desktop.sh report "$@" || { [ $# -eq 0 ] || die "$AOK_WAYLAND_PROBLEM"; }
+fi
+
 # The programs a desktop needs before it can be chosen.
 needs() {
     case "$1" in

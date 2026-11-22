@@ -44,6 +44,13 @@ MARK_BEGIN='# >>> AOK-iSH setup-locale.sh >>>'
 MARK_END='# <<< AOK-iSH setup-locale.sh <<<'
 
 die() { echo "$PROG: $*" >&2; exit 1; }
+
+# In a native-mode root there is no distribution here: run inside its Wayland
+# filesystem instead (wayland-root.sh, setup-native-wayland.sh).
+if [ -r /AOK/tools/wayland-root.sh ]; then
+    . /AOK/tools/wayland-root.sh
+    aok_wayland_handoff setup-locale.sh install "$@" || die "$AOK_WAYLAND_PROBLEM"
+fi
 note() { echo "$PROG: $*"; }
 
 # A BCP 47 tag (zh-Hans-CN, en-GB, pt-BR, ja) as a glibc locale name.
