@@ -5867,13 +5867,21 @@ void handle_syscall_interrupt(struct cpu_state *cpu) {
         dispatch->syscall_args(cpu, raw_args);
         if (dispatch->abi == GUEST_ABI_ARM64 || dispatch->abi == GUEST_ABI_RISCV64) {
             handle_asm_generic_native_syscall(cpu, syscall_num, raw_args);
-            return;
+        } else {
+            // i386/amd64: no legacy marshalling (raw_args[0] is a full guest
+            // address), and the result goes back through the ABI's own
+            // writer, which already sign-extends a negative errno the way
+            // each expects.
+            dispatch->syscall_result(cpu, syscall_num == 0xacc0 ?
+                    sys_ish_aead_guest(raw_args[0]) : sys_ish_pixop_guest(raw_args[0]));
         }
-        // i386/amd64: no legacy marshalling (raw_args[0] is a full guest
-        // address), and the result goes back through the ABI's own writer,
-        // which already sign-extends a negative errno the way each expects.
-        dispatch->syscall_result(cpu, syscall_num == 0xacc0 ?
-                sys_ish_aead_guest(raw_args[0]) : sys_ish_pixop_guest(raw_args[0]));
+        // The exit stop, as every other path makes it. Without it a tracer
+        // that saw the entry stop takes the NEXT call's entry for this one's
+        // exit: strace printed each accelerator call returning the next one's
+        // request pointer, and counted half of them.
+        if (current->ptrace.traced && current->ptrace.stop_at_syscall &&
+                current->ptrace.syscall_stopped)
+            ptrace_syscall_stop(cpu);
         return;
     }
     if (syscall_num >= dispatch->num_syscalls) {
