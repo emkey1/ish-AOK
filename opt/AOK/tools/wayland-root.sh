@@ -98,6 +98,10 @@ aok_wayland_run_in() {
     aok_wayland_refresh "$_aok_dir"
     PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/AOK/native
     export PATH
+    # Tells the script it was entered from a native root: the account's shell
+    # is the one setup-native-wayland.sh wrote, and the chroot left it at /.
+    AOK_WAYLAND_FROM_NATIVE=1
+    export AOK_WAYLAND_FROM_NATIVE
     exec "$_aok_dir/bin/sh" "/AOK/tools/$_aok_script" "$@"
 }
 

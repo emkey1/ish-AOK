@@ -429,7 +429,19 @@ fi
 # terminal actually wants, hence "I have to manually run bash". This is what
 # foot spawns its terminal shell from; check /bin/bash directly instead of
 # re-deriving it from a field that's unreliable for this specific purpose.
-if [ -x /bin/bash ]; then
+#
+# Not when this root is a native root's desktop (wayland-root.sh): there the
+# entry is the one setup-native-wayland.sh copied from the booted root, so it
+# is the shell the user works in, and the desktop's terminal runs it. Entering
+# the root also left this at /, where a login would be at home.
+PW_SHELL=
+[ -n "$PW_LINE" ] && PW_SHELL="$(printf '%s' "$PW_LINE" | cut -d: -f7)"
+if [ -n "${AOK_WAYLAND_FROM_NATIVE:-}" ]; then
+    cd "$HOME" 2>/dev/null || true
+fi
+if [ -n "${AOK_WAYLAND_FROM_NATIVE:-}" ] && [ -n "$PW_SHELL" ] && [ -x "$PW_SHELL" ]; then
+    export SHELL="$PW_SHELL"
+elif [ -x /bin/bash ]; then
     export SHELL=/bin/bash
 elif [ -n "$PW_LINE" ]; then
     PW_SHELL="$(printf '%s' "$PW_LINE" | cut -d: -f7)"
