@@ -335,6 +335,13 @@ struct fd {
             bool inet_nat_peer;
             uint32_t inet_nat_peer_addr;
             uint16_t inet_nat_peer_port;
+            // A UDP connect() to port 0, which Linux allows and Darwin refuses
+            // (EADDRNOTAVAIL): the host socket is connected to a stand-in port
+            // instead, for the route and the source address -- glibc's
+            // getaddrinfo ranks addresses by exactly that probe -- and this
+            // says the guest's peer is port 0: no getpeername, and sends go
+            // nowhere. See sys_connect_common.
+            bool inet_port0_peer;
 
             uint32_t netlink_port_id;
             uint32_t netlink_groups;

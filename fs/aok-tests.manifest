@@ -412,6 +412,7 @@ accept_herd_single_winner.c
 accept_kill.c
 socket_kill.c
 inaddr_any_iface.c
+udp_connect_port0.c
 epoll_dup_add.c
 inotify_mount_paths.c
 inotify_fionread.c

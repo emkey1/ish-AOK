@@ -8002,6 +8002,11 @@ static bool sock_devlog_initctl_fallback(struct fd *sock, bool devlog_target, bo
     return false;
 }
 
+// The port a UDP connect() to port 0 is made to on the host (see
+// sys_connect_common): discard, so that if anything were ever sent there it
+// would be the one port meant to swallow it. Nothing is, by design.
+#define SOCK_PORT0_STAND_IN 9
+
 static int_t sys_connect_common(fd_t sock_fd, guest_addr_t sockaddr_addr, uint_t sockaddr_len) {
     STRACE("connect(%d, 0x%llx, %d)", sock_fd, (unsigned long long) sockaddr_addr, sockaddr_len);
     int_t sock_err;
@@ -8119,6 +8124,30 @@ static int_t sys_connect_common(fd_t sock_fd, guest_addr_t sockaddr_addr, uint_t
         }
     }
 
+    // Linux lets a UDP socket connect to port 0: it looks the route up, picks
+    // the source address, and is connected. Darwin refuses the port with
+    // EADDRNOTAVAIL. glibc's getaddrinfo sorts its answers by connecting a
+    // UDP socket to each, port 0 when no service was asked for (RFC 6724
+    // rule 1, "avoid unusable destinations"), so with every probe refused it
+    // ranked an IPv6 address first on a network with no IPv6 route at all,
+    // and `ping google.com` went nowhere while `ping 8.8.8.8` worked. The
+    // host connects to a stand-in port instead, which asks the host the same
+    // route question. As on Linux, getpeername then says ENOTCONN (there is
+    // no peer port), and a send without an address goes nowhere: Linux's goes
+    // to port 0, where nothing listens.
+    bool port0_peer = false;
+    if ((sock->socket.domain == AF_INET_ || sock->socket.domain == AF_INET6_) &&
+            sock->socket.type == SOCK_DGRAM_ && !sock->socket.net_emul) {
+        struct sockaddr *dest = (struct sockaddr *) &sockaddr;
+        if (dest->sa_family == AF_INET && ((struct sockaddr_in *) dest)->sin_port == 0) {
+            ((struct sockaddr_in *) dest)->sin_port = htons(SOCK_PORT0_STAND_IN);
+            port0_peer = true;
+        } else if (dest->sa_family == AF_INET6 && ((struct sockaddr_in6 *) dest)->sin6_port == 0) {
+            ((struct sockaddr_in6 *) dest)->sin6_port = htons(SOCK_PORT0_STAND_IN);
+            port0_peer = true;
+        }
+    }
+
     if (sock_trace_enabled()) {
         int host_flags = sock->real_fd >= 0 ? fcntl(sock->real_fd, F_GETFL, 0) : -1;
         printk("INFO: net connect enter pid=%d comm=%s guest_domain=%d guest_type=%d real=%d family=%d addrlen=%u guest_flags=%#x host_flags=%#x\n",
@@ -8227,6 +8256,8 @@ static int_t sys_connect_common(fd_t sock_fd, guest_addr_t sockaddr_addr, uint_t
 #endif
 
     // Connected (or, nonblocking, as good as): who to, for getpeername.
+    if (sock->socket.domain == AF_INET_ || sock->socket.domain == AF_INET6_)
+        sock->socket.inet_port0_peer = port0_peer;
     if (net_emul_stream_port != 0)
         sock->socket.net_emul_dest_port = net_emul_stream_port;
     if (sock->socket.domain == AF_LOCAL_) {
@@ -8914,6 +8945,10 @@ static int_t sys_getpeername_common(fd_t sock_fd, guest_addr_t sockaddr_addr, gu
     dword_t sockaddr_len;
     if (user_get(sockaddr_len_addr, sockaddr_len))
         return _EFAULT;
+    // Connected to port 0 (see sys_connect_common): Linux has no peer to
+    // name, and says so.
+    if (sock->socket.inet_port0_peer)
+        return _ENOTCONN;
     // See the matching comment in sys_getsockname_common: this must be a
     // fixed-size buffer, not one sized by the untrusted guest-requested
     // length. stress-ng's --sock stressor's getpeername() calls with a
@@ -9164,6 +9199,13 @@ static int_t sys_sendto_common(fd_t sock_fd, guest_addr_t buffer_addr, dword_t l
     bool unix_seqpacket = sock_is_unix_seqpacket(sock);
     if (unix_seqpacket)
         sockaddr_addr = 0;
+    // Connected to port 0, which the host could only stand in for: Linux
+    // sends to port 0, where nothing listens, so this is sent as far as the
+    // sender is told, and nothing reaches the stand-in (sys_connect_common).
+    if (!sockaddr_addr && sock->socket.inet_port0_peer) {
+        free(buffer);
+        return len;
+    }
     struct sockaddr_max_ sockaddr;
     if (sockaddr_addr) {
         err = sockaddr_read(sockaddr_addr, &sockaddr, &sockaddr_len);
@@ -11327,6 +11369,11 @@ static int_t sys_sendmsg_guest_abi(fd_t sock_fd, guest_addr_t msghdr_addr, int_t
     }
     // Loopback in a private network namespace: as in sendto.
     bool net_emul_drop = false;
+    // Connected to port 0, which the host could only stand in for: Linux
+    // sends to port 0, where nothing listens, so this is sent as far as the
+    // sender is told, and nothing reaches the stand-in (sys_connect_common).
+    if (msg.msg_name == NULL && sock->socket.inet_port0_peer)
+        net_emul_drop = true;
     if (sock->socket.net_emul && !sock->socket.net_emul_icmp) {
         bool use_addr;
         uint_t name_len = msg.msg_name != NULL ? msg.msg_namelen : 0;
@@ -13087,6 +13134,9 @@ static ssize_t sock_write(struct fd *fd, const void *buf, size_t size) {
     if (sock_is_devlog_sink(fd) || sock_is_initctl_sink(fd)) {
         return size;
     }
+    // Connected to port 0: sent as far as the writer is told (sendto above).
+    if (fd->socket.inet_port0_peer)
+        return size;
     if (fd->socket.domain == AF_NETLINK_) {
         // Netlink sockets are emulated in-process (real_fd < 0), so route a bare
         // write()/writev() through the same request handler as sendto()/sendmsg().
