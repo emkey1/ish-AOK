@@ -34,7 +34,8 @@
 #     there, so a file in the shared /home has one owner, and sudo asks the
 #     same question;
 #   - /usr/sbin/policy-rc.d there says no to starting services, because that
-#     filesystem is never booted while this is how it is used.
+#     filesystem is never booted while this is how it is used;
+#   - its package lists are fetched (apt-get update) if it has none.
 #
 # Safe to run again: every step is skipped where it is already done, and a
 # second run is how you add an account (--user) or finish an install that was
@@ -257,6 +258,24 @@ EOF
     chmod 644 "$W/etc/profile.d/10-aok-native.sh"
 fi
 note "a shell inside it is your shell, with the native programs on PATH"
+
+# ---- the package lists -----------------------------------------------------
+
+# A filesystem straight from the catalogue has never run apt: with no lists,
+# `apt install anything` answers "Unable to locate package". Fetched here,
+# once, so the first install works; a later `apt update` is the user's.
+has_lists() {
+    for f in "$W"/var/lib/apt/lists/*_Packages*; do
+        [ -e "$f" ] && return 0
+    done
+    return 1
+}
+if ! has_lists; then
+    log "Fetching the package lists (apt-get update)"
+    aok_companion_env
+    "$W/usr/bin/apt-get" update ||
+        warn "apt-get update failed -- check the network, then run: sudo apt update"
+fi
 
 log "Done"
 note "companion: $ROOT_NAME  ($W)"
