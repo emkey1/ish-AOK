@@ -36,6 +36,9 @@
 #   manage-roots.sh install https://example.org/rootfs.tar.gz Experiment
 #   manage-roots.sh default Devuan6-x86_64 --exit-app
 #
+# A root installed here is at /AOK/roots/<name> as soon as the install
+# reports done (mount-root.sh then gets you inside it).
+#
 # Switching takes effect at the next app launch, because the root to boot is
 # read once when the app starts. Nothing here disturbs the running guest, so
 # you can install a root from inside the root you are using.

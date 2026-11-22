@@ -2386,6 +2386,12 @@ static void RunInstallJob(NSDictionary<NSString *, NSString *> *fields) {
         [control finishError:problem];
         return;
     }
+    // Mounted at /AOK/roots/<name> now, as a root there at launch is, and
+    // before the job reports done: a script that installs a root and then
+    // works in it (setup-native-wayland.sh) otherwise waited for a directory
+    // that only the next launch would bring (A10X, 2026-11-22). The rename
+    // path does the same, for the same reason. Off the main thread already.
+    [roots exposeRootNamed:installed];
     [control finishOk:[NSString stringWithFormat:@"installed %@ (%@)", installed, abi]];
 }
 
