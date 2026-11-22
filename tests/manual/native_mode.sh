@@ -142,6 +142,14 @@ check ifconfig_missing "nosuch0: error fetching interface information: Device no
 check sudo_is_setuid_program /AOK/native/sudo "$(readlink /usr/bin/sudo)"
 check terminfo_link /AOK/native/libs/terminfo "$(readlink /usr/share/terminfo)"
 check os_release aok-native "$(. /etc/os-release; echo "$ID")"
+# The SmallCLUE this build carries, "<commit> <date>", in place of the old
+# "(no distribution)"; "unknown" means the build could not ask git.
+got=$(. /etc/os-release; echo "$PRETTY_NAME|$VERSION")
+case "$got" in
+    "AOK-iSH Native (SmallCLUE "[0-9a-f]*" "[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]")|SmallCLUE "*)
+        pass os_release_smallclue ;;
+    *) fail os_release_smallclue "got [$got]" ;;
+esac
 check uname_m aarch64 "$(uname -m)"
 check uname_o AOK/Linux "$(uname -o)"
 check root_owner "0 0" "$(stat -c '%u %g' /)"

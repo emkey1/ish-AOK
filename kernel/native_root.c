@@ -45,6 +45,7 @@
 #include "kernel/sha_crypt.h"
 #include "kernel/task.h"
 #include "deps/smallclue/src/smallclue.h"
+#include "smallclue_version.h"
 
 #define NATIVE_DIR "/AOK/native/"
 #define APPLETS_CONF "/AOK/tools/native-applets.conf"
@@ -524,10 +525,13 @@ static void write_etc(void) {
                "if (( ${#fpath} )); then\n"
                "    autoload -Uz compinit && compinit -u -d ~/.zcompdump\n"
                "fi\n", 0644, true);
+    // Rewritten at every boot, so it names the SmallCLUE of the running build:
+    // in a root with no distribution, SmallCLUE's applets are the userland.
     write_file("/etc/os-release",
                "NAME=\"AOK-iSH Native\"\n"
-               "PRETTY_NAME=\"AOK-iSH Native (no distribution)\"\n"
+               "PRETTY_NAME=\"AOK-iSH Native (SmallCLUE " AOK_SMALLCLUE_VERSION ")\"\n"
                "ID=aok-native\n"
+               "VERSION=\"SmallCLUE " AOK_SMALLCLUE_VERSION "\"\n"
                "HOME_URL=\"https://github.com/emkey1/ish-AOK\"\n", 0644, false);
 
     // The rc system: /etc/rc runs at boot under SmallCLUE's init, and

@@ -1,0 +1,4 @@
+// Generated at build time from deps/smallclue (meson.build, vcs_tag): the
+// SmallCLUE commit this build carries, and its date. A native root's
+// /etc/os-release names it (kernel/native_root.c).
+#define AOK_SMALLCLUE_VERSION "@VCS_TAG@"

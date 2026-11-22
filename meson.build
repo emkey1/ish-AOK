@@ -534,6 +534,16 @@ native_syscall_nums = custom_target('native_syscall_nums',
     input: files('tools/gen-native-syscalls.py', 'kernel/calls.c'),
     command: [python, '@INPUT0@', '@INPUT1@', '@OUTPUT@'])
 
+# The SmallCLUE this build carries, as "<commit> <date>", for a native root's
+# /etc/os-release. vcs_tag reruns on every build, so a submodule bump shows
+# without a reconfigure; a tree with no git gets "unknown".
+smallclue_version_h = vcs_tag(
+    command: ['git', '-C', meson.current_source_dir() / 'deps/smallclue',
+              'log', '-1', '--format=%h %cs'],
+    input: 'kernel/smallclue_version.h.in',
+    output: 'smallclue_version.h',
+    fallback: 'unknown')
+
 emu_src = [
     'emu/tlb.c',
     'emu/fpu.c',
@@ -661,7 +671,7 @@ src = [
     'kernel/native.c',
     'kernel/native_bench.c',
     'kernel/native_io.c',
-    'kernel/native_root.c',
+    'kernel/native_root.c', smallclue_version_h,
     'kernel/guest_sshd.c',
     'kernel/foreign_exec.c',
     'kernel/native_libc.c',
