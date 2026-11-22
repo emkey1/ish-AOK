@@ -3006,7 +3006,50 @@ void ISHApplyIdleTimerPreference(void) {
                                   details:@{@"enabled": @(enabled),
                                             @"port": @(port),
                                             @"error": @(err)}];
+    if (err == 0)
+        [self applyGuestSshdNow:enabled];
     return err == 0;
+}
+
+// The switch takes effect in the running session too, not only at the next
+// boot: on, unpack the binaries if this build has not yet and (re)start sshd,
+// so a new port applies at once; off, stop the listener. Connections already
+// open stay, as they do when Linux's sshd is stopped. Stopping goes by the pid
+// file rather than `S50sshd stop`, because that script does nothing once the
+// flag file is gone -- which is the order the switch has to go in.
++ (void)applyGuestSshdNow:(BOOL)enabled {
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        ISHRunHoldingBackgroundAssertion(@"guest-sshd-apply", ^{
+            __block int install_err = 0;
+            if (enabled && !ISHNativeRootGuestCall(^{
+                    install_err = guest_sshd_install(false);
+                }))
+                install_err = _EAGAIN;
+            static const char stop[] =
+                "p=$(cat /run/sshd.pid 2>/dev/null)\n"
+                "if [ -n \"$p\" ] && kill \"$p\" 2>/dev/null; then\n"
+                "    i=0\n"
+                "    while kill -0 \"$p\" 2>/dev/null && [ $i -lt 50 ]; do sleep 0.1; i=$((i + 1)); done\n"
+                "fi\n";
+            static const char start[] =
+                "[ -x /etc/rc.d/S50sshd ] && /etc/rc.d/S50sshd start </dev/null 2>&1\n";
+            char command[sizeof(stop) + sizeof(start)];
+            snprintf(command, sizeof(command), "%s%s", stop, enabled && install_err == 0 ? start : "");
+            struct guest_command_result result = {0};
+            int rc = run_guest_command_capture(command, NULL, 60000, 4096, &result);
+            NSString *output = result.output != NULL
+                ? [[NSString alloc] initWithBytes:result.output length:result.output_len
+                                         encoding:NSUTF8StringEncoding] ?: @""
+                : @"";
+            [ISHDiagnosticsStore recordBreadcrumb:@"sshd.setting.live"
+                                          details:@{@"enabled": @(enabled),
+                                                    @"install": @(install_err),
+                                                    @"rc": @(rc),
+                                                    @"exit": @(result.exited ? result.exit_code : -1),
+                                                    @"output": output}];
+            free(result.output);
+        });
+    });
 }
 
 // The whole /etc/passwd line for the ISHDefaultUserAccountUID account, split
