@@ -93,6 +93,11 @@ case "${1:-}" in
     check login_tty_who_am_i "$(tty | sed 's|^/dev/||')" "$(who am i | awk '{ print $2 }')"
     check login_tty_users tester "$(users)"
     check login_tty_wtmp yes "$(who /var/log/wtmp | grep -q '^tester ' && echo yes || echo no)"
+    # login gives the terminal to the user, as util-linux's does; last then
+    # knows the session is live (no /proc/<pid>/loginuid here: it goes by the
+    # terminal's owner).
+    check login_tty_owner "$(id -u)" "$(stat -c %u "$(tty)")"
+    check login_tty_last_live yes "$(last -n 1 tester | grep -q 'still logged in' && echo yes || echo no)"
     exit 0
     ;;
 --init-phase)
