@@ -85,15 +85,55 @@ case "${1:-}" in
     check foreign_libs_locale UTF-8 "$(LANG=C.UTF-8 $O/usr/bin/locale charmap 2>&1)"
     check foreign_libs_user_locpath /mine "$(LOCPATH=/mine $O/bin/sh -c 'echo $LOCPATH' 2>&1)"
     # A root can ask for the booted root's /home and /tmp when it is entered:
-    # its /etc/aok-binds, from a fixed set. The Wayland root of a native root
-    # does (docs/native_wayland_plan.md). /etc is not in the set.
+    # its /etc/aok-binds, from a fixed set. The companion of a native root
+    # does (opt/AOK/docs/native-companion.md). /etc as a whole is not in the set.
     echo root > /proc/ish/foreign_exec
     echo marker > /tmp/nm_binds_marker
     check foreign_binds_before "" "$($O/bin/cat /tmp/nm_binds_marker 2>/dev/null)"
     printf '# test\ntmp\netc\n' > $O/etc/aok-binds
     check foreign_binds_tmp marker "$($O/bin/cat /tmp/nm_binds_marker 2>&1)"
     check foreign_binds_etc_refused 0 "$($O/bin/grep -c aok-native /etc/os-release 2>/dev/null)"
-    rm -f $O/etc/aok-binds /tmp/nm_binds_marker
+    rm -f /tmp/nm_binds_marker
+    # A companion root (opt/AOK/docs/native-companion.md) asks for more: the files
+    # that say what this system is called and how it finds others, and its
+    # time zone, which is a link into each root's own zoneinfo and so is set
+    # there, not bound.
+    printf 'tmp\netc/hosts\netc/hostname\ntimezone\n' > $O/etc/aok-binds
+    cp /etc/hosts /tmp/nm_hosts.saved
+    echo "10.9.8.7 nm-marker-host" >> /etc/hosts
+    had_hostname=0; [ -e /etc/hostname ] && { had_hostname=1; cp /etc/hostname /tmp/nm_hostname.saved; }
+    echo nm-host > /etc/hostname
+    here_zone=$(readlink /etc/localtime 2>/dev/null)
+    there_zone=$(readlink $O/etc/localtime 2>/dev/null)
+    ln -sf /usr/share/zoneinfo/Asia/Tokyo /etc/localtime
+    check foreign_binds_hosts 10.9.8.7 "$($O/bin/sh -c 'grep nm-marker-host /etc/hosts | cut -d" " -f1' 2>&1)"
+    check foreign_binds_hostname nm-host "$($O/bin/cat /etc/hostname 2>&1)"
+    check foreign_binds_timezone JST "$($O/bin/date +%Z 2>&1)"
+    # The cwd carries in where a shared directory shows it there too, and
+    # is the root's / otherwise.
+    mkdir -p /tmp/nm_cwd && cd /tmp/nm_cwd
+    check foreign_cwd_shared /tmp/nm_cwd "$($O/bin/pwd 2>&1)"
+    cd /usr
+    check foreign_cwd_unshared / "$($O/bin/pwd 2>&1)"
+    cd /tmp
+    # A script that lives in another root runs inside it, named by its path
+    # there -- whether or not this root has the interpreter its #! names.
+    # Both do here: /bin/sh and /usr/bin/env are native programs.
+    printf '#!/bin/sh\n. /etc/os-release; echo "$ID $0 $1"\n' > $O/usr/local/bin/nm_script
+    printf '#!/usr/bin/env perl\nprint "perl $0\\n";\n' > $O/usr/local/bin/nm_env
+    chmod 755 $O/usr/local/bin/nm_script $O/usr/local/bin/nm_env
+    check foreign_script_inside "devuan /usr/local/bin/nm_script a" "$($O/usr/local/bin/nm_script a 2>&1)"
+    check foreign_script_env "perl /usr/local/bin/nm_env" "$($O/usr/local/bin/nm_env 2>&1)"
+    echo libs > /proc/ish/foreign_exec
+    check foreign_libs_script_here "aok-native $O/usr/local/bin/nm_script a" "$($O/usr/local/bin/nm_script a 2>&1)"
+    echo root > /proc/ish/foreign_exec
+    rm -f $O/usr/local/bin/nm_script $O/usr/local/bin/nm_env
+    umount $O/etc/hosts $O/etc/hostname 2>/dev/null
+    cat /tmp/nm_hosts.saved > /etc/hosts
+    if [ "$had_hostname" = 1 ]; then cat /tmp/nm_hostname.saved > /etc/hostname; else rm -f /etc/hostname; fi
+    if [ -n "$here_zone" ]; then ln -sf "$here_zone" /etc/localtime; else rm -f /etc/localtime; fi
+    [ -z "$there_zone" ] || ln -sf "$there_zone" $O/etc/localtime
+    rm -rf /tmp/nm_cwd /tmp/nm_hosts.saved /tmp/nm_hostname.saved $O/etc/aok-binds
     echo "$saved" > /proc/ish/foreign_exec
     exit 0
     ;;

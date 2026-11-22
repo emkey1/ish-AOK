@@ -5,6 +5,16 @@ distribution, so it has no compositor and cannot install one. This gives it a
 desktop without changing what it is: the booted root stays native, and the
 desktop runs, emulated, out of a second installed root.
 
+**Since 2026-11-22 the second root is the native root's "companion"**, named
+`Devuan`, recorded in `/etc/aok-companion-root`, and prepared by
+`setup-companion.sh`: apt works in it too
+(opt/AOK/docs/native-companion.md). `setup-native-wayland.sh` runs that and
+then installs the desktop. Where this note says "the Wayland root", "Wayland"
+as a name, or `/etc/aok-wayland-root`, read those. The companion also asks for
+`etc/hosts`, `etc/hostname`, `etc/resolv.conf` and `timezone` in its
+`/etc/aok-binds`, a program started from a shared directory keeps it as its
+cwd, and a script that lives in another root runs inside it.
+
 It replaces the idea queued in TODO.md of shipping a self-contained Wayland
 stack under /AOK/bundled. That would put the stack in the app for everyone;
 this downloads it only for people who ask, and uses pieces that already exist.

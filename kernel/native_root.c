@@ -525,6 +525,47 @@ static void write_etc(void) {
                "if (( ${#fpath} )); then\n"
                "    autoload -Uz compinit && compinit -u -d ~/.zcompdump\n"
                "fi\n", 0644, true);
+    // The companion filesystem (opt/AOK/docs/native-companion.md): a native root has no
+    // package manager, so the package tools' names hand off to the companion's
+    // own, and what apt installs there is found by name because the
+    // companion's bin directories follow this root's on PATH.
+    static const char *const companion_tools[] = {
+        "apt", "apt-get", "apt-cache", "apt-mark", "dpkg", "dpkg-query",
+    };
+    for (size_t i = 0; i < sizeof(companion_tools) / sizeof(companion_tools[0]); i++) {
+        char path[MAX_PATH], script[512];
+        snprintf(path, sizeof(path), "/usr/bin/%s", companion_tools[i]);
+        snprintf(script, sizeof(script),
+                 "#!/bin/sh\n"
+                 "# Written by AOK-iSH only when it is missing: %s works in this native\n"
+                 "# root's companion filesystem. See /AOK/docs/native-companion.md.\n"
+                 "exec /bin/sh /AOK/tools/companion-run.sh %s \"$@\"\n",
+                 companion_tools[i], companion_tools[i]);
+        write_file(path, script, 0755, true);
+    }
+    write_file("/etc/profile.d/20-aok-companion.sh",
+               "# Written by AOK-iSH only when it is missing. What apt installs lives in\n"
+               "# this native root's companion filesystem (/etc/aok-companion-root names\n"
+               "# it); its bin directories follow this root's own on PATH, so those\n"
+               "# programs run by name. See /AOK/docs/native-companion.md.\n"
+               "if [ -r /etc/aok-companion-root ]; then\n"
+               "    _aok_c=\n"
+               "    while IFS= read -r _aok_l || [ -n \"$_aok_l\" ]; do\n"
+               "        case \"$_aok_l\" in ''|'#'*) continue ;; esac\n"
+               "        _aok_c=$_aok_l\n"
+               "        break\n"
+               "    done < /etc/aok-companion-root\n"
+               "    if [ -n \"$_aok_c\" ]; then\n"
+               "        for _aok_d in usr/local/sbin usr/local/bin usr/sbin usr/bin sbin bin usr/games; do\n"
+               "            case \":$PATH:\" in\n"
+               "                *\":/AOK/roots/$_aok_c/$_aok_d:\"*) ;;\n"
+               "                *) PATH=\"$PATH:/AOK/roots/$_aok_c/$_aok_d\" ;;\n"
+               "            esac\n"
+               "        done\n"
+               "        export PATH\n"
+               "    fi\n"
+               "    unset _aok_c _aok_l _aok_d\n"
+               "fi\n", 0644, true);
     // Rewritten at every boot, so it names the SmallCLUE of the running build:
     // in a root with no distribution, SmallCLUE's applets are the userland.
     write_file("/etc/os-release",

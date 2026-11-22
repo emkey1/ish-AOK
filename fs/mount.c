@@ -2516,17 +2516,19 @@ static void bind_replicate_submounts(const char *norm_source, const char *point,
 // would make it but with no capability check -- for kernel/foreign_exec.c,
 // which gives a root the /proc, /dev, ... a program run inside it needs. Both
 // must be directories; POINT is resolved from the current task's view.
-int mount_bind_dir(const char *source, const char *point) {
+// Bind SOURCE at POINT, both of which exist and are of one kind: directories
+// (want_dir) or regular files.
+static int mount_bind_same_kind(const char *source, const char *point, bool want_dir) {
     struct statbuf stat;
     int err = generic_statat(AT_PWD, source, &stat, 0);
     if (err < 0)
         return err;
-    if (!S_ISDIR(stat.mode))
-        return _ENOTDIR;
+    if (want_dir ? !S_ISDIR(stat.mode) : !S_ISREG(stat.mode))
+        return want_dir ? _ENOTDIR : _EINVAL;
     if ((err = generic_statat(AT_PWD, point, &stat, 0)) < 0)
         return err;
-    if (!S_ISDIR(stat.mode))
-        return _ENOTDIR;
+    if (want_dir ? !S_ISDIR(stat.mode) : !S_ISREG(stat.mode))
+        return want_dir ? _ENOTDIR : _EINVAL;
     char norm_source[MAX_PATH], norm_point[MAX_PATH];
     if ((err = path_normalize(AT_PWD, source, norm_source, N_SYMLINK_FOLLOW)) < 0)
         return err;
@@ -2540,6 +2542,14 @@ int mount_bind_dir(const char *source, const char *point) {
         proc_mountinfo_notify_changed();
     }
     return err;
+}
+
+int mount_bind_dir(const char *source, const char *point) {
+    return mount_bind_same_kind(source, point, true);
+}
+
+int mount_bind_file(const char *source, const char *point) {
+    return mount_bind_same_kind(source, point, false);
 }
 
 dword_t sys_mount_guest(guest_addr_t source_addr, guest_addr_t point_addr, guest_addr_t type_addr, dword_t flags, guest_addr_t data_addr) {

@@ -1031,7 +1031,7 @@ static NSString *ISHForeignExecTitle(NSString *mode) {
                @"Applies to programs started after the change, on arm64 filesystems. Uses up to 96 MB of memory.", @"Translated Code section footer: what the translation cache does and that it turns ASLR off");
     if (section == [self _desktopSectionIndex])
         return [AppDelegate bootedRootIsNative]
-            ? NSLocalizedString(@"Installs the desktop the Wayland display shows and chooses which one it starts. Native mode has none of its own: the desktop lives in a second filesystem named Wayland, installed the first time you add one.", @"Wayland Desktop section footer in Settings, in native mode")
+            ? NSLocalizedString(@"Installs the desktop the Wayland display shows and chooses which one it starts. Native mode has none of its own: the desktop lives in a second filesystem named Devuan, installed the first time you add one.", @"Wayland Desktop section footer in Settings, in native mode")
             : NSLocalizedString(@"Installs the desktop the Wayland display shows, in the filesystem that is running, and chooses which one it starts.", @"Wayland Desktop section footer in Settings");
     if (section == [self _sshdSectionIndex])
         return [self _guestSshdEnabled]
@@ -2220,7 +2220,7 @@ static NSString *ISHDesktopInstallCommand(NSString *name) {
 - (void)confirmRunning:(NSString *)title command:(NSString *)command fromCell:(UITableViewCell *)cell {
     ISHActionSheet *sheet = [ISHActionSheet actionSheetWithTitle:title
                                                          message:[AppDelegate bootedRootIsNative]
-        ? NSLocalizedString(@"Native mode has no desktop of its own, so this goes into a second filesystem named Wayland (Devuan, installed the first time) and runs from there. It downloads packages and takes several minutes. Keep AOK-iSH open until it finishes.", @"Desktop setup in native mode: confirmation before installing")
+        ? NSLocalizedString(@"Native mode has no desktop of its own, so this goes into a second filesystem named Devuan (installed the first time) and runs from there. It downloads packages and takes several minutes. Keep AOK-iSH open until it finishes.", @"Desktop setup in native mode: confirmation before installing")
         : NSLocalizedString(@"This downloads packages into the filesystem that is running and takes several minutes. Keep AOK-iSH open until it finishes.", @"Desktop setup: confirmation before installing")];
     __weak typeof(self) weakSelf = self;
     [sheet addActionWithTitle:NSLocalizedString(@"Install", @"Desktop setup: confirm button")
@@ -2242,7 +2242,7 @@ static NSString *ISHDesktopInstallCommand(NSString *name) {
 - (void)wayfirePanelSheetFromCell:(UITableViewCell *)cell {
     ISHActionSheet *sheet = [ISHActionSheet actionSheetWithTitle:ISHDesktopTitle(@"wayfire")
                                                          message:[AppDelegate bootedRootIsNative]
-        ? NSLocalizedString(@"Choose Wayfire's panel. This downloads packages into the Wayland filesystem (Devuan, installed the first time) and takes several minutes; keep AOK-iSH open until it finishes. With both, select-desktop.sh --panel switches between them later.", @"Desktop setup in native mode: Wayfire install, the panel choice")
+        ? NSLocalizedString(@"Choose Wayfire's panel. This downloads packages into the Devuan filesystem (installed the first time) and takes several minutes; keep AOK-iSH open until it finishes. With both, select-desktop.sh --panel switches between them later.", @"Desktop setup in native mode: Wayfire install, the panel choice")
         : NSLocalizedString(@"Choose Wayfire's panel. This downloads packages into the filesystem that is running and takes several minutes; keep AOK-iSH open until it finishes. With both, select-desktop.sh --panel switches between them later.", @"Desktop setup: Wayfire install, the panel choice")];
     NSArray<NSArray<NSString *> *> *panels = @[
         @[NSLocalizedString(@"Install with the Fast Panel", @"Desktop setup: Wayfire with the faster wf-panel"), @"fast"],

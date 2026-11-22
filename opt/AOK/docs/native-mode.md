@@ -83,8 +83,9 @@ for a `GNU/` to name. On a distribution root it says `GNU/Linux` (glibc) or
 `Linux` (musl), as there.
 
 **Not here:** a package manager, compilers, Python and Perl. The Wayland
-desktop is not here either, but you can have one: it runs from a second
-filesystem (see [A desktop](#a-desktop)). `git` does not yet speak
+desktop is not here either. You can have all of them: `apt` and the desktop
+work in a second filesystem, this root's companion (see
+[native-companion.md](native-companion.md) and [A desktop](#a-desktop)). `git` does not yet speak
 `git@host:` (ssh) remotes; use the HTTPS URL. And `ps` shows a shell's
 subshells by their re-launch command line, because a native shell cannot fork
 (see [native-programs.md](native-programs.md)).
@@ -228,18 +229,21 @@ distribution's `who` or `last` reads them too (`last -f /var/log/wtmp`).
 ## A desktop
 
 A native root has no compositor and no package manager to install one with.
-The Wayland window still works, from a second filesystem: Devuan arm64, named
-`Wayland`, which holds the desktop and the graphical programs you add. This
-root stays native and stays the one that is booted.
+The Wayland window still works, from this root's companion filesystem: Devuan
+arm64, named `Devuan`, which is also where `apt` works
+([native-companion.md](native-companion.md)). It holds the desktop and the
+graphical programs you add. This root stays native and stays the one that is
+booted.
 
 ```sh
 sudo sh /AOK/tools/setup-native-wayland.sh
 ```
 
 or **Settings -> Wayland Desktop -> Install**, which runs the same thing. It
-installs the filesystem (from the catalogue, or the copy in the app), wires it
-to this root, and installs the desktop into it; the package install is the
-slow part. Then open the Wayland window as on any root.
+installs the companion if there is none yet (from the catalogue, or the copy
+in the app), wires it to this root, and installs the desktop into it; the
+package install is the slow part. Then open the Wayland window as on any
+root.
 
 **Things worth knowing:**
 
@@ -247,22 +251,14 @@ slow part. Then open the Wayland window as on any root.
   every graphical program -- because it is Devuan's. What comes from
   `/AOK/native` still runs natively, including the shell in the desktop's
   terminal, which is yours.
-- **Your home and `/tmp` are shared.** The Wayland filesystem's
-  `/etc/aok-binds` asks for this root's `/home` and `/tmp`, so the file manager
-  and terminal there see the files you have. Your account exists there with
-  the same name, uid and password; `--user LOGIN` adds another.
-- **Programs go in with `apt`**, in the desktop's terminal (`sudo apt install
-  ...`) or from outside (`sudo sh /AOK/tools/mount-root.sh Wayland -- apt
-  install ...`). `setup-wayfire.sh`, `setup-xfce.sh`, `setup-games.sh` and
-  `select-desktop.sh` run from this root and do their work inside it.
-- **It is an ordinary filesystem**: Filesystems lists it, and it can be
-  renamed or removed. Its name is in `/etc/aok-wayland-root` here; after a
-  rename, that file is what to edit. `--root NAME` uses a Devuan arm64
-  filesystem you already have instead of installing one.
-- **It needs Programs From Other Roots set to Run Inside Their Root**, the
-  default (see below). The scripts say so if it is not.
-- **The GPU drivers** (`setup-gpu.sh`) install the same way, but have not been
-  tried in this arrangement yet.
+- **Your home and `/tmp` are shared**, with the system's name, DNS and time
+  zone, so the file manager and terminal there see the files you have. Your
+  account exists there with the same name, uid and password.
+- **Programs go in with `sudo apt install ...`**, here or in the desktop's
+  terminal. `setup-wayfire.sh`, `setup-xfce.sh`, `setup-games.sh` and
+  `select-desktop.sh` run from this root and do their work inside the
+  companion.
+- **The GPU drivers** (`setup-gpu.sh`) install the same way.
 
 ## Reaching a distribution
 
@@ -283,15 +279,17 @@ sets it too):
 
 | | |
 |---|---|
-| **Run Inside Their Root** (the default) | The program runs chrooted into its own root, as if you had used `mount-root.sh`: AOK-iSH binds `/proc`, `/sys`, `/dev`, `/dev/pts`, `/run`, `/AOK/native`, `/AOK/docs` and `/AOK/tools` into it first. It sees that root's `/etc`, its data files, its `/tmp` and its home directories, and everything it starts does too. A root can ask for more of this one: directories named in its `/etc/aok-binds`, one a line, from `home`, `tmp`, `mnt`, `media` and `srv`, are bound in as well. |
+| **Run Inside Their Root** (the default) | The program runs chrooted into its own root, as if you had used `mount-root.sh`: AOK-iSH binds `/proc`, `/sys`, `/dev`, `/dev/pts`, `/run`, `/AOK/native`, `/AOK/docs` and `/AOK/tools` into it first. It sees that root's `/etc`, its data files, its `/tmp` and its home directories, and everything it starts does too. A root can ask for more of this one: directories named in its `/etc/aok-binds`, one a line, from `home`, `tmp`, `mnt`, `media` and `srv`, are bound in as well, and so are the files and the time zone a [companion](native-companion.md) asks for. A script that lives in another root runs inside it too, with that root's interpreter. |
 | **Use Their Libraries Here** | The program runs here, in the native root, borrowing only its loader, libraries and locales (through `LD_LIBRARY_PATH` and `LOCPATH`, which AOK-iSH removes again for programs that do not need them; a `LOCPATH` of your own wins). It sees your files and your home. Programs that need other data files of their own -- vim's runtime, Python's library -- will not find them. |
 | **Off** | The Linux behaviour: it fails. |
 
-It applies on any root, not only a native one, and only to programs that would
-otherwise fail: a program from another root whose loader is missing here, or
-whose path or `#!` interpreter only resolves inside its own root. A static
-program, or a script whose interpreter exists here too (`#!/bin/sh`), runs as
-it always did, in this root.
+It applies on any root, not only a native one. A binary is touched only if it
+would otherwise fail: one from another root whose loader is missing here. A
+static program runs as it always did, in this root. A script that lives in
+another root is different in Run Inside Their Root: it runs inside that root
+whatever its `#!` line names, because the files and commands it goes on to use
+are that root's. In Use Their Libraries Here a script runs in this root, and
+only an interpreter this root lacks is borrowed.
 
 **A shell inside a root.** `mount-root.sh` works from a native root as it does
 from any other, and binds `/AOK/native` in, so your native shell and tools are

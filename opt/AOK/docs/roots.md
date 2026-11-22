@@ -147,14 +147,25 @@ the next program on: **Run Inside Their Root** (chrooted there, with `/proc`,
 `/dev` and `/AOK/native` bound in, as `mount-root.sh` would; the default),
 **Use Their Libraries Here**, or **Off**. `/proc/ish/foreign_exec` reads and
 sets the same thing (`root`, `libs`, `off`); [native-mode.md](native-mode.md)
-has the trade-offs. A program that already works -- a static one, or a script
-whose interpreter exists here -- is never touched.
+has the trade-offs. A program that already works -- a static one, or a dynamic one
+whose loader exists here -- is never touched.
 
 A root can ask to see more of the booted one when it is entered this way, or
-through `mount-root.sh`: each directory named in its `/etc/aok-binds`, one a
-line, from `home`, `tmp`, `mnt`, `media` and `srv`, is bound in at the same
-path. That is how a native-mode root's desktop, which runs from a second
-filesystem, sees your home ([native-mode.md](native-mode.md#a-desktop)).
+through `mount-root.sh`, by naming it in its `/etc/aok-binds`, one a line:
+
+- the directories `home`, `tmp`, `mnt`, `media` and `srv`, bound in at the
+  same path;
+- the files `etc/hosts`, `etc/hostname` and `etc/resolv.conf`, likewise;
+- `timezone`, which points its `/etc/localtime` at the zone the booted
+  root's names.
+
+A program started from a directory that is shared this way starts in that
+same directory. That is how a native-mode root's companion filesystem, where
+its `apt` and its desktop work, sees your home and the same system you do
+([native-companion.md](native-companion.md)).
+
+A script that lives in another root runs inside that root too, with that
+root's interpreter, when the mode is Run Inside Their Root.
 
 ## `mount-root.sh`: turning a root into a real chroot target
 

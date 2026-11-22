@@ -420,6 +420,9 @@ bool mount_exists_at_point(const char *point);
 // Bind directory SOURCE onto directory POINT, as the kernel's own act (no
 // capability check). Takes mounts_lock itself.
 int mount_bind_dir(const char *source, const char *point);
+// The same for one regular file: SOURCE shows at POINT, which must be a
+// regular file already.
+int mount_bind_file(const char *source, const char *point);
 // A directory, opened as chdir() and chroot() open one (search permission).
 struct fd *fs_open_dir(const char *path);
 

@@ -122,31 +122,71 @@ list_roots() {
 setup_mounts() {
     root=$1
     log "Setting up $root"
-    for d in $BIND_DIRS $(extra_binds "$root"); do
+    for d in $BIND_DIRS $(extra_binds "$root" "$EXTRA_BINDS_ALLOWED"); do
         mount_one_dir "/$d" "$root/$d"
     done
+    for f in $(extra_binds "$root" "$EXTRA_FILE_BINDS_ALLOWED"); do
+        mount_one_file "/$f" "$root/$f"
+    done
+    [ -z "$(extra_binds "$root" timezone)" ] || sync_timezone "$root"
 }
 
 # More of the booted root, when the root asks for it in its /etc/aok-binds:
-# directory names, one a line, from the same fixed set the kernel honours when
-# a program of that root is run by path (kernel/foreign_exec.c). The Wayland
-# root of a native-mode root asks for home and tmp. Builtins only.
+# names, one a line, from the same fixed sets the kernel honours when a
+# program of that root is run by path (kernel/foreign_exec.c). The companion
+# of a native-mode root asks for all of them. Builtins only.
 EXTRA_BINDS_ALLOWED="home tmp mnt media srv"
+EXTRA_FILE_BINDS_ALLOWED="etc/hosts etc/hostname etc/resolv.conf"
+# extra_binds ROOT ALLOWED: the names in ROOT's list that are in ALLOWED.
 extra_binds() {
     [ -f "$1/etc/aok-binds" ] && [ ! -L "$1/etc/aok-binds" ] || return 0
     while IFS= read -r want || [ -n "$want" ]; do
         want=${want#/}; want=${want%/}
-        for ok in $EXTRA_BINDS_ALLOWED; do
+        for ok in $2; do
             [ "$want" = "$ok" ] && echo "$ok"
         done
     done < "$1/etc/aok-binds"
+}
+
+# One regular file of the booted root over the root's own. The point has to
+# be a regular file: a symbolic link there gives way to one.
+mount_one_file() {
+    src=$1 dst=$2
+    [ -f "$src" ] || return 0
+    if is_mounted "$dst"; then
+        note "already mounted: $dst"
+        return 0
+    fi
+    [ ! -L "$dst" ] || rm -f "$dst"
+    [ -e "$dst" ] || : > "$dst"
+    if mount --bind "$src" "$dst" 2>/dev/null; then
+        note "bind-mounted $src -> $dst"
+    else
+        note "WARNING: failed to bind-mount $src -> $dst"
+    fi
+}
+
+# The booted root's time zone: /etc/localtime is a link into a root's own
+# zoneinfo, so the root's is pointed at the same zone in its own.
+sync_timezone() {
+    [ -L /etc/localtime ] || return 0
+    zone=$(readlink /etc/localtime)
+    case "$zone" in *zoneinfo/*) zone=${zone##*zoneinfo/} ;; *) return 0 ;; esac
+    case "$zone" in ''|/*|*..*) return 0 ;; esac
+    [ -f "$1/usr/share/zoneinfo/$zone" ] || return 0
+    if [ "$(readlink "$1/etc/localtime" 2>/dev/null)" != "/usr/share/zoneinfo/$zone" ]; then
+        ln -sf "/usr/share/zoneinfo/$zone" "$1/etc/localtime.aok-new" &&
+            mv -f "$1/etc/localtime.aok-new" "$1/etc/localtime" &&
+            note "time zone: $zone"
+    fi
+    [ ! -f "$1/etc/timezone" ] || printf '%s\n' "$zone" > "$1/etc/timezone"
 }
 
 teardown_mounts() {
     root=$1
     log "Tearing down $root"
     # Reverse order: dev/pts before dev, etc.
-    for d in $EXTRA_BINDS_ALLOWED AOK/fakefs AOK/tests AOK/tools AOK/docs AOK/native run dev/pts dev sys proc; do
+    for d in $EXTRA_FILE_BINDS_ALLOWED $EXTRA_BINDS_ALLOWED AOK/fakefs AOK/tests AOK/tools AOK/docs AOK/native run dev/pts dev sys proc; do
         umount_one_dir "$root/$d"
     done
 }

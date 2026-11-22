@@ -17,7 +17,8 @@
 //         /dev, /dev/pts, /run, /AOK/native, /AOK/docs and /AOK/tools bound
 //         into it first, as mount-root.sh binds them. It finds its own /etc,
 //         its /usr/share data, its libraries -- everything -- and so does
-//         anything it starts. It sees that root's home and /tmp, not these.
+//         anything it starts. It sees that root's home and /tmp, not these,
+//         unless the root asks for these in its /etc/aok-binds.
 //   LIBS  the program runs HERE, in this root's filesystem, with only its
 //         loader and libraries taken from its root: the loader is opened from
 //         there, and LD_LIBRARY_PATH names that root's library directories. It
@@ -26,7 +27,11 @@
 //         them.
 //
 // Only a program that would otherwise have failed is touched: one whose
-// loader is missing here, and which lives in another root.
+// loader is missing here, and which lives in another root. A script is the
+// exception, in ROOT mode: one that lives in another root runs inside it
+// whether or not this root has the interpreter its #! line names
+// (shebang_exec, kernel/exec.c), because what it goes on to name is that
+// root's.
 
 #include <stdatomic.h>
 #include <stdio.h>
@@ -127,18 +132,113 @@ static void bind_one(const char *root, const char *name) {
         mount_bind_dir(source, point);
 }
 
+// Bind the booted root's file /NAME at ROOT/NAME. The point has to be a
+// regular file: one is made if there is nothing there, and a symbolic link
+// (a distribution's resolv.conf, pointing into /run) gives way to one.
+// Nothing happens if /NAME is not a regular file here.
+static void bind_one_file(const char *root, const char *name) {
+    char source[MAX_PATH], point[MAX_PATH];
+    snprintf(source, sizeof(source), "/%s", name);
+    struct statbuf stat;
+    if (generic_statat(AT_PWD, source, &stat, 0) < 0 || !S_ISREG(stat.mode))
+        return;
+    snprintf(point, sizeof(point), "%s/%s", root, name);
+    if (mount_exists_at_point(point))
+        return;
+    int err = generic_statat(AT_PWD, point, &stat, AT_SYMLINK_NOFOLLOW_);
+    if (err == 0 && S_ISLNK(stat.mode)) {
+        generic_unlinkat(AT_PWD, point);
+        err = _ENOENT;
+    }
+    if (err < 0) {
+        struct fd *fd = generic_open(point, O_WRONLY_ | O_CREAT_ | O_EXCL_ | O_NOFOLLOW_, 0644);
+        if (IS_ERR(fd))
+            return;
+        fd_close(fd);
+    } else if (!S_ISREG(stat.mode)) {
+        return;
+    }
+    mount_bind_file(source, point);
+}
+
+// The booted root's time zone, given to ROOT. /etc/localtime is a link into
+// the root's OWN zoneinfo, so it cannot be bound: ROOT's is pointed at the
+// same zone in ROOT's zoneinfo instead, each time ROOT is entered, which
+// follows the device as it travels the way the booted root does. Only when
+// this root's zone is a link that names one, and ROOT has that zone.
+#define ZONEINFO "/usr/share/zoneinfo/"
+static void sync_timezone(const char *root) {
+    char target[MAX_PATH];
+    ssize_t len = generic_readlinkat(AT_PWD, "/etc/localtime", target, sizeof(target) - 1);
+    if (len <= 0)
+        return;
+    target[len] = '\0';
+    const char *zone = strstr(target, "zoneinfo/");
+    if (zone == NULL)
+        return;
+    zone += strlen("zoneinfo/");
+    if (zone[0] == '\0' || zone[0] == '/' || strstr(zone, "..") != NULL)
+        return;
+    char want[MAX_PATH], path[MAX_PATH], tmp[MAX_PATH];
+    if (snprintf(want, sizeof(want), ZONEINFO "%s", zone) >= (int) sizeof(want) ||
+            snprintf(path, sizeof(path), "%s%s", root, want) >= (int) sizeof(path))
+        return;
+    struct statbuf stat;
+    if (generic_statat(AT_PWD, path, &stat, 0) < 0 || !S_ISREG(stat.mode))
+        return;
+    snprintf(path, sizeof(path), "%s/etc/localtime", root);
+    char have[MAX_PATH];
+    len = generic_readlinkat(AT_PWD, path, have, sizeof(have) - 1);
+    if (len > 0)
+        have[len] = '\0';
+    if (len <= 0 || strcmp(have, want) != 0) {
+        // Made beside it and renamed over it: never a moment with no zone.
+        snprintf(tmp, sizeof(tmp), "%s/etc/localtime.aok-new", root);
+        generic_unlinkat(AT_PWD, tmp);
+        if (generic_symlinkat(want, AT_PWD, tmp) < 0 ||
+                generic_renameat(AT_PWD, tmp, AT_PWD, path, 0) < 0) {
+            generic_unlinkat(AT_PWD, tmp);
+            return;
+        }
+    }
+    // Debian keeps the name in /etc/timezone too, where there is one.
+    snprintf(path, sizeof(path), "%s/etc/timezone", root);
+    if (generic_statat(AT_PWD, path, &stat, AT_SYMLINK_NOFOLLOW_) < 0 || !S_ISREG(stat.mode))
+        return;
+    char line[MAX_PATH + 2], old[MAX_PATH + 2] = {};
+    int line_len = snprintf(line, sizeof(line), "%s\n", zone);
+    struct fd *fd = generic_open(path, O_RDONLY_ | O_NOFOLLOW_, 0);
+    if (IS_ERR(fd))
+        return;
+    ssize_t got = generic_read(fd, old, sizeof(old) - 1);
+    fd_close(fd);
+    if (got == line_len && memcmp(old, line, (size_t) line_len) == 0)
+        return;
+    fd = generic_open(path, O_WRONLY_ | O_TRUNC_ | O_NOFOLLOW_, 0);
+    if (IS_ERR(fd))
+        return;
+    generic_write(fd, line, (size_t) line_len);
+    fd_close(fd);
+}
+
 // More of the booted root, when the root being entered asks for it: its
-// /etc/aok-binds names directories, one a line, to bind in as well. A root
-// that is a companion to the booted one wants this -- the Wayland root of a
-// native-mode root (docs/native_wayland_plan.md) asks for home and tmp, so the
-// desktop sees the user's files and the app sees the session's ready file --
-// where a root entered to run one of its own programs does not.
+// /etc/aok-binds names what to share in as well, one a line. A root that is a
+// companion to the booted one wants this -- the Devuan filesystem a
+// native-mode root keeps for apt and its desktop (opt/AOK/docs/native-companion.md)
+// asks for all of it, so its programs see the user's files, this system's
+// name, addresses, DNS and clock, and the app sees a desktop session's ready
+// file -- where a root entered to run one of its own programs does not.
 //
 // A fixed set, not any path: the file belongs to whoever is root in that
-// root, and what it can ask for is user data, never this root's /etc or the
-// other roots. mount-root.sh reads the same file.
+// root. What it can ask for is user data (the directories), the three files
+// that say what this system is called and how it finds others, and the time
+// zone; never the rest of this root's /etc, and never the other roots.
+// mount-root.sh reads the same file.
 #define ROOT_BINDS_FILE "/etc/aok-binds"
 static const char *const root_binds_allowed[] = { "home", "tmp", "mnt", "media", "srv" };
+static const char *const root_file_binds_allowed[] = {
+    "etc/hosts", "etc/hostname", "etc/resolv.conf",
+};
 
 static void bind_requested(const char *root) {
     char path[MAX_PATH];
@@ -146,7 +246,7 @@ static void bind_requested(const char *root) {
     struct fd *fd = generic_open(path, O_RDONLY_ | O_NOFOLLOW_, 0);
     if (IS_ERR(fd))
         return;
-    char buf[512] = {};
+    char buf[1024] = {};
     ssize_t n = generic_read(fd, buf, sizeof(buf) - 1);
     fd_close(fd);
     if (n <= 0)
@@ -165,6 +265,11 @@ static void bind_requested(const char *root) {
         for (size_t i = 0; i < sizeof(root_binds_allowed) / sizeof(root_binds_allowed[0]); i++)
             if (strcmp(line, root_binds_allowed[i]) == 0)
                 bind_one(root, root_binds_allowed[i]);
+        for (size_t i = 0; i < sizeof(root_file_binds_allowed) / sizeof(root_file_binds_allowed[0]); i++)
+            if (strcmp(line, root_file_binds_allowed[i]) == 0)
+                bind_one_file(root, root_file_binds_allowed[i]);
+        if (strcmp(line, "timezone") == 0)
+            sync_timezone(root);
         line = end != NULL ? end + 1 : NULL;
     }
 }
@@ -258,7 +363,8 @@ int foreign_exec_enter_root(const char *root, struct foreign_exec *fx) {
     if (IS_ERR(new_root))
         return (int) PTR_ERR(new_root);
     // The cwd stays where it is when it is inside the root -- it reads as the
-    // same directory from in there -- and becomes the root's / otherwise.
+    // same directory from in there -- and becomes the root's / otherwise,
+    // with one exception below.
     char cwd[MAX_PATH];
     bool cwd_inside = false;
     lock(&current->fs->lock, 0);
@@ -270,6 +376,23 @@ int foreign_exec_enter_root(const char *root, struct foreign_exec *fx) {
     }
     struct fd *new_pwd = NULL;
     if (!cwd_inside) {
+        // Or where a directory shared into the root (/home, /tmp: the binds
+        // above) shows the cwd in there too -- the same directory, by device
+        // and inode, at the same path. `vim notes.txt` in ~/work then opens
+        // the file meant, not one in the root's /.
+        char mirrored[MAX_PATH];
+        struct statbuf here, there;
+        if (pwd != NULL && cwd[0] == '/' && cwd[1] != '\0' &&
+                snprintf(mirrored, sizeof(mirrored), "%s%s", root, cwd) < (int) sizeof(mirrored) &&
+                generic_statat(AT_PWD, cwd, &here, 0) == 0 &&
+                generic_statat(AT_PWD, mirrored, &there, 0) == 0 &&
+                S_ISDIR(there.mode) && here.dev == there.dev && here.inode == there.inode) {
+            new_pwd = fs_open_dir(mirrored);
+            if (IS_ERR(new_pwd))
+                new_pwd = NULL;
+        }
+    }
+    if (!cwd_inside && new_pwd == NULL) {
         new_pwd = fs_open_dir(root);
         if (IS_ERR(new_pwd)) {
             fd_close(new_root);

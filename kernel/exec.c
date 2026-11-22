@@ -2221,6 +2221,36 @@ static int shebang_exec(struct fd *fd, const char *file, struct exec_args argv, 
     };
     size_t args_rest_size = args_size(argv_rest);
 
+    // A script that belongs to another root runs inside that root when
+    // programs from other roots do (kernel/foreign_exec.c, ROOT mode): its
+    // interpreter is that root's, and so is everything the script goes on to
+    // name -- /usr/share/..., /etc/..., the commands it runs. Looked up from
+    // here, `#!/usr/bin/env python3` found this root's env, which then
+    // entered the root to run python3 and handed it a script path that does
+    // not exist in there; and `#!/bin/sh` ran the script with this root's sh
+    // against this root's files. The task moves in first, the interpreter is
+    // opened there, and the script is named by its path in there. If the
+    // root has no such interpreter the move is taken back and the exec goes
+    // on as it would have.
+    struct foreign_exec foreign = {0};
+    char script_path[MAX_PATH], foreign_root[MAX_PATH];
+    const char *foreign_rest = NULL;
+    struct statbuf interpreter_stat;
+    struct fd *interpreter_fd = NULL;
+    bool script_is_foreign = interpreter[0] == '/' &&
+            generic_getpath(fd, script_path) == 0 &&
+            foreign_exec_split(script_path, foreign_root, sizeof(foreign_root), &foreign_rest);
+    if (script_is_foreign && foreign_exec_get_mode() == FOREIGN_EXEC_ROOT &&
+            foreign_exec_enter_root(foreign_root, &foreign) == 0) {
+        interpreter_fd = open_exec(AT_PWD, interpreter, 0, &interpreter_stat);
+        if (IS_ERR(interpreter_fd)) {
+            foreign_exec_undo(&foreign);
+            interpreter_fd = NULL;
+        } else {
+            file = foreign_rest;
+        }
+    }
+
     // Bolt: Cache lengths to avoid redundant O(N) traversals
     size_t interpreter_len = strlen(interpreter);
     size_t file_len = strlen(file);
@@ -2232,12 +2262,22 @@ static int shebang_exec(struct fd *fd, const char *file, struct exec_args argv, 
     // load_script's remove_arg_zero and three copy_string_kernel calls, against
     // the room the exec started with (exec_argv_room). args_rest_size carries
     // the terminator.
-    if (extra_args_size + args_rest_size - 1 > exec_argv_room)
+    if (extra_args_size + args_rest_size - 1 > exec_argv_room) {
+        if (interpreter_fd != NULL)
+            fd_close(interpreter_fd);
+        foreign_exec_undo(&foreign);
+        foreign_exec_done(&foreign);
         return _E2BIG;
+    }
 
     char *new_argv_buf = malloc(extra_args_size + args_rest_size);
-    if (new_argv_buf == NULL)
+    if (new_argv_buf == NULL) {
+        if (interpreter_fd != NULL)
+            fd_close(interpreter_fd);
+        foreign_exec_undo(&foreign);
+        foreign_exec_done(&foreign);
         return _ENOMEM;
+    }
     struct exec_args new_argv = {.args = new_argv_buf};
     size_t n = 0;
 
@@ -2261,26 +2301,16 @@ static int shebang_exec(struct fd *fd, const char *file, struct exec_args argv, 
     // ordinary file, and its mount must allow execution. This was a plain
     // O_RDONLY open, so a script could run an interpreter the caller was not
     // allowed to execute -- Linux answers EACCES.
-    struct statbuf interpreter_stat;
-    struct fd *interpreter_fd = open_exec(AT_PWD, interpreter, 0, &interpreter_stat);
-    // A script that belongs to another root names an interpreter in that root
-    // (#!/usr/bin/python3): look there too (kernel/foreign_exec.c). ROOT mode
-    // moves the task into the root, and takes that back if this exec fails.
-    struct foreign_exec foreign = {0};
-    char script_path[MAX_PATH], foreign_root[MAX_PATH];
-    const char *foreign_rest = NULL;
-    if (IS_ERR(interpreter_fd) && PTR_ERR(interpreter_fd) == _ENOENT && interpreter[0] == '/' &&
-            generic_getpath(fd, script_path) == 0 &&
-            foreign_exec_split(script_path, foreign_root, sizeof(foreign_root), &foreign_rest)) {
-        if (foreign_exec_get_mode() == FOREIGN_EXEC_ROOT) {
-            if (foreign_exec_enter_root(foreign_root, &foreign) == 0)
-                interpreter_fd = open_exec(AT_PWD, interpreter, 0, &interpreter_stat);
-        } else {
-            struct fd *old_root = foreign_exec_lookup_root_begin(foreign_root);
-            if (!IS_ERR(old_root)) {
-                interpreter_fd = open_exec(AT_PWD, interpreter, 0, &interpreter_stat);
-                foreign_exec_lookup_root_end(old_root);
-            }
+    if (interpreter_fd == NULL)
+        interpreter_fd = open_exec(AT_PWD, interpreter, 0, &interpreter_stat);
+    // In LIBS mode a script of another root still runs here; only an
+    // interpreter this root lacks is taken from the script's root.
+    if (IS_ERR(interpreter_fd) && PTR_ERR(interpreter_fd) == _ENOENT && script_is_foreign &&
+            foreign_exec_get_mode() == FOREIGN_EXEC_LIBS) {
+        struct fd *old_root = foreign_exec_lookup_root_begin(foreign_root);
+        if (!IS_ERR(old_root)) {
+            interpreter_fd = open_exec(AT_PWD, interpreter, 0, &interpreter_stat);
+            foreign_exec_lookup_root_end(old_root);
         }
     }
     if (IS_ERR(interpreter_fd)) {

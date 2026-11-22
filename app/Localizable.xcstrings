@@ -1948,62 +1948,62 @@
         }
       }
     },
-    "Choose Wayfire's panel. This downloads packages into the Wayland filesystem (Devuan, installed the first time) and takes several minutes; keep AOK-iSH open until it finishes. With both, select-desktop.sh --panel switches between them later." : {
+    "Choose Wayfire's panel. This downloads packages into the Devuan filesystem (installed the first time) and takes several minutes; keep AOK-iSH open until it finishes. With both, select-desktop.sh --panel switches between them later." : {
       "comment" : "Desktop setup in native mode: Wayfire install, the panel choice",
       "extractionState" : "manual",
       "localizations" : {
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Wähle die Leiste von Wayfire. Dabei werden Pakete in das Wayland-Dateisystem (Devuan, beim ersten Mal installiert) geladen, was einige Minuten dauert; lass AOK-iSH bis zum Ende geöffnet. Mit beiden wechselt select-desktop.sh --panel später zwischen ihnen."
+            "value" : "Wähle die Leiste von Wayfire. Dabei werden Pakete in das Devuan-Dateisystem (beim ersten Mal installiert) geladen, was einige Minuten dauert; lass AOK-iSH bis zum Ende geöffnet. Mit beiden wechselt select-desktop.sh --panel später zwischen ihnen."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Elige el panel de Wayfire. Esto descarga paquetes en el sistema de archivos Wayland (Devuan, instalado la primera vez) y tarda varios minutos; mantén AOK-iSH abierto hasta que termine. Con ambos, select-desktop.sh --panel cambia entre ellos más tarde."
+            "value" : "Elige el panel de Wayfire. Esto descarga paquetes en el sistema de archivos Devuan (instalado la primera vez) y tarda varios minutos; mantén AOK-iSH abierto hasta que termine. Con ambos, select-desktop.sh --panel cambia entre ellos más tarde."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Choisissez le panneau de Wayfire. Des paquets sont téléchargés dans le système de fichiers Wayland (Devuan, installé la première fois), ce qui prend plusieurs minutes ; gardez AOK-iSH ouvert jusqu'à la fin. Avec les deux, select-desktop.sh --panel permet ensuite de passer de l'un à l'autre."
+            "value" : "Choisissez le panneau de Wayfire. Des paquets sont téléchargés dans le système de fichiers Devuan (installé la première fois), ce qui prend plusieurs minutes ; gardez AOK-iSH ouvert jusqu'à la fin. Avec les deux, select-desktop.sh --panel permet ensuite de passer de l'un à l'autre."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Wayfire のパネルを選んでください。Wayland ファイルシステム（Devuan、初回にインストール）にパッケージをダウンロードするため数分かかります。終わるまで AOK-iSH を開いたままにしてください。両方を入れた場合は、あとで select-desktop.sh --panel で切り替えられます。"
+            "value" : "Wayfire のパネルを選んでください。Devuan ファイルシステム（初回にインストール）にパッケージをダウンロードするため数分かかります。終わるまで AOK-iSH を開いたままにしてください。両方を入れた場合は、あとで select-desktop.sh --panel で切り替えられます。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Wayfire의 패널을 선택하십시오. Wayland 파일 시스템(Devuan, 처음에 설치됨)에 패키지를 다운로드하므로 몇 분이 걸립니다. 끝날 때까지 AOK-iSH를 열어 두십시오. 둘 다 설치하면 나중에 select-desktop.sh --panel로 전환할 수 있습니다."
+            "value" : "Wayfire의 패널을 선택하십시오. Devuan 파일 시스템(처음에 설치됨)에 패키지를 다운로드하므로 몇 분이 걸립니다. 끝날 때까지 AOK-iSH를 열어 두십시오. 둘 다 설치하면 나중에 select-desktop.sh --panel로 전환할 수 있습니다."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Escolha o painel do Wayfire. Isso baixa pacotes para o sistema de arquivos Wayland (Devuan, instalado na primeira vez) e leva vários minutos; mantenha o AOK-iSH aberto até terminar. Com os dois, select-desktop.sh --panel alterna entre eles depois."
+            "value" : "Escolha o painel do Wayfire. Isso baixa pacotes para o sistema de arquivos Devuan (instalado na primeira vez) e leva vários minutos; mantenha o AOK-iSH aberto até terminar. Com os dois, select-desktop.sh --panel alterna entre eles depois."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Выберите панель Wayfire. Пакеты загружаются в файловую систему Wayland (Devuan, устанавливается в первый раз), это займёт несколько минут; не закрывайте AOK-iSH до завершения. Если установить обе, позже между ними можно переключаться через select-desktop.sh --panel."
+            "value" : "Выберите панель Wayfire. Пакеты загружаются в файловую систему Devuan (устанавливается в первый раз), это займёт несколько минут; не закрывайте AOK-iSH до завершения. Если установить обе, позже между ними можно переключаться через select-desktop.sh --panel."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "选择 Wayfire 的面板。这会将软件包下载到 Wayland 文件系统（Devuan，首次时安装）中，需要几分钟；完成前请保持 AOK-iSH 打开。若两者都安装，之后可用 select-desktop.sh --panel 在它们之间切换。"
+            "value" : "选择 Wayfire 的面板。这会将软件包下载到 Devuan 文件系统（首次时安装）中，需要几分钟；完成前请保持 AOK-iSH 打开。若两者都安装，之后可用 select-desktop.sh --panel 在它们之间切换。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "選擇 Wayfire 的面板。這會將套件下載到 Wayland 檔案系統（Devuan，首次時安裝）中，需要幾分鐘；完成前請保持 AOK-iSH 開啟。若兩者都安裝，之後可用 select-desktop.sh --panel 在它們之間切換。"
+            "value" : "選擇 Wayfire 的面板。這會將套件下載到 Devuan 檔案系統（首次時安裝）中，需要幾分鐘；完成前請保持 AOK-iSH 開啟。若兩者都安裝，之後可用 select-desktop.sh --panel 在它們之間切換。"
           }
         }
       }
@@ -47984,62 +47984,62 @@
         }
       }
     },
-    "Installs the desktop the Wayland display shows and chooses which one it starts. Native mode has none of its own: the desktop lives in a second filesystem named Wayland, installed the first time you add one." : {
+    "Installs the desktop the Wayland display shows and chooses which one it starts. Native mode has none of its own: the desktop lives in a second filesystem named Devuan, installed the first time you add one." : {
       "comment" : "Wayland Desktop section footer in Settings, in native mode",
       "extractionState" : "manual",
       "localizations" : {
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Installiert den Desktop, den die Wayland-Anzeige zeigt, und legt fest, welcher gestartet wird. Der native Modus hat keinen eigenen: Der Desktop liegt in einem zweiten Dateisystem namens Wayland, das beim ersten Hinzufügen installiert wird."
+            "value" : "Installiert den Desktop, den die Wayland-Anzeige zeigt, und legt fest, welcher gestartet wird. Der native Modus hat keinen eigenen: Der Desktop liegt in einem zweiten Dateisystem namens Devuan, das beim ersten Hinzufügen installiert wird."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Instala el escritorio que muestra la pantalla Wayland y elige cuál se inicia. El modo nativo no tiene uno propio: el escritorio vive en un segundo sistema de archivos llamado Wayland, que se instala la primera vez que añades uno."
+            "value" : "Instala el escritorio que muestra la pantalla Wayland y elige cuál se inicia. El modo nativo no tiene uno propio: el escritorio vive en un segundo sistema de archivos llamado Devuan, que se instala la primera vez que añades uno."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Installe le bureau affiché par l’écran Wayland et choisit celui qui démarre. Le mode natif n'en a pas : le bureau se trouve dans un second système de fichiers nommé Wayland, installé la première fois que vous en ajoutez un."
+            "value" : "Installe le bureau affiché par l’écran Wayland et choisit celui qui démarre. Le mode natif n'en a pas : le bureau se trouve dans un second système de fichiers nommé Devuan, installé la première fois que vous en ajoutez un."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Waylandディスプレイに表示するデスクトップをインストールし、起動するものを選びます。ネイティブモードには独自のものがなく、デスクトップは Wayland という名前の2つ目のファイルシステムに置かれます。これは最初に追加するときにインストールされます。"
+            "value" : "Waylandディスプレイに表示するデスクトップをインストールし、起動するものを選びます。ネイティブモードには独自のものがなく、デスクトップは Devuan という名前の2つ目のファイルシステムに置かれます。これは最初に追加するときにインストールされます。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Wayland 디스플레이가 표시하는 데스크탑을 설치하고, 어떤 것을 시작할지 선택합니다. 네이티브 모드에는 자체 데스크탑이 없어서, 데스크탑은 Wayland라는 이름의 두 번째 파일 시스템에 있으며 처음 추가할 때 설치됩니다."
+            "value" : "Wayland 디스플레이가 표시하는 데스크탑을 설치하고, 어떤 것을 시작할지 선택합니다. 네이티브 모드에는 자체 데스크탑이 없어서, 데스크탑은 Devuan라는 이름의 두 번째 파일 시스템에 있으며 처음 추가할 때 설치됩니다."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Instala o desktop que a tela Wayland mostra e escolhe qual deles é iniciado. O modo nativo não tem um próprio: o desktop fica em um segundo sistema de arquivos chamado Wayland, instalado na primeira vez que você adiciona um."
+            "value" : "Instala o desktop que a tela Wayland mostra e escolhe qual deles é iniciado. O modo nativo não tem um próprio: o desktop fica em um segundo sistema de arquivos chamado Devuan, instalado na primeira vez que você adiciona um."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Устанавливает рабочий стол для дисплея Wayland и выбирает, какой из них запускается. В нативном режиме своего нет: рабочий стол находится во второй файловой системе с именем Wayland, которая устанавливается при первом добавлении."
+            "value" : "Устанавливает рабочий стол для дисплея Wayland и выбирает, какой из них запускается. В нативном режиме своего нет: рабочий стол находится во второй файловой системе с именем Devuan, которая устанавливается при первом добавлении."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "安装 Wayland 显示所用的桌面，并选择启动哪一个。原生模式没有自己的桌面：桌面位于名为 Wayland 的第二个文件系统中，首次添加时安装。"
+            "value" : "安装 Wayland 显示所用的桌面，并选择启动哪一个。原生模式没有自己的桌面：桌面位于名为 Devuan 的第二个文件系统中，首次添加时安装。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "安裝 Wayland 顯示所用的桌面，並選擇要啟動哪一個。原生模式沒有自己的桌面：桌面位於名為 Wayland 的第二個檔案系統中，首次新增時安裝。"
+            "value" : "安裝 Wayland 顯示所用的桌面，並選擇要啟動哪一個。原生模式沒有自己的桌面：桌面位於名為 Devuan 的第二個檔案系統中，首次新增時安裝。"
           }
         }
       }
@@ -88015,62 +88015,62 @@
         }
       }
     },
-    "Native mode has no desktop of its own, so this goes into a second filesystem named Wayland (Devuan, installed the first time) and runs from there. It downloads packages and takes several minutes. Keep AOK-iSH open until it finishes." : {
+    "Native mode has no desktop of its own, so this goes into a second filesystem named Devuan (installed the first time) and runs from there. It downloads packages and takes several minutes. Keep AOK-iSH open until it finishes." : {
       "comment" : "Desktop setup in native mode: confirmation before installing",
       "extractionState" : "manual",
       "localizations" : {
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Der native Modus hat keinen eigenen Desktop. Er kommt deshalb in ein zweites Dateisystem namens Wayland (Devuan, beim ersten Mal installiert) und läuft von dort. Dabei werden Pakete geladen; das dauert einige Minuten. Lass AOK-iSH geöffnet, bis es fertig ist."
+            "value" : "Der native Modus hat keinen eigenen Desktop. Er kommt deshalb in ein zweites Dateisystem namens Devuan (beim ersten Mal installiert) und läuft von dort. Dabei werden Pakete geladen; das dauert einige Minuten. Lass AOK-iSH geöffnet, bis es fertig ist."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "El modo nativo no tiene escritorio propio, así que esto va a un segundo sistema de archivos llamado Wayland (Devuan, instalado la primera vez) y se ejecuta desde allí. Descarga paquetes y tarda varios minutos. Mantén AOK-iSH abierto hasta que termine."
+            "value" : "El modo nativo no tiene escritorio propio, así que esto va a un segundo sistema de archivos llamado Devuan (instalado la primera vez) y se ejecuta desde allí. Descarga paquetes y tarda varios minutos. Mantén AOK-iSH abierto hasta que termine."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Le mode natif n'a pas de bureau à lui : celui-ci va dans un second système de fichiers nommé Wayland (Devuan, installé la première fois) et s'exécute depuis là. Des paquets sont téléchargés, ce qui prend plusieurs minutes. Gardez AOK-iSH ouvert jusqu’à la fin."
+            "value" : "Le mode natif n'a pas de bureau à lui : celui-ci va dans un second système de fichiers nommé Devuan (installé la première fois) et s'exécute depuis là. Des paquets sont téléchargés, ce qui prend plusieurs minutes. Gardez AOK-iSH ouvert jusqu’à la fin."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "ネイティブモードには独自のデスクトップがないため、Wayland という名前の2つ目のファイルシステム（Devuan、初回にインストール）に入れて、そこから実行します。パッケージをダウンロードするため、数分かかります。完了するまでAOK-iSHを開いたままにしてください。"
+            "value" : "ネイティブモードには独自のデスクトップがないため、Devuan という名前の2つ目のファイルシステム（初回にインストール）に入れて、そこから実行します。パッケージをダウンロードするため、数分かかります。完了するまでAOK-iSHを開いたままにしてください。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "네이티브 모드에는 자체 데스크탑이 없으므로, Wayland라는 이름의 두 번째 파일 시스템(Devuan, 처음에 설치됨)에 넣고 거기에서 실행합니다. 패키지를 다운로드하며 몇 분이 걸립니다. 끝날 때까지 AOK-iSH를 열어 두십시오."
+            "value" : "네이티브 모드에는 자체 데스크탑이 없으므로, Devuan라는 이름의 두 번째 파일 시스템(처음에 설치됨)에 넣고 거기에서 실행합니다. 패키지를 다운로드하며 몇 분이 걸립니다. 끝날 때까지 AOK-iSH를 열어 두십시오."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "O modo nativo não tem desktop próprio, então isso vai para um segundo sistema de arquivos chamado Wayland (Devuan, instalado na primeira vez) e roda de lá. Baixa pacotes e leva vários minutos. Mantenha o AOK-iSH aberto até terminar."
+            "value" : "O modo nativo não tem desktop próprio, então isso vai para um segundo sistema de arquivos chamado Devuan (instalado na primeira vez) e roda de lá. Baixa pacotes e leva vários minutos. Mantenha o AOK-iSH aberto até terminar."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "В нативном режиме своего рабочего стола нет, поэтому он ставится во вторую файловую систему с именем Wayland (Devuan, устанавливается в первый раз) и запускается оттуда. Будут загружены пакеты; это займёт несколько минут. Не закрывайте AOK-iSH до завершения."
+            "value" : "В нативном режиме своего рабочего стола нет, поэтому он ставится во вторую файловую систему с именем Devuan (устанавливается в первый раз) и запускается оттуда. Будут загружены пакеты; это займёт несколько минут. Не закрывайте AOK-iSH до завершения."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "原生模式没有自己的桌面，因此会装进名为 Wayland 的第二个文件系统（Devuan，首次时安装）并从那里运行。这会下载软件包，需要几分钟。在完成之前请保持 AOK-iSH 打开。"
+            "value" : "原生模式没有自己的桌面，因此会装进名为 Devuan 的第二个文件系统（首次时安装）并从那里运行。这会下载软件包，需要几分钟。在完成之前请保持 AOK-iSH 打开。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "原生模式沒有自己的桌面，因此會裝進名為 Wayland 的第二個檔案系統（Devuan，首次時安裝）並從那裡執行。這會下載套件，需要數分鐘。完成前請讓 AOK-iSH 保持開啟。"
+            "value" : "原生模式沒有自己的桌面，因此會裝進名為 Devuan 的第二個檔案系統（首次時安裝）並從那裡執行。這會下載套件，需要數分鐘。完成前請讓 AOK-iSH 保持開啟。"
           }
         }
       }
