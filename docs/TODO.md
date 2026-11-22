@@ -144,6 +144,8 @@ freeze (2026-09-25); their full text is in
   worth a look: foot's main thread ran flat out for 1.1 s after one tap in
   its window, and the Wayland view's becomeFirstResponder cost about 110 ms
   each time its Workspace window came to the front.
+- **`transcode`: an audio-only mode (GH #678, Mighty-Moth-Boy, 2026-11-22; told "queued").** The Video Converter and `transcode` take a video and copy or re-encode its audio track; there is no audio-in, audio-out path (kernel/native_transcode.c). Proposed: accept audio files and write m4a/AAC, ALAC or WAV with the system codecs, in the same tool and the same Workspace applet; other formats stay ffmpeg's.
+- **A custom desktop command from the app (GH #674, CobraSoftware, 2026-11-22; told it will be done).** `WAYLAND_COMPOSITOR_CMD` overrides the compositor, but only from the environment start-wayland.sh runs in, which the Wayland window does not offer; /etc/aok-desktop.conf accepts only labwc, sway, wayfire and xfce (start-wayland.sh, the `case "$_wl_choice"`). Proposed: an `AOK_DESKTOP_CMD=` line in that file, set by `select-desktop.sh --command '...'`, treated as WAYLAND_COMPOSITOR_CMD is now. Wanted for trying Phosh and Plasma Mobile.
 
 ## Diagnosed, not fixed
 
