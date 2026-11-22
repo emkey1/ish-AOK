@@ -158,6 +158,15 @@ both sides, which a native program cannot do. It is emulated, so connection
 setup and file-transfer throughput are slower than the client's; the shell you
 land on is native zsh either way, so typing at a prompt feels the same.
 
+**Turn on Settings -> Crypto Accel for faster transfers.** With it on, sshd's
+cipher -- chacha20-poly1305, the one every OpenSSH client picks first -- runs
+on the device's CPU instead of being emulated. Nothing has to be installed
+for this, unlike a distribution's ssh ([crypto-accel.md](crypto-accel.md)):
+the bundled sshd asks for the accelerator itself. On a Mac the CLI moved
+data at 35 MB/s inbound and 53 MB/s outbound with it off, and 56 and 122 with
+it on. sshd checks the switch once per connection, so a connection started
+with it off stays unaccelerated until it ends.
+
 It is off until you ask for it, in **Settings -> sshd**. Turning it on starts
 sshd at once -- unpacking the binaries first, if this build has not yet -- and
 every boot after that runs `/etc/rc.d/S50sshd`; turning it off stops the

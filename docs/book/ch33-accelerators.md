@@ -81,6 +81,23 @@ accelerator grew a raw ChaCha20 stream operation — 32-bit little-endian counte
 96-bit nonce — to serve it. Chapter 25 gave the consequence: `sshd` stays
 emulated and the part of it that matters does not.
 
+That stream operation covers only half of the cipher, though. OpenSSH's
+`chacha20-poly1305@openssh.com` is not the RFC 8439 AEAD: its tag is a bare
+Poly1305 over the encrypted length and payload, with no padding and no length
+block, so the AEAD and tag-only operations cannot produce it, and OpenSSH
+computes it in its own C, which stays emulated even with the provider in
+place. Native mode's bundled `sshd` has no OpenSSL at all, so it is patched to
+call the syscall directly, and the accelerator gained a fourth algorithm for
+it: bare Poly1305 with a caller-supplied one-time key, built on the same
+validated primitive and checked against the same RFC 8439 vector at startup.
+Each ChaCha20 or Poly1305 step of a packet is a separate call that either
+completes or writes nothing, and a declined step runs as OpenSSH's own code,
+so the toggle can change at any moment without a packet going wrong. A
+differential test (`tests/manual/crypto/openssh_chachapoly_test.c`) runs the
+patched file against the unpatched one: 662 packets of up to 70 000 bytes come
+out byte-identical, each side opens the other's, and both refuse a flipped
+bit. On 32 KiB packets the patched file runs 6.7–7x faster.
+
 ## 33.3 The part people miss
 
 An accelerator implemented entirely inside the emulator would be transparent.

@@ -215,6 +215,9 @@ the re-launch trick of Chapter 24 can serve — it is not a shell transferring
 state to a copy of itself, it is a privileged process dropping privilege in a
 child while retaining it in the parent. The decision recorded in the tree was to
 choose re-launch over patching privilege separation out, and it remains open.
+What native mode ships meanwhile is the third option: a static aarch64 `sshd`
+built from the same OpenSSH tree as the native client, run as an ordinary
+emulated guest program, where fork simply works (`tools/build-guest-sshd.sh`).
 
 It is also less costly than it sounds, because the emulated cost is not spread
 evenly. An `ssh` session is **cipher-bound** — measured, when somebody asked
@@ -229,7 +232,11 @@ serve it. Measured on an A10X iPad: about 8.8 MB/s to about 19 MB/s, and
 So the honest summary is not "sshd is slow because it is not native". It is that
 the part of `sshd` worth accelerating has been accelerated by a different
 mechanism, and what remains emulated is connection setup and protocol
-bookkeeping rather than the bulk work.
+bookkeeping rather than the bulk work. Native mode's bundled `sshd` has no
+OpenSSL for a provider to reach, so it asks the accelerator itself, for its
+Poly1305 as well as its ChaCha20 (Chapter 33). On a Mac under the CLI that
+took a 64 MB transfer from 35 to 56 MB/s inbound and from 53 to 122 MB/s
+outbound.
 
 ## 25.8 The class of bug this part is about
 

@@ -360,6 +360,24 @@ void ish_aead_mac_final(struct ish_aead_mac *sp, uint8_t tag[16]) {
     poly1305_finish(&s->poly, tag);
 }
 
+// ---- Bare Poly1305 -------------------------------------------------------
+// The validated primitive above, behind the opaque type the header exports.
+
+_Static_assert(sizeof(struct poly1305) <= sizeof(struct ish_poly1305),
+        "ish_poly1305 opaque buffer too small");
+
+void ish_poly1305_begin(struct ish_poly1305 *sp, const uint8_t key[32]) {
+    poly1305_init((struct poly1305 *) sp, key);
+}
+
+void ish_poly1305_update(struct ish_poly1305 *sp, const uint8_t *m, size_t len) {
+    poly1305_update((struct poly1305 *) sp, m, len);
+}
+
+void ish_poly1305_final(struct ish_poly1305 *sp, uint8_t tag[16]) {
+    poly1305_finish((struct poly1305 *) sp, tag);
+}
+
 // ---- Self-test against RFC 8439 vectors ---------------------------------
 
 static _Bool ct_eq(const uint8_t *a, const uint8_t *b, size_t n) {
@@ -379,6 +397,16 @@ _Bool ish_accel_crypto_selftest(void) {
         poly1305_init(&st, key);
         poly1305_update(&st, (const uint8_t *) msg, sizeof msg - 1);
         poly1305_finish(&st, mac);
+        if (!ct_eq(mac, want, 16)) return 0;
+        // The same vector through the exported streaming API, split where no
+        // 16-byte block boundary falls, because the guest's op feeds it page
+        // spans of any length.
+        struct ish_poly1305 sp;
+        ish_poly1305_begin(&sp, key);
+        ish_poly1305_update(&sp, (const uint8_t *) msg, 7);
+        ish_poly1305_update(&sp, (const uint8_t *) msg + 7, 20);
+        ish_poly1305_update(&sp, (const uint8_t *) msg + 27, sizeof msg - 1 - 27);
+        ish_poly1305_final(&sp, mac);
         if (!ct_eq(mac, want, 16)) return 0;
     }
     // RFC 8439 sect 2.8.2: full AEAD seal (and round-trip open).

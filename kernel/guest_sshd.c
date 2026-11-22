@@ -13,7 +13,9 @@
 // emulated guest ELF forks normally, so the problem does not arise. The cost
 // is connection setup and per-packet crypto speed, which is real for scp
 // throughput and marginal for typing at a prompt, because the shell on the far
-// end is native zsh either way.
+// end is native zsh either way. The crypto runs on the host when the Crypto
+// Accel switch is on: the binaries are built to call kernel/ish_accel.c for
+// chacha20-poly1305 themselves (tools/build-guest-sshd.sh, AOK_GUEST_ACCEL).
 //
 // Native mode has no distribution in it: /lib is empty and there is no libc to
 // link against, so the binaries are static. They are built from the SAME

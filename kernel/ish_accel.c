@@ -62,7 +62,7 @@ void ish_accel_init(void) {
 
 // Guest ABI. Fixed-layout, all 64-bit fields after the two u32s so the
 // struct is identical on arm64 and riscv64 guests. op: 0=seal, 1=open.
-// alg: 0=chacha20-poly1305. All pointers are guest addresses.
+// alg: see the enum below. All pointers are guest addresses.
 struct ish_aead_req {
     uint32_t op;
     uint32_t alg;
@@ -80,6 +80,11 @@ enum {
     ISH_AEAD_ALG_CHACHA20_POLY1305 = 0,
     ISH_AEAD_ALG_CHACHA20 = 1,
     ISH_AEAD_ALG_AES256_GCM = 2,
+    // Bare Poly1305 over req.in with the one-time key at req.key; the tag goes
+    // to req.tag. op 0 only (and the query op). For OpenSSH's
+    // chacha20-poly1305@openssh.com, whose tag is not the RFC 8439 AEAD's: the
+    // bundled native-mode sshd pairs this with the raw ChaCha20 stream.
+    ISH_AEAD_ALG_POLY1305 = 3,
 };
 
 // op 0=seal, 1=open, 2=raw stream (back-compat), 3=tag/MAC only, 4=query.
@@ -103,6 +108,10 @@ static void ish_chacha_span(const void *in_host, void *out_host, size_t span, vo
 static void ish_mac_span(const void *host, size_t span, void *ctx) {
     ish_aead_mac_update((struct ish_aead_mac *) ctx, (const uint8_t *) host, span);
 }
+// Read-only span callback for bare Poly1305.
+static void ish_poly_span(const void *host, size_t span, void *ctx) {
+    ish_poly1305_update((struct ish_poly1305 *) ctx, (const uint8_t *) host, span);
+}
 // Same, for AES-256-GCM (counter position and GHASH block carry across spans).
 static void ish_aes_span(const void *in_host, void *out_host, size_t span, void *ctx) {
     ish_aes256_gcm_update((struct ish_aes_gcm_stream *) ctx,
@@ -123,13 +132,16 @@ dword_t sys_ish_aead_guest(guest_addr_t req_addr) {
     if (user_read(req_addr, &req, sizeof(req)))
         return _EFAULT;
     // alg 0 = ChaCha20-Poly1305 AEAD (op 0=seal, 1=open, 3=tag/MAC-only);
-    // alg 1 = raw ChaCha20 stream (op ignored); alg 2 = AES-256-GCM (op 0/1).
-    // op 2 also selects the raw stream for back-compat.
+    // alg 1 = raw ChaCha20 stream (op ignored); alg 2 = AES-256-GCM (op 0/1);
+    // alg 3 = bare Poly1305 (op 0). op 2 with alg 0 also selects the raw
+    // stream, for back-compat.
     bool is_aes = req.alg == ISH_AEAD_ALG_AES256_GCM;
-    bool raw_stream = (req.alg == ISH_AEAD_ALG_CHACHA20) || (!is_aes && req.op == 2);
+    bool poly_only = req.alg == ISH_AEAD_ALG_POLY1305;
+    bool raw_stream = (req.alg == ISH_AEAD_ALG_CHACHA20) ||
+            (req.alg == ISH_AEAD_ALG_CHACHA20_POLY1305 && req.op == 2);
     bool mac_only = (req.alg == ISH_AEAD_ALG_CHACHA20_POLY1305) && req.op == 3;
     if (req.alg != ISH_AEAD_ALG_CHACHA20_POLY1305 &&
-            req.alg != ISH_AEAD_ALG_CHACHA20 && !is_aes)
+            req.alg != ISH_AEAD_ALG_CHACHA20 && !is_aes && !poly_only)
         return _EOPNOTSUPP;
 
     // Per-algorithm availability. Answering the query op here keeps it free of
@@ -140,7 +152,7 @@ dword_t sys_ish_aead_guest(guest_addr_t req_addr) {
     if (!ready)
         return is_aes ? _EOPNOTSUPP : _ENOSYS;
 
-    if (!raw_stream && !mac_only && req.op > 1)
+    if (poly_only ? req.op != 0 : (!raw_stream && !mac_only && req.op > 1))
         return _EINVAL;
     if (req.inlen > ISH_AEAD_MAX_IN || req.aadlen > ISH_AEAD_MAX_AAD)
         return _EMSGSIZE; // too big for the fast path; caller falls back
@@ -148,6 +160,24 @@ dword_t sys_ish_aead_guest(guest_addr_t req_addr) {
     uint8_t key[32], nonce[12], tag[16];
     if (user_read(req.key, key, sizeof(key)))
         return _EFAULT;
+
+    if (poly_only) {
+        // No nonce, no aad: the key IS the one-time key, and the message is
+        // MAC'd as it stands.
+        dword_t pret = 0;
+        struct ish_poly1305 poly;
+        ish_poly1305_begin(&poly, key);
+        if (req.inlen && user_read_walk(req.in, req.inlen, ish_poly_span, &poly))
+            pret = _EFAULT;
+        else {
+            ish_poly1305_final(&poly, tag);
+            if (user_write(req.tag, tag, sizeof(tag)))
+                pret = _EFAULT;
+        }
+        memset(key, 0, sizeof(key));
+        memset(&poly, 0, sizeof(poly));
+        return pret;
+    }
 
     if (raw_stream) {
         // Raw ChaCha20 stream: req.nonce points to the 16-byte EVP IV

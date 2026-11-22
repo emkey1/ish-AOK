@@ -22,6 +22,16 @@
 # scp throughput, marginal for typing at a prompt, because the shell on the far
 # end is native zsh either way.
 #
+# WHY -DAOK_GUEST_ACCEL
+#
+# The crypto speed, at least, is recoverable. With it, cipher-chachapoly.c asks
+# AOK's crypto accelerator (syscall 0xacc0, kernel/ish_accel.c) for each
+# ChaCha20 and Poly1305 step and runs OpenSSH's own code when it declines --
+# Settings' Crypto Accel switch off, or not AOK at all. Only this build may set
+# it: the native client compiles the same tree as host code, where 0xacc0 is
+# not AOK's. The fork's aok-guest-accel.h has the rest, and
+# tests/manual/crypto/openssh_chachapoly_test.c checks the two paths agree.
+#
 # WHY STATIC
 #
 # Native mode has no distribution in it: /lib is empty and there is no libc to
@@ -99,7 +109,7 @@ cd "$WORK"
     CC="zig cc -target aarch64-linux-musl" \
     AR="zig ar" \
     RANLIB="zig ranlib" \
-    CFLAGS="-O2 -ffunction-sections -fdata-sections" \
+    CFLAGS="-O2 -ffunction-sections -fdata-sections -DAOK_GUEST_ACCEL" \
     LDFLAGS="-static -Wl,--gc-sections" \
     --without-openssl \
     --without-zlib \

@@ -68,6 +68,13 @@ cannot reach them and nothing here accelerates them. Everything below describes
 guest programs that link the guest's OpenSSL. See
 [native-programs.md](native-programs.md) for what runs natively and how to tell.
 
+**Native mode's sshd needs only the toggle.** The `sshd` that Settings -> sshd
+runs in a native root is an emulated guest program, also without OpenSSL, but
+built to call the accelerator itself for chacha20-poly1305: the ChaCha20 and
+the Poly1305 both, which a provider never reaches, since OpenSSH computes the
+Poly1305 itself. Turn the toggle on and new connections use it; there is no
+provider to install. See [native-mode.md](native-mode.md#sshd).
+
 ## Verify
 
 ```sh

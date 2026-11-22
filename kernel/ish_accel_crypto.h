@@ -41,6 +41,17 @@ void ish_aead_mac_begin(struct ish_aead_mac *s, const uint8_t key[32],
 void ish_aead_mac_update(struct ish_aead_mac *s, const uint8_t *ct, size_t len);
 void ish_aead_mac_final(struct ish_aead_mac *s, uint8_t tag[16]);
 
+// Bare Poly1305 (RFC 8439 sect 2.5): the caller supplies the 32-byte one-time
+// key, and the message is MAC'd exactly as given -- no padding, no length
+// block. OpenSSH's chacha20-poly1305@openssh.com needs this, because it is not
+// the RFC 8439 AEAD: its tag covers the encrypted length and the encrypted
+// payload back to back, under a key taken from ChaCha20 block 0. Streaming, so
+// the accelerator can feed it guest page-spans.
+struct ish_poly1305 { _Alignas(16) unsigned char opaque[96]; };
+void ish_poly1305_begin(struct ish_poly1305 *s, const uint8_t key[32]);
+void ish_poly1305_update(struct ish_poly1305 *s, const uint8_t *m, size_t len);
+void ish_poly1305_final(struct ish_poly1305 *s, uint8_t tag[16]);
+
 // ---- Streaming AEAD (lets a caller process the data one page-span at a
 // time straight out of / into guest memory, no bounce buffer) --------------
 // Opaque, stack-allocatable. Sized generously to hold the real context.
