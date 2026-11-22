@@ -1030,7 +1030,9 @@ static NSString *ISHForeignExecTitle(NSString *mode) {
                @"A cached translation is found by the address its code was loaded at, so while this is on, address space layout randomization (ASLR) is off in the Linux system: every program and library loads at the same addresses each time. ASLR does not prevent bugs; it makes a memory-corruption bug harder to turn into an attack, because the attacker cannot know where anything is. With it off, such a bug in a program you run here -- a network service above all -- is easier to exploit. iOS's own protection of the app is not affected.\n\n"
                @"Applies to programs started after the change, on arm64 filesystems. Uses up to 96 MB of memory.", @"Translated Code section footer: what the translation cache does and that it turns ASLR off");
     if (section == [self _desktopSectionIndex])
-        return NSLocalizedString(@"Installs the desktop the Wayland display shows, in the filesystem that is running, and chooses which one it starts.", @"Wayland Desktop section footer in Settings");
+        return [AppDelegate bootedRootIsNative]
+            ? NSLocalizedString(@"Installs the desktop the Wayland display shows and chooses which one it starts. Native mode has none of its own: the desktop lives in a second filesystem named Wayland, installed the first time you add one.", @"Wayland Desktop section footer in Settings, in native mode")
+            : NSLocalizedString(@"Installs the desktop the Wayland display shows, in the filesystem that is running, and chooses which one it starts.", @"Wayland Desktop section footer in Settings");
     if (section == [self _sshdSectionIndex])
         return [self _guestSshdEnabled]
             ? [NSString stringWithFormat:([self _guestSshdPasswordLogin]
@@ -2217,7 +2219,9 @@ static NSString *ISHDesktopInstallCommand(NSString *name) {
 
 - (void)confirmRunning:(NSString *)title command:(NSString *)command fromCell:(UITableViewCell *)cell {
     ISHActionSheet *sheet = [ISHActionSheet actionSheetWithTitle:title
-                                                         message:NSLocalizedString(@"This downloads packages into the filesystem that is running and takes several minutes. Keep AOK-iSH open until it finishes.", @"Desktop setup: confirmation before installing")];
+                                                         message:[AppDelegate bootedRootIsNative]
+        ? NSLocalizedString(@"Native mode has no desktop of its own, so this goes into a second filesystem named Wayland (Devuan, installed the first time) and runs from there. It downloads packages and takes several minutes. Keep AOK-iSH open until it finishes.", @"Desktop setup in native mode: confirmation before installing")
+        : NSLocalizedString(@"This downloads packages into the filesystem that is running and takes several minutes. Keep AOK-iSH open until it finishes.", @"Desktop setup: confirmation before installing")];
     __weak typeof(self) weakSelf = self;
     [sheet addActionWithTitle:NSLocalizedString(@"Install", @"Desktop setup: confirm button")
                         style:UIAlertActionStyleDefault
@@ -2237,7 +2241,9 @@ static NSString *ISHDesktopInstallCommand(NSString *name) {
 // install asks it here, in place of the confirmation the others get.
 - (void)wayfirePanelSheetFromCell:(UITableViewCell *)cell {
     ISHActionSheet *sheet = [ISHActionSheet actionSheetWithTitle:ISHDesktopTitle(@"wayfire")
-                                                         message:NSLocalizedString(@"Choose Wayfire's panel. This downloads packages into the filesystem that is running and takes several minutes; keep AOK-iSH open until it finishes. With both, select-desktop.sh --panel switches between them later.", @"Desktop setup: Wayfire install, the panel choice")];
+                                                         message:[AppDelegate bootedRootIsNative]
+        ? NSLocalizedString(@"Choose Wayfire's panel. This downloads packages into the Wayland filesystem (Devuan, installed the first time) and takes several minutes; keep AOK-iSH open until it finishes. With both, select-desktop.sh --panel switches between them later.", @"Desktop setup in native mode: Wayfire install, the panel choice")
+        : NSLocalizedString(@"Choose Wayfire's panel. This downloads packages into the filesystem that is running and takes several minutes; keep AOK-iSH open until it finishes. With both, select-desktop.sh --panel switches between them later.", @"Desktop setup: Wayfire install, the panel choice")];
     NSArray<NSArray<NSString *> *> *panels = @[
         @[NSLocalizedString(@"Install with the Fast Panel", @"Desktop setup: Wayfire with the faster wf-panel"), @"fast"],
         @[NSLocalizedString(@"Install with Waybar", @"Desktop setup: Wayfire with waybar as its panel"), @"waybar"],

@@ -150,6 +150,12 @@ sets the same thing (`root`, `libs`, `off`); [native-mode.md](native-mode.md)
 has the trade-offs. A program that already works -- a static one, or a script
 whose interpreter exists here -- is never touched.
 
+A root can ask to see more of the booted one when it is entered this way, or
+through `mount-root.sh`: each directory named in its `/etc/aok-binds`, one a
+line, from `home`, `tmp`, `mnt`, `media` and `srv`, is bound in at the same
+path. That is how a native-mode root's desktop, which runs from a second
+filesystem, sees your home ([native-mode.md](native-mode.md#a-desktop)).
+
 ## `mount-root.sh`: turning a root into a real chroot target
 
 Being visible under `/AOK/roots/<name>` isn't enough to actually run

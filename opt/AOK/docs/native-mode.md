@@ -82,8 +82,9 @@ underneath.
 for a `GNU/` to name. On a distribution root it says `GNU/Linux` (glibc) or
 `Linux` (musl), as there.
 
-**Not here:** a package manager, compilers, Python, Perl, and the Wayland
-desktop, which needs a distribution's compositor. `git` does not yet speak
+**Not here:** a package manager, compilers, Python and Perl. The Wayland
+desktop is not here either, but you can have one: it runs from a second
+filesystem (see [A desktop](#a-desktop)). `git` does not yet speak
 `git@host:` (ssh) remotes; use the HTTPS URL. And `ps` shows a shell's
 subshells by their re-launch command line, because a native shell cannot fork
 (see [native-programs.md](native-programs.md)).
@@ -215,6 +216,45 @@ runlevel, `who am i` this terminal) and `users` their names; `uptime` counts
 them. The files are in the layout the guest's own Linux programs use, so a
 distribution's `who` or `last` reads them too (`last -f /var/log/wtmp`).
 
+## A desktop
+
+A native root has no compositor and no package manager to install one with.
+The Wayland window still works, from a second filesystem: Devuan arm64, named
+`Wayland`, which holds the desktop and the graphical programs you add. This
+root stays native and stays the one that is booted.
+
+```sh
+sudo sh /AOK/tools/setup-native-wayland.sh
+```
+
+or **Settings -> Wayland Desktop -> Install**, which runs the same thing. It
+installs the filesystem (from the catalogue, or the copy in the app), wires it
+to this root, and installs the desktop into it; the package install is the
+slow part. Then open the Wayland window as on any root.
+
+**Things worth knowing:**
+
+- **Everything in the desktop is emulated** -- the compositor, the panel,
+  every graphical program -- because it is Devuan's. What comes from
+  `/AOK/native` still runs natively, including the shell in the desktop's
+  terminal, which is yours.
+- **Your home and `/tmp` are shared.** The Wayland filesystem's
+  `/etc/aok-binds` asks for this root's `/home` and `/tmp`, so the file manager
+  and terminal there see the files you have. Your account exists there with
+  the same name, uid and password; `--user LOGIN` adds another.
+- **Programs go in with `apt`**, in the desktop's terminal (`sudo apt install
+  ...`) or from outside (`sudo sh /AOK/tools/mount-root.sh Wayland -- apt
+  install ...`). `setup-wayfire.sh`, `setup-xfce.sh`, `setup-games.sh` and
+  `select-desktop.sh` run from this root and do their work inside it.
+- **It is an ordinary filesystem**: Filesystems lists it, and it can be
+  renamed or removed. Its name is in `/etc/aok-wayland-root` here; after a
+  rename, that file is what to edit. `--root NAME` uses a Devuan arm64
+  filesystem you already have instead of installing one.
+- **It needs Programs From Other Roots set to Run Inside Their Root**, the
+  default (see below). The scripts say so if it is not.
+- **The GPU drivers** (`setup-gpu.sh`) install the same way, but have not been
+  tried in this arrangement yet.
+
 ## Reaching a distribution
 
 Native mode and a distribution live side by side. Install one in Filesystems
@@ -234,7 +274,7 @@ sets it too):
 
 | | |
 |---|---|
-| **Run Inside Their Root** (the default) | The program runs chrooted into its own root, as if you had used `mount-root.sh`: AOK-iSH binds `/proc`, `/sys`, `/dev`, `/dev/pts`, `/run`, `/AOK/native`, `/AOK/docs` and `/AOK/tools` into it first. It sees that root's `/etc`, its data files, its `/tmp` and its home directories, and everything it starts does too. |
+| **Run Inside Their Root** (the default) | The program runs chrooted into its own root, as if you had used `mount-root.sh`: AOK-iSH binds `/proc`, `/sys`, `/dev`, `/dev/pts`, `/run`, `/AOK/native`, `/AOK/docs` and `/AOK/tools` into it first. It sees that root's `/etc`, its data files, its `/tmp` and its home directories, and everything it starts does too. A root can ask for more of this one: directories named in its `/etc/aok-binds`, one a line, from `home`, `tmp`, `mnt`, `media` and `srv`, are bound in as well. |
 | **Use Their Libraries Here** | The program runs here, in the native root, borrowing only its loader, libraries and locales (through `LD_LIBRARY_PATH` and `LOCPATH`, which AOK-iSH removes again for programs that do not need them; a `LOCPATH` of your own wins). It sees your files and your home. Programs that need other data files of their own -- vim's runtime, Python's library -- will not find them. |
 | **Off** | The Linux behaviour: it fails. |
 
