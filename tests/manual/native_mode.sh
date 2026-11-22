@@ -142,6 +142,12 @@ check ifconfig_missing "nosuch0: error fetching interface information: Device no
 check sudo_is_setuid_program /AOK/native/sudo "$(readlink /usr/bin/sudo)"
 check terminfo_link /AOK/native/libs/terminfo "$(readlink /usr/share/terminfo)"
 check os_release aok-native "$(. /etc/os-release; echo "$ID")"
+# w, last and finger (SmallCLUE login_apps.c), linked like every applet.
+check w_header "load average" "$(w | head -1 | grep -o 'load average')"
+check finger_long "Login: tester" "$(finger tester 2>/dev/null | head -1 | cut -c1-13)"
+check finger_missing "finger: nosuch0: no such user." "$(finger nosuch0 2>&1)"
+got=$(last -f /dev/null 2>&1); rc=$?
+check last_empty_file "null begins|0" "$(printf '%s' "$got" | grep -o 'null begins')|$rc"
 # The SmallCLUE this build carries, "<commit> <date>", in place of the old
 # "(no distribution)"; "unknown" means the build could not ask git.
 got=$(. /etc/os-release; echo "$PRETTY_NAME|$VERSION")
