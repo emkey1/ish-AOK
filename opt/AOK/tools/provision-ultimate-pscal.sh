@@ -52,6 +52,7 @@
 #       PASSWORD_AUTH=1            # 1 = sshd PasswordAuthentication yes
 #       NATIVE_LINKS=1             # 0 = skip /AOK/tools/native-links.sh
 #       AUTHORIZED_KEY=            # a public key line to install
+#       SSH_STASH=1                # 0 = skip ssh-stash.sh (~/.ssh across roots)
 #
 # Passwords are never taken from the environment and never echoed: this hands
 # off to `passwd`, which reads them from the terminal itself.
@@ -114,6 +115,9 @@ warn() { printf '    \033[1;33m!\033[0m %s\n' "$*"; }
 # ---- config (env overrides; prompts interactively when run on a TTY) ------
 NEW_HOSTNAME="${NEW_HOSTNAME:-}"
 AUTHORIZED_KEY="${AUTHORIZED_KEY:-}"
+# Its own switch, not PERSIST_SSH: the stash is in /AOK/fakefs, root-only,
+# so a /AOK/persist that cannot be used is no reason to skip it.
+SSH_STASH="${SSH_STASH:-1}"
 
 # ask <var> <prompt> <default>: keep an env-provided value; else prompt on a
 # TTY; else use the default (so piped/ssh runs never block).
@@ -403,6 +407,13 @@ if [ "$PERSIST_SSH" = 1 ]; then
     note "host keys stashed in $PERSIST_DIR (host-backed, survives a root switch)"
 fi
 
+# ~/.ssh from another root, by login name (ssh-stash.sh): keys, config and
+# known_hosts, with authorized_keys merged line by line. Before the
+# authorized_keys steps below, so a stashed key counts as one already there.
+if [ "$SSH_STASH" = 1 ] && [ -f /AOK/tools/ssh-stash.sh ] && [ -d "${AOK_SSH_STASH_DIR:-/AOK/fakefs/ssh}/$TARGET_USER" ]; then
+    sh /AOK/tools/ssh-stash.sh restore "$TARGET_USER" 2>&1 | sed 's/^/    /' || true
+fi
+
 # authorized_keys: the stash first, then the environment, then the operator.
 AUTH_FILE="$USER_HOME/.ssh/authorized_keys"
 if [ -z "$AUTHORIZED_KEY" ] && [ "$PERSIST_SSH" = 1 ] && [ -f "$PERSIST_DIR/authorized_keys" ] \
@@ -432,6 +443,10 @@ if [ -s "$AUTH_FILE" ]; then
     [ "$PERSIST_SSH" = 1 ] && cp "$AUTH_FILE" "$PERSIST_DIR/authorized_keys" 2>/dev/null
 else
     warn "no authorized_keys for $TARGET_USER -- password login only"
+fi
+# ...and back, so the next root this login is set up in gets them too.
+if [ "$SSH_STASH" = 1 ] && [ -f /AOK/tools/ssh-stash.sh ] && [ -d "${AOK_SSH_STASH_DIR:-/AOK/fakefs}" ]; then
+    sh /AOK/tools/ssh-stash.sh save "$TARGET_USER" 2>&1 | sed 's/^/    /' || true
 fi
 
 # ---- sshd_config ---------------------------------------------------------

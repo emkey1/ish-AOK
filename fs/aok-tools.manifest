@@ -14,6 +14,7 @@
 native-links.sh
 native-applets.conf
 persist-links.sh
+ssh-stash.sh
 provision-ultimate-alpine.sh
 provision-ultimate-devuan.sh
 provision-ultimate-archlinux.sh

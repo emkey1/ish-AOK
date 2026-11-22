@@ -57,6 +57,38 @@ The MotePad text editor also treats `/AOK/persist` as its default starting
 directory whenever it's present, since it's the one location guaranteed
 not to disappear under it.
 
+## Your `~/.ssh` in every root: `ssh-stash.sh`
+
+Keys, `config` and `known_hosts` live in each root's own home directory, so a
+public key you put in one root's `authorized_keys` is not in the next. Save it
+once and bring it back anywhere:
+
+```sh
+sudo sh /AOK/tools/ssh-stash.sh save        # this root's ~/.ssh -> the stash
+sudo sh /AOK/tools/ssh-stash.sh restore     # the stash -> this root's ~/.ssh
+sudo sh /AOK/tools/ssh-stash.sh list        # what is stashed, per login
+```
+
+**Things worth knowing:**
+
+- **By login name, not uid.** The same person is uid 501 in one root and 1000
+  or 1001 in another, so the stash is `/AOK/fakefs/ssh/<login>` and a restore
+  takes the owner from the restoring root's own `/etc/passwd`. Name another
+  login after the command (`restore mke`); the default is whoever ran `sudo`.
+- **In `/AOK/fakefs`, root's alone, not `/AOK/persist`.** `/AOK/persist`
+  shows every file as its viewer's own, so a private key kept there could be
+  read by every user of every root. That is why both directions need root.
+- **Merged, not overwritten.** `authorized_keys` and `known_hosts` are
+  combined line by line. Any other file is copied where the other side has
+  none. Where both have one and they differ, `save` takes this root's, and
+  `restore` keeps this root's unless you add `--force`.
+- **Modes are put right**: 0700 for directories, 0644 for `*.pub`, 0600 for
+  everything else, which is what `ssh` and `sshd`'s `StrictModes` want.
+- **Done for you when an account is made.** The provisioners restore the
+  login they set up, Add User and the first-boot account sheet do in a native
+  root, and the PSCAL provisioner also saves after it sets up
+  `authorized_keys`. `SSH_STASH=0` in a provisioner's environment skips it.
+
 ## `bin`, `lib` and `etc`: programs that follow you between roots
 
 `bin`, `lib` and `etc` are created empty on every launch, so they are simply

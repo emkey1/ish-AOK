@@ -611,6 +611,32 @@ static void ISHAddNativeUserFields(UIAlertController *alert) {
     }];
 }
 
+// A ~/.ssh another root saved for this login name (/AOK/tools/ssh-stash.sh),
+// put into the account just made: the same person is usually a different uid
+// in each root, so the stash goes by name. Nothing to do, and nothing said,
+// when there is no stash. NAME has passed native_root_user_name_valid, so it
+// is [a-z_][a-z0-9_-]* and safe inside single quotes.
+static void ISHRestoreStashedSsh(NSString *name) {
+    NSString *command = [NSString stringWithFormat:
+        @"[ -d '/AOK/fakefs/ssh/%@' ] && [ -f /AOK/tools/ssh-stash.sh ] && "
+        @"sh /AOK/tools/ssh-stash.sh restore '%@' 2>&1", name, name];
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        ISHRunHoldingBackgroundAssertion(@"native-user-ssh-restore", ^{
+            struct guest_command_result result = {0};
+            int rc = run_guest_command_capture(command.UTF8String, NULL, 30000, 4096, &result);
+            NSString *output = result.output != NULL
+                ? [[NSString alloc] initWithBytes:result.output length:result.output_len
+                                         encoding:NSUTF8StringEncoding] ?: @""
+                : @"";
+            [ISHDiagnosticsStore recordBreadcrumb:@"native.user.ssh-restore"
+                                          details:@{@"rc": @(rc),
+                                                    @"exit": @(result.exited ? result.exit_code : -1),
+                                                    @"output": output}];
+            free(result.output);
+        });
+    });
+}
+
 // Creates the account the fields describe (native_root_add_user: the groups,
 // sudo, the shell and the home directory). nil when it was made, or what to
 // tell the user when it was not.
@@ -640,6 +666,7 @@ static NSString *ISHCreateNativeUserFromFields(UIAlertController *shown) {
                 [AppDelegate descriptionForISHErrno:err]];
     [ISHDiagnosticsStore recordBreadcrumb:@"native.user.created"
                                   details:@{@"password": @(password.length != 0)}];
+    ISHRestoreStashedSsh(name);
     return nil;
 }
 

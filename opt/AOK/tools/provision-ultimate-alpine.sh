@@ -147,6 +147,13 @@ if [ -n "$TARGET_USER" ] && id "$TARGET_USER" >/dev/null 2>&1; then
 fi
 note "timezone=$TZ_NAME  login=${TARGET_USER:-<none>}  hostname=${NEW_HOSTNAME:-<keep>}"
 
+# ~/.ssh from another root: what ssh-stash.sh saved for this login name, if
+# anything (keys, config, known_hosts; authorized_keys merged line by line).
+if [ "${SSH_STASH:-1}" = 1 ] && [ -n "$TARGET_USER" ] && [ "$TARGET_USER" != root ] && [ -f /AOK/tools/ssh-stash.sh ] \
+   && [ -d "${AOK_SSH_STASH_DIR:-/AOK/fakefs/ssh}/$TARGET_USER" ]; then
+    sh /AOK/tools/ssh-stash.sh restore "$TARGET_USER" 2>&1 | sed 's/^/    /' || true
+fi
+
 # ===========================================================================
 log "Choosing the fastest package mirror (a couple of minutes)"
 # ===========================================================================
