@@ -67,10 +67,10 @@ judgement that is not mine to make.
    `exit(0)` is gone from both paths that had one, and the private
    `[app suspend]` with it. (The claim that these were one decision was
    wrong; see "Other private API use".)
-2. ~~**The bundled Devuan root.**~~ **Decided: download it** — but **blocked
-   on a step outside this tree**. The catalogue has no Devuan arm64 entry at
-   all, so the image has to be published first. See the Licensing section for
-   the order and the exact manifest entry.
+2. ~~**The bundled Devuan root.**~~ **Decided: download it.** Step 1, the
+   catalogue entry, is **done 2026-11-22** (ish-AOK-rootfs `d85597b`, the same
+   archive byte for byte). Step 2, dropping the bundled copy and its
+   hardcoded choice, is left; see the Licensing section.
 3. ~~**Where the GPL corresponding source lives.**~~ **A per-release
    snapshot**, produced by `tools/fetch-root-source.py` (`c725506eb`): 66
    source packages, 212 files, 340 MB for the Devuan image, resolved from the
@@ -78,9 +78,8 @@ judgement that is not mine to make.
 4. ~~**Where the offer text goes.**~~ **A Legal row in Settings**, beside
    Privacy Policy, showing the written offer in the app — because the GPL
    wants the offer to *accompany* the binaries, which a link does not.
-5. **Privacy policy hosting.** Still open, and not urgent: the GitHub blob URL
-   works and is in use; a `gh-pages` branch would be cleaner. Do **not** serve
-   Pages from `docs/` on `working` — it would publish this document.
+5. ~~**Privacy policy hosting.**~~ **Done 2026-11-22**: GitHub Pages, from a
+   `gh-pages` branch that holds nothing else (`tools/publish-privacy-policy.sh`).
 
 **Actions only the maintainer can take:**
 
@@ -183,12 +182,13 @@ Also added, since 5.1.1(i) wants the policy reachable from inside the app and
 not only from the listing: a **Privacy Policy** row in Settings beside the
 GitHub and Discord links (app/AboutViewController.m, About.storyboard).
 
-**Still to decide: where it is hosted.** The in-app row and App Store Connect
-both currently point at the GitHub blob URL,
-`https://github.com/emkey1/ish-AOK/blob/working/docs/privacy-policy.md`, which
-works today and needs no setup. A `gh-pages` branch would give a cleaner
-`emkey1.github.io` URL without the repository chrome; do **not** serve Pages
-from `docs/` on `working`, which would publish this assessment along with it.
+**Hosted on GitHub Pages since 2026-11-22**, at
+`https://emkey1.github.io/ish-AOK/privacy/`, which the Settings row, the
+listing and the review notes all give. The `gh-pages` branch holds only the
+policy and a landing page; `tools/publish-privacy-policy.sh` copies
+`docs/privacy-policy.md` into it, and must be run after every change to the
+policy. Pages is never served from `docs/` on `working`, which would publish
+this assessment along with it.
 
 ### 4. ~~A private API that AOK added itself~~ — DONE (8dc6a0df5)
 
@@ -471,6 +471,10 @@ Two caveats worth keeping rather than claiming more than was shown:
   download URL and no bundled archive as a download, and a bundled image wins
   over a manifest entry of the same identifier -- so once the catalogue has
   one, removing the hardcoded entry is enough.
+
+  **Step 1 done 2026-11-22** (ish-AOK-rootfs `d85597b`): the archive and the
+  entry below are published, and the catalogue now offers `devuan6arm64`. The
+  app's bundled copy still wins until step 2 lands.
 
   **The order this has to happen in:**
 

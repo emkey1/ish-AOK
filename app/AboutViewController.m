@@ -815,7 +815,7 @@ static NSString *ISHForeignExecTitle(NSString *mode) {
         // App Review guideline 5.1.1(i) wants the policy reachable from inside
         // the app, not only from the App Store listing. It lives in the source
         // repository so that its revisions are public and diffable.
-        [UIApplication openURL:@"https://github.com/emkey1/ish-AOK/blob/working/docs/privacy-policy.md"];
+        [UIApplication openURL:@"https://emkey1.github.io/ish-AOK/privacy/"];
     } else if (cell == self.legalCell) {
         // Pushed rather than opened in Safari: the GPL's written offer has to
         // accompany the binaries, and a link to a website does not.

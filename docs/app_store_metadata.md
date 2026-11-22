@@ -124,9 +124,10 @@ https://github.com/emkey1/ish-AOK
 ## Privacy policy URL
 
 ```
-https://github.com/emkey1/ish-AOK/blob/working/docs/privacy-policy.md
+https://emkey1.github.io/ish-AOK/privacy/
 ```
-See must-fix 3 for the hosting options if a cleaner URL is wanted later.
+GitHub Pages, from the `gh-pages` branch; `tools/publish-privacy-policy.sh`
+republishes it after any change to `docs/privacy-policy.md`.
 
 ## Copyright
 

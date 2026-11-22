@@ -95,7 +95,7 @@ when it is on it asks the user to confirm the destination before the first
 message of a chat leaves the device. It also works entirely on-device with
 Apple's Foundation Models, with no API key and no network use at all.
 
-Privacy policy: https://github.com/emkey1/ish-AOK/blob/working/docs/privacy-policy.md
+Privacy policy: https://emkey1.github.io/ish-AOK/privacy/
 
 ### 6. Encryption
 
