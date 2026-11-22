@@ -178,14 +178,21 @@ is 1022, and Settings writes your choice to
 includes first and so wins over anything in it. That config is yours to edit
 afterwards; AOK-iSH writes it only when it is missing.
 
-**Keys only.** Password authentication is off, and deliberately: a native-mode
-account may have no password at all, because terminals open it with `login -f`,
-which does not authenticate.
+**Keys, and passwords if you want them.** Out of the box sshd takes keys only.
+**Settings -> sshd -> Password Login** turns passwords on as well, at once:
+it writes `/etc/ssh/sshd_config.d/11-aok-password.conf` (`PasswordAuthentication
+yes` or `no`) and restarts a running sshd. Two things stay shut either way. An
+account with no password -- terminals open native accounts with `login -f`,
+which does not authenticate, so one may never have had a password -- cannot
+sign in (`PermitEmptyPasswords no`). And root takes keys only
+(`PermitRootLogin prohibit-password`). Give your account a password with
+`passwd`, or when you make it with Add User.
 
-That rules out `ssh-copy-id`, which signs in with a password to install the key
--- so a freshly enabled sshd listens and lets nobody in until you put a key
-there yourself. Do it from a terminal in this filesystem, with the client,
-which needs nothing set up:
+With Password Login on, `ssh-copy-id` works: it signs in with the password
+and installs the key. With it off, a freshly enabled sshd lets nobody in until
+a key is there, so put it there yourself from a terminal in this filesystem,
+with the client -- or carry it over from another root with
+[`ssh-stash.sh`](persist.md):
 
 ```sh
 mkdir -p ~/.ssh

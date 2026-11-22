@@ -3038,6 +3038,37 @@ void ISHApplyIdleTimerPreference(void) {
     return err == 0;
 }
 
++ (BOOL)guestSshdPasswordLogin {
+    if (![self bootedRootIsNative])
+        return NO;
+    __block BOOL on = NO;
+    ISHNativeRootGuestCall(^{
+        on = guest_sshd_password_login();
+    });
+    return on;
+}
+
+// Settings -> sshd -> Password Login: the drop-in in the booted root, then a
+// restart of a running sshd so the change is live at once.
++ (BOOL)setGuestSshdPasswordLogin:(BOOL)enabled {
+    if (![self bootedRootIsNative])
+        return NO;
+    __block int err = _EIO;
+    __block BOOL running = NO;
+    ISHRunHoldingBackgroundAssertion(@"guest-sshd-password", ^{
+        if (!ISHNativeRootGuestCall(^{
+            err = guest_sshd_set_password_login(enabled);
+            running = guest_sshd_enabled();
+        }))
+            err = _EAGAIN;
+    });
+    [ISHDiagnosticsStore recordBreadcrumb:@"sshd.password.applied"
+                                  details:@{@"enabled": @(enabled), @"error": @(err)}];
+    if (err == 0 && running)
+        [self applyGuestSshdNow:YES];
+    return err == 0;
+}
+
 // The switch takes effect in the running session too, not only at the next
 // boot: on, unpack the binaries if this build has not yet and (re)start sshd,
 // so a new port applies at once; off, stop the listener. Connections already

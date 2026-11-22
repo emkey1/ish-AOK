@@ -53,4 +53,15 @@ bool guest_sshd_enabled(void);
 // or a negative errno.
 int guest_sshd_set_enabled(bool enabled, unsigned port);
 
+// Password login, also a file in the booted root:
+// /etc/ssh/sshd_config.d/11-aok-password.conf says PasswordAuthentication yes
+// or no, and comes before sshd_config's own "no", so it wins. Off unless that
+// file says yes. sshd keeps refusing empty passwords (PermitEmptyPasswords no
+// in sshd_config), so an account made without a password -- terminals open
+// them with `login -f` -- still cannot be reached this way, and root stays
+// keys-only (PermitRootLogin prohibit-password). Same calling rules as above.
+#define GUEST_SSHD_PASSWORD_CONF "/etc/ssh/sshd_config.d/11-aok-password.conf"
+bool guest_sshd_password_login(void);
+int guest_sshd_set_password_login(bool enabled);
+
 #endif

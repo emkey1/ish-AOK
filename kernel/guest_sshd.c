@@ -33,6 +33,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <time.h>
 
 #include "fs/fd.h"
@@ -364,4 +365,46 @@ int guest_sshd_set_enabled(bool enabled, unsigned port) {
         "# /etc/rc.d/S50sshd and /AOK/docs/native-mode.md. Settings writes and\n"
         "# removes it, and so can you.\n";
     return write_guest_file(GUEST_SSHD_ENABLED, flag, sizeof(flag) - 1, 0644);
+}
+
+// Whether 11-aok-password.conf turns password login on: its first
+// PasswordAuthentication line, as sshd reads it. Missing or anything else is
+// off, which is sshd_config's own setting.
+bool guest_sshd_password_login(void) {
+    struct fd *fd = generic_open(GUEST_SSHD_PASSWORD_CONF, O_RDONLY_, 0);
+    if (IS_ERR(fd))
+        return false;
+    char buf[512] = {};
+    ssize_t n = generic_read(fd, buf, sizeof(buf) - 1);
+    fd_close(fd);
+    if (n <= 0)
+        return false;
+    buf[n] = '\0';
+    for (char *line = buf; line != NULL && *line != '\0'; ) {
+        char *end = strchr(line, '\n');
+        if (end != NULL)
+            *end = '\0';
+        while (*line == ' ' || *line == '\t')
+            line++;
+        if (strncasecmp(line, "PasswordAuthentication", 22) == 0 &&
+                (line[22] == ' ' || line[22] == '\t')) {
+            char *value = line + 22;
+            while (*value == ' ' || *value == '\t')
+                value++;
+            return strncasecmp(value, "yes", 3) == 0;
+        }
+        line = end != NULL ? end + 1 : NULL;
+    }
+    return false;
+}
+
+int guest_sshd_set_password_login(bool enabled) {
+    // Written either way rather than removed when off: "no" here is the
+    // switch's answer, and it outranks a "yes" someone put lower down.
+    char conf[192];
+    int len = snprintf(conf, sizeof(conf),
+                       "# Written by AOK-iSH's Settings (sshd -> Password Login). Included\n"
+                       "# before the rest of sshd_config, so this wins.\n"
+                       "PasswordAuthentication %s\n", enabled ? "yes" : "no");
+    return write_guest_file(GUEST_SSHD_PASSWORD_CONF, conf, (size_t) len, 0644);
 }

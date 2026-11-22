@@ -30,9 +30,13 @@ struct task;
 // lives in the root, not in a preference; see kernel/guest_sshd.h.
 + (BOOL)guestSshdEnabled;
 // Ask it to, or not, writing UserPreferences' port alongside. Returns whether
-// the root was written to. Nothing starts or stops: it takes effect at the
-// next launch.
+// the root was written to. sshd starts, restarts or stops at once, as well as
+// at every launch after.
 + (BOOL)setGuestSshdEnabled:(BOOL)enabled;
+// Password login for that sshd: also a file in the booted root
+// (guest_sshd_password_login). Setting it restarts a running sshd.
++ (BOOL)guestSshdPasswordLogin;
++ (BOOL)setGuestSshdPasswordLogin:(BOOL)enabled;
 // Whether the booted root is a native one, which is what decides whether the
 // sshd setting is shown at all.
 + (BOOL)bootedRootIsNative;

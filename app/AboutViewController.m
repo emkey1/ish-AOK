@@ -373,6 +373,8 @@ UIViewController *ISHCreateDiagnosticsNavigationController(void) {
     // is read once per table reload rather than four times.
     BOOL _guestSshdEnabledCached;
     BOOL _guestSshdEnabledKnown;
+    BOOL _guestSshdPasswordCached;
+    BOOL _guestSshdPasswordKnown;
     __weak UIBarButtonItem *_modeButton;
     UIBarButtonItem *_doneButton;
 }
@@ -589,6 +591,34 @@ UIViewController *ISHCreateDiagnosticsNavigationController(void) {
 
 - (void)_forgetGuestSshdEnabled {
     _guestSshdEnabledKnown = NO;
+    _guestSshdPasswordKnown = NO;
+}
+
+// Password Login: a file in the booted root too, read once per reload.
+- (BOOL)_guestSshdPasswordLogin {
+    if (!_guestSshdPasswordKnown) {
+        _guestSshdPasswordCached = [AppDelegate guestSshdPasswordLogin];
+        _guestSshdPasswordKnown = YES;
+    }
+    return _guestSshdPasswordCached;
+}
+
+- (UITableViewCell *)_guestSshdPasswordCell {
+    UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:nil];
+    cell.selectionStyle = UITableViewCellSelectionStyleNone;
+    cell.textLabel.text = NSLocalizedString(@"Password Login", @"Settings switch label: lets the ssh server accept an account's password as well as keys");
+    UISwitch *passwordSwitch = [UISwitch new];
+    passwordSwitch.on = [self _guestSshdPasswordLogin];
+    [passwordSwitch addTarget:self action:@selector(guestSshdPasswordChanged:) forControlEvents:UIControlEventValueChanged];
+    cell.accessoryView = passwordSwitch;
+    return cell;
+}
+
+- (void)guestSshdPasswordChanged:(UISwitch *)sender {
+    [AppDelegate setGuestSshdPasswordLogin:sender.on];
+    // Re-read, as the sshd switch does: a failed write puts it back.
+    [self _forgetGuestSshdEnabled];
+    [self.tableView reloadData];
 }
 
 - (UITableViewCell *)_guestSshdEnabledCell {
@@ -1003,7 +1033,10 @@ static NSString *ISHForeignExecTitle(NSString *mode) {
         return NSLocalizedString(@"Installs the desktop the Wayland display shows, in the filesystem that is running, and chooses which one it starts.", @"Wayland Desktop section footer in Settings");
     if (section == [self _sshdSectionIndex])
         return [self _guestSshdEnabled]
-            ? [NSString stringWithFormat:NSLocalizedString(@"sshd is listening on port %ld now, and starts again at every launch.\n\nKeys only, and ssh-copy-id cannot put one here: it signs in with a password first, and password authentication is off, because an account here may have no password at all. Fetch the key with the client instead, from a terminal in this filesystem:\n\nmkdir -p ~/.ssh && ssh you@your-machine 'cat ~/.ssh/id_ed25519.pub' >> ~/.ssh/authorized_keys\n\ned25519 keys work; RSA and ECDSA do not.", @"sshd section footer when on; %ld is a port number"), (long) UserPreferences.shared.guestSshdPort]
+            ? [NSString stringWithFormat:([self _guestSshdPasswordLogin]
+                ? NSLocalizedString(@"sshd is listening on port %ld now, and starts again at every launch.\n\nKeys and passwords. An account with no password still cannot sign in, and root takes keys only. ssh-copy-id works, to put a key here.\n\ned25519 keys work; RSA and ECDSA do not.", @"sshd section footer when on with Password Login on; %ld is a port number")
+                : NSLocalizedString(@"sshd is listening on port %ld now, and starts again at every launch.\n\nKeys only. Turn on Password Login to sign in with an account's password, and to use ssh-copy-id, which needs one. Or fetch your key with the client, from a terminal in this filesystem:\n\nmkdir -p ~/.ssh && ssh you@your-machine 'cat ~/.ssh/id_ed25519.pub' >> ~/.ssh/authorized_keys\n\ned25519 keys work; RSA and ECDSA do not.", @"sshd section footer when on with Password Login off; %ld is a port number")),
+               (long) UserPreferences.shared.guestSshdPort]
             : NSLocalizedString(@"Lets you reach this filesystem over ssh from another machine. ssh OUT already works and needs nothing here.", @"sshd section footer when off");
     return [super tableView:tableView titleForFooterInSection:section];
 }
@@ -1044,7 +1077,7 @@ static NSString *ISHForeignExecTitle(NSString *mode) {
     if (section == [self _jitCacheSectionIndex])
         return 1;
     if (section == [self _sshdSectionIndex])
-        return [self _guestSshdEnabled] ? 2 : 1;
+        return [self _guestSshdEnabled] ? 3 : 1;
     return [super tableView:tableView numberOfRowsInSection:section];
 }
 
@@ -1080,7 +1113,8 @@ static NSString *ISHForeignExecTitle(NSString *mode) {
     if (indexPath.section == [self _desktopSectionIndex])
         return [self _desktopSetupCell];
     if (indexPath.section == [self _sshdSectionIndex])
-        return indexPath.row == 0 ? [self _guestSshdEnabledCell] : [self _guestSshdPortCell];
+        return indexPath.row == 0 ? [self _guestSshdEnabledCell]
+             : indexPath.row == 1 ? [self _guestSshdPortCell] : [self _guestSshdPasswordCell];
     return [super tableView:tableView cellForRowAtIndexPath:indexPath];
 }
 
