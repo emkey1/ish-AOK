@@ -354,7 +354,29 @@ static const NSInteger kMaximumTerminalFontSize = 72;
     NSString *initialWindow = [NSUserDefaults.standardUserDefaults stringForKey:kPreferenceInitialWindowKey];
     if ([initialWindow isEqualToString:@"session-shell"])
         return NO;
+    // A native root's init runs /etc/rc and nothing else: no getty, so the
+    // console has no shell on it unless rc was edited to put one there. Shown
+    // anyway, it echoes what is typed and answers nothing, while the shell this
+    // window started waits on a pty no window shows -- "I never get a prompt",
+    // on leaving the Workspace or the Wayland display for the plain terminal.
+    if ([AppDelegate bootedRootIsNative] && ![self _consoleHasSession])
+        return NO;
     return YES;
+}
+
+// Whether anything has the console as its controlling terminal.
+- (BOOL)_consoleHasSession {
+    int major = TTY_CONSOLE_MAJOR;
+    int minor = 1;
+    get_console_device(&major, &minor);
+    struct tty *tty = tty_lookup_ref(major, minor, NULL);
+    if (tty == NULL)
+        return NO;
+    lock(&tty->lock, 0);
+    BOOL has = tty->session != 0;
+    unlock(&tty->lock);
+    tty_put(tty);
+    return has;
 }
 
 // What this window should show now that it HAS a session.
