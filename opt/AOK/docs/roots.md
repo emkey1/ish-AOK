@@ -357,6 +357,21 @@ so the shipped `/etc/sudoers` authorises it, and keeps the SSH host keys and
 your `authorized_keys` in `/AOK/persist` so the next image update does not
 make you set it all up again.
 
+A PSCAL root's shell is exsh, which reads only `~/.exshrc`, never
+`/etc/profile`. From image 2026.11.22.1 each user's `.exshrc` starts by
+sourcing `/etc/profile`, which reads `/etc/profile.d`, and
+`/etc/profile.d/10-aok-native.sh` puts `/AOK/native` at the end of `PATH`. So
+`zsh`, `ktop`, `motepad` and the other native programs are found at the
+console and over ssh, after the image's own commands. The provisioner gives an
+older image the same setup, and new accounts get it from `/etc/skel`. With
+`NATIVE_LINKS` on, `native-links.sh` puts its links ahead of the image's
+commands instead.
+
+sshd is always on in a PSCAL root, on port 22, started by runit from
+`/etc/service/sshd/run`; `touch /etc/ssh/sshd.disable` turns it off at the next
+boot. The **Settings -> sshd** switch is for [native mode](native-mode.md)
+only.
+
 SmallCLUE's `sudo` asks for **your own** password and then consults
 `/etc/sudoers` (and `/etc/sudoers.d`), like real sudo — user and `%group`
 entries, `(runas)` specs, `NOPASSWD`, explicit command lists, `#includedir` or

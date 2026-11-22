@@ -477,6 +477,59 @@ if [ -n "$NEW_HOSTNAME" ]; then
     note "hostname set to $NEW_HOSTNAME"
 fi
 
+# ---- login environment -----------------------------------------------------
+# exsh reads only ~/.exshrc, never /etc/profile, and images before 2026.11.22
+# shipped an /etc/profile that nothing read, set PATH=/usr/bin and ignored
+# /etc/profile.d. So native programs were never on PATH at an ssh login or the
+# console, and native-links.sh's PATH entry (in /etc/profile.d) went unread.
+# The same fix the image recipe now ships, applied to a root already here:
+# every step is skipped where it is already done.
+mkdir -p /etc/profile.d
+if ! grep -q 'profile\.d' /etc/profile 2>/dev/null; then
+    # The image's own lines, less its PATH, between the recipe's PATH and the
+    # profile.d loop.
+    { printf '%s\n' 'PATH=/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin' 'export PATH'
+      [ -f /etc/profile ] && grep -v '^ *\(export \)\{0,1\}PATH=' /etc/profile
+      printf '%s\n' \
+        'for f in /etc/profile.d/*.sh; do' \
+        '    [ -r "$f" ] && . "$f"' \
+        'done' \
+        'unset f'
+    } | rewrite_file /etc/profile 644
+    note "/etc/profile now reads /etc/profile.d"
+fi
+if [ ! -f /etc/profile.d/10-aok-native.sh ]; then
+    cat > /etc/profile.d/10-aok-native.sh <<'EOF'
+# iSH-AOK's native programs, after this image's own commands.
+if [ -d /AOK/native ]; then
+    case ":$PATH:" in
+        *":/AOK/native:"*) ;;
+        *) PATH="$PATH:/AOK/native"; export PATH ;;
+    esac
+fi
+EOF
+    chmod 644 /etc/profile.d/10-aok-native.sh
+    note "/AOK/native is on PATH, after the image's own commands"
+fi
+# Each exsh user's startup file reads /etc/profile first; /etc/skel too, for
+# accounts made later.
+mkdir -p /etc/skel
+for rc in /root/.exshrc "$USER_HOME/.exshrc" /etc/skel/.exshrc; do
+    if [ -f "$rc" ] && grep -q '^\[ -r /etc/profile \] && \. /etc/profile' "$rc"; then
+        continue
+    fi
+    { printf '%s\n' \
+        '# Read by exsh at every interactive start. exsh does not read /etc/profile' \
+        '# itself, so this does.' \
+        '[ -r /etc/profile ] && . /etc/profile'
+      [ -f "$rc" ] && cat "$rc"
+    } | rewrite_file "$rc" 644
+    case "$rc" in
+        "$USER_HOME"/*) chown "$USER_UID:$USER_GID" "$rc" 2>/dev/null || true ;;
+    esac
+    note "$rc now reads /etc/profile"
+done
+
 # native-links.sh links into /usr/local/native-bin and /usr/local/bin, `sh`
 # (native dash) included; persist-links.sh links /AOK/persist/bin into /usr/local/bin
 # for the sessions that never read /etc/profile.d.
