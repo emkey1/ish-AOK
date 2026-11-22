@@ -136,8 +136,14 @@ freeze (2026-09-25); their full text is in
   each time (sh 0.26 s, sleep 0.06 s per 20 s); /AOK/native/sleep would make
   that free. A System Trace of the same desktop with btop open showed all
   three cores busy for 200-300 ms every 2 s. Whether this is the "regular
-  stutter" reported for typing and the pointer is not established: no trace
-  has been taken while someone was using the desktop.
+  stutter" reported for typing and the pointer is not established, and the
+  panel is not it: with wf-panel stopped the user still saw the stutter. A
+  45 s System Trace during use (16:24, same day) caught 3.5 s of pointer
+  drag and no key events: frames reached the app every 21 ms throughout the
+  drag, and the app's main thread never waited for a CPU. Two things in it
+  worth a look: foot's main thread ran flat out for 1.1 s after one tap in
+  its window, and the Wayland view's becomeFirstResponder cost about 110 ms
+  each time its Workspace window came to the front.
 
 ## Diagnosed, not fixed
 
