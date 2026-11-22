@@ -77,8 +77,16 @@ sudo sh /AOK/tools/setup-companion.sh --user LOGIN  # give another account the c
 It is safe to run again; what is done is kept.
 
 - **It is an ordinary filesystem.** Filesystems lists it, and it can be
-  renamed or removed. Its name is in `/etc/aok-companion-root` in the native
-  root; after a rename, that file is what to edit.
+  renamed or removed there, or with `sudo sh /AOK/tools/manage-roots.sh
+  remove Devuan --yes`. Its name is in `/etc/aok-companion-root` in the native
+  root; after a rename, that file is what to edit, and after a removal,
+  delete it.
+- **What is shared in is there only for programs running inside it.** Seen
+  from the native root, `/AOK/roots/Devuan/home` is the companion's own empty
+  `/home`, not yours, so searching or deleting under `/AOK/roots/Devuan` from
+  here cannot reach your files. (`mount-root.sh` is different: the binds it
+  makes are ordinary ones, visible from everywhere until
+  `mount-root.sh --unmount`.)
 - **It needs Programs From Other Roots set to Run Inside Their Root**, the
   default ([roots.md](roots.md)). `apt` says so if it is not.
 - **A shell inside it**: `sudo sh /AOK/tools/mount-root.sh Devuan`.

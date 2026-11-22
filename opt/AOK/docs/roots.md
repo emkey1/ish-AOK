@@ -159,8 +159,11 @@ through `mount-root.sh`, by naming it in its `/etc/aok-binds`, one a line:
 - `timezone`, which points its `/etc/localtime` at the zone the booted
   root's names.
 
-A program started from a directory that is shared this way starts in that
-same directory. That is how a native-mode root's companion filesystem, where
+What is bound in when a program is run by its path exists only for the
+programs inside that root: from the booted root, `/AOK/roots/<name>/home` is
+still that root's own directory, so a search or an `rm -r` under
+`/AOK/roots/<name>` cannot reach the booted root's files. A program started
+from a directory that is shared this way starts in that same directory. That is how a native-mode root's companion filesystem, where
 its `apt` and its desktop work, sees your home and the same system you do
 ([native-companion.md](native-companion.md)).
 

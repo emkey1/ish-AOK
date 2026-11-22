@@ -110,6 +110,12 @@ static const char *const root_binds[] = {
     "proc", "sys", "dev", "dev/pts", "run", "AOK/native", "AOK/docs", "AOK/tools",
 };
 
+// These binds are for the tasks of ROOT alone (mount_set_scope): they put the
+// booted root's own directories at paths under /AOK/roots/<name>, and if the
+// booted root could see them there, removing or searching that tree from
+// outside would reach this root's /home, /tmp and /dev. `rm -rf
+// /AOK/roots/Devuan` did exactly that on a device, 2026-11-22.
+//
 // Bind the booted root's /NAME at ROOT/NAME, making the mount point if it
 // is not there. Nothing happens if /NAME is not a directory here or something
 // is already mounted at the point.
@@ -128,8 +134,8 @@ static void bind_one(const char *root, const char *name) {
         }
     }
     generic_mkdirat(AT_PWD, point, 0755);
-    if (!mount_exists_at_point(point))
-        mount_bind_dir(source, point);
+    if (!mount_exists_at_point(point) && mount_bind_dir(source, point) == 0)
+        mount_set_scope(point, root);
 }
 
 // Bind the booted root's file /NAME at ROOT/NAME. The point has to be a
@@ -158,7 +164,8 @@ static void bind_one_file(const char *root, const char *name) {
     } else if (!S_ISREG(stat.mode)) {
         return;
     }
-    mount_bind_file(source, point);
+    if (mount_bind_file(source, point) == 0)
+        mount_set_scope(point, root);
 }
 
 // The booted root's time zone, given to ROOT. /etc/localtime is a link into
@@ -374,39 +381,43 @@ int foreign_exec_enter_root(const char *root, struct foreign_exec *fx) {
         size_t rlen = strlen(root);
         cwd_inside = strncmp(cwd, root, rlen) == 0 && (cwd[rlen] == '\0' || cwd[rlen] == '/');
     }
-    struct fd *new_pwd = NULL;
-    if (!cwd_inside) {
-        // Or where a directory shared into the root (/home, /tmp: the binds
-        // above) shows the cwd in there too -- the same directory, by device
-        // and inode, at the same path. `vim notes.txt` in ~/work then opens
-        // the file meant, not one in the root's /.
-        char mirrored[MAX_PATH];
-        struct statbuf here, there;
-        if (pwd != NULL && cwd[0] == '/' && cwd[1] != '\0' &&
-                snprintf(mirrored, sizeof(mirrored), "%s%s", root, cwd) < (int) sizeof(mirrored) &&
-                generic_statat(AT_PWD, cwd, &here, 0) == 0 &&
-                generic_statat(AT_PWD, mirrored, &there, 0) == 0 &&
-                S_ISDIR(there.mode) && here.dev == there.dev && here.inode == there.inode) {
-            new_pwd = fs_open_dir(mirrored);
-            if (IS_ERR(new_pwd))
-                new_pwd = NULL;
-        }
-    }
-    if (!cwd_inside && new_pwd == NULL) {
-        new_pwd = fs_open_dir(root);
-        if (IS_ERR(new_pwd)) {
-            fd_close(new_root);
-            return (int) PTR_ERR(new_pwd);
-        }
-    }
+    // Or where a directory shared into the root (/home, /tmp: the binds
+    // above) shows the cwd in there too -- the same directory, by device and
+    // inode, at the same path. `vim notes.txt` in ~/work then opens the file
+    // meant, not one in the root's /. Asked from inside the root, below:
+    // those binds exist only for its tasks.
+    struct statbuf here;
+    bool have_here = !cwd_inside && pwd != NULL && cwd[0] == '/' && cwd[1] != '\0' &&
+        generic_statat(AT_PWD, cwd, &here, 0) == 0;
 
     lock(&current->fs->lock, 0);
     fx->old_root = current->fs->root;
     current->fs->root = new_root;
-    if (new_pwd != NULL) {
-        fx->old_pwd = current->fs->pwd;
-        current->fs->pwd = new_pwd;
+    unlock(&current->fs->lock);
+    if (cwd_inside)
+        return 0;
+
+    struct fd *new_pwd = NULL;
+    struct statbuf there;
+    if (have_here && generic_statat(AT_PWD, cwd, &there, 0) == 0 && S_ISDIR(there.mode) &&
+            here.dev == there.dev && here.inode == there.inode) {
+        new_pwd = fs_open_dir(cwd);
+        if (IS_ERR(new_pwd))
+            new_pwd = NULL;
     }
+    if (new_pwd == NULL)
+        new_pwd = fs_open_dir("/");
+    if (IS_ERR(new_pwd)) {
+        lock(&current->fs->lock, 0);
+        current->fs->root = fx->old_root;
+        fx->old_root = NULL;
+        unlock(&current->fs->lock);
+        fd_close(new_root);
+        return (int) PTR_ERR(new_pwd);
+    }
+    lock(&current->fs->lock, 0);
+    fx->old_pwd = current->fs->pwd;
+    current->fs->pwd = new_pwd;
     unlock(&current->fs->lock);
     return 0;
 }

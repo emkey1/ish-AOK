@@ -260,6 +260,14 @@ struct mount {
     struct mount *bind_origin;
     const char *bind_prefix;
 
+    // A bind the kernel made for the tasks of one root and nobody else: the
+    // guest path of that root ("/AOK/roots/Devuan"), or NULL for every
+    // ordinary mount. Path lookup takes such a mount only for a task whose
+    // root directory is that root or below it; anyone else sees what the
+    // mount point holds underneath. See mount_set_scope.
+    const char *scope;
+    size_t scope_len;
+
     // This mount's ID in /proc/self/mountinfo and statx's stx_mnt_id: handed
     // out when the mount is made, then fixed for its whole life and never
     // reused (fs/mount.c). 0 for the static internal mounts no listing shows
@@ -423,6 +431,13 @@ int mount_bind_dir(const char *source, const char *point);
 // The same for one regular file: SOURCE shows at POINT, which must be a
 // regular file already.
 int mount_bind_file(const char *source, const char *point);
+// Make the mount at exactly POINT visible only to tasks rooted at ROOT or
+// below it (struct mount's scope). What running a program inside another
+// root binds into that root gets this (kernel/foreign_exec.c): those binds
+// show the BOOTED root's /home, /tmp, /dev and more at paths under
+// /AOK/roots/<name>, and seen from the booted root they made
+// `rm -rf /AOK/roots/<name>` delete the booted root's own home directories.
+int mount_set_scope(const char *point, const char *root);
 // A directory, opened as chdir() and chroot() open one (search permission).
 struct fd *fs_open_dir(const char *path);
 

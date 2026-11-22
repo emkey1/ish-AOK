@@ -99,8 +99,47 @@ char * get_filesystems(void) {
     return fs_list;
 }
 
+// Does the calling task live in the root a scoped mount is for? Called
+// without mounts_lock: working out a task's root path takes other locks.
+static bool mount_scope_admits(const struct mount *mount) {
+    if (current == NULL || current->fs == NULL)
+        return false;
+    // The task's root, which fs->lock guards -- and which this task may be
+    // holding already: fs_chdir closes the old cwd under it, the close emits
+    // an inotify event, and resolving that event's path arrives here. A plain
+    // lock() then waited on itself for ever (a desktop session hung in its
+    // first mkdir). The lock records who took it last, so a failed trylock
+    // whose owner is this thread is that case, and the root is read as the
+    // holder is entitled to; anyone else's hold is waited for.
+    struct fs_info *fs = current->fs;
+    bool locked = trylock(&fs->lock) == 0;
+    if (!locked && !pthread_equal(fs->lock.owner, pthread_self())) {
+        lock(&fs->lock, 0);
+        locked = true;
+    }
+    struct fd *root_fd = fs->root != NULL ? fd_retain(fs->root) : NULL;
+    if (locked)
+        unlock(&fs->lock);
+    if (root_fd == NULL)
+        return false;
+    char root[MAX_PATH];
+    int err = generic_getpath(root_fd, root);
+    fd_close(root_fd);
+    if (err < 0)
+        return false;
+    return strncmp(root, mount->scope, mount->scope_len) == 0 &&
+        (root[mount->scope_len] == '\0' || root[mount->scope_len] == '/');
+}
+
 struct mount *mount_find(char *path) {
     assert(path_is_normalized(path));
+    // A scoped mount (struct mount's scope) is for the tasks of one root.
+    // The first one this path lands on is checked against the caller; if the
+    // caller is not one of them, the search is made again as if no scoped
+    // mount existed, which finds what is underneath. A task is in one root,
+    // so one answer covers every scoped mount the path could meet.
+    bool skip_scoped = false;
+again:
     lock(&mounts_lock, 0);
     struct mount *mount = NULL;
     if (list_empty(&mounts)) {
@@ -108,6 +147,8 @@ struct mount *mount_find(char *path) {
         return NULL;
     }
     list_for_each_entry(&mounts, mount, mounts) {
+        if (skip_scoped && mount->scope != NULL)
+            continue;
         // Optimization: Use cached point_len instead of strlen(mount->point)
         size_t n = mount->point_len;
         if (strncmp(path, mount->point, n) == 0 && (path[n] == '/' || path[n] == '\0'))
@@ -119,7 +160,37 @@ struct mount *mount_find(char *path) {
     }
     mount->refcount++;
     unlock(&mounts_lock);
+    if (mount->scope != NULL && !mount_scope_admits(mount)) {
+        mount_release(mount);
+        skip_scoped = true;
+        goto again;
+    }
     return mount;
+}
+
+int mount_set_scope(const char *point, const char *root) {
+    char *scope = strdup(root);
+    if (scope == NULL)
+        return _ENOMEM;
+    int err = _ENOENT;
+    lock(&mounts_lock, 0);
+    struct mount *mount;
+    list_for_each_entry(&mounts, mount, mounts) {
+        if (strcmp(mount->point, point) == 0 && mount->bind_origin != NULL) {
+            // Set once, before anything can be looking: the caller has only
+            // just made the mount.
+            if (mount->scope == NULL) {
+                mount->scope_len = strlen(scope);
+                mount->scope = scope;
+                scope = NULL;
+            }
+            err = 0;
+            break;
+        }
+    }
+    unlock(&mounts_lock);
+    free(scope);
+    return err;
 }
 
 // Is a filesystem mounted at exactly this point?
@@ -537,6 +608,7 @@ static void mount_destroy(struct mount *mount) {
         // mount_release, which would re-acquire the same non-recursive lock.
         origin->refcount--;
         free((void *) mount->bind_prefix);
+        free((void *) mount->scope);
     } else if (mount->fs->umount) {
         mount->fs->umount(mount);
     }

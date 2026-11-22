@@ -109,6 +109,17 @@ case "${1:-}" in
     check foreign_binds_hosts 10.9.8.7 "$($O/bin/sh -c 'grep nm-marker-host /etc/hosts | cut -d" " -f1' 2>&1)"
     check foreign_binds_hostname nm-host "$($O/bin/cat /etc/hostname 2>&1)"
     check foreign_binds_timezone JST "$($O/bin/date +%Z 2>&1)"
+    # What is bound in is for the programs inside, and is not there seen from
+    # here: `rm -rf /AOK/roots/Devuan` from the booted root once deleted the
+    # booted root's own /home through these binds. The marker is in this
+    # root's /tmp and hostname; from outside, the other root's own show.
+    echo marker > /tmp/nm_scope_marker
+    check foreign_scope_inside marker "$($O/bin/cat /tmp/nm_scope_marker 2>&1)"
+    check foreign_scope_outside_dir "" "$(cat $O/tmp/nm_scope_marker 2>/dev/null)"
+    if [ "$(cat $O/etc/hostname 2>/dev/null)" = nm-host ]; then fail foreign_scope_outside_file "bound file seen from outside"; else pass foreign_scope_outside_file; fi
+    rm -f $O/tmp/nm_scope_marker 2>/dev/null
+    check foreign_scope_rm_spares marker "$(cat /tmp/nm_scope_marker 2>&1)"
+    rm -f /tmp/nm_scope_marker
     # The cwd carries in where a shared directory shows it there too, and
     # is the root's / otherwise.
     mkdir -p /tmp/nm_cwd && cd /tmp/nm_cwd
