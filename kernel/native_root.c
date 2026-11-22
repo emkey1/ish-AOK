@@ -604,15 +604,18 @@ static const struct {
     {"/usr/sbin", 0755}, {"/usr/local", 0755}, {"/usr/local/bin", 0755},
     {"/usr/local/sbin", 0755}, {"/usr/share", 0755}, {"/etc", 0755},
     // /usr/libexec holds sshd-session and sshd-auth, which sshd execs by the
-    // paths compiled into it (kernel/guest_sshd.c). /var/empty is sshd's
-    // privilege-separation directory, and sshd REFUSES TO START unless it is
-    // owned by root and not group- or world-writable -- so 0755 here is not a
-    // style choice.
-    {"/usr/libexec", 0755}, {"/var/empty", 0755},
+    // paths compiled into it (kernel/guest_sshd.c).
+    {"/usr/libexec", 0755},
     {"/etc/ssh", 0755}, {"/etc/ssh/sshd_config.d", 0755},
     {"/etc/profile.d", 0755}, {"/etc/rc.d", 0755}, {"/etc/service", 0755},
     {"/etc/skel", 0755}, {"/root", 0700}, {"/home", 0755},
     {"/tmp", 01777}, {"/var", 0755}, {"/var/tmp", 01777},
+    // sshd's privilege-separation directory. sshd REFUSES TO START unless it
+    // is owned by root and not group- or world-writable, so 0755 is not a
+    // style choice. After /var, because each entry makes one level: listed
+    // before it, the first boot of a new root had no /var/empty, and sshd
+    // switched on in that session would not start until the next launch.
+    {"/var/empty", 0755},
     {"/var/log", 0755}, {"/run", 0755}, {"/dev", 0755}, {"/proc", 0555},
     {"/sys", 0555}, {"/mnt", 0755},
 };
