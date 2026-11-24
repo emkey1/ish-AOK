@@ -7,9 +7,8 @@ Draft copy for the App Store Connect fields, with Apple's limits noted. Written
 file, en-US, version 1.3 with build 566 attached): the name, subtitle,
 promotional text, keywords, description, privacy policy URL and both screenshot
 sets. The support URL there is still the repository's home page, not `/issues`.
-Edit here first, then send, so the two stay the same. **Not the same right now:** the
-subtitle, promotional text, keywords and description below were revised later on
-2026-11-24 and wait for the user's approval before they are sent. Everything here is a starting point to edit, not something to paste
+Edit here first, then send, so the two stay the same. The revised subtitle, promotional
+text, keywords and description were sent the same day, after the user read them. Everything here is a starting point to edit, not something to paste
 unread -- marketing copy is the author's voice, not a generated one.
 
 **One dependency runs through all of it:** the store name. See the assessment's
