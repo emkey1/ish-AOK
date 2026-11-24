@@ -216,7 +216,8 @@ sh /AOK/tools/start-wayland.sh        # the applet runs this for you
 as an alternative (`sudo sh /AOK/tools/select-desktop.sh sway` picks it). Two fuller desktops can take labwc's place (see **Other
 desktops**, below). `start-wayland.sh` also honours `WAYVNC_PORT`,
 `ISH_DISPLAY_READY_FILE`, and `WAYLAND_COMPOSITOR_CMD`, which overrides the
-chosen desktop.
+chosen desktop, a command of your own included (see **A desktop AOK does not
+set up**, below).
 
 One Wayland desktop runs at a time. While one is open, `start-wayland.sh`
 refuses to start another and exits 1 with "a Wayland session is already
@@ -367,6 +368,38 @@ finder), Alt+Shift+Q closes a window and Ctrl+Alt+Left and Right change
 desktops. Their settings are in `~/.config/wayfire.ini` and in
 `~/.config/xfce4/labwc/` (Xfce's own settings are in its settings manager);
 each is written on the desktop's first session and never replaced after that.
+
+### A desktop AOK does not set up
+
+`select-desktop.sh --command` makes the Wayland window start a command of your
+own in place of the four, for trying a desktop AOK does not install, such as
+Phosh. Install it with the filesystem's package manager first; the command's
+program has to be there.
+
+```sh
+sudo sh /AOK/tools/select-desktop.sh --command 'phoc -E phosh'
+sh /AOK/tools/select-desktop.sh                # shows the command that starts
+sudo sh /AOK/tools/select-desktop.sh labwc     # back to a desktop AOK sets up
+```
+
+- The command is run by `/bin/sh`, so it can quote arguments and set
+  variables: `XDG_CURRENT_DESKTOP=Phosh:GNOME phoc -E phosh`.
+- It has to start a Wayland compositor, or a session script that starts one,
+  that makes its socket in `$XDG_RUNTIME_DIR`, as compositors do by default.
+  When the window closes, everything the command started is stopped.
+- The window shows the desktop through wayvnc, which is made for
+  wlroots-based compositors: phoc, labwc, sway, Wayfire, river and others.
+  With another compositor the window may connect and show nothing.
+- A foot terminal still opens as the first window. AOK sets up nothing else
+  for a desktop it does not know: no menu, panel or theme.
+- The command's output goes to the session log, `/tmp/ish-wayland-debug.log`,
+  which is the first place to look when the desktop does not start.
+
+The command is kept as `AOK_DESKTOP_CMD` in `/etc/aok-desktop.conf`.
+Choosing one of the four again removes it, from the command line or by
+tapping it under **Install a Desktop…** in Settings, which marks none of the
+four as the one that starts while a command is set. `--command ''` removes it
+too, and keeps the desktop chosen before.
 
 ### Programs that need root
 

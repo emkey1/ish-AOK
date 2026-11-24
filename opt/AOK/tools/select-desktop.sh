@@ -22,9 +22,21 @@
 #                                              remove NAME's own packages (see
 #                                              own_packages below); what the
 #                                              desktops share stays installed
+#   sudo sh /AOK/tools/select-desktop.sh --command 'COMMAND'
+#                                              start a desktop AOK does not set
+#                                              up, e.g. --command 'phoc -E phosh';
+#                                              choosing NAME again ends it
 #
 # setup-wayfire.sh offers both panels, and a faster wf-panel built from source
 # (tools/wayland/build-wf-panel.sh), and sets the panel it installed.
+#
+# --command takes a shell command, run by /bin/sh, that starts a Wayland
+# compositor -- or a session script that starts one -- in place of the four.
+# The compositor must make its socket in $XDG_RUNTIME_DIR, as any does by
+# default, and the Wayland window shows it through wayvnc, which is made for
+# wlroots-based compositors (phoc, labwc, sway, wayfire, river, ...); with
+# another, the window may connect and show nothing. foot still opens as the
+# first window. --command '' clears it and keeps the desktop chosen before.
 #
 # The choice applies the next time the Wayland window opens; a desktop that is
 # open now keeps running as it is. WAYLAND_COMPOSITOR_CMD, set in the
@@ -94,7 +106,39 @@ current_panel() {
     v=$(sed -n 's/^AOK_WAYFIRE_PANEL=//p' "$CONF" 2>/dev/null | tail -n 1)
     case "$v" in waybar) echo waybar ;; *) echo wf-panel ;; esac
 }
-# Both settings, written together so that changing one keeps the other.
+current_command() {
+    sed -n 's/^AOK_DESKTOP_CMD=//p' "$CONF" 2>/dev/null | tail -n 1
+}
+# The program a command runs: its first word, as the shell splits and unquotes
+# it, that is not a NAME=value or `exec`. Kept the same as wl_cmd_program in
+# start-wayland.sh. Quotes are found by code (39, 34, 92), since this awk
+# program is itself in single quotes.
+command_program() {
+    printf '%s\n' "$1" | awk '{
+        sq = sprintf("%c", 39); dq = sprintf("%c", 34); bs = sprintf("%c", 92)
+        s = $0; n = length(s); tok = ""; intok = 0; q = ""
+        for (i = 1; i <= n + 1; i++) {
+            c = (i <= n) ? substr(s, i, 1) : " "
+            if (q == sq) { if (c == sq) q = ""; else tok = tok c; continue }
+            if (q == dq) {
+                if (c == bs && i < n) { i++; tok = tok substr(s, i, 1); continue }
+                if (c == dq) q = ""; else tok = tok c
+                continue
+            }
+            if (c == sq || c == dq) { q = c; intok = 1; continue }
+            if (c == bs && i < n) { i++; tok = tok substr(s, i, 1); intok = 1; continue }
+            if (index(" \t;&|<>()", c)) {
+                if (intok && tok != "exec" && tok !~ /^[A-Za-z_][A-Za-z0-9_]*=/) { print tok; exit }
+                tok = ""; intok = 0
+                if (c != " " && c != "\t") exit
+                continue
+            }
+            tok = tok c; intok = 1
+        }
+    }'
+}
+# Every setting, written together so that changing one keeps the others: the
+# desktop, Wayfire's panel, and a command of the user's own (may be empty).
 write_conf() {
     {
         echo "# Written by /AOK/tools/select-desktop.sh; start-wayland.sh reads it."
@@ -102,12 +146,26 @@ write_conf() {
         echo "AOK_DESKTOP=$1"
         echo "# Wayfire's panel: wf-panel or waybar"
         echo "AOK_WAYFIRE_PANEL=$2"
+        if [ -n "${3:-}" ]; then
+            echo "# A desktop command of your own (select-desktop.sh --command), run by"
+            echo "# /bin/sh in place of AOK_DESKTOP; choosing a desktop again removes it."
+            echo "AOK_DESKTOP_CMD=$3"
+        fi
     } > "$CONF" || die "cannot write $CONF"
 }
 
 if [ $# -eq 0 ]; then
     cur=$(current)
-    echo "The Wayland desktop starts: $cur"
+    cmd=$(current_command)
+    # With a command of the user's own, none of the four is starred: none of
+    # them starts (the app's Wayland Desktop page reads the star).
+    if [ -n "$cmd" ]; then
+        echo "The Wayland desktop starts the command: $cmd"
+        echo "(sudo sh /AOK/tools/select-desktop.sh NAME goes back to one of these)"
+        cur=
+    else
+        echo "The Wayland desktop starts: $cur"
+    fi
     for d in labwc sway wayfire xfce; do
         if installed "$d"; then state=installed; else state="not installed (sudo sh /AOK/tools/$(setup_script "$d"))"; fi
         mark=" "
@@ -216,11 +274,15 @@ remove_desktop() {
     if [ "$(current)" = "$d" ] || ! installed "$(current)"; then
         for next in labwc sway xfce wayfire; do
             installed "$next" || continue
-            write_conf "$next" "$(current_panel)"
-            echo "The Wayland desktop will start $next from the next session."
+            write_conf "$next" "$(current_panel)" "$(current_command)"
+            if [ -n "$(current_command)" ]; then
+                echo "Your desktop command still starts; choosing a desktop again would start $next."
+            else
+                echo "The Wayland desktop will start $next from the next session."
+            fi
             exit 0
         done
-        write_conf labwc "$(current_panel)"
+        write_conf labwc "$(current_panel)" "$(current_command)"
         echo "No desktop is left installed; sudo sh /AOK/tools/setup-wayland.sh installs one again."
     fi
     exit 0
@@ -228,6 +290,8 @@ remove_desktop() {
 
 name=
 panel=
+command=
+command_set=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --remove)
@@ -239,15 +303,29 @@ while [ $# -gt 0 ]; do
             panel=$2
             shift 2 ;;
         --panel=*) panel=${1#--panel=}; shift ;;
+        --command)
+            [ $# -ge 2 ] || die "--command needs the command, in quotes ('' clears it)"
+            command=$2 command_set=1
+            shift 2 ;;
+        --command=*) command=${1#--command=} command_set=1; shift ;;
         -*) die "unknown option '$1' (try --help)" ;;
         *) [ -z "$name" ] || die "one desktop at a time"; name=$1; shift ;;
     esac
 done
-[ -n "$name$panel" ] || die "nothing to set (try --help)"
+[ -n "$name$panel" ] || [ "$command_set" = 1 ] || die "nothing to set (try --help)"
+[ -z "$name" ] || [ "$command_set" = 0 ] || die "a desktop or a command, not both"
 
 if [ -n "$name" ]; then
     needs "$name" >/dev/null 2>&1 || die "unknown desktop '$name' -- choose labwc, sway, wayfire or xfce"
     installed "$name" || die "$name is not installed -- run: sudo sh /AOK/tools/$(setup_script "$name")"
+fi
+if [ -n "$command" ]; then
+    nl='
+'
+    case "$command" in *"$nl"*) die "the command must be one line" ;; esac
+    prog=$(command_program "$command")
+    [ -n "$prog" ] || die "no program to run in '$command'"
+    command -v "$prog" >/dev/null 2>&1 || die "'$prog' is not installed in this filesystem -- install it first"
 fi
 case "$panel" in
     "") ;;
@@ -257,9 +335,35 @@ case "$panel" in
         command -v wofi >/dev/null 2>&1 || die "wofi (its launcher) is not installed -- run: sudo sh /AOK/tools/setup-wayland.sh" ;;
     *) die "unknown panel '$panel' -- choose wf-panel or waybar" ;;
 esac
-[ "$(id -u)" = 0 ] || die "must run as root:  sudo sh $0 ${name}${panel:+ --panel $panel}"
+if [ "$(id -u)" != 0 ]; then
+    again="sudo sh $0"
+    [ -n "$name" ] && again="$again $name"
+    [ -n "$panel" ] && again="$again --panel $panel"
+    [ "$command_set" = 1 ] && again="$again --command '$command'"
+    die "must run as root:  $again"
+fi
 
-write_conf "${name:-$(current)}" "${panel:-$(current_panel)}"
-[ -n "$name" ] && echo "The Wayland desktop will start $name from the next session."
+# Choosing a desktop ends a command of the user's own; --panel keeps it.
+old_command=$(current_command)
+if [ -n "$name" ]; then
+    new_command=
+elif [ "$command_set" = 1 ]; then
+    new_command=$command
+else
+    new_command=$old_command
+fi
+write_conf "${name:-$(current)}" "${panel:-$(current_panel)}" "$new_command"
+if [ -n "$name" ]; then
+    echo "The Wayland desktop will start $name from the next session."
+    [ -n "$old_command" ] && echo "Your desktop command ($old_command) is removed."
+fi
+if [ "$command_set" = 1 ]; then
+    if [ -n "$command" ]; then
+        echo "The Wayland desktop will start '$command' from the next session."
+        echo "Its output goes to the session's log, /tmp/ish-wayland-debug.log."
+    else
+        echo "The Wayland desktop will start $(current) from the next session."
+    fi
+fi
 [ -n "$panel" ] && echo "Wayfire's panel will be $panel from the next session."
 echo "Close the Wayland window and open it again to switch."

@@ -18,7 +18,9 @@
 #                      compositor invocation, overriding the desktop chosen
 #                      in /etc/aok-desktop.conf (select-desktop.sh: labwc,
 #                      the default; sway; wayfire, setup-wayfire.sh; xfce,
-#                      setup-xfce.sh -- Xfce's session with labwc). cage is
+#                      setup-xfce.sh -- Xfce's session with labwc; or a
+#                      command of the user's own, select-desktop.sh
+#                      --command, which this overrides as well). cage is
 #                      NOT supported here -- its virtual-keyboard keycodes
 #                      are off by evdev's +8 offset and foot silently drops
 #                      every key (see docs/historical/wayland_workspace_plan.md phase 0).
@@ -125,14 +127,59 @@ aok_font_awesome_package() {
 WAYVNC_PORT="${WAYVNC_PORT:-5901}"
 # Which desktop: labwc, sway, wayfire or xfce, as /etc/aok-desktop.conf says
 # (select-desktop.sh writes it; setup-wayfire.sh and setup-xfce.sh choose
-# theirs). WAYLAND_COMPOSITOR_CMD, the older knob, still wins, and its first
-# word names the desktop. COMPOSITOR_BIN is the program that runs as the
-# compositor -- labwc, under Xfce -- and COMPOSITOR_CMD its whole command,
-# which for wayfire and xfce names files under $HOME and is completed once HOME
-# is settled (below).
+# theirs). A command of the user's own wins over that: AOK_DESKTOP_CMD in the
+# same file (select-desktop.sh --command, for a desktop AOK does not set up,
+# such as Phosh), or WAYLAND_COMPOSITOR_CMD in the environment, the older knob,
+# which wins over both. Either is a shell command, run by /bin/sh (so quotes
+# and NAME=value work), that must leave a Wayland socket in $XDG_RUNTIME_DIR:
+# a compositor, or a session script that starts one. Its program -- the first
+# word that is not a NAME=value -- names the desktop, so `labwc -m` is still
+# labwc and gets its menu and panel. COMPOSITOR_BIN is the program that runs
+# as the compositor -- labwc, under Xfce -- and COMPOSITOR_CMD its whole
+# command, which for wayfire and xfce names files under $HOME and is completed
+# once HOME is settled (below).
+# The program: the first word, as the shell splits and unquotes it, that is
+# not a NAME=value or `exec`. Kept the same as command_program in
+# select-desktop.sh. Quotes are found by code (39, 34, 92), since this awk
+# program is itself in single quotes.
+wl_cmd_program() {
+    printf '%s\n' "$1" | awk '{
+        sq = sprintf("%c", 39); dq = sprintf("%c", 34); bs = sprintf("%c", 92)
+        s = $0; n = length(s); tok = ""; intok = 0; q = ""
+        for (i = 1; i <= n + 1; i++) {
+            c = (i <= n) ? substr(s, i, 1) : " "
+            if (q == sq) { if (c == sq) q = ""; else tok = tok c; continue }
+            if (q == dq) {
+                if (c == bs && i < n) { i++; tok = tok substr(s, i, 1); continue }
+                if (c == dq) q = ""; else tok = tok c
+                continue
+            }
+            if (c == sq || c == dq) { q = c; intok = 1; continue }
+            if (c == bs && i < n) { i++; tok = tok substr(s, i, 1); intok = 1; continue }
+            if (index(" \t;&|<>()", c)) {
+                if (intok && tok != "exec" && tok !~ /^[A-Za-z_][A-Za-z0-9_]*=/) { print tok; exit }
+                tok = ""; intok = 0
+                if (c != " " && c != "\t") exit
+                continue
+            }
+            tok = tok c; intok = 1
+        }
+    }'
+}
 AOK_DESKTOP=labwc
+AOK_DESKTOP_CMD_FROM=
 if [ -n "${WAYLAND_COMPOSITOR_CMD:-}" ]; then
-    AOK_DESKTOP=${WAYLAND_COMPOSITOR_CMD%% *}
+    AOK_DESKTOP_CMD_FROM=env
+else
+    _wl_cmd=$(sed -n 's/^AOK_DESKTOP_CMD=//p' /etc/aok-desktop.conf 2>/dev/null | tail -n 1)
+    if [ -n "$_wl_cmd" ]; then
+        WAYLAND_COMPOSITOR_CMD=$_wl_cmd
+        AOK_DESKTOP_CMD_FROM=conf
+    fi
+fi
+if [ -n "$AOK_DESKTOP_CMD_FROM" ]; then
+    _wl_prog=$(wl_cmd_program "$WAYLAND_COMPOSITOR_CMD")
+    AOK_DESKTOP=${_wl_prog##*/}
 else
     _wl_choice=$(sed -n 's/^AOK_DESKTOP=//p' /etc/aok-desktop.conf 2>/dev/null | tail -n 1)
     case "$_wl_choice" in labwc|sway|wayfire|xfce) AOK_DESKTOP=$_wl_choice ;; esac
@@ -148,6 +195,20 @@ case "$AOK_DESKTOP" in
     wayfire) COMPOSITOR_BIN=wayfire DESKTOP_BINS=wayfire DESKTOP_SETUP=setup-wayfire.sh ;;
     *) COMPOSITOR_BIN=$AOK_DESKTOP DESKTOP_BINS=$AOK_DESKTOP DESKTOP_SETUP=setup-wayland.sh ;;
 esac
+# A user's command: the program as written (a path stays a path), and what to
+# do when it is missing.
+DESKTOP_MISSING_HINT=
+if [ -n "$AOK_DESKTOP_CMD_FROM" ]; then
+    COMPOSITOR_BIN=${_wl_prog:-$AOK_DESKTOP} DESKTOP_BINS=${_wl_prog:-$AOK_DESKTOP}
+    case "$AOK_DESKTOP" in
+        labwc|sway|wayfire) ;;
+        *) if [ "$AOK_DESKTOP_CMD_FROM" = conf ]; then
+               DESKTOP_MISSING_HINT="install it, or go back to a desktop AOK sets up: sudo sh /AOK/tools/select-desktop.sh labwc"
+           else
+               DESKTOP_MISSING_HINT="install it, or unset WAYLAND_COMPOSITOR_CMD"
+           fi ;;
+    esac
+fi
 COMPOSITOR_CMD="${WAYLAND_COMPOSITOR_CMD:-$COMPOSITOR_BIN}"
 # A machine with a display of its own -- not under AOK-iSH, and a DRM card
 # present: a virtual machine, say -- shows the desktop there. The compositor
@@ -358,6 +419,12 @@ rm -f "$READY_FILE" "$ERROR_FILE"
 
 _wl_vnc=wayvnc
 [ "$AOK_WL_DISPLAY" = 1 ] && _wl_vnc=""
+# A user's command names one program, which may have a space in its path.
+if [ -n "$DESKTOP_MISSING_HINT" ]; then
+    command -v "$COMPOSITOR_BIN" >/dev/null 2>&1 \
+        || die "'$COMPOSITOR_BIN', which the desktop command '$COMPOSITOR_CMD' runs, was not found -- $DESKTOP_MISSING_HINT"
+    DESKTOP_BINS=
+fi
 for bin in $DESKTOP_BINS foot $_wl_vnc; do
     command -v "$bin" >/dev/null 2>&1 \
         || die "'$bin' not found -- run 'sudo sh /AOK/tools/$DESKTOP_SETUP' first"
@@ -1005,12 +1072,31 @@ if [ "${ISH_WAYLAND_DISABLE_RELEASE_GUARD:-0}" != "1" ] && [ -f "$ISH_RELEASE_GU
 fi
 
 COMPOSITOR_PID=""
+COMPOSITOR_TOP_PID=""
 FOOT_PID=""
 REPAIR_PID=""
 TEE_PIDS=""
 WAYVNC_PID=""
 PANEL_PID=""
 PRESENT_PID=""
+
+# Every process below pid $1, from one read of /proc (a status file has its
+# Pid line before its PPid line).
+wl_tree_of() {
+    cat /proc/[0-9]*/status 2>/dev/null | awk -v root="$1" '
+        /^Pid:/ { pid = $2 }
+        /^PPid:/ { parent[pid] = $2 }
+        END {
+            want[root] = 1
+            more = 1
+            while (more) {
+                more = 0
+                for (p in parent)
+                    if (!(p in want) && (parent[p] in want)) { want[p] = 1; more = 1 }
+            }
+            for (p in want) if (p != root) print p
+        }'
+}
 
 cleanup() {
     trap - TERM INT HUP EXIT
@@ -1022,6 +1108,14 @@ cleanup() {
     # user session exit here, leaving its compositor, wayvnc and foot running.
     { true > "/tmp/ish-display.closing.$$"; } 2>/dev/null
     rm -f "$READY_FILE"
+    # A user's desktop command can be a session script whose compositor and
+    # programs are its children, and killing the script does not end those:
+    # everything under the process it started goes too. Listed before anything
+    # is killed, since an orphan is handed to init at once.
+    _wl_cmd_tree=
+    if [ -n "$AOK_DESKTOP_CMD_FROM" ] && [ -n "$COMPOSITOR_TOP_PID" ]; then
+        _wl_cmd_tree=$(wl_tree_of "$COMPOSITOR_TOP_PID")
+    fi
     [ -n "$PANEL_PID" ] && kill "$PANEL_PID" 2>/dev/null
     # The early-boot repair (below) polls for up to a minute or more, and the
     # `wait` here waited for it: a session closed soon after boot sat in
@@ -1032,7 +1126,10 @@ cleanup() {
     [ -n "$WAYVNC_PID" ] && kill "$WAYVNC_PID" 2>/dev/null
     [ -n "$FOOT_PID" ] && kill "$FOOT_PID" 2>/dev/null
     [ -n "$COMPOSITOR_PID" ] && kill "$COMPOSITOR_PID" 2>/dev/null
-    for pid in $PANEL_PID $PRESENT_PID $WAYVNC_PID $FOOT_PID $COMPOSITOR_PID $REPAIR_PID; do
+    if [ -n "$AOK_DESKTOP_CMD_FROM" ] && [ -n "$COMPOSITOR_TOP_PID" ]; then
+        kill "$COMPOSITOR_TOP_PID" $_wl_cmd_tree 2>/dev/null
+    fi
+    for pid in $PANEL_PID $PRESENT_PID $WAYVNC_PID $FOOT_PID $COMPOSITOR_PID $COMPOSITOR_TOP_PID $REPAIR_PID; do
         wait "$pid" 2>/dev/null
     done
     # Each log's tee ends when the last process writing to it has gone, and a
@@ -2060,6 +2157,14 @@ DRIRC_EOF
 # bring up its output (an allocator or swapchain failure leaves a compositor
 # running with nothing to show).
 start_compositor() {
+    # A user's command goes through the shell, the desktops' own are split at
+    # spaces.
+    if [ -n "$AOK_DESKTOP_CMD_FROM" ]; then
+        set -- /bin/sh -c "$COMPOSITOR_CMD"
+    else
+        # shellcheck disable=SC2086 # one word per argument
+        set -- $COMPOSITOR_CMD
+    fi
     if [ "$WL_GPU_COMPOSITOR" = 1 ] && drirc_dir=$(wl_gpu_drirc); then
         log "starting $COMPOSITOR_CMD (headless, composited on the GPU)"
         log_mark=$(wc -c < "$DEBUG_LOG" 2>/dev/null || echo 0)
@@ -2070,7 +2175,7 @@ start_compositor() {
         [ "$AOK_DESKTOP" = wayfire ] &&
             gpu_renderer="WLR_RENDERER=gles2 WLR_RENDER_DRM_DEVICE=/dev/dri/renderD128"
         spawn_logged compositor "$AOK_ENV" -u LIBGL_ALWAYS_SOFTWARE \
-            $gpu_renderer DRIRC_CONFIGDIR="$drirc_dir" $COMPOSITOR_CMD
+            $gpu_renderer DRIRC_CONFIGDIR="$drirc_dir" "$@"
         COMPOSITOR_PID=$SPAWN_PID
         # The output's first commit, where a failure shows, follows the
         # socket closely: wait for the socket, then a little longer.
@@ -2100,10 +2205,13 @@ start_compositor() {
     else
         log "starting $COMPOSITOR_CMD (headless)"
     fi
-    spawn_logged compositor $COMPOSITOR_CMD
+    spawn_logged compositor "$@"
     COMPOSITOR_PID=$SPAWN_PID
 }
 start_compositor
+# What this script started, which stays the same when COMPOSITOR_PID moves to
+# the compositor below (cleanup ends everything under it).
+COMPOSITOR_TOP_PID=$COMPOSITOR_PID
 
 # Wait for the compositor to create its Wayland socket rather than a fixed
 # sleep -- labwc under JIT on a loaded device can take longer than the ~1s
@@ -2132,10 +2240,11 @@ done
 export WAYLAND_DISPLAY="$WAYLAND_SOCKET_NAME"
 
 # If something still sits between this script and the compositor (a wrapper
-# that runs its command as a child -- see AOK_ENV), track the compositor
-# itself: the X lock names it, and its sockets are the ones looked at below.
-_comp_name=${COMPOSITOR_CMD%% *}
-_comp_name=${_comp_name##*/}
+# that runs its command as a child -- see AOK_ENV -- or the shell a user's
+# command runs in), track the compositor itself: the X lock names it, and its
+# sockets are the ones looked at below. A process's name is the first 15
+# bytes of its program's.
+_comp_name=$(printf '%.15s' "${COMPOSITOR_BIN##*/}")
 if [ "$(cat /proc/"$COMPOSITOR_PID"/comm 2>/dev/null)" != "$_comp_name" ]; then
     for _c in /proc/[0-9]*; do
         [ "$(aok_ppid "${_c#/proc/}")" = "$COMPOSITOR_PID" ] || continue
