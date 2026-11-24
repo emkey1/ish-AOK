@@ -1,6 +1,6 @@
 # Release Notes Since `builds/iSH-AOK_565`
 
-132 commits. **The app is now called AOK-iSH.** Native mode grew the most: it
+133 commits. **The app is now called AOK-iSH.** Native mode grew the most: it
 has `apt` and a Wayland desktop through a companion Devuan filesystem, its own sshd,
 more accounts, and more commands. Most of the rest is preparation for the App Store:
 privacy manifests, a privacy policy, a consent screen before an AI chat sends
@@ -88,8 +88,7 @@ None of this changes how the app works for a tester, except where it says so.
   naming the host and what is sent. On-device models are not asked about.
 - **Privacy Policy** and **Legal** rows in Settings. Legal carries the written offer
   for the source of the GPL software in the bundled filesystems.
-- **Privacy manifests** for the app and the Files extension, and the export-compliance
-  declaration.
+- **Privacy manifests** for the app and the Files extension.
 - **The app no longer closes itself.** Suspend and Exit, and Quit Now when changing
   filesystem, stop the machine and end on a screen that says the app can be closed.
 - **No private APIs.** The device's DNS servers are read through public calls only.

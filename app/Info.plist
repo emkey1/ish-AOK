@@ -34,11 +34,16 @@
 	     algorithm not provided by the OS. No CCATS. The French encryption
 	     declaration is required because we distribute in France.
 
-	     Once Apple has accepted that declaration it issues a code; add it as
-	     ITSEncryptionExportComplianceCode beside this key and the per-build
-	     encryption questions stop. See docs/app_store_assessment.md. -->
-	<key>ITSAppUsesNonExemptEncryption</key>
-	<true/>
+	     The key is NOT set yet. Build 566 shipped it as
+	     ITSAppUsesNonExemptEncryption = YES with no code, and the upload was
+	     refused (90592, "export compliance key value [] doesn't match").
+	     Until the code exists, leave both keys out and answer the encryption
+	     questions per build in App Store Connect, as every build to 565 did.
+
+	     Once Apple has accepted the declaration it issues a code; then add
+	     ITSAppUsesNonExemptEncryption = YES and
+	     ITSEncryptionExportComplianceCode together, and the per-build
+	     questions stop. See docs/app_store_assessment.md. -->
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSAppTransportSecurity</key>

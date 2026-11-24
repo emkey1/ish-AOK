@@ -587,8 +587,14 @@ Two caveats worth keeping rather than claiming more than was shown:
 
 ## Paperwork
 
-- **Export compliance.** `ITSAppUsesNonExemptEncryption` is **set to YES**
-  in app/Info.plist (`9bbe02d44`). **Worked out against primary sources 2026-11-14**; the
+- **Export compliance.** `ITSAppUsesNonExemptEncryption` was set to YES
+  in app/Info.plist (`9bbe02d44`) and **taken out again on 2026-11-24**: the
+  first upload with it, build 566, was refused with error 90592 ("The export
+  compliance key value [] in the app's Info.plist doesn't match the key value
+  of the app's export compliance documentation"). The answer is still YES; the
+  key goes back in together with `ITSEncryptionExportComplianceCode` once
+  Apple has issued the code, and until then the encryption questions are
+  answered per build in App Store Connect. **Worked out against primary sources 2026-11-14**; the
   conclusion is narrower than this entry used to imply, and one piece of
   advice circulating online is simply out of date.
 
@@ -610,10 +616,8 @@ Two caveats worth keeping rather than claiming more than was shown:
   expensive one and we do not need it.
 
   *Decided 2026-11-14: France is in scope.* So the key is **YES** and a French
-  declaration is required. **Set in app/Info.plist**, with the reasoning in a
-  comment beside it, and verified to survive the plist preprocessing:
-  `plutil -extract ITSAppUsesNonExemptEncryption raw` on the built bundle
-  returns `true`.
+  declaration is required. The reasoning is in a comment in app/Info.plist,
+  where the key will go (see the first paragraph for why it is not set yet).
 
   A consequence worth keeping: because we are providing documentation to
   Apple, **no BIS year-end self-classification report is needed** ("if you use
