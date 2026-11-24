@@ -61,6 +61,306 @@
         }
       }
     },
+    "Choose a video from Photos, or a video or audio file from Files, or use Convert Video or Convert Audio on a file in the File Manager. It runs on this device's own encoders." : {
+      "comment" : "Media converter: empty state text",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wähle ein Video aus Fotos oder eine Video- oder Audiodatei aus Dateien, oder nutze „Video konvertieren“ oder „Audio konvertieren“ für eine Datei im Dateimanager. Die Konvertierung läuft auf den Encodern dieses Geräts."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Elige un vídeo de Fotos, o un archivo de vídeo o audio de Archivos, o usa Convertir vídeo o Convertir audio en un archivo del Gestor de archivos. La conversión se hace con los codificadores de este dispositivo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choisissez une vidéo dans Photos, ou un fichier vidéo ou audio dans Fichiers, ou utilisez Convertir la vidéo ou Convertir l’audio sur un fichier du Gestionnaire de fichiers. La conversion utilise les encodeurs de cet appareil."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "写真からビデオを、またはファイルからビデオかオーディオのファイルを選ぶか、ファイルマネージャでファイルの「ビデオを変換」か「オーディオを変換」を使います。変換はこのデバイスのエンコーダで行われます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "사진에서 비디오를, 또는 파일에서 비디오나 오디오 파일을 선택하거나, 파일 관리자에서 파일의 비디오 변환이나 오디오 변환을 사용하십시오. 변환은 이 기기의 인코더에서 실행됩니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Escolha um vídeo de Fotos, ou um arquivo de vídeo ou áudio de Arquivos, ou use Converter Vídeo ou Converter Áudio em um arquivo do Gerenciador de Arquivos. A conversão roda nos codificadores deste aparelho."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Выберите видео в Фото, видео- или аудиофайл в Файлах либо используйте «Конвертировать видео» или «Конвертировать аудио» для файла в Менеджере файлов. Конвертация выполняется кодировщиками устройства."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "从照片中选取视频，或从文件中选取视频或音频文件，或在文件管理器中对文件使用“转换视频”或“转换音频”。转换由本设备的编码器完成。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "從照片中選取影片，或從檔案中選取影片或音訊檔案，或在檔案管理器中對檔案使用「轉換影片」或「轉換音訊」。轉換由本裝置的編碼器完成。"
+          }
+        }
+      }
+    },
+    "Chooses a video or audio file from the Files app." : {
+      "comment" : "Accessibility hint for the media converter's Files button",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wählt eine Video- oder Audiodatei aus der App „Dateien“."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Elige un archivo de vídeo o audio de la app Archivos."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choisit un fichier vidéo ou audio dans l’app Fichiers."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“ファイル”App からビデオまたはオーディオのファイルを選びます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "파일 앱에서 비디오나 오디오 파일을 선택합니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Escolhe um arquivo de vídeo ou áudio do app Arquivos."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Выбирает видео- или аудиофайл в приложении «Файлы»."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "从“文件”App 中选取视频或音频文件。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "從「檔案」App 中選取影片或音訊檔案。"
+          }
+        }
+      }
+    },
+    "Convert Audio…" : {
+      "comment" : "File context menu action: open the audio file in the Media Converter",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Audio konvertieren …"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Convertir audio…"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Convertir l’audio…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "オーディオを変換…"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "오디오 변환…"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Converter Áudio…"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Конвертировать аудио…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "转换音频…"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "轉換音訊…"
+          }
+        }
+      }
+    },
+    "Converts the chosen file with these settings." : {
+      "comment" : "Accessibility hint for the media converter's Convert button",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Konvertiert die gewählte Datei mit diesen Einstellungen."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Convierte el archivo elegido con estos ajustes."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Convertit le fichier choisi avec ces réglages."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "選択したファイルをこの設定で変換します。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "선택한 파일을 이 설정으로 변환합니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Converte o arquivo escolhido com estes ajustes."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Конвертирует выбранный файл с этими настройками."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用这些设置转换所选文件。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用這些設定轉換所選檔案。"
+          }
+        }
+      }
+    },
+    "HEVC and H.264 make a video: HEVC makes smaller files, H.264 plays on more old devices. AAC, ALAC and WAV keep only the sound." : {
+      "comment" : "Accessibility hint for the media converter's format choice",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "HEVC und H.264 erzeugen ein Video: HEVC kleinere Dateien, H.264 läuft auf mehr älteren Geräten. AAC, ALAC und WAV behalten nur den Ton."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "HEVC y H.264 generan un vídeo: HEVC archivos más pequeños, H.264 se reproduce en más dispositivos antiguos. AAC, ALAC y WAV conservan solo el sonido."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "HEVC et H.264 produisent une vidéo : HEVC des fichiers plus petits, H.264 se lit sur davantage d’anciens appareils. AAC, ALAC et WAV ne gardent que le son."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "HEVC と H.264 はビデオを作ります。HEVC はファイルが小さく、H.264 は古いデバイスでも再生できます。AAC、ALAC、WAV は音声だけを残します。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "HEVC와 H.264는 비디오를 만듭니다. HEVC는 파일이 더 작고, H.264는 더 많은 구형 기기에서 재생됩니다. AAC, ALAC, WAV는 소리만 남깁니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "HEVC e H.264 geram um vídeo: HEVC arquivos menores, H.264 reproduz em mais aparelhos antigos. AAC, ALAC e WAV mantêm só o som."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "HEVC и H.264 создают видео: HEVC даёт файлы меньше, H.264 воспроизводится на большем числе старых устройств. AAC, ALAC и WAV оставляют только звук."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "HEVC 和 H.264 生成视频：HEVC 文件更小，H.264 可在更多旧设备上播放。AAC、ALAC 和 WAV 只保留声音。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "HEVC 和 H.264 產生影片：HEVC 檔案較小，H.264 可在更多舊裝置上播放。AAC、ALAC 和 WAV 只保留聲音。"
+          }
+        }
+      }
+    },
     "\n\nIf that works, the failure is in the \"Open Everything as Default User\" su path -- try disabling that setting." : {
       "comment" : "Appended to a Wayland display error; names a setting",
       "extractionState" : "manual",
@@ -121,6 +421,66 @@
         }
       }
     },
+    "Media Converter" : {
+      "comment" : "Window title, menu item and tool name of the media converter applet",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Medienkonverter"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conversor multimedia"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Convertisseur multimédia"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "メディアコンバータ"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "미디어 변환기"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conversor de Mídia"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Конвертер медиа"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "媒体转换器"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "媒體轉換器"
+          }
+        }
+      }
+    },
     "\nNo model set: choose one with the model button." : {
       "comment" : "empty chat note",
       "extractionState" : "manual",
@@ -177,6 +537,66 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "\n未設定模型：請用模型按鈕選擇一個。"
+          }
+        }
+      }
+    },
+    "Nothing chosen" : {
+      "comment" : "Media converter: empty state title",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nichts gewählt"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nada elegido"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rien de choisi"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "何も選択されていません"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "선택한 항목 없음"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nada escolhido"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ничего не выбрано"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未选取任何内容"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未選取任何內容"
           }
         }
       }
@@ -1829,65 +2249,6 @@
         }
       }
     },
-    "Choose one from Photos or Files, or use Convert Video on a file in the File Manager. The conversion runs on this device's hardware video encoder." : {
-      "comment" : "Video converter: empty state text",
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Wähle eines aus Fotos oder Dateien oder nutze „Video konvertieren“ für eine Datei im Dateimanager. Die Konvertierung läuft auf dem Hardware-Videoencoder dieses Geräts."
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Elige uno de Fotos o Archivos, o usa Convertir vídeo en un archivo del Gestor de archivos. La conversión se hace en el codificador de vídeo por hardware de este dispositivo."
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Choisissez-en une dans Photos ou Fichiers, ou utilisez Convertir la vidéo sur un fichier du Gestionnaire de fichiers. La conversion utilise l’encodeur vidéo matériel de cet appareil."
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "写真またはファイルから選ぶか、ファイルマネージャでファイルの「ビデオを変換」を使います。変換はこのデバイスのハードウェアビデオエンコーダで行われます。"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "사진이나 파일에서 선택하거나 파일 관리자에서 파일의 비디오 변환을 사용하십시오. 변환은 이 기기의 하드웨어 비디오 인코더에서 실행됩니다."
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Escolha um de Fotos ou Arquivos, ou use Converter Vídeo em um arquivo do Gerenciador de Arquivos. A conversão roda no codificador de vídeo por hardware deste aparelho."
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Выберите видео в Фото или Файлах либо используйте «Конвертировать видео» для файла в Менеджере файлов. Конвертация выполняется аппаратным видеокодером устройства."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "从照片或文件中选取，或在文件管理器中对文件使用“转换视频”。转换由本设备的硬件视频编码器完成。"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "從照片或檔案中選取，或在檔案管理器中對檔案使用「轉換影片」。轉換由本裝置的硬體影片編碼器完成。"
-          }
-        }
-      }
-    },
     "Choose Wayfire's panel. This downloads packages into the filesystem that is running and takes several minutes; keep AOK-iSH open until it finishes. With both, select-desktop.sh --panel switches between them later." : {
       "comment" : "Desktop setup: Wayfire install, the panel choice",
       "extractionState" : "manual",
@@ -2004,65 +2365,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "選擇 Wayfire 的面板。這會將套件下載到 Devuan 檔案系統（首次時安裝）中，需要幾分鐘；完成前請保持 AOK-iSH 開啟。若兩者都安裝，之後可用 select-desktop.sh --panel 在它們之間切換。"
-          }
-        }
-      }
-    },
-    "Chooses a video from the Files app." : {
-      "comment" : "Accessibility hint for the video converter's Files button",
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Wählt ein Video aus der App „Dateien“."
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Elige un vídeo de la app Archivos."
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Choisit une vidéo dans l’app Fichiers."
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "“ファイル”App からビデオを選びます。"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "파일 앱에서 비디오를 선택합니다."
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Escolhe um vídeo do app Arquivos."
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Выбирает видео в приложении «Файлы»."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "从“文件”App 中选取视频。"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "從「檔案」App 中選取影片。"
           }
         }
       }
@@ -2717,65 +3019,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "正在轉換… %.0f%%%@"
-          }
-        }
-      }
-    },
-    "Converts the chosen video with these settings." : {
-      "comment" : "Accessibility hint for the video converter's Convert button",
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Konvertiert das gewählte Video mit diesen Einstellungen."
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Convierte el vídeo elegido con estos ajustes."
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Convertit la vidéo choisie avec ces réglages."
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "選択したビデオをこの設定で変換します。"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "선택한 비디오를 이 설정으로 변환합니다."
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Converte o vídeo escolhido com estes ajustes."
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Конвертирует выбранное видео с этими настройками."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "使用这些设置转换所选视频。"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "使用這些設定轉換所選影片。"
           }
         }
       }
@@ -4090,65 +4333,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "正在從照片取得影片…"
-          }
-        }
-      }
-    },
-    "HEVC makes smaller files; H.264 plays on more old devices." : {
-      "comment" : "Accessibility hint for the video converter's format choice",
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "HEVC erzeugt kleinere Dateien; H.264 läuft auf mehr älteren Geräten."
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "HEVC genera archivos más pequeños; H.264 se reproduce en más dispositivos antiguos."
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "HEVC produit des fichiers plus petits ; H.264 se lit sur davantage d’anciens appareils."
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "HEVC はファイルが小さく、H.264 は古いデバイスでも再生できます。"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "HEVC는 파일이 더 작고, H.264는 더 많은 구형 기기에서 재생됩니다."
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "HEVC gera arquivos menores; H.264 reproduz em mais aparelhos antigos."
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "HEVC даёт файлы меньше; H.264 воспроизводится на большем числе старых устройств."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "HEVC 文件更小；H.264 可在更多旧设备上播放。"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "HEVC 檔案較小；H.264 可在更多舊裝置上播放。"
           }
         }
       }
@@ -5852,65 +6036,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "法律資訊"
-          }
-        }
-      }
-    },
-    "No video chosen" : {
-      "comment" : "Video converter: empty state title",
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Kein Video gewählt"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Ningún vídeo elegido"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Aucune vidéo choisie"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "ビデオが選択されていません"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "선택한 비디오 없음"
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Nenhum vídeo escolhido"
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Видео не выбрано"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "未选取视频"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "未選取影片"
           }
         }
       }
@@ -8125,6 +8250,66 @@
         }
       }
     },
+    "The result is larger than the original: it was already compact. Try a lower quality." : {
+      "comment" : "Media converter: an audio result grew",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Das Ergebnis ist größer als das Original: Es war bereits kompakt. Versuche eine niedrigere Qualität."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El resultado es mayor que el original: ya era compacto. Prueba una calidad menor."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le résultat est plus gros que l’original : il était déjà compact. Essayez une qualité inférieure."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "結果がオリジナルより大きくなりました。元々コンパクトだったためです。より低い音質を試してください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "결과가 원본보다 큽니다. 원본이 이미 작았습니다. 더 낮은 음질을 사용해 보십시오."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O resultado é maior que o original: ele já era compacto. Tente uma qualidade menor."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Результат больше оригинала: он уже был компактным. Попробуйте качество ниже."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "结果比原文件更大：原文件已很紧凑。请尝试更低的音质。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "結果比原始檔案更大：原始檔案已很精簡。請嘗試更低的音質。"
+          }
+        }
+      }
+    },
     "The result is larger than the original: it was already compact. Try a smaller size or quality." : {
       "comment" : "Video converter: output grew",
       "localizations" : {
@@ -8244,61 +8429,62 @@
         }
       }
     },
-    "This file has no video that iOS can read." : {
-      "comment" : "Video converter: unreadable source",
+    "This file has no video or audio that iOS can read." : {
+      "comment" : "Media converter: unreadable source",
+      "extractionState" : "manual",
       "localizations" : {
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Diese Datei enthält kein Video, das iOS lesen kann."
+            "value" : "Diese Datei enthält weder Video noch Audio, das iOS lesen kann."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Este archivo no tiene vídeo que iOS pueda leer."
+            "value" : "Este archivo no tiene vídeo ni audio que iOS pueda leer."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Ce fichier ne contient aucune vidéo lisible par iOS."
+            "value" : "Ce fichier ne contient ni vidéo ni audio lisible par iOS."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "このファイルには iOS が読み込めるビデオがありません。"
+            "value" : "このファイルには iOS が読み込めるビデオもオーディオもありません。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "이 파일에는 iOS가 읽을 수 있는 비디오가 없습니다."
+            "value" : "이 파일에는 iOS가 읽을 수 있는 비디오나 오디오가 없습니다."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Este arquivo não tem vídeo que o iOS possa ler."
+            "value" : "Este arquivo não tem vídeo nem áudio que o iOS possa ler."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "В этом файле нет видео, которое может прочитать iOS."
+            "value" : "В этом файле нет видео или аудио, которое может прочитать iOS."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "此文件中没有 iOS 可读取的视频。"
+            "value" : "此文件中没有 iOS 可读取的视频或音频。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "此檔案中沒有 iOS 可讀取的影片。"
+            "value" : "此檔案中沒有 iOS 可讀取的影片或音訊。"
           }
         }
       }
@@ -8662,6 +8848,66 @@
         }
       }
     },
+    "Trades file size against sound quality." : {
+      "comment" : "Accessibility hint for the media converter's quality choice, for audio",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wägt Dateigröße gegen Klangqualität ab."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Equilibra el tamaño del archivo con la calidad de sonido."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Équilibre la taille du fichier et la qualité du son."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ファイルサイズと音質のバランスを決めます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "파일 크기와 음질 사이의 균형을 정합니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Equilibra o tamanho do arquivo e a qualidade do som."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Баланс между размером файла и качеством звука."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在文件大小与音质之间取舍。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在檔案大小與音質之間取捨。"
+          }
+        }
+      }
+    },
     "Unpacking %1$ld of %2$ld packages" : {
       "comment" : "Desktop setup progress; %1$ld packages done, %2$ld in all",
       "extractionState" : "manual",
@@ -8782,65 +9028,6 @@
         }
       }
     },
-    "Video Converter" : {
-      "comment" : "Window title of the video converter applet",
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Videokonverter"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Conversor de vídeo"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Convertisseur vidéo"
-          }
-        },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "ビデオコンバータ"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "비디오 변환기"
-          }
-        },
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Conversor de Vídeo"
-          }
-        },
-        "ru" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Конвертер видео"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "视频转换器"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "影片轉換器"
-          }
-        }
-      }
-    },
     "Workspace Dashboard" : {
       "comment" : "Shortcuts destination name for the Workspace dashboard",
       "extractionState" : "manual",
@@ -8957,6 +9144,66 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "現在可以關閉 AOK-iSH 了。下次啟動時會從你離開的地方繼續此工作階段。"
+          }
+        }
+      }
+    },
+    "You choose where to save the audio when it is done." : {
+      "comment" : "Media converter: where an audio result goes when it cannot go beside the original",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wenn sie fertig ist, wählst du, wo das Audio gesichert wird."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Al terminar, eliges dónde guardar el audio."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Une fois terminé, vous choisissez où enregistrer l’audio."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "完了したら、オーディオの保存先を選びます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "완료되면 오디오를 저장할 위치를 선택합니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ao terminar, você escolhe onde salvar o áudio."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "По завершении вы выберете, куда сохранить аудио."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "完成后，你可以选择存储音频的位置。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "完成後，你可以選擇儲存音訊的位置。"
           }
         }
       }

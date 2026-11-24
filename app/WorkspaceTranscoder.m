@@ -2,7 +2,11 @@
 //  WorkspaceTranscoder.m
 //  AOK-iSH
 //
-//  The Video Converter applet. See WorkspaceTranscoder.h.
+//  The Media Converter applet (the Video Converter until it took audio). See
+//  WorkspaceTranscoder.h.
+//
+//  A video becomes HEVC or H.264, or its sound alone AAC, ALAC or WAV; an audio
+//  file becomes AAC, ALAC or WAV. The Format row offers what the source allows.
 //
 //  Three sources, each read where it is wherever that is possible:
 //   - Photos, through PHPicker, which needs no library permission. The picker
@@ -16,7 +20,9 @@
 //
 //  The output goes to Photos (a Photos source always; a guest source when
 //  asked), beside the original (a guest source), or wherever the user picks
-//  (a Files source: a picked file grants no access to its folder).
+//  (a Files source: a picked file grants no access to its folder). Photos
+//  takes no sound alone, so an audio result from a Photos video goes where the
+//  user picks too.
 //
 
 #import <AVFoundation/AVFoundation.h>
@@ -56,6 +62,22 @@ static bool TCAppletShouldCancel(void *ctx) {
 
 static NSString *TCSize(long long bytes) {
     return [NSByteCountFormatter stringFromByteCount:bytes countStyle:NSByteCountFormatterCountStyleFile];
+}
+
+// The Format row: what a video can become, and what sound alone can.
+static NSArray<NSString *> *TCVideoFormats(void) { return @[@"HEVC", @"H.264", @"AAC", @"ALAC", @"WAV"]; }
+static NSArray<NSString *> *TCAudioFormats(void) { return @[@"AAC", @"ALAC", @"WAV"]; }
+
+static NSString *TCAudioCodecName(FourCharCode codec) {
+    switch (codec) {
+    case kAudioFormatMPEG4AAC: case kAudioFormatMPEG4AAC_HE: case kAudioFormatMPEG4AAC_HE_V2: return @"AAC";
+    case kAudioFormatAppleLossless: return @"ALAC";
+    case kAudioFormatFLAC: return @"FLAC";
+    case kAudioFormatMPEGLayer3: return @"MP3";
+    case kAudioFormatLinearPCM: return @"PCM";
+    case kAudioFormatOpus: return @"Opus";
+    default: return @"audio";
+    }
 }
 
 // "+51.5007-000.1246+010.000/" -> a location.
@@ -104,6 +126,8 @@ static CLLocation *TCLocationFromISO6709(NSString *text) {
     BOOL _sourceIsScoped;           // a Files URL under security scope
     NSString *_guestPath;           // a guest source's path
     NSString *_assetIdentifier;     // a Photos source's asset
+    BOOL _sourceIsAudio;            // the source has sound and no picture
+    BOOL _sourceReady;              // read, and found to have a picture or sound
     NSUInteger _loadGeneration;
 
     struct TCApplet *_job;          // non-NULL while converting
@@ -117,7 +141,7 @@ static NSArray<NSNumber *> *TCSizeLines(void) {
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.title = NSLocalizedString(@"Video Converter", @"Window title of the video converter applet");
+    self.title = NSLocalizedString(@"Media Converter", @"Window title, menu item and tool name of the media converter applet");
     [self buildViews];
     [self workspaceApplyTheme];
     [self showNoSource];
@@ -180,7 +204,7 @@ static NSArray<NSNumber *> *TCSizeLines(void) {
     _photosButton.accessibilityHint = NSLocalizedString(@"Chooses a video from your photo library.", @"Accessibility hint for the video converter's Photos button");
     _filesButton = [self sourceButton:NSLocalizedString(@"Files", @"Video converter: pick a video from the Files app")
                                symbol:@"folder" action:@selector(filesTapped)];
-    _filesButton.accessibilityHint = NSLocalizedString(@"Chooses a video from the Files app.", @"Accessibility hint for the video converter's Files button");
+    _filesButton.accessibilityHint = NSLocalizedString(@"Chooses a video or audio file from the Files app.", @"Accessibility hint for the media converter's Files button");
     UIStackView *bar = [[UIStackView alloc] initWithArrangedSubviews:@[_photosButton, _filesButton, [UIView new]]];
     bar.spacing = 16;
     [_stack addArrangedSubview:bar];
@@ -206,10 +230,10 @@ static NSArray<NSNumber *> *TCSizeLines(void) {
     [_stack setCustomSpacing:14 afterView:card];
 
     _codecLabel = [self rowLabel:NSLocalizedString(@"Format", @"Video converter: codec choice label")];
-    _codecControl = [[UISegmentedControl alloc] initWithItems:@[@"HEVC", @"H.264"]];
+    _codecControl = [[UISegmentedControl alloc] initWithItems:TCVideoFormats()];
     _codecControl.selectedSegmentIndex = 0;
     _codecControl.accessibilityLabel = NSLocalizedString(@"Format", @"Video converter: codec choice label");
-    _codecControl.accessibilityHint = NSLocalizedString(@"HEVC makes smaller files; H.264 plays on more old devices.", @"Accessibility hint for the video converter's format choice");
+    _codecControl.accessibilityHint = NSLocalizedString(@"HEVC and H.264 make a video: HEVC makes smaller files, H.264 plays on more old devices. AAC, ALAC and WAV keep only the sound.", @"Accessibility hint for the media converter's format choice");
     [_codecControl addTarget:self action:@selector(optionsChanged) forControlEvents:UIControlEventValueChanged];
 
     _sizeLabel = [self rowLabel:NSLocalizedString(@"Size", @"Video converter: picture size choice label")];
@@ -314,9 +338,50 @@ static NSArray<NSNumber *> *TCSizeLines(void) {
 }
 
 - (void)showNoSource {
-    _sourceLabel.text = NSLocalizedString(@"No video chosen", @"Video converter: empty state title");
-    _sourceDetailLabel.text = NSLocalizedString(@"Choose one from Photos or Files, or use Convert Video on a file in the File Manager. The conversion runs on this device's hardware video encoder.", @"Video converter: empty state text");
+    _sourceLabel.text = NSLocalizedString(@"Nothing chosen", @"Media converter: empty state title");
+    _sourceDetailLabel.text = NSLocalizedString(@"Choose a video from Photos, or a video or audio file from Files, or use Convert Video or Convert Audio on a file in the File Manager. It runs on this device's own encoders.", @"Media converter: empty state text");
     [self optionsChanged];
+}
+
+#pragma mark Format
+
+- (NSArray<NSString *> *)currentFormats {
+    NSMutableArray<NSString *> *formats = [NSMutableArray array];
+    for (NSUInteger i = 0; i < _codecControl.numberOfSegments; i++)
+        [formats addObject:[_codecControl titleForSegmentAtIndex:i] ?: @""];
+    return formats;
+}
+
+// The codec names double as identifiers: they are not translated.
+- (NSString *)selectedFormat {
+    NSInteger i = _codecControl.selectedSegmentIndex;
+    if (i < 0 || i >= (NSInteger) _codecControl.numberOfSegments)
+        return @"HEVC";
+    return [_codecControl titleForSegmentAtIndex:(NSUInteger) i];
+}
+
+- (BOOL)audioOutput {
+    return [TCAudioFormats() containsObject:[self selectedFormat]];
+}
+
+- (NSString *)outputExtension {
+    NSString *format = [self selectedFormat];
+    if ([format isEqualToString:@"WAV"])
+        return @"wav";
+    return [self audioOutput] ? @"m4a" : @"mp4";
+}
+
+// The choices this source allows, keeping the one chosen when it is still
+// among them.
+- (void)setFormats:(NSArray<NSString *> *)formats {
+    if ([formats isEqualToArray:[self currentFormats]])
+        return;
+    NSString *current = [self selectedFormat];
+    [_codecControl removeAllSegments];
+    for (NSUInteger i = 0; i < formats.count; i++)
+        [_codecControl insertSegmentWithTitle:formats[i] atIndex:i animated:NO];
+    NSUInteger keep = [formats indexOfObject:current];
+    _codecControl.selectedSegmentIndex = keep != NSNotFound ? (NSInteger) keep : 0;
 }
 
 // The last conversion's result belongs to the last video.
@@ -331,6 +396,8 @@ static NSArray<NSNumber *> *TCSizeLines(void) {
     _sourceName = name;
     _sourceURL = url;
     _sourceLabel.text = name;
+    _sourceIsAudio = NO;
+    _sourceReady = NO;
     [self clearResult];
     _photosSwitch.on = kind == TCSourcePhotos;
     [self describeSource];
@@ -349,44 +416,78 @@ static NSArray<NSNumber *> *TCSizeLines(void) {
     [asset loadValuesAsynchronouslyForKeys:@[@"duration", @"tracks"] completionHandler:^{
         NSString *text;
         AVAssetTrack *video = [asset tracksWithMediaType:AVMediaTypeVideo].firstObject;
-        if (video == nil) {
-            text = NSLocalizedString(@"This file has no video that iOS can read.", @"Video converter: unreadable source");
-        } else {
+        AVAssetTrack *audio = [asset tracksWithMediaType:AVMediaTypeAudio].firstObject;
+        double seconds = CMTimeGetSeconds(asset.duration);
+        NSDateComponentsFormatter *f = [NSDateComponentsFormatter new];
+        f.allowedUnits = seconds >= 3600 ? (NSCalendarUnitHour | NSCalendarUnitMinute | NSCalendarUnitSecond)
+                                         : (NSCalendarUnitMinute | NSCalendarUnitSecond);
+        f.zeroFormattingBehavior = NSDateComponentsFormatterZeroFormattingBehaviorPad;
+        NSString *sizeText = size ? TCSize(size.longLongValue) : @"?";
+        NSString *durationText = isfinite(seconds) ? [f stringFromTimeInterval:seconds] : @"?";
+        if (video != nil) {
             CGSize n = CGSizeApplyAffineTransform(video.naturalSize, video.preferredTransform);
-            double seconds = CMTimeGetSeconds(asset.duration);
-            NSDateComponentsFormatter *f = [NSDateComponentsFormatter new];
-            f.allowedUnits = seconds >= 3600 ? (NSCalendarUnitHour | NSCalendarUnitMinute | NSCalendarUnitSecond)
-                                             : (NSCalendarUnitMinute | NSCalendarUnitSecond);
-            f.zeroFormattingBehavior = NSDateComponentsFormatterZeroFormattingBehaviorPad;
             CMFormatDescriptionRef format = (__bridge CMFormatDescriptionRef) video.formatDescriptions.firstObject;
             FourCharCode codec = format ? CMFormatDescriptionGetMediaSubType(format) : 0;
             NSString *codecName = codec == kCMVideoCodecType_HEVC ? @"HEVC" : codec == kCMVideoCodecType_H264 ? @"H.264" : @"video";
-            text = [NSString stringWithFormat:@"%@ · %@ · %.0f×%.0f %@ · %.1f Mbit/s",
-                    size ? TCSize(size.longLongValue) : @"?",
-                    isfinite(seconds) ? [f stringFromTimeInterval:seconds] : @"?",
+            text = [NSString stringWithFormat:@"%@ · %@ · %.0f×%.0f %@ · %.1f Mbit/s", sizeText, durationText,
                     fabs(n.width), fabs(n.height), codecName, video.estimatedDataRate / 1e6];
+        } else if (audio != nil) {
+            CMFormatDescriptionRef format = (__bridge CMFormatDescriptionRef) audio.formatDescriptions.firstObject;
+            const AudioStreamBasicDescription *asbd = format ? CMAudioFormatDescriptionGetStreamBasicDescription(format) : NULL;
+            NSMutableArray<NSString *> *parts = [NSMutableArray arrayWithObjects:sizeText, durationText,
+                TCAudioCodecName(format ? CMFormatDescriptionGetMediaSubType(format) : 0), nil];
+            if (asbd != NULL) {
+                // PCM has a depth and no data rate; the rest the other way round.
+                if (asbd->mFormatID == kAudioFormatLinearPCM && asbd->mBitsPerChannel > 0)
+                    [parts addObject:[NSString stringWithFormat:@"%u-bit", (unsigned) asbd->mBitsPerChannel]];
+                [parts addObject:[NSString stringWithFormat:@"%g kHz", asbd->mSampleRate / 1000]];
+                [parts addObject:[NSString stringWithFormat:@"%u ch", (unsigned) asbd->mChannelsPerFrame]];
+            }
+            if (audio.estimatedDataRate > 0)
+                [parts addObject:[NSString stringWithFormat:@"%.0f kbit/s", audio.estimatedDataRate / 1000]];
+            text = [parts componentsJoinedByString:@" · "];
+        } else {
+            text = NSLocalizedString(@"This file has no video or audio that iOS can read.", @"Media converter: unreadable source");
         }
         dispatch_async(dispatch_get_main_queue(), ^{
             typeof(self) strongSelf = weakSelf;
             if (strongSelf == nil || strongSelf->_loadGeneration != generation)
                 return;
             strongSelf->_sourceDetailLabel.text = text;
+            strongSelf->_sourceIsAudio = video == nil && audio != nil;
+            strongSelf->_sourceReady = video != nil || audio != nil;
+            [strongSelf setFormats:strongSelf->_sourceIsAudio ? TCAudioFormats() : TCVideoFormats()];
+            [strongSelf optionsChanged];
         });
     }];
 }
 
 - (void)optionsChanged {
     BOOL guest = _sourceKind == TCSourceGuest;
-    _photosRow.hidden = !guest;
+    BOOL audio = [self audioOutput];
+    // Picture settings mean nothing for sound alone, and a lossless format
+    // has no quality to choose.
+    _photosRow.hidden = !guest || audio;
+    _sizeLabel.hidden = audio;
+    _sizeControl.hidden = audio;
+    BOOL lossless = audio && ![[self selectedFormat] isEqualToString:@"AAC"];
+    _qualityLabel.hidden = lossless;
+    _qualityControl.hidden = lossless;
+    _qualityControl.accessibilityHint = audio
+        ? NSLocalizedString(@"Trades file size against sound quality.", @"Accessibility hint for the media converter's quality choice, for audio")
+        : NSLocalizedString(@"Trades file size against picture quality.", @"Accessibility hint for the video converter's quality choice");
     NSString *dest = nil;
+    NSString *audioPicked = NSLocalizedString(@"You choose where to save the audio when it is done.", @"Media converter: where an audio result goes when it cannot go beside the original");
     switch (_sourceKind) {
     case TCSourceNone:
         break;
     case TCSourcePhotos:
-        dest = NSLocalizedString(@"The converted video is added to Photos, with the original's date and place. The original stays until you delete it.", @"Video converter: where a Photos source's result goes");
+        dest = audio ? audioPicked
+                     : NSLocalizedString(@"The converted video is added to Photos, with the original's date and place. The original stays until you delete it.", @"Video converter: where a Photos source's result goes");
         break;
     case TCSourceFiles:
-        dest = NSLocalizedString(@"You choose where to save the converted video when it is done.", @"Video converter: where a Files source's result goes");
+        dest = audio ? audioPicked
+                     : NSLocalizedString(@"You choose where to save the converted video when it is done.", @"Video converter: where a Files source's result goes");
         break;
     case TCSourceGuest:
         dest = [NSString stringWithFormat:NSLocalizedString(@"Saved beside the original as %@.", @"Video converter: where a guest file's result goes; %@ is the file name"),
@@ -405,8 +506,8 @@ static NSArray<NSNumber *> *TCSizeLines(void) {
     [_convertButton setTitle:title forState:UIControlStateNormal];
     _convertButton.accessibilityHint = busy
         ? NSLocalizedString(@"Stops the conversion and discards its file.", @"Accessibility hint for the video converter's Cancel button")
-        : NSLocalizedString(@"Converts the chosen video with these settings.", @"Accessibility hint for the video converter's Convert button");
-    _convertButton.enabled = busy || _sourceURL != nil;
+        : NSLocalizedString(@"Converts the chosen file with these settings.", @"Accessibility hint for the media converter's Convert button");
+    _convertButton.enabled = busy || (_sourceURL != nil && _sourceReady);
     UIColor *accent = self.workspaceTheme[@"accent"] ?: self.view.tintColor;
     _convertButton.backgroundColor = [(busy ? UIColor.systemRedColor : accent) colorWithAlphaComponent:_convertButton.enabled ? 0.2 : 0.08];
     _convertButton.tintColor = busy ? UIColor.systemRedColor : accent;
@@ -421,7 +522,7 @@ static NSArray<NSNumber *> *TCSizeLines(void) {
 - (NSString *)guestOutputPath {
     NSString *dir = _guestPath.stringByDeletingLastPathComponent;
     NSString *base = _guestPath.lastPathComponent.stringByDeletingPathExtension;
-    return [dir stringByAppendingPathComponent:[base stringByAppendingString:@"-converted.mp4"]];
+    return [dir stringByAppendingPathComponent:[base stringByAppendingFormat:@"-converted.%@", [self outputExtension]]];
 }
 
 #pragma mark Sources
@@ -491,7 +592,7 @@ static NSArray<NSNumber *> *TCSizeLines(void) {
 
 - (void)filesTapped {
     UIDocumentPickerViewController *picker =
-        [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[UTTypeMovie] asCopy:NO];
+        [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[UTTypeMovie, UTTypeAudio] asCopy:NO];
     picker.delegate = self;
     picker.allowsMultipleSelection = NO;
     [self presentViewController:picker animated:YES completion:nil];
@@ -578,11 +679,26 @@ static NSArray<NSNumber *> *TCSizeLines(void) {
         return;
     }
     job->in_host_path = inPath;
-    job->codec = _codecControl.selectedSegmentIndex == 1 ? TRANSCODE_H264 : TRANSCODE_HEVC;
-    job->max_lines = TCSizeLines()[(NSUInteger) MAX(0, _sizeControl.selectedSegmentIndex)].intValue;
-    static const double scales[] = {0.6, 1.0, 1.6};
-    job->rate_scale = scales[MIN(2, MAX(0, _qualityControl.selectedSegmentIndex))];
-    job->audio_bitrate = 128000;
+    NSString *format = [self selectedFormat];
+    NSInteger quality = MIN(2, MAX(0, _qualityControl.selectedSegmentIndex));
+    BOOL audioOutput = [self audioOutput];
+    if (audioOutput) {
+        BOOL wav = [format isEqualToString:@"WAV"];
+        job->container = wav ? TRANSCODE_WAV : TRANSCODE_M4A;
+        job->audio_codec = wav ? TRANSCODE_AUDIO_PCM
+                               : [format isEqualToString:@"ALAC"] ? TRANSCODE_AUDIO_ALAC : TRANSCODE_AUDIO_AAC;
+        // Balanced is transcode's default: AAC copied as it is, anything
+        // else at 128k.
+        static const long aacRates[] = {96000, 0, 256000};
+        if (job->audio_codec == TRANSCODE_AUDIO_AAC)
+            job->audio_bitrate = aacRates[quality];
+    } else {
+        job->container = TRANSCODE_MP4;
+        job->codec = [format isEqualToString:@"H.264"] ? TRANSCODE_H264 : TRANSCODE_HEVC;
+        job->max_lines = TCSizeLines()[(NSUInteger) MAX(0, _sizeControl.selectedSegmentIndex)].intValue;
+        static const double scales[] = {0.6, 1.0, 1.6};
+        job->rate_scale = scales[quality];
+    }
     job->progress = TCAppletProgress;
     job->should_cancel = TCAppletShouldCancel;
     job->ctx = shared;
@@ -621,6 +737,7 @@ static NSArray<NSNumber *> *TCSizeLines(void) {
         NSString *outPath = job->out_host_path[0] ? @(job->out_host_path) : nil;
         NSString *summary = @(job->summary);
         NSString *error = @(job->error);
+        BOOL audioOnly = job->audio_only, lossless = job->lossless;
         free((void *) job->in_host_path);
         free(job);
         dispatch_async(dispatch_get_main_queue(), ^{
@@ -638,13 +755,15 @@ static NSArray<NSNumber *> *TCSizeLines(void) {
             strongSelf->_progressTimer = nil;
             UIApplication.sharedApplication.idleTimerDisabled = NO;
             [strongSelf jobEnded:res output:outPath summary:summary error:error
-                         seconds:-start.timeIntervalSinceNow inputSize:inSize];
+                         seconds:-start.timeIntervalSinceNow inputSize:inSize
+                       audioOnly:audioOnly lossless:lossless];
         });
     });
 }
 
 - (void)jobEnded:(int)res output:(NSString *)outPath summary:(NSString *)summary error:(NSString *)error
-         seconds:(NSTimeInterval)seconds inputSize:(long long)inSize {
+         seconds:(NSTimeInterval)seconds inputSize:(long long)inSize
+       audioOnly:(BOOL)audioOnly lossless:(BOOL)lossless {
     [self updateConvertButton];
     if (res != 0) {
         _progressView.hidden = YES;
@@ -660,16 +779,22 @@ static NSArray<NSNumber *> *TCSizeLines(void) {
     long long outSize = size.longLongValue;
     NSString *result = [NSString stringWithFormat:NSLocalizedString(@"%@ → %@ in %.1f s (%@).", @"Video converter result: input size, output size, seconds, details"),
                         TCSize(inSize), TCSize(outSize), seconds, summary];
-    if (outSize > inSize && inSize > 0)
-        result = [result stringByAppendingFormat:@" %@", NSLocalizedString(@"The result is larger than the original: it was already compact. Try a smaller size or quality.", @"Video converter: output grew")];
+    // Lossless audio is larger than a compressed source by nature.
+    if (outSize > inSize && inSize > 0 && !lossless)
+        result = [result stringByAppendingFormat:@" %@", audioOnly
+            ? NSLocalizedString(@"The result is larger than the original: it was already compact. Try a lower quality.", @"Media converter: an audio result grew")
+            : NSLocalizedString(@"The result is larger than the original: it was already compact. Try a smaller size or quality.", @"Video converter: output grew")];
     _statusLabel.text = result;
-    [self saveOutput:outPath result:result];
+    [self saveOutput:outPath result:result audioOnly:audioOnly];
 }
 
-- (void)saveOutput:(NSString *)outPath result:(NSString *)result {
+- (void)saveOutput:(NSString *)outPath result:(NSString *)result audioOnly:(BOOL)audioOnly {
     NSURL *outURL = [NSURL fileURLWithPath:outPath];
     __weak typeof(self) weakSelf = self;
-    switch (_sourceKind) {
+    // Photos holds no sound alone: an audio result from a Photos video goes
+    // where the user picks, as a Files source's does.
+    TCSourceKind kind = _sourceKind == TCSourcePhotos && audioOnly ? TCSourceFiles : _sourceKind;
+    switch (kind) {
     case TCSourcePhotos: {
         [self saveToPhotos:outURL move:YES then:^(BOOL ok, NSString *message) {
             typeof(self) s = weakSelf;
@@ -689,7 +814,7 @@ static NSArray<NSNumber *> *TCSizeLines(void) {
     }
     case TCSourceGuest: {
         NSString *dest = [self guestOutputPath];
-        BOOL alsoPhotos = _photosSwitch.on;
+        BOOL alsoPhotos = _photosSwitch.on && !audioOnly;
         NSData *data = [NSData dataWithContentsOfURL:outURL options:NSDataReadingMappedAlways error:nil];
         if (data == nil) {
             _statusLabel.text = [result stringByAppendingFormat:@"\n%@", NSLocalizedString(@"Could not read the converted video.", @"Video converter error")];
@@ -736,7 +861,7 @@ static NSArray<NSNumber *> *TCSizeLines(void) {
     if (![fm createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil])
         return outURL;
     NSURL *named = [NSURL fileURLWithPath:[dir stringByAppendingPathComponent:
-                                           [base stringByAppendingString:@"-converted.mp4"]]];
+                                           [base stringByAppendingFormat:@"-converted.%@", outURL.pathExtension]]];
     if (![fm moveItemAtURL:outURL toURL:named error:nil]) {
         [fm removeItemAtPath:dir error:nil];
         return outURL;

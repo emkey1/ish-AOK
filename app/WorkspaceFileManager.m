@@ -878,9 +878,14 @@ static NSString *ISHHomeDirectoryForUID(NSData *passwdData, uid_t targetUID) {
             [weakSelf duplicateItem:item];
         }]];
     }
-    if (item.kind == ISHGuestFileKindRegular &&
-            [ISHFileManagerTranscodableExtensions() containsObject:item.name.pathExtension.lowercaseString]) {
-        UIAction *convert = [UIAction actionWithTitle:NSLocalizedString(@"Convert Video…", @"File context menu action: open the video in the Video Converter") image:[UIImage systemImageNamed:@"film.stack"]
+    NSString *extension = item.name.pathExtension.lowercaseString;
+    BOOL convertsVideo = [ISHFileManagerTranscodableExtensions() containsObject:extension];
+    BOOL convertsAudio = [ISHFileManagerConvertibleAudioExtensions() containsObject:extension];
+    if (item.kind == ISHGuestFileKindRegular && (convertsVideo || convertsAudio)) {
+        NSString *title = convertsVideo
+            ? NSLocalizedString(@"Convert Video…", @"File context menu action: open the video in the Video Converter")
+            : NSLocalizedString(@"Convert Audio…", @"File context menu action: open the audio file in the Media Converter");
+        UIAction *convert = [UIAction actionWithTitle:title image:[UIImage systemImageNamed:convertsVideo ? @"film.stack" : @"waveform"]
                                            identifier:nil handler:^(UIAction *action) {
             [weakSelf.workspaceHostViewController openWorkspaceToolWithIdentifier:@"transcode" fileGuestPath:item.guestPath];
         }];
@@ -1079,12 +1084,23 @@ static NSSet<NSString *> *ISHFileManagerKnownBinaryExtensions(void) {
     return set;
 }
 
-// What AVFoundation can read, so what the Video Converter takes. Narrower
+// What AVFoundation can read, so what the Media Converter takes. Narrower
 // than the player's list: mkv, webm and avi play through other paths there.
 static NSSet<NSString *> *ISHFileManagerTranscodableExtensions(void) {
     static NSSet<NSString *> *set;
     static dispatch_once_t once;
     dispatch_once(&once, ^{ set = [NSSet setWithArray:@[@"mp4", @"mov", @"m4v", @"3gp"]]; });
+    return set;
+}
+
+// The audio files it takes: what iOS decodes. Ogg and Opus files are not
+// among them, and stay ffmpeg's.
+static NSSet<NSString *> *ISHFileManagerConvertibleAudioExtensions(void) {
+    static NSSet<NSString *> *set;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        set = [NSSet setWithArray:@[@"mp3", @"m4a", @"m4b", @"aac", @"wav", @"aif", @"aiff", @"aifc", @"caf", @"flac"]];
+    });
     return set;
 }
 

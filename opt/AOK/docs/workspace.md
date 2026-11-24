@@ -28,7 +28,7 @@ Terminal lists your sessions and Utils lists every applet, in five groups:
 - **Workspace** — Layout Manager, Desktops, Launcher, Quick Actions, Browser,
   Music, MotePad, File Manager, Sessions, Themes, and LLM Chat when it is
   enabled in Settings (see [llm-chat.md](llm-chat.md)).
-- **Media** — Markdown, Image Viewer, Video Player, Video Converter, and Wayland (see below).
+- **Media** — Markdown, Image Viewer, Video Player, Media Converter, and Wayland (see below).
 - **Status** — Clock, Monitor, Networks, Logs.
 - **Storage** — Storage, and Boot Images, which is the Filesystems screen
   described in [roots.md](roots.md).
@@ -134,23 +134,31 @@ and say whether AVFoundation can play them), and streams from the web:
 - From a shell: `ws-videoplayer https://…/live.m3u8` or
   `ws-videoplayer ~/channels.m3u`.
 
-## Video Converter
+## Media Converter
 
-Converts a video to HEVC or H.264 on the device's hardware encoder, the
-Workspace side of `/AOK/native/transcode` (see [transcode.md](transcode.md)).
+Converts a video to HEVC or H.264 on the device's hardware encoder, or a video's
+sound or an audio file to AAC, ALAC or WAV, the Workspace side of
+`/AOK/native/transcode` (see [transcode.md](transcode.md)). It was the Video
+Converter until build 567.
 
 - **Photos** picks a video from your library. The result is added to Photos
   with the original's date and place, and **Delete Original from Photos…**
   then frees the space: iOS asks first, and keeps the original in Recently
   Deleted for 30 days.
-- **Files** picks one from the Files app; when it is done you choose where to
-  save the result.
-- A guest file opens from the File Manager's **Convert Video…** (long-press a
-  video) or `ws-transcode FILE`; the result is saved beside it as
-  `NAME-converted.mp4`, and **Also save to Photos** adds a copy there.
-- **Format**, **Size** (Original, 4K, 1080p, 720p, 480p) and **Quality**
+- **Files** picks a video or an audio file from the Files app; when it is
+  done you choose where to save the result.
+- A guest file opens from the File Manager's **Convert Video…** or **Convert
+  Audio…** (long-press the file) or `ws-transcode FILE`; the result is saved
+  beside it as `NAME-converted.mp4` (or `.m4a`, `.wav`), and **Also save to
+  Photos** adds a video to Photos too.
+- **Format** offers HEVC and H.264 for a video, and AAC, ALAC and WAV, which
+  keep only the sound, for a video or an audio file. Photos holds no sound
+  alone, so the sound of a Photos video is saved where you choose.
+- For a video, **Size** (Original, 4K, 1080p, 720p, 480p) and **Quality**
   (Smaller, Balanced, Better) set the encoder; the rate is chosen from the
-  picture and capped at the source's.
+  picture and capped at the source's. For AAC, **Quality** is 96, 128 or
+  256 kbit/s, and Balanced copies audio that is already AAC as it is. ALAC and
+  WAV are lossless and have no setting.
 
 The screen stays awake while it converts, since iOS stops a conversion when it
 suspends the app. Closing the window cancels it.

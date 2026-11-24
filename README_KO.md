@@ -26,7 +26,7 @@ AOK VM, 자매 앱(완전한 가상 머신: QEMU 와 AOK gadget 엔진으로 만
 - **LLM Chat**: 앱 내장 채팅 클라이언트(OpenAI 호환 서버, Anthropic, Gemini, Apple 온디바이스 모델). 허용/확인/거부 권한 아래에서 게스트의 파일을 읽고 고치고 명령을 실행할 수 있으며, MCP 서버를 쓰고, 여러 채팅을 백그라운드 에이전트로 동시에 돌립니다. API 키는 키체인에 보관되며, 566부터는 첫 메시지를 제공자의 호스트로 보내기 전에 먼저 묻습니다. `/AOK/docs/llm-chat.md` 참고.
 - **외부 디스플레이** (563, iPhone 전용, iOS 27 에서는 564 부터, 실제 하드웨어에서는 아직 시험하지 않음): 모니터나 AirPlay 화면 미러링으로 연결하면 터미널(Workspace 에서는 맨 앞의 터미널 창)이 큰 화면의 비율에 맞게 화면을 채우고, 키보드는 iPhone에 남습니다. Wayland Display는 커서와 함께 그 화면에 미러링됩니다. iPad는 Stage Manager 동작을 그대로 유지합니다. `/AOK/docs/external-display.md` 를 참고하세요.
 - **터미널 안의 이미지** (565): kitty 의 그래픽 프로토콜을 지원하므로 `kitten icat`, `chafa`, `timg` 및 이를 쓰는 파일 관리자가 실제 그림을 보여 주며, 터미널이 자신의 크기를 픽셀 단위로 알려 줍니다. `/AOK/docs/terminal-images.md` 참고.
-- **하드웨어 인코더로 동영상 변환** (565): `/AOK/native/transcode` 는 카메라 앱이 쓰는 인코더로 HEVC 나 H.264 로 다시 인코딩합니다. 게스트 안의 `ffmpeg` 는 에뮬레이션되므로 매우 느립니다. Workspace 의 Video Converter 애플릿은 같은 일을 버튼으로 하며, 사진 앱에서 동영상을 가져오고 결과를 다시 넣어 줍니다. `/AOK/docs/transcode.md` 참고.
+- **하드웨어 인코더로 동영상 변환** (565): `/AOK/native/transcode` 는 카메라 앱이 쓰는 인코더로 HEVC 나 H.264 로 다시 인코딩합니다. 게스트 안의 `ffmpeg` 는 에뮬레이션되므로 매우 느립니다. Workspace 의 Media Converter 애플릿은 같은 일을 버튼으로 하며, 사진 앱에서 동영상을 가져오고 결과를 다시 넣어 줍니다. `/AOK/docs/transcode.md` 참고.
 - **디스크로 서스펜드**: 프로세스, 열린 파일, 터미널까지 세션 전체를 저장했다가 앱이 종료된 뒤에도 이어서 재개합니다. 기본값은 꺼짐. `/AOK/docs/suspend.md` 참고.
 - **한국어와 다른 언어**: 앱 인터페이스가 기기 언어를 따르며, 영어 외에 한국어, 간체·번체 중국어, 일본어, 스페인어, 프랑스어, 독일어, 브라질 포르투갈어, 러시아어를 지원합니다. 터미널은 입력기 입력을 받습니다. 한글은 음절을 그 자리에서 조합해 입력하고, 중국어 병음과 일본어는 조합 중인 글자를 커서 위치에 표시하며 후보 창을 그 옆에 띄웁니다. 화상 키보드와 하드웨어 키보드 모두 해당됩니다. `/AOK/tools/setup-locale.sh` 는 루트 파일시스템에도 기기 언어를 설정합니다(프로그램 번역은 Devuan 에 들어 있습니다). `/AOK/docs/roots.md` 참고.
 - iOS를 통해 게스트 파일을 노출하는 File Provider 지원.
@@ -253,7 +253,7 @@ ninja -C build
 | `/AOK/native/sudo`, `su`, `passwd` | SmallCLUE 의 것을 별도의 **setuid-root** 프로그램으로 둔 것. 부팅된 루트 자신의 `/etc/shadow` 와 `/etc/sudoers` 를 확인합니다 |
 | `/AOK/native/ktop` | 프로세스 뷰어, `/AOK/tools/ktop` 과 같은 소스 |
 | `/AOK/native/wl-present` | VNC 없이 앱에 Wayland 데스크톱을 보여 줌. `start-wayland.sh` 가 실행합니다 |
-| `/AOK/native/transcode` | 기기의 하드웨어 인코더로 동영상을 HEVC 나 H.264 로 다시 인코딩합니다. 게스트 아키텍처와 상관없이 전속력으로 동작하며, Workspace 의 Video Converter 애플릿이 그 앞단입니다. `/AOK/docs/transcode.md` 참고 |
+| `/AOK/native/transcode` | 기기의 하드웨어 인코더로 동영상을 HEVC 나 H.264 로 다시 인코딩합니다. 게스트 아키텍처와 상관없이 전속력으로 동작하며, 시스템 코덱으로 오디오를 AAC, ALAC, WAV 로 변환하기도 합니다. Workspace 의 Media Converter 애플릿이 그 앞단입니다. `/AOK/docs/transcode.md` 참고 |
 | `/AOK/native/bash` | [네이티브 bash와 라이선스](#네이티브-bash와-라이선스) 참고 |
 | `/AOK/native/zsh` | [네이티브 zsh](#네이티브-zsh) 참고 |
 | `/AOK/native/dash`, `/AOK/native/sh` | dash, BSD 라이선스. `native-links.sh` 가 그냥 `sh` 라고 치면 이것이 되도록 만듭니다 |

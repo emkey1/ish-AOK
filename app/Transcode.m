@@ -13,6 +13,7 @@
 //
 
 #import <AVFoundation/AVFoundation.h>
+#import <AudioToolbox/AudioToolbox.h>
 #include <stdatomic.h>
 #include "kernel/native_transcode.h"
 
@@ -82,10 +83,409 @@ static NSDictionary *TCRec709(void) {
 @property (nonatomic) AVAssetReaderOutput *output;
 @property (nonatomic) AVAssetWriterInput *input;
 @property (nonatomic) BOOL isVideo;
+@property (nonatomic) BOOL tracksProgress;  // its presentation times are the job's progress
 @property (nonatomic) BOOL failed;
 @end
 @implementation TCPump
 @end
+
+static BOOL TCIsAAC(FourCharCode codec) {
+    return codec == kAudioFormatMPEG4AAC || codec == kAudioFormatMPEG4AAC_HE ||
+        codec == kAudioFormatMPEG4AAC_HE_V2 || codec == kAudioFormatMPEG4AAC_LD ||
+        codec == kAudioFormatMPEG4AAC_ELD;
+}
+
+// The AAC bitrate the system's encoder will take for this sample rate and
+// channel count: the one asked for when it is allowed, else the highest
+// allowed below it, else the lowest allowed. What it allows depends on both
+// -- 128k is too much for mono at 22.05 kHz, which failed with -12651
+// ("encoding parameters are not supported") -- so it is asked rather than
+// worked out.
+static long TCAACBitrate(double rate, int channels, long wanted) {
+    AudioStreamBasicDescription in = {
+        .mSampleRate = rate, .mFormatID = kAudioFormatLinearPCM,
+        .mFormatFlags = kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked,
+        .mBytesPerPacket = 4 * (UInt32) channels, .mFramesPerPacket = 1,
+        .mBytesPerFrame = 4 * (UInt32) channels, .mChannelsPerFrame = (UInt32) channels, .mBitsPerChannel = 32,
+    };
+    AudioStreamBasicDescription out = {
+        .mSampleRate = rate, .mFormatID = kAudioFormatMPEG4AAC,
+        .mChannelsPerFrame = (UInt32) channels, .mFramesPerPacket = 1024,
+    };
+    AudioConverterRef converter = NULL;
+    if (AudioConverterNew(&in, &out, &converter) != noErr)
+        return wanted;
+    UInt32 size = 0;
+    AudioValueRange *ranges = NULL;
+    if (AudioConverterGetPropertyInfo(converter, kAudioConverterApplicableEncodeBitRates, &size, NULL) == noErr &&
+            size >= sizeof(AudioValueRange) && (ranges = malloc(size)) != NULL &&
+            AudioConverterGetProperty(converter, kAudioConverterApplicableEncodeBitRates, &size, ranges) != noErr) {
+        free(ranges);
+        ranges = NULL;
+    }
+    AudioConverterDispose(converter);
+    if (ranges == NULL)
+        return wanted;
+    long below = 0, lowest = 0;
+    BOOL allowed = NO;
+    for (size_t i = 0; i < size / sizeof(AudioValueRange); i++) {
+        long lo = (long) ranges[i].mMinimum, hi = (long) ranges[i].mMaximum;
+        if (wanted >= lo && wanted <= hi)
+            allowed = YES;
+        if (hi <= wanted && hi > below)
+            below = hi;
+        if (lowest == 0 || lo < lowest)
+            lowest = lo;
+    }
+    free(ranges);
+    if (allowed)
+        return wanted;
+    return below > 0 ? below : lowest > 0 ? lowest : wanted;
+}
+
+static BOOL TCIsSoundOnlyContainer(enum transcode_container container) {
+    return container == TRANSCODE_M4A || container == TRANSCODE_CAF ||
+        container == TRANSCODE_WAV || container == TRANSCODE_AIFF;
+}
+
+// A writer for the job's container, on a file in the temporary directory
+// that job->out_host_path names.
+static AVAssetWriter *TCMakeWriter(struct transcode_job *job, NSError **error) {
+    AVFileType type;
+    NSString *ext;
+    switch (job->container) {
+    case TRANSCODE_MOV: type = AVFileTypeQuickTimeMovie; ext = @"mov"; break;
+    case TRANSCODE_M4A: type = AVFileTypeAppleM4A; ext = @"m4a"; break;
+    case TRANSCODE_CAF: type = AVFileTypeCoreAudioFormat; ext = @"caf"; break;
+    case TRANSCODE_WAV: type = AVFileTypeWAVE; ext = @"wav"; break;
+    case TRANSCODE_AIFF: type = AVFileTypeAIFF; ext = @"aif"; break;
+    default: type = AVFileTypeMPEG4; ext = @"mp4"; break;
+    }
+    NSString *outPath = [NSTemporaryDirectory() stringByAppendingPathComponent:
+        [NSString stringWithFormat:@"%s%@.%@", TRANSCODE_TEMP_PREFIX, NSUUID.UUID.UUIDString, ext]];
+    strlcpy(job->out_host_path, outPath.fileSystemRepresentation, sizeof(job->out_host_path));
+    return [AVAssetWriter assetWriterWithURL:[NSURL fileURLWithPath:outPath] fileType:type error:error];
+}
+
+// Runs every pump to the end, reporting progress and watching for a cancel,
+// then finishes the file. 0 when it is written; 1 when cancelled and -1 with
+// job->error set when it failed, both with the file removed.
+static int TCPumpAll(struct transcode_job *job, AVAssetReader *reader, AVAssetWriter *writer,
+                     NSArray<TCPump *> *pumps, double duration) {
+    NSString *outPath = @(job->out_host_path);
+    if (![reader startReading]) {
+        TCSetError(job, @"cannot read the input", reader.error);
+        return -1;
+    }
+    if (![writer startWriting]) {
+        [reader cancelReading];
+        TCSetError(job, @"cannot start the encoder", writer.error);
+        return -1;
+    }
+    [writer startSessionAtSourceTime:kCMTimeZero];
+
+    // Progress, as the presentation time of the last sample passed on by the
+    // pump that tracks it, in microseconds. Written by its queue, read here.
+    _Atomic int64_t *position = calloc(1, sizeof(*position));
+    _Atomic bool *cancelled = calloc(1, sizeof(*cancelled));
+    if (position == NULL || cancelled == NULL) {
+        free(position);
+        free(cancelled);
+        [reader cancelReading];
+        [writer cancelWriting];
+        TCSetError(job, @"out of memory", nil);
+        return -1;
+    }
+    dispatch_group_t group = dispatch_group_create();
+    for (TCPump *pump in pumps) {
+        dispatch_group_enter(group);
+        dispatch_queue_t queue = dispatch_queue_create(pump.isVideo ? "transcode.video" : "transcode.audio",
+                                                       DISPATCH_QUEUE_SERIAL);
+        __block BOOL finished = NO;
+        [pump.input requestMediaDataWhenReadyOnQueue:queue usingBlock:^{
+            if (finished)
+                return;
+            while (pump.input.isReadyForMoreMediaData) {
+                CMSampleBufferRef buffer = atomic_load(cancelled) ? NULL : [pump.output copyNextSampleBuffer];
+                if (buffer == NULL) {
+                    [pump.input markAsFinished];
+                    finished = YES;
+                    dispatch_group_leave(group);
+                    return;
+                }
+                if (pump.tracksProgress) {
+                    CMTime t = CMSampleBufferGetPresentationTimeStamp(buffer);
+                    if (CMTIME_IS_NUMERIC(t))
+                        atomic_store(position, (int64_t) (CMTimeGetSeconds(t) * 1e6));
+                }
+                BOOL ok = [pump.input appendSampleBuffer:buffer];
+                CFRelease(buffer);
+                if (!ok) {
+                    pump.failed = YES;
+                    atomic_store(cancelled, true);
+                    [pump.input markAsFinished];
+                    finished = YES;
+                    dispatch_group_leave(group);
+                    return;
+                }
+            }
+        }];
+    }
+
+    BOOL userCancelled = NO;
+    while (dispatch_group_wait(group, dispatch_time(DISPATCH_TIME_NOW, 500 * NSEC_PER_MSEC)) != 0) {
+        if (job->progress != NULL && duration > 0)
+            job->progress(atomic_load(position) / 1e6 / duration, job->ctx);
+        if (!userCancelled && job->should_cancel != NULL && job->should_cancel(job->ctx)) {
+            userCancelled = YES;
+            atomic_store(cancelled, true);
+            [reader cancelReading];
+        }
+    }
+    BOOL anyFailed = NO;
+    for (TCPump *pump in pumps)
+        anyFailed |= pump.failed;
+    free(position);
+    free(cancelled);
+
+    if (userCancelled || anyFailed || reader.status == AVAssetReaderStatusFailed) {
+        NSError *readerError = reader.status == AVAssetReaderStatusFailed ? reader.error : nil;
+        NSError *writerError = writer.status == AVAssetWriterStatusFailed ? writer.error : nil;
+        if (reader.status == AVAssetReaderStatusReading)
+            [reader cancelReading];
+        [writer cancelWriting];
+        [NSFileManager.defaultManager removeItemAtPath:outPath error:nil];
+        job->out_host_path[0] = '\0';
+        if (userCancelled)
+            return 1;
+        if (readerError != nil)
+            TCSetError(job, @"decoding failed", readerError);
+        else
+            TCSetError(job, @"encoding failed", writerError);
+        return -1;
+    }
+
+    dispatch_semaphore_t done = dispatch_semaphore_create(0);
+    [writer finishWritingWithCompletionHandler:^{
+        dispatch_semaphore_signal(done);
+    }];
+    dispatch_semaphore_wait(done, DISPATCH_TIME_FOREVER);
+    if (writer.status != AVAssetWriterStatusCompleted) {
+        TCSetError(job, @"encoding failed", writer.error);
+        [NSFileManager.defaultManager removeItemAtPath:outPath error:nil];
+        job->out_host_path[0] = '\0';
+        return -1;
+    }
+    if (job->progress != NULL)
+        job->progress(1, job->ctx);
+    return 0;
+}
+
+// The bits per sample worth keeping from a source: 24 for a lossless or PCM
+// source deeper than 16 bits (or in floating point), 16 for the rest.
+static int TCSourceBits(const AudioStreamBasicDescription *asbd) {
+    if (asbd == NULL)
+        return 16;
+    if (asbd->mFormatID == kAudioFormatLinearPCM)
+        return (asbd->mFormatFlags & kAudioFormatFlagIsFloat) || asbd->mBitsPerChannel > 16 ? 24 : 16;
+    if (asbd->mFormatID == kAudioFormatAppleLossless || asbd->mFormatID == kAudioFormatFLAC) {
+        switch (asbd->mFormatFlags) {
+        case kAppleLosslessFormatFlag_20BitSourceData:
+        case kAppleLosslessFormatFlag_24BitSourceData:
+        case kAppleLosslessFormatFlag_32BitSourceData:
+            return 24;
+        }
+    }
+    return 16;
+}
+
+static NSString *TCAudioCodecName(FourCharCode codec) {
+    switch (codec) {
+    case kAudioFormatMPEG4AAC: return @"AAC";
+    case kAudioFormatMPEG4AAC_HE: case kAudioFormatMPEG4AAC_HE_V2: return @"HE-AAC";
+    case kAudioFormatMPEG4AAC_LD: case kAudioFormatMPEG4AAC_ELD: return @"AAC-LD";
+    case kAudioFormatAppleLossless: return @"ALAC";
+    case kAudioFormatFLAC: return @"FLAC";
+    case kAudioFormatMPEGLayer3: return @"MP3";
+    case kAudioFormatLinearPCM: return @"PCM";
+    case kAudioFormatOpus: return @"Opus";
+    case kAudioFormatAC3: return @"AC-3";
+    case kAudioFormatEnhancedAC3: return @"E-AC-3";
+    default: return @"audio";
+    }
+}
+
+// The input's tags in the common key space, which the writer turns into the
+// container's own (iTunes atoms in an .m4a): an MP3's ID3 frames cannot be
+// written there as they are, and a video's QuickTime keys keep its date and
+// place this way.
+static NSArray<AVMetadataItem *> *TCCommonMetadata(AVAsset *asset) {
+    NSMutableArray<AVMetadataItem *> *items = [NSMutableArray array];
+    for (AVMetadataItem *item in asset.commonMetadata) {
+        if (item.commonKey == nil || item.value == nil)
+            continue;
+        AVMutableMetadataItem *copy = [AVMutableMetadataItem metadataItem];
+        copy.keySpace = AVMetadataKeySpaceCommon;
+        copy.key = item.commonKey;
+        copy.value = item.value;
+        copy.dataType = item.dataType;
+        copy.extendedLanguageTag = item.extendedLanguageTag;
+        [items addObject:copy];
+    }
+    return items;
+}
+
+// A sound-only result: an audio container, or an input with no picture.
+static int TCRunAudio(struct transcode_job *job, AVURLAsset *asset, AVAssetTrack *audio, BOOL inputHasVideo) {
+    NSError *error = nil;
+    job->audio_only = true;
+    if (!inputHasVideo && (job->codec_set || job->max_lines > 0 || job->video_bitrate > 0)) {
+        TCSetError(job, @"the input has no video: -s, -b and -c hevc/h264 are for video", nil);
+        return -1;
+    }
+    if (!inputHasVideo && job->no_audio) {
+        TCSetError(job, @"the input has no video: -n would leave nothing", nil);
+        return -1;
+    }
+    if (audio == nil) {
+        TCSetError(job, inputHasVideo ? @"the input has no audio track"
+                                      : @"the input has no video or audio track", nil);
+        return -1;
+    }
+    if (!TCLoad(audio, @[@"formatDescriptions", @"estimatedDataRate"], &error) ||
+            !TCLoad(asset, @[@"commonMetadata"], &error)) {
+        TCSetError(job, @"cannot read the audio track", error);
+        return -1;
+    }
+    double duration = CMTimeGetSeconds(asset.duration);
+    if (!(duration > 0))
+        duration = 0;
+    CMFormatDescriptionRef format = (__bridge CMFormatDescriptionRef) audio.formatDescriptions.firstObject;
+    const AudioStreamBasicDescription *asbd = format ? CMAudioFormatDescriptionGetStreamBasicDescription(format) : NULL;
+    FourCharCode source = format ? CMFormatDescriptionGetMediaSubType(format) : 0;
+    enum transcode_container container = job->container;
+
+    // The codec, and whether the source can go in as it is.
+    enum transcode_audio_codec codec = job->audio_codec;
+    if (container == TRANSCODE_WAV || container == TRANSCODE_AIFF)
+        codec = TRANSCODE_AUDIO_PCM;
+    if (codec == TRANSCODE_AUDIO_AUTO) {
+        BOOL alacFits = container == TRANSCODE_M4A || container == TRANSCODE_CAF || container == TRANSCODE_MOV;
+        codec = source == kAudioFormatAppleLossless && alacFits ? TRANSCODE_AUDIO_ALAC : TRANSCODE_AUDIO_AAC;
+    }
+    BOOL copy = (codec == TRANSCODE_AUDIO_AAC && TCIsAAC(source) && job->audio_bitrate == 0) ||
+        (codec == TRANSCODE_AUDIO_ALAC && source == kAudioFormatAppleLossless);
+    job->lossless = codec != TRANSCODE_AUDIO_AAC;
+
+    AVAssetReader *reader = [AVAssetReader assetReaderWithAsset:asset error:&error];
+    if (reader == nil) {
+        TCSetError(job, @"cannot read the input", error);
+        return -1;
+    }
+    AVAssetWriter *writer = TCMakeWriter(job, &error);
+    if (writer == nil) {
+        TCSetError(job, @"cannot start the encoder", error);
+        return -1;
+    }
+    if (container != TRANSCODE_WAV && container != TRANSCODE_AIFF)
+        writer.metadata = TCCommonMetadata(asset);
+
+    AVAssetReaderTrackOutput *audioOut = nil;
+    AVAssetWriterInput *audioIn = nil;
+    NSString *note;
+    if (copy) {
+        audioOut = [AVAssetReaderTrackOutput assetReaderTrackOutputWithTrack:audio outputSettings:nil];
+        audioIn = [AVAssetWriterInput assetWriterInputWithMediaType:AVMediaTypeAudio outputSettings:nil
+                                                   sourceFormatHint:format];
+        if (![reader canAddOutput:audioOut] || ![writer canAddInput:audioIn])
+            copy = NO;
+        note = [NSString stringWithFormat:@"%@ %.0f kbit/s, copied", TCAudioCodecName(source),
+                audio.estimatedDataRate / 1000];
+    }
+    if (!copy) {
+        // Mono stays mono; anything wider is mixed down to stereo, as a
+        // video's audio is.
+        int channels = asbd != NULL && asbd->mChannelsPerFrame == 1 ? 1 : 2;
+        double sourceRate = asbd != NULL && asbd->mSampleRate > 0 ? asbd->mSampleRate : 44100;
+        double rate = sourceRate;
+        long bitrate = 0;
+        int bits = TCSourceBits(asbd);
+        if (codec == TRANSCODE_AUDIO_AAC) {
+            // AAC's own rates; above 48 kHz it goes down to the one of the
+            // same family.
+            static const double aacRates[] = {8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000};
+            BOOL valid = NO;
+            for (size_t i = 0; i < sizeof(aacRates) / sizeof(aacRates[0]); i++)
+                valid |= rate == aacRates[i];
+            if (!valid)
+                rate = rate > 48000 && fmod(rate, 48000) == 0 ? 48000 : 44100;
+            bitrate = TCAACBitrate(rate, channels, job->audio_bitrate > 0 ? job->audio_bitrate : 128000);
+        }
+        AudioChannelLayout layout = {
+            .mChannelLayoutTag = channels == 1 ? kAudioChannelLayoutTag_Mono : kAudioChannelLayoutTag_Stereo,
+        };
+        NSData *layoutData = [NSData dataWithBytes:&layout length:sizeof(layout)];
+        audioOut = [AVAssetReaderTrackOutput assetReaderTrackOutputWithTrack:audio outputSettings:@{
+            AVFormatIDKey: @(kAudioFormatLinearPCM),
+            AVSampleRateKey: @(rate),
+            AVNumberOfChannelsKey: @(channels),
+            AVChannelLayoutKey: layoutData,
+            AVLinearPCMBitDepthKey: @32,
+            AVLinearPCMIsFloatKey: @YES,
+            AVLinearPCMIsBigEndianKey: @NO,
+            AVLinearPCMIsNonInterleaved: @NO,
+        }];
+        NSMutableDictionary *settings = [@{
+            AVSampleRateKey: @(rate),
+            AVNumberOfChannelsKey: @(channels),
+            AVChannelLayoutKey: layoutData,
+        } mutableCopy];
+        NSString *what;
+        switch (codec) {
+        case TRANSCODE_AUDIO_ALAC:
+            settings[AVFormatIDKey] = @(kAudioFormatAppleLossless);
+            settings[AVEncoderBitDepthHintKey] = @(bits);
+            what = [NSString stringWithFormat:@"ALAC %d-bit", bits];
+            break;
+        case TRANSCODE_AUDIO_PCM:
+            settings[AVFormatIDKey] = @(kAudioFormatLinearPCM);
+            settings[AVLinearPCMBitDepthKey] = @(bits);
+            settings[AVLinearPCMIsFloatKey] = @NO;
+            settings[AVLinearPCMIsBigEndianKey] = @(container == TRANSCODE_AIFF);
+            settings[AVLinearPCMIsNonInterleaved] = @NO;
+            what = [NSString stringWithFormat:@"PCM %d-bit", bits];
+            break;
+        default:
+            settings[AVFormatIDKey] = @(kAudioFormatMPEG4AAC);
+            settings[AVEncoderBitRateKey] = @(bitrate);
+            what = [NSString stringWithFormat:@"AAC %ld kbit/s", bitrate / 1000];
+            break;
+        }
+        audioIn = [AVAssetWriterInput assetWriterInputWithMediaType:AVMediaTypeAudio outputSettings:settings];
+        if (![reader canAddOutput:audioOut] || ![writer canAddInput:audioIn]) {
+            TCSetError(job, [NSString stringWithFormat:@"cannot make %@ at %.1f kHz from this audio", what, rate / 1000], nil);
+            return -1;
+        }
+        note = [NSString stringWithFormat:@"%@, %@, %g kHz", what, channels == 1 ? @"mono" : @"stereo", rate / 1000];
+        if (TCIsAAC(source) && codec == TRANSCODE_AUDIO_AAC)
+            note = [note stringByAppendingString:@", re-encoded"];
+    }
+    audioOut.alwaysCopiesSampleData = NO;
+    audioIn.expectsMediaDataInRealTime = NO;
+    [reader addOutput:audioOut];
+    [writer addInput:audioIn];
+    TCPump *pump = [TCPump new];
+    pump.output = audioOut;
+    pump.input = audioIn;
+    pump.tracksProgress = YES;
+
+    int res = TCPumpAll(job, reader, writer, @[pump], duration);
+    if (res != 0)
+        return res;
+    NSString *summary = inputHasVideo ? [note stringByAppendingString:@", the video's sound only"] : note;
+    strlcpy(job->summary, summary.UTF8String, sizeof(job->summary));
+    return 0;
+}
 
 static int TCRun(struct transcode_job *job) {
     @autoreleasepool {
@@ -94,15 +494,18 @@ static int TCRun(struct transcode_job *job) {
         AVURLAsset *asset = [AVURLAsset URLAssetWithURL:inURL
                                                 options:@{AVURLAssetPreferPreciseDurationAndTimingKey: @YES}];
         if (!TCLoad(asset, @[@"tracks", @"duration", @"metadata"], &error)) {
-            TCSetError(job, @"cannot read the input as a video", error);
+            TCSetError(job, @"cannot read the input as a video or audio file", error);
             return -1;
         }
         AVAssetTrack *video = [asset tracksWithMediaType:AVMediaTypeVideo].firstObject;
-        AVAssetTrack *audio = job->no_audio ? nil : [asset tracksWithMediaType:AVMediaTypeAudio].firstObject;
-        if (video == nil) {
-            TCSetError(job, @"the input has no video track", nil);
+        AVAssetTrack *firstAudio = [asset tracksWithMediaType:AVMediaTypeAudio].firstObject;
+        if (video == nil || TCIsSoundOnlyContainer(job->container))
+            return TCRunAudio(job, asset, firstAudio, video != nil);
+        if (job->audio_codec != TRANSCODE_AUDIO_AUTO) {
+            TCSetError(job, @"-c aac, alac and pcm make an audio file: name the output .m4a, .caf or .wav", nil);
             return -1;
         }
+        AVAssetTrack *audio = job->no_audio ? nil : firstAudio;
         if (!TCLoad(video, @[@"naturalSize", @"preferredTransform", @"nominalFrameRate",
                              @"estimatedDataRate", @"formatDescriptions"], &error)) {
             TCSetError(job, @"cannot read the video track", error);
@@ -175,13 +578,8 @@ static int TCRun(struct transcode_job *job) {
             return -1;
         }
 
-        NSString *ext = job->mov ? @"mov" : @"mp4";
-        NSString *outPath = [NSTemporaryDirectory() stringByAppendingPathComponent:
-            [NSString stringWithFormat:@"%s%@.%@", TRANSCODE_TEMP_PREFIX, NSUUID.UUID.UUIDString, ext]];
-        strlcpy(job->out_host_path, outPath.fileSystemRepresentation, sizeof(job->out_host_path));
-        AVAssetWriter *writer = [AVAssetWriter assetWriterWithURL:[NSURL fileURLWithPath:outPath]
-                                                         fileType:job->mov ? AVFileTypeQuickTimeMovie : AVFileTypeMPEG4
-                                                            error:&error];
+        BOOL mov = job->container == TRANSCODE_MOV;
+        AVAssetWriter *writer = TCMakeWriter(job, &error);
         if (writer == nil) {
             TCSetError(job, @"cannot start the encoder", error);
             return -1;
@@ -250,6 +648,7 @@ static int TCRun(struct transcode_job *job) {
         videoPump.output = videoOut;
         videoPump.input = videoIn;
         videoPump.isVideo = YES;
+        videoPump.tracksProgress = YES;
         NSMutableArray<TCPump *> *pumps = [NSMutableArray arrayWithObject:videoPump];
 
         // Audio: copied as it is when the container takes it, otherwise
@@ -268,9 +667,7 @@ static int TCRun(struct transcode_job *job) {
             // is: AVAssetWriter also accepts linear PCM there (a Live
             // Photo's audio), and many players then cannot play the file.
             FourCharCode audioCodec = audioFormat ? CMFormatDescriptionGetMediaSubType(audioFormat) : 0;
-            BOOL copyable = job->mov || audioCodec == kAudioFormatMPEG4AAC ||
-                audioCodec == kAudioFormatMPEG4AAC_HE || audioCodec == kAudioFormatMPEG4AAC_HE_V2 ||
-                audioCodec == kAudioFormatMPEG4AAC_LD || audioCodec == kAudioFormatMPEG4AAC_ELD;
+            BOOL copyable = mov || TCIsAAC(audioCodec);
             BOOL copied = audioFormat != NULL && copyable &&
                 [reader canAddOutput:audioOut] && [writer canAddInput:audioIn];
             if (copied) {
@@ -281,6 +678,7 @@ static int TCRun(struct transcode_job *job) {
                     audioFormat ? CMAudioFormatDescriptionGetStreamBasicDescription(audioFormat) : NULL;
                 if (asbd != NULL && (asbd->mSampleRate == 44100 || asbd->mSampleRate == 48000))
                     rate = asbd->mSampleRate;
+                long audioRate = TCAACBitrate(rate, 2, job->audio_bitrate > 0 ? job->audio_bitrate : 128000);
                 AudioChannelLayout stereo = {.mChannelLayoutTag = kAudioChannelLayoutTag_Stereo};
                 NSData *layout = [NSData dataWithBytes:&stereo length:sizeof(stereo)];
                 audioOut = [AVAssetReaderTrackOutput assetReaderTrackOutputWithTrack:audio outputSettings:@{
@@ -294,13 +692,13 @@ static int TCRun(struct transcode_job *job) {
                     AVSampleRateKey: @(rate),
                     AVNumberOfChannelsKey: @2,
                     AVChannelLayoutKey: layout,
-                    AVEncoderBitRateKey: @(job->audio_bitrate),
+                    AVEncoderBitRateKey: @(audioRate),
                 }];
                 if (![reader canAddOutput:audioOut] || ![writer canAddInput:audioIn]) {
                     TCSetError(job, @"cannot carry this video's audio (-n drops it)", nil);
                     return -1;
                 }
-                audioNote = [NSString stringWithFormat:@"audio AAC %ld kbit/s", job->audio_bitrate / 1000];
+                audioNote = [NSString stringWithFormat:@"audio AAC %ld kbit/s", audioRate / 1000];
             }
             audioOut.alwaysCopiesSampleData = NO;
             audioIn.expectsMediaDataInRealTime = NO;
@@ -312,111 +710,9 @@ static int TCRun(struct transcode_job *job) {
             [pumps addObject:audioPump];
         }
 
-        if (![reader startReading]) {
-            TCSetError(job, @"cannot read the input", reader.error);
-            return -1;
-        }
-        if (![writer startWriting]) {
-            [reader cancelReading];
-            TCSetError(job, @"cannot start the encoder", writer.error);
-            return -1;
-        }
-        [writer startSessionAtSourceTime:kCMTimeZero];
-
-        // Progress, as the presentation time of the last video frame passed
-        // on, in microseconds. Written by the video queue, read here.
-        _Atomic int64_t *position = calloc(1, sizeof(*position));
-        _Atomic bool *cancelled = calloc(1, sizeof(*cancelled));
-        if (position == NULL || cancelled == NULL) {
-            free(position);
-            free(cancelled);
-            [reader cancelReading];
-            [writer cancelWriting];
-            TCSetError(job, @"out of memory", nil);
-            return -1;
-        }
-        dispatch_group_t group = dispatch_group_create();
-        for (TCPump *pump in pumps) {
-            dispatch_group_enter(group);
-            dispatch_queue_t queue = dispatch_queue_create(pump.isVideo ? "transcode.video" : "transcode.audio",
-                                                           DISPATCH_QUEUE_SERIAL);
-            __block BOOL finished = NO;
-            [pump.input requestMediaDataWhenReadyOnQueue:queue usingBlock:^{
-                if (finished)
-                    return;
-                while (pump.input.isReadyForMoreMediaData) {
-                    CMSampleBufferRef buffer = atomic_load(cancelled) ? NULL : [pump.output copyNextSampleBuffer];
-                    if (buffer == NULL) {
-                        [pump.input markAsFinished];
-                        finished = YES;
-                        dispatch_group_leave(group);
-                        return;
-                    }
-                    if (pump.isVideo) {
-                        CMTime t = CMSampleBufferGetPresentationTimeStamp(buffer);
-                        if (CMTIME_IS_NUMERIC(t))
-                            atomic_store(position, (int64_t) (CMTimeGetSeconds(t) * 1e6));
-                    }
-                    BOOL ok = [pump.input appendSampleBuffer:buffer];
-                    CFRelease(buffer);
-                    if (!ok) {
-                        pump.failed = YES;
-                        atomic_store(cancelled, true);
-                        [pump.input markAsFinished];
-                        finished = YES;
-                        dispatch_group_leave(group);
-                        return;
-                    }
-                }
-            }];
-        }
-
-        BOOL userCancelled = NO;
-        while (dispatch_group_wait(group, dispatch_time(DISPATCH_TIME_NOW, 500 * NSEC_PER_MSEC)) != 0) {
-            if (job->progress != NULL && duration > 0)
-                job->progress(atomic_load(position) / 1e6 / duration, job->ctx);
-            if (!userCancelled && job->should_cancel != NULL && job->should_cancel(job->ctx)) {
-                userCancelled = YES;
-                atomic_store(cancelled, true);
-                [reader cancelReading];
-            }
-        }
-        BOOL anyFailed = NO;
-        for (TCPump *pump in pumps)
-            anyFailed |= pump.failed;
-        free(position);
-        free(cancelled);
-
-        if (userCancelled || anyFailed || reader.status == AVAssetReaderStatusFailed) {
-            NSError *readerError = reader.status == AVAssetReaderStatusFailed ? reader.error : nil;
-            NSError *writerError = writer.status == AVAssetWriterStatusFailed ? writer.error : nil;
-            if (reader.status == AVAssetReaderStatusReading)
-                [reader cancelReading];
-            [writer cancelWriting];
-            [NSFileManager.defaultManager removeItemAtPath:outPath error:nil];
-            job->out_host_path[0] = '\0';
-            if (userCancelled)
-                return 1;
-            if (readerError != nil)
-                TCSetError(job, @"decoding failed", readerError);
-            else
-                TCSetError(job, @"encoding failed", writerError);
-            return -1;
-        }
-
-        dispatch_semaphore_t done = dispatch_semaphore_create(0);
-        [writer finishWritingWithCompletionHandler:^{
-            dispatch_semaphore_signal(done);
-        }];
-        dispatch_semaphore_wait(done, DISPATCH_TIME_FOREVER);
-        if (writer.status != AVAssetWriterStatusCompleted) {
-            TCSetError(job, @"encoding failed", writer.error);
-            [NSFileManager.defaultManager removeItemAtPath:outPath error:nil];
-            job->out_host_path[0] = '\0';
-            return -1;
-        }
-        if (job->progress != NULL)
-            job->progress(1, job->ctx);
+        int res = TCPumpAll(job, reader, writer, pumps, duration);
+        if (res != 0)
+            return res;
 
         NSString *summary = [NSString stringWithFormat:@"%@%@ %ldx%ld, %.1f Mbit/s%@, %@",
                              hevc ? @"HEVC" : @"H.264", tenBit ? @" HDR" : @"",

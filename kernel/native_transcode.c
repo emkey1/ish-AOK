@@ -1,4 +1,5 @@
-// transcode -- re-encode a video on the device's hardware encoder.
+// transcode -- re-encode a video on the device's hardware encoder, or convert
+// audio with the system's codecs.
 //
 // A native program (kernel/native.c), compiled with the native libc shim like
 // motepad: its files, descriptors and signals are the guest's. The encoding
@@ -8,7 +9,8 @@
 // Why it exists: ffmpeg in the guest encodes in emulated software, which is
 // about the slowest thing an emulator can be asked to do -- H.265 ran at
 // 0.005x real time on a phone that encodes it in hardware at many times real
-// time. This hands the whole job to that hardware.
+// time. This hands the whole job to that hardware. Audio is far cheaper, but
+// an emulated encoder is still many times slower than the system's.
 //
 // Kept to one invocation's state: a native program is a function call in a
 // process that outlives it, so nothing here is static.
@@ -37,19 +39,23 @@ struct tc_run {
 static void tc_usage(FILE *out) {
     fprintf(out,
         "usage: transcode [options] INPUT OUTPUT\n"
-        "Re-encode a video on the device's hardware video encoder.\n"
+        "Re-encode a video on the device's hardware video encoder, or convert\n"
+        "audio with the system's codecs.\n"
         "\n"
-        "  -c CODEC   hevc (default) or h264\n"
+        "  -c CODEC   video: hevc (default) or h264\n"
+        "             audio: aac, alac or pcm (default: aac, or pcm for .wav/.aif)\n"
         "  -s LINES   shrink so the shorter side is at most LINES (e.g. 1080, 720)\n"
         "  -b RATE    video bitrate, e.g. 2M or 1500k (default: chosen from the size,\n"
         "             and capped at the source's)\n"
-        "  -a RATE    audio bitrate when the audio has to be re-encoded (default 128k)\n"
+        "  -a RATE    AAC bitrate (default 128k). A video's audio is re-encoded only\n"
+        "             when it has to be; audio already in AAC is copied unless -a is given\n"
         "  -n         drop the audio\n"
         "  -y         overwrite OUTPUT if it exists\n"
         "  -q         no progress line\n"
         "  -h         this help\n"
         "\n"
-        "OUTPUT ending in .mov is QuickTime; anything else is MPEG-4.\n"
+        "OUTPUT ending in .m4a, .caf, .wav or .aif makes an audio file (from a video,\n"
+        "its sound); .mov is QuickTime; anything else is MPEG-4.\n"
         "INPUT must be an ordinary file (not a pipe, and not on tmpfs).\n"
         "See /AOK/docs/transcode.md.\n");
 }
@@ -157,11 +163,32 @@ static void tc_size(char *buf, size_t size, long long bytes) {
         snprintf(buf, size, "%.1f MB", bytes / 1e6);
 }
 
+// The output's kind, from its name; -1, with the reason printed, for a kind
+// there is no encoder for.
+static int tc_container(const char *name) {
+    static const struct { const char *suffix; int container; } kinds[] = {
+        {".mov", TRANSCODE_MOV}, {".m4a", TRANSCODE_M4A}, {".m4b", TRANSCODE_M4A},
+        {".caf", TRANSCODE_CAF}, {".wav", TRANSCODE_WAV}, {".aif", TRANSCODE_AIFF},
+        {".aiff", TRANSCODE_AIFF}, {".aifc", TRANSCODE_AIFF},
+    };
+    for (size_t i = 0; i < sizeof(kinds) / sizeof(kinds[0]); i++)
+        if (tc_has_suffix(name, kinds[i].suffix))
+            return kinds[i].container;
+    static const char *const none[] = {".mp3", ".flac", ".ogg", ".oga", ".opus", ".aac", ".wma"};
+    for (size_t i = 0; i < sizeof(none) / sizeof(none[0]); i++) {
+        if (tc_has_suffix(name, none[i])) {
+            fprintf(stderr, "transcode: iOS has no %s encoder; make .m4a (AAC, or -c alac for"
+                    " lossless) or .wav, or use ffmpeg\n", none[i] + 1);
+            return -1;
+        }
+    }
+    return TRANSCODE_MP4;
+}
+
 static int tc_main(int argc, char *const argv[]) {
     struct transcode_job job;
     memset(&job, 0, sizeof(job));
     job.codec = TRANSCODE_HEVC;
-    job.audio_bitrate = 128000;
     bool overwrite = false, quiet = false;
     const char *paths[2];
     int npaths = 0;
@@ -205,12 +232,20 @@ static int tc_main(int argc, char *const argv[]) {
         const char *v = argv[++i];
         switch (a[1]) {
         case 'c':
+            job.codec_set = false;
+            job.audio_codec = TRANSCODE_AUDIO_AUTO;
             if (strcasecmp(v, "hevc") == 0 || strcasecmp(v, "h265") == 0)
-                job.codec = TRANSCODE_HEVC;
+                job.codec = TRANSCODE_HEVC, job.codec_set = true;
             else if (strcasecmp(v, "h264") == 0 || strcasecmp(v, "avc") == 0)
-                job.codec = TRANSCODE_H264;
+                job.codec = TRANSCODE_H264, job.codec_set = true;
+            else if (strcasecmp(v, "aac") == 0)
+                job.audio_codec = TRANSCODE_AUDIO_AAC;
+            else if (strcasecmp(v, "alac") == 0)
+                job.audio_codec = TRANSCODE_AUDIO_ALAC;
+            else if (strcasecmp(v, "pcm") == 0 || strcasecmp(v, "wav") == 0)
+                job.audio_codec = TRANSCODE_AUDIO_PCM;
             else {
-                fprintf(stderr, "transcode: codec must be hevc or h264\n");
+                fprintf(stderr, "transcode: codec must be hevc or h264, or for audio aac, alac or pcm\n");
                 return 2;
             }
             break;
@@ -245,7 +280,42 @@ static int tc_main(int argc, char *const argv[]) {
         return 2;
     }
     const char *in_name = paths[0], *out_name = paths[1];
-    job.mov = tc_has_suffix(out_name, ".mov");
+    int container = tc_container(out_name);
+    if (container < 0)
+        return 2;
+    job.container = (enum transcode_container) container;
+    // What each kind of file holds. Whether an MP4 or MOV is sound only
+    // depends on the input, which only the hook reads, so it checks the rest.
+    bool audio_file = container == TRANSCODE_M4A || container == TRANSCODE_CAF ||
+        container == TRANSCODE_WAV || container == TRANSCODE_AIFF;
+    if (audio_file && (job.codec_set || job.max_lines > 0 || job.video_bitrate > 0)) {
+        fprintf(stderr, "transcode: %s is an audio file: -s, -b and -c hevc/h264 are for video\n", out_name);
+        return 2;
+    }
+    if (audio_file && job.no_audio) {
+        fprintf(stderr, "transcode: %s is an audio file: -n would leave nothing in it\n", out_name);
+        return 2;
+    }
+    enum transcode_audio_codec ac = job.audio_codec;
+    if ((container == TRANSCODE_WAV || container == TRANSCODE_AIFF) &&
+            ac != TRANSCODE_AUDIO_AUTO && ac != TRANSCODE_AUDIO_PCM) {
+        fprintf(stderr, "transcode: a %s file holds PCM only; AAC and ALAC go in .m4a\n",
+                container == TRANSCODE_WAV ? "WAV" : "AIFF");
+        return 2;
+    }
+    if (container == TRANSCODE_M4A && ac == TRANSCODE_AUDIO_PCM) {
+        fprintf(stderr, "transcode: PCM goes in .wav, .aif or .caf\n");
+        return 2;
+    }
+    if (container == TRANSCODE_MP4 && (ac == TRANSCODE_AUDIO_ALAC || ac == TRANSCODE_AUDIO_PCM)) {
+        fprintf(stderr, "transcode: MPEG-4 audio is AAC; ALAC goes in .m4a, PCM in .wav\n");
+        return 2;
+    }
+    if (job.audio_bitrate > 0 && (container == TRANSCODE_WAV || container == TRANSCODE_AIFF ||
+                                  ac == TRANSCODE_AUDIO_ALAC || ac == TRANSCODE_AUDIO_PCM)) {
+        fprintf(stderr, "transcode: -a is for AAC; ALAC and PCM are lossless and have no rate to set\n");
+        return 2;
+    }
 
     if (transcode_hook == NULL) {
         fprintf(stderr, "transcode: needs the AOK-iSH app (the encoder is iOS's)\n");
@@ -337,9 +407,11 @@ static int tc_main(int argc, char *const argv[]) {
             printf("%s: %s -> %s (%.0f%%) in %.1f s; %s\n", out_name, a, b,
                 in_st.st_size > 0 ? 100.0 * out_st.st_size / in_st.st_size : 0.0,
                 seconds, job.summary);
-            if (out_st.st_size > in_st.st_size)
+            // Lossless audio is larger than a compressed source by nature.
+            if (out_st.st_size > in_st.st_size && !job.lossless)
                 printf("transcode: note: %s is larger than %s; the source was already more"
-                       " compact than this setting (try -s or a lower -b)\n", out_name, in_name);
+                       " compact than this setting (try %s)\n", out_name, in_name,
+                       job.audio_only ? "a lower -a" : "-s or a lower -b");
         }
     }
     if (job.out_host_path[0] != '\0')

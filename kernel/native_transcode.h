@@ -1,6 +1,7 @@
 // transcode: a native program that re-encodes a video on the device's
-// hardware encoder (kernel/native_transcode.c is the program, app/Transcode.m
-// the AVFoundation half, kernel/native_transcode_glue.c what joins them).
+// hardware encoder, or converts audio with the system's codecs
+// (kernel/native_transcode.c is the program, app/Transcode.m the AVFoundation
+// half, kernel/native_transcode_glue.c what joins them).
 //
 // The program is compiled with the native libc shim, so everything it does is
 // the guest's: its files, its descriptors, its signals. AVFoundation needs
@@ -19,15 +20,38 @@ enum transcode_codec {
     TRANSCODE_H264 = 1,
 };
 
+// What the output file is. M4A, CAF, WAV and AIFF hold sound only; MP4 and
+// MOV hold a video, or sound only when the input has no video.
+enum transcode_container {
+    TRANSCODE_MP4 = 0,
+    TRANSCODE_MOV = 1,
+    TRANSCODE_M4A = 2,
+    TRANSCODE_CAF = 3,
+    TRANSCODE_WAV = 4,
+    TRANSCODE_AIFF = 5,
+};
+
+// The codec of a sound-only result. AUTO keeps AAC or ALAC as it is where the
+// container takes it and makes AAC otherwise; WAV and AIFF are always PCM.
+enum transcode_audio_codec {
+    TRANSCODE_AUDIO_AUTO = 0,
+    TRANSCODE_AUDIO_AAC = 1,
+    TRANSCODE_AUDIO_ALAC = 2,
+    TRANSCODE_AUDIO_PCM = 3,
+};
+
 struct transcode_job {
     // In: the source, a host path, and the codec and limits asked for.
     const char *in_host_path;
+    enum transcode_container container;
     enum transcode_codec codec;
+    bool codec_set;         // the video codec was asked for: an error for a sound-only result
+    enum transcode_audio_codec audio_codec;   // a sound-only result's
     int max_lines;          // shorter side of the picture, 0 = keep
     long video_bitrate;     // bits per second, 0 = chosen from the picture
     double rate_scale;      // multiplies the chosen rate (0 = 1); ignored with video_bitrate
-    long audio_bitrate;     // bits per second, used only when audio is re-encoded
-    bool mov;               // QuickTime rather than MPEG-4
+    long audio_bitrate;     // AAC bits per second, 0 = 128k. A video's audio uses it only when
+                            // re-encoded; a sound-only result is re-encoded when it is set
     bool no_audio;
 
     // Called on the program's own thread, about twice a second, while the
@@ -38,6 +62,8 @@ struct transcode_job {
 
     // Out: the host file written, which the program copies into the guest
     // and then removes, and a description of what was done or what failed.
+    bool audio_only;        // the result is sound only
+    bool lossless;          // ... in ALAC or PCM, which no setting makes smaller
     char out_host_path[1024];
     char summary[512];
     char error[512];

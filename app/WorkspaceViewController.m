@@ -1420,7 +1420,7 @@ static NSString *ISHWorkspaceToolTitle(NSString *toolIdentifier) {
     if ([toolIdentifier isEqualToString:ISHWorkspaceToolVideoPlayerIdentifier])
         return NSLocalizedString(@"Video Player", @"tool window title");
     if ([toolIdentifier isEqualToString:ISHWorkspaceToolTranscodeIdentifier])
-        return NSLocalizedString(@"Video Converter", @"tool window title");
+        return NSLocalizedString(@"Media Converter", @"Window title, menu item and tool name of the media converter applet");
     if ([toolIdentifier isEqualToString:ISHWorkspaceToolDisplayIdentifier])
         return @"Wayland";
     return NSLocalizedString(@"Window", @"generic window title");
@@ -7779,7 +7779,7 @@ static UIResponder *ISHWorkspaceFirstResponderAmongViewControllers(UIViewControl
                 @{@"title": @"Markdown", @"identifier": ISHWorkspaceToolMarkdownViewerIdentifier},
                 @{@"title": NSLocalizedString(@"Image Viewer", @"utility menu item"), @"identifier": ISHWorkspaceToolImageViewerIdentifier},
                 @{@"title": NSLocalizedString(@"Video Player", @"utility menu item"), @"identifier": ISHWorkspaceToolVideoPlayerIdentifier},
-                @{@"title": NSLocalizedString(@"Video Converter", @"utility menu item"), @"identifier": ISHWorkspaceToolTranscodeIdentifier},
+                @{@"title": NSLocalizedString(@"Media Converter", @"Window title, menu item and tool name of the media converter applet"), @"identifier": ISHWorkspaceToolTranscodeIdentifier},
                 @{@"title": @"Wayland", @"identifier": ISHWorkspaceToolDisplayIdentifier},
             ],
         },
