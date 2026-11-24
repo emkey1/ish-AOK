@@ -181,8 +181,11 @@ as the right user.
 
 A finger on the desktop is the pointer: where you touch is where it goes, and
 the touch is the left button. On a phone the targets are smaller than a
-fingertip, so the view's menu (**···**) has **Touchpad Mode** (build 559),
-which treats the whole view as a laptop's touchpad instead:
+fingertip, so the window's menu has **Touchpad Mode** (build 559), which
+treats the whole view as a laptop's touchpad instead. The menu is the **···**
+button in the strip along the top of the Wayland window, beside **Paste**; with
+the Wayland display as the whole app and **Maximize Screen Space** on, that
+strip is hidden and the round **≡** button in the lower-right corner opens it.
 
 | Gesture | What it does |
 |---|---|
