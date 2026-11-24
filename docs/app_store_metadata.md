@@ -58,22 +58,37 @@ processor is emulated in software, a Linux userland runs on top of it, and you
 get a shell with a package manager behind it. Install what you like with apk or
 apt. Nothing is jailbroken and nothing leaves your device unless you send it.
 
+START AT ONCE, OR PICK A DISTRIBUTION
+
+Alpine and Devuan come with the app, and images for other processors download
+from inside it. Or choose AOK-iSH Native: no distribution at all, just a shell
+and about 140 everyday commands built into the app, ready the moment you open
+it. When you want more, apt installs it from Devuan, beside the native commands.
+
 FIVE GUEST ARCHITECTURES
 
 i386, x86_64, arm64, riscv64 and 64-bit little-endian PowerPC, all emulated.
 Run binaries built for hardware you do not own.
 
+A WORKSPACE, NOT JUST A TERMINAL
+
+Arrange windows on desktops of their own: terminals with tabs, a file manager,
+the MotePad editor, a web browser, music and video players, an image viewer, a
+Markdown reader and a system monitor, all working on the same files.
+
 A DESKTOP, IF YOU WANT ONE
 
-A Wayland desktop -- labwc, foot, waybar -- composited on the device's own GPU
-through a virtio-gpu render node, so Mesa draws on Metal. Or stay in the
-terminal; most people do.
+A Wayland desktop -- labwc, Wayfire or Xfce -- composited on the device's own
+GPU through a virtio-gpu render node, so Mesa draws on Metal. Point with a
+finger, or turn the screen into a touchpad. Or stay in the terminal; most
+people do.
 
 FAST WHERE IT COUNTS
 
 ssh, scp, sftp, git, curl, an editor and most of coreutils are compiled into
-the app as native code rather than emulated, so they run at full speed. Video
-conversion uses the hardware encoder the Camera app uses.
+the app as native code rather than emulated, so they run at full speed. The
+Media Converter re-encodes video on the hardware encoder the Camera app uses,
+and converts audio to AAC, ALAC or WAV with the system's own codecs.
 
 BUILT FOR REAL USE
 
@@ -83,17 +98,23 @@ BUILT FOR REAL USE
 - Suspend to disk: processes, open files and terminals survive the app being
   killed
 - FUSE, namespaces, binfmt_misc, and a GPU render node
-- An external display shows the terminal full size while the phone keeps the
-  keyboard
+- On iPhone, an external display shows the terminal full size while the phone
+  keeps the keyboard
+
+IN YOUR LANGUAGE
+
+The app speaks English, Simplified and Traditional Chinese, Japanese, Korean,
+Spanish, French, German, Brazilian Portuguese and Russian, and the terminal
+takes Chinese, Japanese and Korean input.
 
 AN AI CHAT THAT CAN ACTUALLY DO THINGS
 
 An optional chat panel that can read files, edit them and run commands in your
-Linux filesystem, under permissions you set per category. It works entirely
-on-device with Apple's Foundation Models -- no account, no key, nothing sent
-anywhere -- or with a provider you configure yourself. It is switched off until
-you turn it on, and it asks before the first message of a chat leaves the
-device.
+Linux filesystem, under permissions you set per category. On devices that
+support it, it works entirely on-device with Apple's Foundation Models -- no
+account, no key, nothing sent anywhere -- or with a provider you configure
+yourself. It is switched off until you turn it on, and it asks before the
+first message of a chat leaves the device.
 
 PRIVACY
 
@@ -105,7 +126,11 @@ AOK-iSH is open source, a fork of the iSH project, and is developed in the open
 at github.com/emkey1/ish-AOK.
 ```
 
-About 2,050 characters, well inside the limit, with room to add.
+About 3,147 characters, inside the 4,000 limit. The lines are wrapped here for
+reading only: the App Store keeps line breaks, so join each paragraph (and each
+list item) into one line before it goes into App Store Connect. Brought up to date for 567 on
+2026-11-24: native mode and its apt, the Workspace, the Media Converter's
+audio, Touchpad Mode and the ten interface languages.
 
 Three things it deliberately does not do: promise performance it cannot keep
 (emulation is slow and the copy does not pretend otherwise), name a
