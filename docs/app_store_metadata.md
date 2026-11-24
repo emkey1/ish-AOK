@@ -1,7 +1,13 @@
 # App Store metadata
 
 Draft copy for the App Store Connect fields, with Apple's limits noted. Written
-2026-11-14. Everything here is a starting point to edit, not something to paste
+2026-11-14.
+
+**Live on App Store Connect since 2026-11-24** (sent through the API from this
+file, en-US, version 1.3 with build 566 attached): the name, subtitle,
+promotional text, keywords, description, privacy policy URL and both screenshot
+sets. The support URL there is still the repository's home page, not `/issues`.
+Edit here first, then send, so the two stay the same. Everything here is a starting point to edit, not something to paste
 unread -- marketing copy is the author's voice, not a generated one.
 
 **One dependency runs through all of it:** the store name. See the assessment's
