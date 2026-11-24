@@ -47,6 +47,7 @@ PURE = {
     # allocation
     "malloc", "calloc", "realloc", "free", "reallocf", "posix_memalign",
     "open_memstream",   # memory-backed FILE; touches nothing
+    "fmemopen",         # the same, over a buffer the caller already has
     # conversion and maths
     "atoi", "atol", "atoll", "atof", "strtol", "strtoll", "strtoul", "strtoull",
     "strtod", "strtof", "abs", "labs", "llabs", "qsort", "qsort_r", "bsearch",

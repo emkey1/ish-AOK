@@ -5586,6 +5586,25 @@ int nlibc_getifaddrs(struct ifaddrs **ifap) {
     // name is not the macro that brought us here.
     return getifaddrs(ifap);
 }
+unsigned int nlibc_if_nametoindex(const char *name) {
+    if (name == NULL) {
+        errno = ENXIO;
+        return 0;
+    }
+    // The same split as nlibc_getifaddrs: a private namespace has its own
+    // interfaces and its own numbers for them.
+    struct net_namespace *net_ns = current_net_ns();
+    if (net_ns != NULL) {
+        if (strcmp(name, "lo") == 0)
+            return 1;
+        struct net_vif_info vif;
+        if (net_vif_get(net_ns, 0, name, &vif) == 0 && vif.index > 0)
+            return (unsigned int) vif.index;
+        errno = ENXIO;
+        return 0;
+    }
+    return if_nametoindex(name);
+}
 void nlibc_freeifaddrs(struct ifaddrs *ifa) {
     if (ifa != NULL)
         freeifaddrs(ifa);

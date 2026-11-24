@@ -536,6 +536,9 @@ const char *nlibc_gai_strerror(int code);
 int nlibc_getnameinfo(const void *addr, socklen_t addrlen, char *host, socklen_t hostlen,
         char *serv, socklen_t servlen, int flags);
 int nlibc_getifaddrs(struct ifaddrs **ifap);
+// An interface's number by name: the caller's network namespace's, as
+// nlibc_getifaddrs lists them, and not the host's.
+unsigned int nlibc_if_nametoindex(const char *name);
 void nlibc_freeifaddrs(struct ifaddrs *ifa);
 
 /* The older resolver interface, over the same guest /etc/hosts, guest
@@ -1095,6 +1098,7 @@ char *nlibc_strchrnul(const char *s, int c);
 #define gai_strerror             nlibc_gai_strerror
 #define getnameinfo(a,b,c,d,e,f,g) nlibc_getnameinfo((a),(b),(c),(d),(e),(f),(g))
 #define getifaddrs               nlibc_getifaddrs
+#define if_nametoindex          nlibc_if_nametoindex
 #define freeifaddrs              nlibc_freeifaddrs
 #define gethostbyname            nlibc_gethostbyname
 #define gethostbyname2           nlibc_gethostbyname2
