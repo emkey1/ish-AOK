@@ -85,7 +85,7 @@
 		<string>_http._tcp</string>
 	</array>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>This is required for connecting to localhost and using the ping command.</string>
+	<string>Programs you run in AOK-iSH, such as ssh, ping and curl, connect to devices on your local network, and other devices can connect to servers you start, such as sshd.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
 	<string>Programs running in AOK-iSH will be allowed to track your location in the background.</string>
 	<key>NSLocationAlwaysUsageDescription</key>

@@ -197,6 +197,12 @@ on a current system but the strings stay; or remove it and accept the
 VoiceOver bug on iOS 15.7-16.x. Which iOS release first carried the fix was
 not established here (17.0 at the latest is an inference from the date).
 
+**Bounded 2026-11-24:** `accessibilityfixes_init` returns at once on iOS 17 and
+later, so the hook never arms on a current system. The strings are still in
+the binary. That iOS 17 has the fix is still the inference above, not a
+measurement; nobody has run VoiceOver against a terminal on iOS 17+ with the
+hook off.
+
 ### 5. The local network purpose string no longer describes the use (5.1.1(ii))
 
 `app/Info.plist:88`: "This is required for connecting to localhost and using
@@ -205,6 +211,10 @@ ssh server that accepts connections from the network (Settings, sshd), an LLM
 client and MCP client that are commonly pointed at a machine on the LAN, and
 native `ssh` and `curl`. The guideline asks that purpose strings "clearly and
 completely describe your use". Ten languages in `app/InfoPlist.xcstrings`.
+
+**Rewritten 2026-11-24**, in all ten: programs the user runs (ssh, ping, curl)
+connect to devices on the local network, and other devices can connect to
+servers the user starts (sshd).
 
 ### 6. Name and icon: the rule is 4.1(c)
 
@@ -227,6 +237,10 @@ app or metadata". Buried, but in the binary.
 **Fix:** leave ch37 out of the manifest for store builds, or take the names
 out of it.
 
+**Done 2026-11-24:** the three names are out of ch37. The word "sideloaded"
+stays in the chapter, in files-app-integration.md and in the one string: it
+names no marketplace.
+
 ### 8. 2.5.2: three facts the review notes do not mention
 
 Still Apple's call, as the assessment says. What is new:
@@ -243,11 +257,14 @@ None is forbidden; all three are the kind of thing better said than
 discovered. A SHA-256 per entry in the manifest, checked after download, turns
 the second from a weakness into a line in the notes.
 
+**2026-11-24:** the review notes now state the first and third, and what the
+project means by "JIT". The hash is not built.
+
 ---
 
 ## Low: wording and hygiene
 
-- **The ATS justification names the wrong programs.** Review notes line 70
+- **The ATS justification names the wrong programs** (corrected 2026-11-24)**.** Review notes line 70
   gives `curl`, `ssh`, `wget` and package managers as why
   `NSAllowsArbitraryLoads` is needed. ATS governs the URL loading system, not
   sockets, so it does not touch `ssh` or anything emulated. What it does
@@ -267,7 +284,7 @@ the second from a weakness into a line in the notes.
   libarchive, the Xiph codecs, MoltenVK, hterm, helix and its crates all ask
   for their notice to travel with the binary. Not App Review's concern, but it
   is this project's stated standard.
-- **Keywords.** `docs/app_store_metadata.md:43` includes `unix`, `debian`,
+- **Keywords** (`debian` is now `devuan`, and the claim about trademarks is corrected, 2026-11-24; the names themselves are still there)**.** `docs/app_store_metadata.md:43` includes `unix`, `debian`,
   `alpine`, `linux` and `git` while line 45 says it excludes trademarks that
   are not ours. `debian` is also not what ships (Devuan). 2.3.7.
 - **Six method names match UIKit private selectors**: `_applicationDidBecomeActive:`,

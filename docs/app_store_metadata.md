@@ -40,10 +40,13 @@ it is the right place for whatever the current release added.
 ## Keywords (100 characters, comma-separated, no spaces after commas)
 
 ```
-linux,shell,terminal,ssh,unix,bash,developer,command,emulator,alpine,debian,console,sftp,git
+linux,shell,terminal,ssh,unix,bash,developer,command,emulator,alpine,devuan,console,sftp,git
 ```
-93 characters. Deliberately excludes "iSH" (the name field already carries it)
-and any trademark that is not ours.
+92 characters. Deliberately excludes "iSH" (the name field already carries it).
+`linux`, `unix`, `alpine`, `devuan` and `git` are other people's names, used
+here to say what the app runs; 2.3.7 is where an objection would come from,
+and they are the ones to drop if Apple raises it. (`debian` stood here until
+2026-11-24; what ships is Devuan.)
 
 ## Description (4000 characters)
 

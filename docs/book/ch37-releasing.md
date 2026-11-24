@@ -27,6 +27,12 @@ builds the IPA, publishes a GitHub release, and prunes to the five most recent �
 the oldest numbered release and its IPA asset are deleted, though the git tag
 survives.
 
+Since 566 the workflow is also a gate. `tools/check-all.py` runs every
+`tools/check-*` script, each written the day something shipped broken and none
+of them run by anything until then. It runs twice: `--source-only` before any
+dependency is installed, and `--build-only` after the `.app` is built and
+before it is signed. A tag that fails either one ships no IPA.
+
 **The tag name is load-bearing.** The workflow triggers on `builds/iSH-AOK_*`,
 so a differently named tag produces no release build at all — silently, because
 nothing was asked to happen and nothing did.
@@ -66,7 +72,7 @@ code that caused it.
 > bundle has **no `LC_CODE_SIGNATURE`, no `archived-expanded-entitlements.xcent`
 > and no `embedded.mobileprovision`** — verified by unzipping a published IPA.
 >
-> AltStore, SideStore and Sideloadly decide what to request from Apple by
+> The re-signing tools decide what to request from Apple by
 > *reading the entitlements of the app they are re-signing*. They found none,
 > took their "App ID has no app groups, skipping assignment" path, and installed
 > AOK-iSH **with no App Group at all**.
@@ -90,8 +96,8 @@ entitlements (ad-hoc signature)" step between the build and the packaging, which
 runs `tools/adhoc-sign-app.sh` on the built `.app`. An ad-hoc signature needs no
 certificate and no keychain, and the re-signer replaces it wholesale exactly as
 it would a real App Store signature — so all this leaves behind is the one thing
-that was missing, a readable entitlements blob for AltStore, SideStore and
-Sideloadly to read. The script expands `$(PRODUCT_APP_GROUP_IDENTIFIER)` and
+that was missing, a readable entitlements blob for the re-signing tool to
+read. The script expands `$(PRODUCT_APP_GROUP_IDENTIFIER)` and
 `$(PRODUCT_BUNDLE_IDENTIFIER)` itself, because Xcode's packaging step is what
 normally does that and it does not run when signing is off; substituting an
 empty value would ship an entitlement for the group named `""`, so it refuses
@@ -189,7 +195,7 @@ here.
 
 ## 37.5 The release notes are a design record
 
-`docs/release-notes/release-notes-since-iSH-AOK_521.md` through `_551.md` are in the tree, and
+`docs/release-notes/release-notes-since-iSH-AOK_521.md` onwards are in the tree, and
 they are worth reading as a genre.
 
 They are not marketing copy and they are not changelogs. A typical entry names

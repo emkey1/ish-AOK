@@ -33,61 +33,61 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Dies ist erforderlich, um eine Verbindung zu localhost herzustellen und den Befehl ping zu verwenden."
+            "value" : "Programme, die Sie in AOK-iSH ausführen, etwa ssh, ping und curl, verbinden sich mit Geräten in Ihrem lokalen Netzwerk, und andere Geräte können sich mit Servern verbinden, die Sie starten, etwa sshd."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "This is required for connecting to localhost and using the ping command."
+            "value" : "Programs you run in AOK-iSH, such as ssh, ping and curl, connect to devices on your local network, and other devices can connect to servers you start, such as sshd."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Es necesario para conectarse a localhost y usar el comando ping."
+            "value" : "Los programas que ejecutas en AOK-iSH, como ssh, ping y curl, se conectan a dispositivos de tu red local, y otros dispositivos pueden conectarse a los servidores que inicies, como sshd."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Nécessaire pour se connecter à localhost et utiliser la commande ping."
+            "value" : "Les programmes que vous lancez dans AOK-iSH, comme ssh, ping et curl, se connectent aux appareils de votre réseau local, et d’autres appareils peuvent se connecter aux serveurs que vous démarrez, comme sshd."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "localhost への接続と ping コマンドの使用に必要です。"
+            "value" : "AOK-iSH で実行する ssh、ping、curl などのプログラムがローカルネットワーク上のデバイスに接続します。また、sshd など起動したサーバにほかのデバイスから接続できます。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "localhost에 연결하고 ping 명령을 사용하려면 필요합니다."
+            "value" : "AOK-iSH에서 실행하는 ssh, ping, curl 같은 프로그램이 로컬 네트워크의 기기에 연결하며, sshd처럼 직접 시작한 서버에는 다른 기기가 연결할 수 있습니다."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Isso é necessário para conectar ao localhost e usar o comando ping."
+            "value" : "Os programas que você executa no AOK-iSH, como ssh, ping e curl, conectam-se a dispositivos na sua rede local, e outros dispositivos podem se conectar aos servidores que você iniciar, como o sshd."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Это нужно для подключения к localhost и использования команды ping."
+            "value" : "Программы, которые вы запускаете в AOK-iSH, например ssh, ping и curl, подключаются к устройствам в вашей локальной сети, а другие устройства могут подключаться к запущенным вами серверам, например sshd."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "连接到 localhost 和使用 ping 命令时需要此权限。"
+            "value" : "你在 AOK-iSH 中运行的程序（如 ssh、ping 和 curl）会连接本地网络上的设备，其他设备也可以连接你启动的服务器（如 sshd）。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "連線至 localhost 及使用 ping 指令時需要此權限。"
+            "value" : "你在 AOK-iSH 中執行的程式（例如 ssh、ping 和 curl）會連線至區域網路上的裝置，其他裝置也可以連線至你啟動的伺服器（例如 sshd）。"
           }
         }
       }

@@ -64,14 +64,30 @@ So a user installing a package inside the Linux environment is, from iOS's
 point of view, writing data into a file that this app then reads and
 interprets -- the same relationship a document has to the app that opens it.
 
+Three related facts, stated here so they are not a surprise:
+
+- **Linux filesystem images are downloaded.** Settings -> Filesystems offers
+  a catalogue of images (Alpine, Devuan and others), which the app fetches
+  from our GitHub repository and which can therefore gain entries between
+  releases. An image is an archive of guest files for the emulator, as
+  above; none of it is iOS code.
+- **A user can also install an image from a URL they supply**, from the
+  command line inside the environment.
+- **Our own documentation uses the word "JIT"** (and one preference is named
+  "Enable JIT Cache"). It is the project's name for the emulator's
+  threaded-code interpreter described above -- the array of pointers to
+  pre-compiled routines -- and not a just-in-time compiler. No machine code
+  is generated.
+
 ### 3. Network access and App Transport Security
 
 The app's Info.plist sets `NSAllowsArbitraryLoads`. This is required and
-cannot be narrowed: the whole function of a Linux environment is that the
-user's own programs -- `curl`, `ssh`, `wget`, package managers -- connect to
-hosts the user chooses. Those hosts are not known to us in advance and cannot
-be enumerated as exception domains, and many of them, including Linux
-distribution mirrors, still serve plain HTTP.
+cannot be narrowed: the parts of the app that use the system's URL loading
+-- the built-in `curl` command, the in-app browser, the AI chat's and MCP
+client's endpoints, and media streams the user opens -- connect to hosts the
+user chooses. Those hosts are not known to us in advance and cannot be
+enumerated as exception domains, and some of them, such as a server on the
+user's own network, serve plain HTTP.
 
 The app itself makes almost no network requests of its own. They are listed in
 the privacy policy.

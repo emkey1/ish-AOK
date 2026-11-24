@@ -36,6 +36,12 @@ static void patch_if_needed(void) {
 }
 
 __attribute__((constructor)) void accessibilityfixes_init(void) {
+    // WebKit fixed 249976 in February 2023, so no system from iOS 17 on has
+    // the bug. The hook finds a WebKit symbol by its mangled name and
+    // intercepts it with a hardware breakpoint, which is nothing to do on a
+    // system that does not need it.
+    if (@available(iOS 17.0, *))
+        return;
     if (@available(iOS 15.7, *)) {
         [NSNotificationCenter.defaultCenter addObserverForName:UIAccessibilityVoiceOverStatusDidChangeNotification
                                                         object:nil
