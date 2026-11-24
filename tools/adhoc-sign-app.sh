@@ -56,14 +56,14 @@ expand() {
     fi
 }
 
-settings=$(xcodebuild -project "$project" -target AOK-iSH -configuration "$configuration" \
+settings=$(xcodebuild -project "$project" -target iSH-AOK -configuration "$configuration" \
                -sdk iphoneos -showBuildSettings 2>/dev/null)
 app_group=$(echo "$settings" | awk -F' = ' '/ PRODUCT_APP_GROUP_IDENTIFIER = /{print $2; exit}')
 bundle_id=$(echo "$settings" | awk -F' = ' '/ PRODUCT_BUNDLE_IDENTIFIER = /{print $2; exit}')
 : "${app_group:?could not resolve PRODUCT_APP_GROUP_IDENTIFIER}"
 : "${bundle_id:?could not resolve PRODUCT_BUNDLE_IDENTIFIER}"
 
-app_entitlements=$(entitlements_for_target AOK-iSH app/iSH.entitlements)
+app_entitlements=$(entitlements_for_target iSH-AOK app/iSH.entitlements)
 appex_entitlements=$(entitlements_for_target iSH-AOK.FileProvider app/FileProvider/iSHFileProvider.entitlements)
 expand "$app_entitlements" "$work/app.plist"
 expand "$appex_entitlements" "$work/appex.plist"
