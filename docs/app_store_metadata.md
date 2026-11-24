@@ -6,7 +6,10 @@ Draft copy for the App Store Connect fields, with Apple's limits noted. Written
 **Live on App Store Connect since 2026-11-24** (sent through the API from this
 file, en-US, version 1.3 with build 566 attached): the name, subtitle,
 promotional text, keywords, description, privacy policy URL and both screenshot
-sets. The support URL there is still the repository's home page, not `/issues`.
+sets -- four each (terminal, Workspace, Files, LLM Chat). The Wayland desktop
+shot was taken out of both: the desktop runs on a companion Devuan filesystem,
+and the listing does not point at other distributions. The files stay in
+`build/app-store-screenshots/`. The support URL there is still the repository's home page, not `/issues`.
 Edit here first, then send, so the two stay the same. The revised subtitle, promotional
 text, keywords and description were sent the same day, after the user read them. Everything here is a starting point to edit, not something to paste
 unread -- marketing copy is the author's voice, not a generated one.
