@@ -52,7 +52,8 @@ enum {
     DISPLAY_EV_ERROR = 0,
     REGISTRY_BIND = 0,
     REGISTRY_EV_GLOBAL = 0,
-    OUTPUT_EV_NAME = 4,
+    OUTPUT_EV_MODE = 1, OUTPUT_EV_NAME = 4,
+    OUTPUT_MODE_CURRENT = 1,
     SCREENCOPY_CAPTURE_OUTPUT = 0,
     FRAME_COPY = 0, FRAME_DESTROY = 1, FRAME_COPY_WITH_DAMAGE = 2,
     FRAME_EV_BUFFER = 0, FRAME_EV_FLAGS = 1, FRAME_EV_READY = 2, FRAME_EV_FAILED = 3,
@@ -891,6 +892,16 @@ static void on_event(struct wp *w, uint32_t object, uint16_t opcode, const uint3
         if (opcode == OUTPUT_EV_NAME) {
             size_t at = 0;
             snprintf(w->output_label, sizeof(w->output_label), "%s", arg_str(args, words, &at));
+        }
+        // With -i there are no frames to learn the output's size from, and
+        // pointer_event needs it: every pointer event was dropped, so a
+        // software desktop's pointer could not be moved at all, by a touch or
+        // as a touchpad, while keys still worked. The current mode is the
+        // pixel size wayvnc serves the app -- the space its pointer
+        // coordinates are in -- and the compositor sends it again on a resize.
+        if (opcode == OUTPUT_EV_MODE && words >= 3 && (args[0] & OUTPUT_MODE_CURRENT) && w->input_only) {
+            w->width = args[1];
+            w->height = args[2];
         }
         return;
     }
