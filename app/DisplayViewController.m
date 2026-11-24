@@ -327,9 +327,20 @@ typedef NS_ENUM(NSInteger, DisplayConnectionState) {
     // below -- so everything that lives ONLY in that menu (the desktop
     // Resolution and Appearance, the keyboard toggles) was unreachable for
     // anyone running the Display applet in a Workspace window, which is how it
-    // is normally run. Titled with an ellipsis rather than a word because the
-    // pill already carries three buttons and a status line on a phone.
-    _menuButton = [self displayButtonWithTitle:@"\u22ef" action:@selector(menuPipTapped:)];
+    // is normally run. An icon rather than a word because the pill already
+    // carries three buttons and a status line on a phone -- but iOS's own
+    // "more" icon, at a size the pill holds, not the "\u22ef" character at the
+    // buttons' 11 points: that was ten points of faint dots, and a user asking
+    // where Touchpad Mode was could not find it there. It is a button's width
+    // to hit, too.
+    _menuButton = [self displayButtonWithTitle:@"" action:@selector(menuPipTapped:)];
+    UIImageSymbolConfiguration *menuSymbol =
+        [UIImageSymbolConfiguration configurationWithPointSize:17.0 weight:UIImageSymbolWeightSemibold];
+    [_menuButton setImage:[UIImage systemImageNamed:@"ellipsis.circle" withConfiguration:menuSymbol]
+                 forState:UIControlStateNormal];
+    // Wider than the icon; the helper's required hugging would fight that.
+    [_menuButton setContentHuggingPriority:UILayoutPriorityDefaultHigh forAxis:UILayoutConstraintAxisHorizontal];
+    [_menuButton.widthAnchor constraintGreaterThanOrEqualToConstant:32.0].active = YES;
     _menuButton.accessibilityLabel = NSLocalizedString(@"Display menu", @"Accessibility label for the Wayland display menu button");
     _menuButton.accessibilityHint = NSLocalizedString(@"Opens the display menu for resolution, keyboard and input options.", @"Accessibility hint for the Wayland display menu button");
     [_toolbarCard addSubview:_menuButton];
