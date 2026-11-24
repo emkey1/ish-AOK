@@ -20,8 +20,10 @@ API's old-scale field reports it as SEVENTEEN_PLUS); price Free, base territory
 USA; available in 174 of 175 territories and new ones automatically, **France
 held back** until the ANSSI declaration is filed (assessment item 7); copyright
 `2026 Mike Miller`. **Still for the user, on the website:** the App Privacy label
-("Data Not Collected"), the content-rights answer, and EU trader status. **Still
-to send:** the App Review notes, once trimmed under 4,000 characters. Everything here is a starting point to edit, not something to paste
+("Data Not Collected"), the content-rights answer, and EU trader status. The App
+Review notes (docs/app_store_review_notes.md, 3,174 characters) were sent too.
+**Before submitting:** attach a build whose encryption answer is "yes" (567);
+566 was answered "no", which the notes and the assessment contradict. Everything here is a starting point to edit, not something to paste
 unread -- marketing copy is the author's voice, not a generated one.
 
 **One dependency runs through all of it:** the store name. See the assessment's
