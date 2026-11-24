@@ -66,8 +66,8 @@ AOK-iSH puts a Unix-style command line on your iPhone or iPad.
 
 Open it and you have a shell and about 140 everyday commands -- ssh, scp, sftp,
 git, curl, editors and most of coreutils -- compiled into the app itself, so
-they run at full speed and there is nothing to download. Nothing is jailbroken,
-and nothing leaves your device unless you send it.
+they run at full speed and there is nothing to download. Nothing leaves your
+device unless you send it.
 
 HOW IT WORKS
 
@@ -124,15 +124,22 @@ AOK-iSH is open source, a fork of the iSH project, and is developed in the open
 at github.com/emkey1/ish-AOK.
 ```
 
-About 3,147 characters, inside the 4,000 limit. The lines are wrapped here for
+About 2,500 characters, inside the 4,000 limit. The lines are wrapped here for
 reading only: the App Store keeps line breaks, so join each paragraph (and each
-list item) into one line before it goes into App Store Connect. Brought up to date for 567 on
-2026-11-24: native mode and its apt, the Workspace, the Media Converter's
-audio, Touchpad Mode and the ten interface languages.
+list item) into one line before it goes into App Store Connect.
 
-Three things it deliberately does not do: promise performance it cannot keep
-(emulation is slow and the copy does not pretend otherwise), name a
-distribution as supported beyond the two we ship, or carry a TestFlight link.
+Revised 2026-11-24 at the user's word, after a first version had been sent:
+
+- It leads with what ships -- the native root and the commands built into the
+  app -- and does not spotlight other Linux distributions: no apk or apt, no
+  Alpine or Devuan, no guest architectures, and no desktop or FUSE, which need
+  a distribution.
+- It does not claim to be Linux, which is the kernel. AOK-iSH runs no Linux
+  kernel; it implements a useful subset of its interface, and says so.
+- It does not mention jailbreaking, even to deny it: App Review has rejected
+  metadata for the word alone, and "built into the app" already says it.
+- It promises no performance beyond the native commands', and carries no
+  TestFlight link.
 
 ## Support URL
 
