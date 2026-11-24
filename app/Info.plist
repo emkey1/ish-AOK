@@ -98,7 +98,7 @@
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>Programs running in AOK-iSH will be allowed to see your location.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>AOK-iSH deletes a video from your library only when you choose Delete Original in the Video Converter.</string>
+	<string>AOK-iSH deletes a video from your library only when you choose Delete Original in the Media Converter.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>AOK-iSH adds to your photo library when you choose Save Image, or save a converted video to Photos.</string>
 	<key>NSUserActivityTypes</key>

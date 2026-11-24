@@ -3,7 +3,7 @@
 //  AOK-iSH
 //
 //  The hardware video encoder behind /AOK/native/transcode and the Workspace
-//  Video Converter applet. See kernel/native_transcode.h for the job.
+//  Media Converter applet. See kernel/native_transcode.h for the job.
 //
 
 #include "kernel/native_transcode.h"
