@@ -1,13 +1,14 @@
 # App Review notes
 
 The text under "For App Review" below is meant to be pasted into App Store
-Connect's review-notes field as it stands. Everything outside that section is
+Connect's review-notes field as it stands: plain text, since the field shows
+no Markdown, and under its 4,000-character limit. Everything outside that section is
 for us, not for Apple.
 
-One placeholder is left, and it needs nothing:
-
-- **`[DEMO ACCOUNT]`** -- nothing is needed; the line saying so is already
-  written. Left here only so the omission is deliberate.
+Rewritten 2026-11-24 to fit the limit (3,196 characters): plain text; the app
+described as implementing a subset of the Linux interface, not running Linux;
+and the reviewer told that a fresh install asks which filesystem to set up
+(AOK-iSH Native, which downloads nothing).
 
 The name section is gone: on 2026-11-20 the maintainer decided to submit as
 "AOK-iSH" without asking the ish-app maintainers first, so there is no
@@ -33,90 +34,41 @@ appears nowhere in it. The claim holds for the whole tree, not just `emu/` and
 
 Thank you for reviewing AOK-iSH.
 
-### 1. What this app is
+1. WHAT THIS APP IS
 
-AOK-iSH is a Linux environment for iOS. It emulates x86, ARM, RISC-V and
-PowerPC processors in software and runs an ordinary Linux userland on top of
-that emulation, presented as a terminal. It is the same category of app as iSH
-Shell (id1436902243) and UTM SE, both of which are on the App Store.
+AOK-iSH is a Unix-style command-line environment for iPhone and iPad. It implements a useful subset of the Linux system interface (processes, files, pipes, signals, terminals) inside the app. It does not run a Linux kernel or a virtual machine. Its default filesystem, AOK-iSH Native, is about 140 commands compiled into the app's signed binary. Optional filesystem images run x86, ARM, RISC-V or PowerPC programs through an emulator. It is the same category of app as iSH Shell (id1436902243) and UTM SE.
 
-No account is needed, and there is nothing to log in to. Launch the app and a
-shell prompt appears. **[DEMO ACCOUNT]** -- no demo account is required.
+No account or demo login is needed. On first launch the app asks which filesystem to set up: choose AOK-iSH Native (nothing is downloaded). It then asks for an everyday account name, which can be skipped, and a shell prompt appears.
 
-### 2. No downloaded code is executed as app code (2.5.2)
+2. NO DOWNLOADED CODE RUNS AS APP CODE (2.5.2)
 
-This is the point most worth stating plainly, because an emulator can look
-like it is doing something it is not.
+- All iOS code ships inside the signed binary. Nothing is downloaded, loaded or linked at runtime.
+- The emulator never generates or executes machine code. It requests no executable memory: no MAP_JIT, no JIT entitlement, no call that makes a page executable. It dispatches to pre-compiled routines already in the binary; what it builds while running is an array of pointers to them, which is data.
+- Programs a user installs into a filesystem image are guest binaries for the emulated processor. iOS never executes them and they cannot become iOS code: to iOS they are files the app reads, as a document is to the app that opens it.
 
-- **All iOS code in this app ships inside the signed binary.** Nothing is
-  downloaded, loaded or linked at runtime.
-- **The emulator never generates or executes native machine code.** It does
-  not request executable memory from iOS: there is no `MAP_JIT`, no JIT
-  entitlement, and no call that marks any page executable. The emulation core
-  works by dispatching to pre-compiled assembly routines that are already part
-  of the signed binary; what it builds while running is an array of pointers
-  to those routines, which is data, not instructions.
-- **Programs the user installs inside the Linux environment are guest
-  binaries for an emulated processor.** They are interpreted by the emulator.
-  iOS never executes them, and they cannot become iOS code.
+Stated so they are not a surprise:
+- Settings > Filesystems offers a catalogue of filesystem images, fetched from our GitHub repository, which can gain entries between releases. A user can also install one from a URL. An image is an archive of guest files, never iOS code.
+- Our documentation uses the word "JIT" (one preference is "Enable JIT Cache") for the threaded-code interpreter described above. It is not a just-in-time compiler.
 
-So a user installing a package inside the Linux environment is, from iOS's
-point of view, writing data into a file that this app then reads and
-interprets -- the same relationship a document has to the app that opens it.
+3. NETWORK ACCESS (ATS)
 
-Three related facts, stated here so they are not a surprise:
+Info.plist sets NSAllowsArbitraryLoads, and it cannot be narrowed: the built-in curl, the in-app browser, the AI chat and MCP clients, and media streams connect to hosts the user chooses. Those are not known in advance, and some, such as a server on the user's own network, serve plain HTTP. The app's own few requests are listed in the privacy policy.
 
-- **Linux filesystem images are downloaded.** Settings -> Filesystems offers
-  a catalogue of images (Alpine, Devuan and others), which the app fetches
-  from our GitHub repository and which can therefore gain entries between
-  releases. An image is an archive of guest files for the emulator, as
-  above; none of it is iOS code.
-- **A user can also install an image from a URL they supply**, from the
-  command line inside the environment.
-- **Our own documentation uses the word "JIT"** (and one preference is named
-  "Enable JIT Cache"). It is the project's name for the emulator's
-  threaded-code interpreter described above -- the array of pointers to
-  pre-compiled routines -- and not a just-in-time compiler. No machine code
-  is generated.
+4. BACKGROUND MODES
 
-### 3. Network access and App Transport Security
+Both are used only on the user's initiative:
+- Location: requested only when a program opens /dev/location, at which point iOS shows its own prompt. To see it, type: cat /dev/location
+- Audio: the built-in music player keeps playing when the app is not in front. To see it, open the Workspace (the grid icon in the keyboard toolbar) and choose Music.
 
-The app's Info.plist sets `NSAllowsArbitraryLoads`. This is required and
-cannot be narrowed: the parts of the app that use the system's URL loading
--- the built-in `curl` command, the in-app browser, the AI chat's and MCP
-client's endpoints, and media streams the user opens -- connect to hosts the
-user chooses. Those hosts are not known to us in advance and cannot be
-enumerated as exception domains, and some of them, such as a server on the
-user's own network, serve plain HTTP.
+5. PRIVACY
 
-The app itself makes almost no network requests of its own. They are listed in
-the privacy policy.
-
-### 4. Background modes
-
-Two are declared, both used only on the user's initiative:
-
-- **Location** -- requested only when a program running inside Linux opens
-  `/dev/location`. iOS's own permission prompt appears at that moment.
-  *To see it:* type `cat /dev/location` at the prompt.
-- **Audio** -- the built-in music player, so playback continues when the app
-  is not in front. *To see it:* open the Workspace (the grid icon in the
-  keyboard toolbar) and choose the Music tool.
-
-### 5. Privacy
-
-The app collects nothing and contains no analytics, advertising or tracking
-code. The optional LLM chat is switched off until the user turns it on, and
-when it is on it asks the user to confirm the destination before the first
-message of a chat leaves the device. It also works entirely on-device with
-Apple's Foundation Models, with no API key and no network use at all.
+The app collects nothing and contains no analytics, advertising or tracking code. The optional AI chat is off until the user turns it on, and asks the user to confirm the destination before a chat's first message leaves the device. With Apple's Foundation Models it works entirely on-device, with no network use.
 
 Privacy policy: https://emkey1.github.io/ish-AOK/privacy/
 
-### 6. Encryption
+6. ENCRYPTION
 
-The app includes OpenSSH, built with its own cryptography rather than
-OpenSSL, so the app uses encryption beyond what iOS provides.
+The app includes OpenSSH, built with its own cryptography rather than OpenSSL, so it uses encryption beyond what iOS provides.
 
 ---
 
@@ -127,7 +79,7 @@ already seen.
 
 | Action | Expected |
 |---|---|
-| Launch | A shell prompt within a few seconds |
+| Launch (fresh install) | Asks which filesystem; choose AOK-iSH Native; the account question can be skipped; then a prompt |
 | `uname -a` | Linux, with the guest architecture |
 | `cat /dev/location` | iOS location prompt, then coordinates |
 | Workspace -> Music | A player; audio continues in the background |
