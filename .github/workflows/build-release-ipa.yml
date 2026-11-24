@@ -147,6 +147,10 @@ jobs:
       # at anything. Still ahead of packaging and publishing, which is what
       # matters -- a failure here means this tag ships no IPA.
       - name: Pre-release checks (build output)
+        env:
+          # The Xcode build's meson directory. Without it the checks look in
+          # build/, which here is the derived data and holds no archives.
+          AOK_MESON_BUILD_DIR: ${{ github.workspace }}/build/Build/Products/Release-iphoneos/meson/arm64
         run: tools/check-all.py --build-only
 
       - name: Embed entitlements (ad-hoc signature)

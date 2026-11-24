@@ -71,6 +71,11 @@ PURE = {
     # function plus a size the compiler knew; clang emits them under
     # _FORTIFY_SOURCE without the source ever naming them.
     "__memccpy_chk", "__strncat_chk", "wmemmove",
+    # The unchecked forms of three string functions whose _chk forms are
+    # already here. The macOS build only ever emitted the _chk ones; the iOS
+    # Release build, first read by this check for 566, calls these directly
+    # (zsh for memccpy, OpenSSH for the other two). Memory in, memory out.
+    "memccpy", "strlcat", "strlcpy",
     "rand", "rand_r", "srand", "random", "arc4random", "arc4random_uniform",
     # arc4random_buf, and the reasoning written out because this one is a
     # JUDGEMENT rather than a fact -- the shape fileno had.
@@ -453,7 +458,17 @@ OURS = re.compile(r"^(nlibc_|native_|task_|do_|f_get|f_install|f_close|"
 
 
 def _symbols(path, args):
-    out = subprocess.run(["nm"] + args + [path], capture_output=True, text=True)
+    # A directory is meson's object directory for an archive (libfoo.a.p): the
+    # Xcode build links those objects straight into libish.a and never makes
+    # libfoo.a, so on that build the objects are all there is to read.
+    if os.path.isdir(path):
+        paths = sorted(os.path.join(path, f) for f in os.listdir(path)
+                       if f.endswith(".o"))
+        if not paths:
+            return set()
+    else:
+        paths = [path]
+    out = subprocess.run(["nm"] + args + paths, capture_output=True, text=True)
     syms = set()
     for line in out.stdout.splitlines():
         s = line.strip()
@@ -628,28 +643,44 @@ def report(targets, root):
     return 0
 
 
+# Where the default targets are looked for. `build/` is the command-line build.
+# The release workflow builds with Xcode only, whose meson directory is under
+# its products (.../Release-iphoneos/meson/arm64) and holds libfoo.a.p object
+# directories but no libfoo.a; AOK_MESON_BUILD_DIR points this there. Without
+# it the gate could not run on the one build that ships (566: it failed the
+# release for want of build/libsmallclue.a before anything had been built).
+def _default_targets(root):
+    build = os.environ.get("AOK_MESON_BUILD_DIR") or os.path.join(root, "build")
+    targets = []
+    for t in DEFAULT_TARGETS:
+        path = os.path.join(build, os.path.basename(t))
+        if not os.path.exists(path) and os.path.isdir(path + ".p"):
+            path += ".p"
+        targets.append(path)
+    return build, targets
+
+
 def main():
     targets = sys.argv[1:]
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if targets and targets[0] == "--report":
         targets = targets[1:]
         if not targets:
-            targets = [os.path.join(root, t) for t in DEFAULT_TARGETS]
-            targets = [t for t in targets if os.path.exists(t)]
+            targets = [t for t in _default_targets(root)[1] if os.path.exists(t)]
         return report(targets, root)
     if not targets:
-        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        targets = [os.path.join(root, t) for t in DEFAULT_TARGETS]
+        build, targets = _default_targets(root)
         # `ninja -C build ish` links SmallCLUE's objects without ever making
         # its archive, and a missing target used to be skipped in silence --
         # so the gate said "clean" about code it had not looked at, while cp
         # called the host's utimensat (2026-10-01). SmallCLUE is in every
         # build; its absence is an error, not a pass.
-        smallclue = os.path.join(root, "build/libsmallclue.a")
-        if not os.path.exists(smallclue):
-            print("check-native-libc: build/libsmallclue.a is not built -- run "
-                  "ninja -C build libsmallclue.a (ninja ish does not make it)",
-                  file=sys.stderr)
+        if not any(os.path.exists(os.path.join(build, "libsmallclue.a" + sfx))
+                   for sfx in ("", ".p")):
+            print(f"check-native-libc: libsmallclue.a is not built in {build} "
+                  "-- run ninja -C build libsmallclue.a (ninja ish does not "
+                  "make it), or set AOK_MESON_BUILD_DIR to the Xcode build's "
+                  "meson directory", file=sys.stderr)
             return 2
         targets = [t for t in targets if os.path.exists(t)]
         if not targets:

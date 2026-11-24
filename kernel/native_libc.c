@@ -2244,6 +2244,14 @@ int nlibc_linkat(int oldfd, const char *from, int newfd, const char *to, int fla
             guest_from, nlibc_at_fd(newfd), guest_to, guest_flags));
 }
 
+int nlibc_renameat(int oldfd, const char *from, int newfd, const char *to) {
+    NATIVE_FRAME;
+    NLIBC_PATH(guest_from, from);
+    NLIBC_PATH(guest_to, to);
+    return (int) nlibc_ret(native_syscall(NATIVE_SYS_renameat, nlibc_at_fd(oldfd),
+            guest_from, nlibc_at_fd(newfd), guest_to));
+}
+
 int nlibc_mknod(const char *path, mode_t mode, dev_t dev) {
     NATIVE_FRAME;
     NLIBC_PATH(guest_path, path);
