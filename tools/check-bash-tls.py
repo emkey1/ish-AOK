@@ -36,10 +36,23 @@ from importlib import import_module
 ALLOW = import_module("bash-tls-fix-externs").ALLOW
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DEFAULT_ARCHIVES = [os.path.join(REPO, "build", "libbash.a"),
-                    os.path.join(REPO, "build", "libzsh.a"),
-                    os.path.join(REPO, "build", "libdash.a"),
-                    os.path.join(REPO, "build", "libish.a")]
+# AOK_MESON_BUILD_DIR: the Xcode build's meson directory, for the release
+# workflow, which has no build/. There the shells exist only as libfoo.a.p
+# object directories (their objects are linked straight into libish.a), so a
+# missing archive falls back to its object directory. Before this, the release
+# gate found nothing under build/, said "no archives to check" and passed.
+BUILD = os.environ.get("AOK_MESON_BUILD_DIR") or os.path.join(REPO, "build")
+
+
+def _built(name):
+    path = os.path.join(BUILD, name)
+    if not os.path.exists(path) and os.path.isdir(path + ".p"):
+        return path + ".p"
+    return path
+
+
+DEFAULT_ARCHIVES = [_built("libbash.a"), _built("libzsh.a"),
+                    _built("libdash.a"), _built("libish.a")]
 
 # Archives of vendored native programs -- the ones where "mutable and shared
 # between threads" is a bug rather than a design choice, so the whole-class
@@ -152,17 +165,24 @@ def main():
     archives = sys.argv[1:] or DEFAULT_ARCHIVES
     archives = [a for a in archives if os.path.exists(a)]
     if not archives:
+        # With the build directory named, finding nothing there is a failure:
+        # that is the release gate, and it is not allowed to pass on nothing.
         print("check-bash-tls: no archives to check (build first)", file=sys.stderr)
-        return 0
+        return 2 if os.environ.get("AOK_MESON_BUILD_DIR") else 0
 
     bad = []
     for archive in archives:
         with tempfile.TemporaryDirectory() as tmp:
-            # Absolute, because `ar x` runs with cwd=tmp. A relative archive
-            # path extracts nothing, and a gate that examined no objects prints
-            # "clean" -- the exact failure this whole file exists to prevent.
-            subprocess.run(["ar", "x", os.path.abspath(archive)], cwd=tmp,
-                           capture_output=True)
+            if os.path.isdir(archive):
+                # A libfoo.a.p object directory: read the objects where they are.
+                tmp = archive
+                archive = archive[:-len(".p")]
+            else:
+                # Absolute, because `ar x` runs with cwd=tmp. A relative archive
+                # path extracts nothing, and a gate that examined no objects prints
+                # "clean" -- the exact failure this whole file exists to prevent.
+                subprocess.run(["ar", "x", os.path.abspath(archive)], cwd=tmp,
+                               capture_output=True)
             tls_defs, data_defs, tls_refs, data_refs = classify(tmp)
 
             # libish.a is AOK's own kernel, whose globals are process-wide by

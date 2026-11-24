@@ -830,6 +830,10 @@ char ***nlibc_NSGetArgv(void);
 int *nlibc_NSGetArgc(void);
 int nlibc_mkfifo(const char *path, mode_t mode);
 int nlibc_linkat(int oldfd, const char *from, int newfd, const char *to, int flags);
+/* rustix's rename, which the tempfile crate in helix reaches. Found by
+ * tools/check-native-libc.py the first time it read the iOS build (566): the
+ * command-line build has no helix, so nothing there named it. */
+int nlibc_renameat(int oldfd, const char *from, int newfd, const char *to);
 /* Darwin's copy fast paths, which std::fs::copy uses in place of read/write. */
 int nlibc_fclonefileat(int srcfd, int dstdirfd, const char *dst, int flags);
 int nlibc_fcopyfile(int from_fd, int to_fd, void *state, uint32_t flags);
@@ -1304,6 +1308,7 @@ void _longjmp(jmp_buf, int) __attribute__((__noreturn__));
 #define _NSGetArgc               nlibc_NSGetArgc
 #define mkfifo                   nlibc_mkfifo
 #define linkat                   nlibc_linkat
+#define renameat                 nlibc_renameat
 #define fclonefileat             nlibc_fclonefileat
 #define fcopyfile                nlibc_fcopyfile
 #define copyfile_state_alloc     nlibc_copyfile_state_alloc

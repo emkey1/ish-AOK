@@ -51,6 +51,9 @@ DARWIN_ONLY = {
 # runner knows the difference instead of leaving it to whoever writes the job.
 NEEDS_BUILD = {
     'check-bash-tls.py': 'reads the built archives',
+    # Was missing here until 566, whose release build failed at the source
+    # stage with "build/libsmallclue.a is not built": nothing is, that early.
+    'check-native-libc.py': 'reads the built archives',
 }
 
 # What each one is for, in one line, so a red run says what broke without

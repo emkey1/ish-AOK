@@ -1,6 +1,6 @@
 # Release Notes Since `builds/iSH-AOK_565`
 
-133 commits. **The app is now called AOK-iSH.** Native mode grew the most: it
+134 commits. **The app is now called AOK-iSH.** Native mode grew the most: it
 has `apt` and a Wayland desktop through a companion Devuan filesystem, its own sshd,
 more accounts, and more commands. Most of the rest is preparation for the App Store:
 privacy manifests, a privacy policy, a consent screen before an AI chat sends
