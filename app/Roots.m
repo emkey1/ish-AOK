@@ -350,7 +350,8 @@ static NSArray<NSDictionary<NSString *, NSString *> *> *BuildRootChoices(void) {
                 // unpack -- importing it creates an empty filesystem, and the
                 // kernel links /bin and /usr/bin into /AOK/native at every
                 // boot. Bundled in the sense that matters (no download), and
-                // not the default: it cannot install packages.
+                // what a fresh install boots (provisionNativeRootIfEmpty): the
+                // app opens on a shell, and Boot Images adds a distribution.
                 kBundledRootIdentifierKey: @"aoknative",
                 kBundledRootDisplayNameKey: @"AOK-iSH Native (no distribution)",
                 kBundledRootImportNameKey: @"AOK-Native",
@@ -1554,6 +1555,30 @@ static NSString *ISHFileProviderErrorText(NSError *error) {
         [roots addObject:name];
     }];
     return YES;
+}
+
+- (nullable NSString *)provisionNativeRootIfEmpty {
+    if (self.roots.count != 0 || RootsDir() == nil)
+        return nil;
+    NSDictionary<NSString *, NSString *> *native = nil;
+    for (NSDictionary<NSString *, NSString *> *choice in BundledRootChoices()) {
+        if ([choice[kBundledRootKindKey] isEqualToString:kRootKindNative]) {
+            native = choice;
+            break;
+        }
+    }
+    if (native == nil)
+        return nil;
+    NSError *error = nil;
+    if (![self createNativeRootFromChoice:native error:&error]) {
+        [ISHDiagnosticsStore recordBreadcrumb:@"root.firstLaunchNativeFailed"
+                                      details:@{@"error": error.localizedDescription ?: @"unknown"}];
+        return nil;
+    }
+    self.defaultRoot = self.roots.lastObject;
+    [ISHDiagnosticsStore recordBreadcrumb:@"root.firstLaunchNative"
+                                  details:@{@"root": self.defaultRoot ?: @""}];
+    return native[kBundledRootInitialWindowKey] ?: @"";
 }
 
 - (BOOL)isNativeRootNamed:(NSString *)name {

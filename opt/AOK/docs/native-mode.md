@@ -17,8 +17,9 @@ native mode does not have, install a distribution beside it (see below).
 In **Filesystems** (Settings, or the Boot Images applet), under **Official
 Distributions**, pick **AOK-iSH Native**. It is created on the spot, with no
 download. To boot it, open it under Installed Filesystems and choose **Boot
-From This Filesystem**. The first-launch picker offers it too, beside Alpine
-and Devuan; nothing is chosen for you.
+From This Filesystem**. From 567 a fresh install boots it with no picker: with
+no filesystem at all, AOK-iSH makes this one and starts it, and Boot Images adds
+a distribution whenever you want one.
 
 From a shell, with `manage-roots.sh`:
 

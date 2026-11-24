@@ -78,6 +78,13 @@ FOUNDATION_EXPORT NSNotificationName const RootsCatalogDidChangeNotification;
 - (void)resumeDeferredFileProviderDomainSync;
 - (BOOL)importRootFromArchive:(NSURL *)archive name:(NSString *)name error:(NSError **)error progressReporter:(id<ProgressReporter> _Nullable)progress;
 - (BOOL)importBundledRootChoice:(NSString *)identifier error:(NSError **)error progressReporter:(id<ProgressReporter> _Nullable)progress;
+// With no filesystem at all -- a fresh install, or every one deleted -- makes
+// AOK-iSH Native and the default, so the app boots it instead of opening on the
+// Filesystems screen; Boot Images adds a distribution later. Returns the
+// native choice's initial window ("session-shell"), as the picker would apply
+// it, or nil when nothing was made (there were roots, or making it failed --
+// then the picker is still the way in).
+- (nullable NSString *)provisionNativeRootIfEmpty;
 - (BOOL)exportRootNamed:(NSString *)name toArchive:(NSURL *)archive error:(NSError **)error progressReporter:(id<ProgressReporter> _Nullable)progress;
 - (BOOL)destroyRootNamed:(NSString *)name error:(NSError **)error;
 - (BOOL)renameRoot:(NSString *)name toName:(NSString *)newName error:(NSError **)error;

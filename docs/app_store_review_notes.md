@@ -5,10 +5,10 @@ Connect's review-notes field as it stands: plain text, since the field shows
 no Markdown, and under its 4,000-character limit. Everything outside that section is
 for us, not for Apple.
 
-Rewritten 2026-11-24 to fit the limit (3,196 characters): plain text; the app
+Rewritten 2026-11-24 to fit the limit (3,174 characters): plain text; the app
 described as implementing a subset of the Linux interface, not running Linux;
-and the reviewer told that a fresh install asks which filesystem to set up
-(AOK-iSH Native, which downloads nothing).
+and the reviewer told what a fresh install does: from 567 it boots AOK-iSH
+Native at once, with no picker (it was a picker before).
 
 The name section is gone: on 2026-11-20 the maintainer decided to submit as
 "AOK-iSH" without asking the ish-app maintainers first, so there is no
@@ -38,7 +38,7 @@ Thank you for reviewing AOK-iSH.
 
 AOK-iSH is a Unix-style command-line environment for iPhone and iPad. It implements a useful subset of the Linux system interface (processes, files, pipes, signals, terminals) inside the app. It does not run a Linux kernel or a virtual machine. Its default filesystem, AOK-iSH Native, is about 140 commands compiled into the app's signed binary. Optional filesystem images run x86, ARM, RISC-V or PowerPC programs through an emulator. It is the same category of app as iSH Shell (id1436902243) and UTM SE.
 
-No account or demo login is needed. On first launch the app asks which filesystem to set up: choose AOK-iSH Native (nothing is downloaded). It then asks for an everyday account name, which can be skipped, and a shell prompt appears.
+No account or demo login is needed. On first launch the app sets up AOK-iSH Native (nothing is downloaded) and asks for an everyday account name, which can be skipped; a shell prompt is already there behind it.
 
 2. NO DOWNLOADED CODE RUNS AS APP CODE (2.5.2)
 
@@ -79,7 +79,7 @@ already seen.
 
 | Action | Expected |
 |---|---|
-| Launch (fresh install) | Asks which filesystem; choose AOK-iSH Native; the account question can be skipped; then a prompt |
+| Launch (fresh install) | AOK-iSH Native boots at once, no picker; the account question can be skipped; a root prompt behind it |
 | `uname -a` | Linux, with the guest architecture |
 | `cat /dev/location` | iOS location prompt, then coordinates |
 | Workspace -> Music | A player; audio continues in the background |

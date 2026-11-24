@@ -71,6 +71,10 @@ echo op=remove >&3; echo name=Experiment >&3; echo confirm=yes >&3; echo run >&3
 
 ## Installing roots (in-app)
 
+A fresh install already has one: from 567, with no filesystem at all, AOK-iSH
+makes **AOK-iSH Native** and boots it, with no picker (see
+[native-mode.md](native-mode.md)). Everything else is added here.
+
 The **Filesystems** screen — in app settings, and the same screen as the **Boot
 Images** applet in Workspace — lists four groups:
 

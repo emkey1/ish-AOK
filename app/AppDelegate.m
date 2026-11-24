@@ -5594,6 +5594,16 @@ static const NSUInteger ISHDnsRefreshRetryLimit = 8;
         return YES;
 
     [Roots instance];
+    // No filesystem: AOK-iSH Native, rather than the Filesystems screen. The
+    // first window is the one the picker gives the native root, unless the
+    // person already chose the Workspace or the Wayland display.
+    NSString *nativeInitialWindow = [Roots.instance provisionNativeRootIfEmpty];
+    if (nativeInitialWindow.length != 0) {
+        NSString *currentInitialWindow = [defaults stringForKey:kPreferenceInitialWindowKey];
+        if (![currentInitialWindow isEqualToString:ISHInitialWindowWorkspaceValue] &&
+                ![currentInitialWindow isEqualToString:ISHInitialWindowWaylandValue])
+            [defaults setObject:nativeInitialWindow forKey:kPreferenceInitialWindowKey];
+    }
     [ISHDiagnosticsStore recordLaunchStage:@"roots.loaded"
                                    details:@{@"needsInitialRootSelection": @(Roots.instance.needsInitialRootSelection),
                                              @"defaultRoot": Roots.instance.defaultRoot ?: @""}];
@@ -5603,8 +5613,9 @@ static const NSUInteger ISHDnsRefreshRetryLimit = 8;
     // TerminalViewController asks, then boots.
     //
     // Launching WITHOUT booting is already a path the app takes: it is what
-    // happens on a first run, while the root picker is up (the condition right
-    // here). This is the second reason to take it.
+    // happens while the root picker is up (the condition right here) -- with
+    // no filesystem at all, which a fresh install no longer is (it gets AOK-iSH
+    // Native above) unless making that failed. This is the second reason.
     if (!Roots.instance.needsInitialRootSelection && ISHSessionResumeChoicePending()) {
         [ISHDiagnosticsStore recordLaunchStage:@"boot.deferred.sessionChoice"];
     } else if (!Roots.instance.needsInitialRootSelection) {
