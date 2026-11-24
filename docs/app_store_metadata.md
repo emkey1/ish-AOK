@@ -11,7 +11,17 @@ shot was taken out of both: the desktop runs on a companion Devuan filesystem,
 and the listing does not point at other distributions. The files stay in
 `build/app-store-screenshots/`. The support URL there is still the repository's home page, not `/issues`.
 Edit here first, then send, so the two stay the same. The revised subtitle, promotional
-text, keywords and description were sent the same day, after the user read them. Everything here is a starting point to edit, not something to paste
+text, keywords and description were sent the same day, after the user read them.
+
+**Also set 2026-11-24, at the user's word:** categories Developer Tools
+(primary) and Utilities; the age-rating questionnaire, every content question
+"none" and unrestricted web access "yes" -- 16+ on Apple's current tiers (the
+API's old-scale field reports it as SEVENTEEN_PLUS); price Free, base territory
+USA; available in 174 of 175 territories and new ones automatically, **France
+held back** until the ANSSI declaration is filed (assessment item 7); copyright
+`2026 Mike Miller`. **Still for the user, on the website:** the App Privacy label
+("Data Not Collected"), the content-rights answer, and EU trader status. **Still
+to send:** the App Review notes, once trimmed under 4,000 characters. Everything here is a starting point to edit, not something to paste
 unread -- marketing copy is the author's voice, not a generated one.
 
 **One dependency runs through all of it:** the store name. See the assessment's
