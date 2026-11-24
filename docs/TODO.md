@@ -2454,7 +2454,9 @@ loop itself, which is a separate question from the fallbacks.
 
 ## Reported issues
 
-Checked against GitHub on 2026-10-20: **3 open** (#540, #647, #648). #577,
+Checked against GitHub on 2026-11-24, at the start of 567: **6 open** (#540,
+#647, #648, #674, #677, #678), **no open PRs**, nothing closed since 566 and
+nothing in the tree since the 566 tag that fixes one. #577,
 #616, #620, #625, #628, #631, #639 and #640 were closed on 2026-10-14 with
 559, and #646 on 2026-10-20 with 562. **Closing the issue is part of fixing
 the bug** -- a fix recorded here and not there is a fix the reporter never
@@ -2463,8 +2465,11 @@ learns about.
 | # | Title | State |
 |---|---|---|
 | [#540](https://github.com/emkey1/ish-AOK/issues/540) | External display support (AirPlay) | **restored for 563, iPhone only** (2026-10-23): terminal relocated, Wayland display mirrored; shipped in 563 untested on a display (the hardware gate was waived, docs/build_563_musts.md section 9). Commented 2026-10-27 asking iPhone owners to try it; open for their reports. **2026-10-28: an iPhone 15 on iOS 27.0 got only the mirror** -- iOS 27 wants a scene accessory from apps built with its SDK; fixed for 564, verified in the simulator. **2026-11-05: terminal confirmed on hardware (564); Wayland mirror froze, fixed for 565 in the simulator.** iPad keeps Stage Manager; see the queue |
-| [#647](https://github.com/emkey1/ish-AOK/issues/647) | More commands in AOK-iSH Native | answered 2026-10-16; fastfetch/btop natively are in the queue above, nothing promised |
+| [#647](https://github.com/emkey1/ish-AOK/issues/647) | More commands in AOK-iSH Native | answered 2026-10-16; fastfetch/btop natively are in the queue above, nothing promised. **2026-11-24:** told that 566's native `apt` (the companion Devuan root) installs all three; waiting on the reporter |
 | [#648](https://github.com/emkey1/ish-AOK/issues/648) | Devuan apt cannot download a package | answered 2026-10-17: the `W:` line is apt's warning about downloading as root into /root, not an error, and the .deb is there; waiting on the reporter |
+| [#674](https://github.com/emkey1/ish-AOK/issues/674) | Mobile-first desktop (Phosh, Plasma Mobile) | **promised 2026-11-22:** a custom desktop command in /etc/aok-desktop.conf, set by select-desktop.sh -- the queue entry above; the reporter will try a mobile desktop once it exists |
+| [#677](https://github.com/emkey1/ish-AOK/issues/677) | KDE Plasma desktop | answered 2026-11-13 (why full Plasma is not shipped; LXQt or single KDE apps instead). **The reporter's reply of 2026-11-14 ("I Have Install Entire KDE Plasma Desktop") is unanswered**: ask which root and device, and whether it starts |
+| [#678](https://github.com/emkey1/ish-AOK/issues/678) | Audio converter beside the Video Converter | **told "queued" 2026-11-22:** an audio-only mode for `transcode` and the Video Converter -- the queue entry above |
 
 ---
 
