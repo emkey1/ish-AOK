@@ -76,6 +76,8 @@ distribution at all, so SmallCLUE had to be the system as well as its tools:
 `-I`/`-i`/`-f`/`-w`, and login records — `login` and `init` write the guest's
 own `utmp` and `wtmp` layout, which is two layouts (glibc's `struct utmp` is 384
 bytes on x86 and 400 on aarch64 and riscv64), and `who` and `users` read them.
+566 added `w`, `last` and `finger` over the same records, `ip` and `ifconfig`,
+and `sudo`'s `-S` and `-p`.
 And `git` stopped refusing: libgit2 is built in, with SecureTransport as its
 HTTPS transport (Chapter 41).
 
@@ -218,6 +220,7 @@ choose re-launch over patching privilege separation out, and it remains open.
 What native mode ships meanwhile is the third option: a static aarch64 `sshd`
 built from the same OpenSSH tree as the native client, run as an ordinary
 emulated guest program, where fork simply works (`tools/build-guest-sshd.sh`).
+It is off until asked for, in Settings → sshd.
 
 It is also less costly than it sounds, because the emulated cost is not spread
 evenly. An `ssh` session is **cipher-bound** — measured, when somebody asked

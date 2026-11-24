@@ -67,16 +67,20 @@ Run `ls /usr/bin` for the exact list in your build. The main pieces:
 |---|---|
 | shells | `zsh` (the login shell, with completion), `sh` and `dash` |
 | files and text | `ls cp mv rm ln mkdir cat less head tail sort uniq wc cut tr sed grep awk find xargs diff patch tar gzip`, and the rest of SmallCLUE: see [native-programs.md](native-programs.md) |
-| network | `ssh scp sftp ssh-keygen ssh-copy-id`, `curl`, `wget`, `ping`, `host`, `nslookup` |
+| network | `ssh scp sftp ssh-keygen ssh-copy-id`, `curl`, `wget`, `ping`, `host`, `nslookup`, `ip`, `ifconfig` |
 | git | `git`: init, clone and fetch over HTTPS, add, commit, status, diff, log, branch, checkout |
 | editors | `vi`, `hx` (helix), `motepad`, and `md` to read Markdown -- these documents included |
-| system | `ps top ktop kill df free dmesg mount umount chroot uname uptime who users` |
+| system | `ps top ktop kill df free dmesg mount umount chroot uname uptime who w last finger users` |
 | terminal | `tput reset clear stty resize` |
 | accounts | `login su sudo passwd id whoami` |
 | services | `init`, `runit`, `sv`, `halt poweroff reboot` |
 
 Every one of these is the native program: there is no emulated copy
 underneath.
+
+`sudo` reads the password from standard input with `-S` and takes a prompt
+with `-p`, as sudo(8) does, and `passwd` accepts a piped password, so scripts
+that drive them work (from 566).
 
 `uname -o` says `AOK/Linux`: the kernel is AOK's, and there is no C library
 for a `GNU/` to name. On a distribution root it says `GNU/Linux` (glibc) or
@@ -223,7 +227,8 @@ already knows this device by another root's sshd will refuse the new one
 ended when the session's shell exits, and init records each boot and
 shutdown. `who` lists the sessions (`who -b` the boot, `who -r` the
 runlevel, `who am i` this terminal) and `users` their names; `uptime` counts
-them. The files are in the layout the guest's own Linux programs use, so a
+them. `w` adds what each is running, `last` reads the history (a live session
+shows as "still logged in"), and `finger` describes one account. The files are in the layout the guest's own Linux programs use, so a
 distribution's `who` or `last` reads them too (`last -f /var/log/wtmp`).
 
 ## A desktop
@@ -239,7 +244,8 @@ booted.
 sudo sh /AOK/tools/setup-native-wayland.sh
 ```
 
-or **Settings -> Wayland Desktop -> Install**, which runs the same thing. It
+or **Settings -> Wayland Desktop -> Install a Desktop…**, which runs the same
+thing. It
 installs the companion if there is none yet (from the catalogue, or the copy
 in the app), wires it to this root, and installs the desktop into it; the
 package install is the slow part. Then open the Wayland window as on any

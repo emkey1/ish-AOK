@@ -144,7 +144,9 @@ By default AOK-iSH rewrites the guest's `/etc/resolv.conf` on every DNS
 refresh, which fires whenever the device's network path changes — on
 cellular, that can be constantly. A guest resolver that polls the file's
 modification time (some do) sees it change again and again, even though the
-content is identical each time.
+content is identical each time. From 566 a change to the DNS servers of the
+Wi-Fi network you are already on is not such a change: it reaches the guest at
+the next network change.
 
 If that is causing trouble — a resolver logging repeated reopens, or you
 simply want to manage `/etc/resolv.conf` yourself, by hand or with a guest

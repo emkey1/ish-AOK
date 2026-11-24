@@ -390,6 +390,8 @@ not the program.
 **And there is no native `sshd`** (Chapter 25), blocked on privilege-separation
 forking — mitigated rather than fixed, because the crypto accelerator takes the
 cipher out of the emulator and the cipher is what an ssh session is bound by.
+Since 566 a native root has an `sshd` all the same: an emulated one the app
+carries, switched on in Settings → sshd.
 
 ## 41.6 FUSE, stated as absences — and one that stopped being one
 

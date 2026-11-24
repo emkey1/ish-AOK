@@ -29,7 +29,7 @@ To save one *now*, without waiting to be backgrounded:
 
 That writes the session and stops the machine, so the next launch resumes it.
 AOK-iSH stays open on a screen saying the session is suspended, as it does
-after **Suspend and Exit**; close it when you like. (Up to build 566 the app
+after **Suspend and Exit**; close it when you like. (Up to build 565 the app
 quit by itself at that point.)
 There is also `--save FILE`, which takes a copy and lets the session carry on,
 and `--status`, which reports what the last attempt did.

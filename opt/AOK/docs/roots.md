@@ -37,7 +37,7 @@ Three things worth knowing:
   also why you can install a root from inside the root you are using.
   `--exit-app` ends with a screen asking you to close AOK-iSH, which an iOS
   app cannot do for itself; close it, and the next launch comes up in the new
-  root. Up to build 566 the app quit at that point.
+  root. Up to build 565 the app quit at that point.
 - **An install keeps running if you walk away.** The download and unpack belong
   to the app, not to the shell that asked for them. Ctrl-C, a dropped ssh
   session, or a second invocation of `manage-roots.sh status` all find the same
@@ -128,6 +128,11 @@ roots synchronously at launch (each involving a SQLite connection and
 possible schema check) risked tripping iOS's launch watchdog on a device
 with many installed roots.
 
+A root installed with `manage-roots.sh install` while the guest is running is
+mounted at `/AOK/roots/<name>` as soon as the install reports done (from 566;
+before, it appeared at the next launch), so a script can install a root and
+work in it straight away.
+
 If a root is currently locked by something else (for example, the Files
 app File Provider extension is mid-operation on it), its mount is silently
 skipped for that boot — it'll appear on the next one once the lock clears.
@@ -207,6 +212,14 @@ possible at all. `/AOK/fakefs` is there for the suite's compiled-test cache:
 without it a per-architecture run falls back to that root's own `/tmp`, which
 init clears on restart, so every run recompiles every test. Root names are
 sanity-checked to reject `/`, `.`, and `..`.
+
+**Unmount before you delete or search under the root.** The binds
+`mount-root.sh` makes are ordinary ones, visible from the booted root too:
+until `mount-root.sh --unmount <name>`, the `/dev`, `/proc` and
+`/run` under it are the booted root's, and so is whatever that root's
+`/etc/aok-binds` asks for, such as `/home` and `/tmp`. An `rm -r` under `/AOK/roots/<name>`
+reaches all of them. To remove a root, use Filesystems or
+`manage-roots.sh remove <name> --yes`, after the unmount.
 
 A bare `chroot /AOK/roots/<name>`, without `mount-root.sh`, has none of those
 binds — so when `$SHELL` (native zsh, say) does not exist in the new root,

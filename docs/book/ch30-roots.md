@@ -94,6 +94,16 @@ leave a link to nothing. The user's own files (`/etc/passwd`, `/etc/rc`) are
 written only when missing; only links that point into `/AOK/native` are ever
 re-pointed or removed. `/AOK/docs/native-mode.md` is the user's guide to it.
 
+What a native root lacks, it borrows. Since 566 it can keep a **companion**: a
+Devuan arm64 filesystem installed beside it, named `Devuan`, with the name
+recorded in `/etc/aok-companion-root`. `apt` and `dpkg` in the native root are
+one-line hand-offs to it (`/AOK/tools/companion-run.sh`), what apt installs
+runs by name because the companion's `bin` directories follow the native
+root's on `PATH`, and the Wayland desktop of Chapter 32 is installed there and
+runs from there. All of that is emulated and entered through Section 30.5's
+foreign exec; the booted root stays native.
+`/AOK/docs/native-companion.md` has the rules.
+
 ## 30.2 The control surface is a file
 
 The interesting design decision is that the Filesystems screen is not the root
@@ -140,7 +150,7 @@ when the app starts, so changing it disturbs nothing that is running. That is
 also what makes the obvious paradox work: *you can install a root from inside the
 root you are using.* `--exit-app` ends with a screen asking for the app to be
 closed, because an iOS app may not quit itself; closing it is an ordinary
-suspension (Chapter 28), so nothing is left half-written. Up to build 566 the
+suspension (Chapter 28), so nothing is left half-written. Before build 566 the
 app quit at that point by itself.
 
 **Which means "the current root" is two things, and the screen says which.** The
@@ -261,6 +271,17 @@ out; off is Linux's behaviour. It is a runtime choice —
 `/proc/ish/foreign_exec`, `ISH_FOREIGN_EXEC` in the CLI, and Settings → Other
 Filesystems → Programs From Other Roots — because each mode is right for
 different programs.
+
+566 added two things to the default mode. A root's own `/etc/aok-binds` can ask
+for more of the booted root when it is entered — `/home`, `/tmp`, three files
+in `/etc`, the time zone — which is how a native root's companion sees the
+user's files. And what a foreign exec binds in is there only for the tasks
+inside that root (`mount_set_scope`): anyone else sees what the mount point
+holds underneath. They were ordinary mounts first, so the booted root saw its
+own `/home` at `/AOK/roots/<name>/home`, and an `rm -rf` of a companion's
+directory, run on a device to remove it, took the booted root's home
+directories with it. `mount-root.sh`'s binds are the user's own and stay
+ordinary, visible from everywhere until `mount-root.sh --unmount`.
 
 ## 30.6 One sharp edge
 

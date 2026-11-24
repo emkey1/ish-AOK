@@ -60,6 +60,23 @@ the chat's own model through a shell command — could have read a key kept that
 way. Keys saved by an older build move to the Keychain the first time they are
 read; `cat /proc/ish/defaults/llm_api_key` reads back empty.
 
+## Before a chat leaves the device
+
+The first time you send a message to a destination that is not this device,
+AOK-iSH asks first (from 566): "Send this chat to *host*?", saying what goes
+there. That is what you type and the rest of the conversation, and, with
+tools on, the contents of files the assistant reads and the output of
+commands it runs in your guest. **Send** sends the message; **Not Now** sends
+nothing and leaves your text in the field.
+
+It asks once per host, not per preset, so pointing a destination at another
+server asks again. It never asks for Apple Foundation Models or for a server
+on this device (`localhost`, `127.0.0.1`: the LM Studio and Ollama presets),
+since nothing leaves the device.
+
+**Settings → Privacy Policy** opens the app's privacy policy, which says what
+AOK-iSH sends and where.
+
 ## Providers
 
 The **Provider** choice in a destination's editor covers the common cases, or

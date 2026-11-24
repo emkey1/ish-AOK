@@ -4,7 +4,7 @@
 
 # Appendix F. The regression suite, annotated
 
-626 C programs in `tests/manual/`, of which **577 are listed in `fs/aok-tests.manifest`** and therefore reach the device at `/AOK/tests`.
+628 C programs in `tests/manual/`, of which **578 are listed in `fs/aok-tests.manifest`** and therefore reach the device at `/AOK/tests`.
 
 A row with a directory prefix is a per-architecture or accelerator test, kept
 in a subdirectory of `tests/manual/` and registered under that same prefix.
@@ -93,6 +93,7 @@ does not say what it is for.
 | `crypto/accel_test.c` | — | Guest test for the AOK crypto accelerator (ISH_SYS_AEAD syscall): 1. RFC 8439 2.8.2 vector (bit-exact correctness) 2. differential vs the guest's... |
 | `crypto/chacha20_poly1305_bench.c` | — | ChaCha20-Poly1305 via OpenSSL EVP: RFC 8439 sect 2.8.2 test vector (correctness ground truth) + throughput loop (timing). Links libcrypto. |
 | `crypto/chacha20_stream_test.c` | — | The ChaCha20 stream accelerator (system call 0xacc0) against OpenSSL's EVP_chacha20 on 200 random keys, nonces and lengths, and the two timed. |
+| `crypto/openssh_chachapoly_test.c` | — | Guest test for the bundled native-mode sshd's accelerated cipher: OpenSSH's chacha20-poly1305@openssh.com through AOK's crypto accelerator... |
 | `devtmpfs_mount.c` | yes | devtmpfs_mount.c — regression lock for mounting devtmpfs. |
 | `dir_tmpfs.c` | yes | Directory records, a faulting read, and two things tmpfs could not do. |
 | `dirfd_position.c` | yes | A directory's position is a cookie, and lseek has to report it. |
@@ -451,6 +452,7 @@ does not say what it is for.
 | `tty_hangup_signal.c` | yes | A terminal going away signals its session leader. |
 | `tty_job_control.c` | yes | Job control and XON/XOFF flow control: four things AOK's terminals did not do. |
 | `tty_line_discipline.c` | yes | Line-discipline editing and the non-canonical read timer. |
+| `udp_connect_port0.c` | yes | udp_connect_port0: a UDP socket may connect() to port 0, as Linux allows. |
 | `udp_suspend_rebuild.c` | — | A bound UDP socket through an iOS suspension (fs/sockrestart.c). iOS defuncts every TCP and UDP socket of a suspended app; a defunct UDP socket... |
 | `uid_drop_regress.c` | — | Dropping uid and gid as root sticks: setuid, seteuid, setgid and setegid cannot get the old ids back, with or without PR_SET_KEEPCAPS. |
 | `unaligned_page_edge.c` | yes | unaligned_page_edge.c -- loads and stores of 2, 4, 8 and 16 bytes at every offset around a page boundary read and write the right bytes, and one... |

@@ -131,6 +131,13 @@ To override it once, long-press the app's icon on the Home Screen (from build
 **System Console**, and works whether or not the app is already running. The
 menu appears once the app has been opened at least once.
 
+## Privacy and licences
+
+Two rows in Settings (from 566): **Privacy Policy** opens the app's privacy
+policy in the browser, and **Legal** shows, in the app, the licence notices and
+the written offer for the source of the GPL software in the bundled
+filesystems, with the build number to quote when asking for it.
+
 ## The rest of this documentation set
 
 Everything under `/AOK/docs`, in the order most people want it. Two thirds of

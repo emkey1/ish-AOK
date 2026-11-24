@@ -165,6 +165,10 @@ it runs. The API keys moved from the app's preferences to the Keychain in 557,
 because every preference is readable by any guest process as
 `/proc/ish/defaults/<name>` — including the model's own `run_shell`.
 
+Since 566 the chat also asks before the first message leaves the device: once
+per destination host, naming it and what goes with a message. An on-device
+model is not asked about, because nothing leaves.
+
 Output is capped (64 KB), runtime is capped (30 seconds), and a single reply is
 capped at a number of tool rounds (20) — all three adjustable. There are escape
 hatches: "Run, don't ask again this reply", "Always allow", which writes a rule
@@ -214,6 +218,14 @@ of step at the desktop's 2x scale and two of its menu boxes draw wrong on zink.
 The stack has been run on Devuan and Alpine, on amd64 and arm64 guests; Arch
 resolves the same package names and nobody has run a session on it, and the
 user's guide says exactly that.
+
+A native root (Chapter 30) has no distribution to install any of that from. Since
+566 its desktop is installed into its companion Devuan filesystem and runs from
+there, emulated, while the booted root stays native: `setup-native-wayland.sh`,
+or Settings → Wayland Desktop. The setup and start scripts, run in a native
+root, run themselves again inside the companion (`wayland-root.sh`), which
+shares the native root's `/home` and `/tmp`, so the app starts a session and
+finds `/tmp/ish-display.ready` exactly as before.
 
 `start-wayland.sh` is not something the user normally runs; the applet does. It
 runs as the session leader of a pseudo-terminal the applet owns — the same
@@ -337,6 +349,15 @@ own level, lifts the held modifiers to type it, and so `labwc`'s Alt+Shift
 bindings had probably never fired from the app. The client now sends the
 uppercase letter while Shift is held; the same trap still lifts Ctrl from a
 Ctrl with `+`.
+
+Layouts were the larger version of that. The desktop's virtual keyboard had a
+fixed US keymap, and a keysym it had no key for was dropped: a Danish
+keyboard's æ, ø and å, accented letters, other scripts. Since 566 `wl-present`
+lends such a keysym a spare key and sends the keymap again with it, works out
+the Shift level per key, and sends an ASCII symbol typed on the Option layer
+as that symbol. The soft keyboard's accent menu was tried in the simulator;
+the Option layer and Shift levels need a non-US hardware keyboard, and have
+not had one.
 
 Saving a session with the desktop running cannot carry it — what stands behind
 the render node and the view's input lives in the app — so since 557 a save

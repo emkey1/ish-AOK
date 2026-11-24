@@ -17,12 +17,12 @@ AOK VM，姊妹应用（完整的虚拟机：基于 QEMU 与 AOK gadget 引擎�
   - Bundle root `app.ish.iSH-AOK`
 - **五种客户机架构**，全部基于 JIT：`i386`、`amd64`（x86_64）、`arm64`（aarch64）、`riscv64` 和 `ppc64le`（64 位小端 PowerPC）。
 - **原生程序**：zsh、dash（预配置脚本会让它成为 `sh`），以及携带 OpenSSH（`ssh`、`scp`、`sftp`、`ssh-keygen`、`ssh-copy-id`）、Nextvi 编辑器和与 GNU 兼容的 `sed`、`grep`、`find`、`ls`、`tar`、`gzip`、`diff`、`awk` 及大部分 coreutils 的 SmallCLUE busybox 风格工具箱，都作为宿主代码编译进应用，并由客户机的 `execve` 经 `/AOK/native/<名称>` 分发。它们是运行在客户机任务线程上的宿主函数，而不是客户机二进制，因此以全速运行，无需逐条指令翻译。bash 拥有同样的原生实现，但自 556 起发布的构建不再包含它——参见[原生 bash 与许可证](#原生-bash-与许可证)。
-- **原生模式**（558）：完全没有 Linux 发行版的根文件系统。它的 `/bin` 和 `/usr/bin` 就是原生程序——约 140 个日常命令、ssh、git、curl、编辑器——由 SmallCLUE 的 `init` 作为 pid 1 运行 runit 式的服务，登录 shell 是原生 zsh。无需下载任何东西：在“官方发行版”下选择 **AOK-iSH Native** 即可。需要包管理器时，在它旁边再安装一个发行版。参见 `/AOK/docs/native-mode.md`。
+- **原生模式**（558）：完全没有 Linux 发行版的根文件系统。它的 `/bin` 和 `/usr/bin` 就是原生程序——约 140 个日常命令、ssh、git、curl、编辑器——由 SmallCLUE 的 `init` 作为 pid 1 运行 runit 式的服务，登录 shell 是原生 zsh。无需下载任何东西：在“官方发行版”下选择 **AOK-iSH Native** 即可。从 566 起，它通过安装在旁边的伴随 Devuan 文件系统提供 `apt` 和 Wayland 桌面，并有自己的 sshd（Settings → sshd）。参见 `/AOK/docs/native-mode.md` 和 `/AOK/docs/native-companion.md`。
 - `/AOK`，一个只读的应用内文件系统（`/AOK/docs`、`/AOK/tools`、`/AOK/tests`、`/AOK/native`），在构建时通过 `fs/aok-*.manifest` 和 `tools/gen-aokfs.py` 从 `opt/AOK/` 嵌入。
 - 内置在应用中的根文件系统（Alpine 3.24.2 与 Devuan 6，仅 `aarch64`），以及面向 `i386`、`x86_64`、`riscv64` 和 `ppc64le` 的可下载镜像。
 - **在客户机中使用设备的 GPU**：`/dev/dri/renderD128`，一个 virtio-gpu 渲染节点，由进程内运行在 MoltenVK 之上的 virglrenderer Venus 渲染器支撑，因此 Mesa 的 Venus Vulkan 驱动（以及其上的 zink）通过 Metal 绘制。客户机一侧由 `/AOK/tools/setup-gpu.sh` 安装。参见 `/AOK/docs/workspace.md`。
 - **Wayland 桌面**（labwc、foot、waybar；自带四个桌面——也可用 Wayfire 或 Xfce 取代 labwc）：在 GPU 上合成，并通过 `/AOK/native/wl-present` 呈现到应用中——画面单向传出，键盘、指针、剪贴板和尺寸调整反向传入——VNC 作为后备。`/AOK/tools/setup-games.sh` 会安装一组经过测试的游戏。参见 `/AOK/docs/workspace.md`。
-- **LLM Chat**：应用内的聊天客户端（OpenAI 兼容服务器、Anthropic、Gemini、Apple 端侧模型），可在允许/询问/拒绝的权限下读取、编辑客户机中的文件并运行命令，可使用 MCP 服务器，还能把多个聊天作为后台代理同时运行。API 密钥保存在钥匙串中。参见 `/AOK/docs/llm-chat.md`。
+- **LLM Chat**：应用内的聊天客户端（OpenAI 兼容服务器、Anthropic、Gemini、Apple 端侧模型），可在允许/询问/拒绝的权限下读取、编辑客户机中的文件并运行命令，可使用 MCP 服务器，还能把多个聊天作为后台代理同时运行。API 密钥保存在钥匙串中；从 566 起，第一条消息发往提供商的主机之前会先询问。参见 `/AOK/docs/llm-chat.md`。
 - **外接显示器**（563，仅限 iPhone；iOS 27 上从 564 起；尚未在真机上测试）：连接显示器或使用 AirPlay 屏幕镜像时，终端（在 Workspace 中为最前面的终端窗口）按大屏幕的比例铺满整个屏幕，键盘仍留在 iPhone 上；Wayland Display 连同光标一起镜像到大屏幕。iPad 保持 Stage Manager 的行为不变。参见 `/AOK/docs/external-display.md`。
 - **终端里的图片**（565）：支持 kitty 的图形协议，`kitten icat`、`chafa`、`timg` 以及使用它的文件管理器都能显示真正的图片，终端也会以像素为单位报告自己的尺寸。参见 `/AOK/docs/terminal-images.md`。
 - **用硬件编码器转换视频**（565）：`/AOK/native/transcode` 用相机应用所用的编码器重新编码为 HEVC 或 H.264；客户机里的 `ffmpeg` 是模拟运行的，非常慢。Workspace 的 Video Converter 小程序用按钮完成同样的工作，并能从“照片”取视频、把结果存回“照片”。参见 `/AOK/docs/transcode.md`。
@@ -323,7 +323,7 @@ Licensing
 实测在删除注册表项之后，仍有 144 个 bash 目标文件和 35 个 readline 目标文件留在里面。
 只有构建选项能真正移除它们。
 
-二进制中的其余部分不含第三方 GPL：SmallCLUE 是 MIT，OpenSSH 和 libarchive 是 BSD，
+二进制中的其余部分不含第三方 GPL：SmallCLUE 是 Apache-2.0（2026 年 11 月 4 日之前为 MIT），OpenSSH 和 libarchive 是 BSD，
 liblzma 属于公有领域，GPU 相关的 virglrenderer 和 MoltenVK 分别是 MIT 和 Apache-2.0。
 
 **需要加脚注的是 dash，而且这是刻意为之而非疏漏。** dash 采用 BSD-3-Clause ——

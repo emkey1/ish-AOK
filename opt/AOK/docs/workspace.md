@@ -201,7 +201,9 @@ desktop, swipe left on it or touch and hold it: that removes the desktop's own
 packages, and keeps what another desktop or program still uses. **More
 Programs** installs the games, tools, X11 support and GPU drivers described
 below. It installs into the filesystem that is running, takes several minutes,
-and needs AOK-iSH left open meanwhile.
+and needs AOK-iSH left open meanwhile. On a [native-mode](native-mode.md#a-desktop)
+root, which has no packages of its own, it installs into that root's companion
+filesystem, `Devuan`, and the desktop runs from there.
 
 The same scripts can be run by hand:
 

@@ -197,6 +197,11 @@ the compiled library into any program and distributing the result without the
 GPL's conditions applying to it — the permission bash lacks, and the reason it
 ships.
 
+The bundled root filesystems are a separate inventory: they are distributions,
+and hold GPL software of their own. Since 566 Settings has a Legal row, which
+carries the written offer for that source inside the app, where it accompanies
+the binaries it covers.
+
 ## 26.8 The principle
 
 A licence is a constraint on an artifact. In a project that vendors other

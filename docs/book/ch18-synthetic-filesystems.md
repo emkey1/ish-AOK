@@ -313,6 +313,15 @@ literal, word erase, `VMIN`/`VTIME` timers for non-canonical reads, XON/XOFF
 flow control with the two-flag subtlety of Chapter 12, and the signal characters
 that drive job control.
 
+Its input buffer is 4096 bytes, and `tty_input` is a short write: offered more,
+it takes what fits and returns how much that was. Until 566 nobody read the
+return value, so a 23 KB script pasted into the terminal arrived as about 4 KB.
+A non-blocking `tty_input` that stops short now marks the terminal throttled,
+and the read that frees space calls the driver's `input_unthrottle`, so the app
+keeps the remainder and hands it over when there is room. One line longer than
+the buffer is the exception, and it is Linux's: the excess is thrown away and
+the reader gets 4095 characters and the newline.
+
 Pseudo-terminals (`fs/pty.c`) provide the same interface between two guest
 processes, which is what `ssh`, `tmux`, `script` and every terminal multiplexer
 need. And `fs/tty-real.c` connects the guest's terminal to the host's — the CLI's
