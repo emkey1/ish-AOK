@@ -7,7 +7,9 @@ Draft copy for the App Store Connect fields, with Apple's limits noted. Written
 file, en-US, version 1.3 with build 566 attached): the name, subtitle,
 promotional text, keywords, description, privacy policy URL and both screenshot
 sets. The support URL there is still the repository's home page, not `/issues`.
-Edit here first, then send, so the two stay the same. Everything here is a starting point to edit, not something to paste
+Edit here first, then send, so the two stay the same. **Not the same right now:** the
+subtitle, promotional text, keywords and description below were revised later on
+2026-11-24 and wait for the user's approval before they are sent. Everything here is a starting point to edit, not something to paste
 unread -- marketing copy is the author's voice, not a generated one.
 
 **One dependency runs through all of it:** the store name. See the assessment's
@@ -30,51 +32,49 @@ alternative if discoverability matters more than restraint.
 ## Subtitle (30 characters)
 
 ```
-A Linux shell on your device
+A Unix-style shell on device
 ```
-28 characters. Says what it is in words someone searching would use.
+28 characters. Revised 2026-11-24: not "Linux", which is the kernel, and AOK-iSH
+runs no Linux kernel -- it implements a useful subset of its interface.
 
 ## Promotional text (170 characters, changeable without a review)
 
 ```
-Five guest architectures, a Wayland desktop on the GPU, native ssh and git,
-and an on-device AI chat that can read and run things in your filesystem.
+A shell and about 140 commands built into the app, ssh and git among them, a
+windowed Workspace, and an AI chat that can read and run things for you.
 ```
-148 characters. This field can be changed between releases without review, so
+About 150 characters. This field can be changed between releases without review, so
 it is the right place for whatever the current release added.
 
 ## Keywords (100 characters, comma-separated, no spaces after commas)
 
 ```
-linux,shell,terminal,ssh,unix,bash,developer,command,emulator,alpine,devuan,console,sftp,git
+shell,terminal,ssh,sftp,git,zsh,command,cli,unix,linux,developer,console,coreutils,posix
 ```
-92 characters. Deliberately excludes "iSH" (the name field already carries it).
-`linux`, `unix`, `alpine`, `devuan` and `git` are other people's names, used
-here to say what the app runs; 2.3.7 is where an objection would come from,
-and they are the ones to drop if Apple raises it. (`debian` stood here until
-2026-11-24; what ships is Devuan.)
+
+Revised 2026-11-24: no distribution names (`alpine`, `devuan` are gone) and no
+`emulator` -- the listing leads with the native root and does not point at
+other distributions. `linux` stays as a search term only: keywords are not
+shown, and the description says plainly that no Linux kernel runs. `unix`,
+`linux` and `git` are other people's names; 2.3.7 is where an objection would
+come from, and they are the ones to drop if Apple raises it.
 
 ## Description (4000 characters)
 
 ```
-AOK-iSH runs a real Linux system on your iPhone or iPad.
+AOK-iSH puts a Unix-style command line on your iPhone or iPad.
 
-It is not a remote terminal and not a sandbox around a few commands. A
-processor is emulated in software, a Linux userland runs on top of it, and you
-get a shell with a package manager behind it. Install what you like with apk or
-apt. Nothing is jailbroken and nothing leaves your device unless you send it.
+Open it and you have a shell and about 140 everyday commands -- ssh, scp, sftp,
+git, curl, editors and most of coreutils -- compiled into the app itself, so
+they run at full speed and there is nothing to download. Nothing is jailbroken,
+and nothing leaves your device unless you send it.
 
-START AT ONCE, OR PICK A DISTRIBUTION
+HOW IT WORKS
 
-Alpine and Devuan come with the app, and images for other processors download
-from inside it. Or choose AOK-iSH Native: no distribution at all, just a shell
-and about 140 everyday commands built into the app, ready the moment you open
-it. When you want more, apt installs it from Devuan, beside the native commands.
-
-FIVE GUEST ARCHITECTURES
-
-i386, x86_64, arm64, riscv64 and 64-bit little-endian PowerPC, all emulated.
-Run binaries built for hardware you do not own.
+AOK-iSH is not a remote terminal and not a virtual machine. It implements a
+useful subset of the Linux system interface -- processes, files, pipes,
+signals, terminals and networking -- inside the app, so familiar command-line
+tools behave the way you expect.
 
 A WORKSPACE, NOT JUST A TERMINAL
 
@@ -82,28 +82,20 @@ Arrange windows on desktops of their own: terminals with tabs, a file manager,
 the MotePad editor, a web browser, music and video players, an image viewer, a
 Markdown reader and a system monitor, all working on the same files.
 
-A DESKTOP, IF YOU WANT ONE
+CONVERT VIDEO AND AUDIO
 
-A Wayland desktop -- labwc, Wayfire or Xfce -- composited on the device's own
-GPU through a virtio-gpu render node, so Mesa draws on Metal. Point with a
-finger, or turn the screen into a touchpad. Or stay in the terminal; most
-people do.
-
-FAST WHERE IT COUNTS
-
-ssh, scp, sftp, git, curl, an editor and most of coreutils are compiled into
-the app as native code rather than emulated, so they run at full speed. The
-Media Converter re-encodes video on the hardware encoder the Camera app uses,
-and converts audio to AAC, ALAC or WAV with the system's own codecs.
+The Media Converter re-encodes video on the hardware encoder the Camera app
+uses, and converts audio to AAC, ALAC or WAV with the system's own codecs, from
+Photos, the Files app or the app's own folders.
 
 BUILT FOR REAL USE
 
-- Files app integration, so the guest filesystem is a location in Files
+- Files app integration, so your files are a location in Files
+- A built-in ssh server, so you can work from your computer
 - Apple Shortcuts actions, including a headless Run Command
 - Images drawn in the terminal with kitty's graphics protocol
 - Suspend to disk: processes, open files and terminals survive the app being
   killed
-- FUSE, namespaces, binfmt_misc, and a GPU render node
 - On iPhone, an external display shows the terminal full size while the phone
   keeps the keyboard
 
@@ -115,12 +107,12 @@ takes Chinese, Japanese and Korean input.
 
 AN AI CHAT THAT CAN ACTUALLY DO THINGS
 
-An optional chat panel that can read files, edit them and run commands in your
-Linux filesystem, under permissions you set per category. On devices that
-support it, it works entirely on-device with Apple's Foundation Models -- no
-account, no key, nothing sent anywhere -- or with a provider you configure
-yourself. It is switched off until you turn it on, and it asks before the
-first message of a chat leaves the device.
+An optional chat panel that can read your files, edit them and run commands
+for you, under permissions you set per category. On devices that support it,
+it works entirely on-device with Apple's Foundation Models -- no account, no
+key, nothing sent anywhere -- or with a provider you configure yourself. It is
+switched off until you turn it on, and it asks before the first message of a
+chat leaves the device.
 
 PRIVACY
 
