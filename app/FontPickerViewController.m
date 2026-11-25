@@ -206,14 +206,14 @@ enum {
 
     UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"Font" forIndexPath:indexPath];
     NSString *family = _visibleFamilies[indexPath.row];
-    // Scaled here, before Dynamic Type scales it, rather than by
-    // ISHWorkspaceScaleTableViewCell: this label follows Dynamic Type, and the
-    // Workspace window's text size (1.0 anywhere else) multiplies with that
-    // rather than switching it off.
+    // Scaled here rather than by ISHWorkspaceScaleTableViewCell, since the face
+    // is the row's own. The scale is the Workspace window's text size, or the
+    // system text size anywhere else, so the label does not also follow Dynamic
+    // Type itself: that would grow it twice.
     UIFont *font = [UIFont fontWithName:_previewNames[family]
                                    size:ISHWorkspaceScaledPointSize(18, ISHWorkspaceTextScaleForViewController(self))];
-    cell.textLabel.font = [[UIFontMetrics metricsForTextStyle:UIFontTextStyleBody] scaledFontForFont:font];
-    cell.textLabel.adjustsFontForContentSizeCategory = YES;
+    cell.textLabel.font = font;
+    cell.textLabel.adjustsFontForContentSizeCategory = NO;
     cell.textLabel.text = family;
     if ([family isEqualToString:UserPreferences.shared.fontFamily]) {
         cell.accessoryType = UITableViewCellAccessoryCheckmark;

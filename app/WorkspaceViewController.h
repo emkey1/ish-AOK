@@ -57,7 +57,9 @@ extern NSString *_Nullable ISHWorkspaceToolIdentifierForViewController(UIViewCon
 // these applets is the navigation controller, so that is what holds it. A page
 // reads it with ISHWorkspaceTextScaleForViewController whenever it makes text,
 // which is what sizes a page pushed later and a row scrolled in later. Anywhere
-// else it reads 1.0, and the page's text is not touched.
+// else it reads the system text size as a scale (1.0 at the default size, when
+// the page's text is not touched), and -workspaceTextScaleDidChange arrives
+// when that size changes.
 @protocol WorkspaceTextScaledPage <NSObject>
 // The window's scale changed. Sent to every page on the stack whose view is
 // loaded, not only the top one: Back shows the others again.
@@ -73,8 +75,9 @@ extern NSString *_Nullable ISHWorkspaceToolIdentifierForViewController(UIViewCon
 
 // The text scale of the Workspace window `viewController` is shown in: that of
 // the nearest view controller up its parent chain adopting
-// WorkspaceTextScalable. 1.0 anywhere else, including a screen presented
-// modally from inside such a window.
+// WorkspaceTextScalable. Anywhere else, including a screen presented modally
+// from inside such a window, the system text size as a scale: how much body
+// text grows at it, 1.0 at the default size, within the Workspace's 0.5-3.0.
 extern CGFloat ISHWorkspaceTextScaleForViewController(UIViewController *viewController);
 // `size` at `scale`, rounded to half a point as the applets round it.
 extern CGFloat ISHWorkspaceScaledPointSize(CGFloat size, CGFloat scale);
@@ -95,8 +98,15 @@ extern void ISHWorkspaceRescaleTableView(UITableView *tableView, CGFloat scale);
 extern UIFont *_Nullable ISHWorkspaceUnscaledFont(UIView *view);
 // The row height for a table whose rows keep to the 44-point standard because
 // nothing in them pushes on the height (a label and a switch, each centred).
-// `height` unchanged at 1.0 and below; above, at least 44 points at the scale.
+// `height` unchanged at 1.0 and below. Above, a standard row (44 points or
+// automatic) sizes itself -- ISHWorkspaceScaleTableViewCell gives it a floor of
+// 44 points at the scale and makes its labels wrap and push on its margins --
+// and a taller one is at least 44 points at the scale.
 extern CGFloat ISHWorkspaceTextScaledRowHeight(CGFloat height, CGFloat scale);
+// For a row that cannot size itself (its constraints do not reach the cell's
+// bottom): `height` unchanged at 1.0 and below, above it at least 44 points at
+// the scale, which holds one line at every step.
+extern CGFloat ISHWorkspaceTextScaledFixedRowHeight(CGFloat height, CGFloat scale);
 
 // Adopted by an applet whose content should survive an app restart (e.g. the
 // File Manager's current directory, a viewer's open file). The returned

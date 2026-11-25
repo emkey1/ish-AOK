@@ -974,6 +974,24 @@ static UIColor *RootRowInUseAccentColor(void) {
 - (void)viewDidLoad {
     [super viewDidLoad];
     ISHSizeTableSectionTitlesOnMac(self.tableView);
+    [self pinNameFieldToMargin];
+}
+
+// The storyboard ends the name field where the "Name" label ends. That label is
+// the cell's built-in one, which UIKit lays out itself: full width at ordinary
+// text sizes, but only as wide as "Name" at the accessibility sizes, where the
+// field's end then fell short of its start and the field had no width at all.
+// The row's trailing margin is where the label ended anyway at ordinary sizes.
+- (void)pinNameFieldToMargin {
+    UIView *contentView = self.nameField.superview;
+    for (NSLayoutConstraint *constraint in contentView.constraints) {
+        BOOL fieldTrailing = (constraint.firstItem == self.nameField && constraint.firstAttribute == NSLayoutAttributeTrailing) ||
+                             (constraint.secondItem == self.nameField && constraint.secondAttribute == NSLayoutAttributeTrailing);
+        if (fieldTrailing && constraint.active)
+            constraint.active = NO;
+    }
+    if (contentView != nil)
+        [self.nameField.trailingAnchor constraintEqualToAnchor:contentView.layoutMarginsGuide.trailingAnchor].active = YES;
 }
 
 - (void)viewWillAppear:(BOOL)animated {
@@ -1014,12 +1032,17 @@ static UIColor *RootRowInUseAccentColor(void) {
     return cell;
 }
 
-// Every row is one line, but the Name row also lays out its field with
-// constraints that do not reach the bottom of the cell, so its height cannot be
-// trusted to follow the text. 44 points at the scale holds a line at every step.
+// The Name row lays out its field against its label's centre and the top
+// margin, with nothing reaching the bottom of the cell, so its height cannot be
+// trusted to follow the text: left to size itself, the field came out with no
+// height at all. 44 points at the scale holds its one line at every step. The
+// other rows size themselves, which lets "Boot From This Filesystem" wrap.
 - (CGFloat)tableView:(UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath {
-    return ISHWorkspaceTextScaledRowHeight([super tableView:tableView heightForRowAtIndexPath:indexPath],
-                                           ISHWorkspaceTextScaleForViewController(self));
+    CGFloat height = [super tableView:tableView heightForRowAtIndexPath:indexPath];
+    CGFloat scale = ISHWorkspaceTextScaleForViewController(self);
+    if ([self.nameField isDescendantOfView:[super tableView:tableView cellForRowAtIndexPath:indexPath]])
+        return ISHWorkspaceTextScaledFixedRowHeight(height, scale);
+    return ISHWorkspaceTextScaledRowHeight(height, scale);
 }
 
 - (void)workspaceTextScaleDidChange {

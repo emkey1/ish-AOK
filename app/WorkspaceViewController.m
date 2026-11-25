@@ -8431,10 +8431,11 @@ static UIResponder *ISHWorkspaceFirstResponderAmongViewControllers(UIViewControl
 // Not a preferredContentSizeCategory trait override, though that would reach
 // every page and cell without the pages taking part. Their fonts are fixed
 // sizes (the storyboards' system 17, Menlo 14), which a trait does not move.
-// Making them Dynamic Type fonts would move Settings outside the Workspace too,
-// for anyone whose system text size is not the default. And the categories are
-// not the Workspace's steps -- body text has none below 0.82 -- and they resize
-// the navigation bar as well.
+// And the categories are not the Workspace's steps -- body text has none below
+// 0.82 -- and they resize the navigation bar as well. Outside the Workspace the
+// same pages follow the system text size through this same scale (since
+// 2026-11-25, for the App Store's Larger Text label; ISHSystemTextScale below),
+// which keeps the fonts their own and leaves the default size untouched.
 
 // An associated object rather than an ivar, so that the two classes, whose
 // superclasses differ, share one implementation.
@@ -8483,12 +8484,74 @@ static void ISHWorkspaceSetNavigationControllerTextScale(UINavigationController 
 
 @end
 
+// Outside a Workspace window -- Settings, Filesystems and Diagnostics shown full
+// screen, which is every iPhone and an iPad outside Workspace -- the same pages
+// follow the system text size instead (Settings ▸ Accessibility ▸ Display & Text
+// Size ▸ Larger Text): their fonts, scaled by how much body text grows at the
+// chosen size. At the default size that is exactly 1.0, so nothing changes for
+// anyone who has not asked; at the largest accessibility size it is about 3.1,
+// clamped to the Workspace's 3.0, and 2.0 is reached at the third. The fonts
+// stay the pages' own fixed ones (storyboard system 17, Menlo 14) rather than
+// becoming text styles -- see "text size for the navigation-controller
+// applets" above for why.
+// How much body text has grown at the system text size, unclamped: the body
+// font's own sizes (17 at the default, 40 at the third accessibility size), so
+// these pages grow in step with the system's text. UIFontMetrics's curve runs
+// a little behind them (37 there).
+static CGFloat ISHSystemBodyGrowth(void) {
+    UIContentSizeCategory category = UIApplication.sharedApplication.preferredContentSizeCategory;
+    UITraitCollection *traits = [UITraitCollection traitCollectionWithPreferredContentSizeCategory:category];
+    UITraitCollection *defaultSize = [UITraitCollection traitCollectionWithPreferredContentSizeCategory:UIContentSizeCategoryLarge];
+    CGFloat body = [UIFont preferredFontForTextStyle:UIFontTextStyleBody compatibleWithTraitCollection:traits].pointSize;
+    CGFloat base = [UIFont preferredFontForTextStyle:UIFontTextStyleBody compatibleWithTraitCollection:defaultSize].pointSize;
+    return body > 0 && base > 0 ? body / base : 1.0;
+}
+
+static CGFloat ISHSystemTextScale(void) {
+    return ISHWorkspaceClampedTextScale(ISHSystemBodyGrowth());
+}
+
+// Tells every loaded page outside a Workspace window that its scale changed,
+// walking children and presented controllers. A Workspace window's controller
+// is not descended into: its pages answer to the window's own scale.
+static void ISHTellPagesOfSystemTextSize(UIViewController *viewController, NSMutableSet<NSValue *> *seen) {
+    if (viewController == nil || [seen containsObject:[NSValue valueWithNonretainedObject:viewController]])
+        return;
+    [seen addObject:[NSValue valueWithNonretainedObject:viewController]];
+    if ([viewController conformsToProtocol:@protocol(WorkspaceTextScalable)])
+        return;
+    if (viewController.isViewLoaded && [viewController conformsToProtocol:@protocol(WorkspaceTextScaledPage)])
+        [(id<WorkspaceTextScaledPage>) viewController workspaceTextScaleDidChange];
+    for (UIViewController *child in viewController.childViewControllers)
+        ISHTellPagesOfSystemTextSize(child, seen);
+    ISHTellPagesOfSystemTextSize(viewController.presentedViewController, seen);
+}
+
+static void ISHObserveSystemTextSize(void) {
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        [NSNotificationCenter.defaultCenter addObserverForName:UIContentSizeCategoryDidChangeNotification
+                                                        object:nil
+                                                         queue:NSOperationQueue.mainQueue
+                                                    usingBlock:^(NSNotification *notification) {
+            NSMutableSet<NSValue *> *seen = [NSMutableSet set];
+            for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+                if (![scene isKindOfClass:UIWindowScene.class])
+                    continue;
+                for (UIWindow *window in ((UIWindowScene *) scene).windows)
+                    ISHTellPagesOfSystemTextSize(window.rootViewController, seen);
+            }
+        }];
+    });
+}
+
 CGFloat ISHWorkspaceTextScaleForViewController(UIViewController *viewController) {
     for (UIViewController *ancestor = viewController; ancestor != nil; ancestor = ancestor.parentViewController) {
         if ([ancestor conformsToProtocol:@protocol(WorkspaceTextScalable)])
             return ((id<WorkspaceTextScalable>) ancestor).workspaceTextScale;
     }
-    return 1.0;
+    ISHObserveSystemTextSize();
+    return ISHSystemTextScale();
 }
 
 CGFloat ISHWorkspaceScaledPointSize(CGFloat size, CGFloat scale) {
@@ -8499,9 +8562,136 @@ CGFloat ISHWorkspaceTextScaledRowHeight(CGFloat height, CGFloat scale) {
     if (scale <= 1.001)
         return height;
     CGFloat scaled = round(44.0 * scale);
-    // UITableViewAutomaticDimension is negative. Rows like these resolve it to
-    // 44 however large their text, since nothing in them pushes on the height.
+    // A standard row sizes itself while scaled: ISHWorkspaceScaleTableViewCell
+    // has given it a floor of 44 points at the scale, and its labels wrap and
+    // push on the row's margins, so a label too long for one line makes the row
+    // taller instead of being cut off -- a switch row's "Pixman Accel (Wayland
+    // rendering)" at twice the size, say. A row the storyboard made taller than
+    // standard keeps that height, at least the scaled 44.
+    if (height <= 0 || height <= 44.5)
+        return UITableViewAutomaticDimension;
+    return MAX(height, scaled);
+}
+
+CGFloat ISHWorkspaceTextScaledFixedRowHeight(CGFloat height, CGFloat scale) {
+    if (scale <= 1.001)
+        return height;
+    CGFloat scaled = round(44.0 * scale);
+    // UITableViewAutomaticDimension is negative.
     return height > 0 ? MAX(height, scaled) : scaled;
+}
+
+// What ISHWorkspaceScaleTableViewCell changes about a label so that scaled text
+// wraps rather than being cut off, kept on the label to put back at 1.0.
+static char ISHWorkspaceWrapSavedKey;
+static char ISHWorkspaceWrapConstraintsKey;
+static char ISHWorkspaceRowFloorKey;
+
+static void ISHWorkspaceSetLabelWraps(UILabel *label, BOOL wrap) {
+    NSDictionary *saved = objc_getAssociatedObject(label, &ISHWorkspaceWrapSavedKey);
+    if (wrap) {
+        if (saved != nil)
+            return;
+        objc_setAssociatedObject(label, &ISHWorkspaceWrapSavedKey, @{
+            @"lines": @(label.numberOfLines),
+            @"break": @(label.lineBreakMode),
+            @"resist": @([label contentCompressionResistancePriorityForAxis:UILayoutConstraintAxisHorizontal]),
+        }, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        label.numberOfLines = 0;
+        label.lineBreakMode = NSLineBreakByWordWrapping;
+        // Who gives way when the row is too narrow. Beside a switch or stepper
+        // (750), a label of several words gives way and wraps at its spaces,
+        // where at a tie the control was squeezed and drew past the cell's
+        // edge. A single token -- a stepper's "1.00" -- cannot wrap usefully, so
+        // it gives way only after the words do ("Line Height" before its value,
+        // which otherwise broke a character a line) and just before the control.
+        // Beside a text field, the label keeps its width: a field scrolls what
+        // does not fit, and giving way to one squeezed "Launch cmd" to a letter
+        // a line.
+        BOOL besideField = NO;
+        for (UIView *sibling in label.superview.subviews) {
+            if ([sibling isKindOfClass:UITextField.class] || [sibling isKindOfClass:UITextView.class])
+                besideField = YES;
+        }
+        BOOL words = [label.text rangeOfCharacterFromSet:NSCharacterSet.whitespaceCharacterSet].location != NSNotFound;
+        UILayoutPriority original = [label contentCompressionResistancePriorityForAxis:UILayoutConstraintAxisHorizontal];
+        UILayoutPriority priority = besideField ? MAX(original, UILayoutPriorityDefaultHigh + 1)
+                                  : words ? UILayoutPriorityDefaultLow
+                                  : UILayoutPriorityDefaultHigh - 1;
+        [label setContentCompressionResistancePriority:priority forAxis:UILayoutConstraintAxisHorizontal];
+        // The storyboard's switch and command rows only centre the label, so
+        // nothing would make the row taller for a second line. Kept inside the
+        // margins, it does. 999, not required: a page that fixes its own row
+        // heights clips as before rather than logging a conflict.
+        UIView *contentView = label.superview;
+        if (!label.translatesAutoresizingMaskIntoConstraints && [contentView.superview isKindOfClass:UITableViewCell.class]) {
+            NSLayoutConstraint *top = [label.topAnchor constraintGreaterThanOrEqualToAnchor:contentView.layoutMarginsGuide.topAnchor];
+            NSLayoutConstraint *bottom = [label.bottomAnchor constraintLessThanOrEqualToAnchor:contentView.layoutMarginsGuide.bottomAnchor];
+            top.priority = bottom.priority = UILayoutPriorityRequired - 1;
+            [NSLayoutConstraint activateConstraints:@[top, bottom]];
+            objc_setAssociatedObject(label, &ISHWorkspaceWrapConstraintsKey, @[top, bottom], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
+        return;
+    }
+    if (saved == nil)
+        return;
+    label.numberOfLines = [saved[@"lines"] integerValue];
+    label.lineBreakMode = [saved[@"break"] integerValue];
+    [label setContentCompressionResistancePriority:[saved[@"resist"] floatValue]
+                                           forAxis:UILayoutConstraintAxisHorizontal];
+    NSArray<NSLayoutConstraint *> *constraints = objc_getAssociatedObject(label, &ISHWorkspaceWrapConstraintsKey);
+    if (constraints != nil)
+        [NSLayoutConstraint deactivateConstraints:constraints];
+    objc_setAssociatedObject(label, &ISHWorkspaceWrapSavedKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(label, &ISHWorkspaceWrapConstraintsKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
+// The labels under `view`, not inside any other control (as for scaling), that
+// are laid out with constraints: a storyboard switch row's. A built-in cell
+// style's labels are UIKit's to lay out, and UIKit already stacks and wraps
+// them at large sizes; wrapping one more (Startup Mode's value) made a second
+// line the row did not grow for.
+static void ISHWorkspaceSetLabelsWrapInView(UIView *view, BOOL wrap) {
+    if ([view isKindOfClass:UILabel.class]) {
+        if (!view.translatesAutoresizingMaskIntoConstraints || !wrap)
+            ISHWorkspaceSetLabelWraps((UILabel *) view, wrap);
+        return;
+    }
+    if ([view isKindOfClass:UIControl.class])
+        return;
+    for (UIView *subview in view.subviews)
+        ISHWorkspaceSetLabelsWrapInView(subview, wrap);
+}
+
+// Scaled up, a standard row is at least 44 points at the scale whatever its
+// content pushes on (a row of a text field and nothing else pushes on nothing),
+// now that ISHWorkspaceTextScaledRowHeight lets it size itself. 999 for the
+// same reason as the label's margins.
+static void ISHWorkspaceSetRowFloor(UITableViewCell *cell, CGFloat scale) {
+    NSLayoutConstraint *floor = objc_getAssociatedObject(cell, &ISHWorkspaceRowFloorKey);
+    // Only in a row laid out with constraints. A built-in style's row sizes
+    // itself from its own labels, which UIKit stacks and wraps at large sizes;
+    // a constraint in its content view made UIKit size it from constraints
+    // instead, and Startup Mode's wrapped value was cut off top and bottom.
+    BOOL laidOutWithConstraints = NO;
+    for (UIView *subview in cell.contentView.subviews) {
+        if (!subview.translatesAutoresizingMaskIntoConstraints)
+            laidOutWithConstraints = YES;
+    }
+    if (scale <= 1.001 || !laidOutWithConstraints) {
+        if (floor != nil) {
+            floor.active = NO;
+            objc_setAssociatedObject(cell, &ISHWorkspaceRowFloorKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
+        return;
+    }
+    if (floor == nil) {
+        floor = [cell.contentView.heightAnchor constraintGreaterThanOrEqualToConstant:0];
+        floor.priority = UILayoutPriorityRequired - 1;
+        floor.active = YES;
+        objc_setAssociatedObject(cell, &ISHWorkspaceRowFloorKey, floor, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    floor.constant = round(44.0 * scale);
 }
 
 // ISHWorkspaceScaleTextFont's bookkeeping, kept on the view itself: the font its
@@ -8544,6 +8734,29 @@ UIFont *ISHWorkspaceUnscaledFont(UIView *view) {
     return font;
 }
 
+// The font to scale from. A label that follows Dynamic Type -- a built-in cell
+// style's, or one given a text style -- already carries the system text size,
+// and outside a Workspace window the scale is that same size, so scaling the
+// font as found grew "Open Everything as Default User" twice, to some 90
+// points. Such a font is taken back to its size at the default text size
+// first. A fixed font (the storyboards' system 17) is its own base.
+static UIFont *ISHWorkspaceFontAtDefaultTextSize(UIFont *font, BOOL followsDynamicType) {
+    // The attribute is not only a text style's: a plain systemFontOfSize: font
+    // carries it too, as "CTFontRegularUsage", and taking that for a text style
+    // made every storyboard 17 an 11.
+    NSString *style = font.fontDescriptor.fontAttributes[UIFontDescriptorTextStyleAttribute];
+    if (![style hasPrefix:@"UICTFontTextStyle"])
+        style = nil;
+    if (style == nil && !followsDynamicType)
+        return font;
+    if (style != nil) {
+        UITraitCollection *defaultSize =
+            [UITraitCollection traitCollectionWithPreferredContentSizeCategory:UIContentSizeCategoryLarge];
+        return [font fontWithSize:[UIFont preferredFontForTextStyle:style compatibleWithTraitCollection:defaultSize].pointSize];
+    }
+    return [font fontWithSize:round(font.pointSize / ISHSystemBodyGrowth() * 2.0) / 2.0];
+}
+
 void ISHWorkspaceScaleTextFont(UIView *view, CGFloat scale) {
     UIFont *font = ISHWorkspaceFontOfTextView(view);
     if (font == nil)
@@ -8578,7 +8791,8 @@ void ISHWorkspaceScaleTextFont(UIView *view, CGFloat scale) {
     // whenever its traits change, and a cell moving into the window is such a
     // change, so the scale would be gone by the time the row is seen.
     adjusting.adjustsFontForContentSizeCategory = NO;
-    UIFont *target = [unscaled fontWithSize:ISHWorkspaceScaledPointSize(unscaled.pointSize, scale)];
+    UIFont *base = ISHWorkspaceFontAtDefaultTextSize(unscaled, adjusts.boolValue);
+    UIFont *target = [base fontWithSize:ISHWorkspaceScaledPointSize(base.pointSize, scale)];
     ISHWorkspaceSetFontOfTextView(view, target);
     // A field that shrinks its text to fit would otherwise shrink it back as far
     // as its old minimum.
@@ -8629,6 +8843,11 @@ void ISHWorkspaceScaleTableViewCell(UITableViewCell *cell, CGFloat scale) {
         ISHWorkspaceScaleTextFont(cell.textLabel, scale);
         ISHWorkspaceScaleTextFont(cell.detailTextLabel, scale);
     }
+    // Larger than 1.0, text wraps rather than being cut off, and the row grows
+    // to hold it (ISHWorkspaceTextScaledRowHeight). Put back as it was at 1.0
+    // and below, where a line fits as it did.
+    ISHWorkspaceSetLabelsWrapInView(cell.contentView, scale > 1.001);
+    ISHWorkspaceSetRowFloor(cell, scale);
     objc_setAssociatedObject(cell, &ISHWorkspaceScaledCellKey, actualSize ? nil : @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
 
