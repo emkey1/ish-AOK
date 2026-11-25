@@ -2477,7 +2477,7 @@ static const NSInteger kMaxConsecutiveQuickSessionExits = 3;
 // call via the "Hide extra keys with external keyboard" switch -- it used to be forced
 // on iPad regardless of that switch, which defeated the setting there and is exactly
 // what discussion #450 asked to have back (an Esc key alongside a hardware keyboard).
-- (UIView *)_wantedAccessoryBar {
+- (UIInputView *)_wantedAccessoryBar {
     BOOL hide = self.hasExternalKeyboard && UserPreferences.shared.hideExtraKeysWithExternalKeyboard;
     return hide ? nil : self.barView;
 }
@@ -2495,7 +2495,7 @@ static const NSInteger kMaxConsecutiveQuickSessionExits = 3;
 // moves. So a change waits for the keyboard to settle (UIKeyboardDidChangeFrame) and
 // is decided again then, on the state at that moment.
 - (void)_updateAccessoryBar {
-    UIView *wanted = [self _wantedAccessoryBar];
+    UIInputView *wanted = [self _wantedAccessoryBar];
     if (self.termView.inputAccessoryView == wanted) {
         self.accessoryBarChangePending = NO;
         return;
@@ -2546,7 +2546,7 @@ static const NSInteger kMaxConsecutiveQuickSessionExits = 3;
         self.keyboardInMotion = NO;
     }
     self.accessoryBarChangePending = NO;
-    UIView *wanted = [self _wantedAccessoryBar];
+    UIInputView *wanted = [self _wantedAccessoryBar];
     if (self.termView.inputAccessoryView == wanted)
         return;
     self.termView.inputAccessoryView = wanted;
