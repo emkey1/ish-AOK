@@ -296,6 +296,13 @@ static NSArray<NSString *> *ISHSessionCommandWithFallback(NSArray<NSString *> *c
 @property (nonatomic) NSTimeInterval sessionStartedAt;
 @property (nonatomic) NSInteger consecutiveQuickSessionExits;
 @property BOOL ignoreKeyboardMotion;
+// Between a UIKeyboardWillChangeFrame and its UIKeyboardDidChangeFrame, and a key-row
+// change waiting for that to end -- see -_updateAccessoryBar.
+@property (nonatomic) BOOL keyboardInMotion;
+@property (nonatomic) CFTimeInterval keyboardMotionStartedAt;
+@property (nonatomic) BOOL accessoryBarChangePending;
+@property (nonatomic) BOOL accessoryBarChangeScheduled;
+@property (nonatomic) BOOL accessoryBarRetryScheduled;
 @property (nonatomic) BOOL hasExternalKeyboard;
 // For the bottom padding (-_idleBottomPadding): whether an on-screen keyboard
 // was covering the bottom of the view at the last keyboard notification, and
@@ -2462,24 +2469,92 @@ static const NSInteger kMaxConsecutiveQuickSessionExits = 3;
             [UIColor colorWithWhite:0 alpha:0.45];
     }];
     [self _updateFindBarStyle];
-    UIView *oldBarView = self.termView.inputAccessoryView;
-    // Whether the bar is hidden with a hardware keyboard attached is entirely the user's
-    // call via the "Hide extra keys with external keyboard" switch -- it used to be forced
-    // on iPad regardless of that switch, which defeated the setting there and is exactly
-    // what discussion #450 asked to have back (an Esc key alongside a hardware keyboard).
-    BOOL hideAccessoryBar = self.hasExternalKeyboard && UserPreferences.shared.hideExtraKeysWithExternalKeyboard;
-    if (hideAccessoryBar) {
-        self.termView.inputAccessoryView = nil;
-    } else {
-        self.termView.inputAccessoryView = self.barView;
-    }
+    [self _updateAccessoryBar];
     [self _updateFloatingSettingsButtonVisibility];
-    if (self.termView.inputAccessoryView != oldBarView && self.termView.isFirstResponder) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            self.ignoreKeyboardMotion = YES; // avoid infinite recursion
-            [self.termView reloadInputViews];
-            self.ignoreKeyboardMotion = NO;
-        });
+}
+
+// Whether the bar is hidden with a hardware keyboard attached is entirely the user's
+// call via the "Hide extra keys with external keyboard" switch -- it used to be forced
+// on iPad regardless of that switch, which defeated the setting there and is exactly
+// what discussion #450 asked to have back (an Esc key alongside a hardware keyboard).
+- (UIView *)_wantedAccessoryBar {
+    BOOL hide = self.hasExternalKeyboard && UserPreferences.shared.hideExtraKeysWithExternalKeyboard;
+    return hide ? nil : self.barView;
+}
+
+// The key row is the terminal's inputAccessoryView, so showing or hiding it means a
+// reloadInputViews -- and that must not happen while the keyboard is moving between
+// placements. A reload mid-move hands UIKit a new input view set, which it applies in
+// the move's completion against the placement it is moving to. On an iPad with Apple
+// Intelligence and a hardware keyboard that can be the floating assistant, where
+// -[UIInputWindowControllerHostingItem setInputAccessoryView:] (nil included) pins a
+// host view to the responder's input assistant view; the terminal, its shortcut
+// groups emptied (TerminalView -awakeFromNib), has none, and the nil anchor raised in
+// -inputAssistantHostView (TestFlight 564 and 565, iPad13,9, iOS 27.2.1). And the row
+// is decided from keyboard-frame notifications, which arrive during exactly those
+// moves. So a change waits for the keyboard to settle (UIKeyboardDidChangeFrame) and
+// is decided again then, on the state at that moment.
+- (void)_updateAccessoryBar {
+    UIView *wanted = [self _wantedAccessoryBar];
+    if (self.termView.inputAccessoryView == wanted) {
+        self.accessoryBarChangePending = NO;
+        return;
+    }
+    if (!self.termView.isFirstResponder) {
+        // No keyboard is up for this view: nothing is moving, and nothing to reload.
+        self.accessoryBarChangePending = NO;
+        self.termView.inputAccessoryView = wanted;
+        return;
+    }
+    self.accessoryBarChangePending = YES;
+    [self _scheduleAccessoryBarChange];
+}
+
+- (void)_scheduleAccessoryBarChange {
+    if (self.accessoryBarChangeScheduled)
+        return;
+    self.accessoryBarChangeScheduled = YES;
+    // Never from inside the keyboard notification or style pass that asked for it.
+    dispatch_async(dispatch_get_main_queue(), ^{
+        self.accessoryBarChangeScheduled = NO;
+        [self _applyPendingAccessoryBarChange];
+    });
+}
+
+- (void)_applyPendingAccessoryBarChange {
+    if (!self.accessoryBarChangePending)
+        return;
+    if (self.keyboardInMotion) {
+        // -keyboardDidSomething: applies it when the move ends. A move whose end is
+        // never announced must not hold the row back for good, though. Generous,
+        // because a main thread busy at start-up (three of the crashes came 13-20 s
+        // after launch) stretches a quarter-second move well past a second, and
+        // giving up early would land the reload in the very move it waits out.
+        const CFTimeInterval giveUpAfter = 5.0;
+        CFTimeInterval waited = CACurrentMediaTime() - self.keyboardMotionStartedAt;
+        if (waited < giveUpAfter) {
+            if (!self.accessoryBarRetryScheduled) {
+                self.accessoryBarRetryScheduled = YES;
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t) ((giveUpAfter - waited) * NSEC_PER_SEC)),
+                               dispatch_get_main_queue(), ^{
+                    self.accessoryBarRetryScheduled = NO;
+                    [self _applyPendingAccessoryBarChange];
+                });
+            }
+            return;
+        }
+        self.keyboardInMotion = NO;
+    }
+    self.accessoryBarChangePending = NO;
+    UIView *wanted = [self _wantedAccessoryBar];
+    if (self.termView.inputAccessoryView == wanted)
+        return;
+    self.termView.inputAccessoryView = wanted;
+    [self _updateFloatingSettingsButtonVisibility];
+    if (self.termView.isFirstResponder) {
+        self.ignoreKeyboardMotion = YES; // avoid infinite recursion
+        [self.termView reloadInputViews];
+        self.ignoreKeyboardMotion = NO;
     }
 }
 - (void)_updateStyleAnimated {
@@ -2652,6 +2727,16 @@ static const NSInteger kMaxConsecutiveQuickSessionExits = 3;
 }
 
 - (void)keyboardDidSomething:(NSNotification *)notification {
+    // Recorded before the ignore below: a move our own reload started is still a move
+    // (see -_updateAccessoryBar).
+    if ([notification.name isEqualToString:UIKeyboardDidChangeFrameNotification]) {
+        self.keyboardInMotion = NO;
+        if (self.accessoryBarChangePending)
+            [self _scheduleAccessoryBarChange];
+    } else {
+        self.keyboardInMotion = YES;
+        self.keyboardMotionStartedAt = CACurrentMediaTime();
+    }
     if (self.ignoreKeyboardMotion)
         return;
 
