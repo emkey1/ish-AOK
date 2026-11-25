@@ -177,8 +177,26 @@ https://github.com/emkey1/ish-AOK
 ```
 https://emkey1.github.io/ish-AOK/privacy/
 ```
-GitHub Pages, from the `gh-pages` branch; `tools/publish-privacy-policy.sh`
-republishes it after any change to `docs/privacy-policy.md`.
+GitHub Pages, from the `gh-pages` branch; `tools/publish-pages.sh` (once
+`tools/publish-privacy-policy.sh`, which still runs it) republishes it after
+any change to `docs/privacy-policy.md`.
+
+## Accessibility URL (optional)
+
+```
+https://emkey1.github.io/ish-AOK/accessibility/
+```
+`docs/accessibility.md`, published by the same `tools/publish-pages.sh`. Shown
+on the product page beside the Accessibility Nutrition Label.
+
+## Accessibility Nutrition Label (2026-11-25, for 567)
+
+The same on iPhone and iPad: **yes** to Dark Interface, Larger Text,
+Differentiate Without Color Alone and Reduced Motion; **no** to VoiceOver,
+Voice Control, Sufficient Contrast, Captions and Audio Descriptions. The
+reasons, and what would change each "no", are in `docs/accessibility.md` and
+the TODO entry "Accessibility Nutrition Label". Larger Text and Differentiate
+Without Color rest on 567 (fd918053b, 94e1e305b), not on 566.
 
 ## Copyright
 
