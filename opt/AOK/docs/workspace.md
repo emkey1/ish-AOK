@@ -275,9 +275,9 @@ one, Alt+Shift+R reloads labwc's settings and Alt+Shift+E ends the session.
 
 A window moves by its title bar, or by Alt and a drag anywhere inside it, which
 helps when the title bar is out of reach. With no keyboard, tap **alt** in the
-row of keys above the on-screen keyboard: it stays held, so drag the window,
-then tap **alt** again to let it go. (**Show Keyboard** in the window's menu
-brings the keyboard and its row back.)
+row of keys above the on-screen keyboard: it stays held, and outlined, so drag
+the window, then tap **alt** again to let it go. (**Show Keyboard** in the
+window's menu brings the keyboard and its row back.)
 
 The Applications menu and the launcher follow the freedesktop override rule: an
 entry in `/usr/local/share/applications`, then `~/.local/share/applications`,

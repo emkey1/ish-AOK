@@ -65,6 +65,15 @@ extern UIAccessibilityTraits UIAccessibilityTraitToggle;
         self.tintColor = UIColor.whiteColor;
     }
     [self setTitleColor:self.tintColor forState:UIControlStateNormal];
+    // A held modifier (ctrl, alt, ❖ once tapped) is outlined in the key's text
+    // colour, not only shaded: on the dark keyboard the two shades are a few
+    // percent of white apart, and a held key must read as held without colour
+    // (Accessibility ▸ Differentiate Without Color, and the App Store label
+    // that claims it). A press, which lasts only as long as the finger, keeps
+    // the shade alone.
+    BOOL held = self.toggleable && self.selected;
+    self.layer.borderWidth = held ? 2 : 0;
+    self.layer.borderColor = held ? self.tintColor.CGColor : nil;
 }
 
 - (void)setHighlighted:(BOOL)highlighted {

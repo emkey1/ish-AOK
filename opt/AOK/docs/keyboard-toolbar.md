@@ -9,6 +9,10 @@ Until you change something, the bar is the one AOK-iSH has always had:
 **Tab, Control, Escape and the arrow keys** at the left, and **- . / : ! |** in
 the centre, of which only **.** and **/** show on an iPhone held upright.
 
+A tap on **Control** holds it for the next key you type, which is sent as a
+control key (Control then C is Ctrl-C). While it is held the key is shaded and
+outlined; tap it again to let it go without typing.
+
 ## Two places on the bar
 
 The screen has a section for each place a key can sit:
