@@ -550,3 +550,6 @@ ARM64 客户机的工作受到 [OpenMinis/ish-arm64](https://github.com/OpenMini
 
 - [LICENSE.md](LICENSE.md)
 - [LICENSE.IOS](LICENSE.IOS)
+
+应用内置的每个第三方组件的许可证和声明都随应用一同提供，位于“设置 > 许可证”。
+`tools/gen-licences.py` 将它们收集到 `app/Licences.json`。

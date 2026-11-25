@@ -61,6 +61,126 @@
         }
       }
     },
+    "AOK-iSH and the open-source software built into it, each with its licence and the notices it asks to be shipped with." : {
+      "comment" : "Licences screen: the note under AOK-iSH's own entry, saying what the list is",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "AOK-iSH und die darin enthaltene Open-Source-Software, jeweils mit ihrer Lizenz und den Hinweisen, die mit ihr weitergegeben werden sollen."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "AOK-iSH y el software de código abierto que incorpora, cada uno con su licencia y los avisos que pide que lo acompañen."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "AOK-iSH et les logiciels open source qu'il intègre, chacun avec sa licence et les mentions qui doivent l'accompagner."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "AOK-iSH と、それに組み込まれたオープンソースソフトウェア。それぞれのライセンスと、同梱を求められている表示を掲載しています。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "AOK-iSH와 여기에 포함된 오픈 소스 소프트웨어입니다. 각각의 라이선스와 함께 배포하도록 요구되는 고지를 실었습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O AOK-iSH e o software de código aberto incorporado a ele, cada um com sua licença e os avisos que pede que o acompanhem."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "AOK-iSH и встроенное в него программное обеспечение с открытым исходным кодом — у каждого компонента его лицензия и уведомления, которые должны распространяться вместе с ним."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "AOK-iSH 及其内置的开源软件，各附其许可证以及要求随软件一同分发的声明。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "AOK-iSH 及其內建的開放原始碼軟體，各附其授權條款，以及要求隨軟體一併散布的聲明。"
+          }
+        }
+      }
+    },
+    "Built into the app" : {
+      "comment" : "Licences screen section header: the libraries and programs compiled into or shipped inside AOK-iSH",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "In die App integriert"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Integrado en la app"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Intégré à l'app"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "アプリに組み込まれたもの"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "앱에 포함된 구성 요소"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Incorporado ao app"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Встроено в приложение"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "内置于应用"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "內建於 App"
+          }
+        }
+      }
+    },
     "Choose a video from Photos, or a video or audio file from Files, or use Convert Video or Convert Audio on a file in the File Manager. It runs on this device's own encoders." : {
       "comment" : "Media converter: empty state text",
       "extractionState" : "manual",
@@ -417,6 +537,126 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "\n\n如果這樣可行，問題出在「以預設使用者打開所有項目」的 su 路徑 -- 請嘗試停用該設定。"
+          }
+        }
+      }
+    },
+    "LICENCES\n\nThe licences and notices of AOK-iSH and of every component built into it are shown in full on the Licences screen: tap Licences at the top of this screen, or choose Licences in Settings." : {
+      "comment" : "The last paragraph of the Legal screen, pointing at the Licences screen; \"Licences\" is that screen's title and button, \"Settings\" the settings screen's title",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "LIZENZEN\n\nDie Lizenzen und Hinweise von AOK-iSH und aller darin enthaltenen Komponenten stehen vollständig auf dem Bildschirm „Lizenzen“: Tippe oben auf diesem Bildschirm auf „Lizenzen“ oder wähle „Lizenzen“ in den Einstellungen."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "LICENCIAS\n\nLas licencias y los avisos de AOK-iSH y de cada componente que incorpora se muestran completos en la pantalla Licencias: toca Licencias en la parte superior de esta pantalla o elige Licencias en Ajustes."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "LICENCES\n\nLes licences et mentions d'AOK-iSH et de chaque composant qu'il intègre figurent en entier sur l'écran Licences : touchez Licences en haut de cet écran, ou choisissez Licences dans Réglages."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ライセンス\n\nAOK-iSH と、それに組み込まれたすべてのコンポーネントのライセンスと表示は、「ライセンス」画面に全文で掲載されています。この画面の上部にある「ライセンス」をタップするか、設定で「ライセンス」を選択してください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "라이선스\n\nAOK-iSH와 여기에 포함된 모든 구성 요소의 라이선스와 고지 전문은 라이선스 화면에서 볼 수 있습니다. 이 화면 위쪽의 라이선스를 탭하거나 설정에서 라이선스를 선택하십시오."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "LICENÇAS\n\nAs licenças e os avisos do AOK-iSH e de cada componente incorporado a ele aparecem na íntegra na tela Licenças: toque em Licenças no topo desta tela ou escolha Licenças em Ajustes."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ЛИЦЕНЗИИ\n\nЛицензии и уведомления AOK-iSH и всех встроенных в него компонентов полностью приведены на экране «Лицензии»: нажмите «Лицензии» в верхней части этого экрана или выберите «Лицензии» в настройках."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "许可证\n\nAOK-iSH 及其内置的每个组件的许可证和声明全文，见“许可证”屏幕：轻点本屏幕顶部的“许可证”，或在设置中选择“许可证”。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "授權條款\n\nAOK-iSH 及其內建的每個元件的授權條款與聲明全文，見「授權條款」畫面：點一下本畫面頂端的「授權條款」，或在設定中選擇「授權條款」。"
+          }
+        }
+      }
+    },
+    "Licences" : {
+      "comment" : "Title of the Licences screen, the Settings row that opens it, and the Legal screen's button that opens it",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lizenzen"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Licencias"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Licences"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ライセンス"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "라이선스"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Licenças"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Лицензии"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "许可证"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "授權條款"
           }
         }
       }
@@ -5173,6 +5413,126 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "在 AOK-iSH 客體系統中執行一行 Shell 指令，並傳回其輸出（stdout 與 stderr 已合併）。指令在無介面狀態下執行，不需要打開 App。它以 root 身分執行；若在設定中開啟「以預設使用者打開所有項目」，則以預設使用者帳號身分執行。"
+          }
+        }
+      }
+    },
+    "Rust crates" : {
+      "comment" : "Licences screen section header: the Rust libraries (crates) compiled into the app, mostly for the Helix editor",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rust-Crates"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Crates de Rust"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Crates Rust"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rust クレート"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rust 크레이트"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Crates do Rust"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Крейты Rust"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rust crate"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rust crate"
+          }
+        }
+      }
+    },
+    "Rust standard library" : {
+      "comment" : "Licences screen section header: the Rust standard library and the crates it is built from",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rust-Standardbibliothek"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Biblioteca estándar de Rust"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bibliothèque standard de Rust"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rust 標準ライブラリ"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rust 표준 라이브러리"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Biblioteca padrão do Rust"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Стандартная библиотека Rust"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rust 标准库"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rust 標準函式庫"
           }
         }
       }

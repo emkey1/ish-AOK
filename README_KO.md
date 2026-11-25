@@ -599,3 +599,6 @@ ARM64 게스트 작업은 [OpenMinis/ish-arm64](https://github.com/OpenMinis/ish
 
 - [LICENSE.md](LICENSE.md)
 - [LICENSE.IOS](LICENSE.IOS)
+
+앱에 포함된 모든 서드파티 구성 요소의 라이선스와 고지는 앱 안의 설정 > 라이선스에
+들어 있습니다. `tools/gen-licences.py` 가 이를 `app/Licences.json` 으로 모읍니다.

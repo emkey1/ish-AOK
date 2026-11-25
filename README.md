@@ -610,3 +610,7 @@ See:
 
 - [LICENSE.md](LICENSE.md)
 - [LICENSE.IOS](LICENSE.IOS)
+
+The licence and notices of every third-party component built into the app
+ship inside it, under Settings > Licences. `tools/gen-licences.py` collects
+them into `app/Licences.json`.

@@ -19,8 +19,12 @@ text, keywords and description were sent the same day, after the user read them.
 API's old-scale field reports it as SEVENTEEN_PLUS); price Free, base territory
 USA; available in 174 of 175 territories and new ones automatically, **France
 held back** until the ANSSI declaration is filed (assessment item 7); copyright
-`2026 Mike Miller`. **Still for the user, on the website:** the App Privacy label
-("Data Not Collected"), the content-rights answer, and EU trader status. The App
+`2026 Mike Miller`. Content rights set 2026-11-25, at the user's word: "Yes,
+it contains, shows or accesses third-party content" (`USES_THIRD_PARTY_CONTENT`)
+-- the browser, curl and the AI chat reach sites the user picks, the catalogue
+offers others' distributions, and the binary carries open-source code, whose
+notices are on the app's Licences screen. **Still for the user, on the
+website:** the App Privacy label ("Data Not Collected") and EU trader status. The App
 Review notes (docs/app_store_review_notes.md, 3,174 characters) were sent too.
 **Before submitting:** attach a build whose encryption answer is "yes" (567);
 566 was answered "no", which the notes and the assessment contradict. Everything here is a starting point to edit, not something to paste

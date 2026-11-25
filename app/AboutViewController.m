@@ -20,6 +20,7 @@
 #import "WorkspaceViewController.h"
 #import "MarkdownRenderer.h"
 #import "LLMChatInternal.h"
+#import "LicencesViewController.h"
 #if __has_include("libiSH_AOKApp-Swift.h")
 #import "libiSH_AOKApp-Swift.h" // AOKFoundationModelsBridge (Swift, iOS 26+ FoundationModels wrapper)
 #endif
@@ -81,6 +82,7 @@ UIViewController *ISHCreateToolbarKeysViewController(void) {
 @property (weak, nonatomic) IBOutlet UITableViewCell *openDiscord;
 @property (weak, nonatomic) IBOutlet UITableViewCell *privacyPolicyCell;
 @property (weak, nonatomic) IBOutlet UITableViewCell *legalCell;
+@property (weak, nonatomic) IBOutlet UITableViewCell *licencesCell;
 @property (weak, nonatomic) IBOutlet UITableViewCell *customDnsCell;
 
 @property (weak, nonatomic) IBOutlet UITableViewCell *exportContainerCell;
@@ -846,14 +848,15 @@ static NSString *ISHForeignExecTitle(NSString *mode) {
         // the app, not only from the App Store listing. It lives in the source
         // repository so that its revisions are public and diffable.
         [UIApplication openURL:@"https://emkey1.github.io/ish-AOK/privacy/"];
-    } else if (cell == self.legalCell) {
-        // Pushed rather than opened in Safari: the GPL's written offer has to
-        // accompany the binaries, and a link to a website does not.
-        UIViewController *legal = ISHCreateLegalViewController();
+    } else if (cell == self.legalCell || cell == self.licencesCell) {
+        // Pushed rather than opened in Safari: the GPL's written offer, and the
+        // licence notices, have to accompany the binaries, and a link to a
+        // website does not.
+        UIViewController *page = cell == self.legalCell ? ISHCreateLegalViewController() : ISHCreateLicencesViewController();
         if (self.ish_canPushSubpage) {
-            [self.navigationController pushViewController:legal animated:YES];
+            [self.navigationController pushViewController:page animated:YES];
         } else {
-            UINavigationController *navigationController = [[UINavigationController alloc] initWithRootViewController:legal];
+            UINavigationController *navigationController = [[UINavigationController alloc] initWithRootViewController:page];
             ISHConfigureLLMSettingsNavigationController(navigationController);
             [self presentViewController:navigationController animated:YES completion:nil];
         }
@@ -2434,6 +2437,18 @@ static NSString *ISHLegalNoticeText(void) {
         @"The legal notice and GPL written offer shown on the Legal screen; %@ is the build number"), version];
 }
 
+// Its own string, so adding it did not cost the notice above its nine
+// translations.
+static NSString *ISHLegalLicencesPointer(void) {
+    return NSLocalizedString(
+        @"LICENCES\n"
+        @"\n"
+        @"The licences and notices of AOK-iSH and of every component built into "
+        @"it are shown in full on the Licences screen: tap Licences at the top "
+        @"of this screen, or choose Licences in Settings.",
+        @"The last paragraph of the Legal screen, pointing at the Licences screen; \"Licences\" is that screen's title and button, \"Settings\" the settings screen's title");
+}
+
 @interface ISHLegalViewController : UIViewController
 @end
 
@@ -2445,6 +2460,9 @@ static NSString *ISHLegalNoticeText(void) {
     [super viewDidLoad];
     self.title = NSLocalizedString(@"Legal", @"Legal screen title");
     self.view.backgroundColor = UIColor.systemBackgroundColor;
+    self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc]
+        initWithTitle:NSLocalizedString(@"Licences", @"Title of the Licences screen, the Settings row that opens it, and the Legal screen's button that opens it")
+                style:UIBarButtonItemStylePlain target:self action:@selector(showLicences)];
 
     _textView = [[UITextView alloc] initWithFrame:CGRectZero];
     _textView.editable = NO;
@@ -2456,7 +2474,7 @@ static NSString *ISHLegalNoticeText(void) {
     _textView.textContainerInset = UIEdgeInsetsMake(16, 16, 32, 16);
     _textView.dataDetectorTypes = UIDataDetectorTypeLink;
     _textView.translatesAutoresizingMaskIntoConstraints = NO;
-    _textView.text = ISHLegalNoticeText();
+    _textView.text = [NSString stringWithFormat:@"%@\n\n%@", ISHLegalNoticeText(), ISHLegalLicencesPointer()];
     [self.view addSubview:_textView];
     [NSLayoutConstraint activateConstraints:@[
         [_textView.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor],
@@ -2464,6 +2482,10 @@ static NSString *ISHLegalNoticeText(void) {
         [_textView.leadingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.leadingAnchor],
         [_textView.trailingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.trailingAnchor],
     ]];
+}
+
+- (void)showLicences {
+    [self.navigationController pushViewController:ISHCreateLicencesViewController() animated:YES];
 }
 
 @end

@@ -54,6 +54,8 @@ NEEDS_BUILD = {
     # Was missing here until 566, whose release build failed at the source
     # stage with "build/libsmallclue.a is not built": nothing is, that early.
     'check-native-libc.py': 'reads the built archives',
+    # cargo tree runs offline, so the crates must already be fetched.
+    'check-licences.py': 'needs the crates a build fetches',
 }
 
 # What each one is for, in one line, so a red run says what broke without
@@ -63,6 +65,8 @@ ABOUT = {
         'the music player cannot come up with its graph connected to nothing',
     'check-bash-tls.py':
         'no bash global is __thread in one translation unit and not another',
+    'check-licences.py':
+        'the Licences screen lists everything the build puts in the app',
     'check-device-table.py':
         'kernel/hostinfo.m knows every device Xcode can build for',
     'check-native-libc.py':

@@ -277,7 +277,12 @@ project means by "JIT". The hash is not built.
   user-interface string says it. The notes say there is no JIT; add a sentence
   saying the project's own documents use the word for a threaded-code
   interpreter, before a reviewer finds the word and asks.
-- **Third-party licence notices are not in the app.** The Legal screen carries
+- **Third-party licence notices are not in the app** (**done for 567, 2026-11-25:**
+  Settings > Licences lists AOK-iSH and every component, crate and Rust
+  standard library dependency built into the app -- 419 entries -- each with
+  its licence texts in full, from `app/Licences.json`, which
+  `tools/gen-licences.py` writes from the trees the build compiles and
+  `tools/check-licences.py` keeps current after a release build)**.** The Legal screen carries
   the GPL offer and SmallCLUE's NOTICE and points at "the licence in its own
   directory" for the rest, which is not shipped. "Redistributions in binary
   form must reproduce" appears 0 times in the binary; OpenSSH, zsh, dash,
