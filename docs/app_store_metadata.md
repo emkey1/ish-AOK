@@ -39,7 +39,9 @@ checked first and differed from this file only in the name. The privacy and
 accessibility pages were republished too. So were the five screenshots that showed the
 old name (the iPad `uname -a` line, both Workspace shots, both Files shots),
 retaken the same way and put in the same places; the old files are in
-`build/app-store-screenshots/old-aok-ish/`. The description keeps "a fork of
+`build/app-store-screenshots/old-aok-ish/`. TestFlight's beta app description
+and beta review notes, which still said "iSH-Shell" and named distributions,
+were rewritten and sent the same day, after the user read them. The description keeps "a fork of
 the iSH project": stating where the app came from is how people who search for
 iSH find it, and it puts no one else's name in the name or the keywords.
 
