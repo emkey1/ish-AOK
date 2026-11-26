@@ -33,10 +33,10 @@ unread -- marketing copy is the author's voice, not a generated one.
 
 **Renamed 2026-11-26: the app is AOK-Workstation.** The user moved off
 "AOK-iSH" so that the store name no longer carries "iSH" (see the assessment's
-"Name and branding"). Everything below says AOK-Workstation, but **App Store
-Connect still shows "AOK-iSH"** in the name, the description and the review
-notes until they are sent again. That needs the user's go-ahead, and the name
-can only change while a version is editable. The description keeps "a fork of
+"Name and branding"). The name, the description and the review notes were sent
+to App Store Connect again the same day, at the user's word; the live text was
+checked first and differed from this file only in the name. The privacy and
+accessibility pages were republished too. The description keeps "a fork of
 the iSH project": stating where the app came from is how people who search for
 iSH find it, and it puts no one else's name in the name or the keywords.
 

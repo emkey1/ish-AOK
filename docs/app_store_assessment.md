@@ -310,10 +310,15 @@ version is editable (see [app_store_metadata.md](app_store_metadata.md)). The
 description still says the app is a fork of the iSH project, which is a
 statement of where it came from, not a use of the name.
 
-**Still open: the ISH badge on the icon** (`app/Assets.xcassets/AppIcon.appiconset`,
-an "ISH" lozenge under "AOK"). It is the last place the public face of the app
-says "iSH", and 5.2.1 covers icons as well as names. The bundle id stays, as
-below.
+**The icon stays as it is (decided 2026-11-26).** It is "AOK" with an "ISH"
+lozenge (`app/Assets.xcassets/AppIcon.appiconset`). The user's reasoning: on
+the Home Screen it reads "AOK" with "Workstation" under it, which together give
+the app's full name. The bundle id stays too, as below.
+
+**Sent 2026-11-26:** the name, description and review notes went to App Store
+Connect (version 1.3, still Prepare for Submission), the same text as on
+2026-11-24 apart from the name; the privacy and accessibility pages were
+republished.
 
 The draft below was never sent, and with the rename it is not needed. It stays
 as a record, under the name the app had then.

@@ -13,8 +13,8 @@ Native at once, with no picker (it was a picker before).
 There is no name section. On 2026-11-20 the maintainer decided to submit as
 "AOK-iSH" without asking the ish-app maintainers first, and on 2026-11-26 the
 app was renamed AOK-Workstation, whose name borrows no one else's. See the
-assessment's "Name and branding". App Store Connect holds the 2026-11-24 copy,
-which says AOK-iSH, until this one is sent.
+assessment's "Name and branding". This copy (3,206 characters) was sent to App
+Store Connect on 2026-11-26.
 
 The claims about code generation in section 2 were re-checked on 2026-11-14:
 no `MAP_JIT`, no `com.apple.security.cs.allow-jit` or `dynamic-codesigning`
