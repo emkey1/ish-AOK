@@ -25,6 +25,10 @@
 #   sudo sh /AOK/tools/setup-gpu.sh --gl-default OpenGL on the GPU by default
 #   sudo sh /AOK/tools/setup-gpu.sh --gl-software  back to software OpenGL
 #   sh /AOK/tools/setup-gpu.sh --check           report only (no root needed)
+#   sh /AOK/tools/setup-gpu.sh --status          "gpu installed", "gpu partly
+#                                                installed" or "gpu not
+#                                                installed", from the packages
+#                                                alone (no root needed)
 #
 # Devuan 6, Alpine 3.24 and Arch Linux ARM carry the packages (Alpine 3.23
 # has no Venus driver at all). Devuan on all four guest architectures; Alpine
@@ -40,7 +44,13 @@ die()  { printf 'setup-gpu.sh: %s\n' "$*" >&2; exit 1; }
 # filesystem instead (wayland-root.sh, setup-native-wayland.sh).
 if [ -r /AOK/tools/wayland-root.sh ]; then
     . /AOK/tools/wayland-root.sh
-    aok_wayland_handoff setup-gpu.sh install "$@" || die "$AOK_WAYLAND_PROBLEM"
+    # --status only asks, so it installs no companion: with none, nothing here
+    # is installed.
+    if [ "${1:-}" = --status ]; then
+        aok_wayland_handoff setup-gpu.sh report "$@" || { echo "gpu not installed"; exit 0; }
+    else
+        aok_wayland_handoff setup-gpu.sh install "$@" || die "$AOK_WAYLAND_PROBLEM"
+    fi
 fi
 
 CONF=/etc/aok-gpu.conf
@@ -52,17 +62,54 @@ usage() {
 
 DEMOS=0
 CHECK_ONLY=0
+STATUS_ONLY=0
 GL_CHOICE=""
 for arg in "$@"; do
     case "$arg" in
         --demos) DEMOS=1 ;;
         --check) CHECK_ONLY=1 ;;
+        --status) STATUS_ONLY=1 ;;
         --gl-default) GL_CHOICE=gpu ;;
         --gl-software) GL_CHOICE=software ;;
         -h|--help) usage; exit 0 ;;
         *) usage >&2; exit 2 ;;
     esac
 done
+
+# Each distribution's packages; --demos adds to them.
+GPU_PKGS_APT="mesa-vulkan-drivers libgl1-mesa-dri libegl-mesa0 vulkan-tools mesa-utils"
+GPU_PKGS_PACMAN="vulkan-virtio mesa vulkan-tools mesa-utils"
+GPU_PKGS_APK="mesa-vulkan-virtio vulkan-loader mesa-dri-gallium mesa-egl vulkan-tools mesa-utils"
+
+# --status, for the app's desktop setup page: "gpu installed" when every
+# package and gpu-run are there; "gpu partly installed" when gpu-run is (this
+# script ran) and a package is not; else "gpu not installed" -- a desktop
+# pulls some of Mesa in by itself, which is not this. One query, no GPU.
+if [ "$STATUS_ONLY" = 1 ]; then
+    if command -v apt-get >/dev/null 2>&1; then
+        want=$GPU_PKGS_APT
+        have=$(dpkg-query -W -f='${Package} ${db:Status-Status}\n' $want 2>/dev/null | awk '$2 == "installed" { print $1 }')
+    elif command -v pacman >/dev/null 2>&1; then
+        want=$GPU_PKGS_PACMAN
+        have=$(pacman -Q $want 2>/dev/null | awk '{ print $1 }')
+    elif command -v apk >/dev/null 2>&1; then
+        want=$GPU_PKGS_APK
+        have=$(apk info -e $want 2>/dev/null)
+    else
+        echo "gpu not installed"
+        exit 0
+    fi
+    n_want=$(printf '%s\n' $want | wc -l | tr -d ' ')
+    n_have=$(printf '%s\n' "$have" | sed '/^$/d' | sort -u | wc -l | tr -d ' ')
+    if [ "$n_have" -ge "$n_want" ] && [ -x "$GPU_RUN" ]; then
+        echo "gpu installed"
+    elif [ -x "$GPU_RUN" ]; then
+        echo "gpu partly installed"
+    else
+        echo "gpu not installed"
+    fi
+    exit 0
+fi
 
 # apk add, downloading every package before installing any: apk-tools 3
 # streams packages into extraction, and a mirror drops a reader stalled for a
@@ -222,7 +269,7 @@ if command -v apt-get >/dev/null 2>&1; then
     fi
     log "apt-get update"
     apt-get update || die "apt-get update failed -- check network/DNS (guest /etc/resolv.conf)"
-    PKGS="mesa-vulkan-drivers libgl1-mesa-dri libegl-mesa0 vulkan-tools mesa-utils"
+    PKGS=$GPU_PKGS_APT
     [ "$DEMOS" = 1 ] && PKGS="$PKGS glmark2-wayland glmark2-es2-wayland"
     log "installing $PKGS"
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $PKGS \
@@ -231,7 +278,7 @@ elif command -v pacman >/dev/null 2>&1; then
     log "Arch (pacman) detected"
     log "pacman -Sy"
     pacman -Sy --noconfirm || die "pacman -Sy failed -- check network/DNS (guest /etc/resolv.conf)"
-    PKGS="vulkan-virtio mesa vulkan-tools mesa-utils"
+    PKGS=$GPU_PKGS_PACMAN
     [ "$DEMOS" = 1 ] && PKGS="$PKGS glmark2"
     log "installing $PKGS"
     pacman -S --needed --noconfirm $PKGS || die "pacman -S failed -- see output above"
@@ -249,7 +296,7 @@ elif command -v apk >/dev/null 2>&1; then
     # vulkan-tools depends on it (Devuan's and Arch's packages pull theirs
     # in), and without it vulkaninfo found no Vulkan at all and zink fell
     # back to software -- reported on Discord from Alpine 3.24, 2026-10-02.
-    PKGS="mesa-vulkan-virtio vulkan-loader mesa-dri-gallium mesa-egl vulkan-tools mesa-utils"
+    PKGS=$GPU_PKGS_APK
     [ "$DEMOS" = 1 ] && note "Alpine packages no glmark2; es2gears_wayland (mesa-utils) is the demo here"
     log "installing $PKGS"
     apk_add $PKGS || die "apk add failed -- see output above"

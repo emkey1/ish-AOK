@@ -22,6 +22,10 @@
 # Run as root, naming one or more sets, or all of them:
 #       sudo sh /AOK/tools/setup-wayland-extras.sh games tools
 #       sudo sh /AOK/tools/setup-wayland-extras.sh all
+# Or ask which sets are installed, as any user ("games installed", "tools
+# partly installed", "x11 not installed"; the app's desktop setup page shows
+# these):
+#       sh /AOK/tools/setup-wayland-extras.sh status
 #
 # Package names differ between Devuan, Alpine and Arch, and not everything is
 # packaged everywhere: Alpine has no sgt-puzzles, iagno, nudoku, moon-buggy or
@@ -42,10 +46,16 @@ note() { printf '    %s\n' "$*"; }
 die()  { printf 'setup-wayland-extras.sh: %s\n' "$*" >&2; exit 1; }
 
 # In a native-mode root there is no distribution here: run inside its Wayland
-# filesystem instead (wayland-root.sh, setup-native-wayland.sh).
+# filesystem instead (wayland-root.sh, setup-native-wayland.sh). `status` only
+# asks, so it installs no companion: with none, nothing here is installed.
 if [ -r /AOK/tools/wayland-root.sh ]; then
     . /AOK/tools/wayland-root.sh
-    aok_wayland_handoff setup-wayland-extras.sh install "$@" || die "$AOK_WAYLAND_PROBLEM"
+    if [ "${1:-}" = status ]; then
+        aok_wayland_handoff setup-wayland-extras.sh report "$@" \
+            || { printf '%s not installed\n' games tools x11; exit 0; }
+    else
+        aok_wayland_handoff setup-wayland-extras.sh install "$@" || die "$AOK_WAYLAND_PROBLEM"
+    fi
 fi
 
 # apk add, with every package downloaded whole before any is installed.
@@ -92,6 +102,7 @@ usage: sudo sh /AOK/tools/setup-wayland-extras.sh SET...
           viewers, text editor, file manager, calculator, web browser
   x11     Xwayland, xterm and the X fonts, for programs that only speak X11
   all     all three
+  status  which sets are installed (any user)
 USAGE_EOF
 }
 
@@ -99,20 +110,24 @@ USAGE_EOF
 WANT_GAMES=0
 WANT_TOOLS=0
 WANT_X11=0
+STATUS=0
 for set_name in "$@"; do
     case "$set_name" in
         games) WANT_GAMES=1 ;;
         tools) WANT_TOOLS=1 ;;
         x11) WANT_X11=1 ;;
         all) WANT_GAMES=1; WANT_TOOLS=1; WANT_X11=1 ;;
+        status) STATUS=1 ;;
         -h|--help|help) usage; exit 0 ;;
         *) usage >&2; die "unknown set '$set_name'" ;;
     esac
 done
 
-[ "$(id -u)" = 0 ] || die "must run as root:  sudo sh $0 $*"
-command -v labwc >/dev/null 2>&1 \
-    || note "labwc is not installed: these are for the desktop /AOK/tools/setup-wayland.sh installs"
+if [ "$STATUS" = 0 ]; then
+    [ "$(id -u)" = 0 ] || die "must run as root:  sudo sh $0 $*"
+    command -v labwc >/dev/null 2>&1 \
+        || note "labwc is not installed: these are for the desktop /AOK/tools/setup-wayland.sh installs"
+fi
 
 if command -v apt-get >/dev/null 2>&1; then
     PM=apt
@@ -136,6 +151,7 @@ elif command -v apk >/dev/null 2>&1; then
            mousepad pcmanfm galculator dillo"
     X11="xwayland xterm font-misc-misc font-cursor-misc font-alias xeyes xclock xcalc"
 else
+    [ "$STATUS" = 1 ] && { printf '%s not installed\n' games tools x11; exit 0; }
     die "no supported package manager found (need apt-get, pacman, or apk)"
 fi
 
@@ -160,6 +176,46 @@ pm_has() {
     esac
 }
 
+# How many of the packages named are installed: one query for them all, since
+# each is an emulated exec.
+pm_count_installed() {
+    case "$PM" in
+        apt) dpkg-query -W -f='${Package} ${db:Status-Status}\n' "$@" 2>/dev/null \
+                | awk '$2 == "installed" { print $1 }' ;;
+        pacman) pacman -Q "$@" 2>/dev/null | awk '{ print $1 }' ;;
+        apk) apk info -e "$@" 2>/dev/null ;;
+    esac | sort -u | wc -l | tr -d ' '
+}
+
+# A set this script installed leaves its name here, so that one with a package
+# the distribution lacks reads "partly installed" rather than "not installed".
+# Packages a desktop pulled in do not make a set partly installed.
+SET_MARKS=/var/lib/aok/wayland-extras
+
+# NAME PACKAGE...: "NAME installed" when every package is; "partly installed"
+# when this script installed the set and some did not arrive (running it again
+# tries the rest); else "not installed".
+set_status() {
+    _st_name=$1
+    shift
+    _st_have=$(pm_count_installed "$@")
+    if [ "$_st_have" -ge $# ]; then
+        echo "$_st_name installed"
+    elif [ -e "$SET_MARKS/$_st_name" ]; then
+        echo "$_st_name partly installed"
+    else
+        echo "$_st_name not installed"
+    fi
+}
+
+if [ "$STATUS" = 1 ]; then
+    # The lists left unquoted on purpose, as below.
+    set_status games $GAMES
+    set_status tools $TOOLS
+    set_status x11 $X11
+    exit 0
+fi
+
 NOT_INSTALLED=""
 
 # A set goes in as one transaction. A name the distribution does not carry
@@ -182,6 +238,10 @@ install_set() {
         pm_has "$pkg" || NOT_INSTALLED="$NOT_INSTALLED $pkg"
     done
 }
+# After install_set: the set was asked for and installed what it could.
+mark_set() {
+    mkdir -p "$SET_MARKS" && date > "$SET_MARKS/$1"
+}
 
 log "updating the package index"
 case "$PM" in
@@ -191,9 +251,9 @@ case "$PM" in
 esac || die "updating the package index failed -- check network/DNS (guest /etc/resolv.conf)"
 
 # The lists above are left unquoted on purpose: one word per package.
-[ "$WANT_GAMES" = 1 ] && install_set games $GAMES
-[ "$WANT_TOOLS" = 1 ] && install_set tools $TOOLS
-[ "$WANT_X11" = 1 ] && install_set x11 $X11
+[ "$WANT_GAMES" = 1 ] && install_set games $GAMES && mark_set games
+[ "$WANT_TOOLS" = 1 ] && install_set tools $TOOLS && mark_set tools
+[ "$WANT_X11" = 1 ] && install_set x11 $X11 && mark_set x11
 
 log "done"
 if [ -n "$NOT_INSTALLED" ]; then

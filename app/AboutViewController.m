@@ -2251,6 +2251,10 @@ typedef NS_ENUM(NSInteger, ISHDesktopSetupSection) {
     // which one the next session starts. nil until the first answer.
     NSSet<NSString *> *_Nullable _installed;
     NSString *_Nullable _selected;
+    // What setup-wayland-extras.sh status and setup-gpu.sh --status report,
+    // by the name in -extras: "installed", "partly installed" or "not
+    // installed". nil until the first answer.
+    NSDictionary<NSString *, NSString *> *_Nullable _extrasState;
     BOOL _probing, _probeFailed;
 }
 
@@ -2295,7 +2299,9 @@ static NSString *ISHDesktopInstallCommand(NSString *name) {
 }
 
 // Asks the guest: `select-desktop.sh` with no argument lists the four with
-// "installed" or "not installed", a star on the one that starts.
+// "installed" or "not installed", a star on the one that starts; the extras'
+// and the GPU scripts' status lines ("games installed", "gpu not installed")
+// follow in the same answer. None of the three installs anything to answer.
 - (void)probe {
     if (_probing)
         return;
@@ -2304,17 +2310,27 @@ static NSString *ISHDesktopInstallCommand(NSString *name) {
     __weak typeof(self) weakSelf = self;
     dispatch_async(ISHDesktopSetupQueue(), ^{
         NSMutableSet<NSString *> *installed = nil;
+        NSMutableDictionary<NSString *, NSString *> *extrasState = nil;
         NSString *selected = nil;
         if ([AppDelegate ensureBooted] >= 0) {
             struct guest_command_result result = {0};
-            int rc = run_guest_command_capture("sh /AOK/tools/select-desktop.sh 2>&1", NULL, 30000, 16384, &result);
+            int rc = run_guest_command_capture("sh /AOK/tools/select-desktop.sh 2>&1; "
+                                               "sh /AOK/tools/setup-wayland-extras.sh status 2>&1; "
+                                               "sh /AOK/tools/setup-gpu.sh --status 2>&1",
+                                               NULL, 60000, 16384, &result);
             if (rc == 0 && result.launched && result.output != NULL) {
                 installed = [NSMutableSet set];
+                extrasState = [NSMutableDictionary dictionary];
+                NSArray<NSString *> *extrasNames = [[self extras] valueForKey:@"name"];
                 NSString *output = [[NSString alloc] initWithBytes:result.output length:result.output_len encoding:NSUTF8StringEncoding] ?: @"";
                 for (NSString *line in [output componentsSeparatedByString:@"\n"]) {
                     NSArray<NSString *> *words = [[line stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet]
                         componentsSeparatedByCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
                     words = [words filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"length > 0"]];
+                    if (words.count >= 2 && [extrasNames containsObject:words[0]]) {
+                        extrasState[words[0]] = [[words subarrayWithRange:NSMakeRange(1, words.count - 1)] componentsJoinedByString:@" "];
+                        continue;
+                    }
                     BOOL starred = words.count > 0 && [words[0] isEqualToString:@"*"];
                     if (starred)
                         words = [words subarrayWithRange:NSMakeRange(1, words.count - 1)];
@@ -2335,6 +2351,7 @@ static NSString *ISHDesktopInstallCommand(NSString *name) {
             strongSelf->_probing = NO;
             strongSelf->_probeFailed = installed == nil;
             strongSelf->_installed = installed;
+            strongSelf->_extrasState = extrasState;
             strongSelf->_selected = selected;
             [strongSelf.tableView reloadData];
         });
@@ -2343,10 +2360,10 @@ static NSString *ISHDesktopInstallCommand(NSString *name) {
 
 - (NSArray<NSDictionary<NSString *, NSString *> *> *)extras {
     return @[
-        @{@"title": NSLocalizedString(@"Games", @"Desktop setup: a set of extra programs"), @"command": @"sh /AOK/tools/setup-wayland-extras.sh games"},
-        @{@"title": NSLocalizedString(@"Tools", @"Desktop setup: a set of extra programs"), @"command": @"sh /AOK/tools/setup-wayland-extras.sh tools"},
-        @{@"title": NSLocalizedString(@"X11 Programs", @"Desktop setup: a set of extra programs"), @"command": @"sh /AOK/tools/setup-wayland-extras.sh x11"},
-        @{@"title": NSLocalizedString(@"GPU Drivers", @"Desktop setup: installs the GPU drivers"), @"command": @"sh /AOK/tools/setup-gpu.sh"},
+        @{@"name": @"games", @"title": NSLocalizedString(@"Games", @"Desktop setup: a set of extra programs"), @"command": @"sh /AOK/tools/setup-wayland-extras.sh games"},
+        @{@"name": @"tools", @"title": NSLocalizedString(@"Tools", @"Desktop setup: a set of extra programs"), @"command": @"sh /AOK/tools/setup-wayland-extras.sh tools"},
+        @{@"name": @"x11", @"title": NSLocalizedString(@"X11 Programs", @"Desktop setup: a set of extra programs"), @"command": @"sh /AOK/tools/setup-wayland-extras.sh x11"},
+        @{@"name": @"gpu", @"title": NSLocalizedString(@"GPU Drivers", @"Desktop setup: installs the GPU drivers"), @"command": @"sh /AOK/tools/setup-gpu.sh"},
     ];
 }
 
@@ -2395,8 +2412,24 @@ static NSString *ISHDesktopInstallCommand(NSString *name) {
             cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
         }
     } else {
-        cell.textLabel.text = [self extras][(NSUInteger) indexPath.row][@"title"];
-        cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+        // As the desktops show theirs. Tapping an installed set still runs
+        // its script, which brings it up to date.
+        NSDictionary<NSString *, NSString *> *extra = [self extras][(NSUInteger) indexPath.row];
+        cell.textLabel.text = extra[@"title"];
+        NSString *state = _extrasState[extra[@"name"]];
+        if (_extrasState == nil || state == nil) {
+            cell.detailTextLabel.text = _probing ? NSLocalizedString(@"Checking…", @"Desktop setup: state while asking the guest") : @"";
+            cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+        } else if ([state isEqualToString:@"installed"]) {
+            cell.detailTextLabel.text = NSLocalizedString(@"Installed", @"Desktop setup: desktop state");
+            cell.accessoryType = UITableViewCellAccessoryNone;
+        } else if ([state isEqualToString:@"partly installed"]) {
+            cell.detailTextLabel.text = NSLocalizedString(@"Partly Installed", @"Desktop setup: a set of extra programs, some of whose packages did not install");
+            cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+        } else {
+            cell.detailTextLabel.text = NSLocalizedString(@"Not Installed", @"Desktop setup: desktop state");
+            cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+        }
     }
     cell.accessibilityTraits |= UIAccessibilityTraitButton;
     ISHWorkspaceScaleTableViewCell(cell, ISHWorkspaceTextScaleForViewController(self));
