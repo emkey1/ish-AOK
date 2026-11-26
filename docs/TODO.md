@@ -151,7 +151,23 @@ freeze (2026-09-25); their full text is in
   second whatever its format, and each redraw is a compositor repaint and a
   frame to the app. The session script's `sleep 2 &` poll is an emulated exec
   each time (sh 0.26 s, sleep 0.06 s per 20 s); /AOK/native/sleep would make
-  that free. A System Trace of the same desktop with btop open showed all
+  that free. **Both fixed for 567 (2026-11-26):** (1) *The panel:* the bundled
+  wf-panel (and build-wf-panel.sh) now sets the clock's label only when its
+  text changes -- GtkLabel redraws on every set_text, even of the same text --
+  and a format without seconds wakes once a minute. CLI, Wayfire as `tester`
+  in build/devuan-arm64-desk, 30 s idle, WAYLAND_DEBUG commit counts: stock
+  30-31 commits and wf-panel 250-280 ms; patched 0-1 (the minute) and 20-50
+  ms; wayfire 650-730 ms with the stock panel, 590-660 with the patched, 490-530
+  with none. A `%H:%M:%S` clock still commits every second (30 in 30 s), and
+  switching the format to it while the panel runs goes from 0 to 15 commits in
+  15 s. (2) *The poll:* native sleep measured only about a third cheaper (the
+  fork costs more than the exec), so the loop now sleeps 15 s and a CHLD trap
+  kills that sleep when any child exits: the compositor's end and a wayvnc
+  restart are seen at once (CLI: wayvnc killed, restarted in 0 s; labwc
+  killed, session gone in 1 s; no stray sleeps). dash and busybox ash also end
+  a `wait` on a trapped signal, bash does not; killing the sleep covers all
+  three (each noticed in 1 s). **Not run:** the A10X, where the 2026-11-22
+  numbers came from. A System Trace of the same desktop with btop open showed all
   three cores busy for 200-300 ms every 2 s. Whether this is the "regular
   stutter" reported for typing and the pointer is not established, and the
   panel is not it: with wf-panel stopped the user still saw the stutter. A

@@ -1099,7 +1099,7 @@ wl_tree_of() {
 }
 
 cleanup() {
-    trap - TERM INT HUP EXIT
+    trap - TERM INT HUP EXIT CHLD
     # Tells a session starting now that this one is going, not staying, so it
     # waits instead of refusing (see the one-session check near the top).
     # `true`, not `:`: a failed redirection on a special builtin ends dash
@@ -2755,6 +2755,17 @@ fi
 # HUP/TERM traps run at once, and it reaps the compositor, so `kill -0` stops
 # finding a zombie.
 #
+# A child that exits ends the wait at once, so the compositor's end and
+# wayvnc's are seen straight away and the sleep is only a fallback. The CHLD
+# trap kills the sleep being waited for: dash and busybox ash also end a
+# `wait` for any trapped signal, bash does not, and killing the sleep ends
+# it in all three (each noticed a child's exit in 1 s, 2026-11-26). The poll
+# was every 2 s before; each one forked a shell and ran sleep, which on an
+# idle A10X desktop was 0.3 s of CPU in every 20 (2026-11-22). poll_sleep is
+# emptied once the wait is over, so a child exiting later in the loop kills
+# nothing. The trap is dropped after the loop and in cleanup, whose own
+# waits it would cut short.
+#
 # wayvnc is started again if it dies. The app's VNC connection retries for a
 # minute and then gives up ("Timed out connecting to wayvnc"), and with no
 # wayvnc the desktop was lost for good: a wayvnc that died on its detach at
@@ -2763,9 +2774,13 @@ fi
 # after a few restarts. One started while the app shows wl-present's frames
 # is detached again once it is listening.
 wayvnc_restarts=0
+poll_sleep=
+trap '[ -n "$poll_sleep" ] && kill "$poll_sleep" 2>/dev/null' CHLD
 while kill -0 "$COMPOSITOR_PID" 2>/dev/null; do
-    sleep 2 &
-    wait $! 2>/dev/null
+    sleep 15 &
+    poll_sleep=$!
+    wait "$poll_sleep" 2>/dev/null
+    poll_sleep=
     if [ -n "$WAYVNC_PID" ] && ! kill -0 "$WAYVNC_PID" 2>/dev/null \
             && [ "$wayvnc_restarts" -lt 5 ] && kill -0 "$COMPOSITOR_PID" 2>/dev/null; then
         wait "$WAYVNC_PID" 2>/dev/null
@@ -2789,4 +2804,5 @@ while kill -0 "$COMPOSITOR_PID" 2>/dev/null; do
         fi
     fi
 done
+trap - CHLD
 echo "start-wayland: $COMPOSITOR_CMD (pid $COMPOSITOR_PID) exited; ending the session" >&2

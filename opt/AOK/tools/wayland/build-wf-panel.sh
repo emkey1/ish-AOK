@@ -14,6 +14,14 @@
 # otherwise just reopens. The list is still rebuilt when applications are
 # installed or removed, as before.
 #
+# A second change: the clock. It set its label every second whatever its
+# format showed, and GtkLabel lays out and redraws on every set_text, even of
+# the same text -- so an idle desktop drew a panel frame, and the compositor
+# a frame for the app, every second (wf-panel 0.64 s and wayfire 0.61 s of CPU
+# in every 20 on an idle A10X, 2026-11-22). Patched, the label is set only
+# when its text changes, and a clock whose format has no seconds wakes once a
+# minute.
+#
 # Usage:
 #   sudo sh /AOK/tools/wayland/build-wf-panel.sh            build and install
 #   sudo sh /AOK/tools/wayland/build-wf-panel.sh --remove   back to the packaged wf-panel
@@ -83,7 +91,7 @@ apt-get update >/dev/null || die "apt-get update failed -- check network/DNS"
 # only asks for its pkg-config file, and a stand-in (below) answers that.
 log "installing what wf-panel builds with"
 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-    dpkg-dev g++ meson pkgconf wayland-protocols libwayland-dev libgtkmm-3.0-dev \
+    dpkg-dev patch g++ meson pkgconf wayland-protocols libwayland-dev libgtkmm-3.0-dev \
     libgtk-layer-shell-dev libdbusmenu-gtk3-dev libpulse-dev libasound2-dev libwf-config-dev \
     || die "could not install the build dependencies -- see above"
 
@@ -101,6 +109,139 @@ grep -q '^    set_category("All");$' "$menu" \
     || die "$menu has changed shape (no 'set_category(\"All\")' line to patch) -- this wf-shell needs a new patch"
 sed -i 's/^    set_category("All");$/    if (category != "All")\n        set_category("All");/' "$menu"
 grep -q 'if (category != "All")' "$menu" || die "the patch did not apply"
+
+log "patching the clock to redraw only when its text changes"
+clock=src/panel/widgets/clock.cpp
+grep -q '^    label.set_text(text.substr(i));$' "$clock" \
+    || die "$clock has changed shape -- this wf-shell needs a new clock patch"
+patch -p1 --forward >/dev/null <<'PATCH' || die "the clock patch did not apply"
+--- a/src/panel/widgets/clock.cpp
++++ b/src/panel/widgets/clock.cpp
+@@ -1,7 +1,41 @@
+ #include <glibmm.h>
+ #include <iostream>
++#include <cstring>
+ #include "clock.hpp"
+ 
++/* AOK-iSH: whether a GDateTime format shows seconds -- %S, %s, %T, %r, %c,
++ * %X or %f, after any of the flags g_date_time_format takes. */
++static bool format_shows_seconds(const std::string& format)
++{
++    for (size_t i = 0; i < format.size(); i++)
++    {
++        if (format[i] != '%')
++        {
++            continue;
++        }
++
++        size_t j = i + 1;
++        while (j < format.size() && std::strchr("-_0^#EO:", format[j]))
++        {
++            j++;
++        }
++
++        if (j >= format.size())
++        {
++            break;
++        }
++
++        if (std::strchr("SsTrcXf", format[j]))
++        {
++            return true;
++        }
++
++        i = j;
++    }
++
++    return false;
++}
++
+ void WayfireClock::init(Gtk::HBox *container)
+ {
+     button = std::make_unique<WayfireMenuButton>("panel");
+@@ -20,15 +54,50 @@
+ 
+     container->pack_start(*button, false, false);
+ 
+-    timeout = Glib::signal_timeout().connect_seconds(
+-        sigc::mem_fun(this, &WayfireClock::update_label), 1);
++    schedule_update(false);
+ 
+     // initially set font
+     set_font();
+ 
+     font.set_callback([=] () { set_font(); });
++    format.set_callback([=] ()
++    {
++        update_label();
++        schedule_update(true);
++    });
+ }
+ 
++/* AOK-iSH: wake when the label can change, not every second. A clock without
++ * seconds is woken at the start of the next minute; one with them, every
++ * second as before. Each wake schedules the next, so a wake that comes a
++ * little early only means another one shortly after. */
++void WayfireClock::schedule_update(bool replace)
++{
++    if (replace)
++    {
++        timeout.disconnect();
++    }
++
++    auto slot = sigc::mem_fun(this, &WayfireClock::on_timeout);
++    if (format_shows_seconds((std::string)format))
++    {
++        timeout = Glib::signal_timeout().connect_seconds(slot, 1);
++        return;
++    }
++
++    auto now = Glib::DateTime::create_now_local();
++    double into_minute = now.get_seconds(); /* 0 to 59.999... */
++    unsigned ms = (unsigned)((60.0 - into_minute) * 1000.0) + 20;
++    timeout = Glib::signal_timeout().connect(slot, ms);
++}
++
++bool WayfireClock::on_timeout()
++{
++    update_label();
++    schedule_update(false);
++    return false; /* schedule_update set up the next one */
++}
++
+ void WayfireClock::on_calendar_shown()
+ {
+     auto now = Glib::DateTime::create_now_local();
+@@ -55,7 +124,15 @@
+         i++;
+     }
+ 
+-    label.set_text(text.substr(i));
++    /* AOK-iSH: GtkLabel lays out and redraws on every set_text, even of the
++     * same text, and every redraw is a frame the compositor has to put on
++     * screen. */
++    auto shown = text.substr(i);
++    if (label.get_text() != shown)
++    {
++        label.set_text(shown);
++    }
++
+     return 1;
+ }
+ 
+--- a/src/panel/widgets/clock.hpp
++++ b/src/panel/widgets/clock.hpp
+@@ -18,6 +18,8 @@
+ 
+     void set_font();
+     void on_calendar_shown();
++    void schedule_update(bool replace);
++    bool on_timeout();
+ 
+   public:
+     void init(Gtk::HBox *container) override;
+PATCH
+grep -q 'format_shows_seconds' "$clock" || die "the clock patch did not apply"
 
 # --prefix=/usr, though the binary goes to /usr/local/bin: the panel looks
 # for its option metadata under the prefix it was built with
@@ -131,5 +272,5 @@ ln -sf "$LIBBIN" "$BIN"
 cd / && rm -rf "$WORK"
 
 log "done"
-note "Installed $BIN (wf-shell $pkg_version, menu patched). It runs from the"
+note "Installed $BIN (wf-shell $pkg_version, menu and clock patched). It runs from the"
 note "next Wayfire session. Back to the packaged one: sudo sh $0 --remove"
