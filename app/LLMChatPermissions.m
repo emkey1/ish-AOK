@@ -1,6 +1,6 @@
 //
 //  LLMChatPermissions.m
-//  AOK-iSH
+//  AOK-Workstation
 //
 //  See LLMChatPermissions.h.
 //

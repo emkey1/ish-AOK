@@ -1,8 +1,8 @@
-# AOK-iSH privacy policy
+# AOK-Workstation privacy policy
 
 **Effective 13 November 2026.**
 
-The short version: AOK-iSH collects nothing about you, sends nothing about you
+The short version: AOK-Workstation collects nothing about you, sends nothing about you
 anywhere, and contains no analytics, advertising or tracking code of any kind.
 There is no account to create, and nothing in the app reports back to us.
 Everything below is the detail behind that sentence, including the few
@@ -11,14 +11,14 @@ sends your text to somebody else.
 
 ---
 
-## What AOK-iSH is
+## What AOK-Workstation is
 
-AOK-iSH runs a Linux system on your iPhone or iPad by emulating a processor in
+AOK-Workstation runs a Linux system on your iPhone or iPad by emulating a processor in
 software. The Linux filesystem, and everything you put in it, lives in the
 app's own storage on your device. It is not copied to us, and we have no way to
 reach it.
 
-We do not operate a service. There is no AOK-iSH account, no login, no sync and
+We do not operate a service. There is no AOK-Workstation account, no login, no sync and
 no cloud component.
 
 ## What we collect
@@ -59,7 +59,7 @@ it does not check for updates, report installs, or phone home.
 
 ## What programs you run do
 
-AOK-iSH is a general-purpose Linux environment. Programs you install and run
+AOK-Workstation is a general-purpose Linux environment. Programs you install and run
 inside it can use the network exactly as they would on any computer: `apk` and
 `apt` reach their package mirrors, `curl` reaches whatever you point it at,
 `ssh` reaches your servers.
@@ -73,7 +73,7 @@ along the way -- cookies, caches -- stays on your device.
 
 ## The LLM chat
 
-AOK-iSH includes an optional chat panel that talks to a large language model.
+AOK-Workstation includes an optional chat panel that talks to a large language model.
 **It is switched off until you turn it on**, and turning it on is a deliberate
 act in Settings.
 
@@ -153,7 +153,7 @@ not itself sync anything to iCloud.
 
 ## Children
 
-AOK-iSH is a developer tool with unrestricted internet access, and it is not
+AOK-Workstation is a developer tool with unrestricted internet access, and it is not
 directed at children. We do not knowingly collect information from anyone, of
 any age, because we do not collect information at all.
 

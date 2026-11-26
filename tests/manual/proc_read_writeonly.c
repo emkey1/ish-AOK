@@ -4,7 +4,7 @@
 // it a write op and no read op: root's O_RDONLY open succeeds (its 0200 does
 // not stop root), and read(2) is EINVAL -- for a zero-byte read too, since
 // vfs_read refuses a file it cannot read before it looks at the count.
-// AOK-iSH rendered it with no show() at all, left the read buffer unallocated
+// AOK-Workstation rendered it with no show() at all, left the read buffer unallocated
 // and hit assert(data != NULL) in proc_pread: the whole app aborted. That
 // assert is build 557's Organizer crash on iPhone14,5, and this entry is the
 // only regular procfs file with neither show nor pread, so the only way in.

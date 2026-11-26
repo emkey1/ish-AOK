@@ -21,8 +21,8 @@ does not say what it is for.
 | `accept_kill.c` | yes | A task blocked in accept(2) on a listening socket with no incoming connection must die promptly on a fatal signal. Under AOK it could survive kill... |
 | `accept_rcvtimeo.c` | yes | Linux accept(2) honors the listening socket's SO_RCVTIMEO: a blocking accept4() on a listener with a receive timeout returns EAGAIN when the... |
 | `acct_records.c` | yes | acct_records.c -- BSD process accounting: acct(2) and the records it writes. |
-| `aes_gcm_accel.c` | yes | AES-256-GCM through the AOK-iSH crypto accelerator syscall (ISH_SYS_AEAD, alg 2 -- kernel/ish_accel.c + kernel/ish_accel_aes.c). |
-| `aio_basic.c` | yes | Linux native AIO (the io_* family), which AOK-iSH stubbed to ENOSYS until MariaDB dereferenced the nullptr that came back and crash-looped on install. |
+| `aes_gcm_accel.c` | yes | AES-256-GCM through the AOK-Workstation crypto accelerator syscall (ISH_SYS_AEAD, alg 2 -- kernel/ish_accel.c + kernel/ish_accel_aes.c). |
+| `aio_basic.c` | yes | Linux native AIO (the io_* family), which AOK-Workstation stubbed to ENOSYS until MariaDB dereferenced the nullptr that came back and crash-looped on install. |
 | `aio_threads.c` | yes | AIO under concurrency, which is the way MariaDB uses it: many threads sharing one context, and a teardown that can land while they are still... |
 | `ambient_caps.c` | yes | Ambient capabilities + SECBIT_KEEP_CAPS across a root-to-nonroot uid transition -- the exact sequence systemd's executor runs for every service... |
 | `anon_inode_names.c` | yes | anon_inode_names.c -- what readlink(/proc/self/fd/N) says for the anonymous inode family. Linux prints the name each anon_inode_getfd caller... |
@@ -155,7 +155,7 @@ does not say what it is for.
 | `fs_symlink_trailing_slash.c` | yes | A trailing slash on a name whose FINAL component is a symlink. |
 | `fsopen_move_mount.c` | yes | The "new mount API" (fsopen/fsconfig/fsmount/move_mount, kernel 5.2+): before this fix all four were silent ENOSYS stubs, so systemd >= 254's... |
 | `ftruncate_fd_mode.c` | yes | ftruncate(2) takes its permission from the DESCRIPTOR, not from the inode's mode bits. Linux's do_sys_ftruncate checks only FMODE_WRITE, and... |
-| `fuse_basic.c` | yes | fuse_basic.c — self-checking regression lock for AOK-iSH's FUSE support (fs/fuse.c): the /dev/fuse device, the "fuse" filesystem type, and the... |
+| `fuse_basic.c` | yes | fuse_basic.c — self-checking regression lock for AOK-Workstation's FUSE support (fs/fuse.c): the /dev/fuse device, the "fuse" filesystem type, and the... |
 | `fuse_fsopen.c` | yes | fuse_fsopen.c -- a FUSE filesystem mounted with the new mount API: fsopen, fsconfig (fd, rootmode, user_id, group_id, CREATE), fsmount,... |
 | `fuse_threaded_daemon.c` | yes | fuse_threaded_daemon.c — the FUSE daemon is a THREAD of the process using the mount, rather than a separate process. |
 | `fuse_userns.c` | yes | FUSE in a user namespace: a sandbox's root may mount a filesystem served by its own daemon, and the conversation is in the sandbox's terms. |
@@ -239,7 +239,7 @@ does not say what it is for.
 | `native_applet_race.c` | yes | native_applet_race.c -- native applets started at the same moment each run as the applet they were asked for. |
 | `native_coreutils.c` | yes | native_coreutils.c -- SmallCLUE's ls, rm, wc, head, tail, sort, cp, mv, date, chmod, xargs, find and grep against the answers of GNU coreutils... |
 | `native_dash_patterns.c` | yes | native_dash_patterns.c -- native dash's pattern matching against Debian's dash 0.5.12 (camd, glibc). |
-| `native_exec_cloexec.c` | yes | An exec closes every descriptor marked close-on-exec. AOK-iSH's native dispatch (kernel/native.h) did not: it runs the program in place of the... |
+| `native_exec_cloexec.c` | yes | An exec closes every descriptor marked close-on-exec. AOK-Workstation's native dispatch (kernel/native.h) did not: it runs the program in place of the... |
 | `native_fnmatch_applets.c` | yes | native_fnmatch_applets.c -- SmallCLUE's pattern options against GNU's answers: find -name/-iname/-path, ls -I/--hide, grep --include/--exclude,... |
 | `native_libc_state.c` | yes | native_libc_state.c -- native programs each have their own rand() stream. |
 | `native_ln.c` | yes | native_ln.c -- SmallCLUE's ln against GNU coreutils 9's behaviour. |
@@ -339,7 +339,7 @@ does not say what it is for.
 | `riscv64/alu_pair.c` | yes | riscv64 JIT ALU-pair fusions (gen_riscv64_try_after_slli/_after_add, the "alu" bit of /proc/ish/riscv64_jit_fuse): each fused pair must leave... |
 | `riscv64/branch_pair.c` | yes | riscv64 JIT conditional branches: the constant-compare fusions (gen_riscv64_try_li_branch / _andi_branch, the "br" bit of... |
 | `riscv64/jalr_retcache.c` | yes | jalr_retcache.c -- the riscv64 JIT's jalr target/return cache. |
-| `riscv64/ptrace_regset.c` | yes | ptrace_regset (riscv64-only): PTRACE_GETREGSET/SETREGSET(NT_PRSTATUS) must report and accept the real riscv64 register file. AOK-iSH's riscv64... |
+| `riscv64/ptrace_regset.c` | yes | ptrace_regset (riscv64-only): PTRACE_GETREGSET/SETREGSET(NT_PRSTATUS) must report and accept the real riscv64 register file. AOK-Workstation's riscv64... |
 | `riscv64/rcache_run.c` | yes | riscv64 register-cached runs (gen.c gen_riscv64_try_rcache_run, the "rcache" bit of /proc/ish/riscv64_jit_fuse): random straight-line ALU... |
 | `riscv64/riscv64_amo_align.c` | yes | riscv64_amo_align.c -- a misaligned LR, SC or AMO is an address-misaligned trap, which Linux does not emulate for atomics: SIGBUS with BUS_ADRALN... |
 | `riscv64/riscv64_fp_env.c` | yes | riscv64_fp_env.c -- frm, fflags and the per-instruction rounding mode. |

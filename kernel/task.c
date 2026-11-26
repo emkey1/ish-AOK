@@ -518,7 +518,7 @@ int task_snapshot_collect_all(struct task_snapshot *snapshot) {
     return task_snapshot_collect_common(snapshot, false, true);
 }
 
-// "aarch64(n)" on every Apple device: what a program compiled into AOK-iSH
+// "aarch64(n)" on every Apple device: what a program compiled into AOK-Workstation
 // and running as host code (/AOK/native) is, whichever root is booted.
 #if defined(__aarch64__)
 #define NATIVE_ARCH_ENTRY "aarch64(n)"
@@ -2122,7 +2122,7 @@ void run_at_boot(void) {  // Stuff we run only once, at boot time.
         // Nothing to stat -- better a compile time than no answer at all.
         snprintf(built, sizeof(built), "%s %s", __DATE__, __TIME__);
     }
-    printk("AOK-iSH %s built %s booted on %d emulated CPU(s)\n",
+    printk("AOK-Workstation %s built %s booted on %d emulated CPU(s)\n",
             uts.release, built, ncpu);
     // Get boot time
     extern time_t boot_time;

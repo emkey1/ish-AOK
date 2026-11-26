@@ -7,7 +7,7 @@ has to interrupt it, run code it did not call, and then put everything back.
 
 In a real kernel there is one natural place to do that, on the return path from
 kernel to user mode, and every signal delivery in the system funnels through it.
-AOK-iSH has no such boundary, so it has to invent one. This chapter is about
+AOK-Workstation has no such boundary, so it has to invent one. This chapter is about
 what it invented, the second one it accidentally invented alongside, and the
 long tail of bugs that came from the two drifting apart.
 

@@ -1,6 +1,6 @@
 //
 //  LLMChatAgent.h
-//  AOK-iSH
+//  AOK-Workstation
 //
 //  A chat's agent: its messages and the whole reply loop (streaming, tool
 //  calls, permissions, compaction, sub-agents), apart from any window. The

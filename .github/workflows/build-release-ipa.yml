@@ -22,7 +22,7 @@ permissions:
 jobs:
   build:
     # Publishes the numbered build release, and prunes old ones (KEEP_RELEASES),
-    # so it must only run in an AOK-iSH repository: pushing the tags to a repo
+    # so it must only run in an AOK-Workstation repository: pushing the tags to a repo
     # whose origin was misconfigured would both publish our IPA there and start
     # deleting that repo's releases. Name-matched so forks still work, see
     # build-dev-ipa.yml for the reasoning.
@@ -37,7 +37,7 @@ jobs:
           fetch-depth: 0
 
       # See build-dev-ipa.yml: without these two, the release IPA shipped an
-      # ssh that says "not built into this AOK-iSH" and a stub vi.
+      # ssh that says "not built into this AOK-Workstation" and a stub vi.
       - name: Check out smallclue's openssh, nextvi and libgit2
         run: git -C deps/smallclue submodule update --init third-party/openssh third-party/nextvi third-party/libgit2
 
@@ -204,7 +204,7 @@ jobs:
             gh release upload "$TAG" "$IPA_NAME" --clobber
           else
             gh release create "$TAG" "$IPA_NAME" \
-              --title "AOK-iSH Build ${BUILD_N}" \
+              --title "AOK-Workstation Build ${BUILD_N}" \
               "${NOTES_ARGS[@]}" \
               --latest
           fi

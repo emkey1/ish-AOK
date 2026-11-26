@@ -4,7 +4,7 @@ A syscall is where the guest stops being a program and becomes a client. Up to
 that instruction, everything it did was arithmetic on its own state, and the
 emulator's only obligation was to compute the same answers the hardware would.
 At the syscall boundary the guest asks a question that only an operating system
-can answer, and AOK-iSH has to be that operating system.
+can answer, and AOK-Workstation has to be that operating system.
 
 `kernel/calls.c` is about 6,500 lines long and it is the front door. This chapter is
 about what happens between the guest's `svc #0` and the value that lands back in

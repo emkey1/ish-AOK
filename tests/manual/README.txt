@@ -1,4 +1,4 @@
-Focused AOK-iSH guest regression suite
+Focused AOK-Workstation guest regression suite
 
 These sources are exposed inside the guest at /AOK/tests.
 

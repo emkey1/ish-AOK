@@ -1,5 +1,5 @@
 #!/bin/sh
-# ssh-stash.sh -- carry a user's ~/.ssh from one AOK-iSH root to another.
+# ssh-stash.sh -- carry a user's ~/.ssh from one AOK-Workstation root to another.
 #
 # Each root has its own /etc/passwd, and the same person is a different uid in
 # each (the PSCAL image's first login is 501, a native root's 1000, a distro's
@@ -24,7 +24,7 @@
 # and they differ, `save` takes this root's (it is the newer word on what you
 # use) and `restore` keeps this root's unless you add --force.
 #
-# Run as root from any of AOK-iSH's shells: native dash, the PSCAL image's sh,
+# Run as root from any of AOK-Workstation's shells: native dash, the PSCAL image's sh,
 # a distro's sh. Only POSIX sh and the commands every one of those has.
 set -eu
 

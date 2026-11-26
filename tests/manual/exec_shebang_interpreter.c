@@ -1,7 +1,7 @@
 // What a #! line names, and what actually runs.
 //
 //   An interpreter named on a #! line is executed, so it faces every question
-//   any other executable faces -- including, in AOK-iSH, whether it is one of
+//   any other executable faces -- including, in AOK-Workstation, whether it is one of
 //   the programs compiled into the binary (/AOK/native/*, kernel/native.h).
 //   That question was only asked in __do_execve, so it was asked when such a
 //   program was exec'd directly and NOT when it was reached as an interpreter.
@@ -191,7 +191,7 @@ static int run_chain(unsigned n, char *out) {
 }
 
 // Is /AOK/native/<name> a program this build actually carries? The path exists
-// on every AOK-iSH root whether or not the program is compiled in -- what is
+// on every AOK-Workstation root whether or not the program is compiled in -- what is
 // served there when it is not is a placeholder that says so and exits 127
 // (fs/aok.c). Ask by running it: an absent program cannot answer.
 static int native_available(const char *prog) {

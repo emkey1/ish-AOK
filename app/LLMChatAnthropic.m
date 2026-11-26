@@ -1,6 +1,6 @@
 //
 //  LLMChatAnthropic.m
-//  AOK-iSH
+//  AOK-Workstation
 //
 //  See LLMChatAnthropic.h.
 //

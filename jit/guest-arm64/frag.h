@@ -31,7 +31,7 @@
 // of the arm64 front end of AOK VM's QEMU engine until 2026-10-14, when it
 // took copies; each tree owns its own since, and nothing keeps them in step.
 // The contract stays, since it keeps the bodies free of this engine's own
-// state. A host that is not AOK-iSH defines A64_GADGET_HOST, and before
+// state. A host that is not AOK-Workstation defines A64_GADGET_HOST, and before
 // including a shared file supplies what gadgets.h supplies here:
 //
 //   _cpu, _ip     the guest state every slot offset is relative to, and the
@@ -555,7 +555,7 @@
 // costs ~1.3 ns more on the A10X (measured on guest-riscv64's twins).
 
 #ifndef A64_GADGET_HOST
-// AOK-iSH: a way out is one word, the next block's code (or the dispatch's
+// AOK-Workstation: a way out is one word, the next block's code (or the dispatch's
 // tagged word), and a guest address in the stream is the address.
 #define F_WAY_WORDS 1
 #define F_X0 CPU_x0

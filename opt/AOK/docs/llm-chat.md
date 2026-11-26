@@ -1,6 +1,6 @@
 # LLM Chat: a built-in AI assistant that can work in your guest
 
-AOK-iSH includes an in-app LLM chat client that can talk to an
+AOK-Workstation includes an in-app LLM chat client that can talk to an
 OpenAI-compatible API, Anthropic's Claude, Google Gemini, or (on iOS/iPadOS
 26+) Apple's on-device Foundation Models — and, if you let it, read and edit
 files and run shell commands in your guest for you, the way a coding agent
@@ -63,7 +63,7 @@ read; `cat /proc/ish/defaults/llm_api_key` reads back empty.
 ## Before a chat leaves the device
 
 The first time you send a message to a destination that is not this device,
-AOK-iSH asks first (from 566): "Send this chat to *host*?", saying what goes
+AOK-Workstation asks first (from 566): "Send this chat to *host*?", saying what goes
 there. That is what you type and the rest of the conversation, and, with
 tools on, the contents of files the assistant reads and the output of
 commands it runs in your guest. **Send** sends the message; **Not Now** sends
@@ -75,7 +75,7 @@ on this device (`localhost`, `127.0.0.1`: the LM Studio and Ollama presets),
 since nothing leaves the device.
 
 **Settings → Privacy Policy** opens the app's privacy policy, which says what
-AOK-iSH sends and where.
+AOK-Workstation sends and where.
 
 ## Providers
 

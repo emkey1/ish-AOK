@@ -1,11 +1,11 @@
 # Native programs: code that is part of the app
 
-Most of what you run under AOK-iSH is a guest binary. The emulator reads its
+Most of what you run under AOK-Workstation is a guest binary. The emulator reads its
 instructions and translates them, block by block, into instructions the iPhone
 can run. That translation is most of the cost of running anything here.
 
 A **native program** skips it. Programs like `zsh`, `dash` and SmallCLUE's
-toolbox are compiled into AOK-iSH itself, as ordinary arm64 code, and when the
+toolbox are compiled into AOK-Workstation itself, as ordinary arm64 code, and when the
 guest `execve`s one, the emulator calls that code directly instead of loading a
 guest image. There is no translation, because there is nothing to translate.
 
@@ -109,7 +109,7 @@ The files that *do* exist are worth a look:
 ```sh
 head -2 /AOK/native/zsh
 # #!/bin/sh
-# # Placeholder for a program implemented natively inside AOK-iSH.
+# # Placeholder for a program implemented natively inside AOK-Workstation.
 ```
 
 Each one is a tiny shell script. That text is unreachable in normal use, because

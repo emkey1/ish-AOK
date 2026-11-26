@@ -3,7 +3,7 @@
 # PATH -- /usr/local/bin by default.
 #
 # Why this is needed at all, given /AOK/persist/bin IS first on the default
-# PATH: that default is the one AOK-iSH hands to sessions it starts itself.
+# PATH: that default is the one AOK-Workstation hands to sessions it starts itself.
 # A login that gets its environment from somewhere else -- sshd, `su -`, cron,
 # a service started by init -- reads PATH from /etc/profile or a compiled-in
 # default, and will not have it. Linking into /usr/local/bin makes the same
@@ -64,7 +64,7 @@ while [ $# -gt 0 ]; do
 done
 
 if [ ! -d "$SOURCE" ]; then
-    echo "$0: $SOURCE does not exist -- this AOK-iSH has no /AOK/persist mounted" >&2
+    echo "$0: $SOURCE does not exist -- this AOK-Workstation has no /AOK/persist mounted" >&2
     exit 1
 fi
 

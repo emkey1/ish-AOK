@@ -29,7 +29,7 @@
 // Alpine 3.11 i386 e2e root ships -- instead rejects any flag other than
 // AT_SYMLINK_NOFOLLOW with EINVAL in userspace, never issuing a syscall at
 // all. That made this test report a kernel regression that was not there:
-// verified against Linux 6.12/glibc 2.41 and against AOK-iSH, raw fchmodat2
+// verified against Linux 6.12/glibc 2.41 and against AOK-Workstation, raw fchmodat2
 // applies the mode on both, and raw fchmodat with an empty path is ENOENT on
 // both. So fall back to the raw syscall when the libc declines to make one --
 // the kernel behaviour is what this test locks, not the libc's routing.
@@ -56,7 +56,7 @@ int main(int argc, char **argv) {
     test_init(argc, argv);
     if (geteuid() != 0) {
         // Changing a file's owner needs privilege, so unprivileged this can only
-        // ever report EPERM. Skip rather than fail: the AOK-iSH suite runs as uid 0,
+        // ever report EPERM. Skip rather than fail: the AOK-Workstation suite runs as uid 0,
         // and failing here reads like a real AT_EMPTY_PATH regression when it is
         // just the account the suite was launched under.
         printf("at_empty_path: SKIP (not privileged: euid=%d)\n", (int) geteuid());

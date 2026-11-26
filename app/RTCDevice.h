@@ -1,6 +1,6 @@
 //
 //  RTCDevice.h
-//  AOK-iSH
+//  AOK-Workstation
 //
 //  Created by Michael Miller on 11/24/23.
 //

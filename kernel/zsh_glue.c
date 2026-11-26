@@ -1,4 +1,4 @@
-// zsh as a native program: the seam between AOK-iSH and it.
+// zsh as a native program: the seam between AOK-Workstation and it.
 //
 // The bash counterpart, kernel/bash_glue.c, is the model and is worth reading
 // first -- it explains why a native program is a C function rather than a
@@ -411,7 +411,7 @@ int native_zsh_multio_main(int argc, char *const argv[], char *const envp[]) {
 }
 
 /*
- * AOK-iSH: zsh, describing itself to a checkpoint.
+ * AOK-Workstation: zsh, describing itself to a checkpoint.
  *
  * A native program is a C function running on a host thread, so a checkpoint
  * cannot photograph it the way it photographs an emulated task -- there is no

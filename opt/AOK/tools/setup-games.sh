@@ -1,7 +1,7 @@
 #!/bin/sh
 # setup-games.sh
 # ---------------------------------------------------------------------------
-# Install a set of classic games that run well in the AOK-iSH Wayland desktop,
+# Install a set of classic games that run well in the AOK-Workstation Wayland desktop,
 # and set each one up to start the way it works best here:
 #
 #   Freedoom (Phase 1 and 2) on Chocolate Doom    freedoom1, freedoom2
@@ -123,13 +123,13 @@ gpu_blocker() {
         x86_64|amd64|aarch64|arm64) : ;;
         *) echo "Mesa has no GPU driver for $(uname -m) guests"; return ;;
     esac
-    [ -c /dev/dri/renderD128 ] || { echo "this AOK-iSH build has no GPU device"; return; }
+    [ -c /dev/dri/renderD128 ] || { echo "this AOK-Workstation build has no GPU device"; return; }
     case "$(host_chip)" in
         A7*|A8*) echo "zink cannot draw on the $(host_chip)'s GPU"; return ;;
     esac
 }
 
-# The GPU gives an OpenGL context: zink under AOK-iSH (it can still fail at
+# The GPU gives an OpenGL context: zink under AOK-Workstation (it can still fail at
 # the first draw on a GPU gpu_blocker does not know about; --software is the
 # way out), the machine's own driver on a machine of its own -- and there not
 # Mesa's software renderer standing in for it.
@@ -271,7 +271,7 @@ if [ "$GL_CHOICE" = gpu ] && [ "$GL_FORCED" = 0 ]; then
             GL_CHOICE=software
             log "the GPU gave no OpenGL context: drawing in software"
             if [ "$IN_AOK" = 1 ]; then
-                note "If AOK-iSH was in the background just now, the GPU was paused; run this"
+                note "If AOK-Workstation was in the background just now, the GPU was paused; run this"
                 note "again with the app in front, or with --gpu to skip the check."
             else
                 note "(eglinfo -B -p surfaceless names the renderer programs get; --gpu skips"

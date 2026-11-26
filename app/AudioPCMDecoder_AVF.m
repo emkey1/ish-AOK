@@ -1,6 +1,6 @@
 //
 //  AudioPCMDecoder_AVF.m
-//  AOK-iSH
+//  AOK-Workstation
 //
 //  Native-format backend: MP3/AAC/M4A/ALAC/WAV/AIFF/CAF/FLAC via the public
 //  AVAudioFile API. AVAudioFile's processingFormat is already canonical 32-bit

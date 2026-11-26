@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>AOK-iSH</string>
+	<string>Workstation</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -92,17 +92,17 @@
 		<string>_http._tcp</string>
 	</array>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Programs you run in AOK-iSH, such as ssh, ping and curl, connect to devices on your local network, and other devices can connect to servers you start, such as sshd.</string>
+	<string>Programs you run in AOK-Workstation, such as ssh, ping and curl, connect to devices on your local network, and other devices can connect to servers you start, such as sshd.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-	<string>Programs running in AOK-iSH will be allowed to track your location in the background.</string>
+	<string>Programs running in AOK-Workstation will be allowed to track your location in the background.</string>
 	<key>NSLocationAlwaysUsageDescription</key>
-	<string>Programs running in AOK-iSH will be allowed to track your location in the background.</string>
+	<string>Programs running in AOK-Workstation will be allowed to track your location in the background.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>Programs running in AOK-iSH will be allowed to see your location.</string>
+	<string>Programs running in AOK-Workstation will be allowed to see your location.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>AOK-iSH deletes a video from your library only when you choose Delete Original in the Media Converter.</string>
+	<string>AOK-Workstation deletes a video from your library only when you choose Delete Original in the Media Converter.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
-	<string>AOK-iSH adds to your photo library when you choose Save Image, or save a converted video to Photos.</string>
+	<string>AOK-Workstation adds to your photo library when you choose Save Image, or save a converted video to Photos.</string>
 	<key>NSUserActivityTypes</key>
 	<array>
 		<string>app.ish.scene</string>

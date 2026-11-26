@@ -1,5 +1,5 @@
 /*
- * diff_common.h — shared harness for AOK-iSH differential JIT tests.
+ * diff_common.h — shared harness for AOK-Workstation differential JIT tests.
  *
  * A differential test does NOT bake in expected answers. It executes an x86
  * instruction (via inline asm) on controlled operands, captures the result and

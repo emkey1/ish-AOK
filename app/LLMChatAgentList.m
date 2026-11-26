@@ -1,6 +1,6 @@
 //
 //  LLMChatAgentList.m
-//  AOK-iSH
+//  AOK-Workstation
 //
 //  The chats whose agents want attention: waiting for approval, working,
 //  or finished with an answer nobody has read yet. Opened from the status

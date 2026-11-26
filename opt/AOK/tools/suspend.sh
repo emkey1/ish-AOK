@@ -1,5 +1,5 @@
 #!/bin/sh
-# suspend.sh -- save this AOK-iSH session, or check whether it can be saved.
+# suspend.sh -- save this AOK-Workstation session, or check whether it can be saved.
 #
 #     /AOK/tools/suspend.sh              save the session and stop
 #     /AOK/tools/suspend.sh --save FILE  save a copy and keep running
@@ -11,7 +11,7 @@
 # swipe away -- and without this that always loses the session.
 #
 # You do not normally have to run this. With "Suspend to Disk" switched on in
-# Settings, AOK-iSH saves the session by itself whenever the app goes to the
+# Settings, AOK-Workstation saves the session by itself whenever the app goes to the
 # background, which is the case this exists for. This is the manual form, for
 # when you want the session saved NOW.
 #
@@ -129,7 +129,7 @@ case ${1-} in
         if [ -z "$RESUMED" ] && ! ask suspend; then
             echo "suspend.sh: refused." >&2
             echo "  Turn on Suspend to Disk in Settings, or on the command" >&2
-            echo "  line run AOK-iSH with ISH_GUEST_CHECKPOINT=1 and a" >&2
+            echo "  line run AOK-Workstation with ISH_GUEST_CHECKPOINT=1 and a" >&2
             echo "  session file (ISH_SESSION=<path>)." >&2
             status | sed -n 's/^last_refusal */  /p' >&2
             exit 1

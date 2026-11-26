@@ -1,8 +1,8 @@
 //
 //  LicencesViewController.h
-//  AOK-iSH
+//  AOK-Workstation
 //
-//  Settings > Licences: the licence and notices of AOK-iSH and of everything
+//  Settings > Licences: the licence and notices of AOK-Workstation and of everything
 //  built into it, read from Licences.json, which tools/gen-licences.py writes.
 //
 

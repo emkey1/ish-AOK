@@ -1,6 +1,6 @@
 # Crypto acceleration
 
-Emulating a cipher instruction by instruction is slow. AOK-iSH can run one
+Emulating a cipher instruction by instruction is slow. AOK-Workstation can run one
 host-native instead: the guest asks the emulator to do the work through a
 private syscall, and the emulator runs it at full host speed. On an A10X iPad
 that takes ChaCha20 from about 8.8 MB/s to about 19 MB/s, which is the cipher
@@ -14,7 +14,7 @@ to 1.86x on real transfers depending on the device and cipher.
 **Nothing uses it automatically.** Two separate pieces have to be in place, and
 the second one is the one people miss:
 
-1. **The toggle**, in AOK-iSH Settings, called *Crypto Accel (ssh,
+1. **The toggle**, in AOK-Workstation Settings, called *Crypto Accel (ssh,
    arm64/riscv64)*. This controls the syscall itself. Off by default.
 2. **The OpenSSL provider**, a small shared library installed *inside your root
    filesystem*, which is what actually routes OpenSSL's ciphers to the syscall.
@@ -25,7 +25,7 @@ this is almost certainly why.
 
 ## Install
 
-Since AOK-iSH 547 the provider and its installer ship in the app, at
+Since AOK-Workstation 547 the provider and its installer ship in the app, at
 `/AOK/tools/crypto`:
 
 ```sh
@@ -53,7 +53,7 @@ Long-running programs read `openssl.cnf` when they start, so restart anything
 already running. For ssh that means restarting `sshd` if you want existing
 listeners to accelerate new connections.
 
-**This applies to your distro's ssh, not to the native one.** AOK-iSH's native
+**This applies to your distro's ssh, not to the native one.** AOK-Workstation's native
 `ssh`, `scp`, `sftp` and `ssh-keygen` -- reached as `/AOK/native/smallclue ssh`,
 or as plain `ssh` once `/AOK/tools/native-links.sh` has run -- are host code
 compiled into the app, and they are built **without OpenSSL**:
@@ -243,5 +243,5 @@ or put `Ciphers aes256-gcm@openssh.com` in `~/.ssh/config`.
 | `<modulesdir>/ish.so` | installed module |
 | `<openssldir>/openssl.cnf` | edited, backup alongside |
 
-In the AOK-iSH source tree these live under `opt/AOK/tools/crypto/`, and the
+In the AOK-Workstation source tree these live under `opt/AOK/tools/crypto/`, and the
 emulator side is `kernel/ish_accel.c` with `kernel/ish_accel_crypto.c`.

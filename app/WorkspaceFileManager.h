@@ -1,6 +1,6 @@
 //
 //  WorkspaceFileManager.h
-//  AOK-iSH
+//  AOK-Workstation
 //
 //  A Finder-modeled file manager applet for Workspace mode: sidebar of fixed
 //  locations, a native-scrolling file list, breadcrumb-less path label with

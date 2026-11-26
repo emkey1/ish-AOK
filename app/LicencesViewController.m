@@ -1,8 +1,8 @@
 //
 //  LicencesViewController.m
-//  AOK-iSH
+//  AOK-Workstation
 //
-//  Most of the licences of what is built into AOK-iSH ask for their notice to
+//  Most of the licences of what is built into AOK-Workstation ask for their notice to
 //  travel with the binary, so the texts ship in the app rather than behind a
 //  link: Licences.json, written by tools/gen-licences.py from the very trees
 //  the build compiles. This screen lists it, a section per group, and shows
@@ -87,7 +87,7 @@ static BOOL ISHLoadLicences(NSArray<ISHLicenceSection *> **sectionsOut, NSArray<
 
 static NSString *_Nullable ISHLicenceGroupTitle(NSString *group) {
     if ([group isEqualToString:@"components"])
-        return NSLocalizedString(@"Built into the app", @"Licences screen section header: the libraries and programs compiled into or shipped inside AOK-iSH");
+        return NSLocalizedString(@"Built into the app", @"Licences screen section header: the libraries and programs compiled into or shipped inside AOK-Workstation");
     if ([group isEqualToString:@"crates"])
         return NSLocalizedString(@"Rust crates", @"Licences screen section header: the Rust libraries (crates) compiled into the app, mostly for the Helix editor");
     if ([group isEqualToString:@"rust-std"])
@@ -272,8 +272,8 @@ static NSString *ISHReflowLicenceText(NSString *text) {
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
     if (![_sections[section].group isEqualToString:@"app"])
         return nil;
-    return NSLocalizedString(@"AOK-iSH and the open-source software built into it, each with its licence and the notices it asks to be shipped with.",
-                             @"Licences screen: the note under AOK-iSH's own entry, saying what the list is");
+    return NSLocalizedString(@"AOK-Workstation and the open-source software built into it, each with its licence and the notices it asks to be shipped with.",
+                             @"Licences screen: the note under AOK-Workstation's own entry, saying what the list is");
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {

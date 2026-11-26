@@ -1,6 +1,6 @@
 # 23. The shim: answering questions about the guest
 
-A native program is compiled into AOK-iSH as host code, which means its libc
+A native program is compiled into AOK-Workstation as host code, which means its libc
 calls bind to Darwin's libc, which means this:
 
 ```c

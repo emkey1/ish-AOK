@@ -2,7 +2,7 @@
 
 Forks happen for two reasons. Either somebody disagrees with a project's
 direction, or somebody wants to go further in a direction the project is not
-travelling. AOK-iSH is the second kind, and the difference shows in how it
+travelling. AOK-Workstation is the second kind, and the difference shows in how it
 behaves: it merged upstream for years, it carries upstream's contributors'
 names in its own commits, and its README still tells you to use `ish-app/ish` if
 what you want is upstream iSH.

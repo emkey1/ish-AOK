@@ -2,7 +2,7 @@
 
 Assessment written 2026-08-15, against bash 5.2.21 configured and built on this
 Mac (arm64 Darwin), which is the same compiler and libc a native program in
-AOK-iSH is built with. Every number below is measured from that build rather
+AOK-Workstation is built with. Every number below is measured from that build rather
 than estimated.
 
 The short version: **the libc surface is not the problem, the build system is

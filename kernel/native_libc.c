@@ -3745,7 +3745,7 @@ int nlibc_pthread_create(pthread_t *thread, const pthread_attr_t *attr,
 // ------------------------------------------------------------------- exit
 //
 // The host's exit() ends the PROCESS, and a native program shares the app's
-// process -- so a plain exit() in an applet terminated AOK-iSH itself. That is
+// process -- so a plain exit() in an applet terminated AOK-Workstation itself. That is
 // how `env` came to take the whole emulator down after its child finished, and
 // SmallCLUE calls exit()/_exit() in nine places besides.
 //
@@ -8229,7 +8229,7 @@ int nlibc_fremovexattr(int fd_no, const char *name, int options) {
 #endif
 
 // nice(3). The host's renices the THREAD this emulator is running on -- so a
-// guest background job would deprioritise the whole of AOK-iSH, while the
+// guest background job would deprioritise the whole of AOK-Workstation, while the
 // guest's own view of its nice level (what guest `ps` and `nice` report) never
 // moved. Wrong subject, in the same shape as the setegid entry further up.
 //
@@ -8814,7 +8814,7 @@ int nlibc_dlclose(void *handle) {
     return -1;
 }
 const char *nlibc_dlerror(void) {
-    return "dynamic loading is not available in AOK-iSH";
+    return "dynamic loading is not available in AOK-Workstation";
 }
 
 // ------------------------------------------------- walking passwd and group
@@ -10110,7 +10110,7 @@ struct protoent *nlibc_getprotobynumber(int proto) {
 // The second half of the problem is worse than the destination. openlog() sets
 // a PROCESS-WIDE identity on the host, and a native program is a task inside
 // one process: one guest task running ssh would have renamed the syslog
-// identity for the whole AOK-iSH app, including whatever logged next. Here the
+// identity for the whole AOK-Workstation app, including whatever logged next. Here the
 // state is per-thread, which is per native program.
 //
 // The wire format is RFC 3164, which is what a Linux syslogd expects on

@@ -19,7 +19,7 @@
 //
 // The permitted operations are checked as carefully as the forbidden ones: a
 // too-aggressive check would break ordinary use by the file's own owner, and
-// AOK-iSH runs a non-root default user.
+// AOK-Workstation runs a non-root default user.
 //
 // Arch-neutral. Needs root (it drops privileges in a child). Takes an optional
 // base directory argument so it can be pointed at a different filesystem;

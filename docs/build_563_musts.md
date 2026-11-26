@@ -182,7 +182,7 @@ different bug, already fixed on Apple hosts and fixed today for x86_64 ones.
 - *Over 256 KB.* The capture killed the command at the cap, so the action
   failed with "killed by signal 9". It now reads and drops the rest to EOF:
   the command runs to its end with its real status, and the action returns
-  the first 256 KB and a line `[AOK-iSH: output truncated at 256 KB]`.
+  the first 256 KB and a line `[AOK-Workstation: output truncated at 256 KB]`.
 - *Not UTF-8.* One bad byte returned the whole output as empty text. Each
   ill-formed sequence is now a U+FFFD (maximal subparts, as Swift's
   `String(decoding:)`; Foundation's lossy detection dropped everything after

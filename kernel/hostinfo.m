@@ -1,6 +1,6 @@
 //
 //  hostinfo.m
-//  AOK-iSH
+//  AOK-Workstation
 //
 //  Created by Michael Miller on 12/25/23.
 //

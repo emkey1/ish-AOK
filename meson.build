@@ -111,7 +111,7 @@ endif
 
 # Said out loud at configure time, because the consequence is a licensing one
 # and the alternative is finding out from an App Store takedown. OpenSSH and
-# libarchive are BSD, liblzma public domain, and AOK-iSH's own GPL is what
+# libarchive are BSD, liblzma public domain, and AOK-Workstation's own GPL is what
 # LICENSE.IOS covers. smallclue was MIT until 2026-11-04 and is Apache-2.0
 # from there on, which is one-way compatible with the GPLv3 this app is under;
 # its section 4(d) asks that its NOTICE travel with it, and deps/smallclue's
@@ -155,7 +155,7 @@ dash_present = fs_early.exists(dash_dir / 'src/aok_mksignames.c')
 if fs_early.exists(dash_dir / 'src/mksignames.c')
     error('deps/dash/src/mksignames.c is present.\n' +
           '  That file is GPL-2+ (it is bash\'s) and its generated output is\n' +
-          '  LINKED into the binary, which is exactly what AOK-iSH removed it to\n' +
+          '  LINKED into the binary, which is exactly what AOK-Workstation removed it to\n' +
           '  avoid -- see README.md, "Native bash and licensing".\n' +
           '  It has almost certainly come back through a merge from Debian.\n' +
           '  Remove it again; src/aok_mksignames.c replaces it.')
@@ -870,18 +870,18 @@ if not have_openssh
     # handling, the re-entry split); openssh_shim.c and openssh_stubs.c only
     # exist to feed it. None of them compile without the tree's headers, so
     # they drop out together and kernel/smallclue_glue.c's honest "not built
-    # into this AOK-iSH" stubs stay.
+    # into this AOK-Workstation" stubs stay.
     smallclue_excluded += ['openssh_app.c', 'openssh_shim.c',
                            'openssh_stubs.c']
     if have_openssh_tree
         warning('deps/smallclue/third-party/openssh is present but has no ' +
                 'config.h -- ssh/scp/sftp/ssh-keygen will report "not ' +
-                'built into this AOK-iSH". Configure it with: ./configure ' +
+                'built into this AOK-Workstation". Configure it with: ./configure ' +
                 '--without-openssl --without-zlib --sysconfdir=/etc/ssh')
     else
         warning('deps/smallclue/third-party/openssh is not checked out -- ' +
                 'ssh/scp/sftp/ssh-keygen will report "not built into this ' +
-                'AOK-iSH"')
+                'AOK-Workstation"')
     endif
 else
     # src/openssh_stubs.c does two jobs, and only one of them survives
@@ -1587,7 +1587,7 @@ if have_bash
         'bracecomp.c', 'bashhist.c', 'bashline.c', 'list.c', 'stringlib.c',
         'locale.c', 'findcmd.c', 'redir.c', 'pcomplete.c', 'pcomplib.c',
         'xmalloc.c',
-        # AOK-iSH's own: fork by re-launch. Not upstream.
+        # AOK-Workstation's own: fork by re-launch. Not upstream.
         'aok_fork.c']
     bash_builtins_static = ['common.c', 'evalstring.c', 'evalfile.c',
         'getopt.c', 'bashgetopt.c']

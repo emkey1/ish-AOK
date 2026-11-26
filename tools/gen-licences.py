@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Collect the licence of everything built into AOK-iSH into app/Licences.json.
+"""Collect the licence of everything built into AOK-Workstation into app/Licences.json.
 
 The app shows that file on its Licences screen (Settings > Licences,
 app/LicencesViewController.m). Most licences ask for their notice to travel
@@ -7,7 +7,7 @@ with the binary ("Redistributions in binary form must reproduce..."), and a
 link to a website does not travel with anything, so the texts themselves ship
 in the app, read from the same trees the build compiles:
 
-  - COMPONENTS below: AOK-iSH itself, and the C, Objective-C and JavaScript
+  - COMPONENTS below: AOK-Workstation itself, and the C, Objective-C and JavaScript
     code linked into the app or carried in it as guest programs. A new
     library, submodule or bundled guest binary needs an entry here.
   - Rust crates: whatever `cargo tree` says the shipped build compiles
@@ -105,10 +105,10 @@ def vendored_xiph(lib, var):
 
 
 AOK_PREFACE = (
-    'AOK-iSH is a fork of iSH (https://github.com/ish-app/ish) and includes '
+    'AOK-Workstation is a fork of iSH (https://github.com/ish-app/ish) and includes '
     'code from ish-arm64 (https://github.com/OpenMinis/ish-arm64). All three '
     'are under the GNU General Public License, version 3; contributions to '
-    'AOK-iSH after commit 0e3a4144 are also under version 2, as LICENSE.md '
+    'AOK-Workstation after commit 0e3a4144 are also under version 2, as LICENSE.md '
     'below says. The source of this build can be had as the Legal screen '
     'describes.')
 
@@ -134,8 +134,8 @@ def components():
     # (group, name, version, licence, url, [texts]); a text is a path, or a
     # (title, string) pair for one that is not a whole file.
     return [
-        ('app', 'AOK-iSH', '', 'GPL-3.0 AND GPL-2.0', 'https://github.com/emkey1/ish-AOK',
-         [('AOK-iSH', AOK_PREFACE), 'LICENSE.md', 'LICENSE.IOS',
+        ('app', 'AOK-Workstation', '', 'GPL-3.0 AND GPL-2.0', 'https://github.com/emkey1/ish-AOK',
+         [('AOK-Workstation', AOK_PREFACE), 'LICENSE.md', 'LICENSE.IOS',
           (f'{VENDORED}/GPL-3.0.txt'), (f'{VENDORED}/GPL-2.0.txt')]),
 
         ('components', 'SmallCLUE', '', 'Apache-2.0', 'https://github.com/emkey1/smallclue',
@@ -251,7 +251,7 @@ def rust_crates():
     meta = json.loads(run(['cargo', 'metadata', '--format-version', '1', *common,
                            '--filter-platform', 'aarch64-apple-ios'], crate_dir))
     root = next(p for p in meta['packages'] if p['id'] == meta['resolve']['root'])
-    wanted.discard((root['name'], root['version']))  # AOK-iSH's own code
+    wanted.discard((root['name'], root['version']))  # AOK-Workstation's own code
 
     out = []
     for p in meta['packages']:

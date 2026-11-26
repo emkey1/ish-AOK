@@ -1,6 +1,6 @@
 //
 //  LLMChatSettings.m
-//  AOK-iSH
+//  AOK-Workstation
 //
 //  LLM Settings, the provider picker, and the chat and destination lists.
 //
@@ -145,7 +145,7 @@ typedef NS_ENUM(NSInteger, ISHLLMSettingsRow) {
     NSString *models = self.hidesModels
         ? NSLocalizedString(@"Which model a chat talks to is chosen with the chat's model button, next to Chats.", @"LLM settings footer")
         : NSLocalizedString(@"Models lists the saved destinations -- provider, server, model and key -- that chats choose from with their model button.", @"LLM settings footer");
-    return [NSString stringWithFormat:NSLocalizedString(@"%@ A chat is summarized when it reaches three quarters of its Context Window. Tools lets the model read, search and edit files and run commands in the AOK-iSH shell, as Tool Permissions allows (Apple Foundation Models: shell only; Gemini: none). %@ Chats are saved in /AOK/persist/llm-chats.", @"LLM settings footer; each %@ is another footer sentence"), models, thinkingNote];
+    return [NSString stringWithFormat:NSLocalizedString(@"%@ A chat is summarized when it reaches three quarters of its Context Window. Tools lets the model read, search and edit files and run commands in the AOK-Workstation shell, as Tool Permissions allows (Apple Foundation Models: shell only; Gemini: none). %@ Chats are saved in /AOK/persist/llm-chats.", @"LLM settings footer; each %@ is another footer sentence"), models, thinkingNote];
 }
 
 // At the text size of the Workspace window this page is in; see
@@ -283,7 +283,7 @@ typedef NS_ENUM(NSInteger, ISHLLMSettingsRow) {
         return;
     }
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:NSLocalizedString(@"Enable tools?", @"alert title")
-        message:[NSString stringWithFormat:NSLocalizedString(@"The model will be able to read, search and change files and run shell commands in the AOK-iSH Linux environment — to work on code, fetch web pages with curl/wget, or run programs. By default it reads files freely and asks you before each edit or command; Tool Permissions changes that. Output is capped at %ld KB and commands are killed after %@ (both adjustable below). Only enable this with a model and server you trust.", @"enable tools alert message; %@ is a duration"),
+        message:[NSString stringWithFormat:NSLocalizedString(@"The model will be able to read, search and change files and run shell commands in the AOK-Workstation Linux environment — to work on code, fetch web pages with curl/wget, or run programs. By default it reads files freely and asks you before each edit or command; Tool Permissions changes that. Output is capped at %ld KB and commands are killed after %@ (both adjustable below). Only enable this with a model and server you trust.", @"enable tools alert message; %@ is a duration"),
             (long) ISHLLMToolOutputLimitKB(), ISHLLMToolTimeoutTitle(ISHLLMToolTimeoutSeconds())]
         preferredStyle:UIAlertControllerStyleAlert];
     [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Cancel", @"alert button") style:UIAlertActionStyleCancel handler:nil]];

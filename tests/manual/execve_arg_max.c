@@ -8,7 +8,7 @@
 // either, execve fails E2BIG. `getconf ARG_MAX` reports the quarter of the
 // stack limit, and xargs, find -exec + and the shells size commands to it.
 //
-// AOK-iSH read argv and envp into one fixed 32-page buffer each, so any command
+// AOK-Workstation read argv and envp into one fixed 32-page buffer each, so any command
 // past 128 KiB of argument text was E2BIG whatever the stack limit: `cp -pn
 // "$t"/*` over 2099 names of ~95 bytes said "Argument list too long" while
 // getconf said 2 MiB. A #! line's rewritten argv had the same fixed buffer.
@@ -32,10 +32,10 @@
 //     growing it past RLIMIT_STACK fails that copy with E2BIG. One byte past
 //     the last page the limit allows is E2BIG; at it the exec goes ahead (and
 //     the program dies for want of stack -- on Linux too, so only "not E2BIG"
-//     is asked of it). AOK-iSH killed the child there with SIGSEGV instead.
+//     is asked of it). AOK-Workstation killed the child there with SIGSEGV instead.
 //
 // The pointer size is the KERNEL's: 8 for a 64-bit kernel even under -m32, 4
-// on a 32-bit one (AOK-iSH's i386 guests are shown an i686 kernel).
+// on a 32-bit one (AOK-Workstation's i386 guests are shown an i686 kernel).
 //
 // Measured on Linux 6.12 x86_64 (Debian), built 64-bit and -m32. 6.12 differs
 // from 5.10 only for an empty argv (5.18+ count it as one pointer), which no

@@ -57,7 +57,7 @@ __thread int pscal_openssh_showprogress = 1;
 // and then `meson setup --reconfigure build`, because whether the tree exists
 // is decided at configure time and ninja alone will not notice it appear.
 static int openssh_not_built(const char *what) {
-    native_printf(2, "%s: not built into this AOK-iSH\n", what);
+    native_printf(2, "%s: not built into this AOK-Workstation\n", what);
     return 127;
 }
 

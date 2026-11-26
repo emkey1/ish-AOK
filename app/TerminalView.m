@@ -1395,7 +1395,7 @@ static const char *viRepeatKeys = "hjkl";
     // preference is off, so holding Command advertises that the feature exists;
     // the handler explains rather than doing nothing.
     //
-    // Command is free here: AOK-iSH sends Control and Alt to the guest and
+    // Command is free here: AOK-Workstation sends Control and Alt to the guest and
     // keeps Command for the app, which is why Clear Scrollback could take
     // Command-Shift-K above.
     [_keyCommands addObject:[UIKeyCommand keyCommandWithInput:@"s"

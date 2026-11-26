@@ -1,6 +1,6 @@
 //
 //  AudioLibrary.h
-//  AOK-iSH
+//  AOK-Workstation
 //
 //  Bridges the audio player to the filesystem. Two sources, per the design:
 //

@@ -1,5 +1,5 @@
 #!/bin/sh
-# Build a STATIC aarch64 sshd for AOK-iSH's native mode.
+# Build a STATIC aarch64 sshd for AOK-Workstation's native mode.
 #
 # WHY A GUEST BINARY AND NOT A NATIVE PROGRAM
 #

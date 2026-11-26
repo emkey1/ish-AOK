@@ -446,7 +446,7 @@ more, for less.
 ## 7. Ranked against the alternatives
 
 **A. Ship a native decompressor and let PATH do the interposing — do this
-first.** AOK-iSH already has a native `gzip`/`gunzip`/`zcat` applet
+first.** AOK-Workstation already has a native `gzip`/`gunzip`/`zcat` applet
 (`deps/smallclue/src/core.c`). Shadowing the guest's gzip with it needs no new
 emulator code at all. Measured, interleaved A/B, median of 4, same tarball:
 

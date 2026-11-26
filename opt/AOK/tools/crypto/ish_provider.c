@@ -947,11 +947,11 @@ static const OSSL_DISPATCH ag_functions[] = {
 // Build with -DISH_PROVIDER_ENABLE_AEAD to opt back in for that work.
 #ifdef ISH_PROVIDER_ENABLE_AEAD
 #define ISH_CHACHA_ALGS \
-    { "ChaCha20", "provider=ish", cc_functions, "AOK-iSH-accelerated ChaCha20" }, \
-    { "ChaCha20-Poly1305", "provider=ish", cp_functions, "AOK-iSH-accelerated ChaCha20-Poly1305" },
+    { "ChaCha20", "provider=ish", cc_functions, "AOK-Workstation-accelerated ChaCha20" }, \
+    { "ChaCha20-Poly1305", "provider=ish", cp_functions, "AOK-Workstation-accelerated ChaCha20-Poly1305" },
 #else
 #define ISH_CHACHA_ALGS \
-    { "ChaCha20", "provider=ish", cc_functions, "AOK-iSH-accelerated ChaCha20" },
+    { "ChaCha20", "provider=ish", cc_functions, "AOK-Workstation-accelerated ChaCha20" },
 #endif
 // The OID and the id-aes256-GCM short name are spelled out so an implicit
 // fetch by either (OpenSSH asks for EVP_aes_256_gcm(), which resolves through
@@ -959,7 +959,7 @@ static const OSSL_DISPATCH ag_functions[] = {
 // provider having populated the namemap first.
 #define ISH_AES_ALGS \
     { "AES-256-GCM:id-aes256-GCM:2.16.840.1.101.3.4.1.46", "provider=ish", \
-      ag_functions, "AOK-iSH-accelerated AES-256-GCM" },
+      ag_functions, "AOK-Workstation-accelerated AES-256-GCM" },
 #define ISH_ALGS_END { NULL, NULL, NULL, NULL }
 
 // One list per outcome of the two independent probes, all const so a query
@@ -1003,7 +1003,7 @@ static int ish_get_params(void *provctx, OSSL_PARAM params[]) {
     (void) provctx;
     OSSL_PARAM *p;
     if ((p = OSSL_PARAM_locate(params, OSSL_PROV_PARAM_NAME)) != NULL &&
-            !OSSL_PARAM_set_utf8_ptr(p, "AOK-iSH crypto accelerator")) return 0;
+            !OSSL_PARAM_set_utf8_ptr(p, "AOK-Workstation crypto accelerator")) return 0;
     if ((p = OSSL_PARAM_locate(params, OSSL_PROV_PARAM_VERSION)) != NULL &&
             !OSSL_PARAM_set_utf8_ptr(p, "1.1")) return 0;
     if ((p = OSSL_PARAM_locate(params, OSSL_PROV_PARAM_BUILDINFO)) != NULL &&

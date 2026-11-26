@@ -8,7 +8,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "AOK-iSH"
+            "value" : "Workstation"
           }
         }
       },
@@ -21,7 +21,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "new",
-            "value" : "AOK-iSH"
+            "value" : "iSH-AOK"
           }
         }
       },
@@ -33,61 +33,61 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Programme, die Sie in AOK-iSH ausführen, etwa ssh, ping und curl, verbinden sich mit Geräten in Ihrem lokalen Netzwerk, und andere Geräte können sich mit Servern verbinden, die Sie starten, etwa sshd."
+            "value" : "Programme, die Sie in AOK-Workstation ausführen, etwa ssh, ping und curl, verbinden sich mit Geräten in Ihrem lokalen Netzwerk, und andere Geräte können sich mit Servern verbinden, die Sie starten, etwa sshd."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Programs you run in AOK-iSH, such as ssh, ping and curl, connect to devices on your local network, and other devices can connect to servers you start, such as sshd."
+            "value" : "Programs you run in AOK-Workstation, such as ssh, ping and curl, connect to devices on your local network, and other devices can connect to servers you start, such as sshd."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Los programas que ejecutas en AOK-iSH, como ssh, ping y curl, se conectan a dispositivos de tu red local, y otros dispositivos pueden conectarse a los servidores que inicies, como sshd."
+            "value" : "Los programas que ejecutas en AOK-Workstation, como ssh, ping y curl, se conectan a dispositivos de tu red local, y otros dispositivos pueden conectarse a los servidores que inicies, como sshd."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Les programmes que vous lancez dans AOK-iSH, comme ssh, ping et curl, se connectent aux appareils de votre réseau local, et d’autres appareils peuvent se connecter aux serveurs que vous démarrez, comme sshd."
+            "value" : "Les programmes que vous lancez dans AOK-Workstation, comme ssh, ping et curl, se connectent aux appareils de votre réseau local, et d’autres appareils peuvent se connecter aux serveurs que vous démarrez, comme sshd."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "AOK-iSH で実行する ssh、ping、curl などのプログラムがローカルネットワーク上のデバイスに接続します。また、sshd など起動したサーバにほかのデバイスから接続できます。"
+            "value" : "AOK-Workstation で実行する ssh、ping、curl などのプログラムがローカルネットワーク上のデバイスに接続します。また、sshd など起動したサーバにほかのデバイスから接続できます。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "AOK-iSH에서 실행하는 ssh, ping, curl 같은 프로그램이 로컬 네트워크의 기기에 연결하며, sshd처럼 직접 시작한 서버에는 다른 기기가 연결할 수 있습니다."
+            "value" : "AOK-Workstation에서 실행하는 ssh, ping, curl 같은 프로그램이 로컬 네트워크의 기기에 연결하며, sshd처럼 직접 시작한 서버에는 다른 기기가 연결할 수 있습니다."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Os programas que você executa no AOK-iSH, como ssh, ping e curl, conectam-se a dispositivos na sua rede local, e outros dispositivos podem se conectar aos servidores que você iniciar, como o sshd."
+            "value" : "Os programas que você executa no AOK-Workstation, como ssh, ping e curl, conectam-se a dispositivos na sua rede local, e outros dispositivos podem se conectar aos servidores que você iniciar, como o sshd."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Программы, которые вы запускаете в AOK-iSH, например ssh, ping и curl, подключаются к устройствам в вашей локальной сети, а другие устройства могут подключаться к запущенным вами серверам, например sshd."
+            "value" : "Программы, которые вы запускаете в AOK-Workstation, например ssh, ping и curl, подключаются к устройствам в вашей локальной сети, а другие устройства могут подключаться к запущенным вами серверам, например sshd."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "你在 AOK-iSH 中运行的程序（如 ssh、ping 和 curl）会连接本地网络上的设备，其他设备也可以连接你启动的服务器（如 sshd）。"
+            "value" : "你在 AOK-Workstation 中运行的程序（如 ssh、ping 和 curl）会连接本地网络上的设备，其他设备也可以连接你启动的服务器（如 sshd）。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "你在 AOK-iSH 中執行的程式（例如 ssh、ping 和 curl）會連線至區域網路上的裝置，其他裝置也可以連線至你啟動的伺服器（例如 sshd）。"
+            "value" : "你在 AOK-Workstation 中執行的程式（例如 ssh、ping 和 curl）會連線至區域網路上的裝置，其他裝置也可以連線至你啟動的伺服器（例如 sshd）。"
           }
         }
       }
@@ -98,61 +98,61 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "In AOK-iSH laufende Programme dürfen deinen Standort im Hintergrund verfolgen."
+            "value" : "In AOK-Workstation laufende Programme dürfen deinen Standort im Hintergrund verfolgen."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Programs running in AOK-iSH will be allowed to track your location in the background."
+            "value" : "Programs running in AOK-Workstation will be allowed to track your location in the background."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Los programas que se ejecutan en AOK-iSH podrán rastrear tu ubicación en segundo plano."
+            "value" : "Los programas que se ejecutan en AOK-Workstation podrán rastrear tu ubicación en segundo plano."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Les programmes exécutés dans AOK-iSH pourront suivre votre position en arrière-plan."
+            "value" : "Les programmes exécutés dans AOK-Workstation pourront suivre votre position en arrière-plan."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "AOK-iSH で実行されるプログラムが、バックグラウンドで位置情報を追跡できるようになります。"
+            "value" : "AOK-Workstation で実行されるプログラムが、バックグラウンドで位置情報を追跡できるようになります。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "AOK-iSH에서 실행 중인 프로그램이 백그라운드에서 사용자의 위치를 추적할 수 있게 됩니다."
+            "value" : "AOK-Workstation에서 실행 중인 프로그램이 백그라운드에서 사용자의 위치를 추적할 수 있게 됩니다."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Programas executados no AOK-iSH poderão rastrear sua localização em segundo plano."
+            "value" : "Programas executados no AOK-Workstation poderão rastrear sua localização em segundo plano."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Программы, запущенные в AOK-iSH, смогут отслеживать вашу геопозицию в фоновом режиме."
+            "value" : "Программы, запущенные в AOK-Workstation, смогут отслеживать вашу геопозицию в фоновом режиме."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "在 AOK-iSH 中运行的程序将可以在后台跟踪你的位置。"
+            "value" : "在 AOK-Workstation 中运行的程序将可以在后台跟踪你的位置。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "在 AOK-iSH 中執行的程式將可在背景追蹤你的位置。"
+            "value" : "在 AOK-Workstation 中執行的程式將可在背景追蹤你的位置。"
           }
         }
       }
@@ -163,61 +163,61 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "In AOK-iSH laufende Programme dürfen deinen Standort im Hintergrund verfolgen."
+            "value" : "In AOK-Workstation laufende Programme dürfen deinen Standort im Hintergrund verfolgen."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Programs running in AOK-iSH will be allowed to track your location in the background."
+            "value" : "Programs running in AOK-Workstation will be allowed to track your location in the background."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Los programas que se ejecutan en AOK-iSH podrán rastrear tu ubicación en segundo plano."
+            "value" : "Los programas que se ejecutan en AOK-Workstation podrán rastrear tu ubicación en segundo plano."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Les programmes exécutés dans AOK-iSH pourront suivre votre position en arrière-plan."
+            "value" : "Les programmes exécutés dans AOK-Workstation pourront suivre votre position en arrière-plan."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "AOK-iSH で実行されるプログラムが、バックグラウンドで位置情報を追跡できるようになります。"
+            "value" : "AOK-Workstation で実行されるプログラムが、バックグラウンドで位置情報を追跡できるようになります。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "AOK-iSH에서 실행 중인 프로그램이 백그라운드에서 사용자의 위치를 추적할 수 있게 됩니다."
+            "value" : "AOK-Workstation에서 실행 중인 프로그램이 백그라운드에서 사용자의 위치를 추적할 수 있게 됩니다."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Programas executados no AOK-iSH poderão rastrear sua localização em segundo plano."
+            "value" : "Programas executados no AOK-Workstation poderão rastrear sua localização em segundo plano."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Программы, запущенные в AOK-iSH, смогут отслеживать вашу геопозицию в фоновом режиме."
+            "value" : "Программы, запущенные в AOK-Workstation, смогут отслеживать вашу геопозицию в фоновом режиме."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "在 AOK-iSH 中运行的程序将可以在后台跟踪你的位置。"
+            "value" : "在 AOK-Workstation 中运行的程序将可以在后台跟踪你的位置。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "在 AOK-iSH 中執行的程式將可在背景追蹤你的位置。"
+            "value" : "在 AOK-Workstation 中執行的程式將可在背景追蹤你的位置。"
           }
         }
       }
@@ -228,61 +228,61 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "In AOK-iSH laufende Programme dürfen deinen Standort sehen."
+            "value" : "In AOK-Workstation laufende Programme dürfen deinen Standort sehen."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Programs running in AOK-iSH will be allowed to see your location."
+            "value" : "Programs running in AOK-Workstation will be allowed to see your location."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Los programas que se ejecutan en AOK-iSH podrán ver tu ubicación."
+            "value" : "Los programas que se ejecutan en AOK-Workstation podrán ver tu ubicación."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Les programmes exécutés dans AOK-iSH pourront voir votre position."
+            "value" : "Les programmes exécutés dans AOK-Workstation pourront voir votre position."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "AOK-iSH で実行されるプログラムが、位置情報を参照できるようになります。"
+            "value" : "AOK-Workstation で実行されるプログラムが、位置情報を参照できるようになります。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "AOK-iSH에서 실행 중인 프로그램이 사용자의 위치를 볼 수 있게 됩니다."
+            "value" : "AOK-Workstation에서 실행 중인 프로그램이 사용자의 위치를 볼 수 있게 됩니다."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Programas executados no AOK-iSH poderão ver sua localização."
+            "value" : "Programas executados no AOK-Workstation poderão ver sua localização."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Программы, запущенные в AOK-iSH, смогут видеть вашу геопозицию."
+            "value" : "Программы, запущенные в AOK-Workstation, смогут видеть вашу геопозицию."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "在 AOK-iSH 中运行的程序将可以查看你的位置。"
+            "value" : "在 AOK-Workstation 中运行的程序将可以查看你的位置。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "在 AOK-iSH 中執行的程式將可看到你的位置。"
+            "value" : "在 AOK-Workstation 中執行的程式將可看到你的位置。"
           }
         }
       }
@@ -293,61 +293,61 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "AOK-iSH fügt deiner Fotomediathek etwas hinzu, wenn du „Bild sichern“ wählst oder ein konvertiertes Video in Fotos sicherst."
+            "value" : "AOK-Workstation fügt deiner Fotomediathek etwas hinzu, wenn du „Bild sichern“ wählst oder ein konvertiertes Video in Fotos sicherst."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "AOK-iSH adds to your photo library when you choose Save Image, or save a converted video to Photos."
+            "value" : "AOK-Workstation adds to your photo library when you choose Save Image, or save a converted video to Photos."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "AOK-iSH añade a tu fototeca cuando eliges Guardar imagen o guardas un vídeo convertido en Fotos."
+            "value" : "AOK-Workstation añade a tu fototeca cuando eliges Guardar imagen o guardas un vídeo convertido en Fotos."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "AOK-iSH ajoute à votre photothèque lorsque vous choisissez Enregistrer l’image ou enregistrez une vidéo convertie dans Photos."
+            "value" : "AOK-Workstation ajoute à votre photothèque lorsque vous choisissez Enregistrer l’image ou enregistrez une vidéo convertie dans Photos."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "「イメージを保存」を選んだときや、変換したビデオを写真に保存するときに、AOK-iSH は写真ライブラリに追加します。"
+            "value" : "「イメージを保存」を選んだときや、変換したビデオを写真に保存するときに、AOK-Workstation は写真ライブラリに追加します。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "이미지 저장을 선택하거나 변환된 비디오를 사진에 저장할 때 AOK-iSH가 사진 보관함에 추가합니다."
+            "value" : "이미지 저장을 선택하거나 변환된 비디오를 사진에 저장할 때 AOK-Workstation이 사진 보관함에 추가합니다."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "O AOK-iSH adiciona à sua fototeca quando você escolhe Salvar Imagem ou salva um vídeo convertido em Fotos."
+            "value" : "O AOK-Workstation adiciona à sua fototeca quando você escolhe Salvar Imagem ou salva um vídeo convertido em Fotos."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "AOK-iSH добавляет в медиатеку, когда вы выбираете «Сохранить изображение» или сохраняете сконвертированное видео в Фото."
+            "value" : "AOK-Workstation добавляет в медиатеку, когда вы выбираете «Сохранить изображение» или сохраняете сконвертированное видео в Фото."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "当你选择“存储图像”或将转换后的视频存储到照片时，AOK-iSH 会向你的照片图库添加内容。"
+            "value" : "当你选择“存储图像”或将转换后的视频存储到照片时，AOK-Workstation 会向你的照片图库添加内容。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "當你選擇「儲存影像」或將轉換後的影片儲存到照片時，AOK-iSH 會向你的照片圖庫加入內容。"
+            "value" : "當你選擇「儲存影像」或將轉換後的影片儲存到照片時，AOK-Workstation 會向你的照片圖庫加入內容。"
           }
         }
       }
@@ -358,61 +358,61 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "AOK-iSH löscht ein Video aus deiner Mediathek nur, wenn du im Medienkonverter „Original löschen“ wählst."
+            "value" : "AOK-Workstation löscht ein Video aus deiner Mediathek nur, wenn du im Medienkonverter „Original löschen“ wählst."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "AOK-iSH deletes a video from your library only when you choose Delete Original in the Media Converter."
+            "value" : "AOK-Workstation deletes a video from your library only when you choose Delete Original in the Media Converter."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "AOK-iSH solo elimina un vídeo de tu fototeca cuando eliges Eliminar original en el Conversor multimedia."
+            "value" : "AOK-Workstation solo elimina un vídeo de tu fototeca cuando eliges Eliminar original en el Conversor multimedia."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "AOK-iSH ne supprime une vidéo de votre photothèque que lorsque vous choisissez Supprimer l’original dans le Convertisseur multimédia."
+            "value" : "AOK-Workstation ne supprime une vidéo de votre photothèque que lorsque vous choisissez Supprimer l’original dans le Convertisseur multimédia."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "AOK-iSH がライブラリからビデオを削除するのは、メディアコンバータで「オリジナルを削除」を選んだときだけです。"
+            "value" : "AOK-Workstation がライブラリからビデオを削除するのは、メディアコンバータで「オリジナルを削除」を選んだときだけです。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "AOK-iSH는 미디어 변환기에서 원본 삭제를 선택할 때만 보관함에서 비디오를 삭제합니다."
+            "value" : "AOK-Workstation은 미디어 변환기에서 원본 삭제를 선택할 때만 보관함에서 비디오를 삭제합니다."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "O AOK-iSH só apaga um vídeo da sua fototeca quando você escolhe Apagar Original no Conversor de Mídia."
+            "value" : "O AOK-Workstation só apaga um vídeo da sua fototeca quando você escolhe Apagar Original no Conversor de Mídia."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "AOK-iSH удаляет видео из медиатеки, только когда вы выбираете «Удалить оригинал» в Конвертере медиа."
+            "value" : "AOK-Workstation удаляет видео из медиатеки, только когда вы выбираете «Удалить оригинал» в Конвертере медиа."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "只有当你在媒体转换器中选择“删除原视频”时，AOK-iSH 才会从你的图库中删除视频。"
+            "value" : "只有当你在媒体转换器中选择“删除原视频”时，AOK-Workstation 才会从你的图库中删除视频。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "只有當你在媒體轉換器中選擇「刪除原始影片」時，AOK-iSH 才會從你的圖庫中刪除影片。"
+            "value" : "只有當你在媒體轉換器中選擇「刪除原始影片」時，AOK-Workstation 才會從你的圖庫中刪除影片。"
           }
         }
       }

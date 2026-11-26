@@ -1,5 +1,5 @@
 /*
- * sock_common.h — shared harness for AOK-iSH socket/IPC CONFORMANCE tests
+ * sock_common.h — shared harness for AOK-Workstation socket/IPC CONFORMANCE tests
  * (AF_UNIX + AF_INET, stream + datagram, socketpair, send/recv flags, SO_*
  * options, shutdown, poll/epoll, eventfd, pipe/FIFO, peer credentials).
  *

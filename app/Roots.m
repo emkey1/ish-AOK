@@ -71,7 +71,7 @@ static NSString *kDefaultRoot = @"Default Root";
 static NSString *const kISHFileProviderDomainIdentifier = @"iSH-AOK";
 // The identifier keeps the app's old name, so a domain registered before the
 // rename is still found as ours; only the name the Files app shows changed.
-static NSString *const kISHFileProviderDomainDisplayName = @"AOK-iSH";
+static NSString *const kISHFileProviderDomainDisplayName = @"AOK-Workstation";
 static NSString *const kBundledRootIdentifierKey = @"identifier";
 static NSString *const kBundledRootDisplayNameKey = @"displayName";
 static NSString *const kBundledRootArchiveNameKey = @"archiveName";
@@ -89,7 +89,7 @@ static NSString *const kBundledRootGuestArchKey = @"guestArch";
 // one flat row per distro_arch combination.
 static NSString *const kBundledRootFamilyKey = @"family";
 static NSString *const kBundledRootFamilyDisplayNameKey = @"familyDisplayName";
-// "official" (maintained as part of AOK-iSH's regression-tested base images) vs
+// "official" (maintained as part of AOK-Workstation's regression-tested base images) vs
 // "community" (contributed/experimental, no distro-specific patching guarantees).
 static NSString *const kBundledRootTierKey = @"tier";
 static NSString *const kBundledRootTierOfficial = @"official";
@@ -353,13 +353,13 @@ static NSArray<NSDictionary<NSString *, NSString *> *> *BuildRootChoices(void) {
                 // what a fresh install boots (provisionNativeRootIfEmpty): the
                 // app opens on a shell, and Boot Images adds a distribution.
                 kBundledRootIdentifierKey: @"aoknative",
-                kBundledRootDisplayNameKey: @"AOK-iSH Native (no distribution)",
+                kBundledRootDisplayNameKey: @"AOK-Workstation Native (no distribution)",
                 kBundledRootImportNameKey: @"AOK-Native",
                 kBundledRootInitialWindowKey: @"session-shell",
                 kBundledRootGuestABIKey: @"arm64",
                 kBundledRootKindKey: kRootKindNative,
                 kBundledRootFamilyKey: @"aoknative",
-                kBundledRootFamilyDisplayNameKey: @"AOK-iSH Native",
+                kBundledRootFamilyDisplayNameKey: @"AOK-Workstation Native",
                 kBundledRootTierKey: kBundledRootTierOfficial,
             },
             @{
@@ -1350,7 +1350,7 @@ static NSString *ISHFileProviderErrorText(NSError *error) {
                 NSLog(@"error adjusting domains: %@", error);
         };
         onError(error);
-        // These used to go only to the log, so a report of "AOK-iSH is not in
+        // These used to go only to the log, so a report of "AOK-Workstation is not in
         // Files" (#676) came with breadcrumbs saying nothing had failed.
         if (error != nil) {
             [ISHDiagnosticsStore recordBreadcrumb:@"fileprovider.domainSync.listFailed"
@@ -1358,7 +1358,7 @@ static NSString *ISHFileProviderErrorText(NSError *error) {
             [self noteFileProviderDomainStatus:[@"could not list the registered domains: "
                                                 stringByAppendingString:ISHFileProviderErrorText(error)]];
         }
-        NSLog(@"syncing the AOK-iSH file provider domain for %lu root(s)", (unsigned long) rootsSnapshot.count);
+        NSLog(@"syncing the AOK-Workstation file provider domain for %lu root(s)", (unsigned long) rootsSnapshot.count);
 
         // Tell Files to re-list the roots (the domain root container) whenever the
         // set of installed roots changes.
@@ -1373,7 +1373,7 @@ static NSString *ISHFileProviderErrorText(NSError *error) {
             }];
         };
 
-        // Keep exactly one domain (identifier "iSH-AOK", shown as "AOK-iSH");
+        // Keep exactly one domain (identifier "iSH-AOK", shown as "AOK-Workstation");
         // remove everything else, including the legacy one-domain-per-root
         // entries from older builds.
         NSFileProviderDomain *ourDomain = nil;
@@ -2440,7 +2440,7 @@ static void RunExitApp(void) {
         return;
     }
     ISHPresentFinalScreen(NSLocalizedString(@"Restart requested", @"Final screen title after a command in the guest asked for the app to be closed"),
-                          [NSString stringWithFormat:NSLocalizedString(@"Close AOK-iSH and open it again to boot \u201c%@\u201d.",
+                          [NSString stringWithFormat:NSLocalizedString(@"Close AOK-Workstation and open it again to boot \u201c%@\u201d.",
                                                                        @"Final screen message after a command in the guest asked for the app to be closed; %@ is a filesystem name"),
                            next]);
 }

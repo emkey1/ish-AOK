@@ -1812,7 +1812,7 @@ static syscall_t amd64_syscall_table[470] = {
 // glibc/Node/Python/git actually call) that's fair to credit even where
 // not literally copyrightable.
 //
-// Function names are AOK-iSH's own, not OpenMinis' (their arm64-only build
+// Function names are AOK-Workstation's own, not OpenMinis' (their arm64-only build
 // has different function names throughout kernel/). Reused directly from
 // the existing i386/amd64_syscall_table entries above wherever a name
 // matches by syscall semantics — mostly the plain names (sys_read,
@@ -2945,7 +2945,7 @@ static inline void asm_generic_syscall_result_qword(struct cpu_state *cpu, qword
 // /CREDITS-aarch64.md): their calls_arm64.c has NO translation — raw
 // aarch64 flags flow into the same x86-valued fs layer. It's latent
 // there because upstream iSH ignores O_NOFOLLOW; it bites here because
-// AOK-iSH's fs layer enforces O_NOFOLLOW->ELOOP (fs conformance work).
+// AOK-Workstation's fs layer enforces O_NOFOLLOW->ELOOP (fs conformance work).
 // Their tree also silently drops genuine O_DIRECTORY/O_NOFOLLOW from
 // aarch64 guests for the same reason.
 dword_t arm64_open_flags_to_internal(qword_t flags) {

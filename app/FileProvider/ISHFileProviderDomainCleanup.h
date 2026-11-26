@@ -1,6 +1,6 @@
 //
 //  ISHFileProviderDomainCleanup.h
-//  AOK-iSH
+//  AOK-Workstation
 //
 //  Shared by the app (Roots.m) and the File Provider extension
 //  (FileProviderExtension.m), which are separate targets. Header-only so that

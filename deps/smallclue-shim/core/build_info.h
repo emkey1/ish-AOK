@@ -3,7 +3,7 @@
 /* smallclue's own CMakeLists writes this file when it is absent. AOK does not
  * use that build system, so it is provided here instead -- same declarations,
  * kept out of deps/smallclue so the submodule stays pristine. */
-#define BUILD_VERSION "AOK-iSH-native"
+#define BUILD_VERSION "AOK-Workstation-native"
 #include <stdbool.h>
 #include <stddef.h>
 bool pscalRuntimeStderrIsInteractive(void);

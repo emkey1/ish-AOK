@@ -1,4 +1,4 @@
-//! Native Rust programs for AOK-iSH.
+//! Native Rust programs for AOK-Workstation.
 //!
 //! One crate rather than one per program, because each staticlib brings its
 //! own std and two of them in a link is thousands of duplicate symbols. See

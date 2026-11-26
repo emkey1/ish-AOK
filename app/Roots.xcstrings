@@ -852,61 +852,61 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Wird beim nächsten Öffnen von AOK-iSH wirksam."
+            "value" : "Wird beim nächsten Öffnen von AOK-Workstation wirksam."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Takes effect the next time AOK-iSH opens."
+            "value" : "Takes effect the next time AOK-Workstation opens."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Se aplica la próxima vez que se abra AOK-iSH."
+            "value" : "Se aplica la próxima vez que se abra AOK-Workstation."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Prend effet à la prochaine ouverture d’AOK-iSH."
+            "value" : "Prend effet à la prochaine ouverture d’AOK-Workstation."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "次回 AOK-iSH を開いたときに有効になります。"
+            "value" : "次回 AOK-Workstation を開いたときに有効になります。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "다음에 AOK-iSH를 열 때 적용됩니다."
+            "value" : "다음에 AOK-Workstation을 열 때 적용됩니다."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Entra em vigor na próxima vez que o AOK-iSH abrir."
+            "value" : "Entra em vigor na próxima vez que o AOK-Workstation abrir."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Вступит в силу при следующем запуске AOK-iSH."
+            "value" : "Вступит в силу при следующем запуске AOK-Workstation."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "下次打开 AOK-iSH 时生效。"
+            "value" : "下次打开 AOK-Workstation 时生效。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "下次開啟 AOK-iSH 時生效。"
+            "value" : "下次開啟 AOK-Workstation 時生效。"
           }
         }
       }

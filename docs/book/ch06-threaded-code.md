@@ -2,7 +2,7 @@
 
 This chapter is the centre of the book. Everything in Part III and Part IV
 describes a kernel that could, in principle, have been written for any emulator;
-this is the part that explains why AOK-iSH exists at all on a platform that
+this is the part that explains why AOK-Workstation exists at all on a platform that
 forbids the technique its performance depends on.
 
 It is also the chapter where the vocabulary has to be right, because the tree
@@ -110,7 +110,7 @@ registers in host registers across many instructions; a peephole pass can fold
 the flag computation nobody reads.
 
 This is what QEMU does, what every JavaScript engine does, and what a
-hypothetical AOK-iSH would do if it could. The cost is that it requires writing
+hypothetical AOK-Workstation would do if it could. The cost is that it requires writing
 instructions into memory and then executing them, which is the definition of a
 W^X violation.
 
@@ -180,7 +180,7 @@ worth noticing when it happens.
 
 ## 6.5 The reveal: the code generator is one assignment
 
-Here, in full, is AOK-iSH's code generator:
+Here, in full, is AOK-Workstation's code generator:
 
 ```c
 static void gen(struct gen_state *state, unsigned long thing) {
@@ -224,7 +224,7 @@ story, and there is no `mprotect` call in it because there is nothing to
 protect.
 
 That is the loophole, and it is not a trick played on the platform. Byte for
-byte, the executable pages of AOK-iSH are exactly what Apple's build and
+byte, the executable pages of AOK-Workstation are exactly what Apple's build and
 signing process produced. What varies at run time is the order in which they are
 visited.
 

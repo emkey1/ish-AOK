@@ -1,6 +1,6 @@
 //
 //  LLMChatViewController.m
-//  AOK-iSH
+//  AOK-Workstation
 //
 //  The Workspace LLM Chat screen: a view of one chat's agent (LLMChatAgent.m),
 //  which does the work -- the transcript, the prompt, the status panel, and
@@ -909,7 +909,7 @@ static const CGFloat kISHLLMMaximumTextScale = 3.0;
 - (void)askToSendTo:(NSString *)host then:(void (^)(void))proceed {
     NSString *title = [NSString stringWithFormat:NSLocalizedString(@"Send this chat to %@?", @"LLM consent alert title, %@ is a host name"), host];
     NSString *message = [NSString stringWithFormat:NSLocalizedString(
-        @"%@ is not part of AOK-iSH and is not run by its developer.\n\n"
+        @"%@ is not part of AOK-Workstation and is not run by its developer.\n\n"
         @"Sending a message there sends what you type and the rest of this conversation. "
         @"If you let the assistant use tools, it also sends the contents of files it reads "
         @"and the output of commands it runs in your guest.\n\n"

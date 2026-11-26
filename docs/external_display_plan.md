@@ -364,7 +364,7 @@ Observed on hardware, in Workspace mode:
 - the app would not open on the external display at all;
 - it could be dragged there, but resized to a portrait-iPad shape unless full
   screen;
-- opening a second AOK-iSH window on the built-in display dragged the external
+- opening a second AOK-Workstation window on the built-in display dragged the external
   one back to the internal display;
 - opening a terminal applet while the app was on the external display disturbed
   the primary display.

@@ -1,6 +1,6 @@
 //
 //  WorkspaceVideoPlayer.m
-//  AOK-iSH
+//  AOK-Workstation
 //
 
 #import "WorkspaceVideoPlayer.h"

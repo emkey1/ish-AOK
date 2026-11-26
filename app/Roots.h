@@ -41,10 +41,10 @@ FOUNDATION_EXPORT NSNotificationName const RootsCatalogDidChangeNotification;
 @property (readonly) BOOL needsInitialRootSelection;
 @property (readonly) BOOL initialBundledRootImportInProgress;
 @property (readonly, nullable) NSError *initialBundledRootImportError;
-// What happened the last time this launch put AOK-iSH into the Files app (its
+// What happened the last time this launch put AOK-Workstation into the Files app (its
 // File Provider domain): registered, already there, could not register and
 // why, or why it was not tried. nil until the first attempt. For the
-// diagnostics report: an issue saying "AOK-iSH is not in Files" has to be able
+// diagnostics report: an issue saying "AOK-Workstation is not in Files" has to be able
 // to answer itself, and the breadcrumbs that also record it roll over.
 @property (readonly, nullable, copy) NSString *fileProviderDomainStatus;
 // Every choice the app knows about, including versions of a series the picker
@@ -79,7 +79,7 @@ FOUNDATION_EXPORT NSNotificationName const RootsCatalogDidChangeNotification;
 - (BOOL)importRootFromArchive:(NSURL *)archive name:(NSString *)name error:(NSError **)error progressReporter:(id<ProgressReporter> _Nullable)progress;
 - (BOOL)importBundledRootChoice:(NSString *)identifier error:(NSError **)error progressReporter:(id<ProgressReporter> _Nullable)progress;
 // With no filesystem at all -- a fresh install, or every one deleted -- makes
-// AOK-iSH Native and the default, so the app boots it instead of opening on the
+// AOK-Workstation Native and the default, so the app boots it instead of opening on the
 // Filesystems screen; Boot Images adds a distribution later. Returns the
 // native choice's initial window ("session-shell"), as the picker would apply
 // it, or nil when nothing was made (there were roots, or making it failed --

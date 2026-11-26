@@ -15,10 +15,10 @@
 #   touch no other register (the transcendentals use x19 and put it back),
 #   and leave nothing on the stack.
 #
-# The answers are real hardware's: AOK-iSH's tests/manual/x86/x87_kat.c holds
+# The answers are real hardware's: AOK-Workstation's tests/manual/x86/x87_kat.c holds
 # 122880 of them, from an AMD Ryzen.
 #
-# What a host gives the four files (AOK-iSH's is jit/gadgets-aarch64/x87.S):
+# What a host gives the four files (AOK-Workstation's is jit/gadgets-aarch64/x87.S):
 #
 #   _cpu, _ip             its CPU-state and stream registers, by these names;
 #                         neither may be x0, x3-x17 or x30

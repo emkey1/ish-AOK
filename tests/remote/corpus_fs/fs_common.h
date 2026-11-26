@@ -1,5 +1,5 @@
 /*
- * fs_common.h — shared harness for AOK-iSH filesystem/VFS CONFORMANCE tests.
+ * fs_common.h — shared harness for AOK-Workstation filesystem/VFS CONFORMANCE tests.
  *
  * Same philosophy as corpus_signal/sig_common.h: the right oracle for syscall
  * *semantics* is a REAL LINUX KERNEL (mint's Lima x86_64 VM), not Rosetta. The

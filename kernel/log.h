@@ -1,6 +1,6 @@
 //
 //  log.h
-//  AOK-iSH
+//  AOK-Workstation
 //
 //  Created by Michael Miller on 12/10/23.
 //

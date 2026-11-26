@@ -1,11 +1,11 @@
 #!/bin/sh
-# Link AOK-iSH's native programs into a bin directory so they run natively:
+# Link AOK-Workstation's native programs into a bin directory so they run natively:
 # SmallCLUE's applets, and the standalone programs beside it in /AOK/native --
 # zsh, dash (also linked as `sh`), helix (`hx`), ktop, motepad, the bmm/bmt
 # benchmarks, and the setuid-root su, sudo and passwd. (bash, when a build
 # enables it; builds from 556 on do not.)
 #
-# /AOK/native/smallclue is compiled into AOK-iSH and runs as host code rather
+# /AOK/native/smallclue is compiled into AOK-Workstation and runs as host code rather
 # than translated guest instructions, so it costs the same on every guest
 # architecture. Like any multicall binary it picks its applet from argv[0], so
 # a symlink named `wc` runs the wc applet.
@@ -139,8 +139,13 @@ DO_ALSO=1
 SHELL_STATE=/etc/aok-native-shell.prev
 # Delimits the block this script owns inside a zsh startup file that may not be
 # ours, so --remove takes back exactly what it added.
-ZSH_MARK_BEGIN='# >>> AOK-iSH native-bin >>>'
-ZSH_MARK_END='# <<< AOK-iSH native-bin <<<'
+# The marker is an identifier, not the app's name: it keeps the old name,
+# iSH-AOK, which the blocks written before 2026-11-19 carry. Build 566 wrote
+# "AOK-iSH" instead, so a block with that marker is found and removed too.
+ZSH_MARK_BEGIN='# >>> iSH-AOK native-bin >>>'
+ZSH_MARK_END='# <<< iSH-AOK native-bin <<<'
+ZSH_MARK_BEGIN_566='# >>> AOK-iSH native-bin >>>'
+ZSH_MARK_END_566='# <<< AOK-iSH native-bin <<<'
 # The PATH snippet. profile.d rather than a user dotfile: it is system state
 # this script owns, so --remove can delete the whole file and be sure it has
 # left nothing behind, which editing someone's .bashrc could never promise.
@@ -163,7 +168,9 @@ PATH_FILE=/etc/profile.d/05-aok-native-bin.sh
 zsh_block_present() {
     [ -f "$1" ] || return 1
     while IFS= read -r zline || [ -n "$zline" ]; do
-        [ "$zline" = "$ZSH_MARK_BEGIN" ] && return 0
+        case "$zline" in
+            "$ZSH_MARK_BEGIN"|"$ZSH_MARK_BEGIN_566") return 0 ;;
+        esac
     done < "$1"
     return 1
 }
@@ -223,7 +230,7 @@ probe_args() {
 probe_missing() {
     # shellcheck disable=SC2046
     case "$("$NATIVE" "$1" $(probe_args "$1") 2>&1 | head -2)" in
-        *"not built into this AOK-iSH"*|\
+        *"not built into this AOK-Workstation"*|\
         *"unavailable in this build"*|\
         *"not enabled in this build"*) return 0 ;;
     esac
@@ -335,7 +342,7 @@ also_dir() {
 # applet this script links, so --help would break after installation. Same
 # reason the applet list is parsed with builtins.
 usage() {
-    echo "Link AOK-iSH's native programs into a bin directory so they run"
+    echo "Link AOK-Workstation's native programs into a bin directory so they run"
     echo "natively: SmallCLUE's applets, plus the programs beside it in /AOK/native."
     echo
     echo "Usage: sh /AOK/tools/native-links.sh [options] [directory]"
@@ -387,12 +394,12 @@ while [ $# -gt 0 ]; do
 done
 
 if [ ! -x "$NATIVE" ]; then
-    echo "$0: $NATIVE not found -- this AOK-iSH has no native SmallCLUE" >&2
+    echo "$0: $NATIVE not found -- this AOK-Workstation has no native SmallCLUE" >&2
     exit 1
 fi
 
 # A native-mode root (/AOK/docs/native-mode.md) has no distribution to put
-# these in front of: AOK-iSH links /usr/bin into /AOK/native itself, at every
+# these in front of: AOK-Workstation links /usr/bin into /AOK/native itself, at every
 # boot, and keeps the links in step with the build. Linking again on top would
 # only make a second set to drift, and --remove would take away the root's own
 # commands. Builtins only, as everywhere in this script.
@@ -400,7 +407,7 @@ if [ -r /etc/os-release ]; then
     while IFS= read -r osline || [ -n "$osline" ]; do
         if [ "$osline" = "ID=aok-native" ]; then
             echo "$0: this is a native-mode root -- its commands are already the native"
-            echo "programs, linked by AOK-iSH at every boot. Nothing to do."
+            echo "programs, linked by AOK-Workstation at every boot. Nothing to do."
             exit 0
         fi
     done < /etc/os-release
@@ -510,8 +517,8 @@ apply_path() {
                 # it sends you looking somewhere else for the problem.
                 if { while IFS= read -r zline || [ -n "$zline" ]; do
                         case "$zline" in
-                            "$ZSH_MARK_BEGIN") skip=1; continue ;;
-                            "$ZSH_MARK_END")   skip=0; continue ;;
+                            "$ZSH_MARK_BEGIN"|"$ZSH_MARK_BEGIN_566") skip=1; continue ;;
+                            "$ZSH_MARK_END"|"$ZSH_MARK_END_566")     skip=0; continue ;;
                         esac
                         [ "$skip" -eq 1 ] || printf '%s\n' "$zline"
                      done < "$zfile" > "$tmp"; } 2>/dev/null && "$MV" "$tmp" "$zfile" 2>/dev/null; then
@@ -542,7 +549,7 @@ apply_path() {
     # Guarded so re-logging in, or sourcing profile twice, cannot stack the
     # directory onto PATH over and over.
     cat > "$PATH_FILE" <<PATHEOF
-# Added by native-links.sh. Puts AOK-iSH's native applet links ahead of the
+# Added by native-links.sh. Puts AOK-Workstation's native applet links ahead of the
 # distro's commands, so they run as host code instead of being translated.
 # Remove with: sh /AOK/tools/native-links.sh --remove
 case ":\$PATH:" in

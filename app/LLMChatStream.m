@@ -1,6 +1,6 @@
 //
 //  LLMChatStream.m
-//  AOK-iSH
+//  AOK-Workstation
 //
 //  See LLMChatStream.h.
 //

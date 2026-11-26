@@ -12,7 +12,7 @@
 // Guest-filesystem access for natively-implemented programs (kernel/native.h).
 //
 // This is the seam that makes native programs useful rather than merely fast.
-// A native program is compiled into AOK-iSH and linked against the HOST libc,
+// A native program is compiled into AOK-Workstation and linked against the HOST libc,
 // so calling open()/read()/opendir() directly would resolve against the iOS
 // filesystem -- silently reading the wrong files rather than failing, which is
 // the worst possible failure mode. Everything here goes through iSH's own VFS

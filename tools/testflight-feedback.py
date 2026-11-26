@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read AOK-iSH's TestFlight feedback through the App Store Connect API.
+"""Read AOK-Workstation's TestFlight feedback through the App Store Connect API.
 
     tools/testflight-feedback.py                  every report, newest first
     tools/testflight-feedback.py --build 565      reports on build 565 and later
@@ -228,7 +228,7 @@ def save(client, report, directory):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="List AOK-iSH's TestFlight feedback and crash comments (read only).")
+        description="List AOK-Workstation's TestFlight feedback and crash comments (read only).")
     parser.add_argument("--build", type=int, metavar="N",
                         help="only reports on build N or later")
     parser.add_argument("--since", metavar="YYYY-MM-DD",

@@ -1,4 +1,4 @@
-// dash as a native program: the seam between AOK-iSH and it.
+// dash as a native program: the seam between AOK-Workstation and it.
 //
 // kernel/zsh_glue.c is the model and kernel/bash_glue.c explains the idea --
 // that a native program is a C function on a guest task's thread, not a

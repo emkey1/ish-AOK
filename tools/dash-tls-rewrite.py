@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Make dash's globals thread-local, so two native dashes can be live at once.
 
-WHY. A native program in AOK-iSH is a C function on a guest task's thread, not
+WHY. A native program in AOK-Workstation is a C function on a guest task's thread, not
 a process (kernel/native.c). dash's fork-by-relaunch makes the child a second
 guest task -- so a second dash, on a second thread, in the SAME address space
 as its parent, which is still sitting in waitforjob(). With ordinary statics the

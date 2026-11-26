@@ -4,7 +4,7 @@
 // listening hash, so a SYN arriving for a bound-but-not-listening port gets an
 // RST and the client's connect() returns ECONNREFUSED immediately. Darwin
 // silently DROPS that SYN, so the client retries and times out about eight
-// seconds later -- and AOK-iSH inherited it, because a guest socket is a host
+// seconds later -- and AOK-Workstation inherited it, because a guest socket is a host
 // socket. Measured three ways: on the host, in the guest, and on a real device
 // with an external client and a listening control.
 //

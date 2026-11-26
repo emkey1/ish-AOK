@@ -5,7 +5,7 @@ Keyboard Toolbar**. Reorder the keys, remove the ones you never press, bring
 them back, and add keys of your own that type whatever you give them. The bar
 changes as you go; nothing needs restarting.
 
-Until you change something, the bar is the one AOK-iSH has always had:
+Until you change something, the bar is the one AOK-Workstation has always had:
 **Tab, Control, Escape and the arrow keys** at the left, and **- . / : ! |** in
 the centre, of which only **.** and **/** show on an iPhone held upright.
 
@@ -63,7 +63,7 @@ lists any built-in key you have removed, to put it back where it came from.
 ## Where it is kept
 
 The arrangement is an app preference, `Toolbar Keys`, kept with the rest of
-AOK-iSH's settings; it is not in the guest and is not part of a root. It covers
+AOK-Workstation's settings; it is not in the guest and is not part of a root. It covers
 the terminal's bar. The Wayland display's key strip is separate.
 
 See also [workspace.md](workspace.md) for the bar in Workspace windows, and

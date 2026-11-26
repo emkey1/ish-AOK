@@ -1,4 +1,4 @@
-// FUSE for AOK-iSH: the /dev/fuse character device and the "fuse" filesystem
+// FUSE for AOK-Workstation: the /dev/fuse character device and the "fuse" filesystem
 // type, speaking FUSE protocol 7.31 to an ordinary guest daemon (libfuse2/3,
 // sshfs, rclone, ...). The daemon opens /dev/fuse -- each open is one
 // connection -- and calls mount(2) with fd=<n> in the data string; every path

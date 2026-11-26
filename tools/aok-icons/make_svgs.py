@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the AOK-iSH alternate icon SVGs (1024x1024, full bleed). See README.md."""
+"""Generate the AOK-Workstation alternate icon SVGs (1024x1024, full bleed). See README.md."""
 import sys
 from pathlib import Path
 

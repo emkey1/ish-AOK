@@ -6,7 +6,7 @@ iOS ends this app routinely — memory pressure, or you swiping it away — and
 without this that always loses the session. With it on you get the same one
 back: same processes, same open files, same shell.
 
-**It is off by default.** Turn it on in the iOS Settings app, under AOK-iSH →
+**It is off by default.** Turn it on in the iOS Settings app, under Workstation →
 **Suspend to Disk**. It spends storage, and a session it cannot describe is one
 it will not save, so it is not something to switch on for somebody.
 
@@ -28,7 +28,7 @@ To save one *now*, without waiting to be backgrounded:
     /AOK/tools/suspend.sh
 
 That writes the session and stops the machine, so the next launch resumes it.
-AOK-iSH stays open on a screen saying the session is suspended, as it does
+AOK-Workstation stays open on a screen saying the session is suspended, as it does
 after **Suspend and Exit**; close it when you like. (Up to build 565 the app
 quit by itself at that point.)
 There is also `--save FILE`, which takes a copy and lets the session carry on,

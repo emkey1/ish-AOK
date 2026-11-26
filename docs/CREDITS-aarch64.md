@@ -10,7 +10,7 @@ same-architecture (arm64 guest on arm64 host) dispatch avoids the
 cross-architecture translation cost that dominates i386/amd64 emulation.
 
 This file tracks, at the file level, which parts of this port are adapted
-from their source versus independently written against AOK-iSH's own
+from their source versus independently written against AOK-Workstation's own
 conventions. Every commit that adapts their code names the source file(s) in
 its commit message in addition to the entry added here.
 
@@ -194,7 +194,7 @@ credits file supports.
 
 - `kernel/abi/arm64.h`, the `GUEST_ABI_ARM64` enum value, and the
   `guest_abi_desc`/`guest_abi_vm_layout` cases in `kernel/abi.h` — written
-  against AOK-iSH's existing `guest_abi` dispatch machinery (which
+  against AOK-Workstation's existing `guest_abi` dispatch machinery (which
   OpenMinis' fork does not have; their arm64 support is a compile-time
   `#ifdef GUEST_ARM64` build variant, not a per-task runtime ABI). The
   48-bit VA size mirrors their choice; the *stack placement* within it does
@@ -244,7 +244,7 @@ actually call. That curation choice is credited even though the underlying
 facts (numbers) aren't copyrightable — it's real engineering judgment, and
 crediting it is simply accurate and fair.
 
-The actual implementations wired into each slot are 100% AOK-iSH's own —
+The actual implementations wired into each slot are 100% AOK-Workstation's own —
 OpenMinis' function names don't exist in this codebase at all (different
 kernel/ entirely). Every slot reuses an existing i386/amd64 `sys_*`
 function, verified against the exact names already used in this file's

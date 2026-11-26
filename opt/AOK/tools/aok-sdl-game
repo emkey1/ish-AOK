@@ -1,6 +1,6 @@
 #!/bin/sh
 # aok-sdl-game -- start an SDL game from /usr/games the way it works best
-# under AOK-iSH. Installed by /AOK/tools/setup-games.sh as
+# under AOK-Workstation. Installed by /AOK/tools/setup-games.sh as
 # /usr/local/bin/aok-sdl-game, with a symlink per game (/usr/local/bin/sky,
 # /usr/local/bin/freedoom1, ...) that PATH finds before /usr/games.
 #

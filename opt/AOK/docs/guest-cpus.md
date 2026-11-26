@@ -1,7 +1,7 @@
 # What each guest CPU tells your programs
 
-Every guest in AOK-iSH is emulated, so the CPU a program sees is the one
-AOK-iSH describes: through `CPUID` on x86, `AT_HWCAP` and the ID registers on
+Every guest in AOK-Workstation is emulated, so the CPU a program sees is the one
+AOK-Workstation describes: through `CPUID` on x86, `AT_HWCAP` and the ID registers on
 arm64, `riscv_hwprobe` on riscv64, `AT_HWCAP` and `AT_HWCAP2` on ppc64le, and
 `/proc/cpuinfo` on all five. Software
 reads that description to pick its fast paths — glibc's `memcpy`, OpenSSL's
@@ -14,7 +14,7 @@ To see what your root is being told:
 
 ```sh
 grep -m1 -E '^(flags|Features|isa)' /proc/cpuinfo   # one line, whichever guest you are
-uname -r                                            # 5.10.0-ish_aok: the kernel AOK-iSH reports
+uname -r                                            # 5.10.0-ish_aok: the kernel AOK-Workstation reports
 ```
 
 ## x86: i386 and amd64
@@ -103,7 +103,7 @@ Zicond, Zcb, Zfa, Zfhmin, Zicbo*, Zimop/Zcmop, Zawrs) and the vector unit, V
 with Zvbb, Zvkb, Zvkt and Zvfhmin. The `isa` line starts
 `rv64imafdcv_...`, `AT_HWCAP` has `v`, and `riscv_hwprobe` answers as Linux
 does. Pointer masking (Supm) is the one piece left out. The details, and
-AOK-iSH's hook for non-standard vendor instructions, are in
+AOK-Workstation's hook for non-standard vendor instructions, are in
 [riscv64-vendor-extensions.md](riscv64-vendor-extensions.md).
 
 ## ppc64le
@@ -116,7 +116,7 @@ and not reported: decimal floating point, transactional memory, the vector
 crypto instructions (AES, SHA, polynomial multiply) and `scv`, so OpenSSL
 takes its VMX paths rather than the POWER8 crypto ones. `/proc/cpuinfo` is
 POWER's format, `cpu : POWER8 (raw), altivec supported`, and its `timebase`
-line is the frequency `mftb` counts at, which on AOK-iSH is the host's
+line is the frequency `mftb` counts at, which on AOK-Workstation is the host's
 counter.
 
 ## See also

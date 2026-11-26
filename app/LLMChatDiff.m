@@ -1,6 +1,6 @@
 //
 //  LLMChatDiff.m
-//  AOK-iSH
+//  AOK-Workstation
 //
 //  See LLMChatDiff.h. Myers' O(ND) algorithm ("An O(ND) Difference Algorithm
 //  and Its Variations", 1986), keeping every V vector to walk the path back.

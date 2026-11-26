@@ -1,6 +1,6 @@
 //
 //  AudioPCMDecoder_Vorbis.m
-//  AOK-iSH
+//  AOK-Workstation
 //
 //  Ogg Vorbis backend via the vendored libvorbisfile (open-source, public API
 //  only). Real when deps/audiocodecs-static/audiocodecs.xcframework is built;

@@ -1,4 +1,4 @@
-# POWER9 (Power ISA 3.0) on the AOK-iSH ppc64le guest — a scope
+# POWER9 (Power ISA 3.0) on the AOK-Workstation ppc64le guest — a scope
 
 Date: 2026-11-13. **Investigation only: nothing here is implemented, and no
 decision is assumed.** It answers what adding ISA 3.0 to the ppc64le guest

@@ -42,7 +42,7 @@ answers, and only one of them is visible in the source.
 
 ## 26.2 The conflict
 
-bash is GPLv3, along with its bundled readline and GNU termcap. AOK-iSH is
+bash is GPLv3, along with its bundled readline and GNU termcap. AOK-Workstation is
 GPLv3 too. That sounds like it should be the end of the matter, and it is not,
 because of where the app is distributed.
 
@@ -69,7 +69,7 @@ Upstream iSH's answer is the document the Foreword called a gift:
 > the conflict between the GNU GPLv2 or v3 and the Apple App Store terms of
 > service.
 
-That is what makes AOK-iSH distributable at all. It is a promise by upstream
+That is what makes AOK-Workstation distributable at all. It is a promise by upstream
 iSH's own copyright holders about upstream iSH's own code.
 
 And it binds nobody else. The FSF holds bash's copyright. `LICENSE.IOS` cannot
@@ -187,7 +187,7 @@ awkward part:
 | helix | MPL-2.0 (build option: on in the app, off by default in the CLI) |
 | libgit2 (SmallCLUE's `git`, since 558) | GPLv2 with a linking exception |
 | bash, readline, GNU termcap | **GPLv3** (build option) |
-| AOK-iSH itself | GPLv3, plus GPLv2 for post-relicensing contributions |
+| AOK-Workstation itself | GPLv3, plus GPLv2 for post-relicensing contributions |
 
 Nothing else in the binary is third-party GPL. That sentence is checkable, and
 it is checkable in the way this book keeps recommending: `ar t` on the archive,

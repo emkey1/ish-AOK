@@ -263,7 +263,7 @@ interfaceOrientation:(UIInterfaceOrientation)previousInterfaceOrientation
     // hint that anything is working. Naming the fix (open a terminal) covers
     // both a Workspace desktop with no terminal window and the standalone
     // Wayland Display, neither of which can hand anything over yet.
-    label.text = [@"AOK-iSH\n\n" stringByAppendingString:
+    label.text = [@"AOK-Workstation\n\n" stringByAppendingString:
         NSLocalizedString(@"Open a terminal or the Wayland Display to use this screen.", @"External display idle message: shown on a connected monitor while nothing that can use it is open")];
     [container addSubview:label];
     [NSLayoutConstraint activateConstraints:@[

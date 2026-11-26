@@ -21,7 +21,7 @@ than one that is simply absent.
 
 This does not catch applets that fail for reasons other than an unimplemented
 call -- missing OpenSSL, zlib, libgit2 or the OpenSSH tree -- because those
-report "not built into this AOK-iSH" from kernel/smallclue_glue.c and are
+report "not built into this AOK-Workstation" from kernel/smallclue_glue.c and are
 listed separately in the script.
 
 Usage: tools/native-applet-audit.py [smallclue-src-dir]

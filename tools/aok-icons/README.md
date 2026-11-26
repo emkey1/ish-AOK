@@ -1,4 +1,4 @@
-# AOK-iSH alternate app icons
+# AOK-Workstation alternate app icons
 
 Source for the alternate icons in `app/Icons` (the AOK set that replaced the
 alternates inherited from upstream iSH).

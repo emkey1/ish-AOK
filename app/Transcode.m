@@ -1,6 +1,6 @@
 //
 //  Transcode.m
-//  AOK-iSH
+//  AOK-Workstation
 //
 //  The AVFoundation half of the `transcode` native program
 //  (kernel/native_transcode.c; kernel/native_transcode.h has the split).

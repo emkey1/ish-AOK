@@ -131,7 +131,7 @@ static int proc_ish_show_roots(struct proc_entry *UNUSED(entry), struct proc_dat
     // took the whole emulator down.
     if (ish_roots_status == NULL) {
         proc_printf(buf, "job state=unavailable\n");
-        proc_printf(buf, "job message=root management needs the AOK-iSH app\n");
+        proc_printf(buf, "job message=root management needs the AOK-Workstation app\n");
         return 0;
     }
     char *status = ish_roots_status();
@@ -1204,7 +1204,7 @@ static char *proc_ish_release_probe_report;      // last result; NULL until one 
 static atomic_bool proc_ish_release_probe_running;
 
 static const char proc_ish_release_probe_usage[] =
-    "AOK-iSH host page release probe -- docs/simulated_swap_plan.md section 7, day 1\n"
+    "AOK-Workstation host page release probe -- docs/simulated_swap_plan.md section 7, day 1\n"
     "Nothing has been run yet in this session. Reading this file never runs it.\n"
     "\n"
     "  echo run > /proc/ish/mem_release_probe             # default 16 MiB\n"
@@ -1217,7 +1217,7 @@ static const char proc_ish_release_probe_usage[] =
     "probe report the design dead when it is not.\n";
 #else
 static const char proc_ish_release_probe_unsupported[] =
-    "AOK-iSH host page release probe -- docs/simulated_swap_plan.md section 7, day 1\n"
+    "AOK-Workstation host page release probe -- docs/simulated_swap_plan.md section 7, day 1\n"
     "Not available on this host. The probe measures XNU primitives that exist\n"
     "nowhere else -- MADV_FREE_REUSABLE, the phys_footprint ledger jetsam kills\n"
     "on, and task_vm_info.region_count -- so there is nothing here for it to say.\n"
@@ -2357,14 +2357,14 @@ static int proc_ish_show_host_vm(struct proc_entry *UNUSED(entry), struct proc_d
 // ktop's ARCH column read the ELF header behind /proc/<pid>/exe. Since 02c057cb
 // another user's exe is off limits, as on Linux (ptrace_may_access), so to a
 // normal user every root-owned process showed "?". Linux publishes nothing like
-// this because it runs one architecture; AOK-iSH runs four plus host code, and
+// this because it runs one architecture; AOK-Workstation runs four plus host code, and
 // which one a process runs is no secret -- its name in /proc/<pid>/stat, which
-// anyone may read, usually says as much. It lives here, in AOK-iSH's own
+// anyone may read, usually says as much. It lives here, in AOK-Workstation's own
 // directory, rather than as a line added to a file Linux defines.
 //
 // One line per process (thread-group leader): the pid, then the machine name
 // uname(2) reports inside it (aarch64, x86_64, i686, riscv64); for a program
-// compiled into AOK-iSH and running as host code (/AOK/native), the HOST's
+// compiled into AOK-Workstation and running as host code (/AOK/native), the HOST's
 // machine name marked "(n)" -- "aarch64(n)" on every Apple device -- because
 // that is what the code is, whichever root is booted; or "-" for a task caught
 // without an address space (task_arch_name). A zombie, or a leader that has

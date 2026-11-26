@@ -113,7 +113,7 @@ struct task {
     uint64_t threadid;
 
     // Set by execve when the program resolves to one implemented natively
-    // inside AOK-iSH (kernel/native.h), and consumed where this task would
+    // inside AOK-Workstation (kernel/native.h), and consumed where this task would
     // otherwise start executing the loaded image. Hung off the task rather
     // than kept thread-local because a task can be exec'd by a thread that is
     // only impersonating it (kernel/init.c's boot-command launcher does
@@ -754,7 +754,7 @@ struct task {
     const char *exit_arch;
     // x86 debug registers DR0-DR7 as a tracer last wrote them through
     // PTRACE_POKEUSER, so it reads back what it wrote. Nothing arms them:
-    // AOK-iSH has no hardware breakpoints, and a DR7 that would enable one is
+    // AOK-Workstation has no hardware breakpoints, and a DR7 that would enable one is
     // refused (kernel/ptrace.c ptrace_set_debugreg). Not inherited. At the
     // end for the reason given above native_standin_child.
     qword_t ptrace_debugreg[8];

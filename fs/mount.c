@@ -2379,7 +2379,7 @@ static void devtmpfs_repair_nodes(const char *point) {
 // does rather than acting as plain mount options.
 #define MS_PROPAGATION (MS_SHARED_|MS_PRIVATE_|MS_SLAVE_|MS_UNBINDABLE_)
 #define MS_OP (MS_REMOUNT_|MS_BIND_|MS_MOVE_|MS_PROPAGATION)
-// Flags AOK-iSH accepts but does not act on: durability/atime/symlink-resolution
+// Flags AOK-Workstation accepts but does not act on: durability/atime/symlink-resolution
 // niceties. Without mount namespaces these are effectively no-ops, so we strip
 // them rather than reject the whole mount. MS_REC stays in this set so a
 // recursive propagation change (mount --make-rprivate) is still accepted as a

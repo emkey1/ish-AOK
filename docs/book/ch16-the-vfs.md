@@ -1,7 +1,7 @@
 # 16. The VFS
 
 A guest program opens a file. Between `open("/etc/passwd", O_RDONLY)` and any
-bytes coming back, AOK-iSH has to decide which filesystem that path belongs to,
+bytes coming back, AOK-Workstation has to decide which filesystem that path belongs to,
 whether the caller may traverse every directory on the way, whether any
 component is a symlink and where it points, whether the final component exists
 and may be read, and then hand the request to a backing store that might be a
@@ -110,7 +110,7 @@ returned `EBADF`.
 > AOK's `EBADF` made Aria carry a NULL, which `ha_maria::drop_table` then
 > dereferenced — so the failure presented as `mariadbd` crashing with `SIGSEGV`,
 > and the fault address was written into `docs/TODO.md` as a suspected AIO null
-> pointer. It also meant **no MariaDB installation on AOK-iSH had ever
+> pointer. It also meant **no MariaDB installation on AOK-Workstation had ever
 > completed**: `mysql_install_db` died leaving 3 of roughly 30 system tables.
 >
 > Two lessons, both general. A crash inside a well-tested third-party program is

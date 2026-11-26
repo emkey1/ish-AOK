@@ -1,6 +1,6 @@
 # Filesystems, /AOK/roots, and chrooting between architectures
 
-AOK-iSH can have several Linux root filesystems installed at once — Alpine
+AOK-Workstation can have several Linux root filesystems installed at once — Alpine
 or Devuan, in i386, amd64, arm64, riscv64 or (experimentally) ppc64le
 flavors — and can run processes from more than one of them at the same time,
 in the same booted session, via `chroot`. This document covers the on-device
@@ -35,14 +35,14 @@ Three things worth knowing:
 - **Switching takes effect at the next app launch.** Which root boots is read
   once when the app starts, so nothing here disturbs the running guest. That is
   also why you can install a root from inside the root you are using.
-  `--exit-app` ends with a screen asking you to close AOK-iSH, which an iOS
+  `--exit-app` ends with a screen asking you to close AOK-Workstation, which an iOS
   app cannot do for itself; close it, and the next launch comes up in the new
   root. Up to build 565 the app quit at that point.
 - **An install keeps running if you walk away.** The download and unpack belong
   to the app, not to the shell that asked for them. Ctrl-C, a dropped ssh
   session, or a second invocation of `manage-roots.sh status` all find the same
   job still going.
-- **It needs the app.** The command-line build of AOK-iSH has no root manager, and
+- **It needs the app.** The command-line build of AOK-Workstation has no root manager, and
   says so rather than pretending: `/proc/ish/roots` reports
   `job state=unavailable` there.
 
@@ -71,8 +71,8 @@ echo op=remove >&3; echo name=Experiment >&3; echo confirm=yes >&3; echo run >&3
 
 ## Installing roots (in-app)
 
-A fresh install already has one: from 567, with no filesystem at all, AOK-iSH
-makes **AOK-iSH Native** and boots it, with no picker (see
+A fresh install already has one: from 567, with no filesystem at all, AOK-Workstation
+makes **AOK-Workstation Native** and boots it, with no picker (see
 [native-mode.md](native-mode.md)). Everything else is added here.
 
 The **Filesystems** screen — in app settings, and the same screen as the **Boot
@@ -93,8 +93,8 @@ Images** applet in Workspace — lists four groups:
   holding its name, and what is left of one is swept up at the next launch.
   **Boot From This Filesystem** on the detail screen asks when:
   **Next Launch** keeps everything running and switches the next time
-  AOK-iSH opens, and **Quit Now** ends on a screen asking you to close
-  AOK-iSH; closing it ends every running program, and the root boots when you
+  AOK-Workstation opens, and **Quit Now** ends on a screen asking you to close
+  AOK-Workstation; closing it ends every running program, and the root boots when you
   open it again. iOS does not let an app restart itself, or quit by itself.
 - **Root Cached Filesystems (`/AOK/persist/roots`)** — any root archives
   sitting in that shared, persistent folder, whether they got there via
@@ -108,7 +108,7 @@ Images** applet in Workspace — lists four groups:
   import from there. Alpine 3.23.3 is offered for those three only: the bundled
   `aarch64` Alpine is 3.24.2 since 557, and a 3.23.3 `aarch64` root you already
   have keeps working.
-  **AOK-iSH Native** is listed here too: no distribution at all, only the
+  **AOK-Workstation Native** is listed here too: no distribution at all, only the
   programs built into the app, and nothing to download -- it is created on the
   spot. See [native-mode.md](native-mode.md).
 - **Community Distributions** — PSCAL + SmallCLUE (arm64), Arch Linux
@@ -305,12 +305,12 @@ A root arrives with a time zone of its own. Devuan's `/etc/localtime` names
 means UTC. So out of the box a guest's clock ran on UTC rather than on the time
 the device shows.
 
-Each time it boots a root, AOK-iSH points `/etc/localtime` at **the device's
+Each time it boots a root, AOK-Workstation points `/etc/localtime` at **the device's
 zone**, but only while the choice is still its to make:
 
 - there is no `/etc/localtime`;
-- it is the distribution's UTC, and AOK-iSH has never set a zone in this root;
-- it still names the zone AOK-iSH set last time, so a root follows the device
+- it is the distribution's UTC, and AOK-Workstation has never set a zone in this root;
+- it still names the zone AOK-Workstation set last time, so a root follows the device
   when you travel.
 
 **Any other zone is yours, and stays.** Set one with `dpkg-reconfigure tzdata`,
@@ -323,7 +323,7 @@ A root without zone data is left alone: a fresh Alpine root has no tzdata, so
 run `apk add tzdata` (the provisioning scripts below install it) and the zone
 arrives at the following boot.
 
-The zone AOK-iSH set is recorded in `/etc/aok-localtime`. Keep that file — it is
+The zone AOK-Workstation set is recorded in `/etc/aok-localtime`. Keep that file — it is
 what tells a UTC you chose from the one the distribution shipped. Where a root
 has an `/etc/timezone`, it is kept matching; it is never created, since current
 Debian no longer uses it. `cat /proc/ish/timezone` shows the device's zone.
@@ -369,7 +369,7 @@ languages only. For a Chinese-speaking system, use a Devuan root.
 A freshly-imported root is intentionally minimal. Scripts under `/AOK/tools`
 turn one into a comfortable, "full Linux feel" terminal environment in one
 pass — matched packages, sudo, a themed shell, tmux, and services that behave
-correctly under AOK-iSH's clock model:
+correctly under AOK-Workstation's clock model:
 
 ```sh
 sudo sh /AOK/tools/provision-ultimate-alpine.sh
@@ -381,7 +381,7 @@ sh /AOK/tools/provision-ultimate-pscal.sh            # PSCAL + SmallCLUE
 All of them are idempotent (safe to re-run) and interactively prompt for
 their settings unless you pre-set them in the environment.
 
-Each one ends by linking AOK-iSH's native programs in, with
+Each one ends by linking AOK-Workstation's native programs in, with
 [`native-links.sh`](native-setup.md) — into `/usr/local/native-bin` and
 `/usr/local/bin`, so `sh` is native dash — and your own `/AOK/persist/bin` with
 [`persist-links.sh`](persist.md). The Alpine, Devuan and Arch scripts leave the
@@ -416,7 +416,7 @@ entries, `(runas)` specs, `NOPASSWD`, explicit command lists, `#includedir` or
 implemented, and a line using them is skipped rather than guessed at. With no
 sudoers file at all, nobody is authorised. It also ships inside the PSCAL image
 itself, as `provision-ultimate-pscal.sh` on `PATH`, so it is there even on an
-AOK-iSH build older than the script. Its tunables are `TARGET_USER`,
+AOK-Workstation build older than the script. Its tunables are `TARGET_USER`,
 `NEW_HOSTNAME`, `PERSIST_SSH`, `PASSWORD_AUTH`, `NATIVE_LINKS`,
 `AUTHORIZED_KEY` and `SSH_STASH` (whether to restore and save your `~/.ssh`
 through [`ssh-stash.sh`](persist.md), as every provisioner does); note that `/AOK/persist` is host-backed, so the stash puts
@@ -451,7 +451,7 @@ type or put in `TZ_NAME` stays put. Each one:
   themed `tmux.conf` plus a dependency-free Neovim starter config
   (including OSC52 clipboard support on Neovim 0.10+).
 - Configures `chrony` in **monitor-only mode** (`-x`). This matters
-  specifically under AOK-iSH: the guest clock *is* the iOS host clock,
+  specifically under AOK-Workstation: the guest clock *is* the iOS host clock,
   which is already NTP-synced by iOS itself, so chrony must observe rather
   than try to step or slew it.
 - Enables and starts the relevant boot services for the distro (OpenRC on

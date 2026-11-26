@@ -1,6 +1,6 @@
 //
 //  ShellFileBrowser.m
-//  AOK-iSH
+//  AOK-Workstation
 //
 
 #import "ShellFileBrowser.h"

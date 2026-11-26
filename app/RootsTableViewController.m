@@ -547,7 +547,7 @@ static BOOL ISHRunningAsIOSAppOnMac(void) {
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
     if ([self sectionShowsInstalledRoots:section]) {
         if (ISHRunningAsIOSAppOnMac()) {
-            NSString *note = NSLocalizedString(@"Browsing these from the Files app isn't available on a Mac — Apple's File Provider framework doesn't support the kind of extension AOK-iSH uses, so it has been turned off here rather than left to fail. Everything else works as usual.", @"Section footer shown when running on a Mac");
+            NSString *note = NSLocalizedString(@"Browsing these from the Files app isn't available on a Mac — Apple's File Provider framework doesn't support the kind of extension AOK-Workstation uses, so it has been turned off here rather than left to fail. Everything else works as usual.", @"Section footer shown when running on a Mac");
             if (self.choosesRootOnSelection)
                 return [NSString stringWithFormat:@"%@\n\n%@", NSLocalizedString(@"Tap a filesystem to make it active and continue booting.", @"Section footer"), note];
             return note;
@@ -562,7 +562,7 @@ static BOOL ISHRunningAsIOSAppOnMac(void) {
     if ([self sectionShowsOfficialChoices:section]) {
         if (!self.showsInstalledRootsSection)
             return NSLocalizedString(@"Choose a distribution below (you'll be asked which architecture if more than one is available), or tap Import to browse for another archive.", @"Section footer");
-        return NSLocalizedString(@"Maintained and regression-tested as part of AOK-iSH. Can be imported again at any time.", @"Section footer for official distributions");
+        return NSLocalizedString(@"Maintained and regression-tested as part of AOK-Workstation. Can be imported again at any time.", @"Section footer for official distributions");
     }
     if ([self sectionShowsCommunityChoices:section]) {
         return NSLocalizedString(@"Contributed or experimental, without the same support guarantees as the official distributions above. Downloaded on first use into /AOK/persist/roots, where they can be deleted afterward.", @"Section footer for community distributions");
@@ -1113,18 +1113,18 @@ static UIColor *RootRowInUseAccentColor(void) {
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
     if (section == 1) { // boot
         if (self.bootRowIsInert)
-            return NSLocalizedString(@"AOK-iSH is running from this filesystem, and boots it next time too.", @"Filesystem detail footer (boot section)");
+            return NSLocalizedString(@"AOK-Workstation is running from this filesystem, and boots it next time too.", @"Filesystem detail footer (boot section)");
         if (self.isBootedRoot)
-            return NSLocalizedString(@"AOK-iSH is running from this filesystem, but another one is set to boot next.", @"Filesystem detail footer (boot section)");
+            return NSLocalizedString(@"AOK-Workstation is running from this filesystem, but another one is set to boot next.", @"Filesystem detail footer (boot section)");
         if (self.isDefaultRoot)
-            return NSLocalizedString(@"This filesystem boots the next time AOK-iSH opens.", @"Filesystem detail footer (boot section)");
-        return NSLocalizedString(@"Takes effect the next time AOK-iSH opens. You choose whether that is now.", @"Filesystem detail footer (boot section)");
+            return NSLocalizedString(@"This filesystem boots the next time AOK-Workstation opens.", @"Filesystem detail footer (boot section)");
+        return NSLocalizedString(@"Takes effect the next time AOK-Workstation opens. You choose whether that is now.", @"Filesystem detail footer (boot section)");
     }
     if (section == 2) { // delete
         // The rule and then the way out of it (#575): without the second
-        // sentence this read as "AOK-iSH cannot delete machines".
+        // sentence this read as "AOK-Workstation cannot delete machines".
         if ([self.rootName isEqualToString:Roots.instance.bootedRoot])
-            return NSLocalizedString(@"This filesystem can't be deleted or renamed because it's currently mounted as the root. To delete it, choose Boot From This Filesystem on another one; once AOK-iSH is running from that one, this one can go.", @"Filesystem detail footer (delete section)");
+            return NSLocalizedString(@"This filesystem can't be deleted or renamed because it's currently mounted as the root. To delete it, choose Boot From This Filesystem on another one; once AOK-Workstation is running from that one, this one can go.", @"Filesystem detail footer (delete section)");
         if (self.isDefaultRoot)
             return NSLocalizedString(@"This filesystem can't be deleted or renamed because it's the one set to boot next. To delete it, choose Boot From This Filesystem on another one first.", @"Filesystem detail footer (delete section)");
     }
@@ -1151,14 +1151,16 @@ static UIColor *RootRowInUseAccentColor(void) {
     // storage URL to give. NSURLComponents throws on a nil URL, and that was
     // this row aborting the app (#625). Say why instead.
     NSURL *storage = ContainerIsSharedAppGroup() ? NSFileProviderManager.defaultManager.documentStorageURL : nil;
-    // The root lives one level down, inside the single "AOK-iSH" domain.
-    NSURL *url = [[storage URLByAppendingPathComponent:@"AOK-iSH"]
+    // The root lives one level down, in the single domain's folder. That folder
+    // is named by the domain's identifier, which keeps the app's old name
+    // ("iSH-AOK", see Roots.m), not by the name the Files app shows.
+    NSURL *url = [[storage URLByAppendingPathComponent:@"iSH-AOK"]
                   URLByAppendingPathComponent:self.rootName];
     NSURLComponents *components = url != nil ? [NSURLComponents componentsWithURL:url resolvingAgainstBaseURL:NO] : nil;
     components.scheme = @"shareddocuments";
     if (components.string == nil) {
         UIAlertController *alert = [UIAlertController alertControllerWithTitle:NSLocalizedString(@"Files Can’t Show This Filesystem", @"Alert title: Browse Files is unavailable")
-                                                                       message:NSLocalizedString(@"This copy of AOK-iSH was installed without its shared App Group, as a re-signed (sideloaded) copy usually is, so the Files app has no way to reach its filesystems. Export still works.", @"Alert message: Browse Files is unavailable")
+                                                                       message:NSLocalizedString(@"This copy of AOK-Workstation was installed without its shared App Group, as a re-signed (sideloaded) copy usually is, so the Files app has no way to reach its filesystems. Export still works.", @"Alert message: Browse Files is unavailable")
                                                                 preferredStyle:UIAlertControllerStyleAlert];
         [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"OK", @"Alert button") style:UIAlertActionStyleDefault handler:nil]];
         [self presentViewController:alert animated:YES completion:nil];
@@ -1209,7 +1211,7 @@ static UIColor *RootRowInUseAccentColor(void) {
     _exportURL = exportURL;
 }
 
-// This used to quit AOK-iSH on the spot: one tap, no question, every running
+// This used to quit AOK-Workstation on the spot: one tap, no question, every running
 // program ended, under a footer that promised a restart iOS does not let an app
 // perform -- it landed on the home screen. The choice only takes effect at a
 // launch either way, so ask whether that launch is now or whenever it comes.
@@ -1224,15 +1226,15 @@ static UIColor *RootRowInUseAccentColor(void) {
         // choose is booting it next time too. Quitting would only bring the
         // same root back.
         title = [NSString stringWithFormat:NSLocalizedString(@"Keep booting \u201c%@\u201d?", @"Alert title; %@ is a filesystem name"), name];
-        message = NSLocalizedString(@"AOK-iSH is running from it now, but another filesystem is set to boot next. Next Launch makes this one boot next time instead.", @"Boot filesystem alert message");
+        message = NSLocalizedString(@"AOK-Workstation is running from it now, but another filesystem is set to boot next. Next Launch makes this one boot next time instead.", @"Boot filesystem alert message");
         offerQuit = NO;
     } else if (self.isDefaultRoot) {
         title = [NSString stringWithFormat:NSLocalizedString(@"\u201c%@\u201d boots next", @"Alert title; %@ is a filesystem name"), name];
-        message = NSLocalizedString(@"It boots the next time AOK-iSH opens. Quit Now ends on a screen asking you to close AOK-iSH. Closing it ends every running program, and this filesystem boots when you open it again.", @"Boot filesystem alert message");
+        message = NSLocalizedString(@"It boots the next time AOK-Workstation opens. Quit Now ends on a screen asking you to close AOK-Workstation. Closing it ends every running program, and this filesystem boots when you open it again.", @"Boot filesystem alert message");
         offerLater = NO;
     } else {
         title = [NSString stringWithFormat:NSLocalizedString(@"Boot \u201c%@\u201d from now on?", @"Alert title; %@ is a filesystem name"), name];
-        message = NSLocalizedString(@"AOK-iSH can't restart itself. Next Launch keeps everything running and switches the next time AOK-iSH opens. Quit Now ends on a screen asking you to close AOK-iSH. Closing it ends every running program, and this filesystem boots when you open it again.", @"Boot filesystem alert message");
+        message = NSLocalizedString(@"AOK-Workstation can't restart itself. Next Launch keeps everything running and switches the next time AOK-Workstation opens. Quit Now ends on a screen asking you to close AOK-Workstation. Closing it ends every running program, and this filesystem boots when you open it again.", @"Boot filesystem alert message");
     }
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:title
                                                                    message:message
@@ -1249,7 +1251,7 @@ static UIColor *RootRowInUseAccentColor(void) {
         [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Quit Now", @"Alert button: quit the app to switch filesystem") style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
             // The app cannot end itself: this sets the root and puts up the
             // closing screen. The messages above say so; up to 566 they said
-            // Quit Now closed AOK-iSH.
+            // Quit Now closed AOK-Workstation.
             Roots.instance.defaultRoot = name;
             AppDelegate *appDelegate = (AppDelegate *) UIApplication.sharedApplication.delegate;
             // No else. There was one, exit(0), for a delegate that is not

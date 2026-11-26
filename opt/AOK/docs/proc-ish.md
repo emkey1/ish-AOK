@@ -5,7 +5,7 @@ the host device, your settings, the JIT's state. It is AOK's own addition to
 procfs; nothing on real Linux has it.
 
 ```sh
-cat /proc/ish/version        # AOK-iSH 1.3 (564)
+cat /proc/ish/version        # AOK-Workstation 1.3 (564)
 cat /proc/ish/host_info      # the Mac or iPad underneath: OS, release, hardware
 cat /proc/ish/ips            # this device's network interfaces
 cat /proc/ish/colors         # the 16 ANSI colours, drawn -- a quick theme check
@@ -43,7 +43,7 @@ PID ARCH
 ```
 
 One line per process (the thread-group leader): the machine name
-`uname` reports inside it; for a program compiled into AOK-iSH and running as
+`uname` reports inside it; for a program compiled into AOK-Workstation and running as
 host code, the host's machine marked `(n)` — `aarch64(n)` on every Apple
 device (see [native-programs.md](native-programs.md)); or `-`
 for a task caught without an address space. A zombie is listed with what it

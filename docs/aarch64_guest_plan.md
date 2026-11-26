@@ -1,4 +1,4 @@
-# AOK-iSH aarch64 Guest Port Plan
+# AOK-Workstation aarch64 Guest Port Plan
 
 Date: 2026-07-01
 Branch: `aarch64`
@@ -73,7 +73,7 @@ a provenance comment):
   largely mechanical; strong candidate for near-direct adaptation.
 - `asbestos/guest-arm64/gadgets-aarch64/*.S` — instruction-class organization
   (bits/control/crypto/entry/math/memory) as a structural template even if
-  we write our own gadget bodies to match AOK-iSH's existing gadget/tlb
+  we write our own gadget bodies to match AOK-Workstation's existing gadget/tlb
   conventions.
 - `emu/arch/arm64/{cpu.h,decode.h}` — register file and decode-context shape.
 
@@ -321,7 +321,7 @@ that worked for the interpreter):
 - `jit/offsets.c`: new `arm64()` function emitting `CPU_arm64_*` symbolic
   offsets; `MACRO(TLB_BITS)`/`MACRO(PAGE_BITS)` additions.
 - `jit/guest-arm64/gadgets.h`: `CPU_x0`/`CPU_sp`/`CPU_pc`/`CPU_nzcv` alias
-  layer; `_cpu`/`_tlb`/`_ip` matching AOK-iSH's own i386-guest convention
+  layer; `_cpu`/`_tlb`/`_ip` matching AOK-Workstation's own i386-guest convention
   exactly (verified reusable, see CREDITS); `gret`; memory-access
   `read_prep`/`write_prep` adapted from `jit/gadgets-aarch64/gadgets.h`'s
   own proven-correct TLB macro (not OpenMinis' — their `TLB_BITS`/entry
@@ -719,7 +719,7 @@ finally shows)**: three stacked changes, each validated by the
 0.58s (3.2-4.1x, digests verified bit-identical to the host); fork+exec
 x100 0.13s (1.8-2x); awk int/fp 1.4-2x; hand-written 50M loop 26x.
 This is OpenMinis-claim territory measured against a much stronger
-baseline than theirs (AOK-iSH's tuned x86 engines, not upstream).
+baseline than theirs (AOK-Workstation's tuned x86 engines, not upstream).
 
 **Known next work**:
 

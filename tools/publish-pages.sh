@@ -45,13 +45,13 @@ fi
 
 mkdir -p "$work/privacy"
 {
-    printf -- '---\ntitle: AOK-iSH privacy policy\n---\n\n'
+    printf -- '---\ntitle: AOK-Workstation privacy policy\n---\n\n'
     cat "$policy"
 } > "$work/privacy/index.md"
 
 mkdir -p "$work/accessibility"
 {
-    printf -- '---\ntitle: AOK-iSH accessibility\n---\n\n'
+    printf -- '---\ntitle: AOK-Workstation accessibility\n---\n\n'
     cat "$accessibility"
 } > "$work/accessibility/index.md"
 
@@ -59,10 +59,10 @@ mkdir -p "$work/accessibility"
 # the app "is" or "runs" Linux.
 cat > "$work/index.md" <<'EOF'
 ---
-title: AOK-iSH
+title: AOK-Workstation
 ---
 
-# AOK-iSH
+# AOK-Workstation
 
 A Unix-style shell on device, for iPhone and iPad.
 
@@ -73,7 +73,7 @@ A Unix-style shell on device, for iPhone and iPad.
 EOF
 
 cat > "$work/_config.yml" <<'EOF'
-title: AOK-iSH
+title: AOK-Workstation
 theme: jekyll-theme-primer
 EOF
 

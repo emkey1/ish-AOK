@@ -1,6 +1,6 @@
 //
 //  GuestCommandRunner.m
-//  AOK-iSH
+//  AOK-Workstation
 //
 
 #import <UIKit/UIKit.h>
@@ -154,7 +154,7 @@ static NSString *ISHCommandOutputText(const char *bytes, size_t len, BOOL trunca
 
     intptr_t bootErr = [AppDelegate ensureBooted];
     if (bootErr < 0) {
-        outcome.failureReason = [NSString stringWithFormat:NSLocalizedString(@"The guest system could not boot (error %ld). Open AOK-iSH once to finish setup.", @"Shortcuts Run Command failure; %ld is an error number"), (long) bootErr];
+        outcome.failureReason = [NSString stringWithFormat:NSLocalizedString(@"The guest system could not boot (error %ld). Open AOK-Workstation once to finish setup.", @"Shortcuts Run Command failure; %ld is an error number"), (long) bootErr];
         return outcome;
     }
 

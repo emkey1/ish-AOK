@@ -1,4 +1,4 @@
-// fuse_basic.c — self-checking regression lock for AOK-iSH's FUSE support
+// fuse_basic.c — self-checking regression lock for AOK-Workstation's FUSE support
 // (fs/fuse.c): the /dev/fuse device, the "fuse" filesystem type, and the
 // protocol conversation between them.
 //
@@ -10,7 +10,7 @@
 // syscalls and asserts what comes back.
 //
 // Portable: passes identically on a real Linux kernel run as root (the
-// daemon replies -ENOSYS to opcodes AOK-iSH never sends but real kernels
+// daemon replies -ENOSYS to opcodes AOK-Workstation never sends but real kernels
 // do, and ignores the no-reply opcodes FORGET/BATCH_FORGET/DESTROY). An
 // unprivileged real-Linux run skips at mount(2)'s EPERM.
 #define _GNU_SOURCE

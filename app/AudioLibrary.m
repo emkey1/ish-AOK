@@ -1,6 +1,6 @@
 //
 //  AudioLibrary.m
-//  AOK-iSH
+//  AOK-Workstation
 //
 
 #import "AudioLibrary.h"

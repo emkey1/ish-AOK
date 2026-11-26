@@ -15,7 +15,7 @@ static_assert(UTS_NAME_LENGTH == UNAME_LENGTH, "UTS name length must match struc
 #include <sys/sysinfo.h>
 #endif
 
-const char *uname_version = "AOK-iSH";
+const char *uname_version = "AOK-Workstation";
 
 // The kernel release AOK reports: uname -r, /proc/sys/kernel/osrelease and
 // /proc/version.
@@ -147,7 +147,7 @@ void do_uname(struct uname *uts) {
     // misleading when working out which build a device has installed.
     char *build_version = copyBuildVersion();
 
-    const char *uname_version = "AOK-iSH"; // Version should be defined or externally managed
+    const char *uname_version = "AOK-Workstation"; // Version should be defined or externally managed
 
     // Fill the uname structure
     const char *machine = "i686";

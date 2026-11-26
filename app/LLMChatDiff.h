@@ -1,6 +1,6 @@
 //
 //  LLMChatDiff.h
-//  AOK-iSH
+//  AOK-Workstation
 //
 //  Line diffs for the LLM Chat's change review (Changes… and /undo).
 //  Foundation only, tested on the host (tests/unit/llm_diff_test.m).

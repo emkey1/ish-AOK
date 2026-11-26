@@ -1,4 +1,4 @@
-# AOK-iSH on the public App Store: what it would take
+# AOK-Workstation on the public App Store: what it would take
 
 Asked for on 2026-11-13, during the 566 cycle. This is an assessment, not a
 plan: nothing here is scheduled, and the decision to submit at all is the
@@ -83,8 +83,9 @@ judgement that is not mine to make.
 
 **Actions only the maintainer can take:**
 
-6. ~~**Send the name request**~~ Decided 2026-11-20: submit as "AOK-iSH"
-   without asking first. See "Name and branding".
+6. ~~**Send the name request**~~ Not needed: renamed to AOK-Workstation on
+   2026-11-26, after deciding on 2026-11-20 to submit as "AOK-iSH"
+   without asking. See "Name and branding".
 7. ~~**File the ANSSI declaration**~~ **Decided 2026-11-26: not filed.** The
    app is not distributed in France, which is the only thing it gated. See
    "Export compliance" under Paperwork.
@@ -230,7 +231,7 @@ that -- but "unused" was too kind, corrected 2026-11-14:
   live path: `FsUpdateOnlyRepositoriesFile` (app/CurrentRoot.m:196)
   **overwrites `/etc/apk/repositories`** with it. What makes it inert is only
   that `FsIsManaged()` is false for AOK's own roots -- Settings says "The
-  current filesystem is not managed by AOK-iSH" and greys out Upgrade
+  current filesystem is not managed by AOK-Workstation" and greys out Upgrade
   Repositories. Import an old upstream iSH root, which has `/ish`, and it runs.
 
   **DONE 2026-11-14:** dropped, and with it the whole mechanism, since
@@ -291,19 +292,31 @@ leaves the app working. No change needed; it just has to be said, and now is.
 
 ### Name and branding (5.2.1, 4.1)
 
-"AOK-iSH", the ISH badge on the icon, and the `app.ish.*` bundle id all sit
+"AOK-iSH", the ISH badge on the icon, and the `app.ish.*` bundle id all sat
 next to "iSH Shell" (id1436902243) on the same store.
 
 **Step:** written permission from the ish-app maintainers, cited in the review
-notes — or a store name without "iSH". Name availability could not be checked
-from here; the existing TestFlight app record presumably already holds the
-name (*inferred*).
+notes — or a store name without "iSH".
 
 **Decision, 2026-11-20:** submit as "AOK-iSH" without asking the ish-app
-maintainers first, and accept the risk of a 5.2.1 rejection. The review notes
-no longer have a name section. If review rejects the name, the draft below is
-still the first step, and the "if the answer is no" paragraph after it is the
-work list.
+maintainers first, and accept the risk of a 5.2.1 rejection.
+
+**Superseded 2026-11-26: renamed to AOK-Workstation.** The user had second
+thoughts about the risk and took the second option, a store name without
+"iSH". The Home Screen name is "Workstation", since the full name does not fit
+under an icon. No US App Store app was called "AOK-Workstation" on 2026-11-26;
+the store name changes on App Store Connect only when it is sent there, while a
+version is editable (see [app_store_metadata.md](app_store_metadata.md)). The
+description still says the app is a fork of the iSH project, which is a
+statement of where it came from, not a use of the name.
+
+**Still open: the ISH badge on the icon** (`app/Assets.xcassets/AppIcon.appiconset`,
+an "ISH" lozenge under "AOK"). It is the last place the public face of the app
+says "iSH", and 5.2.1 covers icons as well as names. The bundle id stays, as
+below.
+
+The draft below was never sent, and with the rename it is not needed. It stays
+as a record, under the name the app had then.
 
 **Draft of the ask, 2026-11-14.** Only the user can send it, and only the user
 can judge the tone against an existing relationship (there are open PRs on
@@ -330,7 +343,7 @@ yes or no.
 >
 > Either way, thanks for iSH.
 
-If the answer is no, the knock-on work is larger than renaming a string: the
+What a name without "iSH" took, as listed then: the
 store name, the subtitle and keywords in
 [app_store_metadata.md](app_store_metadata.md), the icon's ISH badge, and the
 first line of the description. The **bundle id stays** regardless — changing

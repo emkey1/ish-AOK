@@ -1,6 +1,6 @@
 # FUSE: filesystems written as ordinary guest programs
 
-AOK-iSH carries a real FUSE implementation — the `/dev/fuse` character device
+AOK-Workstation carries a real FUSE implementation — the `/dev/fuse` character device
 and a `fuse` filesystem type, speaking FUSE protocol 7.31. A FUSE daemon you
 compile inside your root, against the distro's own `libfuse`, mounts and serves
 a filesystem here the same way it would on Linux.

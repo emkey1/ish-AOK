@@ -5,7 +5,7 @@
  * or, for a natively-dispatched program, the host's architecture, since that
  * is what it was compiled for.
  *
- * Built for AOK-iSH: a single guest can run i386, amd64, arm64, riscv64 and ppc64le
+ * Built for AOK-Workstation: a single guest can run i386, amd64, arm64, riscv64 and ppc64le
  * binaries side by side (e.g. a chroot into another installed root via
  * /AOK/tools/mount-root.sh), and stock top/htop have no way to show that mix.
  *
@@ -185,11 +185,11 @@ static const char *guest_arch(void) {
     return guest_arch_cached;
 }
 
-// The architecture of the HOST AOK-iSH is running on, which is the one native
-// programs (below) were compiled for. AOK-iSH publishes it as a "host arch"
+// The architecture of the HOST AOK-Workstation is running on, which is the one native
+// programs (below) were compiled for. AOK-Workstation publishes it as a "host arch"
 // line in /proc/cpuinfo, printed for every guest ABI, so it does not depend on
 // which root is booted -- native bash in an i386 root is still arm64 code.
-// Nothing outside AOK-iSH publishes that line, and nothing outside AOK-iSH has
+// Nothing outside AOK-Workstation publishes that line, and nothing outside AOK-Workstation has
 // native programs to ask about, so "?" there is both honest and unreachable.
 //
 // The app build appends the chip in parentheses ("arm64(Apple M4)"), so the
@@ -223,7 +223,7 @@ static const char *host_arch(void) {
 }
 
 // Natively-dispatched programs -- bash, zsh, and SmallCLUE's applets, all
-// reached through /AOK/native -- are host code compiled into AOK-iSH rather
+// reached through /AOK/native -- are host code compiled into AOK-Workstation rather
 // than guest binaries. Exec of one points /proc/<pid>/exe at the /AOK/native
 // entry, and what lives behind that path is a placeholder shell script, not an
 // ELF image (fs/aok.c), so the header read below finds nothing: every native
@@ -247,7 +247,7 @@ static bool exe_is_native(pid_t pid) {
     return strncmp(target, prefix, sizeof(prefix) - 1) == 0;
 }
 
-// AOK-iSH's own answer, /proc/ish/arch: "PID ARCH" and then one "<pid>
+// AOK-Workstation's own answer, /proc/ish/arch: "PID ARCH" and then one "<pid>
 // <machine>" line per process, where machine is what uname(2) says inside it,
 // the host's machine marked "(n)" ("aarch64(n)") for a program running as host
 // code -- "native" before 556 -- or "-" for one with no address space. Read
@@ -255,10 +255,10 @@ static bool exe_is_native(pid_t pid) {
 //
 // It comes FIRST because the ELF header below cannot answer for another user's
 // process: /proc/<pid>/exe is gated by ptrace_may_access, on Linux and on
-// AOK-iSH since the 2026-09-24 hardening, so a normal user saw "?" beside every
+// AOK-Workstation since the 2026-09-24 hardening, so a normal user saw "?" beside every
 // root process -- init, login, sshd, udevd. The table is readable by anyone,
 // and one file per refresh is also cheaper than an open per process. The exe
-// read stays as the fallback for an AOK-iSH without the table, a process that
+// read stays as the fallback for an AOK-Workstation without the table, a process that
 // started after it was read, and a real Linux kernel.
 struct arch_entry {
     pid_t pid;
@@ -357,7 +357,7 @@ static const char *detect_arch(pid_t pid, bool kernel_thread) {
     }
 
     // Nothing ELF-shaped behind the exe link. A native program is the one case
-    // with a real answer; a kernel thread has no exe at all, and is AOK-iSH's
+    // with a real answer; a kernel thread has no exe at all, and is AOK-Workstation's
     // own kernel code -- host code, running natively, whichever root is
     // booted, so it is labelled the way a native program is (it used to take
     // the guest's architecture, and kthreadd alone had no "(n)" in a native
@@ -550,7 +550,7 @@ static int command_column_start(void) {
  * columns before Command -- and then clamped to the terminal with
  * `if (len > cols) len = cols`. Everything to the right of the terminal's
  * width simply fell off, and %CPU sits at columns 53-58. So on a terminal
- * narrower than 59 columns -- an iPad running AOK-iSH at a readable font size
+ * narrower than 59 columns -- an iPad running AOK-Workstation at a readable font size
  * is comfortably inside that -- ktop drew a full process list with PID, USER,
  * PR, NI, VIRT, RES, S and ARCH and NO %CPU COLUMN AT ALL, while the per-CPU
  * meters above it kept working, because those size themselves to the width.
@@ -1676,7 +1676,7 @@ static void print_batch(struct proc_sample *cur, int cur_n,
 // runtime would have given it.
 //
 // ktop is built two ways from this one source: as an ordinary guest binary,
-// where a fresh process makes this a no-op, and compiled into AOK-iSH as a
+// where a fresh process makes this a no-op, and compiled into AOK-Workstation as a
 // native program (kernel/native.h), where `ktop` is a C function called on a
 // guest task's thread inside a process that may have run it before. There the
 // initialisers above ran once, at app start, and every later run inherits

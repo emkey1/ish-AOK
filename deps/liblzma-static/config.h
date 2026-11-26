@@ -1,4 +1,4 @@
-/* Hand-written config.h for liblzma 5.8.3 vendored into AOK-iSH.
+/* Hand-written config.h for liblzma 5.8.3 vendored into AOK-Workstation.
  * Target: Apple platforms (iOS/macOS), arm64 + x86_64, decoders + encoders,
  * single-threaded, size-optimized (runtime tables, no generated headers).
  * Encoders are built because libarchive's xz/7zip/xar *writer* object files

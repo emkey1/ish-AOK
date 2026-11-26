@@ -2,7 +2,7 @@
 // date, chmod, xargs, find and grep against the answers of GNU coreutils 9.4,
 // findutils 4.9 and grep 3.11.
 //
-// AOK-iSH's native-links.sh puts SmallCLUE's applets ahead of the distro's on
+// AOK-Workstation's native-links.sh puts SmallCLUE's applets ahead of the distro's on
 // PATH, so they run every script that names them. The versions these
 // replaced lacked head -c, tail -c and -F, rm -i/-I/-d/-v, sort -k F,F and -o,
 // and printed wc's counts in their own widths (2026-10-01).

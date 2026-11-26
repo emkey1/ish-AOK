@@ -166,7 +166,7 @@ works, and that is architectural.
 `/AOK` is where the same fact reads as an advantage, and the in-app overview
 states it directly:
 
-> AOK-iSH is one machine — there's exactly one Linux kernel
+> AOK-Workstation is one machine — there's exactly one Linux kernel
 > underneath everything, so `/proc`, `/sys`, and `/dev` always reflect the
 > single true system state no matter which root or chroot you're looking at
 > them from.

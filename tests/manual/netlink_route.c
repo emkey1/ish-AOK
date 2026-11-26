@@ -2,7 +2,7 @@
  * netlink_route.c — self-checking regression lock for AF_NETLINK rtnetlink
  * dumps issued through the bare read()/write() (and readv()/writev()) path.
  *
- * AOK-iSH emulates NETLINK_ROUTE sockets entirely in-process (real_fd < 0).
+ * AOK-Workstation emulates NETLINK_ROUTE sockets entirely in-process (real_fd < 0).
  * The send/recv-family syscalls (sendto/sendmsg/recvfrom/recvmsg) special-case
  * AF_NETLINK and route to the in-process handler, but sock_write()/sock_read()
  * used to fall through to the `real_fd < 0` guard and return EOPNOTSUPP.
@@ -434,7 +434,7 @@ static int count_dump_family(int req_type, int expect_new, uint8_t family) {
  * Linux (iproute2 6.15.0, kernel 6.12): families 0/2/10/16/17 all return the
  * full list, family 7 returns none.
  *
- * AOK-iSH dropped every link for any family except AF_UNSPEC/AF_PACKET, which
+ * AOK-Workstation dropped every link for any family except AF_UNSPEC/AF_PACKET, which
  * is invisible to plain `ip addr` (it sends AF_UNSPEC) but makes `ip -4 addr`
  * and `ip -6 addr` print NOTHING: iproute2 dumps links first to build its
  * ifindex->name map, and an empty map means every address it then receives has
@@ -462,7 +462,7 @@ static void test_link_dump_family_filter(void) {
     }
 
     /* AF_BRIDGE is the one family Linux answers differently: rtnl_bridge_getlink
-     * emits bridge ports only. AOK-iSH has no bridge devices, so the reply must
+     * emits bridge ports only. AOK-Workstation has no bridge devices, so the reply must
      * be empty. On a real kernel that is only true when the host has no bridge
      * (a docker host has docker0), so assert the exact count under AOK and
      * merely a subset elsewhere -- otherwise this suite fails on any Linux box

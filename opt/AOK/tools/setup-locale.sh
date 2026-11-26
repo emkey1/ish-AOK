@@ -40,8 +40,13 @@ set -u
 PROG=setup-locale.sh
 CONF=/etc/aok-locale
 PROFILE=/etc/profile.d/01-aok-lang.sh
-MARK_BEGIN='# >>> AOK-iSH setup-locale.sh >>>'
-MARK_END='# <<< AOK-iSH setup-locale.sh <<<'
+# The marker is an identifier, not the app's name: it keeps the old name,
+# iSH-AOK, which the blocks written before 2026-11-19 carry. Build 566 wrote
+# "AOK-iSH" instead, so a block with that marker is replaced too.
+MARK_BEGIN='# >>> iSH-AOK setup-locale.sh >>>'
+MARK_END='# <<< iSH-AOK setup-locale.sh <<<'
+MARK_BEGIN_566='# >>> AOK-iSH setup-locale.sh >>>'
+MARK_END_566='# <<< AOK-iSH setup-locale.sh <<<'
 
 die() { echo "$PROG: $*" >&2; exit 1; }
 
@@ -237,7 +242,8 @@ zshenv=/etc/zshenv
 [ -f /etc/zsh/zshenv ] && zshenv=/etc/zsh/zshenv
 if [ -f "$zshenv" ] || command -v zsh >/dev/null 2>&1 || [ -x /AOK/native/zsh ]; then
     tmp=$(mktemp) || die "mktemp failed"
-    [ -f "$zshenv" ] && sed "/^$MARK_BEGIN\$/,/^$MARK_END\$/d" "$zshenv" > "$tmp"
+    [ -f "$zshenv" ] && sed -e "/^$MARK_BEGIN\$/,/^$MARK_END\$/d" \
+                            -e "/^$MARK_BEGIN_566\$/,/^$MARK_END_566\$/d" "$zshenv" > "$tmp"
     if [ "$LOCALE" != C.UTF-8 ]; then
         {
             echo "$MARK_BEGIN"

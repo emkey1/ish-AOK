@@ -1,4 +1,4 @@
-// Host-native AES-256-GCM for the AOK-iSH crypto accelerator.
+// Host-native AES-256-GCM for the AOK-Workstation crypto accelerator.
 //
 // Hardware only. AES lives here because the guest is emulating it instruction
 // by instruction, and the point is to run it at host speed -- but a software
@@ -9,7 +9,7 @@
 // portable fallback on purpose: "slower" is a fine outcome, "constant-time on
 // the device but not on some other host" is not.
 //
-// Every Apple device AOK-iSH runs on has these instructions, so in practice
+// Every Apple device AOK-Workstation runs on has these instructions, so in practice
 // the unavailable path is only hit on an unusual CLI build host.
 //
 // The streaming shape mirrors kernel/ish_accel_crypto.c's ChaCha20-Poly1305:

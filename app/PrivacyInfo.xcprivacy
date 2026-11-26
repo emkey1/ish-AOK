@@ -2,7 +2,7 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!-- AOK-iSH collects nothing and tracks nobody. What a guest program sends
+	<!-- AOK-Workstation collects nothing and tracks nobody. What a guest program sends
 	     is the user's own doing, and the LLM chat sends only to the provider
 	     the user configures, so neither is collection by this app. -->
 	<key>NSPrivacyTracking</key>

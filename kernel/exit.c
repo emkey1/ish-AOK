@@ -1510,7 +1510,7 @@ noreturn void do_exit_group(int status) {
 //
 // This used to pthread_kill(task->thread, SIGKILL) each one. A host SIGKILL is
 // not aimed at a thread -- it ends the whole process -- so in the app, running
-// `reboot` killed AOK-iSH outright whenever any task outlived init, and one
+// `reboot` killed AOK-Workstation outright whenever any task outlived init, and one
 // always did: busybox init's kill(-1, SIGKILL) takes the terminal's shell, the
 // terminal starts a new one, and init exits two seconds later (#587). It also
 // sent that signal to the saved pthread_t of leaders whose threads were gone.

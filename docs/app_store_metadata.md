@@ -31,29 +31,36 @@ Review notes (docs/app_store_review_notes.md, 3,174 characters) were sent too.
 566 was answered "no", which the notes and the assessment contradict. Everything here is a starting point to edit, not something to paste
 unread -- marketing copy is the author's voice, not a generated one.
 
-**One dependency runs through all of it:** the store name. See the assessment's
-"Name and branding" -- if the fork cannot be listed as "AOK-iSH", the name,
-subtitle and keywords below all change, and so does the first line of the
-description.
+**Renamed 2026-11-26: the app is AOK-Workstation.** The user moved off
+"AOK-iSH" so that the store name no longer carries "iSH" (see the assessment's
+"Name and branding"). Everything below says AOK-Workstation, but **App Store
+Connect still shows "AOK-iSH"** in the name, the description and the review
+notes until they are sent again. That needs the user's go-ahead, and the name
+can only change while a version is editable. The description keeps "a fork of
+the iSH project": stating where the app came from is how people who search for
+iSH find it, and it puts no one else's name in the name or the keywords.
 
 ---
 
 ## Name (30 characters)
 
 ```
-AOK-iSH
+AOK-Workstation
 ```
 
-Seven characters, so there is room if a longer form is ever wanted. Apple
-matches on the name heavily, so "AOK-iSH: Linux Shell" (20) is the obvious
-alternative if discoverability matters more than restraint.
+15 characters. On the Home Screen the app is "Workstation"
+(`CFBundleDisplayName`), because about 12 characters fit under an icon. Store
+names must be unique and Home Screen names need not be. Searched on 2026-11-26:
+no app in the US store (iPhone, iPad or Mac) is called "AOK-Workstation". An
+iPhone app by Locstatt is called "Workstation", which does not stop us using
+that as the Home Screen name.
 
 ## Subtitle (30 characters)
 
 ```
 A Unix-style shell on device
 ```
-28 characters. Revised 2026-11-24: not "Linux", which is the kernel, and AOK-iSH
+28 characters. Revised 2026-11-24: not "Linux", which is the kernel, and AOK-Workstation
 runs no Linux kernel -- it implements a useful subset of its interface.
 
 ## Promotional text (170 characters, changeable without a review)
@@ -81,7 +88,7 @@ come from, and they are the ones to drop if Apple raises it.
 ## Description (4000 characters)
 
 ```
-AOK-iSH puts a Unix-style command line on your iPhone or iPad.
+AOK-Workstation puts a Unix-style command line on your iPhone or iPad.
 
 Open it and you have a shell and about 140 everyday commands -- ssh, scp, sftp,
 git, curl, editors and most of coreutils -- compiled into the app itself, so
@@ -90,7 +97,7 @@ device unless you send it.
 
 HOW IT WORKS
 
-AOK-iSH is not a remote terminal and not a virtual machine. It implements a
+AOK-Workstation is not a remote terminal and not a virtual machine. It implements a
 useful subset of the Linux system interface -- processes, files, pipes,
 signals, terminals and networking -- inside the app, so familiar command-line
 tools behave the way you expect.
@@ -135,11 +142,11 @@ chat leaves the device.
 
 PRIVACY
 
-AOK-iSH collects nothing. There is no account, no analytics, no advertising and
+AOK-Workstation collects nothing. There is no account, no analytics, no advertising and
 no tracking of any kind. What your programs send is your business, and we never
 see it.
 
-AOK-iSH is open source, a fork of the iSH project, and is developed in the open
+AOK-Workstation is open source, a fork of the iSH project, and is developed in the open
 at github.com/emkey1/ish-AOK.
 ```
 
@@ -153,7 +160,7 @@ Revised 2026-11-24 at the user's word, after a first version had been sent:
   app -- and does not spotlight other Linux distributions: no apk or apt, no
   Alpine or Devuan, no guest architectures, and no desktop or FUSE, which need
   a distribution.
-- It does not claim to be Linux, which is the kernel. AOK-iSH runs no Linux
+- It does not claim to be Linux, which is the kernel. AOK-Workstation runs no Linux
   kernel; it implements a useful subset of its interface, and says so.
 - It does not mention jailbreaking, even to deny it: App Review has rejected
   metadata for the word alone, and "built into the app" already says it.
@@ -221,7 +228,7 @@ Suggested set, in order, because the first two are what most people see:
 3. The Wayland desktop.
 4. LLM Chat mid-task, with a permission prompt visible -- it shows both the
    feature and that it asks.
-5. Files app, with AOK-iSH as a location.
+5. Files app, with AOK-Workstation as a location.
 
 `fastlane/Snapfile` already exists for automating these, though it drives the
 simulator and the desktop and GPU shots may be easier taken on a device.

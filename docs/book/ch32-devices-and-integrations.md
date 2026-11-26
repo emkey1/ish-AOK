@@ -65,7 +65,7 @@ the guest a first-class participant in it.
 **"Run Command"** executes a command in the guest and returns its output to the
 shortcut — headlessly, through `run_guest_command_capture_shell()` (Chapter 15's
 `kernel/init.c` machinery) running `/AOK/native/zsh -c`, so **the app never has
-to come to the foreground**. **"Open AOK-iSH"** destinations with Siri phrases
+to come to the foreground**. **"Open AOK-Workstation"** destinations with Siri phrases
 cover the cases where it does.
 
 It is gated behind a preference, `shortcuts_run_commands` in

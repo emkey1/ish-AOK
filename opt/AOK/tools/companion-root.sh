@@ -18,7 +18,7 @@
 # and its time zone. A program started from a directory under /home or /tmp
 # starts in that same directory.
 #
-# Builtins only: this is read by AOK-iSH's native dash and by a distribution's
+# Builtins only: this is read by AOK-Workstation's native dash and by a distribution's
 # sh alike.
 
 AOK_COMPANION_ROOT_FILE=${AOK_COMPANION_ROOT_FILE:-/etc/aok-companion-root}

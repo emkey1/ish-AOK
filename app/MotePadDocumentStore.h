@@ -1,6 +1,6 @@
 //
 //  MotePadDocumentStore.h
-//  AOK-iSH
+//  AOK-Workstation
 //
 //  Guest-filesystem text I/O for the MotePad Workspace applet. Reads/writes/lists
 //  files through the emulated VFS (borrowing pid 1 as `current`, exactly like

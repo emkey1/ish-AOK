@@ -1,6 +1,6 @@
 //
 //  WorkspaceMarkdownViewer.m
-//  AOK-iSH
+//  AOK-Workstation
 //
 
 #import "WorkspaceMarkdownViewer.h"

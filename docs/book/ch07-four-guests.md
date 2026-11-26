@@ -7,7 +7,7 @@ does not ship a modern one; a growing amount of software simply is not built for
 it any more. A guest architecture is only as useful as the userland available
 for it, and i386's was quietly shrinking.
 
-AOK-iSH runs five: `i386`, `amd64`, `arm64`, `riscv64` and, since 562,
+AOK-Workstation runs five: `i386`, `amd64`, `arm64`, `riscv64` and, since 562,
 `ppc64le`, all through the same gadget JIT. This chapter is about what it took
 to get from one to five, what each addition actually taught, and the two traps
 that catch everybody reading this code for the first time.

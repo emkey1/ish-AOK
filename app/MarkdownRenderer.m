@@ -1,6 +1,6 @@
 //
 //  MarkdownRenderer.m
-//  AOK-iSH
+//  AOK-Workstation
 //
 
 #import "MarkdownRenderer.h"

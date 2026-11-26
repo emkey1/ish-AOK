@@ -25,7 +25,7 @@
 //
 // ---- The example pack ----
 // The four instructions below (ish.clz/ish.ctz/ish.pcnt/ish.bswap) are
-// an AOK-iSH-INVENTED demonstration pack, not a transcription of any
+// an AOK-Workstation-INVENTED demonstration pack, not a transcription of any
 // real vendor's silicon (T-Head, Andes, SiFive, etc. all ship real
 // custom-0 extensions, but this project has no way to verify a
 // transcribed encoding against their actual hardware, so it does not

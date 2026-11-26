@@ -128,7 +128,7 @@ paths that commit touched. These remain:
 
 | Where | Reached by |
 |---|---|
-| `app/AppDelegate.m:718` | "Quit AOK-iSH" on the System Halted alert, after `poweroff`, `halt` or `reboot` in the guest |
+| `app/AppDelegate.m:718` | "Quit AOK-Workstation" on the System Halted alert, after `poweroff`, `halt` or `reboot` in the guest |
 | `app/Roots.m:2373-2381`, `:2413` | the `exit-app` roots control operation |
 | `app/AboutViewController.m:472` | leaving recovery mode |
 
@@ -177,7 +177,7 @@ a device.**
 "Quit Now" on the Filesystems screen said it "closes" the app, which since
 `02774847b` meant the closing screen. **FIXED 2026-11-18:** both of its alert
 messages, the docs and the translations now say it ends on a screen asking
-you to close AOK-iSH.
+you to close AOK-Workstation.
 
 ### 4. One private API is left, and its reason has expired
 
@@ -278,7 +278,7 @@ project means by "JIT". The hash is not built.
   saying the project's own documents use the word for a threaded-code
   interpreter, before a reviewer finds the word and asks.
 - **Third-party licence notices are not in the app** (**done for 567, 2026-11-25:**
-  Settings > Licences lists AOK-iSH and every component, crate and Rust
+  Settings > Licences lists AOK-Workstation and every component, crate and Rust
   standard library dependency built into the app -- 419 entries -- each with
   its licence texts in full, from `app/Licences.json`, which
   `tools/gen-licences.py` writes from the trees the build compiles and

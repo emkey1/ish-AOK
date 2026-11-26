@@ -1,6 +1,6 @@
 # 29. The terminal
 
-The most-used piece of AOK-iSH is the one nobody thinks about. Every chapter so
+The most-used piece of AOK-Workstation is the one nobody thinks about. Every chapter so
 far has been about producing the right bytes; this one is about the last few
 inches, where those bytes become glyphs on a phone and somebody's thumbs become
 input.
@@ -9,7 +9,7 @@ It is also where the project made its most surprising implementation choice.
 
 ## 29.1 The terminal emulator is JavaScript
 
-AOK-iSH does not draw its own terminal. It runs **hterm** — the terminal
+AOK-Workstation does not draw its own terminal. It runs **hterm** — the terminal
 emulator from Chromium's `libapps`, written in JavaScript, the one that shipped
 in Chrome's Secure Shell extension for years — inside a `WKWebView`.
 

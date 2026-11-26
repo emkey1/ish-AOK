@@ -1,4 +1,4 @@
-# AOK-iSH roadmap
+# AOK-Workstation roadmap
 
 What the project intends to do next, and in what order. Written 2026-09-07,
 during the 554 release run.

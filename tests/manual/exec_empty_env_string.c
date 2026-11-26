@@ -5,7 +5,7 @@
 // string -- envc counts it, environ[] holds it, and /proc/<pid>/environ has a
 // bare NUL where it sits.
 //
-// AOK-iSH TRUNCATED the environment there. The execve syscalls read argv and
+// AOK-Workstation TRUNCATED the environment there. The execve syscalls read argv and
 // envp into packed blocks -- "s1\0s2\0...\0\0", each string NUL-terminated and
 // one more NUL ending the list -- and read_execve_user_args returned how many
 // strings it had read. Only argc was kept. do_execve then recovered envc by

@@ -1,6 +1,6 @@
-# AOK-iSH
+# AOK-Workstation
 
-AOK-iSH is a fork of [ish-app/ish](https://github.com/ish-app/ish) with local product, tooling, and platform changes for day-to-day development on this tree.
+AOK-Workstation is a fork of [ish-app/ish](https://github.com/ish-app/ish) with local product, tooling, and platform changes for day-to-day development on this tree.
 
 Testflight: https://testflight.apple.com/join/X1flyiqE
 
@@ -11,7 +11,7 @@ This fork is not just a rebrand. It carries fork-specific behavior, bundled root
 ## What This Fork Adds
 
 - Fork-specific app identity:
-  - product name `AOK-iSH`
+  - app name `AOK-Workstation` (`Workstation` on the Home Screen; the Xcode product is still `iSH-AOK`)
   - bundle root `app.ish.iSH-AOK`
 - **Five guest architectures**, all JIT: `i386`, `amd64` (x86_64), `arm64` (aarch64), `riscv64`, and `ppc64le` (64-bit little-endian PowerPC).
 - **Native programs**: zsh, dash (which provisioning makes `sh`) and SmallCLUE's busybox-style toolbox — which carries OpenSSH (`ssh`, `scp`, `sftp`, `ssh-keygen`, `ssh-copy-id`), the Nextvi editor, and GNU-compatible `sed`, `grep`, `find`, `ls`, `tar`, `gzip`, `diff`, `awk` and most of coreutils — are compiled into the app as host code and dispatched from guest `execve` through `/AOK/native/<name>`. They are host functions on a guest task's thread, not guest binaries, so they run at full speed instead of being translated instruction by instruction. bash has the same native implementation, but the shipped build has not included it since 556 — see [Native bash and licensing](#native-bash-and-licensing).
@@ -29,9 +29,9 @@ This fork is not just a rebrand. It carries fork-specific behavior, bundled root
 - File Provider support for exposing guest files through iOS.
 - **FUSE**: `/dev/fuse` and a `fuse` filesystem type (protocol 7.31), so guest `libfuse2`/`libfuse3` daemons mount and serve filesystems unmodified — as root libfuse calls `mount(2)` directly, and an ordinary user goes through the distro's `fusermount3`, as on Linux. See `/AOK/docs/fuse.md`.
 - **Namespaces** (559, experimental): user, mount, pid and network namespaces, so `unshare`, bubblewrap and Codex CLI's command sandbox (`codex sandbox`) start and confine, and systemd's `PrivateTmp=` and friends are real. A private network namespace has its own loopback and `veth`/`dummy` links, and never reaches the host's network. See `/AOK/docs/namespaces.md`.
-- **Apple Shortcuts actions** (iOS 16+): a headless "Run Command" action that executes a command in the guest under the native zsh and returns its output to the shortcut — the app never has to come to the foreground — plus "Open AOK-iSH" destinations with Siri phrases. See `/AOK/docs/shortcuts.md`.
+- **Apple Shortcuts actions** (iOS 16+): a headless "Run Command" action that executes a command in the guest under the native zsh and returns its output to the shortcut — the app never has to come to the foreground — plus "Open AOK-Workstation" destinations with Siri phrases. See `/AOK/docs/shortcuts.md`.
 - **`/dev/url`**: a character device the guest writes a URL to, handing it to iOS to open — including `shortcuts://` links, so a guest script can drive a Shortcut. See `app/URLDevice.m`.
-- **Simulated swap**: an opt-in swap area so a large, mostly idle guest working set can exist without spending real memory on it — with a 24-hour write budget, a thrash guard and a suspension gate, because it spends the device's flash. Off by default; turned on in the iOS Settings app, under AOK-iSH → Simulated Swap (both the switch and a size, effective at the next start). The guest sees it through `/proc/meminfo`, `free`, `vmstat`, `/proc/swaps` and a real `/dev/aokswap0`. See `/AOK/docs/swap.md`.
+- **Simulated swap**: an opt-in swap area so a large, mostly idle guest working set can exist without spending real memory on it — with a 24-hour write budget, a thrash guard and a suspension gate, because it spends the device's flash. Off by default; turned on in the iOS Settings app, under Workstation → Simulated Swap (both the switch and a size, effective at the next start). The guest sees it through `/proc/meminfo`, `free`, `vmstat`, `/proc/swaps` and a real `/dev/aokswap0`. See `/AOK/docs/swap.md`.
 - **`binfmt_misc`**: register an interpreter for a magic number or a filename extension, as on Linux, and `execve` honours it. See `/AOK/docs/binfmt-misc.md`.
 - Accelerators: native replacement of hot libc routines (on by default), and opt-in crypto and pixman offload.
 - Extra diagnostics and operational changes that are specific to this fork.
@@ -135,7 +135,7 @@ live, and `ISH_HLE_STATS=1` prints per-function call counts.
 - `jit/`: the gadget JIT and its per-guest translators.
 - `tests/`: end-to-end tests and the guest-side regression suite.
 - `tools/`: developer tools and host-side helpers.
-- `docs/`: design notes, port plans, release notes, and [the book](docs/book/README.md) — 43 chapters and 8 appendices on how AOK-iSH works.
+- `docs/`: design notes, port plans, release notes, and [the book](docs/book/README.md) — 43 chapters and 8 appendices on how AOK-Workstation works.
 
 ## Clone
 
@@ -232,7 +232,7 @@ Create a filesystem from a rootfs tarball:
 ## Native Programs
 
 A native program is host code compiled into the app. `execve` of a path under
-`/AOK/native` dispatches to a function inside AOK-iSH rather than loading a
+`/AOK/native` dispatches to a function inside AOK-Workstation rather than loading a
 guest image, and the caller cannot tell the difference. `/AOK/native` holds one
 entry per program in the registry (`kernel/native.c`) — `smallclue`, `sudo`,
 `su`, `passwd`, `motepad`, `ktop`, `wl-present`, `transcode`, `bmm`, `bmt`, `rust-probe`,
@@ -311,7 +311,7 @@ Numbers and method are in [docs/bash_native_plan.md](docs/bash_native_plan.md).
 It also puts GPLv3 code in the binary: bash itself, its bundled readline, and
 GNU termcap.
 
-That matters for App Store distribution. AOK-iSH is GPLv3 too, but
+That matters for App Store distribution. AOK-Workstation is GPLv3 too, but
 [LICENSE.IOS](LICENSE.IOS) is a promise from *this project's* copyright holders
 not to enforce against the conflict between the GPL and Apple's terms. It
 cannot bind the FSF, which holds bash's copyright and has had GPL software
@@ -365,7 +365,7 @@ Comment: This file is not directly linked with dash.  However, its output is.
 License: GPL-2+
 ```
 
-**AOK-iSH does not build that file.** It is a build-time generator whose entire
+**AOK-Workstation does not build that file.** It is a build-time generator whose entire
 output is a table of signal names and numbers, derivable from the platform's own
 `signal.h`; AOK generates the table itself and never compiles `mksignames.c`.
 Anyone tempted to restore it for convenience should read this paragraph first —
@@ -560,7 +560,7 @@ differently named tag produces no release build.
 
 ## Upstream Relationship
 
-AOK-iSH is based on upstream iSH, but it is intentionally diverged.
+AOK-Workstation is based on upstream iSH, but it is intentionally diverged.
 
 That means:
 

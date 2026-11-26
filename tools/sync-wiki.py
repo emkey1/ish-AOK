@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Publish opt/AOK/docs to the AOK-iSH GitHub wiki, without losing edits made there.
+"""Publish opt/AOK/docs to the AOK-Workstation GitHub wiki, without losing edits made there.
 
     tools/sync-wiki.py               # report only: say what would change, touch nothing
     tools/sync-wiki.py --push        # publish, and push
@@ -57,7 +57,7 @@ INDEX_END = "<!-- AOK-DOCS-INDEX:END -->"
 
 FOOTER = (
     "\n\n---\n\n*This page is generated from `opt/AOK/docs/{source}` in the "
-    "[AOK-iSH repository](https://github.com/emkey1/ish-AOK/blob/working/opt/AOK/docs/{source}), "
+    "[AOK-Workstation repository](https://github.com/emkey1/ish-AOK/blob/working/opt/AOK/docs/{source}), "
     "which is what the app compiles in and serves at `/AOK/docs`. Edits made "
     "here are noticed rather than overwritten, but they have to be carried back "
     "into the repository to reach the app.*\n"

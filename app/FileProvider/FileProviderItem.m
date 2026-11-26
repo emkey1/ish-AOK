@@ -454,7 +454,7 @@ static NSString *ISHFileProviderNormalizedGuestPath(NSString *path) {
 
 - (NSString *)filename {
     if (self.isDomainRoot)
-        return @"AOK-iSH";
+        return @"AOK-Workstation";
     if (self.isRoot) {
         if ([self.rootName isEqualToString:ISHFileProviderPersistRootName])
             return NSLocalizedString(@"Persist", @"Folder name in the Files app for the shared persistent storage (/AOK/persist)");

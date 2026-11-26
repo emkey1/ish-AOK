@@ -9,7 +9,7 @@ usage() {
     cat <<'EOF'
 Usage: amd64_jit_guest_bench.sh [options]
 
-Run a small guest-side amd64 JIT benchmark from inside AOK-iSH.
+Run a small guest-side amd64 JIT benchmark from inside AOK-Workstation.
 
 Options:
   -n N        Run each case N times. Default: 1

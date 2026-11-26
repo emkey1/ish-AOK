@@ -1,6 +1,6 @@
 //
 //  GuestFileBridge.h
-//  AOK-iSH
+//  AOK-Workstation
 //
 //  Shared async bridge from native UIKit applets (file manager, viewers, and in
 //  time Music/MotePad) to the guest filesystem. Replaces the near-identical

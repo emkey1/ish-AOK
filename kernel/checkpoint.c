@@ -6292,7 +6292,7 @@ static int ckpt_restore_locked(const char *host_path) {
     // The refusal that keeps a byte-copied struct cpu_state honest.
     if (h.build_fingerprint != ckpt_fingerprint() ||
             h.cpu_state_size != sizeof(struct cpu_state)) {
-        ckpt_refuse("saved by a different build of AOK-iSH; a session can be "
+        ckpt_refuse("saved by a different build of AOK-Workstation; a session can be "
                     "resumed only by the build that saved it");
         goto out;
     }

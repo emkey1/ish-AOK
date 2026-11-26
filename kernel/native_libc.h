@@ -5,7 +5,7 @@
  * translation unit of such a program (see meson.build); SmallCLUE is the first
  * consumer, exsh is the next.
  *
- * A native program is compiled into AOK-iSH as HOST code, so its libc calls
+ * A native program is compiled into AOK-Workstation as HOST code, so its libc calls
  * bind to the host's libc and resolve against the *iOS* filesystem. A plain
  * open("/etc/passwd") would therefore succeed and return the wrong file --
  * silent wrongness, the worst available failure mode. Every such call is

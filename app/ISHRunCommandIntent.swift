@@ -14,7 +14,7 @@ import AppIntents
 struct ISHRunCommandIntent: AppIntent {
     static var title: LocalizedStringResource = "Run Command"
     static var description = IntentDescription(
-        "Runs a shell command in the AOK-iSH guest system and returns its output (stdout and stderr merged). The command runs headlessly; the app does not need to be open. It runs as root, or as the default user account when \"Open Everything as Default User\" is enabled in Settings.")
+        "Runs a shell command in the AOK-Workstation guest system and returns its output (stdout and stderr merged). The command runs headlessly; the app does not need to be open. It runs as root, or as the default user account when \"Open Everything as Default User\" is enabled in Settings.")
     static var openAppWhenRun: Bool = false
 
     @Parameter(title: "Command")
@@ -30,7 +30,7 @@ struct ISHRunCommandIntent: AppIntent {
     var failOnNonzeroExit: Bool
 
     static var parameterSummary: some ParameterSummary {
-        Summary("Run \(\.$command) in AOK-iSH") {
+        Summary("Run \(\.$command) in AOK-Workstation") {
             \.$timeout
             \.$failOnNonzeroExit
         }
@@ -67,7 +67,7 @@ struct ISHRunCommandIntent: AppIntent {
         // Past the cap the command still ran to its end; what it printed after
         // was dropped, and the result says so on a line of its own.
         if outcome.truncated {
-            return .result(value: outcome.output + "\n[AOK-iSH: output truncated at \(Self.outputLimitKB) KB]")
+            return .result(value: outcome.output + "\n[AOK-Workstation: output truncated at \(Self.outputLimitKB) KB]")
         }
         return .result(value: outcome.output)
     }
@@ -120,7 +120,7 @@ enum ISHRunCommandError: Error, CustomLocalizedStringResourceConvertible {
     private var message: String {
         switch self {
         case .disabled:
-            return String(localized: "Running commands from Shortcuts is turned off. Enable “Allow Shortcuts to Run Commands” in AOK-iSH’s settings.")
+            return String(localized: "Running commands from Shortcuts is turned off. Enable “Allow Shortcuts to Run Commands” in AOK-Workstation’s settings.")
         case .emptyCommand:
             return String(localized: "The command is empty.")
         case .failed(let reason):

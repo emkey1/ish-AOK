@@ -87,7 +87,7 @@ static int futex_word;
 // lands in sec while the HIGH half lands in nsec -- so a 500ms timeout arrives
 // as {0,0} and returns at once, while a whole-second one survives intact and
 // looks fine. That is a property of the CALLER, not of the kernel: real Linux
-// truncates the identical call the identical way, and AOK-iSH's timespec_ is
+// truncates the identical call the identical way, and AOK-Workstation's timespec_ is
 // the same eight bytes Linux uses. The libc wrappers below never showed it
 // because they already pick the right call.
 //

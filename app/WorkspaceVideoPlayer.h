@@ -1,6 +1,6 @@
 //
 //  WorkspaceVideoPlayer.h
-//  AOK-iSH
+//  AOK-Workstation
 //
 //  A video player applet for Workspace mode, wrapping AVPlayerViewController
 //  (scrubber/rate/AirPlay/fullscreen come for free). Realfs-backed files play

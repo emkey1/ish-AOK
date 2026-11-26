@@ -1,6 +1,6 @@
 //
 //  WorkspaceTranscoder.h
-//  AOK-iSH
+//  AOK-Workstation
 //
 //  The Media Converter applet: the Workspace front end of
 //  /AOK/native/transcode. It converts a video from Photos, from the Files app

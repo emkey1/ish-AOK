@@ -1,6 +1,6 @@
 //
 //  AudioPlayerEngine.m
-//  AOK-iSH
+//  AOK-Workstation
 //
 
 #import "AudioPlayerEngine.h"

@@ -4,7 +4,7 @@ be live at once.
 
 WHY THIS EXISTS
 ---------------
-A native program in AOK-iSH is a C function on a guest task's thread, inside the
+A native program in AOK-Workstation is a C function on a guest task's thread, inside the
 app's one address space (docs/bash_native_plan.md). Two live native bash
 instances therefore share bash's globals, which is the same wall fork hits --
 so kernel/bash_glue.c used to allow only one, and every other shell in the app

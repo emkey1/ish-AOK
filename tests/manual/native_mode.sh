@@ -222,7 +222,7 @@ check last_empty_file "null begins|0" "$(printf '%s' "$got" | grep -o 'null begi
 # "(no distribution)"; "unknown" means the build could not ask git.
 got=$(. /etc/os-release; echo "$PRETTY_NAME|$VERSION")
 case "$got" in
-    "AOK-iSH Native (SmallCLUE "[0-9a-f]*" "[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]")|SmallCLUE "*)
+    "AOK-Workstation Native (SmallCLUE "[0-9a-f]*" "[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]")|SmallCLUE "*)
         pass os_release_smallclue ;;
     *) fail os_release_smallclue "got [$got]" ;;
 esac

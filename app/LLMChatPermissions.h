@@ -1,6 +1,6 @@
 //
 //  LLMChatPermissions.h
-//  AOK-iSH
+//  AOK-Workstation
 //
 //  Which of the LLM Chat's tool calls run on their own, which ask first, and
 //  which are refused. Modelled on OpenCode's allow/ask/deny rules: every tool

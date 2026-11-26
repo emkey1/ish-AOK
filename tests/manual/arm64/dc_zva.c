@@ -1,7 +1,7 @@
 // dc_zva.c — DC ZVA (data cache zero by VA) on an arm64 guest.
 //
 // Regression test for issue #542: the JVM would not start on an aarch64
-// guest. AOK-iSH used to report DCZID_EL0 with DZP=1 ("DC ZVA prohibited")
+// guest. AOK-Workstation used to report DCZID_EL0 with DZP=1 ("DC ZVA prohibited")
 // so it would not have to emulate the instruction, and made DC ZVA itself
 // raise SIGILL. No Linux kernel sets DZP for EL0, so that was a value real
 // hardware never produces, and software is entitled to assume it never

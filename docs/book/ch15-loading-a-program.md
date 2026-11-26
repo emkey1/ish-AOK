@@ -90,7 +90,7 @@ And not only the permission model. *Every* question `execve` asks about a file
 is a question about a chosen program. Two of them were being asked only about
 the file the caller typed.
 
-Section 15.5's — is this a program compiled into AOK-iSH? — went unasked here
+Section 15.5's — is this a program compiled into AOK-Workstation? — went unasked here
 for exactly as long as it took somebody to write `#!/AOK/native/bash` at the top
 of a script. See there for what that silence looked like.
 
@@ -357,7 +357,7 @@ a natively-implemented program:
 If it is, `native_dispatch_exec` records the program on the task and returns
 before reaching any of the ELF machinery. No segments are mapped, no interpreter
 is loaded, no entry point is set. When the task would otherwise begin executing
-the loaded image, it calls a C function inside AOK-iSH instead. Part V is about
+the loaded image, it calls a C function inside AOK-Workstation instead. Part V is about
 what that means; here it is enough to note where the branch is, and that it is a
 branch in `execve` rather than a special case bolted on elsewhere — which is
 exactly why the caller cannot tell.

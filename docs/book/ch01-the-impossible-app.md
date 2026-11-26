@@ -7,7 +7,7 @@ Here is an ordinary thing happening in an unusual place:
 ```
 $ ./build/ish -f build/alpine-arm64-test /bin/sh
 / # uname -a
-Linux Mac.lan 5.10.0-ish_aok AOK-iSH built 2026-08-31 10:24Z unoptimized aarch64 Linux
+Linux Mac.lan 5.10.0-ish_aok AOK-Workstation built 2026-08-31 10:24Z unoptimized aarch64 Linux
 / # head -4 /proc/cpuinfo
 processor       : 0
 model name      : iSH Virtual aarch64-compatible CPU @ 1.066GHz
@@ -50,7 +50,7 @@ detailed. That last case is the interesting one, and it is most of the work.
 
 ## 1.1 Five things an iOS application cannot do
 
-Start with the constraints, because every major design decision in AOK-iSH is
+Start with the constraints, because every major design decision in AOK-Workstation is
 downstream of one of them. None of these are bugs in iOS. They are the platform
 working as intended, and they happen to forbid, one at a time, almost every
 mechanism a Unix system is built out of.
@@ -79,7 +79,7 @@ permits mapping a page both writable and executable is not available to ordinary
 App Store applications. This normally ends the conversation about JIT
 compilation, and with it any hope of running an emulator at a tolerable speed.
 
-AOK-iSH has a JIT anyway, because its JIT never writes an instruction. Compiling
+AOK-Workstation has a JIT anyway, because its JIT never writes an instruction. Compiling
 a block of guest code means appending `unsigned long` values to an array —
 `gen()` at [jit/gen.c:311](../../jit/gen.c#L311) is eighteen lines long —
 thirteen of them as written in 2018, plus a later out-of-memory recovery
@@ -213,7 +213,7 @@ applications. Emulation is not a choice made for ambition's sake; it is the only
 mechanism the platform leaves standing.
 
 Upstream iSH took the third road in May 2017, and spent six years on the tail.
-AOK-iSH's whole 2026 can be read as a campaign against the price: the gadget
+AOK-Workstation's whole 2026 can be read as a campaign against the price: the gadget
 JIT and its five guest translators (Chapters 6 and 7), high-level emulation that
 skips the interpreter entirely for functions it recognizes (Chapter 8), and — in
 the most interesting reversal in the project — native programs, which
@@ -291,7 +291,7 @@ believes and what is actually true. Here is the smallest complete example.
 > exactly that: total user, system, idle and nice ticks for the whole device.
 > It is also wrong, and wrong in a way that looks right in testing. On a phone
 > that is running other applications, the device is mostly idle even while
-> AOK-iSH is pinning a core, so the guest's `top` reported an idle system while
+> AOK-Workstation is pinning a core, so the guest's `top` reported an idle system while
 > the guest was flat out — and every load-sensitive script in the guest drew the
 > wrong conclusion.
 >

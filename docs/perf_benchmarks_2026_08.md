@@ -1,4 +1,4 @@
-# AOK-iSH performance measurements, August 2026
+# AOK-Workstation performance measurements, August 2026
 
 All device numbers are the **A9 iPad** (iPad6,12, ARMv8.0, two homogeneous cores, iOS 16.7)
 unless stated. That device is the reference rig because its two identical cores give ±0.5%

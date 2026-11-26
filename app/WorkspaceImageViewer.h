@@ -1,6 +1,6 @@
 //
 //  WorkspaceImageViewer.h
-//  AOK-iSH
+//  AOK-Workstation
 //
 //  An image viewer applet for Workspace mode: pinch/double-tap zoom over a
 //  jetsam-safe ImageIO downsampled decode, fit/actual-size toggle, and

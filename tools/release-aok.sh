@@ -77,7 +77,7 @@ preflight() {
     require_cmd git
     require_cmd xcodebuild
 
-    note "== AOK-iSH Release Preflight =="
+    note "== AOK-Workstation Release Preflight =="
     note "repo: $repo_root"
     note "project: $project"
     note "scheme: $scheme"

@@ -1,6 +1,6 @@
 //
 //  GuestCommandRunner.h
-//  AOK-iSH
+//  AOK-Workstation
 //
 //  Headless one-shot guest command execution for App Intents (Shortcuts).
 //

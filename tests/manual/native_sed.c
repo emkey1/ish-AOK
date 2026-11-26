@@ -1,6 +1,6 @@
 // native_sed.c -- SmallCLUE's sed against GNU sed 4.9's answers.
 //
-// AOK-iSH's native-links.sh puts SmallCLUE's applets ahead of the distro's on
+// AOK-Workstation's native-links.sh puts SmallCLUE's applets ahead of the distro's on
 // PATH, so its sed runs every script that says `sed`, dpkg maintainer scripts
 // included. The substitution-only sed it replaced rejected `s///p` outright:
 // setup-gpu.sh reported "vulkaninfo lists no Venus device" and "zink gave no

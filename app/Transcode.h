@@ -1,6 +1,6 @@
 //
 //  Transcode.h
-//  AOK-iSH
+//  AOK-Workstation
 //
 //  The hardware video encoder behind /AOK/native/transcode and the Workspace
 //  Media Converter applet. See kernel/native_transcode.h for the job.

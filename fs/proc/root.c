@@ -171,7 +171,7 @@ static int proc_show_cpuinfo(struct proc_entry *UNUSED(entry), struct proc_data 
     // Features), not the x86 one — tools parse "Features" for the same
     // capabilities the emulated ID registers advertise (gen.c's
     // ID_AA64ISAR0 value: aes pmull sha1 sha2 crc32) and "vendor_id :
-    // GenuineIntel" on an aarch64 root is nonsense. The AOK-iSH "host
+    // GenuineIntel" on an aarch64 root is nonsense. The AOK-Workstation "host
     // ..." extension lines are kept, matching the x86 format below.
     if (abi == GUEST_ABI_ARM64) {
         char *arm_host_architecture = copyHostArchitecture();
@@ -265,9 +265,9 @@ static int proc_show_cpuinfo(struct proc_entry *UNUSED(entry), struct proc_data 
             proc_printf(buf, "\n");
         }
         proc_printf(buf, "timebase\t: %llu\n", (unsigned long long) timebase);
-        proc_printf(buf, "platform\t: AOK-iSH\n");
-        proc_printf(buf, "model\t\t: AOK-iSH ppc64le guest\n");
-        proc_printf(buf, "machine\t\t: AOK-iSH\n");
+        proc_printf(buf, "platform\t: AOK-Workstation\n");
+        proc_printf(buf, "model\t\t: AOK-Workstation ppc64le guest\n");
+        proc_printf(buf, "machine\t\t: AOK-Workstation\n");
         proc_printf(buf, "MMU\t\t: Hash\n");
         free(ppc_host_architecture);
         free(ppc_host_machine_identifier);

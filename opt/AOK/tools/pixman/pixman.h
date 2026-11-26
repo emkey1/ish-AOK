@@ -69,7 +69,7 @@ SOFTWARE.
 #ifndef PIXMAN_H__
 #define PIXMAN_H__
 
-/* AOK-iSH: vendored from pixman 0.44.0 (Debian libpixman-1-dev) so the
+/* AOK-Workstation: vendored from pixman 0.44.0 (Debian libpixman-1-dev) so the
  * accelerator shim builds on a guest without the -dev package, and so the
  * guest test suite can build it at all. The one change is this include,
  * quoted so pixman-version.h is found beside this file. */

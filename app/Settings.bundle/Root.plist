@@ -56,11 +56,11 @@
 		</dict>
 		<dict>
 			<key>FooterText</key>
-			<string>Lets AOK-iSH move cold guest memory out to storage, so a large mostly-idle heap or a background process tree stops counting against the memory iOS allows the app. It will not make a working set that is genuinely too big run well.
+			<string>Lets AOK-Workstation move cold guest memory out to storage, so a large mostly-idle heap or a background process tree stops counting against the memory iOS allows the app. It will not make a working set that is genuinely too big run well.
 
-Off unless you turn it on: swapping writes to the device's flash, and the swap area takes up that much space in the app's container while it exists. Both settings take effect the next time AOK-iSH starts, and swap stays off until you have chosen a size as well as switched it on.
+Off unless you turn it on: swapping writes to the device's flash, and the swap area takes up that much space in the app's container while it exists. Both settings take effect the next time AOK-Workstation starts, and swap stays off until you have chosen a size as well as switched it on.
 
-The sizes offered here do not know how much room this device actually has. If there is not enough free space for the size you pick, AOK-iSH leaves swap off rather than quietly making a smaller area than you asked for; "cat /proc/ish/swap" in the guest says which of those happened.</string>
+The sizes offered here do not know how much room this device actually has. If there is not enough free space for the size you pick, AOK-Workstation leaves swap off rather than quietly making a smaller area than you asked for; "cat /proc/ish/swap" in the guest says which of those happened.</string>
 			<key>Title</key>
 			<string>Simulated Swap</string>
 			<key>Type</key>
@@ -110,9 +110,9 @@ The sizes offered here do not know how much room this device actually has. If th
 		</dict>
 		<dict>
 			<key>FooterText</key>
-			<string>Save the whole session when AOK-iSH goes to the background, and bring it back on the next launch. iOS ends this app routinely -- memory pressure, or a swipe away -- and without this that always loses the session.
+			<string>Save the whole session when AOK-Workstation goes to the background, and bring it back on the next launch. iOS ends this app routinely -- memory pressure, or a swipe away -- and without this that always loses the session.
 
-Off by default, because it spends storage and is not free of limits. A session running something AOK-iSH cannot describe is not saved: it says so, and the next launch starts normally. "cat /proc/ish/checkpoint" in the guest reports what the last attempt did and, if it refused, why.</string>
+Off by default, because it spends storage and is not free of limits. A session running something AOK-Workstation cannot describe is not saved: it says so, and the next launch starts normally. "cat /proc/ish/checkpoint" in the guest reports what the last attempt did and, if it refused, why.</string>
 			<key>Title</key>
 			<string>Suspend to Disk</string>
 			<key>Type</key>
@@ -130,13 +130,13 @@ Off by default, because it spends storage and is not free of limits. A session r
 		</dict>
 		<dict>
 			<key>FooterText</key>
-			<string>Swap to a USB drive instead of the app's container. Writes go to a .aok-swap file on the drive, keeping internal flash wear-free. Turn this on, return to AOK-iSH and pick a folder on the drive; it is used from the next launch. If the drive is not attached at launch, swap stays off. To use a different folder, switch this off, return to AOK-iSH, then switch it on again.
+			<string>Swap to a USB drive instead of the app's container. Writes go to a .aok-swap file on the drive, keeping internal flash wear-free. Turn this on, return to AOK-Workstation and pick a folder on the drive; it is used from the next launch. If the drive is not attached at launch, swap stays off. To use a different folder, switch this off, return to AOK-Workstation, then switch it on again.
 
-The file holds guest memory unencrypted, passwords and keys included. It is emptied when swap stops, but if AOK-iSH is killed it keeps its contents until the next launch empties it.
+The file holds guest memory unencrypted, passwords and keys included. It is emptied when swap stops, but if AOK-Workstation is killed it keeps its contents until the next launch empties it.
 
 exFAT drives (most USB sticks) cannot guarantee preallocated space. If the drive fills up while swap is active, affected guest processes will crash. Use a drive with plenty of free space.
 
-Pulling the drive while swap is active crashes any process whose memory was on it. Quit AOK-iSH before removing the drive.</string>
+Pulling the drive while swap is active crashes any process whose memory was on it. Quit AOK-Workstation before removing the drive.</string>
 			<key>Title</key>
 			<string>External USB Swap</string>
 			<key>Type</key>

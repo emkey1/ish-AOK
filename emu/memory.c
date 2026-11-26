@@ -616,7 +616,7 @@ static page_t mem_next_unmapped_page(struct mem *mem, page_t page) {
 // had been overwritten by the recursion. Measured: %gs:0 read 0xf7ffcc64
 // before the fault and 0x00400080 inside the handler.
 //
-// That is what took AOK-iSH down during a Buildroot build (issue #521): the
+// That is what took AOK-Workstation down during a Buildroot build (issue #521): the
 // probe is the first thing in a gnulib configure that overflows a stack on
 // purpose, and every package configured after it inherited the crash.
 #define MEM_STACK_GUARD_GAP_PAGES ((page_t) ((1024 * 1024) >> PAGE_BITS))

@@ -354,7 +354,7 @@ int guest_sshd_set_enabled(bool enabled, unsigned port) {
 
     char conf[128];
     int len = snprintf(conf, sizeof(conf),
-                       "# Written by AOK-iSH's Settings. Included before the rest of\n"
+                       "# Written by AOK-Workstation's Settings. Included before the rest of\n"
                        "# sshd_config, so this wins.\n"
                        "Port %u\n", port);
     int err = write_guest_file("/etc/ssh/sshd_config.d/10-aok-port.conf", conf,
@@ -363,7 +363,7 @@ int guest_sshd_set_enabled(bool enabled, unsigned port) {
         return err;
 
     static const char flag[] =
-        "# AOK-iSH starts sshd in this root while this file exists; see\n"
+        "# AOK-Workstation starts sshd in this root while this file exists; see\n"
         "# /etc/rc.d/S50sshd and /AOK/docs/native-mode.md. Settings writes and\n"
         "# removes it, and so can you.\n";
     return write_guest_file(GUEST_SSHD_ENABLED, flag, sizeof(flag) - 1, 0644);
@@ -405,7 +405,7 @@ int guest_sshd_set_password_login(bool enabled) {
     // switch's answer, and it outranks a "yes" someone put lower down.
     char conf[192];
     int len = snprintf(conf, sizeof(conf),
-                       "# Written by AOK-iSH's Settings (sshd -> Password Login). Included\n"
+                       "# Written by AOK-Workstation's Settings (sshd -> Password Login). Included\n"
                        "# before the rest of sshd_config, so this wins.\n"
                        "PasswordAuthentication %s\n", enabled ? "yes" : "no");
     return write_guest_file(GUEST_SSHD_PASSWORD_CONF, conf, (size_t) len, 0644);

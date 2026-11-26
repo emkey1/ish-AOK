@@ -1,4 +1,4 @@
-# lldb settings for debugging AOK-iSH, the counterpart of ish-gdb.gdb.
+# lldb settings for debugging AOK-Workstation, the counterpart of ish-gdb.gdb.
 #
 # Use it with:   command source /path/to/ish-lldb.lldbinit
 # or in Xcode:   Scheme > Run > Options > "LLDB Init File"

@@ -85,7 +85,7 @@ what happens when nobody notices something has stopped running.
 
 ## 35.4 Linux CI is a second compiler
 
-The Linux build does not ship. Nobody runs AOK-iSH on Linux, `build-mac` and the
+The Linux build does not ship. Nobody runs AOK-Workstation on Linux, `build-mac` and the
 dev IPA are what users get, and the Linux job could be deleted tomorrow without
 affecting a single user.
 

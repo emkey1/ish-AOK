@@ -1,5 +1,5 @@
 // ptrace_regset (riscv64-only): PTRACE_GETREGSET/SETREGSET(NT_PRSTATUS) must
-// report and accept the real riscv64 register file. AOK-iSH's riscv64 port
+// report and accept the real riscv64 register file. AOK-Workstation's riscv64 port
 // (merged for 538) never wired ptrace's regset marshalling for
 // GUEST_ABI_RISCV64 -- every request fell through to the i386 legacy layout,
 // so a real `strace -f` on a riscv64 guest decoded every syscall as syscall 0

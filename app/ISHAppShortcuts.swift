@@ -46,7 +46,7 @@ enum ISHShortcutDestination: String, AppEnum {
 
 @available(iOS 16.0, *)
 struct ISHOpenShortcutIntent: AppIntent {
-    static var title: LocalizedStringResource = "Open AOK-iSH"
+    static var title: LocalizedStringResource = "Open AOK-Workstation"
     static var openAppWhenRun: Bool = true
 
     // The default lives on the @Parameter, not in an init() assignment --
@@ -98,7 +98,7 @@ struct ISHOpenShortcutIntent: AppIntent {
             UIApplication.shared.requestSceneSessionActivation(nil,
                                                                userActivity: activity,
                                                                options: nil) { error in
-                NSLog("AOK-iSH shortcut activation failed: %@", error.localizedDescription)
+                NSLog("AOK-Workstation shortcut activation failed: %@", error.localizedDescription)
             }
         }
         return .result()

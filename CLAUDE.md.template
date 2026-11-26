@@ -21,7 +21,7 @@ push, and is yours to edit freely per checkout.
 
 ---
 
-AOK-iSH is a heavily-diverged fork of
+AOK-Workstation is a heavily-diverged fork of
 [ish-app/ish](https://github.com/ish-app/ish) — a Linux syscall emulator that
 runs as an iOS app, JIT-translating i386/amd64/arm64/riscv64 guest code. See
 [README.md](README.md) for what this fork adds on top of upstream.

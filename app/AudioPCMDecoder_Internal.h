@@ -1,6 +1,6 @@
 //
 //  AudioPCMDecoder_Internal.h
-//  AOK-iSH
+//  AOK-Workstation
 //
 //  Backend constructors used by the factory in AudioPCMDecoder.m. Each backend
 //  always exports its constructor symbol so the app links cleanly; the Ogg/Opus

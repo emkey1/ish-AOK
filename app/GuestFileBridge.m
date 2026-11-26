@@ -1,6 +1,6 @@
 //
 //  GuestFileBridge.m
-//  AOK-iSH
+//  AOK-Workstation
 //
 
 #import "GuestFileBridge.h"

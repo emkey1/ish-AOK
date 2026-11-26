@@ -2,7 +2,7 @@
 
 iOS gives an app a memory ceiling and kills it without warning when it is
 crossed. A guest that allocates too much therefore does not get an `ENOMEM` —
-the whole of AOK-iSH disappears, terminals and all. Swap gives the emulator
+the whole of AOK-Workstation disappears, terminals and all. Swap gives the emulator
 somewhere to put pages the guest is not using, so that a large, mostly idle
 working set can exist without spending real memory on it.
 
@@ -17,23 +17,23 @@ page, read [Compressed memory](#compressed-memory).
 
 ## Turning it on
 
-In the **iOS Settings app** — not the settings inside AOK-iSH — open
-**Settings → AOK-iSH → Simulated Swap**. There are two controls:
+In the **iOS Settings app** — not the settings inside AOK-Workstation — open
+**Settings → Workstation → Simulated Swap**. There are two controls:
 
 - **Enable Swap**, off by default.
 - **Swap Size**, which starts at *Not chosen (swap stays off)* and offers
   256 MB, 512 MB, 1 GB, 2 GB, 4 GB, 8 GB and 16 GB.
 
 **Both are needed.** Turning the switch on without choosing a size leaves swap
-off, deliberately: picking a size for you would be AOK-iSH deciding how much of
+off, deliberately: picking a size for you would be AOK-Workstation deciding how much of
 your flash to write to. If that is the state you are in, the guest says so —
 `cat /proc/ish/swap` reports it rather than just `off`.
 
-**Both take effect the next time AOK-iSH starts**, not when you flip the switch.
+**Both take effect the next time AOK-Workstation starts**, not when you flip the switch.
 The area is created when the guest boots, at its full size, and does not grow.
 
 The sizes offered do not know how much room your device actually has. If there
-is not enough free space for the size you picked, AOK-iSH leaves swap off rather
+is not enough free space for the size you picked, AOK-Workstation leaves swap off rather
 than quietly making a smaller area than you asked for — and again,
 `/proc/ish/swap` says which of the two happened.
 
@@ -52,8 +52,8 @@ area living in the app's own container, it can live in a `.aok-swap` file on
 an attached USB drive, so paging never wears the device's own flash and the
 area can be far bigger than internal storage would allow.
 
-Turn it on in **Settings → AOK-iSH → External USB Swap → Swap to External
-Drive**, then return to AOK-iSH: it asks you to pick a folder on the drive,
+Turn it on in **Settings → Workstation → External USB Swap → Swap to External
+Drive**, then return to AOK-Workstation: it asks you to pick a folder on the drive,
 and the area is used there from the next launch. If the drive is not
 attached at launch, **swap stays off for that launch** rather than silently
 falling back to the container. To use a different folder, switch it off,
@@ -84,7 +84,7 @@ container temp file.
 Compression is the other half of this, and it is worth turning on *before* swap
 is: it buys much the same headroom without spending any flash at all.
 
-In the **iOS Settings app**, under **Settings → AOK-iSH → Compressed Memory**:
+In the **iOS Settings app**, under **Settings → Workstation → Compressed Memory**:
 
 - **Enable Compressed Memory**, off by default.
 - **Compressed Memory Size**, the pool's ceiling. It is clamped to a quarter of
@@ -102,7 +102,7 @@ two shapes — the combination decides:
 
 **Why it helps is not the obvious reason.** iOS already compresses idle memory
 for you, for free — but doing so does not move `phys_footprint`, which is the
-ledger iOS kills the app on. Only compression AOK-iSH does itself, into its own
+ledger iOS kills the app on. Only compression AOK-Workstation does itself, into its own
 buffer with the original released, moves that number. So this is not
 duplicating what the system already does.
 

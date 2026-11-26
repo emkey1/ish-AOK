@@ -183,7 +183,7 @@ esac
 # .expect()s that variable, which is NOT set for an app the simulator
 # launches. app/AccessibilityFixes.m asks `if (@available(iOS 15.7, *))` from
 # a __attribute__((constructor)), so the panic landed inside a dyld static
-# initializer and AOK-iSH took SIGABRT before main() on every launch. The
+# initializer and AOK-Workstation took SIGABRT before main() on every launch. The
 # build being fixed is what made this reachable at all.
 #
 # Renamed rather than deleted: objcopy rewrites the definition AND the crate's

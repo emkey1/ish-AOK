@@ -54,7 +54,7 @@ none exist in this document, and none should be added to it.
 
 ## What this project is
 
-AOK-iSH runs Linux binaries on iOS by JIT-translating guest machine code
+AOK-Workstation runs Linux binaries on iOS by JIT-translating guest machine code
 (i386, amd64, arm64, riscv64 — all four via the same gadget-threaded-code JIT,
 none natively) and reimplementing the Linux kernel surface it needs
 (syscalls, VFS, signals, sockets, ptrace, procfs...) in `kernel/`, `fs/`, and
@@ -102,7 +102,7 @@ it invalidates any measurement taken on it (`uname -v` will say
 `" unoptimized"` on such a build).
 
 The iOS app itself builds from `iSH-AOK.xcodeproj` in Xcode (scheme
-`AOK-iSH`, configuration `Debug-ApplePleaseFixFB19282108`). Full details,
+`iSH-AOK`, configuration `Debug-ApplePleaseFixFB19282108`). Full details,
 including the command-line `xcodebuild` invocation and submodule/clone
 requirements: [../README.md](../README.md).
 
@@ -335,7 +335,7 @@ useful ones while working in this tree:
 ## Security posture
 
 Quoting [../SECURITY.md](../SECURITY.md) directly, because the bar here is
-genuinely different from most projects: **AOK-iSH is not a security
+genuinely different from most projects: **AOK-Workstation is not a security
 boundary.** It assumes it's running inside another sandbox (iOS's own) for a
 single user. Weak permission checks, memory corruption in edge cases, and
 thread-safety issues are treated as **ordinary correctness bugs** — file

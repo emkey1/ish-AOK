@@ -1,6 +1,6 @@
 //
 //  LLMKeychain.m
-//  AOK-iSH
+//  AOK-Workstation
 //
 //  See LLMKeychain.h.
 //

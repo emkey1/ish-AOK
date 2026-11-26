@@ -7,12 +7,14 @@ for us, not for Apple.
 
 Rewritten 2026-11-24 to fit the limit (3,174 characters): plain text; the app
 described as implementing a subset of the Linux interface, not running Linux;
-and the reviewer told what a fresh install does: from 567 it boots AOK-iSH
+and the reviewer told what a fresh install does: from 567 it boots AOK-Workstation
 Native at once, with no picker (it was a picker before).
 
-The name section is gone: on 2026-11-20 the maintainer decided to submit as
-"AOK-iSH" without asking the ish-app maintainers first, so there is no
-permission to cite. See the assessment's "Name and branding".
+There is no name section. On 2026-11-20 the maintainer decided to submit as
+"AOK-iSH" without asking the ish-app maintainers first, and on 2026-11-26 the
+app was renamed AOK-Workstation, whose name borrows no one else's. See the
+assessment's "Name and branding". App Store Connect holds the 2026-11-24 copy,
+which says AOK-iSH, until this one is sent.
 
 The claims about code generation in section 2 were re-checked on 2026-11-14:
 no `MAP_JIT`, no `com.apple.security.cs.allow-jit` or `dynamic-codesigning`
@@ -32,13 +34,13 @@ appears nowhere in it. The claim holds for the whole tree, not just `emu/` and
 
 ## For App Review
 
-Thank you for reviewing AOK-iSH.
+Thank you for reviewing AOK-Workstation.
 
 1. WHAT THIS APP IS
 
-AOK-iSH is a Unix-style command-line environment for iPhone and iPad. It implements a useful subset of the Linux system interface (processes, files, pipes, signals, terminals) inside the app. It does not run a Linux kernel or a virtual machine. Its default filesystem, AOK-iSH Native, is about 140 commands compiled into the app's signed binary. Optional filesystem images run x86, ARM, RISC-V or PowerPC programs through an emulator. It is the same category of app as iSH Shell (id1436902243) and UTM SE.
+AOK-Workstation is a Unix-style command-line environment for iPhone and iPad. It implements a useful subset of the Linux system interface (processes, files, pipes, signals, terminals) inside the app. It does not run a Linux kernel or a virtual machine. Its default filesystem, AOK-Workstation Native, is about 140 commands compiled into the app's signed binary. Optional filesystem images run x86, ARM, RISC-V or PowerPC programs through an emulator. It is the same category of app as iSH Shell (id1436902243) and UTM SE.
 
-No account or demo login is needed. On first launch the app sets up AOK-iSH Native (nothing is downloaded) and asks for an everyday account name, which can be skipped; a shell prompt is already there behind it.
+No account or demo login is needed. On first launch the app sets up AOK-Workstation Native (nothing is downloaded) and asks for an everyday account name, which can be skipped; a shell prompt is already there behind it.
 
 2. NO DOWNLOADED CODE RUNS AS APP CODE (2.5.2)
 
@@ -79,7 +81,7 @@ already seen.
 
 | Action | Expected |
 |---|---|
-| Launch (fresh install) | AOK-iSH Native boots at once, no picker; the account question can be skipped; a root prompt behind it |
+| Launch (fresh install) | AOK-Workstation Native boots at once, no picker; the account question can be skipped; a root prompt behind it |
 | `uname -a` | Linux, with the guest architecture |
 | `cat /dev/location` | iOS location prompt, then coordinates |
 | Workspace -> Music | A player; audio continues in the background |
@@ -87,4 +89,4 @@ already seen.
 | Settings -> Filesystems | The catalogue of Linux images |
 | `apk add` / `apt install` | Reaches the distribution's mirror |
 | LLM Chat with no key | Works on Apple Foundation Models; any other destination asks first |
-| Files app | AOK-iSH appears as a location |
+| Files app | AOK-Workstation appears as a location |

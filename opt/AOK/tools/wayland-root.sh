@@ -11,7 +11,7 @@
 # The companion shares this root's /home and /tmp, so the session inside sees
 # your files, and the app sees the session's /tmp/ish-display.ready.
 #
-# Builtins only until the hand-off: this is read by AOK-iSH's native dash and
+# Builtins only until the hand-off: this is read by AOK-Workstation's native dash and
 # by a distribution's sh alike.
 
 . /AOK/tools/companion-root.sh

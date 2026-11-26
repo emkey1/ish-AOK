@@ -1,5 +1,5 @@
 /*
- * sig_common.h — shared harness for AOK-iSH signal/syscall CONFORMANCE tests.
+ * sig_common.h — shared harness for AOK-Workstation signal/syscall CONFORMANCE tests.
  *
  * Unlike the CPU-instruction corpus (corpus/diff_common.h), the right oracle
  * for signal/syscall *semantics* is a REAL LINUX KERNEL, not Rosetta (which

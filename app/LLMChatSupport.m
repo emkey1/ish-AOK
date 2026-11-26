@@ -1,6 +1,6 @@
 //
 //  LLMChatSupport.m
-//  AOK-iSH
+//  AOK-Workstation
 //
 //  The Workspace LLM Chat's non-UI plumbing: saved destinations and chats,
 //  provider endpoints, and the HTTP/SSE transports.

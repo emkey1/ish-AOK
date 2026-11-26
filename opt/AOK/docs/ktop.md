@@ -5,9 +5,9 @@ written from scratch in plain C99 against `/proc` — no ncurses, no procps.
 Source: `/AOK/tools/ktop/ktop.c` (also `Makefile`, `build.sh`,
 `README.md`).
 
-## Why AOK-iSH needs its own
+## Why AOK-Workstation needs its own
 
-AOK-iSH can run i386, amd64, arm64, riscv64 and ppc64le binaries side by side in
+AOK-Workstation can run i386, amd64, arm64, riscv64 and ppc64le binaries side by side in
 one booted session — most usefully by chrooting into another installed
 root with [`mount-root.sh`](roots.md). Stock `top`/`htop` have no way to
 show that architecture mix. `ktop`'s one real differentiator versus a
@@ -27,7 +27,7 @@ to show or signal. `/proc/ish/applets` lists them instead; see
 
 ## Run it without building it
 
-`ktop` is also compiled into AOK-iSH as a [native program](native-programs.md):
+`ktop` is also compiled into AOK-Workstation as a [native program](native-programs.md):
 
 ```sh
 /AOK/native/ktop
@@ -69,7 +69,7 @@ sh /AOK/tools/ktop/build.sh install      # also installs to /usr/local/bin/ktop
 ```
 
 Prebuilt aarch64 binaries (`ktop-aarch64-musl`, static, and `ktop-aarch64-glibc`,
-dynamic, for glibc roots like Devuan/Debian) live in the AOK-iSH source
+dynamic, for glibc roots like Devuan/Debian) live in the AOK-Workstation source
 repository under `opt/AOK/tools/ktop/prebuilt/`, and CI rebuilds them whenever
 `ktop.c` changes — but they are **not** embedded in the app, so there is no
 `/AOK/tools/ktop/prebuilt` on the device. Build from source here, on aarch64 too.
@@ -113,9 +113,9 @@ task's own record rather than from opening another process's `/proc/<pid>/exe`
 every root-owned process (`init`, `sshd`, `login`, ...). Falling back to an
 ELF-header read of `/proc/<pid>/exe` only happens for a pid the table does not
 have — a process that started after this refresh's table was read, or a real
-Linux host, or an AOK-iSH build old enough not to have the file.
+Linux host, or an AOK-Workstation build old enough not to have the file.
 
-AOK-iSH's native programs — `zsh`, and SmallCLUE's applets (among them
+AOK-Workstation's native programs — `zsh`, and SmallCLUE's applets (among them
 `ssh`, `scp`, `sftp`, `ssh-keygen` and `vi`), all dispatched through
 `/AOK/native` — are host code compiled into the app, not guest binaries, so
 they have no guest ELF image of their own. `/proc/ish/arch` lists these as the

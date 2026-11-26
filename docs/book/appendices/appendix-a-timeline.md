@@ -1,6 +1,6 @@
 # Appendix A. Timeline
 
-Upstream iSH and AOK-iSH on one axis. Dates are from the repository; the
+Upstream iSH and AOK-Workstation on one axis. Dates are from the repository; the
 commits named are the ones that mark a turn rather than the largest ones.
 
 ## 2017 — the first year
@@ -37,7 +37,7 @@ commits named are the ones that mark a turn rather than the largest ones.
 |---|---|
 | **Sept 2019** | Xiangyan Sun's **return cache**, aarch64 then x86-64 (Chapter 6) |
 | Jan 2019 | `fs/sockrestart.c` — surviving iOS taking listening sockets away (Chapter 19) |
-| **Dec 2020** | **First AOK-iSH commits** — `/proc` entry ownership |
+| **Dec 2020** | **First AOK-Workstation commits** — `/proc` entry ownership |
 | Jun 2020 – Oct 2021 | **The GPLv2 relicensing**: 25 contributors, individually |
 | **Dec 2021** | "Print the process name as well as the pid" — the fork's method, in one line (Chapter 3) |
 | 2022 | The fork's first substantial year: lock instrumentation, leak fixes, upstream merges, Jason Conway's reordering patch (Chapter 6) |

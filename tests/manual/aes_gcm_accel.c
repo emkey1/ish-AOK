@@ -1,4 +1,4 @@
-// AES-256-GCM through the AOK-iSH crypto accelerator syscall (ISH_SYS_AEAD,
+// AES-256-GCM through the AOK-Workstation crypto accelerator syscall (ISH_SYS_AEAD,
 // alg 2 -- kernel/ish_accel.c + kernel/ish_accel_aes.c).
 //
 // The accelerator previously offered only ChaCha20, which mattered because on

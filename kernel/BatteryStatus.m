@@ -1,6 +1,6 @@
 //
 //  BatteryStatus.m
-//  AOK-iSH
+//  AOK-Workstation
 //
 //  Created by Michael Miller on 9/10/23.
 //

@@ -8,7 +8,7 @@
 # The change: wf-panel 0.9 (and 0.10) throws away and rebuilds every button in
 # its application menu each time the menu opens (WayfireMenu::on_popover_shown
 # -> set_category("All") -> populate_menu_items). On a PC that is a blink; in
-# AOK-iSH, on an A10X iPad, it was ~3.5 s of CPU for ~100 applications, every
+# AOK-Workstation, on an A10X iPad, it was ~3.5 s of CPU for ~100 applications, every
 # single time (bip, 2026-10-03). Patched, the menu is rebuilt only when it is
 # showing something other than "All" -- a category picked last time -- and
 # otherwise just reopens. The list is still rebuilt when applications are
@@ -28,7 +28,7 @@
 #   sudo sh /AOK/tools/wayland/build-wf-panel.sh --out DIR  build only; leave wf-panel and
 #                                                           wf-panel.source in DIR
 #
-# AOK-iSH ships this build for Devuan 6 in /AOK/bundled, and setup-wayfire.sh
+# AOK-Workstation ships this build for Devuan 6 in /AOK/bundled, and setup-wayfire.sh
 # links to it, so this is the fallback: for a wf-shell the bundled one was not
 # built against. On an A10X iPad the compile ran out of memory; it needs a
 # newer device (tools/build-bundled.sh builds the bundled ones on a Mac).
@@ -123,7 +123,7 @@ patch -p1 --forward >/dev/null <<'PATCH' || die "the clock patch did not apply"
 +#include <cstring>
  #include "clock.hpp"
  
-+/* AOK-iSH: whether a GDateTime format shows seconds -- %S, %s, %T, %r, %c,
++/* AOK-Workstation: whether a GDateTime format shows seconds -- %S, %s, %T, %r, %c,
 + * %X or %f, after any of the flags g_date_time_format takes. */
 +static bool format_shows_seconds(const std::string& format)
 +{
@@ -178,7 +178,7 @@ patch -p1 --forward >/dev/null <<'PATCH' || die "the clock patch did not apply"
 +    });
  }
  
-+/* AOK-iSH: wake when the label can change, not every second. A clock without
++/* AOK-Workstation: wake when the label can change, not every second. A clock without
 + * seconds is woken at the start of the next minute; one with them, every
 + * second as before. Each wake schedules the next, so a wake that comes a
 + * little early only means another one shortly after. */
@@ -217,7 +217,7 @@ patch -p1 --forward >/dev/null <<'PATCH' || die "the clock patch did not apply"
      }
  
 -    label.set_text(text.substr(i));
-+    /* AOK-iSH: GtkLabel lays out and redraws on every set_text, even of the
++    /* AOK-Workstation: GtkLabel lays out and redraws on every set_text, even of the
 +     * same text, and every redraw is a frame the compositor has to put on
 +     * screen. */
 +    auto shown = text.substr(i);

@@ -2,7 +2,7 @@
  * random_seed.c — self-checking regression lock for the /dev/{u,}random
  * seeding ioctls and the /proc/sys/kernel/random pool files.
  *
- * AOK-iSH draws randomness from the host CSPRNG and keeps no real entropy
+ * AOK-Workstation draws randomness from the host CSPRNG and keeps no real entropy
  * pool, but /dev/random and /dev/urandom had no ioctl handler at all, so any
  * RND* ioctl fell through to the generic "no ioctl_size" path and returned
  * ENOTTY ("Not a tty").  At boot the OpenRC seedrng service does exactly:

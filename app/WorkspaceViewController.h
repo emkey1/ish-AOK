@@ -56,7 +56,7 @@ extern NSString *_Nullable ISHWorkspaceToolIdentifierForViewController(UIViewCon
 // A page of an applet whose window holds a navigation controller -- Settings,
 // Diagnostics, Filesystems -- and whose text follows that window's text size.
 //
-// Those pages are ordinary UIKit screens that AOK-iSH also shows outside the
+// Those pages are ordinary UIKit screens that AOK-Workstation also shows outside the
 // Workspace, so the scale cannot be theirs. The Workspace looks for
 // WorkspaceTextScalable on the window's content view controller, which for
 // these applets is the navigation controller, so that is what holds it. A page

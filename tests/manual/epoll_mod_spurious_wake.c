@@ -6,7 +6,7 @@
 // satisfied. Real Linux (ep_insert/ep_modify) only wakes waiters when the
 // file is already ready at ADD/MOD time.
 //
-// Symptom on-device (AOK-iSH 538): syslog-ng burned continuous, mostly-system
+// Symptom on-device (AOK-Workstation 538): syslog-ng burned continuous, mostly-system
 // CPU with near-zero log throughput. ivykis's cross-thread eventfd handling
 // re-arms via EPOLL_CTL_MOD frequently as steady-state bookkeeping, not only
 // when there's real data; each such MOD was forcing syslog-ng's blocked

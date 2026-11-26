@@ -1,6 +1,6 @@
 // PTRACE_POKEUSER, and the per-register rules SETREGS shares with it.
 //
-// AOK-iSH had no PTRACE_POKEUSER at all, on any ABI: the request fell through
+// AOK-Workstation had no PTRACE_POKEUSER at all, on any ABI: the request fell through
 // to the default and failed. gdb writes the debug registers through it (its
 // hardware watchpoints) and some tools poke single registers. SETREGS, for its
 // part, took any fs_base and gs_base and any eflags bit, and a bad selector was
@@ -22,7 +22,7 @@
 //  - u_debugreg: DR4 and DR5 are EIO, DR0-3 take an address, DR6 and DR7 a
 //    value, and each reads back what was written.
 //
-// One difference, on purpose: AOK-iSH has no hardware breakpoints, so a DR7
+// One difference, on purpose: AOK-Workstation has no hardware breakpoints, so a DR7
 // that would arm one is ENOSPC -- Linux's own answer when every debug register
 // is taken -- and gdb says "Couldn't write debug register" instead of placing a
 // watchpoint that would never fire. Every other assertion here holds on Linux
@@ -122,10 +122,10 @@ static void check_debugregs(void) {
     ck("  and reads them back", (long) peek(DR(7)), 0xd0000L);
     ck("DR7 takes 0", poke(DR(7), 0), 0);
     // L0, then G0: arm DR0 as a one-byte execute breakpoint.
-    ck(on_ish ? "DR7 arming a breakpoint (L0) is ENOSPC (none on AOK-iSH)"
+    ck(on_ish ? "DR7 arming a breakpoint (L0) is ENOSPC (none on AOK-Workstation)"
               : "DR7 arming a breakpoint (L0) is taken",
        poke(DR(7), 1), on_ish ? -ENOSPC : 0);
-    ck(on_ish ? "DR7 arming a breakpoint (G0) is ENOSPC (none on AOK-iSH)"
+    ck(on_ish ? "DR7 arming a breakpoint (G0) is ENOSPC (none on AOK-Workstation)"
               : "DR7 arming a breakpoint (G0) is taken",
        poke(DR(7), 2), on_ish ? -ENOSPC : 0);
     ck("DR7 back to 0 is taken", poke(DR(7), 0), 0);

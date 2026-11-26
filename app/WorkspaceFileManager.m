@@ -1,6 +1,6 @@
 //
 //  WorkspaceFileManager.m
-//  AOK-iSH
+//  AOK-Workstation
 //
 
 #import "WorkspaceFileManager.h"

@@ -82,7 +82,7 @@ while [ $# -gt 0 ]; do
         -I*) incs="$incs ${1#-I}" ;;
         -o)  shift; out=$1 ;;
         -E)  preprocess=1 ;;
-        --version) echo "fake-cc (AOK-iSH test shim) 1.0"; exit 0 ;;
+        --version) echo "fake-cc (AOK-Workstation test shim) 1.0"; exit 0 ;;
         *.c) srcs="$srcs $1" ;;
         *)   : ;;
     esac
@@ -287,7 +287,7 @@ fi
 echo "8. the header probe compiles the provider source itself"
 # The probe used to be a stand-in translation unit assembled here: the source's
 # #include lines grepped out with `>`, then one more line appended with `>>`.
-# An AOK-iSH bug left tmpfs ignoring O_APPEND, so on a guest whose /tmp is a
+# An AOK-Workstation bug left tmpfs ignoring O_APPEND, so on a guest whose /tmp is a
 # tmpfs that `>>` wrote at offset 0 and overwrote the first include. The
 # compiler then produced a page of errors about a file this script had mangled
 # itself and deleted on exit, and the script reported them as an OpenSSL header

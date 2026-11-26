@@ -16,7 +16,7 @@
 //
 // Register convention (adapted from OpenMinis/ish-arm64's
 // asbestos/guest-arm64/gadgets-aarch64/gadgets.h, GPLv3, see
-// /CREDITS-aarch64.md): _cpu=x1, _tlb=x2, _ip=x28 match AOK-iSH's own
+// /CREDITS-aarch64.md): _cpu=x1, _tlb=x2, _ip=x28 match AOK-Workstation's own
 // i386-guest convention exactly (same physical registers, verified above),
 // so entry.S's setup is correct unmodified. Guest GPR access is
 // memory-based (ldr/str against cpu_state per touch) rather than cached in
@@ -133,7 +133,7 @@ _fval2  .req x25
 //     it does NOT generalize -- Apple's cores retire ldar nearly free while
 //     the A9 evidently implements load-acquire far more conservatively.
 // So dmb is the DEFAULT: giving up ~6% on new hardware to gain ~73% on old
-// hardware is the trade this project wants, and AOK-iSH ships one binary for
+// hardware is the trade this project wants, and AOK-Workstation ships one binary for
 // both. -Darm64_gret=ldar restores the other spelling; a build using it says
 // " gret=ldar" in `uname -v`.
 //

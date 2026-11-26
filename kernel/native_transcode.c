@@ -318,7 +318,7 @@ static int tc_main(int argc, char *const argv[]) {
     }
 
     if (transcode_hook == NULL) {
-        fprintf(stderr, "transcode: needs the AOK-iSH app (the encoder is iOS's)\n");
+        fprintf(stderr, "transcode: needs the AOK-Workstation app (the encoder is iOS's)\n");
         return 1;
     }
 

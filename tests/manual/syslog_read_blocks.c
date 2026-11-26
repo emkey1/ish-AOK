@@ -19,7 +19,7 @@
 // Measured against x86_64 glibc on Linux 6.12 (camd), running as root, with
 // rsyslogd paused for the run: it holds /proc/kmsg open, which is the SAME
 // destructive reader position this test uses, so it would race for every
-// record. Nothing in an AOK-iSH guest consumes the log that way, so only the
+// record. Nothing in an AOK-Workstation guest consumes the log that way, so only the
 // oracle needs that.
 #define _GNU_SOURCE
 #include <errno.h>

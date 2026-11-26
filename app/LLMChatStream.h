@@ -1,6 +1,6 @@
 //
 //  LLMChatStream.h
-//  AOK-iSH
+//  AOK-Workstation
 //
 //  Streamed replies put back together, so the tool loop can show a reply as
 //  it arrives and still end with exactly the message a non-streaming request

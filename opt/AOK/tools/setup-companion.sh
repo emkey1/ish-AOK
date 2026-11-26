@@ -99,7 +99,7 @@ if [ ! -x "$W/bin/sh" ]; then
         done
         [ -n "$installed" ] || { sleep 1; tries=$((tries + 1)); }
     done
-    [ -n "$installed" ] || die "the filesystem was installed but did not appear under $AOK_COMPANION_ROOTS_DIR; relaunch AOK-iSH and run this again with --root NAME"
+    [ -n "$installed" ] || die "the filesystem was installed but did not appear under $AOK_COMPANION_ROOTS_DIR; relaunch AOK-Workstation and run this again with --root NAME"
     if [ "$installed" != "$ROOT_NAME" ]; then
         if sh /AOK/tools/manage-roots.sh rename "$installed" "$ROOT_NAME" -q; then
             note "named it '$ROOT_NAME'"
@@ -111,7 +111,7 @@ if [ ! -x "$W/bin/sh" ]; then
     W="$AOK_COMPANION_ROOTS_DIR/$ROOT_NAME"
     tries=0
     while [ ! -x "$W/bin/sh" ] && [ "$tries" -lt 30 ]; do sleep 1; tries=$((tries + 1)); done
-    [ -x "$W/bin/sh" ] || die "'$ROOT_NAME' is installed but $W is not there yet; relaunch AOK-iSH and run this again"
+    [ -x "$W/bin/sh" ] || die "'$ROOT_NAME' is installed but $W is not there yet; relaunch AOK-Workstation and run this again"
 else
     log "Using the filesystem '$ROOT_NAME'"
 fi
@@ -129,7 +129,7 @@ note "$AOK_COMPANION_ROOT_FILE names it"
 
 [ -s "$W/etc/aok-binds" ] || printf '%s\n' \
     '# What of the booted root to share into this one when it is entered from' \
-    '# there (AOK-iSH: kernel/foreign_exec.c, mount-root.sh). One a line, of:' \
+    '# there (AOK-Workstation: kernel/foreign_exec.c, mount-root.sh). One a line, of:' \
     '#   home tmp mnt media srv                      directories' \
     '#   etc/hosts etc/hostname etc/resolv.conf      files' \
     '#   timezone                                    /etc/localtime names the same zone' > "$W/etc/aok-binds"
@@ -225,7 +225,7 @@ for login in $USERS; do
 done
 [ "$made" -gt 0 ] || note "(nothing to add)"
 
-# sudo run inside the companion (a desktop's terminal) is AOK-iSH's native
+# sudo run inside the companion (a desktop's terminal) is AOK-Workstation's native
 # one, reading the companion's sudoers. A fresh Devuan has none, and none
 # means nobody.
 if [ ! -e "$W/etc/sudoers" ] && [ -r /etc/sudoers ]; then
@@ -247,7 +247,7 @@ done
 mkdir -p "$W/etc/profile.d"
 if [ ! -e "$W/etc/profile.d/10-aok-native.sh" ]; then
     cat > "$W/etc/profile.d/10-aok-native.sh" <<'EOF'
-# AOK-iSH's native programs, after this filesystem's own commands.
+# AOK-Workstation's native programs, after this filesystem's own commands.
 if [ -d /AOK/native ]; then
     case ":$PATH:" in
         *":/AOK/native:"*) ;;

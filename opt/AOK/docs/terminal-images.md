@@ -29,7 +29,7 @@ chafa -f kitty -s 40x12 photo.jpg  # any format chafa reads, 40x12 cells
   *Terminal does not support reporting screen sizes in pixels*. Pixels are the
   screen's real pixels, so an image is drawn at its own resolution.
 - **Images are sent in the escape code, never by file.** kitty can also pass a
-  file path or shared memory; AOK-iSH says no to those, and `icat` and `chafa`
+  file path or shared memory; AOK-Workstation says no to those, and `icat` and `chafa`
   then send the image directly by themselves. Nothing needs setting.
 - **Not supported:** Unicode placeholder mode (`kitten icat
   --unicode-placeholder`, used by some programs inside tmux), animation, cropping

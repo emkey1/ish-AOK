@@ -22,7 +22,7 @@ usage() {
     cat <<EOF
 Usage: $0 [--install-deps] [--run] [--src DIR] [--work DIR] [--only NAME[,NAME...]] [-v]
 
-Stage, build, and optionally run the focused AOK-iSH guest regression suite.
+Stage, build, and optionally run the focused AOK-Workstation guest regression suite.
 
 Options:
   --install-deps  Install a minimal C toolchain if 'cc' is missing.

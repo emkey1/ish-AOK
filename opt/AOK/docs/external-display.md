@@ -1,7 +1,7 @@
 # External display
 
 Plug an iPhone into a monitor — a USB-C or Lightning video adapter, or AirPlay
-Screen Mirroring to a TV or a Mac — and AOK-iSH puts the terminal on the big
+Screen Mirroring to a TV or a Mac — and AOK-Workstation puts the terminal on the big
 screen at the big screen's shape, while the phone keeps the keyboard. Without
 this, every iOS app gets the same thing: a letterboxed copy of the phone's
 screen.
@@ -45,7 +45,7 @@ filesystem you use:
 
 1. **Install a desktop.** **Settings → Wayland Desktop → Install a Desktop…**,
    then tap one — labwc is the light one. It takes several minutes; leave
-   AOK-iSH open until it finishes. [workspace.md](workspace.md) describes the
+   AOK-Workstation open until it finishes. [workspace.md](workspace.md) describes the
    choices.
 2. **Open the Wayland Display.** Any of: long-press the app's icon on the Home
    Screen and pick **Wayland Display**; set **Settings → Startup Mode →
@@ -66,7 +66,7 @@ the phone's shape — it is still the touch surface, so that is expected.
 ## iPad
 
 iPads are left as they were in 562. An iPad with **Stage Manager** and an
-external display already gets real, resizable AOK-iSH windows on the monitor
+external display already gets real, resizable AOK-Workstation windows on the monitor
 through iPadOS itself; an iPad without it gets the letterboxed mirror. The
 563 behaviour is declared for iPhone only, because the first attempt at this
 feature (546) fought Stage Manager on an iPad and was taken out.
