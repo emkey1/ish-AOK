@@ -1271,7 +1271,7 @@ static void DisplayParkSession(Terminal *terminal, int pid, NSString *_Nullable 
     });
 }
 
-- (void)reconnect:(id)sender {
+- (void)reconnect:(nullable id)sender {
     if (_reconnectPendingAfterTeardown)
         return; // already reconnecting; ignore extra taps while we wait for the old session to actually exit
     _retryWhenShown = NO;
@@ -1334,6 +1334,13 @@ static NSString *DisplayScaleChoiceTitle(NSString *name, NSInteger value, NSInte
     return [NSString stringWithFormat:@"%@%@", value == current ? @"\u2713 " : @"     ", name];
 }
 
+// The Appearance in force, given to the running desktop. It used to wait for
+// the next Reconnect, so picking one did nothing to look at (A10X,
+// 2026-11-26). Where nothing can take it (no wl-present), it still does.
+- (void)_applyDesktopUIScaleNow {
+    [_rfbClient requestDesktopScale:DisplayResolvedUIScale()];
+}
+
 - (void)_presentDesktopResolutionMenuFromView:(UIView *)sender {
     CGSize now = DisplayDesktopSizeForViewSize(_displayView.bounds.size, DisplayResolvedDesktopScale());
     ISHActionSheet *sheet = [ISHActionSheet actionSheetWithTitle:NSLocalizedString(@"Desktop Resolution", @"Action sheet title")
@@ -1344,6 +1351,10 @@ static NSString *DisplayScaleChoiceTitle(NSString *name, NSInteger value, NSInte
     __weak typeof(self) weakSelf = self;
     for (NSNumber *choice in @[@1, @2, @3, @0]) {
         NSInteger value = choice.integerValue;
+        // The whole number that IS the screen's scale would be a second name
+        // for Native: on a 2x iPad, picking between them changed nothing.
+        if (value > 0 && value != current && (CGFloat) value == UIScreen.mainScreen.nativeScale)
+            continue;
         [sheet addActionWithTitle:DisplayScaleChoiceTitle(DisplayDesktopScaleName(value), value, current)
                             style:UIAlertActionStyleDefault
                           handler:^(__unused UIAlertAction *action) {
@@ -1353,6 +1364,10 @@ static NSString *DisplayScaleChoiceTitle(NSString *name, NSInteger value, NSInte
             typeof(self) strongSelf = weakSelf;
             if (strongSelf == nil)
                 return;
+            // "Match Resolution" follows it, and the scale goes first so the
+            // two reach the compositor as one change.
+            if (UserPreferences.shared.displayUIScale <= 0)
+                [strongSelf _applyDesktopUIScaleNow];
             strongSelf->_requestedDesktopSize = CGSizeZero;
             [strongSelf _requestDesktopSizeForDisplay];
         }];
@@ -1363,14 +1378,16 @@ static NSString *DisplayScaleChoiceTitle(NSString *name, NSInteger value, NSInte
 
 - (void)_presentDesktopAppearanceMenuFromView:(UIView *)sender {
     ISHActionSheet *sheet = [ISHActionSheet actionSheetWithTitle:NSLocalizedString(@"Desktop Appearance", @"Action sheet title")
-        message:NSLocalizedString(@"How big things look. Matching the resolution keeps text and windows the size they are now and only makes them sharper; 1x with a raised resolution fits more on screen at a smaller size. Takes effect on the next Reconnect, and needs wlr-randr in the guest.", @"Desktop Appearance action sheet message")];
+        message:NSLocalizedString(@"How big things look. Matching the resolution keeps text and windows the size they are now and only makes them sharper; 1x with a raised resolution fits more on screen at a smaller size. The desktop changes at once if it can, or else on the next Reconnect (which needs wlr-randr in the guest).", @"Desktop Appearance action sheet message")];
     NSInteger current = UserPreferences.shared.displayUIScale;
+    __weak typeof(self) weakSelf = self;
     for (NSNumber *choice in @[@0, @1, @2, @3]) {
         NSInteger value = choice.integerValue;
         [sheet addActionWithTitle:DisplayScaleChoiceTitle(DisplayUIScaleName(value), value, current)
                             style:UIAlertActionStyleDefault
                           handler:^(__unused UIAlertAction *action) {
             UserPreferences.shared.displayUIScale = value;
+            [weakSelf _applyDesktopUIScaleNow];
         }];
     }
     [sheet addActionWithTitle:NSLocalizedString(@"Cancel", @"Action sheet button") style:UIAlertActionStyleCancel handler:nil];

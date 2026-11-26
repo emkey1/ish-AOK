@@ -47265,62 +47265,62 @@
         }
       }
     },
-    "How big things look. Matching the resolution keeps text and windows the size they are now and only makes them sharper; 1x with a raised resolution fits more on screen at a smaller size. Takes effect on the next Reconnect, and needs wlr-randr in the guest." : {
+    "How big things look. Matching the resolution keeps text and windows the size they are now and only makes them sharper; 1x with a raised resolution fits more on screen at a smaller size. The desktop changes at once if it can, or else on the next Reconnect (which needs wlr-randr in the guest)." : {
       "comment" : "Desktop Appearance action sheet message",
       "extractionState" : "manual",
       "localizations" : {
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Wie groß alles erscheint. „Auflösung anpassen“ behält die aktuelle Größe von Text und Fenstern bei und macht sie nur schärfer; 1x mit höherer Auflösung zeigt mehr auf dem Bildschirm in kleinerer Größe. Wirkt beim nächsten Neuverbinden und erfordert wlr-randr im Gast."
+            "value" : "Wie groß alles erscheint. „Auflösung anpassen“ behält die aktuelle Größe von Text und Fenstern bei und macht sie nur schärfer; 1x mit höherer Auflösung zeigt mehr auf dem Bildschirm in kleinerer Größe. Der Desktop ändert sich sofort, wenn möglich, sonst beim nächsten Neuverbinden (dafür ist wlr-randr im Gast nötig)."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "El tamaño con que se ven las cosas. Igualar la resolución mantiene el texto y las ventanas con su tamaño actual y solo los hace más nítidos; 1x con una resolución mayor muestra más contenido en pantalla a menor tamaño. Se aplica en la próxima reconexión y necesita wlr-randr en el sistema invitado."
+            "value" : "El tamaño con que se ven las cosas. Igualar la resolución mantiene el texto y las ventanas con su tamaño actual y solo los hace más nítidos; 1x con una resolución mayor muestra más contenido en pantalla a menor tamaño. El escritorio cambia al instante si puede; si no, en la próxima reconexión (que necesita wlr-randr en el sistema invitado)."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "La taille d'affichage des éléments. Adapter à la résolution garde le texte et les fenêtres à leur taille actuelle et les rend seulement plus nets ; 1x avec une résolution augmentée affiche davantage à une taille plus petite. Prend effet à la prochaine reconnexion et nécessite wlr-randr dans l'invité."
+            "value" : "La taille d'affichage des éléments. Adapter à la résolution garde le texte et les fenêtres à leur taille actuelle et les rend seulement plus nets ; 1x avec une résolution augmentée affiche davantage à une taille plus petite. Le bureau change aussitôt s'il le peut, sinon à la prochaine reconnexion (qui nécessite wlr-randr dans l'invité)."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "表示の大きさ。「解像度に合わせる」はテキストとウインドウを現在のサイズのまま、より鮮明にします。1x で解像度を上げると、小さいサイズでより多くを画面に表示できます。次回の再接続時に有効になり、ゲストに wlr-randr が必要です。"
+            "value" : "表示の大きさ。「解像度に合わせる」はテキストとウインドウを現在のサイズのまま、より鮮明にします。1x で解像度を上げると、小さいサイズでより多くを画面に表示できます。可能であればデスクトップはすぐに変わり、できない場合は次回の再接続時に変わります（ゲストに wlr-randr が必要です）。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "항목이 표시되는 크기입니다. 해상도 일치는 텍스트와 윈도우를 현재 크기로 유지하면서 더 선명하게만 만듭니다. 해상도를 높이고 1x를 사용하면 더 작은 크기로 화면에 더 많이 표시됩니다. 다음 재연결 시 적용되며, 게스트에 wlr-randr이 필요합니다."
+            "value" : "항목이 표시되는 크기입니다. 해상도 일치는 텍스트와 윈도우를 현재 크기로 유지하면서 더 선명하게만 만듭니다. 해상도를 높이고 1x를 사용하면 더 작은 크기로 화면에 더 많이 표시됩니다. 가능하면 데스크톱이 즉시 바뀌고, 그렇지 않으면 다음 재연결 시 바뀝니다(게스트에 wlr-randr이 필요합니다)."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "O tamanho com que as coisas aparecem. Igualar a resolução mantém texto e janelas no tamanho atual e apenas os deixa mais nítidos; 1x com resolução maior cabe mais na tela em tamanho menor. Entra em vigor na próxima Reconexão e requer wlr-randr no convidado."
+            "value" : "O tamanho com que as coisas aparecem. Igualar a resolução mantém texto e janelas no tamanho atual e apenas os deixa mais nítidos; 1x com resolução maior cabe mais na tela em tamanho menor. A área de trabalho muda na hora, se puder; senão, na próxima Reconexão (que requer wlr-randr no convidado)."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Насколько крупно всё выглядит. «Как разрешение» сохраняет текущий размер текста и окон и лишь делает их чётче; 1x с повышенным разрешением вмещает больше на экран при меньшем размере. Вступает в силу при следующем переподключении; в гостевой системе нужен wlr-randr."
+            "value" : "Насколько крупно всё выглядит. «Как разрешение» сохраняет текущий размер текста и окон и лишь делает их чётче; 1x с повышенным разрешением вмещает больше на экран при меньшем размере. Рабочий стол меняется сразу, если это возможно, иначе — при следующем переподключении (для этого в гостевой системе нужен wlr-randr)."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "内容显示的大小。“匹配分辨率”会让文本和窗口保持当前大小，只是更清晰；提高分辨率并使用 1x 可在屏幕上以较小尺寸显示更多内容。在下次“重新连接”时生效，且需要客户机中安装 wlr-randr。"
+            "value" : "内容显示的大小。“匹配分辨率”会让文本和窗口保持当前大小，只是更清晰；提高分辨率并使用 1x 可在屏幕上以较小尺寸显示更多内容。桌面会尽可能立即改变，否则在下次“重新连接”时生效（这需要客户机中安装 wlr-randr）。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "項目顯示的大小。「符合解析度」會讓文字和視窗維持目前大小，只是更清晰；1x 搭配較高解析度則能以較小尺寸在螢幕上容納更多內容。下次「重新連線」時生效，且客體中需要 wlr-randr。"
+            "value" : "項目顯示的大小。「符合解析度」會讓文字和視窗維持目前大小，只是更清晰；1x 搭配較高解析度則能以較小尺寸在螢幕上容納更多內容。桌面會盡可能立即改變，否則在下次「重新連線」時生效（這需要客體中安裝 wlr-randr）。"
           }
         }
       }

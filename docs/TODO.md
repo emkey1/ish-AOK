@@ -159,6 +159,27 @@ freeze (2026-09-25); their full text is in
   already in front, then Desktops forward and the Wayland window forward
   (both by `open`) connected. **Not run:** the standalone (full-screen)
   display; the setup page's install on a device.
+- **The display menu's Resolution and Appearance "did nothing" (user, A10X
+  full screen, 2026-11-26).** Appearance only saved the preference: the scale
+  was set by start-wayland.sh when a session started, so it waited for a
+  Reconnect. Resolution did resize the desktop, but on a 2x iPad its "2x" and
+  "Native (2x)" are the same size, and that is what was picked (the session
+  log shows the same 2732x1932 asked for again); and with Appearance on Match
+  Resolution a new resolution kept the old scale, so things changed size
+  instead of sharpness. **Fixed for 567:** a scale event beside the resize one
+  (`VIRTGPU_INPUT_SCALE`, wl_fixed) that wl-present applies with
+  wlr-output-management's set_scale, a size and a scale that arrive together
+  going to the compositor as one change; the display sends it when either
+  menu changes the scale (Match follows the resolution); the whole number
+  equal to the screen's scale is no longer listed beside Native; the sheet's
+  text says the desktop changes at once if it can, or else on the next
+  Reconnect (nine languages). The CLI's input harness takes `scale S`. A
+  session with no wl-present (none attached for its display) still waits for
+  a Reconnect. CLI (labwc): scale 2 and 1.5 at once, scale 1 with a resize in
+  one change. A10X, native mode, full screen, through the menu (new hook verbs
+  `display-menu` and `wayland-full-screen`): Appearance 2x from 1x doubled the
+  desktop at once; Resolution offers 1x, 3x, Native (2x); with Match
+  Resolution, Native to 1x gave 1366x966 at scale 1 in one mode change.
 - **An idle Wayfire desktop wakes every second.** A10X, 2026-11-22, per-process
   CPU over 20 s with nothing running: wf-panel 0.64 s and wayfire 0.61 s;
   with wf-panel stopped, wayfire 0.30 s. The panel's clock redraws once a

@@ -68,6 +68,7 @@ enum {
     VIRTGPU_INPUT_KEY = 2,      // a = X keysym, b = VIRTGPU_KEY_* flags
     VIRTGPU_INPUT_CLIPBOARD = 3,    // data = UTF-8 text for the desktop's clipboard
     VIRTGPU_INPUT_RESIZE = 4,   // a = width, b = height
+    VIRTGPU_INPUT_SCALE = 5,    // a = the output's scale as wl_fixed (256 is 1x)
 };
 // A key's flags: down (else up), and typed on the Option layer -- the Alt held
 // for Option is not applied to it (a Danish keyboard's { is Option+8).

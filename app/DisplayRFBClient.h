@@ -112,6 +112,12 @@ NS_ASSUME_NONNULL_BEGIN
 // "prohibited" answer none are sent.
 - (void)requestDesktopSizeWidth:(uint16_t)width height:(uint16_t)height;
 
+// The compositor's output scale, set while the desktop runs. Only wl-present
+// can (wlr-output-management); RFB has no way to say it. NO when no
+// wl-present is taking input for this desktop, and the scale waits for the
+// next session, which start-wayland.sh starts at it.
+- (BOOL)requestDesktopScale:(CGFloat)scale;
+
 // The desktop's clipboard, arriving some other way than VNC (wl-present):
 // told to the delegate as if the server had sent it. Any thread.
 - (void)deliverServerCutText:(NSString *)text;

@@ -906,6 +906,12 @@ static inline void rfb_write_u32(uint8_t *p, uint32_t hostValue) {
     return [self _applyDesktopSizeWidth:width height:height];
 }
 
+- (BOOL)requestDesktopScale:(CGFloat)scale {
+    if (!(scale >= 0.25 && scale <= 8.0))
+        return NO;
+    return virtgpu_present_input(_guestPort, VIRTGPU_INPUT_SCALE, (uint32_t) lround(scale * 256.0), 0, NULL, 0) == 0;
+}
+
 - (void)requestDesktopSizeWidth:(uint16_t)width height:(uint16_t)height {
     if (width != 0 && height != 0 &&
             virtgpu_present_input(_guestPort, VIRTGPU_INPUT_RESIZE, width, height, NULL, 0) == 0)

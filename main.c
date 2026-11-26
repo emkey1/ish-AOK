@@ -726,7 +726,7 @@ static const struct virtgpu_present_ops cli_present_ops = {
 // ISH_PRESENT_INPUT=<fifo>, with ISH_PRESENT_DISPLAY=<the desktop's VNC
 // port>: the app's input to wl-present, from the command line. One event a
 // line: `ptr X Y MASK`, `key KEYSYM 1|0`, `type TEXT` (each character down and
-// up), `clip TEXT`, `resize W H`.
+// up), `clip TEXT`, `resize W H`, `scale S` (1, 1.5, 2...).
 static void *cli_present_input(void *arg) {
     const char *path = arg;
     const char *d = getenv("ISH_PRESENT_DISPLAY");
@@ -746,6 +746,9 @@ static void *cli_present_input(void *arg) {
                 err = virtgpu_present_input(display, VIRTGPU_INPUT_KEY, (uint32_t) a, (uint32_t) b, NULL, 0);
             else if (sscanf(line, "resize %lu %lu", &a, &b) == 2)
                 err = virtgpu_present_input(display, VIRTGPU_INPUT_RESIZE, (uint32_t) a, (uint32_t) b, NULL, 0);
+            else if (strncmp(line, "scale ", 6) == 0)
+                err = virtgpu_present_input(display, VIRTGPU_INPUT_SCALE,
+                        (uint32_t) (strtod(line + 6, NULL) * 256.0 + 0.5), 0, NULL, 0);
             else if (strncmp(line, "clip ", 5) == 0)
                 err = virtgpu_present_input(display, VIRTGPU_INPUT_CLIPBOARD, 0, 0, line + 5, (uint32_t) strlen(line + 5));
             else if (strncmp(line, "type ", 5) == 0)

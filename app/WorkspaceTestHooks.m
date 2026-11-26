@@ -36,12 +36,16 @@
 //    add-user                     open the Add a User sheet, as Settings' row does
 //    fill <n> <text>              set text field n of the alert on screen
 //    alert                        the alert on screen: its title and message
+//    display-menu                 open a Wayland display's menu, as its corner
+//                                 (full screen) or ··· button does
+//    wayland-full-screen          the root menu's Wayland Full Screen
 //
 //  Off unless ISH_WORKSPACE_TEST=1 is in the app's environment.
 //
 
 #import <UIKit/UIKit.h>
 #import <notify.h>
+#import <objc/message.h>
 #import <objc/runtime.h>
 #import "WorkspaceTestHooks.h"
 #import "WorkspaceViewController.h"
@@ -49,6 +53,7 @@
 #import "Terminal.h"
 #import "SceneDelegate.h"
 #import "AppDelegate.h"
+#import "DisplayViewController.h"
 #include "kernel/checkpoint.h"
 
 // Debug builds only. The `tap` verb reaches UIAlertAction's `handler`, which is
@@ -232,6 +237,20 @@ static void ISHWorkspaceTestDump(NSString *seq) {
     });
 }
 
+// A Wayland display on screen, full screen or in a Workspace window, or nil.
+static DisplayViewController *ISHWorkspaceTestFindDisplay(UIViewController *vc) {
+    if (vc == nil)
+        return nil;
+    if ([vc isKindOfClass:DisplayViewController.class] && vc.isViewLoaded && vc.view.window != nil)
+        return (DisplayViewController *) vc;
+    for (UIViewController *child in vc.childViewControllers) {
+        DisplayViewController *found = ISHWorkspaceTestFindDisplay(child);
+        if (found != nil)
+            return found;
+    }
+    return ISHWorkspaceTestFindDisplay(vc.presentedViewController);
+}
+
 // The alert on top of any window, or nil.
 static UIAlertController *ISHWorkspaceTestTopAlert(void) {
     for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
@@ -326,6 +345,35 @@ static void ISHWorkspaceTestRun(NSString *line) {
         alert.textFields[index].text = ISHWorkspaceTestDecode(text);
         ISHWorkspaceTestWriteResult(seq, @{@"ok": @YES, @"title": alert.title ?: @"",
                                            @"message": alert.message ?: @""});
+        return;
+    }
+    if ([verb isEqualToString:@"wayland-full-screen"]) {
+        SEL show = NSSelectorFromString(@"showWaylandFullScreen");
+        if (workspace == nil || ![workspace respondsToSelector:show]) {
+            answer(NO, @"no Workspace");
+            return;
+        }
+        ((void (*)(id, SEL)) objc_msgSend)(workspace, show);
+        answer(YES, nil);
+        return;
+    }
+    if ([verb isEqualToString:@"display-menu"]) {
+        for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+            if (![scene isKindOfClass:UIWindowScene.class])
+                continue;
+            for (UIWindow *window in ((UIWindowScene *) scene).windows) {
+                DisplayViewController *display = ISHWorkspaceTestFindDisplay(window.rootViewController);
+                if (display == nil)
+                    continue;
+                // What a tap does: the button's own action, which anchors the
+                // menu on it.
+                UIButton *button = [display valueForKey:@"_menuPip"] ?: [display valueForKey:@"_menuButton"];
+                [button sendActionsForControlEvents:UIControlEventTouchUpInside];
+                answer(button != nil, @"the display has no menu button");
+                return;
+            }
+        }
+        answer(NO, @"no Wayland display on screen");
         return;
     }
     if ([verb isEqualToString:@"alert"]) {

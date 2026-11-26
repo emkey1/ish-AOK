@@ -82,7 +82,7 @@ enum {
     HEAD_EV_NAME = 0, HEAD_EV_ENABLED = 4, HEAD_EV_FINISHED = 9,
     CFG_ENABLE_HEAD = 0, CFG_DISABLE_HEAD = 1, CFG_APPLY = 2, CFG_DESTROY = 4,
     CFG_EV_SUCCEEDED = 0, CFG_EV_FAILED = 1, CFG_EV_CANCELLED = 2,
-    CFG_HEAD_SET_CUSTOM_MODE = 1,
+    CFG_HEAD_SET_CUSTOM_MODE = 1, CFG_HEAD_SET_SCALE = 4,
 };
 
 // Text types a clipboard offer may come in, best first; a source of ours
@@ -178,12 +178,14 @@ struct wp {
     char *clip_in_buf;
     size_t clip_in_len;
 
-    // the desktop's size
+    // the desktop's size, and its scale (wl_fixed: 256 is 1x; 0 is none)
     uint32_t om, om_serial, cfg;
     struct wp_head heads[8];
     int head_count;
     uint32_t want_width, want_height;   // asked for and not yet applied
+    uint32_t want_scale;
     uint32_t cfg_width, cfg_height;     // in the configuration in flight
+    uint32_t cfg_scale;
 };
 
 static void wp_log(struct wp *w, const char *fmt, ...) __attribute__((format(__printf__, 2, 3)));
@@ -311,11 +313,13 @@ static struct wp_head *head_find(struct wp *w, uint32_t id) {
     return NULL;
 }
 
-// Apply the size asked for, when no configuration is in flight and the
-// compositor has described its outputs. Every head must be named in a
-// configuration: the output's gets the new mode, the others stay as they are.
+// Apply the size and scale asked for, when no configuration is in flight and
+// the compositor has described its outputs. Every head must be named in a
+// configuration: the output's gets the new mode and scale, the others stay as
+// they are. The scale is the app's Appearance, applied while the desktop runs
+// rather than only by start-wayland.sh at its start.
 static void resize_try(struct wp *w) {
-    if (w->want_width == 0 || w->cfg != 0 || w->om_serial == 0 || w->head_count == 0)
+    if ((w->want_width == 0 && w->want_scale == 0) || w->cfg != 0 || w->om_serial == 0 || w->head_count == 0)
         return;
     int target = -1;
     for (int i = 0; i < w->head_count; i++)
@@ -335,23 +339,31 @@ static void resize_try(struct wp *w) {
         }
         uint32_t cfg_head = w->next_id++;
         wp_send_u32(w, w->cfg, CFG_ENABLE_HEAD, 2, cfg_head, h->id);
-        if (i == target)
+        if (i == target && w->want_width != 0)
             wp_send_u32(w, cfg_head, CFG_HEAD_SET_CUSTOM_MODE, 3, w->want_width, w->want_height, 0);
+        if (i == target && w->want_scale != 0)
+            wp_send_u32(w, cfg_head, CFG_HEAD_SET_SCALE, 1, w->want_scale);
     }
     wp_send(w, w->cfg, CFG_APPLY, NULL, -1);
     w->cfg_width = w->want_width;
     w->cfg_height = w->want_height;
+    w->cfg_scale = w->want_scale;
 }
 
 static void resize_done(struct wp *w, uint16_t opcode) {
     wp_send(w, w->cfg, CFG_DESTROY, NULL, -1);
     w->cfg = 0;
     if (opcode == CFG_EV_FAILED)
-        wp_log(w, "the compositor refused %ux%u", w->cfg_width, w->cfg_height);
+        wp_log(w, "the compositor refused %ux%u at scale %u/256", w->cfg_width, w->cfg_height, w->cfg_scale);
     // Cancelled (the outputs changed meanwhile): try again with the new
-    // serial. Otherwise it is settled, unless another size came since.
-    if (opcode != CFG_EV_CANCELLED && w->want_width == w->cfg_width && w->want_height == w->cfg_height)
-        w->want_width = w->want_height = 0;
+    // serial. Otherwise it is settled, unless another size or scale came
+    // since.
+    if (opcode != CFG_EV_CANCELLED) {
+        if (w->want_width == w->cfg_width && w->want_height == w->cfg_height)
+            w->want_width = w->want_height = 0;
+        if (w->want_scale == w->cfg_scale)
+            w->want_scale = 0;
+    }
     resize_try(w);
 }
 
@@ -760,6 +772,8 @@ static void input_read(struct wp *w) {
         return;
     w->ilen += (size_t) n;
     size_t at = 0;
+    // A size and a scale sent together go to the compositor as one change.
+    bool output_asked = false;
     while (w->ilen - at >= sizeof(struct virtgpu_input_event)) {
         struct virtgpu_input_event ev;
         memcpy(&ev, w->ibuf + at, sizeof(ev));
@@ -789,12 +803,20 @@ static void input_read(struct wp *w) {
                 if (ev.a >= 64 && ev.b >= 64 && ev.a <= 16384 && ev.b <= 16384) {
                     w->want_width = ev.a;
                     w->want_height = ev.b;
-                    resize_try(w);
+                    output_asked = true;
+                }
+                break;
+            case VIRTGPU_INPUT_SCALE:
+                if (ev.a >= 64 && ev.a <= 8 * 256) {
+                    w->want_scale = ev.a;
+                    output_asked = true;
                 }
                 break;
         }
         at += sizeof(ev) + ev.len;
     }
+    if (output_asked)
+        resize_try(w);
     memmove(w->ibuf, w->ibuf + at, w->ilen - at);
     w->ilen -= at;
     // A clipboard bigger than the buffer: make room for the rest of it.
