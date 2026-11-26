@@ -44,7 +44,7 @@ else that did not need a decision or an account has been done with it.
 | 2. AI consent screen | **Done** `1a8cf6f2d`, verified against OpenRouter |
 | 3. Privacy policy | **Done** `b0475d6ae`, with an in-app link |
 | 4. The DNS private API | **Done** `8dc6a0df5` — *but only compile-verified* |
-| Export compliance key | **Done** `9bbe02d44`, YES, verified in the bundle |
+| Export compliance key | **Not set** since 2026-11-24 (error 90592); answered per build. No France, no documentation (decided 2026-11-26) |
 | App Privacy label | **Settled**: Data Not Collected |
 | Age rating | **Settled**: 16+, confirmed on Apple's page |
 | Store metadata | **Drafted**, every field inside its limit |
@@ -85,8 +85,9 @@ judgement that is not mine to make.
 
 6. ~~**Send the name request**~~ Decided 2026-11-20: submit as "AOK-iSH"
    without asking first. See "Name and branding".
-7. **File the ANSSI declaration** and upload the attestation. This gates a
-   French listing, and is the long pole: reported at about a month.
+7. ~~**File the ANSSI declaration**~~ **Decided 2026-11-26: not filed.** The
+   app is not distributed in France, which is the only thing it gated. See
+   "Export compliance" under Paperwork.
 8. **Take the screenshots** — iPhone 6.9" and iPad 13". Deliberately not
    generated; see [app_store_metadata.md](app_store_metadata.md).
 9. **Answer the App Store Connect questionnaires** — age rating (including
@@ -615,15 +616,31 @@ Two caveats worth keeping rather than claiming more than was shown:
   the **middle row: no CCATS**. That is the useful finding -- CCATS is the
   expensive one and we do not need it.
 
-  *Decided 2026-11-14: France is in scope.* So the key is **YES** and a French
-  declaration is required. The reasoning is in a comment in app/Info.plist,
-  where the key will go (see the first paragraph for why it is not set yet).
+  *Decided 2026-11-14: France is in scope* -- **reversed 2026-11-26**: the
+  maintainer will not file the ANSSI declaration, so the app stays out of
+  France and Apple needs no documentation at all (the table's footnote: the
+  French declaration "is only required if you're distributing your app on the
+  App Store in France"). Until a decision on the key, the encryption questions
+  are answered per build: standard encryption, not in France. Apple's
+  "Complying with Encryption Export Regulations" says the key is NO for
+  encryption "exempt from export compliance documentation requirements",
+  which is where the app now is; setting it would end the per-build
+  questions. See the comment in app/Info.plist.
 
-  A consequence worth keeping: because we are providing documentation to
-  Apple, **no BIS year-end self-classification report is needed** ("if you use
-  non-exempt encryption and provide documentation to Apple, the
-  self-classification report isn't necessary"). Leaving France out would have
-  traded this per-build paperwork for that annual obligation instead.
+  *The year-end report, read again 2026-11-26.* The 2026-11-14 entry said
+  that leaving France out would bring a BIS year-end self-classification
+  report with it. Apple's page says only that such a report "might" be
+  required when no documentation is given to Apple. The regulation, 15 CFR
+  740.17(e)(3) (eCFR, read 2026-11-26), limits the report to "mass market"
+  encryption *components* and 'executable software' -- which it defines as
+  software from an existing hardware component, not "complete binary images"
+  -- and to items that stay in 5A002/5B002/5D002. An app like this is neither
+  as we read it, so no report is expected. If one is ever owed: one email with
+  a spreadsheet (the fields of supplement no. 8 to part 742) to
+  crypt-supp8@bis.doc.gov and enc@nsa.gov, subject "self-classification
+  report", received by 1 February after the year of export; each product is
+  reported once, and later years need only a "nothing has changed" email.
+  This is a reading of the text, not legal advice.
 
   *The stale advice.* Several write-ups point at **EAR 740.13(e)** for the
   open-source exemption. That paragraph is **[Reserved]** -- the publicly
@@ -656,8 +673,9 @@ Two caveats worth keeping rather than claiming more than was shown:
   a distribution full of other people's crypto. It does not cover us -- we are
   a different supplier -- but it shows the form being used for exactly this.
 
-  *Still open:* nobody has filed it. Until ANSSI's attestation is in hand, the
-  honest options are to hold the French listing or to hold the submission.
+  *Settled 2026-11-26:* not filed; the French listing stays held, for good
+  unless the maintainer changes their mind. The notes above are kept for
+  that case.
 - **Entitlements are fine.** Extended virtual addressing, the increased memory
   limit, user fonts and the app group are all self-serve and allowed. Build
   539's rejected debugging-memory entitlement is gone. ~~`iSHRelease.entitlements`

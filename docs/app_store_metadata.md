@@ -18,7 +18,8 @@ text, keywords and description were sent the same day, after the user read them.
 "none" and unrestricted web access "yes" -- 16+ on Apple's current tiers (the
 API's old-scale field reports it as SEVENTEEN_PLUS); price Free, base territory
 USA; available in 174 of 175 territories and new ones automatically, **France
-held back** until the ANSSI declaration is filed (assessment item 7); copyright
+left out** -- by choice since 2026-11-26: no ANSSI declaration will be filed
+(assessment item 7); copyright
 `2026 Mike Miller`. Content rights set 2026-11-25, at the user's word: "Yes,
 it contains, shows or accesses third-party content" (`USES_THIRD_PARTY_CONTENT`)
 -- the browser, curl and the AI chat reach sites the user picks, the catalogue
