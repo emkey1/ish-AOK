@@ -6,6 +6,11 @@ NS_ASSUME_NONNULL_BEGIN
 extern NSString *const ISHInitialWindowWorkspaceValue;
 extern NSString *const ISHInitialWindowChooseFilesystemValue;
 extern NSString *const ISHInitialWindowWaylandValue;
+// Posted with the window view whenever a Workspace window comes to the front:
+// a tap, Ctrl+Tab, Cmd+Arrow, and also the dock, the Launcher, an open of a
+// window already there, /proc/ish/workspace -- the ways that bring it forward
+// without its frontmost handler (-focusDesktopWindow:).
+extern NSString *const ISHWorkspaceWindowDidComeToFrontNotification;
 extern UINavigationController *ISHCreateWorkspaceNavigationController(void);
 extern UINavigationController *ISHCreateWorkspaceNavigationControllerForTool(NSString *_Nullable toolIdentifier);
 extern BOOL ISHShouldLaunchWorkspaceAtStartup(void);

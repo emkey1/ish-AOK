@@ -447,10 +447,11 @@ typedef NS_ENUM(NSInteger, DisplayConnectionState) {
                                                 name:ISHDesktopSetupDidChangeNotification
                                               object:nil];
     // The Workspace posts this with the window view whenever a window comes
-    // to the front; one that is not this window's means this one was left.
+    // to the front, by a tap or by the dock, the Launcher or an open; one that
+    // is not this window's means this one was left.
     [NSNotificationCenter.defaultCenter addObserver:self
                                             selector:@selector(someWindowCameToFront:)
-                                                name:ISHExternalDisplayContentDidBecomeAvailableNotification
+                                                name:ISHWorkspaceWindowDidComeToFrontNotification
                                               object:nil];
     [NSNotificationCenter.defaultCenter addObserver:self
                                             selector:@selector(sceneDidEnterBackground:)
@@ -1176,13 +1177,18 @@ static void DisplayParkSession(Terminal *terminal, int pid, NSString *_Nullable 
             return;
         BOOL diedDuringStartup = strongSelf->_state == DisplayConnectionStateStartingGuestSession
             || strongSelf->_state == DisplayConnectionStateWaitingForReady;
+        // pollForReadyFile's .error read got there first: the failure
+        // start-wayland.sh described is showing, and stays.
+        BOOL reasonShowing = strongSelf->_state == DisplayConnectionStateFailed && strongSelf->_retryWhenShown;
         strongSelf->_state = DisplayConnectionStateFailed;
-        strongSelf->_statusLabel.text = NSLocalizedString(@"Wayland session ended", @"Wayland display status text");
+        if (!reasonShowing)
+            strongSelf->_statusLabel.text = NSLocalizedString(@"Wayland session ended", @"Wayland display status text");
         strongSelf->_reconnectButton.hidden = NO;
         // A session that exits before ever reaching Connected means
-        // start-wayland.sh die()d (or never ran) -- and this exit
-        // notification always wins the race against pollForReadyFile's
-        // .error read, so without this every guest-side startup failure
+        // start-wayland.sh die()d (or never ran). This exit notification
+        // usually beats pollForReadyFile's .error read (not always: on an
+        // A10X the read came first and its reason was overwritten here,
+        // 2026-11-26), so without this every guest-side startup failure
         // presented as the bare "Wayland session ended" with the actual
         // reason left unread in the guest. Fetch and show it.
         if (diedDuringStartup)
@@ -1517,9 +1523,15 @@ static NSString *DisplayScaleChoiceTitle(NSString *name, NSInteger value, NSInte
         [self reconnect:nil];
 }
 
+// This window's own coming forward retries too: the dock, the Launcher and
+// an open of the window bring it forward without -workspaceToolDidBecomeFrontmost.
 - (void)someWindowCameToFront:(NSNotification *)notification {
     UIView *front = [notification.object isKindOfClass:UIView.class] ? notification.object : nil;
-    if (front != nil && self.isViewLoaded && ![self.view isDescendantOfView:front])
+    if (front == nil || !self.isViewLoaded)
+        return;
+    if ([self.view isDescendantOfView:front])
+        [self retryIfShownAgain];
+    else
         _wasAway = YES;
 }
 

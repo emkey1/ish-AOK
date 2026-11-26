@@ -132,6 +132,7 @@
 NSString *const ISHInitialWindowWorkspaceValue = @"workspace";
 NSString *const ISHInitialWindowChooseFilesystemValue = @"choose-filesystem";
 NSString *const ISHInitialWindowWaylandValue = @"wayland";
+NSString *const ISHWorkspaceWindowDidComeToFrontNotification = @"ISHWorkspaceWindowDidComeToFront";
 static NSString *const ISHWorkspaceToolClockIdentifier = @"clock";
 static NSString *const ISHWorkspaceToolInfoIdentifier = @"info";
 static NSString *const ISHWorkspaceToolMonitorIdentifier = @"monitor";
@@ -3876,6 +3877,8 @@ static NSString *ISHTerminalTabTitleForRole(NSString *role, Terminal *terminal) 
         // opening a new one) would never hand it over at all.
         [NSNotificationCenter.defaultCenter postNotificationName:ISHExternalDisplayContentDidBecomeAvailableNotification
                                                           object:strongWindowView];
+        [NSNotificationCenter.defaultCenter postNotificationName:ISHWorkspaceWindowDidComeToFrontNotification
+                                                          object:strongWindowView];
         [strongSelf refreshDockButtons];
     };
     return windowView;
@@ -5303,6 +5306,11 @@ static NSString *ISHWorkspaceDesktopNamesSignature(NSArray<NSString *> *names) {
         [windowView.hostedTerminalViewController focusTerminal];
     else
         [self claimKeyboardFocusForTextScalableWindow:windowView];
+    // Not the frontmost handler, which would also hand a connected external
+    // display over and take the keyboard for MotePad; just the news that this
+    // window is in front now (a failed Wayland window retries on it).
+    [NSNotificationCenter.defaultCenter postNotificationName:ISHWorkspaceWindowDidComeToFrontNotification
+                                                      object:windowView];
     [self refreshDockButtons];
 }
 
