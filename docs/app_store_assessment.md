@@ -44,7 +44,7 @@ else that did not need a decision or an account has been done with it.
 | 2. AI consent screen | **Done** `1a8cf6f2d`, verified against OpenRouter |
 | 3. Privacy policy | **Done** `b0475d6ae`, with an in-app link |
 | 4. The DNS private API | **Done** `8dc6a0df5` — *but only compile-verified* |
-| Export compliance key | **Not set** since 2026-11-24 (error 90592); answered per build. No France, no documentation (decided 2026-11-26) |
+| Export compliance key | **NO** since 2026-11-26: no France, so no documentation; Apple's validation accepts it (YES without a code fails, 90592) |
 | App Privacy label | **Settled**: Data Not Collected |
 | Age rating | **Settled**: 16+, confirmed on Apple's page |
 | Store metadata | **Drafted**, every field inside its limit |
@@ -606,16 +606,24 @@ Two caveats worth keeping rather than claiming more than was shown:
 
 ## Paperwork
 
-- **Export compliance.** `ITSAppUsesNonExemptEncryption` was set to YES
-  in app/Info.plist (`9bbe02d44`) and **taken out again on 2026-11-24**: the
-  first upload with it, build 566, was refused with error 90592 ("The export
-  compliance key value [] in the app's Info.plist doesn't match the key value
-  of the app's export compliance documentation"). The answer is still YES; the
-  key goes back in together with `ITSEncryptionExportComplianceCode` once
-  Apple has issued the code, and until then the encryption questions are
-  answered per build in App Store Connect. **Worked out against primary sources 2026-11-14**; the
-  conclusion is narrower than this entry used to imply, and one piece of
-  advice circulating online is simply out of date.
+- **Export compliance.** `ITSAppUsesNonExemptEncryption` is **NO** in
+  app/Info.plist since 2026-11-26. Its history: set to YES (`9bbe02d44`),
+  and the first upload with it, build 566, was refused with error 90592
+  ("The export compliance key value [] in the app's Info.plist doesn't match
+  the key value of the app's export compliance documentation") -- YES needs
+  `ITSEncryptionExportComplianceCode` beside it, and that code exists only
+  once Apple has accepted documentation. Taken out on 2026-11-24, so each
+  upload asked the encryption questions in App Store Connect. Set to NO once
+  France was left out (below), which is the case Apple's wording gives NO
+  for. **Checked with Apple 2026-11-26:** a Release IPA stamped 567 (not
+  uploaded, so the number is still free), run through
+  `xcrun altool --validate-app` with the API key: NO gave "VERIFY SUCCEEDED
+  with no errors"; the same archive exported with YES failed with 90592,
+  word for word 566's refusal, so the validator does check this key.
+  France was still the one unavailable territory (174 of 175 available),
+  read through the API before and after. **Worked out against primary
+  sources 2026-11-14**; the conclusion is narrower than this entry used to
+  imply, and one piece of advice circulating online is simply out of date.
 
   *What we ship.* More than the entry said. OpenSSH built `--without-openssl`
   falls back to its own ChaCha20-Poly1305 and Ed25519 (meson.build:820-832),
@@ -638,12 +646,16 @@ Two caveats worth keeping rather than claiming more than was shown:
   maintainer will not file the ANSSI declaration, so the app stays out of
   France and Apple needs no documentation at all (the table's footnote: the
   French declaration "is only required if you're distributing your app on the
-  App Store in France"). Until a decision on the key, the encryption questions
-  are answered per build: standard encryption, not in France. Apple's
-  "Complying with Encryption Export Regulations" says the key is NO for
-  encryption "exempt from export compliance documentation requirements",
-  which is where the app now is; setting it would end the per-build
-  questions. See the comment in app/Info.plist.
+  App Store in France"). Apple's "Complying with Encryption Export
+  Regulations" says to set the key to NO if the app "only uses forms of
+  encryption that are exempt from export compliance documentation
+  requirements", which is where the app now is, so the key is NO and App
+  Store Connect no longer asks per build. App Store Connect's own App
+  Encryption Documentation page lists "standard encryption algorithms
+  instead of, or in addition to" the OS's as needing documentation; its
+  reference table narrows that to the French declaration, and only for
+  France. **If France is ever turned on,** the key must go back to YES
+  together with the code. See the comment in app/Info.plist.
 
   *The year-end report, read again 2026-11-26.* The 2026-11-14 entry said
   that leaving France out would bring a BIS year-end self-classification

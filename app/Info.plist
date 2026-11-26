@@ -20,32 +20,35 @@
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
-	<!-- The app carries encryption that is not the operating system's. OpenSSH is configured without OpenSSL and falls back to its
-	     own ChaCha20-Poly1305 and Ed25519 (meson.build:820-832); the bundled root
-	     filesystems, which go to every user, carry OpenSSL (Alpine's
-	     libcrypto3/libssl3) and libgcrypt (Devuan); and Crypto Accel maps
-	     guest AES and SHA instructions onto the host's ARMv8 crypto
-	     extensions.
+	<!-- Export compliance. The app carries encryption that is not the
+	     operating system's. OpenSSH is configured without OpenSSL and falls
+	     back to its own ChaCha20-Poly1305 and Ed25519 (meson.build:820-832);
+	     the root filesystems, which go to every user, carry OpenSSL (Alpine's
+	     libcrypto3/libssl3), libgcrypt (Devuan) and OpenSSH (the native
+	     root); and Crypto Accel maps guest AES and SHA instructions onto the
+	     host's ARMv8 crypto extensions.
 
 	     All of it is IETF/NIST-standard, which is the middle row of Apple's
 	     table (developer.apple.com/help/app-store-connect/reference/
-	     export-compliance-documentation-for-encryption): an industry-standard
-	     algorithm not provided by the OS. No CCATS. That row needs one
-	     document, the French encryption declaration, and only for
-	     distribution in France.
+	     app-information/export-compliance-documentation-for-encryption): an
+	     industry-standard algorithm not provided by the OS. No CCATS. That
+	     row needs one document, the French encryption declaration, and only
+	     for distribution in France.
 
 	     Decided 2026-11-26: the app is not distributed in France and no
-	     declaration will be filed, so Apple needs no documentation.
+	     declaration will be filed, so the app needs no documentation, and
+	     Apple's "Complying with Encryption Export Regulations" says to set
+	     this key to NO when the app "only uses forms of encryption that are
+	     exempt from export compliance documentation requirements". NO also
+	     ends the encryption questions App Store Connect asked for each build.
 
-	     The key is NOT set. Build 566 shipped it as
-	     ITSAppUsesNonExemptEncryption = YES with no code, and the upload was
-	     refused (90592, "export compliance key value [] doesn't match"), so
-	     the encryption questions are answered per build in App Store Connect:
-	     standard encryption, not distributed in France. Apple's
-	     "Complying with Encryption Export Regulations" says to set the key to
-	     NO for encryption "exempt from export compliance documentation
-	     requirements", which would end those questions; not done without the
-	     maintainer's word. See docs/app_store_assessment.md. -->
+	     If France is ever turned on, this must become YES together with
+	     ITSEncryptionExportComplianceCode, the code Apple issues once the
+	     French declaration is accepted. YES without the code is refused at
+	     upload: build 566 got error 90592 ("export compliance key value []
+	     doesn't match"). See docs/app_store_assessment.md. -->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSAppTransportSecurity</key>
