@@ -206,9 +206,9 @@ sh /AOK/tools/mount-root.sh --unmount all
 ```
 
 The script also bind-mounts `/AOK/native`, `/AOK/docs`, `/AOK/tools`,
-`/AOK/tests` and `/AOK/fakefs` into the chroot -- `/AOK/native` so that a
-native login shell (`SHELL=/AOK/native/zsh`) and the native tools work inside
-it too -- so `mount-root.sh`, `ktop` and the guest regression suite stay
+`/AOK/bundled`, `/AOK/tests` and `/AOK/fakefs` into the chroot --
+`/AOK/native` so that a native login shell (`SHELL=/AOK/native/zsh`) and the
+native tools work inside it too -- so `mount-root.sh`, `ktop` and the guest regression suite stay
 reachable from inside it — `/AOK` is the booted root's aokfs mount and does not
 otherwise exist in another root, which is what makes
 `mount-root.sh <root> -- sh /AOK/tests/setup-regressions.sh --run`

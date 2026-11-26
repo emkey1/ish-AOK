@@ -14,11 +14,12 @@
 //
 //   ROOT  the program runs INSIDE its root: the task is chrooted into
 //         /AOK/roots/<name> before the loader is opened, with /proc, /sys,
-//         /dev, /dev/pts, /run, /AOK/native, /AOK/docs and /AOK/tools bound
-//         into it first, as mount-root.sh binds them. It finds its own /etc,
-//         its /usr/share data, its libraries -- everything -- and so does
-//         anything it starts. It sees that root's home and /tmp, not these,
-//         unless the root asks for these in its /etc/aok-binds.
+//         /dev, /dev/pts, /run, /AOK/native, /AOK/docs, /AOK/tools and
+//         /AOK/bundled bound into it first, as mount-root.sh binds them. It
+//         finds its own /etc, its /usr/share data, its libraries --
+//         everything -- and so does anything it starts. It sees that root's
+//         home and /tmp, not these, unless the root asks for these in its
+//         /etc/aok-binds.
 //   LIBS  the program runs HERE, in this root's filesystem, with only its
 //         loader and libraries taken from its root: the loader is opened from
 //         there, and LD_LIBRARY_PATH names that root's library directories. It
@@ -106,8 +107,11 @@ static bool is_dir(const char *path) {
 
 // What mount-root.sh binds into a root, in the order that lets the later
 // ones land inside the earlier (dev before dev/pts).
+// AOK/bundled too: without it a native mode's companion desktop ran the
+// distribution's wayvnc, no pixman shim, and a wf-panel it compiled itself
+// (A10X, 2026-11-26).
 static const char *const root_binds[] = {
-    "proc", "sys", "dev", "dev/pts", "run", "AOK/native", "AOK/docs", "AOK/tools",
+    "proc", "sys", "dev", "dev/pts", "run", "AOK/native", "AOK/docs", "AOK/tools", "AOK/bundled",
 };
 
 // These binds are for the tasks of ROOT alone (mount_set_scope): they put the

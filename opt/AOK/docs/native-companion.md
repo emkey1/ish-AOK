@@ -38,7 +38,7 @@ root each time it is entered:
 | the time zone | its `/etc/localtime` names the zone this root's does |
 
 and, as for any root entered this way, `/proc`, `/sys`, `/dev`, `/run` and
-`/AOK/native`, `/AOK/docs`, `/AOK/tools`.
+`/AOK/native`, `/AOK/docs`, `/AOK/tools`, `/AOK/bundled`.
 
 - **It starts in your directory** when that is under `/home` or `/tmp`:
   `python3 script.py` in `~/work` reads `~/work/script.py`. Anywhere else

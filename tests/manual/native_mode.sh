@@ -73,6 +73,10 @@ case "${1:-}" in
     got=$($O/bin/sh -c '. /etc/os-release; echo "$ID $(pwd)"' 2>&1)
     check foreign_root_inside "devuan /" "$got"
     check foreign_root_native_bound zsh "$($O/bin/sh -c '/AOK/native/zsh -fc "echo \$ZSH_NAME"' 2>&1)"
+    # /AOK/bundled too: a companion's desktop runs its wf-panel and wayvnc and
+    # preloads its shims (it was missing until 2026-11-26).
+    check foreign_root_bundled_bound yes \
+        "$($O/bin/sh -c '[ -d /AOK/bundled/devuan6-aarch64 ] && echo yes || echo no' 2>&1)"
     echo libs > /proc/ish/foreign_exec
     got=$($O/bin/sh -c '. /etc/os-release; echo "$ID"' 2>&1)
     check foreign_libs_here aok-native "$got"

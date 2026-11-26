@@ -2697,8 +2697,24 @@ elif [ "$AOK_DESKTOP" = wayfire ] && command -v wf-panel >/dev/null 2>&1 \
     # distro moves on, the packaged one is the safe panel.
     panel_bin=wf-panel
     fast_panel=$(readlink -f /usr/local/bin/wf-panel 2>/dev/null)
+    wf_shell_version=$(dpkg-query -W -f '${Version}' wf-shell 2>/dev/null)
+    # One this root compiled for itself (/usr/local/lib/ish-wayland, when
+    # setup-wayfire.sh could not use /AOK/bundled's -- which a native mode's
+    # companion could not see before 2026-11-26) lacks what the bundled one
+    # gained since, such as a clock that redraws only when its text changes.
+    # On arm64, where the bundled one runs on the root's own libraries, it
+    # runs in its place when both are for the installed wf-shell.
+    bundled_panel=/AOK/bundled/devuan6-aarch64/wf-panel
+    if [ "$fast_panel" = /usr/local/lib/ish-wayland/wf-panel ] && [ -x "$bundled_panel" ] \
+            && [ "$(dpkg --print-architecture 2>/dev/null)" = arm64 ] \
+            && [ "$(cat "$bundled_panel.source" 2>/dev/null)" = "$wf_shell_version" ] \
+            && [ "$(cat "$fast_panel.source" 2>/dev/null)" = "$wf_shell_version" ]; then
+        log "using the bundled faster wf-panel in place of this root's own build of it"
+        fast_panel=$bundled_panel
+        panel_bin=$bundled_panel
+    fi
     if [ -n "$fast_panel" ] && [ -f "$fast_panel.source" ] && [ -x /usr/bin/wf-panel ] \
-            && [ "$(cat "$fast_panel.source")" != "$(dpkg-query -W -f '${Version}' wf-shell 2>/dev/null)" ]; then
+            && [ "$(cat "$fast_panel.source")" != "$wf_shell_version" ]; then
         log "warning: the faster wf-panel was built for wf-shell $(cat "$fast_panel.source"),"
         log "         not the installed one; starting the packaged wf-panel"
         log "         (sudo sh /AOK/tools/setup-wayfire.sh --panel fast updates it)"
@@ -2766,6 +2782,14 @@ fi
 # nothing. The trap is dropped after the loop and in cleanup, whose own
 # waits it would cut short.
 #
+# The sleep is AOK-iSH's native one where it runs. On an A10X a
+# distribution's sleep cost about 35 ms of CPU to start and the native one
+# 3.5 (2026-11-26), and the poll's sleeps were most of the session's idle CPU:
+# 330 of 400 ms a minute. The trap ends a native sleep as it does any other
+# (dash and busybox ash, same day). The native one is tried once first, so
+# one that cannot start leaves the distribution's in its place rather than a
+# loop that never sleeps.
+#
 # wayvnc is started again if it dies. The app's VNC connection retries for a
 # minute and then gives up ("Timed out connecting to wayvnc"), and with no
 # wayvnc the desktop was lost for good: a wayvnc that died on its detach at
@@ -2774,10 +2798,14 @@ fi
 # after a few restarts. One started while the app shows wl-present's frames
 # is detached again once it is listening.
 wayvnc_restarts=0
+poll_sleep_bin=sleep poll_sleep_applet=
+if [ -x /AOK/native/smallclue ] && /AOK/native/smallclue sleep 0 2>/dev/null; then
+    poll_sleep_bin=/AOK/native/smallclue poll_sleep_applet=sleep
+fi
 poll_sleep=
 trap '[ -n "$poll_sleep" ] && kill "$poll_sleep" 2>/dev/null' CHLD
 while kill -0 "$COMPOSITOR_PID" 2>/dev/null; do
-    sleep 15 &
+    "$poll_sleep_bin" ${poll_sleep_applet:+"$poll_sleep_applet"} 15 &
     poll_sleep=$!
     wait "$poll_sleep" 2>/dev/null
     poll_sleep=

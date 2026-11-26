@@ -12,11 +12,11 @@
 # How its programs run: a program named by its path in another root runs
 # chrooted into that root (Settings -> Other Filesystems -> Programs From
 # Other Roots -> Run Inside Their Root, the default), for any user, with
-# /proc, /sys, /dev, /run and /AOK/native, /AOK/docs and /AOK/tools bound in
-# -- and, because the companion's /etc/aok-binds asks for them, this root's
-# /home and /tmp, its hosts, hostname and resolv.conf, and its time zone. A
-# program started from a directory under /home or /tmp starts in that same
-# directory.
+# /proc, /sys, /dev, /run and /AOK/native, /AOK/docs, /AOK/tools and
+# /AOK/bundled bound in -- and, because the companion's /etc/aok-binds asks
+# for them, this root's /home and /tmp, its hosts, hostname and resolv.conf,
+# and its time zone. A program started from a directory under /home or /tmp
+# starts in that same directory.
 #
 # Builtins only: this is read by AOK-iSH's native dash and by a distribution's
 # sh alike.
