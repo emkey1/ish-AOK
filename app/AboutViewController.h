@@ -21,6 +21,10 @@ extern UIViewController *ISHCreateLLMSettingsViewController(void);
 // The page that installs a desktop for the Wayland display and chooses which
 // one it starts (GH #639). Push it, or present it in a navigation controller.
 extern UIViewController *ISHCreateDesktopSetupViewController(void);
+// Posted on the main thread when one of that page's scripts succeeds: a
+// desktop installed, removed or chosen. A Wayland window that failed for want
+// of one tries again on it.
+extern NSString *const ISHDesktopSetupDidChangeNotification;
 // The Legal screen: licence notice and the GPL written offer. The offer has
 // to accompany the binaries it covers, so it ships in the app rather than
 // living on a website. See docs/gpl-source-offer.md.

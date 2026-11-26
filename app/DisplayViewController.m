@@ -283,6 +283,17 @@ typedef NS_ENUM(NSInteger, DisplayConnectionState) {
     int _teardownPid;
     BOOL _reconnectPendingAfterTeardown;
 
+    // The window failed because start-wayland.sh said what is missing (no
+    // desktop installed, a session already running, ...), so it is worth
+    // trying again once the person has been elsewhere -- most likely fixing
+    // it. Before this the message stayed up after a desktop was installed,
+    // until Reconnect or a relaunch (A10X, 2026-11-22).
+    BOOL _retryWhenShown;
+    // Something other than this window has been in front, or the app in the
+    // background, since the failure. A tap on the window itself also brings
+    // it to the front, and must not replace the message being read.
+    BOOL _wasAway;
+
     DisplayRFBClient *_Nullable _rfbClient;
     // YES once _rfbClient has reported connecting. _state goes Connected
     // optimistically before that, and a SetDesktopSize sent earlier is dropped.
@@ -430,6 +441,24 @@ typedef NS_ENUM(NSInteger, DisplayConnectionState) {
     [NSNotificationCenter.defaultCenter addObserver:self
                                             selector:@selector(guestProcessExited:)
                                                 name:ProcessExitedNotification
+                                              object:nil];
+    [NSNotificationCenter.defaultCenter addObserver:self
+                                            selector:@selector(desktopSetupDidChange:)
+                                                name:ISHDesktopSetupDidChangeNotification
+                                              object:nil];
+    // The Workspace posts this with the window view whenever a window comes
+    // to the front; one that is not this window's means this one was left.
+    [NSNotificationCenter.defaultCenter addObserver:self
+                                            selector:@selector(someWindowCameToFront:)
+                                                name:ISHExternalDisplayContentDidBecomeAvailableNotification
+                                              object:nil];
+    [NSNotificationCenter.defaultCenter addObserver:self
+                                            selector:@selector(sceneDidEnterBackground:)
+                                                name:UISceneDidEnterBackgroundNotification
+                                              object:nil];
+    [NSNotificationCenter.defaultCenter addObserver:self
+                                            selector:@selector(sceneWillEnterForeground:)
+                                                name:UISceneWillEnterForegroundNotification
                                               object:nil];
 
     // "Open Everything as Default User" changed while a session runs as the other user:
@@ -1010,6 +1039,7 @@ static void DisplayParkSession(Terminal *terminal, int pid, NSString *_Nullable 
         err = do_execve(command[0].UTF8String, command.count, argv, envp);
     }
     if (err < 0) {
+        _retryWhenShown = YES;
         [self failWithMessage:[NSString stringWithFormat:
             NSLocalizedString(@"Could not start /AOK/tools/start-wayland.sh: %@\n\nIf no desktop is installed yet, choose Install a Desktop… from this window's ··· menu, or run 'sudo sh /AOK/tools/setup-wayland.sh' in a terminal.", @"Wayland display error; %@ is the error description"),
             [AppDelegate descriptionForISHErrno:err]]];
@@ -1067,6 +1097,7 @@ static void DisplayParkSession(Terminal *terminal, int pid, NSString *_Nullable 
                 return;
             if (errorData.length > 0) {
                 NSString *reason = [[NSString alloc] initWithData:errorData encoding:NSUTF8StringEncoding];
+                innerSelf->_retryWhenShown = YES;
                 [innerSelf failWithMessage:[NSString stringWithFormat:NSLocalizedString(@"start-wayland.sh failed:\n\n%@", @"Wayland display error; %@ is the script's error output"), reason]];
                 return;
             }
@@ -1203,6 +1234,7 @@ static void DisplayParkSession(Terminal *terminal, int pid, NSString *_Nullable 
             return;
         if (errorData.length > 0) {
             NSString *reason = [[NSString alloc] initWithData:errorData encoding:NSUTF8StringEncoding];
+            strongSelf->_retryWhenShown = YES;
             [strongSelf failWithMessage:[NSString stringWithFormat:NSLocalizedString(@"Wayland session ended:\n\n%@", @"Wayland display error; %@ is the script's error output"), reason]];
             return;
         }
@@ -1221,6 +1253,7 @@ static void DisplayParkSession(Terminal *terminal, int pid, NSString *_Nullable 
 
 - (void)failWithMessage:(NSString *)message {
     _state = DisplayConnectionStateFailed;
+    _wasAway = NO;
     __weak typeof(self) weakSelf = self;
     dispatch_async(dispatch_get_main_queue(), ^{
         typeof(self) strongSelf = weakSelf;
@@ -1235,6 +1268,7 @@ static void DisplayParkSession(Terminal *terminal, int pid, NSString *_Nullable 
 - (void)reconnect:(id)sender {
     if (_reconnectPendingAfterTeardown)
         return; // already reconnecting; ignore extra taps while we wait for the old session to actually exit
+    _retryWhenShown = NO;
     BOOL hadActiveSession = _sessionPid != 0;
     [self teardownSession];
     _statusLabel.numberOfLines = 1;
@@ -1466,7 +1500,67 @@ static NSString *DisplayScaleChoiceTitle(NSString *name, NSInteger value, NSInte
 // the front (a tap, Ctrl+Tab, Cmd+arrow Desktop switching), as MotePad's does.
 - (void)workspaceToolDidBecomeFrontmost {
     [self.displayView takeKeyboardFocusFromTouch];
+    [self retryIfShownAgain];
 }
+
+#pragma mark - Trying again after a fix
+
+- (BOOL)canRetryFailedSession {
+    return _state == DisplayConnectionStateFailed && _sessionPid == 0 &&
+        !_reconnectPendingAfterTeardown && self.isViewLoaded;
+}
+
+// A desktop was installed, removed or chosen from the setup page, wherever it
+// was opened. Any failure may be the want of one, so every kind is retried.
+- (void)desktopSetupDidChange:(NSNotification *)notification {
+    if ([self canRetryFailedSession])
+        [self reconnect:nil];
+}
+
+- (void)someWindowCameToFront:(NSNotification *)notification {
+    UIView *front = [notification.object isKindOfClass:UIView.class] ? notification.object : nil;
+    if (front != nil && self.isViewLoaded && ![self.view isDescendantOfView:front])
+        _wasAway = YES;
+}
+
+- (void)sceneDidEnterBackground:(NSNotification *)notification {
+    if (self.isViewLoaded && notification.object == self.view.window.windowScene)
+        _wasAway = YES;
+}
+
+- (void)sceneWillEnterForeground:(NSNotification *)notification {
+    if (!self.isViewLoaded || notification.object != self.view.window.windowScene)
+        return;
+    // Retried here only when this window is the one on show; a Workspace
+    // window behind another is retried when it is brought forward.
+    if ([self isOnShow])
+        [self retryIfShownAgain];
+}
+
+// Whether a touch at the middle of this view would land in it: true for the
+// standalone display and for the Workspace window in front, false for one
+// covered by another window.
+- (BOOL)isOnShow {
+    UIWindow *window = self.view.window;
+    if (window == nil || self.view.hidden)
+        return NO;
+    CGPoint middle = [self.view convertPoint:CGPointMake(CGRectGetMidX(self.view.bounds), CGRectGetMidY(self.view.bounds))
+                                      toView:window];
+    UIView *hit = [window hitTest:middle withEvent:nil];
+    return hit != nil && [hit isDescendantOfView:self.view];
+}
+
+// Shown again after being left: the person may have installed a desktop in a
+// terminal, freed a stuck session, and so on. Only a failure the script
+// described is retried this way -- those come back in a second if nothing
+// changed -- and not a timeout, which would sit for its full deadline again.
+- (void)retryIfShownAgain {
+    if (!_retryWhenShown || !_wasAway || ![self canRetryFailedSession])
+        return;
+    _wasAway = NO;
+    [self reconnect:nil];
+}
+
 
 // Set by the notice's "Don't Show Again".
 static NSString *const DisplayWorkspaceAttachNoticeHiddenKey = @"DisplayWorkspaceAttachNoticeHidden";

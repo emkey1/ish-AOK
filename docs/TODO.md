@@ -129,8 +129,22 @@ freeze (2026-09-25); their full text is in
 - **The Wayland window keeps "no desktop is installed" after one is
   installed.** Seen on the A10X, 2026-11-22: setup-native-wayland.sh finished
   correctly and the window still showed the message until Reconnect or a
-  relaunch (DisplayViewController `failWithMessage:`). Proposed: retry the
-  session when the window is shown again, or when the setup page is dismissed.
+  relaunch (DisplayViewController `failWithMessage:`). **Fixed for 567
+  (2026-11-26):** the desktop setup page posts
+  `ISHDesktopSetupDidChangeNotification` when one of its scripts succeeds,
+  and a failed Wayland window reconnects on it. A failure start-wayland.sh
+  described (its .error file, or the script not starting) is also retried
+  when the window comes back after being left -- another Workspace window in
+  front, or the app in the background -- so a fix typed in a terminal takes
+  too; a tap on the failed window itself does not retry, so the message can
+  be read. Verified in the iOS 26.5 simulator (iPhone 17 Pro, native root
+  with no companion): "Native mode has no desktop of its own", Install a
+  Desktop from the window's menu, and the window was Connected when the
+  install finished; labwc hidden in a terminal and Reconnect gave "'labwc'
+  not found", restoring it in the terminal and bringing the window forward
+  connected; the same failure with the window in front, the app sent Home,
+  labwc restored, the app reopened, and it connected. **Not run:** a device,
+  the standalone (full-screen) display.
 - **An idle Wayfire desktop wakes every second.** A10X, 2026-11-22, per-process
   CPU over 20 s with nothing running: wf-panel 0.64 s and wayfire 0.61 s;
   with wf-panel stopped, wayfire 0.30 s. The panel's clock redraws once a

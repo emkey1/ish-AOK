@@ -1785,6 +1785,8 @@ static const NSInteger ISHToolbarKeysActionsSection = 2;
 // A guest process started with pipes reports no exit status of its own.
 static NSString *const ISHDesktopScriptDoneMarker = @"__AOK_SCRIPT_DONE__";
 
+NSString *const ISHDesktopSetupDidChangeNotification = @"ISHDesktopSetupDidChange";
+
 // One queue for everything that starts, stops or runs a command in the guest
 // from these pages: guest_process_spawn_user and run_guest_command_capture
 // must not be called from the main thread or the shared pool.
@@ -2211,6 +2213,8 @@ static NSString *ISHDesktopPlainText(NSString *text) {
         [_progressView setProgress:1.0f animated:YES];
     [_textView scrollRangeToVisible:NSMakeRange(_textView.textStorage.length, 0)];
     UIAccessibilityPostNotification(UIAccessibilityAnnouncementNotification, summary);
+    if (succeeded)
+        [NSNotificationCenter.defaultCenter postNotificationName:ISHDesktopSetupDidChangeNotification object:nil];
     void (^completion)(BOOL) = _completion;
     _completion = nil;
     if (completion != nil)
@@ -2553,6 +2557,8 @@ static NSString *ISHDesktopInstallCommand(NSString *name) {
                                                                         preferredStyle:UIAlertControllerStyleAlert];
                 [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"OK", @"Alert button") style:UIAlertActionStyleDefault handler:nil]];
                 [strongSelf presentViewController:alert animated:YES completion:nil];
+            } else {
+                [NSNotificationCenter.defaultCenter postNotificationName:ISHDesktopSetupDidChangeNotification object:nil];
             }
             [strongSelf probe];
         });
