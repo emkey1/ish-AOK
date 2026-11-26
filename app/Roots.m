@@ -66,11 +66,14 @@ static NSURL *PersistRootsDir(void) {
 
 static NSString *kDefaultRoot = @"Default Root";
 // A single file-provider domain hosts every installed root as a folder, instead
-// of registering one domain per root (which spammed the Files sidebar). Must
-// stay in sync with the displayName shown in Files and the deep-link path.
+// of registering one domain per root (which spammed the Files sidebar). The
+// identifier also names the domain's folder, which Browse Files builds its path
+// from (RootsTableViewController.m).
 static NSString *const kISHFileProviderDomainIdentifier = @"iSH-AOK";
 // The identifier keeps the app's old name, so a domain registered before the
-// rename is still found as ours; only the name the Files app shows changed.
+// rename is still found as ours. The display name is the domain's own: the Files
+// app (iOS 26.5) labels the location with the app's Home Screen name,
+// "Workstation", not with this.
 static NSString *const kISHFileProviderDomainDisplayName = @"AOK-Workstation";
 static NSString *const kBundledRootIdentifierKey = @"identifier";
 static NSString *const kBundledRootDisplayNameKey = @"displayName";
@@ -1373,7 +1376,7 @@ static NSString *ISHFileProviderErrorText(NSError *error) {
             }];
         };
 
-        // Keep exactly one domain (identifier "iSH-AOK", shown as "AOK-Workstation");
+        // Keep exactly one domain (identifier "iSH-AOK", named "AOK-Workstation");
         // remove everything else, including the legacy one-domain-per-root
         // entries from older builds.
         NSFileProviderDomain *ourDomain = nil;
@@ -1409,8 +1412,9 @@ static NSString *ISHFileProviderErrorText(NSError *error) {
             }];
         } else if (![ourDomain.displayName isEqualToString:kISHFileProviderDomainDisplayName]) {
             // Registered before the app was renamed: adding a domain whose
-            // identifier is already there updates its name in place, so the
-            // Files app stops showing the old one and nothing is re-indexed.
+            // identifier is already there updates its name in place, and
+            // nothing is re-indexed. (Files labels the location with the app's
+            // Home Screen name, so this keeps the domain's own name current.)
             NSFileProviderDomain *renamed = [[NSFileProviderDomain alloc]
                        initWithIdentifier:kISHFileProviderDomainIdentifier
                               displayName:kISHFileProviderDomainDisplayName

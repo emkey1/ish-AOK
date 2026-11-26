@@ -89,4 +89,4 @@ already seen.
 | Settings -> Filesystems | The catalogue of Linux images |
 | `apk add` / `apt install` | Reaches the distribution's mirror |
 | LLM Chat with no key | Works on Apple Foundation Models; any other destination asks first |
-| Files app | AOK-Workstation appears as a location |
+| Files app | Workstation (the Home Screen name) appears as a location |

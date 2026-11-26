@@ -36,8 +36,8 @@ Two details are worth recording because both are choices rather than accidents.
 
 **The location was called "iSH"** until 559 — the extension's display name had
 never been renamed, and the documentation said so plainly rather than leaving
-somebody to wonder whether they were looking at the right app. It is "AOK-Workstation"
-now.
+somebody to wonder whether they were looking at the right app. It is "Workstation"
+now, the app's Home Screen name, which is the name Files shows.
 
 **It is switched off on Macs**, deliberately, and the reasoning is a small model
 of how to handle a platform that will not cooperate:

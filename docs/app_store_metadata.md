@@ -36,7 +36,10 @@ unread -- marketing copy is the author's voice, not a generated one.
 "Name and branding"). The name, the description and the review notes were sent
 to App Store Connect again the same day, at the user's word; the live text was
 checked first and differed from this file only in the name. The privacy and
-accessibility pages were republished too. The description keeps "a fork of
+accessibility pages were republished too. So were the five screenshots that showed the
+old name (the iPad `uname -a` line, both Workspace shots, both Files shots),
+retaken the same way and put in the same places; the old files are in
+`build/app-store-screenshots/old-aok-ish/`. The description keeps "a fork of
 the iSH project": stating where the app came from is how people who search for
 iSH find it, and it puts no one else's name in the name or the keywords.
 
@@ -228,7 +231,7 @@ Suggested set, in order, because the first two are what most people see:
 3. The Wayland desktop.
 4. LLM Chat mid-task, with a permission prompt visible -- it shows both the
    feature and that it asks.
-5. Files app, with AOK-Workstation as a location.
+5. Files app, with Workstation as a location (Files uses the Home Screen name).
 
 `fastlane/Snapfile` already exists for automating these, though it drives the
 simulator and the desktop and GPU shots may be easier taken on a device.

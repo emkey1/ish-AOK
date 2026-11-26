@@ -10,7 +10,7 @@ require "xcodeproj"
 
 PROJECT   = File.expand_path("../iSH-AOK.xcodeproj", __dir__)
 SRC_TARGET = "libiSH-AOKApp"                 # where WorkspaceViewController.m compiles
-FW_TARGETS = ["AOK-Workstation", "AOK-Workstation+Linux"]    # where AudioToolbox / liblzma link
+FW_TARGETS = ["iSH-AOK", "iSH-AOK+Linux"]    # Xcode target names (they keep the first name): where AudioToolbox / liblzma link
 XCFRAMEWORK = File.expand_path("../deps/audiocodecs-static/audiocodecs.xcframework", __dir__)
 
 SOURCES = %w[
