@@ -1,10 +1,10 @@
 ---
-title: AOK-iSH accessibility
+title: AOK-Workstation accessibility
 ---
 
-# AOK-iSH accessibility
+# AOK-Workstation accessibility
 
-What AOK-iSH does for accessibility on iPhone and iPad, how to set it up,
+What AOK-Workstation does for accessibility on iPhone and iPad, how to set it up,
 and what it does not do yet. This describes version 1.3, build 567 and later.
 If something here is wrong for you, or something gets in your way, please
 [open an issue](https://github.com/emkey1/ish-AOK/issues) or use **Settings →

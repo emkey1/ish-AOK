@@ -1,8 +1,8 @@
 ---
-title: AOK-iSH
+title: AOK-Workstation
 ---
 
-# AOK-iSH
+# AOK-Workstation
 
 A Unix-style shell on device, for iPhone and iPad.
 
