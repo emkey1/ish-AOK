@@ -29,6 +29,10 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <copyfile.h>
+#include <fts.h>
+#include <stdatomic.h>
+#include <sys/stat.h>
 #include <errno.h>
 #include "kernel/init.h" // run_guest_command_capture (guest-shell tool)
 
@@ -861,13 +865,7 @@ static NSString *ISHForeignExecTitle(NSString *mode) {
             [self presentViewController:navigationController animated:YES completion:nil];
         }
     } else if (cell == self.exportContainerCell) {
-        // copy the files to the app container so they can be extracted from iTunes file sharing
-        NSURL *container = ContainerURL();
-        NSURL *documents = [NSFileManager.defaultManager URLsForDirectory:NSDocumentDirectory inDomains:NSUserDomainMask][0];
-        [NSFileManager.defaultManager removeItemAtURL:[documents URLByAppendingPathComponent:@"roots copy"] error:nil];
-        [NSFileManager.defaultManager copyItemAtURL:[container URLByAppendingPathComponent:@"roots"]
-                                              toURL:[documents URLByAppendingPathComponent:@"roots copy"]
-                                              error:nil];
+        [self _exportContainer];
     } else if (cell == self.resetMountsCell) {
         iosfs_clear_all_bookmarks();
     } else if (cell == self.customDnsCell) {
@@ -884,6 +882,191 @@ static NSString *ISHForeignExecTitle(NSString *mode) {
         }
     }
     [tableView deselectRowAtIndexPath:indexPath animated:YES];
+}
+
+#pragma mark - Export container
+
+// Secret Advanced Debugging Options > Export container copies every root to
+// "roots copy" in the app's Documents folder, where Finder's file sharing
+// reaches it (upstream iSH's debugging aid, d6353da21). It used to copy on the
+// main thread with every error ignored. A real install is gigabytes and a
+// hundred thousand files, so the app froze until it was killed: two TestFlight
+// crash reports with no log (548, 558). The copy now runs off the main thread,
+// shows how far it has got, can be cancelled, keeps going for as long as iOS
+// allows in the background, and ends by saying where the copy is or why it
+// failed. A failed or cancelled copy is removed.
+//
+// copyfile clones on APFS, so the copy takes almost no space until one side
+// changes. Sockets, FIFOs and device nodes are left out: copyfile cannot copy a
+// socket (ENOTSUP, which ended the whole copy) and would open a FIFO and wait.
+// The guest keeps running meanwhile, so a file it writes during the copy
+// (meta.db among them) can be caught halfway, as it always could.
+
+static BOOL containerExportRunning;              // main thread only
+static atomic_bool containerExportCancelled;     // by Cancel, or iOS ending the background time
+static atomic_long containerExportFilesDone;
+static atomic_long containerExportFilesTotal;    // -1 while counting
+static atomic_int containerExportError;          // errno of the step that failed
+
+static int ISHContainerExportCallback(int what, int stage, __unused copyfile_state_t state,
+                                      const char *src, __unused const char *dst, __unused void *context) {
+    if (atomic_load(&containerExportCancelled))
+        return COPYFILE_QUIT;
+    if (what == COPYFILE_RECURSE_FILE && stage == COPYFILE_START) {
+        struct stat st;
+        if (lstat(src, &st) == 0 && !S_ISREG(st.st_mode) && !S_ISLNK(st.st_mode))
+            return COPYFILE_SKIP;
+    }
+    if (what == COPYFILE_RECURSE_FILE && stage == COPYFILE_FINISH)
+        atomic_fetch_add(&containerExportFilesDone, 1);
+    if (stage == COPYFILE_ERR) {
+        // Kept here: once told to quit, copyfile returns with errno saying
+        // only that it was cancelled.
+        int expected = 0;
+        atomic_compare_exchange_strong(&containerExportError, &expected, errno != 0 ? errno : EIO);
+        return COPYFILE_QUIT;
+    }
+    return COPYFILE_CONTINUE;
+}
+
+// What copyfile will copy: everything but directories and what the callback
+// skips. The same lstat-level walk, so the two counts agree.
+static long ISHContainerExportCountFiles(const char *path) {
+    char *paths[] = {(char *) path, NULL};
+    FTS *fts = fts_open(paths, FTS_PHYSICAL | FTS_NOCHDIR, NULL);
+    if (fts == NULL)
+        return 0;
+    long count = 0;
+    FTSENT *entry;
+    while ((entry = fts_read(fts)) != NULL && !atomic_load(&containerExportCancelled)) {
+        if (entry->fts_info == FTS_F || entry->fts_info == FTS_SL || entry->fts_info == FTS_SLNONE)
+            count++;
+    }
+    fts_close(fts);
+    return count;
+}
+
+static NSString *ISHContainerExportCountString(long count) {
+    return [NSNumberFormatter localizedStringFromNumber:@(count) numberStyle:NSNumberFormatterDecimalStyle];
+}
+
+- (void)_exportContainer {
+    if (containerExportRunning)
+        return;
+    containerExportRunning = YES;
+    atomic_store(&containerExportCancelled, false);
+    atomic_store(&containerExportFilesDone, 0);
+    atomic_store(&containerExportFilesTotal, -1);
+    atomic_store(&containerExportError, 0);
+
+    NSURL *source = [ContainerURL() URLByAppendingPathComponent:@"roots"];
+    NSURL *documents = [NSFileManager.defaultManager URLsForDirectory:NSDocumentDirectory inDomains:NSUserDomainMask].firstObject;
+    NSURL *destination = [documents URLByAppendingPathComponent:@"roots copy"];
+
+    __block BOOL cancelledByUser = NO;
+    UIAlertController *progress =
+        [UIAlertController alertControllerWithTitle:NSLocalizedString(@"Exporting Container", @"Alert title while Export container copies the filesystems")
+                                            message:NSLocalizedString(@"Counting files…", @"Export container progress, before the copy starts")
+                                     preferredStyle:UIAlertControllerStyleAlert];
+    [progress addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Cancel", @"Alert button")
+                                                 style:UIAlertActionStyleCancel
+                                               handler:^(__unused UIAlertAction *action) {
+        cancelledByUser = YES;
+        atomic_store(&containerExportCancelled, true);
+    }]];
+    [self presentViewController:progress animated:YES completion:nil];
+
+    dispatch_source_t timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
+    dispatch_source_set_timer(timer, dispatch_time(DISPATCH_TIME_NOW, 0), NSEC_PER_SEC / 4, NSEC_PER_SEC / 20);
+    dispatch_source_set_event_handler(timer, ^{
+        long total = atomic_load(&containerExportFilesTotal);
+        if (total < 0)
+            return;
+        long done = MIN(atomic_load(&containerExportFilesDone), total);
+        progress.message = [NSString stringWithFormat:NSLocalizedString(@"%1$@ of %2$@ files", @"Export container progress; both are numbers of files"),
+                            ISHContainerExportCountString(done), ISHContainerExportCountString(total)];
+    });
+    dispatch_resume(timer);
+
+    // A copy left running when the app goes to the background gets the time iOS
+    // gives; when that ends, it stops and says so rather than being killed.
+    UIApplication *application = UIApplication.sharedApplication;
+    __block UIBackgroundTaskIdentifier backgroundTask = UIBackgroundTaskInvalid;
+    void (^endBackgroundTask)(void) = ^{
+        if (backgroundTask != UIBackgroundTaskInvalid) {
+            [application endBackgroundTask:backgroundTask];
+            backgroundTask = UIBackgroundTaskInvalid;
+        }
+    };
+    backgroundTask = [application beginBackgroundTaskWithName:@"Export container" expirationHandler:^{
+        int expected = 0;
+        atomic_compare_exchange_strong(&containerExportError, &expected, ECANCELED);
+        atomic_store(&containerExportCancelled, true);
+        endBackgroundTask();
+    }];
+
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        NSFileManager *manager = [[NSFileManager alloc] init];
+        atomic_store(&containerExportFilesTotal, ISHContainerExportCountFiles(source.fileSystemRepresentation));
+
+        NSError *removeError = nil;
+        if (!atomic_load(&containerExportCancelled)
+            && ![manager removeItemAtURL:destination error:&removeError]
+            && !([removeError.domain isEqualToString:NSCocoaErrorDomain] && removeError.code == NSFileNoSuchFileError)) {
+            NSError *underlying = removeError.userInfo[NSUnderlyingErrorKey];
+            int expected = 0;
+            atomic_compare_exchange_strong(&containerExportError, &expected,
+                                           [underlying.domain isEqualToString:NSPOSIXErrorDomain] ? (int) underlying.code : EIO);
+        }
+
+        int result = -1;
+        if (!atomic_load(&containerExportCancelled) && atomic_load(&containerExportError) == 0) {
+            copyfile_state_t state = copyfile_state_alloc();
+            copyfile_state_set(state, COPYFILE_STATE_STATUS_CB, (const void *) &ISHContainerExportCallback);
+            result = copyfile(source.fileSystemRepresentation, destination.fileSystemRepresentation, state,
+                              COPYFILE_ALL | COPYFILE_RECURSIVE | COPYFILE_CLONE | COPYFILE_NOFOLLOW);
+            int copyErrno = errno;
+            copyfile_state_free(state);
+            if (result != 0) {
+                int expected = 0;
+                atomic_compare_exchange_strong(&containerExportError, &expected, copyErrno != 0 ? copyErrno : EIO);
+            }
+        }
+        BOOL succeeded = result == 0 && !atomic_load(&containerExportCancelled);
+        if (!succeeded)
+            [manager removeItemAtURL:destination error:nil];
+        long copied = atomic_load(&containerExportFilesDone);
+        int error = atomic_load(&containerExportError);
+
+        dispatch_async(dispatch_get_main_queue(), ^{
+            dispatch_source_cancel(timer);
+            endBackgroundTask();
+            containerExportRunning = NO;
+            if (cancelledByUser)
+                return;
+            UIAlertController *outcome;
+            if (succeeded) {
+                outcome = [UIAlertController alertControllerWithTitle:NSLocalizedString(@"Container Exported", @"Alert title when Export container has finished")
+                                                              message:[NSString stringWithFormat:NSLocalizedString(@"%@ files were copied to “roots copy”. To get them, connect this device to a Mac, open it in Finder, and find AOK-iSH under Files.", @"Export container result; %@ is a number of files. “roots copy” is a folder name and stays in English; Files is the tab in Finder's window for a connected device"),
+                                                                       ISHContainerExportCountString(copied)]
+                                                       preferredStyle:UIAlertControllerStyleAlert];
+            } else {
+                NSError *reason = [NSError errorWithDomain:NSPOSIXErrorDomain code:error != 0 ? error : EIO userInfo:nil];
+                outcome = [UIAlertController alertControllerWithTitle:NSLocalizedString(@"Export Failed", @"Alert title when Export container could not finish")
+                                                              message:reason.localizedDescription
+                                                       preferredStyle:UIAlertControllerStyleAlert];
+            }
+            [outcome addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"OK", @"Alert button") style:UIAlertActionStyleDefault handler:nil]];
+            void (^show)(void) = ^{
+                if (self.view.window != nil && self.presentedViewController == nil)
+                    [self presentViewController:outcome animated:YES completion:nil];
+            };
+            if (self.presentedViewController == progress)
+                [progress dismissViewControllerAnimated:YES completion:show];
+            else
+                show();
+        });
+    });
 }
 
 - (void)_showCustomDnsServersEditorFromCell:(UITableViewCell *)cell {
