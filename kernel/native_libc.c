@@ -4774,6 +4774,15 @@ int nlibc_getsockopt(int fd_no, int level, int option, void *value, socklen_t *l
             (size > 0 && native_scratch_get(value, guest_value, size) < 0))
         return nlibc_fail(_EFAULT);
     *len = size;
+    // SO_ERROR's value is an errno, and the guest's is a Linux number. Passed
+    // through, a refused connection reached ssh as 111 -- Linux ECONNREFUSED,
+    // and a number Darwin's strerror has no text for, so it printed
+    // "Unknown error: 111". ETIMEDOUT (110) and EHOSTUNREACH (113) were the
+    // same. A non-blocking connect reports how it ended only here, so every
+    // failed connect was affected.
+    if (level == SOL_SOCKET && option == SO_ERROR && value != NULL &&
+            size >= sizeof(int) && *(int *) value != 0)
+        *(int *) value = nlibc_host_errno(*(int *) value);
     return 0;
 }
 

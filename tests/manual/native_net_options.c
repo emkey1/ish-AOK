@@ -29,6 +29,12 @@
 //   wget -q -T 1 /stall      status 4 after about a second -- the control for
 //                            the timeout: /ok with the same -T is status 0
 //   wget -t 2 -T 1 /stall    asked twice
+//   ssh to a closed port     "Connection refused", status 255. A non-blocking
+//                            connect's result is read back with
+//                            getsockopt(SO_ERROR), whose value came through as
+//                            the guest's Linux number: 111, for which Darwin's
+//                            strerror has no text, so ssh said
+//                            "Unknown error: 111".
 //
 // SKIPs where there is no native smallclue.
 #define _GNU_SOURCE
@@ -38,6 +44,7 @@
 #include <pthread.h>
 #include <signal.h>
 #include <stdarg.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -91,6 +98,8 @@ static void *serve(void *unused) {
 
 // Runs an applet; stdout into `out`. Returns the exit status, or -1 if it
 // did not exit; *ms is how long it took.
+static bool want_stderr;   // run() collects stderr with stdout when set
+
 static int run(char *out, size_t out_size, long *ms, const char *applet, ...) {
     char *argv[24];
     int argc = 0;
@@ -114,7 +123,7 @@ static int run(char *out, size_t out_size, long *ms, const char *applet, ...) {
     if (pid == 0) {
         int null = open("/dev/null", O_WRONLY);
         dup2(fds[1], 1);
-        dup2(null, 2);
+        dup2(want_stderr ? fds[1] : null, 2);
         close(fds[0]);
         close(fds[1]);
         // The applet is chosen by the name it is run under.
@@ -144,6 +153,30 @@ static int count_of(const char *hay, const char *needle) {
     return n;
 }
 
+// ssh to a port that was just bound and closed, so nothing listens on it.
+static void check_ssh_refused(char *out, size_t out_size) {
+    int probe = socket(AF_INET, SOCK_STREAM, 0);
+    struct sockaddr_in closed = {.sin_family = AF_INET};
+    inet_pton(AF_INET, "127.0.0.1", &closed.sin_addr);
+    socklen_t len = sizeof(closed);
+    if (probe < 0 || bind(probe, (struct sockaddr *) &closed, sizeof(closed)) != 0 ||
+        getsockname(probe, (struct sockaddr *) &closed, &len) != 0) {
+        CHECK(0, "setup: no closed port to try ssh on");
+        return;
+    }
+    close(probe);
+    char port[16];
+    snprintf(port, sizeof(port), "%d", ntohs(closed.sin_port));
+    want_stderr = true;
+    long ms;
+    int rc = run(out, out_size, &ms, "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5",
+                 "-p", port, "nobody@127.0.0.1", "true", (char *) NULL);
+    want_stderr = false;
+    CHECK(rc == 255, "ssh to a closed port: status %d, wanted 255 (\"%.300s\")", rc, out);
+    CHECK(strstr(out, "Connection refused") != NULL,
+          "ssh to a closed port: wanted \"Connection refused\" (\"%.300s\")", out);
+}
+
 int main(void) {
     if (access(SMALLCLUE, X_OK) != 0) {
         printf("native_net_options: SKIP (no " SMALLCLUE ")\n");
@@ -154,11 +187,17 @@ int main(void) {
     long ms = 0;
     int rc;
 
+    check_ssh_refused(out, sizeof(out));
+
     // ---- ping -----------------------------------------------------------
     rc = run(out, sizeof(out), &ms, "ping", "-c", "1", "127.0.0.1", (char *) NULL);
     if (rc != 0 || strstr(out, "bytes from 127.0.0.1") == NULL) {
         // No ICMP to loopback at all here: nothing about the options can be
         // told from that.
+        if (failures != 0) {
+            printf("native_net_options: FAIL failures=%d\n", failures);
+            return 1;
+        }
         printf("native_net_options: SKIP (ping cannot reach 127.0.0.1: status %d)\n", rc);
         return 0;
     }
