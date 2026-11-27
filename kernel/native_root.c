@@ -355,15 +355,21 @@ static void unlink_stale(const struct link_set *made, const char *previous) {
 }
 
 static void record_links(const struct link_set *made) {
-    size_t size = 128;
+    // Sized from the header itself. A fixed 128 held the AOK-iSH header
+    // (123 bytes) but not the AOK-Workstation one (131), so the rename left
+    // a record cut off inside its second comment line, with no paths: the
+    // next boot found nothing to compare and never removed a stale link.
+    static const char header[] =
+        "# Links AOK-Workstation made into /AOK/native at the last boot. Rewritten at\n"
+        "# every boot; a path that drops out of it is removed.\n";
+    size_t size = sizeof(header);
     for (size_t i = 0; i < made->count; i++)
         size += strlen(made->paths[i]) + 1;
     char *text = malloc(size);
     if (text == NULL)
         return;
-    size_t at = (size_t) snprintf(text, size,
-        "# Links AOK-Workstation made into /AOK/native at the last boot. Rewritten at\n"
-        "# every boot; a path that drops out of it is removed.\n");
+    memcpy(text, header, sizeof(header));
+    size_t at = sizeof(header) - 1;
     for (size_t i = 0; i < made->count && at < size; i++)
         at += (size_t) snprintf(text + at, size - at, "%s\n", made->paths[i]);
     write_file(LINK_RECORD, text, 0644, false);
