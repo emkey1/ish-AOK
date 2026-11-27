@@ -35,7 +35,9 @@ static int check_read_generation(clip_fd *fd) {
     return 0;
 }
 
+// Returns NULL, with *len 0, when there is nothing to read.
 static const char *get_data(clip_fd *fd, size_t *len) {
+    *len = 0;
     if (fd_priv(fd).buffer != NULL) {
         *len = fd_priv(fd).buffer_len;
         return fd_priv(fd).buffer;
@@ -46,8 +48,11 @@ static const char *get_data(clip_fd *fd, size_t *len) {
     }
 
     NSString __autoreleasing *contents = UIPasteboard.generalPasteboard.string;
-    *len = contents.length;
-    return contents.UTF8String;
+    const char *utf8 = contents.UTF8String;
+    // Bytes, not -length: that counts UTF-16 units, so any non-ASCII text
+    // came back short by its extra UTF-8 bytes ("héllo" read as "héll").
+    *len = utf8 != NULL ? strlen(utf8) : 0;
+    return utf8;
 }
 
 static int realloc_to_fit(clip_fd* fd, size_t fit_len) {
@@ -111,9 +116,11 @@ static ssize_t clipboard_read_sync(clip_fd *fd) {
     @autoreleasepool {
         size_t len;
         const void *data = get_data(fd, &len);
+        if (data == NULL || len == 0)
+            return 0;  // an empty pasteboard opens as an empty file
 
         // Make sure size is still INITIAL_BUFFER_CAP based
-        if (realloc_to_fit(fd, len)) {
+        if (realloc_to_fit(fd, len) || fd_priv(fd).buffer == NULL) {
             return _ENOMEM;
         }
 
