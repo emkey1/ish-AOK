@@ -1406,16 +1406,17 @@ static const NSTimeInterval kSaveProgressDelay = 0.4;
 // Take the HUD down, then run `next` -- ordered, because the confirmation and
 // the refusal both present something of their own and UIKit will not present
 // on top of a controller that is still dismissing.
-- (void)_dismissSaveProgressHUDThen:(void (^)(void))next {
+- (void)_dismissSaveProgressHUDThen:(nullable void (^)(void))next {
+    // `next` is nil after a successful Suspend and Exit. Calling a nil block
+    // crashes, which every such suspend did from 566 until this check.
     UIAlertController *hud = self.saveProgressHUD;
     self.saveProgressHUD = nil;
     if (hud == nil || hud.presentingViewController == nil) {
-        next();
+        if (next != nil)
+            next();
         return;
     }
-    [hud dismissViewControllerAnimated:NO completion:^{
-        next();
-    }];
+    [hud dismissViewControllerAnimated:NO completion:next];
 }
 
 - (void)saveSessionFromBar:(__unused id)sender {
