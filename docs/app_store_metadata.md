@@ -27,7 +27,8 @@ offers others' distributions, and the binary carries open-source code, whose
 notices are on the app's Licences screen. **Still for the user, on the
 website:** the App Privacy label ("Data Not Collected") and EU trader status. The App
 Review notes (docs/app_store_review_notes.md, 3,174 characters) were sent too.
-**Before submitting:** build 567 is attached. Its encryption answer is NO
+**Submitted for review 2026-11-27:** version 1.3, build 567; App Store Connect
+reads WAITING_FOR_REVIEW. Build 567 is attached. Its encryption answer is NO
 (`ITSAppUsesNonExemptEncryption`, decided 2026-11-26: the encryption is exempt
 from export documentation, and France stays off), which the assessment's
 "Export compliance" explains. Everything here is a starting point to edit, not something to paste
