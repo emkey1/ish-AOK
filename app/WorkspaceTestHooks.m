@@ -39,6 +39,17 @@
 //    display-menu                 open a Wayland display's menu, as its corner
 //                                 (full screen) or ··· button does
 //    wayland-full-screen          the root menu's Wayland Full Screen
+//    llm-send <text>              type into the LLM chat on screen and press
+//                                 Send (/commands too; the consent alert, if it
+//                                 comes up, is answered with `tap Send`)
+//    llm-new                      the chat menu's New Chat
+//    llm-clear                    the chat menu's Clear Messages (idle chats only:
+//                                 a busy one asks first)
+//    llm-destination <text>       switch the chat to the saved destination whose
+//                                 id is <text>, or whose name or model has it
+//    llm-dump                     the chat on screen: its messages, state,
+//                                 destination (no key), the destinations, and
+//                                 the skills given to the model
 //
 //  Off unless ISH_WORKSPACE_TEST=1 is in the app's environment.
 //
@@ -54,6 +65,9 @@
 #import "SceneDelegate.h"
 #import "AppDelegate.h"
 #import "DisplayViewController.h"
+#import "LLMChatAgent.h"
+#import "LLMChatInternal.h"
+#import "LLMChatSkills.h"
 #include "kernel/checkpoint.h"
 
 // Debug builds only. The `tap` verb reaches UIAlertAction's `handler`, which is
@@ -87,6 +101,15 @@
 - (void)saveWorkspaceDesktops;
 - (void)restoreWorkspaceDesktops;
 - (void)saveSessionFromRootMenu;
+@end
+
+// The LLM chat screen's, implemented in LLMChatViewController.m.
+@interface LLMClientViewController (WorkspaceTestHooks)
+- (void)setPromptFieldText:(NSString *)text;
+- (void)sendPrompt:(id)sender;
+- (void)startNewChat;
+- (void)clearTranscript:(id)sender;
+- (void)switchToDestinationWithID:(NSString *)destinationID;
 @end
 
 // ISHWorkspaceTerminalTabsViewController's, likewise private.
@@ -267,6 +290,83 @@ static UIAlertController *ISHWorkspaceTestTopAlert(void) {
     return nil;
 }
 
+// The LLM chat on screen, in a Workspace window or full screen, or nil.
+static LLMClientViewController *ISHWorkspaceTestFindLLMChat(UIViewController *vc) {
+    if (vc == nil)
+        return nil;
+    if ([vc isKindOfClass:LLMClientViewController.class] && vc.isViewLoaded && vc.view.window != nil)
+        return (LLMClientViewController *) vc;
+    for (UIViewController *child in vc.childViewControllers) {
+        LLMClientViewController *found = ISHWorkspaceTestFindLLMChat(child);
+        if (found != nil)
+            return found;
+    }
+    return ISHWorkspaceTestFindLLMChat(vc.presentedViewController);
+}
+
+static LLMClientViewController *ISHWorkspaceTestLLMChat(void) {
+    for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+        if (![scene isKindOfClass:UIWindowScene.class])
+            continue;
+        for (UIWindow *window in ((UIWindowScene *) scene).windows) {
+            LLMClientViewController *chat = ISHWorkspaceTestFindLLMChat(window.rootViewController);
+            if (chat != nil)
+                return chat;
+        }
+    }
+    return nil;
+}
+
+// Strings and numbers as they are, anything else as its description, so the
+// result is always valid JSON.
+static id ISHWorkspaceTestJSONValue(id value) {
+    if ([value isKindOfClass:NSString.class] || [value isKindOfClass:NSNumber.class])
+        return value;
+    return [value description] ?: @"";
+}
+
+// A destination without its API key.
+static NSDictionary *ISHWorkspaceTestDestination(NSDictionary<NSString *, NSString *> *destination) {
+    NSMutableDictionary *out = [NSMutableDictionary dictionary];
+    for (NSString *key in destination) {
+        if (![key isEqualToString:kISHLLMDestinationAPIKey])
+            out[key] = ISHWorkspaceTestJSONValue(destination[key]);
+    }
+    out[@"hasKey"] = @(ISHLLMStringValue(destination, kISHLLMDestinationAPIKey).length > 0);
+    return out;
+}
+
+static void ISHWorkspaceTestLLMDump(NSString *seq, LLMClientViewController *chat) {
+    ISHLLMAgent *agent = [chat valueForKey:@"agent"];
+    NSMutableArray *messages = [NSMutableArray array];
+    for (NSDictionary<NSString *, id> *message in agent.messages) {
+        NSMutableDictionary *entry = [NSMutableDictionary dictionary];
+        for (NSString *key in message)
+            entry[key] = ISHWorkspaceTestJSONValue(message[key]);
+        [messages addObject:entry];
+    }
+    NSMutableArray *skills = [NSMutableArray array];
+    for (ISHLLMSkill *skill in agent.offeredSkills)
+        [skills addObject:@{@"name": skill.name ?: @"", @"location": skill.location ?: @""}];
+    NSMutableArray *destinations = [NSMutableArray array];
+    for (NSDictionary<NSString *, NSString *> *destination in ISHLLMDestinations())
+        [destinations addObject:ISHWorkspaceTestDestination(destination)];
+    ISHWorkspaceTestWriteResult(seq, @{
+        @"ok": @YES,
+        @"session": agent.sessionID ?: @"",
+        @"title": agent.title ?: @"",
+        @"busy": @(agent.busy),
+        @"status": [agent statusLine] ?: @"",
+        @"lastOutcome": agent.lastOutcome ?: @"",
+        @"approval": agent.pendingApproval.reason ?: @"",
+        @"workingDirectory": agent.toolContext.workingDirectory ?: @"",
+        @"destination": ISHWorkspaceTestDestination([agent destination]),
+        @"destinations": destinations,
+        @"skills": skills,
+        @"messages": messages,
+    });
+}
+
 static void ISHWorkspaceTestRun(NSString *line) {
     NSArray<NSString *> *words = [line componentsSeparatedByString:@" "];
     if (words.count < 2)
@@ -382,6 +482,58 @@ static void ISHWorkspaceTestRun(NSString *line) {
         ISHWorkspaceTestWriteResult(seq, alert == nil ? @{@"ok": @YES, @"alert": @NO}
                                                      : @{@"ok": @YES, @"alert": @YES, @"title": alert.title ?: @"",
                                                          @"message": alert.message ?: @""});
+        return;
+    }
+    if ([verb hasPrefix:@"llm-"]) {
+        LLMClientViewController *chat = ISHWorkspaceTestLLMChat();
+        if (chat == nil) {
+            answer(NO, @"no LLM chat on screen");
+            return;
+        }
+        NSString *text = ISHWorkspaceTestDecode([args componentsJoinedByString:@" "]);
+        if ([verb isEqualToString:@"llm-dump"]) {
+            ISHWorkspaceTestLLMDump(seq, chat);
+            return;
+        }
+        if ([verb isEqualToString:@"llm-send"] && text.length > 0) {
+            // What typing it and tapping Send does.
+            [chat setPromptFieldText:text];
+            [chat sendPrompt:nil];
+            answer(YES, nil);
+            return;
+        }
+        if ([verb isEqualToString:@"llm-new"]) {
+            [chat startNewChat];
+            answer(YES, nil);
+            return;
+        }
+        if ([verb isEqualToString:@"llm-clear"]) {
+            [chat clearTranscript:nil];
+            answer(YES, nil);
+            return;
+        }
+        if ([verb isEqualToString:@"llm-destination"] && text.length > 0) {
+            NSString *match = nil;
+            for (NSDictionary<NSString *, NSString *> *destination in ISHLLMDestinations()) {
+                NSString *identifier = ISHLLMStringValue(destination, kISHLLMDestinationID);
+                if ([identifier isEqualToString:text]) {
+                    match = identifier;
+                    break;
+                }
+                NSString *words = [NSString stringWithFormat:@"%@ %@", ISHLLMDestinationDisplayName(destination),
+                                   ISHLLMStringValue(destination, kISHLLMDestinationModel)];
+                if (match == nil && [words rangeOfString:text options:NSCaseInsensitiveSearch].location != NSNotFound)
+                    match = identifier;
+            }
+            if (match == nil) {
+                answer(NO, @"no such destination");
+                return;
+            }
+            [chat switchToDestinationWithID:match];
+            answer(YES, nil);
+            return;
+        }
+        answer(NO, [@"unknown command: " stringByAppendingString:line]);
         return;
     }
     if ([verb isEqualToString:@"workspace"]) {
