@@ -4,7 +4,7 @@ Draft copy for the App Store Connect fields, with Apple's limits noted. Written
 2026-11-14.
 
 **Live on App Store Connect since 2026-11-24** (sent through the API from this
-file, en-US, version 1.3 with build 566 attached): the name, subtitle,
+file, en-US, version 1.3; build 567 attached since 2026-11-27, in place of 566): the name, subtitle,
 promotional text, keywords, description, privacy policy URL and both screenshot
 sets -- four each (terminal, Workspace, Files, LLM Chat). The Wayland desktop
 shot was taken out of both: the desktop runs on a companion Devuan filesystem,
