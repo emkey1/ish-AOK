@@ -5744,9 +5744,10 @@ static NSString *ISHWorkspaceDesktopNamesSignature(NSArray<NSString *> *names) {
                                             handler:^(__unused UIAlertAction *action) {
         NSString *nameField = alert.textFields[0].text ?: @"";
         NSString *command = isGroup ? nil : (alert.textFields[1].text ?: @"");
-        if (nameField.length == 0 && command.length == 0)
-            return;
+        // A group has no command, so an unnamed group has no name at all.
         NSString *name = nameField.length > 0 ? nameField : command;
+        if (name.length == 0)
+            return;
         ISHWorkspaceLauncherMutateAtPath(path, ^(NSMutableArray<NSDictionary<NSString *, id> *> *level) {
             if (index >= level.count)
                 return;
@@ -11795,9 +11796,15 @@ static NSString *const ISHWorkspaceLauncherRowReuseIdentifier = @"launcher.row";
     if (from >= _rowShortcuts.count)
         return;
 
+    // No destination is a drop past the last row: the move goes to the end,
+    // and the row move below needs that end as an index path of its own.
     NSIndexPath *destinationIndexPath = coordinator.destinationIndexPath;
     NSUInteger to = destinationIndexPath != nil ? (NSUInteger)destinationIndexPath.row : _rowShortcuts.count - 1;
-    BOOL destinationIsGroup = destinationIndexPath != nil && to != from && to < _rowShortcuts.count
+    BOOL droppedPastTheEnd = destinationIndexPath == nil;
+    if (droppedPastTheEnd)
+        destinationIndexPath = [NSIndexPath indexPathForRow:(NSInteger)to inSection:sourceIndexPath.section];
+    // Past the end is never "into" the last row, even when that row is a group.
+    BOOL destinationIsGroup = !droppedPastTheEnd && to != from && to < _rowShortcuts.count
         && ISHWorkspaceShortcutIsGroup(_rowShortcuts[to]);
 
     if (destinationIsGroup) {
@@ -11806,7 +11813,7 @@ static NSString *const ISHWorkspaceLauncherRowReuseIdentifier = @"launcher.row";
         [self reorderShortcutFromIndex:from toIndex:to];
         [tableView moveRowAtIndexPath:sourceIndexPath toIndexPath:destinationIndexPath];
     }
-    [coordinator dropItem:item.dragItem toRowAtIndexPath:destinationIndexPath ?: sourceIndexPath];
+    [coordinator dropItem:item.dragItem toRowAtIndexPath:destinationIndexPath];
 }
 
 - (void)reorderShortcutFromIndex:(NSUInteger)from toIndex:(NSUInteger)to {

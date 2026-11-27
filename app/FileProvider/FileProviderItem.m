@@ -42,9 +42,11 @@ static NSData *ISHBase64URLDecode(NSString *encoded) {
 }
 
 NSString *ISHFileProviderVirtualIdentifierForPath(NSString *path) {
-    NSData *data = [path dataUsingEncoding:NSUTF8StringEncoding];
-    if (data == nil)
-        return nil;
+    // Declared never to return nil, and its callers rely on that. Only a
+    // string holding an unpaired UTF-16 surrogate fails a strict conversion,
+    // which no path built from a directory entry can hold; lossy keeps even
+    // that one identifiable.
+    NSData *data = [path dataUsingEncoding:NSUTF8StringEncoding allowLossyConversion:YES] ?: [NSData data];
     return [ISHFileProviderVirtualIdentifierPrefix stringByAppendingString:ISHBase64URLEncode(data)];
 }
 

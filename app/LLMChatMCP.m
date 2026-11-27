@@ -318,12 +318,15 @@ static NSString *ISHLLMMCPString(NSDictionary *dictionary, NSString *key) {
     NSDictionary *reply = nil;
     NSString *error = nil;
     [self send:ISHLLMMCPRequest(identifier, method, params) timeout:timeout expectReplyTo:identifier reply:&reply error:&error];
+    if (error == nil && reply == nil)
+        error = @"the server sent no reply";
     if (error != nil) {
-        *errorOut = error;
+        if (errorOut != NULL)
+            *errorOut = error;
         return nil;
     }
     NSDictionary *result = ISHLLMMCPResult(reply, &error);
-    if (result == nil)
+    if (result == nil && errorOut != NULL)
         *errorOut = error;
     return result;
 }

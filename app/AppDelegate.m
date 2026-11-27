@@ -1297,10 +1297,13 @@ static void *FallbackConsoleInitThread(void *context) {
         struct task *child = current;
         pid_t childPid = child->pid;
         bool needsSession = true;
-        if (child->group != NULL) {
-            lock(&child->group->lock, 0);
-            needsSession = child->group->sid != childPid || child->group->pgid != childPid;
-            unlock(&child->group->lock);
+        // Read child->group once, so the unlock provably releases the lock
+        // taken (the analyzer, re-reading it, took the lock as still held).
+        struct tgroup *group = child->group;
+        if (group != NULL) {
+            lock(&group->lock, 0);
+            needsSession = group->sid != childPid || group->pgid != childPid;
+            unlock(&group->lock);
         }
         if (needsSession) {
             intptr_t session = (intptr_t) (int32_t) sys_setsid();
@@ -5769,12 +5772,16 @@ static UINavigationController *CreateAboutNavigationController(BOOL recoveryMode
         .sin_family = AF_INET,
     };
 
-    self.reachability = SCNetworkReachabilityCreateWithAddress(kCFAllocatorDefault, (struct sockaddr *) &address);
-    SCNetworkReachabilityContext context = {
-        .info = (__bridge void *) self,
-    };
-    SCNetworkReachabilitySetCallback(self.reachability, NetworkReachabilityCallback, &context);
-    SCNetworkReachabilityScheduleWithRunLoop(self.reachability, CFRunLoopGetMain(), kCFRunLoopCommonModes);
+    // Stored in the ivar: the property is a plain assign, so the +1 reference
+    // from Create is owned here and released where it is unscheduled.
+    _reachability = SCNetworkReachabilityCreateWithAddress(kCFAllocatorDefault, (struct sockaddr *) &address);
+    if (_reachability != NULL) {
+        SCNetworkReachabilityContext context = {
+            .info = (__bridge void *) self,
+        };
+        SCNetworkReachabilitySetCallback(_reachability, NetworkReachabilityCallback, &context);
+        SCNetworkReachabilityScheduleWithRunLoop(_reachability, CFRunLoopGetMain(), kCFRunLoopCommonModes);
+    }
     [self configureDns];
 
     self.metricKitSubscriber = [ISHMetricKitSubscriber new];

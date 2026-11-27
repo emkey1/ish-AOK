@@ -1024,6 +1024,7 @@ static UIColor *RootRowInUseAccentColor(void) {
 }
 
 - (void)viewWillAppear:(BOOL)animated {
+    [super viewWillAppear:animated];
     self.nameField.text = self.rootName;
     [self update];
 }

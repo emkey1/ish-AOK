@@ -1706,11 +1706,12 @@ void root_progress_callback(void *cookie, double progress, const char *message, 
         NSString *domain = NSPOSIXErrorDomain;
         if (fs_err.type == ERR_SQLITE)
             domain = @"SQLite";
-        *error = [NSError errorWithDomain:domain
-                                     code:fs_err.code
-                                 userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithUTF8String:fs_err.message]}];
-        if (fs_err.type == ERR_CANCELLED)
-            *error = nil;
+        if (error != NULL) {
+            *error = fs_err.type == ERR_CANCELLED ? nil
+                : [NSError errorWithDomain:domain
+                                      code:fs_err.code
+                                  userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithUTF8String:fs_err.message]}];
+        }
         free(fs_err.message);
         return NO;
     }

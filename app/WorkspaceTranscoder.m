@@ -422,7 +422,7 @@ static NSArray<NSNumber *> *TCSizeLines(void) {
         f.allowedUnits = seconds >= 3600 ? (NSCalendarUnitHour | NSCalendarUnitMinute | NSCalendarUnitSecond)
                                          : (NSCalendarUnitMinute | NSCalendarUnitSecond);
         f.zeroFormattingBehavior = NSDateComponentsFormatterZeroFormattingBehaviorPad;
-        NSString *sizeText = size ? TCSize(size.longLongValue) : @"?";
+        NSString *sizeText = size != nil ? TCSize(size.longLongValue) : @"?";
         NSString *durationText = isfinite(seconds) ? [f stringFromTimeInterval:seconds] : @"?";
         if (video != nil) {
             CGSize n = CGSizeApplyAffineTransform(video.naturalSize, video.preferredTransform);

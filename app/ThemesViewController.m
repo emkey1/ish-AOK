@@ -231,6 +231,8 @@ enum {
                 theme = self->_userThemes[indexPath.row];
                 break;
         }
+        if (theme == nil)
+            return;  // the Import row: not a theme to switch to
         [self updateTheme:theme];
         [self.tableView performBatchUpdates:^{
             [self.tableView reloadSections:[NSIndexSet indexSetWithIndexesInRange:NSMakeRange(DefaultSection, UserSection - DefaultSection)] withRowAnimation:UITableViewRowAnimationAutomatic];

@@ -1691,16 +1691,24 @@ static void ISHApplyDefaultOwnerForCreation(NSString *path) {
             goto done;
         }
 
+        BOOL hostInAtEOF = NO;
         while (true) {
             ssize_t n;
             if (hostIn != NULL) {
+                // A short read is EOF or an error; after EOF, stop rather than
+                // read again (which is legal, but leaves the stream in a
+                // state the analyzer rightly will not vouch for).
+                if (hostInAtEOF)
+                    break;
                 size_t got = fread(buffer, 1, kExtractionChunkSize, hostIn);
-                if (got == 0) {
+                if (got < kExtractionChunkSize) {
                     if (ferror(hostIn)) {
                         failure = [self errorWithCode:ISHGuestFileBridgeErrorUnknown message:NSLocalizedString(@"Failed reading source file", @"File operation error shown in the file manager")];
                         goto done;
                     }
-                    break;  // clean EOF
+                    hostInAtEOF = YES;  // clean EOF: write what came, then stop
+                    if (got == 0)
+                        break;
                 }
                 n = (ssize_t)got;
             } else {
