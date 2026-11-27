@@ -47,9 +47,12 @@
 //                                 a busy one asks first)
 //    llm-destination <text>       switch the chat to the saved destination whose
 //                                 id is <text>, or whose name or model has it
-//    llm-dump                     the chat on screen: its messages, state,
-//                                 destination (no key), the destinations, and
-//                                 the skills given to the model
+//    llm-dump                     the chat on screen: its window and whether it
+//                                 is shown, its messages, state, destination
+//                                 (no key), the destinations, and the skills
+//                                 given to the model
+//  The llm- verbs act on the chat window the user can see; with none shown
+//  (every chat window on another Desktop) they act on a hidden one.
 //
 //  Off unless ISH_WORKSPACE_TEST=1 is in the app's environment.
 //
@@ -290,31 +293,42 @@ static UIAlertController *ISHWorkspaceTestTopAlert(void) {
     return nil;
 }
 
-// The LLM chat on screen, in a Workspace window or full screen, or nil.
-static LLMClientViewController *ISHWorkspaceTestFindLLMChat(UIViewController *vc) {
+// Every LLM chat in a window, in a Workspace window or full screen.
+static void ISHWorkspaceTestFindLLMChats(UIViewController *vc, NSMutableArray<LLMClientViewController *> *found) {
     if (vc == nil)
-        return nil;
+        return;
     if ([vc isKindOfClass:LLMClientViewController.class] && vc.isViewLoaded && vc.view.window != nil)
-        return (LLMClientViewController *) vc;
-    for (UIViewController *child in vc.childViewControllers) {
-        LLMClientViewController *found = ISHWorkspaceTestFindLLMChat(child);
-        if (found != nil)
-            return found;
-    }
-    return ISHWorkspaceTestFindLLMChat(vc.presentedViewController);
+        [found addObject:(LLMClientViewController *) vc];
+    for (UIViewController *child in vc.childViewControllers)
+        ISHWorkspaceTestFindLLMChats(child, found);
+    ISHWorkspaceTestFindLLMChats(vc.presentedViewController, found);
 }
 
+// A window on another Desktop is hidden but still in the view hierarchy, so
+// view.window alone does not say it can be seen.
+static BOOL ISHWorkspaceTestViewIsShown(UIView *view) {
+    for (UIView *ancestor = view; ancestor != nil; ancestor = ancestor.superview) {
+        if (ancestor.hidden || ancestor.alpha < 0.01)
+            return NO;
+    }
+    return view.window != nil;
+}
+
+// The LLM chat on screen, or else one on another Desktop, or nil. With two
+// chat windows open (one per Desktop), the one the user sees is the one meant.
 static LLMClientViewController *ISHWorkspaceTestLLMChat(void) {
+    NSMutableArray<LLMClientViewController *> *chats = [NSMutableArray array];
     for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
         if (![scene isKindOfClass:UIWindowScene.class])
             continue;
-        for (UIWindow *window in ((UIWindowScene *) scene).windows) {
-            LLMClientViewController *chat = ISHWorkspaceTestFindLLMChat(window.rootViewController);
-            if (chat != nil)
-                return chat;
-        }
+        for (UIWindow *window in ((UIWindowScene *) scene).windows)
+            ISHWorkspaceTestFindLLMChats(window.rootViewController, chats);
     }
-    return nil;
+    for (LLMClientViewController *chat in chats) {
+        if (ISHWorkspaceTestViewIsShown(chat.view))
+            return chat;
+    }
+    return chats.firstObject;
 }
 
 // Strings and numbers as they are, anything else as its description, so the
@@ -351,8 +365,23 @@ static void ISHWorkspaceTestLLMDump(NSString *seq, LLMClientViewController *chat
     NSMutableArray *destinations = [NSMutableArray array];
     for (NSDictionary<NSString *, NSString *> *destination in ISHLLMDestinations())
         [destinations addObject:ISHWorkspaceTestDestination(destination)];
+    // The Workspace window holding this chat (the id a dump gives it), or 0
+    // when the chat is full screen.
+    Class windowClass = NSClassFromString(@"ISHWorkspaceContainedWindowView");
+    NSNumber *windowId = @0;
+    for (UIView *ancestor = chat.view; ancestor != nil; ancestor = ancestor.superview) {
+        if (windowClass != nil && [ancestor isKindOfClass:windowClass]) {
+            WorkspaceViewController *workspace = ISHWorkspaceCurrentController();
+            if (workspace != nil)
+                (void) ISHWorkspaceTestWindows(workspace); // gives it an id if it has none yet
+            windowId = objc_getAssociatedObject(ancestor, ISHWorkspaceTestIdKey) ?: @0;
+            break;
+        }
+    }
     ISHWorkspaceTestWriteResult(seq, @{
         @"ok": @YES,
+        @"window": windowId,
+        @"shown": @(ISHWorkspaceTestViewIsShown(chat.view)),
         @"session": agent.sessionID ?: @"",
         @"title": agent.title ?: @"",
         @"busy": @(agent.busy),
