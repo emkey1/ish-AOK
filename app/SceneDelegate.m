@@ -25,6 +25,8 @@ TerminalViewController *currentTerminalViewController = NULL;
 
 @property NSString *terminalUUID;
 @property BOOL waitingForInitialRootImport;
+// Archives a cold launch was opened with, offered once the scene is active.
+@property (nonatomic, copy, nullable) NSArray<UIOpenURLContext *> *pendingURLContexts API_AVAILABLE(ios(13.0));
 
 @end
 
@@ -352,9 +354,172 @@ static void ConfigureTerminalViewController(SceneDelegate *delegate, TerminalVie
     }
 }
 
+#pragma mark - Root archives from other apps
+
+// What to present from: the window's root, then whatever it is presenting.
+static UIViewController *ISHScenePresentingViewController(UIWindow *window) {
+    UIViewController *viewController = window.rootViewController;
+    while (viewController.presentedViewController != nil && !viewController.presentedViewController.isBeingDismissed)
+        viewController = viewController.presentedViewController;
+    return viewController;
+}
+
+// An alert or action sheet still up anywhere in the scene. Not only this
+// window's: a sheet opened from the terminal's key bar (Switch Terminal, on
+// iPhone) is presented in the keyboard's window, above this one, so anything
+// presented here lands behind it where nothing can reach it (seen in the
+// simulator).
+static UIAlertController *ISHSceneOpenAlert(UIWindow *window) {
+    for (UIWindow *candidate in window.windowScene.windows) {
+        UIViewController *viewController = candidate.rootViewController;
+        while (viewController.presentedViewController != nil) {
+            viewController = viewController.presentedViewController;
+            if ([viewController isKindOfClass:UIAlertController.class] &&
+                !viewController.isBeingDismissed && viewController.presentingViewController != nil)
+                return (UIAlertController *) viewController;
+        }
+    }
+    return nil;
+}
+
+// Present over whatever is showing, after closing an alert or action sheet the
+// person left up when they switched to another app to share the archive: it is
+// stale by the time they come back with a file, and it would cover this one.
+static void ISHScenePresentAfterClosing(UIWindow *window, UIViewController *viewController,
+                                        void (^ _Nullable completion)(void), int closesLeft) {
+    UIAlertController *open = closesLeft > 0 ? ISHSceneOpenAlert(window) : nil;
+    if (open != nil) {
+        [open.presentingViewController dismissViewControllerAnimated:NO completion:^{
+            ISHScenePresentAfterClosing(window, viewController, completion, closesLeft - 1);
+        }];
+        return;
+    }
+    [ISHScenePresentingViewController(window) presentViewController:viewController animated:YES completion:completion];
+}
+
+static void ISHScenePresent(UIWindow *window, UIViewController *viewController, void (^ _Nullable completion)(void)) {
+    ISHScenePresentAfterClosing(window, viewController, completion, 3);
+}
+
+// The Filesystems screen, when the window already shows it as its root
+// (Choose Filesystem at startup, or before the first root exists): the import
+// then belongs there, where finishing it can carry on to the boot.
+static RootsTableViewController *ISHSceneRootsAtRoot(UIWindow *window) {
+    UIViewController *root = window.rootViewController;
+    if ([root isKindOfClass:UINavigationController.class])
+        root = ((UINavigationController *) root).viewControllers.firstObject;
+    return [root isKindOfClass:RootsTableViewController.class] ? (RootsTableViewController *) root : nil;
+}
+
+// An archive handed over by Files' Share or another app's "Open in"
+// (CFBundleDocumentTypes in Info.plist). Nothing is imported without a yes: a
+// .gz from Files may be anything, and an import takes time and space. On a
+// yes, the Filesystems screen does the import, so the name, the progress and
+// the errors are the ones Browse Files gives. When it arrived as a copy in
+// Documents/Inbox (not opened in place: LSSupportsOpeningDocumentsInPlace is
+// NO), the copy is deleted whatever the answer.
+static void ISHSceneOfferRootArchiveImport(UIWindow *window, NSURL *url, BOOL openedInPlace) {
+    BOOL ownCopy = !openedInPlace;
+    UIViewController *presenter = ISHScenePresentingViewController(window);
+    [ISHDiagnosticsStore recordBreadcrumb:@"scene.openArchive"
+                                  details:@{@"file": url.lastPathComponent ?: @"", @"inPlace": @(openedInPlace),
+                                            @"presenter": NSStringFromClass(presenter.class) ?: @""}];
+    if (presenter == nil) {
+        if (ownCopy)
+            [NSFileManager.defaultManager removeItemAtURL:url error:nil];
+        return;
+    }
+    NSString *message = [NSString stringWithFormat:
+        NSLocalizedString(@"“%@” will be added as a new filesystem. The one you are using is not changed.",
+                          @"Alert message when an archive is shared to the app; %@ is the file name"),
+        url.lastPathComponent];
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:NSLocalizedString(@"Import Filesystem?", @"Alert title when an archive is shared to the app")
+                                                                   message:message
+                                                            preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Cancel", @"Alert button")
+                                              style:UIAlertActionStyleCancel
+                                            handler:^(__unused UIAlertAction *action) {
+        if (ownCopy)
+            [NSFileManager.defaultManager removeItemAtURL:url error:nil];
+    }]];
+    [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Import", @"Alert button: import a shared archive as a filesystem")
+                                              style:UIAlertActionStyleDefault
+                                            handler:^(__unused UIAlertAction *action) {
+        RootsTableViewController *shown = ISHSceneRootsAtRoot(window);
+        if (shown != nil && shown.presentedViewController == nil) {
+            [shown importArchiveAtURL:url securityScoped:openedInPlace removeWhenDone:ownCopy];
+            return;
+        }
+        UIViewController *viewController = [[UIStoryboard storyboardWithName:@"Roots" bundle:nil] instantiateInitialViewController];
+        if (![viewController isKindOfClass:RootsTableViewController.class]) {
+            if (ownCopy)
+                [NSFileManager.defaultManager removeItemAtURL:url error:nil];
+            return;
+        }
+        RootsTableViewController *roots = (RootsTableViewController *) viewController;
+        UINavigationController *navigationController = [[UINavigationController alloc] initWithRootViewController:roots];
+        __weak UINavigationController *weakNavigationController = navigationController;
+        roots.navigationItem.leftBarButtonItem =
+            [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemDone
+                                                   primaryAction:[UIAction actionWithHandler:^(__unused UIAction *doneAction) {
+                [weakNavigationController dismissViewControllerAnimated:YES completion:nil];
+            }]];
+        ISHScenePresent(window, navigationController, ^{
+            [roots importArchiveAtURL:url securityScoped:openedInPlace removeWhenDone:ownCopy];
+        });
+    }]];
+    ISHScenePresent(window, alert, nil);
+}
+
+// Copies iOS left in Documents/Inbox that nothing is going to offer any more:
+// the app was killed with the question still up, say. Documents is not in the
+// Files app, so nobody would ever see a several-hundred-megabyte archive
+// sitting there. Once a launch, on a background queue, and only for copies
+// that arrived over an hour ago (the date the file was added to the folder:
+// iOS keeps the original's modification date), so the one this launch was
+// opened with is never among them.
+static void ISHSceneSweepStaleInbox(void) {
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+            NSFileManager *fm = NSFileManager.defaultManager;
+            NSURL *inbox = [[fm URLsForDirectory:NSDocumentDirectory inDomains:NSUserDomainMask].firstObject
+                            URLByAppendingPathComponent:@"Inbox" isDirectory:YES];
+            NSArray<NSURL *> *items = [fm contentsOfDirectoryAtURL:inbox
+                                        includingPropertiesForKeys:@[NSURLAddedToDirectoryDateKey]
+                                                           options:0
+                                                             error:nil];
+            NSDate *cutoff = [NSDate dateWithTimeIntervalSinceNow:-3600];
+            for (NSURL *item in items) {
+                NSDate *added = nil;
+                [item getResourceValue:&added forKey:NSURLAddedToDirectoryDateKey error:nil];
+                if (added != nil && [added compare:cutoff] == NSOrderedAscending)
+                    [fm removeItemAtURL:item error:nil];
+            }
+        });
+    });
+}
+
+static void ISHSceneOfferRootArchiveImports(UIWindow *window, NSArray<UIOpenURLContext *> *contexts) API_AVAILABLE(ios(13.0)) {
+    // One at a time would need a queue of alerts; Files hands over one file.
+    for (UIOpenURLContext *context in contexts) {
+        if (!context.URL.isFileURL)
+            continue;
+        ISHSceneOfferRootArchiveImport(window, context.URL, context.options.openInPlace);
+        return;
+    }
+}
+
 @implementation SceneDelegate
 
+- (void)scene:(UIScene *)scene openURLContexts:(NSSet<UIOpenURLContext *> *)URLContexts {
+    ISHSceneOfferRootArchiveImports(self.window, URLContexts.allObjects);
+}
+
 - (void)scene:(UIScene *)scene willConnectToSession:(UISceneSession *)session options:(UISceneConnectionOptions *)connectionOptions {
+    if (connectionOptions.URLContexts.count != 0)
+        self.pendingURLContexts = connectionOptions.URLContexts.allObjects;
+    ISHSceneSweepStaleInbox();
     [ISHDiagnosticsStore recordLaunchStage:@"scene.willConnect"
                                    details:@{@"session": session.persistentIdentifier ?: @"",
                                              @"recovery": @([NSUserDefaults.standardUserDefaults boolForKey:@"recovery"])}];
@@ -692,6 +857,17 @@ BOOL ISHApplyShortcutActivityToConnectedScene(NSUserActivity *activity) {
     ISHScheduleDeferredFileProviderDomainSyncRelease();
     ISHScheduleLaunchJournalCompletion(@{@"rootController": NSStringFromClass(rootViewController.class) ?: @"unknown",
                                          @"session": scene.session.persistentIdentifier ?: @""});
+    NSArray<UIOpenURLContext *> *pending = self.pendingURLContexts;
+    if (pending.count != 0) {
+        self.pendingURLContexts = nil;
+        // After this turn of the run loop: the window has just come up, and
+        // presenting from inside its first activation can land on a view
+        // controller that is still being swapped in.
+        UIWindow *window = self.window;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            ISHSceneOfferRootArchiveImports(window, pending);
+        });
+    }
 }
 
 - (void)sceneWillResignActive:(UIScene *)scene {

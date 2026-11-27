@@ -117,6 +117,14 @@ Images** applet in Workspace — lists four groups:
   experimental, without the same support guarantees as the official images.
   A build too old for an entry's architecture doesn't list it.
 
+**From another app (567).** A root archive -- `.tar`, `.tar.gz`/`.tgz`,
+`.tar.bz2` or `.tar.xz`/`.txz` -- can be sent here from the Files app's Share
+button or another app's "Open in", where the app is listed as
+**Workstation**. It asks first, then imports the archive as a new root named
+after the file, just as the import button's **Browse Files…** does; the root
+you are using is not changed. A `.tar.zst` has no iOS file type, so it goes
+through `/AOK/persist/roots` or `manage-roots.sh` instead.
+
 Root names become the mount "source" string guest tools like `mount` and
 `df` will show, so names are restricted to `[A-Za-z0-9._-]`, can't start
 with `.`, and can't contain spaces.

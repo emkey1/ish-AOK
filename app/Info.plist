@@ -6,6 +6,37 @@
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
 	<string>Workstation</string>
+	<!-- Root filesystem archives: Files' Share and another app's "Open in"
+	     list the app for these, and an archive handed over that way is
+	     offered for import as a new filesystem (SceneDelegate.m,
+	     ISHSceneOfferRootArchiveImport). Alternate, not Owner: opening a .gz
+	     in Files still does what it did. The types are the ones iOS declares
+	     for the compressions the importer reads (libarchive, Roots.m); .zst
+	     has no system type, so .tar.zst still goes through
+	     /AOK/persist/roots or manage-roots.sh. Keep this list and
+	     RootArchiveContentTypes() in RootsTableViewController.m the same. -->
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Root Filesystem Archive</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>public.tar-archive</string>
+				<string>org.gnu.gnu-tar-archive</string>
+				<string>org.gnu.gnu-zip-archive</string>
+				<string>org.gnu.gnu-zip-tar-archive</string>
+				<string>public.bzip2-archive</string>
+				<string>public.tar-bzip2-archive</string>
+				<string>org.tukaani.xz-archive</string>
+				<string>org.tukaani.tar-xz-archive</string>
+			</array>
+		</dict>
+	</array>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -51,6 +82,14 @@
 	<false/>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<!-- NO: an archive opened from another app arrives as a copy in
+	     Documents/Inbox, which the import deletes when it is done. YES would
+	     hand over the original, but together with UIFileSharingEnabled it
+	     would also list the app's Documents folder in the Files app, which it
+	     has never been. App Store Connect wants this key set whenever
+	     CFBundleDocumentTypes is (ITMS-90737). -->
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<false/>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<!-- NSAllowsLocalNetworking must NOT be added back beside this.

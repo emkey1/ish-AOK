@@ -17,6 +17,16 @@
 #import "WorkspaceViewController.h"
 #include "kernel/fs.h"
 
+// iOS's own types for the compressions Roots' importer reads (libarchive's
+// filter_all). .tar.zst has none, so it is not here; Info.plist's
+// CFBundleDocumentTypes lists the same ones.
+NSArray<NSString *> *RootArchiveContentTypes(void) {
+    return @[@"public.tar-archive", @"org.gnu.gnu-tar-archive",
+             @"org.gnu.gnu-zip-archive", @"org.gnu.gnu-zip-tar-archive",
+             @"public.bzip2-archive", @"public.tar-bzip2-archive",
+             @"org.tukaani.xz-archive", @"org.tukaani.tar-xz-archive"];
+}
+
 @interface RootsTableViewController () <WorkspaceTextScaledPage>
 // Archives found in the shared /AOK/persist/roots directory, shown as the
 // "Root Cached Filesystems" section. Cached so the table data source is stable
@@ -380,7 +390,7 @@ static void RootConfirmAndDelete(UIViewController *host, NSString *rootName,
                         style:UIAlertActionStyleDefault
                       handler:^(__unused UIAlertAction *action) {
         UIDocumentPickerViewController *picker = [[UIDocumentPickerViewController alloc]
-                                                  initWithDocumentTypes:@[@"public.tar-archive", @"org.gnu.gnu-zip-archive", @"public.bzip2-archive"]
+                                                  initWithDocumentTypes:RootArchiveContentTypes()
                                                   inMode:UIDocumentPickerModeImport];
         [self presentViewController:picker animated:YES completion:nil];
         if (@available(iOS 13, *)) {
@@ -912,9 +922,26 @@ static UIColor *RootRowInUseAccentColor(void) {
 }
 
 - (void)importArchiveAtURL:(NSURL *)url securityScoped:(BOOL)securityScoped {
+    [self importArchiveAtURL:url securityScoped:securityScoped removeWhenDone:NO];
+}
+
+- (void)importArchiveAtURL:(NSURL *)url securityScoped:(BOOL)securityScoped removeWhenDone:(BOOL)removeWhenDone {
     NSString *fileName = url.lastPathComponent.stringByDeletingPathExtension;
     if ([fileName hasSuffix:@".tar"])
         fileName = fileName.stringByDeletingPathExtension;
+    // A copy another app handed over lands in Documents/Inbox, and when a
+    // file of that name is already there iOS numbers the copy before its last
+    // extension: "kitchen.tar.xz" arrives as "kitchen.tar-1.xz". Name the
+    // root after the file the person chose, not after iOS's copy.
+    if (removeWhenDone) {
+        NSRange tar = [fileName rangeOfString:@".tar-" options:NSBackwardsSearch];
+        if (tar.location != NSNotFound) {
+            NSString *number = [fileName substringFromIndex:NSMaxRange(tar)];
+            if (number.length != 0 &&
+                [number rangeOfCharacterFromSet:NSCharacterSet.decimalDigitCharacterSet.invertedSet].location == NSNotFound)
+                fileName = [fileName substringToIndex:tar.location];
+        }
+    }
     // Replace characters RootNameIsValid rejects (spaces, etc.) so an archive
     // named "my backup.tar.gz" imports instead of failing name validation.
     static NSCharacterSet *disallowed;
@@ -947,6 +974,8 @@ static UIColor *RootRowInUseAccentColor(void) {
         BOOL success = [Roots.instance importRootFromArchive:url name:name error:&error progressReporter:progressVC];
         if (securityScoped)
             [url stopAccessingSecurityScopedResource];
+        if (removeWhenDone)
+            [NSFileManager.defaultManager removeItemAtURL:url error:nil];
         dispatch_async(dispatch_get_main_queue(), ^{
             [progressVC dismissViewControllerAnimated:YES completion:^{
                 if (!success) {
