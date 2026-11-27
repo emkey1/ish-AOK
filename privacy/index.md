@@ -171,6 +171,6 @@ before it.
 ## Contact
 
 Questions about this policy, or about anything the app does, are best raised as
-an issue at <https://github.com/emkey1/ish-AOK/issues>. Suspected security
+an issue at <https://github.com/emkey1/AOK-Workstation/issues>. Suspected security
 problems have their own route, described in
-[SECURITY.md](https://github.com/emkey1/ish-AOK/blob/working/SECURITY.md).
+[SECURITY.md](https://github.com/emkey1/AOK-Workstation/blob/working/SECURITY.md).
