@@ -29,6 +29,18 @@ of scope on both routes.**
 
 ## Route 1: emulated binaries
 
+**Taken, 2026-11-27, as packages.** PSCAL is the `pscal` .deb in
+AOK-Workstation's own apt repository, [emkey1/aok-apt](https://github.com/emkey1/aok-apt)
+(served at https://emkey1.github.io/aok-apt), built for Devuan 6 on arm64 and
+amd64 by that repository's workflow. A native root's companion has the source
+(`/AOK/tools/aok-apt.sh`, run by `setup-companion.sh` and once by the apt
+stub), so `sudo apt install pscal` puts it in the companion, where it runs
+emulated and is found by name from the native root
+(opt/AOK/docs/native-companion.md). These are ordinary dynamically linked
+Debian builds, not the static rootfs binaries described below, and the
+install root is `/usr/lib/pscal`. The notes below are what was weighed
+before that.
+
 A native root runs guest ELFs too: native dispatch only takes over for
 `/AOK/native/*`, and everything else goes through the gadget engine. sshd in
 a native root is already a static aarch64 ELF run that way.

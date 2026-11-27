@@ -53,5 +53,12 @@ fi
 
 path=$(aok_companion_which "$AOK_COMPANION_DIR" "$cmd") ||
     die "$cmd: not in the companion filesystem (${AOK_COMPANION_DIR##*/})"
+# A companion set up before AOK-Workstation had its own package source gets it
+# here, once, at its first apt as root (aok-apt.sh, which says so when it does).
+case "$cmd" in
+    apt|apt-get)
+        [ "$(id -u)" = 0 ] && sh /AOK/tools/aok-apt.sh --root "$AOK_COMPANION_DIR" --once -q >&2
+        ;;
+esac
 aok_companion_env
 exec "$path" "$@"

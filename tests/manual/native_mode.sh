@@ -14,6 +14,8 @@
 #                         exit is the end of that boot
 #   --login-tty           on a terminal (the gate runs it under script(1)):
 #                         login -f records the session in utmp and wtmp
+#   --foreign-exec        programs from another root (ISH_FAKE_MNT2)
+#   --aok-apt             /AOK/tools/aok-apt.sh against filesystems made in /tmp
 #
 # By hand, in the CLI:
 #   tar -cf /tmp/empty.tar -T /dev/null
@@ -55,6 +57,56 @@ case "${1:-}" in
     printf '#!/bin/sh\n(sh /AOK/tests/native_mode.sh --init-phase > /tmp/native_mode_init.log 2>&1; poweroff) > /dev/null 2>&1 &\n' > /etc/rc.local
     chmod 755 /etc/rc.local
     rm -f /tmp/nmdemo.starts /tmp/nm_rc.count /tmp/native_mode_init.log
+    exit 0
+    ;;
+--aok-apt)
+    # /AOK/tools/aok-apt.sh, which gives a companion (or any Devuan 6
+    # filesystem) AOK-Workstation's own apt source, against filesystems made
+    # here: no network, no companion needed. AOK_APT_SCRIPT swaps the script,
+    # for a control.
+    A=${AOK_APT_SCRIPT:-/AOK/tools/aok-apt.sh}
+    T=/tmp/nm_aok_apt
+    rm -rf "$T"
+    mkfs() { # DIR CODENAME ARCH [certs]
+        mkdir -p "$1/etc/apt" "$1/var/lib/dpkg"
+        printf 'PRETTY_NAME="test"\nVERSION_CODENAME="%s"\n' "$2" > "$1/etc/os-release"
+        printf 'Package: apt\nArchitecture: %s\n\nPackage: dpkg\nStatus: install ok installed\nArchitecture: %s\n\n' "$3" "$3" > "$1/var/lib/dpkg/status"
+        if [ "${4:-}" = certs ]; then
+            mkdir -p "$1/etc/ssl/certs" && echo cert > "$1/etc/ssl/certs/ca-certificates.crt"
+        fi
+    }
+    mkfs "$T/ok" excalibur arm64 certs
+    out=$(sh "$A" --root "$T/ok" 2>&1); rc=$?
+    got=no
+    grep -qx 'URIs: https://emkey1.github.io/aok-apt' "$T/ok/etc/apt/sources.list.d/aok.sources" 2>/dev/null &&
+        cmp -s /AOK/tools/aok-apt.asc "$T/ok/usr/share/keyrings/aok-apt.asc" &&
+        [ -s "$T/ok/var/lib/aok/aok-apt" ] && got=yes
+    check aok_apt_added "0 yes" "$rc $got"
+    case "$out" in *"Added AOK-Workstation's package source"*) pass aok_apt_says_added ;; *) fail aok_apt_says_added "[$out]" ;; esac
+    check aok_apt_once_quiet "" "$(sh "$A" --root "$T/ok" --once -q 2>&1)"
+    sh "$A" --root "$T/ok" --remove > /dev/null 2>&1
+    sh "$A" --root "$T/ok" --once -q > /dev/null 2>&1
+    got=gone; [ -e "$T/ok/etc/apt/sources.list.d/aok.sources" ] && got=back
+    check aok_apt_removal_respected gone "$got"
+    sh "$A" --root "$T/ok" -q > /dev/null 2>&1
+    got=gone; [ -e "$T/ok/etc/apt/sources.list.d/aok.sources" ] && got=back
+    check aok_apt_readded back "$got"
+    mkfs "$T/old" daedalus arm64 certs
+    sh "$A" --root "$T/old" > /dev/null 2>&1; rc=$?
+    sh "$A" --root "$T/old" --once -q > /dev/null 2>&1; rc_once=$?
+    got=none; [ -e "$T/old/etc/apt/sources.list.d/aok.sources" ] && got=written
+    check aok_apt_other_release "1 0 none" "$rc $rc_once $got"
+    mkfs "$T/rv" excalibur riscv64 certs
+    sh "$A" --root "$T/rv" > /dev/null 2>&1
+    check aok_apt_other_arch 1 "$?"
+    mkfs "$T/nocerts" trixie amd64
+    out=$(sh "$A" --root "$T/nocerts" 2>&1)
+    case "$out" in *"apt install ca-certificates"*) pass aok_apt_no_ca_certificates ;; *) fail aok_apt_no_ca_certificates "[$out]" ;; esac
+    mkdir -p "$T/notapt"
+    sh "$A" --root "$T/notapt" > /dev/null 2>&1
+    check aok_apt_not_debian 1 "$?"
+    rm -rf "$T"
+    [ "$fails" -eq 0 ] || exit 1
     exit 0
     ;;
 --foreign-exec)

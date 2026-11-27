@@ -64,6 +64,36 @@ and, as for any root entered this way, `/proc`, `/sys`, `/dev`, `/run` and
   yourself, or from this root's [`/etc/rc.d`](native-mode.md).
 - **Space**: the Devuan base is a few hundred MB before the first package.
 
+## AOK-Workstation's own packages
+
+The companion also gets **AOK-Workstation's own apt repository**
+([github.com/emkey1/aok-apt](https://github.com/emkey1/aok-apt)), beside
+Devuan's. It holds packages built for Devuan 6, arm64 and amd64. Today that
+is PSCAL:
+
+```sh
+sudo apt update
+sudo apt install pscal     # pascal, clike, rea, aether, exsh, pscalvm
+pascal hello.pas           # in a new login, like anything apt installs
+```
+
+`pscal` puts the programs in `/usr/bin` and their units, headers and
+modules in `/usr/lib/pscal`, in the companion. Like everything apt installs
+they run emulated; SDL graphics are not in this build.
+
+Nothing is installed until you ask for it: only the source is added, when
+`setup-companion.sh` prepares the companion, or at the first `sudo apt` for a
+companion prepared before the source existed (from 567). It is
+`/etc/apt/sources.list.d/aok.sources` in the companion, trusted only for the
+repository's key, `/usr/share/keyrings/aok-apt.asc` (also served as
+`/AOK/tools/aok-apt.asc`):
+
+    ed25519 D127 47AE 9E6F 55A7 C139  BD6F E16C 5C31 AF98 5A69
+
+To stop using it: `sudo sh /AOK/tools/aok-apt.sh --remove`. It stays removed;
+`sudo sh /AOK/tools/aok-apt.sh` brings it back. The same command adds it to
+any other Devuan 6 filesystem, when run as root while that one is booted.
+
 ## Setting it up yourself
 
 `sudo apt ...` offers to do this the first time. By hand:
@@ -101,7 +131,8 @@ In the native root, all written only when missing:
 | `/etc/profile.d/20-aok-companion.sh` | puts the companion's `bin` directories after this root's on `PATH` |
 | `/etc/aok-companion-root` | the companion's name |
 
-In the companion: `/etc/aok-binds`, the list of what is shared in. The
+In the companion: `/etc/apt/sources.list.d/aok.sources`, AOK-Workstation's
+package source (above), and `/etc/aok-binds`, the list of what is shared in. The
 names it may hold are `home`, `tmp`, `mnt`, `media`, `srv`, `etc/hosts`,
 `etc/hostname`, `etc/resolv.conf` and `timezone`; add `mnt` or `media` if you
 want those shared too.

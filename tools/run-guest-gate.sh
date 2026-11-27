@@ -232,6 +232,8 @@ leg_run_native() {
                 ISH_FAKE_MNT2="$REPO/build/devuan-arm64-test" ISH_NATIVE_ROOT=1 \
                     "$ISH" -f "$_nroot" /bin/sh /AOK/tests/native_mode.sh --foreign-exec
             fi
+            # AOK-Workstation's apt source (aok-apt.sh), offline.
+            ISH_NATIVE_ROOT=1 "$ISH" -f "$_nroot" /bin/sh /AOK/tests/native_mode.sh --aok-apt
             ISH_NATIVE_ROOT=1 "$ISH" -f "$_nroot" /bin/sh /AOK/tests/native_mode.sh --install-init
             ISH_NATIVE_ROOT=1 "$ISH" -f "$_nroot" /sbin/init > /dev/null 2>&1 &
             _ipid=$!

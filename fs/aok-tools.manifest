@@ -18,6 +18,8 @@ ssh-stash.sh
 companion-root.sh
 companion-run.sh
 setup-companion.sh
+aok-apt.sh
+aok-apt.asc
 wayland-root.sh
 setup-native-wayland.sh
 provision-ultimate-alpine.sh

@@ -151,6 +151,16 @@ if [ ! -e "$W/usr/sbin/policy-rc.d" ]; then
     note "package scripts will not start services there (policy-rc.d)"
 fi
 
+# AOK-Workstation's own packages (PSCAL), from its apt repository. Once only:
+# someone who removed the source keeps it removed (aok-apt.sh --remove).
+if aok_apt_said=$(sh /AOK/tools/aok-apt.sh --root "$W" --once -q 2>&1); then
+    printf '%s\n' "$aok_apt_said" | while IFS= read -r line; do
+        [ -z "$line" ] || note "$line"
+    done
+else
+    warn "could not add AOK-Workstation's package source: $aok_apt_said"
+fi
+
 # The mode that makes any of this work. Said now, not at the first session.
 if ! aok_companion_root_find; then
     die "$AOK_COMPANION_PROBLEM"
