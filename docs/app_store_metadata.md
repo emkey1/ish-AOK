@@ -27,8 +27,10 @@ offers others' distributions, and the binary carries open-source code, whose
 notices are on the app's Licences screen. **Still for the user, on the
 website:** the App Privacy label ("Data Not Collected") and EU trader status. The App
 Review notes (docs/app_store_review_notes.md, 3,174 characters) were sent too.
-**Before submitting:** attach a build whose encryption answer is "yes" (567);
-566 was answered "no", which the notes and the assessment contradict. Everything here is a starting point to edit, not something to paste
+**Before submitting:** build 567 is attached. Its encryption answer is NO
+(`ITSAppUsesNonExemptEncryption`, decided 2026-11-26: the encryption is exempt
+from export documentation, and France stays off), which the assessment's
+"Export compliance" explains. Everything here is a starting point to edit, not something to paste
 unread -- marketing copy is the author's voice, not a generated one.
 
 **Renamed 2026-11-26: the app is AOK-Workstation.** The user moved off
