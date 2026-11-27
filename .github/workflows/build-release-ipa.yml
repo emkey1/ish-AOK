@@ -26,7 +26,7 @@ jobs:
     # whose origin was misconfigured would both publish our IPA there and start
     # deleting that repo's releases. Name-matched so forks still work, see
     # build-dev-ipa.yml for the reasoning.
-    if: endsWith(github.repository, '/ish-AOK')
+    if: endsWith(github.repository, '/AOK-Workstation') || endsWith(github.repository, '/ish-AOK')
     runs-on: macos-15
     timeout-minutes: 90
     steps:

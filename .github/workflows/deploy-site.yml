@@ -8,7 +8,7 @@ jobs:
     # so a foreign repo running our workflows also fires this. It has no secret
     # there and just fails noisily (observed 2026-08-09). Name-matched so forks
     # still work, see build-dev-ipa.yml for the reasoning.
-    if: endsWith(github.repository, '/ish-AOK')
+    if: endsWith(github.repository, '/AOK-Workstation') || endsWith(github.repository, '/ish-AOK')
     runs-on: ubuntu-latest
     steps:
     - name: Trigger Deploy

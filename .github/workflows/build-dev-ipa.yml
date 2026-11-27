@@ -24,8 +24,10 @@ jobs:
     # Matched on repository NAME, not owner/name, so a fork still builds its own
     # dev IPAs. That is the whole point: the failure mode being prevented is the
     # tree landing in a DIFFERENTLY NAMED repo, which a fork is not. The trailing
-    # slash matters, it stops `owner/not-ish-AOK` from matching.
-    if: endsWith(github.repository, '/ish-AOK')
+    # slash matters, it stops `owner/not-ish-AOK` from matching. The repository
+    # was emkey1/ish-AOK until 2026-11-27 and forks made before then keep that
+    # name, so both names match (endsWith ignores case).
+    if: endsWith(github.repository, '/AOK-Workstation') || endsWith(github.repository, '/ish-AOK')
     runs-on: macos-15
     timeout-minutes: 90
     steps:
