@@ -2195,6 +2195,15 @@ if not meson.is_cross_build()
             objc_args: ['-fobjc-arc'],
             link_args: ['-framework', 'Foundation'])
         test('llm_mcp', llm_mcp_test)
+
+        # Agent Skills: where the chat looks, the lenient frontmatter, which
+        # skill wins a name, and the list the model is given.
+        llm_skills_test = executable('llm_skills_test',
+            ['app/LLMChatSkills.m', 'tests/unit/llm_skills_test.m'],
+            include_directories: include_directories('app'),
+            objc_args: ['-fobjc-arc'],
+            link_args: ['-framework', 'Foundation'])
+        test('llm_skills', llm_skills_test)
     endif
 endif
 

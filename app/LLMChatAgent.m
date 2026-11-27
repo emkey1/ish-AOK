@@ -13,6 +13,7 @@
 #import "LLMChatStream.h"
 #import "LLMChatMCP.h"
 #import "LLMChatMCPCore.h"
+#import "LLMChatSkills.h"
 #if __has_include("libiSH_AOKApp-Swift.h")
 #import "libiSH_AOKApp-Swift.h" // AOKFoundationModelsBridge
 #endif
@@ -86,6 +87,7 @@ static const NSUInteger kISHLLMMaxRunningSubagents = 4;
     // Context.
     NSString *_projectInstructions;
     NSString *_projectInstructionsSource;
+    NSString *_skillCatalog;
     NSInteger _knownContextWindowTokens;
     NSString *_knownContextWindowProbeKey;
     BOOL _contextWindowProbeInFlight;
@@ -109,6 +111,7 @@ static const NSUInteger kISHLLMMaxRunningSubagents = 4;
         _sessionID = [ISHLLMStringValue(entry, @"id") copy];
         _shortID = [[_sessionID substringToIndex:MIN((NSUInteger) 8, _sessionID.length)] lowercaseString];
         _toolContext = [ISHLLMToolContext new];
+        _offeredSkills = @[];
         _toolContext.queue = dispatch_queue_create([[@"aok.llm.agent." stringByAppendingString:_shortID] UTF8String], DISPATCH_QUEUE_SERIAL);
         [self loadFromEntry:entry];
     }
@@ -478,19 +481,31 @@ static const NSUInteger kISHLLMMaxRunningSubagents = 4;
     // Which tool results are recent enough to send in full: walk them newest
     // to oldest, keeping full content until the running estimate would blow
     // the budget. Always keep at least the single most recent result in full.
-    // Identity (not equality) keyed, since two results can have identical
-    // content.
+    // A SKILL.md the model loaded is kept whatever its age, outside the
+    // budget: it is standing instructions, not output. Identity (not
+    // equality) keyed, since two results can have identical content.
     NSInteger budget = [self toolResultContextBudgetTokens];
     NSMutableSet<NSValue *> *fullContentToolMessages = [NSMutableSet set];
     NSInteger runningTokens = 0;
+    NSUInteger keptResults = 0;
+    BOOL budgetSpent = NO;
     NSArray<NSDictionary<NSString *, id> *> *live = [self messagesSentToModel];
     for (NSDictionary<NSString *, id> *message in live.reverseObjectEnumerator) {
         if (![ISHLLMStringValue(message, @"role") isEqualToString:@"tool"])
             continue;
+        if ([message[@"skill"] isEqual:@"1"]) {
+            [fullContentToolMessages addObject:[NSValue valueWithNonretainedObject:message]];
+            continue;
+        }
+        if (budgetSpent)
+            continue;
         NSInteger tokens = ISHLLMEstimateTokenCount(ISHLLMStringValue(message, @"content") ?: @"");
-        if (runningTokens + tokens > budget && fullContentToolMessages.count > 0)
-            break;
+        if (runningTokens + tokens > budget && keptResults > 0) {
+            budgetSpent = YES;
+            continue;
+        }
         runningTokens += tokens;
+        keptResults++;
         [fullContentToolMessages addObject:[NSValue valueWithNonretainedObject:message]];
     }
 
@@ -764,6 +779,8 @@ static const NSUInteger kISHLLMMaxRunningSubagents = 4;
                 ISHLLMPermissionActionTitle(ISHLLMCategoryAction(ISHLLMToolCategoryEdit)),
                 ISHLLMPermissionActionTitle(ISHLLMCategoryAction(ISHLLMToolCategoryShell)), mcp,
                 self->_parentSessionID.length == 0 ? NSLocalizedString(@"The model can start sub-agents for independent tasks; they run in the background.\n", @"empty chat tools summary") : @""];
+        if (ISHLLMSkillsEnabled())
+            text = [text stringByAppendingFormat:@" %@", NSLocalizedString(@"/skills lists the skills the model is given.", @"empty chat tools summary, after the list of commands")];
     }];
     return text;
 }
@@ -1424,28 +1441,43 @@ static const NSUInteger kISHLLMMaxRunningSubagents = 4;
     [self loadProjectInstructionsThen:continuation];
 }
 
+// Skills are found here too, for the same reason: a skill added or edited
+// between prompts is in the next one. A prompt waits two seconds at most;
+// until a slower scan finishes, the last prompt's list stands.
 - (void)loadProjectInstructionsThen:(void (^)(void))continuation {
     NSString *workingDirectory = _toolContext.workingDirectory;
+    NSString *homeDirectory = ISHLLMAgentManager.shared.guestHomeDirectory;
+    // Apple's on-device model is given no list: its window is about 4K
+    // tokens, and a longer tool note already made it run everything as a
+    // command (see sendPromptToAppleFoundationModels:).
+    BOOL wantSkills = ISHLLMSkillsEnabled() && !ISHLLMUsesAppleFoundationModels();
     __block BOOL finished = NO;
-    void (^finish)(NSString *, NSString *, BOOL) = ^(NSString *text, NSString *source, BOOL loaded) {
-        if (finished)
-            return;
-        finished = YES;
+    void (^finish)(NSString *, NSString *, NSArray<ISHLLMSkill *> *, BOOL) = ^(NSString *text, NSString *source, NSArray<ISHLLMSkill *> *skills, BOOL loaded) {
+        // A result that comes after the two seconds is kept for the next
+        // round and the next prompt; only the waiting is cut short.
         if (loaded) {
             self->_projectInstructions = text;
             self->_projectInstructionsSource = source;
+            self->_offeredSkills = skills ?: @[];
+            self->_skillCatalog = ISHLLMSkillCatalog(self->_offeredSkills);
         }
+        if (finished)
+            return;
+        finished = YES;
         [self scoped:continuation];
     };
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         NSString *source = nil;
         NSString *text = ISHLLMLoadProjectInstructions(workingDirectory, &source);
+        NSArray<ISHLLMSkill *> *skills = wantSkills
+            ? ISHLLMResolveSkills(ISHLLMDiscoverSkills(workingDirectory, homeDirectory), kISHLLMSkillCatalogBudget)
+            : @[];
         dispatch_async(dispatch_get_main_queue(), ^{
-            finish(text, source, YES);
+            finish(text, source, skills, YES);
         });
     });
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
-        finish(nil, nil, NO);
+        finish(nil, nil, nil, NO);
     });
 }
 
@@ -1466,6 +1498,8 @@ static const NSUInteger kISHLLMMaxRunningSubagents = 4;
         : ISHLLMToolSystemNoteWithoutClock(ISHLLMAgentManager.shared.guestEnvironmentNote, _toolContext.workingDirectory, YES);
     if (_projectInstructions.length > 0)
         note = [note stringByAppendingFormat:@"\n\nProject instructions from %@ -- follow them:\n\n%@", _projectInstructionsSource, _projectInstructions];
+    if (_skillCatalog.length > 0)
+        note = [note stringByAppendingFormat:@"\n\n%@", _skillCatalog];
     if (_parentSessionID.length > 0)
         note = [note stringByAppendingString:@"\n\nYou are a sub-agent: another agent gave you the task in the first message and will read only your final reply. Do the task, then reply with a complete, self-contained report of what you did and found."];
     return note;
@@ -1732,13 +1766,20 @@ static const NSUInteger kISHLLMMaxRunningSubagents = 4;
     ISHLLMToolInvocation *invocation = [ISHLLMToolInvocation invocationWithToolCall:toolCalls[index] context:_toolContext];
     [self performToolInvocation:invocation decision:nil completion:^(NSString *resultText, NSString *summary) {
         [self scoped:^{
-            [self->_messages addObject:@{
+            NSMutableDictionary *result = [@{
                 @"role": @"tool",
                 @"tool_call_id": invocation.callID,
                 @"name": invocation.name.length > 0 ? invocation.name : @"run_shell",
                 @"content": resultText ?: @"",
                 @"summary": summary.length > 0 ? summary : (resultText ?: @""),
-            }];
+            } mutableCopy];
+            // A skill the model loaded is standing instructions for the rest
+            // of the chat: providerMessages keeps it whole when it trims
+            // older results (agentskills.io's integration guide, step 5).
+            if ([invocation.name isEqualToString:@"read_file"] && [invocation.path.lastPathComponent isEqualToString:@"SKILL.md"] &&
+                ![resultText hasPrefix:@"Error:"])
+                result[@"skill"] = @"1";
+            [self->_messages addObject:result];
             [self notifyMessages];
             [self saveTranscript];
             if (self->_cancelled) {

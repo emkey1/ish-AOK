@@ -99139,6 +99139,966 @@
           }
         }
       }
+    },
+    "no frontmatter" : {
+      "comment" : "/skills: why a skill is not offered; its SKILL.md does not start with a --- block",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "kein Frontmatter"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "sin frontmatter"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "pas de frontmatter"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "フロントマターがありません"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "프런트매터 없음"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "sem frontmatter"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "нет frontmatter"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有 frontmatter"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "沒有 frontmatter"
+          }
+        }
+      }
+    },
+    "no description" : {
+      "comment" : "/skills: why a skill is not offered; its frontmatter has no description",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "keine Beschreibung"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "sin descripción"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "pas de description"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "説明がありません"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "설명 없음"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "sem descrição"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "нет описания"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有描述"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "沒有描述"
+          }
+        }
+      }
+    },
+    "%@ comes first" : {
+      "comment" : "/skills: why a skill is not offered; %@ is the path of another SKILL.md with the same name",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ hat Vorrang"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ tiene prioridad"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ passe avant"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ が優先されます"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@이(가) 우선합니다"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ tem prioridade"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "приоритет у %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 优先"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 優先"
+          }
+        }
+      }
+    },
+    "disable-model-invocation is set" : {
+      "comment" : "/skills: why a skill is not offered; the frontmatter key is quoted literally",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "disable-model-invocation ist gesetzt"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "disable-model-invocation está activado"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "disable-model-invocation est défini"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "disable-model-invocation が設定されています"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "disable-model-invocation이 설정되어 있음"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "disable-model-invocation está definido"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "задан disable-model-invocation"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已设置 disable-model-invocation"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已設定 disable-model-invocation"
+          }
+        }
+      }
+    },
+    "the list is full" : {
+      "comment" : "/skills: why a skill is not offered; the list sent to the model reached its size limit",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "die Liste ist voll"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "la lista está llena"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "la liste est pleine"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "リストがいっぱいです"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "목록이 가득 찼음"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "a lista está cheia"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "список заполнен"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "列表已满"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "列表已滿"
+          }
+        }
+      }
+    },
+    "%lu skill" : {
+      "comment" : "chat status, singular: skills listed for the model",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lu Skill"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lu habilidad"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lu compétence"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "スキル %lu 件"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "스킬 %lu개"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lu habilidade"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lu навык"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lu 个技能"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lu 個技能"
+          }
+        }
+      }
+    },
+    "%lu skills" : {
+      "comment" : "chat status, plural: skills listed for the model",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lu Skills"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lu habilidades"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lu compétences"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "スキル %lu 件"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "스킬 %lu개"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lu habilidades"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "навыков: %lu"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lu 个技能"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lu 個技能"
+          }
+        }
+      }
+    },
+    "Skills" : {
+      "comment" : "LLM settings row: Agent Skills (SKILL.md folders)",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Skills"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Habilidades"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Compétences"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "スキル"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "스킬"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Habilidades"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Навыки"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "技能"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "技能"
+          }
+        }
+      }
+    },
+    "Skills listed for the model:" : {
+      "comment" : "/skills report heading",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Für das Modell aufgeführte Skills:"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Habilidades que se le indican al modelo:"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Compétences indiquées au modèle :"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "モデルに提示するスキル："
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "모델에 제공되는 스킬:"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Habilidades informadas ao modelo:"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Навыки, перечисленные для модели:"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "提供给模型的技能："
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "提供給模型的技能："
+          }
+        }
+      }
+    },
+    "Not listed:" : {
+      "comment" : "/skills report heading: skills found but not given to the model",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nicht aufgeführt:"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No incluidas:"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Non indiquées :"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "提示しないもの："
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "제공되지 않음:"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não incluídas:"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не перечислены:"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未提供："
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未提供："
+          }
+        }
+      }
+    },
+    "No skills found. A skill is a folder with a SKILL.md in it. The chat looks in .agents/skills and .claude/skills in the working directory and each folder above it, the same two in your home directory, and /AOK/persist/skills, which every root shares (in Files: Workstation › Persist › skills)." : {
+      "comment" : "/skills report when there are none; paths are literal",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Keine Skills gefunden. Ein Skill ist ein Ordner mit einer SKILL.md darin. Der Chat sucht in .agents/skills und .claude/skills im Arbeitsverzeichnis und in jedem Ordner darüber, in denselben beiden in deinem Home-Verzeichnis und in /AOK/persist/skills, das alle Dateisysteme gemeinsam nutzen (in Dateien: Workstation › Persist › skills)."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se encontraron habilidades. Una habilidad es una carpeta que contiene un SKILL.md. El chat busca en .agents/skills y .claude/skills en el directorio de trabajo y en cada carpeta superior, en esas mismas dos dentro del directorio de inicio y en /AOK/persist/skills, que comparten todos los sistemas de archivos (en Archivos: Workstation › Persist › skills)."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aucune compétence trouvée. Une compétence est un dossier contenant un SKILL.md. Le chat cherche dans .agents/skills et .claude/skills du répertoire de travail et de chaque dossier au-dessus, dans ces deux mêmes dossiers de votre répertoire personnel, et dans /AOK/persist/skills, que partagent tous les systèmes de fichiers (dans Fichiers : Workstation › Persist › skills)."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "スキルが見つかりません。スキルとは SKILL.md を含むフォルダです。チャットは、作業ディレクトリとその上位の各フォルダにある .agents/skills と .claude/skills、ホームディレクトリの同じ2か所、そしてすべてのファイルシステムで共有される /AOK/persist/skills（ファイル App では Workstation › Persist › skills）を探します。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "스킬을 찾을 수 없습니다. 스킬은 SKILL.md가 들어 있는 폴더입니다. 채팅은 작업 디렉터리와 그 위의 각 폴더에 있는 .agents/skills와 .claude/skills, 홈 디렉터리의 같은 두 곳, 그리고 모든 파일 시스템이 공유하는 /AOK/persist/skills(파일 앱: Workstation › Persist › skills)에서 찾습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nenhuma habilidade encontrada. Uma habilidade é uma pasta com um SKILL.md dentro. O chat procura em .agents/skills e .claude/skills no diretório de trabalho e em cada pasta acima dele, nessas mesmas duas no seu diretório pessoal e em /AOK/persist/skills, compartilhada por todos os sistemas de arquivos (no app Arquivos: Workstation › Persist › skills)."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Навыки не найдены. Навык — это папка с файлом SKILL.md. Чат ищет их в .agents/skills и .claude/skills в рабочем каталоге и в каждой папке выше, в тех же двух папках в домашнем каталоге и в /AOK/persist/skills, общей для всех файловых систем (в «Файлах»: Workstation › Persist › skills)."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未找到技能。技能是一个包含 SKILL.md 的文件夹。聊天会在工作目录及其上方每个文件夹中的 .agents/skills 和 .claude/skills、主目录中的这两个位置，以及所有文件系统共享的 /AOK/persist/skills（“文件”中：Workstation › Persist › skills）中查找。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "找不到技能。技能是一個包含 SKILL.md 的檔案夾。聊天會在工作目錄及其上層每個檔案夾中的 .agents/skills 和 .claude/skills、主目錄中的這兩個位置，以及所有檔案系統共用的 /AOK/persist/skills（「檔案」中：Workstation › Persist › skills）中尋找。"
+          }
+        }
+      }
+    },
+    "Skills are off, so the model is given none (Settings › LLM Client › Skills)." : {
+      "comment" : "/skills report note",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Skills sind aus, daher bekommt das Modell keine (Einstellungen › LLM-Client › Skills)."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Las habilidades están desactivadas, así que el modelo no recibe ninguna (Ajustes › Cliente LLM › Habilidades)."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Les compétences sont désactivées : le modèle n’en reçoit aucune (Réglages › Client LLM › Compétences)."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "スキルがオフのため、モデルには提示されません（設定 › LLM クライアント › スキル）。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "스킬이 꺼져 있어 모델에 제공되지 않습니다(설정 › LLM 클라이언트 › 스킬)."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "As habilidades estão desativadas, então o modelo não recebe nenhuma (Ajustes › Cliente LLM › Habilidades)."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Навыки выключены, поэтому модель их не получает (Настройки › LLM-клиент › Навыки)."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "技能已关闭，因此不会提供给模型（设置 › LLM 客户端 › 技能）。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "技能已關閉，因此不會提供給模型（設定 › LLM 用戶端 › 技能）。"
+          }
+        }
+      }
+    },
+    "Tools are off, so the model is given no skills: it reads one with its file tools (Settings › LLM Client › Tools)." : {
+      "comment" : "/skills report note",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tools sind aus, daher bekommt das Modell keine Skills: Es liest sie mit seinen Datei-Tools (Einstellungen › LLM-Client › Tools)."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Las herramientas están desactivadas, así que el modelo no recibe habilidades: las lee con sus herramientas de archivos (Ajustes › Cliente LLM › Herramientas)."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Les outils sont désactivés : le modèle ne reçoit aucune compétence, car il les lit avec ses outils de fichiers (Réglages › Client LLM › Outils)."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ツールがオフのため、モデルにはスキルが提示されません。スキルはファイルツールで読み込むためです（設定 › LLM クライアント › ツール）。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "도구가 꺼져 있어 모델에 스킬이 제공되지 않습니다. 스킬은 파일 도구로 읽습니다(설정 › LLM 클라이언트 › 도구)."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "As ferramentas estão desativadas, então o modelo não recebe habilidades: ele as lê com suas ferramentas de arquivos (Ajustes › Cliente LLM › Ferramentas)."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Инструменты выключены, поэтому модель не получает навыков: она читает их своими файловыми инструментами (Настройки › LLM-клиент › Инструменты)."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "工具已关闭，因此不会向模型提供技能：模型要用文件工具读取技能（设置 › LLM 客户端 › 工具）。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "工具已關閉，因此不會向模型提供技能：模型要用檔案工具讀取技能（設定 › LLM 用戶端 › 工具）。"
+          }
+        }
+      }
+    },
+    "Apple Foundation Models is given no skills: its context is too small." : {
+      "comment" : "/skills report note",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apple Foundation Models bekommt keine Skills: Sein Kontext ist zu klein."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apple Foundation Models no recibe habilidades: su contexto es demasiado pequeño."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apple Foundation Models ne reçoit aucune compétence : son contexte est trop petit."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apple Foundation Models にはスキルを提示しません。コンテキストが小さすぎるためです。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apple Foundation Models에는 스킬이 제공되지 않습니다. 컨텍스트가 너무 작습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O Apple Foundation Models não recebe habilidades: o contexto dele é pequeno demais."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apple Foundation Models не получает навыков: у неё слишком маленький контекст."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apple Foundation Models 不会获得技能：它的上下文太小。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apple Foundation Models 不會取得技能：它的上下文太小。"
+          }
+        }
+      }
+    },
+    "Skills gives the model, along with Tools, a list of the skills (folders with a SKILL.md) in .agents/skills or .claude/skills and in /AOK/persist/skills; it reads one when a task matches. /skills in a chat shows them." : {
+      "comment" : "LLM settings footer sentence",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Skills gibt dem Modell zusammen mit Tools eine Liste der Skills (Ordner mit einer SKILL.md) in .agents/skills oder .claude/skills und in /AOK/persist/skills; es liest einen, wenn eine Aufgabe dazu passt. /skills in einem Chat zeigt sie."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Habilidades da al modelo, junto con Herramientas, una lista de las habilidades (carpetas con un SKILL.md) de .agents/skills o .claude/skills y de /AOK/persist/skills; el modelo lee una cuando una tarea coincide. /skills en un chat las muestra."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Compétences donne au modèle, avec Outils, la liste des compétences (dossiers contenant un SKILL.md) de .agents/skills ou .claude/skills et de /AOK/persist/skills ; il en lit une quand une tâche y correspond. /skills dans un chat les affiche."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "スキルは、ツールと合わせて、.agents/skills または .claude/skills と /AOK/persist/skills にあるスキル（SKILL.md を含むフォルダ）の一覧をモデルに渡します。モデルはタスクに合うスキルを読み込みます。チャットで /skills と入力すると一覧を表示します。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "스킬은 도구와 함께 .agents/skills 또는 .claude/skills와 /AOK/persist/skills에 있는 스킬(SKILL.md가 든 폴더) 목록을 모델에 제공하며, 모델은 작업에 맞는 스킬을 읽습니다. 채팅에서 /skills를 입력하면 목록이 표시됩니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Habilidades dá ao modelo, junto com Ferramentas, uma lista das habilidades (pastas com um SKILL.md) em .agents/skills ou .claude/skills e em /AOK/persist/skills; ele lê uma quando uma tarefa corresponde. /skills em um chat as mostra."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Навыки вместе с инструментами передают модели список навыков (папок с файлом SKILL.md) из .agents/skills или .claude/skills и из /AOK/persist/skills; модель читает навык, когда задача ему соответствует. /skills в чате показывает их."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "“技能”会连同“工具”一起，向模型提供 .agents/skills 或 .claude/skills 以及 /AOK/persist/skills 中的技能（包含 SKILL.md 的文件夹）列表；任务匹配时模型会读取相应技能。在聊天中输入 /skills 可查看它们。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「技能」會連同「工具」一起，向模型提供 .agents/skills 或 .claude/skills 以及 /AOK/persist/skills 中的技能（包含 SKILL.md 的檔案夾）列表；任務符合時模型會讀取相應技能。在聊天中輸入 /skills 可查看它們。"
+          }
+        }
+      }
+    },
+    "/skills lists the skills the model is given." : {
+      "comment" : "empty chat tools summary, after the list of commands",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "/skills listet die Skills auf, die das Modell bekommt."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "/skills muestra las habilidades que recibe el modelo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "/skills liste les compétences fournies au modèle."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "/skills でモデルに提示するスキルを一覧表示します。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "/skills는 모델에 제공되는 스킬을 보여 줍니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "/skills lista as habilidades que o modelo recebe."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "/skills показывает навыки, которые получает модель."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "/skills 列出提供给模型的技能。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "/skills 列出提供給模型的技能。"
+          }
+        }
+      }
     }
   },
   "version" : "1.0"

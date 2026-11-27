@@ -22,6 +22,7 @@
 #import "LLMChatInternal.h"
 #import "LLMChatMCP.h"
 #import "LLMChatAgent.h"
+#import "LLMChatSkills.h"
 #if __has_include("libiSH_AOKApp-Swift.h")
 #import "libiSH_AOKApp-Swift.h" // AOKFoundationModelsBridge (Swift, iOS 26+ FoundationModels wrapper)
 #endif
@@ -961,6 +962,11 @@ static const CGFloat kISHLLMMaximumTextScale = 3.0;
         [self showAgentList];
         return;
     }
+    if ([prompt isEqualToString:@"/skills"]) {
+        [self setPromptFieldText:@""];
+        [self showSkills];
+        return;
+    }
     if ([prompt isEqualToString:@"/chats"]) {
         [self setPromptFieldText:@""];
         [self showChatList];
@@ -1149,6 +1155,9 @@ static NSString *ISHLLMElapsedText(NSDate *since) {
                           subRunning > 0 ? [NSString stringWithFormat:NSLocalizedString(@" (%lu working)", @"chat status suffix: sub-agents still running"), (unsigned long) subRunning] : @""]];
     if (agent.systemPrompt.length > 0)
         [parts addObject:NSLocalizedString(@"system prompt", @"chat status: this chat has a system prompt")];
+    NSUInteger skills = UserPreferences.shared.llmToolsEnabled ? agent.offeredSkills.count : 0;
+    if (skills > 0)
+        [parts addObject:[NSString stringWithFormat:skills == 1 ? NSLocalizedString(@"%lu skill", @"chat status, singular: skills listed for the model") : NSLocalizedString(@"%lu skills", @"chat status, plural: skills listed for the model"), (unsigned long) skills]];
     _infoLabel.text = [parts componentsJoinedByString:@" · "];
 
     // Line 4: every other agent that wants attention.
@@ -1612,6 +1621,53 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
 }
 
 // /mcp: straight to LLM Settings -> MCP Servers.
+static NSString *ISHLLMSkillsReport(NSArray<ISHLLMSkill *> *found, NSArray<ISHLLMSkill *> *offered, BOOL enabled) {
+    NSMutableArray<NSString *> *paragraphs = [NSMutableArray array];
+    if (found.count == 0) {
+        [paragraphs addObject:NSLocalizedString(@"No skills found. A skill is a folder with a SKILL.md in it. The chat looks in .agents/skills and .claude/skills in the working directory and each folder above it, the same two in your home directory, and /AOK/persist/skills, which every root shares (in Files: Workstation › Persist › skills).", @"/skills report when there are none; paths are literal")];
+    } else {
+        NSMutableArray<NSString *> *lines = [NSMutableArray array];
+        for (ISHLLMSkill *skill in offered)
+            [lines addObject:[NSString stringWithFormat:@"- `%@` — %@", skill.name, skill.location]];
+        if (lines.count > 0)
+            [paragraphs addObject:[NSString stringWithFormat:@"%@\n%@", NSLocalizedString(@"Skills listed for the model:", @"/skills report heading"), [lines componentsJoinedByString:@"\n"]]];
+        [lines removeAllObjects];
+        for (ISHLLMSkill *skill in found) {
+            if (skill.notOfferedReason != nil)
+                [lines addObject:[NSString stringWithFormat:@"- `%@` — %@: %@", skill.name, skill.location, skill.notOfferedReason]];
+        }
+        if (lines.count > 0)
+            [paragraphs addObject:[NSString stringWithFormat:@"%@\n%@", NSLocalizedString(@"Not listed:", @"/skills report heading: skills found but not given to the model"), [lines componentsJoinedByString:@"\n"]]];
+    }
+    if (!enabled)
+        [paragraphs addObject:NSLocalizedString(@"Skills are off, so the model is given none (Settings › LLM Client › Skills).", @"/skills report note")];
+    else if (!UserPreferences.shared.llmToolsEnabled)
+        [paragraphs addObject:NSLocalizedString(@"Tools are off, so the model is given no skills: it reads one with its file tools (Settings › LLM Client › Tools).", @"/skills report note")];
+    else if (ISHLLMUsesAppleFoundationModels())
+        [paragraphs addObject:NSLocalizedString(@"Apple Foundation Models is given no skills: its context is too small.", @"/skills report note")];
+    return [paragraphs componentsJoinedByString:@"\n\n"];
+}
+
+// /skills: what the chat finds now and what it would list for the model,
+// as a note in the chat that is never sent. Found afresh, as before a prompt,
+// so a skill just added shows without sending anything.
+- (void)showSkills {
+    ISHLLMAgent *agent = _agent;
+    NSString *workingDirectory = agent.toolContext.workingDirectory;
+    NSString *knownHome = ISHLLMAgentManager.shared.guestHomeDirectory;
+    BOOL enabled = ISHLLMSkillsEnabled();
+    dispatch_async(ISHLLMGuestCommandQueue(), ^{
+        NSString *home = knownHome;
+        if (home.length == 0)
+            ISHLLMDetectGuestEnvironmentNote(&home);
+        NSArray<ISHLLMSkill *> *found = ISHLLMDiscoverSkills(workingDirectory.length > 0 ? workingDirectory : home, home);
+        NSArray<ISHLLMSkill *> *offered = ISHLLMResolveSkills(found, kISHLLMSkillCatalogBudget);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [agent appendLocalRole:@"assistant" content:ISHLLMSkillsReport(found, offered, enabled)];
+        });
+    });
+}
+
 - (void)showMCPServers {
     UIViewController *serversViewController = [LLMMCPServersViewController new];
     if (self.ish_canPushSubpage) {

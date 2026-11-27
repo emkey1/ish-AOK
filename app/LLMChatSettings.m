@@ -16,6 +16,7 @@
 #import "LLMChatInternal.h"
 #import "LLMChatMCP.h"
 #import "LLMChatAgent.h"
+#import "LLMChatSkills.h"
 #if __has_include("libiSH_AOKApp-Swift.h")
 #import "libiSH_AOKApp-Swift.h" // AOKFoundationModelsBridge (Swift, iOS 26+ FoundationModels wrapper)
 #endif
@@ -68,6 +69,7 @@ typedef NS_ENUM(NSInteger, ISHLLMSettingsRow) {
     ISHLLMSettingsRowShellTools,
     ISHLLMSettingsRowToolPermissions,
     ISHLLMSettingsRowMCPServers,
+    ISHLLMSettingsRowSkills,
     ISHLLMSettingsRowCommandTimeout,
     ISHLLMSettingsRowOutputLimit,
     ISHLLMSettingsRowToolRounds,
@@ -145,7 +147,9 @@ typedef NS_ENUM(NSInteger, ISHLLMSettingsRow) {
     NSString *models = self.hidesModels
         ? NSLocalizedString(@"Which model a chat talks to is chosen with the chat's model button, next to Chats.", @"LLM settings footer")
         : NSLocalizedString(@"Models lists the saved destinations -- provider, server, model and key -- that chats choose from with their model button.", @"LLM settings footer");
-    return [NSString stringWithFormat:NSLocalizedString(@"%@ A chat is summarized when it reaches three quarters of its Context Window. Tools lets the model read, search and edit files and run commands in the AOK-Workstation shell, as Tool Permissions allows (Apple Foundation Models: shell only; Gemini: none). %@ Chats are saved in /AOK/persist/llm-chats.", @"LLM settings footer; each %@ is another footer sentence"), models, thinkingNote];
+    NSString *footer = [NSString stringWithFormat:NSLocalizedString(@"%@ A chat is summarized when it reaches three quarters of its Context Window. Tools lets the model read, search and edit files and run commands in the AOK-Workstation shell, as Tool Permissions allows (Apple Foundation Models: shell only; Gemini: none). %@ Chats are saved in /AOK/persist/llm-chats.", @"LLM settings footer; each %@ is another footer sentence"), models, thinkingNote];
+    NSString *skillsNote = NSLocalizedString(@"Skills gives the model, along with Tools, a list of the skills (folders with a SKILL.md) in .agents/skills or .claude/skills and in /AOK/persist/skills; it reads one when a task matches. /skills in a chat shows them.", @"LLM settings footer sentence");
+    return [footer stringByAppendingFormat:@" %@", skillsNote];
 }
 
 // At the text size of the Workspace window this page is in; see
@@ -206,6 +210,11 @@ typedef NS_ENUM(NSInteger, ISHLLMSettingsRow) {
             cell.detailTextLabel.text = total == 0 ? NSLocalizedString(@"None", @"LLM settings row detail: no MCP servers") : [NSString stringWithFormat:NSLocalizedString(@"%lu on", @"LLM settings row detail: MCP servers enabled"), (unsigned long) on];
             break;
         }
+        case ISHLLMSettingsRowSkills:
+            cell.textLabel.text = NSLocalizedString(@"Skills", @"LLM settings row: Agent Skills (SKILL.md folders)");
+            cell.detailTextLabel.text = ISHLLMSkillsEnabled() ? NSLocalizedString(@"On", @"LLM settings switch state") : NSLocalizedString(@"Off", @"LLM settings switch state");
+            cell.accessoryType = ISHLLMSkillsEnabled() ? UITableViewCellAccessoryCheckmark : UITableViewCellAccessoryNone;
+            break;
         case ISHLLMSettingsRowCommandTimeout:
             cell.textLabel.text = NSLocalizedString(@"Command Timeout", @"LLM settings row");
             cell.detailTextLabel.text = ISHLLMToolTimeoutTitle(ISHLLMToolTimeoutSeconds());
@@ -254,6 +263,10 @@ typedef NS_ENUM(NSInteger, ISHLLMSettingsRow) {
             return;
         case ISHLLMSettingsRowMCPServers:
             [self.navigationController pushViewController:[LLMMCPServersViewController new] animated:YES];
+            return;
+        case ISHLLMSettingsRowSkills:
+            ISHLLMSetSkillsEnabled(!ISHLLMSkillsEnabled());
+            [tableView reloadData];
             return;
         case ISHLLMSettingsRowCommandTimeout:
             [self pickToolTimeoutFromView:cell];

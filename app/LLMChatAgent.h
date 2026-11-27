@@ -67,6 +67,10 @@ extern NSNotificationName const ISHLLMAgentStateDidChangeNotification;
 @property (nonatomic, copy, readonly) NSString *systemPrompt;
 @property (nonatomic, readonly) NSArray<NSDictionary<NSString *, id> *> *messages;
 @property (nonatomic, strong, readonly) ISHLLMToolContext *toolContext;
+// The skills listed for the model with the last prompt (LLMChatSkills.h):
+// found again before every prompt, as AGENTS.md is read again. Empty when
+// skills or tools are off.
+@property (nonatomic, copy, readonly) NSArray<ISHLLMSkill *> *offeredSkills;
 
 // A sub-agent's parent (nil for a chat of its own), and a parent's
 // sub-agents, oldest first.

@@ -29,6 +29,7 @@
 		04BA7021CFB26C2DC772BD05 /* LLMChatAgentList.m in Sources */ = {isa = PBXBuildFile; fileRef = 3DB371C3ECEB181CF0D25DDE /* LLMChatAgentList.m */; };
 		ED6E6B2726629191AA23D521 /* LLMChatMCPSettings.m in Sources */ = {isa = PBXBuildFile; fileRef = DAC4877EBB5B59AA3D11F59B /* LLMChatMCPSettings.m */; };
 		962CD6E0986D335994B027D2 /* LLMChatMCPCore.m in Sources */ = {isa = PBXBuildFile; fileRef = 0A5C9251995EA202236D64C9 /* LLMChatMCPCore.m */; };
+		6EB7BC15A651CC371BA19431 /* LLMChatSkills.m in Sources */ = {isa = PBXBuildFile; fileRef = 1E235F125665795E48249128 /* LLMChatSkills.m */; };
 		081C7D4CE20147D638F563B6 /* LLMChatMCP.m in Sources */ = {isa = PBXBuildFile; fileRef = C286A4E6F6B366006F462308 /* LLMChatMCP.m */; };
 		321987EF820BADFCD72B1C32 /* LLMChatAnthropic.m in Sources */ = {isa = PBXBuildFile; fileRef = 0986C23739065C1CCE25B7DA /* LLMChatAnthropic.m */; };
 		33175E1D2F303DBE78906A08 /* LLMChatChanges.m in Sources */ = {isa = PBXBuildFile; fileRef = A40869067E12F07DAFE03C20 /* LLMChatChanges.m */; };
@@ -422,6 +423,8 @@
 		DAC4877EBB5B59AA3D11F59B /* LLMChatMCPSettings.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = LLMChatMCPSettings.m; sourceTree = "<group>"; };
 		0A5C9251995EA202236D64C9 /* LLMChatMCPCore.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = LLMChatMCPCore.m; sourceTree = "<group>"; };
 		36D55C3995325274D6161457 /* LLMChatMCPCore.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = LLMChatMCPCore.h; sourceTree = "<group>"; };
+		1E235F125665795E48249128 /* LLMChatSkills.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = LLMChatSkills.m; sourceTree = "<group>"; };
+		47C6B77AB61B4B58277135D9 /* LLMChatSkills.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = LLMChatSkills.h; sourceTree = "<group>"; };
 		C286A4E6F6B366006F462308 /* LLMChatMCP.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = LLMChatMCP.m; sourceTree = "<group>"; };
 		00093C490F5ED70364872852 /* LLMChatMCP.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = LLMChatMCP.h; sourceTree = "<group>"; };
 		0986C23739065C1CCE25B7DA /* LLMChatAnthropic.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = LLMChatAnthropic.m; sourceTree = "<group>"; };
@@ -1511,6 +1514,8 @@
 				DAC4877EBB5B59AA3D11F59B /* LLMChatMCPSettings.m */,
 				0A5C9251995EA202236D64C9 /* LLMChatMCPCore.m */,
 				36D55C3995325274D6161457 /* LLMChatMCPCore.h */,
+				1E235F125665795E48249128 /* LLMChatSkills.m */,
+				47C6B77AB61B4B58277135D9 /* LLMChatSkills.h */,
 				C286A4E6F6B366006F462308 /* LLMChatMCP.m */,
 				00093C490F5ED70364872852 /* LLMChatMCP.h */,
 				0986C23739065C1CCE25B7DA /* LLMChatAnthropic.m */,
@@ -2312,6 +2317,7 @@
 				04BA7021CFB26C2DC772BD05 /* LLMChatAgentList.m in Sources */,
 				ED6E6B2726629191AA23D521 /* LLMChatMCPSettings.m in Sources */,
 				962CD6E0986D335994B027D2 /* LLMChatMCPCore.m in Sources */,
+				6EB7BC15A651CC371BA19431 /* LLMChatSkills.m in Sources */,
 				081C7D4CE20147D638F563B6 /* LLMChatMCP.m in Sources */,
 				321987EF820BADFCD72B1C32 /* LLMChatAnthropic.m in Sources */,
 				33175E1D2F303DBE78906A08 /* LLMChatChanges.m in Sources */,

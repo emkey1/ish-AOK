@@ -27,6 +27,7 @@
 #import "GuestFileBridge.h"
 #import "LLMChatMCP.h"
 #import "LLMChatMCPCore.h"
+#import "LLMChatSkills.h"
 
 // MARK: - Guest-shell tool support (OpenAI-compatible function calling)
 
@@ -1504,6 +1505,46 @@ NSString *ISHLLMLoadProjectInstructions(NSString *workingDirectory, NSString **s
             return nil;
         directory = [directory stringByDeletingLastPathComponent];
     }
+}
+
+// Bounds on the scan, so a skills folder that is something else (a home
+// directory linked there, say) cannot hold up a prompt.
+static const NSUInteger kISHLLMSkillsMaxEntriesPerFolder = 200;
+static const NSUInteger kISHLLMSkillsMaxFound = 100;
+// Frontmatter is at the top; this is far more than any has.
+static const NSUInteger kISHLLMSkillsReadBytes = 16 * 1024;
+
+NSArray<ISHLLMSkill *> *ISHLLMDiscoverSkills(NSString *workingDirectory, NSString *homeDirectory) {
+    NSMutableArray<ISHLLMSkill *> *found = [NSMutableArray array];
+    if (![ISHGuestFileBridge.sharedBridge isGuestAvailable])
+        return found;
+    for (NSDictionary<NSString *, id> *entry in ISHLLMSkillSearchDirectories(workingDirectory, homeDirectory)) {
+        NSString *folder = entry[@"path"];
+        ISHLLMSkillScope scope = (ISHLLMSkillScope) [entry[@"scope"] integerValue];
+        ISHGuestFileItem *folderItem = ISHLLMStat(folder, NULL);
+        if (folderItem == nil || folderItem.kind != ISHGuestFileKindDirectory || ISHLLMAccessProblem(folderItem, 5, folder) != nil)
+            continue;
+        NSArray<ISHGuestFileItem *> *items = [ISHLLMListWhole(folder, NULL) sortedArrayUsingComparator:^NSComparisonResult(ISHGuestFileItem *a, ISHGuestFileItem *b) {
+            return [a.name compare:b.name];
+        }];
+        NSUInteger looked = 0;
+        for (ISHGuestFileItem *item in items) {
+            if ([item.name hasPrefix:@"."] || [item.name isEqualToString:@"node_modules"] || item.kind != ISHGuestFileKindDirectory)
+                continue;
+            if (++looked > kISHLLMSkillsMaxEntriesPerFolder || found.count >= kISHLLMSkillsMaxFound)
+                break;
+            NSString *location = [[folder stringByAppendingPathComponent:item.name] stringByAppendingPathComponent:@"SKILL.md"];
+            ISHGuestFileItem *file = ISHLLMStat(location, NULL);
+            if (file == nil || file.kind != ISHGuestFileKindRegular || ISHLLMAccessProblem(file, 4, location) != nil)
+                continue;
+            NSData *data = ISHLLMReadWhole(location, kISHLLMSkillsReadBytes, NULL);
+            NSString *text = data != nil ? ISHLLMDecodeText(data, NULL) : nil;
+            [found addObject:ISHLLMParseSkill(text ?: @"", location, item.name, scope)];
+        }
+        if (found.count >= kISHLLMSkillsMaxFound)
+            break;
+    }
+    return found;
 }
 
 static BOOL ISHLLMRemoveFile(NSString *path, NSError **errorOut) {

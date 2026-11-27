@@ -371,6 +371,13 @@ void ISHLLMRunToolInvocation(ISHLLMToolInvocation *invocation, ISHLLMToolContext
 // The nearest AGENTS.md (or CLAUDE.md) at or above workingDirectory, or nil.
 // Blocks on the guest file bridge: call on ISHLLMGuestCommandQueue().
 NSString *ISHLLMLoadProjectInstructions(NSString *workingDirectory, NSString **sourceOut);
+// Every skill (a folder holding a SKILL.md) in the folders
+// ISHLLMSkillSearchDirectories names, in its order, parsed but not yet
+// resolved (ISHLLMResolveSkills). Blocks on the guest file bridge, like the
+// above.
+@class ISHLLMSkill;
+// Either directory may be nil.
+NSArray<ISHLLMSkill *> *ISHLLMDiscoverSkills(NSString *workingDirectory, NSString *homeDirectory);
 // Puts the file back as it was before `change` (removes it if the change
 // created it). Refuses, with changedSince, when the file is no longer what
 // the change left, unless force. Completes on main.

@@ -183,6 +183,47 @@ follows the **MCP Tools** permission (Ask by default). A server that fails to
 connect is named in the chat and left alone for five minutes, unless you change
 its settings or a **Check** succeeds.
 
+## Skills
+
+A **skill** is a folder holding a `SKILL.md`: a few lines of frontmatter giving
+its `name` and a `description` of when to use it, then instructions, and
+sometimes scripts or reference files beside it. It is the
+[Agent Skills](https://agentskills.io) format that Claude Code, Codex and other
+agents read, so a skill written for one of them works here. From 567.
+
+With tools on, every prompt carries a list of the skills the chat finds: each
+one's name, description and location. Only the list costs anything up front.
+When a task matches a description, the model reads that `SKILL.md` with
+`read_file` (allowed by default), and runs what the skill bundles with
+`run_shell`, which asks as any command does. A `SKILL.md` it has read stays in
+full when older tool output is trimmed to save context.
+
+The chat looks in these folders, nearest first:
+
+- `.agents/skills` and `.claude/skills` in the working directory and each folder
+  above it, up to your home directory;
+- the same two in your home directory;
+- `/AOK/persist/skills`, which every root shares. In the Files app it is
+  **Workstation › Persist › skills**, so a skill pack can be unzipped there
+  without a shell.
+
+Each skill is a folder directly inside one of these, for example
+`~/.agents/skills/pdf/SKILL.md`. When two skills share a name the nearer one
+wins. A skill with no description is left out, as is one whose frontmatter sets
+`disable-model-invocation: true`; the list stops at about 12,000 characters.
+`/skills` shows what the chat found, what it lists for the model, and why
+anything is left out. The list is looked for again before every prompt, as
+`AGENTS.md` is read again, so a skill you add is in the next message.
+
+**Settings → LLM Client → Skills** turns this off. Apple Foundation Models is
+given no skills (its context is too small), and Gemini, which gets no tools,
+none either.
+
+A skill is instructions the model is told to follow, so treat one from someone
+else as you would a script: read it before you put it where the chat looks.
+That goes double for a project's own `.agents/skills`, which comes with whatever
+you cloned.
+
 ## Long chats
 
 A chat is **summarised** before it outgrows the model: at three quarters of its
@@ -204,6 +245,7 @@ Type these in the message field:
 | `/compact` | summarise the chat now |
 | `/changes`, `/undo` | review the model's file changes; revert the newest |
 | `/mcp` | the MCP server list |
+| `/skills` | the skills found, and which the model is given |
 | `/models`, `/model NAME` | list the server's models; switch this destination to one |
 
 ## Persistence
