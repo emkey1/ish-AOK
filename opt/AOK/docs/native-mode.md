@@ -90,7 +90,9 @@ for a `GNU/` to name. On a distribution root it says `GNU/Linux` (glibc) or
 **Not here:** a package manager, compilers, Python and Perl. The Wayland
 desktop is not here either. You can have all of them: `apt` and the desktop
 work in a second filesystem, this root's companion (see
-[native-companion.md](native-companion.md) and [A desktop](#a-desktop)). `git` does not yet speak
+[native-companion.md](native-companion.md) and [A desktop](#a-desktop)). From
+567 the companion also has AOK-Workstation's own packages:
+`sudo apt install pscal` adds PSCAL's languages. `git` does not yet speak
 `git@host:` (ssh) remotes; use the HTTPS URL. And `ps` shows a shell's
 subshells by their re-launch command line, because a native shell cannot fork
 (see [native-programs.md](native-programs.md)).

@@ -53,6 +53,9 @@ folder for the shared `/AOK/persist` directory every root sees (see
   quick-look preview) without leaving the Files app.
 - Copy files in and out of the guest filesystem using ordinary Files app
   drag-and-drop or copy/move operations.
+- Send a root archive (`.tar.xz`, `.tar.gz` and the like) to the app with the
+  Share button, to install it as a new filesystem (from 567; see
+  [roots.md](roots.md)).
 
 Because the extension opens the same on-disk, SQLite-backed root your
 running guest uses, changes made from Files app are visible to the guest

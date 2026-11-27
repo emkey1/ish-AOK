@@ -17,15 +17,15 @@ AOK VM，姊妹应用（完整的虚拟机：基于 QEMU 与 AOK gadget 引擎�
   - Bundle root `app.ish.iSH-AOK`
 - **五种客户机架构**，全部基于 JIT：`i386`、`amd64`（x86_64）、`arm64`（aarch64）、`riscv64` 和 `ppc64le`（64 位小端 PowerPC）。
 - **原生程序**：zsh、dash（预配置脚本会让它成为 `sh`），以及携带 OpenSSH（`ssh`、`scp`、`sftp`、`ssh-keygen`、`ssh-copy-id`）、Nextvi 编辑器和与 GNU 兼容的 `sed`、`grep`、`find`、`ls`、`tar`、`gzip`、`diff`、`awk` 及大部分 coreutils 的 SmallCLUE busybox 风格工具箱，都作为宿主代码编译进应用，并由客户机的 `execve` 经 `/AOK/native/<名称>` 分发。它们是运行在客户机任务线程上的宿主函数，而不是客户机二进制，因此以全速运行，无需逐条指令翻译。bash 拥有同样的原生实现，但自 556 起发布的构建不再包含它——参见[原生 bash 与许可证](#原生-bash-与许可证)。
-- **原生模式**（558）：完全没有 Linux 发行版的根文件系统。它的 `/bin` 和 `/usr/bin` 就是原生程序——约 140 个日常命令、ssh、git、curl、编辑器——由 SmallCLUE 的 `init` 作为 pid 1 运行 runit 式的服务，登录 shell 是原生 zsh。无需下载任何东西：在“官方发行版”下选择 **AOK-Workstation Native** 即可。从 566 起，它通过安装在旁边的伴随 Devuan 文件系统提供 `apt` 和 Wayland 桌面，并有自己的 sshd（Settings → sshd）。参见 `/AOK/docs/native-mode.md` 和 `/AOK/docs/native-companion.md`。
+- **原生模式**（558）：完全没有 Linux 发行版的根文件系统。它的 `/bin` 和 `/usr/bin` 就是原生程序——约 140 个日常命令、ssh、git、curl、编辑器——由 SmallCLUE 的 `init` 作为 pid 1 运行 runit 式的服务，登录 shell 是原生 zsh。无需下载任何东西；从 567 起，全新安装会直接启动它，不再显示文件系统选择界面。它也列在“官方发行版”下（**AOK-Workstation Native**），Boot Images 可以在它旁边添加发行版。从 566 起，它通过安装在旁边的伴随 Devuan 文件系统提供 `apt` 和 Wayland 桌面，并有自己的 sshd（Settings → sshd）；从 567 起，伴随文件系统还带有 AOK-Workstation 自己的 apt 仓库，`sudo apt install pscal` 即可安装 PSCAL。参见 `/AOK/docs/native-mode.md` 和 `/AOK/docs/native-companion.md`。
 - `/AOK`，一个只读的应用内文件系统（`/AOK/docs`、`/AOK/tools`、`/AOK/tests`、`/AOK/native`），在构建时通过 `fs/aok-*.manifest` 和 `tools/gen-aokfs.py` 从 `opt/AOK/` 嵌入。
 - 内置在应用中的根文件系统（Alpine 3.24.2 与 Devuan 6，仅 `aarch64`），以及面向 `i386`、`x86_64`、`riscv64` 和 `ppc64le` 的可下载镜像。
 - **在客户机中使用设备的 GPU**：`/dev/dri/renderD128`，一个 virtio-gpu 渲染节点，由进程内运行在 MoltenVK 之上的 virglrenderer Venus 渲染器支撑，因此 Mesa 的 Venus Vulkan 驱动（以及其上的 zink）通过 Metal 绘制。客户机一侧由 `/AOK/tools/setup-gpu.sh` 安装。参见 `/AOK/docs/workspace.md`。
-- **Wayland 桌面**（labwc、foot、waybar；自带四个桌面——也可用 Wayfire 或 Xfce 取代 labwc）：在 GPU 上合成，并通过 `/AOK/native/wl-present` 呈现到应用中——画面单向传出，键盘、指针、剪贴板和尺寸调整反向传入——VNC 作为后备。`/AOK/tools/setup-games.sh` 会安装一组经过测试的游戏。参见 `/AOK/docs/workspace.md`。
-- **LLM Chat**：应用内的聊天客户端（OpenAI 兼容服务器、Anthropic、Gemini、Apple 端侧模型），可在允许/询问/拒绝的权限下读取、编辑客户机中的文件并运行命令，可使用 MCP 服务器，还能把多个聊天作为后台代理同时运行。API 密钥保存在钥匙串中；从 566 起，第一条消息发往提供商的主机之前会先询问。参见 `/AOK/docs/llm-chat.md`。
+- **Wayland 桌面**（labwc、foot、waybar；自带四个桌面——也可用 Wayfire 或 Xfce 取代 labwc）：在 GPU 上合成，并通过 `/AOK/native/wl-present` 呈现到应用中——画面单向传出，键盘、指针、剪贴板和尺寸调整反向传入——VNC 作为后备。从 567 起，`/AOK/tools/select-desktop.sh --command` 可以改为启动你自己的桌面，例如 Phosh。`/AOK/tools/setup-games.sh` 会安装一组经过测试的游戏。参见 `/AOK/docs/workspace.md`。
+- **LLM Chat**：应用内的聊天客户端（OpenAI 兼容服务器、Anthropic、Gemini、Apple 端侧模型），可在允许/询问/拒绝的权限下读取、编辑客户机中的文件并运行命令，可使用 MCP 服务器以及（从 567 起）Agent Skills（含 `SKILL.md` 的文件夹），还能把多个聊天作为后台代理同时运行。API 密钥保存在钥匙串中；从 566 起，第一条消息发往提供商的主机之前会先询问。参见 `/AOK/docs/llm-chat.md`。
 - **外接显示器**（563，仅限 iPhone；iOS 27 上从 564 起；尚未在真机上测试）：连接显示器或使用 AirPlay 屏幕镜像时，终端（在 Workspace 中为最前面的终端窗口）按大屏幕的比例铺满整个屏幕，键盘仍留在 iPhone 上；Wayland Display 连同光标一起镜像到大屏幕。iPad 保持 Stage Manager 的行为不变。参见 `/AOK/docs/external-display.md`。
 - **终端里的图片**（565）：支持 kitty 的图形协议，`kitten icat`、`chafa`、`timg` 以及使用它的文件管理器都能显示真正的图片，终端也会以像素为单位报告自己的尺寸。参见 `/AOK/docs/terminal-images.md`。
-- **用硬件编码器转换视频**（565）：`/AOK/native/transcode` 用相机应用所用的编码器重新编码为 HEVC 或 H.264；客户机里的 `ffmpeg` 是模拟运行的，非常慢。Workspace 的 Media Converter 小程序用按钮完成同样的工作，并能从“照片”取视频、把结果存回“照片”。参见 `/AOK/docs/transcode.md`。
+- **用硬件编码器转换视频**（565），**以及音频**（567）：`/AOK/native/transcode` 用相机应用所用的编码器重新编码为 HEVC 或 H.264；客户机里的 `ffmpeg` 是模拟运行的，非常慢。音频则用系统自带的编解码器转换为 AAC、ALAC 或 WAV。Workspace 的 Media Converter 小程序用按钮完成同样的工作，并能从“照片”取视频、把结果存回“照片”。参见 `/AOK/docs/transcode.md`。
 - **挂起到磁盘**：把整个会话——进程、打开的文件、终端——保存下来，在应用被终止后再恢复。默认关闭。参见 `/AOK/docs/suspend.md`。
 - **中文及其他语言**：应用界面跟随设备语言，除英文外还提供简体中文、繁體中文、日语、韩语、西班牙语、法语、德语、巴西葡萄牙语和俄语。终端支持输入法输入：用中文拼音输入法和日文输入法时，正在组字的文本直接显示在光标处，候选窗口紧挨在旁边，软键盘和硬件键盘都能用；韩文则逐个音节就地输入。`/AOK/tools/setup-locale.sh` 还能让根文件系统也使用设备的语言（Devuan 自带各程序的翻译）。参见 `/AOK/docs/roots.md`。
 - 通过 iOS 系统 API 暴露客户机文件的 File Provider 支持。
@@ -448,6 +448,9 @@ sh /AOK/tests/setup-regressions.sh --only fs_conformance,futex_core --run
 说明：
 
 - 应用会为每个导入的根文件系统记录客户机 ABI。
+- 从 567 起，根文件系统压缩包（`.tar`、`.tar.gz`、`.tar.bz2`、`.tar.xz`）也可以通过“文件”
+  App 的共享按钮或其他应用的“Open in”发送给本应用，询问之后作为新的根文件系统导入。参见
+  `/AOK/docs/roots.md`。
 - 所有已安装的根文件系统还会在已启动的客户机中以读写方式暴露于 `/AOK/roots/<名称>`，
   因此你可以 chroot 进入另一种架构的用户空间。
 - 按路径运行另一个根文件系统中的动态链接程序（`/AOK/roots/<名称>/usr/bin/tmux`）时，

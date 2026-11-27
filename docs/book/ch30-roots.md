@@ -80,7 +80,16 @@ knows) and `offeredRootChoices` (what it puts in front of you) in `Roots.m`.
 
 **Imported.** Any archive sitting in `/AOK/persist/roots`, whether it got there
 by download or because somebody dropped a `.tar.xz` in through the Files app
-(Chapter 31) or from the guest. Tap it and it becomes a named root.
+(Chapter 31) or from the guest. Tap it and it becomes a named root. Since 567
+an archive can also be handed over from outside: the app declares itself for
+`.tar`, `.tar.gz`, `.tar.bz2` and `.tar.xz` at `LSHandlerRank` Alternate, so it
+appears in the Files app's Share button and other apps' "Open in" without
+taking over what opening a `.gz` already did, and `SceneDelegate` asks before
+handing the copy iOS delivered to the Filesystems screen's own importer. A
+`.tar.zst` has no type iOS declares, so it keeps the older routes. That is also
+the answer to a question that comes up whenever another app wants to build roots
+for this one: an App Group cannot cross developer teams, and a root's `data/`
+and `meta.db` are not an interface to hand to another app, but an archive is.
 
 **Made on the spot.** Since 558 there is a fourth kind, which arrives no way at
 all: **AOK-Workstation Native**, a root with no Linux distribution in it. Its `/bin` and
@@ -94,6 +103,14 @@ leave a link to nothing. The user's own files (`/etc/passwd`, `/etc/rc`) are
 written only when missing; only links that point into `/AOK/native` are ever
 re-pointed or removed. `/AOK/docs/native-mode.md` is the user's guide to it.
 
+Since 567 it is also what a fresh install boots. With no filesystem at all the
+app used to open on the Filesystems screen and wait for a choice; now
+`-provisionNativeRootIfEmpty`, called from `willFinishLaunching` right after
+`Roots` loads and before anything decides whether to boot or show the picker,
+makes the native root, makes it the default and boots it. Nothing is
+downloaded, recovery mode makes nothing, and the picker is left for the one
+case that needs it: making the native root failed.
+
 What a native root lacks, it borrows. Since 566 it can keep a **companion**: a
 Devuan arm64 filesystem installed beside it, named `Devuan`, with the name
 recorded in `/etc/aok-companion-root`. `apt` and `dpkg` in the native root are
@@ -103,6 +120,14 @@ root's on `PATH`, and the Wayland desktop of Chapter 32 is installed there and
 runs from there. All of that is emulated and entered through Section 30.5's
 foreign exec; the booted root stays native.
 `/AOK/docs/native-companion.md` has the rules.
+
+Since 567 the companion also gets packages from this project: AOK-Workstation's
+own apt repository (`emkey1/aok-apt`), built for Devuan 6 on arm64 and amd64,
+whose first package is PSCAL. `/AOK/tools/aok-apt.sh` adds the source, trusted
+for that repository's key alone; `setup-companion.sh` runs it while wiring a
+companion, and `companion-run.sh` once at the first `apt` for a companion
+prepared before it existed. It leaves a note behind, so a source somebody
+removed is never put back.
 
 ## 30.2 The control surface is a file
 
@@ -250,9 +275,12 @@ system from wherever you are standing.
 
 `/AOK/tools/mount-root.sh` sets up the bind mounts a chroot needs — `/proc`,
 `/sys`, `/dev`, `/dev/pts`, `/run`, plus `/AOK/native`, `/AOK/docs`, `/AOK/tools`,
-`/AOK/tests` and `/AOK/fakefs` from the booted root. (`/AOK/native` joined the
-list in 558, when a native-mode root's `$SHELL` turned out to be a program the
-chroot could not see.)
+`/AOK/bundled`, `/AOK/tests` and `/AOK/fakefs` from the booted root.
+(`/AOK/native` joined the list in 558, when a native-mode root's `$SHELL`
+turned out to be a program the chroot could not see, and `/AOK/bundled` in
+567, when native mode's desktop, which runs in its companion, was found
+building its own panel and running the distribution's wayvnc in place of the
+bundled ones.)
 Chapter 9 met the consequence: a test running inside such a chroot sees the
 *booted* root's `/proc` while standing in a different filesystem, which is why
 `test_common.h` detects that situation and skips the tests that cross-check the

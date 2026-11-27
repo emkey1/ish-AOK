@@ -43,7 +43,8 @@ sshd's `StrictModes`) are satisfied.
 | `/AOK/persist/roots/` | Cached/downloaded root filesystem archives (`.tar.xz` and similar), shared by every installed root. Populated by the Filesystems screen's download flow, or by dropping an archive in yourself (from the guest, or from the Files app). |
 | `/AOK/persist/music/` | Default library folder for the in-app Music player applet. |
 | `/AOK/persist/playlists/` | Saved playlists (JSON) for the Music player. |
-| `/AOK/persist/llm-chat.json` | Chat history for the in-app LLM Chat assistant. |
+| `/AOK/persist/llm-chats/` | Chat history for the in-app LLM Chat assistant: one file per chat, plus `index.json`. |
+| `/AOK/persist/skills/` | Agent Skills for LLM Chat, one folder with a `SKILL.md` each, found from every root (from 567; make it yourself). See [llm-chat.md](llm-chat.md#skills). |
 | `/AOK/persist/llm-extracts/` | Saved extracted content from the LLM assistant. |
 | `/AOK/persist/llm-prompts/` | User-editable prompt templates for the LLM assistant. |
 

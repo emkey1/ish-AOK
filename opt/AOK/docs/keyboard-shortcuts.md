@@ -34,6 +34,10 @@ Two exceptions:
   Linux desktop and switches *its* desktops (see below). Outside it, the same
   keys switch Workspace's. One habit, two levels.
 
+In a Settings, Filesystems or Diagnostics window, ⌘+ and ⌘- scale that page's
+text. Shown full screen instead — on an iPhone, or an iPad outside Workspace —
+those pages follow the system's text size, Larger Text included, from 567.
+
 ## The terminal
 
 The same keys in Workspace's terminal windows and in the full-screen terminal.

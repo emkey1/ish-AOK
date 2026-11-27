@@ -18,15 +18,15 @@ AOK VM, 자매 앱(완전한 가상 머신: QEMU 와 AOK gadget 엔진으로 만
   - 번들 루트 `app.ish.iSH-AOK`
 - **다섯 가지 게스트 아키텍처**, 모두 JIT 기반: `i386`, `amd64`(x86_64), `arm64`(aarch64), `riscv64`, `ppc64le`(64비트 리틀 엔디언 PowerPC).
 - **네이티브 프로그램**: zsh, dash(프로비저닝이 이를 `sh` 로 만듭니다), 그리고 OpenSSH(`ssh`, `scp`, `sftp`, `ssh-keygen`, `ssh-copy-id`), Nextvi 편집기, GNU 호환 `sed`, `grep`, `find`, `ls`, `tar`, `gzip`, `diff`, `awk` 및 coreutils 대부분을 품고 있는 SmallCLUE 의 busybox 스타일 도구 모음이 호스트 코드로 앱에 컴파일되어 들어가며, 게스트의 `execve` 에서 `/AOK/native/<이름>` 을 통해 디스패치됩니다. 이들은 게스트 바이너리가 아니라 게스트 태스크 스레드 위에서 도는 호스트 함수이므로, 명령어 단위로 변환되지 않고 전속력으로 실행됩니다. bash 도 동일한 네이티브 구현이 있지만, 배포되는 빌드에는 556 부터 포함되지 않습니다 — [네이티브 bash와 라이선스](#네이티브-bash와-라이선스) 참고.
-- **네이티브 모드**(558): 리눅스 배포판이 전혀 없는 루트입니다. `/bin` 과 `/usr/bin` 은 네이티브 프로그램들 — 일상 명령 약 140개, ssh, git, curl, 편집기 — 이고, SmallCLUE 의 `init` 이 pid 1 로서 runit 방식의 서비스를 돌리며, 로그인 셸은 네이티브 zsh 입니다. 아무것도 내려받지 않습니다: 공식 배포판 아래에서 **AOK-Workstation Native** 를 고르면 됩니다. 566부터는 옆에 설치되는 동반 Devuan 파일시스템을 통해 `apt` 와 Wayland 데스크톱을 쓸 수 있고, 자체 sshd(Settings → sshd)도 있습니다. `/AOK/docs/native-mode.md` 와 `/AOK/docs/native-companion.md` 참고.
+- **네이티브 모드**(558): 리눅스 배포판이 전혀 없는 루트입니다. `/bin` 과 `/usr/bin` 은 네이티브 프로그램들 — 일상 명령 약 140개, ssh, git, curl, 편집기 — 이고, SmallCLUE 의 `init` 이 pid 1 로서 runit 방식의 서비스를 돌리며, 로그인 셸은 네이티브 zsh 입니다. 아무것도 내려받지 않으며, 567부터는 새로 설치한 앱이 선택 화면 없이 이 루트로 부팅합니다. 공식 배포판 아래에도 **AOK-Workstation Native** 가 있고, Boot Images 로 그 옆에 배포판을 추가할 수 있습니다. 566부터는 옆에 설치되는 동반 Devuan 파일시스템을 통해 `apt` 와 Wayland 데스크톱을 쓸 수 있고, 자체 sshd(Settings → sshd)도 있습니다. 567부터는 그 동반 파일시스템에 AOK-Workstation 자체 apt 저장소도 있어서 `sudo apt install pscal` 로 PSCAL 을 설치할 수 있습니다. `/AOK/docs/native-mode.md` 와 `/AOK/docs/native-companion.md` 참고.
 - `/AOK`, 읽기 전용 인앱 파일시스템(`/AOK/docs`, `/AOK/tools`, `/AOK/tests`, `/AOK/native`). `fs/aok-*.manifest` 와 `tools/gen-aokfs.py` 를 통해 빌드 시점에 `opt/AOK/` 에서 만들어 넣습니다.
 - 앱 빌드에 번들된 루트 파일시스템(Alpine 3.24.2와 Devuan 6, `aarch64` 전용), 그리고 `i386`, `x86_64`, `riscv64`, `ppc64le` 용 다운로드 이미지.
 - **게스트에서 쓰는 기기의 GPU**: `/dev/dri/renderD128`, 프로세스 안에서 MoltenVK 위의 virglrenderer Venus 렌더러가 뒷받침하는 virtio-gpu 렌더 노드입니다. 그래서 Mesa 의 Venus Vulkan 드라이버(와 그 위의 zink)가 Metal 로 그립니다. 게스트 쪽은 `/AOK/tools/setup-gpu.sh` 가 설치합니다. `/AOK/docs/workspace.md` 참고.
-- **Wayland 데스크톱**(labwc, foot, waybar; 자체 데스크톱 네 개 — labwc 대신 Wayfire 나 Xfce 도 가능): GPU 에서 합성되고, `/AOK/native/wl-present` 를 통해 앱에 전달됩니다 — 한쪽으로는 프레임이, 다른 쪽으로는 키보드, 포인터, 클립보드, 크기 변경이 오가며, VNC 는 대체 경로입니다. `/AOK/tools/setup-games.sh` 는 검증된 게임 묶음을 설치합니다. `/AOK/docs/workspace.md` 참고.
-- **LLM Chat**: 앱 내장 채팅 클라이언트(OpenAI 호환 서버, Anthropic, Gemini, Apple 온디바이스 모델). 허용/확인/거부 권한 아래에서 게스트의 파일을 읽고 고치고 명령을 실행할 수 있으며, MCP 서버를 쓰고, 여러 채팅을 백그라운드 에이전트로 동시에 돌립니다. API 키는 키체인에 보관되며, 566부터는 첫 메시지를 제공자의 호스트로 보내기 전에 먼저 묻습니다. `/AOK/docs/llm-chat.md` 참고.
+- **Wayland 데스크톱**(labwc, foot, waybar; 자체 데스크톱 네 개 — labwc 대신 Wayfire 나 Xfce 도 가능): GPU 에서 합성되고, `/AOK/native/wl-present` 를 통해 앱에 전달됩니다 — 한쪽으로는 프레임이, 다른 쪽으로는 키보드, 포인터, 클립보드, 크기 변경이 오가며, VNC 는 대체 경로입니다. 567부터는 `/AOK/tools/select-desktop.sh --command` 로 Phosh 같은 직접 고른 데스크톱을 대신 시작할 수 있습니다. `/AOK/tools/setup-games.sh` 는 검증된 게임 묶음을 설치합니다. `/AOK/docs/workspace.md` 참고.
+- **LLM Chat**: 앱 내장 채팅 클라이언트(OpenAI 호환 서버, Anthropic, Gemini, Apple 온디바이스 모델). 허용/확인/거부 권한 아래에서 게스트의 파일을 읽고 고치고 명령을 실행할 수 있으며, MCP 서버와 (567부터) Agent Skills(`SKILL.md` 가 든 폴더)를 쓰고, 여러 채팅을 백그라운드 에이전트로 동시에 돌립니다. API 키는 키체인에 보관되며, 566부터는 첫 메시지를 제공자의 호스트로 보내기 전에 먼저 묻습니다. `/AOK/docs/llm-chat.md` 참고.
 - **외부 디스플레이** (563, iPhone 전용, iOS 27 에서는 564 부터, 실제 하드웨어에서는 아직 시험하지 않음): 모니터나 AirPlay 화면 미러링으로 연결하면 터미널(Workspace 에서는 맨 앞의 터미널 창)이 큰 화면의 비율에 맞게 화면을 채우고, 키보드는 iPhone에 남습니다. Wayland Display는 커서와 함께 그 화면에 미러링됩니다. iPad는 Stage Manager 동작을 그대로 유지합니다. `/AOK/docs/external-display.md` 를 참고하세요.
 - **터미널 안의 이미지** (565): kitty 의 그래픽 프로토콜을 지원하므로 `kitten icat`, `chafa`, `timg` 및 이를 쓰는 파일 관리자가 실제 그림을 보여 주며, 터미널이 자신의 크기를 픽셀 단위로 알려 줍니다. `/AOK/docs/terminal-images.md` 참고.
-- **하드웨어 인코더로 동영상 변환** (565): `/AOK/native/transcode` 는 카메라 앱이 쓰는 인코더로 HEVC 나 H.264 로 다시 인코딩합니다. 게스트 안의 `ffmpeg` 는 에뮬레이션되므로 매우 느립니다. Workspace 의 Media Converter 애플릿은 같은 일을 버튼으로 하며, 사진 앱에서 동영상을 가져오고 결과를 다시 넣어 줍니다. `/AOK/docs/transcode.md` 참고.
+- **하드웨어 인코더로 동영상 변환** (565), **오디오도** (567): `/AOK/native/transcode` 는 카메라 앱이 쓰는 인코더로 HEVC 나 H.264 로 다시 인코딩합니다. 게스트 안의 `ffmpeg` 는 에뮬레이션되므로 매우 느립니다. 오디오는 시스템 코덱으로 AAC, ALAC, WAV 로 변환합니다. Workspace 의 Media Converter 애플릿은 같은 일을 버튼으로 하며, 사진 앱에서 동영상을 가져오고 결과를 다시 넣어 줍니다. `/AOK/docs/transcode.md` 참고.
 - **디스크로 서스펜드**: 프로세스, 열린 파일, 터미널까지 세션 전체를 저장했다가 앱이 종료된 뒤에도 이어서 재개합니다. 기본값은 꺼짐. `/AOK/docs/suspend.md` 참고.
 - **한국어와 다른 언어**: 앱 인터페이스가 기기 언어를 따르며, 영어 외에 한국어, 간체·번체 중국어, 일본어, 스페인어, 프랑스어, 독일어, 브라질 포르투갈어, 러시아어를 지원합니다. 터미널은 입력기 입력을 받습니다. 한글은 음절을 그 자리에서 조합해 입력하고, 중국어 병음과 일본어는 조합 중인 글자를 커서 위치에 표시하며 후보 창을 그 옆에 띄웁니다. 화상 키보드와 하드웨어 키보드 모두 해당됩니다. `/AOK/tools/setup-locale.sh` 는 루트 파일시스템에도 기기 언어를 설정합니다(프로그램 번역은 Devuan 에 들어 있습니다). `/AOK/docs/roots.md` 참고.
 - iOS를 통해 게스트 파일을 노출하는 File Provider 지원.
@@ -491,6 +491,9 @@ PSCAL + SmallCLUE 는 앱 안에서 내려받을 수 있으며, 카탈로그는
 참고:
 
 - 앱은 가져온 루트마다 게스트 ABI를 기록합니다.
+- 567부터는 루트 아카이브(`.tar`, `.tar.gz`, `.tar.bz2`, `.tar.xz`)를 파일 앱의 공유
+  버튼이나 다른 앱의 "Open in"으로 앱에 보낼 수도 있으며, 확인 질문 뒤에 새 루트로
+  가져옵니다. `/AOK/docs/roots.md` 참고.
 - 설치된 모든 루트는 부팅된 게스트에서 `/AOK/roots/<이름>`에 읽기·쓰기로 노출되므로,
   다른 아키텍처의 userland로 chroot할 수 있습니다.
 - 다른 루트의 동적 링크 프로그램을 경로로 실행하면(`/AOK/roots/<이름>/usr/bin/tmux`)

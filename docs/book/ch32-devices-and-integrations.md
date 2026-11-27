@@ -169,6 +169,18 @@ Since 566 the chat also asks before the first message leaves the device: once
 per destination host, naming it and what goes with a message. An on-device
 model is not asked about, because nothing leaves.
 
+567 added Agent Skills, the `SKILL.md` folders Claude Code, Codex and other
+agents read. With tools on, every prompt carries only a catalogue of the
+skills found (`.agents/skills` and `.claude/skills` from the working directory
+up to home, then `/AOK/persist/skills`, which every root shares) — a name, a
+description and a path each, stopping at 12,000 characters — and the model
+reads a whole `SKILL.md` with `read_file` when a task matches. Nothing new had
+to be trusted for that: reading is already allowed by default, and anything a
+skill bundles runs through `run_shell` and its permissions. The parser, in
+`LLMChatSkills.m`, reads frontmatter the way other clients' parsers accept it
+rather than as strict YAML: unquoted colons, run-on lines, `>` and `|` blocks,
+CRLF and a BOM all pass.
+
 Output is capped (64 KB), runtime is capped (30 seconds), and a single reply is
 capped at a number of tool rounds (20) — all three adjustable. There are escape
 hatches: "Run, don't ask again this reply", "Always allow", which writes a rule
@@ -282,6 +294,18 @@ Ctrl+Alt+1–4 go straight to one, leaving Cmd+arrows to Workspace's own
 desktops. The session can also move between full screen and a Workspace window
 without ending: either one parks it and the other adopts it.
 
+Since 567 the window can start a desktop AOK does not set up, such as Phosh.
+`select-desktop.sh --command 'phoc -E phosh'` writes `AOK_DESKTOP_CMD=` to
+`/etc/aok-desktop.conf`, and `start-wayland.sh` runs it through `/bin/sh` in
+place of the four. Its program — the first word past any `NAME=value` and
+`exec` — names the desktop, so `labwc -m` still gets labwc's menu and panel,
+and closing the window kills everything under the process the command started,
+so a session script's compositor does not outlive it. A window that failed
+also stopped waiting for a Reconnect: it tries again when the desktop setup
+page's script succeeds, and when it comes back after being left — another
+window in front, or the app in the background — which is how a fix typed in a
+terminal takes.
+
 ### Two ways a frame reaches the screen
 
 **Through VNC**, which is how the applet was built. It began on 2026-07-12 as
@@ -309,8 +333,11 @@ hands that shared memory to the app through the kernel. The app wraps it as a
 Metal buffer and blits the damaged rectangle. No pixel passes through emulated
 code. It carries the other direction too, from a kernel queue the app writes:
 pointer and keyboard through the compositor's virtual devices, the clipboard
-both ways, and the desktop's size. With all of that off its hands `wayvnc` has
-nothing left to do, so once the app is showing frames `wl-present` has it
+both ways, and the desktop's size — since 567 its scale too, applied with
+wlr-output-management's `set_scale` in the same change as a resize, so
+Appearance alters a running desktop rather than waiting for a Reconnect. With
+all of that off its hands `wayvnc` has nothing left to do, so once the app is
+showing frames `wl-present` has it
 detached, and re-attached when `wl-present` ends however it ends; the app's VNC
 connection stays up throughout as the fallback.
 

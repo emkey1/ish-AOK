@@ -165,8 +165,10 @@ Stage Manager, so multi-window is available on a device the platform does not
 give multiple windows to.
 
 The applet list is longer than a book chapter should enumerate — a file manager,
-MotePad, a markdown viewer, an image viewer, a video player, a music player and
-its equalizer, a browser, clock and monitor and network and log panels, storage,
+MotePad, a markdown viewer, an image viewer, a video player, the Media Converter
+(the front end of `/AOK/native/transcode`, on the hardware video encoder since
+565 and taking audio since 567), a music player and its equalizer, a browser,
+clock and monitor and network and log panels, storage,
 the Filesystems screen of Chapter 30, settings, diagnostics, an LLM chat
 (Chapter 32), and a Wayland display (Chapter 32). 557 gave Terminal windows
 tabs, kept by saved layouts and by suspend; let the video player open web

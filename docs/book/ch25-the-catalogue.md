@@ -1,15 +1,17 @@
 # 25. The catalogue
 
-Sixteen entries can live in the registry as of 557, and everything else under
-`/AOK/native` is a symlink to one of them:
+Sixteen entries could live in the registry as of 557, and seventeen since 565
+added `transcode`; everything else under `/AOK/native` is a symlink to one of
+them:
 
 | entry | what it is |
 |---|---|
-| `smallclue` | a busybox-style MIT toolbox; applet chosen by `argv[0]` |
+| `smallclue` | a busybox-style toolbox (Apache-2.0; MIT before November 2026); applet chosen by `argv[0]` |
 | `sudo`, `su`, `passwd` | the three setuid-root programs, separate so no applet can be talked into root |
 | `motepad` | a modeless terminal text editor |
 | `ktop` | the `/AOK/tools` process viewer (Chapter 31), compiled as host code |
 | `wl-present` | carries the Wayland desktop's frames and input to the app (Chapter 32) |
+| `transcode` | video conversion on the hardware encoder (565) and audio conversion with the system's codecs (567), behind the Workspace's Media Converter |
 | `hx` | [helix](https://helix-editor.com), a modal editor with syntax highlighting |
 | `bash` | GNU bash, behind a build option that is off since 556 (Chapter 26) |
 | `zsh` | zsh, on by default |
@@ -25,9 +27,9 @@ program was not written for.
 ## 25.1 SmallCLUE, and the applets that do not own their arguments
 
 SmallCLUE is a multicall toolbox in the busybox tradition: one binary, dozens of
-applets, `argv[0]` selecting which. It is MIT-licensed, it is a submodule
-(`deps/smallclue`), and it is the vehicle for most of what follows — OpenSSH and
-the Nextvi editor are both applets of it.
+applets, `argv[0]` selecting which. It is Apache-2.0-licensed (MIT before
+November 2026), it is a submodule (`deps/smallclue`), and it is the vehicle for
+most of what follows — OpenSSH and the Nextvi editor are both applets of it.
 
 Its most instructive bug is about ownership.
 

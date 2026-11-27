@@ -126,6 +126,11 @@ debugging.
 Whichever you choose, the other windows are still reachable once you are in;
 Startup Mode only picks the first one.
 
+A fresh install has no filesystem to open on. From 567 the app makes
+**AOK-Workstation Native** and boots it, with no picker
+(see [native-mode.md](native-mode.md)); Boot Images adds a distribution
+whenever you want one.
+
 To override it once, long-press the app's icon on the Home Screen (from build
 559): the menu offers **Workspace**, **Wayland Display**, **Session Shell** and
 **System Console**, and works whether or not the app is already running. The
@@ -136,7 +141,10 @@ menu appears once the app has been opened at least once.
 Two rows in Settings (from 566): **Privacy Policy** opens the app's privacy
 policy in the browser, and **Legal** shows, in the app, the licence notices and
 the written offer for the source of the GPL software in the bundled
-filesystems, with the build number to quote when asking for it.
+filesystems, with the build number to quote when asking for it. A third,
+**Licences** (from 567, also a button on the Legal screen), lists every
+component built into the app with its licence texts in full, searchable by
+name or licence.
 
 ## The rest of this documentation set
 
@@ -172,7 +180,7 @@ six of them were not linked from anywhere at all.
 | [motepad.md](motepad.md) | the built-in text editor |
 | [md.md](md.md) | the Markdown viewer |
 | [themes.md](themes.md) | the fourteen bundled themes and writing your own |
-| [llm-chat.md](llm-chat.md) | the in-app LLM chat client — providers, file and shell tools, MCP servers, background agents |
+| [llm-chat.md](llm-chat.md) | the in-app LLM chat client — providers, file and shell tools, MCP servers, Agent Skills (new in 567), background agents |
 | [ktop.md](ktop.md) | the bundled process viewer, and building it from the source shipped here |
 
 **Going faster, and going native**
@@ -181,7 +189,7 @@ six of them were not linked from anywhere at all.
 | --- | --- |
 | [native-programs.md](native-programs.md) | what a native program is and why one is not emulated |
 | [native-mode.md](native-mode.md) | a root with no distribution: only the native programs, init and services, reaching other roots |
-| [native-companion.md](native-companion.md) | `apt` in native mode: the Devuan filesystem a native root keeps for packages and its desktop |
+| [native-companion.md](native-companion.md) | `apt` in native mode: the Devuan filesystem a native root keeps for packages and its desktop, and AOK-Workstation's own packages, such as PSCAL (new in 567) |
 | [native-setup.md](native-setup.md) | putting the native programs on your `PATH` |
 | [binfmt-misc.md](binfmt-misc.md) | teaching the kernel to run other formats through an interpreter |
 | [crypto-accel.md](crypto-accel.md) | routing OpenSSL through the host's crypto instructions |
@@ -191,7 +199,7 @@ six of them were not linked from anywhere at all.
 **The book**
 
 `/AOK/docs/book` is the full AOK-Workstation book -- 43 chapters and 8 appendices on
-how the whole thing works, from the emulator and its four guests through the
+how the whole thing works, from the emulator and its five guests through the
 VFS, native programs, the iOS app, testing and releasing, to an honest account
 of what is still wrong. It ships here because a reader with a terminal and no
 browser is exactly who it was written for. Start at

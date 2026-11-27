@@ -199,10 +199,22 @@ strip is hidden and the round **≡** button in the lower-right corner opens it.
 
 A mouse, a trackpad and a pencil are unaffected: they already point.
 
+The same menu sets the desktop's **Resolution** (how many pixels it has per
+point of the view) and its **Appearance** (how big things look: **Match
+Resolution** keeps text and windows their size and only makes them sharper,
+while 1x with a raised resolution fits more on screen). A new resolution
+resizes the running desktop at once. From 567 so does a new appearance when
+the desktop is shown through `wl-present`; otherwise it waits for the next
+**Reconnect**.
+
 It needs those programs installed in the guest first. From build 559 the app
 does that for you: **Settings → Wayland Desktop → Install a Desktop…**, which
 is also in the display's own **···** menu — where its "not found" message
-appears when a filesystem has no desktop yet. The page lists the desktops with
+appears when a filesystem has no desktop yet. From 567 a window whose desktop
+did not start tries again by itself once that page installs, removes or chooses
+a desktop, and when you come back to it after another window or app was in
+front, so a fix typed in a terminal takes too; a tap on the failed window
+does not, so its message stays readable. The page lists the desktops with
 what is installed and which one starts; tapping one that is not installed runs
 its setup script and shows what it prints, and tapping one that is makes it the
 desktop the next session starts. While a script runs, the page shows its
@@ -211,7 +223,9 @@ done. Installing Wayfire asks which panel it should have. To remove an installed
 desktop, swipe left on it or touch and hold it: that removes the desktop's own
 packages, and keeps what another desktop or program still uses. **More
 Programs** installs the games, tools, X11 support and GPU drivers described
-below. It installs into the filesystem that is running, takes several minutes,
+below, and from 567 says beside each set whether it is Installed, Partly
+Installed or Not Installed. It installs into the filesystem that is running,
+takes several minutes,
 and needs AOK-Workstation left open meanwhile. On a [native-mode](native-mode.md#a-desktop)
 root, which has no packages of its own, it installs into that root's companion
 filesystem, `Devuan`, and the desktop runs from there.
@@ -302,6 +316,7 @@ More programs that run well on this desktop come in three optional sets:
 sudo sh /AOK/tools/setup-wayland-extras.sh games   # puzzles, solitaire, Mines, Chess, terminal games
 sudo sh /AOK/tools/setup-wayland-extras.sh tools   # launcher, notifications, clipboard, screenshots, viewers, editor, files, browser
 sudo sh /AOK/tools/setup-wayland-extras.sh x11     # Xwayland, xterm and the X fonts, for X11-only programs
+sh /AOK/tools/setup-wayland-extras.sh status       # which sets are installed (from 567), as any user
 ```
 
 Name several sets at once, or `all`. The Launcher is fuzzel once **tools** is
@@ -441,6 +456,7 @@ and amd64 only; Alpine 3.23 has no GPU driver, and the script says so):
 ```sh
 sudo sh /AOK/tools/setup-gpu.sh            # add --demos for glmark2
 sh /AOK/tools/setup-gpu.sh --check         # what works, without installing
+sh /AOK/tools/setup-gpu.sh --status        # whether the packages are there (from 567)
 ```
 
 With those, `start-wayland.sh` composites on the GPU, and Vulkan programs
