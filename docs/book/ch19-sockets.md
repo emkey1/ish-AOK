@@ -140,7 +140,7 @@ the path where the guest had polled first — which is why the behaviour looked
 like an intermittent, poll-dependent mystery rather than a missing stash.
 
 The stash was still keeping one wrong answer, found in 559
-([#631](https://github.com/emkey1/ish-AOK/issues/631)): an `ssh` session left
+([#631](https://github.com/emkey1/AOK-Workstation/issues/631)): an `ssh` session left
 idle until the screen locked came back to "Read from remote host: Bad file
 descriptor". A locked device reclaims a suspended app's TCP connections, and
 XNU leaves `EBADF` as the pending error of a socket it has taken. A client

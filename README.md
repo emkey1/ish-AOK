@@ -142,8 +142,8 @@ live, and `ISH_HLE_STATS=1` prints per-function call counts.
 This repo uses submodules.
 
 ```bash
-git clone --recurse-submodules git@github.com:emkey1/ish-AOK.git
-cd ish-AOK
+git clone --recurse-submodules git@github.com:emkey1/AOK-Workstation.git
+cd AOK-Workstation
 ```
 
 If you already cloned without submodules:
@@ -573,7 +573,7 @@ That means:
 - the amd64, arm64 and riscv64 guests here should not be assumed to exist upstream
 
 If you use the `gh` CLI in a clone that has an `upstream` remote, pass
-`--repo emkey1/ish-AOK`. Without it `gh` resolves to `ish-app/ish` and will
+`--repo emkey1/AOK-Workstation`. Without it `gh` resolves to `ish-app/ish` and will
 answer about upstream's workflows, releases and tags instead of this fork's.
 
 ## Working with LLM Coding Agents

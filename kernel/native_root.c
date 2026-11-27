@@ -579,7 +579,7 @@ static void write_etc(void) {
                "PRETTY_NAME=\"AOK-Workstation Native (SmallCLUE " AOK_SMALLCLUE_VERSION ")\"\n"
                "ID=aok-native\n"
                "VERSION=\"SmallCLUE " AOK_SMALLCLUE_VERSION "\"\n"
-               "HOME_URL=\"https://github.com/emkey1/ish-AOK\"\n", 0644, false);
+               "HOME_URL=\"https://github.com/emkey1/AOK-Workstation\"\n", 0644, false);
 
     // The rc system: /etc/rc runs at boot under SmallCLUE's init, and
     // /etc/rc.shutdown when the system halts. Both are plain scripts so what

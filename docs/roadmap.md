@@ -158,7 +158,7 @@ half of the same idea. Worth considering a zstd filter over gzip when that is
 touched -- libarchive already has one and it is markedly faster at similar
 ratios -- but that is a tuning question, not this decision.
 
-**Where it lives in the UI is [#575](https://github.com/emkey1/ish-AOK/issues/575)
+**Where it lives in the UI is [#575](https://github.com/emkey1/AOK-Workstation/issues/575)
 -- and that issue is not what this document said it was.** It read as "add a
 delete button". Read 2026-09-09, the button already exists: `deleteFilesystem`
 in `RootDetailViewController` (app/RootsTableViewController.m), with a
@@ -407,18 +407,18 @@ is worth saying because the open issues read like the feature does not exist.
 
 Two of them are the app's own chrome and both hurt a windowed session
 disproportionately:
-[#580](https://github.com/emkey1/ish-AOK/issues/580) puts the window controls
+[#580](https://github.com/emkey1/AOK-Workstation/issues/580) puts the window controls
 over the terminal content in windowed mode on iPadOS while fullscreen is correct
 -- a layout-guide bug, not anything deep -- and
-[#579](https://github.com/emkey1/ish-AOK/issues/579) loses keyboard focus after
+[#579](https://github.com/emkey1/AOK-Workstation/issues/579) loses keyboard focus after
 a Magic Keyboard trackpad selection. A desktop that drops the keyboard when you
 click is not a desktop.
 
-And [#483](https://github.com/emkey1/ish-AOK/issues/483)'s second half: the
+And [#483](https://github.com/emkey1/AOK-Workstation/issues/483)'s second half: the
 client still requests a fixed resolution pair rather than deriving it from the
 window. The mechanism is already there -- `d60437caf` drives per-orientation
 resize through RFB `SetDesktopSize`.
-[#482](https://github.com/emkey1/ish-AOK/issues/482) is a screenshot with no
+[#482](https://github.com/emkey1/AOK-Workstation/issues/482) is a screenshot with no
 text and is very likely the same root cause; **confirm that before treating them
 as two jobs**, because if they are one, this is a smaller item than the issue
 count suggests.
@@ -432,7 +432,7 @@ re-materialisation rules, and more than one process), but the headline moves to
 making the graphical session something to recommend rather than something that
 works.
 
-**[#574](https://github.com/emkey1/ish-AOK/issues/574), desktop environments.**
+**[#574](https://github.com/emkey1/AOK-Workstation/issues/574), desktop environments.**
 The request is for something the tree can already install --
 `setup-wayland.sh` puts the stack in place -- so the gap is packaging and
 documentation, not capability. That makes it cheap and high-leverage: a
@@ -460,7 +460,7 @@ whole job.
 
 ## 557 -- reach
 
-**3D acceleration, [#484](https://github.com/emkey1/ish-AOK/issues/484) -- as a
+**3D acceleration, [#484](https://github.com/emkey1/AOK-Workstation/issues/484) -- as a
 feasibility gate, not as a feature.** This is the largest open request and the
 one most likely to consume a release without producing anything. virglrenderer
 needs a host GL or GLES implementation to render against; iOS has Metal and
@@ -726,7 +726,7 @@ can lose their session is one they opt into.
 (7e68cfc6), registered off by default (`kPreferenceSuspendToDiskKey: @(NO)` in
 `UserPreferences.m`); the user's guide is `opt/AOK/docs/suspend.md`.
 
-**Keyboard toolbar customization, [#609](https://github.com/emkey1/ish-AOK/issues/609) -- a user request (2026-09-24).** In their
+**Keyboard toolbar customization, [#609](https://github.com/emkey1/AOK-Workstation/issues/609) -- a user request (2026-09-24).** In their
 words: "reorganizing and adding/removing custom toolbar buttons."
 **Done for 557 (2026-09-26):** Settings → Keyboard Toolbar; the user's guide is
 `opt/AOK/docs/keyboard-toolbar.md`. The app's own controls at the right-hand
@@ -740,7 +740,7 @@ Today the extra-keys bar above the on-screen keyboard is fixed:
   `pipeKey`).
 - The only setting hides the bar while a hardware keyboard is attached.
 
-[#162](https://github.com/emkey1/ish-AOK/issues/162) delivered key *remapping*
+[#162](https://github.com/emkey1/AOK-Workstation/issues/162) delivered key *remapping*
 (Caps Lock, Option, backtick-as-Escape), not the bar's layout.
 
 The job:
@@ -771,8 +771,8 @@ smaller bugs went with it: `waitpid(<tid>, __WALL)` on a traced non-leader hung
 (the gdb half), and `ptrace.seized` was never cleared on detach. The
 measurements, the two wrong diagnoses on the way, and what is still open are in
 [docs/historical/build_555_musts.md](historical/build_555_musts.md) §1;
-[#503](https://github.com/emkey1/ish-AOK/issues/503) -- the amd64 cousin -- and
-[#541](https://github.com/emkey1/ish-AOK/issues/541) are both closed.
+[#503](https://github.com/emkey1/AOK-Workstation/issues/503) -- the amd64 cousin -- and
+[#541](https://github.com/emkey1/AOK-Workstation/issues/541) are both closed.
 
 That this sat for two releases as an unbounded "the tools do not work", and
 turned out to be one line once anyone measured it, is the argument for measuring
@@ -795,15 +795,15 @@ attribute cache, and three separate absences follow from that one gap.
 
 **The reported-issue burn-down.** Eighteen open, and two of them are the same
 network question from different angles:
-[#568](https://github.com/emkey1/ish-AOK/issues/568) reports slow throughput and
-[#523](https://github.com/emkey1/ish-AOK/issues/523)'s reproducible half is a
+[#568](https://github.com/emkey1/AOK-Workstation/issues/568) reports slow throughput and
+[#523](https://github.com/emkey1/AOK-Workstation/issues/523)'s reproducible half is a
 15.3 s TLS handshake tail against a sub-second median. That is a wait not being
 woken rather than work being slow, which puts it in the poll/quiesce
 neighbourhood -- and it reproduces with plain `curl`, so it needs neither Go nor
 the AUR to chase.
 
 **Closing issues is part of fixing bugs.**
-[#541](https://github.com/emkey1/ish-AOK/issues/541) has been fixed since
+[#541](https://github.com/emkey1/AOK-Workstation/issues/541) has been fixed since
 2026-08-20 and is still open on GitHub. A fix the reporter never hears about did
 not fully happen.
 
@@ -815,7 +815,7 @@ Naming these is the point of the document. A "future directions" list that
 contains everything commits to nothing, and an unmerged branch quietly becomes a
 promise if nobody says otherwise.
 
-**External display / AirPlay ([#540](https://github.com/emkey1/ish-AOK/issues/540)).**
+**External display / AirPlay ([#540](https://github.com/emkey1/AOK-Workstation/issues/540)).**
 Work exists on `worktree-external-display-540` and is deliberately unmerged --
 the maintainer judged it flawed. It stays fenced. It is not "coming in a future
 release", and it must not be swept into one by accident.

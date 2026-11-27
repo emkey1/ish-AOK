@@ -15,13 +15,16 @@ none exist in this document, and none should be added to it.
 
 ## If you take away nothing else
 
-1. **This is a fork, not upstream.** `origin` is `emkey1/ish-AOK`, forked from
+1. **This is a fork, not upstream.** `origin` is `emkey1/AOK-Workstation`, forked from
    [`ish-app/ish`](https://github.com/ish-app/ish) with deep, deliberate
    divergence (four guest architectures, native programs, `/AOK`, File
    Provider, simulated swap, and more — see [../README.md](../README.md)).
    Upstream's README, issues, branch names and workflows do not describe this
-   repo. If you use `gh`, pass `--repo emkey1/ish-AOK` or it resolves to
-   upstream.
+   repo. If you use `gh`, pass `--repo emkey1/AOK-Workstation` or it resolves to
+   upstream. The repository was `emkey1/ish-AOK` until 2026-11-27; GitHub
+   redirects that name, and `emkey1/emkey1.github.io` forwards its old Pages
+   paths. Never create a repository named `ish-AOK`, which ends the
+   redirects.
 2. **`docs/TODO.md` is a lab notebook, not a task list** — read it, and
    `git log origin/working`, before starting anything. It records what is
    *known*, including rejected designs and wrong first hypotheses, so nobody
@@ -343,7 +346,7 @@ those as a normal GitHub issue (or a `TODO.md`/`future-release-queue.md`
 entry per the workflow above), not as a security report. Real security bugs
 are expected to be rare (the stated example: remote code execution without
 user consent) — those go through
-[GitHub Security Advisories](https://github.com/emkey1/ish-AOK/security/advisories/new),
+[GitHub Security Advisories](https://github.com/emkey1/AOK-Workstation/security/advisories/new),
 not a public issue or PR.
 
 Separately, this app ships an in-app LLM chat client with an optional

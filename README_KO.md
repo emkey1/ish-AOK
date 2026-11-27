@@ -142,8 +142,8 @@ HLE의 영향이 가장 크지만, arm64와 riscv64 게스트에 한정됩니다
 이 저장소는 서브모듈을 사용합니다.
 
 ```bash
-git clone --recurse-submodules git@github.com:emkey1/ish-AOK.git
-cd ish-AOK
+git clone --recurse-submodules git@github.com:emkey1/AOK-Workstation.git
+cd AOK-Workstation
 ```
 
 서브모듈 없이 이미 클론했다면:
@@ -565,7 +565,7 @@ AOK-Workstation은 업스트림 iSH를 기반으로 하지만 의도적으로 �
 - 번들 루트와 운영 동작은 이 포크 고유의 것입니다
 - 여기의 amd64, arm64, riscv64 게스트가 업스트림에도 있다고 가정하면 안 됩니다
 
-`upstream` 리모트가 있는 클론에서 `gh` CLI를 쓸 때는 `--repo emkey1/ish-AOK`를
+`upstream` 리모트가 있는 클론에서 `gh` CLI를 쓸 때는 `--repo emkey1/AOK-Workstation`를
 전달하세요. 그렇지 않으면 `gh`는 `ish-app/ish`로 해석되어 이 포크가 아니라 업스트림의
 워크플로, 릴리스, 태그에 대해 답합니다.
 

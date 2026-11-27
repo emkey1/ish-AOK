@@ -37,7 +37,7 @@ licensing-sensitive code — not just optional background.
 The five things that matter most, before anything else:
 
 1. **This is a fork.** Upstream's README, issues, branches and workflows are
-   not this repo's. If you use `gh`, pass `--repo emkey1/ish-AOK` or it
+   not this repo's. If you use `gh`, pass `--repo emkey1/AOK-Workstation` or it
    resolves to upstream.
 2. **Check `docs/TODO.md` and `git log origin/working` before starting
    work** — someone, or some other session, may already be on it. See

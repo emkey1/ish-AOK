@@ -49,15 +49,15 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DOCS = os.path.join(REPO, "opt", "AOK", "docs")
 MANIFEST = os.path.join(REPO, "docs", "wiki-pages.manifest")
 STATE = os.path.join(REPO, "docs", ".wiki-sync")
-WIKI_URL = "https://github.com/emkey1/ish-AOK.wiki.git"
-BOOK_URL = "https://github.com/emkey1/ish-AOK/blob/working/docs/book"
+WIKI_URL = "https://github.com/emkey1/AOK-Workstation.wiki.git"
+BOOK_URL = "https://github.com/emkey1/AOK-Workstation/blob/working/docs/book"
 
 INDEX_BEGIN = "<!-- AOK-DOCS-INDEX:BEGIN -->"
 INDEX_END = "<!-- AOK-DOCS-INDEX:END -->"
 
 FOOTER = (
     "\n\n---\n\n*This page is generated from `opt/AOK/docs/{source}` in the "
-    "[AOK-Workstation repository](https://github.com/emkey1/ish-AOK/blob/working/opt/AOK/docs/{source}), "
+    "[AOK-Workstation repository](https://github.com/emkey1/AOK-Workstation/blob/working/opt/AOK/docs/{source}), "
     "which is what the app compiles in and serves at `/AOK/docs`. Edits made "
     "here are noticed rather than overwritten, but they have to be carried back "
     "into the repository to reach the app.*\n"

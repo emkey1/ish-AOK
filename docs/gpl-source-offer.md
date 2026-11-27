@@ -219,7 +219,7 @@ address once decision 2 is made.
 > available at [URL].
 >
 > Write to [ADDRESS], or open an issue at
-> https://github.com/emkey1/ish-AOK/issues, naming the AOK-Workstation build number
+> https://github.com/emkey1/AOK-Workstation/issues, naming the AOK-Workstation build number
 > you have.
 
 ---

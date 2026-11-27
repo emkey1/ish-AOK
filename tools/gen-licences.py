@@ -134,7 +134,7 @@ def components():
     # (group, name, version, licence, url, [texts]); a text is a path, or a
     # (title, string) pair for one that is not a whole file.
     return [
-        ('app', 'AOK-Workstation', '', 'GPL-3.0 AND GPL-2.0', 'https://github.com/emkey1/ish-AOK',
+        ('app', 'AOK-Workstation', '', 'GPL-3.0 AND GPL-2.0', 'https://github.com/emkey1/AOK-Workstation',
          [('AOK-Workstation', AOK_PREFACE), 'LICENSE.md', 'LICENSE.IOS',
           (f'{VENDORED}/GPL-3.0.txt'), (f'{VENDORED}/GPL-2.0.txt')]),
 

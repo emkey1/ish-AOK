@@ -18,7 +18,7 @@
 		<key>description</key>
 		<string>Amber Phosphor</string>
 		<key>link</key>
-		<string>https://github.com/emkey1/ish-AOK</string>
+		<string>https://github.com/emkey1/AOK-Workstation</string>
 	</dict>
 	<key>aok-blueprint</key>
 	<dict>
@@ -27,7 +27,7 @@
 		<key>description</key>
 		<string>Blueprint</string>
 		<key>link</key>
-		<string>https://github.com/emkey1/ish-AOK</string>
+		<string>https://github.com/emkey1/AOK-Workstation</string>
 	</dict>
 	<key>aok-boot</key>
 	<dict>
@@ -43,7 +43,7 @@
 		<key>description</key>
 		<string>Boot Log</string>
 		<key>link</key>
-		<string>https://github.com/emkey1/ish-AOK</string>
+		<string>https://github.com/emkey1/AOK-Workstation</string>
 	</dict>
 	<key>aok-check</key>
 	<dict>
@@ -58,7 +58,7 @@
 		<key>description</key>
 		<string>A-OK</string>
 		<key>link</key>
-		<string>https://github.com/emkey1/ish-AOK</string>
+		<string>https://github.com/emkey1/AOK-Workstation</string>
 	</dict>
 	<key>aok-desktop</key>
 	<dict>
@@ -67,7 +67,7 @@
 		<key>description</key>
 		<string>Desktop</string>
 		<key>link</key>
-		<string>https://github.com/emkey1/ish-AOK</string>
+		<string>https://github.com/emkey1/AOK-Workstation</string>
 	</dict>
 	<key>aok-gadgets</key>
 	<dict>
@@ -80,7 +80,7 @@
 		<key>description</key>
 		<string>Gadget Chain</string>
 		<key>link</key>
-		<string>https://github.com/emkey1/ish-AOK</string>
+		<string>https://github.com/emkey1/AOK-Workstation</string>
 	</dict>
 	<key>aok-guests</key>
 	<dict>
@@ -89,7 +89,7 @@
 		<key>description</key>
 		<string>Three Guests</string>
 		<key>link</key>
-		<string>https://github.com/emkey1/ish-AOK</string>
+		<string>https://github.com/emkey1/AOK-Workstation</string>
 	</dict>
 	<key>aok-mono</key>
 	<dict>
@@ -106,7 +106,7 @@
 		<key>description</key>
 		<string>Mono</string>
 		<key>link</key>
-		<string>https://github.com/emkey1/ish-AOK</string>
+		<string>https://github.com/emkey1/AOK-Workstation</string>
 	</dict>
 	<key>aok-prompt</key>
 	<dict>
@@ -122,7 +122,7 @@
 		<key>description</key>
 		<string>Prompt</string>
 		<key>link</key>
-		<string>https://github.com/emkey1/ish-AOK</string>
+		<string>https://github.com/emkey1/AOK-Workstation</string>
 	</dict>
 	<key>aok-silicon</key>
 	<dict>
@@ -135,7 +135,7 @@
 		<key>description</key>
 		<string>Silicon</string>
 		<key>link</key>
-		<string>https://github.com/emkey1/ish-AOK</string>
+		<string>https://github.com/emkey1/AOK-Workstation</string>
 	</dict>
 	<key>aok-sunset</key>
 	<dict>
@@ -148,7 +148,7 @@
 		<key>description</key>
 		<string>Sunset</string>
 		<key>link</key>
-		<string>https://github.com/emkey1/ish-AOK</string>
+		<string>https://github.com/emkey1/AOK-Workstation</string>
 	</dict>
 	<key>aok-suspend</key>
 	<dict>
@@ -161,7 +161,7 @@
 		<key>description</key>
 		<string>Suspend</string>
 		<key>link</key>
-		<string>https://github.com/emkey1/ish-AOK</string>
+		<string>https://github.com/emkey1/AOK-Workstation</string>
 	</dict>
 </dict>
 </plist>

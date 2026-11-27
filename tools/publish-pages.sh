@@ -2,9 +2,9 @@
 # Publish the App Store listing's two pages to the gh-pages branch, where
 # GitHub Pages serves them:
 #
-#   docs/privacy-policy.md  https://emkey1.github.io/ish-AOK/privacy/
+#   docs/privacy-policy.md  https://emkey1.github.io/AOK-Workstation/privacy/
 #                           (Settings -> Privacy Policy, and the listing)
-#   docs/accessibility.md   https://emkey1.github.io/ish-AOK/accessibility/
+#   docs/accessibility.md   https://emkey1.github.io/AOK-Workstation/accessibility/
 #                           (the listing's Accessibility URL)
 #
 # The branch holds only what Pages serves: those pages and a landing page. It
@@ -68,8 +68,8 @@ A Unix-style shell on device, for iPhone and iPad.
 
 - [Accessibility](accessibility/)
 - [Privacy policy](privacy/)
-- [Source code](https://github.com/emkey1/ish-AOK)
-- [Issues](https://github.com/emkey1/ish-AOK/issues)
+- [Source code](https://github.com/emkey1/AOK-Workstation)
+- [Issues](https://github.com/emkey1/AOK-Workstation/issues)
 EOF
 
 cat > "$work/_config.yml" <<'EOF'
@@ -91,6 +91,6 @@ git -C "$work" show --stat --oneline HEAD | head -8
 if [ "$push" = 1 ]; then
     git -C "$work" push -q origin HEAD:refs/heads/gh-pages
     echo "pushed; Pages serves them in a minute or two:"
-    echo "  https://emkey1.github.io/ish-AOK/privacy/"
-    echo "  https://emkey1.github.io/ish-AOK/accessibility/"
+    echo "  https://emkey1.github.io/AOK-Workstation/privacy/"
+    echo "  https://emkey1.github.io/AOK-Workstation/accessibility/"
 fi

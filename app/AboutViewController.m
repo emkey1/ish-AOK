@@ -838,20 +838,20 @@ static NSString *ISHForeignExecTitle(NSString *mode) {
     }
     UITableViewCell *cell = [tableView cellForRowAtIndexPath:indexPath];
     if (cell == self.sendFeedback) {
-        [UIApplication openURL:@"https://github.com/emkey1/ish-AOK/issues/new"];
+        [UIApplication openURL:@"https://github.com/emkey1/AOK-Workstation/issues/new"];
     } else if (cell == self.diagnosticsCell) {
         [self showDiagnostics:cell];
     } else if (cell == self.initialWindowCell) {
         [self _showInitialWindowPickerFromCell:cell];
     } else if (cell == self.openGithub) {
-        [UIApplication openURL:@"https://github.com/emkey1/ish-AOK"];
+        [UIApplication openURL:@"https://github.com/emkey1/AOK-Workstation"];
     } else if (cell == self.openDiscord) {
         [UIApplication openURL:@"https://discord.gg/RkdBXHMbgc"];
     } else if (cell == self.privacyPolicyCell) {
         // App Review guideline 5.1.1(i) wants the policy reachable from inside
         // the app, not only from the App Store listing. It lives in the source
         // repository so that its revisions are public and diffable.
-        [UIApplication openURL:@"https://emkey1.github.io/ish-AOK/privacy/"];
+        [UIApplication openURL:@"https://emkey1.github.io/AOK-Workstation/privacy/"];
     } else if (cell == self.legalCell || cell == self.licencesCell) {
         // Pushed rather than opened in Safari: the GPL's written offer, and the
         // licence notices, have to accompany the binaries, and a link to a
@@ -2634,7 +2634,7 @@ static NSString *ISHLegalNoticeText(void) {
         @"more than our cost of physically performing the distribution.\n"
         @"\n"
         @"To request it, open an issue at\n"
-        @"https://github.com/emkey1/ish-AOK/issues\n"
+        @"https://github.com/emkey1/AOK-Workstation/issues\n"
         @"and say which build number you have. This build is %@.\n"
         @"\n"
         @"Programs you install yourself, with apt or apk or by any other means, "
@@ -2654,7 +2654,7 @@ static NSString *ISHLegalNoticeText(void) {
         @"openssh \u2014 each under the licence in its own directory.\n"
         @"\n"
         @"AOK-Workstation is itself open source, a fork of the iSH project, and is "
-        @"developed at https://github.com/emkey1/ish-AOK where its own source "
+        @"developed at https://github.com/emkey1/AOK-Workstation where its own source "
         @"and licence can be read in full.",
         @"The legal notice and GPL written offer shown on the Legal screen; %@ is the build number"), version];
 }

@@ -185,7 +185,7 @@ not only from the listing: a **Privacy Policy** row in Settings beside the
 GitHub and Discord links (app/AboutViewController.m, About.storyboard).
 
 **Hosted on GitHub Pages since 2026-11-22**, at
-`https://emkey1.github.io/ish-AOK/privacy/`, which the Settings row, the
+`https://emkey1.github.io/AOK-Workstation/privacy/`, which the Settings row, the
 listing and the review notes all give. The `gh-pages` branch holds only the
 policy and a landing page; `tools/publish-privacy-policy.sh` copies
 `docs/privacy-policy.md` into it, and must be run after every change to the

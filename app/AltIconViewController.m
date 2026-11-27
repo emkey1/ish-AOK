@@ -98,7 +98,7 @@
 }
 
 - (IBAction)openSubmissions:(id)sender {
-    [UIApplication openURL:@"https://github.com/emkey1/ish-AOK/issues"];
+    [UIApplication openURL:@"https://github.com/emkey1/AOK-Workstation/issues"];
 }
 
 - (CGFloat)sideInset:(UICollectionViewFlowLayout *)layout {

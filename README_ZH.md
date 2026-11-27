@@ -133,8 +133,8 @@ i386 或 amd64 客户机根本不会走这条路径。
 本仓库使用子模块。
 
 ```bash
-git clone --recurse-submodules git@github.com:emkey1/ish-AOK.git
-cd ish-AOK
+git clone --recurse-submodules git@github.com:emkey1/AOK-Workstation.git
+cd AOK-Workstation
 ```
 
 如果你已经在没有子模块的情况下克隆：
@@ -520,7 +520,7 @@ AOK-Workstation 基于上游 iSH，但有意与之分化。
 - 内置根文件系统与运行行为是本分支特有的
 - 不应假定这里的 amd64、arm64 和 riscv64 客户机在上游同样存在
 
-在带有 `upstream` 远端的克隆中使用 `gh` CLI 时，请加上 `--repo emkey1/ish-AOK`。否则
+在带有 `upstream` 远端的克隆中使用 `gh` CLI 时，请加上 `--repo emkey1/AOK-Workstation`。否则
 `gh` 会解析到 `ish-app/ish`，回答的是上游的工作流、发布和标签，而不是本分支的。
 
 ## 与 LLM 编程代理协作

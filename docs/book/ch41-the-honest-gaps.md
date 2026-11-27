@@ -429,7 +429,7 @@ running; the build before the fix hangs there until the test's alarm.
 
 This entry is the rarest kind, and worth holding up.
 
-External display support ([#540](https://github.com/emkey1/ish-AOK/issues/540))
+External display support ([#540](https://github.com/emkey1/AOK-Workstation/issues/540))
 did ship once. It landed in July (`57380ba6`, `cc0b5b21`) and was reverted for
 546 (`ad602c7c`) after testing on an M4 iPad with a real monitor, because it
 fought how iPadOS already uses an external display: the app would not open
@@ -528,7 +528,7 @@ bug.
 
 ## 41.9 New in 557: the GPU's edges
 
-557 put a GPU under the guest ([#484](https://github.com/emkey1/ish-AOK/issues/484)):
+557 put a GPU under the guest ([#484](https://github.com/emkey1/AOK-Workstation/issues/484)):
 `/dev/dri/renderD128` (`fs/virtgpu.c`) speaks the virtio-gpu interface to stock
 Mesa and replays its Vulkan onto Metal through Venus and MoltenVK, in-process;
 the Wayland compositor renders on it by default; and `wl-present` hands its

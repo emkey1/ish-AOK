@@ -3,7 +3,7 @@
 What AOK-Workstation does for accessibility on iPhone and iPad, how to set it up,
 and what it does not do yet. This describes version 1.3, build 567 and later.
 If something here is wrong for you, or something gets in your way, please
-[open an issue](https://github.com/emkey1/ish-AOK/issues) or use **Settings →
+[open an issue](https://github.com/emkey1/AOK-Workstation/issues) or use **Settings →
 Send Feedback** in the app.
 
 ## At a glance
@@ -85,10 +85,10 @@ program's choice.
 - **Your own key row.** Settings → **Keyboard Toolbar** reorders the keys above
   the on-screen keyboard, removes the ones you do not use, and adds keys that
   type whatever you give them
-  ([how](https://github.com/emkey1/ish-AOK/blob/working/opt/AOK/docs/keyboard-toolbar.md)).
+  ([how](https://github.com/emkey1/AOK-Workstation/blob/working/opt/AOK/docs/keyboard-toolbar.md)).
 - **Hardware keyboards.** The terminal, the Workspace and its editor have
   keyboard shortcuts for most of what they do
-  ([the full list](https://github.com/emkey1/ish-AOK/blob/working/opt/AOK/docs/keyboard-shortcuts.md)).
+  ([the full list](https://github.com/emkey1/AOK-Workstation/blob/working/opt/AOK/docs/keyboard-shortcuts.md)).
   Settings → **External Keyboard** can make Caps Lock act as Control or Escape,
   send Option as Meta, make the backtick key an Escape key, and hide the on-screen
   key row while a keyboard is attached.

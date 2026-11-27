@@ -13,7 +13,7 @@ window now reaches the display too (in 563 it never did). Testers have since
 run the terminal on real displays with 564 — over USB-C, Thunderbolt and
 AirPlay, on iOS 27. The Wayland mirror in 564 showed only its first frame and
 then stopped; 565 fixes that, tested in the simulator on iOS 27.0 but not yet
-on a real display. If you try it, please say what you saw on [#540](https://github.com/emkey1/ish-AOK/issues/540) —
+on a real display. If you try it, please say what you saw on [#540](https://github.com/emkey1/AOK-Workstation/issues/540) —
 working or not.
 
 ## What goes where

@@ -66,7 +66,7 @@ Both are used only on the user's initiative:
 
 The app collects nothing and contains no analytics, advertising or tracking code. The optional AI chat is off until the user turns it on, and asks the user to confirm the destination before a chat's first message leaves the device. With Apple's Foundation Models it works entirely on-device, with no network use.
 
-Privacy policy: https://emkey1.github.io/ish-AOK/privacy/
+Privacy policy: https://emkey1.github.io/AOK-Workstation/privacy/
 
 6. ENCRYPTION
 

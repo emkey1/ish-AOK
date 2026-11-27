@@ -155,7 +155,7 @@ no tracking of any kind. What your programs send is your business, and we never
 see it.
 
 AOK-Workstation is open source, a fork of the iSH project, and is developed in the open
-at github.com/emkey1/ish-AOK.
+at github.com/emkey1/AOK-Workstation.
 ```
 
 About 2,500 characters, inside the 4,000 limit. The lines are wrapped here for
@@ -175,23 +175,29 @@ Revised 2026-11-24 at the user's word, after a first version had been sent:
 - It promises no performance beyond the native commands', and carries no
   TestFlight link.
 
+1.3 (567) went to review with the `ish-AOK` forms of the four URLs below and
+of the description's last line, from before the repository was renamed on
+2026-11-27. They still work: GitHub redirects the repository, and
+`emkey1/emkey1.github.io` forwards the old Pages paths. Enter these forms with
+the next version.
+
 ## Support URL
 
 ```
-https://github.com/emkey1/ish-AOK/issues
+https://github.com/emkey1/AOK-Workstation/issues
 ```
 The assessment already settled that this will do.
 
 ## Marketing URL (optional)
 
 ```
-https://github.com/emkey1/ish-AOK
+https://github.com/emkey1/AOK-Workstation
 ```
 
 ## Privacy policy URL
 
 ```
-https://emkey1.github.io/ish-AOK/privacy/
+https://emkey1.github.io/AOK-Workstation/privacy/
 ```
 GitHub Pages, from the `gh-pages` branch; `tools/publish-pages.sh` (once
 `tools/publish-privacy-policy.sh`, which still runs it) republishes it after
@@ -200,7 +206,7 @@ any change to `docs/privacy-policy.md`.
 ## Accessibility URL (optional)
 
 ```
-https://emkey1.github.io/ish-AOK/accessibility/
+https://emkey1.github.io/AOK-Workstation/accessibility/
 ```
 `docs/accessibility.md`, published by the same `tools/publish-pages.sh`. Shown
 on the product page beside the Accessibility Nutrition Label.
