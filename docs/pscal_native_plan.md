@@ -38,8 +38,10 @@ stub), so `sudo apt install pscal` puts it in the companion, where it runs
 emulated and is found by name from the native root
 (opt/AOK/docs/native-companion.md). These are ordinary dynamically linked
 Debian builds, not the static rootfs binaries described below, and the
-install root is `/usr/lib/pscal`. The notes below are what was weighed
-before that.
+install root is `/usr/lib/pscal`. On the M4 iPad (2026-11-27), installed into
+the native root's companion and run by name from the native root, a small
+program in each language took 44-110 ms end to end, emulated. The notes below
+are what was weighed before that.
 
 A native root runs guest ELFs too: native dispatch only takes over for
 `/AOK/native/*`, and everything else goes through the gadget engine. sshd in
