@@ -241,6 +241,126 @@
         }
       }
     },
+    "AOK-Workstation is free, with no ads and nothing held back. If it is useful to you, a tip helps pay for its development. A tip unlocks nothing: every feature stays free for everyone." : {
+      "comment" : "Tip jar screen: the paragraph at the top, explaining what a tip is for",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "AOK-Workstation ist kostenlos, ohne Werbung und ohne zurückgehaltene Funktionen. Wenn es dir nützt, hilft ein Trinkgeld, seine Entwicklung zu bezahlen. Ein Trinkgeld schaltet nichts frei: Jede Funktion bleibt für alle kostenlos."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "AOK-Workstation es gratuito, sin anuncios y sin nada reservado. Si te resulta útil, una propina ayuda a pagar su desarrollo. Una propina no desbloquea nada: todas las funciones siguen siendo gratuitas para todos."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "AOK-Workstation est gratuit, sans publicité et sans rien de réservé. S'il vous est utile, un pourboire aide à financer son développement. Un pourboire ne débloque rien : toutes les fonctions restent gratuites pour tout le monde."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "AOK-Workstation は無料で、広告も、出し惜しみしている機能もありません。役に立っているなら、チップが開発費の助けになります。チップで使えるようになる機能はなく、すべての機能は誰でも無料のままです。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "AOK-Workstation은 무료이며 광고도, 따로 묶어 둔 기능도 없습니다. 유용하게 쓰고 계신다면 팁이 개발비에 보탬이 됩니다. 팁으로 잠금 해제되는 것은 없으며, 모든 기능은 누구에게나 계속 무료입니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O AOK-Workstation é gratuito, sem anúncios e sem nada guardado. Se ele é útil para você, uma gorjeta ajuda a pagar o seu desenvolvimento. Uma gorjeta não desbloqueia nada: todos os recursos continuam gratuitos para todos."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "AOK-Workstation бесплатен, без рекламы и без скрытых платных функций. Если он вам полезен, чаевые помогают оплачивать его разработку. Чаевые ничего не открывают: все функции остаются бесплатными для всех."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "AOK-Workstation 免费，没有广告，也没有保留的功能。如果它对你有用，打赏可以帮助支付它的开发费用。打赏不会解锁任何东西：所有功能对所有人都保持免费。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "AOK-Workstation 免費，沒有廣告，也沒有保留的功能。如果它對你有用，打賞可以幫助支付它的開發費用。打賞不會解鎖任何東西：所有功能對所有人都維持免費。"
+          }
+        }
+      }
+    },
+    "Apple takes the payment and charges it to your Apple Account. AOK-Workstation receives nothing that identifies you." : {
+      "comment" : "Tip jar screen: the note under the list of tips",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apple wickelt die Zahlung ab und belastet deinen Apple Account. AOK-Workstation erhält nichts, was dich identifiziert."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apple se encarga del pago y lo carga en tu cuenta de Apple. AOK-Workstation no recibe nada que te identifique."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apple se charge du paiement et le débite de votre compte Apple. AOK-Workstation ne reçoit rien qui vous identifie."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "支払いは Apple が処理し、Apple Account に請求されます。AOK-Workstation があなたを特定できる情報を受け取ることはありません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "결제는 Apple이 처리하며 Apple 계정으로 청구됩니다. AOK-Workstation은 사용자를 식별할 수 있는 정보를 전혀 받지 않습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A Apple processa o pagamento e o cobra na sua Conta Apple. O AOK-Workstation não recebe nada que identifique você."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Платёж обрабатывает Apple и списывает его с вашего аккаунта Apple. AOK-Workstation не получает ничего, что позволило бы вас идентифицировать."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "付款由 Apple 处理，并从你的 Apple 账户扣款。AOK-Workstation 不会收到任何可以识别你身份的信息。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "付款由 Apple 處理，並向你的 Apple 帳號收費。AOK-Workstation 不會收到任何可識別你身分的資訊。"
+          }
+        }
+      }
+    },
     "Built into the app" : {
       "comment" : "Licences screen section header: the libraries and programs compiled into or shipped inside AOK-Workstation",
       "extractionState" : "manual",
@@ -957,6 +1077,66 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "授權條款\n\nAOK-Workstation 及其內建的每個元件的授權條款與聲明全文，見「授權條款」畫面：點一下本畫面頂端的「授權條款」，或在設定中選擇「授權條款」。"
+          }
+        }
+      }
+    },
+    "Leave a Tip" : {
+      "comment" : "Title of the tip jar screen, where people can give the developer a tip, and of the Settings row that opens it",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Trinkgeld geben"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dejar una propina"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Laisser un pourboire"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "チップを贈る"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "팁 보내기"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Deixar uma gorjeta"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Оставить чаевые"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打赏"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打賞"
           }
         }
       }
@@ -5417,6 +5597,66 @@
         }
       }
     },
+    "Please try again later." : {
+      "comment" : "Tip jar: message of the alert when a tip failed and the system gave no reason",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bitte versuche es später erneut."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vuelve a intentarlo más tarde."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Veuillez réessayer plus tard."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "しばらくしてからもう一度お試しください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "나중에 다시 시도하십시오."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tente novamente mais tarde."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Повторите попытку позже."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请稍后再试。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "請稍後再試。"
+          }
+        }
+      }
+    },
     "Port" : {
       "comment" : "Settings row label: the port the ssh server listens on",
       "extractionState" : "manual",
@@ -5959,6 +6199,186 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "目標位置"
+          }
+        }
+      }
+    },
+    "Tap to try again." : {
+      "comment" : "Tip jar: second line of the row that says tips are not available; tapping the row asks the App Store again",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tippe, um es erneut zu versuchen."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Toca para volver a intentarlo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Touchez pour réessayer."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "タップするともう一度試します。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "탭하면 다시 시도합니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Toque para tentar novamente."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Нажмите, чтобы повторить попытку."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "轻点以重试。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "點一下以重試。"
+          }
+        }
+      }
+    },
+    "Thank You!" : {
+      "comment" : "Tip jar: title of the alert after a tip went through",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Danke!"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "¡Gracias!"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Merci !"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ありがとうございます！"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "감사합니다!"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Obrigado!"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Спасибо!"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "谢谢！"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "謝謝！"
+          }
+        }
+      }
+    },
+    "The Tip Did Not Go Through" : {
+      "comment" : "Tip jar: title of the alert when a tip failed; nothing was charged",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Das Trinkgeld wurde nicht übermittelt"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La propina no se completó"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le pourboire n'a pas abouti"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "チップを送れませんでした"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "팁을 보내지 못했습니다"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A gorjeta não foi concluída"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не удалось отправить чаевые"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打赏未完成"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打賞未完成"
           }
         }
       }
@@ -6517,6 +6937,306 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "無法確定指令的結束狀態，因此「非零結束碼時失敗」無法據此判斷。輸出：%@"
+          }
+        }
+      }
+    },
+    "This device does not allow In-App Purchases." : {
+      "comment" : "Tip jar status text when Screen Time or a device profile has turned In-App Purchases off",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dieses Gerät erlaubt keine In-App-Käufe."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Este dispositivo no permite compras dentro de la app."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cet appareil n'autorise pas les achats intégrés."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このデバイスでは App 内課金が許可されていません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 기기에서는 앱 내 구입이 허용되지 않습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Este dispositivo não permite compras dentro do app."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "На этом устройстве встроенные покупки запрещены."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此设备不允许 App 内购买项目。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此裝置不允許 App 內購買項目。"
+          }
+        }
+      }
+    },
+    "Tips are not available right now." : {
+      "comment" : "Tip jar status text when the App Store did not send the tips",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Trinkgeld ist gerade nicht verfügbar."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Las propinas no están disponibles ahora mismo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Les pourboires ne sont pas disponibles pour le moment."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "現在チップは利用できません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "지금은 팁을 보낼 수 없습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "As gorjetas não estão disponíveis no momento."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Чаевые сейчас недоступны."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "目前无法打赏。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "目前無法打賞。"
+          }
+        }
+      }
+    },
+    "Waiting for Approval" : {
+      "comment" : "Tip jar: title of the alert when a tip needs approval first, from a parent (Ask to Buy) or a bank",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wartet auf Genehmigung"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esperando aprobación"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "En attente d'approbation"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "承認待ち"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "승인 대기 중"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aguardando aprovação"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ожидает одобрения"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "等待批准"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "等待核准"
+          }
+        }
+      }
+    },
+    "Your tip goes through once it is approved. Thank you!" : {
+      "comment" : "Tip jar: message of the alert when a tip needs approval first",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dein Trinkgeld wird übermittelt, sobald es genehmigt ist. Danke!"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tu propina se hará efectiva en cuanto se apruebe. ¡Gracias!"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Votre pourboire sera effectué dès qu'il aura été approuvé. Merci !"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "承認されるとチップが送られます。ありがとうございます！"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "승인되면 팁이 전달됩니다. 감사합니다!"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sua gorjeta será concluída assim que for aprovada. Obrigado!"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Чаевые будут отправлены, как только платёж одобрят. Спасибо!"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "获得批准后，你的打赏就会完成。谢谢！"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "獲得核准後，你的打賞就會完成。謝謝！"
+          }
+        }
+      }
+    },
+    "Your tip helps keep AOK-Workstation free and in development." : {
+      "comment" : "Tip jar: message of the alert after a tip went through",
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dein Trinkgeld hilft, AOK-Workstation kostenlos und in Entwicklung zu halten."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tu propina ayuda a que AOK-Workstation siga siendo gratuito y en desarrollo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Votre pourboire aide AOK-Workstation à rester gratuit et à continuer d'évoluer."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "いただいたチップは、AOK-Workstation を無料のまま開発し続ける助けになります。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "보내 주신 팁은 AOK-Workstation을 무료로 유지하고 계속 개발하는 데 도움이 됩니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sua gorjeta ajuda a manter o AOK-Workstation gratuito e em desenvolvimento."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ваши чаевые помогают AOK-Workstation оставаться бесплатным и развиваться."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你的打赏帮助 AOK-Workstation 保持免费并持续开发。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你的打賞幫助 AOK-Workstation 維持免費並持續開發。"
           }
         }
       }
@@ -52510,7 +53230,7 @@
       }
     },
     "Loading…" : {
-      "comment" : "Image viewer status text\n   Markdown viewer status text\n   Video player status text",
+      "comment" : "Image viewer status text\n   Markdown viewer status text\n   Tip jar status text while the App Store sends the tips and their prices\n   Video player status text",
       "extractionState" : "manual",
       "localizations" : {
         "de" : {

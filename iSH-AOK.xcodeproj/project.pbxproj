@@ -189,6 +189,10 @@
 		BB28C7A526896B1F00BDC834 /* UIApplication+OpenURL.m in Sources */ = {isa = PBXBuildFile; fileRef = BBFB557B215878C600DFE6DE /* UIApplication+OpenURL.m */; };
 		BB28C7A626896B1F00BDC834 /* AboutViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = BBFB5578215876CD00DFE6DE /* AboutViewController.m */; };
 		AA1CE0CE2F0B000000000001 /* LicencesViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = AA1CE0CE2F0B000000000002 /* LicencesViewController.m */; };
+		AA71B0AA2F2F000000000001 /* TipJar.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA71B0AA2F2F000000000002 /* TipJar.swift */; };
+		AA71B0AA2F2F000000000003 /* TipJarViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = AA71B0AA2F2F000000000004 /* TipJarViewController.m */; };
+		AA71B0AA2F2F000000000007 /* TipJar.storekit in Resources */ = {isa = PBXBuildFile; fileRef = AA71B0AA2F2F000000000006 /* TipJar.storekit */; };
+		AA71B0AA2F2F000000000008 /* TipJarTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA71B0AA2F2F000000000009 /* TipJarTests.swift */; };
 		AA1CE0CE2F0B000000000004 /* Licences.json in Resources */ = {isa = PBXBuildFile; fileRef = AA1CE0CE2F0B000000000005 /* Licences.json */; };
 		BB28C7A726896B1F00BDC834 /* UIViewController+Extras.m in Sources */ = {isa = PBXBuildFile; fileRef = BBFB557021586C4800DFE6DE /* UIViewController+Extras.m */; };
 		BB28C7A826896B1F00BDC834 /* NSObject+SaneKVO.m in Sources */ = {isa = PBXBuildFile; fileRef = BBCED896255BB65A00CA0701 /* NSObject+SaneKVO.m */; };
@@ -777,6 +781,7 @@
 		BBD23D5E258DA450003DCB40 /* Screenshots.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = Screenshots.m; sourceTree = "<group>"; };
 		BBD23D76258DA4BC003DCB40 /* SnapshotHelper.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; name = SnapshotHelper.swift; path = fastlane/SnapshotHelper.swift; sourceTree = SOURCE_ROOT; };
 		BBD23D95258DEF6B003DCB40 /* Screenshots.xctestplan */ = {isa = PBXFileReference; lastKnownFileType = text; path = Screenshots.xctestplan; sourceTree = "<group>"; };
+		AA71B0AA2F2F000000000009 /* TipJarTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TipJarTests.swift; sourceTree = "<group>"; };
 		BBEF191E26806364001225BD /* libiSH-AOKApp.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = "libiSH-AOKApp.a"; sourceTree = BUILT_PRODUCTS_DIR; };
 		BBEF192C26806546001225BD /* AppLib.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = AppLib.xcconfig; sourceTree = "<group>"; };
 		BBFB2C5B2590257E00545EAB /* libish_emu.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = libish_emu.a; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -788,6 +793,10 @@
 		BBFB5578215876CD00DFE6DE /* AboutViewController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = AboutViewController.m; sourceTree = "<group>"; };
 		AA1CE0CE2F0B000000000002 /* LicencesViewController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = LicencesViewController.m; sourceTree = "<group>"; };
 		AA1CE0CE2F0B000000000003 /* LicencesViewController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = LicencesViewController.h; sourceTree = "<group>"; };
+		AA71B0AA2F2F000000000002 /* TipJar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TipJar.swift; sourceTree = "<group>"; };
+		AA71B0AA2F2F000000000005 /* TipJarViewController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TipJarViewController.h; sourceTree = "<group>"; };
+		AA71B0AA2F2F000000000004 /* TipJarViewController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TipJarViewController.m; sourceTree = "<group>"; };
+		AA71B0AA2F2F000000000006 /* TipJar.storekit */ = {isa = PBXFileReference; lastKnownFileType = text; path = TipJar.storekit; sourceTree = "<group>"; };
 		AA1CE0CE2F0B000000000005 /* Licences.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = Licences.json; sourceTree = "<group>"; };
 		BBFB557A215878C600DFE6DE /* UIApplication+OpenURL.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "UIApplication+OpenURL.h"; sourceTree = "<group>"; };
 		BBFB557B215878C600DFE6DE /* UIApplication+OpenURL.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = "UIApplication+OpenURL.m"; sourceTree = "<group>"; };
@@ -1080,6 +1089,7 @@
 			children = (
 				BB41591E255EF9E300E0950C /* UITests.m */,
 				BBD23D5E258DA450003DCB40 /* Screenshots.m */,
+				AA71B0AA2F2F000000000009 /* TipJarTests.swift */,
 				BBD23D76258DA4BC003DCB40 /* SnapshotHelper.swift */,
 				BBD23D95258DEF6B003DCB40 /* Screenshots.xctestplan */,
 				BB415920255EF9E300E0950C /* Info.plist */,
@@ -1502,6 +1512,10 @@
 				AA1CE0CE2F0B000000000003 /* LicencesViewController.h */,
 				AA1CE0CE2F0B000000000002 /* LicencesViewController.m */,
 				AA1CE0CE2F0B000000000005 /* Licences.json */,
+				AA71B0AA2F2F000000000005 /* TipJarViewController.h */,
+				AA71B0AA2F2F000000000004 /* TipJarViewController.m */,
+				AA71B0AA2F2F000000000002 /* TipJar.swift */,
+				AA71B0AA2F2F000000000006 /* TipJar.storekit */,
 				222FF3C6D16AAB7D6D90E559 /* LLMChatInternal.h */,
 				1BCB82C7F2994769EADB8945 /* LLMChatSupport.m */,
 				0D4A622DB170BCCE9126AFC9 /* LLMChatTools.m */,
@@ -1913,6 +1927,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				AA71B0AA2F2F000000000007 /* TipJar.storekit in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -2255,6 +2270,7 @@
 			files = (
 				BB41591F255EF9E300E0950C /* UITests.m in Sources */,
 				BBD23D5F258DA450003DCB40 /* Screenshots.m in Sources */,
+				AA71B0AA2F2F000000000008 /* TipJarTests.swift in Sources */,
 				BBD23D77258DA4BC003DCB40 /* SnapshotHelper.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -2309,6 +2325,7 @@
 				497A08C12963401100B323CF /* AccessibilityFixes.m in Sources */,
 				BB28C7A626896B1F00BDC834 /* AboutViewController.m in Sources */,
 				AA1CE0CE2F0B000000000001 /* LicencesViewController.m in Sources */,
+				AA71B0AA2F2F000000000003 /* TipJarViewController.m in Sources */,
 				9BB992DCCE1343B81D71A938 /* LLMChatSupport.m in Sources */,
 				086DF4AE2BCA3731D05CF391 /* LLMChatTools.m in Sources */,
 				69D530C0057201B5AB1A590F /* LLMChatPermissions.m in Sources */,
@@ -2352,6 +2369,7 @@
 				C3060403DA76F382061A1170 /* DisplayRFBClient.m in Sources */,
 				8D457CFF8048C780CA8A5561 /* DisplayRFBView.m in Sources */,
 				A143B4E425BDFAE03A1725CD /* AOKFoundationModelsBridge.swift in Sources */,
+				AA71B0AA2F2F000000000001 /* TipJar.swift in Sources */,
 				C0A200042F2F000100000005 /* GuestCommandRunner.m in Sources */,
 				C0A200042F2F0001000000A2 /* WorkspaceTestHooks.m in Sources */,
 				BB28C8F326896C1D00BDC834 /* SwapFilePicker.m in Sources */,

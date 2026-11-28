@@ -341,6 +341,23 @@
                                             </subviews>
                                         </tableViewCellContentView>
                                     </tableViewCell>
+                                    <tableViewCell clipsSubviews="YES" contentMode="scaleToFill" preservesSuperviewLayoutMargins="YES" selectionStyle="default" accessoryType="disclosureIndicator" indentationWidth="10" textLabel="Tp1-jr-lb1" style="IBUITableViewCellStyleDefault" id="Tp1-jr-cl1" userLabel="Leave a Tip">
+                                        <rect key="frame" x="0.0" y="596.5" width="320" height="43.5"/>
+                                        <autoresizingMask key="autoresizingMask"/>
+                                        <tableViewCellContentView key="contentView" opaque="NO" clipsSubviews="YES" multipleTouchEnabled="YES" contentMode="center" preservesSuperviewLayoutMargins="YES" insetsLayoutMarginsFromSafeArea="NO" tableViewCell="Tp1-jr-cl1" id="Tp1-jr-cv1">
+                                            <rect key="frame" x="0.0" y="0.0" width="293.5" height="43.5"/>
+                                            <autoresizingMask key="autoresizingMask"/>
+                                            <subviews>
+                                                <label opaque="NO" multipleTouchEnabled="YES" contentMode="left" insetsLayoutMarginsFromSafeArea="NO" text="Leave a Tip" textAlignment="natural" lineBreakMode="tailTruncation" baselineAdjustment="alignBaselines" adjustsFontSizeToFit="NO" id="Tp1-jr-lb1">
+                                                    <rect key="frame" x="16" y="0.0" width="269.5" height="43.5"/>
+                                                    <autoresizingMask key="autoresizingMask"/>
+                                                    <fontDescription key="fontDescription" type="system" pointSize="17"/>
+                                                    <nil key="textColor"/>
+                                                    <nil key="highlightedColor"/>
+                                                </label>
+                                            </subviews>
+                                        </tableViewCellContentView>
+                                    </tableViewCell>
                                     <tableViewCell clipsSubviews="YES" contentMode="scaleToFill" preservesSuperviewLayoutMargins="YES" selectionStyle="default" accessoryType="disclosureIndicator" indentationWidth="10" textLabel="Pr1-vP-lb1" style="IBUITableViewCellStyleDefault" id="Pr1-vP-cl1" userLabel="Privacy Policy">
                                         <rect key="frame" x="0.0" y="596.5" width="320" height="43.5"/>
                                         <autoresizingMask key="autoresizingMask"/>
@@ -547,6 +564,7 @@
                             <outlet property="initialWindowCell" destination="Qz7-Xf-6fk" id="ef3-px-VI0"/>
                             <outlet property="launchCommandField" destination="gDx-hv-hhV" id="RQn-gk-Dx8"/>
                         <outlet property="openDiscord" destination="K5r-jy-Dzl" id="b4l-Vr-6l8"/>
+                        <outlet property="tipJarCell" destination="Tp1-jr-cl1" id="Tp1-jr-ou1"/>
                         <outlet property="privacyPolicyCell" destination="Pr1-vP-cl1" id="Pr1-vP-ou1"/>
                         <outlet property="legalCell" destination="Lg1-nt-cl1" id="Lg1-nt-ou1"/>
                         <outlet property="licencesCell" destination="Lc1-nc-cl1" id="Lc1-nc-ou1"/>

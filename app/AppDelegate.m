@@ -43,6 +43,7 @@
 #import "Roots.h"
 #import "Terminal.h"
 #import "TerminalViewController.h"
+#import "TipJarViewController.h"
 #include "kernel/checkpoint.h"
 #include "kernel/BatteryStatus.h"
 #import "UserPreferences.h"
@@ -5665,6 +5666,10 @@ static UINavigationController *CreateAboutNavigationController(BOOL recoveryMode
     Class appShortcutsBridge = NSClassFromString(@"ISHAppShortcutsBridge");
     if ([appShortcutsBridge respondsToSelector:@selector(refreshAppShortcuts)])
         [appShortcutsBridge performSelector:@selector(refreshAppShortcuts)];
+    // Finishes a tip (Settings > Leave a Tip) that completed while no screen
+    // was waiting for it. StoreKit hands an unfinished one over again at every
+    // launch until something finishes it.
+    ISHTipJarStartObservingTransactions();
     // get the network permissions popup to appear on chinese devices
     [[NSURLSession.sharedSession dataTaskWithURL:[NSURL URLWithString:@"http://captive.apple.com"]] resume];
 

@@ -16,6 +16,10 @@ app was renamed AOK-Workstation, whose name borrows no one else's. See the
 assessment's "Name and branding". This copy (3,206 characters) was sent to App
 Store Connect on 2026-11-26.
 
+**For 568 (1.3.1), not sent yet:** section 6, on the tip jar, was added on
+2026-11-28, and the privacy policy link is the new address (567's notes have
+the old one, which forwards). Send this copy with 568.
+
 The claims about code generation in section 2 were re-checked on 2026-11-14:
 no `MAP_JIT`, no `com.apple.security.cs.allow-jit` or `dynamic-codesigning`
 entitlement, and no host `mprotect` that adds `PROT_EXEC` anywhere in the
@@ -68,7 +72,11 @@ The app collects nothing and contains no analytics, advertising or tracking code
 
 Privacy policy: https://emkey1.github.io/AOK-Workstation/privacy/
 
-6. ENCRYPTION
+6. TIPS (IN-APP PURCHASE)
+
+Settings > Leave a Tip offers three consumable In-App Purchases that tip the developer, as guideline 3.1.1 allows. They unlock nothing: every feature is free with or without one, and the screen says so. To see it, tap the gear in the keyboard toolbar, then Leave a Tip.
+
+7. ENCRYPTION
 
 The app includes OpenSSH, built with its own cryptography rather than OpenSSL, so it uses encryption beyond what iOS provides.
 
@@ -90,3 +98,4 @@ already seen.
 | `apk add` / `apt install` | Reaches the distribution's mirror |
 | LLM Chat with no key | Works on Apple Foundation Models; any other destination asks first |
 | Files app | Workstation (the Home Screen name) appears as a location |
+| Settings -> Leave a Tip | Three tips with prices; a tip shows Apple's payment sheet, then "Thank You!" |

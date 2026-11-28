@@ -21,6 +21,7 @@
 #import "MarkdownRenderer.h"
 #import "LLMChatInternal.h"
 #import "LicencesViewController.h"
+#import "TipJarViewController.h"
 #if __has_include("libiSH_AOKApp-Swift.h")
 #import "libiSH_AOKApp-Swift.h" // AOKFoundationModelsBridge (Swift, iOS 26+ FoundationModels wrapper)
 #endif
@@ -84,6 +85,7 @@ UIViewController *ISHCreateToolbarKeysViewController(void) {
 @property (weak, nonatomic) IBOutlet UITableViewCell *sendFeedback;
 @property (weak, nonatomic) IBOutlet UITableViewCell *openGithub;
 @property (weak, nonatomic) IBOutlet UITableViewCell *openDiscord;
+@property (weak, nonatomic) IBOutlet UITableViewCell *tipJarCell;
 @property (weak, nonatomic) IBOutlet UITableViewCell *privacyPolicyCell;
 @property (weak, nonatomic) IBOutlet UITableViewCell *legalCell;
 @property (weak, nonatomic) IBOutlet UITableViewCell *licencesCell;
@@ -852,11 +854,13 @@ static NSString *ISHForeignExecTitle(NSString *mode) {
         // the app, not only from the App Store listing. It lives in the source
         // repository so that its revisions are public and diffable.
         [UIApplication openURL:@"https://emkey1.github.io/AOK-Workstation/privacy/"];
-    } else if (cell == self.legalCell || cell == self.licencesCell) {
-        // Pushed rather than opened in Safari: the GPL's written offer, and the
-        // licence notices, have to accompany the binaries, and a link to a
-        // website does not.
-        UIViewController *page = cell == self.legalCell ? ISHCreateLegalViewController() : ISHCreateLicencesViewController();
+    } else if (cell == self.legalCell || cell == self.licencesCell || cell == self.tipJarCell) {
+        // Legal and Licences are pushed rather than opened in Safari: the
+        // GPL's written offer, and the licence notices, have to accompany the
+        // binaries, and a link to a website does not.
+        UIViewController *page = cell == self.legalCell ? ISHCreateLegalViewController()
+            : cell == self.licencesCell ? ISHCreateLicencesViewController()
+            : ISHCreateTipJarViewController();
         if (self.ish_canPushSubpage) {
             [self.navigationController pushViewController:page animated:YES];
         } else {

@@ -1,13 +1,13 @@
 # AOK-Workstation privacy policy
 
-**Effective 13 November 2026.**
+**Effective 28 November 2026.**
 
 The short version: AOK-Workstation collects nothing about you, sends nothing about you
 anywhere, and contains no analytics, advertising or tracking code of any kind.
 There is no account to create, and nothing in the app reports back to us.
 Everything below is the detail behind that sentence, including the few
-connections the app does make and the one optional feature that deliberately
-sends your text to somebody else.
+connections the app does make, the one optional feature that deliberately
+sends your text to somebody else, and how tips are paid.
 
 ---
 
@@ -36,7 +36,7 @@ delete on request. Deleting the app deletes everything it stored.
 
 ## Connections the app makes by itself
 
-Three, none of which carries information about you beyond what any web
+Four, none of which carries information about you beyond what any web
 request necessarily reveals to the server it reaches (your IP address and the
 request itself):
 
@@ -53,6 +53,9 @@ request itself):
   `captive.apple.com`, an Apple address that exists for this purpose. Its only
   job is to make iOS show you its "allow network access" prompt on devices
   where iOS requires an app to ask. It sends and receives no data of substance.
+- **Tip prices.** When you open Settings > Leave a Tip, iOS asks Apple's App
+  Store for the tips' names and their prices in your currency. iOS makes that
+  request, to Apple; all the app supplies is which tips to show.
 
 The app makes no other network connection on its own initiative. In particular,
 it does not check for updates, report installs, or phone home.
@@ -116,6 +119,18 @@ guest cannot read them.
 **Your chats.** Chat transcripts are saved on your device, in the app's own
 storage, so a conversation survives closing the app. You can clear them from
 the Chats menu. They are not uploaded anywhere.
+
+## Tips
+
+Settings > Leave a Tip offers three tips, as In-App Purchases. A tip unlocks
+nothing; the app is the same with or without one.
+
+Apple takes the whole payment, under Apple's own terms. We never receive your
+name, your Apple Account, your payment details or anything else that
+identifies you. The app learns only that the tip went through, so that it can
+thank you, and it keeps no record of it. Like every developer on the App
+Store, we get Apple's sales reports, which count purchases by country and date
+and do not say who made them.
 
 ## Device permissions
 
